@@ -1,0 +1,71 @@
+import "dotenv/config";
+import express from "express";
+import http from "node:http";
+import { WebSocketServer, WebSocket } from "ws";
+import { createDoubaoProvider } from "./providers/doubao";
+import { createMockProvider } from "./providers/mock";
+import type { AgentProvider, ClientEvent } from "./providers/types";
+
+const PORT = Number(process.env.PORT ?? 8787);
+const app = express();
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server, path: "/agent" });
+
+app.use(express.json({ limit: "128kb" }));
+
+app.get("/health", (_req, res) => {
+  res.json({ ok: true, provider: process.env.VOICE_PROVIDER ?? "mock" });
+});
+
+app.post("/ark/chat", async (req, res) => {
+  try {
+    const text = String(req.body?.text ?? "").trim();
+    if (!text) {
+      res.status(400).json({ error: "text is required" });
+      return;
+    }
+
+    const { askArk } = await import("./providers/ark");
+    const reply = await askArk(text);
+    res.json({ reply });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Ark request failed";
+    res.status(500).json({ error: message });
+  }
+});
+
+function selectProvider(client: WebSocket): AgentProvider {
+  if (process.env.VOICE_PROVIDER === "doubao") {
+    return createDoubaoProvider(client);
+  }
+  return createMockProvider(client);
+}
+
+wss.on("connection", (client) => {
+  const provider = selectProvider(client);
+
+  client.on("message", async (data, isBinary) => {
+    try {
+      if (isBinary) {
+        await provider.sendAudio(data as Buffer);
+        return;
+      }
+
+      const event = JSON.parse(data.toString()) as ClientEvent;
+      if (event.type === "session.start") await provider.start(event);
+      if (event.type === "audio.start") await provider.startAudio();
+      if (event.type === "audio.stop") await provider.stopAudio();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Voice relay failed";
+      client.send(JSON.stringify({ type: "error", message }));
+    }
+  });
+
+  client.on("close", async () => {
+    await provider.close();
+  });
+});
+
+server.listen(PORT, () => {
+  console.log(`Voice relay listening on http://localhost:${PORT}`);
+});

@@ -1,0 +1,361 @@
+:root {
+  color: #eff6f8;
+  background: #101415;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  line-height: 1.5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+button {
+  font: inherit;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+input {
+  font: inherit;
+}
+
+.shell {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 18% 10%, rgba(26, 151, 126, 0.22), transparent 34%),
+    linear-gradient(135deg, #111719 0%, #192020 44%, #211d17 100%);
+  padding: clamp(16px, 3vw, 36px);
+}
+
+.visor {
+  min-height: calc(100vh - clamp(32px, 6vw, 72px));
+  border: 1px solid rgba(196, 218, 216, 0.2);
+  border-radius: 8px;
+  background:
+    linear-gradient(110deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.01)),
+    rgba(13, 18, 19, 0.8);
+  box-shadow: inset 0 1px 28px rgba(255, 255, 255, 0.04), 0 24px 80px rgba(0, 0, 0, 0.36);
+  overflow: hidden;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: clamp(20px, 3vw, 36px);
+  border-bottom: 1px solid rgba(196, 218, 216, 0.16);
+}
+
+.eyebrow,
+.stateBlock p,
+.metricRow p,
+.routeStrip span,
+.message span {
+  margin: 0;
+  color: #99aaa8;
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+h1,
+h2 {
+  margin: 0;
+  line-height: 1.05;
+}
+
+h1 {
+  font-size: clamp(2rem, 5vw, 5.8rem);
+}
+
+h2 {
+  font-size: 1.15rem;
+}
+
+.signal {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid rgba(196, 218, 216, 0.2);
+  border-radius: 8px;
+  color: #aab8b6;
+  background: rgba(255, 255, 255, 0.04);
+  white-space: nowrap;
+}
+
+.signal span {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #6f7776;
+}
+
+.signal.online span {
+  background: #3ee89f;
+  box-shadow: 0 0 18px #3ee89f;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 1.35fr) minmax(260px, 0.65fr);
+  gap: 18px;
+  padding: clamp(16px, 3vw, 36px);
+}
+
+.hudPanel {
+  border: 1px solid rgba(196, 218, 216, 0.16);
+  border-radius: 8px;
+  background: rgba(7, 11, 12, 0.48);
+}
+
+.helmetPanel {
+  display: grid;
+  align-items: center;
+  min-height: 520px;
+  padding: clamp(18px, 3vw, 34px);
+}
+
+.helmetVisual {
+  position: relative;
+  width: min(100%, 720px);
+  margin: auto;
+  aspect-ratio: 1.55;
+}
+
+.helmetVisual svg {
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 22px 35px rgba(0, 0, 0, 0.36));
+}
+
+.helmetShell {
+  fill: #d9e1dd;
+}
+
+.helmetVisor {
+  fill: #263537;
+  stroke: #54e0be;
+  stroke-width: 3;
+}
+
+.chin {
+  fill: #8b9b97;
+}
+
+.micDot {
+  fill: #ef6a3a;
+  filter: drop-shadow(0 0 12px #ef6a3a);
+}
+
+.voiceCore {
+  position: absolute;
+  right: 22%;
+  bottom: 16%;
+  width: clamp(54px, 8vw, 92px);
+  aspect-ratio: 1;
+  border: 1px solid rgba(62, 232, 159, 0.5);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: rgba(62, 232, 159, 0.07);
+}
+
+.voiceCore span {
+  width: 42%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: #3ee89f;
+}
+
+.voiceCore.active {
+  animation: pulse 1.15s infinite ease-in-out;
+}
+
+@keyframes pulse {
+  50% {
+    transform: scale(1.08);
+    box-shadow: 0 0 50px rgba(62, 232, 159, 0.36);
+  }
+}
+
+.primaryControls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-self: end;
+}
+
+.mainButton,
+.ghostButton {
+  min-height: 48px;
+  border-radius: 8px;
+  padding: 0 22px;
+  cursor: pointer;
+}
+
+.mainButton {
+  border: 0;
+  background: #f26a3d;
+  color: #170c08;
+  font-weight: 800;
+}
+
+.ghostButton {
+  border: 1px solid rgba(196, 218, 216, 0.24);
+  color: #eff6f8;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.commandBar {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) auto auto;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.commandBar input {
+  min-width: 0;
+  min-height: 48px;
+  border: 1px solid rgba(196, 218, 216, 0.2);
+  border-radius: 8px;
+  padding: 0 14px;
+  color: #eff6f8;
+  background: rgba(255, 255, 255, 0.06);
+  outline: none;
+}
+
+.commandBar input:focus {
+  border-color: rgba(62, 232, 159, 0.72);
+  box-shadow: 0 0 0 3px rgba(62, 232, 159, 0.12);
+}
+
+.statusPanel {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+}
+
+.stateBlock {
+  display: grid;
+  gap: 8px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid rgba(196, 218, 216, 0.14);
+}
+
+.stateBlock strong {
+  font-size: clamp(2rem, 4vw, 3.5rem);
+  line-height: 1;
+}
+
+.stateBlock span {
+  color: #c5d3d0;
+}
+
+.metricRow {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.metricRow div,
+.routeStrip {
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 16px;
+}
+
+.metricRow strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 1.45rem;
+}
+
+.routeStrip {
+  display: grid;
+  gap: 6px;
+  align-self: end;
+}
+
+.routeStrip strong {
+  font-size: 1.8rem;
+}
+
+.routeStrip small {
+  color: #d8e0dd;
+}
+
+.transcriptPanel {
+  grid-column: 1 / -1;
+  padding: 18px;
+}
+
+.panelHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.panelHeader span {
+  color: #3ee89f;
+}
+
+.transcriptList {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.message {
+  min-height: 108px;
+  border-radius: 8px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.message.agent {
+  border-left: 3px solid #3ee89f;
+}
+
+.message.rider {
+  border-left: 3px solid #f26a3d;
+}
+
+.message p {
+  margin: 8px 0 0;
+  color: #f5fbfa;
+}
+
+@media (max-width: 900px) {
+  .topbar,
+  .grid,
+  .primaryControls,
+  .commandBar,
+  .metricRow,
+  .transcriptList {
+    grid-template-columns: 1fr;
+  }
+
+  .topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .helmetPanel {
+    min-height: 420px;
+  }
+}

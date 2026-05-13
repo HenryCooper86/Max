@@ -92,6 +92,15 @@ function useHelmetAgent() {
     setTranscript((items) => [...items.slice(-7), { id: Date.now() + Math.random(), speaker, text }]);
   }, []);
 
+  const speak = useCallback((text: string) => {
+    if (!("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1.02;
+    utterance.pitch = 0.96;
+    window.speechSynthesis.speak(utterance);
+  }, []);
+
   const connect = useCallback(() => {
     if (socketRef.current?.readyState === WebSocket.OPEN) return;
     setStatus("Connecting");
@@ -113,7 +122,10 @@ function useHelmetAgent() {
           setStatus(event.mode === "mock" ? "Mock route active" : "Doubao live");
         }
         if (event.type === "status") setStatus(event.detail);
-        if (event.type === "transcript") pushTranscript(event.speaker, event.text);
+        if (event.type === "transcript") {
+          pushTranscript(event.speaker, event.text);
+          if (event.speaker === "agent" && event.final !== false) speak(event.text);
+        }
         if (event.type === "metric") {
           setNoiseDb(event.noiseDb);
           setLatencyMs(event.latencyMs);
@@ -133,7 +145,7 @@ function useHelmetAgent() {
     socket.addEventListener("error", () => {
       setStatus("Connection error");
     });
-  }, [pushTranscript]);
+  }, [pushTranscript, speak]);
 
   const waitForSocket = useCallback(async () => {
     connect();
@@ -172,34 +184,39 @@ function useHelmetAgent() {
   }, []);
 
   const startMic = useCallback(async () => {
-    const socket = await waitForSocket();
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true
-      }
-    });
-    const audioContext = new AudioContext();
-    const source = audioContext.createMediaStreamSource(stream);
-    const processor = audioContext.createScriptProcessor(4096, 1, 1);
-    streamRef.current = stream;
-    audioContextRef.current = audioContext;
-    processorRef.current = processor;
+    try {
+      const socket = await waitForSocket();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
+      const audioContext = new AudioContext();
+      const source = audioContext.createMediaStreamSource(stream);
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      streamRef.current = stream;
+      audioContextRef.current = audioContext;
+      processorRef.current = processor;
 
-    processor.onaudioprocess = (event) => {
-      const socket = socketRef.current;
-      if (!socket || socket.readyState !== WebSocket.OPEN) return;
-      const input = event.inputBuffer.getChannelData(0);
-      const pcm16 = floatToPcm16(downsampleTo16k(input, audioContext.sampleRate));
-      socket.send(pcm16);
-    };
+      processor.onaudioprocess = (event) => {
+        const socket = socketRef.current;
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        const input = event.inputBuffer.getChannelData(0);
+        const pcm16 = floatToPcm16(downsampleTo16k(input, audioContext.sampleRate));
+        socket.send(pcm16);
+      };
 
-    source.connect(processor);
-    processor.connect(audioContext.destination);
-    setListening(true);
-    setStatus("Listening");
-    socket.send(JSON.stringify({ type: "audio.start" }));
+      source.connect(processor);
+      processor.connect(audioContext.destination);
+      setListening(true);
+      setStatus("Listening");
+      socket.send(JSON.stringify({ type: "audio.start" }));
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Microphone access failed");
+      setListening(false);
+    }
   }, [waitForSocket]);
 
   const disconnect = useCallback(() => {
@@ -207,15 +224,6 @@ function useHelmetAgent() {
     socketRef.current?.close();
     socketRef.current = null;
   }, [stopMic]);
-
-  const speak = useCallback((text: string) => {
-    if (!("speechSynthesis" in window)) return;
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 1.02;
-    utterance.pitch = 0.96;
-    window.speechSynthesis.speak(utterance);
-  }, []);
 
   const submitCommand = useCallback(
     async (textOverride?: string) => {

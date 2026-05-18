@@ -113,6 +113,7 @@ VOICE_PROVIDER=doubao
 DOUBAO_AGENT_WS_URL=wss://openspeech.bytedance.com/api/v3/realtime/dialogue
 DOUBAO_RESOURCE_ID=volc.speech.dialog
 DOUBAO_APP_ID=
+DOUBAO_APP_KEY=
 DOUBAO_ACCESS_KEY=
 DOUBAO_BOT_NAME=Horizon Helmet
 DOUBAO_SYSTEM_ROLE=You are a motorcycle helmet voice assistant. Keep replies short, hands-free, and safety-first.

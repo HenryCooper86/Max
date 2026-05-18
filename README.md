@@ -2,6 +2,10 @@
 
 Prototype AI voice agent for a motorcycle helmet. Max introduces himself as Max Motorcycle Helmet AI assistant, uses a Chinese male voice, and helps with motorcycle-related issues, navigation, weather, route conditions, nearby stops, and other rider topics.
 
+## Frontend Preview
+
+![Max Motorcycle Helmet AI frontend](docs/assets/frontend-screenshot.png)
+
 ## Current Capabilities
 
 - Helmet HUD with mic, status, latency, noise, navigation, and transcript panels.

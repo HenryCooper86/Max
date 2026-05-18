@@ -59,6 +59,8 @@ Add your Ark key to `.env`:
 VOICE_PROVIDER=mock
 ARK_API_KEY=your-ark-api-key
 ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+# Optional: use your Ark endpoint ID here when you have one.
+ARK_ENDPOINT_ID=ep-your-endpoint-id
 ARK_MODEL=doubao-seed-1-6-250615
 ```
 
@@ -94,9 +96,12 @@ Use `Start Voice` to exercise the realtime audio streaming path. In the default 
 ```bash
 ARK_API_KEY=
 ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+ARK_ENDPOINT_ID=
 ARK_MODEL=doubao-seed-1-6-250615
 HELMET_AGENT_SYSTEM_PROMPT=You are Horizon, an AI voice agent for a motorcycle helmet. Keep replies short, clear, hands-free, and safety-first.
 ```
+
+For Volcengine Ark quick-start usage, `ARK_API_KEY` plus either `ARK_ENDPOINT_ID` (`ep-...`) or a public model ID in `ARK_MODEL` is enough for the app's text command path. `ARK_KEY_ID` is only API-key metadata and is not sent to `/chat/completions`.
 
 ### Realtime Voice Provider
 
@@ -112,6 +117,8 @@ Doubao realtime voice mode:
 VOICE_PROVIDER=doubao
 DOUBAO_AGENT_WS_URL=wss://openspeech.bytedance.com/api/v3/realtime/dialogue
 DOUBAO_RESOURCE_ID=volc.speech.dialog
+DOUBAO_API_KEY_ID=
+DOUBAO_API_KEY=
 DOUBAO_APP_ID=
 DOUBAO_APP_KEY=
 DOUBAO_ACCESS_KEY=
@@ -121,7 +128,7 @@ DOUBAO_REALTIME_MODEL=1.2.1.1
 DOUBAO_VOICE=zh_female_vv_jupiter_bigtts
 ```
 
-The Ark API key from Volcengine Ark is not the same credential set as the Doubao realtime speech-dialog WebSocket API. Ark powers the command/reply text path. Doubao realtime voice needs the speech-dialog app credentials above.
+The Ark API key from Volcengine Ark is not the same credential set as the Doubao realtime speech-dialog WebSocket API. Ark powers the command/reply text path. Doubao realtime voice uses the Doubao Speech/OpenSpeech realtime dialogue endpoint. With the newer Speech console, set `DOUBAO_API_KEY`; the key ID can be stored in `DOUBAO_API_KEY_ID` for reference but is not sent. Legacy app credentials are used only when `DOUBAO_API_KEY` is empty.
 
 ## API Routes
 

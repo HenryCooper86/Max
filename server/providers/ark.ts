@@ -17,6 +17,14 @@ type ArkChatResponse = {
 const DEFAULT_SYSTEM_PROMPT =
   "You are Horizon, an AI voice agent for a motorcycle helmet. Keep replies short, clear, hands-free, and safety-first. If the rider asks for a risky action while riding, give a safer alternative.";
 
+function getArkModel() {
+  const model = process.env.ARK_ENDPOINT_ID?.trim() || process.env.ARK_MODEL?.trim() || "doubao-seed-1-6-250615";
+  if (model.startsWith("api-key-")) {
+    throw new Error("ARK_MODEL/ARK_ENDPOINT_ID must be a public model ID or an endpoint ID like ep-..., not the API key ID.");
+  }
+  return model;
+}
+
 export async function askArk(riderText: string) {
   const apiKey = process.env.ARK_API_KEY;
   if (!apiKey) {
@@ -24,7 +32,7 @@ export async function askArk(riderText: string) {
   }
 
   const baseUrl = process.env.ARK_BASE_URL ?? "https://ark.cn-beijing.volces.com/api/v3";
-  const model = process.env.ARK_MODEL ?? "doubao-seed-1-6-250615";
+  const model = getArkModel();
   const messages: ArkMessage[] = [
     {
       role: "system",

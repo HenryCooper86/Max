@@ -62,10 +62,20 @@ function requireEnv(name: string) {
 }
 
 function buildDoubaoHeaders() {
+  const apiKey = process.env.DOUBAO_API_KEY;
+  const resourceId = process.env.DOUBAO_RESOURCE_ID ?? "volc.speech.dialog";
+
+  if (apiKey) {
+    return {
+      "X-Api-Key": apiKey,
+      "X-Api-Resource-Id": resourceId,
+      "X-Api-Connect-Id": randomUUID()
+    };
+  }
+
   const appId = requireEnv("DOUBAO_APP_ID");
   const appKey = requireEnv("DOUBAO_APP_KEY");
   const accessKey = requireEnv("DOUBAO_ACCESS_KEY");
-  const resourceId = process.env.DOUBAO_RESOURCE_ID ?? "volc.speech.dialog";
 
   return {
     "X-Api-App-ID": appId,

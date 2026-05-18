@@ -397,7 +397,7 @@ function App() {
         <div className="topbar">
           <div>
             <p className="eyebrow">HCT Helmet OS</p>
-            <h1>Max Your Motorcycle Helmet AI Asistant</h1>
+            <h1>Max Your Motorcycle Helmet AI</h1>
           </div>
           <div className={`signal ${agent.connected ? "online" : ""}`}>
             <span />

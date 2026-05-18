@@ -396,8 +396,8 @@ function App() {
       <section className="visor" aria-label="Helmet voice agent cockpit">
         <div className="topbar">
           <div>
-            <p className="eyebrow">Horizon Helmet OS</p>
-            <h1>Rider Voice Agent</h1>
+            <p className="eyebrow">Max Helmet OS</p>
+            <h1>Max Motorcycle Helmet AI</h1>
           </div>
           <div className={`signal ${agent.connected ? "online" : ""}`}>
             <span />
@@ -448,7 +448,7 @@ function App() {
             >
               <input
                 aria-label="Rider command"
-                placeholder="Ask Horizon: route home, weather ahead, nearest gas..."
+                placeholder="Ask Max: route home, weather ahead, nearest gas..."
                 value={agent.commandText}
                 onChange={(event) => agent.setCommandText(event.target.value)}
               />
@@ -490,10 +490,10 @@ function App() {
               <span>{agent.transcript.length ? "Live" : "Idle"}</span>
             </div>
             <div className="transcriptList">
-              {(agent.transcript.length ? agent.transcript : [{ id: 1, speaker: "agent" as const, text: "Say: route home, call teammate, weather ahead, or nearest gas." }]).map(
+              {(agent.transcript.length ? agent.transcript : [{ id: 1, speaker: "agent" as const, text: "Hi, I am Max Motorcycle Helmet AI assistant. Ask me about routes, weather, nearby stops, or motorcycle issues." }]).map(
                 (item) => (
                   <article className={`message ${item.speaker}`} key={item.id}>
-                    <span>{item.speaker === "rider" ? "Rider" : "Agent"}</span>
+                    <span>{item.speaker === "rider" ? "Rider" : "Max"}</span>
                     <p>{item.text}</p>
                   </article>
                 )

@@ -1,6 +1,6 @@
-# Horizon Helmet Voice Agent
+# Max Motorcycle Helmet AI
 
-Prototype AI voice agent for a motorcycle helmet. The app provides a helmet-style rider HUD, microphone streaming demo, Ark-powered command responses, browser speech recognition, and browser text-to-speech playback.
+Prototype AI voice agent for a motorcycle helmet. Max introduces himself as Max Motorcycle Helmet AI assistant, uses a Chinese male voice, and helps with motorcycle-related issues, navigation, weather, route conditions, nearby stops, and other rider topics.
 
 ## Current Capabilities
 
@@ -98,7 +98,7 @@ ARK_API_KEY=
 ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
 ARK_ENDPOINT_ID=
 ARK_MODEL=doubao-seed-1-6-250615
-HELMET_AGENT_SYSTEM_PROMPT=You are Horizon, an AI voice agent for a motorcycle helmet. Keep replies short, clear, hands-free, and safety-first.
+HELMET_AGENT_SYSTEM_PROMPT=You are Max, a friendly Motorcycle Helmet AI assistant. Introduce yourself as Max Motorcycle Helmet AI assistant. Help riders with motorcycle-related issues, navigation, weather, route conditions, nearby stops, and other motorcycle topics. Keep replies short, clear, hands-free, and safety-first.
 ```
 
 For Volcengine Ark quick-start usage, `ARK_API_KEY` plus either `ARK_ENDPOINT_ID` (`ep-...`) or a public model ID in `ARK_MODEL` is enough for the app's text command path. `ARK_KEY_ID` is only API-key metadata and is not sent to `/chat/completions`.
@@ -122,10 +122,10 @@ DOUBAO_API_KEY=
 DOUBAO_APP_ID=
 DOUBAO_APP_KEY=
 DOUBAO_ACCESS_KEY=
-DOUBAO_BOT_NAME=Horizon Helmet
-DOUBAO_SYSTEM_ROLE=You are a motorcycle helmet voice assistant. Keep replies short, hands-free, and safety-first.
+DOUBAO_BOT_NAME=Max
+DOUBAO_SYSTEM_ROLE=You are Max, a friendly Motorcycle Helmet AI assistant. Introduce yourself as Max Motorcycle Helmet AI assistant. Help riders with motorcycle-related issues, navigation, weather, route conditions, nearby stops, and other motorcycle topics. Keep replies short, clear, hands-free, and safety-first.
 DOUBAO_REALTIME_MODEL=1.2.1.1
-DOUBAO_VOICE=zh_female_vv_jupiter_bigtts
+DOUBAO_VOICE=zh_male_wennuanahu_moon_bigtts
 ```
 
 The Ark API key from Volcengine Ark is not the same credential set as the Doubao realtime speech-dialog WebSocket API. Ark powers the command/reply text path. Doubao realtime voice uses the Doubao Speech/OpenSpeech realtime dialogue endpoint. With the newer Speech console, set `DOUBAO_API_KEY`; the key ID can be stored in `DOUBAO_API_KEY_ID` for reference but is not sent. Legacy app credentials are used only when `DOUBAO_API_KEY` is empty.

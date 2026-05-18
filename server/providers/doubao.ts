@@ -129,10 +129,10 @@ function buildAudioRequest(sessionId: string, audio: Buffer) {
 function buildDoubaoSessionConfig(config: DoubaoSessionConfig) {
   return {
     dialog: {
-      bot_name: process.env.DOUBAO_BOT_NAME ?? "Horizon Helmet",
+      bot_name: process.env.DOUBAO_BOT_NAME ?? "Max",
       system_role:
         process.env.DOUBAO_SYSTEM_ROLE ??
-        "You are a motorcycle helmet voice assistant. Keep replies short, hands-free, and safety-first.",
+        "You are Max, a friendly Motorcycle Helmet AI assistant. Introduce yourself as Max Motorcycle Helmet AI assistant. Help riders with motorcycle-related issues, navigation, weather, route conditions, nearby stops, and other motorcycle topics. Keep replies short, clear, hands-free, and safety-first.",
       extra: {
         input_mod: "keep_alive",
         model: process.env.DOUBAO_REALTIME_MODEL ?? "1.2.1.1"
@@ -146,7 +146,7 @@ function buildDoubaoSessionConfig(config: DoubaoSessionConfig) {
       }
     },
     tts: {
-      speaker: process.env.DOUBAO_VOICE ?? "zh_female_vv_jupiter_bigtts",
+      speaker: process.env.DOUBAO_VOICE ?? "zh_male_wennuanahu_moon_bigtts",
       audio_config: {
         channel: 1,
         format: "pcm_s16le",

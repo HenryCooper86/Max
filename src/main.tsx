@@ -396,8 +396,8 @@ function App() {
       <section className="visor" aria-label="Helmet voice agent cockpit">
         <div className="topbar">
           <div>
-            <p className="eyebrow">Max Helmet OS</p>
-            <h1>Max Motorcycle Helmet AI</h1>
+            <p className="eyebrow">HCT Helmet OS</p>
+            <h1>Max Your Motorcycle Helmet AI by HCT Helmet Team</h1>
           </div>
           <div className={`signal ${agent.connected ? "online" : ""}`}>
             <span />

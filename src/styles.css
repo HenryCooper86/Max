@@ -162,6 +162,10 @@ h2 {
   filter: drop-shadow(0 0 12px #ef6a3a);
 }
 
+.helmetVisual.offline .micDot {
+  animation: redBlink 1.05s infinite ease-in-out;
+}
+
 .voiceCore {
   position: absolute;
   right: 22%;
@@ -182,8 +186,38 @@ h2 {
   background: #3ee89f;
 }
 
+.helmetVisual.online .voiceCore span {
+  animation: greenBlink 1.05s infinite ease-in-out;
+}
+
 .voiceCore.active {
   animation: pulse 1.15s infinite ease-in-out;
+}
+
+@keyframes redBlink {
+  0%,
+  100% {
+    opacity: 0.42;
+    filter: drop-shadow(0 0 5px rgba(239, 106, 58, 0.42));
+  }
+
+  50% {
+    opacity: 1;
+    filter: drop-shadow(0 0 20px #ef6a3a);
+  }
+}
+
+@keyframes greenBlink {
+  0%,
+  100% {
+    opacity: 0.48;
+    box-shadow: 0 0 8px rgba(62, 232, 159, 0.28);
+  }
+
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 24px rgba(62, 232, 159, 0.84);
+  }
 }
 
 @keyframes pulse {

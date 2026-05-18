@@ -407,7 +407,7 @@ function App() {
 
         <div className="grid">
           <section className="hudPanel helmetPanel">
-            <div className="helmetVisual" aria-hidden="true">
+            <div className={`helmetVisual ${agent.connected ? "online" : "offline"}`} aria-hidden="true">
               <svg viewBox="0 0 420 270" role="img">
                 <path
                   className="helmetShell"

@@ -9,7 +9,7 @@ Prototype AI voice agent for a motorcycle helmet. The app provides a helmet-styl
 - Ark chat command mode through a server-side route so the API key is not exposed to browser code.
 - Browser speech recognition for command capture when supported by the browser.
 - Browser text-to-speech for agent replies.
-- Placeholder Doubao realtime voice provider for later low-latency voice-to-voice integration.
+- Doubao realtime voice provider for low-latency speech-to-speech sessions.
 
 ## Tech Stack
 
@@ -31,7 +31,7 @@ Prototype AI voice agent for a motorcycle helmet. The app provides a helmet-styl
 │   ├── index.ts              # Express API and WebSocket relay
 │   └── providers/
 │       ├── ark.ts            # Ark chat completion client
-│       ├── doubao.ts         # Doubao realtime voice provider placeholder
+│       ├── doubao.ts         # Doubao realtime voice provider
 │       ├── mock.ts           # Mock live voice provider
 │       └── types.ts
 ├── .env.example              # Environment variable template
@@ -85,7 +85,7 @@ Use `Ask Ark` for the working AI response path:
 
 Use `Voice Command` if your browser supports the Web Speech API. This captures speech as text, sends it to Ark, and speaks the reply.
 
-Use `Start Voice` to exercise the realtime audio streaming path. In the current default configuration, this connects to the mock WebSocket provider and emits simulated rider/agent transcript events.
+Use `Start Voice` to exercise the realtime audio streaming path. In the default configuration, this connects to the mock WebSocket provider and emits simulated rider/agent transcript events. With `VOICE_PROVIDER=doubao`, the backend connects to the Doubao realtime dialogue WebSocket, sends browser mic PCM frames, and relays returned PCM voice audio back to the browser.
 
 ## Environment Variables
 
@@ -106,20 +106,21 @@ Default:
 VOICE_PROVIDER=mock
 ```
 
-Future Doubao realtime voice mode:
+Doubao realtime voice mode:
 
 ```bash
 VOICE_PROVIDER=doubao
 DOUBAO_AGENT_WS_URL=wss://openspeech.bytedance.com/api/v3/realtime/dialogue
 DOUBAO_RESOURCE_ID=volc.speech.dialog
 DOUBAO_APP_ID=
-DOUBAO_APP_KEY=
 DOUBAO_ACCESS_KEY=
 DOUBAO_BOT_NAME=Horizon Helmet
 DOUBAO_SYSTEM_ROLE=You are a motorcycle helmet voice assistant. Keep replies short, hands-free, and safety-first.
+DOUBAO_REALTIME_MODEL=1.2.1.1
+DOUBAO_VOICE=zh_female_vv_jupiter_bigtts
 ```
 
-The Ark API key from Volcengine Ark is not the same credential set as the Doubao realtime speech-dialog WebSocket API. Ark powers the current command/reply brain. Doubao realtime voice still needs the speech-dialog app credentials above.
+The Ark API key from Volcengine Ark is not the same credential set as the Doubao realtime speech-dialog WebSocket API. Ark powers the command/reply text path. Doubao realtime voice needs the speech-dialog app credentials above.
 
 ## API Routes
 
@@ -157,7 +158,7 @@ Client events:
 { "type": "audio.stop" }
 ```
 
-Binary messages are 16 kHz PCM16 mono audio frames.
+Browser-to-server binary messages are 16 kHz PCM16 mono audio frames. When using Doubao, server-to-browser binary messages are 24 kHz PCM16 mono voice audio frames returned by the realtime API.
 
 ## Scripts
 
@@ -200,4 +201,4 @@ curl -s http://localhost:8787/health
 1. Confirm the production Ark model or endpoint ID to use for helmet responses.
 2. Replace mock navigation/noise values with real helmet/mobile telemetry.
 3. Add proper wake-word flow and push-to-talk behavior.
-4. Complete Doubao realtime voice integration once speech-dialog credentials and protocol details are available.
+4. Add interruption controls and richer realtime state labels for Doubao sessions.

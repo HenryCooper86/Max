@@ -85,8 +85,11 @@ function useHelmetAgent() {
   const socketRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const playbackContextRef = useRef<AudioContext | null>(null);
+  const playbackCursorRef = useRef(0);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const speechRef = useRef<BrowserSpeechRecognition | null>(null);
+  const speechContinuousRef = useRef(false);
 
   const pushTranscript = useCallback((speaker: "rider" | "agent", text: string) => {
     setTranscript((items) => [...items.slice(-7), { id: Date.now() + Math.random(), speaker, text }]);
@@ -99,6 +102,29 @@ function useHelmetAgent() {
     utterance.rate = 1.02;
     utterance.pitch = 0.96;
     window.speechSynthesis.speak(utterance);
+  }, []);
+
+  const playPcm16 = useCallback((audioData: ArrayBuffer) => {
+    const sampleRate = 24000;
+    const audioContext = playbackContextRef.current ?? new AudioContext({ sampleRate });
+    playbackContextRef.current = audioContext;
+
+    const pcm = new Int16Array(audioData);
+    if (!pcm.length) return;
+
+    const buffer = audioContext.createBuffer(1, pcm.length, sampleRate);
+    const channel = buffer.getChannelData(0);
+    for (let i = 0; i < pcm.length; i += 1) {
+      channel[i] = Math.max(-1, Math.min(1, pcm[i] / 0x8000));
+    }
+
+    const source = audioContext.createBufferSource();
+    source.buffer = buffer;
+    source.connect(audioContext.destination);
+
+    const startAt = Math.max(audioContext.currentTime, playbackCursorRef.current);
+    source.start(startAt);
+    playbackCursorRef.current = startAt + buffer.duration;
   }, []);
 
   const connect = useCallback(() => {
@@ -115,6 +141,11 @@ function useHelmetAgent() {
     });
 
     socket.addEventListener("message", (message) => {
+      if (message.data instanceof ArrayBuffer) {
+        playPcm16(message.data);
+        return;
+      }
+
       try {
         const event = JSON.parse(String(message.data)) as AgentEvent;
         if (event.type === "session.started") {
@@ -145,7 +176,7 @@ function useHelmetAgent() {
     socket.addEventListener("error", () => {
       setStatus("Connection error");
     });
-  }, [pushTranscript, speak]);
+  }, [playPcm16, pushTranscript, speak]);
 
   const waitForSocket = useCallback(async () => {
     connect();
@@ -173,6 +204,8 @@ function useHelmetAgent() {
   }, [connect]);
 
   const stopMic = useCallback(() => {
+    speechContinuousRef.current = false;
+    speechRef.current?.stop();
     processorRef.current?.disconnect();
     audioContextRef.current?.close();
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -213,6 +246,16 @@ function useHelmetAgent() {
       setListening(true);
       setStatus("Listening");
       socket.send(JSON.stringify({ type: "audio.start" }));
+      void fetch("/health")
+        .then((response) => response.json() as Promise<{ provider?: string }>)
+        .then((health) => {
+          if (health.provider === "doubao") {
+            startSpeechCapture(true);
+          }
+        })
+        .catch(() => {
+          startSpeechCapture(true);
+        });
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Microphone access failed");
       setListening(false);
@@ -221,6 +264,9 @@ function useHelmetAgent() {
 
   const disconnect = useCallback(() => {
     stopMic();
+    playbackContextRef.current?.close();
+    playbackContextRef.current = null;
+    playbackCursorRef.current = 0;
     socketRef.current?.close();
     socketRef.current = null;
   }, [stopMic]);
@@ -259,16 +305,19 @@ function useHelmetAgent() {
     [arkBusy, commandText, pushTranscript, speak]
   );
 
-  const startSpeechCommand = useCallback(() => {
+  function startSpeechCapture(continuous: boolean) {
     const SpeechRecognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
       setStatus("Speech recognition is not available in this browser");
       return;
     }
 
+    speechContinuousRef.current = continuous;
+    speechRef.current?.stop();
+
     const recognition = new SpeechRecognition();
     speechRef.current = recognition;
-    recognition.continuous = false;
+    recognition.continuous = continuous;
     recognition.interimResults = false;
     recognition.lang = "en-US";
     recognition.onresult = (event) => {
@@ -281,14 +330,28 @@ function useHelmetAgent() {
     };
     recognition.onerror = () => {
       setSpeechListening(false);
-      setStatus("Speech command failed");
+      if (!continuous) setStatus("Speech command failed");
     };
     recognition.onend = () => {
       setSpeechListening(false);
+      if (speechContinuousRef.current) {
+        window.setTimeout(() => {
+          try {
+            recognition.start();
+            setSpeechListening(true);
+          } catch {
+            setStatus("Speech recognition restart failed");
+          }
+        }, 250);
+      }
     };
     setSpeechListening(true);
-    setStatus("Listening for command");
+    setStatus(continuous ? "Listening with Ark voice fallback" : "Listening for command");
     recognition.start();
+  }
+
+  const startSpeechCommand = useCallback(() => {
+    startSpeechCapture(false);
   }, [submitCommand]);
 
   useEffect(

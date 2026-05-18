@@ -17,6 +17,28 @@ type ArkChatResponse = {
 const DEFAULT_SYSTEM_PROMPT =
   "You are Max, a friendly Motorcycle Helmet AI assistant. Introduce yourself as Max Motorcycle Helmet AI assistant. Help riders with motorcycle-related issues, navigation, weather, route conditions, nearby stops, and other motorcycle topics. Keep replies short, clear, hands-free, and safety-first. If the rider asks for a risky action while riding, give a safer alternative.";
 
+export function createLocalHelmetReply(riderText: string) {
+  const text = riderText.toLowerCase();
+
+  if (text.includes("gas") || text.includes("fuel")) {
+    return "I hear you. Nearest gas lookup needs live location, so pull over or check your map app safely.";
+  }
+
+  if (text.includes("weather") || text.includes("rain") || text.includes("wind")) {
+    return "I hear you. Live weather needs a connected data source; ride cautiously and watch road conditions.";
+  }
+
+  if (text.includes("route") || text.includes("navigation") || text.includes("home")) {
+    return "I hear you. Navigation needs live maps connected; keep your current route and pull over before changing it.";
+  }
+
+  if (text.includes("hear") || text.includes("test") || text.includes("hello")) {
+    return "I can hear you. Max is replying through local fallback mode.";
+  }
+
+  return "I hear you. Ark is unavailable, so I am using local fallback mode. Keep riding safely.";
+}
+
 function getArkModel() {
   const model = process.env.ARK_ENDPOINT_ID?.trim() || process.env.ARK_MODEL?.trim() || "doubao-seed-1-6-250615";
   if (model.startsWith("api-key-")) {

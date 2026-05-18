@@ -9,6 +9,9 @@ export default defineConfig({
       "/ark": {
         target: "http://localhost:8787"
       },
+      "/health": {
+        target: "http://localhost:8787"
+      },
       "/agent": {
         target: "ws://localhost:8787",
         ws: true

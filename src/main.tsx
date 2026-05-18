@@ -247,7 +247,10 @@ function useHelmetAgent() {
       setStatus("Listening");
       socket.send(JSON.stringify({ type: "audio.start" }));
       void fetch("/health")
-        .then((response) => response.json() as Promise<{ provider?: string }>)
+        .then((response) => {
+          if (!response.ok) throw new Error("Health check failed");
+          return response.json() as Promise<{ provider?: string }>;
+        })
         .then((health) => {
           if (health.provider === "doubao") {
             startSpeechCapture(true);
@@ -288,16 +291,20 @@ function useHelmetAgent() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text })
         });
-        const payload = (await response.json()) as { reply?: string; error?: string };
+        const payload = (await response.json()) as { reply?: string; error?: string; fallback?: boolean };
         if (!response.ok) throw new Error(payload.error ?? "Ark request failed");
         const reply = payload.reply ?? "";
         pushTranscript("agent", reply);
         speak(reply);
         setProvider("ark");
         setLatencyMs(Math.round(performance.now() - startedAt));
-        setStatus("Ark reply ready");
+        setStatus(payload.fallback ? "Local fallback reply ready" : "Ark reply ready");
       } catch (error) {
-        setStatus(error instanceof Error ? error.message : "Ark request failed");
+        const message = error instanceof Error ? error.message : "Ark request failed";
+        const reply = `I heard you, but I cannot reach Ark: ${message}`;
+        pushTranscript("agent", reply);
+        speak(reply);
+        setStatus(message);
       } finally {
         setArkBusy(false);
       }

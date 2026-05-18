@@ -18,8 +18,8 @@ app.get("/health", (_req, res) => {
 });
 
 app.post("/ark/chat", async (req, res) => {
+  const text = String(req.body?.text ?? "").trim();
   try {
-    const text = String(req.body?.text ?? "").trim();
     if (!text) {
       res.status(400).json({ error: "text is required" });
       return;
@@ -30,6 +30,11 @@ app.post("/ark/chat", async (req, res) => {
     res.json({ reply });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Ark request failed";
+    if (text && process.env.HELMET_AGENT_OFFLINE_FALLBACK !== "false") {
+      const { createLocalHelmetReply } = await import("./providers/ark");
+      res.json({ reply: createLocalHelmetReply(text), fallback: true, error: message });
+      return;
+    }
     res.status(500).json({ error: message });
   }
 });

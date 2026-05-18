@@ -208,12 +208,43 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
   let started = false;
   let sessionId = randomUUID();
   let sessionReady = false;
+  let pendingAgentText = "";
+  let receivedTtsAudio = false;
+  let ttsFallbackTimer: NodeJS.Timeout | undefined;
   const pendingAudio: Buffer[] = [];
 
   function sendClient(payload: unknown) {
     if (client.readyState === client.OPEN) {
       client.send(JSON.stringify(payload));
     }
+  }
+
+  function clearTtsFallbackTimer() {
+    if (ttsFallbackTimer) clearTimeout(ttsFallbackTimer);
+    ttsFallbackTimer = undefined;
+  }
+
+  function flushPendingAgentText(useBrowserSpeech: boolean) {
+    const text = pendingAgentText.trim();
+    if (!text) return;
+    sendClient({ type: "transcript", speaker: "agent", text, final: useBrowserSpeech });
+    pendingAgentText = "";
+  }
+
+  function armTtsFallbackTimer() {
+    clearTtsFallbackTimer();
+    ttsFallbackTimer = setTimeout(() => {
+      if (!receivedTtsAudio) {
+        flushPendingAgentText(true);
+        sendClient({
+          type: "status",
+          state: "ready",
+          detail: "Doubao TTS returned no audio; using browser speech fallback"
+        });
+      }
+      receivedTtsAudio = false;
+      ttsFallbackTimer = undefined;
+    }, 1800);
   }
 
   function connectUpstream(config: DoubaoSessionConfig) {
@@ -246,6 +277,8 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
         }
 
         if (frame.event === EventReceive.TtsResponse) {
+          receivedTtsAudio = true;
+          clearTtsFallbackTimer();
           if (client.readyState === client.OPEN) client.send(frame.payload, { binary: true });
           return;
         }
@@ -259,11 +292,37 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
 
         if (frame.event === EventReceive.ChatResponse) {
           const text = String(payload.content ?? "");
-          if (text) sendClient({ type: "transcript", speaker: "agent", text, final: false });
+          if (text) pendingAgentText += text;
           return;
         }
 
-        if (frame.event === EventReceive.ChatEnded || frame.event === EventReceive.TtsEnded) {
+        if (frame.event === EventReceive.ChatEnded) {
+          if (pendingAgentText && receivedTtsAudio) {
+            flushPendingAgentText(false);
+          } else if (pendingAgentText) {
+            armTtsFallbackTimer();
+          }
+          sendClient({ type: "status", state: "ready", detail: "Doubao reply text complete" });
+          return;
+        }
+
+        if (frame.event === EventReceive.TtsEnded) {
+          clearTtsFallbackTimer();
+          if (pendingAgentText && !receivedTtsAudio) {
+            flushPendingAgentText(true);
+            sendClient({
+              type: "status",
+              state: "ready",
+              detail: "Doubao TTS returned no audio; using browser speech fallback"
+            });
+          } else {
+            sendClient({ type: "status", state: "ready", detail: "Doubao reply complete" });
+          }
+          receivedTtsAudio = false;
+          return;
+        }
+
+        if (frame.event === EventReceive.AsrEnded) {
           sendClient({ type: "status", state: "ready", detail: "Doubao reply complete" });
           return;
         }
@@ -288,6 +347,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
 
     upstream.on("close", () => {
       sessionReady = false;
+      clearTtsFallbackTimer();
       sendClient({ type: "status", state: "closed", detail: "Doubao live agent disconnected" });
     });
 
@@ -323,6 +383,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
       sendClient({ type: "status", state: "ready", detail: "Mic muted" });
     },
     async close() {
+      clearTtsFallbackTimer();
       if (upstream?.readyState === WebSocket.OPEN) {
         if (sessionReady) upstream.send(buildFullClientRequest(EventSend.FinishSession, sessionId));
         upstream.send(buildFullClientRequest(EventSend.FinishConnection));

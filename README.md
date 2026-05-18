@@ -89,7 +89,7 @@ Use `Ask Ark` for the working AI response path:
 3. The app sends the command to `/ark/chat`.
 4. The reply appears in the transcript and is spoken by browser text-to-speech.
 
-Use `Voice Command` if your browser supports the Web Speech API. This captures speech as text, sends it to Ark, and speaks the reply.
+Use `Voice Command` if your browser supports the Web Speech API. This captures speech as text, sends it to Ark, and speaks the reply. If Ark credentials are missing or rejected, the server returns a short local fallback reply by default so the voice flow still responds while credentials are being fixed.
 
 Use `Start Voice` to exercise the realtime audio streaming path. In the default configuration, this connects to the mock WebSocket provider and emits simulated rider/agent transcript events. With `VOICE_PROVIDER=doubao`, the backend connects to the Doubao realtime dialogue WebSocket, sends browser mic PCM frames, and relays returned PCM voice audio back to the browser.
 
@@ -103,9 +103,12 @@ ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
 ARK_ENDPOINT_ID=
 ARK_MODEL=doubao-seed-1-6-250615
 HELMET_AGENT_SYSTEM_PROMPT=You are Max, a friendly Motorcycle Helmet AI assistant. Introduce yourself as Max Motorcycle Helmet AI assistant. Help riders with motorcycle-related issues, navigation, weather, route conditions, nearby stops, and other motorcycle topics. Keep replies short, clear, hands-free, and safety-first.
+HELMET_AGENT_OFFLINE_FALLBACK=true
 ```
 
 For Volcengine Ark quick-start usage, `ARK_API_KEY` plus either `ARK_ENDPOINT_ID` (`ep-...`) or a public model ID in `ARK_MODEL` is enough for the app's text command path. `ARK_KEY_ID` is only API-key metadata and is not sent to `/chat/completions`.
+
+Set `HELMET_AGENT_OFFLINE_FALLBACK=false` when you want `/ark/chat` to return HTTP errors instead of local fallback replies.
 
 ### Realtime Voice Provider
 
@@ -129,7 +132,7 @@ DOUBAO_ACCESS_KEY=
 DOUBAO_BOT_NAME=Max
 DOUBAO_SYSTEM_ROLE=You are Max, a friendly Motorcycle Helmet AI assistant. Introduce yourself as Max Motorcycle Helmet AI assistant. Help riders with motorcycle-related issues, navigation, weather, route conditions, nearby stops, and other motorcycle topics. Keep replies short, clear, hands-free, and safety-first.
 DOUBAO_REALTIME_MODEL=1.2.1.1
-DOUBAO_VOICE=zh_male_wennuanahu_moon_bigtts
+DOUBAO_VOICE=zh_male_yunzhou_jupiter_bigtts
 ```
 
 The Ark API key from Volcengine Ark is not the same credential set as the Doubao realtime speech-dialog WebSocket API. Ark powers the command/reply text path. Doubao realtime voice uses the Doubao Speech/OpenSpeech realtime dialogue endpoint. With the newer Speech console, set `DOUBAO_API_KEY`; the key ID can be stored in `DOUBAO_API_KEY_ID` for reference but is not sent. Legacy app credentials are used only when `DOUBAO_API_KEY` is empty.

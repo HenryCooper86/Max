@@ -1,6 +1,6 @@
-# Max Motorcycle Helmet AI
+# Max 摩托车头盔 AI
 
-Prototype AI voice agent for a motorcycle helmet. Max introduces himself as Max Motorcycle Helmet AI assistant, uses a Doubao realtime voice, and helps with motorcycle-related issues, navigation, weather, route conditions, nearby stops, and other rider topics.
+Prototype AI voice agent for a motorcycle helmet. Max keeps the same name and motorcycle helmet assistant role, speaks Chinese by default, can also use English or Japanese, and refuses other languages. Realtime Doubao voice defaults to the working female Chinese voice.
 
 ## Frontend Preview
 
@@ -82,16 +82,16 @@ http://localhost:5173
 
 ## Using The App
 
-Use `Ask Ark` for the working AI response path:
+Use `询问 Ark` for the working AI response path:
 
-1. Type a rider command in the command bar.
-2. Click `Ask Ark`.
+1. Type a rider command in Chinese, English, or Japanese in the command bar.
+2. Click `询问 Ark`.
 3. The app sends the command to `/ark/chat`.
 4. The reply appears in the transcript and is spoken by browser text-to-speech.
 
-Use `Voice Command` if your browser supports the Web Speech API. This captures speech as text, sends it to Ark, and speaks the reply. If Ark credentials are missing or rejected, the server returns a short local fallback reply by default so the voice flow still responds while credentials are being fixed.
+Use `语音指令` if your browser supports the Web Speech API. This captures Chinese speech by default, sends it to Ark, and speaks the reply with Chinese browser text-to-speech when supported. If Ark credentials are missing or rejected, the server returns a short local fallback reply by default so the voice flow still responds while credentials are being fixed.
 
-Use `Start Voice` to exercise the realtime audio streaming path. In the default configuration, this connects to the mock WebSocket provider and emits simulated rider/agent transcript events. With `VOICE_PROVIDER=doubao`, the backend connects to the Doubao realtime dialogue WebSocket, sends browser mic PCM frames, and relays returned PCM voice audio back to the browser.
+Use `开始语音` to exercise the realtime audio streaming path. In the default configuration, this connects to the mock WebSocket provider and emits simulated rider/agent transcript events. With `VOICE_PROVIDER=doubao`, the backend connects to the Doubao realtime dialogue WebSocket, sends browser mic PCM frames, and relays returned female Chinese PCM voice audio back to the browser.
 
 ## Environment Variables
 
@@ -102,7 +102,7 @@ ARK_API_KEY=
 ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
 ARK_ENDPOINT_ID=
 ARK_MODEL=doubao-seed-1-6-250615
-HELMET_AGENT_SYSTEM_PROMPT=You are Max, a friendly Motorcycle Helmet AI assistant. Introduce yourself as Max Motorcycle Helmet AI assistant. Help riders with motorcycle-related issues, navigation, weather, route conditions, nearby stops, and other motorcycle topics. Keep replies short, clear, hands-free, and safety-first.
+HELMET_AGENT_SYSTEM_PROMPT=你是 Max，一位友好、冷静、以安全为先的摩托车头盔 AI 助手。你的名字保持 Max，角色保持 Motorcycle Helmet AI assistant。默认使用中文回答；如果骑手明确使用英文，可以用英文回答；如果骑手明确使用日文，可以用日文回答。只允许中文、英文、日文三种语言，不要使用其他语言。如果骑手使用其他语言或要求你使用其他语言，请用中文简短说明：我只支持中文、English、日本語。帮助骑手处理摩托车相关问题、导航、天气、路况、附近停靠点和骑行安全事项。回答要简短、清晰、适合免手操作。骑行中遇到危险或分心请求时，给出更安全的替代方案。声音设定为中文女声。
 HELMET_AGENT_OFFLINE_FALLBACK=true
 ```
 
@@ -130,7 +130,7 @@ DOUBAO_APP_ID=
 DOUBAO_APP_KEY=
 DOUBAO_ACCESS_KEY=
 DOUBAO_BOT_NAME=Max
-DOUBAO_SYSTEM_ROLE=You are Max, a friendly Motorcycle Helmet AI assistant. Introduce yourself as Max Motorcycle Helmet AI assistant. Help riders with motorcycle-related issues, navigation, weather, route conditions, nearby stops, and other motorcycle topics. Keep replies short, clear, hands-free, and safety-first.
+DOUBAO_SYSTEM_ROLE=你是 Max，一位友好、冷静、以安全为先的摩托车头盔 AI 助手。你的名字保持 Max，角色保持 Motorcycle Helmet AI assistant。默认使用中文回答；如果骑手明确使用英文，可以用英文回答；如果骑手明确使用日文，可以用日文回答。只允许中文、英文、日文三种语言，不要使用其他语言。如果骑手使用其他语言或要求你使用其他语言，请用中文简短说明：我只支持中文、English、日本語。帮助骑手处理摩托车相关问题、导航、天气、路况、附近停靠点和骑行安全事项。回答要简短、清晰、适合免手操作。骑行中遇到危险或分心请求时，给出更安全的替代方案。声音设定为中文女声。
 DOUBAO_REALTIME_MODEL=1.2.1.1
 DOUBAO_INPUT_MODE=keep_alive
 DOUBAO_VOICE=zh_female_vv_jupiter_bigtts
@@ -150,7 +150,7 @@ Request:
 
 ```json
 {
-  "text": "Find the nearest gas station and keep it short."
+  "text": "帮我找最近的加油站，简短回答。"
 }
 ```
 
@@ -158,13 +158,13 @@ Response:
 
 ```json
 {
-  "reply": "Nearest gas is 0.5 miles ahead on the right."
+  "reply": "最近加油站在前方 0.5 英里右侧。"
 }
 ```
 
 ### `WS /agent`
 
-Browser audio relay endpoint used by `Start Voice`.
+Browser audio relay endpoint used by `开始语音`.
 
 Client events:
 
@@ -203,7 +203,7 @@ Smoke test Ark:
 ```bash
 curl -s http://localhost:8787/ark/chat \
   -H 'content-type: application/json' \
-  -d '{"text":"Nearest gas station, short reply."}'
+  -d '{"text":"最近的加油站，简短回答。"}'
 ```
 
 Smoke test health:

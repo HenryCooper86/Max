@@ -48,6 +48,24 @@ type TranscriptItem = {
 const SAMPLE_RATE = 16000;
 const PCM_FRAME_SAMPLES = 320;
 const VISUALIZER_BARS = [0.42, 0.78, 0.56, 0.94, 0.68, 0.84, 0.48, 0.72, 0.6];
+const SUPPORTED_LANGUAGE_MESSAGE = "我只支持中文、English、日本語。请使用这三种语言之一。";
+
+function isSupportedLanguageText(text: string) {
+  return text
+    .replace(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Latin}\p{Number}\p{Punctuation}\p{Separator}\p{Symbol}]/gu, "")
+    .trim().length === 0;
+}
+
+function selectChineseFemaleVoice() {
+  const voices = window.speechSynthesis.getVoices();
+  const zhVoices = voices.filter((voice) => voice.lang.toLowerCase().startsWith("zh"));
+  return (
+    zhVoices.find((voice) => /female|女|xiaoxiao|xiaoyi|tingting|jupiter/i.test(`${voice.name} ${voice.voiceURI}`)) ??
+    zhVoices[0] ??
+    voices.find((voice) => voice.lang.toLowerCase().startsWith("en")) ??
+    voices[0]
+  );
+}
 
 function createAgentSocket() {
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
@@ -77,7 +95,7 @@ function downsampleTo16k(input: Float32Array, inputRate: number) {
 function useHelmetAgent() {
   const [connected, setConnected] = useState(false);
   const [listening, setListening] = useState(false);
-  const [status, setStatus] = useState("Offline");
+  const [status, setStatus] = useState("离线");
   const [provider, setProvider] = useState("mock");
   const [noiseDb, setNoiseDb] = useState(42);
   const [latencyMs, setLatencyMs] = useState(0);
@@ -124,8 +142,11 @@ function useHelmetAgent() {
     if (!("speechSynthesis" in window)) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "zh-CN";
+    const voice = selectChineseFemaleVoice();
+    if (voice) utterance.voice = voice;
     utterance.rate = 1.02;
-    utterance.pitch = 0.96;
+    utterance.pitch = 1.06;
     window.speechSynthesis.speak(utterance);
   }, []);
 
@@ -155,14 +176,14 @@ function useHelmetAgent() {
 
   const connect = useCallback(() => {
     if (socketRef.current?.readyState === WebSocket.OPEN) return;
-    setStatus("Connecting");
+    setStatus("连接中");
     const socket = createAgentSocket();
     socket.binaryType = "arraybuffer";
     socketRef.current = socket;
 
     socket.addEventListener("open", () => {
       setConnected(true);
-      setStatus("Ready");
+      setStatus("就绪");
       socket.send(JSON.stringify({ type: "session.start", sampleRate: SAMPLE_RATE, channels: 1 }));
     });
 
@@ -176,7 +197,7 @@ function useHelmetAgent() {
         const event = JSON.parse(String(message.data)) as AgentEvent;
         if (event.type === "session.started") {
           setProvider(event.provider);
-          setStatus(event.mode === "mock" ? "Mock route active" : "Doubao live");
+          setStatus(event.mode === "mock" ? "模拟路线已启用" : "豆包实时语音在线");
         }
         if (event.type === "status") setStatus(event.detail);
         if (event.type === "transcript") {
@@ -189,25 +210,25 @@ function useHelmetAgent() {
         }
         if (event.type === "error") setStatus(event.message);
       } catch {
-        setStatus("Unexpected agent message");
+        setStatus("收到异常代理消息");
       }
     });
 
     socket.addEventListener("close", () => {
       setConnected(false);
       setListening(false);
-      setStatus("Offline");
+      setStatus("离线");
     });
 
     socket.addEventListener("error", () => {
-      setStatus("Connection error");
+      setStatus("连接错误");
     });
   }, [playPcm16, pushTranscript, speak]);
 
   const waitForSocket = useCallback(async () => {
     connect();
     const socket = socketRef.current;
-    if (!socket) throw new Error("Voice socket was not created");
+    if (!socket) throw new Error("语音连接未创建");
     if (socket.readyState === WebSocket.OPEN) return socket;
 
     return new Promise<WebSocket>((resolve, reject) => {
@@ -217,7 +238,7 @@ function useHelmetAgent() {
       };
       const handleError = () => {
         cleanup();
-        reject(new Error("Voice socket failed to open"));
+        reject(new Error("语音连接打开失败"));
       };
       const cleanup = () => {
         socket.removeEventListener("open", handleOpen);
@@ -304,10 +325,10 @@ function useHelmetAgent() {
         socket.send(frame.buffer);
       }, 20);
       setListening(true);
-      setStatus("Listening");
+      setStatus("正在收听");
       socket.send(JSON.stringify({ type: "audio.start" }));
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Microphone access failed");
+      setStatus(error instanceof Error ? error.message : "无法访问麦克风");
       setListening(false);
     }
   }, [waitForSocket]);
@@ -328,9 +349,16 @@ function useHelmetAgent() {
 
       pushTranscript("rider", text);
       setCommandText("");
+      if (!isSupportedLanguageText(text)) {
+        pushTranscript("agent", SUPPORTED_LANGUAGE_MESSAGE);
+        speak(SUPPORTED_LANGUAGE_MESSAGE);
+        setStatus("语言不支持");
+        return;
+      }
+
       arkBusyRef.current = true;
       setArkBusy(true);
-      setStatus("Thinking with Ark");
+      setStatus("Ark 正在思考");
       const startedAt = performance.now();
 
       try {
@@ -340,16 +368,16 @@ function useHelmetAgent() {
           body: JSON.stringify({ text })
         });
         const payload = (await response.json()) as { reply?: string; error?: string; fallback?: boolean };
-        if (!response.ok) throw new Error(payload.error ?? "Ark request failed");
+        if (!response.ok) throw new Error(payload.error ?? "Ark 请求失败");
         const reply = payload.reply ?? "";
         pushTranscript("agent", reply);
         speak(reply);
         setProvider("ark");
         setLatencyMs(Math.round(performance.now() - startedAt));
-        setStatus(payload.fallback ? "Local fallback reply ready" : "Ark reply ready");
+        setStatus(payload.fallback ? "本地备用回复已就绪" : "Ark 回复已就绪");
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Ark request failed";
-        const reply = `I heard you, but I cannot reach Ark: ${message}`;
+        const message = error instanceof Error ? error.message : "Ark 请求失败";
+        const reply = `我听到了，但暂时无法连接 Ark：${message}`;
         pushTranscript("agent", reply);
         speak(reply);
         setStatus(message);
@@ -373,7 +401,7 @@ function useHelmetAgent() {
   function startSpeechCapture(continuous: boolean) {
     const SpeechRecognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      setStatus("Speech recognition is not available in this browser");
+      setStatus("此浏览器不支持语音识别");
       return;
     }
 
@@ -386,7 +414,7 @@ function useHelmetAgent() {
     speechRef.current = recognition;
     recognition.continuous = continuous;
     recognition.interimResults = continuous;
-    recognition.lang = "en-US";
+    recognition.lang = "zh-CN";
     recognition.onresult = (event) => {
       const results = Array.from(event.results);
       const startIndex = event.resultIndex ?? 0;
@@ -422,7 +450,7 @@ function useHelmetAgent() {
     };
     recognition.onerror = () => {
       setSpeechListening(false);
-      if (!continuous) setStatus("Speech command failed");
+      if (!continuous) setStatus("语音指令失败");
     };
     recognition.onend = () => {
       setSpeechListening(false);
@@ -432,13 +460,13 @@ function useHelmetAgent() {
             recognition.start();
             setSpeechListening(true);
           } catch {
-            setStatus("Speech recognition restart failed");
+            setStatus("语音识别重启失败");
           }
         }, 250);
       }
     };
     setSpeechListening(true);
-    setStatus(continuous ? "Listening with Ark voice fallback" : "Listening for command");
+    setStatus(continuous ? "正在使用 Ark 语音备用模式收听" : "正在收听指令");
     recognition.start();
   }
 
@@ -479,18 +507,18 @@ function useHelmetAgent() {
 function App() {
   const agent = useHelmetAgent();
   const agentState = useMemo(() => {
-    if (agent.listening) return "Listening";
-    if (agent.connected) return "Standby";
-    return "Offline";
+    if (agent.listening) return "收听中";
+    if (agent.connected) return "待命";
+    return "离线";
   }, [agent.connected, agent.listening]);
 
   return (
     <main className="shell">
-      <section className="visor" aria-label="Helmet voice agent cockpit">
+      <section className="visor" aria-label="头盔语音助手座舱">
         <div className="topbar">
           <div>
             <p className="eyebrow">HCT Helmet OS</p>
-            <h1>Max Your Motorcycle Helmet AI</h1>
+            <h1>Max 摩托车头盔 AI</h1>
           </div>
           <div className={`signal ${agent.connected ? "online" : ""}`}>
             <span />
@@ -530,10 +558,10 @@ function App() {
                 onClick={agent.listening ? agent.stopMic : agent.startMic}
                 type="button"
               >
-                {agent.listening ? "Mute Mic" : "Start Voice"}
+                {agent.listening ? "静音麦克风" : "开始语音"}
               </button>
               <button className="ghostButton" onClick={agent.connected ? agent.disconnect : agent.connect} type="button">
-                {agent.connected ? "Disconnect" : "Connect"}
+                {agent.connected ? "断开" : "连接"}
               </button>
             </div>
             <form
@@ -544,53 +572,53 @@ function App() {
               }}
             >
               <input
-                aria-label="Rider command"
-                placeholder="Ask Max: route home, weather ahead, nearest gas..."
+                aria-label="骑手指令"
+                placeholder="问 Max：回家路线、前方天气、最近加油站..."
                 value={agent.commandText}
                 onChange={(event) => agent.setCommandText(event.target.value)}
               />
               <button className="ghostButton" type="button" onClick={agent.startSpeechCommand}>
-                {agent.speechListening ? "Listening" : "Voice Command"}
+                {agent.speechListening ? "收听中" : "语音指令"}
               </button>
               <button className="mainButton" type="submit" disabled={agent.arkBusy}>
-                {agent.arkBusy ? "Sending" : "Ask Ark"}
+                {agent.arkBusy ? "发送中" : "询问 Ark"}
               </button>
             </form>
           </section>
 
           <section className="hudPanel statusPanel">
             <div className="stateBlock">
-              <p>Agent</p>
+              <p>助手</p>
               <strong>{agentState}</strong>
               <span>{agent.status}</span>
             </div>
             <div className="metricRow">
               <div>
-                <p>Wind Noise</p>
+                <p>风噪</p>
                 <strong>{agent.noiseDb} dB</strong>
               </div>
               <div>
-                <p>Latency</p>
+                <p>延迟</p>
                 <strong>{agent.latencyMs} ms</strong>
               </div>
             </div>
             <div className="routeStrip">
-              <span>Navigation</span>
+              <span>导航</span>
               <strong>US-101 N</strong>
-              <small>Next turn in 1.4 mi</small>
+              <small>1.4 英里后转弯</small>
             </div>
           </section>
 
           <section className="hudPanel transcriptPanel">
             <div className="panelHeader">
-              <h2>Conversation</h2>
-              <span>{agent.transcript.length ? "Live" : "Idle"}</span>
+              <h2>对话</h2>
+              <span>{agent.transcript.length ? "实时" : "空闲"}</span>
             </div>
             <div className="transcriptList">
-              {(agent.transcript.length ? agent.transcript : [{ id: 1, speaker: "agent" as const, text: "Hi, I am Max Motorcycle Helmet AI assistant. Ask me about routes, weather, nearby stops, or motorcycle issues." }]).map(
+              {(agent.transcript.length ? agent.transcript : [{ id: 1, speaker: "agent" as const, text: "你好，我是 Max，摩托车头盔 AI 助手。你可以问我路线、天气、附近停靠点或摩托车问题。" }]).map(
                 (item) => (
                   <article className={`message ${item.speaker}`} key={item.id}>
-                    <span>{item.speaker === "rider" ? "Rider" : "Max"}</span>
+                    <span>{item.speaker === "rider" ? "骑手" : "Max"}</span>
                     <p>{item.text}</p>
                   </article>
                 )

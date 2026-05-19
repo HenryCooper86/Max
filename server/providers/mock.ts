@@ -2,17 +2,17 @@ import type { WebSocket } from "ws";
 import type { AgentProvider, SessionStartEvent } from "./types";
 
 const riderPrompts = [
-  "Helmet mic check. I need the fastest route home.",
-  "Wind is picking up. Keep navigation prompts short.",
-  "Find the nearest gas station on this route.",
-  "Send my ETA to the group ride."
+  "头盔麦克风测试。帮我找最快回家路线。",
+  "风变大了。导航提示保持简短。",
+  "帮我找这条路线最近的加油站。",
+  "把我的预计到达时间发给骑行小队。"
 ];
 
 const agentReplies = [
-  "Route home is set. Stay on US-101 North for 11 miles.",
-  "Noise suppression is active. I will use concise prompts.",
-  "Nearest gas is 2.1 miles ahead on the right.",
-  "ETA shared. Current arrival time is 18:42."
+  "回家路线已设置。沿 US-101 North 继续 11 英里。",
+  "降噪已开启。我会保持提示简短。",
+  "最近加油站在前方 2.1 英里右侧。",
+  "预计到达时间已发送。当前到达时间是 18:42。"
 ];
 
 export function createMockProvider(client: WebSocket): AgentProvider {
@@ -48,11 +48,11 @@ export function createMockProvider(client: WebSocket): AgentProvider {
       send({
         type: "status",
         state: "ready",
-        detail: `Mock agent ready at ${event.sampleRate} Hz`
+        detail: `模拟代理已就绪，采样率 ${event.sampleRate} Hz`
       });
     },
     async startAudio() {
-      send({ type: "status", state: "listening", detail: "Listening through helmet mic" });
+      send({ type: "status", state: "listening", detail: "正在通过头盔麦克风收听" });
       timer = setInterval(emitConversation, 4800);
       emitConversation();
     },
@@ -70,7 +70,7 @@ export function createMockProvider(client: WebSocket): AgentProvider {
     async stopAudio() {
       if (timer) clearInterval(timer);
       timer = undefined;
-      send({ type: "status", state: "ready", detail: "Mic muted" });
+      send({ type: "status", state: "ready", detail: "麦克风已静音" });
     },
     async close() {
       if (timer) clearInterval(timer);

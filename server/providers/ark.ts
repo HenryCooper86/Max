@@ -14,29 +14,40 @@ type ArkChatResponse = {
   };
 };
 
-const DEFAULT_SYSTEM_PROMPT =
-  "You are Max, a friendly Motorcycle Helmet AI assistant. Introduce yourself as Max Motorcycle Helmet AI assistant. Help riders with motorcycle-related issues, navigation, weather, route conditions, nearby stops, and other motorcycle topics. Keep replies short, clear, hands-free, and safety-first. If the rider asks for a risky action while riding, give a safer alternative.";
+export const DEFAULT_AGENT_SYSTEM_PROMPT =
+  "你是 Max，一位友好、冷静、以安全为先的摩托车头盔 AI 助手。你的名字保持 Max，角色保持 Motorcycle Helmet AI assistant。默认使用中文回答；如果骑手明确使用英文，可以用英文回答；如果骑手明确使用日文，可以用日文回答。只允许中文、英文、日文三种语言，不要使用其他语言。如果骑手使用其他语言或要求你使用其他语言，请用中文简短说明：我只支持中文、English、日本語。帮助骑手处理摩托车相关问题、导航、天气、路况、附近停靠点和骑行安全事项。回答要简短、清晰、适合免手操作。骑行中遇到危险或分心请求时，给出更安全的替代方案。声音设定为中文女声。";
+
+export function isSupportedLanguageText(text: string) {
+  const meaningfulText = text
+    .replace(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Latin}\p{Number}\p{Punctuation}\p{Separator}\p{Symbol}]/gu, "")
+    .trim();
+  return meaningfulText.length === 0;
+}
 
 export function createLocalHelmetReply(riderText: string) {
   const text = riderText.toLowerCase();
 
-  if (text.includes("gas") || text.includes("fuel")) {
-    return "I hear you. Nearest gas lookup needs live location, so pull over or check your map app safely.";
+  if (!isSupportedLanguageText(riderText)) {
+    return "我只支持中文、English、日本語。请使用这三种语言之一。";
   }
 
-  if (text.includes("weather") || text.includes("rain") || text.includes("wind")) {
-    return "I hear you. Live weather needs a connected data source; ride cautiously and watch road conditions.";
+  if (text.includes("gas") || text.includes("fuel") || text.includes("加油") || text.includes("油站")) {
+    return "收到。附近油站需要实时位置数据；请先保持骑行安全，必要时靠边后再查看地图。";
   }
 
-  if (text.includes("route") || text.includes("navigation") || text.includes("home")) {
-    return "I hear you. Navigation needs live maps connected; keep your current route and pull over before changing it.";
+  if (text.includes("weather") || text.includes("rain") || text.includes("wind") || text.includes("天气") || text.includes("下雨") || text.includes("风")) {
+    return "收到。实时天气需要联网数据；请降低风险，注意风雨和路面变化。";
   }
 
-  if (text.includes("hear") || text.includes("test") || text.includes("hello")) {
-    return "I can hear you. Max is replying through local fallback mode.";
+  if (text.includes("route") || text.includes("navigation") || text.includes("home") || text.includes("路线") || text.includes("导航") || text.includes("回家")) {
+    return "收到。导航需要实时地图连接；先保持当前路线，变更路线前请靠边确认。";
   }
 
-  return "I hear you. Ark is unavailable, so I am using local fallback mode. Keep riding safely.";
+  if (text.includes("hear") || text.includes("test") || text.includes("hello") || text.includes("听见") || text.includes("测试") || text.includes("你好")) {
+    return "我听得到。Max 正在使用本地备用模式回复。";
+  }
+
+  return "收到。Ark 当前不可用，我会用本地备用模式简短回复。请保持骑行安全。";
 }
 
 function getArkModel() {
@@ -48,6 +59,10 @@ function getArkModel() {
 }
 
 export async function askArk(riderText: string) {
+  if (!isSupportedLanguageText(riderText)) {
+    return createLocalHelmetReply(riderText);
+  }
+
   const apiKey = process.env.ARK_API_KEY;
   if (!apiKey) {
     throw new Error("ARK_API_KEY is required for Ark command mode");
@@ -58,7 +73,7 @@ export async function askArk(riderText: string) {
   const messages: ArkMessage[] = [
     {
       role: "system",
-      content: process.env.HELMET_AGENT_SYSTEM_PROMPT ?? DEFAULT_SYSTEM_PROMPT
+      content: process.env.HELMET_AGENT_SYSTEM_PROMPT ?? DEFAULT_AGENT_SYSTEM_PROMPT
     },
     {
       role: "user",

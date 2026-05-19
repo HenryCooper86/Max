@@ -1,6 +1,7 @@
 import { WebSocket, type RawData } from "ws";
 import { randomUUID } from "node:crypto";
 import type { AgentProvider, SessionStartEvent } from "./types";
+import { DEFAULT_AGENT_SYSTEM_PROMPT } from "./ark";
 
 type DoubaoSessionConfig = {
   sampleRate: number;
@@ -131,9 +132,7 @@ function buildDoubaoSessionConfig(config: DoubaoSessionConfig) {
   return {
     dialog: {
       bot_name: process.env.DOUBAO_BOT_NAME ?? "Max",
-      system_role:
-        process.env.DOUBAO_SYSTEM_ROLE ??
-        "You are Max, a friendly Motorcycle Helmet AI assistant. Introduce yourself as Max Motorcycle Helmet AI assistant. Help riders with motorcycle-related issues, navigation, weather, route conditions, nearby stops, and other motorcycle topics. Keep replies short, clear, hands-free, and safety-first.",
+      system_role: process.env.DOUBAO_SYSTEM_ROLE ?? DEFAULT_AGENT_SYSTEM_PROMPT,
       extra: {
         input_mod: process.env.DOUBAO_INPUT_MODE ?? "keep_alive",
         model: process.env.DOUBAO_REALTIME_MODEL ?? "1.2.1.1"
@@ -240,7 +239,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
         sendClient({
           type: "status",
           state: "ready",
-          detail: "Doubao TTS returned no audio; using browser speech fallback"
+          detail: "豆包 TTS 未返回音频，正在使用浏览器语音备用模式"
         });
       }
       receivedTtsAudio = false;
@@ -254,7 +253,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
 
     upstream.on("open", () => {
       upstream?.send(buildFullClientRequest(EventSend.StartConnection));
-      sendClient({ type: "status", state: "connecting", detail: "Doubao voice connection opened" });
+      sendClient({ type: "status", state: "connecting", detail: "豆包语音连接已打开" });
     });
 
     upstream.on("message", (message) => {
@@ -270,7 +269,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
         if (frame.event === EventReceive.SessionStarted) {
           sessionReady = true;
           sendClient({ type: "session.started", provider: "doubao", mode: "live" });
-          sendClient({ type: "status", state: "ready", detail: "Doubao realtime voice connected" });
+          sendClient({ type: "status", state: "ready", detail: "豆包实时语音已连接" });
           while (pendingAudio.length) {
             upstream?.send(buildAudioRequest(sessionId, pendingAudio.shift()!));
           }
@@ -280,21 +279,21 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
         if (frame.event === EventReceive.TtsResponse) {
           receivedTtsAudio = true;
           clearTtsFallbackTimer();
-          sendClient({ type: "status", state: "speaking", detail: "Doubao voice audio received" });
+          sendClient({ type: "status", state: "speaking", detail: "已收到豆包语音音频" });
           if (client.readyState === client.OPEN) client.send(frame.payload, { binary: true });
           return;
         }
 
         const payload = parseJsonPayload(frame);
         if (frame.event === EventReceive.AsrInfo) {
-          sendClient({ type: "status", state: "hearing", detail: "Doubao detected rider speech" });
+          sendClient({ type: "status", state: "hearing", detail: "豆包检测到骑手语音" });
           return;
         }
 
         if (frame.event === EventReceive.AsrResponse) {
           const text = extractAsrText(payload);
           if (text) {
-            sendClient({ type: "status", state: "asr", detail: `Doubao heard: ${text}` });
+            sendClient({ type: "status", state: "asr", detail: `豆包听到：${text}` });
             sendClient({ type: "transcript", speaker: "rider", text, final: false });
           }
           return;
@@ -304,7 +303,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
           const text = String(payload.content ?? "");
           if (text) {
             pendingAgentText += text;
-            sendClient({ type: "status", state: "thinking", detail: "Doubao generated reply text" });
+            sendClient({ type: "status", state: "thinking", detail: "豆包已生成回复文本" });
           }
           return;
         }
@@ -315,7 +314,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
           } else if (pendingAgentText) {
             armTtsFallbackTimer();
           }
-          sendClient({ type: "status", state: "ready", detail: "Doubao reply text complete" });
+          sendClient({ type: "status", state: "ready", detail: "豆包回复文本已完成" });
           return;
         }
 
@@ -326,17 +325,17 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
             sendClient({
               type: "status",
               state: "ready",
-              detail: "Doubao TTS returned no audio; using browser speech fallback"
+              detail: "豆包 TTS 未返回音频，正在使用浏览器语音备用模式"
             });
           } else {
-            sendClient({ type: "status", state: "ready", detail: "Doubao reply complete" });
+            sendClient({ type: "status", state: "ready", detail: "豆包回复已完成" });
           }
           receivedTtsAudio = false;
           return;
         }
 
         if (frame.event === EventReceive.AsrEnded) {
-          sendClient({ type: "status", state: "ready", detail: "Doubao reply complete" });
+          sendClient({ type: "status", state: "ready", detail: "豆包回复已完成" });
           return;
         }
 
@@ -345,15 +344,15 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
           frame.event === EventReceive.SessionFailed ||
           frame.event === EventReceive.DialogCommonError
         ) {
-          sendClient({ type: "error", message: String(payload.error ?? payload.message ?? "Doubao voice session failed") });
+          sendClient({ type: "error", message: String(payload.error ?? payload.message ?? "豆包语音会话失败") });
           return;
         }
 
         if (frame.event === EventReceive.Usage) {
-          sendClient({ type: "status", state: "usage", detail: "Doubao usage event received" });
+          sendClient({ type: "status", state: "usage", detail: "已收到豆包用量事件" });
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Received invalid Doubao payload";
+        const message = error instanceof Error ? error.message : "收到无效豆包载荷";
         sendClient({ type: "status", state: "doubao", detail: message });
       }
     });
@@ -361,13 +360,13 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
     upstream.on("close", () => {
       sessionReady = false;
       clearTtsFallbackTimer();
-      sendClient({ type: "status", state: "closed", detail: "Doubao live agent disconnected" });
+      sendClient({ type: "status", state: "closed", detail: "豆包实时代理已断开" });
     });
 
     upstream.on("unexpected-response", (_request, response) => {
       sendClient({
         type: "error",
-        message: `Doubao voice handshake failed with HTTP ${response.statusCode}. Check speech-dialog App ID, Access Token, Resource ID, and entitlement.`
+        message: `豆包语音握手失败，HTTP ${response.statusCode}。请检查 speech-dialog App ID、Access Token、Resource ID 和权限。`
       });
     });
 
@@ -384,7 +383,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
       }
     },
     async startAudio() {
-      sendClient({ type: "status", state: "listening", detail: "Listening through Doubao realtime voice" });
+      sendClient({ type: "status", state: "listening", detail: "正在通过豆包实时语音收听" });
     },
     async sendAudio(chunk: Buffer) {
       if (upstream && upstream.readyState === WebSocket.OPEN) {
@@ -396,7 +395,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
       if (upstream?.readyState === WebSocket.OPEN && sessionReady) {
         upstream.send(buildFullClientRequest(EventSend.EndAsr, sessionId));
       }
-      sendClient({ type: "status", state: "ready", detail: "Mic muted" });
+      sendClient({ type: "status", state: "ready", detail: "麦克风已静音" });
     },
     async close() {
       clearTtsFallbackTimer();

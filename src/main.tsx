@@ -500,7 +500,7 @@ function App() {
 
         <div className="grid">
           <section className="hudPanel helmetPanel">
-            <div className={`helmetVisual ${agent.connected ? "online" : "offline"}`} aria-hidden="true">
+            <div className={`helmetVisual ${agent.connected ? "online" : "offline"} ${agent.listening ? "listening" : ""}`} aria-hidden="true">
               <svg viewBox="0 0 420 270" role="img">
                 <path
                   className="helmetShell"
@@ -515,10 +515,8 @@ function App() {
                   d="M220 167c40 4 82 0 126-12-5 28-18 46-40 54-31 11-66 17-103 17 17-17 22-36 17-59Z"
                 />
                 <circle className="micDot" cx="258" cy="205" r="9" />
+                <circle className="greenDot" cx="282" cy="205" r="9" />
               </svg>
-              <div className={`voiceCore ${agent.listening ? "active" : ""}`}>
-                <span />
-              </div>
               <div className={`visorVisualizer ${agent.listening ? "active" : ""}`}>
                 {VISUALIZER_BARS.map((weight, index) => {
                   const scale = agent.listening ? Math.max(0.12, Math.min(1, agent.voiceLevel * weight + 0.08)) : 0.12;

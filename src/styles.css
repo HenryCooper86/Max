@@ -162,34 +162,17 @@ h2 {
   filter: drop-shadow(0 0 12px #ef6a3a);
 }
 
+.greenDot {
+  fill: #3ee89f;
+  filter: drop-shadow(0 0 12px rgba(62, 232, 159, 0.72));
+}
+
 .helmetVisual.offline .micDot {
   animation: redBlink 1.05s infinite ease-in-out;
 }
 
-.voiceCore {
-  position: absolute;
-  left: 66.2%;
-  top: 73.7%;
-  width: 4.3%;
-  aspect-ratio: 1;
-  display: grid;
-  place-items: center;
-}
-
-.voiceCore span {
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  background: #3ee89f;
-  box-shadow: 0 0 18px rgba(62, 232, 159, 0.64);
-}
-
-.helmetVisual.online .voiceCore span {
+.helmetVisual.online .greenDot {
   animation: greenBlink 1.05s infinite ease-in-out;
-}
-
-.voiceCore.active {
-  animation: none;
 }
 
 .visorVisualizer {

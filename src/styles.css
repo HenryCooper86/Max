@@ -99,8 +99,8 @@ h2 {
 }
 
 .signal span {
-  width: 9px;
-  height: 9px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
   background: #6f7776;
 }
@@ -168,17 +168,17 @@ h2 {
 
 .voiceCore {
   position: absolute;
-  right: 22%;
-  bottom: 16%;
-  width: clamp(54px, 8vw, 92px);
+  left: 66.2%;
+  top: 73.7%;
+  width: 4.3%;
   aspect-ratio: 1;
   display: grid;
   place-items: center;
 }
 
 .voiceCore span {
-  width: 48%;
-  aspect-ratio: 1;
+  width: 100%;
+  height: 100%;
   border-radius: 50%;
   background: #3ee89f;
   box-shadow: 0 0 18px rgba(62, 232, 159, 0.64);
@@ -190,6 +190,37 @@ h2 {
 
 .voiceCore.active {
   animation: none;
+}
+
+.visorVisualizer {
+  position: absolute;
+  left: 32%;
+  top: 33%;
+  width: 42%;
+  height: 19%;
+  display: grid;
+  grid-template-columns: repeat(9, 1fr);
+  align-items: center;
+  gap: clamp(3px, 0.7vw, 8px);
+  padding: 0 3%;
+  opacity: 0.24;
+  mix-blend-mode: screen;
+  pointer-events: none;
+  transform: skewX(-7deg);
+}
+
+.visorVisualizer span {
+  height: 76%;
+  min-height: 8px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #7fffe5 0%, #3ee89f 48%, #1b7b77 100%);
+  box-shadow: 0 0 16px rgba(62, 232, 159, 0.56);
+  transform-origin: center;
+  transition: transform 80ms linear, opacity 120ms ease;
+}
+
+.visorVisualizer.active {
+  opacity: 0.86;
 }
 
 @keyframes redBlink {

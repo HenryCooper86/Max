@@ -47,6 +47,7 @@ type TranscriptItem = {
 
 const SAMPLE_RATE = 16000;
 const PCM_FRAME_SAMPLES = 320;
+const VISUALIZER_BARS = [0.42, 0.78, 0.56, 0.94, 0.68, 0.84, 0.48, 0.72, 0.6];
 
 function createAgentSocket() {
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
@@ -83,6 +84,7 @@ function useHelmetAgent() {
   const [commandText, setCommandText] = useState("");
   const [arkBusy, setArkBusy] = useState(false);
   const [speechListening, setSpeechListening] = useState(false);
+  const [voiceLevel, setVoiceLevel] = useState(0);
   const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
   const socketRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -93,6 +95,8 @@ function useHelmetAgent() {
   const micSinkRef = useRef<GainNode | null>(null);
   const pcmQueueRef = useRef<Int16Array>(new Int16Array(0));
   const pcmSendTimerRef = useRef<number | null>(null);
+  const voiceLevelRef = useRef(0);
+  const lastVoiceLevelUpdateRef = useRef(0);
   const speechRef = useRef<BrowserSpeechRecognition | null>(null);
   const speechContinuousRef = useRef(false);
   const speechBufferRef = useRef("");
@@ -230,6 +234,8 @@ function useHelmetAgent() {
     if (pcmSendTimerRef.current) window.clearInterval(pcmSendTimerRef.current);
     pcmSendTimerRef.current = null;
     pcmQueueRef.current = new Int16Array(0);
+    voiceLevelRef.current = 0;
+    setVoiceLevel(0);
     processorRef.current?.disconnect();
     micSinkRef.current?.disconnect();
     audioContextRef.current?.close();
@@ -264,6 +270,19 @@ function useHelmetAgent() {
 
       processor.onaudioprocess = (event) => {
         const input = event.inputBuffer.getChannelData(0);
+        let sumSquares = 0;
+        for (let i = 0; i < input.length; i += 1) {
+          sumSquares += input[i] * input[i];
+        }
+        const rms = Math.sqrt(sumSquares / input.length);
+        const nextLevel = Math.min(1, rms * 8);
+        voiceLevelRef.current = voiceLevelRef.current * 0.68 + nextLevel * 0.32;
+        const now = performance.now();
+        if (now - lastVoiceLevelUpdateRef.current > 45) {
+          lastVoiceLevelUpdateRef.current = now;
+          setVoiceLevel(voiceLevelRef.current);
+        }
+
         const next = floatToPcm16Array(downsampleTo16k(input, audioContext.sampleRate));
         const queued = pcmQueueRef.current;
         const merged = new Int16Array(queued.length + next.length);
@@ -445,6 +464,7 @@ function useHelmetAgent() {
     commandText,
     arkBusy,
     speechListening,
+    voiceLevel,
     transcript,
     setCommandText,
     connect,
@@ -498,6 +518,12 @@ function App() {
               </svg>
               <div className={`voiceCore ${agent.listening ? "active" : ""}`}>
                 <span />
+              </div>
+              <div className={`visorVisualizer ${agent.listening ? "active" : ""}`}>
+                {VISUALIZER_BARS.map((weight, index) => {
+                  const scale = agent.listening ? Math.max(0.12, Math.min(1, agent.voiceLevel * weight + 0.08)) : 0.12;
+                  return <span key={weight + index} style={{ transform: `scaleY(${scale})` }} />;
+                })}
               </div>
             </div>
             <div className="primaryControls">

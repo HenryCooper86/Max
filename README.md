@@ -1,6 +1,6 @@
 # Max Motorcycle Helmet AI
 
-Prototype AI voice agent for a motorcycle helmet. Max introduces himself as Max Motorcycle Helmet AI assistant, uses a Chinese male voice, and helps with motorcycle-related issues, navigation, weather, route conditions, nearby stops, and other rider topics.
+Prototype AI voice agent for a motorcycle helmet. Max introduces himself as Max Motorcycle Helmet AI assistant, uses a Doubao realtime voice, and helps with motorcycle-related issues, navigation, weather, route conditions, nearby stops, and other rider topics.
 
 ## Frontend Preview
 
@@ -132,7 +132,8 @@ DOUBAO_ACCESS_KEY=
 DOUBAO_BOT_NAME=Max
 DOUBAO_SYSTEM_ROLE=You are Max, a friendly Motorcycle Helmet AI assistant. Introduce yourself as Max Motorcycle Helmet AI assistant. Help riders with motorcycle-related issues, navigation, weather, route conditions, nearby stops, and other motorcycle topics. Keep replies short, clear, hands-free, and safety-first.
 DOUBAO_REALTIME_MODEL=1.2.1.1
-DOUBAO_VOICE=zh_male_yunzhou_jupiter_bigtts
+DOUBAO_INPUT_MODE=keep_alive
+DOUBAO_VOICE=zh_female_vv_jupiter_bigtts
 ```
 
 The Ark API key from Volcengine Ark is not the same credential set as the Doubao realtime speech-dialog WebSocket API. Ark powers the command/reply text path. Doubao realtime voice uses the Doubao Speech/OpenSpeech realtime dialogue endpoint. With the newer Speech console, set `DOUBAO_API_KEY`; the key ID can be stored in `DOUBAO_API_KEY_ID` for reference but is not sent. Legacy app credentials are used only when `DOUBAO_API_KEY` is empty.

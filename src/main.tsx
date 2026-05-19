@@ -14,6 +14,7 @@ type BrowserSpeechRecognition = {
 };
 
 type SpeechRecognitionEvent = {
+  resultIndex?: number;
   results: ArrayLike<{
     0: {
       transcript: string;
@@ -45,19 +46,20 @@ type TranscriptItem = {
 };
 
 const SAMPLE_RATE = 16000;
+const PCM_FRAME_SAMPLES = 320;
 
 function createAgentSocket() {
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
   return new WebSocket(`${protocol}://${window.location.host}/agent`);
 }
 
-function floatToPcm16(float32: Float32Array) {
+function floatToPcm16Array(float32: Float32Array) {
   const pcm = new Int16Array(float32.length);
   for (let i = 0; i < float32.length; i += 1) {
     const sample = Math.max(-1, Math.min(1, float32[i]));
     pcm[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
   }
-  return pcm.buffer;
+  return pcm;
 }
 
 function downsampleTo16k(input: Float32Array, inputRate: number) {
@@ -88,12 +90,31 @@ function useHelmetAgent() {
   const playbackContextRef = useRef<AudioContext | null>(null);
   const playbackCursorRef = useRef(0);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const micSinkRef = useRef<GainNode | null>(null);
+  const pcmQueueRef = useRef<Int16Array>(new Int16Array(0));
+  const pcmSendTimerRef = useRef<number | null>(null);
   const speechRef = useRef<BrowserSpeechRecognition | null>(null);
   const speechContinuousRef = useRef(false);
+  const speechBufferRef = useRef("");
+  const speechFlushTimerRef = useRef<number | null>(null);
+  const arkBusyRef = useRef(false);
 
   const pushTranscript = useCallback((speaker: "rider" | "agent", text: string) => {
     setTranscript((items) => [...items.slice(-7), { id: Date.now() + Math.random(), speaker, text }]);
   }, []);
+
+  const clearSpeechFlushTimer = useCallback(() => {
+    if (speechFlushTimerRef.current) window.clearTimeout(speechFlushTimerRef.current);
+    speechFlushTimerRef.current = null;
+  }, []);
+
+  const stopSpeechCapture = useCallback(() => {
+    speechContinuousRef.current = false;
+    clearSpeechFlushTimer();
+    speechBufferRef.current = "";
+    speechRef.current?.stop();
+    setSpeechListening(false);
+  }, [clearSpeechFlushTimer]);
 
   const speak = useCallback((text: string) => {
     if (!("speechSynthesis" in window)) return;
@@ -121,6 +142,7 @@ function useHelmetAgent() {
     const source = audioContext.createBufferSource();
     source.buffer = buffer;
     source.connect(audioContext.destination);
+    if (audioContext.state === "suspended") void audioContext.resume();
 
     const startAt = Math.max(audioContext.currentTime, playbackCursorRef.current);
     source.start(startAt);
@@ -204,17 +226,21 @@ function useHelmetAgent() {
   }, [connect]);
 
   const stopMic = useCallback(() => {
-    speechContinuousRef.current = false;
-    speechRef.current?.stop();
+    stopSpeechCapture();
+    if (pcmSendTimerRef.current) window.clearInterval(pcmSendTimerRef.current);
+    pcmSendTimerRef.current = null;
+    pcmQueueRef.current = new Int16Array(0);
     processorRef.current?.disconnect();
+    micSinkRef.current?.disconnect();
     audioContextRef.current?.close();
     streamRef.current?.getTracks().forEach((track) => track.stop());
+    micSinkRef.current = null;
     processorRef.current = null;
     audioContextRef.current = null;
     streamRef.current = null;
     setListening(false);
     socketRef.current?.send(JSON.stringify({ type: "audio.stop" }));
-  }, []);
+  }, [stopSpeechCapture]);
 
   const startMic = useCallback(async () => {
     try {
@@ -228,37 +254,39 @@ function useHelmetAgent() {
       });
       const audioContext = new AudioContext();
       const source = audioContext.createMediaStreamSource(stream);
-      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      const processor = audioContext.createScriptProcessor(1024, 1, 1);
+      const micSink = audioContext.createGain();
+      micSink.gain.value = 0;
       streamRef.current = stream;
       audioContextRef.current = audioContext;
       processorRef.current = processor;
+      micSinkRef.current = micSink;
 
       processor.onaudioprocess = (event) => {
-        const socket = socketRef.current;
-        if (!socket || socket.readyState !== WebSocket.OPEN) return;
         const input = event.inputBuffer.getChannelData(0);
-        const pcm16 = floatToPcm16(downsampleTo16k(input, audioContext.sampleRate));
-        socket.send(pcm16);
+        const next = floatToPcm16Array(downsampleTo16k(input, audioContext.sampleRate));
+        const queued = pcmQueueRef.current;
+        const merged = new Int16Array(queued.length + next.length);
+        merged.set(queued);
+        merged.set(next, queued.length);
+        pcmQueueRef.current = merged;
       };
 
       source.connect(processor);
-      processor.connect(audioContext.destination);
+      processor.connect(micSink);
+      micSink.connect(audioContext.destination);
+      pcmSendTimerRef.current = window.setInterval(() => {
+        const socket = socketRef.current;
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        const queued = pcmQueueRef.current;
+        if (queued.length < PCM_FRAME_SAMPLES) return;
+        const frame = queued.slice(0, PCM_FRAME_SAMPLES);
+        pcmQueueRef.current = queued.slice(PCM_FRAME_SAMPLES);
+        socket.send(frame.buffer);
+      }, 20);
       setListening(true);
       setStatus("Listening");
       socket.send(JSON.stringify({ type: "audio.start" }));
-      void fetch("/health")
-        .then((response) => {
-          if (!response.ok) throw new Error("Health check failed");
-          return response.json() as Promise<{ provider?: string }>;
-        })
-        .then((health) => {
-          if (health.provider === "doubao") {
-            startSpeechCapture(true);
-          }
-        })
-        .catch(() => {
-          startSpeechCapture(true);
-        });
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Microphone access failed");
       setListening(false);
@@ -277,10 +305,11 @@ function useHelmetAgent() {
   const submitCommand = useCallback(
     async (textOverride?: string) => {
       const text = (textOverride ?? commandText).trim();
-      if (!text || arkBusy) return;
+      if (!text || arkBusyRef.current) return;
 
       pushTranscript("rider", text);
       setCommandText("");
+      arkBusyRef.current = true;
       setArkBusy(true);
       setStatus("Thinking with Ark");
       const startedAt = performance.now();
@@ -306,11 +335,21 @@ function useHelmetAgent() {
         speak(reply);
         setStatus(message);
       } finally {
+        arkBusyRef.current = false;
         setArkBusy(false);
       }
     },
-    [arkBusy, commandText, pushTranscript, speak]
+    [commandText, pushTranscript, speak]
   );
+
+  const flushSpeechCommand = useCallback(() => {
+    clearSpeechFlushTimer();
+    const text = speechBufferRef.current.trim().replace(/\s+/g, " ");
+    speechBufferRef.current = "";
+    if (!text) return;
+    setCommandText(text);
+    void submitCommand(text);
+  }, [clearSpeechFlushTimer, submitCommand]);
 
   function startSpeechCapture(continuous: boolean) {
     const SpeechRecognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
@@ -320,20 +359,47 @@ function useHelmetAgent() {
     }
 
     speechContinuousRef.current = continuous;
+    clearSpeechFlushTimer();
+    speechBufferRef.current = "";
     speechRef.current?.stop();
 
     const recognition = new SpeechRecognition();
     speechRef.current = recognition;
     recognition.continuous = continuous;
-    recognition.interimResults = false;
+    recognition.interimResults = continuous;
     recognition.lang = "en-US";
     recognition.onresult = (event) => {
-      const finalText = Array.from(event.results)
+      const results = Array.from(event.results);
+      const startIndex = event.resultIndex ?? 0;
+      const newResults = results.slice(startIndex);
+      const finalText = newResults
+        .filter((result) => result.isFinal)
         .map((result) => result[0]?.transcript ?? "")
         .join(" ")
         .trim();
-      setCommandText(finalText);
-      void submitCommand(finalText);
+
+      if (!continuous) {
+        const command = (finalText || results.map((result) => result[0]?.transcript ?? "").join(" ")).trim();
+        setCommandText(command);
+        void submitCommand(command);
+        return;
+      }
+
+      if (finalText) {
+        speechBufferRef.current = `${speechBufferRef.current} ${finalText}`.trim();
+      }
+
+      const interimText = newResults
+        .filter((result) => !result.isFinal)
+        .map((result) => result[0]?.transcript ?? "")
+        .join(" ")
+        .trim();
+      setCommandText(`${speechBufferRef.current} ${interimText}`.trim());
+
+      if (speechBufferRef.current) {
+        clearSpeechFlushTimer();
+        speechFlushTimerRef.current = window.setTimeout(flushSpeechCommand, 1300);
+      }
     };
     recognition.onerror = () => {
       setSpeechListening(false);
@@ -363,10 +429,10 @@ function useHelmetAgent() {
 
   useEffect(
     () => () => {
-      speechRef.current?.stop();
+      stopSpeechCapture();
       disconnect();
     },
-    [disconnect]
+    [disconnect, stopSpeechCapture]
   );
 
   return {

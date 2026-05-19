@@ -25,7 +25,8 @@ const enum EventSend {
   FinishConnection = 2,
   StartSession = 100,
   FinishSession = 102,
-  TaskRequest = 200
+  TaskRequest = 200,
+  EndAsr = 400
 }
 
 const enum EventReceive {
@@ -134,7 +135,7 @@ function buildDoubaoSessionConfig(config: DoubaoSessionConfig) {
         process.env.DOUBAO_SYSTEM_ROLE ??
         "You are Max, a friendly Motorcycle Helmet AI assistant. Introduce yourself as Max Motorcycle Helmet AI assistant. Help riders with motorcycle-related issues, navigation, weather, route conditions, nearby stops, and other motorcycle topics. Keep replies short, clear, hands-free, and safety-first.",
       extra: {
-        input_mod: "keep_alive",
+        input_mod: process.env.DOUBAO_INPUT_MODE ?? "keep_alive",
         model: process.env.DOUBAO_REALTIME_MODEL ?? "1.2.1.1"
       }
     },
@@ -146,7 +147,7 @@ function buildDoubaoSessionConfig(config: DoubaoSessionConfig) {
       }
     },
     tts: {
-      speaker: process.env.DOUBAO_VOICE ?? "zh_male_wennuanahu_moon_bigtts",
+      speaker: process.env.DOUBAO_VOICE ?? "zh_female_vv_jupiter_bigtts",
       audio_config: {
         channel: 1,
         format: "pcm_s16le",
@@ -279,20 +280,32 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
         if (frame.event === EventReceive.TtsResponse) {
           receivedTtsAudio = true;
           clearTtsFallbackTimer();
+          sendClient({ type: "status", state: "speaking", detail: "Doubao voice audio received" });
           if (client.readyState === client.OPEN) client.send(frame.payload, { binary: true });
           return;
         }
 
         const payload = parseJsonPayload(frame);
+        if (frame.event === EventReceive.AsrInfo) {
+          sendClient({ type: "status", state: "hearing", detail: "Doubao detected rider speech" });
+          return;
+        }
+
         if (frame.event === EventReceive.AsrResponse) {
           const text = extractAsrText(payload);
-          if (text) sendClient({ type: "transcript", speaker: "rider", text, final: false });
+          if (text) {
+            sendClient({ type: "status", state: "asr", detail: `Doubao heard: ${text}` });
+            sendClient({ type: "transcript", speaker: "rider", text, final: false });
+          }
           return;
         }
 
         if (frame.event === EventReceive.ChatResponse) {
           const text = String(payload.content ?? "");
-          if (text) pendingAgentText += text;
+          if (text) {
+            pendingAgentText += text;
+            sendClient({ type: "status", state: "thinking", detail: "Doubao generated reply text" });
+          }
           return;
         }
 
@@ -380,6 +393,9 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
       }
     },
     async stopAudio() {
+      if (upstream?.readyState === WebSocket.OPEN && sessionReady) {
+        upstream.send(buildFullClientRequest(EventSend.EndAsr, sessionId));
+      }
       sendClient({ type: "status", state: "ready", detail: "Mic muted" });
     },
     async close() {

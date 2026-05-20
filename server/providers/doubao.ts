@@ -50,7 +50,7 @@ const enum EventReceive {
   DialogCommonError = 599
 }
 
-type ParsedDoubaoFrame = {
+export type ParsedDoubaoFrame = {
   event: number;
   sessionId: string;
   serialization: number;
@@ -95,12 +95,7 @@ function uint32(value: number) {
 }
 
 function buildHeader(messageType: MessageType, serialization: SerializationMethod) {
-  return Buffer.from([
-    0x11,
-    (messageType << 4) | 0b0100,
-    serialization << 4,
-    0x00
-  ]);
+  return Buffer.from([0x11, (messageType << 4) | 0b0100, serialization << 4, 0x00]);
 }
 
 function buildFullClientRequest(event: EventSend, sessionId?: string, metadata: unknown = {}) {
@@ -156,16 +151,14 @@ function buildDoubaoSessionConfig(config: DoubaoSessionConfig) {
   };
 }
 
-function parseDoubaoFrame(raw: RawData): ParsedDoubaoFrame {
-  const data = Buffer.isBuffer(raw)
-    ? raw
-    : Array.isArray(raw)
-      ? Buffer.concat(raw)
-      : Buffer.from(raw);
+export function parseDoubaoFrame(raw: RawData): ParsedDoubaoFrame {
+  const data = Buffer.isBuffer(raw) ? raw : Array.isArray(raw) ? Buffer.concat(raw) : Buffer.from(raw);
   if (data.length < 12) throw new Error("Doubao frame is too short");
 
   const messageType = (data[1] >> 4) & 0b1111;
-  if (![MessageType.FullServerResponse, MessageType.AudioOnlyResponse, MessageType.ErrorInformation].includes(messageType)) {
+  if (
+    ![MessageType.FullServerResponse, MessageType.AudioOnlyResponse, MessageType.ErrorInformation].includes(messageType)
+  ) {
     throw new Error(`Unsupported Doubao message type ${messageType}`);
   }
 
@@ -191,7 +184,7 @@ function parseJsonPayload(frame: ParsedDoubaoFrame) {
   return JSON.parse(frame.payload.toString()) as Record<string, unknown>;
 }
 
-function extractAsrText(payload: Record<string, unknown>) {
+export function extractAsrText(payload: Record<string, unknown>) {
   const results = payload.results;
   if (!Array.isArray(results)) return "";
   return results

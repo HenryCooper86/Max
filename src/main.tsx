@@ -4,7 +4,12 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { HelmetVisual } from "./components/HelmetVisual";
 import { ArcGauge, Compass, SignalBars } from "./components/Instruments";
 import { QuickPhrases } from "./components/QuickPhrases";
-import { SUPPORTED_LANGUAGE_MESSAGE, isSupportedLanguageText } from "../shared/language";
+import {
+  SUPPORTED_LANGUAGE_MESSAGE,
+  type SupportedLanguage,
+  detectLanguage,
+  isSupportedLanguageText
+} from "../shared/language";
 import "./styles.css";
 
 type BrowserSpeechRecognition = {
@@ -57,15 +62,35 @@ const SAMPLE_RATE = 16000;
 const PLAYBACK_SAMPLE_RATE = 24000;
 const MAX_RECONNECT_ATTEMPTS = 6;
 
-function selectChineseFemaleVoice() {
+// BCP-47 locales and female-voice name hints per supported language.
+const VOICE_LOCALE: Record<SupportedLanguage, string> = {
+  zh: "zh-CN",
+  ja: "ja-JP",
+  en: "en-US"
+};
+
+type VoiceGender = "female" | "male";
+
+// Voice-name hints per gender and language. `\bmale\b` avoids matching "female".
+const VOICE_HINTS: Record<VoiceGender, Record<SupportedLanguage, RegExp>> = {
+  female: {
+    zh: /female|女|xiaoxiao|xiaoyi|tingting|jupiter/i,
+    ja: /female|女|kyoko|nanami|haruka|o-ren|sayaka/i,
+    en: /female|samantha|victoria|zira|aria|jenny|fiona/i
+  },
+  male: {
+    zh: /\bmale\b|男|kangkang|yunyang|yunxi|yunjian|liang/i,
+    ja: /\bmale\b|男|otoya|ichiro|keita|daichi|hattori/i,
+    en: /\bmale\b|daniel|alex|david|mark|guy|fred|thomas/i
+  }
+};
+
+/** Picks a voice matching the language and gender, with graceful fallback. */
+function selectVoice(language: SupportedLanguage, gender: VoiceGender) {
   const voices = window.speechSynthesis.getVoices();
-  const zhVoices = voices.filter((voice) => voice.lang.toLowerCase().startsWith("zh"));
-  return (
-    zhVoices.find((voice) => /female|女|xiaoxiao|xiaoyi|tingting|jupiter/i.test(`${voice.name} ${voice.voiceURI}`)) ??
-    zhVoices[0] ??
-    voices.find((voice) => voice.lang.toLowerCase().startsWith("en")) ??
-    voices[0]
-  );
+  const matches = voices.filter((voice) => voice.lang.toLowerCase().startsWith(language));
+  const hint = VOICE_HINTS[gender][language];
+  return matches.find((voice) => hint.test(`${voice.name} ${voice.voiceURI}`)) ?? matches[0];
 }
 
 function createAgentSocket() {
@@ -85,6 +110,7 @@ function useHelmetAgent() {
   const [speechListening, setSpeechListening] = useState(false);
   const [voiceLevel, setVoiceLevel] = useState(0);
   const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
+  const [voiceGender, setVoiceGenderState] = useState<VoiceGender>("female");
 
   const socketRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -103,6 +129,7 @@ function useHelmetAgent() {
   const speechBufferRef = useRef("");
   const speechFlushTimerRef = useRef<number | null>(null);
   const arkBusyRef = useRef(false);
+  const voiceGenderRef = useRef<VoiceGender>("female");
 
   const pushTranscript = useCallback((speaker: "rider" | "agent", text: string) => {
     setTranscript((items) => [...items.slice(-7), { id: Date.now() + Math.random(), speaker, text }]);
@@ -140,16 +167,29 @@ function useHelmetAgent() {
   }, []);
 
   const speak = useCallback((text: string) => {
-    if (!("speechSynthesis" in window)) return;
+    if (!("speechSynthesis" in window) || !text.trim()) return;
     window.speechSynthesis.cancel();
+    // Speak each reply in its own language; forcing a Chinese voice makes
+    // Japanese (and often English) replies fall silent.
+    const language = detectLanguage(text);
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "zh-CN";
-    const voice = selectChineseFemaleVoice();
+    utterance.lang = VOICE_LOCALE[language];
+    const voice = selectVoice(language, voiceGenderRef.current);
     if (voice) utterance.voice = voice;
     utterance.rate = 1.02;
     utterance.pitch = 1.06;
     window.speechSynthesis.speak(utterance);
   }, []);
+
+  // Switch the TTS voice and speak a short sample so the change is audible.
+  const setVoiceGender = useCallback(
+    (gender: VoiceGender) => {
+      voiceGenderRef.current = gender;
+      setVoiceGenderState(gender);
+      speak(gender === "male" ? "已切换到男声。" : "已切换到女声。");
+    },
+    [speak]
+  );
 
   const playPcm16 = useCallback((audioData: ArrayBuffer) => {
     const audioContext = playbackContextRef.current ?? new AudioContext({ sampleRate: PLAYBACK_SAMPLE_RATE });
@@ -552,7 +592,9 @@ function useHelmetAgent() {
     speechListening,
     voiceLevel,
     transcript,
+    voiceGender,
     setCommandText,
+    setVoiceGender,
     connect,
     startMic,
     stopMic,
@@ -618,9 +660,27 @@ function App() {
               <h1>Max 摩托车头盔 AI</h1>
             </div>
           </div>
-          <div className={`signal ${agent.connected ? "online" : ""}`}>
-            <span />
-            {agent.provider.toUpperCase()}
+          <div className="topbarControls">
+            <div className="voiceToggle" role="group" aria-label="语音性别">
+              <button
+                type="button"
+                className={agent.voiceGender === "female" ? "active" : ""}
+                onClick={() => agent.setVoiceGender("female")}
+              >
+                女声
+              </button>
+              <button
+                type="button"
+                className={agent.voiceGender === "male" ? "active" : ""}
+                onClick={() => agent.setVoiceGender("male")}
+              >
+                男声
+              </button>
+            </div>
+            <div className={`signal ${agent.connected ? "online" : ""}`}>
+              <span />
+              {agent.provider.toUpperCase()}
+            </div>
           </div>
         </div>
 

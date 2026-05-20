@@ -180,6 +180,45 @@ h2 {
   animation: softPulse 1.6s ease-in-out infinite;
 }
 
+.topbarControls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.voiceToggle {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid rgba(196, 218, 216, 0.2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.voiceToggle button {
+  min-height: 32px;
+  padding: 0 15px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.voiceToggle button:hover:not(.active) {
+  color: var(--text);
+}
+
+.voiceToggle button.active {
+  background: var(--accent);
+  color: #07221a;
+  font-weight: 700;
+}
+
 /* ============================================================
    Layout grid
    ============================================================ */

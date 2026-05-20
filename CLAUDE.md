@@ -78,6 +78,10 @@ credentials. Add new realtime providers by implementing `AgentProvider` and wiri
   latched toggle and the hold-to-talk (push-to-talk) button share one reused audio graph.
 - Barge-in (`stopAgentSpeech`) cancels browser TTS and stops queued Doubao audio whenever the
   rider starts talking or sends a new command.
+- The 女声/男声 voice toggle sets `voiceGenderRef`. Browser TTS picks a matching voice (with a
+  pitch shift when no genuine gendered voice is installed); the live Doubao speaker is chosen
+  server-side from `voiceGender` in `session.start`, so switching mid-session reconnects the
+  relay (`restartSession`) to start a fresh session with the new speaker.
 - `src/ErrorBoundary.tsx` wraps the app so a render crash shows a recoverable screen.
 
 ### Language gating

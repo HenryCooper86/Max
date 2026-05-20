@@ -135,6 +135,7 @@ function useHelmetAgent() {
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimerRef = useRef<number | null>(null);
   const connectRef = useRef<() => void>(() => {});
+  const isLiveRef = useRef(false);
   const speechRef = useRef<BrowserSpeechRecognition | null>(null);
   const speechContinuousRef = useRef(false);
   const speechBufferRef = useRef("");
@@ -202,16 +203,6 @@ function useHelmetAgent() {
     window.speechSynthesis.speak(utterance);
   }, []);
 
-  // Switch the TTS voice and speak a short sample so the change is audible.
-  const setVoiceGender = useCallback(
-    (gender: VoiceGender) => {
-      voiceGenderRef.current = gender;
-      setVoiceGenderState(gender);
-      speak(gender === "male" ? "已切换到男声。" : "已切换到女声。");
-    },
-    [speak]
-  );
-
   const playPcm16 = useCallback((audioData: ArrayBuffer) => {
     const audioContext = playbackContextRef.current ?? new AudioContext({ sampleRate: PLAYBACK_SAMPLE_RATE });
     playbackContextRef.current = audioContext;
@@ -256,7 +247,14 @@ function useHelmetAgent() {
       reconnectAttemptsRef.current = 0;
       setConnected(true);
       setStatus("就绪");
-      socket.send(JSON.stringify({ type: "session.start", sampleRate: SAMPLE_RATE, channels: 1 }));
+      socket.send(
+        JSON.stringify({
+          type: "session.start",
+          sampleRate: SAMPLE_RATE,
+          channels: 1,
+          voiceGender: voiceGenderRef.current
+        })
+      );
       // Resume the audio stream if the rider was transmitting before the drop.
       if (transmittingRef.current) socket.send(JSON.stringify({ type: "audio.start" }));
     });
@@ -271,6 +269,7 @@ function useHelmetAgent() {
         const event = JSON.parse(String(message.data)) as AgentEvent;
         if (event.type === "session.started") {
           setProvider(event.provider);
+          isLiveRef.current = event.mode !== "mock";
           setStatus(event.mode === "mock" ? "模拟路线已启用" : "豆包实时语音在线");
         }
         if (event.type === "status") setStatus(event.detail);
@@ -290,8 +289,11 @@ function useHelmetAgent() {
     });
 
     socket.addEventListener("close", () => {
+      // Ignore a socket already superseded by a newer one (e.g. a restart).
+      if (socketRef.current !== socket) return;
       setConnected(false);
-      if (socketRef.current === socket) socketRef.current = null;
+      socketRef.current = null;
+      isLiveRef.current = false;
       if (intentionalCloseRef.current) {
         setStatus("离线");
         return;
@@ -317,6 +319,30 @@ function useHelmetAgent() {
   useEffect(() => {
     connectRef.current = connect;
   }, [connect]);
+
+  // Reopen the relay so a fresh realtime session picks up changed settings
+  // (e.g. the voice gender). The mic graph is untouched, so capture continues.
+  const restartSession = useCallback(() => {
+    if (!socketRef.current) return;
+    socketRef.current.close();
+    connect();
+  }, [connect]);
+
+  // Switch the assistant voice. The live Doubao speaker is fixed at session
+  // start, so restart the session; the mock/Ark path just uses browser TTS.
+  const setVoiceGender = useCallback(
+    (gender: VoiceGender) => {
+      voiceGenderRef.current = gender;
+      setVoiceGenderState(gender);
+      if (isLiveRef.current) {
+        setStatus(gender === "male" ? "正在切换到男声…" : "正在切换到女声…");
+        restartSession();
+      } else {
+        speak(gender === "male" ? "已切换到男声。" : "已切换到女声。");
+      }
+    },
+    [restartSession, speak]
+  );
 
   const waitForSocket = useCallback(async () => {
     connect();

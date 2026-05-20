@@ -1,12 +1,26 @@
 import { WebSocket, type RawData } from "ws";
 import { randomUUID } from "node:crypto";
-import type { AgentProvider, SessionStartEvent } from "./types";
+import type { AgentProvider, SessionStartEvent, VoiceGender } from "./types";
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from "./ark";
 
 type DoubaoSessionConfig = {
   sampleRate: number;
   channels: number;
+  voiceGender: VoiceGender;
 };
+
+// Default realtime-dialogue speakers from the Doubao 音色列表 (jupiter family).
+// Override per deployment with DOUBAO_VOICE / DOUBAO_VOICE_MALE.
+const DEFAULT_FEMALE_SPEAKER = "zh_female_vv_jupiter_bigtts";
+const DEFAULT_MALE_SPEAKER = "zh_male_yunzhou_jupiter_bigtts";
+
+/** Resolves the Doubao realtime speaker ID for the requested gender. */
+export function doubaoSpeaker(voiceGender: VoiceGender): string {
+  if (voiceGender === "male") {
+    return process.env.DOUBAO_VOICE_MALE?.trim() || DEFAULT_MALE_SPEAKER;
+  }
+  return process.env.DOUBAO_VOICE?.trim() || DEFAULT_FEMALE_SPEAKER;
+}
 
 const enum MessageType {
   FullClientRequest = 0b0001,
@@ -141,7 +155,7 @@ function buildDoubaoSessionConfig(config: DoubaoSessionConfig) {
       }
     },
     tts: {
-      speaker: process.env.DOUBAO_VOICE ?? "zh_female_vv_jupiter_bigtts",
+      speaker: doubaoSpeaker(config.voiceGender),
       audio_config: {
         channel: 1,
         format: "pcm_s16le",
@@ -372,7 +386,11 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
     async start(event: SessionStartEvent) {
       if (!started) {
         started = true;
-        connectUpstream({ sampleRate: event.sampleRate, channels: event.channels });
+        connectUpstream({
+          sampleRate: event.sampleRate,
+          channels: event.channels,
+          voiceGender: event.voiceGender ?? "female"
+        });
       }
     },
     async startAudio() {

@@ -149,7 +149,10 @@ DOUBAO_SYSTEM_ROLE=你是 Max，一位友好、冷静、以安全为先的摩托
 DOUBAO_REALTIME_MODEL=1.2.1.1
 DOUBAO_INPUT_MODE=keep_alive
 DOUBAO_VOICE=zh_female_vv_jupiter_bigtts
+DOUBAO_VOICE_MALE=zh_male_yunzhou_jupiter_bigtts
 ```
+
+`DOUBAO_VOICE` and `DOUBAO_VOICE_MALE` are realtime speaker IDs from the Doubao 音色列表. The `女声 / 男声` toggle in the UI sends the chosen gender with `session.start`, so the live Doubao session uses the matching speaker; switching mid-session reconnects the relay to apply the new speaker. Verify both IDs are enabled for your speech-dialog resource.
 
 The Ark API key from Volcengine Ark is not the same credential set as the Doubao realtime speech-dialog WebSocket API. Ark powers the command/reply text path. Doubao realtime voice uses the Doubao Speech/OpenSpeech realtime dialogue endpoint. With the newer Speech console, set `DOUBAO_API_KEY`; the key ID can be stored in `DOUBAO_API_KEY_ID` for reference but is not sent. Legacy app credentials are used only when `DOUBAO_API_KEY` is empty.
 
@@ -184,7 +187,7 @@ Browser audio relay endpoint used by `开始语音`.
 Client events:
 
 ```json
-{ "type": "session.start", "sampleRate": 16000, "channels": 1 }
+{ "type": "session.start", "sampleRate": 16000, "channels": 1, "voiceGender": "female" }
 { "type": "audio.start" }
 { "type": "audio.stop" }
 ```

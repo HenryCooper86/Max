@@ -74,7 +74,7 @@ type VoiceGender = "female" | "male";
 // Voice-name hints per gender and language. `\bmale\b` avoids matching "female".
 const VOICE_HINTS: Record<VoiceGender, Record<SupportedLanguage, RegExp>> = {
   female: {
-    zh: /female|女|xiaoxiao|xiaoyi|tingting|jupiter/i,
+    zh: /female|女|xiaoxiao|xiaoyi|ting-?ting|jupiter/i,
     ja: /female|女|kyoko|nanami|haruka|o-ren|sayaka/i,
     en: /female|samantha|victoria|zira|aria|jenny|fiona/i
   },
@@ -85,12 +85,23 @@ const VOICE_HINTS: Record<VoiceGender, Record<SupportedLanguage, RegExp>> = {
   }
 };
 
-/** Picks a voice matching the language and gender, with graceful fallback. */
+/**
+ * Picks a voice for the language and gender. Returns `matched: false` when no
+ * genuinely gendered voice is installed, so the caller can compensate via pitch.
+ */
 function selectVoice(language: SupportedLanguage, gender: VoiceGender) {
   const voices = window.speechSynthesis.getVoices();
   const matches = voices.filter((voice) => voice.lang.toLowerCase().startsWith(language));
-  const hint = VOICE_HINTS[gender][language];
-  return matches.find((voice) => hint.test(`${voice.name} ${voice.voiceURI}`)) ?? matches[0];
+  const describe = (voice: SpeechSynthesisVoice) => `${voice.name} ${voice.voiceURI}`;
+
+  const exact = matches.find((voice) => VOICE_HINTS[gender][language].test(describe(voice)));
+  if (exact) return { voice: exact, matched: true };
+
+  // No gendered voice for this language: skip the opposite gender's obvious
+  // voice if we can, but still return something so the reply is spoken.
+  const opposite = VOICE_HINTS[gender === "male" ? "female" : "male"][language];
+  const neutral = matches.find((voice) => !opposite.test(describe(voice)));
+  return { voice: neutral ?? matches[0], matched: false };
 }
 
 function createAgentSocket() {
@@ -124,6 +135,7 @@ function useHelmetAgent() {
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimerRef = useRef<number | null>(null);
   const connectRef = useRef<() => void>(() => {});
+  const isLiveRef = useRef(false);
   const speechRef = useRef<BrowserSpeechRecognition | null>(null);
   const speechContinuousRef = useRef(false);
   const speechBufferRef = useRef("");
@@ -172,24 +184,24 @@ function useHelmetAgent() {
     // Speak each reply in its own language; forcing a Chinese voice makes
     // Japanese (and often English) replies fall silent.
     const language = detectLanguage(text);
+    const gender = voiceGenderRef.current;
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = VOICE_LOCALE[language];
-    const voice = selectVoice(language, voiceGenderRef.current);
+
+    const { voice, matched } = selectVoice(language, gender);
     if (voice) utterance.voice = voice;
-    utterance.rate = 1.02;
-    utterance.pitch = 1.06;
+
+    // Most systems ship a single (female) voice per language. When no real
+    // gendered voice is found, shift pitch so the toggle is still audible.
+    if (gender === "male") {
+      utterance.pitch = matched ? 0.9 : 0.6;
+      utterance.rate = 0.98;
+    } else {
+      utterance.pitch = matched ? 1.06 : 1.16;
+      utterance.rate = 1.04;
+    }
     window.speechSynthesis.speak(utterance);
   }, []);
-
-  // Switch the TTS voice and speak a short sample so the change is audible.
-  const setVoiceGender = useCallback(
-    (gender: VoiceGender) => {
-      voiceGenderRef.current = gender;
-      setVoiceGenderState(gender);
-      speak(gender === "male" ? "已切换到男声。" : "已切换到女声。");
-    },
-    [speak]
-  );
 
   const playPcm16 = useCallback((audioData: ArrayBuffer) => {
     const audioContext = playbackContextRef.current ?? new AudioContext({ sampleRate: PLAYBACK_SAMPLE_RATE });
@@ -235,7 +247,14 @@ function useHelmetAgent() {
       reconnectAttemptsRef.current = 0;
       setConnected(true);
       setStatus("就绪");
-      socket.send(JSON.stringify({ type: "session.start", sampleRate: SAMPLE_RATE, channels: 1 }));
+      socket.send(
+        JSON.stringify({
+          type: "session.start",
+          sampleRate: SAMPLE_RATE,
+          channels: 1,
+          voiceGender: voiceGenderRef.current
+        })
+      );
       // Resume the audio stream if the rider was transmitting before the drop.
       if (transmittingRef.current) socket.send(JSON.stringify({ type: "audio.start" }));
     });
@@ -250,6 +269,7 @@ function useHelmetAgent() {
         const event = JSON.parse(String(message.data)) as AgentEvent;
         if (event.type === "session.started") {
           setProvider(event.provider);
+          isLiveRef.current = event.mode !== "mock";
           setStatus(event.mode === "mock" ? "模拟路线已启用" : "豆包实时语音在线");
         }
         if (event.type === "status") setStatus(event.detail);
@@ -269,8 +289,11 @@ function useHelmetAgent() {
     });
 
     socket.addEventListener("close", () => {
+      // Ignore a socket already superseded by a newer one (e.g. a restart).
+      if (socketRef.current !== socket) return;
       setConnected(false);
-      if (socketRef.current === socket) socketRef.current = null;
+      socketRef.current = null;
+      isLiveRef.current = false;
       if (intentionalCloseRef.current) {
         setStatus("离线");
         return;
@@ -296,6 +319,30 @@ function useHelmetAgent() {
   useEffect(() => {
     connectRef.current = connect;
   }, [connect]);
+
+  // Reopen the relay so a fresh realtime session picks up changed settings
+  // (e.g. the voice gender). The mic graph is untouched, so capture continues.
+  const restartSession = useCallback(() => {
+    if (!socketRef.current) return;
+    socketRef.current.close();
+    connect();
+  }, [connect]);
+
+  // Switch the assistant voice. The live Doubao speaker is fixed at session
+  // start, so restart the session; the mock/Ark path just uses browser TTS.
+  const setVoiceGender = useCallback(
+    (gender: VoiceGender) => {
+      voiceGenderRef.current = gender;
+      setVoiceGenderState(gender);
+      if (isLiveRef.current) {
+        setStatus(gender === "male" ? "正在切换到男声…" : "正在切换到女声…");
+        restartSession();
+      } else {
+        speak(gender === "male" ? "已切换到男声。" : "已切换到女声。");
+      }
+    },
+    [restartSession, speak]
+  );
 
   const waitForSocket = useCallback(async () => {
     connect();

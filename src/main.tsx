@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { HelmetVisual } from "./components/HelmetVisual";
+import { ArcGauge, Compass, SignalBars } from "./components/Instruments";
+import { QuickPhrases } from "./components/QuickPhrases";
 import { SUPPORTED_LANGUAGE_MESSAGE, isSupportedLanguageText } from "../shared/language";
 import "./styles.css";
 
@@ -53,7 +56,6 @@ type WorkletMessage = { type: "frame"; pcm: ArrayBuffer } | { type: "level"; val
 const SAMPLE_RATE = 16000;
 const PLAYBACK_SAMPLE_RATE = 24000;
 const MAX_RECONNECT_ATTEMPTS = 6;
-const VISUALIZER_BARS = [0.42, 0.78, 0.56, 0.94, 0.68, 0.84, 0.48, 0.72, 0.6];
 
 function selectChineseFemaleVoice() {
   const voices = window.speechSynthesis.getVoices();
@@ -572,6 +574,8 @@ function App() {
     return "离线";
   }, [agent.connected, agent.listening]);
 
+  const latencyTone = agent.latencyMs < 140 ? "good" : agent.latencyMs < 280 ? "warn" : "alert";
+
   const handleTalkStart = useCallback(
     (event: React.PointerEvent<HTMLButtonElement>) => {
       event.preventDefault();
@@ -604,9 +608,15 @@ function App() {
     <main className="shell">
       <section className="visor" aria-label="头盔语音助手座舱">
         <div className="topbar">
-          <div>
-            <p className="eyebrow">HCT Helmet OS</p>
-            <h1>Max 摩托车头盔 AI</h1>
+          <div className="brand">
+            <svg className="logoMark" viewBox="0 0 44 44" aria-hidden="true">
+              <path className="logoShell" d="M8 24a14 14 0 0 1 28 0v4a4 4 0 0 1-4 4H12a4 4 0 0 1-4-4Z" />
+              <rect className="logoVisor" x="13" y="18" width="22" height="7" rx="3.5" />
+            </svg>
+            <div>
+              <p className="eyebrow">HCT Helmet OS</p>
+              <h1>Max 摩托车头盔 AI</h1>
+            </div>
           </div>
           <div className={`signal ${agent.connected ? "online" : ""}`}>
             <span />
@@ -616,33 +626,7 @@ function App() {
 
         <div className="grid">
           <section className="hudPanel helmetPanel">
-            <div
-              className={`helmetVisual ${agent.connected ? "online" : "offline"} ${agent.listening ? "listening" : ""}`}
-              aria-hidden="true"
-            >
-              <svg viewBox="0 0 420 270" role="img">
-                <path
-                  className="helmetShell"
-                  d="M54 161c4-81 68-132 151-132 93 0 159 61 166 149 2 24-11 45-34 54-45 17-126 26-204 8-50-12-81-39-79-79Z"
-                />
-                <path
-                  className="helmetVisor"
-                  d="M155 88h155c22 0 40 18 40 40v13c-48 18-106 25-178 21-27-1-49-24-49-51 0-13 11-23 32-23Z"
-                />
-                <path
-                  className="chin"
-                  d="M220 167c40 4 82 0 126-12-5 28-18 46-40 54-31 11-66 17-103 17 17-17 22-36 17-59Z"
-                />
-                <circle className="micDot" cx="258" cy="205" r="9" />
-                <circle className="greenDot" cx="282" cy="205" r="9" />
-              </svg>
-              <div className={`visorVisualizer ${agent.listening ? "active" : ""}`}>
-                {VISUALIZER_BARS.map((weight, index) => {
-                  const scale = agent.listening ? Math.max(0.12, Math.min(1, agent.voiceLevel * weight + 0.08)) : 0.12;
-                  return <span key={weight + index} style={{ transform: `scaleY(${scale})` }} />;
-                })}
-              </div>
-            </div>
+            <HelmetVisual connected={agent.connected} listening={agent.listening} voiceLevel={agent.voiceLevel} />
             <div className="primaryControls">
               <button className="mainButton" onClick={agent.listening ? agent.stopMic : agent.startMic} type="button">
                 {agent.listening ? "静音麦克风" : "开始语音"}
@@ -665,6 +649,7 @@ function App() {
                 {agent.connected ? "断开" : "连接"}
               </button>
             </div>
+            <QuickPhrases onSelect={(text) => void agent.submitCommand(text)} disabled={agent.arkBusy} />
             <form
               className="commandBar"
               onSubmit={(event) => {
@@ -689,24 +674,28 @@ function App() {
 
           <section className="hudPanel statusPanel">
             <div className="stateBlock">
-              <p>助手</p>
-              <strong>{agentState}</strong>
-              <span>{agent.status}</span>
-            </div>
-            <div className="metricRow">
-              <div>
-                <p>风噪</p>
-                <strong>{agent.noiseDb} dB</strong>
+              <div className="stateMain">
+                <p>助手</p>
+                <strong>{agentState}</strong>
               </div>
-              <div>
-                <p>延迟</p>
-                <strong>{agent.latencyMs} ms</strong>
-              </div>
+              <SignalBars active={agent.connected} />
             </div>
-            <div className="routeStrip">
-              <span>导航</span>
-              <strong>US-101 N</strong>
-              <small>1.4 英里后转弯</small>
+            <p className="stateDetail">{agent.status}</p>
+            <Compass route="US-101 N" instruction="1.4 英里后转弯" />
+            <div className="instrumentRow">
+              <ArcGauge label="风噪" value={agent.noiseDb} unit="dB" min={30} max={95} />
+              <div className={`instrument latency ${latencyTone}`}>
+                <div className="instrumentHead">
+                  <span>延迟</span>
+                </div>
+                <div className="latencyValue">
+                  <strong>{agent.latencyMs}</strong>
+                  <span>ms</span>
+                </div>
+                <div className="latencyBar">
+                  <i style={{ width: `${Math.min(100, agent.latencyMs / 4)}%` }} />
+                </div>
+              </div>
             </div>
           </section>
 

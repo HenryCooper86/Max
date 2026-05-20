@@ -1,6 +1,20 @@
+/* ============================================================
+   Design tokens
+   ============================================================ */
 :root {
-  color: #eff6f8;
-  background: #101415;
+  --bg: #101415;
+  --text: #eff6f8;
+  --muted: #99aaa8;
+  --accent: #3ee89f;
+  --accent-cyan: #5fe9d6;
+  --rider: #f26a3d;
+  --danger: #ff6f57;
+  --warn: #f2c14e;
+  --panel: rgba(7, 11, 12, 0.5);
+  --border: rgba(196, 218, 216, 0.16);
+
+  color: var(--text);
+  background: var(--bg);
   font-family:
     Inter,
     ui-sans-serif,
@@ -23,39 +37,61 @@ body {
   min-height: 100vh;
 }
 
-button {
+button,
+input {
   font: inherit;
 }
 
 button:disabled {
   cursor: not-allowed;
-  opacity: 0.62;
+  opacity: 0.55;
 }
 
-input {
-  font: inherit;
-}
-
+/* ============================================================
+   Shell + visor frame
+   ============================================================ */
 .shell {
   min-height: 100vh;
   background:
-    radial-gradient(circle at 18% 10%, rgba(26, 151, 126, 0.22), transparent 34%),
+    radial-gradient(circle at 18% 8%, rgba(62, 232, 159, 0.16), transparent 38%),
+    radial-gradient(circle at 88% 92%, rgba(242, 106, 61, 0.12), transparent 40%),
     linear-gradient(135deg, #111719 0%, #192020 44%, #211d17 100%);
   padding: clamp(16px, 3vw, 36px);
 }
 
 .visor {
+  position: relative;
   min-height: calc(100vh - clamp(32px, 6vw, 72px));
   border: 1px solid rgba(196, 218, 216, 0.2);
-  border-radius: 8px;
-  background: linear-gradient(110deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.01)), rgba(13, 18, 19, 0.8);
+  border-radius: 10px;
+  background: linear-gradient(110deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.01)), rgba(13, 18, 19, 0.82);
   box-shadow:
     inset 0 1px 28px rgba(255, 255, 255, 0.04),
     0 24px 80px rgba(0, 0, 0, 0.36);
   overflow: hidden;
 }
 
+/* Faint HUD grid, faded out toward the edges. */
+.visor::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(120, 170, 160, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(120, 170, 160, 0.05) 1px, transparent 1px);
+  background-size: 46px 46px;
+  -webkit-mask: radial-gradient(circle at 32% 16%, #000, transparent 74%);
+  mask: radial-gradient(circle at 32% 16%, #000, transparent 74%);
+}
+
+/* ============================================================
+   Topbar + branding
+   ============================================================ */
 .topbar {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -64,16 +100,36 @@ input {
   border-bottom: 1px solid rgba(196, 218, 216, 0.16);
 }
 
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.logoMark {
+  width: 46px;
+  height: 46px;
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 12px rgba(62, 232, 159, 0.45));
+}
+
+.logoShell {
+  fill: var(--accent);
+}
+
+.logoVisor {
+  fill: #0c1112;
+}
+
 .eyebrow,
-.stateBlock p,
-.metricRow p,
-.routeStrip span,
+.instrumentHead span,
+.stateMain p,
 .message span {
   margin: 0;
-  color: #99aaa8;
-  font-size: 0.76rem;
+  color: var(--muted);
+  font-size: 0.74rem;
   text-transform: uppercase;
-  letter-spacing: 0;
+  letter-spacing: 0.12em;
 }
 
 h1,
@@ -83,7 +139,7 @@ h2 {
 }
 
 h1 {
-  font-size: clamp(2rem, 4vw, 4.2rem);
+  font-size: clamp(1.8rem, 3.4vw, 3.6rem);
   max-width: 920px;
 }
 
@@ -96,162 +152,296 @@ h2 {
   align-items: center;
   gap: 10px;
   min-height: 38px;
-  padding: 0 14px;
+  padding: 0 16px;
   border: 1px solid rgba(196, 218, 216, 0.2);
-  border-radius: 8px;
+  border-radius: 999px;
   color: #aab8b6;
   background: rgba(255, 255, 255, 0.04);
   white-space: nowrap;
+  letter-spacing: 0.1em;
+  font-size: 0.82rem;
 }
 
 .signal span {
-  width: 18px;
-  height: 18px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
   background: #6f7776;
 }
 
-.signal.online span {
-  background: #3ee89f;
-  box-shadow: 0 0 18px #3ee89f;
+.signal.online {
+  border-color: rgba(62, 232, 159, 0.4);
+  color: var(--text);
 }
 
+.signal.online span {
+  background: var(--accent);
+  box-shadow: 0 0 16px var(--accent);
+  animation: softPulse 1.6s ease-in-out infinite;
+}
+
+/* ============================================================
+   Layout grid
+   ============================================================ */
 .grid {
+  position: relative;
+  z-index: 1;
   display: grid;
-  grid-template-columns: minmax(320px, 1.35fr) minmax(260px, 0.65fr);
+  grid-template-columns: minmax(320px, 1.35fr) minmax(280px, 0.65fr);
   gap: 18px;
   padding: clamp(16px, 3vw, 36px);
 }
 
 .hudPanel {
-  border: 1px solid rgba(196, 218, 216, 0.16);
-  border-radius: 8px;
-  background: rgba(7, 11, 12, 0.48);
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
 }
 
+/* ============================================================
+   Helmet panel + cinematic centerpiece
+   ============================================================ */
 .helmetPanel {
   display: grid;
-  align-items: center;
-  min-height: 520px;
-  padding: clamp(18px, 3vw, 34px);
+  grid-template-rows: 1fr auto auto auto;
+  gap: 14px;
+  min-height: 540px;
+  padding: clamp(18px, 3vw, 32px);
 }
 
-.helmetVisual {
+.helmetStage {
   position: relative;
-  width: min(100%, 720px);
-  margin: auto;
+  align-self: center;
+  justify-self: center;
+  width: min(100%, 600px);
   aspect-ratio: 1.55;
+
+  --ring: var(--danger);
+  --ring-soft: rgba(255, 111, 87, 0.5);
+  --ring-faint: rgba(255, 111, 87, 0.18);
+  --glow: rgba(255, 111, 87, 0.22);
+}
+
+.helmetStage.online {
+  --ring: var(--accent);
+  --ring-soft: rgba(62, 232, 159, 0.5);
+  --ring-faint: rgba(62, 232, 159, 0.18);
+  --glow: rgba(62, 232, 159, 0.2);
+}
+
+.helmetStage.listening {
+  --ring: var(--accent-cyan);
+  --ring-soft: rgba(95, 233, 214, 0.6);
+  --ring-faint: rgba(95, 233, 214, 0.22);
+  --glow: rgba(95, 233, 214, 0.32);
+}
+
+.helmetStage::before {
+  content: "";
+  position: absolute;
+  inset: -6%;
+  z-index: 0;
+  background: radial-gradient(circle at 50% 46%, var(--glow), transparent 62%);
+}
+
+/* HUD corner brackets */
+.hudFrame {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.corner {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  border: 2px solid var(--ring);
+  opacity: 0.6;
+  transition: border-color 0.4s ease;
+}
+
+.corner.tl {
+  top: 0;
+  left: 0;
+  border-right: 0;
+  border-bottom: 0;
+}
+
+.corner.tr {
+  top: 0;
+  right: 0;
+  border-left: 0;
+  border-bottom: 0;
+}
+
+.corner.bl {
+  bottom: 0;
+  left: 0;
+  border-right: 0;
+  border-top: 0;
+}
+
+.corner.br {
+  bottom: 0;
+  right: 0;
+  border-left: 0;
+  border-top: 0;
+}
+
+/* Targeting reticle */
+.reticle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 1;
+  width: 96%;
+  height: 100%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 1.5px dashed var(--ring-soft);
+  animation: reticlePulse 4.5s ease-in-out infinite;
+}
+
+.reticle::before {
+  content: "";
+  position: absolute;
+  inset: 11%;
+  border-radius: 50%;
+  border: 1px solid var(--ring-faint);
+}
+
+.reticle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  height: 92%;
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 1.5px dashed var(--ring);
+  border-left-color: transparent;
+  border-right-color: transparent;
+  opacity: 0.5;
+  animation: reticleSpin 18s linear infinite;
+}
+
+/* Helmet illustration */
+.helmetVisual {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
 }
 
 .helmetVisual svg {
   width: 100%;
   height: 100%;
-  filter: drop-shadow(0 22px 35px rgba(0, 0, 0, 0.36));
-}
-
-.helmetShell {
-  fill: #d9e1dd;
+  display: block;
+  filter: drop-shadow(0 22px 34px rgba(0, 0, 0, 0.42));
 }
 
 .helmetVisor {
-  fill: #263537;
-  stroke: #54e0be;
+  stroke: var(--ring);
   stroke-width: 3;
+  transition: stroke 0.4s ease;
 }
 
-.chin {
-  fill: #8b9b97;
+.visorGlare {
+  fill: #e3fbf4;
+  opacity: 0.16;
 }
 
 .micDot {
-  fill: #ef6a3a;
-  filter: drop-shadow(0 0 12px #ef6a3a);
+  fill: var(--rider);
+  filter: drop-shadow(0 0 12px var(--rider));
 }
 
 .greenDot {
-  fill: #3ee89f;
+  fill: var(--accent);
   filter: drop-shadow(0 0 12px rgba(62, 232, 159, 0.72));
 }
 
-.helmetVisual.offline .micDot {
+.helmetStage.offline .micDot {
   animation: redBlink 1.05s infinite ease-in-out;
 }
 
-.helmetVisual.online .greenDot {
+.helmetStage.online .greenDot,
+.helmetStage.listening .greenDot {
   animation: greenBlink 1.05s infinite ease-in-out;
 }
 
+/* On-visor voice visualizer */
 .visorVisualizer {
   position: absolute;
-  left: 32%;
-  top: 33%;
-  width: 42%;
-  height: 19%;
+  left: 33%;
+  top: 32%;
+  z-index: 2;
+  width: 40%;
+  height: 20%;
   display: grid;
   grid-template-columns: repeat(9, 1fr);
   align-items: center;
-  gap: clamp(3px, 0.7vw, 8px);
-  padding: 0 3%;
-  opacity: 0.24;
-  mix-blend-mode: screen;
+  gap: clamp(2px, 0.7vw, 7px);
+  opacity: 0.32;
   pointer-events: none;
   transform: skewX(-7deg);
-}
-
-.visorVisualizer span {
-  height: 76%;
-  min-height: 8px;
-  border-radius: 999px;
-  background: linear-gradient(180deg, #7fffe5 0%, #3ee89f 48%, #1b7b77 100%);
-  box-shadow: 0 0 16px rgba(62, 232, 159, 0.56);
-  transform-origin: center;
-  transition:
-    transform 80ms linear,
-    opacity 120ms ease;
+  transition: opacity 0.2s ease;
 }
 
 .visorVisualizer.active {
-  opacity: 0.86;
+  opacity: 0.95;
 }
 
-@keyframes redBlink {
-  0%,
-  100% {
-    opacity: 0.42;
-    filter: drop-shadow(0 0 5px rgba(239, 106, 58, 0.42));
-  }
-
-  50% {
-    opacity: 1;
-    filter: drop-shadow(0 0 20px #ef6a3a);
-  }
+.visorVisualizer span {
+  height: 82%;
+  min-height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #ccfff4 0%, var(--ring) 56%, #1b7b77 100%);
+  box-shadow: 0 0 12px var(--ring-soft);
+  transform-origin: center;
+  transition: transform 90ms linear;
 }
 
-@keyframes greenBlink {
-  0%,
-  100% {
-    opacity: 0.48;
-    box-shadow: 0 0 8px rgba(62, 232, 159, 0.28);
-  }
-
-  50% {
-    opacity: 1;
-    box-shadow: 0 0 24px rgba(62, 232, 159, 0.84);
-  }
+/* Floating state caption */
+.helmetCaption {
+  position: absolute;
+  left: 50%;
+  bottom: 1%;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 14px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  border: 1px solid var(--ring-faint);
+  background: rgba(8, 13, 14, 0.72);
+  color: var(--ring);
+  font-size: 0.74rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
 }
 
-@keyframes pulse {
-  50% {
-    transform: scale(1.08);
-    box-shadow: 0 0 50px rgba(62, 232, 159, 0.36);
-  }
+.captionDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ring);
+  box-shadow: 0 0 10px var(--ring);
+  animation: softPulse 1.5s ease-in-out infinite;
 }
 
+/* ============================================================
+   Buttons + controls
+   ============================================================ */
 .primaryControls {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-  align-self: end;
 }
 
 .mainButton,
@@ -261,46 +451,101 @@ h2 {
   border-radius: 8px;
   padding: 0 22px;
   cursor: pointer;
+  transition:
+    transform 0.12s ease,
+    box-shadow 0.16s ease,
+    background 0.16s ease,
+    border-color 0.16s ease,
+    filter 0.16s ease;
 }
 
 .mainButton {
   border: 0;
-  background: #f26a3d;
+  background: var(--rider);
   color: #170c08;
   font-weight: 800;
 }
 
+.mainButton:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 26px rgba(242, 106, 61, 0.34);
+  filter: brightness(1.06);
+}
+
+.mainButton:active:not(:disabled) {
+  transform: translateY(0);
+}
+
 .ghostButton {
   border: 1px solid rgba(196, 218, 216, 0.24);
-  color: #eff6f8;
+  color: var(--text);
   background: rgba(255, 255, 255, 0.05);
 }
 
+.ghostButton:hover:not(:disabled) {
+  border-color: rgba(62, 232, 159, 0.5);
+  background: rgba(255, 255, 255, 0.09);
+}
+
 .talkButton {
-  border: 1px solid rgba(62, 232, 159, 0.5);
-  color: #eff6f8;
-  background: rgba(62, 232, 159, 0.12);
+  border: 1px solid rgba(95, 233, 214, 0.5);
+  color: var(--text);
+  background: rgba(95, 233, 214, 0.12);
   font-weight: 700;
   touch-action: none;
   user-select: none;
-  transition:
-    transform 80ms ease,
-    box-shadow 120ms ease,
-    background 120ms ease;
+}
+
+.talkButton:hover {
+  border-color: rgba(95, 233, 214, 0.8);
 }
 
 .talkButton.active {
-  background: #3ee89f;
+  background: var(--accent-cyan);
   color: #07221a;
   transform: scale(0.97);
-  box-shadow: 0 0 26px rgba(62, 232, 159, 0.5);
+  box-shadow: 0 0 26px rgba(95, 233, 214, 0.55);
 }
 
+/* Quick-phrase chips */
+.quickPhrases {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip {
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(196, 218, 216, 0.2);
+  background: rgba(255, 255, 255, 0.04);
+  color: #d6e2df;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition:
+    transform 0.12s ease,
+    border-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.chip:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(62, 232, 159, 0.55);
+  background: rgba(62, 232, 159, 0.1);
+  color: var(--text);
+}
+
+.chip:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+/* Command bar */
 .commandBar {
   display: grid;
   grid-template-columns: minmax(200px, 1fr) auto auto;
   gap: 10px;
-  margin-top: 16px;
 }
 
 .commandBar input {
@@ -309,9 +554,12 @@ h2 {
   border: 1px solid rgba(196, 218, 216, 0.2);
   border-radius: 8px;
   padding: 0 14px;
-  color: #eff6f8;
+  color: var(--text);
   background: rgba(255, 255, 255, 0.06);
   outline: none;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .commandBar input:focus {
@@ -319,61 +567,245 @@ h2 {
   box-shadow: 0 0 0 3px rgba(62, 232, 159, 0.12);
 }
 
+/* ============================================================
+   Status panel + instruments
+   ============================================================ */
 .statusPanel {
   display: grid;
-  gap: 16px;
+  align-content: start;
+  gap: 14px;
   padding: 18px;
 }
 
 .stateBlock {
-  display: grid;
-  gap: 8px;
-  padding-bottom: 18px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 14px;
   border-bottom: 1px solid rgba(196, 218, 216, 0.14);
 }
 
-.stateBlock strong {
-  font-size: clamp(2rem, 4vw, 3.5rem);
+.stateMain {
+  display: grid;
+  gap: 6px;
+}
+
+.stateMain strong {
+  font-size: clamp(1.8rem, 3.2vw, 2.7rem);
   line-height: 1;
 }
 
-.stateBlock span {
+.stateDetail {
+  margin: -2px 0 2px;
   color: #c5d3d0;
+  min-height: 1.4em;
 }
 
-.metricRow {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+.signalBars {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 34px;
+  flex-shrink: 0;
 }
 
-.metricRow div,
-.routeStrip {
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.06);
-  padding: 16px;
+.signalBars span {
+  width: 6px;
+  border-radius: 2px;
+  background: rgba(196, 218, 216, 0.2);
+  transition: background 0.3s ease;
 }
 
-.metricRow strong {
+.signalBars.active span {
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(62, 232, 159, 0.5);
+  animation: signalPulse 1.7s ease-in-out infinite;
+}
+
+.instrument {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 14px;
+}
+
+.instrumentHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.instrumentHead strong {
+  font-size: 0.98rem;
+}
+
+/* Compass */
+.compassBody {
+  display: flex;
+  justify-content: center;
+}
+
+.compassBody svg {
+  width: clamp(124px, 56%, 176px);
+  height: auto;
+}
+
+.compassRing {
+  fill: rgba(8, 12, 13, 0.6);
+  stroke: var(--border);
+  stroke-width: 1.5;
+}
+
+.compassRingInner {
+  fill: none;
+  stroke: rgba(196, 218, 216, 0.1);
+  stroke-width: 1;
+}
+
+.compassTick {
+  stroke: rgba(196, 218, 216, 0.35);
+  stroke-width: 1.5;
+}
+
+.compassTick.major {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.compassLabel {
+  fill: #c5d3d0;
+  font-size: 11px;
+  font-weight: 700;
+  text-anchor: middle;
+}
+
+.compassNeedle {
+  transform-box: view-box;
+  transform-origin: 60px 60px;
+  transition: transform 0.6s ease;
+}
+
+.needleNorth {
+  fill: var(--rider);
+}
+
+.needleSouth {
+  fill: #7d8c89;
+}
+
+.compassHub {
+  fill: var(--text);
+}
+
+.compass small {
   display: block;
   margin-top: 8px;
-  font-size: 1.45rem;
-}
-
-.routeStrip {
-  display: grid;
-  gap: 6px;
-  align-self: end;
-}
-
-.routeStrip strong {
-  font-size: 1.8rem;
-}
-
-.routeStrip small {
+  text-align: center;
   color: #d8e0dd;
 }
 
+/* Arc gauge */
+.instrumentRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.gauge svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.gaugeTrack {
+  fill: none;
+  stroke: rgba(196, 218, 216, 0.14);
+  stroke-width: 9;
+  stroke-linecap: round;
+}
+
+.gaugeFill {
+  fill: none;
+  stroke-width: 9;
+  stroke-linecap: round;
+  transition:
+    stroke-dashoffset 0.5s ease,
+    stroke 0.4s ease;
+}
+
+.gauge.good .gaugeFill {
+  stroke: var(--accent);
+}
+
+.gauge.warn .gaugeFill {
+  stroke: var(--warn);
+}
+
+.gauge.alert .gaugeFill {
+  stroke: var(--danger);
+}
+
+.gaugeValue {
+  margin-top: -4px;
+  text-align: center;
+}
+
+.gaugeValue strong {
+  font-size: 1.5rem;
+}
+
+.gaugeValue span {
+  margin-left: 3px;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* Latency readout */
+.latencyValue strong {
+  font-size: 1.5rem;
+}
+
+.latencyValue span {
+  margin-left: 3px;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.latencyBar {
+  margin-top: 12px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(196, 218, 216, 0.14);
+  overflow: hidden;
+}
+
+.latencyBar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition:
+    width 0.5s ease,
+    background 0.4s ease;
+}
+
+.latency.good .latencyBar i {
+  background: var(--accent);
+}
+
+.latency.warn .latencyBar i {
+  background: var(--warn);
+}
+
+.latency.alert .latencyBar i {
+  background: var(--danger);
+}
+
+/* ============================================================
+   Transcript
+   ============================================================ */
 .transcriptPanel {
   grid-column: 1 / -1;
   padding: 18px;
@@ -387,7 +819,9 @@ h2 {
 }
 
 .panelHeader span {
-  color: #3ee89f;
+  color: var(--accent);
+  letter-spacing: 0.1em;
+  font-size: 0.8rem;
 }
 
 .transcriptList {
@@ -397,18 +831,28 @@ h2 {
 }
 
 .message {
-  min-height: 108px;
-  border-radius: 8px;
+  min-height: 112px;
+  border-radius: 10px;
   padding: 14px;
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  transition:
+    transform 0.15s ease,
+    background 0.15s ease;
+}
+
+.message:hover {
+  transform: translateY(-2px);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .message.agent {
-  border-left: 3px solid #3ee89f;
+  border-left-color: var(--accent);
 }
 
 .message.rider {
-  border-left: 3px solid #f26a3d;
+  border-left-color: var(--rider);
 }
 
 .message p {
@@ -416,6 +860,9 @@ h2 {
   color: #f5fbfa;
 }
 
+/* ============================================================
+   Error boundary screen
+   ============================================================ */
 .errorVisor {
   display: grid;
   gap: 14px;
@@ -434,12 +881,83 @@ h2 {
   margin-top: 8px;
 }
 
+/* ============================================================
+   Keyframes
+   ============================================================ */
+@keyframes redBlink {
+  0%,
+  100% {
+    opacity: 0.42;
+    filter: drop-shadow(0 0 5px rgba(239, 106, 58, 0.42));
+  }
+  50% {
+    opacity: 1;
+    filter: drop-shadow(0 0 20px #ef6a3a);
+  }
+}
+
+@keyframes greenBlink {
+  0%,
+  100% {
+    opacity: 0.48;
+    filter: drop-shadow(0 0 6px rgba(62, 232, 159, 0.3));
+  }
+  50% {
+    opacity: 1;
+    filter: drop-shadow(0 0 22px rgba(62, 232, 159, 0.85));
+  }
+}
+
+@keyframes reticleSpin {
+  from {
+    transform: translate(-50%, -50%) rotate(0deg);
+  }
+  to {
+    transform: translate(-50%, -50%) rotate(360deg);
+  }
+}
+
+@keyframes reticlePulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+
+@keyframes softPulse {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes signalPulse {
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* ============================================================
+   Responsive
+   ============================================================ */
 @media (max-width: 900px) {
   .topbar,
   .grid,
   .primaryControls,
   .commandBar,
-  .metricRow,
+  .instrumentRow,
   .transcriptList {
     grid-template-columns: 1fr;
   }
@@ -450,6 +968,18 @@ h2 {
   }
 
   .helmetPanel {
-    min-height: 420px;
+    min-height: 440px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reticle,
+  .reticle::after,
+  .captionDot,
+  .signal.online span,
+  .signalBars.active span,
+  .micDot,
+  .greenDot {
+    animation: none;
   }
 }

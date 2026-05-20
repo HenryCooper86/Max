@@ -4,10 +4,7 @@ export type SessionStartEvent = {
   channels: number;
 };
 
-export type ClientEvent =
-  | SessionStartEvent
-  | { type: "audio.start" }
-  | { type: "audio.stop" };
+export type ClientEvent = SessionStartEvent | { type: "audio.start" } | { type: "audio.stop" };
 
 export type AgentProvider = {
   start(event: SessionStartEvent): Promise<void>;

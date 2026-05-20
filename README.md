@@ -14,6 +14,11 @@ Prototype AI voice agent for a motorcycle helmet. Max keeps the same name and mo
 - Browser speech recognition for command capture when supported by the browser.
 - Browser text-to-speech for agent replies.
 - Doubao realtime voice provider for low-latency speech-to-speech sessions.
+- AudioWorklet mic capture that runs off the main thread for glitch-free streaming.
+- Push-to-talk (hold-to-talk) control alongside the latched mic toggle.
+- Barge-in: agent speech stops as soon as the rider talks or sends a new command.
+- Automatic WebSocket reconnect with exponential backoff if the relay drops.
+- Startup config validation that warns about missing Ark or Doubao credentials.
 
 ## Tech Stack
 
@@ -30,15 +35,23 @@ Prototype AI voice agent for a motorcycle helmet. Max keeps the same name and mo
 .
 ├── src/
 │   ├── main.tsx              # Helmet HUD and client voice/command logic
+│   ├── ErrorBoundary.tsx     # Recoverable screen for render-time crashes
 │   └── styles.css            # App styling
+├── public/
+│   └── pcm-worklet.js        # AudioWorklet: mic downsample + PCM16 framing
 ├── server/
 │   ├── index.ts              # Express API and WebSocket relay
+│   ├── config.ts             # Env config resolution and startup validation
 │   └── providers/
 │       ├── ark.ts            # Ark chat completion client
 │       ├── doubao.ts         # Doubao realtime voice provider
 │       ├── mock.ts           # Mock live voice provider
 │       └── types.ts
+├── shared/
+│   └── language.ts           # Language gating shared by client and server
+├── tests/                    # Vitest unit tests for the pure functions
 ├── .env.example              # Environment variable template
+├── eslint.config.js
 ├── package.json
 └── vite.config.ts
 ```
@@ -92,6 +105,8 @@ Use `询问 Ark` for the working AI response path:
 Use `语音指令` if your browser supports the Web Speech API. This captures Chinese speech by default, sends it to Ark, and speaks the reply with Chinese browser text-to-speech when supported. If Ark credentials are missing or rejected, the server returns a short local fallback reply by default so the voice flow still responds while credentials are being fixed.
 
 Use `开始语音` to exercise the realtime audio streaming path. In the default configuration, this connects to the mock WebSocket provider and emits simulated rider/agent transcript events. With `VOICE_PROVIDER=doubao`, the backend connects to the Doubao realtime dialogue WebSocket, sends browser mic PCM frames, and relays returned female Chinese PCM voice audio back to the browser.
+
+Use `按住说话` for push-to-talk: the mic transmits only while the button is held and mutes on release. The latched `开始语音` toggle and `按住说话` share the same audio session, so you can mix the two. Whenever the rider starts talking or sends a new command, any in-progress agent speech is interrupted (barge-in).
 
 ## Environment Variables
 
@@ -179,9 +194,12 @@ Browser-to-server binary messages are 16 kHz PCM16 mono audio frames. When using
 ## Scripts
 
 ```bash
-npm run dev       # Run Vite client and Express/WebSocket server
-npm run build     # Type-check and build production assets
-npm run preview   # Preview built client
+npm run dev          # Run Vite client and Express/WebSocket server
+npm run build        # Type-check and build production assets
+npm run preview      # Preview built client
+npm run lint         # Lint with ESLint
+npm run format       # Format with Prettier (format:check to verify only)
+npm test             # Run the Vitest unit tests (test:watch for watch mode)
 ```
 
 ## Security Notes
@@ -192,10 +210,12 @@ npm run preview   # Preview built client
 
 ## Verification
 
-Build:
+Build, lint, and test:
 
 ```bash
 npm run build
+npm run lint
+npm test
 ```
 
 Smoke test Ark:
@@ -216,5 +236,5 @@ curl -s http://localhost:8787/health
 
 1. Confirm the production Ark model or endpoint ID to use for helmet responses.
 2. Replace mock navigation/noise values with real helmet/mobile telemetry.
-3. Add proper wake-word flow and push-to-talk behavior.
-4. Add interruption controls and richer realtime state labels for Doubao sessions.
+3. Add a wake-word flow on top of the existing push-to-talk control.
+4. Add richer realtime state labels for Doubao sessions.

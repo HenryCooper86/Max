@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { ErrorBoundary } from "./ErrorBoundary";
+import { SUPPORTED_LANGUAGE_MESSAGE, isSupportedLanguageText } from "../shared/language";
 import "./styles.css";
 
 type BrowserSpeechRecognition = {
@@ -45,16 +47,13 @@ type TranscriptItem = {
   text: string;
 };
 
-const SAMPLE_RATE = 16000;
-const PCM_FRAME_SAMPLES = 320;
-const VISUALIZER_BARS = [0.42, 0.78, 0.56, 0.94, 0.68, 0.84, 0.48, 0.72, 0.6];
-const SUPPORTED_LANGUAGE_MESSAGE = "我只支持中文、English、日本語。请使用这三种语言之一。";
+// Messages posted from public/pcm-worklet.js.
+type WorkletMessage = { type: "frame"; pcm: ArrayBuffer } | { type: "level"; value: number };
 
-function isSupportedLanguageText(text: string) {
-  return text
-    .replace(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Latin}\p{Number}\p{Punctuation}\p{Separator}\p{Symbol}]/gu, "")
-    .trim().length === 0;
-}
+const SAMPLE_RATE = 16000;
+const PLAYBACK_SAMPLE_RATE = 24000;
+const MAX_RECONNECT_ATTEMPTS = 6;
+const VISUALIZER_BARS = [0.42, 0.78, 0.56, 0.94, 0.68, 0.84, 0.48, 0.72, 0.6];
 
 function selectChineseFemaleVoice() {
   const voices = window.speechSynthesis.getVoices();
@@ -72,26 +71,6 @@ function createAgentSocket() {
   return new WebSocket(`${protocol}://${window.location.host}/agent`);
 }
 
-function floatToPcm16Array(float32: Float32Array) {
-  const pcm = new Int16Array(float32.length);
-  for (let i = 0; i < float32.length; i += 1) {
-    const sample = Math.max(-1, Math.min(1, float32[i]));
-    pcm[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
-  }
-  return pcm;
-}
-
-function downsampleTo16k(input: Float32Array, inputRate: number) {
-  if (inputRate === SAMPLE_RATE) return input;
-  const ratio = inputRate / SAMPLE_RATE;
-  const outputLength = Math.floor(input.length / ratio);
-  const output = new Float32Array(outputLength);
-  for (let i = 0; i < outputLength; i += 1) {
-    output[i] = input[Math.floor(i * ratio)] ?? 0;
-  }
-  return output;
-}
-
 function useHelmetAgent() {
   const [connected, setConnected] = useState(false);
   const [listening, setListening] = useState(false);
@@ -104,17 +83,19 @@ function useHelmetAgent() {
   const [speechListening, setSpeechListening] = useState(false);
   const [voiceLevel, setVoiceLevel] = useState(0);
   const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
+
   const socketRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const playbackContextRef = useRef<AudioContext | null>(null);
   const playbackCursorRef = useRef(0);
-  const processorRef = useRef<ScriptProcessorNode | null>(null);
-  const micSinkRef = useRef<GainNode | null>(null);
-  const pcmQueueRef = useRef<Int16Array>(new Int16Array(0));
-  const pcmSendTimerRef = useRef<number | null>(null);
-  const voiceLevelRef = useRef(0);
-  const lastVoiceLevelUpdateRef = useRef(0);
+  const playbackSourcesRef = useRef<AudioBufferSourceNode[]>([]);
+  const transmittingRef = useRef(false);
+  const intentionalCloseRef = useRef(false);
+  const reconnectAttemptsRef = useRef(0);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const connectRef = useRef<() => void>(() => {});
   const speechRef = useRef<BrowserSpeechRecognition | null>(null);
   const speechContinuousRef = useRef(false);
   const speechBufferRef = useRef("");
@@ -138,6 +119,24 @@ function useHelmetAgent() {
     setSpeechListening(false);
   }, [clearSpeechFlushTimer]);
 
+  // Barge-in: silence whatever the agent is currently saying so the rider can
+  // interrupt. Covers both browser TTS and queued Doubao voice audio.
+  const stopAgentSpeech = useCallback(() => {
+    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    for (const source of playbackSourcesRef.current) {
+      try {
+        source.onended = null;
+        source.stop();
+      } catch {
+        /* source already finished */
+      }
+    }
+    playbackSourcesRef.current = [];
+    if (playbackContextRef.current) {
+      playbackCursorRef.current = playbackContextRef.current.currentTime;
+    }
+  }, []);
+
   const speak = useCallback((text: string) => {
     if (!("speechSynthesis" in window)) return;
     window.speechSynthesis.cancel();
@@ -151,14 +150,13 @@ function useHelmetAgent() {
   }, []);
 
   const playPcm16 = useCallback((audioData: ArrayBuffer) => {
-    const sampleRate = 24000;
-    const audioContext = playbackContextRef.current ?? new AudioContext({ sampleRate });
+    const audioContext = playbackContextRef.current ?? new AudioContext({ sampleRate: PLAYBACK_SAMPLE_RATE });
     playbackContextRef.current = audioContext;
 
     const pcm = new Int16Array(audioData);
     if (!pcm.length) return;
 
-    const buffer = audioContext.createBuffer(1, pcm.length, sampleRate);
+    const buffer = audioContext.createBuffer(1, pcm.length, PLAYBACK_SAMPLE_RATE);
     const channel = buffer.getChannelData(0);
     for (let i = 0; i < pcm.length; i += 1) {
       channel[i] = Math.max(-1, Math.min(1, pcm[i] / 0x8000));
@@ -169,22 +167,35 @@ function useHelmetAgent() {
     source.connect(audioContext.destination);
     if (audioContext.state === "suspended") void audioContext.resume();
 
+    source.onended = () => {
+      playbackSourcesRef.current = playbackSourcesRef.current.filter((item) => item !== source);
+    };
+    playbackSourcesRef.current.push(source);
+
     const startAt = Math.max(audioContext.currentTime, playbackCursorRef.current);
     source.start(startAt);
     playbackCursorRef.current = startAt + buffer.duration;
   }, []);
 
   const connect = useCallback(() => {
-    if (socketRef.current?.readyState === WebSocket.OPEN) return;
-    setStatus("连接中");
+    const existing = socketRef.current;
+    if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+    intentionalCloseRef.current = false;
+    setStatus(reconnectAttemptsRef.current > 0 ? `重新连接中…（第 ${reconnectAttemptsRef.current} 次）` : "连接中");
+
     const socket = createAgentSocket();
     socket.binaryType = "arraybuffer";
     socketRef.current = socket;
 
     socket.addEventListener("open", () => {
+      reconnectAttemptsRef.current = 0;
       setConnected(true);
       setStatus("就绪");
       socket.send(JSON.stringify({ type: "session.start", sampleRate: SAMPLE_RATE, channels: 1 }));
+      // Resume the audio stream if the rider was transmitting before the drop.
+      if (transmittingRef.current) socket.send(JSON.stringify({ type: "audio.start" }));
     });
 
     socket.addEventListener("message", (message) => {
@@ -201,6 +212,7 @@ function useHelmetAgent() {
         }
         if (event.type === "status") setStatus(event.detail);
         if (event.type === "transcript") {
+          if (event.speaker === "rider") stopAgentSpeech();
           pushTranscript(event.speaker, event.text);
           if (event.speaker === "agent" && event.final !== false) speak(event.text);
         }
@@ -216,14 +228,32 @@ function useHelmetAgent() {
 
     socket.addEventListener("close", () => {
       setConnected(false);
-      setListening(false);
-      setStatus("离线");
+      if (socketRef.current === socket) socketRef.current = null;
+      if (intentionalCloseRef.current) {
+        setStatus("离线");
+        return;
+      }
+
+      // Unexpected drop: reconnect with exponential backoff.
+      reconnectAttemptsRef.current += 1;
+      if (reconnectAttemptsRef.current > MAX_RECONNECT_ATTEMPTS) {
+        reconnectAttemptsRef.current = 0;
+        setStatus("语音中继连接失败，请点击连接重试");
+        return;
+      }
+      const delay = Math.min(8000, 1000 * 2 ** (reconnectAttemptsRef.current - 1));
+      setStatus(`连接已断开，${Math.round(delay / 1000)} 秒后自动重连…`);
+      reconnectTimerRef.current = window.setTimeout(() => connectRef.current(), delay);
     });
 
     socket.addEventListener("error", () => {
       setStatus("连接错误");
     });
-  }, [playPcm16, pushTranscript, speak]);
+  }, [playPcm16, pushTranscript, speak, stopAgentSpeech]);
+
+  useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
 
   const waitForSocket = useCallback(async () => {
     connect();
@@ -250,103 +280,130 @@ function useHelmetAgent() {
     });
   }, [connect]);
 
-  const stopMic = useCallback(() => {
-    stopSpeechCapture();
-    if (pcmSendTimerRef.current) window.clearInterval(pcmSendTimerRef.current);
-    pcmSendTimerRef.current = null;
-    pcmQueueRef.current = new Int16Array(0);
-    voiceLevelRef.current = 0;
-    setVoiceLevel(0);
-    processorRef.current?.disconnect();
-    micSinkRef.current?.disconnect();
-    audioContextRef.current?.close();
+  // Acquire the mic + AudioWorklet graph once and reuse it across PtT presses.
+  const ensureMic = useCallback(async () => {
+    if (streamRef.current && audioContextRef.current && workletNodeRef.current) {
+      if (audioContextRef.current.state === "suspended") await audioContextRef.current.resume();
+      return;
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+    });
+    const audioContext = new AudioContext();
+    if (!audioContext.audioWorklet) {
+      stream.getTracks().forEach((track) => track.stop());
+      await audioContext.close();
+      throw new Error("此浏览器不支持 AudioWorklet 麦克风采集");
+    }
+
+    await audioContext.audioWorklet.addModule("/pcm-worklet.js");
+    const source = audioContext.createMediaStreamSource(stream);
+    const workletNode = new AudioWorkletNode(audioContext, "pcm-capture", {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      outputChannelCount: [1],
+      channelCount: 1,
+      channelCountMode: "explicit"
+    });
+
+    workletNode.port.onmessage = (event: MessageEvent<WorkletMessage>) => {
+      const message = event.data;
+      if (message.type === "frame") {
+        if (!transmittingRef.current) return;
+        const socket = socketRef.current;
+        if (socket?.readyState === WebSocket.OPEN) socket.send(message.pcm);
+      } else if (message.type === "level") {
+        setVoiceLevel(transmittingRef.current ? message.value : 0);
+      }
+    };
+
+    source.connect(workletNode);
+    workletNode.connect(audioContext.destination);
+
+    streamRef.current = stream;
+    audioContextRef.current = audioContext;
+    workletNodeRef.current = workletNode;
+  }, []);
+
+  const releaseMic = useCallback(() => {
+    transmittingRef.current = false;
+    if (workletNodeRef.current) {
+      workletNodeRef.current.port.onmessage = null;
+      workletNodeRef.current.disconnect();
+      workletNodeRef.current = null;
+    }
+    if (audioContextRef.current) {
+      void audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
     streamRef.current?.getTracks().forEach((track) => track.stop());
-    micSinkRef.current = null;
-    processorRef.current = null;
-    audioContextRef.current = null;
     streamRef.current = null;
-    setListening(false);
-    socketRef.current?.send(JSON.stringify({ type: "audio.stop" }));
-  }, [stopSpeechCapture]);
+    setVoiceLevel(0);
+  }, []);
 
   const startMic = useCallback(async () => {
     try {
       const socket = await waitForSocket();
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        }
-      });
-      const audioContext = new AudioContext();
-      const source = audioContext.createMediaStreamSource(stream);
-      const processor = audioContext.createScriptProcessor(1024, 1, 1);
-      const micSink = audioContext.createGain();
-      micSink.gain.value = 0;
-      streamRef.current = stream;
-      audioContextRef.current = audioContext;
-      processorRef.current = processor;
-      micSinkRef.current = micSink;
-
-      processor.onaudioprocess = (event) => {
-        const input = event.inputBuffer.getChannelData(0);
-        let sumSquares = 0;
-        for (let i = 0; i < input.length; i += 1) {
-          sumSquares += input[i] * input[i];
-        }
-        const rms = Math.sqrt(sumSquares / input.length);
-        const nextLevel = Math.min(1, rms * 8);
-        voiceLevelRef.current = voiceLevelRef.current * 0.68 + nextLevel * 0.32;
-        const now = performance.now();
-        if (now - lastVoiceLevelUpdateRef.current > 45) {
-          lastVoiceLevelUpdateRef.current = now;
-          setVoiceLevel(voiceLevelRef.current);
-        }
-
-        const next = floatToPcm16Array(downsampleTo16k(input, audioContext.sampleRate));
-        const queued = pcmQueueRef.current;
-        const merged = new Int16Array(queued.length + next.length);
-        merged.set(queued);
-        merged.set(next, queued.length);
-        pcmQueueRef.current = merged;
-      };
-
-      source.connect(processor);
-      processor.connect(micSink);
-      micSink.connect(audioContext.destination);
-      pcmSendTimerRef.current = window.setInterval(() => {
-        const socket = socketRef.current;
-        if (!socket || socket.readyState !== WebSocket.OPEN) return;
-        const queued = pcmQueueRef.current;
-        if (queued.length < PCM_FRAME_SAMPLES) return;
-        const frame = queued.slice(0, PCM_FRAME_SAMPLES);
-        pcmQueueRef.current = queued.slice(PCM_FRAME_SAMPLES);
-        socket.send(frame.buffer);
-      }, 20);
+      await ensureMic();
+      stopAgentSpeech();
+      streamRef.current?.getAudioTracks().forEach((track) => (track.enabled = true));
+      transmittingRef.current = true;
       setListening(true);
       setStatus("正在收听");
       socket.send(JSON.stringify({ type: "audio.start" }));
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "无法访问麦克风");
+      transmittingRef.current = false;
       setListening(false);
+      setStatus(error instanceof Error ? error.message : "无法访问麦克风");
     }
-  }, [waitForSocket]);
+  }, [ensureMic, stopAgentSpeech, waitForSocket]);
+
+  // Stops transmitting but keeps the audio graph alive (the track is disabled,
+  // so no real audio is captured) for an instant restart on the next press.
+  const stopMic = useCallback(() => {
+    transmittingRef.current = false;
+    streamRef.current?.getAudioTracks().forEach((track) => (track.enabled = false));
+    setVoiceLevel(0);
+    setListening(false);
+    stopSpeechCapture();
+    const socket = socketRef.current;
+    if (socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: "audio.stop" }));
+    }
+  }, [stopSpeechCapture]);
 
   const disconnect = useCallback(() => {
+    intentionalCloseRef.current = true;
+    if (reconnectTimerRef.current) {
+      window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    reconnectAttemptsRef.current = 0;
     stopMic();
-    playbackContextRef.current?.close();
-    playbackContextRef.current = null;
+    releaseMic();
+    stopAgentSpeech();
+    if (playbackContextRef.current) {
+      void playbackContextRef.current.close();
+      playbackContextRef.current = null;
+    }
     playbackCursorRef.current = 0;
     socketRef.current?.close();
     socketRef.current = null;
-  }, [stopMic]);
+    setConnected(false);
+    setStatus("离线");
+  }, [releaseMic, stopAgentSpeech, stopMic]);
 
   const submitCommand = useCallback(
     async (textOverride?: string) => {
       const text = (textOverride ?? commandText).trim();
       if (!text || arkBusyRef.current) return;
 
+      stopAgentSpeech();
       pushTranscript("rider", text);
       setCommandText("");
       if (!isSupportedLanguageText(text)) {
@@ -386,7 +443,7 @@ function useHelmetAgent() {
         setArkBusy(false);
       }
     },
-    [commandText, pushTranscript, speak]
+    [commandText, pushTranscript, speak, stopAgentSpeech]
   );
 
   const flushSpeechCommand = useCallback(() => {
@@ -405,6 +462,7 @@ function useHelmetAgent() {
       return;
     }
 
+    stopAgentSpeech();
     speechContinuousRef.current = continuous;
     clearSpeechFlushTimer();
     speechBufferRef.current = "";
@@ -470,9 +528,7 @@ function useHelmetAgent() {
     recognition.start();
   }
 
-  const startSpeechCommand = useCallback(() => {
-    startSpeechCapture(false);
-  }, [submitCommand]);
+  const startSpeechCommand = () => startSpeechCapture(false);
 
   useEffect(
     () => () => {
@@ -506,11 +562,43 @@ function useHelmetAgent() {
 
 function App() {
   const agent = useHelmetAgent();
+  const [pttActive, setPttActive] = useState(false);
+  const pttActiveRef = useRef(false);
+  const pttOwnsMicRef = useRef(false);
+
   const agentState = useMemo(() => {
     if (agent.listening) return "收听中";
     if (agent.connected) return "待命";
     return "离线";
   }, [agent.connected, agent.listening]);
+
+  const handleTalkStart = useCallback(
+    (event: React.PointerEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      if (pttActiveRef.current) return;
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      pttActiveRef.current = true;
+      setPttActive(true);
+      // Only this press should release the mic if it was not already live.
+      if (!agent.listening) {
+        pttOwnsMicRef.current = true;
+        void agent.startMic();
+      } else {
+        pttOwnsMicRef.current = false;
+      }
+    },
+    [agent]
+  );
+
+  const handleTalkEnd = useCallback(() => {
+    if (!pttActiveRef.current) return;
+    pttActiveRef.current = false;
+    setPttActive(false);
+    if (pttOwnsMicRef.current) {
+      agent.stopMic();
+      pttOwnsMicRef.current = false;
+    }
+  }, [agent]);
 
   return (
     <main className="shell">
@@ -528,7 +616,10 @@ function App() {
 
         <div className="grid">
           <section className="hudPanel helmetPanel">
-            <div className={`helmetVisual ${agent.connected ? "online" : "offline"} ${agent.listening ? "listening" : ""}`} aria-hidden="true">
+            <div
+              className={`helmetVisual ${agent.connected ? "online" : "offline"} ${agent.listening ? "listening" : ""}`}
+              aria-hidden="true"
+            >
               <svg viewBox="0 0 420 270" role="img">
                 <path
                   className="helmetShell"
@@ -553,14 +644,24 @@ function App() {
               </div>
             </div>
             <div className="primaryControls">
-              <button
-                className="mainButton"
-                onClick={agent.listening ? agent.stopMic : agent.startMic}
-                type="button"
-              >
+              <button className="mainButton" onClick={agent.listening ? agent.stopMic : agent.startMic} type="button">
                 {agent.listening ? "静音麦克风" : "开始语音"}
               </button>
-              <button className="ghostButton" onClick={agent.connected ? agent.disconnect : agent.connect} type="button">
+              <button
+                className={`talkButton ${pttActive ? "active" : ""}`}
+                type="button"
+                onPointerDown={handleTalkStart}
+                onPointerUp={handleTalkEnd}
+                onPointerLeave={handleTalkEnd}
+                onPointerCancel={handleTalkEnd}
+              >
+                {pttActive ? "松开结束" : "按住说话"}
+              </button>
+              <button
+                className="ghostButton"
+                onClick={agent.connected ? agent.disconnect : agent.connect}
+                type="button"
+              >
                 {agent.connected ? "断开" : "连接"}
               </button>
             </div>
@@ -615,14 +716,21 @@ function App() {
               <span>{agent.transcript.length ? "实时" : "空闲"}</span>
             </div>
             <div className="transcriptList">
-              {(agent.transcript.length ? agent.transcript : [{ id: 1, speaker: "agent" as const, text: "你好，我是 Max，摩托车头盔 AI 助手。你可以问我路线、天气、附近停靠点或摩托车问题。" }]).map(
-                (item) => (
-                  <article className={`message ${item.speaker}`} key={item.id}>
-                    <span>{item.speaker === "rider" ? "骑手" : "Max"}</span>
-                    <p>{item.text}</p>
-                  </article>
-                )
-              )}
+              {(agent.transcript.length
+                ? agent.transcript
+                : [
+                    {
+                      id: 1,
+                      speaker: "agent" as const,
+                      text: "你好，我是 Max，摩托车头盔 AI 助手。你可以问我路线、天气、附近停靠点或摩托车问题。"
+                    }
+                  ]
+              ).map((item) => (
+                <article className={`message ${item.speaker}`} key={item.id}>
+                  <span>{item.speaker === "rider" ? "骑手" : "Max"}</span>
+                  <p>{item.text}</p>
+                </article>
+              ))}
             </div>
           </section>
         </div>
@@ -633,6 +741,8 @@ function App() {
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </React.StrictMode>
 );

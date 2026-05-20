@@ -1,12 +1,11 @@
-import "dotenv/config";
 import express from "express";
 import http from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
+import { config, describeConfig, validateConfig } from "./config";
 import { createDoubaoProvider } from "./providers/doubao";
 import { createMockProvider } from "./providers/mock";
 import type { AgentProvider, ClientEvent } from "./providers/types";
 
-const PORT = Number(process.env.PORT ?? 8787);
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/agent" });
@@ -14,7 +13,7 @@ const wss = new WebSocketServer({ server, path: "/agent" });
 app.use(express.json({ limit: "128kb" }));
 
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, provider: process.env.VOICE_PROVIDER ?? "mock" });
+  res.json({ ok: true, provider: config.voiceProvider });
 });
 
 app.post("/ark/chat", async (req, res) => {
@@ -30,7 +29,7 @@ app.post("/ark/chat", async (req, res) => {
     res.json({ reply });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Ark request failed";
-    if (text && process.env.HELMET_AGENT_OFFLINE_FALLBACK !== "false") {
+    if (text && config.offlineFallback) {
       const { createLocalHelmetReply } = await import("./providers/ark");
       res.json({ reply: createLocalHelmetReply(text), fallback: true, error: message });
       return;
@@ -40,7 +39,7 @@ app.post("/ark/chat", async (req, res) => {
 });
 
 function selectProvider(client: WebSocket): AgentProvider {
-  if (process.env.VOICE_PROVIDER === "doubao") {
+  if (config.voiceProvider === "doubao") {
     return createDoubaoProvider(client);
   }
   return createMockProvider(client);
@@ -71,6 +70,9 @@ wss.on("connection", (client) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`Voice relay listening on http://localhost:${PORT}`);
+const warnings = validateConfig();
+server.listen(config.port, () => {
+  console.log(`Voice relay listening on http://localhost:${config.port}`);
+  for (const line of describeConfig()) console.log(`  ${line}`);
+  for (const warning of warnings) console.warn(`  ⚠️  ${warning}`);
 });

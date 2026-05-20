@@ -74,7 +74,7 @@ type VoiceGender = "female" | "male";
 // Voice-name hints per gender and language. `\bmale\b` avoids matching "female".
 const VOICE_HINTS: Record<VoiceGender, Record<SupportedLanguage, RegExp>> = {
   female: {
-    zh: /female|女|xiaoxiao|xiaoyi|tingting|jupiter/i,
+    zh: /female|女|xiaoxiao|xiaoyi|ting-?ting|jupiter/i,
     ja: /female|女|kyoko|nanami|haruka|o-ren|sayaka/i,
     en: /female|samantha|victoria|zira|aria|jenny|fiona/i
   },
@@ -85,12 +85,23 @@ const VOICE_HINTS: Record<VoiceGender, Record<SupportedLanguage, RegExp>> = {
   }
 };
 
-/** Picks a voice matching the language and gender, with graceful fallback. */
+/**
+ * Picks a voice for the language and gender. Returns `matched: false` when no
+ * genuinely gendered voice is installed, so the caller can compensate via pitch.
+ */
 function selectVoice(language: SupportedLanguage, gender: VoiceGender) {
   const voices = window.speechSynthesis.getVoices();
   const matches = voices.filter((voice) => voice.lang.toLowerCase().startsWith(language));
-  const hint = VOICE_HINTS[gender][language];
-  return matches.find((voice) => hint.test(`${voice.name} ${voice.voiceURI}`)) ?? matches[0];
+  const describe = (voice: SpeechSynthesisVoice) => `${voice.name} ${voice.voiceURI}`;
+
+  const exact = matches.find((voice) => VOICE_HINTS[gender][language].test(describe(voice)));
+  if (exact) return { voice: exact, matched: true };
+
+  // No gendered voice for this language: skip the opposite gender's obvious
+  // voice if we can, but still return something so the reply is spoken.
+  const opposite = VOICE_HINTS[gender === "male" ? "female" : "male"][language];
+  const neutral = matches.find((voice) => !opposite.test(describe(voice)));
+  return { voice: neutral ?? matches[0], matched: false };
 }
 
 function createAgentSocket() {
@@ -172,12 +183,22 @@ function useHelmetAgent() {
     // Speak each reply in its own language; forcing a Chinese voice makes
     // Japanese (and often English) replies fall silent.
     const language = detectLanguage(text);
+    const gender = voiceGenderRef.current;
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = VOICE_LOCALE[language];
-    const voice = selectVoice(language, voiceGenderRef.current);
+
+    const { voice, matched } = selectVoice(language, gender);
     if (voice) utterance.voice = voice;
-    utterance.rate = 1.02;
-    utterance.pitch = 1.06;
+
+    // Most systems ship a single (female) voice per language. When no real
+    // gendered voice is found, shift pitch so the toggle is still audible.
+    if (gender === "male") {
+      utterance.pitch = matched ? 0.9 : 0.6;
+      utterance.rate = 0.98;
+    } else {
+      utterance.pitch = matched ? 1.06 : 1.16;
+      utterance.rate = 1.04;
+    }
     window.speechSynthesis.speak(utterance);
   }, []);
 

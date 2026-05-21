@@ -243,7 +243,7 @@ h2 {
    ============================================================ */
 .helmetPanel {
   display: grid;
-  grid-template-rows: 1fr auto auto auto;
+  grid-template-rows: 1fr auto;
   gap: 14px;
   min-height: 540px;
   padding: clamp(18px, 3vw, 32px);
@@ -475,135 +475,54 @@ h2 {
 }
 
 /* ============================================================
-   Buttons + controls
+   Buttons
    ============================================================ */
-.primaryControls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
 .mainButton,
-.ghostButton,
-.talkButton {
-  min-height: 48px;
-  border-radius: 8px;
-  padding: 0 22px;
+.micButton {
+  border: 0;
   cursor: pointer;
+  background: var(--rider);
+  color: #170c08;
+  font-weight: 800;
   transition:
     transform 0.12s ease,
     box-shadow 0.16s ease,
     background 0.16s ease,
-    border-color 0.16s ease,
     filter 0.16s ease;
 }
 
 .mainButton {
-  border: 0;
-  background: var(--rider);
-  color: #170c08;
-  font-weight: 800;
+  min-height: 48px;
+  border-radius: 8px;
+  padding: 0 22px;
 }
 
-.mainButton:hover:not(:disabled) {
+/* Single mic toggle: the one primary action in the helmet panel. */
+.micButton {
+  width: 100%;
+  min-height: 58px;
+  border-radius: 10px;
+  padding: 0 24px;
+  font-size: 1.05rem;
+  letter-spacing: 0.04em;
+}
+
+.mainButton:hover:not(:disabled),
+.micButton:hover {
   transform: translateY(-1px);
   box-shadow: 0 10px 26px rgba(242, 106, 61, 0.34);
   filter: brightness(1.06);
 }
 
-.mainButton:active:not(:disabled) {
+.mainButton:active:not(:disabled),
+.micButton:active {
   transform: translateY(0);
 }
 
-.ghostButton {
-  border: 1px solid rgba(196, 218, 216, 0.24);
-  color: var(--text);
-  background: rgba(255, 255, 255, 0.05);
-}
-
-.ghostButton:hover:not(:disabled) {
-  border-color: rgba(62, 232, 159, 0.5);
-  background: rgba(255, 255, 255, 0.09);
-}
-
-.talkButton {
-  border: 1px solid rgba(95, 233, 214, 0.5);
-  color: var(--text);
-  background: rgba(95, 233, 214, 0.12);
-  font-weight: 700;
-  touch-action: none;
-  user-select: none;
-}
-
-.talkButton:hover {
-  border-color: rgba(95, 233, 214, 0.8);
-}
-
-.talkButton.active {
+.micButton.active {
   background: var(--accent-cyan);
   color: #07221a;
-  transform: scale(0.97);
-  box-shadow: 0 0 26px rgba(95, 233, 214, 0.55);
-}
-
-/* Quick-phrase chips */
-.quickPhrases {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.chip {
-  min-height: 34px;
-  padding: 0 14px;
-  border-radius: 999px;
-  border: 1px solid rgba(196, 218, 216, 0.2);
-  background: rgba(255, 255, 255, 0.04);
-  color: #d6e2df;
-  font-size: 0.85rem;
-  cursor: pointer;
-  transition:
-    transform 0.12s ease,
-    border-color 0.15s ease,
-    background 0.15s ease,
-    color 0.15s ease;
-}
-
-.chip:hover:not(:disabled) {
-  transform: translateY(-1px);
-  border-color: rgba(62, 232, 159, 0.55);
-  background: rgba(62, 232, 159, 0.1);
-  color: var(--text);
-}
-
-.chip:active:not(:disabled) {
-  transform: translateY(0);
-}
-
-/* Command bar */
-.commandBar {
-  display: grid;
-  grid-template-columns: minmax(200px, 1fr) auto auto;
-  gap: 10px;
-}
-
-.commandBar input {
-  min-width: 0;
-  min-height: 48px;
-  border: 1px solid rgba(196, 218, 216, 0.2);
-  border-radius: 8px;
-  padding: 0 14px;
-  color: var(--text);
-  background: rgba(255, 255, 255, 0.06);
-  outline: none;
-  transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease;
-}
-
-.commandBar input:focus {
-  border-color: rgba(62, 232, 159, 0.72);
-  box-shadow: 0 0 0 3px rgba(62, 232, 159, 0.12);
+  box-shadow: 0 0 26px rgba(95, 233, 214, 0.5);
 }
 
 /* ============================================================
@@ -675,131 +594,6 @@ h2 {
   justify-content: space-between;
   gap: 8px;
   margin-bottom: 8px;
-}
-
-.instrumentHead strong {
-  font-size: 0.98rem;
-}
-
-/* Compass */
-.compassBody {
-  display: flex;
-  justify-content: center;
-}
-
-.compassBody svg {
-  width: clamp(124px, 56%, 176px);
-  height: auto;
-}
-
-.compassRing {
-  fill: rgba(8, 12, 13, 0.6);
-  stroke: var(--border);
-  stroke-width: 1.5;
-}
-
-.compassRingInner {
-  fill: none;
-  stroke: rgba(196, 218, 216, 0.1);
-  stroke-width: 1;
-}
-
-.compassTick {
-  stroke: rgba(196, 218, 216, 0.35);
-  stroke-width: 1.5;
-}
-
-.compassTick.major {
-  stroke: var(--accent);
-  stroke-width: 2;
-}
-
-.compassLabel {
-  fill: #c5d3d0;
-  font-size: 11px;
-  font-weight: 700;
-  text-anchor: middle;
-}
-
-.compassNeedle {
-  transform-box: view-box;
-  transform-origin: 60px 60px;
-  transition: transform 0.6s ease;
-}
-
-.needleNorth {
-  fill: var(--rider);
-}
-
-.needleSouth {
-  fill: #7d8c89;
-}
-
-.compassHub {
-  fill: var(--text);
-}
-
-.compass small {
-  display: block;
-  margin-top: 8px;
-  text-align: center;
-  color: #d8e0dd;
-}
-
-/* Arc gauge */
-.instrumentRow {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-
-.gauge svg {
-  width: 100%;
-  height: auto;
-  display: block;
-}
-
-.gaugeTrack {
-  fill: none;
-  stroke: rgba(196, 218, 216, 0.14);
-  stroke-width: 9;
-  stroke-linecap: round;
-}
-
-.gaugeFill {
-  fill: none;
-  stroke-width: 9;
-  stroke-linecap: round;
-  transition:
-    stroke-dashoffset 0.5s ease,
-    stroke 0.4s ease;
-}
-
-.gauge.good .gaugeFill {
-  stroke: var(--accent);
-}
-
-.gauge.warn .gaugeFill {
-  stroke: var(--warn);
-}
-
-.gauge.alert .gaugeFill {
-  stroke: var(--danger);
-}
-
-.gaugeValue {
-  margin-top: -4px;
-  text-align: center;
-}
-
-.gaugeValue strong {
-  font-size: 1.5rem;
-}
-
-.gaugeValue span {
-  margin-left: 3px;
-  color: var(--muted);
-  font-size: 0.85rem;
 }
 
 /* Latency readout */
@@ -994,9 +788,6 @@ h2 {
 @media (max-width: 900px) {
   .topbar,
   .grid,
-  .primaryControls,
-  .commandBar,
-  .instrumentRow,
   .transcriptList {
     grid-template-columns: 1fr;
   }

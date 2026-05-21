@@ -5,8 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Overview
 
 Prototype AI voice agent for a motorcycle helmet ("Max"). A React HUD frontend talks to an
-Express/WebSocket backend that relays voice and chat to Volcengine services. The agent speaks
-Chinese by default, also handles English and Japanese, and refuses any other language.
+Express/WebSocket backend that relays realtime voice to Volcengine's Doubao Speech service.
+The agent speaks Chinese by default, also handles English and Japanese, and refuses any
+other language. The UI is a single live voice agent — no text chat.
 
 ## Commands
 
@@ -25,28 +26,22 @@ npx vitest run tests/language.test.ts   # Run a single test file
 `tsc` runs with `noEmit: true` purely for type-checking `src/`, `server/`, and `shared/`.
 Tests live in `tests/` and cover the pure functions; Vitest picks them up with no config.
 
-Smoke tests (server must be running):
+Smoke test (server must be running):
 
 ```bash
 curl -s http://localhost:8787/health
-curl -s http://localhost:8787/ark/chat -H 'content-type: application/json' -d '{"text":"最近的加油站，简短回答。"}'
 ```
 
 ## Architecture
 
-Two processes in development. The Vite client proxies `/ark`, `/health`, and `/agent` (WS) to
-the backend on `:8787`, so the browser only ever talks to the Vite origin (see `vite.config.ts`).
+Two processes in development. The Vite client proxies `/health` and `/agent` (WS) to the
+backend on `:8787`, so the browser only ever talks to the Vite origin (see `vite.config.ts`).
 
-### Two independent paths, two credential sets
+### Realtime voice path
 
-1. **Ark text command path** — `POST /ark/chat` → `server/providers/ark.ts`. Uses the
-   Volcengine **Ark** chat-completions API (`ARK_API_KEY`). Handles typed commands and the
-   browser Web Speech API voice-command flow. The browser speaks replies with its own TTS.
-2. **Doubao realtime voice path** — `WS /agent` → `server/providers/doubao.ts`. Uses the
-   separate Volcengine **Doubao Speech / OpenSpeech** realtime dialogue WebSocket (`DOUBAO_*`
-   credentials). Full speech-to-speech: browser mic PCM in, synthesized voice PCM out.
-
-These are different Volcengine products with different credentials — do not conflate them.
+`WS /agent` → `server/providers/doubao.ts`. Uses the Volcengine **Doubao Speech /
+OpenSpeech** realtime dialogue WebSocket (`DOUBAO_*` credentials). Full speech-to-speech:
+browser mic PCM in, synthesized voice PCM out. This is the only agent path.
 
 ### WebSocket relay and the provider pattern
 
@@ -74,47 +69,36 @@ credentials. Add new realtime providers by implementing `AgentProvider` and wiri
 
 - The `/agent` WebSocket auto-reconnects with exponential backoff (`MAX_RECONNECT_ATTEMPTS`
   in `main.tsx`); `intentionalCloseRef` distinguishes a user disconnect from a dropped link.
-- Mic transmission is gated by `transmittingRef` and the track's `enabled` flag, so the
-  latched toggle and the hold-to-talk (push-to-talk) button share one reused audio graph.
+- A single mic toggle (`startMic`/`stopMic`) starts and stops listening and auto-connects the
+  relay on first use. `stopMic` disables the audio track but keeps the graph alive for an
+  instant restart, so transmission is gated by `transmittingRef` and the track's `enabled` flag.
 - Barge-in (`stopAgentSpeech`) cancels browser TTS and stops queued Doubao audio whenever the
-  rider starts talking or sends a new command.
-- The 女声/男声 voice toggle sets `voiceGenderRef`. Browser TTS picks a matching voice (with a
-  pitch shift when no genuine gendered voice is installed); the live Doubao speaker is chosen
+  rider starts talking.
+- The 女声/男声 voice toggle sets `voiceGenderRef`. The live Doubao speaker is chosen
   server-side from `voiceGender` in `session.start`, so switching mid-session reconnects the
-  relay (`restartSession`) to start a fresh session with the new speaker.
+  relay (`restartSession`) to start a fresh session with the new speaker. When Doubao returns
+  reply text but no audio, the browser speaks it with its own TTS (`speak`), picking a voice
+  via `detectLanguage` in `shared/language.ts`.
 - `src/ErrorBoundary.tsx` wraps the app so a render crash shows a recoverable screen.
-
-### Language gating
-
-Only Chinese, Japanese, and Latin scripts are accepted. `isSupportedLanguageText` and the
-refusal message live in `shared/language.ts`, imported by both `src/main.tsx` and
-`server/providers/ark.ts`. Unsupported input short-circuits to the refusal without calling Ark.
 
 ### Server config
 
-`server/config.ts` resolves and validates env vars at startup. `validateConfig()` logs
-warnings (missing `ARK_API_KEY`, or `VOICE_PROVIDER=doubao` with no Doubao credentials) but
-the server still starts so the mock path stays usable. `index.ts` reads `config` for the
-provider choice, the `/health` payload, and the offline-fallback decision.
-
-### Offline fallback
-
-When Ark credentials are missing or rejected, `/ark/chat` returns a local canned reply from
-`createLocalHelmetReply` (keyword-matched, marked `fallback: true`) instead of an error.
-Set `HELMET_AGENT_OFFLINE_FALLBACK=false` to make it fail hard with HTTP 500 instead.
+`server/config.ts` resolves and validates env vars at startup. `validateConfig()` logs a
+warning when `VOICE_PROVIDER=doubao` but no Doubao credentials are set; the server still
+starts so the mock path stays usable. `index.ts` reads `config` for the provider choice and
+the `/health` payload.
 
 ## Configuration
 
 Copy `.env.example` to `.env` (gitignored). Key variables:
 
 - `VOICE_PROVIDER` — `mock` (default) or `doubao`, selects the `/agent` provider.
-- `ARK_API_KEY`, `ARK_ENDPOINT_ID` / `ARK_MODEL` — Ark text path. If `ARK_ENDPOINT_ID`
-  (`ep-...`) is set it overrides `ARK_MODEL`. Never pass the API-key ID as the model.
 - `DOUBAO_API_KEY` (+ `DOUBAO_RESOURCE_ID`) — newer Speech-console auth. When empty, the
   legacy `DOUBAO_APP_ID`/`DOUBAO_APP_KEY`/`DOUBAO_ACCESS_KEY` path is used instead.
-- `HELMET_AGENT_SYSTEM_PROMPT` / `DOUBAO_SYSTEM_ROLE` — the "Max" persona prompt for each
-  path; `DEFAULT_AGENT_SYSTEM_PROMPT` in `ark.ts` is the in-code fallback for both.
+- `DOUBAO_SYSTEM_ROLE` — the "Max" persona prompt. `DEFAULT_AGENT_SYSTEM_PROMPT` in
+  `doubao.ts` is the in-code fallback.
+- `DOUBAO_VOICE` / `DOUBAO_VOICE_MALE` — realtime speaker IDs for the 女声/男声 toggle.
 
 The persona (name "Max", helmet-assistant role, three-language rule, concise hands-free
-replies) is defined identically in the system prompt and these env defaults — keep them
-consistent when changing agent behavior.
+replies) is defined identically in `DEFAULT_AGENT_SYSTEM_PROMPT` and the `DOUBAO_SYSTEM_ROLE`
+default — keep them consistent when changing agent behavior.

@@ -2,51 +2,15 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createRoot } from "react-dom/client";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { HelmetVisual } from "./components/HelmetVisual";
-import { ArcGauge, Compass, SignalBars } from "./components/Instruments";
-import { QuickPhrases } from "./components/QuickPhrases";
-import {
-  SUPPORTED_LANGUAGE_MESSAGE,
-  type SupportedLanguage,
-  detectLanguage,
-  isSupportedLanguageText
-} from "../shared/language";
+import { SignalBars } from "./components/Instruments";
+import { type SupportedLanguage, detectLanguage } from "../shared/language";
 import "./styles.css";
-
-type BrowserSpeechRecognition = {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  onresult: ((event: SpeechRecognitionEvent) => void) | null;
-  onerror: (() => void) | null;
-  onend: (() => void) | null;
-  start(): void;
-  stop(): void;
-};
-
-type SpeechRecognitionEvent = {
-  resultIndex?: number;
-  results: ArrayLike<{
-    0: {
-      transcript: string;
-    };
-    isFinal: boolean;
-  }>;
-};
-
-type SpeechRecognitionConstructor = new () => BrowserSpeechRecognition;
-
-declare global {
-  interface Window {
-    SpeechRecognition?: SpeechRecognitionConstructor;
-    webkitSpeechRecognition?: SpeechRecognitionConstructor;
-  }
-}
 
 type AgentEvent =
   | { type: "session.started"; provider: string; mode: string }
   | { type: "status"; state: string; detail: string }
   | { type: "transcript"; speaker: "rider" | "agent"; text: string; final?: boolean }
-  | { type: "metric"; noiseDb: number; latencyMs: number }
+  | { type: "metric"; latencyMs: number }
   | { type: "error"; message: string };
 
 type TranscriptItem = {
@@ -62,7 +26,7 @@ const SAMPLE_RATE = 16000;
 const PLAYBACK_SAMPLE_RATE = 24000;
 const MAX_RECONNECT_ATTEMPTS = 6;
 
-// BCP-47 locales and female-voice name hints per supported language.
+// BCP-47 locales per supported language, used for the browser-TTS fallback.
 const VOICE_LOCALE: Record<SupportedLanguage, string> = {
   zh: "zh-CN",
   ja: "ja-JP",
@@ -114,11 +78,7 @@ function useHelmetAgent() {
   const [listening, setListening] = useState(false);
   const [status, setStatus] = useState("离线");
   const [provider, setProvider] = useState("mock");
-  const [noiseDb, setNoiseDb] = useState(42);
   const [latencyMs, setLatencyMs] = useState(0);
-  const [commandText, setCommandText] = useState("");
-  const [arkBusy, setArkBusy] = useState(false);
-  const [speechListening, setSpeechListening] = useState(false);
   const [voiceLevel, setVoiceLevel] = useState(0);
   const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
   const [voiceGender, setVoiceGenderState] = useState<VoiceGender>("female");
@@ -136,29 +96,11 @@ function useHelmetAgent() {
   const reconnectTimerRef = useRef<number | null>(null);
   const connectRef = useRef<() => void>(() => {});
   const isLiveRef = useRef(false);
-  const speechRef = useRef<BrowserSpeechRecognition | null>(null);
-  const speechContinuousRef = useRef(false);
-  const speechBufferRef = useRef("");
-  const speechFlushTimerRef = useRef<number | null>(null);
-  const arkBusyRef = useRef(false);
   const voiceGenderRef = useRef<VoiceGender>("female");
 
   const pushTranscript = useCallback((speaker: "rider" | "agent", text: string) => {
     setTranscript((items) => [...items.slice(-7), { id: Date.now() + Math.random(), speaker, text }]);
   }, []);
-
-  const clearSpeechFlushTimer = useCallback(() => {
-    if (speechFlushTimerRef.current) window.clearTimeout(speechFlushTimerRef.current);
-    speechFlushTimerRef.current = null;
-  }, []);
-
-  const stopSpeechCapture = useCallback(() => {
-    speechContinuousRef.current = false;
-    clearSpeechFlushTimer();
-    speechBufferRef.current = "";
-    speechRef.current?.stop();
-    setSpeechListening(false);
-  }, [clearSpeechFlushTimer]);
 
   // Barge-in: silence whatever the agent is currently saying so the rider can
   // interrupt. Covers both browser TTS and queued Doubao voice audio.
@@ -178,6 +120,7 @@ function useHelmetAgent() {
     }
   }, []);
 
+  // Browser-TTS fallback, used when Doubao returns reply text but no audio.
   const speak = useCallback((text: string) => {
     if (!("speechSynthesis" in window) || !text.trim()) return;
     window.speechSynthesis.cancel();
@@ -278,10 +221,7 @@ function useHelmetAgent() {
           pushTranscript(event.speaker, event.text);
           if (event.speaker === "agent" && event.final !== false) speak(event.text);
         }
-        if (event.type === "metric") {
-          setNoiseDb(event.noiseDb);
-          setLatencyMs(event.latencyMs);
-        }
+        if (event.type === "metric") setLatencyMs(event.latencyMs);
         if (event.type === "error") setStatus(event.message);
       } catch {
         setStatus("收到异常代理消息");
@@ -303,7 +243,7 @@ function useHelmetAgent() {
       reconnectAttemptsRef.current += 1;
       if (reconnectAttemptsRef.current > MAX_RECONNECT_ATTEMPTS) {
         reconnectAttemptsRef.current = 0;
-        setStatus("语音中继连接失败，请点击连接重试");
+        setStatus("语音中继连接失败，请重新开始语音");
         return;
       }
       const delay = Math.min(8000, 1000 * 2 ** (reconnectAttemptsRef.current - 1));
@@ -329,7 +269,7 @@ function useHelmetAgent() {
   }, [connect]);
 
   // Switch the assistant voice. The live Doubao speaker is fixed at session
-  // start, so restart the session; the mock/Ark path just uses browser TTS.
+  // start, so restart the session; the mock path just uses browser TTS.
   const setVoiceGender = useCallback(
     (gender: VoiceGender) => {
       voiceGenderRef.current = gender;
@@ -369,7 +309,7 @@ function useHelmetAgent() {
     });
   }, [connect]);
 
-  // Acquire the mic + AudioWorklet graph once and reuse it across PtT presses.
+  // Acquire the mic + AudioWorklet graph once and reuse it across toggles.
   const ensureMic = useCallback(async () => {
     if (streamRef.current && audioContextRef.current && workletNodeRef.current) {
       if (audioContextRef.current.state === "suspended") await audioContextRef.current.resume();
@@ -453,18 +393,17 @@ function useHelmetAgent() {
   }, [ensureMic, stopAgentSpeech, waitForSocket]);
 
   // Stops transmitting but keeps the audio graph alive (the track is disabled,
-  // so no real audio is captured) for an instant restart on the next press.
+  // so no real audio is captured) for an instant restart on the next toggle.
   const stopMic = useCallback(() => {
     transmittingRef.current = false;
     streamRef.current?.getAudioTracks().forEach((track) => (track.enabled = false));
     setVoiceLevel(0);
     setListening(false);
-    stopSpeechCapture();
     const socket = socketRef.current;
     if (socket?.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ type: "audio.stop" }));
     }
-  }, [stopSpeechCapture]);
+  }, []);
 
   const disconnect = useCallback(() => {
     intentionalCloseRef.current = true;
@@ -487,175 +426,25 @@ function useHelmetAgent() {
     setStatus("离线");
   }, [releaseMic, stopAgentSpeech, stopMic]);
 
-  const submitCommand = useCallback(
-    async (textOverride?: string) => {
-      const text = (textOverride ?? commandText).trim();
-      if (!text || arkBusyRef.current) return;
-
-      stopAgentSpeech();
-      pushTranscript("rider", text);
-      setCommandText("");
-      if (!isSupportedLanguageText(text)) {
-        pushTranscript("agent", SUPPORTED_LANGUAGE_MESSAGE);
-        speak(SUPPORTED_LANGUAGE_MESSAGE);
-        setStatus("语言不支持");
-        return;
-      }
-
-      arkBusyRef.current = true;
-      setArkBusy(true);
-      setStatus("Ark 正在思考");
-      const startedAt = performance.now();
-
-      try {
-        const response = await fetch("/ark/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text })
-        });
-        const payload = (await response.json()) as { reply?: string; error?: string; fallback?: boolean };
-        if (!response.ok) throw new Error(payload.error ?? "Ark 请求失败");
-        const reply = payload.reply ?? "";
-        pushTranscript("agent", reply);
-        speak(reply);
-        setProvider("ark");
-        setLatencyMs(Math.round(performance.now() - startedAt));
-        setStatus(payload.fallback ? "本地备用回复已就绪" : "Ark 回复已就绪");
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Ark 请求失败";
-        const reply = `我听到了，但暂时无法连接 Ark：${message}`;
-        pushTranscript("agent", reply);
-        speak(reply);
-        setStatus(message);
-      } finally {
-        arkBusyRef.current = false;
-        setArkBusy(false);
-      }
-    },
-    [commandText, pushTranscript, speak, stopAgentSpeech]
-  );
-
-  const flushSpeechCommand = useCallback(() => {
-    clearSpeechFlushTimer();
-    const text = speechBufferRef.current.trim().replace(/\s+/g, " ");
-    speechBufferRef.current = "";
-    if (!text) return;
-    setCommandText(text);
-    void submitCommand(text);
-  }, [clearSpeechFlushTimer, submitCommand]);
-
-  function startSpeechCapture(continuous: boolean) {
-    const SpeechRecognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      setStatus("此浏览器不支持语音识别");
-      return;
-    }
-
-    stopAgentSpeech();
-    speechContinuousRef.current = continuous;
-    clearSpeechFlushTimer();
-    speechBufferRef.current = "";
-    speechRef.current?.stop();
-
-    const recognition = new SpeechRecognition();
-    speechRef.current = recognition;
-    recognition.continuous = continuous;
-    recognition.interimResults = continuous;
-    recognition.lang = "zh-CN";
-    recognition.onresult = (event) => {
-      const results = Array.from(event.results);
-      const startIndex = event.resultIndex ?? 0;
-      const newResults = results.slice(startIndex);
-      const finalText = newResults
-        .filter((result) => result.isFinal)
-        .map((result) => result[0]?.transcript ?? "")
-        .join(" ")
-        .trim();
-
-      if (!continuous) {
-        const command = (finalText || results.map((result) => result[0]?.transcript ?? "").join(" ")).trim();
-        setCommandText(command);
-        void submitCommand(command);
-        return;
-      }
-
-      if (finalText) {
-        speechBufferRef.current = `${speechBufferRef.current} ${finalText}`.trim();
-      }
-
-      const interimText = newResults
-        .filter((result) => !result.isFinal)
-        .map((result) => result[0]?.transcript ?? "")
-        .join(" ")
-        .trim();
-      setCommandText(`${speechBufferRef.current} ${interimText}`.trim());
-
-      if (speechBufferRef.current) {
-        clearSpeechFlushTimer();
-        speechFlushTimerRef.current = window.setTimeout(flushSpeechCommand, 1300);
-      }
-    };
-    recognition.onerror = () => {
-      setSpeechListening(false);
-      if (!continuous) setStatus("语音指令失败");
-    };
-    recognition.onend = () => {
-      setSpeechListening(false);
-      if (speechContinuousRef.current) {
-        window.setTimeout(() => {
-          try {
-            recognition.start();
-            setSpeechListening(true);
-          } catch {
-            setStatus("语音识别重启失败");
-          }
-        }, 250);
-      }
-    };
-    setSpeechListening(true);
-    setStatus(continuous ? "正在使用 Ark 语音备用模式收听" : "正在收听指令");
-    recognition.start();
-  }
-
-  const startSpeechCommand = () => startSpeechCapture(false);
-
-  useEffect(
-    () => () => {
-      stopSpeechCapture();
-      disconnect();
-    },
-    [disconnect, stopSpeechCapture]
-  );
+  useEffect(() => () => disconnect(), [disconnect]);
 
   return {
     connected,
     listening,
     status,
     provider,
-    noiseDb,
     latencyMs,
-    commandText,
-    arkBusy,
-    speechListening,
     voiceLevel,
     transcript,
     voiceGender,
-    setCommandText,
     setVoiceGender,
-    connect,
     startMic,
-    stopMic,
-    disconnect,
-    submitCommand,
-    startSpeechCommand
+    stopMic
   };
 }
 
 function App() {
   const agent = useHelmetAgent();
-  const [pttActive, setPttActive] = useState(false);
-  const pttActiveRef = useRef(false);
-  const pttOwnsMicRef = useRef(false);
 
   const agentState = useMemo(() => {
     if (agent.listening) return "收听中";
@@ -664,34 +453,6 @@ function App() {
   }, [agent.connected, agent.listening]);
 
   const latencyTone = agent.latencyMs < 140 ? "good" : agent.latencyMs < 280 ? "warn" : "alert";
-
-  const handleTalkStart = useCallback(
-    (event: React.PointerEvent<HTMLButtonElement>) => {
-      event.preventDefault();
-      if (pttActiveRef.current) return;
-      event.currentTarget.setPointerCapture?.(event.pointerId);
-      pttActiveRef.current = true;
-      setPttActive(true);
-      // Only this press should release the mic if it was not already live.
-      if (!agent.listening) {
-        pttOwnsMicRef.current = true;
-        void agent.startMic();
-      } else {
-        pttOwnsMicRef.current = false;
-      }
-    },
-    [agent]
-  );
-
-  const handleTalkEnd = useCallback(() => {
-    if (!pttActiveRef.current) return;
-    pttActiveRef.current = false;
-    setPttActive(false);
-    if (pttOwnsMicRef.current) {
-      agent.stopMic();
-      pttOwnsMicRef.current = false;
-    }
-  }, [agent]);
 
   return (
     <main className="shell">
@@ -734,49 +495,13 @@ function App() {
         <div className="grid">
           <section className="hudPanel helmetPanel">
             <HelmetVisual connected={agent.connected} listening={agent.listening} voiceLevel={agent.voiceLevel} />
-            <div className="primaryControls">
-              <button className="mainButton" onClick={agent.listening ? agent.stopMic : agent.startMic} type="button">
-                {agent.listening ? "静音麦克风" : "开始语音"}
-              </button>
-              <button
-                className={`talkButton ${pttActive ? "active" : ""}`}
-                type="button"
-                onPointerDown={handleTalkStart}
-                onPointerUp={handleTalkEnd}
-                onPointerLeave={handleTalkEnd}
-                onPointerCancel={handleTalkEnd}
-              >
-                {pttActive ? "松开结束" : "按住说话"}
-              </button>
-              <button
-                className="ghostButton"
-                onClick={agent.connected ? agent.disconnect : agent.connect}
-                type="button"
-              >
-                {agent.connected ? "断开" : "连接"}
-              </button>
-            </div>
-            <QuickPhrases onSelect={(text) => void agent.submitCommand(text)} disabled={agent.arkBusy} />
-            <form
-              className="commandBar"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void agent.submitCommand();
-              }}
+            <button
+              className={`micButton ${agent.listening ? "active" : ""}`}
+              onClick={agent.listening ? agent.stopMic : agent.startMic}
+              type="button"
             >
-              <input
-                aria-label="骑手指令"
-                placeholder="问 Max：回家路线、前方天气、最近加油站..."
-                value={agent.commandText}
-                onChange={(event) => agent.setCommandText(event.target.value)}
-              />
-              <button className="ghostButton" type="button" onClick={agent.startSpeechCommand}>
-                {agent.speechListening ? "收听中" : "语音指令"}
-              </button>
-              <button className="mainButton" type="submit" disabled={agent.arkBusy}>
-                {agent.arkBusy ? "发送中" : "询问 Ark"}
-              </button>
-            </form>
+              {agent.listening ? "结束语音" : "开始语音"}
+            </button>
           </section>
 
           <section className="hudPanel statusPanel">
@@ -788,20 +513,16 @@ function App() {
               <SignalBars active={agent.connected} />
             </div>
             <p className="stateDetail">{agent.status}</p>
-            <Compass route="US-101 N" instruction="1.4 英里后转弯" />
-            <div className="instrumentRow">
-              <ArcGauge label="风噪" value={agent.noiseDb} unit="dB" min={30} max={95} />
-              <div className={`instrument latency ${latencyTone}`}>
-                <div className="instrumentHead">
-                  <span>延迟</span>
-                </div>
-                <div className="latencyValue">
-                  <strong>{agent.latencyMs}</strong>
-                  <span>ms</span>
-                </div>
-                <div className="latencyBar">
-                  <i style={{ width: `${Math.min(100, agent.latencyMs / 4)}%` }} />
-                </div>
+            <div className={`instrument latency ${latencyTone}`}>
+              <div className="instrumentHead">
+                <span>延迟</span>
+              </div>
+              <div className="latencyValue">
+                <strong>{agent.latencyMs}</strong>
+                <span>ms</span>
+              </div>
+              <div className="latencyBar">
+                <i style={{ width: `${Math.min(100, agent.latencyMs / 4)}%` }} />
               </div>
             </div>
           </section>
@@ -818,7 +539,7 @@ function App() {
                     {
                       id: 1,
                       speaker: "agent" as const,
-                      text: "你好，我是 Max，摩托车头盔 AI 助手。你可以问我路线、天气、附近停靠点或摩托车问题。"
+                      text: "你好，我是 Max，摩托车头盔 AI 助手。点击开始语音，问我路线、天气、附近停靠点或摩托车问题。"
                     }
                   ]
               ).map((item) => (

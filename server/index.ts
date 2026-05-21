@@ -13,36 +13,12 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/agent" });
 
-app.use(express.json({ limit: "128kb" }));
-
 app.get("/health", (_req, res) => {
   res.json({ ok: true, provider: config.voiceProvider });
 });
 
-app.post("/ark/chat", async (req, res) => {
-  const text = String(req.body?.text ?? "").trim();
-  try {
-    if (!text) {
-      res.status(400).json({ error: "text is required" });
-      return;
-    }
-
-    const { askArk } = await import("./providers/ark");
-    const reply = await askArk(text);
-    res.json({ reply });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Ark request failed";
-    if (text && config.offlineFallback) {
-      const { createLocalHelmetReply } = await import("./providers/ark");
-      res.json({ reply: createLocalHelmetReply(text), fallback: true, error: message });
-      return;
-    }
-    res.status(500).json({ error: message });
-  }
-});
-
 // Serve the built client when a production bundle exists. In development the
-// Vite dev server handles this instead and proxies /ark, /health, /agent here.
+// Vite dev server handles this instead and proxies /health and /agent here.
 const clientDir = fileURLToPath(new URL("../dist", import.meta.url));
 if (existsSync(clientDir)) {
   app.use(express.static(clientDir));

@@ -2,26 +2,15 @@ import "dotenv/config";
 
 export type VoiceProvider = "mock" | "doubao";
 
-function readFlag(value: string | undefined, fallback: boolean): boolean {
-  if (value === undefined) return fallback;
-  return value !== "false";
-}
-
 /** Backend configuration resolved from environment variables at startup. */
 export const config = {
   port: Number(process.env.PORT ?? 8787),
-  voiceProvider: (process.env.VOICE_PROVIDER === "doubao" ? "doubao" : "mock") as VoiceProvider,
-  arkApiKey: process.env.ARK_API_KEY?.trim() ?? "",
-  offlineFallback: readFlag(process.env.HELMET_AGENT_OFFLINE_FALLBACK, true)
+  voiceProvider: (process.env.VOICE_PROVIDER === "doubao" ? "doubao" : "mock") as VoiceProvider
 };
 
 /** Human-readable summary printed on startup. */
 export function describeConfig(): string[] {
-  return [
-    `Realtime voice provider: ${config.voiceProvider}`,
-    `Ark command mode: ${config.arkApiKey ? "API key set" : "no API key (local fallback only)"}`,
-    `Offline fallback: ${config.offlineFallback ? "on" : "off"}`
-  ];
+  return [`Realtime voice provider: ${config.voiceProvider}`];
 }
 
 /**
@@ -31,14 +20,6 @@ export function describeConfig(): string[] {
  */
 export function validateConfig(): string[] {
   const warnings: string[] = [];
-
-  if (!config.arkApiKey) {
-    warnings.push(
-      config.offlineFallback
-        ? "ARK_API_KEY 未设置：/ark/chat 将返回本地备用回复。"
-        : "ARK_API_KEY 未设置且 offline fallback 已关闭：/ark/chat 将返回 HTTP 500。"
-    );
-  }
 
   if (config.voiceProvider === "doubao") {
     const hasApiKey = Boolean(process.env.DOUBAO_API_KEY?.trim());

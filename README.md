@@ -1,6 +1,6 @@
 # Max 摩托车头盔 AI
 
-Prototype AI voice agent for a motorcycle helmet. Max keeps the same name and motorcycle helmet assistant role, speaks Chinese by default, can also use English or Japanese, and refuses other languages. Realtime Doubao voice defaults to the working female Chinese voice.
+Prototype AI voice agent for a motorcycle helmet. Max keeps the same name and motorcycle helmet assistant role, speaks Chinese by default, can also use English or Japanese, and refuses other languages. The app is a single live voice agent — start the mic and talk. Realtime Doubao voice defaults to the working female Chinese voice.
 
 ## Frontend Preview
 
@@ -8,17 +8,15 @@ Prototype AI voice agent for a motorcycle helmet. Max keeps the same name and mo
 
 ## Current Capabilities
 
-- Helmet HUD with mic, status, latency, noise, navigation, and transcript panels.
+- Helmet HUD with a single mic toggle, connection status, latency readout, and a live transcript.
 - Mock live voice relay over WebSocket for testing the streaming path without production credentials.
-- Ark chat command mode through a server-side route so the API key is not exposed to browser code.
-- Browser speech recognition for command capture when supported by the browser.
-- Browser text-to-speech for agent replies.
 - Doubao realtime voice provider for low-latency speech-to-speech sessions.
 - AudioWorklet mic capture that runs off the main thread for glitch-free streaming.
-- Push-to-talk (hold-to-talk) control alongside the latched mic toggle.
-- Barge-in: agent speech stops as soon as the rider talks or sends a new command.
+- Browser text-to-speech fallback when Doubao returns reply text but no audio.
+- `女声 / 男声` voice toggle that picks the live Doubao speaker.
+- Barge-in: agent speech stops as soon as the rider talks.
 - Automatic WebSocket reconnect with exponential backoff if the relay drops.
-- Startup config validation that warns about missing Ark or Doubao credentials.
+- Startup config validation that warns about missing Doubao credentials.
 
 ## Tech Stack
 
@@ -27,28 +25,28 @@ Prototype AI voice agent for a motorcycle helmet. Max keeps the same name and mo
 - TypeScript
 - Express
 - WebSocket relay with `ws`
-- Volcengine Ark-compatible chat completions endpoint
+- Volcengine Doubao Speech realtime dialogue WebSocket
 
 ## Project Structure
 
 ```text
 .
 ├── src/
-│   ├── main.tsx              # Helmet HUD and client voice/command logic
+│   ├── main.tsx              # Helmet HUD and client voice logic
 │   ├── ErrorBoundary.tsx     # Recoverable screen for render-time crashes
+│   ├── components/           # HUD presentational components
 │   └── styles.css            # App styling
 ├── public/
 │   └── pcm-worklet.js        # AudioWorklet: mic downsample + PCM16 framing
 ├── server/
-│   ├── index.ts              # Express API and WebSocket relay
+│   ├── index.ts              # Express /health and WebSocket relay
 │   ├── config.ts             # Env config resolution and startup validation
 │   └── providers/
-│       ├── ark.ts            # Ark chat completion client
 │       ├── doubao.ts         # Doubao realtime voice provider
 │       ├── mock.ts           # Mock live voice provider
 │       └── types.ts
 ├── shared/
-│   └── language.ts           # Language gating shared by client and server
+│   └── language.ts           # TTS language detection helper
 ├── tests/                    # Vitest unit tests for the pure functions
 ├── .env.example              # Environment variable template
 ├── eslint.config.js
@@ -70,16 +68,7 @@ Create `.env` from `.env.example`:
 cp .env.example .env
 ```
 
-Add your Ark key to `.env`:
-
-```bash
-VOICE_PROVIDER=mock
-ARK_API_KEY=your-ark-api-key
-ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
-# Optional: use your Ark endpoint ID here when you have one.
-ARK_ENDPOINT_ID=ep-your-endpoint-id
-ARK_MODEL=doubao-seed-1-6-250615
-```
+The default `VOICE_PROVIDER=mock` needs no credentials. For real speech-to-speech, set `VOICE_PROVIDER=doubao` and add your Doubao Speech credentials (see Environment Variables).
 
 Run the app:
 
@@ -95,39 +84,15 @@ http://localhost:5173
 
 ## Using The App
 
-Use `询问 Ark` for the working AI response path:
+Click `开始语音` to start the realtime voice agent. The button connects the relay, opens the mic, and streams audio; click `结束语音` to stop. In the default configuration this uses the mock WebSocket provider and emits simulated rider/agent transcript events. With `VOICE_PROVIDER=doubao`, the backend connects to the Doubao realtime dialogue WebSocket, sends browser mic PCM frames, and relays returned Chinese PCM voice audio back to the browser.
 
-1. Type a rider command in Chinese, English, or Japanese in the command bar.
-2. Click `询问 Ark`.
-3. The app sends the command to `/ark/chat`.
-4. The reply appears in the transcript and is spoken by browser text-to-speech.
-
-Use `语音指令` if your browser supports the Web Speech API. This captures Chinese speech by default, sends it to Ark, and speaks the reply with Chinese browser text-to-speech when supported. If Ark credentials are missing or rejected, the server returns a short local fallback reply by default so the voice flow still responds while credentials are being fixed.
-
-Use `开始语音` to exercise the realtime audio streaming path. In the default configuration, this connects to the mock WebSocket provider and emits simulated rider/agent transcript events. With `VOICE_PROVIDER=doubao`, the backend connects to the Doubao realtime dialogue WebSocket, sends browser mic PCM frames, and relays returned female Chinese PCM voice audio back to the browser.
-
-Use `按住说话` for push-to-talk: the mic transmits only while the button is held and mutes on release. The latched `开始语音` toggle and `按住说话` share the same audio session, so you can mix the two. Whenever the rider starts talking or sends a new command, any in-progress agent speech is interrupted (barge-in).
+Use the `女声 / 男声` toggle to switch the assistant voice. Whenever the rider starts talking, any in-progress agent speech is interrupted (barge-in).
 
 ## Environment Variables
 
-### Ark Command Mode
-
-```bash
-ARK_API_KEY=
-ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
-ARK_ENDPOINT_ID=
-ARK_MODEL=doubao-seed-1-6-250615
-HELMET_AGENT_SYSTEM_PROMPT=你是 Max，一位友好、冷静、以安全为先的摩托车头盔 AI 助手。你的名字保持 Max，角色保持 Motorcycle Helmet AI assistant。默认使用中文回答；如果骑手明确使用英文，可以用英文回答；如果骑手明确使用日文，可以用日文回答。只允许中文、英文、日文三种语言，不要使用其他语言。如果骑手使用其他语言或要求你使用其他语言，请用中文简短说明：我只支持中文、English、日本語。帮助骑手处理摩托车相关问题、导航、天气、路况、附近停靠点和骑行安全事项。回答要简短、清晰、适合免手操作。骑行中遇到危险或分心请求时，给出更安全的替代方案。声音设定为中文女声。
-HELMET_AGENT_OFFLINE_FALLBACK=true
-```
-
-For Volcengine Ark quick-start usage, `ARK_API_KEY` plus either `ARK_ENDPOINT_ID` (`ep-...`) or a public model ID in `ARK_MODEL` is enough for the app's text command path. `ARK_KEY_ID` is only API-key metadata and is not sent to `/chat/completions`.
-
-Set `HELMET_AGENT_OFFLINE_FALLBACK=false` when you want `/ark/chat` to return HTTP errors instead of local fallback replies.
-
 ### Realtime Voice Provider
 
-Default:
+Default (no credentials required):
 
 ```bash
 VOICE_PROVIDER=mock
@@ -145,7 +110,7 @@ DOUBAO_APP_ID=
 DOUBAO_APP_KEY=
 DOUBAO_ACCESS_KEY=
 DOUBAO_BOT_NAME=Max
-DOUBAO_SYSTEM_ROLE=你是 Max，一位友好、冷静、以安全为先的摩托车头盔 AI 助手。你的名字保持 Max，角色保持 Motorcycle Helmet AI assistant。默认使用中文回答；如果骑手明确使用英文，可以用英文回答；如果骑手明确使用日文，可以用日文回答。只允许中文、英文、日文三种语言，不要使用其他语言。如果骑手使用其他语言或要求你使用其他语言，请用中文简短说明：我只支持中文、English、日本語。帮助骑手处理摩托车相关问题、导航、天气、路况、附近停靠点和骑行安全事项。回答要简短、清晰、适合免手操作。骑行中遇到危险或分心请求时，给出更安全的替代方案。声音设定为中文女声。
+DOUBAO_SYSTEM_ROLE=你是 Max，...   # 见 .env.example 的完整 persona 文本
 DOUBAO_REALTIME_MODEL=1.2.1.1
 DOUBAO_INPUT_MODE=keep_alive
 DOUBAO_VOICE=zh_female_vv_jupiter_bigtts
@@ -154,31 +119,13 @@ DOUBAO_VOICE_MALE=zh_male_yunzhou_jupiter_bigtts
 
 `DOUBAO_VOICE` and `DOUBAO_VOICE_MALE` are realtime speaker IDs from the Doubao 音色列表. The `女声 / 男声` toggle in the UI sends the chosen gender with `session.start`, so the live Doubao session uses the matching speaker; switching mid-session reconnects the relay to apply the new speaker. Verify both IDs are enabled for your speech-dialog resource.
 
-The Ark API key from Volcengine Ark is not the same credential set as the Doubao realtime speech-dialog WebSocket API. Ark powers the command/reply text path. Doubao realtime voice uses the Doubao Speech/OpenSpeech realtime dialogue endpoint. With the newer Speech console, set `DOUBAO_API_KEY`; the key ID can be stored in `DOUBAO_API_KEY_ID` for reference but is not sent. Legacy app credentials are used only when `DOUBAO_API_KEY` is empty.
+With the newer Speech console, set `DOUBAO_API_KEY`; the key ID can be stored in `DOUBAO_API_KEY_ID` for reference but is not sent. Legacy app credentials (`DOUBAO_APP_ID` / `DOUBAO_APP_KEY` / `DOUBAO_ACCESS_KEY`) are used only when `DOUBAO_API_KEY` is empty.
 
 ## API Routes
 
 ### `GET /health`
 
-Returns backend health and selected realtime voice provider.
-
-### `POST /ark/chat`
-
-Request:
-
-```json
-{
-  "text": "帮我找最近的加油站，简短回答。"
-}
-```
-
-Response:
-
-```json
-{
-  "reply": "最近加油站在前方 0.5 英里右侧。"
-}
-```
+Returns backend health and the selected realtime voice provider.
 
 ### `WS /agent`
 
@@ -208,7 +155,7 @@ npm test             # Run the Vitest unit tests (test:watch for watch mode)
 ## Security Notes
 
 - `.env` is ignored by git.
-- Ark calls go through the local server so `ARK_API_KEY` is not bundled into frontend JavaScript.
+- Doubao credentials stay on the local server; the browser only talks to the WebSocket relay.
 - Do not commit real API keys, app keys, or access tokens.
 
 ## Verification
@@ -221,15 +168,7 @@ npm run lint
 npm test
 ```
 
-Smoke test Ark:
-
-```bash
-curl -s http://localhost:8787/ark/chat \
-  -H 'content-type: application/json' \
-  -d '{"text":"最近的加油站，简短回答。"}'
-```
-
-Smoke test health:
+Smoke test health (server must be running):
 
 ```bash
 curl -s http://localhost:8787/health
@@ -237,7 +176,6 @@ curl -s http://localhost:8787/health
 
 ## Next Steps
 
-1. Confirm the production Ark model or endpoint ID to use for helmet responses.
-2. Replace mock navigation/noise values with real helmet/mobile telemetry.
-3. Add a wake-word flow on top of the existing push-to-talk control.
-4. Add richer realtime state labels for Doubao sessions.
+1. Replace mock latency values with real session telemetry.
+2. Add a wake-word flow on top of the mic toggle.
+3. Add richer realtime state labels for Doubao sessions.

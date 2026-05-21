@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ErrorBoundary } from "./ErrorBoundary";
-import { HelmetVisual } from "./components/HelmetVisual";
-import { SignalBars } from "./components/Instruments";
+import { HelmetVisual, type TurnState } from "./components/HelmetVisual";
+import { SignalBars, WeatherReadout, type Weather } from "./components/Instruments";
 import { type SupportedLanguage, detectLanguage } from "../shared/language";
 import "./styles.css";
 
@@ -11,6 +11,7 @@ type AgentEvent =
   | { type: "status"; state: string; detail: string }
   | { type: "transcript"; speaker: "rider" | "agent"; text: string; final?: boolean }
   | { type: "metric"; latencyMs: number }
+  | { type: "weather"; description: string; temperatureC: number; windSpeedKmh: number; isDay: boolean }
   | { type: "error"; message: string };
 
 type TranscriptItem = {
@@ -21,6 +22,8 @@ type TranscriptItem = {
 
 // Messages posted from public/pcm-worklet.js.
 type WorkletMessage = { type: "frame"; pcm: ArrayBuffer } | { type: "level"; value: number };
+
+type RiderLocation = { lat: number; lon: number };
 
 const SAMPLE_RATE = 16000;
 const PLAYBACK_SAMPLE_RATE = 24000;
@@ -73,6 +76,40 @@ function createAgentSocket() {
   return new WebSocket(`${protocol}://${window.location.host}/agent`);
 }
 
+// Best-effort rider geolocation for live weather. Resolves null when the rider
+// declines, the API is missing, or the lookup times out — weather is optional.
+function getRiderLocation(): Promise<RiderLocation | null> {
+  if (!("geolocation" in navigator)) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    navigator.geolocation.getCurrentPosition(
+      (position) => resolve({ lat: position.coords.latitude, lon: position.coords.longitude }),
+      () => resolve(null),
+      { timeout: 6000, maximumAge: 300000 }
+    );
+  });
+}
+
+// Folds a server status event into the conversational turn state. Unknown
+// states leave the turn state unchanged.
+function mapTurnState(state: string, previous: TurnState): TurnState {
+  switch (state) {
+    case "listening":
+    case "ready":
+      return "listening";
+    case "hearing":
+    case "asr":
+      return "hearing";
+    case "thinking":
+      return "thinking";
+    case "speaking":
+      return "speaking";
+    case "closed":
+      return "idle";
+    default:
+      return previous;
+  }
+}
+
 function useHelmetAgent() {
   const [connected, setConnected] = useState(false);
   const [listening, setListening] = useState(false);
@@ -82,6 +119,8 @@ function useHelmetAgent() {
   const [voiceLevel, setVoiceLevel] = useState(0);
   const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
   const [voiceGender, setVoiceGenderState] = useState<VoiceGender>("female");
+  const [turnState, setTurnState] = useState<TurnState>("idle");
+  const [weather, setWeather] = useState<Weather | null>(null);
 
   const socketRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -97,6 +136,7 @@ function useHelmetAgent() {
   const connectRef = useRef<() => void>(() => {});
   const isLiveRef = useRef(false);
   const voiceGenderRef = useRef<VoiceGender>("female");
+  const locationRef = useRef<RiderLocation | null>(null);
 
   const pushTranscript = useCallback((speaker: "rider" | "agent", text: string) => {
     setTranscript((items) => [...items.slice(-7), { id: Date.now() + Math.random(), speaker, text }]);
@@ -190,12 +230,14 @@ function useHelmetAgent() {
       reconnectAttemptsRef.current = 0;
       setConnected(true);
       setStatus("就绪");
+      const location = locationRef.current;
       socket.send(
         JSON.stringify({
           type: "session.start",
           sampleRate: SAMPLE_RATE,
           channels: 1,
-          voiceGender: voiceGenderRef.current
+          voiceGender: voiceGenderRef.current,
+          ...(location ? { lat: location.lat, lon: location.lon } : {})
         })
       );
       // Resume the audio stream if the rider was transmitting before the drop.
@@ -215,13 +257,24 @@ function useHelmetAgent() {
           isLiveRef.current = event.mode !== "mock";
           setStatus(event.mode === "mock" ? "模拟路线已启用" : "豆包实时语音在线");
         }
-        if (event.type === "status") setStatus(event.detail);
+        if (event.type === "status") {
+          setStatus(event.detail);
+          if (transmittingRef.current) setTurnState((prev) => mapTurnState(event.state, prev));
+        }
         if (event.type === "transcript") {
           if (event.speaker === "rider") stopAgentSpeech();
           pushTranscript(event.speaker, event.text);
           if (event.speaker === "agent" && event.final !== false) speak(event.text);
         }
         if (event.type === "metric") setLatencyMs(event.latencyMs);
+        if (event.type === "weather") {
+          setWeather({
+            description: event.description,
+            temperatureC: event.temperatureC,
+            windSpeedKmh: event.windSpeedKmh,
+            isDay: event.isDay
+          });
+        }
         if (event.type === "error") setStatus(event.message);
       } catch {
         setStatus("收到异常代理消息");
@@ -243,7 +296,7 @@ function useHelmetAgent() {
       reconnectAttemptsRef.current += 1;
       if (reconnectAttemptsRef.current > MAX_RECONNECT_ATTEMPTS) {
         reconnectAttemptsRef.current = 0;
-        setStatus("语音中继连接失败，请重新开始语音");
+        setStatus("语音中继连接失败，请重新开启免提");
         return;
       }
       const delay = Math.min(8000, 1000 * 2 ** (reconnectAttemptsRef.current - 1));
@@ -309,7 +362,7 @@ function useHelmetAgent() {
     });
   }, [connect]);
 
-  // Acquire the mic + AudioWorklet graph once and reuse it across toggles.
+  // Acquire the mic + AudioWorklet graph once and reuse it across sessions.
   const ensureMic = useCallback(async () => {
     if (streamRef.current && audioContextRef.current && workletNodeRef.current) {
       if (audioContextRef.current.state === "suspended") await audioContextRef.current.resume();
@@ -375,30 +428,36 @@ function useHelmetAgent() {
     setVoiceLevel(0);
   }, []);
 
+  // Start the hands-free session: grab geolocation (for live weather), open the
+  // relay, and stream the mic continuously — Doubao's VAD handles turn-taking.
   const startMic = useCallback(async () => {
     try {
+      if (!locationRef.current) locationRef.current = await getRiderLocation();
       const socket = await waitForSocket();
       await ensureMic();
       stopAgentSpeech();
       streamRef.current?.getAudioTracks().forEach((track) => (track.enabled = true));
       transmittingRef.current = true;
       setListening(true);
-      setStatus("正在收听");
+      setTurnState("listening");
+      setStatus("免提已开启，请讲话");
       socket.send(JSON.stringify({ type: "audio.start" }));
     } catch (error) {
       transmittingRef.current = false;
       setListening(false);
+      setTurnState("idle");
       setStatus(error instanceof Error ? error.message : "无法访问麦克风");
     }
   }, [ensureMic, stopAgentSpeech, waitForSocket]);
 
   // Stops transmitting but keeps the audio graph alive (the track is disabled,
-  // so no real audio is captured) for an instant restart on the next toggle.
+  // so no real audio is captured) for an instant restart next time.
   const stopMic = useCallback(() => {
     transmittingRef.current = false;
     streamRef.current?.getAudioTracks().forEach((track) => (track.enabled = false));
     setVoiceLevel(0);
     setListening(false);
+    setTurnState("idle");
     const socket = socketRef.current;
     if (socket?.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ type: "audio.stop" }));
@@ -423,6 +482,7 @@ function useHelmetAgent() {
     socketRef.current?.close();
     socketRef.current = null;
     setConnected(false);
+    setTurnState("idle");
     setStatus("离线");
   }, [releaseMic, stopAgentSpeech, stopMic]);
 
@@ -437,6 +497,8 @@ function useHelmetAgent() {
     voiceLevel,
     transcript,
     voiceGender,
+    turnState,
+    weather,
     setVoiceGender,
     startMic,
     stopMic
@@ -447,7 +509,7 @@ function App() {
   const agent = useHelmetAgent();
 
   const agentState = useMemo(() => {
-    if (agent.listening) return "收听中";
+    if (agent.listening) return "免提中";
     if (agent.connected) return "待命";
     return "离线";
   }, [agent.connected, agent.listening]);
@@ -494,14 +556,26 @@ function App() {
 
         <div className="grid">
           <section className="hudPanel helmetPanel">
-            <HelmetVisual connected={agent.connected} listening={agent.listening} voiceLevel={agent.voiceLevel} />
-            <button
-              className={`micButton ${agent.listening ? "active" : ""}`}
-              onClick={agent.listening ? agent.stopMic : agent.startMic}
-              type="button"
-            >
-              {agent.listening ? "结束语音" : "开始语音"}
-            </button>
+            <HelmetVisual
+              connected={agent.connected}
+              listening={agent.listening}
+              voiceLevel={agent.voiceLevel}
+              turnState={agent.turnState}
+            />
+            <div className="handsFree">
+              <button
+                className={`micButton ${agent.listening ? "active" : ""}`}
+                onClick={agent.listening ? agent.stopMic : agent.startMic}
+                type="button"
+              >
+                {agent.listening ? "结束免提" : "开启免提"}
+              </button>
+              <p className="handsFreeHint">
+                {agent.listening
+                  ? "免提已开启 — 直接说话即可，Max 会自动聆听并回答。"
+                  : "开启后无需再次点击，全程语音交互。需要麦克风与定位权限。"}
+              </p>
+            </div>
           </section>
 
           <section className="hudPanel statusPanel">
@@ -513,6 +587,7 @@ function App() {
               <SignalBars active={agent.connected} />
             </div>
             <p className="stateDetail">{agent.status}</p>
+            <WeatherReadout weather={agent.weather} />
             <div className={`instrument latency ${latencyTone}`}>
               <div className="instrumentHead">
                 <span>延迟</span>
@@ -539,7 +614,7 @@ function App() {
                     {
                       id: 1,
                       speaker: "agent" as const,
-                      text: "你好，我是 Max，摩托车头盔 AI 助手。点击开始语音，问我路线、天气、附近停靠点或摩托车问题。"
+                      text: "你好，我是 Max，摩托车头盔 AI 助手。开启免提后直接说话，问我天气、路线或摩托车问题。"
                     }
                   ]
               ).map((item) => (

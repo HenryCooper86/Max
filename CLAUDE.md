@@ -7,7 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Prototype AI voice agent for a motorcycle helmet ("Max"). A React HUD frontend talks to an
 Express/WebSocket backend that relays realtime voice to Volcengine's Doubao Speech service.
 The agent speaks Chinese by default, also handles English and Japanese, and refuses any
-other language. The UI is a single live voice agent — no text chat.
+other language. The UI is a single hands-free voice agent — one tap to activate, then the
+rider just talks (Doubao's server-side VAD handles turn-taking); no text chat.
 
 ## Commands
 
@@ -43,14 +44,22 @@ backend on `:8787`, so the browser only ever talks to the Vite origin (see `vite
 OpenSpeech** realtime dialogue WebSocket (`DOUBAO_*` credentials). Full speech-to-speech:
 browser mic PCM in, synthesized voice PCM out. This is the only agent path.
 
+### Live weather context
+
+`server/weather.ts` fetches current weather for the rider's coordinates from **Open-Meteo**
+(free, no API key). When `session.start` carries `lat`/`lon` (the browser sends them after a
+geolocation grant), `doubao.ts` folds a one-line weather summary into the agent's
+`system_role` so weather questions are answered with real data, and emits a `weather` event
+the HUD renders. Weather is best-effort — a failed lookup never blocks the session.
+
 ### WebSocket relay and the provider pattern
 
 `server/index.ts` accepts browser WS connections on `/agent` and, per connection, picks a
 provider via `VOICE_PROVIDER`: `mock` (default) or `doubao`. Both implement the `AgentProvider`
 interface in `server/providers/types.ts` (`start`/`startAudio`/`sendAudio`/`stopAudio`/`close`).
-`mock.ts` emits scripted transcript/metric events for testing the streaming path without
-credentials. Add new realtime providers by implementing `AgentProvider` and wiring them into
-`selectProvider`.
+`mock.ts` emits scripted transcript/status/metric/weather events (including a turn-state
+cycle) for testing the hands-free HUD without credentials. Add new realtime providers by
+implementing `AgentProvider` and wiring them into `selectProvider`.
 
 ### Audio pipeline
 
@@ -69,9 +78,13 @@ credentials. Add new realtime providers by implementing `AgentProvider` and wiri
 
 - The `/agent` WebSocket auto-reconnects with exponential backoff (`MAX_RECONNECT_ATTEMPTS`
   in `main.tsx`); `intentionalCloseRef` distinguishes a user disconnect from a dropped link.
-- A single mic toggle (`startMic`/`stopMic`) starts and stops listening and auto-connects the
-  relay on first use. `stopMic` disables the audio track but keeps the graph alive for an
+- Hands-free is one toggle (`startMic`/`stopMic`): activating it requests geolocation, opens
+  the relay, and streams the mic continuously — Doubao's VAD segments turns, so the rider
+  never taps again. `stopMic` disables the audio track but keeps the graph alive for an
   instant restart, so transmission is gated by `transmittingRef` and the track's `enabled` flag.
+- `turnState` (`idle`/`listening`/`hearing`/`thinking`/`speaking`) is derived from server
+  `status` events by `mapTurnState` and drives the `HelmetVisual` caption and ring colour, so
+  the rider can see when Max heard them, is thinking, or is replying.
 - Barge-in (`stopAgentSpeech`) cancels browser TTS and stops queued Doubao audio whenever the
   rider starts talking.
 - The 女声/男声 voice toggle sets `voiceGenderRef`. The live Doubao speaker is chosen

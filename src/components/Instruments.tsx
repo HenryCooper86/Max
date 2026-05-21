@@ -8,3 +8,32 @@ export function SignalBars({ active }: { active: boolean }) {
     </div>
   );
 }
+
+export type Weather = {
+  description: string;
+  temperatureC: number;
+  windSpeedKmh: number;
+  isDay: boolean;
+};
+
+/** Live weather instrument; the agent answers weather questions from this data. */
+export function WeatherReadout({ weather }: { weather: Weather | null }) {
+  return (
+    <div className="instrument weather">
+      <div className="instrumentHead">
+        <span>实时天气</span>
+      </div>
+      {weather ? (
+        <>
+          <div className="weatherMain">
+            <strong>{weather.temperatureC}°</strong>
+            <span>{weather.description}</span>
+          </div>
+          <p className="weatherWind">风速 {weather.windSpeedKmh} km/h</p>
+        </>
+      ) : (
+        <p className="weatherEmpty">激活后接入定位天气</p>
+      )}
+    </div>
+  );
+}

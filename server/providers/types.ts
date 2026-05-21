@@ -5,6 +5,9 @@ export type SessionStartEvent = {
   sampleRate: number;
   channels: number;
   voiceGender?: VoiceGender;
+  // Rider coordinates, when geolocation is granted — used for live weather.
+  lat?: number;
+  lon?: number;
 };
 
 export type ClientEvent = SessionStartEvent | { type: "audio.start" } | { type: "audio.stop" };

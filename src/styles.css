@@ -276,6 +276,20 @@ h2 {
   --glow: rgba(95, 233, 214, 0.32);
 }
 
+.helmetStage.thinking {
+  --ring: var(--warn);
+  --ring-soft: rgba(242, 193, 78, 0.55);
+  --ring-faint: rgba(242, 193, 78, 0.2);
+  --glow: rgba(242, 193, 78, 0.24);
+}
+
+.helmetStage.speaking {
+  --ring: var(--accent);
+  --ring-soft: rgba(62, 232, 159, 0.6);
+  --ring-faint: rgba(62, 232, 159, 0.24);
+  --glow: rgba(62, 232, 159, 0.34);
+}
+
 .helmetStage::before {
   content: "";
   position: absolute;
@@ -407,7 +421,9 @@ h2 {
 }
 
 .helmetStage.online .greenDot,
-.helmetStage.listening .greenDot {
+.helmetStage.listening .greenDot,
+.helmetStage.thinking .greenDot,
+.helmetStage.speaking .greenDot {
   animation: greenBlink 1.05s infinite ease-in-out;
 }
 
@@ -525,6 +541,19 @@ h2 {
   box-shadow: 0 0 26px rgba(95, 233, 214, 0.5);
 }
 
+/* Hands-free control block: the mic toggle plus its one-line hint. */
+.handsFree {
+  display: grid;
+  gap: 8px;
+}
+
+.handsFreeHint {
+  margin: 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
 /* ============================================================
    Status panel + instruments
    ============================================================ */
@@ -594,6 +623,35 @@ h2 {
   justify-content: space-between;
   gap: 8px;
   margin-bottom: 8px;
+}
+
+/* Live weather instrument */
+.weatherMain {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.weatherMain strong {
+  font-size: 1.6rem;
+  line-height: 1;
+}
+
+.weatherMain span {
+  color: #d8e0dd;
+  font-size: 0.95rem;
+}
+
+.weatherWind {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.weatherEmpty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
 }
 
 /* Latency readout */

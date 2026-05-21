@@ -1,17 +1,38 @@
+/** Conversational state of the hands-free session, driven by server events. */
+export type TurnState = "idle" | "listening" | "hearing" | "thinking" | "speaking";
+
 type Props = {
   connected: boolean;
   listening: boolean;
   voiceLevel: number;
+  turnState: TurnState;
 };
 
 // Relative heights of the on-visor voice bars.
 const BARS = [0.42, 0.78, 0.56, 0.94, 0.68, 0.84, 0.48, 0.72, 0.6];
 
+const CAPTIONS: Record<TurnState, string> = {
+  idle: "待机",
+  listening: "免提待命 · 请讲话",
+  hearing: "正在聆听…",
+  thinking: "Max 思考中…",
+  speaking: "Max 回答中"
+};
+
+// Maps each turn state to a helmet ring palette (see .helmetStage.* in styles).
+const RING_CLASS: Record<TurnState, string> = {
+  idle: "online",
+  listening: "listening",
+  hearing: "listening",
+  thinking: "thinking",
+  speaking: "speaking"
+};
+
 /** Cinematic helmet centerpiece: gradient shell, animated state reticle, and
  *  an on-visor voice visualizer driven by the live mic level. */
-export function HelmetVisual({ connected, listening, voiceLevel }: Props) {
-  const stateClass = listening ? "listening" : connected ? "online" : "offline";
-  const caption = listening ? "收听中" : connected ? "待命" : "离线";
+export function HelmetVisual({ connected, listening, voiceLevel, turnState }: Props) {
+  const stateClass = connected ? RING_CLASS[turnState] : "offline";
+  const caption = connected ? CAPTIONS[turnState] : "离线";
 
   return (
     <div className={`helmetStage ${stateClass}`}>

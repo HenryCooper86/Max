@@ -26,19 +26,22 @@ export function createMockProvider(client: WebSocket): AgentProvider {
     }
   }
 
+  // Walks the turn states (hearing → thinking → speaking → listening) so the
+  // hands-free HUD can be exercised without Doubao credentials.
   function emitConversation() {
     const riderText = riderPrompts[promptIndex % riderPrompts.length];
     const agentText = agentReplies[promptIndex % agentReplies.length];
     promptIndex += 1;
 
+    send({ type: "status", state: "hearing", detail: "正在聆听骑手讲话" });
     send({ type: "transcript", speaker: "rider", text: riderText, final: true });
+    send({ type: "status", state: "thinking", detail: "Max 正在思考" });
+
     setTimeout(() => {
+      send({ type: "status", state: "speaking", detail: "Max 正在回答" });
       send({ type: "transcript", speaker: "agent", text: agentText, final: true });
-      send({
-        type: "metric",
-        noiseDb: 38 + Math.round(Math.random() * 18),
-        latencyMs: 92 + Math.round(Math.random() * 70)
-      });
+      send({ type: "metric", latencyMs: 92 + Math.round(Math.random() * 70) });
+      setTimeout(() => send({ type: "status", state: "listening", detail: "免提待命，请讲话" }), 1500);
     }, 650);
   }
 
@@ -52,25 +55,23 @@ export function createMockProvider(client: WebSocket): AgentProvider {
       });
     },
     async startAudio() {
-      send({ type: "status", state: "listening", detail: "正在通过头盔麦克风收听" });
-      timer = setInterval(emitConversation, 4800);
+      send({ type: "status", state: "listening", detail: "免提待命，请讲话" });
+      // Scripted weather so the HUD weather readout is demoable without creds.
+      send({ type: "weather", description: "晴间多云", temperatureC: 21, windSpeedKmh: 12, isDay: true });
+      timer = setInterval(emitConversation, 6000);
       emitConversation();
     },
     async sendAudio(chunk: Buffer) {
       frameCount += 1;
       if (frameCount % 24 === 0) {
-        send({
-          type: "metric",
-          noiseDb: 36 + Math.round(Math.random() * 20),
-          latencyMs: 88 + Math.round(Math.random() * 85)
-        });
+        send({ type: "metric", latencyMs: 88 + Math.round(Math.random() * 85) });
       }
       void chunk;
     },
     async stopAudio() {
       if (timer) clearInterval(timer);
       timer = undefined;
-      send({ type: "status", state: "ready", detail: "麦克风已静音" });
+      send({ type: "status", state: "ready", detail: "免提已暂停" });
     },
     async close() {
       if (timer) clearInterval(timer);

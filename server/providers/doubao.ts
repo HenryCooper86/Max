@@ -1,6 +1,7 @@
 import { WebSocket, type RawData } from "ws";
 import { randomUUID } from "node:crypto";
 import type { AgentProvider, SessionStartEvent, VoiceGender } from "./types";
+import { fetchRiderWeather } from "../weather";
 
 // The "Max" persona prompt. Overridable per deployment with DOUBAO_SYSTEM_ROLE;
 // keep it consistent with the DOUBAO_SYSTEM_ROLE default in .env.example.
@@ -11,6 +12,8 @@ type DoubaoSessionConfig = {
   sampleRate: number;
   channels: number;
   voiceGender: VoiceGender;
+  // Persona prompt, possibly augmented with live weather for this session.
+  systemRole: string;
 };
 
 // Default realtime-dialogue speakers from the Doubao 音色列表 (jupiter family).
@@ -145,7 +148,7 @@ function buildDoubaoSessionConfig(config: DoubaoSessionConfig) {
   return {
     dialog: {
       bot_name: process.env.DOUBAO_BOT_NAME ?? "Max",
-      system_role: process.env.DOUBAO_SYSTEM_ROLE ?? DEFAULT_AGENT_SYSTEM_PROMPT,
+      system_role: config.systemRole,
       extra: {
         input_mod: process.env.DOUBAO_INPUT_MODE ?? "keep_alive",
         model: process.env.DOUBAO_REALTIME_MODEL ?? "1.2.1.1"
@@ -388,14 +391,43 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
 
   return {
     async start(event: SessionStartEvent) {
-      if (!started) {
-        started = true;
-        connectUpstream({
-          sampleRate: event.sampleRate,
-          channels: event.channels,
-          voiceGender: event.voiceGender ?? "female"
-        });
+      if (started) return;
+      started = true;
+
+      let systemRole = process.env.DOUBAO_SYSTEM_ROLE ?? DEFAULT_AGENT_SYSTEM_PROMPT;
+
+      // Best-effort: fold live weather for the rider's location into the agent
+      // context so weather questions are answered with real data. A failure
+      // here never blocks the session — the agent just answers generically.
+      if (typeof event.lat === "number" && typeof event.lon === "number") {
+        try {
+          const weather = await fetchRiderWeather(event.lat, event.lon);
+          systemRole +=
+            `\n\n[实时骑行情报] 骑手当前位置${weather.summary}` +
+            "当骑手询问天气、风力或路况时，请基于这条真实数据简短回答。";
+          sendClient({
+            type: "weather",
+            description: weather.description,
+            temperatureC: weather.temperatureC,
+            windSpeedKmh: weather.windSpeedKmh,
+            isDay: weather.isDay
+          });
+          sendClient({
+            type: "status",
+            state: "ready",
+            detail: `已接入实时天气：${weather.description} ${weather.temperatureC}°C`
+          });
+        } catch {
+          sendClient({ type: "status", state: "ready", detail: "实时天气暂不可用，使用通用回答" });
+        }
       }
+
+      connectUpstream({
+        sampleRate: event.sampleRate,
+        channels: event.channels,
+        voiceGender: event.voiceGender ?? "female",
+        systemRole
+      });
     },
     async startAudio() {
       sendClient({ type: "status", state: "listening", detail: "正在通过豆包实时语音收听" });

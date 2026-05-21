@@ -26,6 +26,7 @@ Prototype AI voice agent for a motorcycle helmet. Max keeps the same name and mo
 - Express
 - WebSocket relay with `ws`
 - Volcengine Doubao Speech realtime dialogue WebSocket
+- pm2 · Caddy · AWS Lightsail (test deployment)
 
 ## Project Structure
 
@@ -53,6 +54,97 @@ Prototype AI voice agent for a motorcycle helmet. Max keeps the same name and mo
 ├── package.json
 └── vite.config.ts
 ```
+
+## Architecture
+
+The project is a thin, real-time audio relay. The browser never holds a Volcengine credential and never talks to Volcengine directly — it speaks only to our own Node server, which proxies the realtime voice session and keeps the secrets server-side.
+
+### Runtime topology
+
+```text
+Browser
+  React HUD (src/main.tsx) ......... 开始语音 toggle, 女声/男声 toggle, HelmetVisual, transcript
+  AudioWorklet (pcm-worklet.js) .... mic capture -> 16 kHz PCM16, 320-sample (20 ms) frames
+  Web Audio playback .............. 24 kHz PCM16 voice, gapless scheduling, barge-in stop
+        |                                                       ^
+        |  WebSocket /agent                                     |
+        |    up:   binary mic PCM16  +  JSON (session.start, audio.start/stop)
+        |    down: binary voice PCM16  +  JSON (transcript, status, metric, error)
+        v                                                       |
+  dev:  Vite dev server :5173 ...... proxies /agent + /health -->|
+  prod: Caddy :443 (self-signed TLS) .. reverse_proxy ---------->|
+        |
+        v
+Node server :8787  (Express + ws, server/index.ts)
+  GET /health  .  WS /agent  .  serves dist/ (prod)
+        |
+        v  selectProvider(VOICE_PROVIDER)   -- one provider per WS connection
+  +----------------------------+   +------------------------------------------+
+  | mock  (mock.ts)            |   | doubao (doubao.ts)                       |
+  | scripted transcript and    |   | custom binary frame protocol             |
+  | metric events, no creds    |   +------------------------------------------+
+  +----------------------------+                  |  ^
+                                                  v  |  binary frames (audio + events)
+                              Volcengine Doubao OpenSpeech realtime dialogue WebSocket
+```
+
+### Two processes in development
+
+`npm run dev` runs two processes via `concurrently`:
+
+- **Vite dev server** (`:5173`) — serves the React client with hot-module reload.
+- **tsx watch server** (`:8787`) — the Express + WebSocket backend, restarted on change.
+
+The browser only ever talks to the Vite origin. Vite proxies `/health` (HTTP) and `/agent` (WebSocket) through to `:8787` — see `vite.config.ts` — which keeps development same-origin and CORS-free. In production there is a single Node process: the Express server serves the pre-built `dist/` client itself and still exposes `/health` and `/agent`.
+
+### The provider pattern
+
+Every `/agent` WebSocket connection gets its own `AgentProvider`, chosen by `selectProvider` from the `VOICE_PROVIDER` env var:
+
+| Provider         | File                         | Use                                                                                            |
+| ---------------- | ---------------------------- | ---------------------------------------------------------------------------------------------- |
+| `mock` (default) | `server/providers/mock.ts`   | Scripted rider/agent transcripts and metrics. Exercises the full streaming path with no creds. |
+| `doubao`         | `server/providers/doubao.ts` | Real speech-to-speech against the Volcengine Doubao realtime dialogue WebSocket.               |
+
+Both implement the `AgentProvider` interface in `server/providers/types.ts`:
+
+```ts
+start(event); // open the upstream session
+startAudio(); // rider began transmitting
+sendAudio(chunk); // a 16 kHz PCM16 mic frame
+stopAudio(); // rider stopped transmitting
+close(); // tear the session down
+```
+
+A new realtime backend is added by implementing this interface and wiring it into `selectProvider` — nothing else in the relay changes.
+
+### Audio pipeline
+
+**Uplink — browser → server → Doubao**
+
+1. `getUserMedia` opens the mic; an `AudioWorklet` (`public/pcm-worklet.js`) runs off the main thread.
+2. The worklet downsamples to **16 kHz** and emits **320-sample (20 ms) PCM16 mono** frames over its message port.
+3. `main.tsx` forwards each frame as a binary WebSocket message to `/agent`.
+4. The `doubao` provider wraps each frame in a protocol frame and sends it upstream.
+
+**Downlink — Doubao → server → browser**
+
+1. Doubao streams back **24 kHz PCM16 mono** voice audio.
+2. The provider relays the raw PCM payload to the browser as a binary message.
+3. `main.tsx` schedules each buffer gaplessly with a playback cursor; active `AudioBufferSourceNode`s are tracked so **barge-in** can stop them instantly when the rider speaks.
+
+If Doubao returns reply _text_ but no audio, the browser falls back to its own `speechSynthesis` TTS, picking a voice with `detectLanguage` (`shared/language.ts`).
+
+### Doubao binary frame protocol
+
+`doubao.ts` speaks Volcengine's realtime dialogue framing directly: a **4-byte header** followed by big-endian `uint32` event / length fields and a JSON or raw payload. The `MessageType`, `EventSend`, and `EventReceive` enums plus `buildHeader` / `parseDoubaoFrame` define it — the send and parse halves must stay in sync. Frame parsing and the ASR/speaker helpers are unit-tested in `tests/doubao-frame.test.ts` and `tests/doubao-voice.test.ts`.
+
+### Client resilience
+
+- **Auto-reconnect** — the `/agent` socket reconnects with exponential backoff (`MAX_RECONNECT_ATTEMPTS`); `intentionalCloseRef` separates a user disconnect from a dropped link.
+- **Reused audio graph** — `stopMic` disables the mic track but keeps the AudioWorklet graph alive, so the next `开始语音` restarts instantly.
+- **Voice switch** — the live Doubao speaker is fixed at session start, so toggling `女声/男声` reconnects the relay (`restartSession`) for a fresh session.
+- **Error boundary** — `src/ErrorBoundary.tsx` catches render-time crashes and shows a recoverable screen.
 
 ## Setup
 
@@ -152,6 +244,83 @@ npm run format       # Format with Prettier (format:check to verify only)
 npm test             # Run the Vitest unit tests (test:watch for watch mode)
 ```
 
+## Build & Deployment Pipeline
+
+### Pipeline overview
+
+```text
+ Develop              Verify                 Build                Deploy to test server
+ -------              ------                 -----                ---------------------
+ npm install          npm run lint           npm run build        rsync push  ->  Lightsail
+ npm run dev          npm run format:check     tsc --noEmit        npm install    (on server)
+   vite  :5173        npm test (vitest)        vite build          npm run build  (on server)
+   tsx   :8787                                 -> dist/            pm2 restart horizon
+   (Vite proxy)                                                    Caddy :443 -> :8787
+```
+
+### 1. Develop
+
+```bash
+npm install      # first time only
+npm run dev      # vite :5173  +  tsx watch :8787
+```
+
+### 2. Verify (quality gates)
+
+```bash
+npm run lint           # ESLint (typescript-eslint + react-hooks)
+npm run format:check   # Prettier check (npm run format to auto-fix)
+npm test               # Vitest unit tests
+```
+
+### 3. Build
+
+```bash
+npm run build          # tsc --noEmit type-check, then vite build -> dist/
+```
+
+`tsc` only type-checks (`noEmit: true`); `vite build` emits the hashed client bundle to `dist/`. The server runs its TypeScript directly with `tsx`, so there is no separate server build step.
+
+### 4. Test server
+
+A shared test server runs on **AWS Lightsail** (region `ap-northeast-2`) so the team can try the product:
+
+| Item            | Value                                                                               |
+| --------------- | ----------------------------------------------------------------------------------- |
+| URL             | `https://3.35.135.136/` — self-signed cert; accept the browser warning once         |
+| Host            | Ubuntu; app deployed at `/home/ubuntu/app`                                          |
+| Process manager | `pm2`, process name `horizon` (runs `tsx server/index.ts` on port `8787`)           |
+| Reverse proxy   | `Caddy` — `:80` redirects to `:443`, terminates self-signed TLS, proxies to `:8787` |
+| Provider        | `VOICE_PROVIDER=doubao` — testers get real Doubao realtime voice                    |
+
+The Lightsail box cannot reach the internal GitLab, so deployment is an **rsync push from a developer machine** — not a `git pull` on the server.
+
+### 5. Deploy to the test server
+
+Run from the project root on your machine. The server keeps its own `.env`; credentials are never copied from a developer machine.
+
+```bash
+KEY=/path/to/LightsailDefaultKey-ap-northeast-2.pem
+HOST=ubuntu@3.35.135.136
+
+# (optional) preview exactly what will change
+rsync -azn --delete --exclude='.git' --exclude='.env' --exclude='node_modules' \
+  --exclude='dist' --exclude='.DS_Store' -e "ssh -i $KEY" ./ "$HOST":/home/ubuntu/app/
+
+# 1. Push source. --delete removes files deleted in the repo; the excludes
+#    protect the server .env, node_modules, dist, and .git.
+rsync -az --delete --exclude='.git' --exclude='.env' --exclude='node_modules' \
+  --exclude='dist' --exclude='.DS_Store' -e "ssh -i $KEY" ./ "$HOST":/home/ubuntu/app/
+
+# 2. Install deps, rebuild the client, and restart the process.
+ssh -i "$KEY" "$HOST" 'cd ~/app && npm install && npm run build && pm2 restart horizon'
+
+# 3. Verify.
+curl -sk https://3.35.135.136/health      # expect {"ok":true,"provider":"doubao"}
+```
+
+> **Note:** `react`, `react-dom`, and the `@types/*` packages live in `devDependencies`. The server only needs them to _build_ the client (the built `dist/` bundles React in), so the server must run a full `npm install` — a production-only install cannot rebuild the client.
+
 ## Security Notes
 
 - `.env` is ignored by git.
@@ -179,3 +348,5 @@ curl -s http://localhost:8787/health
 1. Replace mock latency values with real session telemetry.
 2. Add a wake-word flow on top of the mic toggle.
 3. Add richer realtime state labels for Doubao sessions.
+4. Script the test-server deploy (or wire up GitLab CI once a runner can reach the host).
+5. Replace the Lightsail self-signed certificate with a trusted cert behind a domain name.

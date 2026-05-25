@@ -669,6 +669,66 @@ h2 {
   font-size: 0.76rem;
 }
 
+/* Fused safety/status readout for the first glance. */
+.ridePulse {
+  border-left: 3px solid var(--accent);
+  background:
+    linear-gradient(135deg, rgba(62, 232, 159, 0.12), transparent 48%),
+    rgba(255, 255, 255, 0.04);
+}
+
+.ridePulse.caution {
+  border-left-color: var(--warn);
+  background:
+    linear-gradient(135deg, rgba(242, 193, 78, 0.14), transparent 48%),
+    rgba(255, 255, 255, 0.04);
+}
+
+.ridePulse.critical {
+  border-left-color: var(--danger);
+  background:
+    linear-gradient(135deg, rgba(255, 111, 87, 0.16), transparent 48%),
+    rgba(255, 255, 255, 0.04);
+}
+
+.ridePulse strong {
+  display: block;
+  color: #f5fbfa;
+  font-size: clamp(1rem, 1.45vw, 1.3rem);
+  line-height: 1.18;
+}
+
+.ridePulse p {
+  margin: 7px 0 0;
+  color: #c5d3d0;
+  font-size: 0.86rem;
+}
+
+.pulseGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.pulseGrid span {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgba(196, 218, 216, 0.12);
+  border-radius: 8px;
+  background: rgba(7, 11, 12, 0.28);
+  color: var(--muted);
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.pulseGrid b {
+  display: block;
+  margin-bottom: 2px;
+  color: #f5fbfa;
+  font-size: 0.86rem;
+}
+
 /* Ride intelligence */
 .rideIntel {
   border-left: 3px solid var(--accent);
@@ -1086,6 +1146,7 @@ h2 {
   }
 
   .preflightGrid,
+  .pulseGrid,
   .rideHistory {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

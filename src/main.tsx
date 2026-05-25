@@ -138,6 +138,31 @@ const RESPONSE_MODE_LABELS: Record<SessionMemoryState["responseMode"], string> =
   emergency: "紧急"
 };
 
+const HAZARD_LABELS: Record<HazardLevel, string> = {
+  normal: "稳定",
+  caution: "注意",
+  critical: "高风险"
+};
+
+const HAZARD_ACTIONS: Record<HazardLevel, string> = {
+  normal: "保持节奏，专注下一步提示",
+  caution: "放缓一点，扩大车距",
+  critical: "优先靠边，确认安全"
+};
+
+const NETWORK_LABELS: Record<RideHudContext["network"], string> = {
+  online: "在线",
+  degraded: "弱网",
+  offline: "离线"
+};
+
+const PERMISSION_LABELS: Record<PermissionStateLabel, string> = {
+  granted: "已授权",
+  prompt: "待授权",
+  denied: "已拒绝",
+  unknown: "未确认"
+};
+
 const CREDENTIAL_LABELS: Record<NonNullable<AgentHealth["credentials"]>, string> = {
   configured: "ok",
   missing: "missing",
@@ -876,9 +901,11 @@ function App() {
   const latencyTone = agent.latencyMs < 140 ? "good" : agent.latencyMs < 280 ? "warn" : "alert";
   const lastCommand = [...agent.transcript].reverse().find((item) => item.speaker === "rider")?.text ?? "—";
   const lastReply = [...agent.transcript].reverse().find((item) => item.speaker === "agent")?.text ?? "—";
+  const weatherRisk = agent.weather?.riskLevel ?? "normal";
+  const fusedHazard = combineHazardLevels(agent.rideContext.hazardLevel, weatherRisk);
   const preflight = [
-    { label: t.mic, value: agent.micPermission },
-    { label: t.location, value: agent.locationPermission },
+    { label: t.mic, value: PERMISSION_LABELS[agent.micPermission] },
+    { label: t.location, value: PERMISSION_LABELS[agent.locationPermission] },
     { label: t.server, value: agent.health?.ok ? t.ready : "…" },
     { label: t.provider, value: agent.provider.toUpperCase() },
     { label: t.voice, value: `${agent.voiceGender === "female" ? "女声" : "男声"} · ${PERSONALITY_LABELS[agent.voicePersonality]}` }
@@ -991,6 +1018,32 @@ function App() {
               <SignalBars active={agent.connected} />
             </div>
             <p className="stateDetail">{agent.status}</p>
+            <div className={`instrument ridePulse ${fusedHazard}`}>
+              <div className="instrumentHead">
+                <span>态势摘要</span>
+                <b>{HAZARD_LABELS[fusedHazard]}</b>
+              </div>
+              <strong>{HAZARD_ACTIONS[fusedHazard]}</strong>
+              <p>{agent.rideContext.glanceableFocus}</p>
+              <div className="pulseGrid">
+                <span>
+                  <b>{agent.rideContext.modeLabel}</b>
+                  模式
+                </span>
+                <span>
+                  <b>{agent.rideContext.scenarioLabel}</b>
+                  场景
+                </span>
+                <span>
+                  <b>{NETWORK_LABELS[agent.rideContext.network]}</b>
+                  网络
+                </span>
+                <span>
+                  <b>{agent.rideContext.batteryPct}%</b>
+                  电量
+                </span>
+              </div>
+            </div>
             <div className="instrument preflight">
               <div className="instrumentHead">
                 <span>{t.onboarding}</span>

@@ -1,3 +1,5 @@
+import type { DemoScenario, RideMode } from "../../shared/ride";
+
 export type VoiceGender = "female" | "male";
 
 export type SessionStartEvent = {
@@ -5,6 +7,8 @@ export type SessionStartEvent = {
   sampleRate: number;
   channels: number;
   voiceGender?: VoiceGender;
+  rideMode?: RideMode;
+  scenario?: DemoScenario;
   // Rider coordinates, when geolocation is granted — used for live weather.
   lat?: number;
   lon?: number;

@@ -10,7 +10,11 @@ Prototype AI voice agent for a motorcycle helmet. Max keeps the same name and mo
 
 - Hands-free operation — one tap activates the session, then the rider just talks; Doubao's server-side VAD handles turn-taking.
 - Turn-state HUD — the helmet shows when Max is listening, heard the rider, is thinking, or is replying.
+- Ride intelligence modes — switch between 骑行 / 导航 / 停车 / 紧急 so Max changes response length and safety behavior.
+- Scenario-driven mock demos — 通勤、横风、低油、小队、紧急 scenes exercise realistic rider context without Doubao credentials.
 - Live weather — pulls current weather for the rider's location (Open-Meteo, no API key) and folds it into the agent's context so weather questions get real answers.
+- Rider risk readouts — HUD shows speed, route phase, network, helmet battery, weather risk, and concise rider advice.
+- Latency telemetry — the relay reports ASR, thinking, first-audio, and total timing so the realtime path is measurable.
 - Doubao realtime voice provider for low-latency speech-to-speech sessions.
 - Mock live voice relay over WebSocket for testing the hands-free HUD without production credentials.
 - AudioWorklet mic capture that runs off the main thread for glitch-free streaming.
@@ -67,6 +71,7 @@ The project is a thin, real-time audio relay. The browser never holds a Volcengi
 ```text
 Browser
   React HUD (src/main.tsx) ......... 开始语音 toggle, 女声/男声 toggle, HelmetVisual, transcript
+                                  .... 骑行模式 + 演示场景 controls, rider intelligence HUD
   AudioWorklet (pcm-worklet.js) .... mic capture -> 16 kHz PCM16, 320-sample (20 ms) frames
   Web Audio playback .............. 24 kHz PCM16 voice, gapless scheduling, barge-in stop
         |                                                       ^
@@ -145,7 +150,9 @@ If Doubao returns reply _text_ but no audio, the browser falls back to its own `
 ### Hands-free & live weather
 
 - **Hands-free** — activating the session streams the mic continuously (Doubao's `keep_alive` input mode); Doubao's server-side VAD segments turns, so the rider never taps again. `turnState` (`idle`/`listening`/`hearing`/`thinking`/`speaking`) is derived from server `status` events and drives the helmet's caption and ring colour.
-- **Weather** — on activation the browser requests geolocation and sends `lat`/`lon` with `session.start`. `server/weather.ts` fetches current conditions from **Open-Meteo** (free, no API key); `doubao.ts` folds a one-line summary into the agent's `system_role` and emits a `weather` event for the HUD. A failed lookup never blocks the session.
+- **Ride intelligence** — `session.start` carries the selected `rideMode` and `scenario`; `shared/ride.ts` turns that into a safety policy, response style, and HUD focus. Doubao receives this as prompt context; the mock provider turns it into scenario-specific transcripts and telemetry.
+- **Weather** — on activation the browser requests geolocation and sends `lat`/`lon` with `session.start`. `server/weather.ts` fetches current conditions from **Open-Meteo** (free, no API key), classifies rider risk, and emits weather/advice to the HUD. `doubao.ts` folds the same data into the agent's `system_role`. A failed lookup never blocks the session.
+- **Telemetry** — providers emit `metric` and `telemetry` events. The HUD shows first-audio latency plus ASR / thinking / first-audio / total timing so demos can discuss realtime behavior with numbers.
 
 ### Client resilience
 
@@ -184,11 +191,11 @@ http://localhost:5173
 
 ## Using The App
 
-Click `开启免提` once to start the hands-free session. The browser asks for microphone and location permission, then the agent runs continuously — the rider just talks, and Doubao's voice detection handles turn-taking. The helmet caption shows the live turn state (listening → heard you → thinking → replying). Click `结束免提` to stop.
+Pick a scenario (`通勤` / `横风` / `低油` / `小队` / `紧急`) and mode (`骑行` / `导航` / `停车` / `紧急`), then click `开启免提` once to start the hands-free session. The browser asks for microphone and location permission, then the agent runs continuously — the rider just talks, and Doubao's voice detection handles turn-taking. The helmet caption shows the live turn state (listening → heard you → thinking → replying). Click `结束免提` to stop.
 
 In the default configuration this uses the mock WebSocket provider and emits a simulated turn-state cycle. With `VOICE_PROVIDER=doubao`, the backend connects to the Doubao realtime dialogue WebSocket, sends browser mic PCM frames, and relays returned Chinese PCM voice audio back to the browser.
 
-If location permission is granted, Max greets the ride with real weather and can answer weather questions accurately — the status panel shows the current conditions. Use the `女声 / 男声` toggle to switch the assistant voice. Whenever the rider starts talking, any in-progress agent speech is interrupted (barge-in).
+If location permission is granted, Max greets the ride with real weather and can answer weather questions accurately — the status panel shows current conditions, risk, and rider advice. In mock mode, the scenario selector drives scripted speed, route phase, weather risk, and latency telemetry. Use the `女声 / 男声` toggle to switch the assistant voice. Whenever the rider starts talking, any in-progress agent speech is interrupted (barge-in).
 
 ## Environment Variables
 

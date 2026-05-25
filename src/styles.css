@@ -187,7 +187,8 @@ h2 {
   gap: 12px;
 }
 
-.voiceToggle {
+.voiceToggle,
+.modeToggle {
   display: inline-flex;
   padding: 3px;
   border: 1px solid rgba(196, 218, 216, 0.2);
@@ -195,7 +196,8 @@ h2 {
   background: rgba(255, 255, 255, 0.04);
 }
 
-.voiceToggle button {
+.voiceToggle button,
+.modeToggle button {
   min-height: 32px;
   padding: 0 15px;
   border: 0;
@@ -209,11 +211,17 @@ h2 {
     color 0.15s ease;
 }
 
-.voiceToggle button:hover:not(.active) {
+.modeToggle button {
+  padding: 0 11px;
+}
+
+.voiceToggle button:hover:not(.active),
+.modeToggle button:hover:not(.active) {
   color: var(--text);
 }
 
-.voiceToggle button.active {
+.voiceToggle button.active,
+.modeToggle button.active {
   background: var(--accent);
   color: #07221a;
   font-weight: 700;
@@ -554,6 +562,37 @@ h2 {
   font-size: 0.82rem;
 }
 
+.scenarioStrip {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.scenarioStrip button {
+  min-height: 34px;
+  border: 1px solid rgba(196, 218, 216, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.82rem;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.scenarioStrip button:hover:not(.active) {
+  color: var(--text);
+  border-color: rgba(196, 218, 216, 0.34);
+}
+
+.scenarioStrip button.active {
+  border-color: rgba(95, 233, 214, 0.6);
+  background: rgba(95, 233, 214, 0.14);
+  color: var(--text);
+}
+
 /* ============================================================
    Status panel + instruments
    ============================================================ */
@@ -625,7 +664,79 @@ h2 {
   margin-bottom: 8px;
 }
 
+.instrumentHead b {
+  color: var(--accent-cyan);
+  font-size: 0.76rem;
+}
+
+/* Ride intelligence */
+.rideIntel {
+  border-left: 3px solid var(--accent);
+}
+
+.rideIntel.caution {
+  border-left-color: var(--warn);
+}
+
+.rideIntel.critical {
+  border-left-color: var(--danger);
+}
+
+.rideIntelGrid {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: baseline;
+  gap: 5px 9px;
+}
+
+.rideIntelGrid strong {
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.rideIntelGrid span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.rideIntelGrid p {
+  margin: 0;
+  color: #d8e0dd;
+  font-size: 0.88rem;
+}
+
+.rideChips,
+.telemetryGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 12px;
+}
+
+.rideChips span,
+.telemetryGrid span {
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid rgba(196, 218, 216, 0.14);
+  border-radius: 999px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 0.74rem;
+}
+
 /* Live weather instrument */
+.weather {
+  border-left: 3px solid var(--accent);
+}
+
+.weather.caution {
+  border-left-color: var(--warn);
+}
+
+.weather.critical {
+  border-left-color: var(--danger);
+}
+
 .weatherMain {
   display: flex;
   align-items: baseline;
@@ -645,6 +756,12 @@ h2 {
 .weatherWind {
   margin: 8px 0 0;
   color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.weatherAdvice {
+  margin: 8px 0 0;
+  color: #d8e0dd;
   font-size: 0.82rem;
 }
 
@@ -857,6 +974,18 @@ h2 {
 
   .helmetPanel {
     min-height: 440px;
+  }
+
+  .scenarioStrip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .rideIntelGrid {
+    grid-template-columns: auto auto;
+  }
+
+  .rideIntelGrid p {
+    grid-column: 1 / -1;
   }
 }
 

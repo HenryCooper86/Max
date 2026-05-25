@@ -4,6 +4,14 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { HelmetVisual, type TurnState } from "./components/HelmetVisual";
 import { SignalBars, WeatherReadout, type Weather } from "./components/Instruments";
 import { type SupportedLanguage, detectLanguage } from "../shared/language";
+import {
+  combineHazardLevels,
+  scenarioDefaultMode,
+  scenarioLabel,
+  type DemoScenario,
+  type RideMode,
+  type RideIntelligence
+} from "../shared/ride";
 import "./styles.css";
 
 type AgentEvent =
@@ -11,7 +19,29 @@ type AgentEvent =
   | { type: "status"; state: string; detail: string }
   | { type: "transcript"; speaker: "rider" | "agent"; text: string; final?: boolean }
   | { type: "metric"; latencyMs: number }
-  | { type: "weather"; description: string; temperatureC: number; windSpeedKmh: number; isDay: boolean }
+  | {
+      type: "weather";
+      description: string;
+      temperatureC: number;
+      windSpeedKmh: number;
+      isDay: boolean;
+      riskLevel?: HazardLevel;
+      riderAdvice?: string;
+    }
+  | {
+      type: "ride.context";
+      mode: RideMode;
+      modeLabel: string;
+      scenario: DemoScenario;
+      scenarioLabel: string;
+      speedKmh?: number;
+      routePhase?: string;
+      network?: "online" | "degraded" | "offline";
+      batteryPct?: number;
+      hazardLevel: HazardLevel;
+      glanceableFocus: string;
+    }
+  | { type: "telemetry"; asrMs: number; thinkMs: number; firstAudioMs: number; totalMs: number }
   | { type: "error"; message: string };
 
 type TranscriptItem = {
@@ -24,10 +54,60 @@ type TranscriptItem = {
 type WorkletMessage = { type: "frame"; pcm: ArrayBuffer } | { type: "level"; value: number };
 
 type RiderLocation = { lat: number; lon: number };
+type HazardLevel = RideIntelligence["hazardLevel"];
+
+type RideHudContext = {
+  mode: RideMode;
+  modeLabel: string;
+  scenario: DemoScenario;
+  scenarioLabel: string;
+  speedKmh: number;
+  routePhase: string;
+  network: "online" | "degraded" | "offline";
+  batteryPct: number;
+  hazardLevel: HazardLevel;
+  glanceableFocus: string;
+};
+
+type Telemetry = {
+  asrMs: number;
+  thinkMs: number;
+  firstAudioMs: number;
+  totalMs: number;
+};
 
 const SAMPLE_RATE = 16000;
 const PLAYBACK_SAMPLE_RATE = 24000;
 const MAX_RECONNECT_ATTEMPTS = 6;
+const DEFAULT_RIDE_CONTEXT: RideHudContext = {
+  mode: "navigation",
+  modeLabel: "导航",
+  scenario: "commute",
+  scenarioLabel: "通勤",
+  speedKmh: 0,
+  routePhase: "等待骑行上下文",
+  network: "offline",
+  batteryPct: 0,
+  hazardLevel: "normal",
+  glanceableFocus: "下一步提示"
+};
+
+const RIDE_MODE_LABELS: Record<RideMode, string> = {
+  ride: "骑行",
+  stop: "停车",
+  navigation: "导航",
+  emergency: "紧急"
+};
+
+const SCENARIOS: DemoScenario[] = ["commute", "wind", "fuel", "group", "emergency"];
+const RIDE_MODES: RideMode[] = ["ride", "navigation", "stop", "emergency"];
+const SCENARIO_HAZARDS: Record<DemoScenario, HazardLevel> = {
+  commute: "normal",
+  wind: "caution",
+  fuel: "normal",
+  group: "normal",
+  emergency: "critical"
+};
 
 // BCP-47 locales per supported language, used for the browser-TTS fallback.
 const VOICE_LOCALE: Record<SupportedLanguage, string> = {
@@ -118,6 +198,8 @@ function useHelmetAgent() {
   const [voiceGender, setVoiceGenderState] = useState<VoiceGender>("female");
   const [turnState, setTurnState] = useState<TurnState>("idle");
   const [weather, setWeather] = useState<Weather | null>(null);
+  const [rideContext, setRideContext] = useState<RideHudContext>(DEFAULT_RIDE_CONTEXT);
+  const [telemetry, setTelemetry] = useState<Telemetry>({ asrMs: 0, thinkMs: 0, firstAudioMs: 0, totalMs: 0 });
 
   const socketRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -134,6 +216,8 @@ function useHelmetAgent() {
   const isLiveRef = useRef(false);
   const voiceGenderRef = useRef<VoiceGender>("female");
   const locationRef = useRef<RiderLocation | null>(null);
+  const rideModeRef = useRef<RideMode>(DEFAULT_RIDE_CONTEXT.mode);
+  const scenarioRef = useRef<DemoScenario>(DEFAULT_RIDE_CONTEXT.scenario);
 
   const pushTranscript = useCallback((speaker: "rider" | "agent", text: string) => {
     setTranscript((items) => [...items.slice(-7), { id: Date.now() + Math.random(), speaker, text }]);
@@ -234,6 +318,8 @@ function useHelmetAgent() {
           sampleRate: SAMPLE_RATE,
           channels: 1,
           voiceGender: voiceGenderRef.current,
+          rideMode: rideModeRef.current,
+          scenario: scenarioRef.current,
           ...(location ? { lat: location.lat, lon: location.lon } : {})
         })
       );
@@ -269,7 +355,35 @@ function useHelmetAgent() {
             description: event.description,
             temperatureC: event.temperatureC,
             windSpeedKmh: event.windSpeedKmh,
-            isDay: event.isDay
+            isDay: event.isDay,
+            riskLevel: event.riskLevel ?? "normal",
+            riderAdvice: event.riderAdvice ?? "天气风险较低，保持正常安全骑行。"
+          });
+          setRideContext((context) => ({
+            ...context,
+            hazardLevel: combineHazardLevels(context.hazardLevel, event.riskLevel ?? "normal")
+          }));
+        }
+        if (event.type === "ride.context") {
+          setRideContext({
+            mode: event.mode,
+            modeLabel: event.modeLabel,
+            scenario: event.scenario,
+            scenarioLabel: event.scenarioLabel,
+            speedKmh: event.speedKmh ?? 0,
+            routePhase: event.routePhase ?? "等待路线信息",
+            network: event.network ?? "online",
+            batteryPct: event.batteryPct ?? 0,
+            hazardLevel: event.hazardLevel,
+            glanceableFocus: event.glanceableFocus
+          });
+        }
+        if (event.type === "telemetry") {
+          setTelemetry({
+            asrMs: Math.max(0, event.asrMs),
+            thinkMs: Math.max(0, event.thinkMs),
+            firstAudioMs: Math.max(0, event.firstAudioMs),
+            totalMs: Math.max(0, event.totalMs)
           });
         }
         if (event.type === "error") setStatus(event.message);
@@ -332,6 +446,46 @@ function useHelmetAgent() {
       }
     },
     [restartSession, speak]
+  );
+
+  const setRideMode = useCallback(
+    (mode: RideMode) => {
+      rideModeRef.current = mode;
+      const hazardLevel = combineHazardLevels(
+        mode === "emergency" ? "critical" : mode === "navigation" ? "caution" : "normal",
+        SCENARIO_HAZARDS[scenarioRef.current]
+      );
+      setRideContext((context) => ({
+        ...context,
+        mode,
+        modeLabel: RIDE_MODE_LABELS[mode],
+        hazardLevel
+      }));
+      if (socketRef.current) restartSession();
+    },
+    [restartSession]
+  );
+
+  const setScenario = useCallback(
+    (scenario: DemoScenario) => {
+      scenarioRef.current = scenario;
+      const mode = scenarioDefaultMode(scenario);
+      rideModeRef.current = mode;
+      const hazardLevel = combineHazardLevels(
+        mode === "emergency" ? "critical" : mode === "navigation" ? "caution" : "normal",
+        SCENARIO_HAZARDS[scenario]
+      );
+      setRideContext((context) => ({
+        ...context,
+        scenario,
+        scenarioLabel: scenarioLabel(scenario),
+        mode,
+        modeLabel: RIDE_MODE_LABELS[mode],
+        hazardLevel
+      }));
+      if (socketRef.current) restartSession();
+    },
+    [restartSession]
   );
 
   const waitForSocket = useCallback(async () => {
@@ -496,7 +650,11 @@ function useHelmetAgent() {
     voiceGender,
     turnState,
     weather,
+    rideContext,
+    telemetry,
     setVoiceGender,
+    setRideMode,
+    setScenario,
     startMic,
     stopMic
   };
@@ -544,6 +702,18 @@ function App() {
                 男声
               </button>
             </div>
+            <div className="modeToggle" role="group" aria-label="骑行模式">
+              {RIDE_MODES.map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  className={agent.rideContext.mode === mode ? "active" : ""}
+                  onClick={() => agent.setRideMode(mode)}
+                >
+                  {RIDE_MODE_LABELS[mode]}
+                </button>
+              ))}
+            </div>
             <div className={`signal ${agent.connected ? "online" : ""}`}>
               <span />
               {agent.provider.toUpperCase()}
@@ -572,6 +742,18 @@ function App() {
                   ? "免提已开启 — 直接说话即可，Max 会自动聆听并回答。"
                   : "开启后无需再次点击，全程语音交互。需要麦克风与定位权限。"}
               </p>
+              <div className="scenarioStrip" aria-label="演示场景">
+                {SCENARIOS.map((scenario) => (
+                  <button
+                    key={scenario}
+                    type="button"
+                    className={agent.rideContext.scenario === scenario ? "active" : ""}
+                    onClick={() => agent.setScenario(scenario)}
+                  >
+                    {scenarioLabel(scenario)}
+                  </button>
+                ))}
+              </div>
             </div>
           </section>
 
@@ -584,6 +766,22 @@ function App() {
               <SignalBars active={agent.connected} />
             </div>
             <p className="stateDetail">{agent.status}</p>
+            <div className={`instrument rideIntel ${agent.rideContext.hazardLevel}`}>
+              <div className="instrumentHead">
+                <span>骑行情报</span>
+                <b>{agent.rideContext.modeLabel}</b>
+              </div>
+              <div className="rideIntelGrid">
+                <strong>{agent.rideContext.speedKmh}</strong>
+                <span>km/h</span>
+                <p>{agent.rideContext.routePhase}</p>
+              </div>
+              <div className="rideChips">
+                <span>{agent.rideContext.scenarioLabel}</span>
+                <span>{agent.rideContext.network}</span>
+                <span>{agent.rideContext.batteryPct}%</span>
+              </div>
+            </div>
             <WeatherReadout weather={agent.weather} />
             <div className={`instrument latency ${latencyTone}`}>
               <div className="instrumentHead">
@@ -595,6 +793,12 @@ function App() {
               </div>
               <div className="latencyBar">
                 <i style={{ width: `${Math.min(100, agent.latencyMs / 4)}%` }} />
+              </div>
+              <div className="telemetryGrid">
+                <span>ASR {agent.telemetry.asrMs}ms</span>
+                <span>思考 {agent.telemetry.thinkMs}ms</span>
+                <span>首音 {agent.telemetry.firstAudioMs}ms</span>
+                <span>总计 {agent.telemetry.totalMs}ms</span>
               </div>
             </div>
           </section>

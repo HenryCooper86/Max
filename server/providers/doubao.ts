@@ -2,6 +2,14 @@ import { WebSocket, type RawData } from "ws";
 import { randomUUID } from "node:crypto";
 import type { AgentProvider, SessionStartEvent, VoiceGender } from "./types";
 import { fetchRiderWeather } from "../weather";
+import {
+  buildRideContextSummary,
+  describeRideMode,
+  rideModeFromScenario,
+  scenarioLabel,
+  type DemoScenario,
+  type RideContext
+} from "../../shared/ride";
 
 // The "Max" persona prompt. Overridable per deployment with DOUBAO_SYSTEM_ROLE;
 // keep it consistent with the DOUBAO_SYSTEM_ROLE default in .env.example.
@@ -225,6 +233,11 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
   let pendingAgentText = "";
   let receivedTtsAudio = false;
   let ttsFallbackTimer: NodeJS.Timeout | undefined;
+  let rideContext: RideContext = { mode: "ride", scenario: "commute" };
+  let audioStartedAt = 0;
+  let asrStartedAt = 0;
+  let chatStartedAt = 0;
+  let firstAudioAt = 0;
   const pendingAudio: Buffer[] = [];
 
   function sendClient(payload: unknown) {
@@ -261,6 +274,33 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
     }, 1800);
   }
 
+  function emitRideContext() {
+    const intelligence = describeRideMode(rideContext.mode);
+    sendClient({
+      type: "ride.context",
+      mode: rideContext.mode,
+      modeLabel: intelligence.modeLabel,
+      scenario: rideContext.scenario,
+      scenarioLabel: scenarioLabel(rideContext.scenario),
+      speedKmh: rideContext.speedKmh,
+      routePhase: rideContext.routePhase,
+      network: rideContext.network,
+      batteryPct: rideContext.batteryPct,
+      hazardLevel: intelligence.hazardLevel,
+      glanceableFocus: intelligence.glanceableFocus
+    });
+  }
+
+  function emitTelemetry(totalEnd = Date.now()) {
+    const asrMs = audioStartedAt && asrStartedAt ? asrStartedAt - audioStartedAt : 0;
+    const thinkMs = asrStartedAt && chatStartedAt ? chatStartedAt - asrStartedAt : 0;
+    const firstAudioMs = chatStartedAt && firstAudioAt ? firstAudioAt - chatStartedAt : 0;
+    const totalMs = audioStartedAt ? totalEnd - audioStartedAt : 0;
+    if (asrMs || thinkMs || firstAudioMs || totalMs) {
+      sendClient({ type: "telemetry", asrMs, thinkMs, firstAudioMs, totalMs });
+    }
+  }
+
   function connectUpstream(config: DoubaoSessionConfig) {
     const url = process.env.DOUBAO_AGENT_WS_URL ?? "wss://openspeech.bytedance.com/api/v3/realtime/dialogue";
     upstream = new WebSocket(url, { headers: buildDoubaoHeaders() });
@@ -283,6 +323,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
         if (frame.event === EventReceive.SessionStarted) {
           sessionReady = true;
           sendClient({ type: "session.started", provider: "doubao", mode: "live" });
+          emitRideContext();
           sendClient({ type: "status", state: "ready", detail: "豆包实时语音已连接" });
           while (pendingAudio.length) {
             upstream?.send(buildAudioRequest(sessionId, pendingAudio.shift()!));
@@ -291,6 +332,10 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
         }
 
         if (frame.event === EventReceive.TtsResponse) {
+          if (!firstAudioAt) {
+            firstAudioAt = Date.now();
+            if (chatStartedAt) sendClient({ type: "metric", latencyMs: firstAudioAt - chatStartedAt });
+          }
           receivedTtsAudio = true;
           clearTtsFallbackTimer();
           sendClient({ type: "status", state: "speaking", detail: "已收到豆包语音音频" });
@@ -300,6 +345,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
 
         const payload = parseJsonPayload(frame);
         if (frame.event === EventReceive.AsrInfo) {
+          if (!asrStartedAt) asrStartedAt = Date.now();
           sendClient({ type: "status", state: "hearing", detail: "豆包检测到骑手语音" });
           return;
         }
@@ -314,6 +360,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
         }
 
         if (frame.event === EventReceive.ChatResponse) {
+          if (!chatStartedAt) chatStartedAt = Date.now();
           const text = String(payload.content ?? "");
           if (text) {
             pendingAgentText += text;
@@ -345,6 +392,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
             sendClient({ type: "status", state: "ready", detail: "豆包回复已完成" });
           }
           receivedTtsAudio = false;
+          emitTelemetry();
           return;
         }
 
@@ -395,6 +443,16 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
       started = true;
 
       let systemRole = process.env.DOUBAO_SYSTEM_ROLE ?? DEFAULT_AGENT_SYSTEM_PROMPT;
+      const scenario: DemoScenario = event.scenario ?? "commute";
+      rideContext = {
+        mode: rideModeFromScenario(event.rideMode, scenario),
+        scenario,
+        network: "online"
+      };
+      systemRole +=
+        `\n\n[骑行上下文] ${buildRideContextSummary(rideContext)}。` +
+        "你必须根据模式调整回答长度和安全策略；紧急模式优先生命安全，导航模式只给下一步。";
+      emitRideContext();
 
       // Best-effort: fold live weather for the rider's location into the agent
       // context so weather questions are answered with real data. A failure
@@ -404,13 +462,15 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
           const weather = await fetchRiderWeather(event.lat, event.lon);
           systemRole +=
             `\n\n[实时骑行情报] 骑手当前位置${weather.summary}` +
-            "当骑手询问天气、风力或路况时，请基于这条真实数据简短回答。";
+            `${weather.riderAdvice}当骑手询问天气、风力或路况时，请基于这条真实数据简短回答。`;
           sendClient({
             type: "weather",
             description: weather.description,
             temperatureC: weather.temperatureC,
             windSpeedKmh: weather.windSpeedKmh,
-            isDay: weather.isDay
+            isDay: weather.isDay,
+            riskLevel: weather.riskLevel,
+            riderAdvice: weather.riderAdvice
           });
           sendClient({
             type: "status",
@@ -430,6 +490,11 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
       });
     },
     async startAudio() {
+      audioStartedAt = Date.now();
+      asrStartedAt = 0;
+      chatStartedAt = 0;
+      firstAudioAt = 0;
+      emitRideContext();
       sendClient({ type: "status", state: "listening", detail: "正在通过豆包实时语音收听" });
     },
     async sendAudio(chunk: Buffer) {

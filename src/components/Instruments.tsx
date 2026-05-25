@@ -14,14 +14,19 @@ export type Weather = {
   temperatureC: number;
   windSpeedKmh: number;
   isDay: boolean;
+  riskLevel: "normal" | "caution" | "critical";
+  riderAdvice: string;
 };
 
 /** Live weather instrument; the agent answers weather questions from this data. */
 export function WeatherReadout({ weather }: { weather: Weather | null }) {
   return (
-    <div className="instrument weather">
+    <div className={`instrument weather ${weather?.riskLevel ?? "normal"}`}>
       <div className="instrumentHead">
         <span>实时天气</span>
+        {weather ? (
+          <b>{weather.riskLevel === "critical" ? "高风险" : weather.riskLevel === "caution" ? "注意" : "正常"}</b>
+        ) : null}
       </div>
       {weather ? (
         <>
@@ -30,6 +35,7 @@ export function WeatherReadout({ weather }: { weather: Weather | null }) {
             <span>{weather.description}</span>
           </div>
           <p className="weatherWind">风速 {weather.windSpeedKmh} km/h</p>
+          <p className="weatherAdvice">{weather.riderAdvice}</p>
         </>
       ) : (
         <p className="weatherEmpty">激活后接入定位天气</p>

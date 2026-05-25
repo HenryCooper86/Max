@@ -55,6 +55,8 @@ export type RiderWeather = {
   temperatureC: number;
   windSpeedKmh: number;
   isDay: boolean;
+  riskLevel: "normal" | "caution" | "critical";
+  riderAdvice: string;
   /** Natural-language summary for the agent system prompt. */
   summary: string;
 };
@@ -83,12 +85,37 @@ export async function fetchRiderWeather(lat: number, lon: number): Promise<Rider
   const temperatureC = Math.round(Number(current.temperature_2m ?? 0));
   const windSpeedKmh = Math.round(Number(current.wind_speed_10m ?? 0));
   const description = describeWeatherCode(Number(current.weather_code ?? 0));
+  const { riskLevel, riderAdvice } = assessWeatherRisk(description, windSpeedKmh);
 
   return {
     description,
     temperatureC,
     windSpeedKmh,
     isDay: current.is_day !== 0,
+    riskLevel,
+    riderAdvice,
     summary: buildWeatherSummary(description, temperatureC, windSpeedKmh)
+  };
+}
+
+export function assessWeatherRisk(description: string, windSpeedKmh: number) {
+  const severeWeather = /雷|冰雹|大雨|强|冻雨|大雪/.test(description);
+  if (severeWeather || windSpeedKmh >= 45) {
+    return {
+      riskLevel: "critical" as const,
+      riderAdvice: "建议降低速度，尽快寻找安全地点停车等待。"
+    };
+  }
+
+  if (/雨|雪|雾/.test(description) || windSpeedKmh >= 25) {
+    return {
+      riskLevel: "caution" as const,
+      riderAdvice: "保持更大车距，注意横风和低附着路面。"
+    };
+  }
+
+  return {
+    riskLevel: "normal" as const,
+    riderAdvice: "天气风险较低，保持正常安全骑行。"
   };
 }

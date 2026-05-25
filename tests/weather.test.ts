@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildWeatherSummary, describeWeatherCode } from "../server/weather";
+import { assessWeatherRisk, buildWeatherSummary, describeWeatherCode } from "../server/weather";
 
 describe("describeWeatherCode", () => {
   it("maps clear sky", () => {
@@ -16,6 +16,22 @@ describe("describeWeatherCode", () => {
 
   it("falls back for unknown codes", () => {
     expect(describeWeatherCode(424242)).toBe("未知天气");
+  });
+});
+
+describe("assessWeatherRisk", () => {
+  it("marks calm clear weather as normal", () => {
+    expect(assessWeatherRisk("晴", 8).riskLevel).toBe("normal");
+  });
+
+  it("marks rain or strong wind as caution", () => {
+    expect(assessWeatherRisk("小雨", 10).riskLevel).toBe("caution");
+    expect(assessWeatherRisk("晴", 28).riskLevel).toBe("caution");
+  });
+
+  it("marks severe weather as critical", () => {
+    expect(assessWeatherRisk("雷阵雨", 12).riskLevel).toBe("critical");
+    expect(assessWeatherRisk("晴", 48).riskLevel).toBe("critical");
   });
 });
 

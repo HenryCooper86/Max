@@ -771,6 +771,80 @@ h2 {
   font-size: 0.85rem;
 }
 
+/* Activation checks */
+.preflight {
+  border-left: 3px solid var(--accent-cyan);
+}
+
+.preflightGrid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.preflightGrid span {
+  min-width: 0;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #d8e0dd;
+  font-size: 0.76rem;
+  overflow-wrap: anywhere;
+}
+
+.preflightGrid b {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* Provider and packet diagnostics */
+.diagnostics {
+  border-left: 3px solid var(--muted);
+}
+
+.diagnostics.ready,
+.diagnostics.relay,
+.diagnostics.provider {
+  border-left-color: var(--accent);
+}
+
+.diagnostics.connecting {
+  border-left-color: var(--warn);
+}
+
+.diagnostics.degraded,
+.diagnostics.offline {
+  border-left-color: var(--danger);
+}
+
+.diagnosticGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.diagnosticGrid span,
+.diagnosticGrid strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.diagnosticGrid span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.diagnosticGrid strong {
+  color: #f5fbfa;
+  font-size: 0.82rem;
+}
+
 /* Latency readout */
 .latencyValue strong {
   font-size: 1.5rem;
@@ -830,6 +904,37 @@ h2 {
   color: var(--accent);
   letter-spacing: 0.1em;
   font-size: 0.8rem;
+}
+
+.rideHistory {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(160px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.rideHistory div {
+  min-height: 76px;
+  padding: 12px;
+  border: 1px solid rgba(196, 218, 216, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.rideHistory span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.rideHistory strong {
+  display: block;
+  margin-top: 7px;
+  color: #f5fbfa;
+  font-size: 0.88rem;
+  font-weight: 650;
 }
 
 .transcriptList {
@@ -980,12 +1085,21 @@ h2 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .preflightGrid,
+  .rideHistory {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .rideIntelGrid {
     grid-template-columns: auto auto;
   }
 
   .rideIntelGrid p {
     grid-column: 1 / -1;
+  }
+
+  .diagnosticGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractAsrText, parseDoubaoFrame } from "../server/providers/doubao";
+import { EventSend, buildAudioRequest, buildFullClientRequest, extractAsrText, parseDoubaoFrame } from "../server/providers/doubao";
 
 function uint32(value: number): Buffer {
   const buffer = Buffer.alloc(4);
@@ -23,6 +23,25 @@ function buildServerFrame(
 }
 
 describe("parseDoubaoFrame", () => {
+  it("builds a full client-request header and event", () => {
+    const frame = buildFullClientRequest(EventSend.StartConnection);
+
+    expect(frame[0]).toBe(0x11);
+    expect(frame[1] >> 4).toBe(0b0001);
+    expect(frame[2] >> 4).toBe(0b0001);
+    expect(frame.readUInt32BE(4)).toBe(EventSend.StartConnection);
+  });
+
+  it("builds an audio-only request with raw PCM payload", () => {
+    const audio = Buffer.from([9, 8, 7]);
+    const frame = buildAudioRequest("abc", audio);
+
+    expect(frame[1] >> 4).toBe(0b0010);
+    expect(frame[2] >> 4).toBe(0b0000);
+    expect(frame.readUInt32BE(4)).toBe(EventSend.TaskRequest);
+    expect(frame.subarray(frame.length - audio.length).equals(audio)).toBe(true);
+  });
+
   it("parses a JSON server-response frame", () => {
     const frame = buildServerFrame(550, "session-abc", Buffer.from(JSON.stringify({ content: "你好" })));
     const parsed = parseDoubaoFrame(frame);
@@ -46,6 +65,11 @@ describe("parseDoubaoFrame", () => {
   it("rejects unsupported message types", () => {
     const frame = buildServerFrame(100, "s", Buffer.from("{}"), { messageType: 0b0001 });
     expect(() => parseDoubaoFrame(frame)).toThrow();
+  });
+
+  it("rejects frames with a truncated payload", () => {
+    const frame = buildServerFrame(550, "s", Buffer.from(JSON.stringify({ content: "hi" })));
+    expect(() => parseDoubaoFrame(frame.subarray(0, frame.length - 2))).toThrow("payload is incomplete");
   });
 });
 

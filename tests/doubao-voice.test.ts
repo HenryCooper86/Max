@@ -13,7 +13,7 @@ describe("doubaoSpeaker", () => {
 
   it("returns the default male speaker", () => {
     vi.stubEnv("DOUBAO_VOICE_MALE", "");
-    expect(doubaoSpeaker("male")).toBe("zh_male_yunzhou_jupiter_bigtts");
+    expect(doubaoSpeaker("male")).toBe("zh_male_vv_jupiter_bigtts");
   });
 
   it("honours the DOUBAO_VOICE override for female", () => {

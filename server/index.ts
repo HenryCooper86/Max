@@ -4,17 +4,18 @@ import path from "node:path";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
-import { config, describeConfig, validateConfig } from "./config";
+import { buildHealth, config, describeConfig, validateConfig } from "./config";
 import { createDoubaoProvider } from "./providers/doubao";
 import { createMockProvider } from "./providers/mock";
-import type { AgentProvider, ClientEvent } from "./providers/types";
+import type { AgentProvider } from "./providers/types";
+import { AgentSessionController } from "./session-controller";
 
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/agent" });
 
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, provider: config.voiceProvider });
+  res.json(buildHealth(Math.round(process.uptime())));
 });
 
 // Serve the built client when a production bundle exists. In development the
@@ -35,27 +36,14 @@ function selectProvider(client: WebSocket): AgentProvider {
 }
 
 wss.on("connection", (client) => {
-  const provider = selectProvider(client);
+  const session = new AgentSessionController(client, selectProvider);
 
   client.on("message", async (data, isBinary) => {
-    try {
-      if (isBinary) {
-        await provider.sendAudio(data as Buffer);
-        return;
-      }
-
-      const event = JSON.parse(data.toString()) as ClientEvent;
-      if (event.type === "session.start") await provider.start(event);
-      if (event.type === "audio.start") await provider.startAudio();
-      if (event.type === "audio.stop") await provider.stopAudio();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Voice relay failed";
-      client.send(JSON.stringify({ type: "error", message }));
-    }
+    await session.handleMessage(data, isBinary);
   });
 
   client.on("close", async () => {
-    await provider.close();
+    await session.close();
   });
 });
 

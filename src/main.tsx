@@ -1,48 +1,26 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createRoot } from "react-dom/client";
+import { createRoot, type Root } from "react-dom/client";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { HelmetVisual, type TurnState } from "./components/HelmetVisual";
 import { SignalBars, WeatherReadout, type Weather } from "./components/Instruments";
+import type {
+  AgentEvent,
+  AgentHealth,
+  ConnectionState,
+  HazardLevel,
+  ProviderCapabilities,
+  VoicePersonality
+} from "../shared/agent";
+import { createPacketWindow, recordDroppedFrame, recordSentFrame, type PacketWindow } from "../shared/audio";
 import { type SupportedLanguage, detectLanguage } from "../shared/language";
 import {
   combineHazardLevels,
   scenarioDefaultMode,
   scenarioLabel,
   type DemoScenario,
-  type RideMode,
-  type RideIntelligence
+  type RideMode
 } from "../shared/ride";
 import "./styles.css";
-
-type AgentEvent =
-  | { type: "session.started"; provider: string; mode: string }
-  | { type: "status"; state: string; detail: string }
-  | { type: "transcript"; speaker: "rider" | "agent"; text: string; final?: boolean }
-  | { type: "metric"; latencyMs: number }
-  | {
-      type: "weather";
-      description: string;
-      temperatureC: number;
-      windSpeedKmh: number;
-      isDay: boolean;
-      riskLevel?: HazardLevel;
-      riderAdvice?: string;
-    }
-  | {
-      type: "ride.context";
-      mode: RideMode;
-      modeLabel: string;
-      scenario: DemoScenario;
-      scenarioLabel: string;
-      speedKmh?: number;
-      routePhase?: string;
-      network?: "online" | "degraded" | "offline";
-      batteryPct?: number;
-      hazardLevel: HazardLevel;
-      glanceableFocus: string;
-    }
-  | { type: "telemetry"; asrMs: number; thinkMs: number; firstAudioMs: number; totalMs: number }
-  | { type: "error"; message: string };
 
 type TranscriptItem = {
   id: number;
@@ -54,7 +32,6 @@ type TranscriptItem = {
 type WorkletMessage = { type: "frame"; pcm: ArrayBuffer } | { type: "level"; value: number };
 
 type RiderLocation = { lat: number; lon: number };
-type HazardLevel = RideIntelligence["hazardLevel"];
 
 type RideHudContext = {
   mode: RideMode;
@@ -76,6 +53,21 @@ type Telemetry = {
   totalMs: number;
 };
 
+type SessionMemoryState = {
+  language: "zh" | "en";
+  destination?: string;
+  lastIntent?: string;
+  responseMode: "concise" | "normal" | "emergency";
+};
+
+type PacketStats = {
+  outgoingFrames: number;
+  outgoingFps: number;
+  droppedFrames: number;
+};
+
+type PermissionStateLabel = "granted" | "prompt" | "denied" | "unknown";
+
 const SAMPLE_RATE = 16000;
 const PLAYBACK_SAMPLE_RATE = 24000;
 const MAX_RECONNECT_ATTEMPTS = 6;
@@ -90,6 +82,28 @@ const DEFAULT_RIDE_CONTEXT: RideHudContext = {
   batteryPct: 0,
   hazardLevel: "normal",
   glanceableFocus: "下一步提示"
+};
+
+const DEFAULT_CAPABILITIES: ProviderCapabilities = {
+  serverVad: false,
+  synthesizedAudio: false,
+  transcriptEvents: false,
+  bargeIn: false,
+  voiceSelection: false,
+  weatherContext: false,
+  sessionMemory: false,
+  emergencyMode: false
+};
+
+const DEFAULT_MEMORY: SessionMemoryState = {
+  language: "zh",
+  responseMode: "concise"
+};
+
+const DEFAULT_PACKET_STATS: PacketStats = {
+  outgoingFrames: 0,
+  outgoingFps: 0,
+  droppedFrames: 0
 };
 
 const RIDE_MODE_LABELS: Record<RideMode, string> = {
@@ -107,6 +121,74 @@ const SCENARIO_HAZARDS: Record<DemoScenario, HazardLevel> = {
   fuel: "normal",
   group: "normal",
   emergency: "critical"
+};
+
+const CONNECTION_LABELS: Record<ConnectionState, string> = {
+  offline: "离线",
+  connecting: "连接中",
+  relay: "中继在线",
+  provider: "代理握手",
+  ready: "已就绪",
+  degraded: "降级"
+};
+
+const RESPONSE_MODE_LABELS: Record<SessionMemoryState["responseMode"], string> = {
+  concise: "极简",
+  normal: "正常",
+  emergency: "紧急"
+};
+
+const CREDENTIAL_LABELS: Record<NonNullable<AgentHealth["credentials"]>, string> = {
+  configured: "ok",
+  missing: "missing",
+  "not-required": "mock"
+};
+
+const VOICE_PERSONALITIES: VoicePersonality[] = ["concise", "friendly", "technical", "rally"];
+const PERSONALITY_LABELS: Record<VoicePersonality, string> = {
+  concise: "极简",
+  friendly: "友好",
+  technical: "技术",
+  rally: "领航"
+};
+
+const UI_TEXT = {
+  zh: {
+    assistant: "助手",
+    conversation: "对话",
+    rideHistory: "骑行记录",
+    onboarding: "启动检查",
+    mic: "麦克风",
+    location: "定位",
+    server: "服务",
+    provider: "代理",
+    voice: "声音",
+    ready: "就绪",
+    idle: "空闲",
+    live: "实时",
+    lastCommand: "上一指令",
+    lastReply: "上一回复",
+    connection: "连接",
+    weather: "天气"
+  },
+  en: {
+    assistant: "Assistant",
+    conversation: "Conversation",
+    rideHistory: "Ride Log",
+    onboarding: "Preflight",
+    mic: "Mic",
+    location: "Location",
+    server: "Server",
+    provider: "Provider",
+    voice: "Voice",
+    ready: "Ready",
+    idle: "Idle",
+    live: "Live",
+    lastCommand: "Last command",
+    lastReply: "Last reply",
+    connection: "Connection",
+    weather: "Weather"
+  }
 };
 
 // BCP-47 locales per supported language, used for the browser-TTS fallback.
@@ -153,6 +235,16 @@ function createAgentSocket() {
   return new WebSocket(`${protocol}://${window.location.host}/agent`);
 }
 
+async function fetchAgentHealth(): Promise<AgentHealth | null> {
+  try {
+    const response = await fetch("/health");
+    if (!response.ok) return null;
+    return (await response.json()) as AgentHealth;
+  } catch {
+    return null;
+  }
+}
+
 // Best-effort rider geolocation for live weather. Resolves null when the rider
 // declines, the API is missing, or the lookup times out — weather is optional.
 function getRiderLocation(): Promise<RiderLocation | null> {
@@ -192,14 +284,22 @@ function useHelmetAgent() {
   const [listening, setListening] = useState(false);
   const [status, setStatus] = useState("离线");
   const [provider, setProvider] = useState("mock");
+  const [connectionState, setConnectionState] = useState<ConnectionState>("offline");
+  const [health, setHealth] = useState<AgentHealth | null>(null);
+  const [capabilities, setCapabilities] = useState<ProviderCapabilities>(DEFAULT_CAPABILITIES);
   const [latencyMs, setLatencyMs] = useState(0);
+  const [packetStats, setPacketStats] = useState<PacketStats>(DEFAULT_PACKET_STATS);
   const [voiceLevel, setVoiceLevel] = useState(0);
   const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
   const [voiceGender, setVoiceGenderState] = useState<VoiceGender>("female");
+  const [voicePersonality, setVoicePersonalityState] = useState<VoicePersonality>("concise");
   const [turnState, setTurnState] = useState<TurnState>("idle");
   const [weather, setWeather] = useState<Weather | null>(null);
   const [rideContext, setRideContext] = useState<RideHudContext>(DEFAULT_RIDE_CONTEXT);
   const [telemetry, setTelemetry] = useState<Telemetry>({ asrMs: 0, thinkMs: 0, firstAudioMs: 0, totalMs: 0 });
+  const [sessionMemory, setSessionMemory] = useState<SessionMemoryState>(DEFAULT_MEMORY);
+  const [micPermission, setMicPermission] = useState<PermissionStateLabel>("unknown");
+  const [locationPermission, setLocationPermission] = useState<PermissionStateLabel>("unknown");
 
   const socketRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -215,12 +315,43 @@ function useHelmetAgent() {
   const connectRef = useRef<() => void>(() => {});
   const isLiveRef = useRef(false);
   const voiceGenderRef = useRef<VoiceGender>("female");
+  const voicePersonalityRef = useRef<VoicePersonality>("concise");
   const locationRef = useRef<RiderLocation | null>(null);
   const rideModeRef = useRef<RideMode>(DEFAULT_RIDE_CONTEXT.mode);
   const scenarioRef = useRef<DemoScenario>(DEFAULT_RIDE_CONTEXT.scenario);
+  const frameWindowRef = useRef<PacketWindow>(createPacketWindow());
 
   const pushTranscript = useCallback((speaker: "rider" | "agent", text: string) => {
     setTranscript((items) => [...items.slice(-7), { id: Date.now() + Math.random(), speaker, text }]);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchAgentHealth().then((nextHealth) => {
+      if (cancelled || !nextHealth) return;
+      setHealth(nextHealth);
+      setProvider(nextHealth.provider);
+      setCapabilities(nextHealth.capabilities);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!navigator.permissions?.query) return;
+    const trackPermission = async (name: PermissionName, setter: (state: PermissionStateLabel) => void) => {
+      try {
+        const status = await navigator.permissions.query({ name });
+        const update = () => setter(status.state);
+        update();
+        status.addEventListener("change", update);
+      } catch {
+        setter("unknown");
+      }
+    };
+    void trackPermission("microphone" as PermissionName, setMicPermission);
+    void trackPermission("geolocation", setLocationPermission);
   }, []);
 
   // Barge-in: silence whatever the agent is currently saying so the rider can
@@ -238,6 +369,10 @@ function useHelmetAgent() {
     playbackSourcesRef.current = [];
     if (playbackContextRef.current) {
       playbackCursorRef.current = playbackContextRef.current.currentTime;
+    }
+    if (transmittingRef.current) {
+      setTurnState("listening");
+      setStatus("已打断 Max，继续听你说");
     }
   }, []);
 
@@ -301,6 +436,7 @@ function useHelmetAgent() {
       return;
     }
     intentionalCloseRef.current = false;
+    setConnectionState("connecting");
     setStatus(reconnectAttemptsRef.current > 0 ? `重新连接中…（第 ${reconnectAttemptsRef.current} 次）` : "连接中");
 
     const socket = createAgentSocket();
@@ -310,6 +446,7 @@ function useHelmetAgent() {
     socket.addEventListener("open", () => {
       reconnectAttemptsRef.current = 0;
       setConnected(true);
+      setConnectionState("relay");
       setStatus("就绪");
       const location = locationRef.current;
       socket.send(
@@ -318,6 +455,7 @@ function useHelmetAgent() {
           sampleRate: SAMPLE_RATE,
           channels: 1,
           voiceGender: voiceGenderRef.current,
+          voicePersonality: voicePersonalityRef.current,
           rideMode: rideModeRef.current,
           scenario: scenarioRef.current,
           ...(location ? { lat: location.lat, lon: location.lon } : {})
@@ -337,11 +475,20 @@ function useHelmetAgent() {
         const event = JSON.parse(String(message.data)) as AgentEvent;
         if (event.type === "session.started") {
           setProvider(event.provider);
+          setCapabilities(event.capabilities);
           isLiveRef.current = event.mode !== "mock";
+          setConnectionState("ready");
           setStatus(event.mode === "mock" ? "模拟路线已启用" : "豆包实时语音在线");
+        }
+        if (event.type === "connection") {
+          setConnectionState(event.state);
+          setStatus(event.detail);
         }
         if (event.type === "status") {
           setStatus(event.detail);
+          if (event.state === "connecting") setConnectionState("provider");
+          if (event.state === "ready") setConnectionState("ready");
+          if (event.state === "closed") setConnectionState("offline");
           if (transmittingRef.current) setTurnState((prev) => mapTurnState(event.state, prev));
         }
         if (event.type === "transcript") {
@@ -349,7 +496,14 @@ function useHelmetAgent() {
           pushTranscript(event.speaker, event.text);
           if (event.speaker === "agent" && event.final !== false) speak(event.text);
         }
-        if (event.type === "metric") setLatencyMs(event.latencyMs);
+        if (event.type === "metric") {
+          setLatencyMs(event.latencyMs);
+          setPacketStats((stats) => ({
+            ...stats,
+            outgoingFps: event.outgoingFps ?? stats.outgoingFps,
+            droppedFrames: event.droppedFrames ?? stats.droppedFrames
+          }));
+        }
         if (event.type === "weather") {
           setWeather({
             description: event.description,
@@ -378,6 +532,14 @@ function useHelmetAgent() {
             glanceableFocus: event.glanceableFocus
           });
         }
+        if (event.type === "session.memory") {
+          setSessionMemory({
+            language: event.language,
+            destination: event.destination,
+            lastIntent: event.lastIntent,
+            responseMode: event.responseMode
+          });
+        }
         if (event.type === "telemetry") {
           setTelemetry({
             asrMs: Math.max(0, event.asrMs),
@@ -395,8 +557,9 @@ function useHelmetAgent() {
     socket.addEventListener("close", () => {
       // Ignore a socket already superseded by a newer one (e.g. a restart).
       if (socketRef.current !== socket) return;
-      setConnected(false);
-      socketRef.current = null;
+        setConnected(false);
+        setConnectionState("offline");
+        socketRef.current = null;
       isLiveRef.current = false;
       if (intentionalCloseRef.current) {
         setStatus("离线");
@@ -407,6 +570,7 @@ function useHelmetAgent() {
       reconnectAttemptsRef.current += 1;
       if (reconnectAttemptsRef.current > MAX_RECONNECT_ATTEMPTS) {
         reconnectAttemptsRef.current = 0;
+        setConnectionState("degraded");
         setStatus("语音中继连接失败，请重新开启免提");
         return;
       }
@@ -416,6 +580,7 @@ function useHelmetAgent() {
     });
 
     socket.addEventListener("error", () => {
+      setConnectionState("degraded");
       setStatus("连接错误");
     });
   }, [playPcm16, pushTranscript, speak, stopAgentSpeech]);
@@ -438,14 +603,25 @@ function useHelmetAgent() {
     (gender: VoiceGender) => {
       voiceGenderRef.current = gender;
       setVoiceGenderState(gender);
-      if (isLiveRef.current) {
+      const isDoubaoProvider = provider === "doubao" || health?.provider === "doubao";
+      if (isLiveRef.current || isDoubaoProvider || socketRef.current) {
         setStatus(gender === "male" ? "正在切换到男声…" : "正在切换到女声…");
-        restartSession();
+        if (socketRef.current) restartSession();
       } else {
-        speak(gender === "male" ? "已切换到男声。" : "已切换到女声。");
+        setStatus(gender === "male" ? "已切换到男声" : "已切换到女声");
       }
     },
-    [restartSession, speak]
+    [health?.provider, provider, restartSession]
+  );
+
+  const setVoicePersonality = useCallback(
+    (personality: VoicePersonality) => {
+      voicePersonalityRef.current = personality;
+      setVoicePersonalityState(personality);
+      setStatus(`已切换语气：${PERSONALITY_LABELS[personality]}`);
+      if (socketRef.current) restartSession();
+    },
+    [restartSession]
   );
 
   const setRideMode = useCallback(
@@ -549,7 +725,17 @@ function useHelmetAgent() {
       if (message.type === "frame") {
         if (!transmittingRef.current) return;
         const socket = socketRef.current;
-        if (socket?.readyState === WebSocket.OPEN) socket.send(message.pcm);
+        if (socket?.readyState === WebSocket.OPEN) {
+          socket.send(message.pcm);
+          const now = performance.now();
+          const result = recordSentFrame(frameWindowRef.current, now);
+          frameWindowRef.current = result.window;
+          if (result.metric) setPacketStats(result.metric);
+        } else {
+          const result = recordDroppedFrame(frameWindowRef.current);
+          frameWindowRef.current = result.window;
+          setPacketStats((stats) => ({ ...stats, droppedFrames: result.metric.droppedFrames }));
+        }
       } else if (message.type === "level") {
         setVoiceLevel(transmittingRef.current ? message.value : 0);
       }
@@ -583,12 +769,18 @@ function useHelmetAgent() {
   // relay, and stream the mic continuously — Doubao's VAD handles turn-taking.
   const startMic = useCallback(async () => {
     try {
-      if (!locationRef.current) locationRef.current = await getRiderLocation();
+      if (!locationRef.current) {
+        locationRef.current = await getRiderLocation();
+        setLocationPermission(locationRef.current ? "granted" : "unknown");
+      }
       const socket = await waitForSocket();
       await ensureMic();
       stopAgentSpeech();
       streamRef.current?.getAudioTracks().forEach((track) => (track.enabled = true));
       transmittingRef.current = true;
+      setMicPermission("granted");
+      frameWindowRef.current = createPacketWindow();
+      setPacketStats(DEFAULT_PACKET_STATS);
       setListening(true);
       setTurnState("listening");
       setStatus("免提已开启，请讲话");
@@ -607,6 +799,7 @@ function useHelmetAgent() {
     transmittingRef.current = false;
     streamRef.current?.getAudioTracks().forEach((track) => (track.enabled = false));
     setVoiceLevel(0);
+    frameWindowRef.current = createPacketWindow();
     setListening(false);
     setTurnState("idle");
     const socket = socketRef.current;
@@ -633,6 +826,7 @@ function useHelmetAgent() {
     socketRef.current?.close();
     socketRef.current = null;
     setConnected(false);
+    setConnectionState("offline");
     setTurnState("idle");
     setStatus("离线");
   }, [releaseMic, stopAgentSpeech, stopMic]);
@@ -644,15 +838,24 @@ function useHelmetAgent() {
     listening,
     status,
     provider,
+    connectionState,
+    health,
+    capabilities,
     latencyMs,
+    packetStats,
     voiceLevel,
     transcript,
     voiceGender,
+    voicePersonality,
     turnState,
     weather,
     rideContext,
     telemetry,
+    sessionMemory,
+    micPermission,
+    locationPermission,
     setVoiceGender,
+    setVoicePersonality,
     setRideMode,
     setScenario,
     startMic,
@@ -662,14 +865,24 @@ function useHelmetAgent() {
 
 function App() {
   const agent = useHelmetAgent();
+  const t = UI_TEXT[agent.sessionMemory.language];
 
   const agentState = useMemo(() => {
-    if (agent.listening) return "免提中";
-    if (agent.connected) return "待命";
-    return "离线";
-  }, [agent.connected, agent.listening]);
+    if (agent.listening) return agent.sessionMemory.language === "en" ? "Hands-free" : "免提中";
+    if (agent.connected) return agent.sessionMemory.language === "en" ? "Standby" : "待命";
+    return agent.sessionMemory.language === "en" ? "Offline" : "离线";
+  }, [agent.connected, agent.listening, agent.sessionMemory.language]);
 
   const latencyTone = agent.latencyMs < 140 ? "good" : agent.latencyMs < 280 ? "warn" : "alert";
+  const lastCommand = [...agent.transcript].reverse().find((item) => item.speaker === "rider")?.text ?? "—";
+  const lastReply = [...agent.transcript].reverse().find((item) => item.speaker === "agent")?.text ?? "—";
+  const preflight = [
+    { label: t.mic, value: agent.micPermission },
+    { label: t.location, value: agent.locationPermission },
+    { label: t.server, value: agent.health?.ok ? t.ready : "…" },
+    { label: t.provider, value: agent.provider.toUpperCase() },
+    { label: t.voice, value: `${agent.voiceGender === "female" ? "女声" : "男声"} · ${PERSONALITY_LABELS[agent.voicePersonality]}` }
+  ];
 
   return (
     <main className="shell">
@@ -701,6 +914,18 @@ function App() {
               >
                 男声
               </button>
+            </div>
+            <div className="voiceToggle" role="group" aria-label="语气风格">
+              {VOICE_PERSONALITIES.map((personality) => (
+                <button
+                  key={personality}
+                  type="button"
+                  className={agent.voicePersonality === personality ? "active" : ""}
+                  onClick={() => agent.setVoicePersonality(personality)}
+                >
+                  {PERSONALITY_LABELS[personality]}
+                </button>
+              ))}
             </div>
             <div className="modeToggle" role="group" aria-label="骑行模式">
               {RIDE_MODES.map((mode) => (
@@ -760,12 +985,26 @@ function App() {
           <section className="hudPanel statusPanel">
             <div className="stateBlock">
               <div className="stateMain">
-                <p>助手</p>
+                <p>{t.assistant}</p>
                 <strong>{agentState}</strong>
               </div>
               <SignalBars active={agent.connected} />
             </div>
             <p className="stateDetail">{agent.status}</p>
+            <div className="instrument preflight">
+              <div className="instrumentHead">
+                <span>{t.onboarding}</span>
+                <b>{agent.health?.ok ? t.ready : "check"}</b>
+              </div>
+              <div className="preflightGrid">
+                {preflight.map((item) => (
+                  <span key={item.label}>
+                    <b>{item.label}</b>
+                    {item.value}
+                  </span>
+                ))}
+              </div>
+            </div>
             <div className={`instrument rideIntel ${agent.rideContext.hazardLevel}`}>
               <div className="instrumentHead">
                 <span>骑行情报</span>
@@ -783,6 +1022,28 @@ function App() {
               </div>
             </div>
             <WeatherReadout weather={agent.weather} />
+            <div className={`instrument diagnostics ${agent.connectionState}`}>
+              <div className="instrumentHead">
+                <span>系统诊断</span>
+                <b>{CONNECTION_LABELS[agent.connectionState]}</b>
+              </div>
+              <div className="diagnosticGrid">
+                <span>凭证</span>
+                <strong>{agent.health ? CREDENTIAL_LABELS[agent.health.credentials] : "unknown"}</strong>
+                <span>VAD</span>
+                <strong>{agent.capabilities.serverVad ? "server" : "off"}</strong>
+                <span>音频</span>
+                <strong>{agent.capabilities.synthesizedAudio ? "PCM" : "TTS"}</strong>
+                <span>记忆</span>
+                <strong>{agent.capabilities.sessionMemory ? "on" : "off"}</strong>
+              </div>
+              <div className="rideChips">
+                <span>{agent.sessionMemory.language === "zh" ? "中文" : "English"}</span>
+                <span>{RESPONSE_MODE_LABELS[agent.sessionMemory.responseMode]}</span>
+                <span>{agent.sessionMemory.lastIntent ?? "待识别"}</span>
+                {agent.sessionMemory.destination ? <span>{agent.sessionMemory.destination}</span> : null}
+              </div>
+            </div>
             <div className={`instrument latency ${latencyTone}`}>
               <div className="instrumentHead">
                 <span>延迟</span>
@@ -799,14 +1060,34 @@ function App() {
                 <span>思考 {agent.telemetry.thinkMs}ms</span>
                 <span>首音 {agent.telemetry.firstAudioMs}ms</span>
                 <span>总计 {agent.telemetry.totalMs}ms</span>
+                <span>上行 {agent.packetStats.outgoingFps}fps</span>
+                <span>丢帧 {agent.packetStats.droppedFrames}</span>
               </div>
             </div>
           </section>
 
           <section className="hudPanel transcriptPanel">
             <div className="panelHeader">
-              <h2>对话</h2>
-              <span>{agent.transcript.length ? "实时" : "空闲"}</span>
+              <h2>{t.conversation}</h2>
+              <span>{agent.transcript.length ? t.live : t.idle}</span>
+            </div>
+            <div className="rideHistory">
+              <div>
+                <span>{t.lastCommand}</span>
+                <strong>{lastCommand}</strong>
+              </div>
+              <div>
+                <span>{t.lastReply}</span>
+                <strong>{lastReply}</strong>
+              </div>
+              <div>
+                <span>{t.weather}</span>
+                <strong>{agent.weather ? `${agent.weather.description} ${agent.weather.temperatureC}°C` : "—"}</strong>
+              </div>
+              <div>
+                <span>{t.connection}</span>
+                <strong>{CONNECTION_LABELS[agent.connectionState]}</strong>
+              </div>
             </div>
             <div className="transcriptList">
               {(agent.transcript.length
@@ -832,7 +1113,17 @@ function App() {
   );
 }
 
-createRoot(document.getElementById("root")!).render(
+declare global {
+  interface Window {
+    __helmetMaxRoot?: Root;
+  }
+}
+
+const rootElement = document.getElementById("root")!;
+const root = window.__helmetMaxRoot ?? createRoot(rootElement);
+window.__helmetMaxRoot = root;
+
+root.render(
   <React.StrictMode>
     <ErrorBoundary>
       <App />

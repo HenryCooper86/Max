@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { providerCapabilities, type AgentHealth } from "../shared/agent";
 
 export type VoiceProvider = "mock" | "doubao";
 
@@ -8,9 +9,23 @@ export const config = {
   voiceProvider: (process.env.VOICE_PROVIDER === "doubao" ? "doubao" : "mock") as VoiceProvider
 };
 
+export function credentialStatus(): AgentHealth["credentials"] {
+  if (config.voiceProvider !== "doubao") return "not-required";
+
+  const hasApiKey = Boolean(process.env.DOUBAO_API_KEY?.trim());
+  const hasLegacy = Boolean(
+    process.env.DOUBAO_APP_ID?.trim() && process.env.DOUBAO_APP_KEY?.trim() && process.env.DOUBAO_ACCESS_KEY?.trim()
+  );
+  return hasApiKey || hasLegacy ? "configured" : "missing";
+}
+
 /** Human-readable summary printed on startup. */
 export function describeConfig(): string[] {
-  return [`Realtime voice provider: ${config.voiceProvider}`];
+  return [
+    `Realtime voice provider: ${config.voiceProvider}`,
+    `Provider credentials: ${credentialStatus()}`,
+    "Weather context: Open-Meteo best-effort"
+  ];
 }
 
 /**
@@ -22,11 +37,7 @@ export function validateConfig(): string[] {
   const warnings: string[] = [];
 
   if (config.voiceProvider === "doubao") {
-    const hasApiKey = Boolean(process.env.DOUBAO_API_KEY?.trim());
-    const hasLegacy = Boolean(
-      process.env.DOUBAO_APP_ID?.trim() && process.env.DOUBAO_APP_KEY?.trim() && process.env.DOUBAO_ACCESS_KEY?.trim()
-    );
-    if (!hasApiKey && !hasLegacy) {
+    if (credentialStatus() === "missing") {
       warnings.push(
         "VOICE_PROVIDER=doubao 但缺少 DOUBAO_API_KEY 或完整的 DOUBAO_APP_ID/APP_KEY/ACCESS_KEY：实时语音会话将无法建立。"
       );
@@ -34,4 +45,15 @@ export function validateConfig(): string[] {
   }
 
   return warnings;
+}
+
+export function buildHealth(uptimeSec: number): AgentHealth {
+  return {
+    ok: true,
+    provider: config.voiceProvider,
+    uptimeSec,
+    credentials: credentialStatus(),
+    weather: "available",
+    capabilities: providerCapabilities(config.voiceProvider)
+  };
 }

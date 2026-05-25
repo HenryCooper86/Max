@@ -1,6 +1,7 @@
 import { WebSocket, type RawData } from "ws";
 import { randomUUID } from "node:crypto";
 import type { AgentProvider, SessionStartEvent, VoiceGender } from "./types";
+import { DOUBAO_CAPABILITIES } from "../../shared/agent";
 import { fetchRiderWeather } from "../weather";
 import {
   buildRideContextSummary,
@@ -10,11 +11,20 @@ import {
   type DemoScenario,
   type RideContext
 } from "../../shared/ride";
+import {
+  buildIntentGuidancePrompt,
+  buildPersonalityPrompt,
+  buildSafetyPrompt,
+  buildSessionMemoryPrompt,
+  createSessionMemory,
+  updateSessionMemory,
+  type SessionMemory
+} from "../../shared/session";
 
 // The "Max" persona prompt. Overridable per deployment with DOUBAO_SYSTEM_ROLE;
 // keep it consistent with the DOUBAO_SYSTEM_ROLE default in .env.example.
 export const DEFAULT_AGENT_SYSTEM_PROMPT =
-  "你是 Max，一位友好、冷静、以安全为先的摩托车头盔 AI 助手。你的名字保持 Max，角色保持 Motorcycle Helmet AI assistant。默认使用中文回答；如果骑手明确使用英文，可以用英文回答。只允许中文和英文两种语言，不要使用其他语言。如果骑手使用其他语言或要求你使用其他语言，请用中文简短说明：我只支持中文和 English。帮助骑手处理摩托车相关问题、导航、天气、路况、附近停靠点和骑行安全事项。回答要简短、清晰、适合免手操作。骑行中遇到危险或分心请求时，给出更安全的替代方案。声音设定为中文女声。";
+  "你是 Max，一位友好、冷静、以安全为先的摩托车头盔 AI 助手。你的名字保持 Max，角色保持 Motorcycle Helmet AI assistant。默认使用中文回答；如果骑手明确使用英文，可以用英文回答。只允许中文和英文两种语言，不要使用其他语言。如果骑手使用其他语言或要求你使用其他语言，请用中文简短说明：我只支持中文和 English。帮助骑手处理摩托车相关问题、导航、天气、路况、附近停靠点和骑行安全事项。回答要简短、清晰、适合免手操作。骑行中遇到危险或分心请求时，给出更安全的替代方案。声音由当前会话音色决定。";
 
 type DoubaoSessionConfig = {
   sampleRate: number;
@@ -27,7 +37,7 @@ type DoubaoSessionConfig = {
 // Default realtime-dialogue speakers from the Doubao 音色列表 (jupiter family).
 // Override per deployment with DOUBAO_VOICE / DOUBAO_VOICE_MALE.
 const DEFAULT_FEMALE_SPEAKER = "zh_female_vv_jupiter_bigtts";
-const DEFAULT_MALE_SPEAKER = "zh_male_yunzhou_jupiter_bigtts";
+const DEFAULT_MALE_SPEAKER = "zh_male_vv_jupiter_bigtts";
 
 /** Resolves the Doubao realtime speaker ID for the requested gender. */
 export function doubaoSpeaker(voiceGender: VoiceGender): string {
@@ -50,7 +60,7 @@ const enum SerializationMethod {
   Json = 0b0001
 }
 
-const enum EventSend {
+export const enum EventSend {
   StartConnection = 1,
   FinishConnection = 2,
   StartSession = 100,
@@ -127,7 +137,7 @@ function buildHeader(messageType: MessageType, serialization: SerializationMetho
   return Buffer.from([0x11, (messageType << 4) | 0b0100, serialization << 4, 0x00]);
 }
 
-function buildFullClientRequest(event: EventSend, sessionId?: string, metadata: unknown = {}) {
+export function buildFullClientRequest(event: EventSend, sessionId?: string, metadata: unknown = {}) {
   const meta = Buffer.from(JSON.stringify(metadata));
   const parts = [buildHeader(MessageType.FullClientRequest, SerializationMethod.Json), uint32(event)];
 
@@ -140,7 +150,7 @@ function buildFullClientRequest(event: EventSend, sessionId?: string, metadata: 
   return Buffer.concat(parts);
 }
 
-function buildAudioRequest(sessionId: string, audio: Buffer) {
+export function buildAudioRequest(sessionId: string, audio: Buffer) {
   const session = Buffer.from(sessionId);
   return Buffer.concat([
     buildHeader(MessageType.AudioOnlyRequest, SerializationMethod.Raw),
@@ -197,14 +207,17 @@ export function parseDoubaoFrame(raw: RawData): ParsedDoubaoFrame {
   const sessionStart = 12;
   const sessionEnd = sessionStart + sessionLength;
   const payloadLengthStart = sessionEnd;
+  if (data.length < payloadLengthStart + 4) throw new Error("Doubao frame payload length is missing");
+  const payloadLength = data.readUInt32BE(payloadLengthStart);
   const payloadStart = payloadLengthStart + 4;
-  if (data.length < payloadStart) throw new Error("Doubao frame payload is incomplete");
+  const payloadEnd = payloadStart + payloadLength;
+  if (data.length < payloadEnd) throw new Error("Doubao frame payload is incomplete");
 
   return {
     event,
     sessionId: data.subarray(sessionStart, sessionEnd).toString(),
     serialization,
-    payload: data.subarray(payloadStart)
+    payload: data.subarray(payloadStart, payloadEnd)
   };
 }
 
@@ -234,6 +247,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
   let receivedTtsAudio = false;
   let ttsFallbackTimer: NodeJS.Timeout | undefined;
   let rideContext: RideContext = { mode: "ride", scenario: "commute" };
+  let memory: SessionMemory = createSessionMemory("ride");
   let audioStartedAt = 0;
   let asrStartedAt = 0;
   let chatStartedAt = 0;
@@ -256,6 +270,10 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
     if (!text) return;
     sendClient({ type: "transcript", speaker: "agent", text, final: useBrowserSpeech });
     pendingAgentText = "";
+  }
+
+  function emitMemory() {
+    sendClient({ type: "session.memory", ...memory });
   }
 
   function armTtsFallbackTimer() {
@@ -322,8 +340,9 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
 
         if (frame.event === EventReceive.SessionStarted) {
           sessionReady = true;
-          sendClient({ type: "session.started", provider: "doubao", mode: "live" });
+          sendClient({ type: "session.started", provider: "doubao", mode: "live", capabilities: DOUBAO_CAPABILITIES });
           emitRideContext();
+          emitMemory();
           sendClient({ type: "status", state: "ready", detail: "豆包实时语音已连接" });
           while (pendingAudio.length) {
             upstream?.send(buildAudioRequest(sessionId, pendingAudio.shift()!));
@@ -353,8 +372,10 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
         if (frame.event === EventReceive.AsrResponse) {
           const text = extractAsrText(payload);
           if (text) {
+            memory = updateSessionMemory(memory, text, rideContext.mode);
             sendClient({ type: "status", state: "asr", detail: `豆包听到：${text}` });
             sendClient({ type: "transcript", speaker: "rider", text, final: false });
+            emitMemory();
           }
           return;
         }
@@ -406,6 +427,11 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
           frame.event === EventReceive.SessionFailed ||
           frame.event === EventReceive.DialogCommonError
         ) {
+          sendClient({
+            type: "status",
+            state: "degraded",
+            detail: "豆包连接异常，已保留浏览器 TTS 备用通道"
+          });
           sendClient({ type: "error", message: String(payload.error ?? payload.message ?? "豆包语音会话失败") });
           return;
         }
@@ -422,6 +448,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
     upstream.on("close", () => {
       sessionReady = false;
       clearTtsFallbackTimer();
+      if (pendingAgentText) flushPendingAgentText(true);
       sendClient({ type: "status", state: "closed", detail: "豆包实时代理已断开" });
     });
 
@@ -433,6 +460,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
     });
 
     upstream.on("error", (error) => {
+      sendClient({ type: "status", state: "degraded", detail: "豆包音频不可用，浏览器 TTS 备用通道待命" });
       sendClient({ type: "error", message: error.message });
     });
   }
@@ -449,10 +477,18 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
         scenario,
         network: "online"
       };
+      memory = createSessionMemory(rideContext.mode);
       systemRole +=
         `\n\n[骑行上下文] ${buildRideContextSummary(rideContext)}。` +
-        "你必须根据模式调整回答长度和安全策略；紧急模式优先生命安全，导航模式只给下一步。";
+        `\n[声音设置] 当前会话使用${event.voiceGender === "male" ? "男声" : "女声"}音色。不要在文字中声称自己是其他性别音色。` +
+        `你必须根据模式调整回答长度和安全策略；紧急模式优先生命安全，导航模式只给下一步。\n${buildSafetyPrompt(
+          rideContext,
+          memory
+        )}\n${buildIntentGuidancePrompt(memory.lastIntent)}\n${buildPersonalityPrompt(
+          event.voicePersonality ?? "concise"
+        )}\n[短期记忆] ${buildSessionMemoryPrompt(memory)}。`;
       emitRideContext();
+      emitMemory();
 
       // Best-effort: fold live weather for the rider's location into the agent
       // context so weather questions are answered with real data. A failure

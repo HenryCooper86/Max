@@ -1,5 +1,6 @@
 import type { WebSocket } from "ws";
 import type { AgentProvider, SessionStartEvent } from "./types";
+import { MOCK_CAPABILITIES } from "../../shared/agent";
 import {
   buildRideContextSummary,
   combineHazardLevels,
@@ -9,6 +10,7 @@ import {
   type DemoScenario,
   type RideContext
 } from "../../shared/ride";
+import { createSessionMemory, updateSessionMemory, type SessionMemory } from "../../shared/session";
 
 type MockTurn = {
   rider: string;
@@ -148,6 +150,7 @@ export function createMockProvider(client: WebSocket): AgentProvider {
     batteryPct: SCENARIOS.commute.batteryPct
   };
   let audioStartedAt = 0;
+  let memory: SessionMemory = createSessionMemory("navigation");
 
   function send(payload: unknown) {
     if (client.readyState === client.OPEN) {
@@ -173,6 +176,10 @@ export function createMockProvider(client: WebSocket): AgentProvider {
     });
   }
 
+  function emitMemory() {
+    send({ type: "session.memory", ...memory });
+  }
+
   function emitWeather() {
     const weather = SCENARIOS[scenario].weather;
     send({ type: "weather", ...weather });
@@ -191,6 +198,8 @@ export function createMockProvider(client: WebSocket): AgentProvider {
 
     send({ type: "status", state: "hearing", detail: "正在聆听骑手讲话" });
     send({ type: "transcript", speaker: "rider", text: turn.rider, final: true });
+    memory = updateSessionMemory(memory, turn.rider, rideContext.mode);
+    emitMemory();
     send({ type: "status", state: "thinking", detail: "Max 正在思考" });
 
     setTimeout(() => {
@@ -220,8 +229,10 @@ export function createMockProvider(client: WebSocket): AgentProvider {
         network: profile.network,
         batteryPct: profile.batteryPct
       };
-      send({ type: "session.started", provider: "mock", mode: "mock" });
+      memory = createSessionMemory(rideContext.mode);
+      send({ type: "session.started", provider: "mock", mode: "mock", capabilities: MOCK_CAPABILITIES });
       emitRideContext();
+      emitMemory();
       send({
         type: "status",
         state: "ready",

@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Prototype AI voice agent for a motorcycle helmet ("Max"). A React HUD frontend talks to an
 Express/WebSocket backend that relays realtime voice to Volcengine's Doubao Speech service.
-The agent speaks Chinese by default, also handles English and Japanese, and refuses any
-other language. The UI is a single hands-free voice agent — one tap to activate, then the
-rider just talks (Doubao's server-side VAD handles turn-taking); no text chat.
+The agent speaks Chinese by default, also handles English, and refuses any other language.
+The UI is a single hands-free voice agent — one tap to activate, then the rider just talks
+(Doubao's server-side VAD handles turn-taking); no text chat.
 
 ## Commands
 
@@ -112,6 +112,6 @@ Copy `.env.example` to `.env` (gitignored). Key variables:
   `doubao.ts` is the in-code fallback.
 - `DOUBAO_VOICE` / `DOUBAO_VOICE_MALE` — realtime speaker IDs for the 女声/男声 toggle.
 
-The persona (name "Max", helmet-assistant role, three-language rule, concise hands-free
+The persona (name "Max", helmet-assistant role, Chinese/English-only rule, concise hands-free
 replies) is defined identically in `DEFAULT_AGENT_SYSTEM_PROMPT` and the `DOUBAO_SYSTEM_ROLE`
 default — keep them consistent when changing agent behavior.

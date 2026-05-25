@@ -32,7 +32,6 @@ const MAX_RECONNECT_ATTEMPTS = 6;
 // BCP-47 locales per supported language, used for the browser-TTS fallback.
 const VOICE_LOCALE: Record<SupportedLanguage, string> = {
   zh: "zh-CN",
-  ja: "ja-JP",
   en: "en-US"
 };
 
@@ -42,12 +41,10 @@ type VoiceGender = "female" | "male";
 const VOICE_HINTS: Record<VoiceGender, Record<SupportedLanguage, RegExp>> = {
   female: {
     zh: /female|女|xiaoxiao|xiaoyi|ting-?ting|jupiter/i,
-    ja: /female|女|kyoko|nanami|haruka|o-ren|sayaka/i,
     en: /female|samantha|victoria|zira|aria|jenny|fiona/i
   },
   male: {
     zh: /\bmale\b|男|kangkang|yunyang|yunxi|yunjian|liang/i,
-    ja: /\bmale\b|男|otoya|ichiro|keita|daichi|hattori/i,
     en: /\bmale\b|daniel|alex|david|mark|guy|fred|thomas/i
   }
 };
@@ -165,7 +162,7 @@ function useHelmetAgent() {
     if (!("speechSynthesis" in window) || !text.trim()) return;
     window.speechSynthesis.cancel();
     // Speak each reply in its own language; forcing a Chinese voice makes
-    // Japanese (and often English) replies fall silent.
+    // English replies fall silent.
     const language = detectLanguage(text);
     const gender = voiceGenderRef.current;
     const utterance = new SpeechSynthesisUtterance(text);

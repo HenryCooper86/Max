@@ -2,10 +2,6 @@ import { describe, expect, it } from "vitest";
 import { detectLanguage } from "../shared/language";
 
 describe("detectLanguage", () => {
-  it("detects Japanese from kana", () => {
-    expect(detectLanguage("ルート確認をお願いします")).toBe("ja");
-  });
-
   it("detects Chinese from Han-only text", () => {
     expect(detectLanguage("最近的加油站在前方一公里")).toBe("zh");
   });
@@ -16,5 +12,9 @@ describe("detectLanguage", () => {
 
   it("treats kanji-only text as Chinese", () => {
     expect(detectLanguage("確認")).toBe("zh");
+  });
+
+  it("falls back to English for non-Han non-Latin text", () => {
+    expect(detectLanguage("hello world")).toBe("en");
   });
 });

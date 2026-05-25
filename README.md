@@ -1,6 +1,6 @@
 # Max 摩托车头盔 AI
 
-Prototype AI voice agent for a motorcycle helmet. Max keeps the same name and motorcycle helmet assistant role, speaks Chinese by default, can also use English or Japanese, and refuses other languages. The app is a single hands-free voice agent — one tap to activate, then the rider just talks. It also pulls live weather for the rider's location so Max can answer weather questions with real data. Realtime Doubao voice defaults to the working female Chinese voice.
+Prototype AI voice agent for a motorcycle helmet. Max keeps the same name and motorcycle helmet assistant role, speaks Chinese by default, can also use English, and refuses other languages. The app is a single hands-free voice agent — one tap to activate, then the rider just talks. It also pulls live weather for the rider's location so Max can answer weather questions with real data. Realtime Doubao voice defaults to the working female Chinese voice.
 
 ## Frontend Preview
 

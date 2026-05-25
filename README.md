@@ -1,6 +1,6 @@
 # Max 摩托车头盔 AI
 
-Prototype AI voice agent for a motorcycle helmet. Max keeps the same name and motorcycle helmet assistant role, speaks Chinese by default, can also use English, and refuses other languages. The app is a single hands-free voice agent — one tap to activate, then the rider just talks. It also pulls live weather for the rider's location so Max can answer weather questions with real data. Realtime Doubao voice defaults to the working female Chinese voice.
+Prototype AI voice agent for a motorcycle helmet. Max keeps the same name and motorcycle helmet assistant role, speaks Chinese by default, can also use English, and refuses other languages. The app is a single hands-free voice agent — click the main button or press Space to activate, then the rider just talks. It also pulls live weather for the rider's location so Max can answer weather questions with real data. Realtime Doubao voice defaults to the working female Chinese voice.
 
 ## Frontend Preview
 
@@ -8,10 +8,11 @@ Prototype AI voice agent for a motorcycle helmet. Max keeps the same name and mo
 
 ## Current Capabilities
 
-- Hands-free operation — one tap activates the session, then the rider just talks; Doubao's server-side VAD handles turn-taking.
+- Hands-free operation — click the main button or press Space to start/stop; once active, the rider just talks and Doubao's server-side VAD handles turn-taking.
 - Turn-state HUD — the helmet shows when Max is listening, heard the rider, is thinking, or is replying.
 - Ride intelligence modes — switch between 骑行 / 导航 / 停车 / 紧急 so Max changes response length and safety behavior.
 - Scenario-driven mock demos — 通勤、横风、低油、小队、紧急 scenes exercise realistic rider context without Doubao credentials.
+- Ride pulse summary — a first-glance `态势摘要` card fuses mode, scenario, weather risk, network, battery, and the current rider focus into normal / caution / critical guidance.
 - Live weather — pulls current weather for the rider's location (Open-Meteo, no API key) and folds it into the agent's context so weather questions get real answers.
 - Rider risk readouts — HUD shows speed, route phase, network, helmet battery, weather risk, and concise rider advice.
 - Latency telemetry — the relay reports ASR, thinking, first-audio, and total timing so the realtime path is measurable.
@@ -53,8 +54,7 @@ Prototype AI voice agent for a motorcycle helmet. Max keeps the same name and mo
 │       ├── doubao.ts         # Doubao realtime voice provider
 │       ├── mock.ts           # Mock live voice provider
 │       └── types.ts
-├── shared/
-│   └── language.ts           # TTS language detection helper
+├── shared/                   # Shared language, ride, session, audio, and event helpers
 ├── tests/                    # Vitest unit tests for the pure functions
 ├── .env.example              # Environment variable template
 ├── eslint.config.js
@@ -70,8 +70,8 @@ The project is a thin, real-time audio relay. The browser never holds a Volcengi
 
 ```text
 Browser
-  React HUD (src/main.tsx) ......... 开始语音 toggle, 女声/男声 toggle, HelmetVisual, transcript
-                                  .... 骑行模式 + 演示场景 controls, rider intelligence HUD
+  React HUD (src/main.tsx) ......... 开启免提 button + Space toggle, 女声/男声 toggle, HelmetVisual
+                                  .... 骑行模式 + 演示场景 controls, ride pulse, transcript
   AudioWorklet (pcm-worklet.js) .... mic capture -> 16 kHz PCM16, 320-sample (20 ms) frames
   Web Audio playback .............. 24 kHz PCM16 voice, gapless scheduling, barge-in stop
         |                                                       ^
@@ -149,8 +149,8 @@ If Doubao returns reply _text_ but no audio, the browser falls back to its own `
 
 ### Hands-free & live weather
 
-- **Hands-free** — activating the session streams the mic continuously (Doubao's `keep_alive` input mode); Doubao's server-side VAD segments turns, so the rider never taps again. `turnState` (`idle`/`listening`/`hearing`/`thinking`/`speaking`) is derived from server `status` events and drives the helmet's caption and ring colour.
-- **Ride intelligence** — `session.start` carries the selected `rideMode` and `scenario`; `shared/ride.ts` turns that into a safety policy, response style, and HUD focus. Doubao receives this as prompt context; the mock provider turns it into scenario-specific transcripts and telemetry.
+- **Hands-free** — activating the session with the main button or Space streams the mic continuously (Doubao's `keep_alive` input mode); Doubao's server-side VAD segments turns, so the rider never taps again. `turnState` (`idle`/`listening`/`hearing`/`thinking`/`speaking`) is derived from server `status` events and drives the helmet's caption and ring colour. Space toggling ignores editable controls so future form inputs are not hijacked.
+- **Ride intelligence** — `session.start` carries the selected `rideMode` and `scenario`; `shared/ride.ts` turns that into a safety policy, response style, hazard level, and HUD focus. Doubao receives this as prompt context; the mock provider turns it into scenario-specific transcripts and telemetry. The HUD's `态势摘要` card fuses ride hazard and weather risk into immediate normal / caution / critical rider guidance.
 - **Weather** — on activation the browser requests geolocation and sends `lat`/`lon` with `session.start`. `server/weather.ts` fetches current conditions from **Open-Meteo** (free, no API key), classifies rider risk, and emits weather/advice to the HUD. `doubao.ts` folds the same data into the agent's `system_role`. A failed lookup never blocks the session.
 - **Telemetry** — providers emit `metric` and `telemetry` events. The HUD shows first-audio latency plus ASR / thinking / first-audio / total timing so demos can discuss realtime behavior with numbers.
 
@@ -191,7 +191,9 @@ http://localhost:5173
 
 ## Using The App
 
-Pick a scenario (`通勤` / `横风` / `低油` / `小队` / `紧急`) and mode (`骑行` / `导航` / `停车` / `紧急`), then click `开启免提` once to start the hands-free session. The browser asks for microphone and location permission, then the agent runs continuously — the rider just talks, and Doubao's voice detection handles turn-taking. The helmet caption shows the live turn state (listening → heard you → thinking → replying). Click `结束免提` to stop.
+Pick a scenario (`通勤` / `横风` / `低油` / `小队` / `紧急`) and mode (`骑行` / `导航` / `停车` / `紧急`), then click `开启免提` or press Space once to start the hands-free session. The browser asks for microphone and location permission, then the agent runs continuously — the rider just talks, and Doubao's voice detection handles turn-taking. The helmet caption shows the live turn state (listening → heard you → thinking → replying). Click `结束免提` or press Space again to stop.
+
+The status panel starts with a `态势摘要` card that combines the selected ride mode, scenario, weather risk, network state, battery level, and glanceable focus into a short rider action. In emergency or severe-weather contexts it turns critical and prioritizes stopping safely.
 
 In the default configuration this uses the mock WebSocket provider and emits a simulated turn-state cycle. With `VOICE_PROVIDER=doubao`, the backend connects to the Doubao realtime dialogue WebSocket, sends browser mic PCM frames, and relays returned Chinese PCM voice audio back to the browser.
 
@@ -347,8 +349,9 @@ rsync -az --delete --exclude='.git' --exclude='.env' --exclude='node_modules' \
 # 2. Install deps, rebuild the client, and restart the process.
 ssh -i "$KEY" "$HOST" 'cd ~/app && npm install && npm run build && pm2 restart horizon'
 
-# 3. Verify.
+# 3. Verify health and confirm the rebuilt hashed client bundle is being served.
 curl -sk https://3.35.135.136/health      # expect {"ok":true,"provider":"doubao"}
+curl -sk https://3.35.135.136/ | sed -n '1,20p'
 ```
 
 > **Note:** `react`, `react-dom`, and the `@types/*` packages live in `devDependencies`. The server only needs them to _build_ the client (the built `dist/` bundles React in), so the server must run a full `npm install` — a production-only install cannot rebuild the client.
@@ -377,9 +380,10 @@ curl -s http://localhost:8787/health
 
 ## Next Steps
 
-1. Measure real round-trip latency in the Doubao provider — the latency panel is mock-only today.
+1. Add a guided demo ride mode that automatically advances through scenarios and scripted mock turns.
 2. Refresh weather mid-ride and add more agent tools (nearby stops, navigation).
-3. Add a wake word so the mic need not stream continuously.
-4. Secure the `/agent` relay — access token, origin check, and a per-IP connection cap.
-5. Script the test-server deploy (or wire up GitLab CI once a runner can reach the host).
-6. Replace the Lightsail self-signed certificate with a trusted cert behind a domain name.
+3. Make the helmet visual respond to fused hazard level, not only turn state.
+4. Add a wake word so the mic need not stream continuously.
+5. Secure the `/agent` relay — access token, origin check, and a per-IP connection cap.
+6. Script the test-server deploy (or wire up GitLab CI once a runner can reach the host).
+7. Replace the Lightsail self-signed certificate with a trusted cert behind a domain name.

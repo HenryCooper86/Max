@@ -13,7 +13,7 @@ describe("doubaoSpeaker", () => {
 
   it("returns the default male speaker", () => {
     vi.stubEnv("DOUBAO_VOICE_MALE", "");
-    expect(doubaoSpeaker("male")).toBe("zh_male_vv_jupiter_bigtts");
+    expect(doubaoSpeaker("male")).toBe("zh_male_yunzhou_jupiter_bigtts");
   });
 
   it("honours the DOUBAO_VOICE override for female", () => {
@@ -24,5 +24,10 @@ describe("doubaoSpeaker", () => {
   it("honours the DOUBAO_VOICE_MALE override for male", () => {
     vi.stubEnv("DOUBAO_VOICE_MALE", "zh_male_custom_bigtts");
     expect(doubaoSpeaker("male")).toBe("zh_male_custom_bigtts");
+  });
+
+  it("replaces the old unsupported male realtime speaker", () => {
+    vi.stubEnv("DOUBAO_VOICE_MALE", "zh_male_vv_jupiter_bigtts");
+    expect(doubaoSpeaker("male")).toBe("zh_male_yunzhou_jupiter_bigtts");
   });
 });

@@ -34,17 +34,20 @@ type DoubaoSessionConfig = {
   systemRole: string;
 };
 
-// Default realtime-dialogue speakers from the Doubao 音色列表 (jupiter family).
+// Default realtime-dialogue speakers from the Doubao S2S-Omni 音色列表 (jupiter family).
 // Override per deployment with DOUBAO_VOICE / DOUBAO_VOICE_MALE.
 const DEFAULT_FEMALE_SPEAKER = "zh_female_vv_jupiter_bigtts";
-const DEFAULT_MALE_SPEAKER = "zh_male_vv_jupiter_bigtts";
+const DEFAULT_MALE_SPEAKER = "zh_male_yunzhou_jupiter_bigtts";
+const UNSUPPORTED_REALTIME_SPEAKER_REPLACEMENTS: Record<string, string> = {
+  zh_male_vv_jupiter_bigtts: DEFAULT_MALE_SPEAKER
+};
 
 /** Resolves the Doubao realtime speaker ID for the requested gender. */
 export function doubaoSpeaker(voiceGender: VoiceGender): string {
-  if (voiceGender === "male") {
-    return process.env.DOUBAO_VOICE_MALE?.trim() || DEFAULT_MALE_SPEAKER;
-  }
-  return process.env.DOUBAO_VOICE?.trim() || DEFAULT_FEMALE_SPEAKER;
+  const configuredSpeaker =
+    voiceGender === "male" ? process.env.DOUBAO_VOICE_MALE?.trim() : process.env.DOUBAO_VOICE?.trim();
+  const speaker = configuredSpeaker || (voiceGender === "male" ? DEFAULT_MALE_SPEAKER : DEFAULT_FEMALE_SPEAKER);
+  return UNSUPPORTED_REALTIME_SPEAKER_REPLACEMENTS[speaker] ?? speaker;
 }
 
 const enum MessageType {

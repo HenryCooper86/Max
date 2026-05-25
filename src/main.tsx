@@ -891,6 +891,30 @@ function useHelmetAgent() {
 function App() {
   const agent = useHelmetAgent();
   const t = UI_TEXT[agent.sessionMemory.language];
+  const { listening, startMic, stopMic } = agent;
+
+  useEffect(() => {
+    const toggleHandsFree = (event: KeyboardEvent) => {
+      if (event.code !== "Space" || event.repeat) return;
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(target.tagName))
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      if (listening) {
+        stopMic();
+      } else {
+        void startMic();
+      }
+    };
+
+    window.addEventListener("keydown", toggleHandsFree);
+    return () => window.removeEventListener("keydown", toggleHandsFree);
+  }, [listening, startMic, stopMic]);
 
   const agentState = useMemo(() => {
     if (agent.listening) return agent.sessionMemory.language === "en" ? "Hands-free" : "免提中";
@@ -991,8 +1015,8 @@ function App() {
               </button>
               <p className="handsFreeHint">
                 {agent.listening
-                  ? "免提已开启 — 直接说话即可，Max 会自动聆听并回答。"
-                  : "开启后无需再次点击，全程语音交互。需要麦克风与定位权限。"}
+                  ? "免提已开启 — 直接说话即可，按空格或点击按钮可结束。"
+                  : "点击按钮或按空格开启免提。需要麦克风与定位权限。"}
               </p>
               <div className="scenarioStrip" aria-label="演示场景">
                 {SCENARIOS.map((scenario) => (

@@ -288,7 +288,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
   function flushPendingAgentText(useBrowserSpeech: boolean) {
     const text = pendingAgentText.trim();
     if (!text) return;
-    sendClient({ type: "transcript", speaker: "agent", text, final: useBrowserSpeech });
+    sendClient({ type: "transcript", speaker: "agent", text, final: true, useBrowserSpeech });
     pendingAgentText = "";
   }
 

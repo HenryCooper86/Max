@@ -950,6 +950,7 @@ h2 {
 .panelHeader {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: 12px;
   margin-bottom: 14px;
 }
@@ -958,6 +959,30 @@ h2 {
   color: var(--accent);
   letter-spacing: 0.1em;
   font-size: 0.8rem;
+}
+
+.panelActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.panelActions button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid rgba(107, 238, 174, 0.34);
+  border-radius: 999px;
+  background: rgba(107, 238, 174, 0.1);
+  color: #dffdf0;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.panelActions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .rideHistory {
@@ -993,9 +1018,9 @@ h2 {
 
 .transcriptList {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 12px;
-  max-height: 520px;
+  max-height: 720px;
   overflow-y: auto;
   padding-right: 4px;
 }

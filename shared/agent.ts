@@ -41,7 +41,7 @@ export type AgentEvent =
     }
   | { type: "connection"; state: ConnectionState; detail: string }
   | { type: "status"; state: string; detail: string }
-  | { type: "transcript"; speaker: "rider" | "agent"; text: string; final?: boolean }
+  | { type: "transcript"; speaker: "rider" | "agent"; text: string; final?: boolean; useBrowserSpeech?: boolean }
   | { type: "metric"; latencyMs: number; droppedFrames?: number; outgoingFps?: number }
   | {
       type: "weather";

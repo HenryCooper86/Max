@@ -215,6 +215,7 @@ const UI_TEXT = {
     ready: "就绪",
     idle: "空闲",
     live: "实时",
+    exportLog: "导出日志",
     lastCommand: "上一指令",
     lastReply: "上一回复",
     connection: "连接",
@@ -234,6 +235,7 @@ const UI_TEXT = {
     ready: "Ready",
     idle: "Idle",
     live: "Live",
+    exportLog: "Export log",
     lastCommand: "Last command",
     lastReply: "Last reply",
     connection: "Connection",
@@ -337,6 +339,27 @@ function formatClockTime(timestamp: number) {
   }).format(timestamp);
 }
 
+function exportTranscriptLog(items: TranscriptItem[]) {
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    turns: items.map((item) => ({
+      id: item.id,
+      at: new Date(item.at).toISOString(),
+      speaker: item.speaker,
+      language: item.language,
+      final: item.final,
+      text: item.text
+    }))
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `max-session-log-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 // Folds a server status event into the conversational turn state. Unknown
 // states leave the turn state unchanged.
 function mapTurnState(state: string, previous: TurnState): TurnState {
@@ -423,8 +446,9 @@ function useHelmetAgent() {
       }
 
       transcriptTurnRef.current += 1;
+      const finalizedItems = last && !last.final ? [...items.slice(0, -1), { ...last, final: true }] : items;
       return [
-        ...items.slice(-39),
+        ...finalizedItems,
         {
           id: transcriptTurnRef.current,
           at: now,
@@ -606,7 +630,7 @@ function useHelmetAgent() {
         if (event.type === "transcript") {
           if (event.speaker === "rider") stopAgentSpeech();
           pushTranscript(event.speaker, event.text, event.final !== false);
-          if (event.speaker === "agent" && event.final !== false) speak(event.text);
+          if (event.speaker === "agent" && (event.useBrowserSpeech ?? event.final !== false)) speak(event.text);
         }
         if (event.type === "metric") {
           setLatencyMs(event.latencyMs);
@@ -1252,7 +1276,16 @@ function App() {
           <section className="hudPanel transcriptPanel">
             <div className="panelHeader">
               <h2>{t.conversation}</h2>
-              <span>{agent.transcript.length ? t.live : t.idle}</span>
+              <div className="panelActions">
+                <span>{agent.transcript.length ? `${t.live} · ${agent.transcript.length}` : t.idle}</span>
+                <button
+                  type="button"
+                  onClick={() => exportTranscriptLog(agent.transcript)}
+                  disabled={!agent.transcript.length}
+                >
+                  {t.exportLog}
+                </button>
+              </div>
             </div>
             <div className="rideHistory">
               <div>

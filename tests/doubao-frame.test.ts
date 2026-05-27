@@ -5,6 +5,7 @@ import {
   buildFullClientRequest,
   extractChatText,
   extractAsrText,
+  normalizeTranscriptText,
   parseDoubaoFrame
 } from "../server/providers/doubao";
 
@@ -98,6 +99,14 @@ describe("extractChatText", () => {
   it("extracts nested and choice-style chat content", () => {
     expect(extractChatText({ choices: [{ delta: { content: "天气" } }, { message: { content: "已接入" } }] })).toBe(
       "天气已接入"
+    );
+  });
+});
+
+describe("normalizeTranscriptText", () => {
+  it("matches English transcript variants with missing spaces", () => {
+    expect(normalizeTranscriptText("Sure. Fromnow on, I'll respondin English.")).toBe(
+      normalizeTranscriptText("Sure. From now on, I'll respond in English.")
     );
   });
 });

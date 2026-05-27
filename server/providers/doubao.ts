@@ -270,6 +270,13 @@ export function extractChatText(payload: Record<string, unknown>) {
     .join("");
 }
 
+export function normalizeTranscriptText(text: string) {
+  return text
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^\p{Letter}\p{Number}\p{Script=Han}]+/gu, "");
+}
+
 export function extractAsrText(payload: Record<string, unknown>) {
   const results = payload.results;
   if (!Array.isArray(results)) return "";
@@ -290,7 +297,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
   let pendingAgentText = "";
   let receivedTtsAudio = false;
   let ttsFallbackTimer: NodeJS.Timeout | undefined;
-  let lastFlushedAgentText = "";
+  let lastFlushedAgentTextKey = "";
   let lastFlushedAgentTextAt = 0;
   let rideContext: RideContext = { mode: "ride", scenario: "commute" };
   let memory: SessionMemory = createSessionMemory("ride");
@@ -315,11 +322,12 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
     const text = pendingAgentText.trim();
     if (!text) return;
     const now = Date.now();
-    if (text === lastFlushedAgentText && now - lastFlushedAgentTextAt < 8000) {
+    const textKey = normalizeTranscriptText(text);
+    if (textKey === lastFlushedAgentTextKey && now - lastFlushedAgentTextAt < 8000) {
       pendingAgentText = "";
       return;
     }
-    lastFlushedAgentText = text;
+    lastFlushedAgentTextKey = textKey;
     lastFlushedAgentTextAt = now;
     sendClient({ type: "transcript", speaker: "agent", text, final: true, useBrowserSpeech });
     pendingAgentText = "";

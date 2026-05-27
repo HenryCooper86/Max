@@ -339,6 +339,13 @@ function formatClockTime(timestamp: number) {
   }).format(timestamp);
 }
 
+function normalizeTranscriptText(text: string) {
+  return text
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^\p{Letter}\p{Number}\p{Script=Han}]+/gu, "");
+}
+
 function exportTranscriptLog(items: TranscriptItem[]) {
   const payload = {
     exportedAt: new Date().toISOString(),
@@ -432,7 +439,12 @@ function useHelmetAgent() {
     const now = Date.now();
     setTranscript((items) => {
       const last = items.at(-1);
-      if (speaker === "agent" && last?.speaker === "agent" && last.text === cleanText && now - last.at < 8000) {
+      if (
+        speaker === "agent" &&
+        last?.speaker === "agent" &&
+        normalizeTranscriptText(last.text) === normalizeTranscriptText(cleanText) &&
+        now - last.at < 8000
+      ) {
         return items;
       }
       if (last?.speaker === speaker && !last.final) {

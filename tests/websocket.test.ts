@@ -2,7 +2,7 @@ import http from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import type { AgentEvent } from "../shared/agent";
-import { AgentSessionController } from "../server/session-controller";
+import { AgentSessionController, normalizeRawData, parseClientEvent } from "../server/session-controller";
 import { createMockProvider } from "../server/providers/mock";
 
 let server: http.Server | undefined;
@@ -92,5 +92,49 @@ describe("/agent WebSocket relay", () => {
     expect(events.some((event) => event.type === "transcript" && event.speaker === "rider")).toBe(true);
 
     socket.terminate();
+  });
+});
+
+describe("client event validation", () => {
+  it("accepts a valid session.start event", () => {
+    const event = parseClientEvent(
+      Buffer.from(
+        JSON.stringify({
+          type: "session.start",
+          sampleRate: 16000,
+          channels: 1,
+          voiceGender: "male",
+          voicePersonality: "rally",
+          rideMode: "navigation",
+          scenario: "wind",
+          lat: 37.57,
+          lon: 126.98
+        })
+      )
+    );
+
+    expect(event.type).toBe("session.start");
+    if (event.type === "session.start") {
+      expect(event.voiceGender).toBe("male");
+      expect(event.scenario).toBe("wind");
+    }
+  });
+
+  it("rejects unsupported client event values before they reach a provider", () => {
+    expect(() =>
+      parseClientEvent(Buffer.from(JSON.stringify({ type: "session.start", sampleRate: 44100, channels: 1 })))
+    ).toThrow("Invalid sampleRate");
+    expect(() =>
+      parseClientEvent(
+        Buffer.from(JSON.stringify({ type: "session.start", sampleRate: 16000, channels: 1, scenario: "trackday" }))
+      )
+    ).toThrow("Invalid scenario");
+    expect(() => parseClientEvent(Buffer.from(JSON.stringify({ type: "unknown" })))).toThrow(
+      "Unsupported client event"
+    );
+  });
+
+  it("normalizes fragmented binary frames", () => {
+    expect(normalizeRawData([Buffer.from([1, 2]), Buffer.from([3, 4])])).toEqual(Buffer.from([1, 2, 3, 4]));
   });
 });

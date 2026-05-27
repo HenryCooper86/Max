@@ -3,6 +3,60 @@ import type { AgentProvider, ClientEvent } from "./providers/types";
 
 export type ProviderFactory = (client: WebSocket) => AgentProvider;
 
+const MAX_CLIENT_JSON_BYTES = 8 * 1024;
+const MAX_CLIENT_AUDIO_BYTES = 32 * 1024;
+const VOICE_GENDERS = new Set(["female", "male"]);
+const VOICE_PERSONALITIES = new Set(["concise", "friendly", "technical", "rally"]);
+const RIDE_MODES = new Set(["ride", "stop", "navigation", "emergency"]);
+const DEMO_SCENARIOS = new Set(["commute", "wind", "fuel", "group", "emergency"]);
+
+export function normalizeRawData(data: RawData): Buffer {
+  if (Buffer.isBuffer(data)) return data;
+  if (Array.isArray(data)) return Buffer.concat(data);
+  return Buffer.from(data);
+}
+
+function assertOptionalEnum(value: unknown, allowed: Set<string>, field: string) {
+  if (value !== undefined && (typeof value !== "string" || !allowed.has(value))) {
+    throw new Error(`Invalid ${field}`);
+  }
+}
+
+function assertOptionalCoordinate(value: unknown, min: number, max: number, field: string) {
+  if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value) || value < min || value > max)) {
+    throw new Error(`Invalid ${field}`);
+  }
+}
+
+export function parseClientEvent(data: RawData): ClientEvent {
+  const buffer = normalizeRawData(data);
+  if (buffer.byteLength > MAX_CLIENT_JSON_BYTES) throw new Error("Client event is too large");
+
+  const value = JSON.parse(buffer.toString()) as Record<string, unknown>;
+  if (!value || typeof value !== "object" || typeof value.type !== "string") {
+    throw new Error("Client event type is required");
+  }
+
+  if (value.type === "audio.start" || value.type === "audio.stop") {
+    return { type: value.type };
+  }
+
+  if (value.type !== "session.start") {
+    throw new Error(`Unsupported client event ${value.type}`);
+  }
+
+  if (value.sampleRate !== 16000) throw new Error("Invalid sampleRate");
+  if (value.channels !== 1) throw new Error("Invalid channels");
+  assertOptionalEnum(value.voiceGender, VOICE_GENDERS, "voiceGender");
+  assertOptionalEnum(value.voicePersonality, VOICE_PERSONALITIES, "voicePersonality");
+  assertOptionalEnum(value.rideMode, RIDE_MODES, "rideMode");
+  assertOptionalEnum(value.scenario, DEMO_SCENARIOS, "scenario");
+  assertOptionalCoordinate(value.lat, -90, 90, "lat");
+  assertOptionalCoordinate(value.lon, -180, 180, "lon");
+
+  return value as ClientEvent;
+}
+
 export class AgentSessionController {
   private readonly provider: AgentProvider;
 
@@ -17,11 +71,13 @@ export class AgentSessionController {
   async handleMessage(data: RawData, isBinary: boolean) {
     try {
       if (isBinary) {
-        await this.provider.sendAudio(Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer));
+        const chunk = normalizeRawData(data);
+        if (chunk.byteLength > MAX_CLIENT_AUDIO_BYTES) throw new Error("Audio frame is too large");
+        await this.provider.sendAudio(chunk);
         return;
       }
 
-      const event = JSON.parse(data.toString()) as ClientEvent;
+      const event = parseClientEvent(data);
       if (event.type === "session.start") await this.provider.start(event);
       if (event.type === "audio.start") await this.provider.startAudio();
       if (event.type === "audio.stop") await this.provider.stopAudio();

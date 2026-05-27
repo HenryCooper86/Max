@@ -2,6 +2,19 @@ import "dotenv/config";
 import { providerCapabilities, type AgentHealth } from "../shared/agent";
 
 export type VoiceProvider = "mock" | "doubao";
+export type WeatherLocation = {
+  lat: number;
+  lon: number;
+  source: "configured" | "demo";
+};
+
+const DEMO_WEATHER_LOCATION = {
+  // Seoul City Hall, close to the Lightsail test region and useful for demos
+  // when browser geolocation is denied.
+  lat: 37.5665,
+  lon: 126.978,
+  source: "demo" as const
+};
 
 /** Backend configuration resolved from environment variables at startup. */
 export const config = {
@@ -10,16 +23,16 @@ export const config = {
   defaultWeatherLocation: resolveDefaultWeatherLocation()
 };
 
-function resolveDefaultWeatherLocation() {
+function resolveDefaultWeatherLocation(): WeatherLocation {
   const latValue = process.env.DEFAULT_RIDER_LAT?.trim() || process.env.WEATHER_DEFAULT_LAT?.trim();
   const lonValue = process.env.DEFAULT_RIDER_LON?.trim() || process.env.WEATHER_DEFAULT_LON?.trim();
-  if (!latValue || !lonValue) return null;
+  if (!latValue || !lonValue) return DEMO_WEATHER_LOCATION;
 
   const lat = Number(latValue);
   const lon = Number(lonValue);
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
-  return { lat, lon };
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return DEMO_WEATHER_LOCATION;
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return DEMO_WEATHER_LOCATION;
+  return { lat, lon, source: "configured" };
 }
 
 export function credentialStatus(): AgentHealth["credentials"] {
@@ -37,7 +50,7 @@ export function describeConfig(): string[] {
   return [
     `Realtime voice provider: ${config.voiceProvider}`,
     `Provider credentials: ${credentialStatus()}`,
-    `Weather context: Open-Meteo best-effort${config.defaultWeatherLocation ? " + fallback location" : ""}`
+    `Weather context: Open-Meteo best-effort + ${config.defaultWeatherLocation.source} fallback`
   ];
 }
 

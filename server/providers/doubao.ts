@@ -247,6 +247,29 @@ function parseJsonPayload(frame: ParsedDoubaoFrame) {
   return JSON.parse(frame.payload.toString()) as Record<string, unknown>;
 }
 
+function extractTextFields(value: unknown): string[] {
+  if (!value) return [];
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(extractTextFields);
+  if (typeof value !== "object") return [];
+
+  const record = value as Record<string, unknown>;
+  const direct = ["content", "text", "sentence", "transcript", "answer", "output_text"].flatMap((key) =>
+    extractTextFields(record[key])
+  );
+  if (direct.length) return direct;
+  return ["message", "delta", "result", "response", "output", "choices", "data"].flatMap((key) =>
+    extractTextFields(record[key])
+  );
+}
+
+export function extractChatText(payload: Record<string, unknown>) {
+  return extractTextFields(payload)
+    .map((text) => text.trim())
+    .filter(Boolean)
+    .join("");
+}
+
 export function extractAsrText(payload: Record<string, unknown>) {
   const results = payload.results;
   if (!Array.isArray(results)) return "";
@@ -403,10 +426,19 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
 
         if (frame.event === EventReceive.ChatResponse) {
           if (!chatStartedAt) chatStartedAt = Date.now();
-          const text = String(payload.content ?? "");
+          const text = extractChatText(payload);
           if (text) {
             pendingAgentText += text;
             sendClient({ type: "status", state: "thinking", detail: "豆包已生成回复文本" });
+          }
+          return;
+        }
+
+        if (frame.event === EventReceive.TtsSentenceStart || frame.event === EventReceive.TtsSentenceEnd) {
+          const text = extractChatText(payload);
+          if (text && !pendingAgentText.includes(text)) {
+            pendingAgentText += text;
+            sendClient({ type: "status", state: "thinking", detail: "豆包已生成语音文本" });
           }
           return;
         }
@@ -431,6 +463,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
               detail: "豆包 TTS 未返回音频，正在使用浏览器语音备用模式"
             });
           } else {
+            if (pendingAgentText) flushPendingAgentText(false);
             sendClient({ type: "status", state: "ready", detail: "豆包回复已完成" });
           }
           receivedTtsAudio = false;
@@ -518,14 +551,17 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
       const weatherLocation =
         typeof event.lat === "number" && typeof event.lon === "number"
           ? { lat: event.lat, lon: event.lon, source: "rider" as const }
-          : appConfig.defaultWeatherLocation
-            ? { ...appConfig.defaultWeatherLocation, source: "fallback" as const }
-            : null;
+          : appConfig.defaultWeatherLocation;
 
       if (weatherLocation) {
         try {
           const weather = await fetchRiderWeather(weatherLocation.lat, weatherLocation.lon);
-          const locationLabel = weatherLocation.source === "rider" ? "骑手当前位置" : "默认演示位置";
+          const locationLabel =
+            weatherLocation.source === "rider"
+              ? "骑手当前位置"
+              : weatherLocation.source === "configured"
+                ? "默认位置"
+                : "演示位置";
           systemRole +=
             `\n\n[实时骑行情报] ${locationLabel}${weather.summary}` +
             `${weather.riderAdvice}当骑手询问天气、风力或路况时，请基于这条真实数据简短回答。`;
@@ -541,7 +577,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
           sendClient({
             type: "status",
             state: "ready",
-            detail: `已接入${weatherLocation.source === "rider" ? "实时" : "默认"}天气：${weather.description} ${weather.temperatureC}°C`
+            detail: `已接入${weatherLocation.source === "rider" ? "实时" : locationLabel}天气：${weather.description} ${weather.temperatureC}°C`
           });
         } catch {
           sendClient({ type: "status", state: "ready", detail: "实时天气暂不可用，使用通用回答" });

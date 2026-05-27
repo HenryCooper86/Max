@@ -3,6 +3,7 @@ import {
   EventSend,
   buildAudioRequest,
   buildFullClientRequest,
+  extractChatText,
   extractAsrText,
   parseDoubaoFrame
 } from "../server/providers/doubao";
@@ -86,5 +87,17 @@ describe("extractAsrText", () => {
 
   it("returns an empty string when results are missing", () => {
     expect(extractAsrText({})).toBe("");
+  });
+});
+
+describe("extractChatText", () => {
+  it("extracts direct chat content", () => {
+    expect(extractChatText({ content: "可以，现在显示天气。" })).toBe("可以，现在显示天气。");
+  });
+
+  it("extracts nested and choice-style chat content", () => {
+    expect(extractChatText({ choices: [{ delta: { content: "天气" } }, { message: { content: "已接入" } }] })).toBe(
+      "天气已接入"
+    );
   });
 });

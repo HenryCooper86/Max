@@ -236,14 +236,14 @@ With the newer Speech console, set `DOUBAO_API_KEY`; the key ID can be stored in
 
 ### Weather
 
-Live weather uses [Open-Meteo](https://open-meteo.com/), which is free and needs no API key. The rider's coordinates come from the browser's geolocation prompt. If the rider declines, the live Doubao provider can fall back to an optional demo/default location:
+Live weather uses [Open-Meteo](https://open-meteo.com/), which is free and needs no API key. The rider's coordinates come from the browser's geolocation prompt. If the rider declines, the live Doubao provider falls back to server-side default weather so the HUD remains useful during demos. Set an explicit default location with:
 
 ```bash
 DEFAULT_RIDER_LAT=
 DEFAULT_RIDER_LON=
 ```
 
-Leave those blank if Max should only use real rider coordinates.
+If these are blank, Max uses a built-in Seoul demo fallback. Real rider coordinates always take priority when browser geolocation is granted.
 
 ## API Routes
 

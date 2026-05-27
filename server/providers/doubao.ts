@@ -2,6 +2,7 @@ import { WebSocket, type RawData } from "ws";
 import { randomUUID } from "node:crypto";
 import type { AgentProvider, SessionStartEvent, VoiceGender } from "./types";
 import { DOUBAO_CAPABILITIES } from "../../shared/agent";
+import { config as appConfig } from "../config";
 import { fetchRiderWeather } from "../weather";
 import {
   buildRideContextSummary,
@@ -514,11 +515,19 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
       // Best-effort: fold live weather for the rider's location into the agent
       // context so weather questions are answered with real data. A failure
       // here never blocks the session — the agent just answers generically.
-      if (typeof event.lat === "number" && typeof event.lon === "number") {
+      const weatherLocation =
+        typeof event.lat === "number" && typeof event.lon === "number"
+          ? { lat: event.lat, lon: event.lon, source: "rider" as const }
+          : appConfig.defaultWeatherLocation
+            ? { ...appConfig.defaultWeatherLocation, source: "fallback" as const }
+            : null;
+
+      if (weatherLocation) {
         try {
-          const weather = await fetchRiderWeather(event.lat, event.lon);
+          const weather = await fetchRiderWeather(weatherLocation.lat, weatherLocation.lon);
+          const locationLabel = weatherLocation.source === "rider" ? "骑手当前位置" : "默认演示位置";
           systemRole +=
-            `\n\n[实时骑行情报] 骑手当前位置${weather.summary}` +
+            `\n\n[实时骑行情报] ${locationLabel}${weather.summary}` +
             `${weather.riderAdvice}当骑手询问天气、风力或路况时，请基于这条真实数据简短回答。`;
           sendClient({
             type: "weather",
@@ -532,11 +541,13 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
           sendClient({
             type: "status",
             state: "ready",
-            detail: `已接入实时天气：${weather.description} ${weather.temperatureC}°C`
+            detail: `已接入${weatherLocation.source === "rider" ? "实时" : "默认"}天气：${weather.description} ${weather.temperatureC}°C`
           });
         } catch {
           sendClient({ type: "status", state: "ready", detail: "实时天气暂不可用，使用通用回答" });
         }
+      } else {
+        sendClient({ type: "status", state: "ready", detail: "定位未授权，未配置默认天气位置" });
       }
 
       connectUpstream({

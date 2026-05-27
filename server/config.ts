@@ -6,8 +6,21 @@ export type VoiceProvider = "mock" | "doubao";
 /** Backend configuration resolved from environment variables at startup. */
 export const config = {
   port: Number(process.env.PORT ?? 8787),
-  voiceProvider: (process.env.VOICE_PROVIDER === "doubao" ? "doubao" : "mock") as VoiceProvider
+  voiceProvider: (process.env.VOICE_PROVIDER === "doubao" ? "doubao" : "mock") as VoiceProvider,
+  defaultWeatherLocation: resolveDefaultWeatherLocation()
 };
+
+function resolveDefaultWeatherLocation() {
+  const latValue = process.env.DEFAULT_RIDER_LAT?.trim() || process.env.WEATHER_DEFAULT_LAT?.trim();
+  const lonValue = process.env.DEFAULT_RIDER_LON?.trim() || process.env.WEATHER_DEFAULT_LON?.trim();
+  if (!latValue || !lonValue) return null;
+
+  const lat = Number(latValue);
+  const lon = Number(lonValue);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
+  return { lat, lon };
+}
 
 export function credentialStatus(): AgentHealth["credentials"] {
   if (config.voiceProvider !== "doubao") return "not-required";
@@ -24,7 +37,7 @@ export function describeConfig(): string[] {
   return [
     `Realtime voice provider: ${config.voiceProvider}`,
     `Provider credentials: ${credentialStatus()}`,
-    "Weather context: Open-Meteo best-effort"
+    `Weather context: Open-Meteo best-effort${config.defaultWeatherLocation ? " + fallback location" : ""}`
   ];
 }
 

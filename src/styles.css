@@ -672,23 +672,17 @@ h2 {
 /* Fused safety/status readout for the first glance. */
 .ridePulse {
   border-left: 3px solid var(--accent);
-  background:
-    linear-gradient(135deg, rgba(62, 232, 159, 0.12), transparent 48%),
-    rgba(255, 255, 255, 0.04);
+  background: linear-gradient(135deg, rgba(62, 232, 159, 0.12), transparent 48%), rgba(255, 255, 255, 0.04);
 }
 
 .ridePulse.caution {
   border-left-color: var(--warn);
-  background:
-    linear-gradient(135deg, rgba(242, 193, 78, 0.14), transparent 48%),
-    rgba(255, 255, 255, 0.04);
+  background: linear-gradient(135deg, rgba(242, 193, 78, 0.14), transparent 48%), rgba(255, 255, 255, 0.04);
 }
 
 .ridePulse.critical {
   border-left-color: var(--danger);
-  background:
-    linear-gradient(135deg, rgba(255, 111, 87, 0.16), transparent 48%),
-    rgba(255, 255, 255, 0.04);
+  background: linear-gradient(135deg, rgba(255, 111, 87, 0.16), transparent 48%), rgba(255, 255, 255, 0.04);
 }
 
 .ridePulse strong {
@@ -999,8 +993,11 @@ h2 {
 
 .transcriptList {
   display: grid;
-  grid-template-columns: repeat(4, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
   gap: 12px;
+  max-height: 520px;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .message {
@@ -1031,6 +1028,22 @@ h2 {
 .message p {
   margin: 8px 0 0;
   color: #f5fbfa;
+}
+
+.messageMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.messageMeta b {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 650;
 }
 
 /* ============================================================

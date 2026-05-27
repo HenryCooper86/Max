@@ -24,8 +24,11 @@ import "./styles.css";
 
 type TranscriptItem = {
   id: number;
+  at: number;
   speaker: "rider" | "agent";
   text: string;
+  final: boolean;
+  language: SupportedLanguage;
 };
 
 // Messages posted from public/pcm-worklet.js.
@@ -68,6 +71,14 @@ type PacketStats = {
 
 type PermissionStateLabel = "granted" | "prompt" | "denied" | "unknown";
 
+type AudioProcessingState = {
+  echoCancellation: boolean | "unknown";
+  noiseSuppression: boolean | "unknown";
+  autoGainControl: boolean | "unknown";
+  sampleRate?: number;
+  channelCount?: number;
+};
+
 const SAMPLE_RATE = 16000;
 const PLAYBACK_SAMPLE_RATE = 24000;
 const MAX_RECONNECT_ATTEMPTS = 6;
@@ -104,6 +115,12 @@ const DEFAULT_PACKET_STATS: PacketStats = {
   outgoingFrames: 0,
   outgoingFps: 0,
   droppedFrames: 0
+};
+
+const DEFAULT_AUDIO_PROCESSING: AudioProcessingState = {
+  echoCancellation: "unknown",
+  noiseSuppression: "unknown",
+  autoGainControl: "unknown"
 };
 
 const RIDE_MODE_LABELS: Record<RideMode, string> = {
@@ -163,6 +180,12 @@ const PERMISSION_LABELS: Record<PermissionStateLabel, string> = {
   unknown: "未确认"
 };
 
+const AUDIO_PROCESSING_LABELS: Record<"true" | "false" | "unknown", string> = {
+  true: "开启",
+  false: "关闭",
+  unknown: "未知"
+};
+
 const CREDENTIAL_LABELS: Record<NonNullable<AgentHealth["credentials"]>, string> = {
   configured: "ok",
   missing: "missing",
@@ -185,6 +208,7 @@ const UI_TEXT = {
     onboarding: "启动检查",
     mic: "麦克风",
     location: "定位",
+    audio: "降噪",
     server: "服务",
     provider: "代理",
     voice: "声音",
@@ -203,6 +227,7 @@ const UI_TEXT = {
     onboarding: "Preflight",
     mic: "Mic",
     location: "Location",
+    audio: "Noise",
     server: "Server",
     provider: "Provider",
     voice: "Voice",
@@ -283,6 +308,35 @@ function getRiderLocation(): Promise<RiderLocation | null> {
   });
 }
 
+function audioProcessingLabel(value: AudioProcessingState["echoCancellation"]) {
+  return AUDIO_PROCESSING_LABELS[String(value) as "true" | "false" | "unknown"];
+}
+
+function readAudioProcessingSettings(track: MediaStreamTrack): AudioProcessingState {
+  const settings = track.getSettings() as MediaTrackSettings & {
+    echoCancellation?: boolean;
+    noiseSuppression?: boolean;
+    autoGainControl?: boolean;
+  };
+
+  return {
+    echoCancellation: settings.echoCancellation ?? "unknown",
+    noiseSuppression: settings.noiseSuppression ?? "unknown",
+    autoGainControl: settings.autoGainControl ?? "unknown",
+    sampleRate: settings.sampleRate,
+    channelCount: settings.channelCount
+  };
+}
+
+function formatClockTime(timestamp: number) {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  }).format(timestamp);
+}
+
 // Folds a server status event into the conversational turn state. Unknown
 // states leave the turn state unchanged.
 function mapTurnState(state: string, previous: TurnState): TurnState {
@@ -325,6 +379,7 @@ function useHelmetAgent() {
   const [sessionMemory, setSessionMemory] = useState<SessionMemoryState>(DEFAULT_MEMORY);
   const [micPermission, setMicPermission] = useState<PermissionStateLabel>("unknown");
   const [locationPermission, setLocationPermission] = useState<PermissionStateLabel>("unknown");
+  const [audioProcessing, setAudioProcessing] = useState<AudioProcessingState>(DEFAULT_AUDIO_PROCESSING);
 
   const socketRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -345,9 +400,41 @@ function useHelmetAgent() {
   const rideModeRef = useRef<RideMode>(DEFAULT_RIDE_CONTEXT.mode);
   const scenarioRef = useRef<DemoScenario>(DEFAULT_RIDE_CONTEXT.scenario);
   const frameWindowRef = useRef<PacketWindow>(createPacketWindow());
+  const transcriptTurnRef = useRef(0);
 
-  const pushTranscript = useCallback((speaker: "rider" | "agent", text: string) => {
-    setTranscript((items) => [...items.slice(-7), { id: Date.now() + Math.random(), speaker, text }]);
+  const pushTranscript = useCallback((speaker: "rider" | "agent", text: string, final = true) => {
+    const cleanText = text.trim();
+    if (!cleanText) return;
+    const language = detectLanguage(cleanText);
+    const now = Date.now();
+    setTranscript((items) => {
+      const last = items.at(-1);
+      if (last?.speaker === speaker && !last.final) {
+        return [
+          ...items.slice(0, -1),
+          {
+            ...last,
+            at: now,
+            text: cleanText,
+            final,
+            language
+          }
+        ];
+      }
+
+      transcriptTurnRef.current += 1;
+      return [
+        ...items.slice(-39),
+        {
+          id: transcriptTurnRef.current,
+          at: now,
+          speaker,
+          text: cleanText,
+          final,
+          language
+        }
+      ];
+    });
   }, []);
 
   useEffect(() => {
@@ -518,7 +605,7 @@ function useHelmetAgent() {
         }
         if (event.type === "transcript") {
           if (event.speaker === "rider") stopAgentSpeech();
-          pushTranscript(event.speaker, event.text);
+          pushTranscript(event.speaker, event.text, event.final !== false);
           if (event.speaker === "agent" && event.final !== false) speak(event.text);
         }
         if (event.type === "metric") {
@@ -582,9 +669,9 @@ function useHelmetAgent() {
     socket.addEventListener("close", () => {
       // Ignore a socket already superseded by a newer one (e.g. a restart).
       if (socketRef.current !== socket) return;
-        setConnected(false);
-        setConnectionState("offline");
-        socketRef.current = null;
+      setConnected(false);
+      setConnectionState("offline");
+      socketRef.current = null;
       isLiveRef.current = false;
       if (intentionalCloseRef.current) {
         setStatus("离线");
@@ -725,9 +812,14 @@ function useHelmetAgent() {
       audio: {
         echoCancellation: true,
         noiseSuppression: true,
-        autoGainControl: true
-      }
+        autoGainControl: true,
+        channelCount: { ideal: 1 },
+        sampleRate: { ideal: SAMPLE_RATE },
+        sampleSize: { ideal: 16 }
+      } as MediaTrackConstraints
     });
+    const [track] = stream.getAudioTracks();
+    if (track) setAudioProcessing(readAudioProcessingSettings(track));
     const audioContext = new AudioContext();
     if (!audioContext.audioWorklet) {
       stream.getTracks().forEach((track) => track.stop());
@@ -788,6 +880,7 @@ function useHelmetAgent() {
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
     setVoiceLevel(0);
+    setAudioProcessing(DEFAULT_AUDIO_PROCESSING);
   }, []);
 
   // Start the hands-free session: grab geolocation (for live weather), open the
@@ -879,6 +972,7 @@ function useHelmetAgent() {
     sessionMemory,
     micPermission,
     locationPermission,
+    audioProcessing,
     setVoiceGender,
     setVoicePersonality,
     setRideMode,
@@ -930,9 +1024,13 @@ function App() {
   const preflight = [
     { label: t.mic, value: PERMISSION_LABELS[agent.micPermission] },
     { label: t.location, value: PERMISSION_LABELS[agent.locationPermission] },
+    { label: t.audio, value: `NS ${audioProcessingLabel(agent.audioProcessing.noiseSuppression)}` },
     { label: t.server, value: agent.health?.ok ? t.ready : "…" },
     { label: t.provider, value: agent.provider.toUpperCase() },
-    { label: t.voice, value: `${agent.voiceGender === "female" ? "女声" : "男声"} · ${PERSONALITY_LABELS[agent.voicePersonality]}` }
+    {
+      label: t.voice,
+      value: `${agent.voiceGender === "female" ? "女声" : "男声"} · ${PERSONALITY_LABELS[agent.voicePersonality]}`
+    }
   ];
 
   return (
@@ -1113,6 +1211,14 @@ function App() {
                 <strong>{agent.capabilities.synthesizedAudio ? "PCM" : "TTS"}</strong>
                 <span>记忆</span>
                 <strong>{agent.capabilities.sessionMemory ? "on" : "off"}</strong>
+                <span>降噪</span>
+                <strong>{audioProcessingLabel(agent.audioProcessing.noiseSuppression)}</strong>
+                <span>回声</span>
+                <strong>{audioProcessingLabel(agent.audioProcessing.echoCancellation)}</strong>
+                <span>增益</span>
+                <strong>{audioProcessingLabel(agent.audioProcessing.autoGainControl)}</strong>
+                <span>采样</span>
+                <strong>{agent.audioProcessing.sampleRate ?? SAMPLE_RATE}Hz</strong>
               </div>
               <div className="rideChips">
                 <span>{agent.sessionMemory.language === "zh" ? "中文" : "English"}</span>
@@ -1172,13 +1278,21 @@ function App() {
                 : [
                     {
                       id: 1,
+                      at: Date.now(),
                       speaker: "agent" as const,
+                      final: true,
+                      language: "zh" as const,
                       text: "你好，我是 Max，摩托车头盔 AI 助手。开启免提后直接说话，问我天气、路线或摩托车问题。"
                     }
                   ]
               ).map((item) => (
                 <article className={`message ${item.speaker}`} key={item.id}>
                   <span>{item.speaker === "rider" ? "骑手" : "Max"}</span>
+                  <div className="messageMeta">
+                    <b>{formatClockTime(item.at)}</b>
+                    <b>{item.language === "zh" ? "中文" : "EN"}</b>
+                    <b>{item.final ? "final" : "live"}</b>
+                  </div>
                   <p>{item.text}</p>
                 </article>
               ))}

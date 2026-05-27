@@ -14,7 +14,11 @@ export function createPacketWindow(now = 0): PacketWindow {
   return { startedAt: now, sent: 0, dropped: 0 };
 }
 
-export function recordSentFrame(window: PacketWindow, now: number, intervalMs = 1000): { window: PacketWindow; metric?: PacketMetric } {
+export function recordSentFrame(
+  window: PacketWindow,
+  now: number,
+  intervalMs = 1000
+): { window: PacketWindow; metric?: PacketMetric } {
   const startedAt = window.startedAt || window.sent ? window.startedAt : now;
   const sent = window.sent + 1;
   const elapsed = now - startedAt;

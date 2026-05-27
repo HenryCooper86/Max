@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { EventSend, buildAudioRequest, buildFullClientRequest, extractAsrText, parseDoubaoFrame } from "../server/providers/doubao";
+import {
+  EventSend,
+  buildAudioRequest,
+  buildFullClientRequest,
+  extractAsrText,
+  parseDoubaoFrame
+} from "../server/providers/doubao";
 
 function uint32(value: number): Buffer {
   const buffer = Buffer.alloc(4);

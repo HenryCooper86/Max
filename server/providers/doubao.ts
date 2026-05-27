@@ -24,7 +24,7 @@ import {
 // The "Max" persona prompt. Overridable per deployment with DOUBAO_SYSTEM_ROLE;
 // keep it consistent with the DOUBAO_SYSTEM_ROLE default in .env.example.
 export const DEFAULT_AGENT_SYSTEM_PROMPT =
-  "你是 Max，一位友好、冷静、以安全为先的摩托车头盔 AI 助手。你的名字保持 Max，角色保持 Motorcycle Helmet AI assistant。默认使用中文回答；如果骑手明确使用英文，可以用英文回答。只允许中文和英文两种语言，不要使用其他语言。如果骑手使用其他语言或要求你使用其他语言，请用中文简短说明：我只支持中文和 English。帮助骑手处理摩托车相关问题、导航、天气、路况、附近停靠点和骑行安全事项。回答要简短、清晰、适合免手操作。骑行中遇到危险或分心请求时，给出更安全的替代方案。声音由当前会话音色决定。";
+  "你是 Max，一位友好、冷静、以安全为先的摩托车头盔 AI 助手。你的名字保持 Max，角色保持 Motorcycle Helmet AI assistant。默认语言是中文，第二语言是 English；如果骑手明确使用英文，可以用英文回答。只允许中文和 English 两种语言，不要使用其他语言。如果骑手使用其他语言或要求你使用其他语言，请用中文简短说明：我只支持中文和 English。帮助骑手处理摩托车相关问题、导航、天气、路况、附近停靠点和骑行安全事项。回答要简短、清晰、适合免手操作。骑行中遇到危险、分心请求或超出头盔助手范围的请求时，先保护骑行安全，给出更安全的替代方案，必要时建议停车后继续。男声和女声只是当前会话音色，必须共享同一个 Max 角色、同一语言规则、同一安全策略和同一默认行为。";
 
 type DoubaoSessionConfig = {
   sampleRate: number;
@@ -48,6 +48,23 @@ export function doubaoSpeaker(voiceGender: VoiceGender): string {
     voiceGender === "male" ? process.env.DOUBAO_VOICE_MALE?.trim() : process.env.DOUBAO_VOICE?.trim();
   const speaker = configuredSpeaker || (voiceGender === "male" ? DEFAULT_MALE_SPEAKER : DEFAULT_FEMALE_SPEAKER);
   return UNSUPPORTED_REALTIME_SPEAKER_REPLACEMENTS[speaker] ?? speaker;
+}
+
+export function buildVoiceSettingPrompt(voiceGender: VoiceGender): string {
+  const voiceLabel = voiceGender === "male" ? "男声" : "女声";
+  return (
+    `[声音设置] 当前会话使用${voiceLabel}音色。` +
+    "男声和女声共享同一个 Max 角色、同一语言规则、同一安全策略和同一默认行为；音色只影响声音，不改变身份、能力或人格。" +
+    "不要在文字中声称自己是其他性别音色。"
+  );
+}
+
+export function buildLanguageInteractionPrompt(): string {
+  return (
+    "[语言与交互规则] 默认先用中文回应；只有当骑手明确使用 English 或要求 English 时才切换英文。" +
+    "如果听到中文和英文以外的语言、或骑手要求使用其他语言，只用中文简短拒绝：我只支持中文和 English。" +
+    "每次回复优先给下一步可执行动作；骑行中最多问一个必要问题，避免菜单、长列表和需要看屏幕的说明。"
+  );
 }
 
 const enum MessageType {
@@ -483,7 +500,8 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
       memory = createSessionMemory(rideContext.mode);
       systemRole +=
         `\n\n[骑行上下文] ${buildRideContextSummary(rideContext)}。` +
-        `\n[声音设置] 当前会话使用${event.voiceGender === "male" ? "男声" : "女声"}音色。不要在文字中声称自己是其他性别音色。` +
+        `\n${buildVoiceSettingPrompt(event.voiceGender ?? "female")}` +
+        `\n${buildLanguageInteractionPrompt()}` +
         `你必须根据模式调整回答长度和安全策略；紧急模式优先生命安全，导航模式只给下一步。\n${buildSafetyPrompt(
           rideContext,
           memory

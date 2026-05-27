@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { doubaoSpeaker } from "../server/providers/doubao";
+import {
+  DEFAULT_AGENT_SYSTEM_PROMPT,
+  buildLanguageInteractionPrompt,
+  buildVoiceSettingPrompt,
+  doubaoSpeaker
+} from "../server/providers/doubao";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -29,5 +34,24 @@ describe("doubaoSpeaker", () => {
   it("replaces the old unsupported male realtime speaker", () => {
     vi.stubEnv("DOUBAO_VOICE_MALE", "zh_male_vv_jupiter_bigtts");
     expect(doubaoSpeaker("male")).toBe("zh_male_yunzhou_jupiter_bigtts");
+  });
+
+  it("keeps male and female voices on the same Max role and defaults", () => {
+    const malePrompt = buildVoiceSettingPrompt("male");
+    const femalePrompt = buildVoiceSettingPrompt("female");
+
+    expect(malePrompt).toContain("同一个 Max 角色");
+    expect(femalePrompt).toContain("同一个 Max 角色");
+    expect(malePrompt).toContain("音色只影响声音");
+    expect(femalePrompt).toContain("音色只影响声音");
+  });
+
+  it("sets Chinese first, English second, and rejects other languages", () => {
+    const prompt = `${DEFAULT_AGENT_SYSTEM_PROMPT}\n${buildLanguageInteractionPrompt()}`;
+
+    expect(prompt).toContain("默认语言是中文");
+    expect(prompt).toContain("第二语言是 English");
+    expect(prompt).toContain("只支持中文和 English");
+    expect(prompt).toContain("中文和英文以外的语言");
   });
 });

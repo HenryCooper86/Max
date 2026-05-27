@@ -432,6 +432,9 @@ function useHelmetAgent() {
     const now = Date.now();
     setTranscript((items) => {
       const last = items.at(-1);
+      if (speaker === "agent" && last?.speaker === "agent" && last.text === cleanText && now - last.at < 8000) {
+        return items;
+      }
       if (last?.speaker === speaker && !last.final) {
         return [
           ...items.slice(0, -1),

@@ -290,6 +290,8 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
   let pendingAgentText = "";
   let receivedTtsAudio = false;
   let ttsFallbackTimer: NodeJS.Timeout | undefined;
+  let lastFlushedAgentText = "";
+  let lastFlushedAgentTextAt = 0;
   let rideContext: RideContext = { mode: "ride", scenario: "commute" };
   let memory: SessionMemory = createSessionMemory("ride");
   let audioStartedAt = 0;
@@ -312,6 +314,13 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
   function flushPendingAgentText(useBrowserSpeech: boolean) {
     const text = pendingAgentText.trim();
     if (!text) return;
+    const now = Date.now();
+    if (text === lastFlushedAgentText && now - lastFlushedAgentTextAt < 8000) {
+      pendingAgentText = "";
+      return;
+    }
+    lastFlushedAgentText = text;
+    lastFlushedAgentTextAt = now;
     sendClient({ type: "transcript", speaker: "agent", text, final: true, useBrowserSpeech });
     pendingAgentText = "";
   }

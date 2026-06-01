@@ -1,0 +1,403 @@
+package com.horizon.maxhelmet.agent
+
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Context
+import android.content.pm.PackageManager
+import android.location.LocationManager
+import android.speech.tts.TextToSpeech
+import android.util.Log
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import okio.ByteString
+import okio.ByteString.Companion.toByteString
+import java.util.Locale
+import java.util.concurrent.TimeUnit
+
+/**
+ * Owns one hands-free voice session end to end: relay WebSocket, mic streaming,
+ * voice playback, TTS fallback, and the HUD state. This is the Android
+ * counterpart of the useHelmetAgent hook in src/main.tsx.
+ */
+class AgentSession(
+    private val context: Context,
+    private val scope: CoroutineScope
+) {
+
+    data class State(
+        val handsFree: Boolean = false,
+        val connection: ConnectionState = ConnectionState.OFFLINE,
+        val statusText: String = "离线",
+        val provider: String = "",
+        val isLive: Boolean = false,
+        val turnState: TurnState = TurnState.IDLE,
+        val voiceGender: VoiceGender = VoiceGender.FEMALE,
+        val voiceLevel: Float = 0f,
+        val latencyMs: Int = 0,
+        val transcript: List<TranscriptItem> = emptyList(),
+        val weather: Weather? = null,
+        val telemetry: Telemetry? = null
+    )
+
+    companion object {
+        private const val TAG = "AgentSession"
+
+        /** Mirrors MAX_RECONNECT_ATTEMPTS in src/main.tsx. */
+        const val MAX_RECONNECT_ATTEMPTS = 6
+
+        /** Repeated agent lines inside this window are dropped (src/main.tsx). */
+        private const val AGENT_DEDUPE_WINDOW_MS = 8_000L
+    }
+
+    private val _state = MutableStateFlow(State())
+    val state: StateFlow<State> = _state.asStateFlow()
+
+    private val httpClient = OkHttpClient.Builder()
+        .pingInterval(20, TimeUnit.SECONDS)
+        .build()
+
+    private var webSocket: WebSocket? = null
+    private var relayUrl: String = ""
+    private var reconnectAttempts = 0
+    private var reconnectJob: Job? = null
+
+    @Volatile
+    private var intentionalClose = false
+
+    @Volatile
+    private var transmitting = false
+
+    private var transcriptTurn = 0
+    private var location: Pair<Double, Double>? = null
+
+    private val player = PcmPlayer()
+    private val mic = MicStreamer(
+        onFrame = { frame -> if (transmitting) webSocket?.send(frame.toByteString()) },
+        onLevel = { level -> _state.update { it.copy(voiceLevel = if (transmitting) level else 0f) } }
+    )
+
+    // Device-TTS fallback, the counterpart of the browser speechSynthesis path:
+    // speaks agent reply text when there is no synthesized audio (always the
+    // case for the mock provider).
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
+
+    init {
+        tts = TextToSpeech(context) { status -> ttsReady = status == TextToSpeech.SUCCESS }
+    }
+
+    // ---- public API --------------------------------------------------------
+
+    /** Activates hands-free: resolve location, open the relay, start the mic. */
+    fun start(url: String, voiceGender: VoiceGender) {
+        if (_state.value.handsFree) return
+        relayUrl = url
+        intentionalClose = false
+        reconnectAttempts = 0
+        transmitting = true
+        _state.update {
+            it.copy(handsFree = true, voiceGender = voiceGender, turnState = TurnState.LISTENING)
+        }
+        scope.launch {
+            location = resolveLocation()
+            connect()
+            try {
+                mic.start()
+            } catch (error: Exception) {
+                Log.w(TAG, "Mic start failed", error)
+                _state.update { it.copy(statusText = "麦克风不可用，请检查录音权限") }
+            }
+        }
+    }
+
+    /** Deactivates hands-free: stop the mic and close the relay. */
+    fun stop() {
+        if (!_state.value.handsFree) return
+        transmitting = false
+        intentionalClose = true
+        reconnectJob?.cancel()
+        webSocket?.send(AUDIO_STOP_EVENT)
+        webSocket?.close(1000, "rider stopped")
+        webSocket = null
+        mic.stop()
+        tts?.stop()
+        player.stopPlayback()
+        _state.update {
+            it.copy(
+                handsFree = false,
+                connection = ConnectionState.OFFLINE,
+                statusText = "离线",
+                turnState = TurnState.IDLE,
+                voiceLevel = 0f
+            )
+        }
+    }
+
+    /**
+     * Switches the live speaker. Mirrors restartSession in src/main.tsx: the
+     * Doubao speaker is fixed at session start, so reconnect for a fresh session.
+     * The mic keeps running across the restart.
+     */
+    fun setVoiceGender(gender: VoiceGender) {
+        if (_state.value.voiceGender == gender) return
+        _state.update { it.copy(voiceGender = gender) }
+        if (_state.value.handsFree && webSocket != null) restartSession()
+    }
+
+    // ---- relay connection --------------------------------------------------
+
+    private fun restartSession() {
+        val socket = webSocket
+        webSocket = null
+        intentionalClose = true
+        socket?.close(1000, "session restart")
+        scope.launch {
+            delay(150)
+            intentionalClose = false
+            reconnectAttempts = 0
+            connect()
+        }
+    }
+
+    private fun connect() {
+        if (intentionalClose) return
+        _state.update {
+            it.copy(
+                connection = ConnectionState.CONNECTING,
+                statusText = if (reconnectAttempts > 0) "重新连接中…（第 $reconnectAttempts 次）" else "连接中"
+            )
+        }
+
+        val request = Request.Builder().url(relayUrl).build()
+        webSocket = httpClient.newWebSocket(request, object : WebSocketListener() {
+
+            override fun onOpen(socket: WebSocket, response: Response) {
+                if (socket !== webSocket) return
+                reconnectAttempts = 0
+                _state.update { it.copy(connection = ConnectionState.RELAY, statusText = "就绪") }
+                socket.send(buildSessionStart(_state.value.voiceGender, location?.first, location?.second))
+                // Resume the audio stream if the rider was transmitting before a drop.
+                if (transmitting) socket.send(AUDIO_START_EVENT)
+            }
+
+            override fun onMessage(socket: WebSocket, text: String) {
+                if (socket !== webSocket) return
+                val event = runCatching { parseAgentEvent(text) }.getOrElse {
+                    _state.update { state -> state.copy(statusText = "收到异常代理消息") }
+                    return
+                }
+                handleEvent(event)
+            }
+
+            override fun onMessage(socket: WebSocket, bytes: ByteString) {
+                if (socket !== webSocket) return
+                player.play(bytes.toByteArray())
+            }
+
+            override fun onClosed(socket: WebSocket, code: Int, reason: String) {
+                handleSocketClosed(socket)
+            }
+
+            override fun onFailure(socket: WebSocket, t: Throwable, response: Response?) {
+                Log.w(TAG, "Relay socket failure", t)
+                handleSocketClosed(socket)
+            }
+        })
+    }
+
+    private fun handleSocketClosed(socket: WebSocket) {
+        // Ignore a socket already superseded by a newer one (e.g. a restart).
+        if (webSocket != null && socket !== webSocket) return
+        webSocket = null
+        if (intentionalClose) {
+            if (_state.value.handsFree) return // restartSession() will reconnect
+            _state.update { it.copy(connection = ConnectionState.OFFLINE, statusText = "离线") }
+            return
+        }
+
+        // Unexpected drop: reconnect with exponential backoff (mirrors src/main.tsx).
+        reconnectAttempts += 1
+        if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+            reconnectAttempts = 0
+            _state.update {
+                it.copy(connection = ConnectionState.DEGRADED, statusText = "语音中继连接失败，请重新开启免提")
+            }
+            return
+        }
+        val delayMs = minOf(8_000L, 1_000L * (1L shl (reconnectAttempts - 1)))
+        _state.update {
+            it.copy(connection = ConnectionState.OFFLINE, statusText = "连接已断开，${delayMs / 1000} 秒后自动重连…")
+        }
+        reconnectJob = scope.launch {
+            delay(delayMs)
+            connect()
+        }
+    }
+
+    // ---- event handling ----------------------------------------------------
+
+    private fun handleEvent(event: AgentEvent) {
+        when (event) {
+            is AgentEvent.SessionStarted -> _state.update {
+                it.copy(
+                    provider = event.provider,
+                    isLive = event.mode != "mock",
+                    connection = ConnectionState.READY,
+                    statusText = if (event.mode == "mock") "模拟路线已启用" else "豆包实时语音在线"
+                )
+            }
+
+            is AgentEvent.Connection -> _state.update {
+                it.copy(connection = mapConnectionState(event.state, it.connection), statusText = event.detail)
+            }
+
+            is AgentEvent.Status -> _state.update {
+                val connection = when (event.state) {
+                    "connecting" -> ConnectionState.PROVIDER
+                    "ready" -> ConnectionState.READY
+                    "closed" -> ConnectionState.OFFLINE
+                    else -> it.connection
+                }
+                it.copy(
+                    statusText = event.detail,
+                    connection = connection,
+                    turnState = if (transmitting) mapTurnState(event.state, it.turnState) else it.turnState
+                )
+            }
+
+            is AgentEvent.Transcript -> {
+                // Barge-in: the rider talking always silences the agent.
+                if (event.speaker == Speaker.RIDER) stopAgentSpeech()
+                pushTranscript(event.speaker, event.text, event.final)
+                val shouldSpeak = event.useBrowserSpeech ?: event.final
+                if (event.speaker == Speaker.AGENT && shouldSpeak) speak(event.text)
+            }
+
+            is AgentEvent.Metric -> _state.update { it.copy(latencyMs = event.latencyMs) }
+
+            is AgentEvent.WeatherUpdate -> _state.update { it.copy(weather = event.weather) }
+
+            is AgentEvent.TelemetryUpdate -> _state.update { it.copy(telemetry = event.telemetry) }
+
+            is AgentEvent.ErrorEvent -> _state.update { it.copy(statusText = event.message) }
+
+            AgentEvent.Unhandled -> Unit
+        }
+    }
+
+    /** Port of pushTranscript in src/main.tsx, including the dedupe rules. */
+    private fun pushTranscript(speaker: Speaker, text: String, final: Boolean) {
+        val clean = text.trim()
+        if (clean.isEmpty()) return
+        val now = System.currentTimeMillis()
+        val language = detectLanguage(clean)
+
+        _state.update { state ->
+            val items = state.transcript
+            val last = items.lastOrNull()
+
+            // Repeated agent line within the dedupe window → drop it.
+            if (speaker == Speaker.AGENT && last?.speaker == Speaker.AGENT &&
+                normalizeTranscriptText(last.text) == normalizeTranscriptText(clean) &&
+                now - last.at < AGENT_DEDUPE_WINDOW_MS
+            ) {
+                return@update state
+            }
+
+            // Same speaker still mid-turn → update that entry in place.
+            if (last != null && last.speaker == speaker && !last.final) {
+                return@update state.copy(
+                    transcript = items.dropLast(1) +
+                        last.copy(at = now, text = clean, final = final, language = language)
+                )
+            }
+
+            // New turn: finalize any dangling in-progress entry, then append.
+            val finalized = if (last != null && !last.final) {
+                items.dropLast(1) + last.copy(final = true)
+            } else {
+                items
+            }
+            transcriptTurn += 1
+            state.copy(
+                transcript = finalized + TranscriptItem(transcriptTurn, now, speaker, clean, final, language)
+            )
+        }
+    }
+
+    // ---- speech output -----------------------------------------------------
+
+    /** Barge-in: silence whatever the agent is currently saying. */
+    private fun stopAgentSpeech() {
+        tts?.stop()
+        player.stopPlayback()
+        if (transmitting) {
+            _state.update { it.copy(turnState = TurnState.LISTENING, statusText = "已打断 Max，继续听你说") }
+        }
+    }
+
+    private fun speak(text: String) {
+        val engine = tts ?: return
+        if (!ttsReady || text.isBlank()) return
+        engine.language = if (detectLanguage(text) == "zh") Locale.SIMPLIFIED_CHINESE else Locale.US
+        engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "max-reply")
+    }
+
+    // ---- location ----------------------------------------------------------
+
+    /**
+     * Best-effort one-shot location for the weather context. Last-known is good
+     * enough — the server falls back to its demo location when this is null.
+     */
+    @SuppressLint("MissingPermission")
+    private suspend fun resolveLocation(): Pair<Double, Double>? {
+        if (!hasLocationPermission()) return null
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                val manager = context.getSystemService(LocationManager::class.java) ?: return@runCatching null
+                listOf(
+                    LocationManager.GPS_PROVIDER,
+                    LocationManager.NETWORK_PROVIDER,
+                    LocationManager.PASSIVE_PROVIDER
+                ).firstNotNullOfOrNull { provider ->
+                    runCatching { manager.getLastKnownLocation(provider) }.getOrNull()
+                }?.let { it.latitude to it.longitude }
+            }.getOrNull()
+        }
+    }
+
+    private fun hasLocationPermission(): Boolean =
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+}
+
+/** Process-wide owner of the single AgentSession instance. */
+object AgentSessionHolder {
+    @Volatile
+    private var session: AgentSession? = null
+
+    fun get(context: Context): AgentSession =
+        session ?: synchronized(this) {
+            session ?: AgentSession(
+                context.applicationContext,
+                CoroutineScope(SupervisorJob() + Dispatchers.Default)
+            ).also { session = it }
+        }
+}

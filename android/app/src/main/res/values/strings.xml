@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Max 头盔助手</string>
+    <string name="notification_channel_name">免提语音会话</string>
+    <string name="notification_title">Max 免提语音运行中</string>
+    <string name="notification_text">正在监听骑手语音</string>
+</resources>

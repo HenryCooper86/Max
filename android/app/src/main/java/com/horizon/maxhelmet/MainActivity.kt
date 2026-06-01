@@ -20,8 +20,9 @@ class MainActivity : ComponentActivity() {
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
-            // Mic is required; location and notifications are best-effort
-            // (the relay falls back to demo weather without coordinates).
+            // Mic is required; location, Bluetooth, and notifications are
+            // best-effort (the relay falls back to demo weather without
+            // coordinates, and audio falls back to the phone mic/speaker).
             if (grants[Manifest.permission.RECORD_AUDIO] == true) {
                 viewModel.toggleHandsFree()
             }
@@ -36,7 +37,8 @@ class MainActivity : ComponentActivity() {
             MaxHelmetTheme {
                 AgentScreen(
                     viewModel = viewModel,
-                    onToggleHandsFree = ::toggleHandsFreeWithPermissions
+                    onToggleHandsFree = ::toggleHandsFreeWithPermissions,
+                    onExportTranscript = { viewModel.exportTranscript(this) }
                 )
             }
         }
@@ -53,6 +55,9 @@ class MainActivity : ComponentActivity() {
             add(Manifest.permission.RECORD_AUDIO)
             add(Manifest.permission.ACCESS_FINE_LOCATION)
             add(Manifest.permission.ACCESS_COARSE_LOCATION)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                add(Manifest.permission.BLUETOOTH_CONNECT)
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 add(Manifest.permission.POST_NOTIFICATIONS)
             }

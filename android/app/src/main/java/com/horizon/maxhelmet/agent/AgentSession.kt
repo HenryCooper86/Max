@@ -26,13 +26,17 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLContext
+import javax.net.ssl.X509TrustManager
 
 /**
  * Owns one hands-free voice session end to end: relay WebSocket, mic streaming,
- * voice playback, TTS fallback, and the HUD state. This is the Android
- * counterpart of the useHelmetAgent hook in src/main.tsx.
+ * voice playback, Bluetooth routing, TTS fallback, and the HUD state. This is
+ * the Android counterpart of the useHelmetAgent hook in src/main.tsx.
  */
 class AgentSession(
     private val context: Context,
@@ -47,12 +51,20 @@ class AgentSession(
         val isLive: Boolean = false,
         val turnState: TurnState = TurnState.IDLE,
         val voiceGender: VoiceGender = VoiceGender.FEMALE,
+        val voicePersonality: VoicePersonality = VoicePersonality.CONCISE,
         val voiceLevel: Float = 0f,
         val latencyMs: Int = 0,
         val transcript: List<TranscriptItem> = emptyList(),
         val weather: Weather? = null,
-        val telemetry: Telemetry? = null
-    )
+        val rideContext: RideContext = RideContext(),
+        val sessionMemory: SessionMemory = SessionMemory(),
+        val telemetry: Telemetry? = null,
+        val bluetoothRouted: Boolean = false
+    ) {
+        /** 态势摘要 fusion: ride hazard + weather risk (fusedHazard in src/main.tsx). */
+        val fusedHazard: HazardLevel
+            get() = combineHazardLevels(rideContext.hazardLevel, weather?.riskLevel ?: HazardLevel.NORMAL)
+    }
 
     companion object {
         private const val TAG = "AgentSession"
@@ -67,9 +79,8 @@ class AgentSession(
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state.asStateFlow()
 
-    private val httpClient = OkHttpClient.Builder()
-        .pingInterval(20, TimeUnit.SECONDS)
-        .build()
+    private var httpClient: OkHttpClient = buildHttpClient(allowSelfSigned = false)
+    private var allowSelfSigned = false
 
     private var webSocket: WebSocket? = null
     private var relayUrl: String = ""
@@ -86,6 +97,7 @@ class AgentSession(
     private var location: Pair<Double, Double>? = null
 
     private val player = PcmPlayer()
+    private val audioRouter = AudioRouter(context)
     private val mic = MicStreamer(
         onFrame = { frame -> if (transmitting) webSocket?.send(frame.toByteString()) },
         onLevel = { level -> _state.update { it.copy(voiceLevel = if (transmitting) level else 0f) } }
@@ -103,15 +115,30 @@ class AgentSession(
 
     // ---- public API --------------------------------------------------------
 
-    /** Activates hands-free: resolve location, open the relay, start the mic. */
-    fun start(url: String, voiceGender: VoiceGender) {
+    /**
+     * Activates hands-free: route audio, resolve location, open the relay, and
+     * start the mic. `allowSelfSignedTls` opts into trusting the test server's
+     * self-signed certificate for wss:// URLs.
+     */
+    fun start(url: String, allowSelfSignedTls: Boolean) {
         if (_state.value.handsFree) return
         relayUrl = url
+
+        if (allowSelfSignedTls != allowSelfSigned) {
+            allowSelfSigned = allowSelfSignedTls
+            httpClient = buildHttpClient(allowSelfSigned)
+        }
+
         intentionalClose = false
         reconnectAttempts = 0
         transmitting = true
+
+        // In-helmet Bluetooth headset routing; playback follows the same path.
+        val bluetoothRouted = audioRouter.startVoiceRouting()
+        player.useVoiceCall = bluetoothRouted
+
         _state.update {
-            it.copy(handsFree = true, voiceGender = voiceGender, turnState = TurnState.LISTENING)
+            it.copy(handsFree = true, turnState = TurnState.LISTENING, bluetoothRouted = bluetoothRouted)
         }
         scope.launch {
             location = resolveLocation()
@@ -125,7 +152,7 @@ class AgentSession(
         }
     }
 
-    /** Deactivates hands-free: stop the mic and close the relay. */
+    /** Deactivates hands-free: stop the mic, restore routing, close the relay. */
     fun stop() {
         if (!_state.value.handsFree) return
         transmitting = false
@@ -136,14 +163,17 @@ class AgentSession(
         webSocket = null
         mic.stop()
         tts?.stop()
-        player.stopPlayback()
+        // Release (not just flush) so the next session can pick a new audio route.
+        player.release()
+        audioRouter.stopVoiceRouting()
         _state.update {
             it.copy(
                 handsFree = false,
                 connection = ConnectionState.OFFLINE,
                 statusText = "离线",
                 turnState = TurnState.IDLE,
-                voiceLevel = 0f
+                voiceLevel = 0f,
+                bluetoothRouted = false
             )
         }
     }
@@ -155,11 +185,77 @@ class AgentSession(
      */
     fun setVoiceGender(gender: VoiceGender) {
         if (_state.value.voiceGender == gender) return
-        _state.update { it.copy(voiceGender = gender) }
-        if (_state.value.handsFree && webSocket != null) restartSession()
+        _state.update {
+            it.copy(
+                voiceGender = gender,
+                statusText = if (gender == VoiceGender.MALE) "已切换到男声" else "已切换到女声"
+            )
+        }
+        restartIfConnected()
     }
 
+    /** Mirrors setVoicePersonality in src/main.tsx. */
+    fun setVoicePersonality(personality: VoicePersonality) {
+        if (_state.value.voicePersonality == personality) return
+        _state.update {
+            it.copy(voicePersonality = personality, statusText = "已切换语气：${personality.label}")
+        }
+        restartIfConnected()
+    }
+
+    /** Mirrors setRideMode in src/main.tsx, including the hazard fusion. */
+    fun setRideMode(mode: RideMode) {
+        if (_state.value.rideContext.mode == mode) return
+        _state.update {
+            val hazardLevel = combineHazardLevels(rideModeHazard(mode), it.rideContext.scenario.hazard)
+            it.copy(rideContext = it.rideContext.copy(mode = mode, hazardLevel = hazardLevel))
+        }
+        restartIfConnected()
+    }
+
+    /** Mirrors setScenario in src/main.tsx — the scenario also picks a default mode. */
+    fun setScenario(scenario: DemoScenario) {
+        if (_state.value.rideContext.scenario == scenario) return
+        _state.update {
+            val mode = scenarioDefaultMode(scenario)
+            val hazardLevel = combineHazardLevels(rideModeHazard(mode), scenario.hazard)
+            it.copy(
+                rideContext = it.rideContext.copy(scenario = scenario, mode = mode, hazardLevel = hazardLevel)
+            )
+        }
+        restartIfConnected()
+    }
+
+    /** Builds the transcript export JSON (port of exportTranscriptLog in src/main.tsx). */
+    fun buildTranscriptExport(): String = buildTranscriptExportJson(_state.value.transcript)
+
     // ---- relay connection --------------------------------------------------
+
+    private fun buildHttpClient(allowSelfSigned: Boolean): OkHttpClient {
+        val builder = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS)
+
+        if (allowSelfSigned) {
+            // Prototype-only: the Lightsail test relay uses a self-signed
+            // certificate. This trust-all manager is gated behind an explicit
+            // settings toggle and must never ship in a production build.
+            val trustAll = object : X509TrustManager {
+                override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) = Unit
+                override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) = Unit
+                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+            }
+            val sslContext = SSLContext.getInstance("TLS").apply {
+                init(null, arrayOf(trustAll), SecureRandom())
+            }
+            builder.sslSocketFactory(sslContext.socketFactory, trustAll)
+            builder.hostnameVerifier { _, _ -> true }
+        }
+
+        return builder.build()
+    }
+
+    private fun restartIfConnected() {
+        if (_state.value.handsFree && webSocket != null) restartSession()
+    }
 
     private fun restartSession() {
         val socket = webSocket
@@ -190,7 +286,17 @@ class AgentSession(
                 if (socket !== webSocket) return
                 reconnectAttempts = 0
                 _state.update { it.copy(connection = ConnectionState.RELAY, statusText = "就绪") }
-                socket.send(buildSessionStart(_state.value.voiceGender, location?.first, location?.second))
+                val current = _state.value
+                socket.send(
+                    buildSessionStart(
+                        voiceGender = current.voiceGender,
+                        voicePersonality = current.voicePersonality,
+                        rideMode = current.rideContext.mode,
+                        scenario = current.rideContext.scenario,
+                        lat = location?.first,
+                        lon = location?.second
+                    )
+                )
                 // Resume the audio stream if the rider was transmitting before a drop.
                 if (transmitting) socket.send(AUDIO_START_EVENT)
             }
@@ -290,7 +396,19 @@ class AgentSession(
 
             is AgentEvent.Metric -> _state.update { it.copy(latencyMs = event.latencyMs) }
 
-            is AgentEvent.WeatherUpdate -> _state.update { it.copy(weather = event.weather) }
+            is AgentEvent.WeatherUpdate -> _state.update {
+                // Weather risk also feeds the fused ride hazard (src/main.tsx).
+                it.copy(
+                    weather = event.weather,
+                    rideContext = it.rideContext.copy(
+                        hazardLevel = combineHazardLevels(it.rideContext.hazardLevel, event.weather.riskLevel)
+                    )
+                )
+            }
+
+            is AgentEvent.RideContextUpdate -> _state.update { it.copy(rideContext = event.rideContext) }
+
+            is AgentEvent.SessionMemoryUpdate -> _state.update { it.copy(sessionMemory = event.memory) }
 
             is AgentEvent.TelemetryUpdate -> _state.update { it.copy(telemetry = event.telemetry) }
 

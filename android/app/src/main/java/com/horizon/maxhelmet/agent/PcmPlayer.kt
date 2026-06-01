@@ -28,6 +28,13 @@ class PcmPlayer {
     @Volatile
     private var generation = 0
 
+    /**
+     * When true the track uses the voice-communication stream so playback
+     * follows Bluetooth SCO routing (in-helmet headsets). Set before start().
+     */
+    @Volatile
+    var useVoiceCall = false
+
     @Synchronized
     fun start() {
         if (running) return
@@ -39,7 +46,10 @@ class PcmPlayer {
         val audioTrack = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setUsage(
+                        if (useVoiceCall) AudioAttributes.USAGE_VOICE_COMMUNICATION
+                        else AudioAttributes.USAGE_MEDIA
+                    )
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build()
             )

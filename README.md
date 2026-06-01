@@ -6,6 +6,24 @@ Prototype AI voice agent for a motorcycle helmet. Max keeps the same name and mo
 
 ![Max Motorcycle Helmet AI frontend](docs/assets/frontend-screenshot.png)
 
+## Android App Preview
+
+The native Android client (`android/`, Kotlin + Jetpack Compose) speaks the same `/agent` relay
+protocol as the web HUD, so the Node server, Doubao integration, weather, and ride intelligence
+all work unchanged. See [android/README.md](android/README.md) for build and setup.
+
+**免提会话 — Max 回答中** · hands-free session with the turn-state ring
+
+![Android HUD — hands-free session, Max speaking](docs/assets/android-hud-speaking.png)
+
+**态势摘要 · 实时天气 · 延迟遥测** · ride pulse, live weather, and latency cards
+
+![Android HUD — ride pulse, weather, and latency telemetry](docs/assets/android-ride-pulse.png)
+
+**实时对话记录** · live transcript with in-place updates and JSON export
+
+![Android HUD — live transcript with export](docs/assets/android-transcript.png)
+
 ## Current Capabilities
 
 - Hands-free operation — click the main button or press Space to start/stop; once active, the rider just talks and Doubao's server-side VAD handles turn-taking.

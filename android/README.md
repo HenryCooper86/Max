@@ -16,6 +16,12 @@ Phone (this app)                        Mac / test server
 └─────────────────────────┘            └──────────────────────┘
 ```
 
+## Screenshots
+
+| 免提会话（Max 回答中） | 态势摘要 + 天气 + 延迟 | 实时对话记录 |
+| --- | --- | --- |
+| ![Hands-free session](../docs/assets/android-hud-speaking.png) | ![Ride pulse and weather](../docs/assets/android-ride-pulse.png) | ![Live transcript](../docs/assets/android-transcript.png) |
+
 ## Requirements
 
 - Android Studio (its bundled JDK builds the project — Homebrew Java 25 is too new for Gradle 8.9)

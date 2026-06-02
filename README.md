@@ -32,6 +32,14 @@ barge-in, reconnect handling, live weather, transcript export, and TTS fallback 
 iOS-native audio routing and background audio. See [ios/README.md](ios/README.md) for Xcode,
 relay URL, and self-signed test-server setup.
 
+**待机设置 — Max iOS HUD** · voice, ride mode, scenario, relay URL, and hands-free control
+
+![iOS HUD — idle setup](docs/assets/ios-hud-idle.png)
+
+**免提会话 — 模拟语音在线** · turn-state ring, ride pulse, live weather, and telemetry
+
+![iOS HUD — active hands-free session](docs/assets/ios-hud-active.png)
+
 ## Current Capabilities
 
 - Hands-free operation — click the main button or press Space to start/stop; once active, the rider just talks and Doubao's server-side VAD handles turn-taking.

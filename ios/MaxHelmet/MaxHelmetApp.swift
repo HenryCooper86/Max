@@ -1,0 +1,22 @@
+import SwiftUI
+
+/// App entry — the iOS counterpart of android/.../MainActivity.kt. Hosts the
+/// single hands-free HUD, forces dark mode (the HUD is designed dark), and keeps
+/// the screen awake while open so riders can glance at it (FLAG_KEEP_SCREEN_ON).
+@main
+struct MaxHelmetApp: App {
+    @StateObject private var viewModel = MainViewModel()
+    @StateObject private var session = AgentSession.shared
+
+    init() {
+        // Riders glance at the HUD; keep it visible while the app is foregrounded.
+        UIApplication.shared.isIdleTimerDisabled = true
+    }
+
+    var body: some Scene {
+        WindowGroup {
+            AgentScreen(viewModel: viewModel, session: session)
+                .preferredColorScheme(.dark)
+        }
+    }
+}

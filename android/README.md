@@ -18,8 +18,8 @@ Phone (this app)                        Mac / test server
 
 ## Screenshots
 
-| 免提会话（Max 回答中） | 态势摘要 + 天气 + 延迟 | 实时对话记录 |
-| --- | --- | --- |
+| 免提会话（Max 回答中）                                         | 态势摘要 + 天气 + 延迟                                           | 实时对话记录                                              |
+| -------------------------------------------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------- |
 | ![Hands-free session](../docs/assets/android-hud-speaking.png) | ![Ride pulse and weather](../docs/assets/android-ride-pulse.png) | ![Live transcript](../docs/assets/android-transcript.png) |
 
 ## Requirements
@@ -45,10 +45,10 @@ Android Studio and press Run.
    The server listens on `0.0.0.0:8787`, so it is reachable over the LAN.
 2. Install and launch the app, then set the 语音中继地址 field:
 
-| Where the app runs   | Relay URL                                            |
-| -------------------- | ---------------------------------------------------- |
-| Android emulator     | `ws://10.0.2.2:8787/agent` (default — host loopback) |
-| Physical phone (LAN) | `ws://<Mac-LAN-IP>:8787/agent`                       |
+| Where the app runs   | Relay URL                                                         |
+| -------------------- | ----------------------------------------------------------------- |
+| Android emulator     | `ws://10.0.2.2:8787/agent` (default — host loopback)              |
+| Physical phone (LAN) | `ws://<Mac-LAN-IP>:8787/agent`                                    |
 | Physical phone (USB) | `ws://127.0.0.1:8787/agent` after `adb reverse tcp:8787 tcp:8787` |
 
 3. Tap 开启免提. The app asks for microphone (required) and location (optional, used for
@@ -91,15 +91,15 @@ The emulator forwards the host Mac's microphone, so the full voice loop is testa
 
 ## Architecture
 
-| File | Role | Web counterpart |
-| ---- | ---- | --------------- |
-| `agent/AgentProtocol.kt` | Event types, JSON parsing, ride/hazard/turn-state/language helpers, export payload | `shared/agent.ts`, `shared/ride.ts`, `shared/language.ts`, helpers in `src/main.tsx` |
-| `agent/MicStreamer.kt` | 16 kHz PCM16 mic capture, 20 ms frames | `public/pcm-worklet.js` |
-| `agent/PcmPlayer.kt` | 24 kHz PCM16 gapless playback + barge-in flush | playback scheduling in `src/main.tsx` |
-| `agent/AudioRouter.kt` | Bluetooth headset (SCO) routing for in-helmet headsets | — (browsers can't control routing) |
-| `agent/AgentSession.kt` | Session orchestration, reconnect, transcript, state | `useHelmetAgent` hook in `src/main.tsx` |
-| `service/VoiceAgentService.kt` | Microphone foreground service | — (browser tabs can't do this) |
-| `ui/AgentScreen.kt` | Compose HUD: ring, ride pulse, telemetry, transcript, controls | `src/components/` + HUD layout in `src/main.tsx` |
+| File                           | Role                                                                               | Web counterpart                                                                      |
+| ------------------------------ | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `agent/AgentProtocol.kt`       | Event types, JSON parsing, ride/hazard/turn-state/language helpers, export payload | `shared/agent.ts`, `shared/ride.ts`, `shared/language.ts`, helpers in `src/main.tsx` |
+| `agent/MicStreamer.kt`         | 16 kHz PCM16 mic capture, 20 ms frames                                             | `public/pcm-worklet.js`                                                              |
+| `agent/PcmPlayer.kt`           | 24 kHz PCM16 gapless playback + barge-in flush                                     | playback scheduling in `src/main.tsx`                                                |
+| `agent/AudioRouter.kt`         | Bluetooth headset (SCO) routing for in-helmet headsets                             | — (browsers can't control routing)                                                   |
+| `agent/AgentSession.kt`        | Session orchestration, reconnect, transcript, state                                | `useHelmetAgent` hook in `src/main.tsx`                                              |
+| `service/VoiceAgentService.kt` | Microphone foreground service                                                      | — (browser tabs can't do this)                                                       |
+| `ui/AgentScreen.kt`            | Compose HUD: ring, ride pulse, telemetry, transcript, controls                     | `src/components/` + HUD layout in `src/main.tsx`                                     |
 
 ## Connecting to the Lightsail test server
 

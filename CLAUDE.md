@@ -25,6 +25,7 @@ npm run lint         # ESLint (flat config, typescript-eslint + react-hooks)
 npm run format       # Prettier write; format:check verifies without writing
 npm test             # Vitest run; test:watch for watch mode
 npx vitest run tests/language.test.ts   # Run a single test file
+./start-relay.command # Finder-friendly launcher for the backend relay only
 ```
 
 `tsc` runs with `noEmit: true` purely for type-checking `src/`, `server/`, and `shared/`.
@@ -176,6 +177,26 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradle
 ```
 
 See `android/README.md` for emulator/device setup and relay URL configuration.
+
+## iOS app
+
+`ios/` is a native Swift + SwiftUI client (bundle id `com.horizon.maxhelmet`) that speaks the
+same `/agent` relay protocol as the web HUD and Android app — the Node server needs no changes.
+It mirrors the Android two-layer split: `Agent/` is pure protocol + audio + session logic,
+`UI/` is the SwiftUI HUD. Key mapping: `Agent/AgentProtocol.swift` ports `shared/agent.ts` +
+`shared/ride.ts` + `shared/language.ts` (and `AgentProtocol.kt`), `Agent/MicStreamer.swift`
+ports `public/pcm-worklet.js` (16 kHz PCM16, 20 ms frames via `AVAudioEngine`),
+`Agent/PcmPlayer.swift` ports the 24 kHz playback scheduling (`AVAudioPlayerNode`),
+`Agent/AudioRouter.swift` configures `AVAudioSession` (iOS handles Bluetooth HFP routing), and
+`Agent/AgentSession.swift` ports the `useHelmetAgent` hook (reconnect backoff, transcript dedup,
+barge-in, `AVSpeechSynthesizer` TTS fallback). Platform differences: the Android foreground
+service becomes the `UIBackgroundModes = audio` capability, and there is no manual SCO routing.
+When the relay protocol or the web-side helpers change, update the iOS counterparts alongside
+the Android ones.
+
+Build: open `ios/MaxHelmet.xcodeproj` in Xcode 16+ and Run (no SPM/CocoaPods deps; iOS 17+).
+The target uses a file-system-synchronized group, so new `MaxHelmet/` files need no "add to
+target" step. See `ios/README.md` for relay URL and self-signed-cert setup.
 
 ## Test server deployment
 

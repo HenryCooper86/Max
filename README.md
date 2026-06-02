@@ -24,9 +24,18 @@ all work unchanged. See [android/README.md](android/README.md) for build and set
 
 ![Android HUD — live transcript with export](docs/assets/android-transcript.png)
 
+## iOS App
+
+The native iOS client (`ios/`, Swift + SwiftUI) also speaks the same `/agent` relay protocol as
+the web HUD and Android app. It mirrors the hands-free HUD, mic streaming, 24 kHz PCM playback,
+barge-in, reconnect handling, live weather, transcript export, and TTS fallback while using
+iOS-native audio routing and background audio. See [ios/README.md](ios/README.md) for Xcode,
+relay URL, and self-signed test-server setup.
+
 ## Current Capabilities
 
 - Hands-free operation — click the main button or press Space to start/stop; once active, the rider just talks and Doubao's server-side VAD handles turn-taking.
+- Native iOS and Android clients that reuse the same `/agent` relay protocol as the web HUD.
 - Turn-state HUD — the helmet shows when Max is listening, heard the rider, is thinking, or is replying.
 - Ride intelligence modes — switch between 骑行 / 导航 / 停车 / 紧急 so Max changes response length and safety behavior.
 - Scenario-driven mock demos — 通勤、横风、低油、小队、紧急 scenes exercise realistic rider context without Doubao credentials.
@@ -74,6 +83,8 @@ all work unchanged. See [android/README.md](android/README.md) for build and set
 │       └── types.ts
 ├── shared/                   # Shared language, ride, session, audio, and event helpers
 ├── tests/                    # Vitest unit tests for the pure functions
+├── android/                  # Native Kotlin + Jetpack Compose client
+├── ios/                      # Native Swift + SwiftUI client
 ├── .env.example              # Environment variable template
 ├── eslint.config.js
 ├── package.json
@@ -303,6 +314,7 @@ npm run preview      # Preview built client
 npm run lint         # Lint with ESLint
 npm run format       # Format with Prettier (format:check to verify only)
 npm test             # Run the Vitest unit tests (test:watch for watch mode)
+./start-relay.command # Double-clickable backend relay launcher for local mobile testing
 ```
 
 ## Build & Deployment Pipeline

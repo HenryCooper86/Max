@@ -3,6 +3,11 @@
 dist
 node_modules
 
+# Agent/local workflow notes
+AGENTS.md
+CLAUDE.md
+MR_DESCRIPTION.md
+
 # Generated native build output
 android/**/build/
 

@@ -16,9 +16,15 @@ iPhone (this app)                       Mac / test server
 └─────────────────────────┘            └──────────────────────┘
 ```
 
+## Screenshots
+
+| 待机设置                                         | 免提会话                                             |
+| ------------------------------------------------ | ---------------------------------------------------- |
+| ![iOS idle HUD](../docs/assets/ios-hud-idle.png) | ![iOS active HUD](../docs/assets/ios-hud-active.png) |
+
 ## Requirements
 
-- Xcode 16 or newer (the project uses file-system-synchronized groups, an Xcode 16 format)
+- Xcode 16 or newer; Xcode 17 / iOS 26.5 simulator was used for the latest screenshots.
 - iOS 17+ device or simulator
 - An Apple Developer signing team for running on a physical device (Simulator needs none)
 
@@ -33,6 +39,19 @@ On a physical device, select your team under **Signing & Capabilities** first (t
 
 > New Swift files dropped into `MaxHelmet/` are picked up automatically — the target uses a
 > synchronized group, so there is no "add to target" step.
+
+Command-line simulator build from the repo root:
+
+```bash
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild \
+  -project ios/MaxHelmet.xcodeproj \
+  -scheme MaxHelmet \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
+```
+
+If `xcodebuild` reports that the active developer directory is Command Line Tools, use the
+explicit `DEVELOPER_DIR` command above or switch the machine to full Xcode with `xcode-select`.
 
 ## Run against the relay
 
@@ -50,12 +69,61 @@ On a physical device, select your team under **Signing & Capabilities** first (t
    weather). With `VOICE_PROVIDER=mock` you get the scripted demo session; with
    `VOICE_PROVIDER=doubao` you get real speech-to-speech.
 
+### Simulator quick start
+
+```bash
+# Terminal 1 — relay
+npm run dev:server
+
+# Terminal 2 — build, install, and launch
+DEVICE="iPhone 17 Pro"
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild \
+  -project ios/MaxHelmet.xcodeproj \
+  -scheme MaxHelmet \
+  -destination "platform=iOS Simulator,name=$DEVICE" build
+
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun simctl boot "$DEVICE"
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun simctl install "$DEVICE" \
+  ~/Library/Developer/Xcode/DerivedData/MaxHelmet-*/Build/Products/Debug-iphonesimulator/MaxHelmet.app
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun simctl launch "$DEVICE" \
+  com.horizon.maxhelmet
+```
+
+The simulator can connect to the Mac relay at `ws://localhost:8787/agent`.
+
+### Permissions
+
+| Permission / capability               | Why it is needed                                                        |
+| ------------------------------------- | ----------------------------------------------------------------------- |
+| `NSMicrophoneUsageDescription`        | Stream rider speech to the relay.                                       |
+| `NSLocationWhenInUseUsageDescription` | Send coordinates for weather and ride-risk context.                     |
+| `NSLocalNetworkUsageDescription`      | Connect to a relay running on the same LAN during local development.    |
+| `UIBackgroundModes = audio`           | Keep mic/playback active when the app is backgrounded or screen sleeps. |
+| `NSAllowsArbitraryLoads`              | Prototype-only support for `ws://` dev relays and self-signed testing.  |
+
+Location is optional. If denied, the server can use fallback weather coordinates.
+
 ### Self-signed test server
 
 The Lightsail test box uses a self-signed certificate. Toggle **信任自签名证书（测试服务器）**
 before connecting to a `wss://` host with such a cert. This trust-all path is gated behind the
 toggle and must never ship in a production build. `Info.plist` also enables
 `NSAllowsArbitraryLoads` so `ws://` (cleartext) dev relays work — tighten both before release.
+
+## What's implemented
+
+- Hands-free toggle: one button starts/stops mic streaming and the relay session.
+- SwiftUI turn-state HUD with the same captions, colors, controls, and ride cards as Android/web.
+- Voice gender, personality, ride mode, and demo scenario selectors.
+- 16 kHz PCM16 mono microphone streaming through `AVAudioEngine`.
+- 24 kHz PCM16 gapless playback through `AVAudioPlayerNode`.
+- Barge-in: rider speech stops queued provider audio and fallback TTS.
+- Reconnect with exponential backoff and user-visible connection status.
+- Live weather card and fused `态势摘要` ride-pulse card.
+- Transcript with in-place updates, deduplication, timestamps, and JSON export via share sheet.
+- `AVSpeechSynthesizer` fallback when the provider sends text without audio.
+- Optional trust-all TLS path for the self-signed Lightsail test server.
 
 ## Architecture
 
@@ -80,8 +148,8 @@ audio + session logic; the `UI/` layer is the SwiftUI HUD.
   in `Info.plist` keeps the mic and playback alive when the app is backgrounded or the screen
   is off. There is no separate notification.
 - **Bluetooth routing** is handled by iOS itself — `AVAudioSession` with `.playAndRecord` +
-  `.allowBluetooth` automatically prefers a connected HFP headset, so there is no manual SCO
-  start/stop.
+  Bluetooth category options automatically prefers a connected HFP headset, so there is no
+  manual SCO start/stop.
 - **TTS fallback** uses `AVSpeechSynthesizer` (the mock provider returns reply text but no
   audio; Doubao returns synthesized audio).
 
@@ -92,10 +160,31 @@ counterparts.
 
 ## Verifying the build
 
-There is no headless way to compile an iOS app off a Mac, so CI/parity checks should run on a
-Mac runner:
+CI/parity checks should run on a Mac runner with full Xcode installed:
 
 ```bash
-xcodebuild -project ios/MaxHelmet.xcodeproj -scheme MaxHelmet \
-  -destination 'platform=iOS Simulator,name=iPhone 15' build
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild \
+  -project ios/MaxHelmet.xcodeproj \
+  -scheme MaxHelmet \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
 ```
+
+## Troubleshooting
+
+| Symptom                               | Check                                                                                      |
+| ------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `xcodebuild` cannot find simulators   | Use full Xcode via `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`.             |
+| Simulator app stays offline           | Use `ws://localhost:8787/agent` and make sure `npm run dev:server` is running.             |
+| Physical iPhone cannot connect        | Use `ws://<Mac-LAN-IP>:8787/agent`; grant local-network permission and check the firewall. |
+| Mic permission prompt does not appear | Reset app privacy in Simulator or delete/reinstall the app.                                |
+| Self-signed test server fails         | Use `wss://3.35.135.136/agent` and enable the self-signed certificate toggle.              |
+| App launches but no live weather      | Grant location permission or configure fallback coordinates on the server.                 |
+| Bluetooth route is not selected       | Pair the headset before starting the session; iOS chooses HFP routing automatically.       |
+
+## Release caveats
+
+- `NSAllowsArbitraryLoads` and the trust-all certificate path are prototype conveniences. Remove
+  or narrow them before production.
+- Configure a real signing team, bundle ID, versioning, icons, and privacy text before TestFlight.
+- Keep the protocol parity checklist in sync with web and Android whenever `/agent` changes.

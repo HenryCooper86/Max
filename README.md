@@ -68,6 +68,9 @@ relay URL, and self-signed test-server setup.
 - Express
 - WebSocket relay with `ws`
 - Volcengine Doubao Speech realtime dialogue WebSocket
+- Vitest for pure helper/protocol tests
+- Native Android: Kotlin, Jetpack Compose, OkHttp, AudioRecord/AudioTrack
+- Native iOS: Swift, SwiftUI, URLSessionWebSocketTask, AVAudioEngine/AVAudioPlayerNode
 - pm2 · Caddy · AWS Lightsail (test deployment)
 
 ## Project Structure
@@ -102,6 +105,19 @@ relay URL, and self-signed test-server setup.
 ## Architecture
 
 The project is a thin, real-time audio relay. The browser never holds a Volcengine credential and never talks to Volcengine directly — it speaks only to our own Node server, which proxies the realtime voice session and keeps the secrets server-side.
+
+### Platform clients
+
+All clients use the same `/agent` relay and session contract. The web HUD is the reference
+implementation; Android and iOS port the same protocol helpers, transcript rules, ride-context
+mapping, audio frame sizes, reconnect behavior, barge-in, and TTS fallback.
+
+| Client  | Location   | UI/audio stack                                     | Local relay URL                                 | Notes                                                                |
+| ------- | ---------- | -------------------------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------- |
+| Web     | `src/`     | React + Web Audio + `AudioWorklet`                 | same-origin `/agent` through Vite proxy         | Best for fast iteration, screenshots, and browser mic/TTS behavior.  |
+| Android | `android/` | Jetpack Compose + `AudioRecord` + `AudioTrack`     | emulator: `ws://10.0.2.2:8787/agent`            | Foreground service keeps the mic session alive with screen off.      |
+| iOS     | `ios/`     | SwiftUI + `AVAudioEngine` + `AVAudioPlayerNode`    | simulator: `ws://localhost:8787/agent`          | Background audio mode keeps the hands-free session alive.            |
+| Test    | any client | Browser/mobile client pointed at shared deployment | `wss://3.35.135.136/agent` with self-signed TLS | Uses `VOICE_PROVIDER=doubao` and the server's private `.env` values. |
 
 ### Runtime topology
 
@@ -188,6 +204,7 @@ If Doubao returns reply _text_ but no audio, the browser falls back to its own `
 ### Hands-free & live weather
 
 - **Hands-free** — activating the session with the main button or Space streams the mic continuously (Doubao's `keep_alive` input mode); Doubao's server-side VAD segments turns, so the rider never taps again. `turnState` (`idle`/`listening`/`hearing`/`thinking`/`speaking`) is derived from server `status` events and drives the helmet's caption and ring colour. Space toggling ignores editable controls so future form inputs are not hijacked.
+- **Language policy** — Max speaks Chinese by default, can answer in English, and refuses unsupported languages. Client-side language detection is used for TTS voice selection and transcript labeling; server prompt context enforces the rider-facing behavior.
 - **Ride intelligence** — `session.start` carries the selected `rideMode` and `scenario`; `shared/ride.ts` turns that into a safety policy, response style, hazard level, and HUD focus. Doubao receives this as prompt context; the mock provider turns it into scenario-specific transcripts and telemetry. The HUD's `态势摘要` card fuses ride hazard and weather risk into immediate normal / caution / critical rider guidance.
 - **Weather** — on activation the browser requests geolocation and sends `lat`/`lon` with `session.start`. `server/weather.ts` fetches current conditions from **Open-Meteo** (free, no API key), classifies rider risk, and emits weather/advice to the HUD. `doubao.ts` folds the same data into the agent's `system_role`. A failed lookup never blocks the session.
 - **Telemetry** — providers emit `metric` and `telemetry` events. The HUD shows first-audio latency plus ASR / thinking / first-audio / total timing so demos can discuss realtime behavior with numbers.
@@ -201,6 +218,10 @@ If Doubao returns reply _text_ but no audio, the browser falls back to its own `
 - **Error boundary** — `src/ErrorBoundary.tsx` catches render-time crashes and shows a recoverable screen.
 
 ## Setup
+
+Use the Node version already installed on the project machines, or any current Node release that
+supports Vite 6, TypeScript, `tsx`, and WebSocket APIs. Native mobile builds have their own
+toolchain requirements in [android/README.md](android/README.md) and [ios/README.md](ios/README.md).
 
 Install dependencies:
 
@@ -237,6 +258,38 @@ The status panel starts with a `态势摘要` card that combines the selected ri
 In the default configuration this uses the mock WebSocket provider and emits a simulated turn-state cycle. With `VOICE_PROVIDER=doubao`, the backend connects to the Doubao realtime dialogue WebSocket, sends browser mic PCM frames, and relays returned Chinese PCM voice audio back to the browser.
 
 If location permission is granted, Max greets the ride with real weather and can answer weather questions accurately — the status panel shows current conditions, risk, and rider advice. In mock mode, the scenario selector drives scripted speed, route phase, weather risk, and latency telemetry. Use the `女声 / 男声` toggle to switch the assistant voice. Whenever the rider starts talking, any in-progress agent speech is interrupted (barge-in).
+
+### Demo scenarios
+
+| Scenario | Purpose                         | Typical HUD behavior                                             |
+| -------- | ------------------------------- | ---------------------------------------------------------------- |
+| `通勤`   | Baseline daily ride             | Normal/caution guidance, navigation context, stable telemetry.   |
+| `横风`   | Weather and hazard response     | Elevated weather/ride risk and advice to slow down or stabilize. |
+| `低油`   | Route and resource planning     | Fuel-aware routing prompt, nearby stop style responses.          |
+| `小队`   | Group riding context            | Short coordination-oriented prompts and group safety focus.      |
+| `紧急`   | High-priority safety escalation | Critical tone, stop-safely guidance, concise emergency behavior. |
+
+### Mobile clients
+
+Start the backend relay before launching a native app:
+
+```bash
+npm run dev:server
+```
+
+Then set the app's relay URL:
+
+| Client                 | URL                            |
+| ---------------------- | ------------------------------ |
+| Android emulator       | `ws://10.0.2.2:8787/agent`     |
+| Android physical phone | `ws://<Mac-LAN-IP>:8787/agent` |
+| iOS Simulator          | `ws://localhost:8787/agent`    |
+| iPhone on LAN          | `ws://<Mac-LAN-IP>:8787/agent` |
+| Shared test server     | `wss://3.35.135.136/agent`     |
+
+For the shared test server, enable the self-signed certificate trust toggle inside the native
+app. That toggle is for this prototype test server only and should be removed or disabled before
+any production release.
 
 ## Environment Variables
 
@@ -290,12 +343,23 @@ Returns backend health and the selected realtime voice provider.
 
 ### `WS /agent`
 
-Browser audio relay endpoint used by the hands-free session.
+Audio relay endpoint used by all clients. JSON messages are UTF-8 text frames; mic and provider
+audio are binary WebSocket frames.
 
 Client → server events (`lat`/`lon` are optional and sent only when geolocation is granted):
 
 ```json
-{ "type": "session.start", "sampleRate": 16000, "channels": 1, "voiceGender": "female", "lat": 37.57, "lon": 126.98 }
+{
+  "type": "session.start",
+  "sampleRate": 16000,
+  "channels": 1,
+  "voiceGender": "female",
+  "voicePersonality": "concise",
+  "rideMode": "navigation",
+  "scenario": "commute",
+  "lat": 37.57,
+  "lon": 126.98
+}
 { "type": "audio.start" }
 { "type": "audio.stop" }
 ```
@@ -306,12 +370,31 @@ Server → client events (JSON):
 { "type": "session.started", "provider": "doubao", "mode": "live" }
 { "type": "status", "state": "thinking", "detail": "Max 正在思考" }
 { "type": "transcript", "speaker": "agent", "text": "...", "final": false }
+{
+  "type": "ride.context",
+  "mode": "navigation",
+  "modeLabel": "导航",
+  "scenario": "commute",
+  "scenarioLabel": "通勤",
+  "speedKmh": 58,
+  "routePhase": "城市快速路，距离出口 3.2 km",
+  "network": "online",
+  "batteryPct": 82,
+  "hazardLevel": "caution",
+  "glanceableFocus": "下一路口、距离、车道"
+}
+{ "type": "session.memory", "language": "zh", "lastIntent": "navigation", "responseMode": "concise" }
 { "type": "weather", "description": "晴", "temperatureC": 22, "windSpeedKmh": 10, "isDay": true }
 { "type": "metric", "latencyMs": 120 }
+{ "type": "telemetry", "asrMs": 90, "thinkMs": 220, "firstAudioMs": 420, "totalMs": 1100 }
 { "type": "error", "message": "..." }
 ```
 
 Browser-to-server binary messages are 16 kHz PCM16 mono audio frames. When using Doubao, server-to-browser binary messages are 24 kHz PCM16 mono voice audio frames returned by the realtime API.
+
+The relay validates client JSON size, event types, enum values, lat/lon ranges, and audio frame
+size before forwarding anything to a provider. Unknown or malformed events return an `error`
+event instead of reaching Doubao.
 
 ## Scripts
 
@@ -424,6 +507,36 @@ Smoke test health (server must be running):
 ```bash
 curl -s http://localhost:8787/health
 ```
+
+Native verification:
+
+```bash
+# Android debug APK
+(cd android && JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew assembleDebug)
+
+# iOS simulator build from the repo root
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild \
+  -project ios/MaxHelmet.xcodeproj \
+  -scheme MaxHelmet \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
+```
+
+If Xcode's command-line tools are selected instead of full Xcode, use the explicit
+`DEVELOPER_DIR` form above or run `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`
+on a developer machine.
+
+## Troubleshooting
+
+| Symptom                              | Check                                                                                        |
+| ------------------------------------ | -------------------------------------------------------------------------------------------- |
+| `/health` fails                      | Make sure `npm run dev:server` is running and port `8787` is not already occupied.           |
+| Browser cannot open mic              | Use `localhost` or HTTPS; browsers block mic capture on insecure non-local origins.          |
+| Native app says offline              | Verify the relay URL for emulator/simulator/LAN and confirm the server listens on `0.0.0.0`. |
+| Doubao session starts but no voice   | Confirm `DOUBAO_API_KEY` or legacy credentials, resource ID, realtime model, and voice IDs.  |
+| Weather does not appear              | Grant location permission or set `DEFAULT_RIDER_LAT` / `DEFAULT_RIDER_LON` in `.env`.        |
+| Self-signed test server fails mobile | Enable the native app's test-only self-signed certificate toggle.                            |
+| WebSocket test fails with `EPERM`    | The test binds `127.0.0.1`; rerun in an environment that permits local loopback listeners.   |
 
 ## Next Steps
 

@@ -24,9 +24,10 @@ Phone (this app)                        Mac / test server
 
 ## Requirements
 
-- Android Studio (its bundled JDK builds the project — Homebrew Java 25 is too new for Gradle 8.9)
-- Android SDK with platform 34 (already configured in `local.properties`)
+- Android Studio with its bundled JBR/JDK. Gradle requires JDK 17-21; avoid Homebrew Java 25+.
+- Android SDK with platform 34.
 - A device or emulator running Android 8.0+ (API 26+)
+- Gradle wrapper 9.4.1, Android Gradle Plugin 9.2.1, Kotlin 2.2.10, Compose BOM 2024.09.03.
 
 ## Build
 
@@ -38,6 +39,13 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradle
 
 The APK lands at `app/build/outputs/apk/debug/app-debug.apk`. Or open `android/` in
 Android Studio and press Run.
+
+Useful Gradle checks:
+
+```bash
+JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew assembleDebug
+JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew lintDebug
+```
 
 ## Run against the relay
 
@@ -54,6 +62,23 @@ Android Studio and press Run.
 3. Tap 开启免提. The app asks for microphone (required) and location (optional, used for
    live weather). With `VOICE_PROVIDER=mock` you get the scripted demo session; with
    `VOICE_PROVIDER=doubao` you get real speech-to-speech.
+
+### Permissions
+
+The manifest requests only the permissions needed for the prototype:
+
+| Permission                      | Why it is needed                                                    |
+| ------------------------------- | ------------------------------------------------------------------- |
+| `INTERNET`                      | Connect to the local or test `/agent` WebSocket relay.              |
+| `RECORD_AUDIO`                  | Stream the rider's microphone as 16 kHz PCM16 frames.               |
+| `ACCESS_COARSE/FINE_LOCATION`   | Send coordinates to the relay for live weather and risk advice.     |
+| `FOREGROUND_SERVICE_MICROPHONE` | Keep the hands-free mic session alive when the app is backgrounded. |
+| `POST_NOTIFICATIONS`            | Show the foreground-service notification on newer Android versions. |
+| `BLUETOOTH_CONNECT`             | Route audio to an in-helmet Bluetooth headset on Android 12+.       |
+| `MODIFY_AUDIO_SETTINGS`         | Start/stop headset routing and speaker/mic mode adjustments.        |
+
+Location is optional. If the rider denies it, the relay can still use server-side fallback
+weather coordinates.
 
 ## Emulator quick start
 
@@ -89,6 +114,17 @@ The emulator forwards the host Mac's microphone, so the full voice loop is testa
 - Bluetooth headset (SCO) routing for in-helmet headsets, with phone mic/speaker fallback
 - `wss://` support with an opt-in "信任自签名证书" toggle for the Lightsail test server
 
+## Protocol parity checklist
+
+When changing shared web/server behavior, update Android at the same time:
+
+- Event names and payloads in `shared/agent.ts` and `agent/AgentProtocol.kt`
+- Ride modes, scenarios, hazard fusion, and prompt labels from `shared/ride.ts`
+- Language detection and transcript normalization from `shared/language.ts` and `src/main.tsx`
+- Audio frame assumptions: uplink 16 kHz PCM16 mono, 320 samples / 20 ms; downlink 24 kHz PCM16
+- Reconnect/backoff behavior, barge-in behavior, and transcript JSON export payload
+- Self-signed test-server handling and relay URL defaults
+
 ## Architecture
 
 | File                           | Role                                                                               | Web counterpart                                                                      |
@@ -105,6 +141,26 @@ The emulator forwards the host Mac's microphone, so the full voice loop is testa
 
 Set the relay address to `wss://3.35.135.136/agent` and switch on 信任自签名证书 — the test
 server's certificate is self-signed, so the toggle is required until it gets a trusted cert.
+
+## Troubleshooting
+
+| Symptom                              | Check                                                                                   |
+| ------------------------------------ | --------------------------------------------------------------------------------------- |
+| App stays offline in emulator        | Use `ws://10.0.2.2:8787/agent`, not `localhost`; `localhost` means the emulator itself. |
+| Physical phone cannot connect        | Put phone and Mac on the same LAN, use the Mac LAN IP, and allow firewall access.       |
+| USB device cannot connect            | Run `adb reverse tcp:8787 tcp:8787`, then use `ws://127.0.0.1:8787/agent`.              |
+| Mic does not start                   | Grant microphone permission and confirm no other app is holding exclusive audio focus.  |
+| Bluetooth headset is ignored         | Grant Bluetooth permission on Android 12+ and confirm the headset supports HFP/SCO.     |
+| Test server TLS fails                | Use `wss://3.35.135.136/agent` and enable the self-signed certificate toggle.           |
+| Build fails with Java version errors | Use Android Studio's JBR as `JAVA_HOME`; do not build with Homebrew Java 25+.           |
+
+## Release caveats
+
+- The self-signed certificate trust toggle is for the shared test server only. Remove or harden
+  it before release.
+- The debug APK is unsigned for distribution. Configure a release signing key before shipping.
+- `network_security_config.xml` permits development traffic; review it before production.
+- Keep the foreground-service notification clear and user-visible for Android policy compliance.
 
 ## Not yet implemented (next steps)
 

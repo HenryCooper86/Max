@@ -7,6 +7,7 @@ node_modules
 AGENTS.md
 CLAUDE.md
 MR_DESCRIPTION.md
+.claude/
 
 # Generated native build output
 android/**/build/

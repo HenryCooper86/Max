@@ -240,12 +240,22 @@ final class AgentSession: NSObject, ObservableObject {
         webSocket = task
         task.resume()
 
-        // Relay handshake: send session.start, then resume audio if transmitting.
+        // The relay handshake is sent from handleSocketOpened() once the upgrade
+        // actually completes — claiming "就绪" here would mask a rejected connection.
+        receive(on: task)
+        schedulePing(on: task)
+    }
+
+    /// The relay accepted the WebSocket upgrade: report ready and run the
+    /// handshake — session.start, then resume audio if transmitting.
+    private func handleSocketOpened(_ task: URLSessionWebSocketTask) {
+        assert(Thread.isMainThread)
+        guard task === webSocket else { return }
+        reconnectAttempts = 0
         update {
             $0.connection = .relay
             $0.statusText = "就绪"
         }
-        reconnectAttempts = 0
         let current = state.value
         task.send(.string(buildSessionStart(
             voiceGender: current.voiceGender,
@@ -256,9 +266,6 @@ final class AgentSession: NSObject, ObservableObject {
             lon: location?.longitude
         ))) { _ in }
         if transmitting { task.send(.string(audioStartEvent)) { _ in } }
-
-        receive(on: task)
-        schedulePing(on: task)
     }
 
     private func receive(on task: URLSessionWebSocketTask) {
@@ -311,6 +318,17 @@ final class AgentSession: NSObject, ObservableObject {
             update {
                 $0.connection = .offline
                 $0.statusText = "离线"
+            }
+            return
+        }
+
+        // The relay answered but refused the WebSocket upgrade (e.g. a wrong path
+        // → HTTP 400). That's a configuration problem; retrying can't fix it.
+        if let status = (task.response as? HTTPURLResponse)?.statusCode, status != 101 {
+            reconnectAttempts = 0
+            update {
+                $0.connection = .degraded
+                $0.statusText = "中继拒绝连接（HTTP \(status)），请检查中继地址"
             }
             return
         }
@@ -487,6 +505,32 @@ final class AgentSession: NSObject, ObservableObject {
 // Reads like the Kotlin `_state.value`; `state` is already the current snapshot.
 extension AgentSession.State {
     var value: AgentSession.State { self }
+}
+
+// MARK: - WebSocket lifecycle
+
+extension AgentSession: URLSessionWebSocketDelegate {
+    func urlSession(
+        _ session: URLSession,
+        webSocketTask: URLSessionWebSocketTask,
+        didOpenWithProtocol protocol: String?
+    ) {
+        DispatchQueue.main.async { [weak self] in
+            self?.handleSocketOpened(webSocketTask)
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        webSocketTask: URLSessionWebSocketTask,
+        didCloseWith closeCode: URLSessionWebSocketTask.CloseCode,
+        reason: Data?
+    ) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, webSocketTask === self.webSocket else { return }
+            self.handleSocketClosed(webSocketTask)
+        }
+    }
 }
 
 // MARK: - URLSession delegate (self-signed TLS opt-in)

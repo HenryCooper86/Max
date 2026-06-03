@@ -7,16 +7,21 @@ import SwiftUI
 struct MaxHelmetApp: App {
     @StateObject private var viewModel = MainViewModel()
     @StateObject private var session = AgentSession.shared
-
-    init() {
-        // Riders glance at the HUD; keep it visible while the app is foregrounded.
-        UIApplication.shared.isIdleTimerDisabled = true
-    }
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
             AgentScreen(viewModel: viewModel, session: session)
                 .preferredColorScheme(.dark)
+                .onAppear { updateIdleTimer() }
+                .onChange(of: scenePhase) { _, _ in updateIdleTimer() }
+                .onChange(of: session.state.handsFree) { _, _ in updateIdleTimer() }
         }
+    }
+
+    private func updateIdleTimer() {
+        // Riders glance at the HUD during active sessions; restore the system
+        // default as soon as the app backgrounds or hands-free stops.
+        UIApplication.shared.isIdleTimerDisabled = scenePhase == .active && session.state.handsFree
     }
 }

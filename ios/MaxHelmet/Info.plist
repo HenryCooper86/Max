@@ -49,10 +49,6 @@
 	<string>Max 需要访问本地网络以连接同一 Wi-Fi 下的语音中继服务器。</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<!-- Prototype only: allows ws:// (cleartext) to the dev relay and the
-		     self-signed wss:// test server. Tighten before any production build. -->
-		<key>NSAllowsArbitraryLoads</key>
-		<true/>
 	</dict>
 </dict>
 </plist>

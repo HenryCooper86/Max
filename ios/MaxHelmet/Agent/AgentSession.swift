@@ -87,9 +87,15 @@ final class AgentSession: NSObject, ObservableObject {
     func start(url: String, allowSelfSignedTls: Bool) {
         guard !state.value.handsFree else { return }
         relayURL = url
+        reconnectWorkItem?.cancel()
 
-        if allowSelfSignedTls != allowSelfSigned {
-            allowSelfSigned = allowSelfSignedTls
+        #if DEBUG
+        let trustedSelfSigned = allowSelfSignedTls
+        #else
+        let trustedSelfSigned = false
+        #endif
+        if trustedSelfSigned != allowSelfSigned {
+            allowSelfSigned = trustedSelfSigned
             urlSession = makeSession()
         }
 
@@ -261,25 +267,27 @@ final class AgentSession: NSObject, ObservableObject {
 
     private func receive(on task: URLSessionWebSocketTask) {
         task.receive { [weak self] result in
-            guard let self, task === self.webSocket else { return }
-            switch result {
-            case .success(let message):
-                switch message {
-                case .string(let text):
-                    let event = parseAgentEvent(text)
-                    if case .unhandled = event, !text.contains("\"type\"") {
-                        self.update { $0.statusText = "收到异常代理消息" }
-                    } else {
-                        DispatchQueue.main.async { self.handleEvent(event) }
+            DispatchQueue.main.async {
+                guard let self, task === self.webSocket else { return }
+                switch result {
+                case .success(let message):
+                    switch message {
+                    case .string(let text):
+                        let event = parseAgentEvent(text)
+                        if case .unhandled = event, !text.contains("\"type\"") {
+                            self.update { $0.statusText = "收到异常代理消息" }
+                        } else {
+                            self.handleEvent(event)
+                        }
+                    case .data(let data):
+                        self.player.play(data)
+                    @unknown default:
+                        break
                     }
-                case .data(let data):
-                    self.player.play(data)
-                @unknown default:
-                    break
+                    self.receive(on: task)
+                case .failure:
+                    self.handleSocketClosed(task)
                 }
-                self.receive(on: task)
-            case .failure:
-                self.handleSocketClosed(task)
             }
         }
     }
@@ -293,6 +301,7 @@ final class AgentSession: NSObject, ObservableObject {
     }
 
     private func handleSocketClosed(_ task: URLSessionWebSocketTask) {
+        assert(Thread.isMainThread)
         // Ignore a socket already superseded by a newer one (e.g. a restart).
         if let current = webSocket, task !== current { return }
         webSocket = nil
@@ -488,6 +497,10 @@ extension AgentSession: URLSessionDelegate {
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
+        #if !DEBUG
+        completionHandler(.performDefaultHandling, nil)
+        return
+        #else
         guard allowSelfSigned,
               challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
               let trust = challenge.protectionSpace.serverTrust else {
@@ -498,6 +511,7 @@ extension AgentSession: URLSessionDelegate {
         // This trust-all path is gated behind an explicit settings toggle and must
         // never ship in a production build.
         completionHandler(.useCredential, URLCredential(trust: trust))
+        #endif
     }
 }
 
@@ -520,18 +534,28 @@ private final class LocationProvider: NSObject, CLLocationManagerDelegate {
         self.finished = false
 
         let status = manager.authorizationStatus
-        if status == .notDetermined {
+        switch status {
+        case .notDetermined:
             manager.requestWhenInUseAuthorization()
+        case .authorizedWhenInUse, .authorizedAlways:
+            requestCurrentLocation()
+        case .denied, .restricted:
+            finish(nil)
+        @unknown default:
+            finish(nil)
         }
+        // Never block the session on a slow fix.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+            self?.finish(self?.manager.location?.coordinate)
+        }
+    }
+
+    private func requestCurrentLocation() {
         if let cached = manager.location?.coordinate {
             finish(cached)
             return
         }
         manager.requestLocation()
-        // Never block the session on a slow fix.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
-            self?.finish(self?.manager.location?.coordinate)
-        }
     }
 
     private func finish(_ coordinate: CLLocationCoordinate2D?) {
@@ -553,7 +577,7 @@ private final class LocationProvider: NSObject, CLLocationManagerDelegate {
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let status = manager.authorizationStatus
         if status == .authorizedWhenInUse || status == .authorizedAlways {
-            if let cached = manager.location?.coordinate { finish(cached) }
+            requestCurrentLocation()
         } else if status == .denied || status == .restricted {
             finish(nil)
         }

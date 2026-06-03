@@ -49,6 +49,8 @@
 	<string>Max 需要访问本地网络以连接同一 Wi-Fi 下的语音中继服务器。</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
 	</dict>
 </dict>
 </plist>

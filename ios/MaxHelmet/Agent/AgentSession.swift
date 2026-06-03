@@ -89,11 +89,7 @@ final class AgentSession: NSObject, ObservableObject {
         relayURL = url
         reconnectWorkItem?.cancel()
 
-        #if DEBUG
         let trustedSelfSigned = allowSelfSignedTls
-        #else
-        let trustedSelfSigned = false
-        #endif
         if trustedSelfSigned != allowSelfSigned {
             allowSelfSigned = trustedSelfSigned
             urlSession = makeSession()
@@ -267,25 +263,29 @@ final class AgentSession: NSObject, ObservableObject {
 
     private func receive(on task: URLSessionWebSocketTask) {
         task.receive { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self, task === self.webSocket else { return }
-                switch result {
-                case .success(let message):
-                    switch message {
-                    case .string(let text):
-                        let event = parseAgentEvent(text)
+            guard let self, task === self.webSocket else { return }
+            switch result {
+            case .success(let message):
+                switch message {
+                case .string(let text):
+                    let event = parseAgentEvent(text)
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, task === self.webSocket else { return }
                         if case .unhandled = event, !text.contains("\"type\"") {
                             self.update { $0.statusText = "收到异常代理消息" }
                         } else {
                             self.handleEvent(event)
                         }
-                    case .data(let data):
-                        self.player.play(data)
-                    @unknown default:
-                        break
                     }
-                    self.receive(on: task)
-                case .failure:
+                case .data(let data):
+                    self.player.play(data)
+                @unknown default:
+                    break
+                }
+                self.receive(on: task)
+            case .failure:
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, task === self.webSocket else { return }
                     self.handleSocketClosed(task)
                 }
             }
@@ -497,21 +497,15 @@ extension AgentSession: URLSessionDelegate {
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
-        #if !DEBUG
-        completionHandler(.performDefaultHandling, nil)
-        return
-        #else
         guard allowSelfSigned,
               challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
               let trust = challenge.protectionSpace.serverTrust else {
             completionHandler(.performDefaultHandling, nil)
             return
         }
-        // Prototype-only: the Lightsail test relay uses a self-signed certificate.
-        // This trust-all path is gated behind an explicit settings toggle and must
-        // never ship in a production build.
+        // Demo relay support: the Lightsail test relay uses a self-signed
+        // certificate. Keep this gated behind the explicit settings toggle.
         completionHandler(.useCredential, URLCredential(trust: trust))
-        #endif
     }
 }
 

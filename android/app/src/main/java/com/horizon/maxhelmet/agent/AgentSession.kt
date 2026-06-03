@@ -97,7 +97,7 @@ class AgentSession(
     private var location: Pair<Double, Double>? = null
 
     private val player = PcmPlayer()
-    private val audioRouter = AudioRouter(context)
+    private val audioRouter = jiaAudioRouter(context)
     private val mic = MicStreamer(
         onFrame = { frame -> if (transmitting) webSocket?.send(frame.toByteString()) },
         onLevel = { level -> _state.update { it.copy(voiceLevel = if (transmitting) level else 0f) } }

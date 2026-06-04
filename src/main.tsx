@@ -81,6 +81,10 @@ type AudioProcessingState = {
 
 const SAMPLE_RATE = 16000;
 const PLAYBACK_SAMPLE_RATE = 24000;
+// Boost agent speech above the raw Doubao level (the relayed PCM is conservative,
+// so unity playback sounds quiet even at full device volume). A limiter after the
+// gain keeps loud peaks from clipping. Mirrored by PcmPlayer on iOS/Android.
+const PLAYBACK_GAIN = 2.0;
 const MAX_RECONNECT_ATTEMPTS = 6;
 const DEFAULT_RIDE_CONTEXT: RideHudContext = {
   mode: "navigation",
@@ -418,6 +422,7 @@ function useHelmetAgent() {
   const playbackContextRef = useRef<AudioContext | null>(null);
   const playbackCursorRef = useRef(0);
   const playbackSourcesRef = useRef<AudioBufferSourceNode[]>([]);
+  const playbackGainRef = useRef<GainNode | null>(null);
   const transmittingRef = useRef(false);
   const intentionalCloseRef = useRef(false);
   const reconnectAttemptsRef = useRef(0);
@@ -560,6 +565,23 @@ function useHelmetAgent() {
     const pcm = new Int16Array(audioData);
     if (!pcm.length) return;
 
+    // Lazily build a shared gain → limiter → destination chain so every agent
+    // buffer is boosted by PLAYBACK_GAIN while the limiter tames the loud peaks.
+    let gain = playbackGainRef.current;
+    if (!gain || gain.context !== audioContext) {
+      gain = audioContext.createGain();
+      gain.gain.value = PLAYBACK_GAIN;
+      const limiter = audioContext.createDynamicsCompressor();
+      limiter.threshold.value = -3;
+      limiter.knee.value = 0;
+      limiter.ratio.value = 20;
+      limiter.attack.value = 0.003;
+      limiter.release.value = 0.05;
+      gain.connect(limiter);
+      limiter.connect(audioContext.destination);
+      playbackGainRef.current = gain;
+    }
+
     const buffer = audioContext.createBuffer(1, pcm.length, PLAYBACK_SAMPLE_RATE);
     const channel = buffer.getChannelData(0);
     for (let i = 0; i < pcm.length; i += 1) {
@@ -568,7 +590,7 @@ function useHelmetAgent() {
 
     const source = audioContext.createBufferSource();
     source.buffer = buffer;
-    source.connect(audioContext.destination);
+    source.connect(gain);
     if (audioContext.state === "suspended") void audioContext.resume();
 
     source.onended = () => {
@@ -979,6 +1001,7 @@ function useHelmetAgent() {
       void playbackContextRef.current.close();
       playbackContextRef.current = null;
     }
+    playbackGainRef.current = null;
     playbackCursorRef.current = 0;
     socketRef.current?.close();
     socketRef.current = null;
@@ -989,6 +1012,45 @@ function useHelmetAgent() {
   }, [releaseMic, stopAgentSpeech, stopMic]);
 
   useEffect(() => () => disconnect(), [disconnect]);
+
+  // Keep the screen awake while a hands-free session is active. Mobile browsers
+  // (iOS Safari 16.4+, Android Chrome) dim and then lock the screen on idle,
+  // which suspends the audio context and cuts the conversation mid-ride. The
+  // Wake Lock is auto-released whenever the tab is hidden, so re-acquire it when
+  // the page returns to the foreground. Best-effort: unsupported browsers no-op.
+  useEffect(() => {
+    if (!listening) return;
+    if (typeof navigator === "undefined" || !("wakeLock" in navigator)) return;
+
+    let cancelled = false;
+    let sentinel: WakeLockSentinel | null = null;
+
+    const acquire = async () => {
+      try {
+        sentinel = await navigator.wakeLock.request("screen");
+        if (cancelled) {
+          void sentinel.release();
+          sentinel = null;
+        }
+      } catch {
+        /* lost user activation or unsupported — leave the screen on its default */
+      }
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible" && !sentinel) void acquire();
+    };
+
+    void acquire();
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisibility);
+      void sentinel?.release();
+      sentinel = null;
+    };
+  }, [listening]);
 
   return {
     connected,

@@ -15,6 +15,14 @@ import kotlin.concurrent.thread
 class PcmPlayer {
     companion object {
         const val SAMPLE_RATE = 24_000
+
+        /**
+         * Boost agent speech above the raw Doubao level so it is loud enough at the
+         * helmet speaker; AudioTrack volume maxes at unity, so the gain is applied to
+         * the PCM samples and clamped so peaks don't wrap. Mirrors PLAYBACK_GAIN in
+         * src/main.tsx and PcmPlayer.playbackGain on iOS.
+         */
+        const val PLAYBACK_GAIN = 2.0f
     }
 
     private val queue = LinkedBlockingQueue<ByteArray>()
@@ -89,7 +97,25 @@ class PcmPlayer {
     /** Queues a 24 kHz PCM16 buffer. Called from the WebSocket reader thread. */
     fun play(pcm: ByteArray) {
         if (!running) start()
-        queue.put(pcm)
+        queue.put(applyGain(pcm))
+    }
+
+    /**
+     * Scales the little-endian PCM16 samples in place by [PLAYBACK_GAIN], clamping
+     * to the signed 16-bit range so boosted peaks distort gracefully instead of
+     * wrapping around.
+     */
+    private fun applyGain(pcm: ByteArray): ByteArray {
+        if (PLAYBACK_GAIN == 1.0f) return pcm
+        var i = 0
+        while (i + 1 < pcm.size) {
+            val sample = (pcm[i + 1].toInt() shl 8) or (pcm[i].toInt() and 0xFF)
+            val boosted = (sample * PLAYBACK_GAIN).toInt().coerceIn(-32768, 32767)
+            pcm[i] = (boosted and 0xFF).toByte()
+            pcm[i + 1] = ((boosted shr 8) and 0xFF).toByte()
+            i += 2
+        }
+        return pcm
     }
 
     /** Barge-in: drop queued audio and cut the current utterance immediately. */

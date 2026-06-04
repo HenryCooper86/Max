@@ -7,6 +7,10 @@ import AVFoundation
 final class PcmPlayer {
 
     static let sampleRate = 24_000
+    /// Boost agent speech above the raw Doubao level so it is loud enough at the
+    /// helmet speaker; samples are clamped after the boost so peaks don't clip.
+    /// Mirrors PLAYBACK_GAIN in src/main.tsx and PcmPlayer.kt.
+    static let playbackGain: Float = 2.0
 
     private let engine = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
@@ -114,6 +118,15 @@ final class PcmPlayer {
             status.pointee = .haveData
             return inBuffer
         }
-        return error == nil ? outBuffer : nil
+        guard error == nil else { return nil }
+
+        // Apply the playback boost and clamp to [-1, 1] so loud peaks don't wrap.
+        if let samples = outBuffer.floatChannelData {
+            let gain = PcmPlayer.playbackGain
+            for i in 0..<Int(outBuffer.frameLength) {
+                samples[0][i] = max(-1.0, min(1.0, samples[0][i] * gain))
+            }
+        }
+        return outBuffer
     }
 }

@@ -63,6 +63,7 @@ struct AgentScreen: View {
                 }
                 .padding(.bottom, 4)
             }
+            .scrollIndicators(.hidden)
 
             BottomControls(state: state, viewModel: viewModel)
         }
@@ -424,6 +425,7 @@ private struct TranscriptCard: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .frame(height: 240)
+                    .scrollIndicators(.hidden)
                     .onChange(of: items.count) { _, _ in
                         if let last = items.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
                     }

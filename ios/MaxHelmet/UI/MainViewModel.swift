@@ -6,9 +6,27 @@ import Combine
 final class MainViewModel: ObservableObject {
 
     /// On the iOS Simulator, `localhost` reaches the host machine where the relay
-    /// listens on :8787. On a physical device, replace the host with the dev
-    /// machine's LAN IP or the wss:// test server.
-    static let defaultRelayURL = "ws://localhost:8787/agent"
+    /// listens on :8787. On a physical device, `localhost` is the phone itself, so
+    /// default to the shared AWS Lightsail test relay (self-signed wss://) instead.
+    /// Either default can be overridden in the HUD's 语音中继地址 field.
+    static let defaultRelayURL: String = {
+        #if targetEnvironment(simulator)
+        return "ws://localhost:8787/agent"
+        #else
+        return "wss://3.35.135.136/agent"
+        #endif
+    }()
+
+    /// The Lightsail test relay terminates TLS with a self-signed certificate, so a
+    /// physical device must opt into trusting it on first launch; the simulator talks
+    /// plain ws:// to localhost and needs no exception.
+    static let defaultAllowSelfSigned: Bool = {
+        #if targetEnvironment(simulator)
+        return false
+        #else
+        return true
+        #endif
+    }()
 
     private enum Keys {
         static let relayURL = "relay_url"
@@ -39,7 +57,7 @@ final class MainViewModel: ObservableObject {
 
     init() {
         relayURL = defaults.string(forKey: Keys.relayURL) ?? Self.defaultRelayURL
-        allowSelfSigned = defaults.bool(forKey: Keys.allowSelfSigned)
+        allowSelfSigned = defaults.object(forKey: Keys.allowSelfSigned) as? Bool ?? Self.defaultAllowSelfSigned
     }
 
     /// One toggle, like the web HUD's 开启免提 / 结束免提 button. On iOS, microphone

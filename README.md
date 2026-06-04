@@ -112,12 +112,12 @@ All clients use the same `/agent` relay and session contract. The web HUD is the
 implementation; Android and iOS port the same protocol helpers, transcript rules, ride-context
 mapping, audio frame sizes, reconnect behavior, barge-in, and TTS fallback.
 
-| Client  | Location   | UI/audio stack                                     | Local relay URL                                 | Notes                                                                |
-| ------- | ---------- | -------------------------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------- |
-| Web     | `src/`     | React + Web Audio + `AudioWorklet`                 | same-origin `/agent` through Vite proxy         | Best for fast iteration, screenshots, and browser mic/TTS behavior.  |
-| Android | `android/` | Jetpack Compose + `AudioRecord` + `AudioTrack`     | emulator: `ws://10.0.2.2:8787/agent`            | Foreground service keeps the mic session alive with screen off.      |
-| iOS     | `ios/`     | SwiftUI + `AVAudioEngine` + `AVAudioPlayerNode`    | simulator: `ws://localhost:8787/agent`          | Background audio mode keeps the hands-free session alive.            |
-| Test    | any client | Browser/mobile client pointed at shared deployment | `wss://3.35.135.136/agent` with self-signed TLS | Uses `VOICE_PROVIDER=doubao` and the server's private `.env` values. |
+| Client  | Location   | UI/audio stack                                     | Local relay URL                                                            | Notes                                                                                 |
+| ------- | ---------- | -------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Web     | `src/`     | React + Web Audio + `AudioWorklet`                 | same-origin `/agent` through Vite proxy                                    | Best for fast iteration, screenshots, and browser mic/TTS behavior.                   |
+| Android | `android/` | Jetpack Compose + `AudioRecord` + `AudioTrack`     | emulator: `ws://10.0.2.2:8787/agent`                                       | Foreground service keeps the mic session alive with screen off.                       |
+| iOS     | `ios/`     | SwiftUI + `AVAudioEngine` + `AVAudioPlayerNode`    | simulator: `ws://localhost:8787/agent`; device: `wss://3.35.135.136/agent` | Environment-aware default relay; background audio keeps the hands-free session alive. |
+| Test    | any client | Browser/mobile client pointed at shared deployment | `wss://3.35.135.136/agent` with self-signed TLS                            | Uses `VOICE_PROVIDER=doubao` and the server's private `.env` values.                  |
 
 ### Runtime topology
 
@@ -284,12 +284,15 @@ Then set the app's relay URL:
 | Android emulator       | `ws://10.0.2.2:8787/agent`     |
 | Android physical phone | `ws://<Mac-LAN-IP>:8787/agent` |
 | iOS Simulator          | `ws://localhost:8787/agent`    |
+| iPhone (default)       | `wss://3.35.135.136/agent`     |
 | iPhone on LAN          | `ws://<Mac-LAN-IP>:8787/agent` |
 | Shared test server     | `wss://3.35.135.136/agent`     |
 
-For the shared test server, enable the self-signed certificate trust toggle inside the native
-app. That toggle is for this prototype test server only and should be removed or disabled before
-any production release.
+The iOS app picks its default relay by environment: the simulator uses `ws://localhost:8787/agent`,
+while a physical device defaults to the shared Lightsail relay (`wss://3.35.135.136/agent`) with the
+self-signed trust toggle auto-enabled. For any other `wss://` self-signed host, enable the trust
+toggle inside the native app. That toggle is for this prototype test server only and should be
+removed or disabled before any production release.
 
 ## Environment Variables
 

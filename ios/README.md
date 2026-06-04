@@ -57,13 +57,18 @@ explicit `DEVELOPER_DIR` command above or switch the machine to full Xcode with 
 
 1. Start the relay on the Mac: `npm run dev:server` (or `npm run dev`) from the repo root.
    The server listens on `0.0.0.0:8787`, so it is reachable over the LAN.
-2. Launch the app and set the 语音中继地址 field:
+2. Launch the app. The 语音中继地址 field is prefilled from an environment-aware default
+   (`MainViewModel.defaultRelayURL`) — override it for any of the rows below:
 
-| Where the app runs    | Relay URL                                |
-| --------------------- | ---------------------------------------- |
-| iOS Simulator         | `ws://localhost:8787/agent` (default)    |
-| Physical iPhone (LAN) | `ws://<Mac-LAN-IP>:8787/agent`           |
-| Shared test server    | `wss://3.35.135.136/agent` (self-signed) |
+| Where the app runs    | Relay URL                                           | Default?                       |
+| --------------------- | --------------------------------------------------- | ------------------------------ |
+| iOS Simulator         | `ws://localhost:8787/agent`                         | ✅ on the simulator            |
+| Physical iPhone       | `wss://3.35.135.136/agent` (Lightsail, self-signed) | ✅ on a device (trust auto-on) |
+| Physical iPhone (LAN) | `ws://<Mac-LAN-IP>:8787/agent`                      | override for a local Mac relay |
+
+On a physical device `localhost` is the phone itself, so the app defaults to the shared AWS
+Lightsail test relay and turns the self-signed trust toggle on for that first connection.
+Point it back at a Mac relay by typing the LAN URL (and toggling self-signed off for `ws://`).
 
 3. Tap 开启免提. The app asks for microphone (required) and location (optional, used for live
    weather). With `VOICE_PROVIDER=mock` you get the scripted demo session; with
@@ -92,6 +97,34 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun simctl l
 
 The simulator can connect to the Mac relay at `ws://localhost:8787/agent`.
 
+### Physical device quick start
+
+Running on a real iPhone needs a signing team. With a **free** Apple ID, add it once in
+**Xcode ▸ Settings ▸ Accounts**, then select your **(Personal Team)** under the MaxHelmet target's
+**Signing & Capabilities** so Xcode provisions an _Apple Development_ certificate. The repo already
+pins `DEVELOPMENT_TEAM = V487HQQLC6`; change it to your own team if you are not on that account.
+
+```bash
+# Find your connected device's UDID
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun devicectl list devices
+
+UDID=<your-device-udid>
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+
+# Build, install, and launch on the device
+xcodebuild -project ios/MaxHelmet.xcodeproj -scheme MaxHelmet \
+  -destination "id=$UDID" -configuration Debug \
+  -derivedDataPath /tmp/MaxHelmetBuild -allowProvisioningUpdates build
+xcrun devicectl device install app --device "$UDID" \
+  /tmp/MaxHelmetBuild/Build/Products/Debug-iphoneos/MaxHelmet.app
+xcrun devicectl device process launch --device "$UDID" com.horizon.maxhelmet
+```
+
+The device must have **Developer Mode** enabled (Settings ▸ Privacy & Security ▸ Developer Mode).
+On the first launch, trust the developer under **Settings ▸ General ▸ VPN & Device Management** if
+iOS shows an "Untrusted Developer" prompt. A free personal team's signature **expires after 7 days** —
+re-run the build/install to refresh it. The installed app defaults to the Lightsail relay above.
+
 ### Permissions
 
 | Permission / capability               | Why it is needed                                                        |
@@ -106,9 +139,11 @@ Location is optional. If denied, the server can use fallback weather coordinates
 
 ### Self-signed test server
 
-The Lightsail test box uses a self-signed certificate. Toggle **信任自签名证书（测试服务器）**
-before connecting to a `wss://` host with such a cert. This trust-all path is gated behind the
-toggle and must never ship in a production build. `Info.plist` also enables
+The Lightsail test box uses a self-signed certificate. The toggle **信任自签名证书（测试服务器）**
+gates a trust-all path for `wss://` hosts with such a cert. On a physical device it defaults **on**
+(via `MainViewModel.defaultAllowSelfSigned`) so the Lightsail default relay connects out of the box;
+the simulator defaults it **off** since it talks plain `ws://` to localhost. This trust-all path
+must never ship in a production build. `Info.plist` also enables
 `NSAllowsArbitraryLoads` so `ws://` (cleartext) dev relays work — tighten both before release.
 
 ## What's implemented
@@ -172,15 +207,16 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 
 ## Troubleshooting
 
-| Symptom                               | Check                                                                                      |
-| ------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `xcodebuild` cannot find simulators   | Use full Xcode via `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`.             |
-| Simulator app stays offline           | Use `ws://localhost:8787/agent` and make sure `npm run dev:server` is running.             |
-| Physical iPhone cannot connect        | Use `ws://<Mac-LAN-IP>:8787/agent`; grant local-network permission and check the firewall. |
-| Mic permission prompt does not appear | Reset app privacy in Simulator or delete/reinstall the app.                                |
-| Self-signed test server fails         | Use `wss://3.35.135.136/agent` and enable the self-signed certificate toggle.              |
-| App launches but no live weather      | Grant location permission or configure fallback coordinates on the server.                 |
-| Bluetooth route is not selected       | Pair the headset before starting the session; iOS chooses HFP routing automatically.       |
+| Symptom                               | Check                                                                                                                                                               |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `xcodebuild` cannot find simulators   | Use full Xcode via `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`.                                                                                      |
+| Simulator app stays offline           | Use `ws://localhost:8787/agent` and make sure `npm run dev:server` is running.                                                                                      |
+| Physical iPhone cannot connect        | Default is `wss://3.35.135.136/agent` (self-signed on); for a Mac relay use `ws://<Mac-LAN-IP>:8787/agent`, grant local-network permission, and check the firewall. |
+| Device app won't launch after ~7 days | Free personal-team signature expired — re-run the device build/install to refresh it.                                                                               |
+| Mic permission prompt does not appear | Reset app privacy in Simulator or delete/reinstall the app.                                                                                                         |
+| Self-signed test server fails         | Use `wss://3.35.135.136/agent` and enable the self-signed certificate toggle.                                                                                       |
+| App launches but no live weather      | Grant location permission or configure fallback coordinates on the server.                                                                                          |
+| Bluetooth route is not selected       | Pair the headset before starting the session; iOS chooses HFP routing automatically.                                                                                |
 
 ## Release caveats
 

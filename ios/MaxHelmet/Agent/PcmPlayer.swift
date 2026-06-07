@@ -12,18 +12,24 @@ final class PcmPlayer {
     /// Mirrors PLAYBACK_GAIN in src/main.tsx and PcmPlayer.kt.
     static let playbackGain: Float = 2.0
 
-    private let engine = AVAudioEngine()
+    /// Shared with MicStreamer so the agent voice renders through the same engine
+    /// that performs echo cancellation — see prepare() and MicStreamer.start().
+    private let engine: AVAudioEngine
     private let playerNode = AVAudioPlayerNode()
     private let inputFormat: AVAudioFormat   // 24 kHz PCM16 mono (the wire format)
     private let mixFormat: AVAudioFormat     // 24 kHz float32 mono (engine-friendly)
     private var converter: AVAudioConverter?
 
     private let queue = DispatchQueue(label: "pcm-player")
-    private var running = false
+    /// The playback node is attached to the shared engine exactly once.
+    private var attached = false
+    /// True once playerNode.play() has armed the node for scheduling.
+    private var playing = false
     /// Bumped by barge-in so scheduled completions for the old utterance are ignored.
     private var generation = 0
 
-    init() {
+    init(engine: AVAudioEngine) {
+        self.engine = engine
         inputFormat = AVAudioFormat(
             commonFormat: .pcmFormatInt16,
             sampleRate: Double(PcmPlayer.sampleRate),
@@ -39,27 +45,26 @@ final class PcmPlayer {
         converter = AVAudioConverter(from: inputFormat, to: mixFormat)
     }
 
-    func start() {
+    /// Attaches the playback node to the shared engine. Must run while the engine
+    /// is stopped, before MicStreamer starts it, so the agent voice renders
+    /// through the echo-cancelling output. MicStreamer owns the engine's start/stop.
+    func prepare() {
         queue.sync {
-            guard !running else { return }
+            guard !attached else { return }
             engine.attach(playerNode)
             engine.connect(playerNode, to: engine.mainMixerNode, format: mixFormat)
-            engine.prepare()
-            do {
-                try engine.start()
-                playerNode.play()
-                running = true
-            } catch {
-                running = false
-            }
+            attached = true
         }
     }
 
     /// Queues a 24 kHz PCM16 buffer. Called from the WebSocket reader.
     func play(_ pcm: Data) {
-        if !running { start() }
         queue.async { [weak self] in
-            guard let self, self.running else { return }
+            guard let self, self.attached, self.engine.isRunning else { return }
+            if !self.playing {
+                self.playerNode.play()   // arm the node now that the engine runs
+                self.playing = true
+            }
             guard let buffer = self.makeFloatBuffer(from: pcm) else { return }
             // stopPlayback() (barge-in) flushes the node, so any buffer scheduled
             // before it is discarded — the generation counter mirrors the Android
@@ -72,7 +77,7 @@ final class PcmPlayer {
     func stopPlayback() {
         queue.sync {
             generation += 1
-            guard running else { return }
+            guard playing else { return }
             playerNode.stop()
             playerNode.play()   // re-arm for the next utterance
         }
@@ -81,10 +86,9 @@ final class PcmPlayer {
     func release() {
         queue.sync {
             generation += 1
-            guard running else { return }
-            playerNode.stop()
-            engine.stop()
-            running = false
+            guard playing else { return }
+            playerNode.stop()   // MicStreamer.stop() stops the shared engine
+            playing = false
         }
     }
 

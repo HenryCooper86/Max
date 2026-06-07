@@ -58,9 +58,15 @@ final class AgentSession: NSObject, ObservableObject {
     private var transcriptTurn = 0
     private var location: CLLocationCoordinate2D?
 
-    private let player = PcmPlayer()
+    /// One AVAudioEngine shared by mic capture and agent playback. iOS only
+    /// cancels echo across a single engine (see MicStreamer/PcmPlayer), so this
+    /// is what stops the built-in speaker from feeding the agent's own voice back
+    /// into the mic. Mirrors the web's single shared AudioContext.
+    private let voiceEngine = AVAudioEngine()
+    private lazy var player = PcmPlayer(engine: voiceEngine)
     private let audioRouter = AudioRouter()
     private lazy var mic = MicStreamer(
+        engine: voiceEngine,
         onFrame: { [weak self] frame in
             guard let self, self.transmitting else { return }
             self.webSocket?.send(.data(frame)) { _ in }
@@ -125,6 +131,10 @@ final class AgentSession: NSObject, ObservableObject {
             }
             DispatchQueue.main.async {
                 do {
+                    // Attach the playback node first so it renders through the
+                    // shared engine before the mic starts it — the engine's output
+                    // is the echo-cancellation reference signal.
+                    self.player.prepare()
                     try self.mic.start()
                 } catch {
                     self.update { $0.statusText = "麦克风不可用，请检查录音权限" }

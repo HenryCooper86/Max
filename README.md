@@ -116,7 +116,7 @@ mapping, audio frame sizes, reconnect behavior, barge-in, and TTS fallback.
 | ------- | ---------- | -------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
 | Web     | `src/`     | React + Web Audio + `AudioWorklet`                 | same-origin `/agent` through Vite proxy                                    | Best for fast iteration, screenshots, and browser mic/TTS behavior.                   |
 | Android | `android/` | Jetpack Compose + `AudioRecord` + `AudioTrack`     | emulator: `ws://10.0.2.2:8787/agent`                                       | Foreground service keeps the mic session alive with screen off.                       |
-| iOS     | `ios/`     | SwiftUI + `AVAudioEngine` + `AVAudioPlayerNode`    | simulator: `ws://localhost:8787/agent`; device: `wss://3.35.135.136/agent` | Environment-aware default relay; background audio keeps the hands-free session alive. |
+| iOS     | `ios/`     | SwiftUI + shared `AVAudioEngine` (voice-processing AEC) + `AVAudioPlayerNode` | simulator: `ws://localhost:8787/agent`; device: `wss://3.35.135.136/agent` | Environment-aware default relay; background audio keeps the hands-free session alive; built-in-speaker echo cancellation. |
 | Test    | any client | Browser/mobile client pointed at shared deployment | `wss://3.35.135.136/agent` with self-signed TLS                            | Uses `VOICE_PROVIDER=doubao` and the server's private `.env` values.                  |
 
 ### Runtime topology

@@ -13,14 +13,19 @@ final class MicStreamer {
     private let onFrame: (Data) -> Void
     private let onLevel: (Float) -> Void
 
-    private let engine = AVAudioEngine()
+    /// Shared with PcmPlayer so iOS's voice-processing I/O unit can use the
+    /// playback as its echo-cancellation reference — see start().
+    private let engine: AVAudioEngine
     private var converter: AVAudioConverter?
     private let outputFormat: AVAudioFormat
     /// Accumulates resampled PCM16 bytes until a full 320-sample frame is ready.
     private var pending = Data()
     private var running = false
 
-    init(onFrame: @escaping (Data) -> Void, onLevel: @escaping (Float) -> Void) {
+    init(engine: AVAudioEngine,
+         onFrame: @escaping (Data) -> Void,
+         onLevel: @escaping (Float) -> Void) {
+        self.engine = engine
         self.onFrame = onFrame
         self.onLevel = onLevel
         // 16 kHz, mono, signed 16-bit, interleaved — the wire format the relay expects.
@@ -36,6 +41,16 @@ final class MicStreamer {
     /// configured the shared AVAudioSession (see AudioRouter).
     func start() throws {
         guard !running else { return }
+
+        // Enable Apple's acoustic echo cancellation before the engine starts.
+        // This switches both I/O nodes to the voice-processing unit, which
+        // subtracts whatever PcmPlayer renders through the shared engine from the
+        // mic signal — without it the built-in speaker echoes into the mic and
+        // the agent replies to itself. AirPods masked this by isolating the path.
+        // Must be done while the engine is stopped; best-effort per route.
+        if !engine.isRunning {
+            try? engine.inputNode.setVoiceProcessingEnabled(true)
+        }
 
         let input = engine.inputNode
         let inputFormat = input.inputFormat(forBus: 0)

@@ -153,6 +153,9 @@ must never ship in a production build. `Info.plist` also enables
 - Voice gender, personality, ride mode, and demo scenario selectors.
 - 16 kHz PCM16 mono microphone streaming through `AVAudioEngine`.
 - 24 kHz PCM16 gapless playback through `AVAudioPlayerNode`.
+- Acoustic echo cancellation: capture and playback share **one** `AVAudioEngine` with the
+  voice-processing I/O unit enabled, so the built-in speaker does not feed the agent's own
+  voice back into the mic. See *Platform notes* below.
 - Barge-in: rider speech stops queued provider audio and fallback TTS.
 - Reconnect with exponential backoff and user-visible connection status.
 - Live weather card and fused `态势摘要` ride-pulse card.
@@ -168,8 +171,8 @@ audio + session logic; the `UI/` layer is the SwiftUI HUD.
 | File                        | Role                                                                                                                                                                | Ports from                                                                                |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | `Agent/AgentProtocol.swift` | Enums, event parsing, `session.start` builder, pure helpers (`combineHazardLevels`, `mapTurnState`, `detectLanguage`, `normalizeTranscriptText`, transcript export) | `shared/agent.ts`, `shared/ride.ts`, `shared/language.ts`, `android/.../AgentProtocol.kt` |
-| `Agent/MicStreamer.swift`   | Mic capture → 16 kHz PCM16 mono, 320-sample (20 ms) frames                                                                                                          | `public/pcm-worklet.js`, `MicStreamer.kt`                                                 |
-| `Agent/PcmPlayer.swift`     | Gapless 24 kHz PCM16 playback + barge-in                                                                                                                            | playback cursor in `src/main.tsx`, `PcmPlayer.kt`                                         |
+| `Agent/MicStreamer.swift`   | Mic capture → 16 kHz PCM16 mono, 320-sample (20 ms) frames; enables echo cancellation on the shared engine and owns its start/stop                                   | `public/pcm-worklet.js`, `MicStreamer.kt`                                                 |
+| `Agent/PcmPlayer.swift`     | Gapless 24 kHz PCM16 playback + barge-in; attaches its player node to the shared engine                                                                             | playback cursor in `src/main.tsx`, `PcmPlayer.kt`                                         |
 | `Agent/AudioRouter.swift`   | `AVAudioSession` voice-chat config + Bluetooth (HFP) routing                                                                                                        | `AudioRouter.kt`                                                                          |
 | `Agent/AgentSession.swift`  | Relay WebSocket, reconnect backoff, transcript dedup, barge-in, `AVSpeechSynthesizer` TTS fallback, location, self-signed TLS, published state                      | `useHelmetAgent` in `src/main.tsx`, `AgentSession.kt`                                     |
 | `UI/AgentScreen.swift`      | The HUD: header, rider controls, turn-state ring, 态势摘要, weather, telemetry, transcript, controls                                                                | `src/components/HelmetVisual.tsx`, `AgentScreen.kt`                                       |
@@ -185,6 +188,17 @@ audio + session logic; the `UI/` layer is the SwiftUI HUD.
 - **Bluetooth routing** is handled by iOS itself — `AVAudioSession` with `.playAndRecord` +
   Bluetooth category options automatically prefers a connected HFP headset, so there is no
   manual SCO start/stop.
+- **Echo cancellation** is the iOS analogue of the web's `getUserMedia({ echoCancellation })`.
+  iOS only cancels echo *within a single* `AVAudioEngine`: enabling voice processing on the
+  input node (`setVoiceProcessingEnabled(true)`) makes the voice-processing I/O unit subtract
+  whatever is rendered through **that same engine's** output from the mic signal. So
+  `MicStreamer` (capture) and `PcmPlayer` (playback) share one `AVAudioEngine` owned by
+  `AgentSession` (`voiceEngine`): the player node is attached before the mic starts the engine,
+  giving the canceller its reference signal. Two separate engines (the earlier design) gave the
+  canceller no reference, so on the built-in speaker the mic picked up the agent's own voice and
+  it replied to itself — AirPods masked the bug by isolating the audio path. Voice processing
+  must be enabled while the engine is stopped; it can only be confirmed audibly on a physical
+  device, since the Simulator does not model speaker→mic acoustic feedback.
 - **TTS fallback** uses `AVSpeechSynthesizer` (the mock provider returns reply text but no
   audio; Doubao returns synthesized audio).
 

@@ -20,7 +20,10 @@ const DEMO_WEATHER_LOCATION = {
 export const config = {
   port: Number(process.env.PORT ?? 8787),
   voiceProvider: (process.env.VOICE_PROVIDER === "doubao" ? "doubao" : "mock") as VoiceProvider,
-  defaultWeatherLocation: resolveDefaultWeatherLocation()
+  defaultWeatherLocation: resolveDefaultWeatherLocation(),
+  // When on, the live agent only replies when the rider addresses it ("Hey Max");
+  // set AGENT_WAKE_WORD=off to make it answer every utterance again.
+  wakeWord: process.env.AGENT_WAKE_WORD?.trim().toLowerCase() !== "off"
 };
 
 function resolveDefaultWeatherLocation(): WeatherLocation {
@@ -50,7 +53,8 @@ export function describeConfig(): string[] {
   return [
     `Realtime voice provider: ${config.voiceProvider}`,
     `Provider credentials: ${credentialStatus()}`,
-    `Weather context: Open-Meteo best-effort + ${config.defaultWeatherLocation.source} fallback`
+    `Weather context: Open-Meteo best-effort + ${config.defaultWeatherLocation.source} fallback`,
+    `Wake word ("Hey Max"): ${config.wakeWord ? "on" : "off"}`
   ];
 }
 

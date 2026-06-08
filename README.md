@@ -204,6 +204,7 @@ If Doubao returns reply _text_ but no audio, the browser falls back to its own `
 ### Hands-free & live weather
 
 - **Hands-free** — activating the session with the main button or Space streams the mic continuously (Doubao's `keep_alive` input mode); Doubao's server-side VAD segments turns, so the rider never taps again. `turnState` (`idle`/`listening`/`hearing`/`thinking`/`speaking`) is derived from server `status` events and drives the helmet's caption and ring colour. Space toggling ignores editable controls so future form inputs are not hijacked.
+- **Wake word ("Hey Max")** — on the live Doubao path the agent only replies when the rider addresses it by name (`shared/wake.ts`). Because Doubao runs ASR internally, the relay can't pre-filter raw audio; instead `doubao.ts` watches the rider transcript and, when it lacks the wake phrase, **suppresses Doubao's reply** (drops the agent voice frames + transcript) so chit-chat and passenger talk don't trigger Max. Once addressed, a 12 s follow-up window (`WAKE_FOLLOWUP_WINDOW_MS`) keeps the conversation open without re-saying the phrase, sliding forward on each rider turn. The matcher tolerates casing, punctuation, Chinese greetings (`你好 Max`), and common ASR mishearings, while rejecting substrings like "they **max** out". Disable with `AGENT_WAKE_WORD=off`. The mock provider is unaffected (its scripted demo always responds).
 - **Language policy** — Max speaks Chinese by default, can answer in English, and refuses unsupported languages. Client-side language detection is used for TTS voice selection and transcript labeling; server prompt context enforces the rider-facing behavior.
 - **Ride intelligence** — `session.start` carries the selected `rideMode` and `scenario`; `shared/ride.ts` turns that into a safety policy, response style, hazard level, and HUD focus. Doubao receives this as prompt context; the mock provider turns it into scenario-specific transcripts and telemetry. The HUD's `态势摘要` card fuses ride hazard and weather risk into immediate normal / caution / critical rider guidance.
 - **Weather** — on activation the browser requests geolocation and sends `lat`/`lon` with `session.start`. `server/weather.ts` fetches current conditions from **Open-Meteo** (free, no API key), classifies rider risk, and emits weather/advice to the HUD. `doubao.ts` folds the same data into the agent's `system_role`. A failed lookup never blocks the session.
@@ -337,6 +338,16 @@ DEFAULT_RIDER_LON=
 ```
 
 If these are blank, Max uses a built-in Seoul demo fallback. Real rider coordinates always take priority when browser geolocation is granted.
+
+### Wake word
+
+On the live Doubao path Max only answers when addressed as **"Hey Max"** (see *Hands-free & live weather* above). It is on by default; turn it off so the agent replies to every utterance again:
+
+```bash
+AGENT_WAKE_WORD=off
+```
+
+The wake phrase and the 12 s follow-up window live in `shared/wake.ts`. The mock provider always responds regardless of this flag.
 
 ## API Routes
 

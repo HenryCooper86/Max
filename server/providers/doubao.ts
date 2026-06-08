@@ -2,6 +2,7 @@ import { WebSocket, type RawData } from "ws";
 import { randomUUID } from "node:crypto";
 import type { AgentProvider, SessionStartEvent, VoiceGender } from "./types";
 import { DOUBAO_CAPABILITIES } from "../../shared/agent";
+import { containsWakePhrase, WAKE_FOLLOWUP_WINDOW_MS, WAKE_PHRASE_LABEL } from "../../shared/wake";
 import { config as appConfig } from "../config";
 import { fetchRiderWeather } from "../weather";
 import {
@@ -297,6 +298,15 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
   let pendingAgentText = "";
   let receivedTtsAudio = false;
   let ttsFallbackTimer: NodeJS.Timeout | undefined;
+  // Wake-word ("Hey Max") gating. The rider transcript for the current turn
+  // accumulates in riderTurnText; addressedUntil holds the conversation window.
+  // replyDecided/replyAddressed latch the decision for the whole agent turn so
+  // a late window expiry can't clip a reply that already started.
+  const wakeWordEnabled = appConfig.wakeWord;
+  let riderTurnText = "";
+  let addressedUntil = 0;
+  let replyDecided = false;
+  let replyAddressed = false;
   let lastFlushedAgentTextKey = "";
   let lastFlushedAgentTextAt = 0;
   let rideContext: RideContext = { mode: "ride", scenario: "commute" };
@@ -318,7 +328,23 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
     ttsFallbackTimer = undefined;
   }
 
+  // Latches once per agent turn: true when the rider's utterance addressed Max
+  // (or fell inside the follow-up window). Reset on each new rider turn.
+  function replyIsAddressed(): boolean {
+    if (!wakeWordEnabled) return true;
+    if (!replyDecided) {
+      replyAddressed = Date.now() <= addressedUntil;
+      replyDecided = true;
+    }
+    return replyAddressed;
+  }
+
   function flushPendingAgentText(useBrowserSpeech: boolean) {
+    // Drop the reply entirely when the rider did not address Max.
+    if (!replyIsAddressed()) {
+      pendingAgentText = "";
+      return;
+    }
     const text = pendingAgentText.trim();
     if (!text) return;
     const now = Date.now();
@@ -412,6 +438,8 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
         }
 
         if (frame.event === EventReceive.TtsResponse) {
+          // Suppress the agent's voice when the rider did not address Max.
+          if (!replyIsAddressed()) return;
           if (!firstAudioAt) {
             firstAudioAt = Date.now();
             if (chatStartedAt) sendClient({ type: "metric", latencyMs: firstAudioAt - chatStartedAt });
@@ -426,6 +454,10 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
         const payload = parseJsonPayload(frame);
         if (frame.event === EventReceive.AsrInfo) {
           if (!asrStartedAt) asrStartedAt = Date.now();
+          // New rider turn: reset the wake-word accumulation and decision latch.
+          riderTurnText = "";
+          replyDecided = false;
+          replyAddressed = false;
           sendClient({ type: "status", state: "hearing", detail: "豆包检测到骑手语音" });
           return;
         }
@@ -433,6 +465,12 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
         if (frame.event === EventReceive.AsrResponse) {
           const text = extractAsrText(payload);
           if (text) {
+            // Accumulate the turn transcript and (re)open the conversation window
+            // when the rider says "Hey Max" or is already inside an open window.
+            riderTurnText = riderTurnText ? `${riderTurnText} ${text}` : text;
+            if (wakeWordEnabled && (containsWakePhrase(riderTurnText) || Date.now() <= addressedUntil)) {
+              addressedUntil = Date.now() + WAKE_FOLLOWUP_WINDOW_MS;
+            }
             memory = updateSessionMemory(memory, text, rideContext.mode);
             sendClient({ type: "status", state: "asr", detail: `豆包听到：${text}` });
             sendClient({ type: "transcript", speaker: "rider", text, final: false });
@@ -446,7 +484,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
           const text = extractChatText(payload);
           if (text) {
             pendingAgentText += text;
-            sendClient({ type: "status", state: "thinking", detail: "豆包已生成回复文本" });
+            if (replyIsAddressed()) sendClient({ type: "status", state: "thinking", detail: "豆包已生成回复文本" });
           }
           return;
         }
@@ -455,7 +493,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
           const text = extractChatText(payload);
           if (text && !pendingAgentText.includes(text)) {
             pendingAgentText += text;
-            sendClient({ type: "status", state: "thinking", detail: "豆包已生成语音文本" });
+            if (replyIsAddressed()) sendClient({ type: "status", state: "thinking", detail: "豆包已生成语音文本" });
           }
           return;
         }
@@ -616,7 +654,11 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
       chatStartedAt = 0;
       firstAudioAt = 0;
       emitRideContext();
-      sendClient({ type: "status", state: "listening", detail: "正在通过豆包实时语音收听" });
+      sendClient({
+        type: "status",
+        state: "listening",
+        detail: wakeWordEnabled ? `正在收听 —— 说一声 "${WAKE_PHRASE_LABEL}" 唤醒 Max` : "正在通过豆包实时语音收听"
+      });
     },
     async sendAudio(chunk: Buffer) {
       if (upstream && upstream.readyState === WebSocket.OPEN) {

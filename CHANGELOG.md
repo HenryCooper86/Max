@@ -1,0 +1,48 @@
+# Changelog
+
+## 2026-06-08
+
+Audio fixes across all clients, plus a "Max" wake word on the live agent.
+
+### Added
+- **Wake word ("Max")** — on the live Doubao path the agent now only replies when
+  the rider addresses it by name. Because Doubao runs ASR internally, the relay
+  can't pre-filter raw audio, so `server/providers/doubao.ts` watches the rider
+  transcript and suppresses Doubao's reply (drops the agent voice frames +
+  transcript + TTS fallback) when the name is absent. Saying "Max" anywhere in the
+  utterance addresses it (an optional greeting is allowed but not required, since
+  ASR often drops it); a 12 s follow-up window keeps the conversation open without
+  repeating the name. Matcher + tests in `shared/wake.ts` / `tests/wake.test.ts`.
+  Toggle with `AGENT_WAKE_WORD=off`. The mock provider always responds.
+
+### Fixed
+- **iOS built-in-speaker echo** — the app heard and replied to itself on the phone
+  speaker (fine on AirPods). Root cause: mic capture and playback used two separate
+  `AVAudioEngine` instances, so iOS's voice-processing unit had no echo reference.
+  Capture and playback now share one engine with `setVoiceProcessingEnabled(true)`,
+  mirroring the web's single `AudioContext` + `echoCancellation`.
+  (`ios/MaxHelmet/Agent/{AgentSession,MicStreamer,PcmPlayer}.swift`)
+- **Web mic anti-aliasing** — `public/pcm-worklet.js` replaced nearest-neighbor
+  decimation with a box-average filter, so mic energy above 8 kHz no longer aliases
+  into the 16 kHz band and blurs ASR.
+- **Web audio/render hardening** (`src/main.tsx`) — create/resume the playback
+  `AudioContext` inside the start gesture (Safari autoplay), warm `speechSynthesis`
+  voices on mount, and skip redundant visor-level re-renders.
+
+### Changed
+- **Android** — renamed the misnamed `jiaAudioRouter` class to `AudioRouter`.
+  Documented that Android already does AEC (`VOICE_COMMUNICATION` +
+  `AcousticEchoCanceler`) and the known built-in-speaker weakness (deferred,
+  pending a physical-device test).
+
+### Deployed
+- AWS Lightsail test server (`wss://3.35.135.136/agent`) updated with the server-side
+  changes; `Wake word ("Max"): on` confirmed live.
+
+### Notes / follow-ups
+- iOS echo fix and the Android AEC weakness can only be confirmed on a **physical
+  device** (simulators/emulators don't model speaker→mic feedback).
+- Bare "Max" can false-trigger on phrases like "max out" / "max speed"; revisit if
+  it proves annoying in real riding.
+- The Doubao wake-word gating has no automated coverage yet (no mock-upstream test
+  harness); the matcher itself is unit-tested.

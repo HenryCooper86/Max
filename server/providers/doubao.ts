@@ -313,7 +313,12 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
   let started = false;
   let sessionId = randomUUID();
   let sessionReady = false;
-  let pendingAgentText = "";
+  // Doubao streams the agent reply over two channels: ChatResponse (raw LLM
+  // tokens, often missing spaces) and TtsSentence (the spoken text, properly
+  // spaced). They're kept separate so the transcript can use the spoken text —
+  // which matches the voice — instead of concatenating both and duplicating it.
+  let chatText = "";
+  let ttsText = "";
   let receivedTtsAudio = false;
   let ttsFallbackTimer: NodeJS.Timeout | undefined;
   // Wake-word ("Max") gating. The rider transcript for the current turn
@@ -357,24 +362,34 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
     return replyAddressed;
   }
 
+  /** The reply text to show: the spoken (TTS) text if any, else the raw chat text. */
+  function pendingReplyText(): string {
+    return (ttsText || chatText).trim();
+  }
+
+  function resetPendingReply() {
+    chatText = "";
+    ttsText = "";
+  }
+
   function flushPendingAgentText(useBrowserSpeech: boolean) {
     // Drop the reply entirely when the rider did not address Max.
     if (!replyIsAddressed()) {
-      pendingAgentText = "";
+      resetPendingReply();
       return;
     }
-    const text = pendingAgentText.trim();
+    const text = pendingReplyText();
     if (!text) return;
     const now = Date.now();
     const textKey = normalizeTranscriptText(text);
     if (textKey === lastFlushedAgentTextKey && now - lastFlushedAgentTextAt < 8000) {
-      pendingAgentText = "";
+      resetPendingReply();
       return;
     }
     lastFlushedAgentTextKey = textKey;
     lastFlushedAgentTextAt = now;
     sendClient({ type: "transcript", speaker: "agent", text, final: true, useBrowserSpeech });
-    pendingAgentText = "";
+    resetPendingReply();
   }
 
   function emitMemory() {
@@ -501,7 +516,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
           if (!chatStartedAt) chatStartedAt = Date.now();
           const text = extractChatText(payload);
           if (text) {
-            pendingAgentText += text;
+            chatText += text;
             if (replyIsAddressed()) sendClient({ type: "status", state: "thinking", detail: "豆包已生成回复文本" });
           }
           return;
@@ -509,36 +524,32 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
 
         if (frame.event === EventReceive.TtsSentenceStart || frame.event === EventReceive.TtsSentenceEnd) {
           const text = extractChatText(payload);
-          if (text && !pendingAgentText.includes(text)) {
-            pendingAgentText += text;
+          if (text && !ttsText.includes(text)) {
+            ttsText += text;
             if (replyIsAddressed()) sendClient({ type: "status", state: "thinking", detail: "豆包已生成语音文本" });
           }
           return;
         }
 
         if (frame.event === EventReceive.ChatEnded) {
-          if (pendingAgentText && receivedTtsAudio) {
-            flushPendingAgentText(false);
-          } else if (pendingAgentText) {
-            armTtsFallbackTimer();
-          }
+          // The reply text is complete, but TTS may still be streaming. Defer the
+          // single flush to TtsEnded so the transcript uses the full spoken text
+          // and isn't emitted twice. If no audio is coming, the fallback timer
+          // flushes the text for browser speech.
+          if (!receivedTtsAudio && pendingReplyText()) armTtsFallbackTimer();
           sendClient({ type: "status", state: "ready", detail: "豆包回复文本已完成" });
           return;
         }
 
         if (frame.event === EventReceive.TtsEnded) {
           clearTtsFallbackTimer();
-          if (pendingAgentText && !receivedTtsAudio) {
-            flushPendingAgentText(true);
-            sendClient({
-              type: "status",
-              state: "ready",
-              detail: "豆包 TTS 未返回音频，正在使用浏览器语音备用模式"
-            });
-          } else {
-            if (pendingAgentText) flushPendingAgentText(false);
-            sendClient({ type: "status", state: "ready", detail: "豆包回复已完成" });
-          }
+          // Flush exactly once, using browser speech only when no audio arrived.
+          if (pendingReplyText()) flushPendingAgentText(!receivedTtsAudio);
+          sendClient({
+            type: "status",
+            state: "ready",
+            detail: receivedTtsAudio ? "豆包回复已完成" : "豆包 TTS 未返回音频，正在使用浏览器语音备用模式"
+          });
           receivedTtsAudio = false;
           emitTelemetry();
           return;
@@ -575,7 +586,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
     upstream.on("close", () => {
       sessionReady = false;
       clearTtsFallbackTimer();
-      if (pendingAgentText) flushPendingAgentText(true);
+      if (pendingReplyText()) flushPendingAgentText(true);
       sendClient({ type: "status", state: "closed", detail: "豆包实时代理已断开" });
     });
 

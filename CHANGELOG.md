@@ -4,6 +4,16 @@
 
 Audio fixes across all clients, plus a "Max" wake word on the live agent.
 
+### Fixed
+- **Doubao transcript duplication / garbled spacing** — the agent reply was
+  accumulated from *both* Doubao channels into one buffer: `ChatResponse` (raw LLM
+  tokens, missing spaces — "I'mMax") and `TtsSentence` (the spoken text, properly
+  spaced — "I'm Max"). The substring de-dup missed because the two differed, so
+  depending on timing the transcript showed the reply twice in one entry, or as two
+  entries — while the voice played once. Now the channels are kept in separate
+  buffers, the transcript uses the spoken (TTS) text (matching the voice), and the
+  reply flushes exactly once at end-of-speech. (`server/providers/doubao.ts`)
+
 ### Changed
 - **Agent identity** — Max now attributes its development to **Horizon Continental
   Technology (neueHCT)** (never the underlying model vendor) and names the CEO as

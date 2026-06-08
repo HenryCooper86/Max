@@ -436,6 +436,9 @@ function useHelmetAgent() {
   const scenarioRef = useRef<DemoScenario>(DEFAULT_RIDE_CONTEXT.scenario);
   const frameWindowRef = useRef<PacketWindow>(createPacketWindow());
   const transcriptTurnRef = useRef(0);
+  // Last visor level pushed to React state; used to skip re-renders when the
+  // quantized level is unchanged (e.g. steady silence during a ride).
+  const lastVoiceLevelRef = useRef(0);
 
   const pushTranscript = useCallback((speaker: "rider" | "agent", text: string, final = true) => {
     const cleanText = text.trim();
@@ -492,6 +495,19 @@ function useHelmetAgent() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  // Warm the speech-synthesis voice list. `getVoices()` is empty until the async
+  // `voiceschanged` event fires in Chrome, so the first TTS-fallback reply on a
+  // cold load would otherwise miss gender/locale selection. Touching it on mount
+  // kicks off the load so voices are ready by the time a reply arrives.
+  useEffect(() => {
+    if (!("speechSynthesis" in window)) return;
+    const synth = window.speechSynthesis;
+    synth.getVoices();
+    const onVoicesChanged = () => synth.getVoices();
+    synth.addEventListener("voiceschanged", onVoicesChanged);
+    return () => synth.removeEventListener("voiceschanged", onVoicesChanged);
   }, []);
 
   useEffect(() => {
@@ -915,7 +931,13 @@ function useHelmetAgent() {
           setPacketStats((stats) => ({ ...stats, droppedFrames: result.metric.droppedFrames }));
         }
       } else if (message.type === "level") {
-        setVoiceLevel(transmittingRef.current ? message.value : 0);
+        // Quantize to ~0.02 and drop no-change updates so a steady level (notably
+        // silence) doesn't re-render the whole HUD ~23×/s while transmitting.
+        const next = Math.round((transmittingRef.current ? message.value : 0) * 50) / 50;
+        if (next !== lastVoiceLevelRef.current) {
+          lastVoiceLevelRef.current = next;
+          setVoiceLevel(next);
+        }
       }
     };
 
@@ -940,6 +962,7 @@ function useHelmetAgent() {
     }
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
+    lastVoiceLevelRef.current = 0;
     setVoiceLevel(0);
     setAudioProcessing(DEFAULT_AUDIO_PROCESSING);
   }, []);
@@ -954,6 +977,12 @@ function useHelmetAgent() {
       }
       const socket = await waitForSocket();
       await ensureMic();
+      // Create/resume the playback context inside this user gesture so the first
+      // agent reply is audible under browser autoplay policy (Safari is strict
+      // about contexts first touched on a later network event).
+      const playback = playbackContextRef.current ?? new AudioContext({ sampleRate: PLAYBACK_SAMPLE_RATE });
+      playbackContextRef.current = playback;
+      if (playback.state === "suspended") void playback.resume();
       stopAgentSpeech();
       streamRef.current?.getAudioTracks().forEach((track) => (track.enabled = true));
       transmittingRef.current = true;
@@ -977,6 +1006,7 @@ function useHelmetAgent() {
   const stopMic = useCallback(() => {
     transmittingRef.current = false;
     streamRef.current?.getAudioTracks().forEach((track) => (track.enabled = false));
+    lastVoiceLevelRef.current = 0;
     setVoiceLevel(0);
     frameWindowRef.current = createPacketWindow();
     setListening(false);

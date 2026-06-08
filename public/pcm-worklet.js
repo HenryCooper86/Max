@@ -42,12 +42,24 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
     merged.set(channel, this.pending.length);
     this.pending = merged;
 
-    // Downsample with a running fractional read position, packing PCM16 frames.
-    while (Math.ceil(this.readPos) < this.pending.length) {
-      const sample = Math.max(-1, Math.min(1, this.pending[Math.round(this.readPos)] || 0));
+    // Downsample with a box-average filter: each 16 kHz output sample is the
+    // mean of the input samples its step spans. Averaging low-passes the signal
+    // before decimation, so energy above 8 kHz (sibilants) no longer aliases
+    // back into the band — plain point sampling (keeping every Nth sample) folds
+    // it in and blurs ASR. `readPos` tracks a fractional position in `pending`;
+    // we only emit once a full `ratio`-wide window is available.
+    while (this.readPos + this.ratio <= this.pending.length) {
+      const end = this.readPos + this.ratio;
+      let sum = 0;
+      let count = 0;
+      for (let i = Math.floor(this.readPos); i < end; i += 1) {
+        sum += this.pending[i];
+        count += 1;
+      }
+      const sample = Math.max(-1, Math.min(1, count > 0 ? sum / count : 0));
       this.frame[this.frameFill] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
       this.frameFill += 1;
-      this.readPos += this.ratio;
+      this.readPos = end;
 
       if (this.frameFill === FRAME_SAMPLES) {
         const out = this.frame.slice(0);
@@ -56,7 +68,7 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
       }
     }
 
-    // Drop the consumed samples, keep the fractional remainder.
+    // Drop the consumed whole samples, keep the fractional remainder.
     const consumed = Math.floor(this.readPos);
     if (consumed > 0) {
       this.pending = this.pending.slice(consumed);

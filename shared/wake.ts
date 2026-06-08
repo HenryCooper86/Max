@@ -1,11 +1,11 @@
-// Wake-phrase detection for addressing the agent by name. The agent is "Max",
-// but a bare single-syllable name is unreliable (ASR mishears it and it false-
-// triggers on words like "match" / "max speed"), so it answers to the phrase
-// "Hey Max". Detection runs server-side on the rider ASR transcript — the live
-// Doubao path can't pre-filter raw audio because ASR happens inside Doubao.
+// Wake-word detection for addressing the agent by name. The agent answers to
+// "Max" — saying the name anywhere in an utterance addresses it (an optional
+// greeting like "hey"/"你好" is allowed but not required, since ASR often drops
+// it). Detection runs server-side on the rider ASR transcript — the live Doubao
+// path can't pre-filter raw audio because ASR happens inside Doubao.
 
 /** What the rider says to address the agent. Shown in HUD hints. */
-export const WAKE_PHRASE_LABEL = "Hey Max";
+export const WAKE_PHRASE_LABEL = "Max";
 
 /**
  * After the rider addresses Max, follow-up utterances within this window count
@@ -14,16 +14,17 @@ export const WAKE_PHRASE_LABEL = "Hey Max";
  */
 export const WAKE_FOLLOWUP_WINDOW_MS = 12_000;
 
-// Greeting tokens that may precede the name (English + common Chinese), and
-// name variants covering frequent ASR mishearings of "Max".
+// Optional greeting tokens that may precede the name (English + common Chinese),
+// and name variants covering frequent ASR mishearings of "Max".
 const GREETINGS = ["hey", "hi", "hiya", "hello", "yo", "ok", "okay", "嘿", "嗨", "喂", "你好", "哈喽", "哈罗"];
-const NAME_VARIANTS = ["max", "maxx", "maxs", "macks", "mack", "marks", "mac", "mags", "maximus", "maxwell", "麦克斯", "马克斯"];
+const NAME_VARIANTS = ["max", "maxx", "maxs", "macks", "mack", "marks", "mac", "mags", "maximus", "maxwell", "麦克斯", "马克斯", "马克思", "迈克斯", "麦克思"];
 
-// Greeting at a token boundary, optional space, then a name variant ending the
-// token. The leading (?:^|\s) stops "they max out" from matching the "hey max"
-// substring; the trailing (?=\s|$) stops "hey maximum" from matching on "max".
+// A name variant as a standalone token, with an optional greeting in front. The
+// leading (?:^|\s) and trailing (?=\s|$) keep the match to a whole token, so the
+// name embedded in a larger word ("maximum", "maximize") does not trigger, while
+// a bare "Max" anywhere in the utterance does.
 const WAKE_REGEX = new RegExp(
-  `(?:^|\\s)(?:${GREETINGS.join("|")})\\s*(?:${NAME_VARIANTS.join("|")})(?=\\s|$)`,
+  `(?:^|\\s)(?:(?:${GREETINGS.join("|")})\\s*)?(?:${NAME_VARIANTS.join("|")})(?=\\s|$)`,
   "u"
 );
 
@@ -35,7 +36,7 @@ function normalize(text: string): string {
     .trim();
 }
 
-/** True when `text` (a rider transcript) addresses the agent as "Hey Max". */
+/** True when `text` (a rider transcript) addresses the agent by name ("Max"). */
 export function containsWakePhrase(text: string): boolean {
   if (!text) return false;
   return WAKE_REGEX.test(normalize(text));

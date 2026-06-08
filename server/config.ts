@@ -21,8 +21,8 @@ export const config = {
   port: Number(process.env.PORT ?? 8787),
   voiceProvider: (process.env.VOICE_PROVIDER === "doubao" ? "doubao" : "mock") as VoiceProvider,
   defaultWeatherLocation: resolveDefaultWeatherLocation(),
-  // When on, the live agent only replies when the rider addresses it ("Hey Max");
-  // set AGENT_WAKE_WORD=off to make it answer every utterance again.
+  // When on, the live agent only replies when the rider addresses it by name
+  // ("Max"); set AGENT_WAKE_WORD=off to make it answer every utterance again.
   wakeWord: process.env.AGENT_WAKE_WORD?.trim().toLowerCase() !== "off"
 };
 
@@ -54,7 +54,7 @@ export function describeConfig(): string[] {
     `Realtime voice provider: ${config.voiceProvider}`,
     `Provider credentials: ${credentialStatus()}`,
     `Weather context: Open-Meteo best-effort + ${config.defaultWeatherLocation.source} fallback`,
-    `Wake word ("Hey Max"): ${config.wakeWord ? "on" : "off"}`
+    `Wake word ("Max"): ${config.wakeWord ? "on" : "off"}`
   ];
 }
 

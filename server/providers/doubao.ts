@@ -298,7 +298,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
   let pendingAgentText = "";
   let receivedTtsAudio = false;
   let ttsFallbackTimer: NodeJS.Timeout | undefined;
-  // Wake-word ("Hey Max") gating. The rider transcript for the current turn
+  // Wake-word ("Max") gating. The rider transcript for the current turn
   // accumulates in riderTurnText; addressedUntil holds the conversation window.
   // replyDecided/replyAddressed latch the decision for the whole agent turn so
   // a late window expiry can't clip a reply that already started.
@@ -466,7 +466,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
           const text = extractAsrText(payload);
           if (text) {
             // Accumulate the turn transcript and (re)open the conversation window
-            // when the rider says "Hey Max" or is already inside an open window.
+            // when the rider says "Max" or is already inside an open window.
             riderTurnText = riderTurnText ? `${riderTurnText} ${text}` : text;
             if (wakeWordEnabled && (containsWakePhrase(riderTurnText) || Date.now() <= addressedUntil)) {
               addressedUntil = Date.now() + WAKE_FOLLOWUP_WINDOW_MS;

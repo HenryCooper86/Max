@@ -5,6 +5,8 @@ import android.media.AudioFormat
 import android.media.AudioTrack
 import java.util.concurrent.LinkedBlockingQueue
 import kotlin.concurrent.thread
+import kotlin.math.abs
+import kotlin.math.exp
 
 /**
  * Gapless playback of the 24 kHz PCM16 mono voice frames relayed from Doubao —
@@ -23,6 +25,14 @@ class PcmPlayer {
          * src/main.tsx and PcmPlayer.playbackGain on iOS.
          */
         const val PLAYBACK_GAIN = 2.0f
+
+        /**
+         * Soft-limiter threshold (≈ -3 dBFS, matching the web's DynamicsCompressor
+         * threshold). Samples below this stay linear; louder peaks are compressed
+         * smoothly toward full scale instead of hard-clipping, which is what made
+         * the boosted Doubao voice sound harsh on Android vs. iOS/web.
+         */
+        private const val LIMIT_THRESHOLD = 0.7f
     }
 
     private val queue = LinkedBlockingQueue<ByteArray>()
@@ -101,21 +111,35 @@ class PcmPlayer {
     }
 
     /**
-     * Scales the little-endian PCM16 samples in place by [PLAYBACK_GAIN], clamping
-     * to the signed 16-bit range so boosted peaks distort gracefully instead of
-     * wrapping around.
+     * Boosts the little-endian PCM16 samples in place by [PLAYBACK_GAIN] and runs
+     * them through a soft limiter so loud peaks compress smoothly instead of
+     * hard-clipping — the PCM-domain equivalent of the web's DynamicsCompressor.
      */
     private fun applyGain(pcm: ByteArray): ByteArray {
         if (PLAYBACK_GAIN == 1.0f) return pcm
         var i = 0
         while (i + 1 < pcm.size) {
+            // High byte shl 8 sign-extends; low byte masked → signed Int16.
             val sample = (pcm[i + 1].toInt() shl 8) or (pcm[i].toInt() and 0xFF)
-            val boosted = (sample * PLAYBACK_GAIN).toInt().coerceIn(-32768, 32767)
-            pcm[i] = (boosted and 0xFF).toByte()
-            pcm[i + 1] = ((boosted shr 8) and 0xFF).toByte()
+            val limited = softLimit(sample / 32768f * PLAYBACK_GAIN)
+            val out = (limited * 32767f).toInt().coerceIn(-32768, 32767)
+            pcm[i] = (out and 0xFF).toByte()
+            pcm[i + 1] = ((out shr 8) and 0xFF).toByte()
             i += 2
         }
         return pcm
+    }
+
+    /**
+     * Soft-knee limiter: linear up to [LIMIT_THRESHOLD], then the overshoot is
+     * compressed exponentially toward ±1, so the signal never hard-clips.
+     */
+    private fun softLimit(x: Float): Float {
+        val magnitude = abs(x)
+        if (magnitude <= LIMIT_THRESHOLD) return x
+        val headroom = 1f - LIMIT_THRESHOLD
+        val compressed = LIMIT_THRESHOLD + headroom * (1f - exp(-(magnitude - LIMIT_THRESHOLD) / headroom))
+        return if (x < 0f) -compressed else compressed
     }
 
     /** Barge-in: drop queued audio and cut the current utterance immediately. */

@@ -11,6 +11,7 @@ import {
   type RideContext
 } from "../../shared/ride";
 import { createSessionMemory, updateSessionMemory, type SessionMemory } from "../../shared/session";
+import { ADAS_SCENARIOS, formatAdasAlert, type AdasSeverity } from "../../shared/adas";
 
 type MockTurn = {
   rider: string;
@@ -139,6 +140,10 @@ const SCENARIOS: Record<DemoScenario, ScenarioProfile> = {
 export function createMockProvider(client: WebSocket): AgentProvider {
   let frameCount = 0;
   let timer: NodeJS.Timeout | undefined;
+  // Auto-injected ADAS alerts run on their own cadence, offset from the chat
+  // loop, and cycle through the hazard catalog.
+  let hazardTimer: NodeJS.Timeout | undefined;
+  let hazardIndex = 0;
   let promptIndex = 0;
   let scenario: DemoScenario = "commute";
   let rideContext: RideContext = {
@@ -158,9 +163,11 @@ export function createMockProvider(client: WebSocket): AgentProvider {
     }
   }
 
-  function emitRideContext() {
+  function emitRideContext(hazardOverride?: AdasSeverity) {
     const intelligence = describeRideMode(rideContext.mode);
-    const hazardLevel = combineHazardLevels(intelligence.hazardLevel, SCENARIOS[scenario].weather.riskLevel);
+    let hazardLevel = combineHazardLevels(intelligence.hazardLevel, SCENARIOS[scenario].weather.riskLevel);
+    // An active ADAS alert momentarily raises the ride-pulse hazard.
+    if (hazardOverride) hazardLevel = combineHazardLevels(hazardLevel, hazardOverride);
     send({
       type: "ride.context",
       mode: rideContext.mode,
@@ -217,6 +224,34 @@ export function createMockProvider(client: WebSocket): AgentProvider {
     }, 650);
   }
 
+  // Simulates an ADAS sensor event: the agent interrupts whatever it is saying
+  // and announces the directional warning. Cycles through the hazard catalog so
+  // a single demo session exercises rear / front / side alerts.
+  function emitHazardAlert() {
+    const hazard = ADAS_SCENARIOS[hazardIndex % ADAS_SCENARIOS.length];
+    hazardIndex += 1;
+
+    send({
+      type: "hazard.alert",
+      threat: hazard.threat,
+      direction: hazard.direction,
+      severity: hazard.severity,
+      label: hazard.label,
+      message: hazard.message,
+      advice: hazard.advice,
+      ttcSeconds: hazard.ttcSeconds,
+      interrupt: true
+    });
+    send({ type: "status", state: "speaking", detail: `⚠️ ${hazard.label}` });
+    send({ type: "transcript", speaker: "agent", text: formatAdasAlert(hazard), final: true, useBrowserSpeech: true });
+    // Raise the ride-pulse hazard for the duration of the alert, then restore.
+    emitRideContext(hazard.severity);
+    setTimeout(() => {
+      emitRideContext();
+      send({ type: "status", state: "listening", detail: "预警结束，继续免提" });
+    }, (hazard.ttcSeconds + 1) * 1000);
+  }
+
   return {
     async start(event: SessionStartEvent) {
       scenario = event.scenario ?? "commute";
@@ -246,6 +281,10 @@ export function createMockProvider(client: WebSocket): AgentProvider {
       emitWeather();
       timer = setInterval(emitConversation, 6000);
       emitConversation();
+      // Fire the first ADAS alert shortly after start, then on its own cadence
+      // (offset from the chat loop) so alerts interrupt mid-conversation.
+      hazardTimer = setInterval(emitHazardAlert, 11000);
+      setTimeout(emitHazardAlert, 4000);
     },
     async sendAudio(chunk: Buffer) {
       frameCount += 1;
@@ -257,10 +296,13 @@ export function createMockProvider(client: WebSocket): AgentProvider {
     async stopAudio() {
       if (timer) clearInterval(timer);
       timer = undefined;
+      if (hazardTimer) clearInterval(hazardTimer);
+      hazardTimer = undefined;
       send({ type: "status", state: "ready", detail: "免提已暂停" });
     },
     async close() {
       if (timer) clearInterval(timer);
+      if (hazardTimer) clearInterval(hazardTimer);
     }
   };
 }

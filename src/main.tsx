@@ -11,6 +11,7 @@ import type {
   ProviderCapabilities,
   VoicePersonality
 } from "../shared/agent";
+import { adasDirectionLabel, type AdasDirection, type AdasSeverity, type AdasThreat } from "../shared/adas";
 import { createPacketWindow, recordDroppedFrame, recordSentFrame, type PacketWindow } from "../shared/audio";
 import { type SupportedLanguage, detectLanguage } from "../shared/language";
 import {
@@ -47,6 +48,16 @@ type RideHudContext = {
   batteryPct: number;
   hazardLevel: HazardLevel;
   glanceableFocus: string;
+};
+
+type HazardAlertState = {
+  threat: AdasThreat;
+  direction: AdasDirection;
+  severity: AdasSeverity;
+  label: string;
+  message: string;
+  advice: string;
+  ttcSeconds: number;
 };
 
 type Telemetry = {
@@ -409,6 +420,7 @@ function useHelmetAgent() {
   const [turnState, setTurnState] = useState<TurnState>("idle");
   const [weather, setWeather] = useState<Weather | null>(null);
   const [rideContext, setRideContext] = useState<RideHudContext>(DEFAULT_RIDE_CONTEXT);
+  const [hazardAlert, setHazardAlert] = useState<HazardAlertState | null>(null);
   const [telemetry, setTelemetry] = useState<Telemetry>({ asrMs: 0, thinkMs: 0, firstAudioMs: 0, totalMs: 0 });
   const [sessionMemory, setSessionMemory] = useState<SessionMemoryState>(DEFAULT_MEMORY);
   const [micPermission, setMicPermission] = useState<PermissionStateLabel>("unknown");
@@ -436,6 +448,7 @@ function useHelmetAgent() {
   const scenarioRef = useRef<DemoScenario>(DEFAULT_RIDE_CONTEXT.scenario);
   const frameWindowRef = useRef<PacketWindow>(createPacketWindow());
   const transcriptTurnRef = useRef(0);
+  const hazardClearTimerRef = useRef<number | null>(null);
   // Last visor level pushed to React state; used to skip re-renders when the
   // quantized level is unchanged (e.g. steady silence during a ride).
   const lastVoiceLevelRef = useRef(0);
@@ -684,6 +697,26 @@ function useHelmetAgent() {
           if (event.speaker === "rider") stopAgentSpeech();
           pushTranscript(event.speaker, event.text, event.final !== false);
           if (event.speaker === "agent" && (event.useBrowserSpeech ?? event.final !== false)) speak(event.text);
+        }
+        if (event.type === "hazard.alert") {
+          // Proactive ADAS warning: cut any in-progress agent speech so the
+          // alert is heard immediately, then surface it and auto-dismiss.
+          if (event.interrupt) stopAgentSpeech();
+          setTurnState("speaking");
+          setHazardAlert({
+            threat: event.threat,
+            direction: event.direction,
+            severity: event.severity,
+            label: event.label,
+            message: event.message,
+            advice: event.advice,
+            ttcSeconds: event.ttcSeconds
+          });
+          if (hazardClearTimerRef.current) window.clearTimeout(hazardClearTimerRef.current);
+          hazardClearTimerRef.current = window.setTimeout(
+            () => setHazardAlert(null),
+            (event.ttcSeconds + 2) * 1000
+          );
         }
         if (event.type === "metric") {
           setLatencyMs(event.latencyMs);
@@ -1024,6 +1057,11 @@ function useHelmetAgent() {
       reconnectTimerRef.current = null;
     }
     reconnectAttemptsRef.current = 0;
+    if (hazardClearTimerRef.current) {
+      window.clearTimeout(hazardClearTimerRef.current);
+      hazardClearTimerRef.current = null;
+    }
+    setHazardAlert(null);
     stopMic();
     releaseMic();
     stopAgentSpeech();
@@ -1099,6 +1137,7 @@ function useHelmetAgent() {
     turnState,
     weather,
     rideContext,
+    hazardAlert,
     telemetry,
     sessionMemory,
     micPermission,
@@ -1225,6 +1264,19 @@ function App() {
             </div>
           </div>
         </div>
+
+        {agent.hazardAlert && (
+          <div className={`hazardBanner ${agent.hazardAlert.severity}`} role="alert" aria-live="assertive">
+            <span className="hazardDir">{adasDirectionLabel(agent.hazardAlert.direction)}</span>
+            <div className="hazardBody">
+              <strong>⚠️ {agent.hazardAlert.label}</strong>
+              <p>
+                {agent.hazardAlert.message} {agent.hazardAlert.advice}
+              </p>
+            </div>
+            <span className="hazardTtc">{agent.hazardAlert.ttcSeconds}s</span>
+          </div>
+        )}
 
         <div className="grid">
           <section className="hudPanel helmetPanel">

@@ -1,3 +1,4 @@
+import type { AdasDirection, AdasSeverity, AdasThreat } from "./adas";
 import type { DemoScenario, RideIntelligence, RideMode } from "./ride";
 
 export type VoiceGender = "female" | "male";
@@ -78,6 +79,19 @@ export type AgentEvent =
       thinkMs: number;
       firstAudioMs: number;
       totalMs: number;
+    }
+  | {
+      // A proactive ADAS safety alert. `interrupt` tells the client to cut any
+      // in-progress agent speech so the warning is heard immediately.
+      type: "hazard.alert";
+      threat: AdasThreat;
+      direction: AdasDirection;
+      severity: AdasSeverity;
+      label: string;
+      message: string;
+      advice: string;
+      ttcSeconds: number;
+      interrupt: boolean;
     }
   | { type: "error"; message: string };
 

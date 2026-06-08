@@ -270,6 +270,19 @@ If location permission is granted, Max greets the ride with real weather and can
 | `小队`   | Group riding context            | Short coordination-oriented prompts and group safety focus.      |
 | `紧急`   | High-priority safety escalation | Critical tone, stop-safely guidance, concise emergency behavior. |
 
+### ADAS proactive hazard alerts
+
+The mock provider also simulates an **ADAS sensor suite**: while you're chatting, it periodically
+raises a proactive safety alert that **interrupts** the agent and announces the danger by direction —
+a car closing fast from behind, hard braking ahead, a vehicle in the blind spot, cross-traffic at a
+junction, a pedestrian, lane departure, tailgating. The catalog lives in `shared/adas.ts`; each alert
+is a `hazard.alert` event (`shared/agent.ts`) carrying `direction`, `severity`, `ttcSeconds`, a spoken
+`message`, and `interrupt: true`. The web HUD cuts any in-progress speech, speaks the warning, and
+shows a pulsing directional banner; the ride-pulse hazard is raised for the duration. (Live Doubao has
+no sensor feed, so this is a test-framework feature — auto-injected on every mock session.
+`tests/adas.test.ts` covers the catalog and the injection.) iOS/Android safely ignore the new event
+until they add a handler.
+
 ### Mobile clients
 
 Start the backend relay before launching a native app:

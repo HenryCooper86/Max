@@ -5,6 +5,14 @@
 Audio fixes across all clients, plus a "Max" wake word on the live agent.
 
 ### Added
+- **ADAS proactive hazard alerts (test framework)** — the mock provider now
+  simulates a sensor suite that interrupts the conversation to warn of danger by
+  direction: rear approach, forward collision, left/right blind spot, cross-traffic,
+  pedestrian, lane departure, tailgating. New `hazard.alert` protocol event
+  (`shared/agent.ts`), catalog in `shared/adas.ts`, auto-injected by
+  `server/providers/mock.ts`. The web HUD cuts in-progress speech, speaks the
+  warning, and shows a pulsing directional banner. Covered by `tests/adas.test.ts`.
+  iOS/Android ignore the event until they add a handler.
 - **Wake word ("Max")** — on the live Doubao path the agent now only replies when
   the rider addresses it by name. Because Doubao runs ASR internally, the relay
   can't pre-filter raw audio, so `server/providers/doubao.ts` watches the rider

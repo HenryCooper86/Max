@@ -269,7 +269,7 @@ If location permission is granted, Max greets the ride with real weather and can
 | `低油`   | Route and resource planning     | Fuel-aware routing prompt, nearby stop style responses.          |
 | `小队`   | Group riding context            | Short coordination-oriented prompts and group safety focus.      |
 | `紧急`   | High-priority safety escalation | Critical tone, stop-safely guidance, concise emergency behavior. |
-| `预警`   | ADAS hazard-alert showcase      | Fast-cadence directional alerts (rear/front/sides) that interrupt the agent. |
+| `ADAS`   | ADAS hazard-alert showcase      | Fast-cadence directional alerts (rear/front/sides) that interrupt the agent. |
 
 ### ADAS proactive hazard alerts
 
@@ -283,7 +283,7 @@ speak the warning, and show a pulsing directional banner; the ride-pulse hazard 
 duration. (Live Doubao has no sensor feed, so this is a test-framework feature — auto-injected on
 every mock session. `tests/adas.test.ts` covers the catalog and the injection.)
 
-A dedicated **`预警` demo scenario** (in the scenario strip on all three clients) showcases the alerts
+A dedicated **`ADAS` demo scenario** (in the scenario strip on all three clients) showcases the alerts
 on a fast cadence — selecting it cycles the full catalog (rear → front → sides → …) every ~5 s so you
 can watch each directional warning on demand. Other scenarios sprinkle alerts in roughly every 11 s.
 

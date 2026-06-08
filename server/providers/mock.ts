@@ -299,7 +299,7 @@ export function createMockProvider(client: WebSocket): AgentProvider {
       emitWeather();
       timer = setInterval(emitConversation, 6000);
       emitConversation();
-      // The dedicated 预警 scenario showcases the alerts on a fast cadence; other
+      // The dedicated ADAS scenario showcases the alerts on a fast cadence; other
       // scenarios sprinkle them in occasionally to interrupt mid-conversation.
       const adasDemo = scenario === "adas";
       hazardTimer = setInterval(emitHazardAlert, adasDemo ? 5000 : 11000);

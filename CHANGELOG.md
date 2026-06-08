@@ -12,7 +12,7 @@ Audio fixes across all clients, plus a "Max" wake word on the live agent.
   (`shared/agent.ts`), catalog in `shared/adas.ts`, auto-injected by
   `server/providers/mock.ts`. **Web, iOS, and Android** all react: cut in-progress
   speech, speak the warning, and show a pulsing directional banner. A selectable
-  `预警` demo scenario showcases the alerts on a fast cadence. Covered by
+  `ADAS` demo scenario showcases the alerts on a fast cadence. Covered by
   `tests/adas.test.ts`.
 - **Wake word ("Max")** — on the live Doubao path the agent now only replies when
   the rider addresses it by name. Because Doubao runs ASR internally, the relay

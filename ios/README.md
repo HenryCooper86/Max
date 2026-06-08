@@ -158,7 +158,7 @@ must never ship in a production build. `Info.plist` also enables
   voice back into the mic. See *Platform notes* below.
 - Barge-in: rider speech stops queued provider audio and fallback TTS.
 - ADAS hazard alerts: reacts to the server `hazard.alert` event by interrupting playback, speaking
-  the warning, and showing a pulsing directional banner; a `预警` demo scenario showcases them.
+  the warning, and showing a pulsing directional banner; an `ADAS` demo scenario showcases them.
 - Reconnect with exponential backoff and user-visible connection status.
 - Live weather card and fused `态势摘要` ride-pulse card.
 - Transcript with in-place updates, deduplication, timestamps, and JSON export via share sheet.

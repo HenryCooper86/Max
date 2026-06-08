@@ -56,7 +56,7 @@ const SCENARIO_LABELS: Record<DemoScenario, string> = {
   fuel: "低油",
   group: "小队",
   emergency: "紧急",
-  adas: "预警"
+  adas: "ADAS"
 };
 
 export function describeRideMode(mode: RideMode): RideIntelligence {

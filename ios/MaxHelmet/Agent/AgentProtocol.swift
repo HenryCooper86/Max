@@ -107,7 +107,7 @@ enum DemoScenario: String, CaseIterable {
         case .fuel: return "低油"
         case .group: return "小队"
         case .emergency: return "紧急"
-        case .adas: return "预警"
+        case .adas: return "ADAS"
         }
     }
 

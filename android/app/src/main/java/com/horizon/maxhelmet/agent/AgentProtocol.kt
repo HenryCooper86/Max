@@ -72,7 +72,7 @@ enum class DemoScenario(val wire: String, val label: String, val hazard: HazardL
     FUEL("fuel", "低油", HazardLevel.NORMAL),
     GROUP("group", "小队", HazardLevel.NORMAL),
     EMERGENCY("emergency", "紧急", HazardLevel.CRITICAL),
-    ADAS("adas", "预警", HazardLevel.CAUTION);
+    ADAS("adas", "ADAS", HazardLevel.CAUTION);
 
     companion object {
         fun fromWire(value: String): DemoScenario = entries.firstOrNull { it.wire == value } ?: COMMUTE

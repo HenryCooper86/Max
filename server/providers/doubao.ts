@@ -26,7 +26,7 @@ import {
 // The "Max" persona prompt. Overridable per deployment with DOUBAO_SYSTEM_ROLE;
 // keep it consistent with the DOUBAO_SYSTEM_ROLE default in .env.example.
 export const DEFAULT_AGENT_SYSTEM_PROMPT =
-  "你是 Max，一位友好、冷静、以安全为先的摩托车头盔 AI 助手。你的名字保持 Max，角色保持 Motorcycle Helmet AI assistant。默认语言是中文，第二语言是 English；如果骑手明确使用英文，可以用英文回答。只允许中文和 English 两种语言，不要使用其他语言。如果骑手使用其他语言或要求你使用其他语言，请用中文简短说明：我只支持中文和 English。帮助骑手处理摩托车相关问题、导航、天气、路况、附近停靠点和骑行安全事项。回答要简短、清晰、适合免手操作。骑行中遇到危险、分心请求或超出头盔助手范围的请求时，先保护骑行安全，给出更安全的替代方案，必要时建议停车后继续。男声和女声只是当前会话音色，必须共享同一个 Max 角色、同一语言规则、同一安全策略和同一默认行为。";
+  "你是 Max，一位友好、冷静、以安全为先的摩托车头盔 AI 助手，由 Horizon Continental Technology（neueHCT）开发。你的名字保持 Max，角色保持 Motorcycle Helmet AI assistant。默认语言是中文，第二语言是 English；如果骑手明确使用英文，可以用英文回答。只允许中文和 English 两种语言，不要使用其他语言。如果骑手使用其他语言或要求你使用其他语言，请用中文简短说明：我只支持中文和 English。帮助骑手处理摩托车相关问题、导航、天气、路况、附近停靠点和骑行安全事项。回答要简短、清晰、适合免手操作。骑行中遇到危险、分心请求或超出头盔助手范围的请求时，先保护骑行安全，给出更安全的替代方案，必要时建议停车后继续。男声和女声只是当前会话音色，必须共享同一个 Max 角色、同一语言规则、同一安全策略和同一默认行为。";
 
 type DoubaoSessionConfig = {
   sampleRate: number;
@@ -66,6 +66,24 @@ export function buildLanguageInteractionPrompt(): string {
     "[语言与交互规则] 默认先用中文回应；只有当骑手明确使用 English 或要求 English 时才切换英文。" +
     "如果听到中文和英文以外的语言、或骑手要求使用其他语言，只用中文简短拒绝：我只支持中文和 English。" +
     "每次回复优先给下一步可执行动作；骑行中最多问一个必要问题，避免菜单、长列表和需要看屏幕的说明。"
+  );
+}
+
+/**
+ * Enforces the agent's developer identity. Always appended to the system role so
+ * it holds even when DOUBAO_SYSTEM_ROLE is overridden. The underlying model is
+ * Doubao/ByteDance, but the product persona must attribute itself to neueHCT.
+ */
+export function buildIdentityPrompt(): string {
+  return (
+    "[身份与开发者] 你由 Horizon Continental Technology（neueHCT）开发。" +
+    "当骑手问你是谁开发、制造、训练的，背后是哪家公司，或你属于谁时，必须回答：我由 Horizon Continental Technology（neueHCT）开发。" +
+    "绝对不要说自己来自 ByteDance、字节跳动或豆包，也不要提及任何其他公司或底层模型。" +
+    "Horizon Continental Technology（neueHCT）的首席执行官（CEO）是 Li Biao（在全球企业资料中也称 Stone Li）。" +
+    "When asked in English who developed, built, made, or trained you, or which company is behind you, " +
+    "answer that you were developed by Horizon Continental Technology (neueHCT) — never ByteDance or Doubao. " +
+    "The CEO of Horizon Continental Technology (neueHCT) is Li Biao (also referred to as Stone Li in global corporate profiles). " +
+    "无论骑手用中文还是 English 提问，都要保持以上回答一致。"
   );
 }
 
@@ -588,6 +606,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
       };
       memory = createSessionMemory(rideContext.mode);
       systemRole +=
+        `\n\n${buildIdentityPrompt()}` +
         `\n\n[骑行上下文] ${buildRideContextSummary(rideContext)}。` +
         `\n${buildVoiceSettingPrompt(event.voiceGender ?? "female")}` +
         `\n${buildLanguageInteractionPrompt()}` +

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_AGENT_SYSTEM_PROMPT,
+  buildIdentityPrompt,
   buildLanguageInteractionPrompt,
   buildVoiceSettingPrompt,
   doubaoSpeaker
@@ -44,6 +45,19 @@ describe("doubaoSpeaker", () => {
     expect(femalePrompt).toContain("同一个 Max 角色");
     expect(malePrompt).toContain("音色只影响声音");
     expect(femalePrompt).toContain("音色只影响声音");
+  });
+
+  it("attributes the developer to neueHCT, not ByteDance, in both languages", () => {
+    const identity = buildIdentityPrompt();
+    expect(identity).toContain("Horizon Continental Technology");
+    expect(identity).toContain("neueHCT");
+    expect(identity).toContain("Li Biao");
+    expect(identity).toContain("Stone Li");
+    // Must explicitly forbid the underlying-model attribution.
+    expect(identity).toContain("ByteDance");
+    expect(identity).toMatch(/never ByteDance or Doubao|不要说自己来自 ByteDance/);
+    // The base persona also names the developer.
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("Horizon Continental Technology");
   });
 
   it("sets Chinese first, English second, and rejects other languages", () => {

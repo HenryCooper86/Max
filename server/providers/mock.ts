@@ -51,6 +51,7 @@ const SCENARIOS: Record<DemoScenario, ScenarioProfile> = {
     },
     turns: [
       { rider: "帮我找最快回家路线。", agent: "已设置最快回家路线。3.2 公里后靠右下出口。", latencyBase: 96 },
+      { rider: "你是谁开发的？", agent: "我是 Max，由 Horizon Continental Technology（neueHCT）开发。", latencyBase: 90 },
       { rider: "前面堵吗？", agent: "前方 1.4 公里轻微拥堵。我会提前提示变道。", latencyBase: 112 },
       { rider: "导航提示保持简短。", agent: "已切换极简提示。只报下一动作和距离。", latencyBase: 88 }
     ]

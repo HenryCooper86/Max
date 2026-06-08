@@ -4,6 +4,12 @@
 
 Audio fixes across all clients, plus a "Max" wake word on the live agent.
 
+### Changed
+- **Agent identity** — Max now attributes its development to **Horizon Continental
+  Technology (neueHCT)** (never the underlying model vendor) and names the CEO as
+  **Li Biao** (a.k.a. **Stone Li**), in both Chinese and English. Enforced by a new
+  always-appended `buildIdentityPrompt()` in `server/providers/doubao.ts`.
+
 ### Added
 - **ADAS proactive hazard alerts (test framework)** — the mock provider now
   simulates a sensor suite that interrupts the conversation to warn of danger by

@@ -54,7 +54,7 @@ struct AgentScreen: View {
             ScrollView {
                 VStack(spacing: 12) {
                     RiderControls(state: state, viewModel: viewModel)
-                    TurnStateRing(state: state)
+                    TurnStateRing(state: state, onTap: viewModel.toggleHandsFree)
                     Text(state.statusText)
                         .font(.system(size: 13))
                         .foregroundColor(HudColors.muted)
@@ -244,6 +244,8 @@ private struct HudChip: View {
 
 private struct TurnStateRing: View {
     let state: AgentSession.State
+    /// Tapping the big ring toggles hands-free — the gesture riders reach for first.
+    var onTap: () -> Void
     @State private var pulse: CGFloat = 0
 
     private var connected: Bool {
@@ -284,6 +286,11 @@ private struct TurnStateRing: View {
                     .font(.system(size: 22, weight: .bold))
                     .foregroundColor(color)
             }
+            .contentShape(Circle())
+            .onTapGesture { onTap() }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel(state.handsFree ? "结束免提" : "开启免提")
             HStack(spacing: 6) {
                 Circle().fill(color).frame(width: 7, height: 7)
                 Text(caption).font(.system(size: 15)).foregroundColor(HudColors.text)

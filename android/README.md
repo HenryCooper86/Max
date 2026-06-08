@@ -96,7 +96,7 @@ The emulator forwards the host Mac's microphone, so the full voice loop is testa
 
 ## What's implemented (full HUD parity)
 
-- Hands-free toggle: one button starts mic streaming + relay session (开启免提 / 结束免提)
+- Hands-free toggle: the 开启免提 / 结束免提 button **or tapping the big Max ring** starts/stops mic streaming + relay session
 - Turn-state ring with the web HUD's captions and palette (待机 / 请讲话 / 聆听 / 思考 / 回答)
 - Live transcript with in-place partial updates and agent-line dedup (same rules as the web client)
 - Transcript JSON export via the system share sheet (导出日志, same payload as the web export)

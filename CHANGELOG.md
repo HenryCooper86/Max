@@ -15,6 +15,9 @@ Audio fixes across all clients, plus a "Max" wake word on the live agent.
   reply flushes exactly once at end-of-speech. (`server/providers/doubao.ts`)
 
 ### Changed
+- **iOS & Android: tap the Max ring to start/stop** — the big turn-state ring (the
+  element riders instinctively press) is now a button that toggles hands-free, in
+  addition to the existing 开启免提 / 结束免提 button.
 - **Agent identity** — Max now attributes its development to **Horizon Continental
   Technology (neueHCT)** (never the underlying model vendor) and names the CEO as
   **Li Biao** (a.k.a. **Stone Li**), in both Chinese and English. Enforced by a new

@@ -148,7 +148,7 @@ must never ship in a production build. `Info.plist` also enables
 
 ## What's implemented
 
-- Hands-free toggle: one button starts/stops mic streaming and the relay session.
+- Hands-free toggle: the 开启免提/结束免提 button **or tapping the big Max ring** starts/stops mic streaming and the relay session.
 - SwiftUI turn-state HUD with the same captions, colors, controls, and ride cards as Android/web.
 - Voice gender, personality, ride mode, and demo scenario selectors.
 - 16 kHz PCM16 mono microphone streaming through `AVAudioEngine`.

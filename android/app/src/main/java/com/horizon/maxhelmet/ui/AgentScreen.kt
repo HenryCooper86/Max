@@ -133,7 +133,11 @@ fun AgentScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             RiderControls(state, viewModel)
-            TurnStateRing(state, modifier = Modifier.align(Alignment.CenterHorizontally))
+            TurnStateRing(
+                state,
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+                onToggle = onToggleHandsFree
+            )
             Text(
                 text = state.statusText,
                 color = HudColors.Muted,
@@ -281,7 +285,11 @@ private fun HudChip(
 // ---- helmet ring -------------------------------------------------------------
 
 @Composable
-private fun TurnStateRing(state: AgentSession.State, modifier: Modifier = Modifier) {
+private fun TurnStateRing(
+    state: AgentSession.State,
+    modifier: Modifier = Modifier,
+    onToggle: () -> Unit = {}
+) {
     val connected = state.connection != ConnectionState.OFFLINE && state.connection != ConnectionState.DEGRADED
     val color = ringColor(connected, state.turnState)
     val caption = if (connected) TURN_CAPTIONS.getValue(state.turnState) else "离线"
@@ -297,7 +305,14 @@ private fun TurnStateRing(state: AgentSession.State, modifier: Modifier = Modifi
     )
 
     Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(modifier = Modifier.size(170.dp), contentAlignment = Alignment.Center) {
+        // Tapping the big ring toggles hands-free — the gesture riders reach for first.
+        Box(
+            modifier = Modifier
+                .size(170.dp)
+                .clip(CircleShape)
+                .clickable(onClick = onToggle),
+            contentAlignment = Alignment.Center
+        ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 // DrawScope.center is the middle of the drawing area.
                 val baseRadius = size.minDimension * 0.36f

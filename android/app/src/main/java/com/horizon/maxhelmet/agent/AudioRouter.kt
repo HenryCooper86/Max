@@ -12,7 +12,7 @@ import android.util.Log
  * versions. Falls back silently to the phone mic/speaker when no headset is
  * paired — routing is always best-effort and never blocks the session.
  */
-class jiaAudioRouter(context: Context) {
+class AudioRouter(context: Context) {
 
     companion object {
         private const val TAG = "AudioRouter"

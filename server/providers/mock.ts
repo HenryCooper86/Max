@@ -134,6 +134,24 @@ const SCENARIOS: Record<DemoScenario, ScenarioProfile> = {
       { rider: "帮我记录位置。", agent: "已记录当前位置。停车后我可以帮你整理求助信息。", latencyBase: 94 },
       { rider: "现在怎么办？", agent: "保持直线，靠右停车，离开车道后再检查车辆。", latencyBase: 86 }
     ]
+  },
+  adas: {
+    speedKmh: 68,
+    routePhase: "城市道路，主动安全预警演示",
+    network: "online",
+    batteryPct: 80,
+    weather: {
+      description: "多云",
+      temperatureC: 20,
+      windSpeedKmh: 14,
+      isDay: true,
+      riskLevel: "caution",
+      riderAdvice: "保持警觉，留意周围车辆与盲区。"
+    },
+    turns: [
+      { rider: "周围有什么要注意的吗？", agent: "我在帮你盯着前后方和盲区，有危险会立刻提醒。", latencyBase: 96 },
+      { rider: "继续。", agent: "好的，保持当前车道，注意车距。", latencyBase: 90 }
+    ]
   }
 };
 
@@ -281,10 +299,11 @@ export function createMockProvider(client: WebSocket): AgentProvider {
       emitWeather();
       timer = setInterval(emitConversation, 6000);
       emitConversation();
-      // Fire the first ADAS alert shortly after start, then on its own cadence
-      // (offset from the chat loop) so alerts interrupt mid-conversation.
-      hazardTimer = setInterval(emitHazardAlert, 11000);
-      setTimeout(emitHazardAlert, 4000);
+      // The dedicated 预警 scenario showcases the alerts on a fast cadence; other
+      // scenarios sprinkle them in occasionally to interrupt mid-conversation.
+      const adasDemo = scenario === "adas";
+      hazardTimer = setInterval(emitHazardAlert, adasDemo ? 5000 : 11000);
+      setTimeout(emitHazardAlert, adasDemo ? 2000 : 4000);
     },
     async sendAudio(chunk: Buffer) {
       frameCount += 1;

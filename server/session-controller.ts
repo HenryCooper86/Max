@@ -8,7 +8,7 @@ const MAX_CLIENT_AUDIO_BYTES = 32 * 1024;
 const VOICE_GENDERS = new Set(["female", "male"]);
 const VOICE_PERSONALITIES = new Set(["concise", "friendly", "technical", "rally"]);
 const RIDE_MODES = new Set(["ride", "stop", "navigation", "emergency"]);
-const DEMO_SCENARIOS = new Set(["commute", "wind", "fuel", "group", "emergency"]);
+const DEMO_SCENARIOS = new Set(["commute", "wind", "fuel", "group", "emergency", "adas"]);
 
 export function normalizeRawData(data: RawData): Buffer {
   if (Buffer.isBuffer(data)) return data;

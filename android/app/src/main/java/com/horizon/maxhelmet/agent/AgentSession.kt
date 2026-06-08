@@ -59,7 +59,9 @@ class AgentSession(
         val rideContext: RideContext = RideContext(),
         val sessionMemory: SessionMemory = SessionMemory(),
         val telemetry: Telemetry? = null,
-        val bluetoothRouted: Boolean = false
+        val bluetoothRouted: Boolean = false,
+        /** The active ADAS hazard alert, shown as a banner until it auto-clears. */
+        val hazardAlert: AgentEvent.HazardAlert? = null
     ) {
         /** 态势摘要 fusion: ride hazard + weather risk (fusedHazard in src/main.tsx). */
         val fusedHazard: HazardLevel
@@ -86,6 +88,8 @@ class AgentSession(
     private var relayUrl: String = ""
     private var reconnectAttempts = 0
     private var reconnectJob: Job? = null
+    /** Bumped on each hazard alert so a stale auto-clear can't dismiss a newer one. */
+    private var hazardAlertGeneration = 0
 
     @Volatile
     private var intentionalClose = false
@@ -173,7 +177,8 @@ class AgentSession(
                 statusText = "离线",
                 turnState = TurnState.IDLE,
                 voiceLevel = 0f,
-                bluetoothRouted = false
+                bluetoothRouted = false,
+                hazardAlert = null
             )
         }
     }
@@ -412,6 +417,8 @@ class AgentSession(
 
             is AgentEvent.TelemetryUpdate -> _state.update { it.copy(telemetry = event.telemetry) }
 
+            is AgentEvent.HazardAlert -> handleHazardAlert(event)
+
             is AgentEvent.ErrorEvent -> _state.update { it.copy(statusText = event.message) }
 
             AgentEvent.Unhandled -> Unit
@@ -455,6 +462,28 @@ class AgentSession(
             state.copy(
                 transcript = finalized + TranscriptItem(transcriptTurn, now, speaker, clean, final, language)
             )
+        }
+    }
+
+    // ---- ADAS hazard alerts ------------------------------------------------
+
+    /**
+     * A proactive ADAS alert: cut any in-progress agent speech so the warning is
+     * heard immediately, surface the banner, speak it, then auto-clear it.
+     */
+    private fun handleHazardAlert(alert: AgentEvent.HazardAlert) {
+        if (alert.interrupt) stopAgentSpeech()
+        hazardAlertGeneration += 1
+        val generation = hazardAlertGeneration
+        _state.update {
+            it.copy(hazardAlert = alert, turnState = TurnState.SPEAKING, statusText = "⚠️ ${alert.label}")
+        }
+        speak("${alert.message} ${alert.advice}")
+        scope.launch {
+            delay((alert.ttcSeconds + 2) * 1000L)
+            if (hazardAlertGeneration == generation) {
+                _state.update { it.copy(hazardAlert = null) }
+            }
         }
     }
 

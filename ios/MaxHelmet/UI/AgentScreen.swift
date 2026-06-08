@@ -49,6 +49,8 @@ struct AgentScreen: View {
         VStack(spacing: 10) {
             HeaderBar(state: state)
 
+            if let alert = state.hazardAlert { HazardBanner(alert: alert) }
+
             ScrollView {
                 VStack(spacing: 12) {
                     RiderControls(state: state, viewModel: viewModel)
@@ -74,6 +76,43 @@ struct AgentScreen: View {
         .sheet(item: $viewModel.exportFile) { file in
             ActivityView(items: [file.url])
         }
+    }
+}
+
+// MARK: - ADAS hazard banner
+
+private struct HazardBanner: View {
+    let alert: HazardAlert
+
+    var body: some View {
+        let color = hazardColor(alert.severity)
+        HStack(spacing: 12) {
+            Text(alert.directionLabel)
+                .font(.system(size: 15, weight: .bold))
+                .foregroundColor(HudColors.text)
+                .frame(minWidth: 52)
+                .padding(.vertical, 8)
+                .padding(.horizontal, 8)
+                .background(color.opacity(0.22))
+                .cornerRadius(8)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("⚠️ \(alert.label)")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(HudColors.text)
+                Text("\(alert.message) \(alert.advice)")
+                    .font(.system(size: 12))
+                    .foregroundColor(HudColors.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+            Text("\(alert.ttcSeconds)s")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundColor(color)
+        }
+        .padding(12)
+        .background(color.opacity(0.12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(color, lineWidth: 1))
+        .cornerRadius(12)
     }
 }
 

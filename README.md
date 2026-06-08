@@ -269,6 +269,7 @@ If location permission is granted, Max greets the ride with real weather and can
 | `低油`   | Route and resource planning     | Fuel-aware routing prompt, nearby stop style responses.          |
 | `小队`   | Group riding context            | Short coordination-oriented prompts and group safety focus.      |
 | `紧急`   | High-priority safety escalation | Critical tone, stop-safely guidance, concise emergency behavior. |
+| `预警`   | ADAS hazard-alert showcase      | Fast-cadence directional alerts (rear/front/sides) that interrupt the agent. |
 
 ### ADAS proactive hazard alerts
 
@@ -277,11 +278,14 @@ raises a proactive safety alert that **interrupts** the agent and announces the 
 a car closing fast from behind, hard braking ahead, a vehicle in the blind spot, cross-traffic at a
 junction, a pedestrian, lane departure, tailgating. The catalog lives in `shared/adas.ts`; each alert
 is a `hazard.alert` event (`shared/agent.ts`) carrying `direction`, `severity`, `ttcSeconds`, a spoken
-`message`, and `interrupt: true`. The web HUD cuts any in-progress speech, speaks the warning, and
-shows a pulsing directional banner; the ride-pulse hazard is raised for the duration. (Live Doubao has
-no sensor feed, so this is a test-framework feature — auto-injected on every mock session.
-`tests/adas.test.ts` covers the catalog and the injection.) iOS/Android safely ignore the new event
-until they add a handler.
+`message`, and `interrupt: true`. **Web, iOS, and Android** all react: they cut any in-progress speech,
+speak the warning, and show a pulsing directional banner; the ride-pulse hazard is raised for the
+duration. (Live Doubao has no sensor feed, so this is a test-framework feature — auto-injected on
+every mock session. `tests/adas.test.ts` covers the catalog and the injection.)
+
+A dedicated **`预警` demo scenario** (in the scenario strip on all three clients) showcases the alerts
+on a fast cadence — selecting it cycles the full catalog (rear → front → sides → …) every ~5 s so you
+can watch each directional warning on demand. Other scenarios sprinkle alerts in roughly every 11 s.
 
 ### Mobile clients
 

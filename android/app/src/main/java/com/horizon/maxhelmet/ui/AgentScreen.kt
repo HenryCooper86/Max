@@ -49,6 +49,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.horizon.maxhelmet.agent.AgentEvent
 import com.horizon.maxhelmet.agent.AgentSession
 import com.horizon.maxhelmet.agent.ConnectionState
 import com.horizon.maxhelmet.agent.DemoScenario
@@ -118,6 +119,11 @@ fun AgentScreen(
     ) {
         HeaderBar(state)
         Spacer(Modifier.height(10.dp))
+
+        state.hazardAlert?.let {
+            HazardBanner(it)
+            Spacer(Modifier.height(10.dp))
+        }
 
         // Everything except the header and the hands-free button scrolls.
         Column(
@@ -345,6 +351,30 @@ private fun TurnStateRing(state: AgentSession.State, modifier: Modifier = Modifi
 }
 
 // ---- 态势摘要 (ride pulse) ----------------------------------------------------
+
+@Composable
+private fun HazardBanner(alert: AgentEvent.HazardAlert) {
+    val color = hazardColor(alert.severity)
+    HudCard(borderColor = color) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(color.copy(alpha = 0.22f))
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+            ) {
+                Text(alert.directionLabel, color = HudColors.Text, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text("⚠️ ${alert.label}", color = HudColors.Text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Text("${alert.message} ${alert.advice}", color = HudColors.Muted, fontSize = 12.sp)
+            }
+            Spacer(Modifier.width(8.dp))
+            Text("${alert.ttcSeconds}s", color = color, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
 
 @Composable
 private fun RidePulseCard(state: AgentSession.State) {

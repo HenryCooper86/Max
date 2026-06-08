@@ -26,6 +26,8 @@ final class AgentSession: NSObject, ObservableObject {
         var sessionMemory = SessionMemory()
         var telemetry: Telemetry? = nil
         var bluetoothRouted = false
+        /// The active ADAS hazard alert, shown as a banner until it auto-clears.
+        var hazardAlert: HazardAlert? = nil
 
         /// 态势摘要 fusion: ride hazard + weather risk (fusedHazard in src/main.tsx).
         var fusedHazard: HazardLevel {
@@ -56,6 +58,8 @@ final class AgentSession: NSObject, ObservableObject {
     private var transmitting = false
 
     private var transcriptTurn = 0
+    /// Bumped on each hazard alert so a stale auto-clear can't dismiss a newer one.
+    private var hazardAlertGeneration = 0
     private var location: CLLocationCoordinate2D?
 
     /// One AVAudioEngine shared by mic capture and agent playback. iOS only
@@ -163,6 +167,7 @@ final class AgentSession: NSObject, ObservableObject {
             $0.turnState = .idle
             $0.voiceLevel = 0
             $0.bluetoothRouted = false
+            $0.hazardAlert = nil
         }
     }
 
@@ -423,6 +428,9 @@ final class AgentSession: NSObject, ObservableObject {
         case let .telemetryUpdate(telemetry):
             update { $0.telemetry = telemetry }
 
+        case let .hazardAlert(alert):
+            handleHazardAlert(alert)
+
         case let .error(message):
             update { $0.statusText = message }
 
@@ -471,6 +479,27 @@ final class AgentSession: NSObject, ObservableObject {
                 text: clean, final: final, language: language
             ))
             $0.transcript = items
+        }
+    }
+
+    // MARK: - ADAS hazard alerts
+
+    /// A proactive ADAS alert: cut any in-progress agent speech so the warning is
+    /// heard immediately, surface the banner, speak it, then auto-clear it.
+    private func handleHazardAlert(_ alert: HazardAlert) {
+        if alert.interrupt { stopAgentSpeech() }
+        hazardAlertGeneration += 1
+        let generation = hazardAlertGeneration
+        update {
+            $0.hazardAlert = alert
+            $0.turnState = .speaking
+            $0.statusText = "⚠️ \(alert.label)"
+        }
+        speak("\(alert.message) \(alert.advice)")
+        // Dismiss after the reaction window unless a newer alert has replaced it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + Double(alert.ttcSeconds) + 2) { [weak self] in
+            guard let self, self.hazardAlertGeneration == generation else { return }
+            self.update { $0.hazardAlert = nil }
         }
     }
 

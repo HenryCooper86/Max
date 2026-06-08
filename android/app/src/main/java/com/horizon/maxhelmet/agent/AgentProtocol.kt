@@ -71,7 +71,8 @@ enum class DemoScenario(val wire: String, val label: String, val hazard: HazardL
     WIND("wind", "横风", HazardLevel.CAUTION),
     FUEL("fuel", "低油", HazardLevel.NORMAL),
     GROUP("group", "小队", HazardLevel.NORMAL),
-    EMERGENCY("emergency", "紧急", HazardLevel.CRITICAL);
+    EMERGENCY("emergency", "紧急", HazardLevel.CRITICAL),
+    ADAS("adas", "预警", HazardLevel.CAUTION);
 
     companion object {
         fun fromWire(value: String): DemoScenario = entries.firstOrNull { it.wire == value } ?: COMMUTE
@@ -181,6 +182,31 @@ sealed interface AgentEvent {
     data class RideContextUpdate(val rideContext: RideContext) : AgentEvent
     data class SessionMemoryUpdate(val memory: SessionMemory) : AgentEvent
     data class TelemetryUpdate(val telemetry: Telemetry) : AgentEvent
+
+    /** A proactive ADAS safety alert (shared/adas.ts). */
+    data class HazardAlert(
+        val threat: String,
+        val direction: String,
+        val severity: HazardLevel,
+        val label: String,
+        val message: String,
+        val advice: String,
+        val ttcSeconds: Int,
+        val interrupt: Boolean
+    ) : AgentEvent {
+        /** Chinese label for the threat direction. */
+        val directionLabel: String
+            get() = when (direction) {
+                "front" -> "前方"
+                "rear" -> "后方"
+                "left" -> "左侧"
+                "right" -> "右侧"
+                "left_rear" -> "左后方"
+                "right_rear" -> "右后方"
+                else -> ""
+            }
+    }
+
     data class ErrorEvent(val message: String) : AgentEvent
 
     /** Event types this client does not consume. */
@@ -248,6 +274,17 @@ fun parseAgentEvent(text: String): AgentEvent {
                 firstAudioMs = maxOf(0, json.optInt("firstAudioMs")),
                 totalMs = maxOf(0, json.optInt("totalMs"))
             )
+        )
+
+        "hazard.alert" -> AgentEvent.HazardAlert(
+            threat = json.optString("threat"),
+            direction = json.optString("direction"),
+            severity = HazardLevel.fromWire(json.optString("severity", "caution")),
+            label = json.optString("label"),
+            message = json.optString("message"),
+            advice = json.optString("advice"),
+            ttcSeconds = json.optInt("ttcSeconds"),
+            interrupt = json.optBoolean("interrupt", true)
         )
 
         "error" -> AgentEvent.ErrorEvent(json.optString("message", "Voice relay failed"))

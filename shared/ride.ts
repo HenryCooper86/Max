@@ -1,6 +1,6 @@
 export type RideMode = "ride" | "stop" | "navigation" | "emergency";
 
-export type DemoScenario = "commute" | "wind" | "fuel" | "group" | "emergency";
+export type DemoScenario = "commute" | "wind" | "fuel" | "group" | "emergency" | "adas";
 
 export type RideContext = {
   mode: RideMode;
@@ -55,7 +55,8 @@ const SCENARIO_LABELS: Record<DemoScenario, string> = {
   wind: "横风",
   fuel: "低油",
   group: "小队",
-  emergency: "紧急"
+  emergency: "紧急",
+  adas: "预警"
 };
 
 export function describeRideMode(mode: RideMode): RideIntelligence {

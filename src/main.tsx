@@ -145,14 +145,15 @@ const RIDE_MODE_LABELS: Record<RideMode, string> = {
   emergency: "紧急"
 };
 
-const SCENARIOS: DemoScenario[] = ["commute", "wind", "fuel", "group", "emergency"];
+const SCENARIOS: DemoScenario[] = ["commute", "wind", "fuel", "group", "emergency", "adas"];
 const RIDE_MODES: RideMode[] = ["ride", "navigation", "stop", "emergency"];
 const SCENARIO_HAZARDS: Record<DemoScenario, HazardLevel> = {
   commute: "normal",
   wind: "caution",
   fuel: "normal",
   group: "normal",
-  emergency: "critical"
+  emergency: "critical",
+  adas: "caution"
 };
 
 const CONNECTION_LABELS: Record<ConnectionState, string> = {

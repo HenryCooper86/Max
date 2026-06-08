@@ -108,6 +108,8 @@ The emulator forwards the host Mac's microphone, so the full voice loop is testa
   grid, speed + route phase, session-memory chips
 - Telemetry readouts: relay latency tone plus ASR / 思考 / 首音 / 总计 timings
 - Barge-in: rider speech stops queued Doubao audio and device TTS
+- ADAS hazard alerts: reacts to the server `hazard.alert` event by interrupting playback, speaking
+  the warning, and showing a pulsing directional banner; a `预警` demo scenario showcases them
 - Device-TTS fallback when the provider sends text without audio (mock provider, Doubao text-only replies)
 - Auto-reconnect with exponential backoff (6 attempts, mirrors the web client)
 - Foreground service so the session keeps running with the screen off

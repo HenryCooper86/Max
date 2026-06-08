@@ -97,7 +97,7 @@ enum RideMode: String, CaseIterable {
 
 /// Mirror of DemoScenario in shared/ride.ts, with SCENARIO_HAZARDS from src/main.tsx.
 enum DemoScenario: String, CaseIterable {
-    case commute, wind, fuel, group, emergency
+    case commute, wind, fuel, group, emergency, adas
 
     var wire: String { rawValue }
     var label: String {
@@ -107,13 +107,14 @@ enum DemoScenario: String, CaseIterable {
         case .fuel: return "低油"
         case .group: return "小队"
         case .emergency: return "紧急"
+        case .adas: return "预警"
         }
     }
 
     var hazard: HazardLevel {
         switch self {
         case .commute, .fuel, .group: return .normal
-        case .wind: return .caution
+        case .wind, .adas: return .caution
         case .emergency: return .critical
         }
     }
@@ -220,6 +221,31 @@ struct SessionMemory: Equatable {
 }
 
 /// Server → client JSON events (shared/agent.ts AgentEvent).
+/// A proactive ADAS safety alert (`hazard.alert`). Mirrors shared/adas.ts.
+struct HazardAlert: Equatable {
+    let threat: String
+    let direction: String
+    let severity: HazardLevel
+    let label: String
+    let message: String
+    let advice: String
+    let ttcSeconds: Int
+    let interrupt: Bool
+
+    /// Chinese label for the threat direction.
+    var directionLabel: String {
+        switch direction {
+        case "front": return "前方"
+        case "rear": return "后方"
+        case "left": return "左侧"
+        case "right": return "右侧"
+        case "left_rear": return "左后方"
+        case "right_rear": return "右后方"
+        default: return ""
+        }
+    }
+}
+
 enum AgentEvent {
     case sessionStarted(provider: String, mode: String)
     case connection(state: String, detail: String)
@@ -230,6 +256,7 @@ enum AgentEvent {
     case rideContextUpdate(RideContext)
     case sessionMemoryUpdate(SessionMemory)
     case telemetryUpdate(Telemetry)
+    case hazardAlert(HazardAlert)
     case error(message: String)
     /// Event types this client does not consume.
     case unhandled
@@ -315,6 +342,18 @@ func parseAgentEvent(_ text: String) -> AgentEvent {
             thinkMs: max(0, int("thinkMs")),
             firstAudioMs: max(0, int("firstAudioMs")),
             totalMs: max(0, int("totalMs"))
+        ))
+
+    case "hazard.alert":
+        return .hazardAlert(HazardAlert(
+            threat: str("threat"),
+            direction: str("direction"),
+            severity: HazardLevel.fromWire(str("severity", "caution")),
+            label: str("label"),
+            message: str("message"),
+            advice: str("advice"),
+            ttcSeconds: int("ttcSeconds"),
+            interrupt: bool("interrupt", true)
         ))
 
     case "error":

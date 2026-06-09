@@ -23,6 +23,11 @@ Audio fixes across all clients, plus a "Max" wake word on the live agent.
   reply flushes exactly once at end-of-speech. (`server/providers/doubao.ts`)
 
 ### Changed
+- **iOS & Android: max-width centered HUD** — the single-column HUD was stretching
+  edge-to-edge on wide tablet / iPad screens (controls hugging the top-left, the ring
+  floating in empty space). It is now capped at ~560 dp and centered, so it reads as
+  a phone-width column on large screens — matching the web's centered shell. Phones
+  are narrower than the cap, so they are unaffected.
 - **iOS & Android: tap the Max ring to start/stop** — the big turn-state ring (the
   element riders instinctively press) is now a button that toggles hands-free, in
   addition to the existing 开启免提 / 结束免提 button.

@@ -71,6 +71,11 @@ struct AgentScreen: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
+        // Cap the HUD width and center it so it reads as a phone-width column on
+        // iPad/large screens instead of stretching edge-to-edge (matches Android
+        // and the web's centered, max-width shell). iPhones are narrower than the
+        // cap, so they are unaffected.
+        .frame(maxWidth: 560)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(HudColors.background.ignoresSafeArea())
         .sheet(item: $viewModel.exportFile) { file in

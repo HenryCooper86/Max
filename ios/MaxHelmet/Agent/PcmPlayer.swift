@@ -8,9 +8,13 @@ final class PcmPlayer {
 
     static let sampleRate = 24_000
     /// Boost agent speech above the raw Doubao level so it is loud enough at the
-    /// helmet speaker; samples are clamped after the boost so peaks don't clip.
+    /// helmet speaker; a soft limiter (see softLimit) tames peaks afterward.
     /// Mirrors PLAYBACK_GAIN in src/main.tsx and PcmPlayer.kt.
     static let playbackGain: Float = 2.0
+    /// Soft-limiter threshold (≈ -3 dBFS, matching the web's DynamicsCompressor and
+    /// Android PcmPlayer). Samples below this stay linear; louder peaks compress
+    /// smoothly toward full scale instead of hard-clipping.
+    static let limitThreshold: Float = 0.7
 
     /// Shared with MicStreamer so the agent voice renders through the same engine
     /// that performs echo cancellation — see prepare() and MicStreamer.start().
@@ -124,13 +128,24 @@ final class PcmPlayer {
         }
         guard error == nil else { return nil }
 
-        // Apply the playback boost and clamp to [-1, 1] so loud peaks don't wrap.
+        // Apply the playback boost, then soft-limit so loud peaks compress
+        // smoothly toward ±1 instead of hard-clipping (matches Android / web).
         if let samples = outBuffer.floatChannelData {
             let gain = PcmPlayer.playbackGain
             for i in 0..<Int(outBuffer.frameLength) {
-                samples[0][i] = max(-1.0, min(1.0, samples[0][i] * gain))
+                samples[0][i] = softLimit(samples[0][i] * gain)
             }
         }
         return outBuffer
+    }
+
+    /// Soft-knee limiter: linear up to `limitThreshold`, then the overshoot is
+    /// compressed exponentially toward ±1, so the signal never hard-clips.
+    private func softLimit(_ x: Float) -> Float {
+        let magnitude = abs(x)
+        if magnitude <= PcmPlayer.limitThreshold { return x }
+        let headroom = 1 - PcmPlayer.limitThreshold
+        let compressed = PcmPlayer.limitThreshold + headroom * (1 - exp(-(magnitude - PcmPlayer.limitThreshold) / headroom))
+        return x < 0 ? -compressed : compressed
     }
 }

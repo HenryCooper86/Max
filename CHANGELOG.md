@@ -5,10 +5,11 @@
 Audio fixes across all clients, plus a "Max" wake word on the live agent.
 
 ### Fixed
-- **Android playback harshness** — the agent voice was boosted 2× and then
-  hard-clipped, making the real Doubao voice sound harsher than on iOS/web. Added a
-  per-sample soft limiter (linear below ≈-3 dBFS, smooth compression above) to
-  `PcmPlayer`, the PCM-domain equivalent of the web's DynamicsCompressor. (Note:
+- **iOS & Android playback harshness** — the agent voice was boosted 2× and then
+  hard-clipped, making the real Doubao voice sound harsher than on the web. Added a
+  per-sample soft limiter (linear below ≈-3 dBFS, smooth compression above) to both
+  `PcmPlayer`s, the PCM-domain equivalent of the web's DynamicsCompressor — so all
+  three clients now match. (Note:
   a robotic voice on Android usually means the app is on the **mock** relay, which
   has no real audio and falls back to device TTS — point it at the Doubao relay for
   the real voice.)

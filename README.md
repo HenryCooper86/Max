@@ -42,11 +42,15 @@ relay URL, and self-signed test-server setup.
 
 ## Current Capabilities
 
-- Hands-free operation — click the main button or press Space to start/stop; once active, the rider just talks and Doubao's server-side VAD handles turn-taking.
-- Native iOS and Android clients that reuse the same `/agent` relay protocol as the web HUD.
+- Hands-free operation — click the main button, **tap the big Max ring** (iOS/Android), or press Space (web) to start/stop; once active, the rider just talks and Doubao's server-side VAD handles turn-taking.
+- Wake word — on the live agent, Max only replies when addressed by name ("Max"), so chit-chat and passenger talk don't trigger it; a 12 s follow-up window keeps a conversation going.
+- ADAS proactive safety alerts — simulated directional hazards (rear approach, forward collision, blind spot, cross-traffic, pedestrian, lane departure, tailgating) **interrupt** the agent and announce the danger; fires on mock and, for the `ADAS` scenario, on the live Doubao path.
+- Agent identity — attributes its development to Horizon Continental Technology (neueHCT) and names the CEO (Li Biao / Stone Li), in Chinese and English.
+- Acoustic echo cancellation — built-in-speaker echo is cancelled so the agent doesn't hear and answer itself (web `echoCancellation`; iOS shared voice-processing engine; Android `VOICE_COMMUNICATION` + `AcousticEchoCanceler`).
+- Native iOS and Android clients that reuse the same `/agent` relay protocol as the web HUD, with a width-capped, centered HUD that reads the same on phones and tablets/iPad.
 - Turn-state HUD — the helmet shows when Max is listening, heard the rider, is thinking, or is replying.
 - Ride intelligence modes — switch between 骑行 / 导航 / 停车 / 紧急 so Max changes response length and safety behavior.
-- Scenario-driven mock demos — 通勤、横风、低油、小队、紧急 scenes exercise realistic rider context without Doubao credentials.
+- Scenario-driven mock demos — 通勤、横风、低油、小队、紧急、ADAS scenes exercise realistic rider context without Doubao credentials.
 - Ride pulse summary — a first-glance `态势摘要` card fuses mode, scenario, weather risk, network, battery, and the current rider focus into normal / caution / critical guidance.
 - Live weather — pulls current weather for the rider's location (Open-Meteo, no API key) and folds it into the agent's context so weather questions get real answers.
 - Rider risk readouts — HUD shows speed, route phase, network, helmet battery, weather risk, and concise rider advice.
@@ -55,7 +59,8 @@ relay URL, and self-signed test-server setup.
 - Mock live voice relay over WebSocket for testing the hands-free HUD without production credentials.
 - AudioWorklet mic capture that runs off the main thread for glitch-free streaming.
 - Browser text-to-speech fallback when Doubao returns reply text but no audio.
-- `女声 / 男声` voice toggle that picks the live Doubao speaker.
+- `女声 / 男声` voice toggle that picks the live Doubao speaker, plus a 语气 personality selector (极简 / 友好 / 技术 / 领航).
+- Boosted, soft-limited playback so the agent is loud enough at the helmet speaker without the harsh clipping of a hard gain (web compressor; iOS/Android per-sample soft limiter).
 - Barge-in: agent speech stops as soon as the rider talks.
 - Automatic WebSocket reconnect with exponential backoff if the relay drops.
 - Startup config validation that warns about missing Doubao credentials.

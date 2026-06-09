@@ -274,19 +274,34 @@ If location permission is granted, Max greets the ride with real weather and can
 
 ### ADAS proactive hazard alerts
 
-The mock provider also simulates an **ADAS sensor suite**: while you're chatting, it periodically
-raises a proactive safety alert that **interrupts** the agent and announces the danger by direction —
-a car closing fast from behind, hard braking ahead, a vehicle in the blind spot, cross-traffic at a
-junction, a pedestrian, lane departure, tailgating. The catalog lives in `shared/adas.ts`; each alert
-is a `hazard.alert` event (`shared/agent.ts`) carrying `direction`, `severity`, `ttcSeconds`, a spoken
-`message`, and `interrupt: true`. **Web, iOS, and Android** all react: they cut any in-progress speech,
-speak the warning, and show a pulsing directional banner; the ride-pulse hazard is raised for the
-duration. (Live Doubao has no sensor feed, so this is a test-framework feature — auto-injected on
-every mock session. `tests/adas.test.ts` covers the catalog and the injection.)
+The agent simulates an **ADAS sensor suite**: while you're chatting, it periodically raises a proactive
+safety alert that **interrupts** the agent and announces the danger by direction — a car closing fast
+from behind, hard braking ahead, a vehicle in the blind spot, cross-traffic at a junction, a pedestrian,
+lane departure, tailgating. The catalog lives in `shared/adas.ts`; each alert is a `hazard.alert` event
+(`shared/agent.ts`) carrying `direction`, `severity`, `ttcSeconds`, a spoken `message`, and
+`interrupt: true`. **Web, iOS, and Android** all react: they cut any in-progress speech, speak the
+warning, and show a pulsing directional banner; the ride-pulse hazard is raised for the duration.
+
+Detection is simulated (no real sensors yet — see *Making ADAS real* below), driven by a shared
+injector (`server/hazard-injector.ts`) used by **both** providers:
+
+- **Mock** — auto-injects on every session (≈11 s; ≈5 s on the `ADAS` scenario), for HUD demos.
+- **Live Doubao** — injects only when the **`ADAS` scenario** is selected (so normal voice sessions
+  stay uninterrupted), so the hazards "happen" with the real Doubao voice on the deployed server.
 
 A dedicated **`ADAS` demo scenario** (in the scenario strip on all three clients) showcases the alerts
-on a fast cadence — selecting it cycles the full catalog (rear → front → sides → …) every ~5 s so you
-can watch each directional warning on demand. Other scenarios sprinkle alerts in roughly every 11 s.
+on a fast cadence — selecting it cycles the full catalog (rear → front → sides → …) every ~5 s.
+`tests/adas.test.ts` covers the catalog, the injector, and the mock injection.
+
+### Making ADAS real
+
+Today the *detections* are simulated; the delivery pipeline (event → interrupt → banner → spoken
+warning, on all three clients) is production-shaped. To drive it from real hazards, replace the
+injector with a real source — for latency and safety this should run **on-device**, not via the relay:
+phone IMU (hard-brake / crash) + GPS/map (curve, speed limit) need no new hardware; a road-facing
+camera adds forward-collision / pedestrian / lane departure; the flagship **rear-approach / blind-spot**
+alerts require a rear/side camera or radar. Real ADAS also needs false-alarm tuning, fail-safes, and a
+safety/liability review before it's a shippable feature rather than a demo.
 
 ### Mobile clients
 

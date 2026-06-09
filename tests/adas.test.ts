@@ -7,6 +7,7 @@ import {
   type AdasDirection
 } from "../shared/adas";
 import { createMockProvider } from "../server/providers/mock";
+import { createHazardInjector } from "../server/hazard-injector";
 
 describe("ADAS catalog", () => {
   it("has well-formed entries", () => {
@@ -47,6 +48,36 @@ describe("ADAS catalog", () => {
     expect(line).toContain(adasDirectionLabel("rear"));
     expect(line).toContain(rear.message);
     expect(line).toContain(rear.advice);
+  });
+});
+
+describe("createHazardInjector", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("fires an interrupting alert with a display-only transcript and raises the hazard", () => {
+    vi.useFakeTimers();
+    const sent: Array<Record<string, unknown>> = [];
+    const hazardOverrides: Array<string | undefined> = [];
+    const injector = createHazardInjector({
+      send: (p) => sent.push(p as Record<string, unknown>),
+      emitRideContext: (o) => hazardOverrides.push(o)
+    });
+
+    injector.start(5000, 2000);
+    vi.advanceTimersByTime(2100); // first alert at 2000 ms
+
+    const alert = sent.find((m) => m.type === "hazard.alert");
+    expect(alert?.interrupt).toBe(true);
+
+    // The client's hazard.alert handler speaks the warning, so the transcript
+    // must be display-only to avoid a double TTS read.
+    const transcript = sent.find((m) => m.type === "transcript" && m.speaker === "agent");
+    expect(transcript?.useBrowserSpeech).toBe(false);
+
+    // The ride-pulse hazard is raised to the alert severity.
+    expect(hazardOverrides).toContain(alert?.severity);
+
+    injector.stop();
   });
 });
 

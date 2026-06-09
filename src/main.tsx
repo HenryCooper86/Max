@@ -701,8 +701,9 @@ function useHelmetAgent() {
         }
         if (event.type === "hazard.alert") {
           // Proactive ADAS warning: cut any in-progress agent speech so the
-          // alert is heard immediately, then surface it and auto-dismiss.
+          // alert is heard immediately, speak it, then surface it and auto-dismiss.
           if (event.interrupt) stopAgentSpeech();
+          speak(`${event.message} ${event.advice}`);
           setTurnState("speaking");
           setHazardAlert({
             threat: event.threat,

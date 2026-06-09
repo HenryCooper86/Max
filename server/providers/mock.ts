@@ -11,7 +11,8 @@ import {
   type RideContext
 } from "../../shared/ride";
 import { createSessionMemory, updateSessionMemory, type SessionMemory } from "../../shared/session";
-import { ADAS_SCENARIOS, formatAdasAlert, type AdasSeverity } from "../../shared/adas";
+import { type AdasSeverity } from "../../shared/adas";
+import { createHazardInjector } from "../hazard-injector";
 
 type MockTurn = {
   rider: string;
@@ -159,10 +160,6 @@ const SCENARIOS: Record<DemoScenario, ScenarioProfile> = {
 export function createMockProvider(client: WebSocket): AgentProvider {
   let frameCount = 0;
   let timer: NodeJS.Timeout | undefined;
-  // Auto-injected ADAS alerts run on their own cadence, offset from the chat
-  // loop, and cycle through the hazard catalog.
-  let hazardTimer: NodeJS.Timeout | undefined;
-  let hazardIndex = 0;
   let promptIndex = 0;
   let scenario: DemoScenario = "commute";
   let rideContext: RideContext = {
@@ -246,30 +243,7 @@ export function createMockProvider(client: WebSocket): AgentProvider {
   // Simulates an ADAS sensor event: the agent interrupts whatever it is saying
   // and announces the directional warning. Cycles through the hazard catalog so
   // a single demo session exercises rear / front / side alerts.
-  function emitHazardAlert() {
-    const hazard = ADAS_SCENARIOS[hazardIndex % ADAS_SCENARIOS.length];
-    hazardIndex += 1;
-
-    send({
-      type: "hazard.alert",
-      threat: hazard.threat,
-      direction: hazard.direction,
-      severity: hazard.severity,
-      label: hazard.label,
-      message: hazard.message,
-      advice: hazard.advice,
-      ttcSeconds: hazard.ttcSeconds,
-      interrupt: true
-    });
-    send({ type: "status", state: "speaking", detail: `⚠️ ${hazard.label}` });
-    send({ type: "transcript", speaker: "agent", text: formatAdasAlert(hazard), final: true, useBrowserSpeech: true });
-    // Raise the ride-pulse hazard for the duration of the alert, then restore.
-    emitRideContext(hazard.severity);
-    setTimeout(() => {
-      emitRideContext();
-      send({ type: "status", state: "listening", detail: "预警结束，继续免提" });
-    }, (hazard.ttcSeconds + 1) * 1000);
-  }
+  const hazardInjector = createHazardInjector({ send, emitRideContext });
 
   return {
     async start(event: SessionStartEvent) {
@@ -303,8 +277,7 @@ export function createMockProvider(client: WebSocket): AgentProvider {
       // The dedicated ADAS scenario showcases the alerts on a fast cadence; other
       // scenarios sprinkle them in occasionally to interrupt mid-conversation.
       const adasDemo = scenario === "adas";
-      hazardTimer = setInterval(emitHazardAlert, adasDemo ? 5000 : 11000);
-      setTimeout(emitHazardAlert, adasDemo ? 2000 : 4000);
+      hazardInjector.start(adasDemo ? 5000 : 11000, adasDemo ? 2000 : 4000);
     },
     async sendAudio(chunk: Buffer) {
       frameCount += 1;
@@ -316,13 +289,12 @@ export function createMockProvider(client: WebSocket): AgentProvider {
     async stopAudio() {
       if (timer) clearInterval(timer);
       timer = undefined;
-      if (hazardTimer) clearInterval(hazardTimer);
-      hazardTimer = undefined;
+      hazardInjector.stop();
       send({ type: "status", state: "ready", detail: "免提已暂停" });
     },
     async close() {
       if (timer) clearInterval(timer);
-      if (hazardTimer) clearInterval(hazardTimer);
+      hazardInjector.stop();
     }
   };
 }

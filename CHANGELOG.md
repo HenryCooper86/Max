@@ -4,7 +4,18 @@
 
 Audio fixes across all clients, plus a "Max" wake word on the live agent.
 
+### Changed
+- **ADAS now fires on the live Doubao path, not just mock** — extracted the hazard
+  injection into a shared `server/hazard-injector.ts` used by both providers. The
+  Doubao provider injects the simulated hazards when the **ADAS scenario** is selected
+  (other scenarios stay uninterrupted), so the alerts "happen" with the real Doubao
+  voice on the deployed server. Detection is still simulated.
+
 ### Fixed
+- **ADAS alert spoken twice on iOS/Android** — the warning was read by both the
+  `hazard.alert` handler and the alert transcript's `useBrowserSpeech`. The transcript
+  is now display-only (`useBrowserSpeech: false`) and the `hazard.alert` handler is the
+  single speaker on all three clients (the web handler now speaks too).
 - **iOS & Android playback harshness** — the agent voice was boosted 2× and then
   hard-clipped, making the real Doubao voice sound harsher than on the web. Added a
   per-sample soft limiter (linear below ≈-3 dBFS, smooth compression above) to both

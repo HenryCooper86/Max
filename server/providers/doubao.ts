@@ -2,11 +2,14 @@ import { WebSocket, type RawData } from "ws";
 import { randomUUID } from "node:crypto";
 import type { AgentProvider, SessionStartEvent, VoiceGender } from "./types";
 import { DOUBAO_CAPABILITIES } from "../../shared/agent";
+import { type AdasSeverity } from "../../shared/adas";
 import { containsWakePhrase, WAKE_FOLLOWUP_WINDOW_MS, WAKE_PHRASE_LABEL } from "../../shared/wake";
 import { config as appConfig } from "../config";
+import { createHazardInjector } from "../hazard-injector";
 import { fetchRiderWeather } from "../weather";
 import {
   buildRideContextSummary,
+  combineHazardLevels,
   describeRideMode,
   rideModeFromScenario,
   scenarioLabel,
@@ -412,8 +415,12 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
     }, 1800);
   }
 
-  function emitRideContext() {
+  function emitRideContext(hazardOverride?: AdasSeverity) {
     const intelligence = describeRideMode(rideContext.mode);
+    // An active ADAS alert momentarily raises the ride-pulse hazard.
+    const hazardLevel = hazardOverride
+      ? combineHazardLevels(intelligence.hazardLevel, hazardOverride)
+      : intelligence.hazardLevel;
     sendClient({
       type: "ride.context",
       mode: rideContext.mode,
@@ -424,10 +431,14 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
       routePhase: rideContext.routePhase,
       network: rideContext.network,
       batteryPct: rideContext.batteryPct,
-      hazardLevel: intelligence.hazardLevel,
+      hazardLevel,
       glanceableFocus: intelligence.glanceableFocus
     });
   }
+
+  // Simulated ADAS hazards on the live path — only for the dedicated ADAS scenario
+  // so normal voice sessions aren't interrupted. See server/hazard-injector.ts.
+  const hazardInjector = createHazardInjector({ send: sendClient, emitRideContext });
 
   function emitTelemetry(totalEnd = Date.now()) {
     const asrMs = audioStartedAt && asrStartedAt ? asrStartedAt - audioStartedAt : 0;
@@ -689,6 +700,9 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
         state: "listening",
         detail: wakeWordEnabled ? `正在收听 —— 说一声 "${WAKE_PHRASE_LABEL}" 唤醒 Max` : "正在通过豆包实时语音收听"
       });
+      // Fire simulated ADAS hazards only when the rider picked the ADAS scenario,
+      // so normal Doubao voice sessions stay uninterrupted.
+      if (rideContext.scenario === "adas") hazardInjector.start(5000, 2000);
     },
     async sendAudio(chunk: Buffer) {
       if (upstream && upstream.readyState === WebSocket.OPEN) {
@@ -697,12 +711,14 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
       }
     },
     async stopAudio() {
+      hazardInjector.stop();
       if (upstream?.readyState === WebSocket.OPEN && sessionReady) {
         upstream.send(buildFullClientRequest(EventSend.EndAsr, sessionId));
       }
       sendClient({ type: "status", state: "ready", detail: "麦克风已静音" });
     },
     async close() {
+      hazardInjector.stop();
       clearTtsFallbackTimer();
       if (upstream?.readyState === WebSocket.OPEN) {
         if (sessionReady) upstream.send(buildFullClientRequest(EventSend.FinishSession, sessionId));

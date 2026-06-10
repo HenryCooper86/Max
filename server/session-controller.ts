@@ -1,4 +1,5 @@
 import type { RawData, WebSocket } from "ws";
+import type { Logger } from "./logger";
 import type { AgentProvider, ClientEvent } from "./providers/types";
 
 export type ProviderFactory = (client: WebSocket) => AgentProvider;
@@ -41,6 +42,11 @@ export function parseClientEvent(data: RawData): ClientEvent {
     return { type: value.type };
   }
 
+  if (value.type === "demo.guided") {
+    if (typeof value.enabled !== "boolean") throw new Error("Invalid demo.guided enabled flag");
+    return { type: "demo.guided", enabled: value.enabled };
+  }
+
   if (value.type !== "session.start") {
     throw new Error(`Unsupported client event ${value.type}`);
   }
@@ -62,7 +68,8 @@ export class AgentSessionController {
 
   constructor(
     private readonly client: WebSocket,
-    providerFactory: ProviderFactory
+    providerFactory: ProviderFactory,
+    private readonly log?: Logger
   ) {
     this.provider = providerFactory(client);
     this.send({ type: "connection", state: "relay", detail: "语音中继 WebSocket 已连接" });
@@ -78,11 +85,25 @@ export class AgentSessionController {
       }
 
       const event = parseClientEvent(data);
+      if (event.type !== "audio.start" && event.type !== "audio.stop") {
+        this.log?.info(
+          `client event: ${event.type}`,
+          event.type === "session.start"
+            ? {
+                scenario: event.scenario,
+                rideMode: event.rideMode,
+                voiceGender: event.voiceGender
+              }
+            : undefined
+        );
+      }
       if (event.type === "session.start") await this.provider.start(event);
       if (event.type === "audio.start") await this.provider.startAudio();
       if (event.type === "audio.stop") await this.provider.stopAudio();
+      if (event.type === "demo.guided") await this.provider.setGuidedDemo?.(event.enabled);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Voice relay failed";
+      this.log?.warn("client message failed", { message });
       this.send({ type: "error", message });
     }
   }

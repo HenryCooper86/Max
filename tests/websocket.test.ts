@@ -134,6 +134,14 @@ describe("client event validation", () => {
     );
   });
 
+  it("accepts and validates the guided-demo toggle", () => {
+    const event = parseClientEvent(Buffer.from(JSON.stringify({ type: "demo.guided", enabled: true })));
+    expect(event).toEqual({ type: "demo.guided", enabled: true });
+    expect(() => parseClientEvent(Buffer.from(JSON.stringify({ type: "demo.guided" })))).toThrow(
+      "Invalid demo.guided enabled flag"
+    );
+  });
+
   it("normalizes fragmented binary frames", () => {
     expect(normalizeRawData([Buffer.from([1, 2]), Buffer.from([3, 4])])).toEqual(Buffer.from([1, 2, 3, 4]));
   });

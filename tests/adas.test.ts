@@ -30,9 +30,7 @@ describe("ADAS catalog", () => {
     const directions = new Set<AdasDirection>(ADAS_SCENARIOS.map((s) => s.direction));
     expect(directions.has("rear")).toBe(true);
     expect(directions.has("front")).toBe(true);
-    const hasSide = ["left", "right", "left_rear", "right_rear"].some((d) =>
-      directions.has(d as AdasDirection)
-    );
+    const hasSide = ["left", "right", "left_rear", "right_rear"].some((d) => directions.has(d as AdasDirection));
     expect(hasSide).toBe(true);
   });
 

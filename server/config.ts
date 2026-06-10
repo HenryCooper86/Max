@@ -23,8 +23,32 @@ export const config = {
   defaultWeatherLocation: resolveDefaultWeatherLocation(),
   // When on, the live agent only replies when the rider addresses it by name
   // ("Max"); set AGENT_WAKE_WORD=off to make it answer every utterance again.
-  wakeWord: process.env.AGENT_WAKE_WORD?.trim().toLowerCase() !== "off"
+  wakeWord: process.env.AGENT_WAKE_WORD?.trim().toLowerCase() !== "off",
+  // Shared secret for the /agent WebSocket (clients send it as ?token=…).
+  // Empty disables auth so the local demo stays plug-and-play.
+  relayAuthToken: process.env.RELAY_AUTH_TOKEN?.trim() ?? "",
+  // Browser Origin allowlist for /agent. Empty allows every origin.
+  allowedOrigins: (process.env.RELAY_ALLOWED_ORIGINS ?? "")
+    .split(",")
+    .map((origin) => origin.trim().replace(/\/$/, ""))
+    .filter(Boolean),
+  // Upgrade attempts allowed per client IP per minute; 0 disables the limiter.
+  connPerMinute: resolveBoundedInt(process.env.RELAY_CONN_PER_MINUTE, 30, 0, 10_000),
+  // Honor X-Forwarded-For for rate limiting only behind a trusted proxy.
+  trustProxy: process.env.RELAY_TRUST_PROXY?.trim().toLowerCase() === "on",
+  // How often a live session re-fetches weather mid-ride. 0 turns refresh off.
+  weatherRefreshMs: resolveBoundedInt(process.env.WEATHER_REFRESH_MS, 10 * 60_000, 0, 6 * 3_600_000),
+  // Base wait for Doubao TTS audio before falling back to browser speech. The
+  // doubao provider adapts upward from this floor using measured first-audio
+  // latency, so a slow link doesn't trigger spurious fallbacks.
+  ttsFallbackMs: resolveBoundedInt(process.env.TTS_FALLBACK_MS, 1800, 400, 10_000)
 };
+
+function resolveBoundedInt(raw: string | undefined, fallback: number, min: number, max: number): number {
+  const value = Number(raw?.trim());
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
 
 function resolveDefaultWeatherLocation(): WeatherLocation {
   const latValue = process.env.DEFAULT_RIDER_LAT?.trim() || process.env.WEATHER_DEFAULT_LAT?.trim();
@@ -54,7 +78,11 @@ export function describeConfig(): string[] {
     `Realtime voice provider: ${config.voiceProvider}`,
     `Provider credentials: ${credentialStatus()}`,
     `Weather context: Open-Meteo best-effort + ${config.defaultWeatherLocation.source} fallback`,
-    `Wake word ("Max"): ${config.wakeWord ? "on" : "off"}`
+    `Weather mid-ride refresh: ${config.weatherRefreshMs ? `every ${Math.round(config.weatherRefreshMs / 60000)} min` : "off"}`,
+    `Wake word ("Max"): ${config.wakeWord ? "on" : "off"}`,
+    `Relay auth token: ${config.relayAuthToken ? "required" : "open"}`,
+    `Relay origin allowlist: ${config.allowedOrigins.length ? config.allowedOrigins.join(", ") : "any"}`,
+    `Relay rate limit: ${config.connPerMinute ? `${config.connPerMinute} conn/min/IP` : "off"}`
   ];
 }
 
@@ -70,6 +98,11 @@ export function validateConfig(): string[] {
     if (credentialStatus() === "missing") {
       warnings.push(
         "VOICE_PROVIDER=doubao 但缺少 DOUBAO_API_KEY 或完整的 DOUBAO_APP_ID/APP_KEY/ACCESS_KEY：实时语音会话将无法建立。"
+      );
+    }
+    if (!config.relayAuthToken) {
+      warnings.push(
+        "RELAY_AUTH_TOKEN 未设置：任何发现该地址的人都能消耗豆包配额。生产部署请设置一个随机令牌，客户端通过 ?token=… 连接。"
       );
     }
   }

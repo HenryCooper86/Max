@@ -40,11 +40,14 @@ export function createHazardInjector({ send, emitRideContext }: HazardInjectorOp
     send({ type: "transcript", speaker: "agent", text: formatAdasAlert(hazard), final: true, useBrowserSpeech: false });
     emitRideContext(hazard.severity);
 
-    const restore = setTimeout(() => {
-      restoreTimers.delete(restore);
-      emitRideContext();
-      send({ type: "status", state: "listening", detail: "预警结束，继续免提" });
-    }, (hazard.ttcSeconds + 1) * 1000);
+    const restore = setTimeout(
+      () => {
+        restoreTimers.delete(restore);
+        emitRideContext();
+        send({ type: "status", state: "listening", detail: "预警结束，继续免提" });
+      },
+      (hazard.ttcSeconds + 1) * 1000
+    );
     restoreTimers.add(restore);
   }
 

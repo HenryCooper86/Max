@@ -8,4 +8,6 @@ export type AgentProvider = {
   sendAudio(chunk: Buffer): Promise<void>;
   stopAudio(): Promise<void>;
   close(): Promise<void>;
+  /** Toggles the guided demo ride. Providers without a demo tour omit this. */
+  setGuidedDemo?(enabled: boolean): Promise<void>;
 };

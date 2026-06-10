@@ -31,7 +31,13 @@ export type SessionStartEvent = {
   lon?: number;
 };
 
-export type ClientEvent = SessionStartEvent | { type: "audio.start" } | { type: "audio.stop" };
+export type ClientEvent =
+  | SessionStartEvent
+  | { type: "audio.start" }
+  | { type: "audio.stop" }
+  // Guided demo ride: the mock provider auto-advances through the scenario
+  // catalog so a hands-off demo shows every capability. Live provider ignores it.
+  | { type: "demo.guided"; enabled: boolean };
 
 export type AgentEvent =
   | {

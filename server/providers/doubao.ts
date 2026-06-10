@@ -6,6 +6,7 @@ import { type AdasSeverity } from "../../shared/adas";
 import { containsWakePhrase, WAKE_FOLLOWUP_WINDOW_MS, WAKE_PHRASE_LABEL } from "../../shared/wake";
 import { config as appConfig } from "../config";
 import { createHazardInjector } from "../hazard-injector";
+import { createLogger, type Logger } from "../logger";
 import { fetchRiderWeather } from "../weather";
 import {
   buildRideContextSummary,
@@ -323,7 +324,7 @@ export function extractAsrText(payload: Record<string, unknown>) {
     .trim();
 }
 
-export function createDoubaoProvider(client: WebSocket): AgentProvider {
+export function createDoubaoProvider(client: WebSocket, log: Logger = createLogger("doubao")): AgentProvider {
   let upstream: WebSocket | undefined;
   let started = false;
   let sessionId = randomUUID();
@@ -336,6 +337,11 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
   let ttsText = "";
   let receivedTtsAudio = false;
   let ttsFallbackTimer: NodeJS.Timeout | undefined;
+  // Measured chat→first-audio latency of the previous turn; the TTS fallback
+  // wait adapts upward from the configured floor so a slow link doesn't trip
+  // the browser-speech fallback while real audio is still in flight.
+  let lastFirstAudioLatencyMs = 0;
+  let weatherRefreshTimer: NodeJS.Timeout | undefined;
   // Wake-word ("Max") gating. The rider transcript for the current turn
   // accumulates in riderTurnText; addressedUntil holds the conversation window.
   // replyDecided/replyAddressed latch the decision for the whole agent turn so
@@ -394,6 +400,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
   function flushPendingAgentText(useBrowserSpeech: boolean) {
     // Drop the reply entirely when the rider did not address Max.
     if (!replyIsAddressed()) {
+      log.debug("reply suppressed — rider did not address Max", { riderTurnText });
       resetPendingReply();
       return;
     }
@@ -415,10 +422,17 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
     sendClient({ type: "session.memory", ...memory });
   }
 
+  /** Configured floor, raised to 1.5× the last measured first-audio latency. */
+  function ttsFallbackDelayMs(): number {
+    return Math.min(10_000, Math.max(appConfig.ttsFallbackMs, Math.round(lastFirstAudioLatencyMs * 1.5)));
+  }
+
   function armTtsFallbackTimer() {
     clearTtsFallbackTimer();
+    const delayMs = ttsFallbackDelayMs();
     ttsFallbackTimer = setTimeout(() => {
       if (!receivedTtsAudio) {
+        log.warn("TTS fallback fired — no Doubao audio", { waitedMs: delayMs });
         flushPendingAgentText(true);
         sendClient({
           type: "status",
@@ -428,7 +442,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
       }
       receivedTtsAudio = false;
       ttsFallbackTimer = undefined;
-    }, 1800);
+    }, delayMs);
   }
 
   function emitRideContext(hazardOverride?: AdasSeverity) {
@@ -462,6 +476,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
     const firstAudioMs = chatStartedAt && firstAudioAt ? firstAudioAt - chatStartedAt : 0;
     const totalMs = audioStartedAt ? totalEnd - audioStartedAt : 0;
     if (asrMs || thinkMs || firstAudioMs || totalMs) {
+      log.info("turn telemetry", { asrMs, thinkMs, firstAudioMs, totalMs });
       sendClient({ type: "telemetry", asrMs, thinkMs, firstAudioMs, totalMs });
     }
   }
@@ -471,6 +486,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
     upstream = new WebSocket(url, { headers: buildDoubaoHeaders() });
 
     upstream.on("open", () => {
+      log.info("doubao upstream opened");
       upstream?.send(buildFullClientRequest(EventSend.StartConnection));
       sendClient({ type: "status", state: "connecting", detail: "豆包语音连接已打开" });
     });
@@ -487,6 +503,10 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
 
         if (frame.event === EventReceive.SessionStarted) {
           sessionReady = true;
+          log.info("doubao session started", {
+            sessionId: sessionId.slice(0, 8),
+            pendingAudioFrames: pendingAudio.length
+          });
           sendClient({ type: "session.started", provider: "doubao", mode: "live", capabilities: DOUBAO_CAPABILITIES });
           emitRideContext();
           emitMemory();
@@ -502,7 +522,10 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
           if (!replyIsAddressed()) return;
           if (!firstAudioAt) {
             firstAudioAt = Date.now();
-            if (chatStartedAt) sendClient({ type: "metric", latencyMs: firstAudioAt - chatStartedAt });
+            if (chatStartedAt) {
+              lastFirstAudioLatencyMs = firstAudioAt - chatStartedAt;
+              sendClient({ type: "metric", latencyMs: lastFirstAudioLatencyMs });
+            }
           }
           receivedTtsAudio = true;
           clearTtsFallbackTimer();
@@ -536,6 +559,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
               addressedUntil = Date.now() + WAKE_FOLLOWUP_WINDOW_MS;
             }
             memory = updateSessionMemory(memory, text, rideContext.mode);
+            log.debug("rider asr", { text });
             sendClient({ type: "status", state: "asr", detail: `豆包听到：${text}` });
             sendClient({ type: "transcript", speaker: "rider", text, final: false });
             emitMemory();
@@ -596,6 +620,10 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
           frame.event === EventReceive.SessionFailed ||
           frame.event === EventReceive.DialogCommonError
         ) {
+          log.error("doubao session error", {
+            event: frame.event,
+            payload: String(payload.error ?? payload.message ?? "")
+          });
           sendClient({
             type: "status",
             state: "degraded",
@@ -616,12 +644,14 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
 
     upstream.on("close", () => {
       sessionReady = false;
+      log.info("doubao upstream closed");
       clearTtsFallbackTimer();
       if (pendingReplyText()) flushPendingAgentText(true);
       sendClient({ type: "status", state: "closed", detail: "豆包实时代理已断开" });
     });
 
     upstream.on("unexpected-response", (_request, response) => {
+      log.error("doubao handshake failed", { statusCode: response.statusCode });
       sendClient({
         type: "error",
         message: `豆包语音握手失败，HTTP ${response.statusCode}。请检查 speech-dialog App ID、Access Token、Resource ID 和权限。`
@@ -629,6 +659,7 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
     });
 
     upstream.on("error", (error) => {
+      log.error("doubao upstream error", { message: error.message });
       sendClient({ type: "status", state: "degraded", detail: "豆包音频不可用，浏览器 TTS 备用通道待命" });
       sendClient({ type: "error", message: error.message });
     });
@@ -696,7 +727,37 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
             detail: `已接入${weatherLocation.source === "rider" ? "实时" : locationLabel}天气：${weather.description} ${weather.temperatureC}°C`
           });
         } catch {
+          log.warn("initial weather fetch failed", { lat: weatherLocation.lat, lon: weatherLocation.lon });
           sendClient({ type: "status", state: "ready", detail: "实时天气暂不可用，使用通用回答" });
+        }
+
+        // Mid-ride refresh: long rides outlive the session-start snapshot, so
+        // re-fetch on an interval and push the HUD update. The Doubao system
+        // role is fixed once the session starts, so the agent's own context
+        // freshens on the next session; the HUD and hazard fusion stay live.
+        if (appConfig.weatherRefreshMs > 0) {
+          weatherRefreshTimer = setInterval(async () => {
+            try {
+              const weather = await fetchRiderWeather(weatherLocation.lat, weatherLocation.lon);
+              sendClient({
+                type: "weather",
+                description: weather.description,
+                temperatureC: weather.temperatureC,
+                windSpeedKmh: weather.windSpeedKmh,
+                isDay: weather.isDay,
+                riskLevel: weather.riskLevel,
+                riderAdvice: weather.riderAdvice
+              });
+              log.info("weather refreshed", {
+                description: weather.description,
+                temperatureC: weather.temperatureC,
+                windSpeedKmh: weather.windSpeedKmh,
+                riskLevel: weather.riskLevel
+              });
+            } catch {
+              log.warn("weather refresh failed — keeping last reading");
+            }
+          }, appConfig.weatherRefreshMs);
         }
       } else {
         sendClient({ type: "status", state: "ready", detail: "定位未授权，未配置默认天气位置" });
@@ -744,11 +805,16 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
     async close() {
       hazardInjector.stop();
       clearTtsFallbackTimer();
+      if (weatherRefreshTimer) {
+        clearInterval(weatherRefreshTimer);
+        weatherRefreshTimer = undefined;
+      }
       if (upstream?.readyState === WebSocket.OPEN) {
         if (sessionReady) upstream.send(buildFullClientRequest(EventSend.FinishSession, sessionId));
         upstream.send(buildFullClientRequest(EventSend.FinishConnection));
       }
       upstream?.close();
+      log.info("doubao provider closed");
     }
   };
 }

@@ -52,7 +52,11 @@ const SCENARIOS: Record<DemoScenario, ScenarioProfile> = {
     },
     turns: [
       { rider: "帮我找最快回家路线。", agent: "已设置最快回家路线。3.2 公里后靠右下出口。", latencyBase: 96 },
-      { rider: "你是谁开发的？", agent: "我是 Max，由 Horizon Continental Technology（neueHCT）开发。", latencyBase: 90 },
+      {
+        rider: "你是谁开发的？",
+        agent: "我是 Max，由 Horizon Continental Technology（neueHCT）开发。",
+        latencyBase: 90
+      },
       { rider: "前面堵吗？", agent: "前方 1.4 公里轻微拥堵。我会提前提示变道。", latencyBase: 112 },
       { rider: "导航提示保持简短。", agent: "已切换极简提示。只报下一动作和距离。", latencyBase: 88 }
     ]
@@ -157,11 +161,20 @@ const SCENARIOS: Record<DemoScenario, ScenarioProfile> = {
   }
 };
 
+// Order of scenarios on the guided demo ride: everyday riding first, then the
+// hazard-heavy chapters so the demo escalates naturally toward ADAS/emergency.
+const GUIDED_TOUR: DemoScenario[] = ["commute", "wind", "fuel", "group", "adas", "emergency"];
+/** One guided chapter shows ~2 turns at the 6 s conversation cadence. */
+const GUIDED_CHAPTER_MS = 14_000;
+
 export function createMockProvider(client: WebSocket): AgentProvider {
   let frameCount = 0;
   let timer: NodeJS.Timeout | undefined;
   let promptIndex = 0;
   let scenario: DemoScenario = "commute";
+  let guided = false;
+  let guidedTimer: NodeJS.Timeout | undefined;
+  let guidedStep = 0;
   let rideContext: RideContext = {
     mode: "navigation",
     scenario,
@@ -245,6 +258,50 @@ export function createMockProvider(client: WebSocket): AgentProvider {
   // a single demo session exercises rear / front / side alerts.
   const hazardInjector = createHazardInjector({ send, emitRideContext });
 
+  /** Applies a scenario's profile to the ride context and refreshes the HUD. */
+  function enterScenario(next: DemoScenario, announce: boolean) {
+    scenario = next;
+    const profile = SCENARIOS[next];
+    rideContext = {
+      mode: rideModeFromScenario(undefined, next),
+      scenario: next,
+      speedKmh: profile.speedKmh,
+      routePhase: profile.routePhase,
+      network: profile.network,
+      batteryPct: profile.batteryPct
+    };
+    promptIndex = 0;
+    emitRideContext();
+    emitWeather();
+    if (announce) {
+      send({ type: "status", state: "ready", detail: `巡游演示：进入「${scenarioLabel(next)}」场景` });
+    }
+    // The ADAS chapter fires its alerts fast so the tour shows them; the other
+    // chapters keep the hazard channel quiet to leave room for conversation.
+    hazardInjector.stop();
+    if (scenario === "adas") hazardInjector.start(5000, 1500);
+  }
+
+  function stopGuidedTour() {
+    if (guidedTimer) clearInterval(guidedTimer);
+    guidedTimer = undefined;
+  }
+
+  // Auto-advance through GUIDED_TOUR while hands-free audio is running.
+  function startGuidedTour() {
+    stopGuidedTour();
+    guidedStep = 0;
+    enterScenario(GUIDED_TOUR[0], true);
+    guidedTimer = setInterval(() => {
+      guidedStep += 1;
+      if (guidedStep >= GUIDED_TOUR.length) {
+        guidedStep = 0;
+        send({ type: "status", state: "ready", detail: "巡游演示一轮结束，重新开始" });
+      }
+      enterScenario(GUIDED_TOUR[guidedStep], true);
+    }, GUIDED_CHAPTER_MS);
+  }
+
   return {
     async start(event: SessionStartEvent) {
       scenario = event.scenario ?? "commute";
@@ -274,6 +331,10 @@ export function createMockProvider(client: WebSocket): AgentProvider {
       emitWeather();
       timer = setInterval(emitConversation, 6000);
       emitConversation();
+      if (guided) {
+        startGuidedTour();
+        return;
+      }
       // The dedicated ADAS scenario showcases the alerts on a fast cadence; other
       // scenarios sprinkle them in occasionally to interrupt mid-conversation.
       const adasDemo = scenario === "adas";
@@ -289,11 +350,25 @@ export function createMockProvider(client: WebSocket): AgentProvider {
     async stopAudio() {
       if (timer) clearInterval(timer);
       timer = undefined;
+      stopGuidedTour();
       hazardInjector.stop();
       send({ type: "status", state: "ready", detail: "免提已暂停" });
     },
+    async setGuidedDemo(enabled: boolean) {
+      guided = enabled;
+      if (!enabled) {
+        stopGuidedTour();
+        send({ type: "status", state: "ready", detail: "巡游演示已关闭" });
+        return;
+      }
+      // Audio already running → start touring immediately; otherwise the tour
+      // begins on the next startAudio.
+      if (timer) startGuidedTour();
+      else send({ type: "status", state: "ready", detail: "巡游演示已开启，开启免提后自动巡游场景" });
+    },
     async close() {
       if (timer) clearInterval(timer);
+      stopGuidedTour();
       hazardInjector.stop();
     }
   };

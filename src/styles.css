@@ -307,6 +307,39 @@ h2 {
   --glow: rgba(62, 232, 159, 0.34);
 }
 
+/* Fused hazard (ride mode + weather + ADAS) overrides the conversational
+   palette — declared after the turn-state classes so it wins at equal
+   specificity. Caution = amber; critical = red with an urgent ring pulse. */
+.helmetStage.hazard-caution {
+  --ring: var(--warn);
+  --ring-soft: rgba(242, 193, 78, 0.6);
+  --ring-faint: rgba(242, 193, 78, 0.24);
+  --glow: rgba(242, 193, 78, 0.3);
+}
+
+.helmetStage.hazard-critical {
+  --ring: var(--danger);
+  --ring-soft: rgba(255, 111, 87, 0.65);
+  --ring-faint: rgba(255, 111, 87, 0.26);
+  --glow: rgba(255, 111, 87, 0.36);
+}
+
+.helmetStage.hazard-critical .reticle {
+  animation: hazardPulse 0.9s ease-in-out infinite;
+}
+
+@keyframes hazardPulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: translate(-50%, -50%) scale(1.015);
+  }
+}
+
 .helmetStage::before {
   content: "";
   position: absolute;
@@ -599,6 +632,17 @@ h2 {
 .scenarioStrip button.active {
   border-color: rgba(95, 233, 214, 0.6);
   background: rgba(95, 233, 214, 0.14);
+  color: var(--text);
+}
+
+/* Guided demo ride toggle: walks every scenario hands-off (mock provider). */
+.scenarioStrip .guidedToggle {
+  border-style: dashed;
+}
+
+.scenarioStrip .guidedToggle.active {
+  border-color: rgba(62, 232, 159, 0.65);
+  background: rgba(62, 232, 159, 0.16);
   color: var(--text);
 }
 

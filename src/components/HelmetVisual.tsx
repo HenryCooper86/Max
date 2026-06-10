@@ -1,3 +1,5 @@
+import type { HazardLevel } from "../../shared/agent";
+
 /** Conversational state of the hands-free session, driven by server events. */
 export type TurnState = "idle" | "listening" | "hearing" | "thinking" | "speaking";
 
@@ -6,6 +8,8 @@ type Props = {
   listening: boolean;
   voiceLevel: number;
   turnState: TurnState;
+  /** Fused ride/weather/ADAS hazard; tints the ring when above normal. */
+  hazardLevel?: HazardLevel;
 };
 
 // Relative heights of the on-visor voice bars.
@@ -28,14 +32,26 @@ const RING_CLASS: Record<TurnState, string> = {
   speaking: "speaking"
 };
 
+const HAZARD_CAPTIONS: Record<Exclude<HazardLevel, "normal">, string> = {
+  caution: "注意路况",
+  critical: "高风险 · 优先安全"
+};
+
 /** Cinematic helmet centerpiece: gradient shell, animated state reticle, and
  *  an on-visor voice visualizer driven by the live mic level. */
-export function HelmetVisual({ connected, listening, voiceLevel, turnState }: Props) {
+export function HelmetVisual({ connected, listening, voiceLevel, turnState, hazardLevel = "normal" }: Props) {
   const stateClass = connected ? RING_CLASS[turnState] : "offline";
-  const caption = connected ? CAPTIONS[turnState] : "离线";
+  // The fused hazard overrides the conversational palette: a rider glancing at
+  // the helmet must see danger first, turn state second.
+  const hazardClass = connected && hazardLevel !== "normal" ? `hazard-${hazardLevel}` : "";
+  const caption = !connected
+    ? "离线"
+    : hazardLevel !== "normal"
+      ? `${HAZARD_CAPTIONS[hazardLevel]} · ${CAPTIONS[turnState]}`
+      : CAPTIONS[turnState];
 
   return (
-    <div className={`helmetStage ${stateClass}`}>
+    <div className={`helmetStage ${stateClass} ${hazardClass}`}>
       <div className="hudFrame" aria-hidden="true">
         <span className="corner tl" />
         <span className="corner tr" />

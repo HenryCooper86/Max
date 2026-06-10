@@ -1,10 +1,44 @@
 # Changelog
 
+## 2026-06-10
+
+Relay hardening, web HUD accessibility/design polish, and an iOS mic-tap fix.
+
+### Fixed
+
+- **iOS mic tap leak on engine start failure** — in `MicStreamer.start()`, if
+  `engine.start()` threw after the input tap was installed, `running` stayed false so
+  `stop()` early-returned and never removed the tap; the next `start()` would install
+  a second tap on the same bus and crash. The tap (and converter/pending buffer) are
+  now cleaned up before the error is rethrown. (`ios/MaxHelmet/Agent/MicStreamer.swift`)
+
+### Changed
+
+- **Doubao relay hardening** (`server/providers/doubao.ts`):
+  - `extractTextFields` now has a recursion depth limit (8), so a deeply nested
+    upstream JSON payload can no longer overflow the stack. Regression-tested in
+    `tests/doubao-frame.test.ts`.
+  - Upstream JSON payloads larger than 1 MB are rejected before parsing.
+  - The pre-session mic buffer (`pendingAudio`) is capped at 150 frames (3 s);
+    oldest frames are dropped first, so a session that never becomes ready cannot
+    grow it without bound.
+  - Voice audio is no longer relayed to a client whose socket write buffer exceeds
+    4 MB (backpressure guard — frames are dropped instead of queueing in server memory).
+- **Web HUD design & accessibility** (`src/styles.css`):
+  - Keyboard-visible focus ring (`:focus-visible`) on all buttons/inputs/links —
+    previously no interactive element had a visible focus state (WCAG 2.4.7).
+  - ADAS hazard direction chip is larger and bolder (1.25 rem / 800) so the
+    direction dominates the banner in safety-critical moments.
+  - `--muted` lightened `#99aaa8 → #a7b8b6` for better label legibility outdoors.
+  - Transcript list scrolls smoothly; `prefers-reduced-motion` now also disables
+    the visor visualizer bar transitions, message hover transition, and smooth scroll.
+
 ## 2026-06-08
 
 Audio fixes across all clients, plus a "Max" wake word on the live agent.
 
 ### Changed
+
 - **ADAS now fires on the live Doubao path, not just mock** — extracted the hazard
   injection into a shared `server/hazard-injector.ts` used by both providers. The
   Doubao provider injects the simulated hazards when the **ADAS scenario** is selected
@@ -12,6 +46,7 @@ Audio fixes across all clients, plus a "Max" wake word on the live agent.
   voice on the deployed server. Detection is still simulated.
 
 ### Fixed
+
 - **ADAS alert spoken twice on iOS/Android** — the warning was read by both the
   `hazard.alert` handler and the alert transcript's `useBrowserSpeech`. The transcript
   is now display-only (`useBrowserSpeech: false`) and the `hazard.alert` handler is the
@@ -25,7 +60,7 @@ Audio fixes across all clients, plus a "Max" wake word on the live agent.
   has no real audio and falls back to device TTS — point it at the Doubao relay for
   the real voice.)
 - **Doubao transcript duplication / garbled spacing** — the agent reply was
-  accumulated from *both* Doubao channels into one buffer: `ChatResponse` (raw LLM
+  accumulated from _both_ Doubao channels into one buffer: `ChatResponse` (raw LLM
   tokens, missing spaces — "I'mMax") and `TtsSentence` (the spoken text, properly
   spaced — "I'm Max"). The substring de-dup missed because the two differed, so
   depending on timing the transcript showed the reply twice in one entry, or as two
@@ -34,6 +69,7 @@ Audio fixes across all clients, plus a "Max" wake word on the live agent.
   reply flushes exactly once at end-of-speech. (`server/providers/doubao.ts`)
 
 ### Changed
+
 - **iOS & Android: max-width centered HUD** — the single-column HUD was stretching
   edge-to-edge on wide tablet / iPad screens (controls hugging the top-left, the ring
   floating in empty space). It is now capped at ~560 dp and centered, so it reads as
@@ -48,6 +84,7 @@ Audio fixes across all clients, plus a "Max" wake word on the live agent.
   always-appended `buildIdentityPrompt()` in `server/providers/doubao.ts`.
 
 ### Added
+
 - **ADAS proactive hazard alerts (test framework)** — the mock provider now
   simulates a sensor suite that interrupts the conversation to warn of danger by
   direction: rear approach, forward collision, left/right blind spot, cross-traffic,
@@ -68,6 +105,7 @@ Audio fixes across all clients, plus a "Max" wake word on the live agent.
   Toggle with `AGENT_WAKE_WORD=off`. The mock provider always responds.
 
 ### Fixed
+
 - **iOS built-in-speaker echo** — the app heard and replied to itself on the phone
   speaker (fine on AirPods). Root cause: mic capture and playback used two separate
   `AVAudioEngine` instances, so iOS's voice-processing unit had no echo reference.
@@ -82,16 +120,19 @@ Audio fixes across all clients, plus a "Max" wake word on the live agent.
   voices on mount, and skip redundant visor-level re-renders.
 
 ### Changed
+
 - **Android** — renamed the misnamed `jiaAudioRouter` class to `AudioRouter`.
   Documented that Android already does AEC (`VOICE_COMMUNICATION` +
   `AcousticEchoCanceler`) and the known built-in-speaker weakness (deferred,
   pending a physical-device test).
 
 ### Deployed
+
 - AWS Lightsail test server (`wss://3.35.135.136/agent`) updated with the server-side
   changes; `Wake word ("Max"): on` confirmed live.
 
 ### Notes / follow-ups
+
 - iOS echo fix and the Android AEC weakness can only be confirmed on a **physical
   device** (simulators/emulators don't model speaker→mic feedback).
 - Bare "Max" can false-trigger on phrases like "max out" / "max speed"; revisit if

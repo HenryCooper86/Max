@@ -66,7 +66,17 @@ final class MicStreamer {
         }
 
         engine.prepare()
-        try engine.start()
+        do {
+            try engine.start()
+        } catch {
+            // engine.start() failed after the tap was installed. Remove it now:
+            // `running` is still false, so stop() would early-return and a retry
+            // of start() would install a second tap on the same bus and crash.
+            input.removeTap(onBus: 0)
+            converter = nil
+            pending.removeAll(keepingCapacity: true)
+            throw error
+        }
         running = true
     }
 

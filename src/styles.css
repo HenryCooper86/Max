@@ -4,7 +4,7 @@
 :root {
   --bg: #101415;
   --text: #eff6f8;
-  --muted: #99aaa8;
+  --muted: #a7b8b6;
   --accent: #3ee89f;
   --accent-cyan: #5fe9d6;
   --rider: #f26a3d;
@@ -45,6 +45,15 @@ input {
 button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+/* Keyboard-visible focus ring on every interactive control (WCAG 2.4.7).
+   :focus-visible keeps mouse/touch clicks ring-free. */
+button:focus-visible,
+input:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 2px;
 }
 
 /* ============================================================
@@ -1023,6 +1032,7 @@ h2 {
   max-height: 720px;
   overflow-y: auto;
   padding-right: 4px;
+  scroll-behavior: smooth;
 }
 
 .message {
@@ -1212,6 +1222,13 @@ h2 {
   .greenDot {
     animation: none;
   }
+
+  .visorVisualizer span,
+  .message,
+  .transcriptList {
+    transition: none;
+    scroll-behavior: auto;
+  }
 }
 
 /* ADAS proactive hazard alert banner */
@@ -1224,22 +1241,27 @@ h2 {
   border-radius: 14px;
   border: 1px solid var(--danger);
   background: linear-gradient(90deg, rgba(255, 111, 87, 0.22), rgba(255, 111, 87, 0.06));
-  box-shadow: 0 0 0 1px rgba(255, 111, 87, 0.25), 0 12px 30px rgba(255, 111, 87, 0.18);
+  box-shadow:
+    0 0 0 1px rgba(255, 111, 87, 0.25),
+    0 12px 30px rgba(255, 111, 87, 0.18);
   animation: hazardPulse 1s ease-in-out infinite;
 }
 
 .hazardBanner.caution {
   border-color: var(--warn);
   background: linear-gradient(90deg, rgba(242, 193, 78, 0.2), rgba(242, 193, 78, 0.05));
-  box-shadow: 0 0 0 1px rgba(242, 193, 78, 0.22), 0 12px 30px rgba(242, 193, 78, 0.16);
+  box-shadow:
+    0 0 0 1px rgba(242, 193, 78, 0.22),
+    0 12px 30px rgba(242, 193, 78, 0.16);
 }
 
 .hazardDir {
   flex: 0 0 auto;
-  min-width: 56px;
+  min-width: 64px;
   text-align: center;
-  font-weight: 700;
-  font-size: 1.05rem;
+  font-weight: 800;
+  font-size: 1.25rem;
+  letter-spacing: 0.04em;
   padding: 8px 10px;
   border-radius: 10px;
   background: rgba(255, 111, 87, 0.2);
@@ -1281,10 +1303,14 @@ h2 {
 @keyframes hazardPulse {
   0%,
   100% {
-    box-shadow: 0 0 0 1px rgba(255, 111, 87, 0.25), 0 12px 30px rgba(255, 111, 87, 0.18);
+    box-shadow:
+      0 0 0 1px rgba(255, 111, 87, 0.25),
+      0 12px 30px rgba(255, 111, 87, 0.18);
   }
   50% {
-    box-shadow: 0 0 0 2px rgba(255, 111, 87, 0.55), 0 16px 38px rgba(255, 111, 87, 0.32);
+    box-shadow:
+      0 0 0 2px rgba(255, 111, 87, 0.55),
+      0 16px 38px rgba(255, 111, 87, 0.32);
   }
 }
 

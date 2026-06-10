@@ -101,6 +101,18 @@ describe("extractChatText", () => {
       "天气已接入"
     );
   });
+
+  it("stops at the recursion depth limit instead of overflowing on deep payloads", () => {
+    // Build a payload nested far beyond the extraction depth limit.
+    let payload: Record<string, unknown> = { content: "深处文本" };
+    for (let i = 0; i < 5000; i += 1) payload = { data: payload };
+    expect(() => extractChatText(payload)).not.toThrow();
+    expect(extractChatText(payload)).toBe("");
+  });
+
+  it("still extracts text within the allowed nesting depth", () => {
+    expect(extractChatText({ data: { response: { message: { content: "正常深度" } } } })).toBe("正常深度");
+  });
 });
 
 describe("normalizeTranscriptText", () => {

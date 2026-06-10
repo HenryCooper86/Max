@@ -264,24 +264,36 @@ export function parseDoubaoFrame(raw: RawData): ParsedDoubaoFrame {
   };
 }
 
+/** Upper bound for upstream JSON payloads; anything larger is dropped, not parsed. */
+const MAX_JSON_PAYLOAD_BYTES = 1024 * 1024;
+
+/** Stop relaying voice audio to a client whose socket write buffer is this full. */
+const MAX_CLIENT_BUFFERED_BYTES = 4 * 1024 * 1024;
+
+/** Maximum nesting depth explored when mining reply text out of upstream JSON. */
+const MAX_TEXT_EXTRACTION_DEPTH = 8;
+
 function parseJsonPayload(frame: ParsedDoubaoFrame) {
   if (!frame.payload.length || frame.serialization !== SerializationMethod.Json) return {};
+  if (frame.payload.length > MAX_JSON_PAYLOAD_BYTES) {
+    throw new Error("Doubao JSON payload exceeds size limit");
+  }
   return JSON.parse(frame.payload.toString()) as Record<string, unknown>;
 }
 
-function extractTextFields(value: unknown): string[] {
-  if (!value) return [];
+function extractTextFields(value: unknown, depth = 0): string[] {
+  if (!value || depth > MAX_TEXT_EXTRACTION_DEPTH) return [];
   if (typeof value === "string") return [value];
-  if (Array.isArray(value)) return value.flatMap(extractTextFields);
+  if (Array.isArray(value)) return value.flatMap((item) => extractTextFields(item, depth + 1));
   if (typeof value !== "object") return [];
 
   const record = value as Record<string, unknown>;
   const direct = ["content", "text", "sentence", "transcript", "answer", "output_text"].flatMap((key) =>
-    extractTextFields(record[key])
+    extractTextFields(record[key], depth + 1)
   );
   if (direct.length) return direct;
   return ["message", "delta", "result", "response", "output", "choices", "data"].flatMap((key) =>
-    extractTextFields(record[key])
+    extractTextFields(record[key], depth + 1)
   );
 }
 
@@ -341,6 +353,10 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
   let asrStartedAt = 0;
   let chatStartedAt = 0;
   let firstAudioAt = 0;
+  // Mic frames that arrive before the upstream session is ready. Bounded so a
+  // session that never becomes ready cannot grow this without limit — 150
+  // frames is 3 s of 20 ms audio; older frames are dropped first.
+  const MAX_PENDING_AUDIO_FRAMES = 150;
   const pendingAudio: Buffer[] = [];
 
   function sendClient(payload: unknown) {
@@ -491,7 +507,11 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
           receivedTtsAudio = true;
           clearTtsFallbackTimer();
           sendClient({ type: "status", state: "speaking", detail: "已收到豆包语音音频" });
-          if (client.readyState === client.OPEN) client.send(frame.payload, { binary: true });
+          // Backpressure guard: if the client socket cannot drain (slow or stalled
+          // link), drop voice frames instead of queueing them in server memory.
+          if (client.readyState === client.OPEN && client.bufferedAmount < MAX_CLIENT_BUFFERED_BYTES) {
+            client.send(frame.payload, { binary: true });
+          }
           return;
         }
 
@@ -706,8 +726,12 @@ export function createDoubaoProvider(client: WebSocket): AgentProvider {
     },
     async sendAudio(chunk: Buffer) {
       if (upstream && upstream.readyState === WebSocket.OPEN) {
-        if (sessionReady) upstream.send(buildAudioRequest(sessionId, chunk));
-        else pendingAudio.push(chunk);
+        if (sessionReady) {
+          upstream.send(buildAudioRequest(sessionId, chunk));
+        } else {
+          if (pendingAudio.length >= MAX_PENDING_AUDIO_FRAMES) pendingAudio.shift();
+          pendingAudio.push(chunk);
+        }
       }
     },
     async stopAudio() {

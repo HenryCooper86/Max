@@ -64,6 +64,7 @@ relay URL, and self-signed test-server setup.
 - Barge-in: agent speech stops as soon as the rider talks.
 - Automatic WebSocket reconnect with exponential backoff if the relay drops.
 - Startup config validation that warns about missing Doubao credentials.
+- Accessible web HUD — keyboard-visible focus rings on every control, `prefers-reduced-motion` support, and status labels tuned for outdoor glanceability.
 
 ## Tech Stack
 
@@ -117,12 +118,12 @@ All clients use the same `/agent` relay and session contract. The web HUD is the
 implementation; Android and iOS port the same protocol helpers, transcript rules, ride-context
 mapping, audio frame sizes, reconnect behavior, barge-in, and TTS fallback.
 
-| Client  | Location   | UI/audio stack                                     | Local relay URL                                                            | Notes                                                                                 |
-| ------- | ---------- | -------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Web     | `src/`     | React + Web Audio + `AudioWorklet`                 | same-origin `/agent` through Vite proxy                                    | Best for fast iteration, screenshots, and browser mic/TTS behavior.                   |
-| Android | `android/` | Jetpack Compose + `AudioRecord` + `AudioTrack`     | emulator: `ws://10.0.2.2:8787/agent`                                       | Foreground service keeps the mic session alive with screen off.                       |
+| Client  | Location   | UI/audio stack                                                                | Local relay URL                                                            | Notes                                                                                                                     |
+| ------- | ---------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Web     | `src/`     | React + Web Audio + `AudioWorklet`                                            | same-origin `/agent` through Vite proxy                                    | Best for fast iteration, screenshots, and browser mic/TTS behavior.                                                       |
+| Android | `android/` | Jetpack Compose + `AudioRecord` + `AudioTrack`                                | emulator: `ws://10.0.2.2:8787/agent`                                       | Foreground service keeps the mic session alive with screen off.                                                           |
 | iOS     | `ios/`     | SwiftUI + shared `AVAudioEngine` (voice-processing AEC) + `AVAudioPlayerNode` | simulator: `ws://localhost:8787/agent`; device: `wss://3.35.135.136/agent` | Environment-aware default relay; background audio keeps the hands-free session alive; built-in-speaker echo cancellation. |
-| Test    | any client | Browser/mobile client pointed at shared deployment | `wss://3.35.135.136/agent` with self-signed TLS                            | Uses `VOICE_PROVIDER=doubao` and the server's private `.env` values.                  |
+| Test    | any client | Browser/mobile client pointed at shared deployment                            | `wss://3.35.135.136/agent` with self-signed TLS                            | Uses `VOICE_PROVIDER=doubao` and the server's private `.env` values.                                                      |
 
 ### Runtime topology
 
@@ -268,13 +269,13 @@ If location permission is granted, Max greets the ride with real weather and can
 
 ### Demo scenarios
 
-| Scenario | Purpose                         | Typical HUD behavior                                             |
-| -------- | ------------------------------- | ---------------------------------------------------------------- |
-| `通勤`   | Baseline daily ride             | Normal/caution guidance, navigation context, stable telemetry.   |
-| `横风`   | Weather and hazard response     | Elevated weather/ride risk and advice to slow down or stabilize. |
-| `低油`   | Route and resource planning     | Fuel-aware routing prompt, nearby stop style responses.          |
-| `小队`   | Group riding context            | Short coordination-oriented prompts and group safety focus.      |
-| `紧急`   | High-priority safety escalation | Critical tone, stop-safely guidance, concise emergency behavior. |
+| Scenario | Purpose                         | Typical HUD behavior                                                         |
+| -------- | ------------------------------- | ---------------------------------------------------------------------------- |
+| `通勤`   | Baseline daily ride             | Normal/caution guidance, navigation context, stable telemetry.               |
+| `横风`   | Weather and hazard response     | Elevated weather/ride risk and advice to slow down or stabilize.             |
+| `低油`   | Route and resource planning     | Fuel-aware routing prompt, nearby stop style responses.                      |
+| `小队`   | Group riding context            | Short coordination-oriented prompts and group safety focus.                  |
+| `紧急`   | High-priority safety escalation | Critical tone, stop-safely guidance, concise emergency behavior.             |
 | `ADAS`   | ADAS hazard-alert showcase      | Fast-cadence directional alerts (rear/front/sides) that interrupt the agent. |
 
 ### ADAS proactive hazard alerts
@@ -287,7 +288,7 @@ lane departure, tailgating. The catalog lives in `shared/adas.ts`; each alert is
 `interrupt: true`. **Web, iOS, and Android** all react: they cut any in-progress speech, speak the
 warning, and show a pulsing directional banner; the ride-pulse hazard is raised for the duration.
 
-Detection is simulated (no real sensors yet — see *Making ADAS real* below), driven by a shared
+Detection is simulated (no real sensors yet — see _Making ADAS real_ below), driven by a shared
 injector (`server/hazard-injector.ts`) used by **both** providers:
 
 - **Mock** — auto-injects on every session (≈11 s; ≈5 s on the `ADAS` scenario), for HUD demos.
@@ -300,7 +301,7 @@ on a fast cadence — selecting it cycles the full catalog (rear → front → s
 
 ### Making ADAS real
 
-Today the *detections* are simulated; the delivery pipeline (event → interrupt → banner → spoken
+Today the _detections_ are simulated; the delivery pipeline (event → interrupt → banner → spoken
 warning, on all three clients) is production-shaped. To drive it from real hazards, replace the
 injector with a real source — for latency and safety this should run **on-device**, not via the relay:
 phone IMU (hard-brake / crash) + GPS/map (curve, speed limit) need no new hardware; a road-facing
@@ -379,7 +380,7 @@ If these are blank, Max uses a built-in Seoul demo fallback. Real rider coordina
 
 ### Wake word
 
-On the live Doubao path Max only answers when addressed by name — say **"Max"** (see *Hands-free & live weather* above). It is on by default; turn it off so the agent replies to every utterance again:
+On the live Doubao path Max only answers when addressed by name — say **"Max"** (see _Hands-free & live weather_ above). It is on by default; turn it off so the agent replies to every utterance again:
 
 ```bash
 AGENT_WAKE_WORD=off
@@ -447,6 +448,12 @@ Browser-to-server binary messages are 16 kHz PCM16 mono audio frames. When using
 The relay validates client JSON size, event types, enum values, lat/lon ranges, and audio frame
 size before forwarding anything to a provider. Unknown or malformed events return an `error`
 event instead of reaching Doubao.
+
+The upstream direction is bounded too: Doubao JSON payloads over 1 MB are rejected before
+parsing, reply-text extraction stops at a fixed nesting depth (so a pathological payload cannot
+overflow the stack), the pre-session mic buffer is capped at 3 s (oldest frames dropped first),
+and voice audio stops being relayed to a client whose socket write buffer exceeds 4 MB instead
+of queueing in server memory.
 
 ## Scripts
 
@@ -543,6 +550,8 @@ curl -sk https://3.35.135.136/ | sed -n '1,20p'
 - `.env` is ignored by git.
 - Doubao credentials stay on the local server; the browser only talks to the WebSocket relay.
 - Do not commit real API keys, app keys, or access tokens.
+- The relay enforces resource limits in both directions (payload size, text-extraction depth,
+  buffered-audio caps, client backpressure) so one bad session cannot exhaust server memory.
 
 ## Verification
 

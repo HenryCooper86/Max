@@ -223,7 +223,7 @@ If Doubao returns reply _text_ but no audio, the browser falls back to its own `
 ### Hands-free & live weather
 
 - **Hands-free** — activating the session with the main button or Space streams the mic continuously (Doubao's `keep_alive` input mode); Doubao's server-side VAD segments turns, so the rider never taps again. `turnState` (`idle`/`listening`/`hearing`/`thinking`/`speaking`) is derived from server `status` events and drives the helmet's caption and ring colour. Space toggling ignores editable controls so future form inputs are not hijacked.
-- **Wake word ("Max")** — on the live Doubao path the agent only replies when the rider addresses it by name (`shared/wake.ts`). Because Doubao runs ASR internally, the relay can't pre-filter raw audio; instead `doubao.ts` watches the rider transcript and, when it lacks the name, **suppresses Doubao's reply** (drops the agent voice frames + transcript) so chit-chat and passenger talk don't trigger Max. Saying "Max" anywhere in the utterance addresses it (an optional greeting like "Hey"/"你好" is allowed but not required, since ASR often drops it). Once addressed, a 12 s follow-up window (`WAKE_FOLLOWUP_WINDOW_MS`) keeps the conversation open without repeating the name, sliding forward on each rider turn. The matcher tolerates casing, punctuation, and common ASR mishearings, while ignoring the name embedded in a larger word ("maximum"). Disable with `AGENT_WAKE_WORD=off`. The mock provider is unaffected (its scripted demo always responds).
+- **Wake word ("Max")** — on the live Doubao path the agent only replies when the rider addresses it by name (`shared/wake.ts`). Because Doubao runs ASR internally, the relay can't pre-filter raw audio; instead `doubao.ts` watches the rider transcript and, when it lacks the name, **suppresses Doubao's reply** (drops the agent voice frames + transcript) so chit-chat and passenger talk don't trigger Max. Saying "Max" anywhere in the utterance addresses it (an optional greeting like "Hey"/"你好" is allowed but not required, since ASR often drops it). Once addressed, a 12 s follow-up window (`WAKE_FOLLOWUP_WINDOW_MS`) keeps the conversation open without repeating the name, sliding forward on each rider turn. The matcher tolerates casing, punctuation (including CJK punctuation and fullwidth forms like `Ｍａｘ`), common ASR mishearings, the name glued to Chinese text (`max今天路况`), and the Chinese renderings inside unspaced Han runs (`麦克斯今天天气怎么样`), while ignoring the name embedded in a larger word ("maximum"). Disable with `AGENT_WAKE_WORD=off`. The mock provider is unaffected (its scripted demo always responds).
 - **Language policy** — Max speaks Chinese by default, can answer in English, and refuses unsupported languages. Client-side language detection is used for TTS voice selection and transcript labeling; server prompt context enforces the rider-facing behavior.
 - **Agent identity** — when asked who built/developed it, Max attributes itself to **Horizon Continental Technology (neueHCT)** — never the underlying model vendor — and states that the CEO is **Li Biao** (also known as **Stone Li**), consistently in both Chinese and English. Enforced by `buildIdentityPrompt()` in `server/providers/doubao.ts`, which is always appended to the system role even when `DOUBAO_SYSTEM_ROLE` is overridden.
 - **Ride intelligence** — `session.start` carries the selected `rideMode` and `scenario`; `shared/ride.ts` turns that into a safety policy, response style, hazard level, and HUD focus. Doubao receives this as prompt context; the mock provider turns it into scenario-specific transcripts and telemetry. The HUD's `态势摘要` card fuses ride hazard and weather risk into immediate normal / caution / critical rider guidance.
@@ -392,6 +392,21 @@ DEFAULT_RIDER_LON=
 ```
 
 If these are blank, Max uses a built-in Seoul demo fallback. Real rider coordinates always take priority when browser geolocation is granted.
+
+Live sessions also re-fetch weather mid-ride every `WEATHER_REFRESH_MS` (default 10 minutes; `0` disables) and push the update to the HUD and hazard fusion, so a long ride doesn't keep showing the session-start snapshot.
+
+### Relay security
+
+The `/agent` WebSocket holds the path to your Doubao quota, so the relay supports three optional, independently configurable guards (all off by default for local development):
+
+```bash
+RELAY_AUTH_TOKEN=          # shared secret; clients connect with ?token=…
+RELAY_ALLOWED_ORIGINS=     # comma-separated browser Origin allowlist
+RELAY_CONN_PER_MINUTE=30   # WebSocket upgrade attempts per client IP per minute
+RELAY_TRUST_PROXY=off      # read client IP from X-Forwarded-For (behind a proxy only)
+```
+
+When a token is set, the web HUD learns it from a one-time `?token=…` page URL (then remembers it in localStorage), and the native apps take it in the 认证令牌 field in Settings. Origin checks apply only to browsers — native clients send no Origin header and are covered by the token. Rejected upgrades answer `401`/`403`/`429` before the WebSocket is accepted and are logged with the client address. Running the Doubao provider without a token logs a startup warning.
 
 ### Wake word
 
@@ -616,10 +631,13 @@ on a developer machine.
 
 ## Next Steps
 
-1. Add a guided demo ride mode that automatically advances through scenarios and scripted mock turns.
-2. Refresh weather mid-ride and add more agent tools (nearby stops, navigation).
-3. Make the helmet visual respond to fused hazard level, not only turn state.
-4. Add a wake word so the mic need not stream continuously.
-5. Secure the `/agent` relay — access token, origin check, and a per-IP connection cap.
-6. Script the test-server deploy (or wire up GitLab CI once a runner can reach the host).
-7. Replace the Lightsail self-signed certificate with a trusted cert behind a domain name.
+1. Add more agent tools (nearby stops, navigation).
+2. Wire up GitLab CI once a runner can reach the test host (deploy script already exists).
+3. Replace the Lightsail self-signed certificate with a trusted cert behind a domain name.
+4. Replace the simulated ADAS hazard injector with real sensor input + confidence scoring.
+
+Recently shipped (see CHANGELOG): guided demo ride (mock provider scenario tour), mid-ride weather
+refresh, helmet visual driven by the fused hazard level, wake word ("Max") with CJK-robust matching,
+`/agent` relay security (token + origin allowlist + per-IP rate limit), structured per-session server
+logging, adaptive TTS-fallback timeout, transcript persistence on all three clients, and the web
+client refactor into focused hooks.

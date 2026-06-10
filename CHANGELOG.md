@@ -1,5 +1,63 @@
 # Changelog
 
+## 2026-06-10 — Hardening & roadmap sweep
+
+One pass over the improvement backlog: relay security, fresher ride context,
+debuggable server, and quality-of-life features across all three clients.
+
+### Added
+
+- **Relay security** (`server/auth.ts`) — the `/agent` WebSocket upgrade can now
+  require a shared token (`RELAY_AUTH_TOKEN`, sent as `?token=…`; constant-time
+  compare), enforce a browser Origin allowlist (`RELAY_ALLOWED_ORIGINS`), and
+  rate-limit upgrade attempts per client IP (`RELAY_CONN_PER_MINUTE`, sliding
+  window). All three layers are optional so the local demo stays plug-and-play;
+  running `VOICE_PROVIDER=doubao` without a token logs a startup warning. The web
+  HUD picks the token up once from `?token=…` in the page URL and remembers it;
+  iOS/Android get a 认证令牌 field in Settings.
+- **Mid-ride weather refresh** — live sessions re-fetch Open-Meteo on an interval
+  (`WEATHER_REFRESH_MS`, default 10 min) and push the update to the HUD, so a long
+  ride no longer shows the session-start snapshot. (The Doubao system prompt is
+  fixed per session; the agent's own context freshens on the next session.)
+- **Structured per-session server logging** (`server/logger.ts`) — timestamped,
+  level-filtered (`LOG_LEVEL`) lines tagged with a short session id cover the
+  whole relay lifecycle: connects/rejections, Doubao session state, turn
+  telemetry, TTS fallbacks, weather refreshes, errors.
+- **Guided demo ride** — a `demo.guided` client event makes the mock provider
+  tour every scenario automatically (commute → wind → fuel → group → ADAS →
+  emergency, ~14 s per chapter) with HUD context, weather, and hazards following
+  along; the web HUD gets a ▶ 巡游 toggle next to the scenario strip (mock
+  provider only).
+- **Transcript persistence** — web (localStorage), iOS (UserDefaults), and
+  Android (SharedPreferences) keep the most recent 200 conversation turns across
+  restarts, with a 清空 (clear) action.
+
+### Changed
+
+- **Helmet visual reflects fused hazard** — the helmet ring/glow on all three
+  clients now fuses ride-mode hazard, weather risk, and active ADAS alerts:
+  amber for caution, red with an urgent ring pulse for critical, overriding the
+  turn-state palette; the caption calls the danger out first.
+- **Adaptive TTS-fallback timeout** — the wait for Doubao audio before the
+  browser-speech fallback starts from `TTS_FALLBACK_MS` (default 1800 ms) and
+  adapts upward to 1.5× the previous turn's measured first-audio latency, so
+  slow links stop triggering spurious fallbacks.
+- **Wake word handles CJK edge cases** (`shared/wake.ts`) — NFKC folding
+  (fullwidth `Ｍａｘ`), Han↔Latin boundary splitting (`max今天路况`), and the
+  Chinese name variants now match inside unspaced Han runs
+  (`麦克斯今天天气怎么样`); new unit tests cover all three classes.
+- **Web client refactor** — the 1,500-line `src/main.tsx` is split into focused
+  modules with no behavior change: `hooks/useHelmetAgent` (session brain),
+  `hooks/useAudioPlayback`, `hooks/useMicCapture`, `lib/constants`, `lib/speech`,
+  `lib/utils`, `lib/persistence`, `types.ts`, and `App.tsx`; `main.tsx` is now
+  just the bootstrap.
+
+### Docs
+
+- `.env.example` documents the new relay-security and session-behaviour knobs;
+  the README Next Steps list drops everything shipped here (including the stale
+  "add a wake word" item — it already shipped earlier).
+
 ## 2026-06-10 — Helmet centerpiece & unified settings
 
 Follow-up to voice mode: the centerpiece is now the **brand helmet** instead of

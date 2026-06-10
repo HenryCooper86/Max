@@ -21,8 +21,8 @@ Phone (this app)                        Mac / test server
 Voice mode: the brand helmet breathes and glows with the conversation, with a
 single caption and minimal controls. Every setting lives in the 设置 sheet.
 
-| 待机 — 点按头盔                                          | 免提会话（已就绪）                                          | 设置（语音 · 连接 · 场景 · 诊断）                       |
-| -------------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------- |
+| 待机 — 点按头盔                                                    | 免提会话（已就绪）                                               | 设置（语音 · 连接 · 场景 · 诊断）                              |
+| ------------------------------------------------------------------ | ---------------------------------------------------------------- | -------------------------------------------------------------- |
 | ![Android voice mode, idle](../docs/assets/android-voice-idle.png) | ![Android live session](../docs/assets/android-voice-active.png) | ![Android settings sheet](../docs/assets/android-settings.png) |
 
 ## Requirements

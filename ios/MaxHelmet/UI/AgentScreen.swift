@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Captions and orb palette ported from src/components/HelmetVisual.tsx and
+// Captions and palette ported from src/components/HelmetVisual.tsx and
 // android/.../ui/AgentScreen.kt.
 private let turnCaptions: [TurnState: String] = [
     .idle: "待机",
@@ -39,7 +39,7 @@ private func connectionLabel(_ state: ConnectionState) -> String {
     }
 }
 
-/// The orb's hue follows the session: a calm green invites a tap when idle,
+/// The glow's hue follows the session: a calm green invites a tap when idle,
 /// amber while connecting, then the per-turn ring color once live.
 private func orbColor(_ state: AgentSession.State) -> Color {
     guard state.handsFree else { return HudColors.accent }
@@ -50,9 +50,9 @@ private func orbColor(_ state: AgentSession.State) -> Color {
     }
 }
 
-/// The single line under the orb — the only words on the clean screen.
+/// The single line under the helmet — the only words on the clean screen.
 private func orbCaption(_ state: AgentSession.State) -> String {
-    guard state.handsFree else { return "点按光球，开始对话" }
+    guard state.handsFree else { return "点按头盔，开始对话" }
     if state.micMuted { return "麦克风已静音" }
     switch state.connection {
     case .ready: return turnCaptions[state.turnState] ?? ""
@@ -61,10 +61,10 @@ private func orbCaption(_ state: AgentSession.State) -> String {
 }
 
 /// Pure voice-mode main screen, in the spirit of ChatGPT's voice mode: a dark
-/// glow, one big animated orb that breathes with the conversation and swells
-/// with the rider's voice, a single status caption, and minimal controls. The
-/// safety-critical ADAS hazard banner still pins to the top. Rider preferences
-/// and the developer panel open as sheets; captions are optional under the orb.
+/// glow with the helmet centerpiece breathing and glowing with the conversation,
+/// a single status caption, and minimal controls. The safety-critical ADAS hazard
+/// banner pins to the top. All rider + test settings live in the gear sheet;
+/// captions are optional under the helmet.
 struct AgentScreen: View {
     @ObservedObject var viewModel: MainViewModel
     @ObservedObject var session: AgentSession
@@ -78,14 +78,7 @@ struct AgentScreen: View {
             BackgroundGlow(color: color)
 
             VStack(spacing: 14) {
-                StatusPill(
-                    state: state,
-                    devMode: viewModel.devMode,
-                    onLongPress: {
-                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                        viewModel.toggleDevMode()
-                    }
-                )
+                StatusPill(state: state)
 
                 if let alert = state.hazardAlert {
                     HazardBanner(alert: alert).padding(.horizontal, 4)
@@ -93,7 +86,7 @@ struct AgentScreen: View {
 
                 Spacer(minLength: 8)
 
-                VoiceOrb(
+                HelmetVisual(
                     color: color,
                     turnState: state.turnState,
                     voiceLevel: state.voiceLevel,
@@ -101,7 +94,7 @@ struct AgentScreen: View {
                     onTap: viewModel.toggleHandsFree
                 )
 
-                CaptionLine(text: orbCaption(state), color: color)
+                CaptionLine(text: orbCaption(state))
 
                 Spacer(minLength: 8)
 
@@ -125,17 +118,15 @@ struct AgentScreen: View {
         .animation(.easeInOut(duration: 0.25), value: viewModel.showCaptions)
         .animation(.easeInOut(duration: 0.25), value: state.micMuted)
         .sheet(isPresented: $viewModel.showPreferences) {
-            SettingsSheet(title: "偏好设置", detent: .medium) {
-                PreferencesPanel(state: state, viewModel: viewModel)
+            SettingsSheet(title: "设置") {
+                SettingsPanel(state: state, viewModel: viewModel)
             }
-        }
-        .sheet(isPresented: $viewModel.showDevPanel) {
-            SettingsSheet(title: "开发者模式", detent: .large) {
-                DevPanel(state: state, viewModel: viewModel)
+            // Attached to the settings sheet so 导出日志 (tapped from inside it)
+            // can present the share sheet stacked on top — a second .sheet on the
+            // main screen would be blocked while the settings sheet is up.
+            .sheet(item: $viewModel.exportFile) { file in
+                ActivityView(items: [file.url])
             }
-        }
-        .sheet(item: $viewModel.exportFile) { file in
-            ActivityView(items: [file.url])
         }
     }
 }
@@ -158,12 +149,10 @@ private struct BackgroundGlow: View {
     }
 }
 
-// MARK: - top status pill (long-press toggles the developer panel)
+// MARK: - top status pill
 
 private struct StatusPill: View {
     let state: AgentSession.State
-    let devMode: Bool
-    let onLongPress: () -> Void
 
     var body: some View {
         let online = state.connection == .ready
@@ -178,11 +167,6 @@ private struct StatusPill: View {
             Text(connectionLabel(state.connection))
                 .font(.system(size: 13))
                 .foregroundColor(HudColors.muted)
-            if devMode {
-                Text("· 开发者")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(HudColors.accentCyan)
-            }
             if state.bluetoothRouted {
                 Image(systemName: "headphones")
                     .font(.system(size: 11))
@@ -192,9 +176,6 @@ private struct StatusPill: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .background(Capsule().fill(HudColors.panelElevated.opacity(0.7)))
-        .contentShape(Capsule())
-        // Hidden gesture: long-press the status pill to toggle developer mode.
-        .onLongPressGesture(minimumDuration: 0.8, perform: onLongPress)
     }
 }
 
@@ -235,12 +216,13 @@ private struct HazardBanner: View {
     }
 }
 
-// MARK: - voice orb
+// MARK: - helmet centerpiece
 
-/// A glowing, breathing sphere that reacts to the session: it breathes faster
-/// while thinking, ripples outward with the rider's voice level, and shows a
-/// rotating shimmer while Max thinks. Tapping it toggles hands-free.
-private struct VoiceOrb: View {
+/// The brand helmet (shell + chin + visor + status dots), ported from the web
+/// HelmetVisual SVG. A state-tinted halo behind it breathes with the turn state
+/// and ripples outward with the rider's voice; the visor glows while Max listens
+/// or speaks. Tapping it toggles hands-free.
+private struct HelmetVisual: View {
     let color: Color
     let turnState: TurnState
     let voiceLevel: Float
@@ -258,10 +240,10 @@ private struct VoiceOrb: View {
 
     private var pulseAmplitude: Double {
         switch turnState {
-        case .idle: return 0.05
-        case .listening, .hearing: return 0.10
-        case .thinking: return 0.14
-        case .speaking: return 0.17
+        case .idle: return 0.03
+        case .listening, .hearing: return 0.06
+        case .thinking: return 0.08
+        case .speaking: return 0.10
         }
     }
 
@@ -269,61 +251,21 @@ private struct VoiceOrb: View {
         TimelineView(.animation) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
             let level = Double(max(0, min(1, voiceLevel)))
-            let breathe = 0.5 + 0.5 * sin(t * breatheSpeed)          // 0…1
-            let pulse = pulseAmplitude * breathe + 0.28 * level       // swell
-            let coreScale = 1.0 + pulse
+            let breathe = 0.5 + 0.5 * sin(t * breatheSpeed)
+            let pulse = pulseAmplitude * breathe + 0.06 * level
 
-            ZStack {
-                // Outer halo — soft colored bloom.
-                Circle()
-                    .fill(
-                        RadialGradient(
-                            gradient: Gradient(colors: [color.opacity(0.42), .clear]),
-                            center: .center, startRadius: 8, endRadius: 150
-                        )
-                    )
-                    .scaleEffect(1.18 + 0.16 * breathe + 0.30 * level)
-                    .blur(radius: 22)
-
-                // Voice ripple — expands as the rider speaks.
-                Circle()
-                    .stroke(color.opacity(0.5), lineWidth: 2)
-                    .scaleEffect(0.82 + 0.55 * level + 0.08 * breathe)
-                    .opacity(0.15 + 0.7 * level)
-
-                // Core sphere — offset highlight reads as a lit orb.
-                Circle()
-                    .fill(
-                        RadialGradient(
-                            gradient: Gradient(colors: [
-                                Color.white.opacity(0.92),
-                                color,
-                                color.opacity(0.72)
-                            ]),
-                            center: UnitPoint(x: 0.40, y: 0.34),
-                            startRadius: 3, endRadius: 118
-                        )
-                    )
-                    .overlay(Circle().stroke(Color.white.opacity(0.14), lineWidth: 1))
-                    .scaleEffect(coreScale)
-                    .shadow(color: color.opacity(0.55), radius: 28)
-
-                // Thinking shimmer — a rotating highlight arc.
-                if turnState == .thinking {
-                    Circle()
-                        .trim(from: 0, to: 0.28)
-                        .stroke(
-                            Color.white.opacity(0.55),
-                            style: StrokeStyle(lineWidth: 3, lineCap: .round)
-                        )
-                        .rotationEffect(.degrees(t.truncatingRemainder(dividingBy: 2) * 180))
-                        .scaleEffect(coreScale * 1.04)
-                }
+            Canvas { context, size in
+                drawHelmet(
+                    in: &context, size: size, color: color, level: level,
+                    breathe: breathe, pulse: pulse,
+                    listening: turnState == .listening || turnState == .hearing,
+                    speaking: turnState == .speaking
+                )
             }
         }
-        .frame(width: 250, height: 250)
-        .opacity(dimmed ? 0.5 : 1)
-        .contentShape(Circle())
+        .frame(width: 300, height: 300)
+        .opacity(dimmed ? 0.55 : 1)
+        .contentShape(Rectangle())
         .onTapGesture { onTap() }
         .accessibilityElement()
         .accessibilityAddTraits(.isButton)
@@ -331,11 +273,177 @@ private struct VoiceOrb: View {
     }
 }
 
+// Helmet SVG paths (viewBox 0 0 420 270), copied from src/components/HelmetVisual.tsx.
+private let helmetShellPath = "M54 161c4-81 68-132 151-132 93 0 159 61 166 149 2 24-11 45-34 54-45 17-126 26-204 8-50-12-81-39-79-79Z"
+private let helmetChinPath = "M220 167c40 4 82 0 126-12-5 28-18 46-40 54-31 11-66 17-103 17 17-17 22-36 17-59Z"
+private let helmetVisorPath = "M155 88h155c22 0 40 18 40 40v13c-48 18-106 25-178 21-27-1-49-24-49-51 0-13 11-23 32-23Z"
+
+private func drawHelmet(
+    in context: inout GraphicsContext, size: CGSize, color: Color, level: Double,
+    breathe: Double, pulse: Double, listening: Bool, speaking: Bool
+) {
+    let center = CGPoint(x: size.width / 2, y: size.height / 2)
+    // Clamp every glow radius to fit inside the canvas so the radial gradient
+    // fades fully to clear before the edge — otherwise the bounded canvas clips
+    // the growing glow into hard rectangular cuts at the top and bottom.
+    let maxR = min(size.width, size.height) / 2
+
+    // Halo — soft state-tinted bloom behind the helmet.
+    let haloR = min(size.width * 0.34 * (1.0 + 0.16 * breathe + 0.45 * level), maxR)
+    context.fill(
+        Path(ellipseIn: CGRect(x: center.x - haloR, y: center.y - haloR, width: haloR * 2, height: haloR * 2)),
+        with: .radialGradient(
+            Gradient(colors: [color.opacity(0.42 + 0.12 * level), .clear]),
+            center: center, startRadius: 6, endRadius: haloR
+        )
+    )
+    // Voice ripple — expands as the rider speaks.
+    let rippleR = min(size.width * 0.30 * (0.92 + 0.5 * level), maxR * 0.95)
+    context.stroke(
+        Path(ellipseIn: CGRect(x: center.x - rippleR, y: center.y - rippleR, width: rippleR * 2, height: rippleR * 2)),
+        with: .color(color.opacity(0.12 + 0.5 * level)), lineWidth: 2
+    )
+
+    // Helmet, scaled to fit and breathing about the canvas center.
+    let baseScale = size.width / 420 * 0.74
+    let s = baseScale * (1.0 + pulse)
+    context.translateBy(x: (size.width - 420 * s) / 2, y: (size.height - 270 * s) / 2)
+    context.scaleBy(x: s, y: s)
+
+    context.fill(
+        svgPath(helmetShellPath),
+        with: .linearGradient(
+            Gradient(colors: [Color(hex: 0xF6F9F6), Color(hex: 0xCDD6D1), Color(hex: 0x8B9893)]),
+            startPoint: CGPoint(x: 120, y: 28), endPoint: CGPoint(x: 150, y: 215)
+        )
+    )
+    context.fill(
+        svgPath(helmetChinPath),
+        with: .linearGradient(
+            Gradient(colors: [Color(hex: 0x8B9B97), Color(hex: 0x5D6B68)]),
+            startPoint: CGPoint(x: 283, y: 160), endPoint: CGPoint(x: 283, y: 240)
+        )
+    )
+    let visor = svgPath(helmetVisorPath)
+    context.fill(
+        visor,
+        with: .linearGradient(
+            Gradient(colors: [Color(hex: 0x3C5B60), Color(hex: 0x1E3539), Color(hex: 0x11252A)]),
+            startPoint: CGPoint(x: 232, y: 88), endPoint: CGPoint(x: 232, y: 165)
+        )
+    )
+    // Visor state glow — tints the visor while Max listens or speaks.
+    let visorGlow = (speaking ? 0.42 : (listening ? 0.30 : 0.10)) * (0.55 + 0.45 * level)
+    context.fill(visor, with: .color(color.opacity(visorGlow)))
+    // Visor glare highlight.
+    context.fill(
+        Path(ellipseIn: CGRect(x: 206 - 58, y: 106 - 11, width: 116, height: 22)),
+        with: .color(.white.opacity(0.12))
+    )
+    // Mic + status dots.
+    context.fill(
+        Path(ellipseIn: CGRect(x: 258 - 9, y: 205 - 9, width: 18, height: 18)),
+        with: .color(listening ? HudColors.accentCyan : HudColors.muted)
+    )
+    context.fill(
+        Path(ellipseIn: CGRect(x: 282 - 9, y: 205 - 9, width: 18, height: 18)),
+        with: .color(color)
+    )
+}
+
+// MARK: - minimal SVG path parser (supports M/m L/l H/h V/v C/c Z)
+
+private func svgPath(_ d: String) -> Path {
+    var path = Path()
+    let tokens = svgTokens(d)
+    var i = 0
+    var current = CGPoint.zero
+    var start = CGPoint.zero
+    var cmd: Character = " "
+
+    func num(_ k: Int) -> CGFloat {
+        guard k < tokens.count, case let .number(v) = tokens[k] else { return 0 }
+        return v
+    }
+
+    while i < tokens.count {
+        switch tokens[i] {
+        case .command(let c):
+            cmd = c
+            i += 1
+            if c == "Z" || c == "z" {
+                path.closeSubpath()
+                current = start
+            }
+        case .number:
+            switch cmd {
+            case "M":
+                current = CGPoint(x: num(i), y: num(i + 1)); i += 2
+                start = current; path.move(to: current); cmd = "L"
+            case "m":
+                current = CGPoint(x: current.x + num(i), y: current.y + num(i + 1)); i += 2
+                start = current; path.move(to: current); cmd = "l"
+            case "L":
+                current = CGPoint(x: num(i), y: num(i + 1)); i += 2; path.addLine(to: current)
+            case "l":
+                current = CGPoint(x: current.x + num(i), y: current.y + num(i + 1)); i += 2; path.addLine(to: current)
+            case "H": current = CGPoint(x: num(i), y: current.y); i += 1; path.addLine(to: current)
+            case "h": current = CGPoint(x: current.x + num(i), y: current.y); i += 1; path.addLine(to: current)
+            case "V": current = CGPoint(x: current.x, y: num(i)); i += 1; path.addLine(to: current)
+            case "v": current = CGPoint(x: current.x, y: current.y + num(i)); i += 1; path.addLine(to: current)
+            case "C":
+                let c1 = CGPoint(x: num(i), y: num(i + 1))
+                let c2 = CGPoint(x: num(i + 2), y: num(i + 3))
+                let end = CGPoint(x: num(i + 4), y: num(i + 5)); i += 6
+                path.addCurve(to: end, control1: c1, control2: c2); current = end
+            case "c":
+                let c1 = CGPoint(x: current.x + num(i), y: current.y + num(i + 1))
+                let c2 = CGPoint(x: current.x + num(i + 2), y: current.y + num(i + 3))
+                let end = CGPoint(x: current.x + num(i + 4), y: current.y + num(i + 5)); i += 6
+                path.addCurve(to: end, control1: c1, control2: c2); current = end
+            default:
+                i += 1
+            }
+        }
+    }
+    return path
+}
+
+private enum SVGToken { case command(Character); case number(CGFloat) }
+
+private func svgTokens(_ s: String) -> [SVGToken] {
+    var out: [SVGToken] = []
+    let chars = Array(s)
+    let n = chars.count
+    let commands = Set("MmLlHhVvCcSsQqTtAaZz")
+    var i = 0
+    while i < n {
+        let c = chars[i]
+        if c == " " || c == "," || c == "\n" || c == "\t" { i += 1; continue }
+        if commands.contains(c) { out.append(.command(c)); i += 1; continue }
+        var j = i
+        if chars[j] == "+" || chars[j] == "-" { j += 1 }
+        while j < n && chars[j].isNumber { j += 1 }
+        if j < n && chars[j] == "." { j += 1; while j < n && chars[j].isNumber { j += 1 } }
+        if j < n && (chars[j] == "e" || chars[j] == "E") {
+            j += 1
+            if j < n && (chars[j] == "+" || chars[j] == "-") { j += 1 }
+            while j < n && chars[j].isNumber { j += 1 }
+        }
+        if j > i, let v = Double(String(chars[i..<j])) {
+            out.append(.number(CGFloat(v)))
+            i = j
+        } else {
+            i += 1
+        }
+    }
+    return out
+}
+
 // MARK: - caption line
 
 private struct CaptionLine: View {
     let text: String
-    let color: Color
 
     var body: some View {
         Text(text)
@@ -393,7 +501,7 @@ private struct CaptionsOverlay: View {
     }
 }
 
-// MARK: - secondary controls (字幕 · 偏好 · 开发者)
+// MARK: - secondary controls (字幕 · 设置)
 
 private struct SecondaryControls: View {
     @ObservedObject var viewModel: MainViewModel
@@ -408,13 +516,7 @@ private struct SecondaryControls: View {
 
             Spacer(minLength: 0)
 
-            if viewModel.devMode {
-                PillToggle(icon: "wrench.and.screwdriver", label: "开发", on: false) {
-                    viewModel.showDevPanel = true
-                }
-            }
-
-            PillToggle(icon: "gearshape.fill", label: "偏好", on: false) {
+            PillToggle(icon: "gearshape.fill", label: "设置", on: false) {
                 viewModel.showPreferences = true
             }
         }
@@ -514,7 +616,6 @@ private struct CircleControl: View {
 
 private struct SettingsSheet<Content: View>: View {
     let title: String
-    let detent: PresentationDetent
     @ViewBuilder let content: Content
     @Environment(\.dismiss) private var dismiss
 
@@ -535,20 +636,21 @@ private struct SettingsSheet<Content: View>: View {
             .padding(18)
         }
         .background(HudColors.background)
-        .presentationDetents([detent])
+        .presentationDetents([.large])
         .presentationDragIndicator(.visible)
         .presentationBackground(HudColors.background)
     }
 }
 
-// MARK: - rider preferences
+// MARK: - settings (voice · connection · demo · diagnostics)
 
-private struct PreferencesPanel: View {
+private struct SettingsPanel: View {
     let state: AgentSession.State
     @ObservedObject var viewModel: MainViewModel
 
     var body: some View {
-        HudCard {
+        // Rider voice preferences.
+        SectionCard(title: "语音") {
             ChipRow(label: "声音") {
                 ForEach(VoiceGender.allCases, id: \.self) { gender in
                     HudChip(label: gender.label, selected: state.voiceGender == gender) {
@@ -572,6 +674,91 @@ private struct PreferencesPanel: View {
                     ) { viewModel.setRideMode(mode) }
                 }
             }
+        }
+
+        // Server / relay connection.
+        SectionCard(title: "连接") {
+            if state.handsFree {
+                Text("当前服务器：\(viewModel.relayURL)")
+                    .font(.system(size: 12))
+                    .foregroundColor(HudColors.muted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text("结束免提后可修改服务器地址。")
+                    .font(.system(size: 11))
+                    .foregroundColor(HudColors.muted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Text("语音中继地址（ws:// 或 wss://）")
+                    .font(.system(size: 11)).foregroundColor(HudColors.muted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                TextField("语音中继地址", text: $viewModel.relayURL)
+                    .font(.system(size: 14))
+                    .foregroundColor(HudColors.text)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled(true)
+                    .padding(12)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(HudColors.panelElevated))
+                HStack {
+                    Text("信任自签名证书（测试服务器）")
+                        .font(.system(size: 12)).foregroundColor(HudColors.muted)
+                    Spacer()
+                    Toggle("", isOn: $viewModel.allowSelfSigned)
+                        .labelsHidden()
+                        .tint(HudColors.accent)
+                }
+            }
+        }
+
+        // Demo scenarios (ADAS hazard injection).
+        SectionCard(title: "演示场景") {
+            ChipRow(label: "场景") {
+                ForEach(DemoScenario.allCases, id: \.self) { scenario in
+                    HudChip(
+                        label: scenario.label,
+                        selected: state.rideContext.scenario == scenario,
+                        selectedColor: hazardColor(scenario.hazard)
+                    ) { viewModel.setScenario(scenario) }
+                }
+            }
+        }
+
+        // Diagnostics: latency, telemetry, transcript export, raw status.
+        SectionCard(title: "诊断") {
+            let toneColor: Color = state.latencyMs < 140
+                ? HudColors.accent
+                : (state.latencyMs < 280 ? HudColors.warn : HudColors.danger)
+            HStack {
+                Text("延迟").font(.system(size: 11)).foregroundColor(HudColors.muted)
+                Text("\(state.latencyMs)ms")
+                    .font(.system(size: 12, weight: .bold)).foregroundColor(toneColor)
+                Spacer()
+                HudChip(label: "导出日志", selected: !state.transcript.isEmpty, selectedColor: HudColors.accentCyan) {
+                    if !state.transcript.isEmpty { viewModel.exportTranscript() }
+                }
+            }
+            if let telemetry = state.telemetry {
+                Text("ASR \(telemetry.asrMs) · 思考 \(telemetry.thinkMs) · 首音 \(telemetry.firstAudioMs) · 总计 \(telemetry.totalMs)ms")
+                    .font(.system(size: 11)).foregroundColor(HudColors.muted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Text(state.statusText)
+                .font(.system(size: 12))
+                .foregroundColor(HudColors.muted)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+private struct SectionCard<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        HudCard {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(HudColors.muted)
+            content
         }
     }
 }
@@ -648,77 +835,6 @@ private struct ChatBubble: View {
                 }
             }
             if !isRider { Spacer(minLength: 40) }
-        }
-    }
-}
-
-// MARK: - developer panel (open from the wrench when developer mode is on)
-
-private struct DevPanel: View {
-    let state: AgentSession.State
-    @ObservedObject var viewModel: MainViewModel
-
-    var body: some View {
-        HudCard(borderColor: HudColors.accentCyan.opacity(0.4)) {
-            HStack {
-                Text("会话与遥测")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(HudColors.accentCyan)
-                Spacer()
-                HudChip(label: "导出日志", selected: !state.transcript.isEmpty, selectedColor: HudColors.accentCyan) {
-                    if !state.transcript.isEmpty { viewModel.exportTranscript() }
-                }
-            }
-
-            Text(state.statusText)
-                .font(.system(size: 12))
-                .foregroundColor(HudColors.muted)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            ChipRow(label: "场景") {
-                ForEach(DemoScenario.allCases, id: \.self) { scenario in
-                    HudChip(
-                        label: scenario.label,
-                        selected: state.rideContext.scenario == scenario,
-                        selectedColor: hazardColor(scenario.hazard)
-                    ) { viewModel.setScenario(scenario) }
-                }
-            }
-
-            // latencyTone in src/main.tsx: <140 good, <280 warn, else alert.
-            let toneColor: Color = state.latencyMs < 140
-                ? HudColors.accent
-                : (state.latencyMs < 280 ? HudColors.warn : HudColors.danger)
-            HStack {
-                Text("延迟").font(.system(size: 11)).foregroundColor(HudColors.muted)
-                Text("\(state.latencyMs)ms")
-                    .font(.system(size: 12, weight: .bold)).foregroundColor(toneColor)
-                Spacer()
-                if let telemetry = state.telemetry {
-                    Text("ASR \(telemetry.asrMs) · 思考 \(telemetry.thinkMs) · 首音 \(telemetry.firstAudioMs) · 总计 \(telemetry.totalMs)ms")
-                        .font(.system(size: 11)).foregroundColor(HudColors.muted)
-                }
-            }
-            .padding(.top, 2)
-
-            if !state.handsFree {
-                TextField("语音中继地址（ws:// 或 wss://）", text: $viewModel.relayURL)
-                    .font(.system(size: 14))
-                    .foregroundColor(HudColors.text)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled(true)
-                    .padding(12)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(HudColors.panelElevated))
-
-                HStack {
-                    Text("信任自签名证书（测试服务器）")
-                        .font(.system(size: 12)).foregroundColor(HudColors.muted)
-                    Spacer()
-                    Toggle("", isOn: $viewModel.allowSelfSigned)
-                        .labelsHidden()
-                        .tint(HudColors.accent)
-                }
-            }
         }
     }
 }

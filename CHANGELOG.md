@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-06-10 — Helmet centerpiece & unified settings
+
+Follow-up to voice mode: the centerpiece is now the **brand helmet** instead of
+the abstract orb, and every setting lives in one place again.
+
+### Changed
+
+- **iOS & Android: helmet centerpiece** — the glowing orb is replaced by the
+  brand helmet (shell + chin + visor + status dots), ported from the web
+  `HelmetVisual` SVG and drawn natively (a small SVG-path parser feeds SwiftUI
+  `Path` / Compose `Path`). The state-tinted halo still breathes with the turn
+  state and ripples with the rider's voice, and the visor glows while Max listens
+  or speaks. Tapping the helmet toggles hands-free.
+- **Unified 设置 (Settings) sheet** — the gear now opens a single settings sheet
+  with everything that briefly went missing: **语音** (声音 / 语气 / 模式),
+  **连接** (语音中继地址 server address + 信任自签名证书 trust toggle),
+  **演示场景** (demo scenarios), and **诊断** (延迟 latency, telemetry, 导出日志
+  export, raw status). The separate developer-panel long-press gesture is gone —
+  nothing is hidden anymore.
+
+### Fixed
+
+- **Helmet glow no longer clips** — the reactive halo is clamped to the canvas so
+  its radial gradient fades fully to transparent before the edge; growing the glow
+  no longer shows hard rectangular cuts at the top and bottom.
+- **Transcript export is shareable from Settings** — on iOS the 导出日志 share
+  sheet is now presented from the settings sheet (it was attached to the main
+  screen, so it couldn't open while Settings was up). The JSON transcript can be
+  AirDropped / saved / mailed for review from both clients.
+
 ## 2026-06-10 — Voice mode
 
 A ground-up redesign of the iOS and Android main screens into a "pure voice

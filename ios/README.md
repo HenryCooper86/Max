@@ -57,10 +57,8 @@ explicit `DEVELOPER_DIR` command above or switch the machine to full Xcode with 
 
 1. Start the relay on the Mac: `npm run dev:server` (or `npm run dev`) from the repo root.
    The server listens on `0.0.0.0:8787`, so it is reachable over the LAN.
-2. Launch the app. The 语音中继地址 field lives in the hidden developer panel — **long-press
-   the status pill** (the `Max · 已就绪` chip at the top) to enable developer mode, then tap the
-   **开发** (wrench) button that appears in the control row to open it (persisted; long-press the
-   pill again to hide developer mode). The
+2. Launch the app. Tap the **设置** (gear) button at the bottom to open the settings sheet; the
+   **连接** section holds the 语音中继地址 field. The
    field is prefilled from an environment-aware default (`MainViewModel.defaultRelayURL`) —
    override it for any of the rows below:
 

@@ -11,7 +11,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -45,6 +44,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -53,12 +53,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -80,7 +77,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-// Captions and orb palette ported from src/components/HelmetVisual.tsx.
+// Captions and palette ported from src/components/HelmetVisual.tsx.
 private val TURN_CAPTIONS = mapOf(
     TurnState.IDLE to "待机",
     TurnState.LISTENING to "免提待命 · 请讲话",
@@ -114,7 +111,7 @@ private fun connectionLabel(state: ConnectionState): String = when (state) {
     ConnectionState.DEGRADED -> "降级"
 }
 
-/** The orb's hue follows the session: a calm green invites a tap when idle,
+/** The glow's hue follows the session: a calm green invites a tap when idle,
  * amber while connecting, then the per-turn ring color once live. */
 private fun orbColor(state: AgentSession.State): Color {
     if (!state.handsFree) return HudColors.Accent
@@ -125,9 +122,9 @@ private fun orbColor(state: AgentSession.State): Color {
     }
 }
 
-/** The single line under the orb — the only words on the clean screen. */
+/** The single line under the helmet — the only words on the clean screen. */
 private fun orbCaption(state: AgentSession.State): String {
-    if (!state.handsFree) return "点按光球，开始对话"
+    if (!state.handsFree) return "点按头盔，开始对话"
     if (state.micMuted) return "麦克风已静音"
     return when (state.connection) {
         ConnectionState.READY -> TURN_CAPTIONS.getValue(state.turnState)
@@ -136,11 +133,11 @@ private fun orbCaption(state: AgentSession.State): String {
 }
 
 /**
- * Pure voice-mode main screen, in the spirit of ChatGPT's voice mode: a dark
- * glow, one big animated orb that breathes with the conversation and swells with
- * the rider's voice, a single status caption, and minimal controls. The
- * safety-critical ADAS hazard banner still pins to the top. Rider preferences and
- * the developer panel open as bottom sheets; captions are optional under the orb.
+ * Pure voice-mode main screen, in the spirit of ChatGPT's voice mode: a dark glow
+ * with the brand helmet centerpiece breathing and glowing with the conversation,
+ * a single status caption, and minimal controls. The safety-critical ADAS hazard
+ * banner pins to the top. All rider + test settings live in the gear sheet;
+ * captions are optional under the helmet.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -158,7 +155,6 @@ fun AgentScreen(
             .background(HudColors.Background),
         contentAlignment = Alignment.TopCenter
     ) {
-        // Soft state-tinted glow behind everything.
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -174,7 +170,7 @@ fun AgentScreen(
                 .padding(horizontal = 20.dp, vertical = 14.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            StatusPill(state = state, devMode = viewModel.devMode, onToggleDevMode = viewModel::toggleDevMode)
+            StatusPill(state = state)
 
             state.hazardAlert?.let {
                 Spacer(Modifier.height(12.dp))
@@ -183,7 +179,7 @@ fun AgentScreen(
 
             Spacer(Modifier.weight(1f))
 
-            VoiceOrb(
+            HelmetVisual(
                 color = color,
                 turnState = state.turnState,
                 voiceLevel = state.voiceLevel,
@@ -217,36 +213,20 @@ fun AgentScreen(
             onDismissRequest = { viewModel.showPreferences = false },
             containerColor = HudColors.Background
         ) {
-            SheetContent("偏好设置") { PreferencesPanel(state, viewModel) }
-        }
-    }
-    if (viewModel.showDevPanel) {
-        ModalBottomSheet(
-            onDismissRequest = { viewModel.showDevPanel = false },
-            containerColor = HudColors.Background
-        ) {
-            SheetContent("开发者模式") { DevPanel(state, viewModel, onExportTranscript) }
+            SheetContent("设置") { SettingsPanel(state, viewModel, onExportTranscript) }
         }
     }
 }
 
-// ---- top status pill (long-press toggles the developer panel) ----------------------
+// ---- top status pill -----------------------------------------------------------------
 
 @Composable
-private fun StatusPill(state: AgentSession.State, devMode: Boolean, onToggleDevMode: () -> Unit) {
-    val haptics = LocalHapticFeedback.current
+private fun StatusPill(state: AgentSession.State) {
     val online = state.connection == ConnectionState.READY
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(50))
             .background(HudColors.PanelElevated.copy(alpha = 0.7f))
-            .pointerInput(Unit) {
-                // Hidden gesture: long-press the status pill to toggle developer mode.
-                detectTapGestures(onLongPress = {
-                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                    onToggleDevMode()
-                })
-            }
             .padding(horizontal = 14.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(7.dp)
@@ -260,24 +240,27 @@ private fun StatusPill(state: AgentSession.State, devMode: Boolean, onToggleDevM
         Text("Max", color = HudColors.Text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
         Text("·", color = HudColors.Muted, fontSize = 13.sp)
         Text(connectionLabel(state.connection), color = HudColors.Muted, fontSize = 13.sp)
-        if (devMode) {
-            Text("· 开发者", color = HudColors.AccentCyan, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-        }
         if (state.bluetoothRouted) {
             Text("🎧", fontSize = 11.sp)
         }
     }
 }
 
-// ---- voice orb --------------------------------------------------------------------
+// ---- helmet centerpiece --------------------------------------------------------------
+
+// Helmet SVG paths (viewBox 0 0 420 270), copied from src/components/HelmetVisual.tsx.
+private const val HELMET_SHELL = "M54 161c4-81 68-132 151-132 93 0 159 61 166 149 2 24-11 45-34 54-45 17-126 26-204 8-50-12-81-39-79-79Z"
+private const val HELMET_CHIN = "M220 167c40 4 82 0 126-12-5 28-18 46-40 54-31 11-66 17-103 17 17-17 22-36 17-59Z"
+private const val HELMET_VISOR = "M155 88h155c22 0 40 18 40 40v13c-48 18-106 25-178 21-27-1-49-24-49-51 0-13 11-23 32-23Z"
 
 /**
- * A glowing, breathing sphere that reacts to the session: it breathes faster
- * while thinking, ripples outward with the rider's voice level, and shows a
- * rotating shimmer while Max thinks. Tapping it toggles hands-free.
+ * The brand helmet (shell + chin + visor + status dots), ported from the web
+ * HelmetVisual SVG. A state-tinted halo behind it breathes with the turn state and
+ * ripples outward with the rider's voice; the visor glows while Max listens or
+ * speaks. Tapping it toggles hands-free.
  */
 @Composable
-private fun VoiceOrb(
+private fun HelmetVisual(
     color: Color,
     turnState: TurnState,
     voiceLevel: Float,
@@ -291,43 +274,44 @@ private fun VoiceOrb(
         TurnState.SPEAKING -> 1000
     }
     val pulseAmp = when (turnState) {
-        TurnState.IDLE -> 0.05f
-        TurnState.LISTENING, TurnState.HEARING -> 0.10f
-        TurnState.THINKING -> 0.14f
-        TurnState.SPEAKING -> 0.17f
+        TurnState.IDLE -> 0.03f
+        TurnState.LISTENING, TurnState.HEARING -> 0.06f
+        TurnState.THINKING -> 0.08f
+        TurnState.SPEAKING -> 0.10f
     }
+    val listening = turnState == TurnState.LISTENING || turnState == TurnState.HEARING
+    val speaking = turnState == TurnState.SPEAKING
 
-    val transition = rememberInfiniteTransition(label = "orb")
-    val breathe by transition.animateFloat(
+    val breathe by rememberInfiniteTransition(label = "helmet").animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(tween(breatheDuration, easing = LinearEasing), RepeatMode.Reverse),
         label = "breathe"
     )
-    val spin by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(tween(1400, easing = LinearEasing), RepeatMode.Restart),
-        label = "spin"
-    )
+
+    val shell = remember { svgToPath(HELMET_SHELL) }
+    val chin = remember { svgToPath(HELMET_CHIN) }
+    val visor = remember { svgToPath(HELMET_VISOR) }
 
     Canvas(
         modifier = Modifier
-            .size(250.dp)
-            .clip(CircleShape)
-            .alpha(if (dimmed) 0.5f else 1f)
+            .size(300.dp)
+            .alpha(if (dimmed) 0.55f else 1f)
             .clickable(onClick = onTap)
     ) {
-        val c = center
         val level = voiceLevel.coerceIn(0f, 1f)
-        val base = size.minDimension * 0.30f
-        val coreScale = 1f + pulseAmp * breathe + 0.28f * level
+        val pulse = pulseAmp * breathe + 0.06f * level
+        val c = center
+        // Clamp every glow radius to fit inside the canvas so the radial gradient
+        // fades fully to clear before the edge — otherwise the bounded canvas clips
+        // the growing glow into hard rectangular cuts at the top and bottom.
+        val maxR = minOf(size.width, size.height) / 2f
 
-        // Outer halo — soft colored bloom.
-        val haloR = base * (1.55f + 0.18f * breathe + 0.30f * level)
+        // Halo — soft state-tinted bloom behind the helmet.
+        val haloR = minOf(size.width * 0.34f * (1f + 0.16f * breathe + 0.45f * level), maxR)
         drawCircle(
             brush = Brush.radialGradient(
-                colors = listOf(color.copy(alpha = 0.42f), Color.Transparent),
+                colors = listOf(color.copy(alpha = 0.42f + 0.12f * level), Color.Transparent),
                 center = c,
                 radius = haloR
             ),
@@ -336,47 +320,143 @@ private fun VoiceOrb(
         )
         // Voice ripple — expands as the rider speaks.
         drawCircle(
-            color = color.copy(alpha = 0.15f + 0.7f * level),
-            radius = base * (0.95f + 0.55f * level),
+            color = color.copy(alpha = 0.12f + 0.5f * level),
+            radius = minOf(size.width * 0.30f * (0.92f + 0.5f * level), maxR * 0.95f),
             center = c,
             style = Stroke(width = 2.dp.toPx())
         )
-        // Core sphere — offset highlight reads as a lit orb.
-        val coreR = base * coreScale
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(Color.White.copy(alpha = 0.92f), color, color.copy(alpha = 0.72f)),
-                center = Offset(c.x - base * 0.22f, c.y - base * 0.28f),
-                radius = coreR * 1.15f
-            ),
-            radius = coreR,
-            center = c
-        )
-        drawCircle(
-            color = Color.White.copy(alpha = 0.14f),
-            radius = coreR,
-            center = c,
-            style = Stroke(width = 1.dp.toPx())
-        )
-        // Thinking shimmer — a rotating highlight arc.
-        if (turnState == TurnState.THINKING) {
-            rotate(spin, pivot = c) {
-                val r = coreR * 1.04f
-                drawArc(
-                    color = Color.White.copy(alpha = 0.55f),
-                    startAngle = 0f,
-                    sweepAngle = 100f,
-                    useCenter = false,
-                    topLeft = Offset(c.x - r, c.y - r),
-                    size = Size(r * 2f, r * 2f),
-                    style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round)
+
+        // Helmet, scaled to fit and breathing about the canvas center.
+        val s = (size.width / 420f * 0.74f) * (1f + pulse)
+        val tx = (size.width - 420f * s) / 2f
+        val ty = (size.height - 270f * s) / 2f
+        withTransform({ translate(tx, ty); scale(s, s, pivot = Offset.Zero) }) {
+            drawPath(
+                shell,
+                brush = Brush.linearGradient(
+                    colors = listOf(Color(0xFFF6F9F6), Color(0xFFCDD6D1), Color(0xFF8B9893)),
+                    start = Offset(120f, 28f), end = Offset(150f, 215f)
                 )
-            }
+            )
+            drawPath(
+                chin,
+                brush = Brush.linearGradient(
+                    colors = listOf(Color(0xFF8B9B97), Color(0xFF5D6B68)),
+                    start = Offset(283f, 160f), end = Offset(283f, 240f)
+                )
+            )
+            drawPath(
+                visor,
+                brush = Brush.linearGradient(
+                    colors = listOf(Color(0xFF3C5B60), Color(0xFF1E3539), Color(0xFF11252A)),
+                    start = Offset(232f, 88f), end = Offset(232f, 165f)
+                )
+            )
+            // Visor state glow — tints the visor while Max listens or speaks.
+            val visorGlow = (if (speaking) 0.42f else if (listening) 0.30f else 0.10f) * (0.55f + 0.45f * level)
+            drawPath(visor, color = color.copy(alpha = visorGlow))
+            // Visor glare highlight.
+            drawOval(
+                color = Color.White.copy(alpha = 0.12f),
+                topLeft = Offset(206f - 58f, 106f - 11f),
+                size = Size(116f, 22f)
+            )
+            // Mic + status dots.
+            drawCircle(if (listening) HudColors.AccentCyan else HudColors.Muted, radius = 9f, center = Offset(258f, 205f))
+            drawCircle(color, radius = 9f, center = Offset(282f, 205f))
         }
     }
 }
 
-// ---- secondary controls (字幕 · 偏好 · 开发者) ---------------------------------------
+/** Minimal SVG path parser (supports M/m L/l H/h V/v C/c Z) → Compose Path. */
+private fun svgToPath(d: String): Path {
+    val path = Path()
+    val tokens = svgTokens(d)
+    var i = 0
+    var curX = 0f
+    var curY = 0f
+    var startX = 0f
+    var startY = 0f
+    var cmd = ' '
+
+    fun num(k: Int): Float = (tokens.getOrNull(k) as? SvgToken.Num)?.v ?: 0f
+
+    while (i < tokens.size) {
+        when (val tok = tokens[i]) {
+            is SvgToken.Cmd -> {
+                cmd = tok.c
+                i++
+                if (cmd == 'Z' || cmd == 'z') {
+                    path.close()
+                    curX = startX; curY = startY
+                }
+            }
+            is SvgToken.Num -> {
+                when (cmd) {
+                    'M' -> {
+                        curX = num(i); curY = num(i + 1); i += 2
+                        startX = curX; startY = curY; path.moveTo(curX, curY); cmd = 'L'
+                    }
+                    'm' -> {
+                        curX += num(i); curY += num(i + 1); i += 2
+                        startX = curX; startY = curY; path.moveTo(curX, curY); cmd = 'l'
+                    }
+                    'L' -> { curX = num(i); curY = num(i + 1); i += 2; path.lineTo(curX, curY) }
+                    'l' -> { curX += num(i); curY += num(i + 1); i += 2; path.lineTo(curX, curY) }
+                    'H' -> { curX = num(i); i += 1; path.lineTo(curX, curY) }
+                    'h' -> { curX += num(i); i += 1; path.lineTo(curX, curY) }
+                    'V' -> { curY = num(i); i += 1; path.lineTo(curX, curY) }
+                    'v' -> { curY += num(i); i += 1; path.lineTo(curX, curY) }
+                    'C' -> {
+                        path.cubicTo(num(i), num(i + 1), num(i + 2), num(i + 3), num(i + 4), num(i + 5))
+                        curX = num(i + 4); curY = num(i + 5); i += 6
+                    }
+                    'c' -> {
+                        path.cubicTo(
+                            curX + num(i), curY + num(i + 1),
+                            curX + num(i + 2), curY + num(i + 3),
+                            curX + num(i + 4), curY + num(i + 5)
+                        )
+                        curX += num(i + 4); curY += num(i + 5); i += 6
+                    }
+                    else -> i++
+                }
+            }
+        }
+    }
+    return path
+}
+
+private sealed interface SvgToken {
+    data class Cmd(val c: Char) : SvgToken
+    data class Num(val v: Float) : SvgToken
+}
+
+private fun svgTokens(s: String): List<SvgToken> {
+    val out = ArrayList<SvgToken>()
+    val commands = "MmLlHhVvCcSsQqTtAaZz"
+    var i = 0
+    val n = s.length
+    while (i < n) {
+        val c = s[i]
+        if (c == ' ' || c == ',' || c == '\n' || c == '\t') { i++; continue }
+        if (c in commands) { out.add(SvgToken.Cmd(c)); i++; continue }
+        var j = i
+        if (s[j] == '+' || s[j] == '-') j++
+        while (j < n && s[j].isDigit()) j++
+        if (j < n && s[j] == '.') { j++; while (j < n && s[j].isDigit()) j++ }
+        if (j < n && (s[j] == 'e' || s[j] == 'E')) {
+            j++
+            if (j < n && (s[j] == '+' || s[j] == '-')) j++
+            while (j < n && s[j].isDigit()) j++
+        }
+        val v = if (j > i) s.substring(i, j).toFloatOrNull() else null
+        if (v != null) { out.add(SvgToken.Num(v)); i = j } else i++
+    }
+    return out
+}
+
+// ---- secondary controls (字幕 · 设置) ------------------------------------------------
 
 @Composable
 private fun SecondaryControls(viewModel: MainViewModel) {
@@ -386,11 +466,7 @@ private fun SecondaryControls(viewModel: MainViewModel) {
     ) {
         PillToggle(glyph = "💬", label = "字幕", on = viewModel.showCaptions, onClick = viewModel::toggleCaptions)
         Spacer(Modifier.weight(1f))
-        if (viewModel.devMode) {
-            PillToggle(glyph = "🛠", label = "开发", on = false, onClick = { viewModel.showDevPanel = true })
-            Spacer(Modifier.width(10.dp))
-        }
-        PillToggle(glyph = "⚙", label = "偏好", on = false, onClick = { viewModel.showPreferences = true })
+        PillToggle(glyph = "⚙", label = "设置", on = false, onClick = { viewModel.showPreferences = true })
     }
 }
 
@@ -599,41 +675,130 @@ private fun SheetContent(title: String, content: @Composable ColumnScope.() -> U
     }
 }
 
-// ---- rider preferences ----------------------------------------------------------------
+// ---- settings (voice · connection · demo · diagnostics) ------------------------------
 
 @Composable
-private fun PreferencesPanel(state: AgentSession.State, viewModel: MainViewModel) {
-    HudCard {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            ChipRow(label = "声音") {
-                VoiceGender.entries.forEach { gender ->
-                    HudChip(
-                        label = gender.label,
-                        selected = state.voiceGender == gender,
-                        onClick = { viewModel.setVoiceGender(gender) }
-                    )
-                }
-            }
-            ChipRow(label = "语气") {
-                VoicePersonality.entries.forEach { personality ->
-                    HudChip(
-                        label = personality.label,
-                        selected = state.voicePersonality == personality,
-                        onClick = { viewModel.setVoicePersonality(personality) }
-                    )
-                }
-            }
-            ChipRow(label = "模式") {
-                RideMode.entries.forEach { mode ->
-                    HudChip(
-                        label = mode.label,
-                        selected = state.rideContext.mode == mode,
-                        onClick = { viewModel.setRideMode(mode) },
-                        selectedColor = if (mode == RideMode.EMERGENCY) HudColors.Danger else HudColors.Accent
-                    )
-                }
+private fun SettingsPanel(
+    state: AgentSession.State,
+    viewModel: MainViewModel,
+    onExportTranscript: () -> Unit
+) {
+    // Rider voice preferences.
+    SectionCard("语音") {
+        ChipRow(label = "声音") {
+            VoiceGender.entries.forEach { gender ->
+                HudChip(gender.label, state.voiceGender == gender, { viewModel.setVoiceGender(gender) })
             }
         }
+        ChipRow(label = "语气") {
+            VoicePersonality.entries.forEach { personality ->
+                HudChip(personality.label, state.voicePersonality == personality, { viewModel.setVoicePersonality(personality) })
+            }
+        }
+        ChipRow(label = "模式") {
+            RideMode.entries.forEach { mode ->
+                HudChip(
+                    mode.label,
+                    state.rideContext.mode == mode,
+                    { viewModel.setRideMode(mode) },
+                    selectedColor = if (mode == RideMode.EMERGENCY) HudColors.Danger else HudColors.Accent
+                )
+            }
+        }
+    }
+
+    // Server / relay connection.
+    SectionCard("连接") {
+        if (state.handsFree) {
+            Text("当前服务器：${viewModel.relayUrl}", color = HudColors.Muted, fontSize = 12.sp)
+            Text("结束免提后可修改服务器地址。", color = HudColors.Muted, fontSize = 11.sp)
+        } else {
+            OutlinedTextField(
+                value = viewModel.relayUrl,
+                onValueChange = viewModel::updateRelayUrl,
+                singleLine = true,
+                label = { Text("语音中继地址（ws:// 或 wss://）", fontSize = 12.sp) },
+                textStyle = MaterialTheme.typography.bodySmall.copy(color = HudColors.Text),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = HudColors.AccentCyan,
+                    unfocusedBorderColor = HudColors.Border,
+                    focusedLabelColor = HudColors.AccentCyan,
+                    unfocusedLabelColor = HudColors.Muted
+                ),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("信任自签名证书（测试服务器）", color = HudColors.Muted, fontSize = 12.sp)
+                Switch(
+                    checked = viewModel.allowSelfSigned,
+                    onCheckedChange = viewModel::updateAllowSelfSigned,
+                    colors = SwitchDefaults.colors(
+                        checkedTrackColor = HudColors.Accent,
+                        checkedThumbColor = Color(0xFF07221A)
+                    )
+                )
+            }
+        }
+    }
+
+    // Demo scenarios (ADAS hazard injection).
+    SectionCard("演示场景") {
+        ChipRow(label = "场景") {
+            DemoScenario.entries.forEach { scenario ->
+                HudChip(
+                    scenario.label,
+                    state.rideContext.scenario == scenario,
+                    { viewModel.setScenario(scenario) },
+                    selectedColor = hazardColor(scenario.hazard)
+                )
+            }
+        }
+    }
+
+    // Diagnostics: latency, telemetry, transcript export, raw status.
+    SectionCard("诊断") {
+        val toneColor = when {
+            state.latencyMs < 140 -> HudColors.Accent
+            state.latencyMs < 280 -> HudColors.Warn
+            else -> HudColors.Danger
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("延迟", color = HudColors.Muted, fontSize = 11.sp)
+                Text("${state.latencyMs}ms", color = toneColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+            HudChip(
+                "导出日志",
+                state.transcript.isNotEmpty(),
+                { if (state.transcript.isNotEmpty()) onExportTranscript() },
+                selectedColor = HudColors.AccentCyan
+            )
+        }
+        state.telemetry?.let {
+            Text(
+                "ASR ${it.asrMs} · 思考 ${it.thinkMs} · 首音 ${it.firstAudioMs} · 总计 ${it.totalMs}ms",
+                color = HudColors.Muted,
+                fontSize = 11.sp
+            )
+        }
+        Text(state.statusText, color = HudColors.Muted, fontSize = 12.sp)
+    }
+}
+
+@Composable
+private fun SectionCard(title: String, content: @Composable ColumnScope.() -> Unit) {
+    HudCard {
+        Text(title, color = HudColors.Muted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(8.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { content() }
     }
 }
 
@@ -677,99 +842,6 @@ private fun HudChip(
             fontSize = 13.sp,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
         )
-    }
-}
-
-// ---- developer panel (open from the wrench when developer mode is on) ------------------
-
-@Composable
-private fun DevPanel(
-    state: AgentSession.State,
-    viewModel: MainViewModel,
-    onExportTranscript: () -> Unit
-) {
-    HudCard(borderColor = HudColors.AccentCyan.copy(alpha = 0.4f)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("会话与遥测", color = HudColors.AccentCyan, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-            HudChip(
-                label = "导出日志",
-                selected = state.transcript.isNotEmpty(),
-                onClick = { if (state.transcript.isNotEmpty()) onExportTranscript() },
-                selectedColor = HudColors.AccentCyan
-            )
-        }
-        Spacer(Modifier.height(6.dp))
-
-        Text(state.statusText, color = HudColors.Muted, fontSize = 12.sp)
-        Spacer(Modifier.height(8.dp))
-
-        ChipRow(label = "场景") {
-            DemoScenario.entries.forEach { scenario ->
-                HudChip(
-                    label = scenario.label,
-                    selected = state.rideContext.scenario == scenario,
-                    onClick = { viewModel.setScenario(scenario) },
-                    selectedColor = hazardColor(scenario.hazard)
-                )
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-
-        // latencyTone in src/main.tsx: <140 good, <280 warn, else alert.
-        val toneColor = when {
-            state.latencyMs < 140 -> HudColors.Accent
-            state.latencyMs < 280 -> HudColors.Warn
-            else -> HudColors.Danger
-        }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("延迟", color = HudColors.Muted, fontSize = 11.sp)
-            Text("${state.latencyMs}ms", color = toneColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            state.telemetry?.let {
-                Text(
-                    "ASR ${it.asrMs} · 思考 ${it.thinkMs} · 首音 ${it.firstAudioMs} · 总计 ${it.totalMs}ms",
-                    color = HudColors.Muted,
-                    fontSize = 11.sp
-                )
-            }
-        }
-
-        // Connection settings: editable only while disconnected.
-        if (!state.handsFree) {
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = viewModel.relayUrl,
-                onValueChange = viewModel::updateRelayUrl,
-                singleLine = true,
-                label = { Text("语音中继地址（ws:// 或 wss://）", fontSize = 12.sp) },
-                textStyle = MaterialTheme.typography.bodySmall.copy(color = HudColors.Text),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = HudColors.AccentCyan,
-                    unfocusedBorderColor = HudColors.Border,
-                    focusedLabelColor = HudColors.AccentCyan,
-                    unfocusedLabelColor = HudColors.Muted
-                ),
-                modifier = Modifier.fillMaxWidth()
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("信任自签名证书（测试服务器）", color = HudColors.Muted, fontSize = 12.sp)
-                Switch(
-                    checked = viewModel.allowSelfSigned,
-                    onCheckedChange = viewModel::updateAllowSelfSigned,
-                    colors = SwitchDefaults.colors(
-                        checkedTrackColor = HudColors.Accent,
-                        checkedThumbColor = Color(0xFF07221A)
-                    )
-                )
-            }
-        }
     }
 }
 

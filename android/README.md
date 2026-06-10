@@ -51,7 +51,9 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradle
 
 1. Start the relay on the Mac: `npm run dev:server` (or `npm run dev`) from the repo root.
    The server listens on `0.0.0.0:8787`, so it is reachable over the LAN.
-2. Install and launch the app, then set the 语音中继地址 field:
+2. Install and launch the app, then set the 语音中继地址 field — it lives in the hidden
+   developer panel: **long-press the Max logo** on the main screen to reveal it (persisted;
+   long-press again to hide):
 
 | Where the app runs   | Relay URL                                                         |
 | -------------------- | ----------------------------------------------------------------- |
@@ -116,8 +118,8 @@ The emulator forwards the host Mac's microphone, so the full voice loop is testa
 - Bluetooth headset (SCO) routing for in-helmet headsets, with phone mic/speaker fallback
 - Acoustic echo cancellation: mic capture uses the `VOICE_COMMUNICATION` source plus
   `AcousticEchoCanceler` / `NoiseSuppressor`, so the agent's voice is not fed back into the
-  mic (the Android analogue of the web's `getUserMedia({ echoCancellation })`). See *Audio
-  notes* below for a known built-in-speaker limitation.
+  mic (the Android analogue of the web's `getUserMedia({ echoCancellation })`). See _Audio
+  notes_ below for a known built-in-speaker limitation.
 - `wss://` support with an opt-in "信任自签名证书" toggle for the Lightsail test server
 
 ## Protocol parity checklist
@@ -133,15 +135,15 @@ When changing shared web/server behavior, update Android at the same time:
 
 ## Architecture
 
-| File                           | Role                                                                               | Web counterpart                                                                      |
-| ------------------------------ | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `agent/AgentProtocol.kt`       | Event types, JSON parsing, ride/hazard/turn-state/language helpers, export payload | `shared/agent.ts`, `shared/ride.ts`, `shared/language.ts`, helpers in `src/main.tsx` |
+| File                           | Role                                                                                                              | Web counterpart                                                                      |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `agent/AgentProtocol.kt`       | Event types, JSON parsing, ride/hazard/turn-state/language helpers, export payload                                | `shared/agent.ts`, `shared/ride.ts`, `shared/language.ts`, helpers in `src/main.tsx` |
 | `agent/MicStreamer.kt`         | 16 kHz PCM16 mic capture, 20 ms frames; `VOICE_COMMUNICATION` source + `AcousticEchoCanceler` / `NoiseSuppressor` | `public/pcm-worklet.js`                                                              |
-| `agent/PcmPlayer.kt`           | 24 kHz PCM16 gapless playback + barge-in flush                                     | playback scheduling in `src/main.tsx`                                                |
-| `agent/AudioRouter.kt`         | Bluetooth headset (SCO) routing for in-helmet headsets                             | — (browsers can't control routing)                                                   |
-| `agent/AgentSession.kt`        | Session orchestration, reconnect, transcript, state                                | `useHelmetAgent` hook in `src/main.tsx`                                              |
-| `service/VoiceAgentService.kt` | Microphone foreground service                                                      | — (browser tabs can't do this)                                                       |
-| `ui/AgentScreen.kt`            | Compose HUD: ring, ride pulse, telemetry, transcript, controls                     | `src/components/` + HUD layout in `src/main.tsx`                                     |
+| `agent/PcmPlayer.kt`           | 24 kHz PCM16 gapless playback + barge-in flush                                                                    | playback scheduling in `src/main.tsx`                                                |
+| `agent/AudioRouter.kt`         | Bluetooth headset (SCO) routing for in-helmet headsets                                                            | — (browsers can't control routing)                                                   |
+| `agent/AgentSession.kt`        | Session orchestration, reconnect, transcript, state                                                               | `useHelmetAgent` hook in `src/main.tsx`                                              |
+| `service/VoiceAgentService.kt` | Microphone foreground service                                                                                     | — (browser tabs can't do this)                                                       |
+| `ui/AgentScreen.kt`            | Compose HUD: ring, ride pulse, telemetry, transcript, controls                                                    | `src/components/` + HUD layout in `src/main.tsx`                                     |
 
 ## Connecting to the Lightsail test server
 
@@ -165,7 +167,7 @@ server's certificate is self-signed, so the toggle is required until it gets a t
 - **Echo cancellation** is handled by the platform: `MicStreamer` records from
   `MediaRecorder.AudioSource.VOICE_COMMUNICATION` (which engages the device AEC/AGC/NS) and
   additionally attaches `AcousticEchoCanceler` + `NoiseSuppressor` to the record session. Unlike
-  iOS's voice-processing unit — which only cancels audio rendered through the *same*
+  iOS's voice-processing unit — which only cancels audio rendered through the _same_
   `AVAudioEngine` — Android's `VOICE_COMMUNICATION` AEC references the actual speaker output at
   the HAL level, so capture and playback do **not** have to share one graph.
 - **Known limitation (built-in speaker, no Bluetooth headset).** When no headset is routed,
@@ -194,4 +196,4 @@ server's certificate is self-signed, so the toggle is required until it gets a t
 - A wake word so the mic need not stream continuously
 - Unit tests for the protocol parsing and transcript dedup helpers
 - Built-in-speaker echo hardening: always use `MODE_IN_COMMUNICATION` + `USAGE_VOICE_COMMUNICATION`
-  for the live session (see *Audio notes*), pending a physical-device test
+  for the live session (see _Audio notes_), pending a physical-device test

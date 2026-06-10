@@ -48,6 +48,8 @@ relay URL, and self-signed test-server setup.
 - Agent identity — attributes its development to Horizon Continental Technology (neueHCT) and names the CEO (Li Biao / Stone Li), in Chinese and English.
 - Acoustic echo cancellation — built-in-speaker echo is cancelled so the agent doesn't hear and answer itself (web `echoCancellation`; iOS shared voice-processing engine; Android `VOICE_COMMUNICATION` + `AcousticEchoCanceler`).
 - Native iOS and Android clients that reuse the same `/agent` relay protocol as the web HUD, with a width-capped, centered HUD that reads the same on phones and tablets/iPad.
+- Production-clean mobile main screen — hero ring, glance strip (速度 · 风险 · 天气 · 电量), chat-bubble conversation, and a pill hands-free button; rider preferences (声音 / 语气 / 模式) sit behind a gear button.
+- Hidden developer panel on iOS/Android — **long-press the Max logo** to reveal test settings (relay URL, self-signed trust, demo scenarios, latency telemetry, raw status, log export); persisted across launches.
 - Turn-state HUD — the helmet shows when Max is listening, heard the rider, is thinking, or is replying.
 - Ride intelligence modes — switch between 骑行 / 导航 / 停车 / 紧急 so Max changes response length and safety behavior.
 - Scenario-driven mock demos — 通勤、横风、低油、小队、紧急、ADAS scenes exercise realistic rider context without Doubao credentials.
@@ -317,7 +319,9 @@ Start the backend relay before launching a native app:
 npm run dev:server
 ```
 
-Then set the app's relay URL:
+Then set the app's relay URL. The relay field and the self-signed trust toggle live in the
+hidden developer panel — **long-press the Max logo** on the main screen to reveal it (the
+header subtitle shows `· 开发者模式` while enabled; long-press again to hide):
 
 | Client                 | URL                            |
 | ---------------------- | ------------------------------ |

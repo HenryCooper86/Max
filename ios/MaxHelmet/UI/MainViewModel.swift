@@ -31,6 +31,7 @@ final class MainViewModel: ObservableObject {
     private enum Keys {
         static let relayURL = "relay_url"
         static let allowSelfSigned = "allow_self_signed"
+        static let devMode = "dev_mode"
     }
 
     let session = AgentSession.shared
@@ -55,9 +56,24 @@ final class MainViewModel: ObservableObject {
     /// Set when the rider exports the transcript; the view presents a share sheet.
     @Published var exportFile: ExportFile?
 
+    /// Developer mode reveals the test settings (relay URL, self-signed trust,
+    /// demo scenarios, telemetry, raw status, log export). Toggled by
+    /// long-pressing the Max logo; persisted so demos survive relaunch.
+    @Published var devMode: Bool {
+        didSet { defaults.set(devMode, forKey: Keys.devMode) }
+    }
+
+    /// Rider preferences panel (voice / tone / ride mode), toggled by the gear.
+    @Published var showPreferences = false
+
     init() {
         relayURL = defaults.string(forKey: Keys.relayURL) ?? Self.defaultRelayURL
         allowSelfSigned = defaults.object(forKey: Keys.allowSelfSigned) as? Bool ?? Self.defaultAllowSelfSigned
+        devMode = defaults.bool(forKey: Keys.devMode)
+    }
+
+    func toggleDevMode() {
+        devMode.toggle()
     }
 
     /// One toggle, like the web HUD's 开启免提 / 结束免提 button. On iOS, microphone

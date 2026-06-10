@@ -39,6 +39,10 @@ private func connectionLabel(_ state: ConnectionState) -> String {
     }
 }
 
+/// Production-clean main screen: brand header, hazard alerts, hero ring,
+/// glance strip, conversation, hands-free button. Rider preferences live behind
+/// the gear; all test settings live in a developer panel revealed by
+/// long-pressing the Max logo (persisted across launches).
 struct AgentScreen: View {
     @ObservedObject var viewModel: MainViewModel
     @ObservedObject var session: AgentSession
@@ -46,28 +50,46 @@ struct AgentScreen: View {
     private var state: AgentSession.State { session.state }
 
     var body: some View {
-        VStack(spacing: 10) {
-            HeaderBar(state: state)
+        VStack(spacing: 12) {
+            HeaderBar(
+                state: state,
+                devMode: viewModel.devMode,
+                preferencesShown: viewModel.showPreferences,
+                onToggleDevMode: viewModel.toggleDevMode,
+                onTogglePreferences: { viewModel.showPreferences.toggle() }
+            )
 
             if let alert = state.hazardAlert { HazardBanner(alert: alert) }
 
             ScrollView {
-                VStack(spacing: 12) {
-                    RiderControls(state: state, viewModel: viewModel)
+                VStack(spacing: 14) {
+                    if viewModel.showPreferences {
+                        PreferencesPanel(state: state, viewModel: viewModel)
+                    }
+
                     TurnStateRing(state: state, onTap: viewModel.toggleHandsFree)
-                    Text(state.statusText)
-                        .font(.system(size: 13))
-                        .foregroundColor(HudColors.muted)
-                    RidePulseCard(state: state)
-                    if let weather = state.weather { WeatherCard(weather: weather) }
-                    TelemetryCard(latencyMs: state.latencyMs, telemetry: state.telemetry)
-                    TranscriptCard(items: state.transcript) { viewModel.exportTranscript() }
+                        .padding(.top, 6)
+
+                    GlanceStrip(state: state)
+
+                    if state.transcript.isEmpty {
+                        Text("点按 Max 圆环开始对话")
+                            .font(.system(size: 13))
+                            .foregroundColor(HudColors.muted)
+                            .padding(.top, 2)
+                    } else {
+                        ConversationCard(items: state.transcript)
+                    }
+
+                    if viewModel.devMode {
+                        DevPanel(state: state, viewModel: viewModel)
+                    }
                 }
                 .padding(.bottom, 4)
             }
             .scrollIndicators(.hidden)
 
-            BottomControls(state: state, viewModel: viewModel)
+            HandsFreeButton(handsFree: state.handsFree, action: viewModel.toggleHandsFree)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -78,6 +100,8 @@ struct AgentScreen: View {
         .frame(maxWidth: 560)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(HudColors.background.ignoresSafeArea())
+        .animation(.easeInOut(duration: 0.2), value: viewModel.showPreferences)
+        .animation(.easeInOut(duration: 0.2), value: viewModel.devMode)
         .sheet(item: $viewModel.exportFile) { file in
             ActivityView(items: [file.url])
         }
@@ -93,13 +117,13 @@ private struct HazardBanner: View {
         let color = hazardColor(alert.severity)
         HStack(spacing: 12) {
             Text(alert.directionLabel)
-                .font(.system(size: 15, weight: .bold))
+                .font(.system(size: 17, weight: .heavy))
                 .foregroundColor(HudColors.text)
-                .frame(minWidth: 52)
+                .frame(minWidth: 56)
                 .padding(.vertical, 8)
                 .padding(.horizontal, 8)
                 .background(color.opacity(0.22))
-                .cornerRadius(8)
+                .cornerRadius(10)
             VStack(alignment: .leading, spacing: 2) {
                 Text("⚠️ \(alert.label)")
                     .font(.system(size: 14, weight: .semibold))
@@ -116,8 +140,8 @@ private struct HazardBanner: View {
         }
         .padding(12)
         .background(color.opacity(0.12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(color, lineWidth: 1))
-        .cornerRadius(12)
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(color, lineWidth: 1))
+        .cornerRadius(14)
     }
 }
 
@@ -125,14 +149,30 @@ private struct HazardBanner: View {
 
 private struct HeaderBar: View {
     let state: AgentSession.State
+    let devMode: Bool
+    let preferencesShown: Bool
+    let onToggleDevMode: () -> Void
+    let onTogglePreferences: () -> Void
 
     var body: some View {
-        HStack(alignment: .center) {
+        HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("MAX").font(.system(size: 22, weight: .bold)).foregroundColor(HudColors.text)
-                Text("摩托车头盔 AI").font(.system(size: 12)).foregroundColor(HudColors.muted)
+                Text("Max")
+                    .font(.system(size: 24, weight: .bold, design: .rounded))
+                    .foregroundColor(HudColors.text)
+                Text(devMode ? "摩托车头盔 AI · 开发者模式" : "摩托车头盔 AI")
+                    .font(.system(size: 12))
+                    .foregroundColor(devMode ? HudColors.accentCyan : HudColors.muted)
             }
+            .contentShape(Rectangle())
+            // Hidden gesture: long-press the logo to toggle the developer panel.
+            .onLongPressGesture(minimumDuration: 0.8) {
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                onToggleDevMode()
+            }
+
             Spacer()
+
             VStack(alignment: .trailing, spacing: 2) {
                 let online = state.connection == .ready
                 HStack(spacing: 6) {
@@ -142,9 +182,24 @@ private struct HeaderBar: View {
                     Text(connectionLabel(state.connection))
                         .font(.system(size: 13)).foregroundColor(HudColors.text)
                 }
-                Text(providerLine)
-                    .font(.system(size: 11)).foregroundColor(HudColors.muted)
+                if devMode {
+                    Text(providerLine)
+                        .font(.system(size: 11)).foregroundColor(HudColors.muted)
+                } else if state.bluetoothRouted {
+                    Text("蓝牙耳机")
+                        .font(.system(size: 11)).foregroundColor(HudColors.muted)
+                }
             }
+
+            Button(action: onTogglePreferences) {
+                Image(systemName: "gearshape.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(preferencesShown ? HudColors.accent : HudColors.muted)
+                    .frame(width: 38, height: 38)
+                    .background(Circle().fill(HudColors.panelElevated))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("偏好设置")
         }
     }
 
@@ -159,21 +214,25 @@ private struct HeaderBar: View {
     }
 }
 
-// MARK: - rider controls
+// MARK: - rider preferences (gear)
 
-private struct RiderControls: View {
+private struct PreferencesPanel: View {
     let state: AgentSession.State
     @ObservedObject var viewModel: MainViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        HudCard {
+            Text("偏好设置")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(HudColors.muted)
             ChipRow(label: "声音") {
                 ForEach(VoiceGender.allCases, id: \.self) { gender in
                     HudChip(label: gender.label, selected: state.voiceGender == gender) {
                         viewModel.setVoiceGender(gender)
                     }
                 }
-                Spacer().frame(width: 4)
+            }
+            ChipRow(label: "语气") {
                 ForEach(VoicePersonality.allCases, id: \.self) { personality in
                     HudChip(label: personality.label, selected: state.voicePersonality == personality) {
                         viewModel.setVoicePersonality(personality)
@@ -189,17 +248,7 @@ private struct RiderControls: View {
                     ) { viewModel.setRideMode(mode) }
                 }
             }
-            ChipRow(label: "场景") {
-                ForEach(DemoScenario.allCases, id: \.self) { scenario in
-                    HudChip(
-                        label: scenario.label,
-                        selected: state.rideContext.scenario == scenario,
-                        selectedColor: hazardColor(scenario.hazard)
-                    ) { viewModel.setScenario(scenario) }
-                }
-            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -228,24 +277,22 @@ private struct HudChip: View {
     var body: some View {
         Button(action: action) {
             Text(label)
-                .font(.system(size: 13))
+                .font(.system(size: 13, weight: selected ? .semibold : .regular))
                 .foregroundColor(selected ? selectedColor : HudColors.muted)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
+                .padding(.horizontal, 13)
+                .padding(.vertical, 7)
                 .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(selected ? selectedColor.opacity(0.18) : Color.clear)
+                    Capsule().fill(selected ? selectedColor.opacity(0.16) : HudColors.panelElevated)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(selected ? selectedColor : HudColors.border, lineWidth: 1)
+                    Capsule().stroke(selected ? selectedColor.opacity(0.7) : Color.clear, lineWidth: 1)
                 )
         }
         .buttonStyle(.plain)
     }
 }
 
-// MARK: - helmet ring
+// MARK: - hero ring
 
 private struct TurnStateRing: View {
     let state: AgentSession.State
@@ -261,7 +308,7 @@ private struct TurnStateRing: View {
         let color = ringColor(connected: connected, turnState: state.turnState)
         let caption = connected ? (turnCaptions[state.turnState] ?? "") : "离线"
 
-        VStack(spacing: 2) {
+        VStack(spacing: 6) {
             ZStack {
                 Canvas { context, size in
                     let center = CGPoint(x: size.width / 2, y: size.height / 2)
@@ -274,21 +321,21 @@ private struct TurnStateRing: View {
                     }
                     // Soft outer glow ring, breathing with the pulse animation.
                     context.fill(
-                        circle(baseRadius + 18 * (0.6 + 0.4 * pulse)),
-                        with: .color(color.opacity(0.12 + 0.10 * pulse)))
+                        circle(baseRadius + 22 * (0.6 + 0.4 * pulse)),
+                        with: .color(color.opacity(0.10 + 0.10 * pulse)))
                     // Voice-level ring: expands as the rider speaks.
                     context.stroke(
-                        circle(baseRadius + 14 * CGFloat(state.voiceLevel)),
+                        circle(baseRadius + 16 * CGFloat(state.voiceLevel)),
                         with: .color(color.opacity(0.35)), lineWidth: 2)
                     // Main state ring.
-                    context.stroke(circle(baseRadius), with: .color(color), lineWidth: 4)
+                    context.stroke(circle(baseRadius), with: .color(color), lineWidth: 3.5)
                     // Inner fill.
-                    context.fill(circle(baseRadius - 3), with: .color(color.opacity(0.10)))
+                    context.fill(circle(baseRadius - 3), with: .color(color.opacity(0.08)))
                 }
-                .frame(width: 170, height: 170)
+                .frame(width: 210, height: 210)
 
-                Text(state.handsFree ? "免提中" : "MAX")
-                    .font(.system(size: 22, weight: .bold))
+                Text(state.handsFree ? "免提中" : "Max")
+                    .font(.system(size: 26, weight: .bold, design: .rounded))
                     .foregroundColor(color)
             }
             .contentShape(Circle())
@@ -296,9 +343,10 @@ private struct TurnStateRing: View {
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isButton)
             .accessibilityLabel(state.handsFree ? "结束免提" : "开启免提")
+
             HStack(spacing: 6) {
                 Circle().fill(color).frame(width: 7, height: 7)
-                Text(caption).font(.system(size: 15)).foregroundColor(HudColors.text)
+                Text(caption).font(.system(size: 15, weight: .medium)).foregroundColor(HudColors.text)
             }
         }
         .frame(maxWidth: .infinity)
@@ -310,210 +358,197 @@ private struct TurnStateRing: View {
     }
 }
 
-// MARK: - 态势摘要 (ride pulse)
+// MARK: - glance strip (speed · risk · weather · battery)
 
-private struct RidePulseCard: View {
+private struct GlanceStrip: View {
     let state: AgentSession.State
 
     var body: some View {
         let fused = state.fusedHazard
-        let color = hazardColor(fused)
         let context = state.rideContext
-        let memory = state.sessionMemory
 
-        HudCard(borderColor: color.opacity(0.5)) {
-            CardHeader(title: "态势摘要", value: fused.label, valueColor: color)
-            Text(fused.riderAction)
-                .font(.system(size: 15, weight: .bold)).foregroundColor(HudColors.text)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Text(context.glanceableFocus)
-                .font(.system(size: 12)).foregroundColor(HudColors.muted)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
+        HudCard {
             HStack {
-                PulseCell(value: context.mode.label, label: "模式")
+                GlanceCell(value: "\(context.speedKmh)", unit: "km/h", label: "速度")
                 Spacer()
-                PulseCell(value: context.scenario.label, label: "场景")
+                GlanceCell(value: fused.label, label: "风险", valueColor: hazardColor(fused))
                 Spacer()
-                PulseCell(value: networkLabel(context.network), label: "网络")
+                if let weather = state.weather {
+                    GlanceCell(value: "\(weather.temperatureC)°", label: weather.description)
+                } else {
+                    GlanceCell(value: "--", label: "天气")
+                }
                 Spacer()
-                PulseCell(value: "\(context.batteryPct)%", label: "电量")
+                GlanceCell(value: "\(context.batteryPct)%", label: "电量")
             }
-            .padding(.top, 4)
 
-            HStack(alignment: .bottom, spacing: 4) {
-                Text("\(context.speedKmh)")
-                    .font(.system(size: 26, weight: .bold)).foregroundColor(HudColors.text)
-                Text("km/h").font(.system(size: 12)).foregroundColor(HudColors.muted).padding(.bottom, 3)
-                Text(context.routePhase)
-                    .font(.system(size: 12)).foregroundColor(HudColors.muted).padding(.bottom, 3)
-                    .padding(.leading, 8)
-                Spacer()
+            if fused != .normal {
+                Text(fused.riderAction)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(hazardColor(fused))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 4)
             }
-            .padding(.top, 4)
-
-            HStack(spacing: 6) {
-                MemoryChip(label: memory.language == "zh" ? "中文" : "English")
-                MemoryChip(label: responseModeLabel(memory.responseMode))
-                MemoryChip(label: memory.lastIntent ?? "待识别")
-                if let destination = memory.destination { MemoryChip(label: destination) }
+            if let weather = state.weather, weather.riskLevel != .normal {
+                Text(weather.riderAdvice)
+                    .font(.system(size: 12))
+                    .foregroundColor(HudColors.muted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
 }
 
-private struct PulseCell: View {
+private struct GlanceCell: View {
     let value: String
+    var unit: String = ""
     let label: String
+    var valueColor: Color = HudColors.text
+
     var body: some View {
         VStack(spacing: 2) {
-            Text(value).font(.system(size: 14, weight: .bold)).foregroundColor(HudColors.text)
-            Text(label).font(.system(size: 11)).foregroundColor(HudColors.muted)
-        }
-    }
-}
-
-private struct MemoryChip: View {
-    let label: String
-    var body: some View {
-        Text(label)
-            .font(.system(size: 11)).foregroundColor(HudColors.muted)
-            .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(RoundedRectangle(cornerRadius: 6).fill(HudColors.border.opacity(0.3)))
-    }
-}
-
-// MARK: - weather
-
-private struct WeatherCard: View {
-    let weather: Weather
-    var body: some View {
-        let riskColor = hazardColor(weather.riskLevel)
-        HudCard {
-            CardHeader(title: "实时天气", value: weather.riskLevel.label, valueColor: riskColor)
-            HStack(alignment: .bottom, spacing: 8) {
-                Text("\(weather.temperatureC)°")
-                    .font(.system(size: 26, weight: .bold)).foregroundColor(HudColors.text)
-                Text(weather.description)
-                    .font(.system(size: 14)).foregroundColor(HudColors.text).padding(.bottom, 3)
-                Text("风速 \(weather.windSpeedKmh) km/h")
-                    .font(.system(size: 12)).foregroundColor(HudColors.muted).padding(.bottom, 3)
-                Spacer()
-            }
-            Text(weather.riderAdvice)
-                .font(.system(size: 12)).foregroundColor(HudColors.muted)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-}
-
-// MARK: - telemetry
-
-private struct TelemetryCard: View {
-    let latencyMs: Int
-    let telemetry: Telemetry?
-
-    var body: some View {
-        // latencyTone in src/main.tsx: <140 good, <280 warn, else alert.
-        let toneColor: Color = latencyMs < 140 ? HudColors.accent : (latencyMs < 280 ? HudColors.warn : HudColors.danger)
-        HudCard {
-            CardHeader(title: "延迟", value: "\(latencyMs)ms", valueColor: toneColor)
-            if let telemetry {
-                HStack {
-                    PulseCell(value: "\(telemetry.asrMs)ms", label: "ASR")
-                    Spacer()
-                    PulseCell(value: "\(telemetry.thinkMs)ms", label: "思考")
-                    Spacer()
-                    PulseCell(value: "\(telemetry.firstAudioMs)ms", label: "首音")
-                    Spacer()
-                    PulseCell(value: "\(telemetry.totalMs)ms", label: "总计")
+            HStack(alignment: .lastTextBaseline, spacing: 2) {
+                Text(value)
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(valueColor)
+                if !unit.isEmpty {
+                    Text(unit).font(.system(size: 10)).foregroundColor(HudColors.muted)
                 }
-                .padding(.top, 4)
             }
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundColor(HudColors.muted)
+                .lineLimit(1)
         }
     }
 }
 
-// MARK: - transcript
+// MARK: - conversation
 
-private struct TranscriptCard: View {
+private struct ConversationCard: View {
     let items: [TranscriptItem]
-    let onExport: () -> Void
 
     private let timeFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.dateFormat = "HH:mm:ss"
+        f.dateFormat = "HH:mm"
         return f
     }()
 
     var body: some View {
         HudCard {
             HStack {
-                Text("对话记录").font(.system(size: 12)).foregroundColor(HudColors.muted)
+                Text("对话")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(HudColors.muted)
                 Spacer()
-                if !items.isEmpty {
-                    Text("实时 · \(items.count)").font(.system(size: 11)).foregroundColor(HudColors.muted)
-                }
-                HudChip(label: "导出日志", selected: !items.isEmpty, selectedColor: HudColors.accentCyan) {
-                    if !items.isEmpty { onExport() }
-                }
+                Text("\(items.count)")
+                    .font(.system(size: 11)).foregroundColor(HudColors.muted)
             }
 
-            if items.isEmpty {
-                Text("开启免提后，对话会显示在这里。")
-                    .font(.system(size: 13)).foregroundColor(HudColors.muted)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 4)
-            } else {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ForEach(items) { item in
-                                TranscriptRow(item: item, time: timeFormatter.string(from: item.at))
-                                    .id(item.id)
-                            }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 8) {
+                        ForEach(items) { item in
+                            ChatBubble(item: item, time: timeFormatter.string(from: item.at))
+                                .id(item.id)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(height: 240)
-                    .scrollIndicators(.hidden)
-                    .onChange(of: items.count) { _, _ in
-                        if let last = items.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
-                    }
+                    .frame(maxWidth: .infinity)
                 }
-                .padding(.top, 4)
+                .frame(height: 250)
+                .scrollIndicators(.hidden)
+                .onChange(of: items.count) { _, _ in
+                    if let last = items.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
+                }
             }
+            .padding(.top, 2)
         }
     }
 }
 
-private struct TranscriptRow: View {
+private struct ChatBubble: View {
     let item: TranscriptItem
     let time: String
 
+    private var isRider: Bool { item.speaker == .rider }
+
     var body: some View {
-        let speakerColor = item.speaker == .rider ? HudColors.rider : HudColors.accent
-        let speakerLabel = item.speaker == .rider ? "骑手" : "Max"
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 8) {
-                Text(speakerLabel)
-                    .font(.system(size: 12, weight: .bold)).foregroundColor(speakerColor)
-                Text(time).font(.system(size: 10)).foregroundColor(HudColors.muted)
-                if !item.final { Text("…").font(.system(size: 12)).foregroundColor(HudColors.muted) }
+        HStack {
+            if isRider { Spacer(minLength: 40) }
+            VStack(alignment: isRider ? .trailing : .leading, spacing: 3) {
+                Text(item.text)
+                    .font(.system(size: 14))
+                    .foregroundColor(HudColors.text)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(isRider ? HudColors.rider.opacity(0.16) : HudColors.panelElevated)
+                    )
+                HStack(spacing: 5) {
+                    Text(isRider ? "骑手" : "Max")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(isRider ? HudColors.rider : HudColors.accent)
+                    Text(time).font(.system(size: 10)).foregroundColor(HudColors.muted)
+                    if !item.final {
+                        Text("…").font(.system(size: 10)).foregroundColor(HudColors.muted)
+                    }
+                }
             }
-            Text(item.text).font(.system(size: 14)).foregroundColor(HudColors.text)
+            if !isRider { Spacer(minLength: 40) }
         }
     }
 }
 
-// MARK: - bottom controls
+// MARK: - developer panel (long-press the logo)
 
-private struct BottomControls: View {
+private struct DevPanel: View {
     let state: AgentSession.State
     @ObservedObject var viewModel: MainViewModel
 
     var body: some View {
-        VStack(spacing: 8) {
+        HudCard(borderColor: HudColors.accentCyan.opacity(0.4)) {
+            HStack {
+                Text("开发者模式")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(HudColors.accentCyan)
+                Spacer()
+                HudChip(label: "导出日志", selected: !state.transcript.isEmpty, selectedColor: HudColors.accentCyan) {
+                    if !state.transcript.isEmpty { viewModel.exportTranscript() }
+                }
+            }
+
+            Text(state.statusText)
+                .font(.system(size: 12))
+                .foregroundColor(HudColors.muted)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            ChipRow(label: "场景") {
+                ForEach(DemoScenario.allCases, id: \.self) { scenario in
+                    HudChip(
+                        label: scenario.label,
+                        selected: state.rideContext.scenario == scenario,
+                        selectedColor: hazardColor(scenario.hazard)
+                    ) { viewModel.setScenario(scenario) }
+                }
+            }
+
+            // latencyTone in src/main.tsx: <140 good, <280 warn, else alert.
+            let toneColor: Color = state.latencyMs < 140
+                ? HudColors.accent
+                : (state.latencyMs < 280 ? HudColors.warn : HudColors.danger)
+            HStack {
+                Text("延迟").font(.system(size: 11)).foregroundColor(HudColors.muted)
+                Text("\(state.latencyMs)ms")
+                    .font(.system(size: 12, weight: .bold)).foregroundColor(toneColor)
+                Spacer()
+                if let telemetry = state.telemetry {
+                    Text("ASR \(telemetry.asrMs) · 思考 \(telemetry.thinkMs) · 首音 \(telemetry.firstAudioMs) · 总计 \(telemetry.totalMs)ms")
+                        .font(.system(size: 11)).foregroundColor(HudColors.muted)
+                }
+            }
+            .padding(.top, 2)
+
             if !state.handsFree {
                 TextField("语音中继地址（ws:// 或 wss://）", text: $viewModel.relayURL)
                     .font(.system(size: 14))
@@ -521,7 +556,7 @@ private struct BottomControls: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled(true)
                     .padding(12)
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(HudColors.border, lineWidth: 1))
+                    .background(RoundedRectangle(cornerRadius: 10).fill(HudColors.panelElevated))
 
                 HStack {
                     Text("信任自签名证书（测试服务器）")
@@ -532,46 +567,41 @@ private struct BottomControls: View {
                         .tint(HudColors.accent)
                 }
             }
-
-            Button(action: viewModel.toggleHandsFree) {
-                Text(state.handsFree ? "结束免提" : "开启免提")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundColor(state.handsFree ? HudColors.text : HudColors.onAccent)
-                    .padding(.vertical, 12)
-                    .frame(maxWidth: .infinity)
-                    .background(RoundedRectangle(cornerRadius: 12)
-                        .fill(state.handsFree ? HudColors.danger : HudColors.accent))
-            }
-            .buttonStyle(.plain)
         }
+    }
+}
+
+// MARK: - hands-free button
+
+private struct HandsFreeButton: View {
+    let handsFree: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(handsFree ? "结束免提" : "开启免提")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundColor(handsFree ? HudColors.text : HudColors.onAccent)
+                .padding(.vertical, 15)
+                .frame(maxWidth: .infinity)
+                .background(Capsule().fill(handsFree ? HudColors.danger : HudColors.accent))
+        }
+        .buttonStyle(.plain)
     }
 }
 
 // MARK: - shared card scaffolding
 
 private struct HudCard<Content: View>: View {
-    var borderColor: Color = HudColors.border
+    var borderColor: Color = .clear
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) { content }
-            .padding(14)
+        VStack(alignment: .leading, spacing: 8) { content }
+            .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 12).fill(HudColors.panel))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(borderColor, lineWidth: 1))
-    }
-}
-
-private struct CardHeader: View {
-    let title: String
-    let value: String
-    let valueColor: Color
-    var body: some View {
-        HStack {
-            Text(title).font(.system(size: 12)).foregroundColor(HudColors.muted)
-            Spacer()
-            Text(value).font(.system(size: 13, weight: .bold)).foregroundColor(valueColor)
-        }
+            .background(RoundedRectangle(cornerRadius: 16).fill(HudColors.panel))
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(borderColor, lineWidth: 1))
     }
 }
 

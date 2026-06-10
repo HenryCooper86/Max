@@ -2,7 +2,28 @@
 
 ## 2026-06-10
 
-Relay hardening, web HUD accessibility/design polish, and an iOS mic-tap fix.
+Relay hardening, web HUD accessibility/design polish, an iOS mic-tap fix, and a
+production-clean redesign of the iOS and Android main screens.
+
+### Changed
+
+- **iOS & Android: production-clean main screen** — the HUD now shows only what a
+  rider needs: brand header with connection dot, ADAS hazard banner, a larger hero
+  ring (210 dp), a glance strip (速度 · 风险 · 天气 · 电量 with risk/weather advice
+  when elevated), a chat-bubble conversation view, and a pill hands-free button.
+  Rider preferences (声音 / 语气 / 模式) moved behind a gear button.
+  (`ios/.../UI/AgentScreen.swift`, `android/.../ui/AgentScreen.kt`)
+- **iOS & Android: test settings hidden behind a developer panel** — relay URL,
+  the self-signed trust toggle, demo scenarios, latency telemetry, raw status
+  text, and transcript export now live in a `开发者模式` panel revealed by
+  **long-pressing the Max logo** (persisted across launches, with haptic
+  feedback; the header subtitle shows `· 开发者模式` while enabled). Production
+  builds look clean by default but every demo control is still reachable on any
+  build. (`MainViewModel.swift` / `MainViewModel.kt` hold the persisted flag.)
+- **iOS & Android theme refresh** — borderless 16 dp-radius cards on a soft
+  elevated surface, capsule chips, rounded brand type (iOS), and the same
+  `--muted` legibility bump as the web (`#99AAA8 → #A7B8B6`).
+  (`HudTheme.swift`, `theme/Theme.kt`)
 
 ### Fixed
 

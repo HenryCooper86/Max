@@ -9,13 +9,16 @@ import androidx.compose.ui.graphics.Color
 object HudColors {
     val Background = Color(0xFF101415)
     val Text = Color(0xFFEFF6F8)
-    val Muted = Color(0xFF99AAA8)
+    val Muted = Color(0xFFA7B8B6)
     val Accent = Color(0xFF3EE89F)
     val AccentCyan = Color(0xFF5FE9D6)
     val Rider = Color(0xFFF26A3D)
     val Danger = Color(0xFFFF6F57)
     val Warn = Color(0xFFF2C14E)
     val Panel = Color(0xCC0B1112)
+
+    /** Softer raised surface for borderless cards (modern, production look). */
+    val PanelElevated = Color(0xFF181F20)
     val Border = Color(0x29C4DAD8)
 }
 

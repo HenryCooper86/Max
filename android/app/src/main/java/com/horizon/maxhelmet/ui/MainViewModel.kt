@@ -34,6 +34,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val PREFS = "max_helmet"
         private const val KEY_RELAY_URL = "relay_url"
         private const val KEY_ALLOW_SELF_SIGNED = "allow_self_signed"
+        private const val KEY_DEV_MODE = "dev_mode"
     }
 
     private val session: AgentSession = AgentSessionHolder.get(application)
@@ -56,6 +57,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun updateAllowSelfSigned(allow: Boolean) {
         allowSelfSigned = allow
         prefs.edit().putBoolean(KEY_ALLOW_SELF_SIGNED, allow).apply()
+    }
+
+    /**
+     * Developer mode reveals the test settings (relay URL, self-signed trust,
+     * demo scenarios, telemetry, raw status, log export). Toggled by
+     * long-pressing the Max logo; persisted so demos survive relaunch.
+     */
+    var devMode by mutableStateOf(prefs.getBoolean(KEY_DEV_MODE, false))
+        private set
+
+    /** Rider preferences panel (voice / tone / ride mode), toggled by the gear. */
+    var showPreferences by mutableStateOf(false)
+        private set
+
+    fun toggleDevMode() {
+        devMode = !devMode
+        prefs.edit().putBoolean(KEY_DEV_MODE, devMode).apply()
+    }
+
+    fun togglePreferences() {
+        showPreferences = !showPreferences
     }
 
     /** One toggle, like the web HUD's 开启免提 / 结束免提 button. */

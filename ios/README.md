@@ -57,8 +57,10 @@ explicit `DEVELOPER_DIR` command above or switch the machine to full Xcode with 
 
 1. Start the relay on the Mac: `npm run dev:server` (or `npm run dev`) from the repo root.
    The server listens on `0.0.0.0:8787`, so it is reachable over the LAN.
-2. Launch the app. The 语音中继地址 field is prefilled from an environment-aware default
-   (`MainViewModel.defaultRelayURL`) — override it for any of the rows below:
+2. Launch the app. The 语音中继地址 field lives in the hidden developer panel — **long-press
+   the Max logo** on the main screen to reveal it (persisted; long-press again to hide). The
+   field is prefilled from an environment-aware default (`MainViewModel.defaultRelayURL`) —
+   override it for any of the rows below:
 
 | Where the app runs    | Relay URL                                           | Default?                       |
 | --------------------- | --------------------------------------------------- | ------------------------------ |
@@ -155,7 +157,7 @@ must never ship in a production build. `Info.plist` also enables
 - 24 kHz PCM16 gapless playback through `AVAudioPlayerNode`.
 - Acoustic echo cancellation: capture and playback share **one** `AVAudioEngine` with the
   voice-processing I/O unit enabled, so the built-in speaker does not feed the agent's own
-  voice back into the mic. See *Platform notes* below.
+  voice back into the mic. See _Platform notes_ below.
 - Barge-in: rider speech stops queued provider audio and fallback TTS.
 - ADAS hazard alerts: reacts to the server `hazard.alert` event by interrupting playback, speaking
   the warning, and showing a pulsing directional banner; an `ADAS` demo scenario showcases them.
@@ -173,7 +175,7 @@ audio + session logic; the `UI/` layer is the SwiftUI HUD.
 | File                        | Role                                                                                                                                                                | Ports from                                                                                |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | `Agent/AgentProtocol.swift` | Enums, event parsing, `session.start` builder, pure helpers (`combineHazardLevels`, `mapTurnState`, `detectLanguage`, `normalizeTranscriptText`, transcript export) | `shared/agent.ts`, `shared/ride.ts`, `shared/language.ts`, `android/.../AgentProtocol.kt` |
-| `Agent/MicStreamer.swift`   | Mic capture → 16 kHz PCM16 mono, 320-sample (20 ms) frames; enables echo cancellation on the shared engine and owns its start/stop                                   | `public/pcm-worklet.js`, `MicStreamer.kt`                                                 |
+| `Agent/MicStreamer.swift`   | Mic capture → 16 kHz PCM16 mono, 320-sample (20 ms) frames; enables echo cancellation on the shared engine and owns its start/stop                                  | `public/pcm-worklet.js`, `MicStreamer.kt`                                                 |
 | `Agent/PcmPlayer.swift`     | Gapless 24 kHz PCM16 playback + barge-in; attaches its player node to the shared engine                                                                             | playback cursor in `src/main.tsx`, `PcmPlayer.kt`                                         |
 | `Agent/AudioRouter.swift`   | `AVAudioSession` voice-chat config + Bluetooth (HFP) routing                                                                                                        | `AudioRouter.kt`                                                                          |
 | `Agent/AgentSession.swift`  | Relay WebSocket, reconnect backoff, transcript dedup, barge-in, `AVSpeechSynthesizer` TTS fallback, location, self-signed TLS, published state                      | `useHelmetAgent` in `src/main.tsx`, `AgentSession.kt`                                     |
@@ -191,7 +193,7 @@ audio + session logic; the `UI/` layer is the SwiftUI HUD.
   Bluetooth category options automatically prefers a connected HFP headset, so there is no
   manual SCO start/stop.
 - **Echo cancellation** is the iOS analogue of the web's `getUserMedia({ echoCancellation })`.
-  iOS only cancels echo *within a single* `AVAudioEngine`: enabling voice processing on the
+  iOS only cancels echo _within a single_ `AVAudioEngine`: enabling voice processing on the
   input node (`setVoiceProcessingEnabled(true)`) makes the voice-processing I/O unit subtract
   whatever is rendered through **that same engine's** output from the mic signal. So
   `MicStreamer` (capture) and `PcmPlayer` (playback) share one `AVAudioEngine` owned by

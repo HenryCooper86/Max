@@ -33,7 +33,12 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -55,6 +60,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -499,14 +505,15 @@ private fun PrimaryControls(
     if (state.handsFree) {
         Row(horizontalArrangement = Arrangement.spacedBy(44.dp), verticalAlignment = Alignment.CenterVertically) {
             CircleControl(
-                glyph = if (state.micMuted) "🔇" else "🎙",
+                icon = if (state.micMuted) Icons.Filled.MicOff else Icons.Filled.Mic,
+                iconColor = if (state.micMuted) HudColors.Warn else HudColors.Text,
                 background = HudColors.PanelElevated,
                 label = if (state.micMuted) "取消静音" else "静音",
                 onClick = onToggleMute
             )
             CircleControl(
-                glyph = "✕",
-                glyphColor = Color.White,
+                icon = Icons.Filled.Close,
+                iconColor = Color.White,
                 background = HudColors.Danger,
                 label = "结束",
                 onClick = onToggleHandsFree
@@ -514,7 +521,8 @@ private fun PrimaryControls(
         }
     } else {
         CircleControl(
-            glyph = "🎙",
+            icon = Icons.Filled.Mic,
+            iconColor = Color(0xFF07221A),
             background = HudColors.Accent,
             diameter = 76.dp,
             label = "开始",
@@ -525,11 +533,11 @@ private fun PrimaryControls(
 
 @Composable
 private fun CircleControl(
-    glyph: String,
+    icon: ImageVector,
     background: Color,
     label: String,
     onClick: () -> Unit,
-    glyphColor: Color = HudColors.Text,
+    iconColor: Color = HudColors.Text,
     diameter: androidx.compose.ui.unit.Dp = 64.dp
 ) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -541,7 +549,12 @@ private fun CircleControl(
                 .clickable(onClick = onClick),
             contentAlignment = Alignment.Center
         ) {
-            Text(glyph, color = glyphColor, fontSize = (diameter.value * 0.34f).sp)
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = iconColor,
+                modifier = Modifier.size(diameter * 0.42f)
+            )
         }
         Spacer(Modifier.height(7.dp))
         Text(label, color = HudColors.Muted, fontSize = 12.sp)

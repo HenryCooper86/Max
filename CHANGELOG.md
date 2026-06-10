@@ -7,6 +7,10 @@ the abstract orb, and every setting lives in one place again.
 
 ### Changed
 
+- **Android: control icons match iOS** — the start / mute / end buttons now use
+  Material vector icons (`Mic` / `MicOff` / `Close`, via `material-icons-extended`)
+  instead of emoji glyphs, so the microphone matches iOS's SF Symbol `mic.fill`.
+
 - **iOS & Android: helmet centerpiece** — the glowing orb is replaced by the
   brand helmet (shell + chin + visor + status dots), ported from the web
   `HelmetVisual` SVG and drawn natively (a small SVG-path parser feeds SwiftUI

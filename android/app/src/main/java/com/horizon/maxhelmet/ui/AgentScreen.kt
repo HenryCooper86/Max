@@ -92,6 +92,12 @@ private val TURN_CAPTIONS = mapOf(
     TurnState.SPEAKING to "Max 回答中"
 )
 
+/** Caption prefixes for a non-normal fused hazard (HAZARD_CAPTIONS in HelmetVisual.tsx). */
+private val HAZARD_CAPTIONS = mapOf(
+    HazardLevel.CAUTION to "注意路况",
+    HazardLevel.CRITICAL to "高风险 · 优先安全"
+)
+
 private fun ringColor(connected: Boolean, turnState: TurnState): Color {
     if (!connected) return HudColors.Danger
     return when (turnState) {
@@ -124,7 +130,11 @@ private fun orbColor(state: AgentSession.State): Color {
     return when (state.connection) {
         ConnectionState.OFFLINE, ConnectionState.DEGRADED -> HudColors.Danger
         ConnectionState.CONNECTING, ConnectionState.PROVIDER -> HudColors.Warn
-        ConnectionState.RELAY, ConnectionState.READY -> ringColor(true, state.turnState)
+        // The fused hazard overrides the conversational palette: a rider glancing
+        // at the helmet must see danger first, turn state second (HelmetVisual.tsx).
+        ConnectionState.RELAY, ConnectionState.READY ->
+            if (state.fusedHazard != HazardLevel.NORMAL) hazardColor(state.fusedHazard)
+            else ringColor(true, state.turnState)
     }
 }
 
@@ -132,10 +142,13 @@ private fun orbColor(state: AgentSession.State): Color {
 private fun orbCaption(state: AgentSession.State): String {
     if (!state.handsFree) return "点按头盔，开始对话"
     if (state.micMuted) return "麦克风已静音"
-    return when (state.connection) {
+    val caption = when (state.connection) {
         ConnectionState.READY -> TURN_CAPTIONS.getValue(state.turnState)
         else -> connectionLabel(state.connection)
     }
+    // A non-normal fused hazard leads the caption (HAZARD_CAPTIONS in HelmetVisual.tsx).
+    val hazardPrefix = HAZARD_CAPTIONS[state.fusedHazard]
+    return if (hazardPrefix != null) "$hazardPrefix · $caption" else caption
 }
 
 /**
@@ -190,6 +203,7 @@ fun AgentScreen(
                 turnState = state.turnState,
                 voiceLevel = state.voiceLevel,
                 dimmed = state.micMuted,
+                hazard = if (state.handsFree) state.fusedHazard else HazardLevel.NORMAL,
                 onTap = onToggleHandsFree
             )
             Spacer(Modifier.height(18.dp))
@@ -271,6 +285,7 @@ private fun HelmetVisual(
     turnState: TurnState,
     voiceLevel: Float,
     dimmed: Boolean,
+    hazard: HazardLevel,
     onTap: () -> Unit
 ) {
     val breatheDuration = when (turnState) {
@@ -295,6 +310,16 @@ private fun HelmetVisual(
         label = "breathe"
     )
 
+    // Critical fused hazard: a fast urgency pulse layered onto the glow alpha,
+    // so danger reads even when the rider isn't talking.
+    val hazardPulse by rememberInfiniteTransition(label = "hazard").animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(900, easing = LinearEasing), RepeatMode.Reverse),
+        label = "hazardPulse"
+    )
+    val critical = hazard == HazardLevel.CRITICAL
+
     val shell = remember { svgToPath(HELMET_SHELL) }
     val chin = remember { svgToPath(HELMET_CHIN) }
     val visor = remember { svgToPath(HELMET_VISOR) }
@@ -313,11 +338,14 @@ private fun HelmetVisual(
         // the growing glow into hard rectangular cuts at the top and bottom.
         val maxR = minOf(size.width, size.height) / 2f
 
+        // Critical hazard throbs the glow; otherwise it holds steady.
+        val urgency = if (critical) 0.6f + 0.4f * hazardPulse else 1f
+
         // Halo — soft state-tinted bloom behind the helmet.
         val haloR = minOf(size.width * 0.34f * (1f + 0.16f * breathe + 0.45f * level), maxR)
         drawCircle(
             brush = Brush.radialGradient(
-                colors = listOf(color.copy(alpha = 0.42f + 0.12f * level), Color.Transparent),
+                colors = listOf(color.copy(alpha = (0.42f + 0.12f * level) * urgency), Color.Transparent),
                 center = c,
                 radius = haloR
             ),
@@ -326,7 +354,7 @@ private fun HelmetVisual(
         )
         // Voice ripple — expands as the rider speaks.
         drawCircle(
-            color = color.copy(alpha = 0.12f + 0.5f * level),
+            color = color.copy(alpha = (0.12f + 0.5f * level) * urgency),
             radius = minOf(size.width * 0.30f * (0.92f + 0.5f * level), maxR * 0.95f),
             center = c,
             style = Stroke(width = 2.dp.toPx())
@@ -740,6 +768,21 @@ private fun SettingsPanel(
                 ),
                 modifier = Modifier.fillMaxWidth()
             )
+            // Optional shared relay secret, sent as the ?token= query parameter.
+            OutlinedTextField(
+                value = viewModel.authToken,
+                onValueChange = viewModel::updateAuthToken,
+                singleLine = true,
+                label = { Text("认证令牌（可选）", fontSize = 12.sp) },
+                textStyle = MaterialTheme.typography.bodySmall.copy(color = HudColors.Text),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = HudColors.AccentCyan,
+                    unfocusedBorderColor = HudColors.Border,
+                    focusedLabelColor = HudColors.AccentCyan,
+                    unfocusedLabelColor = HudColors.Muted
+                ),
+                modifier = Modifier.fillMaxWidth()
+            )
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -788,12 +831,20 @@ private fun SettingsPanel(
                 Text("延迟", color = HudColors.Muted, fontSize = 11.sp)
                 Text("${state.latencyMs}ms", color = toneColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
-            HudChip(
-                "导出日志",
-                state.transcript.isNotEmpty(),
-                { if (state.transcript.isNotEmpty()) onExportTranscript() },
-                selectedColor = HudColors.AccentCyan
-            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                HudChip(
+                    "导出日志",
+                    state.transcript.isNotEmpty(),
+                    { if (state.transcript.isNotEmpty()) onExportTranscript() },
+                    selectedColor = HudColors.AccentCyan
+                )
+                HudChip(
+                    "清空对话记录",
+                    state.transcript.isNotEmpty(),
+                    { if (state.transcript.isNotEmpty()) viewModel.clearTranscript() },
+                    selectedColor = HudColors.Danger
+                )
+            }
         }
         state.telemetry?.let {
             Text(

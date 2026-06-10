@@ -81,6 +81,13 @@ class AgentSession(
 
         /** Repeated agent lines inside this window are dropped (src/main.tsx). */
         private const val AGENT_DEDUPE_WINDOW_MS = 8_000L
+
+        /** Same prefs file the HUD settings use (MainViewModel.PREFS). */
+        private const val PREFS = "max_helmet"
+        private const val KEY_TRANSCRIPT_LOG = "transcript_log"
+
+        /** Keep the stored conversation bounded (TRANSCRIPT_CAP in src/lib/persistence.ts). */
+        private const val TRANSCRIPT_CAP = 200
     }
 
     private val _state = MutableStateFlow(State())
@@ -110,6 +117,11 @@ class AgentSession(
     private var transcriptTurn = 0
     private var location: Pair<Double, Double>? = null
 
+    private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    /** (count, last id) of the final turns last written, so partial updates skip the disk. */
+    private var persistedTranscriptSignature: Pair<Int, Int>? = null
+
     private val player = PcmPlayer()
     private val audioRouter = AudioRouter(context)
     private val mic = MicStreamer(
@@ -125,6 +137,13 @@ class AgentSession(
 
     init {
         tts = TextToSpeech(context) { status -> ttsReady = status == TextToSpeech.SUCCESS }
+        // Restore the persisted ride log so the conversation survives restarts,
+        // seeding the turn counter past it so ids never collide (useHelmetAgent.ts).
+        val restored = decodeStoredTranscript(prefs.getString(KEY_TRANSCRIPT_LOG, null))
+        if (restored.isNotEmpty()) {
+            transcriptTurn = restored.maxOf { it.id }
+            _state.update { it.copy(transcript = restored) }
+        }
     }
 
     // ---- public API --------------------------------------------------------
@@ -132,11 +151,12 @@ class AgentSession(
     /**
      * Activates hands-free: route audio, resolve location, open the relay, and
      * start the mic. `allowSelfSignedTls` opts into trusting the test server's
-     * self-signed certificate for wss:// URLs.
+     * self-signed certificate for wss:// URLs. A non-empty `authToken` is sent
+     * as the relay's `token` query parameter (server/auth.ts).
      */
-    fun start(url: String, allowSelfSignedTls: Boolean) {
+    fun start(url: String, allowSelfSignedTls: Boolean, authToken: String = "") {
         if (_state.value.handsFree) return
-        relayUrl = url
+        relayUrl = appendAuthToken(url, authToken)
 
         if (allowSelfSignedTls != allowSelfSigned) {
             allowSelfSigned = allowSelfSignedTls
@@ -262,6 +282,13 @@ class AgentSession(
 
     /** Builds the transcript export JSON (port of exportTranscriptLog in src/main.tsx). */
     fun buildTranscriptExport(): String = buildTranscriptExportJson(_state.value.transcript)
+
+    /** Clears both the live transcript and its persisted copy (清空对话记录). */
+    fun clearTranscript() {
+        _state.update { it.copy(transcript = emptyList()) }
+        persistedTranscriptSignature = null
+        prefs.edit().remove(KEY_TRANSCRIPT_LOG).apply()
+    }
 
     // ---- relay connection --------------------------------------------------
 
@@ -492,6 +519,21 @@ class AgentSession(
                 transcript = finalized + TranscriptItem(transcriptTurn, now, speaker, clean, final, language)
             )
         }
+        persistTranscript()
+    }
+
+    /**
+     * Persists the finished turns so the conversation survives restarts (the
+     * counterpart of saveStoredTranscript in src/lib/persistence.ts). Final
+     * entries never mutate, so a (count, last id) signature is enough to skip
+     * the disk write while a partial turn is still streaming in.
+     */
+    private fun persistTranscript() {
+        val finals = _state.value.transcript.filter { it.final }.takeLast(TRANSCRIPT_CAP)
+        val signature = finals.size to (finals.lastOrNull()?.id ?: 0)
+        if (signature == persistedTranscriptSignature) return
+        persistedTranscriptSignature = signature
+        prefs.edit().putString(KEY_TRANSCRIPT_LOG, encodeStoredTranscript(finals)).apply()
     }
 
     // ---- ADAS hazard alerts ------------------------------------------------

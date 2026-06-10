@@ -2,6 +2,7 @@ package com.horizon.maxhelmet.agent
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.URLEncoder
 import java.text.Normalizer
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -318,6 +319,59 @@ fun buildSessionStart(
 
 const val AUDIO_START_EVENT = """{"type":"audio.start"}"""
 const val AUDIO_STOP_EVENT = """{"type":"audio.stop"}"""
+
+/**
+ * Appends the optional relay auth token as a `token` query parameter
+ * (buildAgentUrl in src/lib/utils.ts). Handles a URL that already has a query.
+ */
+fun appendAuthToken(url: String, token: String): String {
+    val clean = token.trim()
+    if (clean.isEmpty()) return url
+    val separator = if ('?' in url) '&' else '?'
+    return url + separator + "token=" + URLEncoder.encode(clean, "UTF-8")
+}
+
+/** Serializes finished turns for SharedPreferences (saveStoredTranscript in src/lib/persistence.ts). */
+fun encodeStoredTranscript(items: List<TranscriptItem>): String {
+    val array = JSONArray()
+    items.forEach { item ->
+        array.put(
+            JSONObject().apply {
+                put("id", item.id)
+                put("at", item.at)
+                put("speaker", item.speaker.wire)
+                put("language", item.language)
+                put("text", item.text)
+            }
+        )
+    }
+    return array.toString()
+}
+
+/**
+ * Restores persisted turns (loadStoredTranscript in src/lib/persistence.ts).
+ * Anything restored is by definition a finished turn, so `final` is true.
+ * Best-effort: malformed storage yields an empty log, never a crash.
+ */
+fun decodeStoredTranscript(raw: String?): List<TranscriptItem> {
+    if (raw.isNullOrEmpty()) return emptyList()
+    return runCatching {
+        val array = JSONArray(raw)
+        (0 until array.length()).mapNotNull { index ->
+            val json = array.optJSONObject(index) ?: return@mapNotNull null
+            val text = json.optString("text")
+            if (text.isEmpty()) return@mapNotNull null
+            TranscriptItem(
+                id = json.optInt("id"),
+                at = json.optLong("at"),
+                speaker = Speaker.fromWire(json.optString("speaker")),
+                text = text,
+                final = true,
+                language = json.optString("language").ifEmpty { detectLanguage(text) }
+            )
+        }
+    }.getOrElse { emptyList() }
+}
 
 /** Port of mapTurnState in src/main.tsx — unknown states keep the previous one. */
 fun mapTurnState(state: String, previous: TurnState): TurnState = when (state) {

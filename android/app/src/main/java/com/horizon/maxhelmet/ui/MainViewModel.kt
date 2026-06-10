@@ -33,6 +33,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val DEFAULT_RELAY_URL = "ws://10.0.2.2:8787/agent"
         private const val PREFS = "max_helmet"
         private const val KEY_RELAY_URL = "relay_url"
+        private const val KEY_AUTH_TOKEN = "relay_auth_token"
         private const val KEY_ALLOW_SELF_SIGNED = "allow_self_signed"
         private const val KEY_DEV_MODE = "dev_mode"
     }
@@ -45,6 +46,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var relayUrl by mutableStateOf(prefs.getString(KEY_RELAY_URL, DEFAULT_RELAY_URL) ?: DEFAULT_RELAY_URL)
         private set
 
+    /** Optional shared relay auth token, sent as the `token` query parameter. */
+    var authToken by mutableStateOf(prefs.getString(KEY_AUTH_TOKEN, "") ?: "")
+        private set
+
     /** Trust the test relay's self-signed certificate for wss:// (prototype only). */
     var allowSelfSigned by mutableStateOf(prefs.getBoolean(KEY_ALLOW_SELF_SIGNED, false))
         private set
@@ -52,6 +57,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun updateRelayUrl(url: String) {
         relayUrl = url
         prefs.edit().putString(KEY_RELAY_URL, url).apply()
+    }
+
+    fun updateAuthToken(token: String) {
+        authToken = token
+        prefs.edit().putString(KEY_AUTH_TOKEN, token).apply()
     }
 
     fun updateAllowSelfSigned(allow: Boolean) {
@@ -101,7 +111,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             VoiceAgentService.stop(app)
         } else {
             VoiceAgentService.start(app)
-            session.start(relayUrl.trim(), allowSelfSigned)
+            session.start(relayUrl.trim(), allowSelfSigned, authToken.trim())
         }
     }
 
@@ -115,6 +125,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setRideMode(mode: RideMode) = session.setRideMode(mode)
 
     fun setScenario(scenario: DemoScenario) = session.setScenario(scenario)
+
+    /** 清空对话记录: drops both the live and the persisted conversation log. */
+    fun clearTranscript() = session.clearTranscript()
 
     /**
      * Exports the conversation log as JSON and opens the system share sheet —

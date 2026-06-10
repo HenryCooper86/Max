@@ -66,6 +66,13 @@ final class MainViewModel: ObservableObject {
     /// Rider preferences panel (voice / tone / ride mode), toggled by the gear.
     @Published var showPreferences = false
 
+    /// Captions overlay under the orb. Off by default for the clean voice-mode
+    /// look; toggled by the 字幕 button (like ChatGPT's optional captions).
+    @Published var showCaptions = false
+
+    /// Developer panel sheet, opened from the wrench (only shown when devMode is on).
+    @Published var showDevPanel = false
+
     init() {
         relayURL = defaults.string(forKey: Keys.relayURL) ?? Self.defaultRelayURL
         allowSelfSigned = defaults.object(forKey: Keys.allowSelfSigned) as? Bool ?? Self.defaultAllowSelfSigned
@@ -87,6 +94,9 @@ final class MainViewModel: ObservableObject {
                           allowSelfSignedTls: allowSelfSigned)
         }
     }
+
+    /// Mutes/unmutes the mic mid-session (bottom mute control).
+    func toggleMute() { session.toggleMute() }
 
     func setVoiceGender(_ gender: VoiceGender) { session.setVoiceGender(gender) }
     func setVoicePersonality(_ personality: VoicePersonality) { session.setVoicePersonality(personality) }

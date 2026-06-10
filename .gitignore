@@ -11,6 +11,7 @@ MR_DESCRIPTION.md
 
 # Generated native build output
 android/**/build/
+ios/build/
 
 # Xcode user-local state
 **/xcuserdata/

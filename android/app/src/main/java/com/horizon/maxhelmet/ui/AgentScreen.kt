@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -33,10 +34,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
@@ -47,9 +47,15 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -74,7 +80,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-// Captions and ring palette ported from src/components/HelmetVisual.tsx.
+// Captions and orb palette ported from src/components/HelmetVisual.tsx.
 private val TURN_CAPTIONS = mapOf(
     TurnState.IDLE to "待机",
     TurnState.LISTENING to "免提待命 · 请讲话",
@@ -108,12 +114,35 @@ private fun connectionLabel(state: ConnectionState): String = when (state) {
     ConnectionState.DEGRADED -> "降级"
 }
 
+/** The orb's hue follows the session: a calm green invites a tap when idle,
+ * amber while connecting, then the per-turn ring color once live. */
+private fun orbColor(state: AgentSession.State): Color {
+    if (!state.handsFree) return HudColors.Accent
+    return when (state.connection) {
+        ConnectionState.OFFLINE, ConnectionState.DEGRADED -> HudColors.Danger
+        ConnectionState.CONNECTING, ConnectionState.PROVIDER -> HudColors.Warn
+        ConnectionState.RELAY, ConnectionState.READY -> ringColor(true, state.turnState)
+    }
+}
+
+/** The single line under the orb — the only words on the clean screen. */
+private fun orbCaption(state: AgentSession.State): String {
+    if (!state.handsFree) return "点按光球，开始对话"
+    if (state.micMuted) return "麦克风已静音"
+    return when (state.connection) {
+        ConnectionState.READY -> TURN_CAPTIONS.getValue(state.turnState)
+        else -> connectionLabel(state.connection)
+    }
+}
+
 /**
- * Production-clean main screen: brand header, hazard alerts, hero ring,
- * glance strip, conversation, hands-free button. Rider preferences live behind
- * the gear; all test settings live in a developer panel revealed by
- * long-pressing the Max logo (persisted across launches).
+ * Pure voice-mode main screen, in the spirit of ChatGPT's voice mode: a dark
+ * glow, one big animated orb that breathes with the conversation and swells with
+ * the rider's voice, a single status caption, and minimal controls. The
+ * safety-critical ADAS hazard banner still pins to the top. Rider preferences and
+ * the developer panel open as bottom sheets; captions are optional under the orb.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AgentScreen(
     viewModel: MainViewModel,
@@ -121,165 +150,460 @@ fun AgentScreen(
     onExportTranscript: () -> Unit
 ) {
     val state by viewModel.sessionState.collectAsStateWithLifecycle()
+    val color = orbColor(state)
 
-    // Cap the HUD width and center it so it reads as a phone-width column on wide
-    // tablet screens instead of stretching edge-to-edge. Phones are narrower than
-    // the cap, so they are unaffected. Mirrors the web's centered, max-width shell.
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(HudColors.Background),
         contentAlignment = Alignment.TopCenter
     ) {
+        // Soft state-tinted glow behind everything.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.radialGradient(colors = listOf(color.copy(alpha = 0.16f), Color.Transparent))
+                )
+        )
+
         Column(
             modifier = Modifier
                 .widthIn(max = 560.dp)
                 .fillMaxHeight()
-                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .padding(horizontal = 20.dp, vertical = 14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            HeaderBar(
-                state = state,
-                devMode = viewModel.devMode,
-                preferencesShown = viewModel.showPreferences,
-                onToggleDevMode = viewModel::toggleDevMode,
-                onTogglePreferences = viewModel::togglePreferences
-            )
-            Spacer(Modifier.height(12.dp))
+            StatusPill(state = state, devMode = viewModel.devMode, onToggleDevMode = viewModel::toggleDevMode)
 
             state.hazardAlert?.let {
-                HazardBanner(it)
                 Spacer(Modifier.height(12.dp))
+                HazardBanner(it)
             }
 
-            // Everything except the header and the hands-free button scrolls.
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
-                AnimatedVisibility(visible = viewModel.showPreferences) {
-                    PreferencesPanel(state, viewModel)
-                }
+            Spacer(Modifier.weight(1f))
 
-                TurnStateRing(
-                    state,
-                    modifier = Modifier
-                        .align(Alignment.CenterHorizontally)
-                        .padding(top = 6.dp),
-                    onToggle = onToggleHandsFree
-                )
+            VoiceOrb(
+                color = color,
+                turnState = state.turnState,
+                voiceLevel = state.voiceLevel,
+                dimmed = state.micMuted,
+                onTap = onToggleHandsFree
+            )
+            Spacer(Modifier.height(18.dp))
+            Text(
+                text = orbCaption(state),
+                color = HudColors.Text,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Medium,
+                textAlign = TextAlign.Center
+            )
 
-                GlanceStrip(state)
+            Spacer(Modifier.weight(1f))
 
-                if (state.transcript.isEmpty()) {
-                    Text(
-                        text = "点按 Max 圆环开始对话",
-                        color = HudColors.Muted,
-                        fontSize = 13.sp,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                } else {
-                    ConversationCard(state.transcript)
-                }
-
-                AnimatedVisibility(visible = viewModel.devMode) {
-                    DevPanel(state, viewModel, onExportTranscript)
-                }
+            AnimatedVisibility(visible = viewModel.showCaptions) {
+                CaptionsOverlay(state.transcript)
             }
+            Spacer(Modifier.height(12.dp))
 
-            Spacer(Modifier.height(10.dp))
-            HandsFreeButton(handsFree = state.handsFree, onClick = onToggleHandsFree)
+            SecondaryControls(viewModel)
+            Spacer(Modifier.height(16.dp))
+            PrimaryControls(state = state, onToggleHandsFree = onToggleHandsFree, onToggleMute = viewModel::toggleMute)
+        }
+    }
+
+    if (viewModel.showPreferences) {
+        ModalBottomSheet(
+            onDismissRequest = { viewModel.showPreferences = false },
+            containerColor = HudColors.Background
+        ) {
+            SheetContent("偏好设置") { PreferencesPanel(state, viewModel) }
+        }
+    }
+    if (viewModel.showDevPanel) {
+        ModalBottomSheet(
+            onDismissRequest = { viewModel.showDevPanel = false },
+            containerColor = HudColors.Background
+        ) {
+            SheetContent("开发者模式") { DevPanel(state, viewModel, onExportTranscript) }
         }
     }
 }
 
-// ---- header ----------------------------------------------------------------
+// ---- top status pill (long-press toggles the developer panel) ----------------------
 
 @Composable
-private fun HeaderBar(
-    state: AgentSession.State,
-    devMode: Boolean,
-    preferencesShown: Boolean,
-    onToggleDevMode: () -> Unit,
-    onTogglePreferences: () -> Unit
-) {
+private fun StatusPill(state: AgentSession.State, devMode: Boolean, onToggleDevMode: () -> Unit) {
     val haptics = LocalHapticFeedback.current
+    val online = state.connection == ConnectionState.READY
     Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // Hidden gesture: long-press the logo to toggle the developer panel.
-        Column(
-            modifier = Modifier.pointerInput(Unit) {
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(HudColors.PanelElevated.copy(alpha = 0.7f))
+            .pointerInput(Unit) {
+                // Hidden gesture: long-press the status pill to toggle developer mode.
                 detectTapGestures(onLongPress = {
                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                     onToggleDevMode()
                 })
             }
-        ) {
-            Text("Max", color = HudColors.Text, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-            Text(
-                text = if (devMode) "摩托车头盔 AI · 开发者模式" else "摩托车头盔 AI",
-                color = if (devMode) HudColors.AccentCyan else HudColors.Muted,
-                fontSize = 12.sp
-            )
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(7.dp)
+                .clip(CircleShape)
+                .background(if (online) HudColors.Accent else HudColors.Muted)
+        )
+        Text("Max", color = HudColors.Text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        Text("·", color = HudColors.Muted, fontSize = 13.sp)
+        Text(connectionLabel(state.connection), color = HudColors.Muted, fontSize = 13.sp)
+        if (devMode) {
+            Text("· 开发者", color = HudColors.AccentCyan, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
         }
+        if (state.bluetoothRouted) {
+            Text("🎧", fontSize = 11.sp)
+        }
+    }
+}
 
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Column(horizontalAlignment = Alignment.End) {
-                val online = state.connection == ConnectionState.READY
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(if (online) HudColors.Accent else HudColors.Muted)
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(connectionLabel(state.connection), color = HudColors.Text, fontSize = 13.sp)
-                }
-                if (devMode) {
-                    val providerLabel = when {
-                        state.provider.isEmpty() -> "未连接"
-                        state.isLive -> "豆包实时语音"
-                        else -> "模拟语音"
-                    }
-                    val bluetooth = if (state.bluetoothRouted) " · 蓝牙耳机" else ""
-                    val latency = if (state.latencyMs > 0) " · ${state.latencyMs}ms" else ""
-                    Text(providerLabel + bluetooth + latency, color = HudColors.Muted, fontSize = 11.sp)
-                } else if (state.bluetoothRouted) {
-                    Text("蓝牙耳机", color = HudColors.Muted, fontSize = 11.sp)
-                }
-            }
+// ---- voice orb --------------------------------------------------------------------
 
-            Box(
-                modifier = Modifier
-                    .size(38.dp)
-                    .clip(CircleShape)
-                    .background(HudColors.PanelElevated)
-                    .clickable(onClick = onTogglePreferences),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "⚙",
-                    color = if (preferencesShown) HudColors.Accent else HudColors.Muted,
-                    fontSize = 18.sp
+/**
+ * A glowing, breathing sphere that reacts to the session: it breathes faster
+ * while thinking, ripples outward with the rider's voice level, and shows a
+ * rotating shimmer while Max thinks. Tapping it toggles hands-free.
+ */
+@Composable
+private fun VoiceOrb(
+    color: Color,
+    turnState: TurnState,
+    voiceLevel: Float,
+    dimmed: Boolean,
+    onTap: () -> Unit
+) {
+    val breatheDuration = when (turnState) {
+        TurnState.IDLE -> 1700
+        TurnState.LISTENING, TurnState.HEARING -> 1150
+        TurnState.THINKING -> 760
+        TurnState.SPEAKING -> 1000
+    }
+    val pulseAmp = when (turnState) {
+        TurnState.IDLE -> 0.05f
+        TurnState.LISTENING, TurnState.HEARING -> 0.10f
+        TurnState.THINKING -> 0.14f
+        TurnState.SPEAKING -> 0.17f
+    }
+
+    val transition = rememberInfiniteTransition(label = "orb")
+    val breathe by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(breatheDuration, easing = LinearEasing), RepeatMode.Reverse),
+        label = "breathe"
+    )
+    val spin by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(1400, easing = LinearEasing), RepeatMode.Restart),
+        label = "spin"
+    )
+
+    Canvas(
+        modifier = Modifier
+            .size(250.dp)
+            .clip(CircleShape)
+            .alpha(if (dimmed) 0.5f else 1f)
+            .clickable(onClick = onTap)
+    ) {
+        val c = center
+        val level = voiceLevel.coerceIn(0f, 1f)
+        val base = size.minDimension * 0.30f
+        val coreScale = 1f + pulseAmp * breathe + 0.28f * level
+
+        // Outer halo — soft colored bloom.
+        val haloR = base * (1.55f + 0.18f * breathe + 0.30f * level)
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(color.copy(alpha = 0.42f), Color.Transparent),
+                center = c,
+                radius = haloR
+            ),
+            radius = haloR,
+            center = c
+        )
+        // Voice ripple — expands as the rider speaks.
+        drawCircle(
+            color = color.copy(alpha = 0.15f + 0.7f * level),
+            radius = base * (0.95f + 0.55f * level),
+            center = c,
+            style = Stroke(width = 2.dp.toPx())
+        )
+        // Core sphere — offset highlight reads as a lit orb.
+        val coreR = base * coreScale
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(Color.White.copy(alpha = 0.92f), color, color.copy(alpha = 0.72f)),
+                center = Offset(c.x - base * 0.22f, c.y - base * 0.28f),
+                radius = coreR * 1.15f
+            ),
+            radius = coreR,
+            center = c
+        )
+        drawCircle(
+            color = Color.White.copy(alpha = 0.14f),
+            radius = coreR,
+            center = c,
+            style = Stroke(width = 1.dp.toPx())
+        )
+        // Thinking shimmer — a rotating highlight arc.
+        if (turnState == TurnState.THINKING) {
+            rotate(spin, pivot = c) {
+                val r = coreR * 1.04f
+                drawArc(
+                    color = Color.White.copy(alpha = 0.55f),
+                    startAngle = 0f,
+                    sweepAngle = 100f,
+                    useCenter = false,
+                    topLeft = Offset(c.x - r, c.y - r),
+                    size = Size(r * 2f, r * 2f),
+                    style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round)
                 )
             }
         }
     }
 }
 
-// ---- rider preferences (gear) -------------------------------------------------
+// ---- secondary controls (字幕 · 偏好 · 开发者) ---------------------------------------
+
+@Composable
+private fun SecondaryControls(viewModel: MainViewModel) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        PillToggle(glyph = "💬", label = "字幕", on = viewModel.showCaptions, onClick = viewModel::toggleCaptions)
+        Spacer(Modifier.weight(1f))
+        if (viewModel.devMode) {
+            PillToggle(glyph = "🛠", label = "开发", on = false, onClick = { viewModel.showDevPanel = true })
+            Spacer(Modifier.width(10.dp))
+        }
+        PillToggle(glyph = "⚙", label = "偏好", on = false, onClick = { viewModel.showPreferences = true })
+    }
+}
+
+@Composable
+private fun PillToggle(glyph: String, label: String, on: Boolean, onClick: () -> Unit) {
+    val tint = if (on) HudColors.Accent else HudColors.Muted
+    val background = if (on) HudColors.Accent.copy(alpha = 0.16f) else HudColors.PanelElevated
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(background)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text(glyph, fontSize = 13.sp)
+        Text(label, color = tint, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+// ---- primary controls (start · mute · end) -------------------------------------------
+
+@Composable
+private fun PrimaryControls(
+    state: AgentSession.State,
+    onToggleHandsFree: () -> Unit,
+    onToggleMute: () -> Unit
+) {
+    if (state.handsFree) {
+        Row(horizontalArrangement = Arrangement.spacedBy(44.dp), verticalAlignment = Alignment.CenterVertically) {
+            CircleControl(
+                glyph = if (state.micMuted) "🔇" else "🎙",
+                background = HudColors.PanelElevated,
+                label = if (state.micMuted) "取消静音" else "静音",
+                onClick = onToggleMute
+            )
+            CircleControl(
+                glyph = "✕",
+                glyphColor = Color.White,
+                background = HudColors.Danger,
+                label = "结束",
+                onClick = onToggleHandsFree
+            )
+        }
+    } else {
+        CircleControl(
+            glyph = "🎙",
+            background = HudColors.Accent,
+            diameter = 76.dp,
+            label = "开始",
+            onClick = onToggleHandsFree
+        )
+    }
+}
+
+@Composable
+private fun CircleControl(
+    glyph: String,
+    background: Color,
+    label: String,
+    onClick: () -> Unit,
+    glyphColor: Color = HudColors.Text,
+    diameter: androidx.compose.ui.unit.Dp = 64.dp
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            modifier = Modifier
+                .size(diameter)
+                .clip(CircleShape)
+                .background(background)
+                .clickable(onClick = onClick),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(glyph, color = glyphColor, fontSize = (diameter.value * 0.34f).sp)
+        }
+        Spacer(Modifier.height(7.dp))
+        Text(label, color = HudColors.Muted, fontSize = 12.sp)
+    }
+}
+
+// ---- optional captions overlay (字幕) -------------------------------------------------
+
+@Composable
+private fun CaptionsOverlay(items: List<TranscriptItem>) {
+    val listState = rememberLazyListState()
+    val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+
+    LaunchedEffect(items.size, items.lastOrNull()?.text) {
+        if (items.isNotEmpty()) listState.animateScrollToItem(items.lastIndex)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(HudColors.Panel)
+            .padding(14.dp)
+    ) {
+        if (items.isEmpty()) {
+            Text(
+                text = "暂无字幕",
+                color = HudColors.Muted,
+                fontSize = 13.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 18.dp)
+            )
+        } else {
+            LazyColumn(
+                state = listState,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(190.dp)
+            ) {
+                items(items, key = { it.id }) { item ->
+                    ChatBubble(item = item, time = timeFormat.format(Date(item.at)))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatBubble(item: TranscriptItem, time: String) {
+    val isRider = item.speaker == Speaker.RIDER
+    val bubbleColor = if (isRider) HudColors.Rider.copy(alpha = 0.16f) else HudColors.PanelElevated
+    val speakerColor = if (isRider) HudColors.Rider else HudColors.Accent
+
+    Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = if (isRider) Alignment.CenterEnd else Alignment.CenterStart
+    ) {
+        Column(
+            horizontalAlignment = if (isRider) Alignment.End else Alignment.Start,
+            modifier = Modifier.padding(
+                start = if (isRider) 40.dp else 0.dp,
+                end = if (isRider) 0.dp else 40.dp
+            )
+        ) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(bubbleColor)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                Text(item.text, color = HudColors.Text, fontSize = 14.sp)
+            }
+            Spacer(Modifier.height(3.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text(
+                    text = if (isRider) "骑手" else "Max",
+                    color = speakerColor,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(time, color = HudColors.Muted, fontSize = 10.sp)
+                if (!item.final) Text("…", color = HudColors.Muted, fontSize = 10.sp)
+            }
+        }
+    }
+}
+
+// ---- ADAS hazard banner (safety-critical: kept on every screen) ----------------------
+
+@Composable
+private fun HazardBanner(alert: AgentEvent.HazardAlert) {
+    val color = hazardColor(alert.severity)
+    HudCard(borderColor = color) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(color.copy(alpha = 0.22f))
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+            ) {
+                Text(alert.directionLabel, color = HudColors.Text, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text("⚠️ ${alert.label}", color = HudColors.Text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Text("${alert.message} ${alert.advice}", color = HudColors.Muted, fontSize = 12.sp)
+            }
+            Spacer(Modifier.width(8.dp))
+            Text("${alert.ttcSeconds}s", color = color, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+// ---- settings sheet scaffold ----------------------------------------------------------
+
+@Composable
+private fun SheetContent(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 18.dp)
+            .padding(bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Text(title, color = HudColors.Text, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        content()
+    }
+}
+
+// ---- rider preferences ----------------------------------------------------------------
 
 @Composable
 private fun PreferencesPanel(state: AgentSession.State, viewModel: MainViewModel) {
     HudCard {
-        Text("偏好设置", color = HudColors.Muted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(8.dp))
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             ChipRow(label = "声音") {
                 VoiceGender.entries.forEach { gender ->
@@ -356,247 +680,7 @@ private fun HudChip(
     }
 }
 
-// ---- hero ring -----------------------------------------------------------------
-
-@Composable
-private fun TurnStateRing(
-    state: AgentSession.State,
-    modifier: Modifier = Modifier,
-    onToggle: () -> Unit = {}
-) {
-    val connected = state.connection != ConnectionState.OFFLINE && state.connection != ConnectionState.DEGRADED
-    val color = ringColor(connected, state.turnState)
-    val caption = if (connected) TURN_CAPTIONS.getValue(state.turnState) else "离线"
-
-    val pulse by rememberInfiniteTransition(label = "ring-pulse").animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1600, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "ring-pulse"
-    )
-
-    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        // Tapping the big ring toggles hands-free — the gesture riders reach for first.
-        Box(
-            modifier = Modifier
-                .size(210.dp)
-                .clip(CircleShape)
-                .clickable(onClick = onToggle),
-            contentAlignment = Alignment.Center
-        ) {
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                // DrawScope.center is the middle of the drawing area.
-                val baseRadius = size.minDimension * 0.36f
-
-                // Soft outer glow ring, breathing with the pulse animation.
-                drawCircle(
-                    color = color.copy(alpha = 0.10f + 0.10f * pulse),
-                    radius = baseRadius + 22.dp.toPx() * (0.6f + 0.4f * pulse),
-                    center = center
-                )
-                // Voice-level ring: expands as the rider speaks.
-                drawCircle(
-                    color = color.copy(alpha = 0.35f),
-                    radius = baseRadius + 16.dp.toPx() * state.voiceLevel,
-                    center = center,
-                    style = Stroke(width = 2.dp.toPx())
-                )
-                // Main state ring.
-                drawCircle(
-                    color = color,
-                    radius = baseRadius,
-                    center = center,
-                    style = Stroke(width = 3.5.dp.toPx())
-                )
-                // Inner fill.
-                drawCircle(
-                    color = color.copy(alpha = 0.08f),
-                    radius = baseRadius - 3.dp.toPx(),
-                    center = center
-                )
-            }
-            Text(
-                text = if (state.handsFree) "免提中" else "Max",
-                color = color,
-                fontSize = 26.sp,
-                fontWeight = FontWeight.Bold
-            )
-        }
-        Spacer(Modifier.height(6.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .size(7.dp)
-                    .clip(CircleShape)
-                    .background(color)
-            )
-            Spacer(Modifier.width(6.dp))
-            Text(caption, color = HudColors.Text, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-        }
-    }
-}
-
-// ---- ADAS hazard banner ---------------------------------------------------------
-
-@Composable
-private fun HazardBanner(alert: AgentEvent.HazardAlert) {
-    val color = hazardColor(alert.severity)
-    HudCard(borderColor = color) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(color.copy(alpha = 0.22f))
-                    .padding(horizontal = 10.dp, vertical = 8.dp)
-            ) {
-                Text(alert.directionLabel, color = HudColors.Text, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text("⚠️ ${alert.label}", color = HudColors.Text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                Text("${alert.message} ${alert.advice}", color = HudColors.Muted, fontSize = 12.sp)
-            }
-            Spacer(Modifier.width(8.dp))
-            Text("${alert.ttcSeconds}s", color = color, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-        }
-    }
-}
-
-// ---- glance strip (speed · risk · weather · battery) ------------------------------
-
-@Composable
-private fun GlanceStrip(state: AgentSession.State) {
-    val fused = state.fusedHazard
-    val context = state.rideContext
-    val weather = state.weather
-
-    HudCard {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            GlanceCell(value = "${context.speedKmh}", unit = "km/h", label = "速度")
-            GlanceCell(value = fused.label, label = "风险", valueColor = hazardColor(fused))
-            if (weather != null) {
-                GlanceCell(value = "${weather.temperatureC}°", label = weather.description)
-            } else {
-                GlanceCell(value = "--", label = "天气")
-            }
-            GlanceCell(value = "${context.batteryPct}%", label = "电量")
-        }
-
-        if (fused != HazardLevel.NORMAL) {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = fused.riderAction,
-                color = hazardColor(fused),
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold
-            )
-        }
-        if (weather != null && weather.riskLevel != HazardLevel.NORMAL) {
-            Spacer(Modifier.height(2.dp))
-            Text(weather.riderAdvice, color = HudColors.Muted, fontSize = 12.sp)
-        }
-    }
-}
-
-@Composable
-private fun GlanceCell(
-    value: String,
-    label: String,
-    unit: String = "",
-    valueColor: Color = HudColors.Text
-) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text(value, color = valueColor, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-            if (unit.isNotEmpty()) {
-                Spacer(Modifier.width(2.dp))
-                Text(unit, color = HudColors.Muted, fontSize = 10.sp, modifier = Modifier.padding(bottom = 2.dp))
-            }
-        }
-        Text(label, color = HudColors.Muted, fontSize = 11.sp, maxLines = 1)
-    }
-}
-
-// ---- conversation -----------------------------------------------------------------
-
-@Composable
-private fun ConversationCard(items: List<TranscriptItem>) {
-    val listState = rememberLazyListState()
-    val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
-
-    // Keep the latest turn in view as the conversation grows.
-    LaunchedEffect(items.size, items.lastOrNull()?.text) {
-        if (items.isNotEmpty()) listState.animateScrollToItem(items.lastIndex)
-    }
-
-    HudCard {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("对话", color = HudColors.Muted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-            Text("${items.size}", color = HudColors.Muted, fontSize = 11.sp)
-        }
-        Spacer(Modifier.height(8.dp))
-        LazyColumn(
-            state = listState,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(250.dp)
-        ) {
-            items(items, key = { it.id }) { item ->
-                ChatBubble(item = item, time = timeFormat.format(Date(item.at)))
-            }
-        }
-    }
-}
-
-@Composable
-private fun ChatBubble(item: TranscriptItem, time: String) {
-    val isRider = item.speaker == Speaker.RIDER
-    val bubbleColor = if (isRider) HudColors.Rider.copy(alpha = 0.16f) else HudColors.PanelElevated
-    val speakerColor = if (isRider) HudColors.Rider else HudColors.Accent
-
-    Box(
-        modifier = Modifier.fillMaxWidth(),
-        contentAlignment = if (isRider) Alignment.CenterEnd else Alignment.CenterStart
-    ) {
-        Column(
-            horizontalAlignment = if (isRider) Alignment.End else Alignment.Start,
-            modifier = Modifier.padding(
-                start = if (isRider) 40.dp else 0.dp,
-                end = if (isRider) 0.dp else 40.dp
-            )
-        ) {
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(bubbleColor)
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
-            ) {
-                Text(item.text, color = HudColors.Text, fontSize = 14.sp)
-            }
-            Spacer(Modifier.height(3.dp))
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text(
-                    text = if (isRider) "骑手" else "Max",
-                    color = speakerColor,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(time, color = HudColors.Muted, fontSize = 10.sp)
-                if (!item.final) Text("…", color = HudColors.Muted, fontSize = 10.sp)
-            }
-        }
-    }
-}
-
-// ---- developer panel (long-press the logo) -------------------------------------------
+// ---- developer panel (open from the wrench when developer mode is on) ------------------
 
 @Composable
 private fun DevPanel(
@@ -610,7 +694,7 @@ private fun DevPanel(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("开发者模式", color = HudColors.AccentCyan, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Text("会话与遥测", color = HudColors.AccentCyan, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             HudChip(
                 label = "导出日志",
                 selected = state.transcript.isNotEmpty(),
@@ -689,29 +773,7 @@ private fun DevPanel(
     }
 }
 
-// ---- hands-free button ----------------------------------------------------------
-
-@Composable
-private fun HandsFreeButton(handsFree: Boolean, onClick: () -> Unit) {
-    Button(
-        onClick = onClick,
-        shape = RoundedCornerShape(50),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = if (handsFree) HudColors.Danger else HudColors.Accent,
-            contentColor = if (handsFree) HudColors.Text else Color(0xFF07221A)
-        ),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Text(
-            if (handsFree) "结束免提" else "开启免提",
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(vertical = 7.dp)
-        )
-    }
-}
-
-// ---- shared card scaffolding -------------------------------------------------------
+// ---- shared card scaffolding -----------------------------------------------------------
 
 @Composable
 private fun HudCard(
@@ -722,7 +784,7 @@ private fun HudCard(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(HudColors.Panel)
+            .background(HudColors.PanelElevated)
             .then(
                 if (borderColor != Color.Transparent) {
                     Modifier.border(1.dp, borderColor, RoundedCornerShape(16.dp))

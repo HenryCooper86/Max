@@ -67,9 +67,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var devMode by mutableStateOf(prefs.getBoolean(KEY_DEV_MODE, false))
         private set
 
-    /** Rider preferences panel (voice / tone / ride mode), toggled by the gear. */
+    /** Rider preferences sheet (voice / tone / ride mode), opened by the gear. */
     var showPreferences by mutableStateOf(false)
+
+    /**
+     * Captions overlay under the orb. Off by default for the clean voice-mode
+     * look; toggled by the 字幕 button (like ChatGPT's optional captions).
+     */
+    var showCaptions by mutableStateOf(false)
         private set
+
+    /** Developer panel sheet, opened from the wrench (only shown when devMode is on). */
+    var showDevPanel by mutableStateOf(false)
 
     fun toggleDevMode() {
         devMode = !devMode
@@ -78,6 +87,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun togglePreferences() {
         showPreferences = !showPreferences
+    }
+
+    fun toggleCaptions() {
+        showCaptions = !showCaptions
     }
 
     /** One toggle, like the web HUD's 开启免提 / 结束免提 button. */
@@ -91,6 +104,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             session.start(relayUrl.trim(), allowSelfSigned)
         }
     }
+
+    /** Mutes/unmutes the mic mid-session (bottom mute control). */
+    fun toggleMute() = session.toggleMute()
 
     fun setVoiceGender(gender: VoiceGender) = session.setVoiceGender(gender)
 

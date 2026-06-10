@@ -16,6 +16,9 @@ final class AgentSession: NSObject, ObservableObject {
         var provider = ""
         var isLive = false
         var turnState: TurnState = .idle
+        /// Mic muted mid-session: the relay stays open and Max can keep speaking,
+        /// but rider audio frames are withheld (ChatGPT-style mute).
+        var micMuted = false
         var voiceGender: VoiceGender = .female
         var voicePersonality: VoicePersonality = .concise
         var voiceLevel: Float = 0
@@ -56,6 +59,9 @@ final class AgentSession: NSObject, ObservableObject {
 
     private var intentionalClose = false
     private var transmitting = false
+    /// Plain mirror of `state.micMuted`, read off the audio thread alongside
+    /// `transmitting` so the mic callback never touches `@Published` state.
+    private var micMuted = false
 
     private var transcriptTurn = 0
     /// Bumped on each hazard alert so a stale auto-clear can't dismiss a newer one.
@@ -72,12 +78,13 @@ final class AgentSession: NSObject, ObservableObject {
     private lazy var mic = MicStreamer(
         engine: voiceEngine,
         onFrame: { [weak self] frame in
-            guard let self, self.transmitting else { return }
+            guard let self, self.transmitting, !self.micMuted else { return }
             self.webSocket?.send(.data(frame)) { _ in }
         },
         onLevel: { [weak self] level in
             guard let self else { return }
-            self.update { $0.voiceLevel = self.transmitting ? level : 0 }
+            let active = self.transmitting && !self.micMuted
+            self.update { $0.voiceLevel = active ? level : 0 }
         }
     )
 
@@ -108,11 +115,13 @@ final class AgentSession: NSObject, ObservableObject {
         intentionalClose = false
         reconnectAttempts = 0
         transmitting = true
+        micMuted = false
 
         let bluetoothRouted = audioRouter.startVoiceRouting()
         update {
             $0.handsFree = true
             $0.turnState = .listening
+            $0.micMuted = false
             $0.bluetoothRouted = bluetoothRouted
         }
 
@@ -151,6 +160,7 @@ final class AgentSession: NSObject, ObservableObject {
     func stop() {
         guard state.value.handsFree else { return }
         transmitting = false
+        micMuted = false
         intentionalClose = true
         reconnectWorkItem?.cancel()
         webSocket?.send(.string(audioStopEvent)) { _ in }
@@ -166,8 +176,21 @@ final class AgentSession: NSObject, ObservableObject {
             $0.statusText = "离线"
             $0.turnState = .idle
             $0.voiceLevel = 0
+            $0.micMuted = false
             $0.bluetoothRouted = false
             $0.hazardAlert = nil
+        }
+    }
+
+    /// Mutes/unmutes the rider's microphone without ending the session, so Max can
+    /// keep talking while the rider's audio is withheld (the bottom mute control).
+    func toggleMute() {
+        guard state.value.handsFree else { return }
+        micMuted.toggle()
+        let muted = micMuted
+        update {
+            $0.micMuted = muted
+            if muted { $0.voiceLevel = 0 }
         }
     }
 

@@ -52,8 +52,9 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradle
 1. Start the relay on the Mac: `npm run dev:server` (or `npm run dev`) from the repo root.
    The server listens on `0.0.0.0:8787`, so it is reachable over the LAN.
 2. Install and launch the app, then set the 语音中继地址 field — it lives in the hidden
-   developer panel: **long-press the Max logo** on the main screen to reveal it (persisted;
-   long-press again to hide):
+   developer panel: **long-press the status pill** (the `Max · 已就绪` chip at the top) to enable
+   developer mode, then tap the **开发** (wrench) button in the control row to open it (persisted;
+   long-press the pill again to hide developer mode):
 
 | Where the app runs   | Relay URL                                                         |
 | -------------------- | ----------------------------------------------------------------- |

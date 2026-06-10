@@ -50,6 +50,11 @@ class AgentSession(
         val provider: String = "",
         val isLive: Boolean = false,
         val turnState: TurnState = TurnState.IDLE,
+        /**
+         * Mic muted mid-session: the relay stays open and Max can keep speaking,
+         * but rider audio frames are withheld (ChatGPT-style mute).
+         */
+        val micMuted: Boolean = false,
         val voiceGender: VoiceGender = VoiceGender.FEMALE,
         val voicePersonality: VoicePersonality = VoicePersonality.CONCISE,
         val voiceLevel: Float = 0f,
@@ -97,14 +102,19 @@ class AgentSession(
     @Volatile
     private var transmitting = false
 
+    /** Plain mirror of `state.micMuted`, read off the audio thread alongside
+     * `transmitting` so the mic callback never touches the StateFlow. */
+    @Volatile
+    private var micMuted = false
+
     private var transcriptTurn = 0
     private var location: Pair<Double, Double>? = null
 
     private val player = PcmPlayer()
     private val audioRouter = AudioRouter(context)
     private val mic = MicStreamer(
-        onFrame = { frame -> if (transmitting) webSocket?.send(frame.toByteString()) },
-        onLevel = { level -> _state.update { it.copy(voiceLevel = if (transmitting) level else 0f) } }
+        onFrame = { frame -> if (transmitting && !micMuted) webSocket?.send(frame.toByteString()) },
+        onLevel = { level -> _state.update { it.copy(voiceLevel = if (transmitting && !micMuted) level else 0f) } }
     )
 
     // Device-TTS fallback, the counterpart of the browser speechSynthesis path:
@@ -136,13 +146,19 @@ class AgentSession(
         intentionalClose = false
         reconnectAttempts = 0
         transmitting = true
+        micMuted = false
 
         // In-helmet Bluetooth headset routing; playback follows the same path.
         val bluetoothRouted = audioRouter.startVoiceRouting()
         player.useVoiceCall = bluetoothRouted
 
         _state.update {
-            it.copy(handsFree = true, turnState = TurnState.LISTENING, bluetoothRouted = bluetoothRouted)
+            it.copy(
+                handsFree = true,
+                turnState = TurnState.LISTENING,
+                micMuted = false,
+                bluetoothRouted = bluetoothRouted
+            )
         }
         scope.launch {
             location = resolveLocation()
@@ -160,6 +176,7 @@ class AgentSession(
     fun stop() {
         if (!_state.value.handsFree) return
         transmitting = false
+        micMuted = false
         intentionalClose = true
         reconnectJob?.cancel()
         webSocket?.send(AUDIO_STOP_EVENT)
@@ -177,10 +194,22 @@ class AgentSession(
                 statusText = "离线",
                 turnState = TurnState.IDLE,
                 voiceLevel = 0f,
+                micMuted = false,
                 bluetoothRouted = false,
                 hazardAlert = null
             )
         }
+    }
+
+    /**
+     * Mutes/unmutes the rider's microphone without ending the session, so Max can
+     * keep talking while the rider's audio is withheld (the bottom mute control).
+     */
+    fun toggleMute() {
+        if (!_state.value.handsFree) return
+        micMuted = !micMuted
+        val muted = micMuted
+        _state.update { it.copy(micMuted = muted, voiceLevel = if (muted) 0f else it.voiceLevel) }
     }
 
     /**

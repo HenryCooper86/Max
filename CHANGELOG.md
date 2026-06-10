@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-06-10 — Voice mode
+
+A ground-up redesign of the iOS and Android main screens into a "pure voice
+mode" in the spirit of ChatGPT's voice mode: a dark, state-tinted glow with one
+big animated orb at the center, a single status caption, and minimal controls.
+
+### Changed
+
+- **iOS & Android: pure voice-mode screen** — the data-dense HUD is replaced by a
+  glowing **voice orb** that breathes with the turn state (faster while thinking),
+  swells with the rider's voice level, and shows a rotating shimmer while Max
+  thinks. Tapping the orb toggles hands-free. Below it sits one status caption and
+  a minimal control row: a single **开始** mic button when idle, or **静音 / 结束**
+  while live. (`ios/.../UI/AgentScreen.swift`, `android/.../ui/AgentScreen.kt`)
+- **Optional captions (字幕)** — the conversation transcript is hidden by default
+  for the clean look and revealed on demand as a rolling overlay under the orb,
+  matching ChatGPT's optional captions.
+- **Settings as sheets** — rider preferences (gear) and the developer panel
+  (wrench, shown only in developer mode) now open as bottom sheets / detents
+  instead of inline cards, keeping the main screen empty. Developer mode is still
+  toggled by long-pressing the top status pill. The ADAS hazard banner still pins
+  to the top on every screen.
+- **New: mid-session mic mute** — a real mute that withholds rider audio while
+  keeping the relay open so Max can keep speaking (`AgentSession.toggleMute()` on
+  both clients).
+
 ## 2026-06-10
 
 Relay hardening, web HUD accessibility/design polish, an iOS mic-tap fix, and a

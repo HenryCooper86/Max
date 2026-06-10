@@ -30,6 +30,7 @@ final class MainViewModel: ObservableObject {
 
     private enum Keys {
         static let relayURL = "relay_url"
+        static let authToken = "auth_token"
         static let allowSelfSigned = "allow_self_signed"
         static let devMode = "dev_mode"
     }
@@ -39,6 +40,12 @@ final class MainViewModel: ObservableObject {
 
     @Published var relayURL: String {
         didSet { defaults.set(relayURL, forKey: Keys.relayURL) }
+    }
+
+    /// Optional shared auth token for the relay; appended to the /agent URL as
+    /// `?token=…` when non-empty. Empty means the relay requires no token.
+    @Published var authToken: String {
+        didSet { defaults.set(authToken, forKey: Keys.authToken) }
     }
 
     /// Trust the test relay's self-signed certificate for wss:// (prototype only).
@@ -75,6 +82,7 @@ final class MainViewModel: ObservableObject {
 
     init() {
         relayURL = defaults.string(forKey: Keys.relayURL) ?? Self.defaultRelayURL
+        authToken = defaults.string(forKey: Keys.authToken) ?? ""
         allowSelfSigned = defaults.object(forKey: Keys.allowSelfSigned) as? Bool ?? Self.defaultAllowSelfSigned
         devMode = defaults.bool(forKey: Keys.devMode)
     }
@@ -91,12 +99,16 @@ final class MainViewModel: ObservableObject {
             session.stop()
         } else {
             session.start(url: relayURL.trimmingCharacters(in: .whitespacesAndNewlines),
+                          authToken: authToken.trimmingCharacters(in: .whitespacesAndNewlines),
                           allowSelfSignedTls: allowSelfSigned)
         }
     }
 
     /// Mutes/unmutes the mic mid-session (bottom mute control).
     func toggleMute() { session.toggleMute() }
+
+    /// Empties the conversation log and its persisted copy (设置 → 诊断 → 清空).
+    func clearTranscript() { session.clearTranscript() }
 
     func setVoiceGender(_ gender: VoiceGender) { session.setVoiceGender(gender) }
     func setVoicePersonality(_ personality: VoicePersonality) { session.setVoicePersonality(personality) }

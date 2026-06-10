@@ -40,8 +40,11 @@ private func connectionLabel(_ state: ConnectionState) -> String {
 }
 
 /// The glow's hue follows the session: a calm green invites a tap when idle,
-/// amber while connecting, then the per-turn ring color once live.
+/// amber while connecting, then the per-turn ring color once live. The fused
+/// hazard (ride + weather, see State.fusedHazard) overrides the conversational
+/// palette — safety tint always wins, mirroring the web HelmetVisual.
 private func orbColor(_ state: AgentSession.State) -> Color {
+    if state.fusedHazard != .normal { return hazardColor(state.fusedHazard) }
     guard state.handsFree else { return HudColors.accent }
     switch state.connection {
     case .offline, .degraded: return HudColors.danger
@@ -51,12 +54,22 @@ private func orbColor(_ state: AgentSession.State) -> Color {
 }
 
 /// The single line under the helmet — the only words on the clean screen.
+/// An elevated fused hazard prefixes the caption with the safety call-out.
 private func orbCaption(_ state: AgentSession.State) -> String {
-    guard state.handsFree else { return "点按头盔，开始对话" }
-    if state.micMuted { return "麦克风已静音" }
-    switch state.connection {
-    case .ready: return turnCaptions[state.turnState] ?? ""
-    default: return connectionLabel(state.connection)
+    let base: String
+    if !state.handsFree {
+        base = "点按头盔，开始对话"
+    } else if state.micMuted {
+        base = "麦克风已静音"
+    } else if state.connection == .ready {
+        base = turnCaptions[state.turnState] ?? ""
+    } else {
+        base = connectionLabel(state.connection)
+    }
+    switch state.fusedHazard {
+    case .normal: return base
+    case .caution: return "注意路况 · " + base
+    case .critical: return "高风险 · 优先安全 · " + base
     }
 }
 
@@ -91,6 +104,7 @@ struct AgentScreen: View {
                     turnState: state.turnState,
                     voiceLevel: state.voiceLevel,
                     dimmed: state.micMuted,
+                    hazard: state.fusedHazard,
                     onTap: viewModel.toggleHandsFree
                 )
 
@@ -227,6 +241,8 @@ private struct HelmetVisual: View {
     let turnState: TurnState
     let voiceLevel: Float
     let dimmed: Bool
+    /// Fused ride + weather hazard; critical adds a ~0.9s opacity pulse.
+    let hazard: HazardLevel
     var onTap: () -> Void
 
     private var breatheSpeed: Double {
@@ -253,6 +269,11 @@ private struct HelmetVisual: View {
             let level = Double(max(0, min(1, voiceLevel)))
             let breathe = 0.5 + 0.5 * sin(t * breatheSpeed)
             let pulse = pulseAmplitude * breathe + 0.06 * level
+            // Critical hazard: a subtle ~0.9s opacity pulse so the danger tint
+            // visibly throbs without competing with the hazard banner.
+            let hazardPulse = hazard == .critical
+                ? 0.86 + 0.14 * (0.5 + 0.5 * sin(t * (2 * .pi / 0.9)))
+                : 1.0
 
             Canvas { context, size in
                 drawHelmet(
@@ -262,6 +283,7 @@ private struct HelmetVisual: View {
                     speaking: turnState == .speaking
                 )
             }
+            .opacity(hazardPulse)
         }
         .frame(width: 300, height: 300)
         .opacity(dimmed ? 0.55 : 1)
@@ -698,6 +720,16 @@ private struct SettingsPanel: View {
                     .autocorrectionDisabled(true)
                     .padding(12)
                     .background(RoundedRectangle(cornerRadius: 10).fill(HudColors.panelElevated))
+                Text("认证令牌（可选，服务器未配置时留空）")
+                    .font(.system(size: 11)).foregroundColor(HudColors.muted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                TextField("认证令牌", text: $viewModel.authToken)
+                    .font(.system(size: 14))
+                    .foregroundColor(HudColors.text)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled(true)
+                    .padding(12)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(HudColors.panelElevated))
                 HStack {
                     Text("信任自签名证书（测试服务器）")
                         .font(.system(size: 12)).foregroundColor(HudColors.muted)
@@ -734,6 +766,9 @@ private struct SettingsPanel: View {
                 Spacer()
                 HudChip(label: "导出日志", selected: !state.transcript.isEmpty, selectedColor: HudColors.accentCyan) {
                     if !state.transcript.isEmpty { viewModel.exportTranscript() }
+                }
+                HudChip(label: "清空", selected: !state.transcript.isEmpty, selectedColor: HudColors.danger) {
+                    if !state.transcript.isEmpty { viewModel.clearTranscript() }
                 }
             }
             if let telemetry = state.telemetry {

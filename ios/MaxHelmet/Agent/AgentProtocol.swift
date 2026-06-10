@@ -165,7 +165,7 @@ func responseModeLabel(_ responseMode: String) -> String {
     }
 }
 
-enum Speaker: String {
+enum Speaker: String, Codable {
     case rider, agent
 
     var wire: String { rawValue }
@@ -175,7 +175,8 @@ enum Speaker: String {
     }
 }
 
-struct TranscriptItem: Identifiable, Equatable {
+/// Codable so AgentSession can persist the recent final turns across launches.
+struct TranscriptItem: Identifiable, Equatable, Codable {
     let id: Int
     var at: Date
     let speaker: Speaker

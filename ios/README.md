@@ -22,12 +22,12 @@ Voice mode: the brand helmet breathes and glows with the conversation, with a
 single caption and minimal controls. The ADAS hazard banner pins to the top, and
 every setting lives in the 设置 sheet.
 
-| 待机 — 点按头盔                                   | 免提会话 + ADAS 提示                                  |
-| ------------------------------------------------- | ----------------------------------------------------- |
+| 待机 — 点按头盔                                          | 免提会话 + ADAS 提示                                                   |
+| -------------------------------------------------------- | ---------------------------------------------------------------------- |
 | ![iOS voice mode, idle](../docs/assets/ios-hud-idle.png) | ![iOS live session with ADAS alert](../docs/assets/ios-hud-active.png) |
 
-| 字幕（对话记录）                                  | 设置（语音 · 连接 · 场景 · 诊断）                     |
-| ------------------------------------------------- | ----------------------------------------------------- |
+| 字幕（对话记录）                                         | 设置（语音 · 连接 · 场景 · 诊断）                      |
+| -------------------------------------------------------- | ------------------------------------------------------ |
 | ![iOS captions overlay](../docs/assets/ios-captions.png) | ![iOS settings sheet](../docs/assets/ios-settings.png) |
 
 ## Requirements

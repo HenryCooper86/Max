@@ -54,6 +54,8 @@ final class AgentSession: NSObject, ObservableObject {
 
     private var webSocket: URLSessionWebSocketTask?
     private var relayURL = ""
+    /// Optional shared relay auth token, appended to the /agent URL as ?token=….
+    private var authToken = ""
     private var reconnectAttempts = 0
     private var reconnectWorkItem: DispatchWorkItem?
 
@@ -94,16 +96,24 @@ final class AgentSession: NSObject, ObservableObject {
     override init() {
         super.init()
         urlSession = makeSession()
+        let restored = Self.loadStoredTranscript()
+        if !restored.isEmpty {
+            transcriptTurn = restored.map(\.id).max() ?? 0
+            state.transcript = restored
+        }
     }
 
     // MARK: - public API
 
     /// Activates hands-free: route audio, resolve location, open the relay, and
-    /// start the mic. `allowSelfSignedTls` opts into trusting the test server's
-    /// self-signed certificate for wss:// URLs.
-    func start(url: String, allowSelfSignedTls: Bool) {
+    /// start the mic. `authToken`, when non-empty, is appended to the /agent URL
+    /// as ?token=… (relays without a configured token ignore it).
+    /// `allowSelfSignedTls` opts into trusting the test server's self-signed
+    /// certificate for wss:// URLs.
+    func start(url: String, authToken: String = "", allowSelfSignedTls: Bool) {
         guard !state.value.handsFree else { return }
         relayURL = url
+        self.authToken = authToken
         reconnectWorkItem?.cancel()
 
         let trustedSelfSigned = allowSelfSignedTls
@@ -242,6 +252,36 @@ final class AgentSession: NSObject, ObservableObject {
     /// Builds the transcript export JSON (port of exportTranscriptLog in src/main.tsx).
     func buildTranscriptExport() -> String { buildTranscriptExportJSON(state.value.transcript) }
 
+    /// Empties the conversation log and its persisted copy (设置 → 诊断 → 清空).
+    func clearTranscript() {
+        update { $0.transcript = [] }
+        UserDefaults.standard.removeObject(forKey: Self.transcriptStoreKey)
+    }
+
+    // MARK: - transcript persistence
+
+    /// The most recent final turns survive app restarts, stored as JSON in
+    /// UserDefaults and refreshed on every transcript change (see update()).
+    private static let transcriptStoreKey = "transcript_log"
+    private static let transcriptStoreLimit = 200
+
+    private static func loadStoredTranscript() -> [TranscriptItem] {
+        guard let data = UserDefaults.standard.data(forKey: transcriptStoreKey),
+              var items = try? JSONDecoder().decode([TranscriptItem].self, from: data) else {
+            return []
+        }
+        // Only final turns are stored, but normalize anyway: a restored turn can
+        // never resume streaming, so it always counts as final.
+        for index in items.indices { items[index].final = true }
+        return items
+    }
+
+    private static func storeTranscript(_ items: [TranscriptItem]) {
+        let finals = Array(items.filter(\.final).suffix(transcriptStoreLimit))
+        guard let data = try? JSONEncoder().encode(finals) else { return }
+        UserDefaults.standard.set(data, forKey: transcriptStoreKey)
+    }
+
     // MARK: - relay connection
 
     private func makeSession() -> URLSession {
@@ -267,8 +307,20 @@ final class AgentSession: NSObject, ObservableObject {
         }
     }
 
+    /// The relay endpoint with the optional shared auth token appended as a
+    /// `token` query parameter (URL-encoded, preserving any existing query).
+    private func relayEndpointURL() -> URL? {
+        guard var components = URLComponents(string: relayURL) else { return nil }
+        if !authToken.isEmpty {
+            var items = components.queryItems ?? []
+            items.append(URLQueryItem(name: "token", value: authToken))
+            components.queryItems = items
+        }
+        return components.url
+    }
+
     private func connect() {
-        guard !intentionalClose, let url = URL(string: relayURL) else { return }
+        guard !intentionalClose, let url = relayEndpointURL() else { return }
         update {
             $0.connection = .connecting
             $0.statusText = self.reconnectAttempts > 0 ? "重新连接中…（第 \(self.reconnectAttempts) 次）" : "连接中"
@@ -558,7 +610,10 @@ final class AgentSession: NSObject, ObservableObject {
             guard let self else { return }
             var copy = self.state
             transform(&copy)
-            if copy != self.state { self.state = copy }
+            if copy != self.state {
+                if copy.transcript != self.state.transcript { Self.storeTranscript(copy.transcript) }
+                self.state = copy
+            }
         }
         if Thread.isMainThread { apply() } else { DispatchQueue.main.async(execute: apply) }
     }

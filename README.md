@@ -12,17 +12,20 @@ The native Android client (`android/`, Kotlin + Jetpack Compose) speaks the same
 protocol as the web HUD, so the Node server, Doubao integration, weather, and ride intelligence
 all work unchanged. See [android/README.md](android/README.md) for build and setup.
 
-**免提会话 — Max 回答中** · hands-free session with the turn-state ring
+Voice mode: the brand helmet breathes and glows with the conversation, with a
+single status caption and minimal controls.
 
-![Android HUD — hands-free session, Max speaking](docs/assets/android-hud-speaking.png)
+**待机 — 点按头盔** · voice mode at rest
 
-**态势摘要 · 实时天气 · 延迟遥测** · ride pulse, live weather, and latency cards
+![Android voice mode — idle](docs/assets/android-voice-idle.png)
 
-![Android HUD — ride pulse, weather, and latency telemetry](docs/assets/android-ride-pulse.png)
+**免提会话（已就绪）** · live hands-free session, helmet listening
 
-**实时对话记录** · live transcript with in-place updates and JSON export
+![Android voice mode — live session](docs/assets/android-voice-active.png)
 
-![Android HUD — live transcript with export](docs/assets/android-transcript.png)
+**设置 — 语音 · 连接 · 场景 · 诊断** · the unified settings sheet (server address, voice, scenarios, diagnostics)
+
+![Android settings sheet](docs/assets/android-settings.png)
 
 ## iOS App
 
@@ -32,17 +35,25 @@ barge-in, reconnect handling, live weather, transcript export, and TTS fallback 
 iOS-native audio routing and background audio. See [ios/README.md](ios/README.md) for Xcode,
 relay URL, and self-signed test-server setup.
 
-**待机设置 — Max iOS HUD** · voice, ride mode, scenario, relay URL, and hands-free control
+Voice mode: the brand helmet breathes and glows with the conversation, with a
+single status caption and minimal controls.
 
-![iOS HUD — idle setup](docs/assets/ios-hud-idle.png)
+**待机 — 点按头盔** · voice mode at rest
 
-**免提会话 — 模拟语音在线** · turn-state ring, ride pulse, live weather, and telemetry
+![iOS voice mode — idle](docs/assets/ios-hud-idle.png)
 
-![iOS HUD — active hands-free session](docs/assets/ios-hud-active.png)
+**免提会话 + ADAS 提示** · live hands-free session with an ADAS hazard alert pinned on top
+
+![iOS live session with ADAS alert](docs/assets/ios-hud-active.png)
+
+**字幕 + 设置** · optional captions overlay, and the unified settings sheet (server address, voice, scenarios, diagnostics)
+
+![iOS captions overlay](docs/assets/ios-captions.png)
+![iOS settings sheet](docs/assets/ios-settings.png)
 
 ## Current Capabilities
 
-- Hands-free operation — click the main button, **tap the big Max ring** (iOS/Android), or press Space (web) to start/stop; once active, the rider just talks and Doubao's server-side VAD handles turn-taking.
+- Hands-free operation — click the main button, **tap the helmet** (iOS/Android), or press Space (web) to start/stop; once active, the rider just talks and Doubao's server-side VAD handles turn-taking.
 - Wake word — on the live agent, Max only replies when addressed by name ("Max"), so chit-chat and passenger talk don't trigger it; a 12 s follow-up window keeps a conversation going.
 - ADAS proactive safety alerts — simulated directional hazards (rear approach, forward collision, blind spot, cross-traffic, pedestrian, lane departure, tailgating) **interrupt** the agent and announce the danger; fires on mock and, for the `ADAS` scenario, on the live Doubao path.
 - Agent identity — attributes its development to Horizon Continental Technology (neueHCT) and names the CEO (Li Biao / Stone Li), in Chinese and English.

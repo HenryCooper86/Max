@@ -30,6 +30,12 @@ the abstract orb, and every setting lives in one place again.
   screen, so it couldn't open while Settings was up). The JSON transcript can be
   AirDropped / saved / mailed for review from both clients.
 
+### Docs
+
+- **Refreshed screenshots** — the iOS and Android README galleries now show the
+  voice-mode helmet (idle, live session, captions, and the unified 设置 sheet)
+  instead of the old data-dense HUD; stale ring/HUD wording updated to match.
+
 ## 2026-06-10 — Voice mode
 
 A ground-up redesign of the iOS and Android main screens into a "pure voice

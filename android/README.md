@@ -18,9 +18,12 @@ Phone (this app)                        Mac / test server
 
 ## Screenshots
 
-| 免提会话（Max 回答中）                                         | 态势摘要 + 天气 + 延迟                                           | 实时对话记录                                              |
-| -------------------------------------------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------- |
-| ![Hands-free session](../docs/assets/android-hud-speaking.png) | ![Ride pulse and weather](../docs/assets/android-ride-pulse.png) | ![Live transcript](../docs/assets/android-transcript.png) |
+Voice mode: the brand helmet breathes and glows with the conversation, with a
+single caption and minimal controls. Every setting lives in the 设置 sheet.
+
+| 待机 — 点按头盔                                          | 免提会话（已就绪）                                          | 设置（语音 · 连接 · 场景 · 诊断）                       |
+| -------------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------- |
+| ![Android voice mode, idle](../docs/assets/android-voice-idle.png) | ![Android live session](../docs/assets/android-voice-active.png) | ![Android settings sheet](../docs/assets/android-settings.png) |
 
 ## Requirements
 
@@ -97,7 +100,7 @@ The emulator forwards the host Mac's microphone, so the full voice loop is testa
 
 ## What's implemented (full HUD parity)
 
-- Hands-free toggle: the 开启免提 / 结束免提 button **or tapping the big Max ring** starts/stops mic streaming + relay session
+- Hands-free toggle: the 开始 / 结束 button **or tapping the helmet** starts/stops mic streaming + relay session
 - Turn-state ring with the web HUD's captions and palette (待机 / 请讲话 / 聆听 / 思考 / 回答)
 - Live transcript with in-place partial updates and agent-line dedup (same rules as the web client)
 - Transcript JSON export via the system share sheet (导出日志, same payload as the web export)

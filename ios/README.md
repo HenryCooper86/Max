@@ -18,9 +18,17 @@ iPhone (this app)                       Mac / test server
 
 ## Screenshots
 
-| 待机设置                                         | 免提会话                                             |
-| ------------------------------------------------ | ---------------------------------------------------- |
-| ![iOS idle HUD](../docs/assets/ios-hud-idle.png) | ![iOS active HUD](../docs/assets/ios-hud-active.png) |
+Voice mode: the brand helmet breathes and glows with the conversation, with a
+single caption and minimal controls. The ADAS hazard banner pins to the top, and
+every setting lives in the 设置 sheet.
+
+| 待机 — 点按头盔                                   | 免提会话 + ADAS 提示                                  |
+| ------------------------------------------------- | ----------------------------------------------------- |
+| ![iOS voice mode, idle](../docs/assets/ios-hud-idle.png) | ![iOS live session with ADAS alert](../docs/assets/ios-hud-active.png) |
+
+| 字幕（对话记录）                                  | 设置（语音 · 连接 · 场景 · 诊断）                     |
+| ------------------------------------------------- | ----------------------------------------------------- |
+| ![iOS captions overlay](../docs/assets/ios-captions.png) | ![iOS settings sheet](../docs/assets/ios-settings.png) |
 
 ## Requirements
 
@@ -150,7 +158,7 @@ must never ship in a production build. `Info.plist` also enables
 
 ## What's implemented
 
-- Hands-free toggle: the 开启免提/结束免提 button **or tapping the big Max ring** starts/stops mic streaming and the relay session.
+- Hands-free toggle: the 开始/结束 button **or tapping the helmet** starts/stops mic streaming and the relay session.
 - SwiftUI turn-state HUD with the same captions, colors, controls, and ride cards as Android/web.
 - Voice gender, personality, ride mode, and demo scenario selectors.
 - 16 kHz PCM16 mono microphone streaming through `AVAudioEngine`.
@@ -179,7 +187,7 @@ audio + session logic; the `UI/` layer is the SwiftUI HUD.
 | `Agent/PcmPlayer.swift`     | Gapless 24 kHz PCM16 playback + barge-in; attaches its player node to the shared engine                                                                             | playback cursor in `src/main.tsx`, `PcmPlayer.kt`                                         |
 | `Agent/AudioRouter.swift`   | `AVAudioSession` voice-chat config + Bluetooth (HFP) routing                                                                                                        | `AudioRouter.kt`                                                                          |
 | `Agent/AgentSession.swift`  | Relay WebSocket, reconnect backoff, transcript dedup, barge-in, `AVSpeechSynthesizer` TTS fallback, location, self-signed TLS, published state                      | `useHelmetAgent` in `src/main.tsx`, `AgentSession.kt`                                     |
-| `UI/AgentScreen.swift`      | The HUD: header, rider controls, turn-state ring, 态势摘要, weather, telemetry, transcript, controls                                                                | `src/components/HelmetVisual.tsx`, `AgentScreen.kt`                                       |
+| `UI/AgentScreen.swift`      | Voice-mode screen: animated helmet centerpiece (ported SVG), status caption, ADAS banner, captions overlay, minimal controls, and the unified 设置 sheet            | `src/components/HelmetVisual.tsx`, `AgentScreen.kt`                                       |
 | `UI/MainViewModel.swift`    | Relay-URL / cert prefs (`UserDefaults`), hands-free toggle, transcript export share sheet                                                                           | `MainViewModel.kt`                                                                        |
 | `UI/HudTheme.swift`         | Design tokens                                                                                                                                                       | `src/styles.css`, `theme/Theme.kt`                                                        |
 | `MaxHelmetApp.swift`        | App entry; keeps the screen awake, forces dark mode                                                                                                                 | `MainActivity.kt`                                                                         |

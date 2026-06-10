@@ -15,3 +15,6 @@ android/**/build/
 # Xcode user-local state
 **/xcuserdata/
 *.xcuserstate
+
+# macOS folder metadata
+.DS_Store

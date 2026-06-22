@@ -45,7 +45,11 @@ export const config = {
 };
 
 function resolveBoundedInt(raw: string | undefined, fallback: number, min: number, max: number): number {
-  const value = Number(raw?.trim());
+  // Treat empty/whitespace as unset: Number("") is 0, which would otherwise be
+  // clamped to `min` instead of falling back to the intended default.
+  const trimmed = raw?.trim();
+  if (!trimmed) return fallback;
+  const value = Number(trimmed);
   if (!Number.isFinite(value)) return fallback;
   return Math.min(max, Math.max(min, Math.round(value)));
 }
@@ -105,6 +109,12 @@ export function validateConfig(): string[] {
         "RELAY_AUTH_TOKEN 未设置：任何发现该地址的人都能消耗豆包配额。生产部署请设置一个随机令牌，客户端通过 ?token=… 连接。"
       );
     }
+  }
+
+  if (config.allowedOrigins.length && !config.relayAuthToken) {
+    warnings.push(
+      "RELAY_ALLOWED_ORIGINS 已设置但 RELAY_AUTH_TOKEN 未设置：来源白名单只能拦截浏览器，不发送 Origin 头的原生 App 或脚本仍可连接。请同时设置令牌。"
+    );
   }
 
   return warnings;

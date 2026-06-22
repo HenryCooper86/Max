@@ -117,7 +117,9 @@ export function buildPersonalityPrompt(personality: VoicePersonality): string {
 function inferDestination(text: string): string | undefined {
   const zhMatch = text.match(/(?:去|到|回)([^，。,.!?]{1,12})/);
   if (zhMatch?.[1]) return zhMatch[1].trim();
-  const enMatch = text.match(/\b(?:to|home to|navigate to|route to)\s+([a-z0-9\s-]{3,28})/i);
+  // Require a destination-bearing phrase. A bare "to" would over-match ordinary
+  // infinitives ("I want to ride") and capture them as a destination.
+  const enMatch = text.match(/\b(?:home to|navigate to|route to|head(?:ing|ed)? to|drive to|going to|take me to)\s+([a-z0-9\s-]{3,28})/i);
   if (enMatch?.[1]) return enMatch[1].trim();
   return undefined;
 }

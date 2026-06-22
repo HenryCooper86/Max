@@ -19,7 +19,9 @@ export function recordSentFrame(
   now: number,
   intervalMs = 1000
 ): { window: PacketWindow; metric?: PacketMetric } {
-  const startedAt = window.startedAt || window.sent ? window.startedAt : now;
+  // Lazily anchor the window on the first frame: a freshly created window has
+  // startedAt === 0, so adopt `now` until at least one frame has been counted.
+  const startedAt = window.sent > 0 ? window.startedAt : now;
   const sent = window.sent + 1;
   const elapsed = now - startedAt;
 
@@ -27,11 +29,13 @@ export function recordSentFrame(
     return { window: { ...window, startedAt, sent } };
   }
 
+  // outgoingFps is per-window; droppedFrames is a running cumulative count that
+  // carries across windows so the HUD shows total frames dropped this session.
   return {
     window: { startedAt: now, sent: 0, dropped: window.dropped },
     metric: {
       outgoingFrames: sent,
-      outgoingFps: Math.round((sent * 1000) / elapsed),
+      outgoingFps: Math.round((sent * 1000) / Math.max(1, elapsed)),
       droppedFrames: window.dropped
     }
   };

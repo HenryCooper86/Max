@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildIntentGuidancePrompt,
+  buildPersonalityPrompt,
   buildSafetyPrompt,
   buildSessionMemoryPrompt,
   createSessionMemory,
@@ -27,6 +29,42 @@ describe("session memory and safety policy", () => {
     expect(memory.lastIntent).toBe("navigation");
     expect(memory.destination).toBe("家");
     expect(memory.responseMode).toBe("concise");
+  });
+
+  it("infers an English destination only from destination-bearing phrases", () => {
+    // A bare infinitive must not be mistaken for a destination.
+    expect(updateSessionMemory(createSessionMemory("ride"), "I want to ride fast", "ride").destination).toBeUndefined();
+    // A real navigation phrase still captures the place.
+    expect(
+      updateSessionMemory(createSessionMemory("navigation"), "navigate to busan station", "navigation").destination
+    ).toBe("busan station");
+  });
+
+  it("maps each personality to its own prompt fragment", () => {
+    expect(buildPersonalityPrompt("concise")).toContain("极简");
+    expect(buildPersonalityPrompt("friendly")).toContain("友好");
+    expect(buildPersonalityPrompt("technical")).toContain("技术型");
+    expect(buildPersonalityPrompt("rally")).toContain("领航员");
+  });
+
+  it("gives intent-specific guidance and falls back to the language rule", () => {
+    expect(buildIntentGuidancePrompt("navigation")).toContain("导航");
+    expect(buildIntentGuidancePrompt("emergency")).toContain("紧急");
+    expect(buildIntentGuidancePrompt("diagnostics")).toContain("诊断");
+    // Undefined intent → the generic language-rule fallback.
+    expect(buildIntentGuidancePrompt(undefined)).toContain("语言规则");
+  });
+
+  it("adds the high-speed policy and telemetry above 60 km/h", () => {
+    const memory = createSessionMemory("ride");
+    const prompt = buildSafetyPrompt(
+      { mode: "ride", scenario: "commute", speedKmh: 72, routePhase: "highway", network: "online", batteryPct: 64 },
+      memory
+    );
+    expect(prompt).toContain("高速");
+    expect(prompt).toContain("72");
+    expect(prompt).toContain("highway");
+    expect(prompt).toContain("64%");
   });
 
   it("builds compact prompt fragments for Doubao", () => {

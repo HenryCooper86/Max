@@ -212,18 +212,29 @@ export function useHelmetAgent() {
 
   useEffect(() => {
     if (!navigator.permissions?.query) return;
+    // The query is async, so guard against the effect being torn down (e.g. a
+    // StrictMode remount) before it resolves, and remove every "change" listener
+    // on cleanup so they don't accumulate across mounts.
+    let active = true;
+    const cleanups: Array<() => void> = [];
     const trackPermission = async (name: PermissionName, setter: (state: PermissionStateLabel) => void) => {
       try {
         const status = await navigator.permissions.query({ name });
+        if (!active) return;
         const update = () => setter(status.state);
         update();
         status.addEventListener("change", update);
+        cleanups.push(() => status.removeEventListener("change", update));
       } catch {
         setter("unknown");
       }
     };
     void trackPermission("microphone" as PermissionName, setMicPermission);
     void trackPermission("geolocation", setLocationPermission);
+    return () => {
+      active = false;
+      for (const cleanup of cleanups) cleanup();
+    };
   }, []);
 
   const connect = useCallback(() => {
@@ -265,7 +276,13 @@ export function useHelmetAgent() {
 
     socket.addEventListener("message", (message) => {
       if (message.data instanceof ArrayBuffer) {
-        playPcm16(message.data);
+        // playPcm16 can throw (e.g. AudioContext creation limits); keep it from
+        // escaping the WebSocket message handler as an unhandled error.
+        try {
+          playPcm16(message.data);
+        } catch (error) {
+          console.error("PCM playback failed", error);
+        }
         return;
       }
 
@@ -527,9 +544,18 @@ export function useHelmetAgent() {
   // relay, and stream the mic continuously — Doubao's VAD handles turn-taking.
   const startMic = useCallback(async () => {
     try {
+      // Geolocation is best-effort for live weather; fire it in parallel so a slow
+      // or pending GPS prompt never delays opening the relay or the mic. If it
+      // resolves before the session opens, connect()'s open handler includes it.
       if (!locationRef.current) {
-        locationRef.current = await getRiderLocation();
-        setLocationPermission(locationRef.current ? "granted" : "unknown");
+        void getRiderLocation().then((location) => {
+          if (location) {
+            locationRef.current = location;
+            setLocationPermission("granted");
+          }
+          // On null (denied/timeout) we leave the label to the navigator.permissions
+          // tracker, which reports "denied" accurately — don't clobber it here.
+        });
       }
       const socket = await waitForSocket();
       await ensureMic();

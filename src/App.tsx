@@ -92,6 +92,7 @@ export function App() {
               <button
                 type="button"
                 className={agent.voiceGender === "female" ? "active" : ""}
+                aria-pressed={agent.voiceGender === "female"}
                 onClick={() => agent.setVoiceGender("female")}
               >
                 女声
@@ -99,6 +100,7 @@ export function App() {
               <button
                 type="button"
                 className={agent.voiceGender === "male" ? "active" : ""}
+                aria-pressed={agent.voiceGender === "male"}
                 onClick={() => agent.setVoiceGender("male")}
               >
                 男声
@@ -110,6 +112,7 @@ export function App() {
                   key={personality}
                   type="button"
                   className={agent.voicePersonality === personality ? "active" : ""}
+                  aria-pressed={agent.voicePersonality === personality}
                   onClick={() => agent.setVoicePersonality(personality)}
                 >
                   {PERSONALITY_LABELS[personality]}
@@ -122,6 +125,7 @@ export function App() {
                   key={mode}
                   type="button"
                   className={agent.rideContext.mode === mode ? "active" : ""}
+                  aria-pressed={agent.rideContext.mode === mode}
                   onClick={() => agent.setRideMode(mode)}
                 >
                   {RIDE_MODE_LABELS[mode]}
@@ -160,6 +164,7 @@ export function App() {
             <div className="handsFree">
               <button
                 className={`micButton ${agent.listening ? "active" : ""}`}
+                aria-pressed={agent.listening}
                 onClick={agent.listening ? agent.stopMic : agent.startMic}
                 type="button"
               >
@@ -176,6 +181,7 @@ export function App() {
                     key={scenario}
                     type="button"
                     className={agent.rideContext.scenario === scenario ? "active" : ""}
+                    aria-pressed={agent.rideContext.scenario === scenario}
                     onClick={() => agent.setScenario(scenario)}
                   >
                     {scenarioLabel(scenario)}
@@ -185,6 +191,7 @@ export function App() {
                   <button
                     type="button"
                     className={`guidedToggle ${agent.guidedDemo ? "active" : ""}`}
+                    aria-pressed={agent.guidedDemo}
                     onClick={() => agent.setGuidedDemo(!agent.guidedDemo)}
                     title="自动巡游全部演示场景"
                   >

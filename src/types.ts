@@ -59,7 +59,6 @@ export type SessionMemoryState = {
 };
 
 export type PacketStats = {
-  outgoingFrames: number;
   outgoingFps: number;
   droppedFrames: number;
 };
@@ -71,5 +70,4 @@ export type AudioProcessingState = {
   noiseSuppression: boolean | "unknown";
   autoGainControl: boolean | "unknown";
   sampleRate?: number;
-  channelCount?: number;
 };

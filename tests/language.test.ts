@@ -14,7 +14,11 @@ describe("detectLanguage", () => {
     expect(detectLanguage("確認")).toBe("zh");
   });
 
-  it("falls back to English for non-Han non-Latin text", () => {
-    expect(detectLanguage("hello world")).toBe("en");
+  it("falls back to English for non-Han non-Latin scripts", () => {
+    // Any script without Han characters resolves to English (the only non-zh
+    // supported voice), including Cyrillic, Arabic, and kana.
+    expect(detectLanguage("привет")).toBe("en");
+    expect(detectLanguage("مرحبا")).toBe("en");
+    expect(detectLanguage("こんにちは")).toBe("en");
   });
 });

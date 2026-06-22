@@ -329,6 +329,9 @@ export function createMockProvider(client: WebSocket): AgentProvider {
       send({ type: "status", state: "listening", detail: "免提待命，请讲话" });
       emitRideContext();
       emitWeather();
+      // Guard against a second audio.start without an intervening audio.stop,
+      // which would otherwise orphan the previous interval.
+      if (timer) clearInterval(timer);
       timer = setInterval(emitConversation, 6000);
       emitConversation();
       if (guided) {

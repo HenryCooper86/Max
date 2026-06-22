@@ -71,12 +71,24 @@ wss.on("connection", (client, request) => {
   const session = new AgentSessionController(client, (socket) => selectProvider(socket, sessionLog), sessionLog);
 
   client.on("message", async (data, isBinary) => {
-    await session.handleMessage(data, isBinary);
+    try {
+      await session.handleMessage(data, isBinary);
+    } catch (error) {
+      sessionLog.warn("message handling failed", {
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
   });
 
   client.on("close", async (code) => {
     sessionLog.info("client disconnected", { code });
-    await session.close();
+    try {
+      await session.close();
+    } catch (error) {
+      sessionLog.warn("session close failed", {
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
   });
 
   client.on("error", (error) => {

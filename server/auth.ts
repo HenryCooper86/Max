@@ -36,7 +36,7 @@ export function clientAddress(request: IncomingMessage): string {
   return request.socket.remoteAddress ?? "unknown";
 }
 
-/** Sliding-window upgrade-attempt limiter. Exported for tests. */
+/** Fixed-window upgrade-attempt limiter (resets fully every window). Exported for tests. */
 export function checkRateLimit(address: string, now = Date.now()): boolean {
   if (config.connPerMinute <= 0) return true;
 

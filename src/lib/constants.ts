@@ -55,7 +55,6 @@ export const DEFAULT_MEMORY: SessionMemoryState = {
 };
 
 export const DEFAULT_PACKET_STATS: PacketStats = {
-  outgoingFrames: 0,
   outgoingFps: 0,
   droppedFrames: 0
 };
@@ -148,7 +147,6 @@ export const UI_TEXT = {
   zh: {
     assistant: "助手",
     conversation: "对话",
-    rideHistory: "骑行记录",
     onboarding: "启动检查",
     mic: "麦克风",
     location: "定位",
@@ -169,7 +167,6 @@ export const UI_TEXT = {
   en: {
     assistant: "Assistant",
     conversation: "Conversation",
-    rideHistory: "Ride Log",
     onboarding: "Preflight",
     mic: "Mic",
     location: "Location",

@@ -51,8 +51,7 @@ export function readAudioProcessingSettings(track: MediaStreamTrack): AudioProce
     echoCancellation: settings.echoCancellation ?? "unknown",
     noiseSuppression: settings.noiseSuppression ?? "unknown",
     autoGainControl: settings.autoGainControl ?? "unknown",
-    sampleRate: settings.sampleRate,
-    channelCount: settings.channelCount
+    sampleRate: settings.sampleRate
   };
 }
 
@@ -90,7 +89,9 @@ export function exportTranscriptLog(items: TranscriptItem[]) {
   link.href = url;
   link.download = `max-session-log-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
   link.click();
-  URL.revokeObjectURL(url);
+  // Defer revocation: some browsers (e.g. Firefox) cancel the download if the
+  // blob URL is revoked synchronously before the download has started.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 // Folds a server status event into the conversational turn state. Unknown

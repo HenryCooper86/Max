@@ -355,10 +355,16 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
   let lastFlushedAgentTextAt = 0;
   let rideContext: RideContext = { mode: "ride", scenario: "commute" };
   let memory: SessionMemory = createSessionMemory("ride");
-  let audioStartedAt = 0;
+  // Per-turn latency anchors. Reset at each rider turn (AsrInfo) so telemetry
+  // and the adaptive TTS-fallback delay reflect the current turn, not just the
+  // first turn of the session.
   let asrStartedAt = 0;
+  let asrFirstTextAt = 0;
   let chatStartedAt = 0;
   let firstAudioAt = 0;
+  // True once the TTS fallback has already spoken this turn via browser speech,
+  // so late-arriving Doubao audio for the same reply isn't also played.
+  let fallbackSpoke = false;
   // Mic frames that arrive before the upstream session is ready. Bounded so a
   // session that never becomes ready cannot grow this without limit — 150
   // frames is 3 s of 20 ms audio; older frames are dropped first.
@@ -434,6 +440,8 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
       if (!receivedTtsAudio) {
         log.warn("TTS fallback fired — no Doubao audio", { waitedMs: delayMs });
         flushPendingAgentText(true);
+        // Browser speech now owns this reply; suppress any late Doubao audio.
+        fallbackSpoke = true;
         sendClient({
           type: "status",
           state: "ready",
@@ -471,10 +479,10 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
   const hazardInjector = createHazardInjector({ send: sendClient, emitRideContext });
 
   function emitTelemetry(totalEnd = Date.now()) {
-    const asrMs = audioStartedAt && asrStartedAt ? asrStartedAt - audioStartedAt : 0;
-    const thinkMs = asrStartedAt && chatStartedAt ? chatStartedAt - asrStartedAt : 0;
+    const asrMs = asrStartedAt && asrFirstTextAt ? asrFirstTextAt - asrStartedAt : 0;
+    const thinkMs = asrFirstTextAt && chatStartedAt ? chatStartedAt - asrFirstTextAt : 0;
     const firstAudioMs = chatStartedAt && firstAudioAt ? firstAudioAt - chatStartedAt : 0;
-    const totalMs = audioStartedAt ? totalEnd - audioStartedAt : 0;
+    const totalMs = asrStartedAt ? totalEnd - asrStartedAt : 0;
     if (asrMs || thinkMs || firstAudioMs || totalMs) {
       log.info("turn telemetry", { asrMs, thinkMs, firstAudioMs, totalMs });
       sendClient({ type: "telemetry", asrMs, thinkMs, firstAudioMs, totalMs });
@@ -520,6 +528,9 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
         if (frame.event === EventReceive.TtsResponse) {
           // Suppress the agent's voice when the rider did not address Max.
           if (!replyIsAddressed()) return;
+          // If the fallback already spoke this reply via browser speech, drop the
+          // late Doubao audio so the rider doesn't hear it twice.
+          if (fallbackSpoke) return;
           if (!firstAudioAt) {
             firstAudioAt = Date.now();
             if (chatStartedAt) {
@@ -540,8 +551,13 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
 
         const payload = parseJsonPayload(frame);
         if (frame.event === EventReceive.AsrInfo) {
-          if (!asrStartedAt) asrStartedAt = Date.now();
-          // New rider turn: reset the wake-word accumulation and decision latch.
+          // New rider turn: anchor the per-turn latency timers and reset the
+          // wake-word accumulation, decision latch, and double-speak guard.
+          asrStartedAt = Date.now();
+          asrFirstTextAt = 0;
+          chatStartedAt = 0;
+          firstAudioAt = 0;
+          fallbackSpoke = false;
           riderTurnText = "";
           replyDecided = false;
           replyAddressed = false;
@@ -552,6 +568,7 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
         if (frame.event === EventReceive.AsrResponse) {
           const text = extractAsrText(payload);
           if (text) {
+            if (!asrFirstTextAt) asrFirstTextAt = Date.now();
             // Accumulate the turn transcript and (re)open the conversation window
             // when the rider says "Max" or is already inside an open window.
             riderTurnText = riderTurnText ? `${riderTurnText} ${text}` : text;
@@ -646,6 +663,12 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
       sessionReady = false;
       log.info("doubao upstream closed");
       clearTtsFallbackTimer();
+      // The session is dead; stop the mid-ride weather refresh so it doesn't keep
+      // pushing HUD updates for a connection that's gone.
+      if (weatherRefreshTimer) {
+        clearInterval(weatherRefreshTimer);
+        weatherRefreshTimer = undefined;
+      }
       if (pendingReplyText()) flushPendingAgentText(true);
       sendClient({ type: "status", state: "closed", detail: "豆包实时代理已断开" });
     });
@@ -771,10 +794,8 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
       });
     },
     async startAudio() {
-      audioStartedAt = Date.now();
-      asrStartedAt = 0;
-      chatStartedAt = 0;
-      firstAudioAt = 0;
+      // Per-turn latency timers are anchored at each AsrInfo, so there's nothing
+      // session-level to seed here.
       emitRideContext();
       sendClient({
         type: "status",
@@ -786,14 +807,15 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
       if (rideContext.scenario === "adas") hazardInjector.start(5000, 2000);
     },
     async sendAudio(chunk: Buffer) {
-      if (upstream && upstream.readyState === WebSocket.OPEN) {
-        if (sessionReady) {
-          upstream.send(buildAudioRequest(sessionId, chunk));
-        } else {
-          if (pendingAudio.length >= MAX_PENDING_AUDIO_FRAMES) pendingAudio.shift();
-          pendingAudio.push(chunk);
-        }
+      if (sessionReady && upstream?.readyState === WebSocket.OPEN) {
+        upstream.send(buildAudioRequest(sessionId, chunk));
+        return;
       }
+      // Buffer frames that arrive before the upstream session is ready —
+      // including during start()'s weather fetch, before `upstream` even exists —
+      // so the rider's first words aren't lost. Bounded; oldest frames drop first.
+      if (pendingAudio.length >= MAX_PENDING_AUDIO_FRAMES) pendingAudio.shift();
+      pendingAudio.push(chunk);
     },
     async stopAudio() {
       hazardInjector.stop();

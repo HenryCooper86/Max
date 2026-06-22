@@ -341,15 +341,17 @@ h2 {
 }
 
 /* Layered ambient glow — the calm "voice orb" aura the mobile apps lead with,
-   instead of a hard targeting frame. */
+   instead of a hard targeting frame. Elliptical (not circular) so the bloom
+   fades to transparent before every edge of this wide box; a `circle` gradient
+   would still be opaque at the nearer top/bottom edges and clip into a rectangle. */
 .helmetStage::before {
   content: "";
   position: absolute;
   inset: -12%;
   z-index: 0;
   background:
-    radial-gradient(circle at 50% 47%, var(--glow), transparent 58%),
-    radial-gradient(circle at 50% 52%, var(--ring-faint), transparent 72%);
+    radial-gradient(ellipse 58% 56% at 50% 48%, var(--glow), transparent 72%),
+    radial-gradient(ellipse 74% 70% at 50% 52%, var(--ring-faint), transparent 78%);
   filter: blur(2px);
 }
 

@@ -251,7 +251,7 @@ h2 {
 .hudPanel {
   position: relative;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 14px;
   background: var(--panel);
 }
 
@@ -340,12 +340,17 @@ h2 {
   }
 }
 
+/* Layered ambient glow — the calm "voice orb" aura the mobile apps lead with,
+   instead of a hard targeting frame. */
 .helmetStage::before {
   content: "";
   position: absolute;
-  inset: -6%;
+  inset: -12%;
   z-index: 0;
-  background: radial-gradient(circle at 50% 46%, var(--glow), transparent 62%);
+  background:
+    radial-gradient(circle at 50% 47%, var(--glow), transparent 58%),
+    radial-gradient(circle at 50% 52%, var(--ring-faint), transparent 72%);
+  filter: blur(2px);
 }
 
 /* HUD corner brackets */
@@ -358,11 +363,13 @@ h2 {
 
 .corner {
   position: absolute;
-  width: 26px;
-  height: 26px;
-  border: 2px solid var(--ring);
-  opacity: 0.6;
-  transition: border-color 0.4s ease;
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid var(--ring);
+  opacity: 0.32;
+  transition:
+    border-color 0.4s ease,
+    opacity 0.4s ease;
 }
 
 .corner.tl {
@@ -394,6 +401,8 @@ h2 {
 }
 
 /* Targeting reticle */
+/* Soft concentric halo rings (calm, breathing) rather than a dashed targeting
+   reticle — closer to the mobile orb while keeping a sense of the HUD. */
 .reticle {
   position: absolute;
   top: 50%;
@@ -403,16 +412,17 @@ h2 {
   height: 100%;
   transform: translate(-50%, -50%);
   border-radius: 50%;
-  border: 1.5px dashed var(--ring-soft);
+  border: 1px solid var(--ring-faint);
   animation: reticlePulse 4.5s ease-in-out infinite;
 }
 
 .reticle::before {
   content: "";
   position: absolute;
-  inset: 11%;
+  inset: 9%;
   border-radius: 50%;
   border: 1px solid var(--ring-faint);
+  opacity: 0.7;
 }
 
 .reticle::after {
@@ -424,11 +434,11 @@ h2 {
   aspect-ratio: 1;
   transform: translate(-50%, -50%);
   border-radius: 50%;
-  border: 1.5px dashed var(--ring);
+  border: 1.5px solid var(--ring);
   border-left-color: transparent;
   border-right-color: transparent;
-  opacity: 0.5;
-  animation: reticleSpin 18s linear infinite;
+  opacity: 0.32;
+  animation: reticleSpin 30s linear infinite;
 }
 
 /* Helmet illustration */
@@ -456,9 +466,11 @@ h2 {
   opacity: 0.16;
 }
 
+/* Both visor dots read as calm state indicators (teal + green), matching the
+   mobile apps — the prominent orange is reserved for actions, not the idle HUD. */
 .micDot {
-  fill: var(--rider);
-  filter: drop-shadow(0 0 12px var(--rider));
+  fill: var(--accent-cyan);
+  filter: drop-shadow(0 0 12px rgba(95, 233, 214, 0.72));
 }
 
 .greenDot {
@@ -467,6 +479,8 @@ h2 {
 }
 
 .helmetStage.offline .micDot {
+  fill: var(--danger);
+  filter: drop-shadow(0 0 12px var(--danger));
   animation: redBlink 1.05s infinite ease-in-out;
 }
 
@@ -702,11 +716,12 @@ h2 {
   animation: signalPulse 1.7s ease-in-out infinite;
 }
 
+/* Borderless raised tiles rather than boxed-in cards — calmer and clearer.
+   The colored left rail (set per-instrument below) carries status at a glance. */
 .instrument {
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.04);
-  padding: 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.028);
+  padding: 16px;
 }
 
 .instrumentHead {
@@ -760,10 +775,9 @@ h2 {
 
 .pulseGrid span {
   min-width: 0;
-  padding: 8px;
-  border: 1px solid rgba(196, 218, 216, 0.12);
+  padding: 8px 10px;
   border-radius: 8px;
-  background: rgba(7, 11, 12, 0.28);
+  background: rgba(255, 255, 255, 0.035);
   color: var(--muted);
   font-size: 0.72rem;
   overflow-wrap: anywhere;
@@ -823,11 +837,10 @@ h2 {
 .rideChips span,
 .telemetryGrid span {
   min-height: 24px;
-  padding: 3px 8px;
-  border: 1px solid rgba(196, 218, 216, 0.14);
+  padding: 4px 11px;
   border-radius: 999px;
   color: var(--muted);
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.05);
   font-size: 0.74rem;
 }
 

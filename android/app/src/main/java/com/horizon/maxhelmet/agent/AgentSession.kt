@@ -373,7 +373,10 @@ class AgentSession(
 
             override fun onMessage(socket: WebSocket, bytes: ByteString) {
                 if (socket !== webSocket) return
-                player.play(bytes.toByteArray())
+                // AudioTrack setup can throw (unsupported config / bad state); keep it
+                // from escaping onto the reader thread and tearing down the listener.
+                runCatching { player.play(bytes.toByteArray()) }
+                    .onFailure { Log.w(TAG, "PCM playback failed", it) }
             }
 
             override fun onClosed(socket: WebSocket, code: Int, reason: String) {

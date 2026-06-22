@@ -339,6 +339,15 @@ private func drawHelmet(
             startPoint: CGPoint(x: 120, y: 28), endPoint: CGPoint(x: 150, y: 215)
         )
     )
+    // Top rim light — lifts the shell off the background with volume (mirrors the
+    // web shellSheen gradient in HelmetVisual.tsx).
+    context.fill(
+        svgPath(helmetShellPath),
+        with: .linearGradient(
+            Gradient(colors: [Color.white.opacity(0.5), Color.clear]),
+            startPoint: CGPoint(x: 210, y: 28), endPoint: CGPoint(x: 210, y: 120)
+        )
+    )
     context.fill(
         svgPath(helmetChinPath),
         with: .linearGradient(
@@ -350,7 +359,7 @@ private func drawHelmet(
     context.fill(
         visor,
         with: .linearGradient(
-            Gradient(colors: [Color(hex: 0x3C5B60), Color(hex: 0x1E3539), Color(hex: 0x11252A)]),
+            Gradient(colors: [Color(hex: 0x54787E), Color(hex: 0x22393D), Color(hex: 0x0A1A1F)]),
             startPoint: CGPoint(x: 232, y: 88), endPoint: CGPoint(x: 232, y: 165)
         )
     )
@@ -361,6 +370,11 @@ private func drawHelmet(
     context.fill(
         Path(ellipseIn: CGRect(x: 206 - 58, y: 106 - 11, width: 116, height: 22)),
         with: .color(.white.opacity(0.12))
+    )
+    // Crisp glassy streak across the upper visor (mirrors web visorSpec).
+    context.fill(
+        Path(ellipseIn: CGRect(x: 190 - 44, y: 99 - 3.4, width: 88, height: 6.8)),
+        with: .color(.white.opacity(0.5))
     )
     // Mic + status dots.
     context.fill(

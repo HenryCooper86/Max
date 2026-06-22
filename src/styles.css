@@ -466,6 +466,19 @@ h2 {
   opacity: 0.16;
 }
 
+/* Crisp glassy highlight across the upper visor. */
+.visorSpec {
+  fill: #f4fffb;
+  opacity: 0.5;
+}
+
+/* Top rim light on the shell — screen-blended so it reads as light, not paint. */
+.shellSheen {
+  mix-blend-mode: screen;
+  opacity: 0.85;
+  pointer-events: none;
+}
+
 /* Both visor dots read as calm state indicators (teal + green), matching the
    mobile apps — the prominent orange is reserved for actions, not the idle HUD. */
 .micDot {

@@ -372,6 +372,15 @@ private fun HelmetVisual(
                     start = Offset(120f, 28f), end = Offset(150f, 215f)
                 )
             )
+            // Top rim light — lifts the shell off the background with volume
+            // (mirrors the web shellSheen gradient in HelmetVisual.tsx).
+            drawPath(
+                shell,
+                brush = Brush.linearGradient(
+                    colors = listOf(Color.White.copy(alpha = 0.5f), Color.Transparent),
+                    start = Offset(210f, 28f), end = Offset(210f, 120f)
+                )
+            )
             drawPath(
                 chin,
                 brush = Brush.linearGradient(
@@ -382,7 +391,7 @@ private fun HelmetVisual(
             drawPath(
                 visor,
                 brush = Brush.linearGradient(
-                    colors = listOf(Color(0xFF3C5B60), Color(0xFF1E3539), Color(0xFF11252A)),
+                    colors = listOf(Color(0xFF54787E), Color(0xFF22393D), Color(0xFF0A1A1F)),
                     start = Offset(232f, 88f), end = Offset(232f, 165f)
                 )
             )
@@ -394,6 +403,12 @@ private fun HelmetVisual(
                 color = Color.White.copy(alpha = 0.12f),
                 topLeft = Offset(206f - 58f, 106f - 11f),
                 size = Size(116f, 22f)
+            )
+            // Crisp glassy streak across the upper visor (mirrors web visorSpec).
+            drawOval(
+                color = Color.White.copy(alpha = 0.5f),
+                topLeft = Offset(190f - 44f, 99f - 3.4f),
+                size = Size(88f, 6.8f)
             )
             // Mic + status dots.
             drawCircle(if (listening) HudColors.AccentCyan else HudColors.Muted, radius = 9f, center = Offset(258f, 205f))

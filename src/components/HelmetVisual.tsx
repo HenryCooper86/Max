@@ -69,19 +69,30 @@ export function HelmetVisual({ connected, listening, voiceLevel, turnState, haza
               <stop offset="1" stopColor="#8b9893" />
             </linearGradient>
             <linearGradient id="visorGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stopColor="#3c5b60" />
-              <stop offset="0.5" stopColor="#1e3539" />
-              <stop offset="1" stopColor="#11252a" />
+              <stop offset="0" stopColor="#54787e" />
+              <stop offset="0.42" stopColor="#22393d" />
+              <stop offset="1" stopColor="#0a1a1f" />
             </linearGradient>
             <linearGradient id="chinGrad" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0" stopColor="#8b9b97" />
               <stop offset="1" stopColor="#5d6b68" />
+            </linearGradient>
+            {/* Soft top rim light that gives the shell volume. */}
+            <linearGradient id="shellSheen" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stopColor="#ffffff" stopOpacity="0.5" />
+              <stop offset="0.4" stopColor="#ffffff" stopOpacity="0" />
             </linearGradient>
           </defs>
 
           <path
             className="helmetShell"
             fill="url(#shellGrad)"
+            d="M54 161c4-81 68-132 151-132 93 0 159 61 166 149 2 24-11 45-34 54-45 17-126 26-204 8-50-12-81-39-79-79Z"
+          />
+          {/* Top rim light — lifts the shell off the background with volume. */}
+          <path
+            className="shellSheen"
+            fill="url(#shellSheen)"
             d="M54 161c4-81 68-132 151-132 93 0 159 61 166 149 2 24-11 45-34 54-45 17-126 26-204 8-50-12-81-39-79-79Z"
           />
           <path
@@ -95,6 +106,8 @@ export function HelmetVisual({ connected, listening, voiceLevel, turnState, haza
             d="M155 88h155c22 0 40 18 40 40v13c-48 18-106 25-178 21-27-1-49-24-49-51 0-13 11-23 32-23Z"
           />
           <ellipse className="visorGlare" cx="206" cy="106" rx="58" ry="11" />
+          {/* Crisp specular streak across the upper visor for a glassy read. */}
+          <ellipse className="visorSpec" cx="190" cy="99" rx="44" ry="3.4" />
           <circle className="micDot" cx="258" cy="205" r="9" />
           <circle className="greenDot" cx="282" cy="205" r="9" />
         </svg>

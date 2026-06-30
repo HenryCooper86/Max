@@ -146,10 +146,27 @@ data class Telemetry(
     val totalMs: Int
 )
 
+/**
+ * Mirror of ProviderCapabilities in shared/agent.ts, carried by session.started.
+ * Defaults match the web's DEFAULT_CAPABILITIES (all off).
+ */
+data class ProviderCapabilities(
+    val serverVad: Boolean = false,
+    val synthesizedAudio: Boolean = false,
+    val transcriptEvents: Boolean = false,
+    val bargeIn: Boolean = false,
+    val voiceSelection: Boolean = false,
+    val weatherContext: Boolean = false,
+    val sessionMemory: Boolean = false,
+    val emergencyMode: Boolean = false
+)
+
 /** Mirror of the ride.context event payload / DEFAULT_RIDE_CONTEXT in src/main.tsx. */
 data class RideContext(
     val mode: RideMode = RideMode.NAVIGATION,
+    val modeLabel: String = "导航",
     val scenario: DemoScenario = DemoScenario.COMMUTE,
+    val scenarioLabel: String = "通勤",
     val speedKmh: Int = 0,
     val routePhase: String = "等待骑行上下文",
     val network: String = "offline",
@@ -168,7 +185,7 @@ data class SessionMemory(
 
 /** Server → client JSON events (shared/agent.ts AgentEvent). */
 sealed interface AgentEvent {
-    data class SessionStarted(val provider: String, val mode: String) : AgentEvent
+    data class SessionStarted(val provider: String, val mode: String, val capabilities: ProviderCapabilities) : AgentEvent
     data class Connection(val state: String, val detail: String) : AgentEvent
     data class Status(val state: String, val detail: String) : AgentEvent
     data class Transcript(
@@ -217,10 +234,23 @@ sealed interface AgentEvent {
 fun parseAgentEvent(text: String): AgentEvent {
     val json = JSONObject(text)
     return when (json.optString("type")) {
-        "session.started" -> AgentEvent.SessionStarted(
-            provider = json.optString("provider", "unknown"),
-            mode = json.optString("mode", "mock")
-        )
+        "session.started" -> {
+            val caps = json.optJSONObject("capabilities")
+            AgentEvent.SessionStarted(
+                provider = json.optString("provider", "unknown"),
+                mode = json.optString("mode", "mock"),
+                capabilities = ProviderCapabilities(
+                    serverVad = caps?.optBoolean("serverVad", false) ?: false,
+                    synthesizedAudio = caps?.optBoolean("synthesizedAudio", false) ?: false,
+                    transcriptEvents = caps?.optBoolean("transcriptEvents", false) ?: false,
+                    bargeIn = caps?.optBoolean("bargeIn", false) ?: false,
+                    voiceSelection = caps?.optBoolean("voiceSelection", false) ?: false,
+                    weatherContext = caps?.optBoolean("weatherContext", false) ?: false,
+                    sessionMemory = caps?.optBoolean("sessionMemory", false) ?: false,
+                    emergencyMode = caps?.optBoolean("emergencyMode", false) ?: false
+                )
+            )
+        }
 
         "connection" -> AgentEvent.Connection(json.optString("state"), json.optString("detail"))
 
@@ -246,18 +276,24 @@ fun parseAgentEvent(text: String): AgentEvent {
             )
         )
 
-        "ride.context" -> AgentEvent.RideContextUpdate(
-            RideContext(
-                mode = RideMode.fromWire(json.optString("mode")),
-                scenario = DemoScenario.fromWire(json.optString("scenario")),
-                speedKmh = json.optInt("speedKmh", 0),
-                routePhase = json.optString("routePhase").ifEmpty { "等待路线信息" },
-                network = json.optString("network").ifEmpty { "online" },
-                batteryPct = json.optInt("batteryPct", 0),
-                hazardLevel = HazardLevel.fromWire(json.optString("hazardLevel")),
-                glanceableFocus = json.optString("glanceableFocus")
+        "ride.context" -> {
+            val mode = RideMode.fromWire(json.optString("mode"))
+            val scenario = DemoScenario.fromWire(json.optString("scenario"))
+            AgentEvent.RideContextUpdate(
+                RideContext(
+                    mode = mode,
+                    modeLabel = json.optString("modeLabel").ifEmpty { mode.label },
+                    scenario = scenario,
+                    scenarioLabel = json.optString("scenarioLabel").ifEmpty { scenario.label },
+                    speedKmh = json.optInt("speedKmh", 0),
+                    routePhase = json.optString("routePhase").ifEmpty { "等待路线信息" },
+                    network = json.optString("network").ifEmpty { "online" },
+                    batteryPct = json.optInt("batteryPct", 0),
+                    hazardLevel = HazardLevel.fromWire(json.optString("hazardLevel")),
+                    glanceableFocus = json.optString("glanceableFocus")
+                )
             )
-        )
+        }
 
         "session.memory" -> AgentEvent.SessionMemoryUpdate(
             SessionMemory(

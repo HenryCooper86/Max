@@ -49,6 +49,10 @@ class AgentSession(
         val statusText: String = "离线",
         val provider: String = "",
         val isLive: Boolean = false,
+        /** Provider capabilities advertised by session.started (mirror of
+         *  ProviderCapabilities in shared/agent.ts). Defaults match the web's
+         *  DEFAULT_CAPABILITIES (all off) until the relay reports the real set. */
+        val capabilities: ProviderCapabilities = ProviderCapabilities(),
         val turnState: TurnState = TurnState.IDLE,
         /**
          * Mic muted mid-session: the relay stays open and Max can keep speaking,
@@ -427,6 +431,7 @@ class AgentSession(
                 it.copy(
                     provider = event.provider,
                     isLive = event.mode != "mock",
+                    capabilities = event.capabilities,
                     connection = ConnectionState.READY,
                     statusText = if (event.mode == "mock") "模拟路线已启用" else "豆包实时语音在线"
                 )
@@ -461,13 +466,11 @@ class AgentSession(
             is AgentEvent.Metric -> _state.update { it.copy(latencyMs = event.latencyMs) }
 
             is AgentEvent.WeatherUpdate -> _state.update {
-                // Weather risk also feeds the fused ride hazard (src/main.tsx).
-                it.copy(
-                    weather = event.weather,
-                    rideContext = it.rideContext.copy(
-                        hazardLevel = combineHazardLevels(it.rideContext.hazardLevel, event.weather.riskLevel)
-                    )
-                )
+                // rideContext.hazardLevel is owned by ride.context events (already fused
+                // with weather server-side); fusedHazard folds the current weather in at
+                // read time. Mutating hazardLevel here would only ever raise it (max),
+                // so an improving weather reading could leave the HUD stuck high.
+                it.copy(weather = event.weather)
             }
 
             is AgentEvent.RideContextUpdate -> _state.update { it.copy(rideContext = event.rideContext) }

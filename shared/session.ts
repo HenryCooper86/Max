@@ -119,7 +119,9 @@ function inferDestination(text: string): string | undefined {
   if (zhMatch?.[1]) return zhMatch[1].trim();
   // Require a destination-bearing phrase. A bare "to" would over-match ordinary
   // infinitives ("I want to ride") and capture them as a destination.
-  const enMatch = text.match(/\b(?:home to|navigate to|route to|head(?:ing|ed)? to|drive to|going to|take me to)\s+([a-z0-9\s-]{3,28})/i);
+  const enMatch = text.match(
+    /\b(?:home to|navigate to|route to|head(?:ing|ed)? to|drive to|going to|take me to)\s+([a-z0-9\s-]{3,28})/i
+  );
   if (enMatch?.[1]) return enMatch[1].trim();
   return undefined;
 }

@@ -15,6 +15,10 @@ final class AgentSession: NSObject, ObservableObject {
         var statusText = "离线"
         var provider = ""
         var isLive = false
+        /// Provider capabilities advertised by session.started (mirror of
+        /// ProviderCapabilities in shared/agent.ts). Defaults match the web's
+        /// DEFAULT_CAPABILITIES (all off) until the relay reports the real set.
+        var capabilities = ProviderCapabilities()
         var turnState: TurnState = .idle
         /// Mic muted mid-session: the relay stays open and Max can keep speaking,
         /// but rider audio frames are withheld (ChatGPT-style mute).
@@ -447,10 +451,11 @@ final class AgentSession: NSObject, ObservableObject {
 
     private func handleEvent(_ event: AgentEvent) {
         switch event {
-        case let .sessionStarted(provider, mode):
+        case let .sessionStarted(provider, mode, capabilities):
             update {
                 $0.provider = provider
                 $0.isLive = mode != "mock"
+                $0.capabilities = capabilities
                 $0.connection = .ready
                 $0.statusText = mode == "mock" ? "模拟路线已启用" : "豆包实时语音在线"
             }
@@ -488,11 +493,12 @@ final class AgentSession: NSObject, ObservableObject {
             update { $0.latencyMs = latencyMs }
 
         case let .weatherUpdate(weather):
-            // Weather risk also feeds the fused ride hazard (src/main.tsx).
-            update {
-                $0.weather = weather
-                $0.rideContext.hazardLevel = combineHazardLevels($0.rideContext.hazardLevel, weather.riskLevel)
-            }
+            // rideContext.hazardLevel is owned by the server's ride.context events
+            // (already fused with weather there), and fusedHazard folds the current
+            // weather in at read time. Mutating hazardLevel here would only ever
+            // raise it (combineHazardLevels takes the max), so an improving weather
+            // reading could leave the HUD stuck high between ride.context events.
+            update { $0.weather = weather }
 
         case let .rideContextUpdate(rideContext):
             update { $0.rideContext = rideContext }

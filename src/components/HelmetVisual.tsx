@@ -115,7 +115,7 @@ export function HelmetVisual({ connected, listening, voiceLevel, turnState, haza
         <div className={`visorVisualizer ${listening ? "active" : ""}`}>
           {BARS.map((weight, index) => {
             const scale = listening ? Math.max(0.14, Math.min(1, voiceLevel * weight + 0.1)) : 0.14;
-            return <span key={weight + index} style={{ transform: `scaleY(${scale})` }} />;
+            return <span key={index} style={{ transform: `scaleY(${scale})` }} />;
           })}
         </div>
       </div>

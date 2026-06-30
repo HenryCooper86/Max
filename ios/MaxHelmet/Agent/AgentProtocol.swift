@@ -201,10 +201,25 @@ struct Telemetry: Equatable {
     let totalMs: Int
 }
 
+/// Mirror of ProviderCapabilities in shared/agent.ts, carried by session.started.
+/// Defaults match the web's DEFAULT_CAPABILITIES (all off).
+struct ProviderCapabilities: Equatable {
+    var serverVad: Bool = false
+    var synthesizedAudio: Bool = false
+    var transcriptEvents: Bool = false
+    var bargeIn: Bool = false
+    var voiceSelection: Bool = false
+    var weatherContext: Bool = false
+    var sessionMemory: Bool = false
+    var emergencyMode: Bool = false
+}
+
 /// Mirror of the ride.context event payload / DEFAULT_RIDE_CONTEXT in src/main.tsx.
 struct RideContext: Equatable {
     var mode: RideMode = .navigation
+    var modeLabel: String = "导航"
     var scenario: DemoScenario = .commute
+    var scenarioLabel: String = "通勤"
     var speedKmh: Int = 0
     var routePhase: String = "等待骑行上下文"
     var network: String = "offline"
@@ -248,7 +263,7 @@ struct HazardAlert: Equatable {
 }
 
 enum AgentEvent {
-    case sessionStarted(provider: String, mode: String)
+    case sessionStarted(provider: String, mode: String, capabilities: ProviderCapabilities)
     case connection(state: String, detail: String)
     case status(state: String, detail: String)
     case transcript(speaker: Speaker, text: String, final: Bool, useBrowserSpeech: Bool?)
@@ -282,7 +297,21 @@ func parseAgentEvent(_ text: String) -> AgentEvent {
 
     switch type {
     case "session.started":
-        return .sessionStarted(provider: str("provider", "unknown"), mode: str("mode", "mock"))
+        let caps = json["capabilities"] as? [String: Any] ?? [:]
+        return .sessionStarted(
+            provider: str("provider", "unknown"),
+            mode: str("mode", "mock"),
+            capabilities: ProviderCapabilities(
+                serverVad: caps["serverVad"] as? Bool ?? false,
+                synthesizedAudio: caps["synthesizedAudio"] as? Bool ?? false,
+                transcriptEvents: caps["transcriptEvents"] as? Bool ?? false,
+                bargeIn: caps["bargeIn"] as? Bool ?? false,
+                voiceSelection: caps["voiceSelection"] as? Bool ?? false,
+                weatherContext: caps["weatherContext"] as? Bool ?? false,
+                sessionMemory: caps["sessionMemory"] as? Bool ?? false,
+                emergencyMode: caps["emergencyMode"] as? Bool ?? false
+            )
+        )
 
     case "connection":
         return .connection(state: str("state"), detail: str("detail"))
@@ -313,11 +342,15 @@ func parseAgentEvent(_ text: String) -> AgentEvent {
         ))
 
     case "ride.context":
+        let mode = RideMode.fromWire(str("mode"))
+        let scenario = DemoScenario.fromWire(str("scenario"))
         let routePhase = str("routePhase")
         let network = str("network")
         return .rideContextUpdate(RideContext(
-            mode: RideMode.fromWire(str("mode")),
-            scenario: DemoScenario.fromWire(str("scenario")),
+            mode: mode,
+            modeLabel: str("modeLabel", mode.label),
+            scenario: scenario,
+            scenarioLabel: str("scenarioLabel", scenario.label),
             speedKmh: int("speedKmh"),
             routePhase: routePhase.isEmpty ? "等待路线信息" : routePhase,
             network: network.isEmpty ? "online" : network,

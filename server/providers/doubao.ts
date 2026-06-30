@@ -718,72 +718,71 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
       // Best-effort: fold live weather for the rider's location into the agent
       // context so weather questions are answered with real data. A failure
       // here never blocks the session — the agent just answers generically.
+      // Always resolved: a rider location wins, otherwise the configured or demo
+      // fallback (see config.resolveDefaultWeatherLocation), so there is no
+      // "no weather location" branch to handle here.
       const weatherLocation =
         typeof event.lat === "number" && typeof event.lon === "number"
           ? { lat: event.lat, lon: event.lon, source: "rider" as const }
           : appConfig.defaultWeatherLocation;
 
-      if (weatherLocation) {
-        try {
-          const weather = await fetchRiderWeather(weatherLocation.lat, weatherLocation.lon);
-          const locationLabel =
-            weatherLocation.source === "rider"
-              ? "骑手当前位置"
-              : weatherLocation.source === "configured"
-                ? "默认位置"
-                : "演示位置";
-          systemRole +=
-            `\n\n[实时骑行情报] ${locationLabel}${weather.summary}` +
-            `${weather.riderAdvice}当骑手询问天气、风力或路况时，请基于这条真实数据简短回答。`;
-          sendClient({
-            type: "weather",
-            description: weather.description,
-            temperatureC: weather.temperatureC,
-            windSpeedKmh: weather.windSpeedKmh,
-            isDay: weather.isDay,
-            riskLevel: weather.riskLevel,
-            riderAdvice: weather.riderAdvice
-          });
-          sendClient({
-            type: "status",
-            state: "ready",
-            detail: `已接入${weatherLocation.source === "rider" ? "实时" : locationLabel}天气：${weather.description} ${weather.temperatureC}°C`
-          });
-        } catch {
-          log.warn("initial weather fetch failed", { lat: weatherLocation.lat, lon: weatherLocation.lon });
-          sendClient({ type: "status", state: "ready", detail: "实时天气暂不可用，使用通用回答" });
-        }
+      try {
+        const weather = await fetchRiderWeather(weatherLocation.lat, weatherLocation.lon);
+        const locationLabel =
+          weatherLocation.source === "rider"
+            ? "骑手当前位置"
+            : weatherLocation.source === "configured"
+              ? "默认位置"
+              : "演示位置";
+        systemRole +=
+          `\n\n[实时骑行情报] ${locationLabel}${weather.summary}` +
+          `${weather.riderAdvice}当骑手询问天气、风力或路况时，请基于这条真实数据简短回答。`;
+        sendClient({
+          type: "weather",
+          description: weather.description,
+          temperatureC: weather.temperatureC,
+          windSpeedKmh: weather.windSpeedKmh,
+          isDay: weather.isDay,
+          riskLevel: weather.riskLevel,
+          riderAdvice: weather.riderAdvice
+        });
+        sendClient({
+          type: "status",
+          state: "ready",
+          detail: `已接入${weatherLocation.source === "rider" ? "实时" : locationLabel}天气：${weather.description} ${weather.temperatureC}°C`
+        });
+      } catch {
+        log.warn("initial weather fetch failed", { lat: weatherLocation.lat, lon: weatherLocation.lon });
+        sendClient({ type: "status", state: "ready", detail: "实时天气暂不可用，使用通用回答" });
+      }
 
-        // Mid-ride refresh: long rides outlive the session-start snapshot, so
-        // re-fetch on an interval and push the HUD update. The Doubao system
-        // role is fixed once the session starts, so the agent's own context
-        // freshens on the next session; the HUD and hazard fusion stay live.
-        if (appConfig.weatherRefreshMs > 0) {
-          weatherRefreshTimer = setInterval(async () => {
-            try {
-              const weather = await fetchRiderWeather(weatherLocation.lat, weatherLocation.lon);
-              sendClient({
-                type: "weather",
-                description: weather.description,
-                temperatureC: weather.temperatureC,
-                windSpeedKmh: weather.windSpeedKmh,
-                isDay: weather.isDay,
-                riskLevel: weather.riskLevel,
-                riderAdvice: weather.riderAdvice
-              });
-              log.info("weather refreshed", {
-                description: weather.description,
-                temperatureC: weather.temperatureC,
-                windSpeedKmh: weather.windSpeedKmh,
-                riskLevel: weather.riskLevel
-              });
-            } catch {
-              log.warn("weather refresh failed — keeping last reading");
-            }
-          }, appConfig.weatherRefreshMs);
-        }
-      } else {
-        sendClient({ type: "status", state: "ready", detail: "定位未授权，未配置默认天气位置" });
+      // Mid-ride refresh: long rides outlive the session-start snapshot, so
+      // re-fetch on an interval and push the HUD update. The Doubao system
+      // role is fixed once the session starts, so the agent's own context
+      // freshens on the next session; the HUD and hazard fusion stay live.
+      if (appConfig.weatherRefreshMs > 0) {
+        weatherRefreshTimer = setInterval(async () => {
+          try {
+            const weather = await fetchRiderWeather(weatherLocation.lat, weatherLocation.lon);
+            sendClient({
+              type: "weather",
+              description: weather.description,
+              temperatureC: weather.temperatureC,
+              windSpeedKmh: weather.windSpeedKmh,
+              isDay: weather.isDay,
+              riskLevel: weather.riskLevel,
+              riderAdvice: weather.riderAdvice
+            });
+            log.info("weather refreshed", {
+              description: weather.description,
+              temperatureC: weather.temperatureC,
+              windSpeedKmh: weather.windSpeedKmh,
+              riskLevel: weather.riskLevel
+            });
+          } catch {
+            log.warn("weather refresh failed — keeping last reading");
+          }
+        }, appConfig.weatherRefreshMs);
       }
 
       connectUpstream({

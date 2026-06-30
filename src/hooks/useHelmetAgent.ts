@@ -346,10 +346,13 @@ export function useHelmetAgent() {
             riskLevel: event.riskLevel ?? "normal",
             riderAdvice: event.riderAdvice ?? "天气风险较低，保持正常安全骑行。"
           });
-          setRideContext((context) => ({
-            ...context,
-            hazardLevel: combineHazardLevels(context.hazardLevel, event.riskLevel ?? "normal")
-          }));
+          // The ride context's hazardLevel is owned by the server's ride.context
+          // events (already fused with weather there). Don't fold weather in again
+          // here: combineHazardLevels only raises, so a weather event that *lowers*
+          // the risk would leave rideContext.hazardLevel stuck high — and the live
+          // path can go a whole session between ride.context events. The helmet and
+          // ride-pulse tints fuse the current weather at render time (App.tsx), so
+          // weather risk is reflected without ratcheting this state.
         }
         if (event.type === "ride.context") {
           setRideContext({
@@ -358,8 +361,12 @@ export function useHelmetAgent() {
             scenario: event.scenario,
             scenarioLabel: event.scenarioLabel,
             speedKmh: event.speedKmh ?? 0,
-            routePhase: event.routePhase ?? "等待路线信息",
-            network: event.network ?? "online",
+            // Treat an empty string as missing too, matching the iOS/Android
+            // parsers (routePhase.isEmpty / ifEmpty) — all three clients then
+            // show the fallback instead of a blank field for a server that
+            // ever sends "".
+            routePhase: event.routePhase || "等待路线信息",
+            network: event.network || "online",
             batteryPct: event.batteryPct ?? 0,
             hazardLevel: event.hazardLevel,
             glanceableFocus: event.glanceableFocus

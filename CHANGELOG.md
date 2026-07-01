@@ -1,5 +1,62 @@
 # Changelog
 
+## 2026-07-01 — Web auto-fit, weather/audio startup fix, relay limiter hardening
+
+A review pass with three focused fixes: the web HUD always shows the start
+button, the live path no longer clips the rider's opening words, and the per-IP
+rate limiter behaves correctly (and safely) behind the production reverse proxy.
+
+### Fixed
+
+- **Web: start button always visible (auto-fit cockpit)** (`src/styles.css`) —
+  the helmet panel shared a CSS grid row with the much taller status column and
+  was stretched to match it, pushing the mic/start button ~1200 px down (below
+  the fold on any laptop). The grid columns now top-align, and the helmet panel
+  takes a viewport-relative height (`clamp` on `100dvh`) with a `minmax(0, 1fr)`
+  helmet row so the helmet letterboxes/shrinks and the button stays on screen on
+  load — verified across desktop, short-laptop, and mobile widths, with a
+  `max-height` media query for very short viewports.
+- **Live path dropped the rider's first words** (`server/providers/doubao.ts`) —
+  `start()` awaited the Open-Meteo fetch (up to 4 s) _before_ opening the Doubao
+  connection, so the ~5 s pre-session window outlasted the 3 s pending-audio
+  buffer and the opening utterance was clipped. The weather fetch now runs
+  **concurrently** with the connection handshake and only gates `StartSession`
+  (so live weather still lands in `system_role`), and the pending-audio buffer is
+  sized to 5 s. Net: ~5 s → ~4 s startup with the buffered audio fully retained.
+- **Rate limiter collapsed / was spoofable behind the proxy** (`server/auth.ts`,
+  `server/config.ts`) — two problems in the documented Caddy/Lightsail topology:
+  (1) with `RELAY_TRUST_PROXY=off` every client counted as the proxy's socket
+  address, turning the per-IP limit into a single global bucket that could lock
+  all riders out at once; (2) even with trust on, `clientAddress` read the
+  _leftmost_ `X-Forwarded-For` entry, which the client can forge. The relay now
+  reads the real client IP `RELAY_TRUSTED_PROXY_HOPS` entries from the **right**
+  (default 1 = single Caddy), warns at startup when the Doubao backend runs with
+  the limiter on but proxy trust off, and prints the resolved proxy-trust state.
+- **Rate limiter is now a true sliding window** (`server/auth.ts`) — it had reset
+  fully every 60 s (a fixed window allowing a ~2× burst across the boundary)
+  despite every doc calling it "sliding." Replaced with a sliding 60 s timestamp
+  log, so the implementation finally matches the documentation.
+
+### Added
+
+- **First `createDoubaoProvider` session tests** (`tests/doubao-session.test.ts`)
+  — cover the previously-untested live path with a mock upstream socket and a
+  gated weather fetch: the connection opens concurrently with the fetch,
+  `StartSession` waits for and folds in the weather, and mic frames buffered
+  during startup are flushed rather than dropped.
+- **Relay proxy/limiter tests** (`tests/auth.test.ts`) — right-anchored
+  `X-Forwarded-For` parsing (including spoofed-leftmost and multi-hop), trust-off
+  ignoring the header, and sliding-window partial-expiry behaviour.
+- **`RELAY_TRUSTED_PROXY_HOPS`** — number of trusted reverse-proxy hops (default
+  1); only consulted when `RELAY_TRUST_PROXY=on`.
+
+### Docs
+
+- `.env.example` and the README relay-security section document
+  `RELAY_TRUST_PROXY` / `RELAY_TRUSTED_PROXY_HOPS`, the proxy-collapse caveat, and
+  the sliding window; the README weather and client-resilience notes now cover the
+  concurrent startup fetch and the auto-fit HUD.
+
 ## 2026-06-10 — Hardening & roadmap sweep
 
 One pass over the improvement backlog: relay security, fresher ride context,

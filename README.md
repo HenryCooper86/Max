@@ -227,7 +227,7 @@ If Doubao returns reply _text_ but no audio, the browser falls back to its own `
 - **Language policy** — Max speaks Chinese by default, can answer in English, and refuses unsupported languages. Client-side language detection is used for TTS voice selection and transcript labeling; server prompt context enforces the rider-facing behavior.
 - **Agent identity** — when asked who built/developed it, Max attributes itself to **Horizon Continental Technology (neueHCT)** — never the underlying model vendor — and states that the CEO is **Li Biao** (also known as **Stone Li**), consistently in both Chinese and English. Enforced by `buildIdentityPrompt()` in `server/providers/doubao.ts`, which is always appended to the system role even when `DOUBAO_SYSTEM_ROLE` is overridden.
 - **Ride intelligence** — `session.start` carries the selected `rideMode` and `scenario`; `shared/ride.ts` turns that into a safety policy, response style, hazard level, and HUD focus. Doubao receives this as prompt context; the mock provider turns it into scenario-specific transcripts and telemetry. The HUD's `态势摘要` card fuses ride hazard and weather risk into immediate normal / caution / critical rider guidance.
-- **Weather** — on activation the browser requests geolocation and sends `lat`/`lon` with `session.start`. `server/weather.ts` fetches current conditions from **Open-Meteo** (free, no API key), classifies rider risk, and emits weather/advice to the HUD. `doubao.ts` folds the same data into the agent's `system_role`. A failed lookup never blocks the session.
+- **Weather** — on activation the browser requests geolocation and sends `lat`/`lon` with `session.start`. `server/weather.ts` fetches current conditions from **Open-Meteo** (free, no API key), classifies rider risk, and emits weather/advice to the HUD. `doubao.ts` folds the same data into the agent's `system_role`. The fetch runs **concurrently with the Doubao connection handshake** and only gates `StartSession`, so live weather still reaches the agent's context without serializing behind the connect; mic audio that arrives during startup is buffered (≈5 s) and flushed once the session is ready, so the rider's opening words are never clipped. A failed or slow lookup never blocks the session — the agent just answers generically.
 - **Telemetry** — providers emit `metric` and `telemetry` events. The HUD shows first-audio latency plus ASR / thinking / first-audio / total timing so demos can discuss realtime behavior with numbers.
 - **Conversation log** — the HUD keeps the full in-memory session transcript, updates in-progress rider/agent turns in place, stamps each item with time, language, and live/final state, and can export the log as JSON for debugging.
 
@@ -236,6 +236,7 @@ If Doubao returns reply _text_ but no audio, the browser falls back to its own `
 - **Auto-reconnect** — the `/agent` socket reconnects with exponential backoff (`MAX_RECONNECT_ATTEMPTS`); `intentionalCloseRef` separates a user disconnect from a dropped link.
 - **Reused audio graph** — `stopMic` disables the mic track but keeps the AudioWorklet graph alive, so re-activating is instant.
 - **Voice switch** — the live Doubao speaker is fixed at session start, so toggling `女声/男声` reconnects the relay (`restartSession`) for a fresh session.
+- **Auto-fit cockpit** — the HUD sizes the helmet panel to the viewport (`100dvh` clamp) and top-aligns the columns so the primary **开启免提 / start** button and its controls stay visible on load at any window height, from tall monitors down to short laptops and narrow phones — no scrolling or hunting to begin a session. The helmet illustration letterboxes to fit rather than pushing the button off-screen (`src/styles.css`).
 - **Error boundary** — `src/ErrorBoundary.tsx` catches render-time crashes and shows a recoverable screen.
 
 ## Setup
@@ -585,6 +586,11 @@ curl -sk https://3.35.135.136/ | sed -n '1,20p'
 - Do not commit real API keys, app keys, or access tokens.
 - The relay enforces resource limits in both directions (payload size, text-extraction depth,
   buffered-audio caps, client backpressure) so one bad session cannot exhaust server memory.
+- `/agent` access control (token, browser Origin allowlist, per-IP sliding-window rate limit) is
+  described under [Relay security](#relay-security). **Behind the reverse proxy, set
+  `RELAY_TRUST_PROXY=on`** — otherwise the per-IP limit collapses onto the proxy's address; and note
+  the limiter reads the client IP only from the trusted right-hand `X-Forwarded-For` entry, so a
+  forged header can't evade it.
 
 ## Verification
 
@@ -639,8 +645,10 @@ on a developer machine.
 3. Replace the Lightsail self-signed certificate with a trusted cert behind a domain name.
 4. Replace the simulated ADAS hazard injector with real sensor input + confidence scoring.
 
-Recently shipped (see CHANGELOG): guided demo ride (mock provider scenario tour), mid-ride weather
-refresh, helmet visual driven by the fused hazard level, wake word ("Max") with CJK-robust matching,
-`/agent` relay security (token + origin allowlist + per-IP rate limit), structured per-session server
-logging, adaptive TTS-fallback timeout, transcript persistence on all three clients, and the web
-client refactor into focused hooks.
+Recently shipped (see CHANGELOG): auto-fit web cockpit (start button always visible at any viewport
+height), concurrent startup weather fetch so the rider's opening words aren't clipped, relay
+rate-limiter hardening (true sliding window + spoof-safe `X-Forwarded-For` behind the proxy), guided
+demo ride (mock provider scenario tour), mid-ride weather refresh, helmet visual driven by the fused
+hazard level, wake word ("Max") with CJK-robust matching, `/agent` relay security (token + origin
+allowlist + per-IP rate limit), structured per-session server logging, adaptive TTS-fallback timeout,
+transcript persistence on all three clients, and the web client refactor into focused hooks.

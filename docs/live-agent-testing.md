@@ -337,13 +337,25 @@ refuses to attribute itself to ByteDance if asked "你是哪家公司的".
 **What it does:** Gates the WebSocket upgrade — optional shared token
 (`RELAY_AUTH_TOKEN`), origin allowlist for browsers (`RELAY_ALLOWED_ORIGINS`,
 native apps send no `Origin` and pass), and a per-IP connection rate limit
-(`RELAY_CONN_PER_MINUTE`, default 30, sliding window).
+(`RELAY_CONN_PER_MINUTE`, default 30) enforced as a **true sliding 60 s window**
+(no burst at the minute boundary).
 
-**Code:** `server/auth.ts` (`authorizeUpgrade`, `checkRateLimit`, `resetRateLimit`).
+**Behind a reverse proxy** (the Caddy/Lightsail deploy) set `RELAY_TRUST_PROXY=on`
+so the real client IP is read from `X-Forwarded-For` — `RELAY_TRUSTED_PROXY_HOPS`
+entries from the **right** (default 1 = single Caddy). Left of that is
+client-supplied and never trusted, so a forged `X-Forwarded-For` can't dodge the
+limit. With trust off behind a proxy, every client collapses onto the proxy's
+address and the per-IP limit becomes a single global bucket — the relay logs a
+startup warning for exactly this misconfiguration.
+
+**Code:** `server/auth.ts` (`authorizeUpgrade`, `checkRateLimit`, `clientAddress`,
+`resetRateLimit`).
 
 **Unit test:** `tests/auth.test.ts` — open-when-unconfigured, token required when
-set, browser origin allowlist with native bypass, and the sliding rate-limit
-window (cap, unaffected other IPs, recovery after 60 s).
+set, browser origin allowlist with native bypass, the sliding rate-limit window
+(cap, unaffected other IPs, recovery after 60 s, partial-expiry — one slot frees
+without a full reset), and proxy IP handling (trust-off ignores the header,
+right-anchored real IP, spoofed-leftmost entry rejected, multi-hop peeling).
 
 ```bash
 npm test -- "authorizeUpgrade"
@@ -354,7 +366,9 @@ without `?token=` → handshake rejected; with `?token=s3cret` → accepted. Set
 `RELAY_ALLOWED_ORIGINS=https://max.example.com` and open the client from a
 different origin → rejected. Set `RELAY_CONN_PER_MINUTE=3` and reconnect
 repeatedly from one IP → 4th attempt within a minute is rejected, recovers a
-minute later.
+minute later. Behind Caddy, confirm the startup log prints `Relay proxy trust:
+on (1 hop via X-Forwarded-For)` — and that leaving `RELAY_TRUST_PROXY=off` there
+prints the proxy-collapse warning instead.
 
 ---
 

@@ -33,13 +33,19 @@
 
 body {
   margin: 0;
-  min-width: 320px;
+  min-width: 0;
   min-height: 100vh;
+  overflow-x: hidden;
 }
 
 button,
 input {
   font: inherit;
+}
+
+button {
+  max-width: 100%;
+  min-width: 0;
 }
 
 button:disabled {
@@ -65,11 +71,13 @@ a:focus-visible {
     radial-gradient(circle at 18% 8%, rgba(62, 232, 159, 0.16), transparent 38%),
     radial-gradient(circle at 88% 92%, rgba(242, 106, 61, 0.12), transparent 40%),
     linear-gradient(135deg, #111719 0%, #192020 44%, #211d17 100%);
-  padding: clamp(16px, 3vw, 36px);
+  padding: clamp(10px, 3vw, 36px);
 }
 
 .visor {
   position: relative;
+  max-width: 100%;
+  min-width: 0;
   min-height: calc(100vh - clamp(32px, 6vw, 72px));
   border: 1px solid rgba(196, 218, 216, 0.2);
   border-radius: 10px;
@@ -105,6 +113,7 @@ a:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  min-width: 0;
   padding: clamp(20px, 3vw, 36px);
   border-bottom: 1px solid rgba(196, 218, 216, 0.16);
 }
@@ -113,6 +122,12 @@ a:focus-visible {
   display: flex;
   align-items: center;
   gap: 16px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.brand > div {
+  min-width: 0;
 }
 
 .logoMark {
@@ -150,6 +165,8 @@ h2 {
 h1 {
   font-size: clamp(1.8rem, 3.4vw, 3.6rem);
   max-width: 920px;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
 }
 
 h2 {
@@ -194,34 +211,42 @@ h2 {
   align-items: center;
   flex-wrap: wrap;
   gap: 12px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .voiceToggle,
 .modeToggle {
   display: inline-flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   padding: 3px;
   border: 1px solid rgba(196, 218, 216, 0.2);
-  border-radius: 999px;
+  border-radius: 12px;
   background: rgba(255, 255, 255, 0.04);
 }
 
 .voiceToggle button,
 .modeToggle button {
+  flex: 1 1 auto;
   min-height: 32px;
-  padding: 0 15px;
+  min-width: 42px;
+  padding: 0 clamp(9px, 2vw, 15px);
   border: 0;
-  border-radius: 999px;
+  border-radius: 10px;
   background: transparent;
   color: var(--muted);
   font-size: 0.82rem;
+  line-height: 1.15;
   cursor: pointer;
+  overflow-wrap: anywhere;
   transition:
     background 0.15s ease,
     color 0.15s ease;
 }
 
 .modeToggle button {
-  padding: 0 11px;
+  padding: 0 clamp(8px, 1.8vw, 11px);
 }
 
 .voiceToggle button:hover:not(.active),
@@ -243,13 +268,15 @@ h2 {
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: minmax(320px, 1.35fr) minmax(280px, 0.65fr);
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
   gap: 18px;
+  min-width: 0;
   padding: clamp(16px, 3vw, 36px);
 }
 
 .hudPanel {
   position: relative;
+  min-width: 0;
   border: 1px solid var(--border);
   border-radius: 14px;
   background: var(--panel);
@@ -264,6 +291,7 @@ h2 {
   gap: 14px;
   min-height: 540px;
   padding: clamp(18px, 3vw, 32px);
+  min-width: 0;
 }
 
 .helmetStage {
@@ -594,12 +622,17 @@ h2 {
 
 /* Single mic toggle: the one primary action in the helmet panel. */
 .micButton {
-  width: 100%;
-  min-height: 58px;
+  justify-self: center;
+  width: min(100%, 440px);
+  min-height: clamp(50px, 7vh, 58px);
   border-radius: 10px;
-  padding: 0 24px;
-  font-size: 1.05rem;
+  padding: 0 clamp(12px, 4vw, 24px);
+  font-size: clamp(0.94rem, 2.6vw, 1.05rem);
+  line-height: 1.15;
   letter-spacing: 0.04em;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
 }
 
 .mainButton:hover:not(:disabled),
@@ -623,30 +656,44 @@ h2 {
 /* Hands-free control block: the mic toggle plus its one-line hint. */
 .handsFree {
   display: grid;
+  justify-self: center;
+  width: min(100%, 560px);
   gap: 8px;
+  min-width: 0;
 }
 
 .handsFreeHint {
   margin: 0;
+  max-width: 48rem;
+  justify-self: center;
   text-align: center;
   color: var(--muted);
   font-size: 0.82rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
 }
 
 .scenarioStrip {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 92px), 1fr));
   gap: 8px;
+  min-width: 0;
 }
 
 .scenarioStrip button {
   min-height: 34px;
+  min-width: 0;
+  padding: 0 10px;
   border: 1px solid rgba(196, 218, 216, 0.18);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.04);
   color: var(--muted);
   cursor: pointer;
   font-size: 0.82rem;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+  white-space: normal;
   transition:
     background 0.15s ease,
     color 0.15s ease,
@@ -1257,12 +1304,22 @@ h2 {
     flex-direction: column;
   }
 
-  .helmetPanel {
-    min-height: 440px;
+  .topbarControls {
+    width: 100%;
   }
 
-  .scenarioStrip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .voiceToggle,
+  .modeToggle {
+    flex: 1 1 min(100%, 180px);
+  }
+
+  .signal {
+    flex: 1 1 120px;
+    justify-content: center;
+  }
+
+  .helmetPanel {
+    min-height: 440px;
   }
 
   .preflightGrid,
@@ -1281,6 +1338,56 @@ h2 {
 
   .diagnosticGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 420px) {
+  .shell {
+    padding: 8px;
+  }
+
+  .topbar,
+  .grid {
+    padding: 10px;
+  }
+
+  .brand {
+    gap: 10px;
+  }
+
+  .logoMark {
+    width: 38px;
+    height: 38px;
+  }
+
+  h1 {
+    font-size: clamp(1.35rem, 8.4vw, 1.9rem);
+  }
+
+  .helmetPanel,
+  .statusPanel,
+  .transcriptPanel {
+    padding: 14px;
+  }
+
+  .helmetPanel {
+    min-height: 390px;
+  }
+
+  .micButton {
+    min-height: 48px;
+    letter-spacing: 0.02em;
+  }
+
+  .scenarioStrip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .scenarioStrip button {
+    min-height: 32px;
+    padding: 0 7px;
+    font-size: 0.78rem;
   }
 }
 

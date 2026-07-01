@@ -36,6 +36,11 @@ export const config = {
   connPerMinute: resolveBoundedInt(process.env.RELAY_CONN_PER_MINUTE, 30, 0, 10_000),
   // Honor X-Forwarded-For for rate limiting only behind a trusted proxy.
   trustProxy: process.env.RELAY_TRUST_PROXY?.trim().toLowerCase() === "on",
+  // Number of trusted reverse proxies in front of the relay (e.g. 1 for the
+  // documented single Caddy hop). The real client IP is this many entries from
+  // the RIGHT of X-Forwarded-For; entries further left are client-supplied and
+  // must never be trusted. Only consulted when trustProxy is on.
+  trustedProxyHops: resolveBoundedInt(process.env.RELAY_TRUSTED_PROXY_HOPS, 1, 1, 10),
   // How often a live session re-fetches weather mid-ride. 0 turns refresh off.
   weatherRefreshMs: resolveBoundedInt(process.env.WEATHER_REFRESH_MS, 10 * 60_000, 0, 6 * 3_600_000),
   // Base wait for Doubao TTS audio before falling back to browser speech. The
@@ -86,7 +91,8 @@ export function describeConfig(): string[] {
     `Wake word ("Max"): ${config.wakeWord ? "on" : "off"}`,
     `Relay auth token: ${config.relayAuthToken ? "required" : "open"}`,
     `Relay origin allowlist: ${config.allowedOrigins.length ? config.allowedOrigins.join(", ") : "any"}`,
-    `Relay rate limit: ${config.connPerMinute ? `${config.connPerMinute} conn/min/IP` : "off"}`
+    `Relay rate limit: ${config.connPerMinute ? `${config.connPerMinute} conn/min/IP (sliding)` : "off"}`,
+    `Relay proxy trust: ${config.trustProxy ? `on (${config.trustedProxyHops} hop${config.trustedProxyHops === 1 ? "" : "s"} via X-Forwarded-For)` : "off (client IP = socket address)"}`
   ];
 }
 
@@ -114,6 +120,16 @@ export function validateConfig(): string[] {
   if (config.allowedOrigins.length && !config.relayAuthToken) {
     warnings.push(
       "RELAY_ALLOWED_ORIGINS 已设置但 RELAY_AUTH_TOKEN 未设置：来源白名单只能拦截浏览器，不发送 Origin 头的原生 App 或脚本仍可连接。请同时设置令牌。"
+    );
+  }
+
+  // Behind a reverse proxy (the documented Caddy/Lightsail deploy), every client
+  // shares the proxy's socket address unless X-Forwarded-For is trusted, so the
+  // per-IP limiter collapses into a single global bucket that can lock everyone
+  // out. Flag it when running the real backend without proxy trust enabled.
+  if (config.voiceProvider === "doubao" && config.connPerMinute > 0 && !config.trustProxy) {
+    warnings.push(
+      "RELAY_CONN_PER_MINUTE 已启用但 RELAY_TRUST_PROXY=off：若本服务位于反向代理（如部署文档中的 Caddy）之后，所有客户端会被算作同一个代理 IP，速率限制会退化为全局限制并可能锁死所有人。反代后请设置 RELAY_TRUST_PROXY=on（并按需设置 RELAY_TRUSTED_PROXY_HOPS）。"
     );
   }
 

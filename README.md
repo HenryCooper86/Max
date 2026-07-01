@@ -402,11 +402,14 @@ The `/agent` WebSocket holds the path to your Doubao quota, so the relay support
 ```bash
 RELAY_AUTH_TOKEN=          # shared secret; clients connect with ?token=…
 RELAY_ALLOWED_ORIGINS=     # comma-separated browser Origin allowlist
-RELAY_CONN_PER_MINUTE=30   # WebSocket upgrade attempts per client IP per minute
+RELAY_CONN_PER_MINUTE=30   # WebSocket upgrade attempts per client IP per minute (sliding 60s window)
 RELAY_TRUST_PROXY=off      # read client IP from X-Forwarded-For (behind a proxy only)
+RELAY_TRUSTED_PROXY_HOPS=1 # trusted proxy count; client IP is this many entries from the right of XFF
 ```
 
-When a token is set, the web HUD learns it from a one-time `?token=…` page URL (then remembers it in localStorage), and the native apps take it in the 认证令牌 field in Settings. Origin checks apply only to browsers — native clients send no Origin header and are covered by the token. Rejected upgrades answer `401`/`403`/`429` before the WebSocket is accepted and are logged with the client address. Running the Doubao provider without a token logs a startup warning.
+When a token is set, the web HUD learns it from a one-time `?token=…` page URL (then remembers it in localStorage), and the native apps take it in the 认证令牌 field in Settings. Origin checks apply only to browsers — native clients send no Origin header and are covered by the token. The rate limit is a true sliding 60-second window, so there is no burst allowance at the minute boundary. Rejected upgrades answer `401`/`403`/`429` before the WebSocket is accepted and are logged with the client address. Running the Doubao provider without a token logs a startup warning.
+
+> **Behind a reverse proxy (the Caddy/Lightsail deploy below), set `RELAY_TRUST_PROXY=on`.** Otherwise every client is seen as the proxy's own socket address, so the per-IP rate limit collapses into a single global bucket that can lock all riders out at once. With trust on, the real client IP is read from `X-Forwarded-For` at `RELAY_TRUSTED_PROXY_HOPS` entries from the right (default `1`, matching a single Caddy) — never the leftmost entry, which the client can forge. The relay prints a startup warning if the Doubao backend runs with the limiter on but proxy trust off.
 
 ### Wake word
 

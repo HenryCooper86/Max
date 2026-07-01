@@ -40,6 +40,21 @@ type DoubaoSessionConfig = {
   systemRole: string;
 };
 
+// Passed to connectUpstream. The upstream handshake opens immediately while the
+// live-weather fetch runs concurrently; StartSession then waits on the weather
+// addendum so it still lands in the agent's context, but without serializing the
+// two round-trips (which used to push the rider's first words past the buffer).
+type ConnectConfig = {
+  sampleRate: number;
+  channels: number;
+  voiceGender: VoiceGender;
+  // Persona prompt without weather; the weather addendum is appended once resolved.
+  baseSystemRole: string;
+  // Resolves to the weather addendum for the system prompt ("" when weather is
+  // unavailable). Never rejects — the session must start regardless.
+  weatherRolePromise: Promise<string>;
+};
+
 // Default realtime-dialogue speakers from the Doubao S2S-Omni 音色列表 (jupiter family).
 // Override per deployment with DOUBAO_VOICE / DOUBAO_VOICE_MALE.
 const DEFAULT_FEMALE_SPEAKER = "zh_female_vv_jupiter_bigtts";
@@ -366,9 +381,12 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
   // so late-arriving Doubao audio for the same reply isn't also played.
   let fallbackSpoke = false;
   // Mic frames that arrive before the upstream session is ready. Bounded so a
-  // session that never becomes ready cannot grow this without limit — 150
-  // frames is 3 s of 20 ms audio; older frames are dropped first.
-  const MAX_PENDING_AUDIO_FRAMES = 150;
+  // session that never becomes ready cannot grow this without limit. StartSession
+  // is deferred until the live-weather fetch resolves (bounded at 4 s, and now run
+  // concurrently with the connection handshake), so the buffer must comfortably
+  // outlast that window or the rider's opening words are dropped. 250 frames is
+  // 5 s of 20 ms audio (~160 KB); older frames are dropped first.
+  const MAX_PENDING_AUDIO_FRAMES = 250;
   const pendingAudio: Buffer[] = [];
 
   function sendClient(payload: unknown) {
@@ -489,7 +507,7 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
     }
   }
 
-  function connectUpstream(config: DoubaoSessionConfig) {
+  function connectUpstream(config: ConnectConfig) {
     const url = process.env.DOUBAO_AGENT_WS_URL ?? "wss://openspeech.bytedance.com/api/v3/realtime/dialogue";
     upstream = new WebSocket(url, { headers: buildDoubaoHeaders() });
 
@@ -499,13 +517,31 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
       sendClient({ type: "status", state: "connecting", detail: "豆包语音连接已打开" });
     });
 
-    upstream.on("message", (message) => {
+    upstream.on("message", async (message) => {
       try {
         const frame = parseDoubaoFrame(message);
 
         if (frame.event === EventReceive.ConnectionStarted) {
           sessionId = randomUUID();
-          upstream?.send(buildFullClientRequest(EventSend.StartSession, sessionId, buildDoubaoSessionConfig(config)));
+          // Fold in the concurrently-fetched weather (bounded; "" if unavailable),
+          // then start the session. Doubao sends nothing until StartSession, so
+          // awaiting here only defers our own next send.
+          const weatherRole = await config.weatherRolePromise;
+          const systemRole = config.baseSystemRole + weatherRole;
+          // The socket may have closed while the weather fetch was in flight.
+          if (upstream?.readyState !== WebSocket.OPEN) return;
+          upstream.send(
+            buildFullClientRequest(
+              EventSend.StartSession,
+              sessionId,
+              buildDoubaoSessionConfig({
+                sampleRate: config.sampleRate,
+                channels: config.channels,
+                voiceGender: config.voiceGender,
+                systemRole
+              })
+            )
+          );
           return;
         }
 
@@ -726,35 +762,45 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
           ? { lat: event.lat, lon: event.lon, source: "rider" as const }
           : appConfig.defaultWeatherLocation;
 
-      try {
-        const weather = await fetchRiderWeather(weatherLocation.lat, weatherLocation.lon);
-        const locationLabel =
-          weatherLocation.source === "rider"
-            ? "骑手当前位置"
-            : weatherLocation.source === "configured"
-              ? "默认位置"
-              : "演示位置";
-        systemRole +=
-          `\n\n[实时骑行情报] ${locationLabel}${weather.summary}` +
-          `${weather.riderAdvice}当骑手询问天气、风力或路况时，请基于这条真实数据简短回答。`;
-        sendClient({
-          type: "weather",
-          description: weather.description,
-          temperatureC: weather.temperatureC,
-          windSpeedKmh: weather.windSpeedKmh,
-          isDay: weather.isDay,
-          riskLevel: weather.riskLevel,
-          riderAdvice: weather.riderAdvice
-        });
-        sendClient({
-          type: "status",
-          state: "ready",
-          detail: `已接入${weatherLocation.source === "rider" ? "实时" : locationLabel}天气：${weather.description} ${weather.temperatureC}°C`
-        });
-      } catch {
-        log.warn("initial weather fetch failed", { lat: weatherLocation.lat, lon: weatherLocation.lon });
-        sendClient({ type: "status", state: "ready", detail: "实时天气暂不可用，使用通用回答" });
-      }
+      // Kick the weather fetch off WITHOUT awaiting it here: it now runs
+      // concurrently with the upstream connection handshake and is folded into
+      // the system role at StartSession (see connectUpstream). Awaiting here used
+      // to serialize the weather round-trip (up to 4 s) ahead of the connect,
+      // pushing the rider's opening words past the pending-audio buffer. This
+      // promise resolves to the weather system-prompt addendum and never rejects.
+      const weatherRolePromise = (async (): Promise<string> => {
+        try {
+          const weather = await fetchRiderWeather(weatherLocation.lat, weatherLocation.lon);
+          const locationLabel =
+            weatherLocation.source === "rider"
+              ? "骑手当前位置"
+              : weatherLocation.source === "configured"
+                ? "默认位置"
+                : "演示位置";
+          sendClient({
+            type: "weather",
+            description: weather.description,
+            temperatureC: weather.temperatureC,
+            windSpeedKmh: weather.windSpeedKmh,
+            isDay: weather.isDay,
+            riskLevel: weather.riskLevel,
+            riderAdvice: weather.riderAdvice
+          });
+          sendClient({
+            type: "status",
+            state: "ready",
+            detail: `已接入${weatherLocation.source === "rider" ? "实时" : locationLabel}天气：${weather.description} ${weather.temperatureC}°C`
+          });
+          return (
+            `\n\n[实时骑行情报] ${locationLabel}${weather.summary}` +
+            `${weather.riderAdvice}当骑手询问天气、风力或路况时，请基于这条真实数据简短回答。`
+          );
+        } catch {
+          log.warn("initial weather fetch failed", { lat: weatherLocation.lat, lon: weatherLocation.lon });
+          sendClient({ type: "status", state: "ready", detail: "实时天气暂不可用，使用通用回答" });
+          return "";
+        }
+      })();
 
       // Mid-ride refresh: long rides outlive the session-start snapshot, so
       // re-fetch on an interval and push the HUD update. The Doubao system
@@ -789,7 +835,8 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
         sampleRate: event.sampleRate,
         channels: event.channels,
         voiceGender: event.voiceGender ?? "female",
-        systemRole
+        baseSystemRole: systemRole,
+        weatherRolePromise
       });
     },
     async startAudio() {

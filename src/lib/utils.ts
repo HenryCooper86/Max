@@ -88,7 +88,10 @@ export function exportTranscriptLog(items: TranscriptItem[]) {
   const link = document.createElement("a");
   link.href = url;
   link.download = `max-session-log-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+  link.style.display = "none";
+  document.body.appendChild(link);
   link.click();
+  link.remove();
   // Defer revocation: some browsers (e.g. Firefox) cancel the download if the
   // blob URL is revoked synchronously before the download has started.
   setTimeout(() => URL.revokeObjectURL(url), 0);

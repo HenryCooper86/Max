@@ -269,6 +269,10 @@ h2 {
   z-index: 1;
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+  /* Top-align the columns so the helmet panel keeps its own (shorter) height
+     instead of being stretched to match the tall status column — that stretch
+     is what used to push the start button far below the fold. */
+  align-items: start;
   gap: 18px;
   min-width: 0;
   padding: clamp(16px, 3vw, 36px);
@@ -287,11 +291,20 @@ h2 {
    ============================================================ */
 .helmetPanel {
   display: grid;
-  grid-template-rows: 1fr auto;
+  /* minmax(0, 1fr): without the 0 floor the helmet row keeps its natural
+     min-content height and the panel ignores the cap below — this floor is what
+     lets the helmet shrink so the start button stays on screen. */
+  grid-template-rows: minmax(0, 1fr) auto;
   gap: 14px;
-  min-height: 540px;
+  /* Auto-fit to the viewport: a *definite* height (not just min/max) is what
+     lets the grid distribute space so the helmet row shrinks and the start
+     button below stays on screen on load. The clamp floor keeps the helmet
+     legible on tiny screens; the ceiling caps it on tall monitors. 100dvh
+     tracks the *visible* viewport (mobile toolbars included). */
+  height: clamp(320px, calc(100dvh - 232px), 620px);
   padding: clamp(18px, 3vw, 32px);
   min-width: 0;
+  overflow: hidden;
 }
 
 .helmetStage {
@@ -300,6 +313,11 @@ h2 {
   justify-self: center;
   width: min(100%, 600px);
   aspect-ratio: 1.55;
+  /* Let the helmet shrink to whatever height the (viewport-capped) panel row
+     leaves for it, so the start button below always stays on screen. The SVG
+     inside letterboxes cleanly rather than overflowing. */
+  max-height: 100%;
+  min-height: 0;
 
   --ring: var(--danger);
   --ring-soft: rgba(255, 111, 87, 0.5);
@@ -1292,6 +1310,26 @@ h2 {
 /* ============================================================
    Responsive
    ============================================================ */
+
+/* Short desktop/laptop viewports: reclaim vertical space from the topbar and
+   let the helmet shrink further so the start button stays visible without
+   scrolling even at ~500–620px of usable height. Two-column layout only. */
+@media (min-width: 901px) and (max-height: 640px) {
+  .topbar {
+    padding-top: clamp(12px, 2vh, 18px);
+    padding-bottom: clamp(12px, 2vh, 18px);
+  }
+
+  .shell {
+    padding-top: clamp(8px, 1.5vh, 20px);
+    padding-bottom: clamp(8px, 1.5vh, 20px);
+  }
+
+  .helmetPanel {
+    height: clamp(240px, calc(100dvh - 196px), 620px);
+  }
+}
+
 @media (max-width: 900px) {
   .topbar,
   .grid,
@@ -1318,8 +1356,11 @@ h2 {
     justify-content: center;
   }
 
+  /* Single-column: the helmet stacks above the status/transcript, so pinning it
+     would cover that content. Let it scroll normally and size to content. */
   .helmetPanel {
-    min-height: 440px;
+    height: auto;
+    min-height: clamp(340px, 58dvh, 460px);
   }
 
   .preflightGrid,
@@ -1371,7 +1412,7 @@ h2 {
   }
 
   .helmetPanel {
-    min-height: 390px;
+    min-height: clamp(300px, 52dvh, 400px);
   }
 
   .micButton {

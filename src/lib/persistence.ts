@@ -8,6 +8,8 @@ import type { TranscriptItem, VoiceGender } from "../types";
 const TRANSCRIPT_KEY = "max.transcript.v1";
 const SETTINGS_KEY = "max.settings.v1";
 const TOKEN_KEY = "max.relayToken";
+const VOICE_GENDERS = new Set<VoiceGender>(["female", "male"]);
+const VOICE_PERSONALITIES = new Set<VoicePersonality>(["concise", "friendly", "technical", "rally"]);
 
 /** Keep the stored conversation bounded so years of rides can't fill the quota. */
 const TRANSCRIPT_CAP = 200;
@@ -16,6 +18,26 @@ type StoredSettings = {
   voiceGender?: VoiceGender;
   voicePersonality?: VoicePersonality;
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+export function normalizeStoredSettings(value: unknown): StoredSettings {
+  if (!isRecord(value)) return {};
+
+  const settings: StoredSettings = {};
+  if (typeof value.voiceGender === "string" && VOICE_GENDERS.has(value.voiceGender as VoiceGender)) {
+    settings.voiceGender = value.voiceGender as VoiceGender;
+  }
+  if (
+    typeof value.voicePersonality === "string" &&
+    VOICE_PERSONALITIES.has(value.voicePersonality as VoicePersonality)
+  ) {
+    settings.voicePersonality = value.voicePersonality as VoicePersonality;
+  }
+  return settings;
+}
 
 function readJson<T>(key: string): T | null {
   try {
@@ -66,11 +88,11 @@ export function clearStoredTranscript() {
 }
 
 export function loadStoredSettings(): StoredSettings {
-  return readJson<StoredSettings>(SETTINGS_KEY) ?? {};
+  return normalizeStoredSettings(readJson<unknown>(SETTINGS_KEY));
 }
 
 export function saveStoredSettings(settings: StoredSettings) {
-  writeJson(SETTINGS_KEY, settings);
+  writeJson(SETTINGS_KEY, normalizeStoredSettings(settings));
 }
 
 /**
@@ -83,6 +105,9 @@ export function relayAuthToken(): string {
     const fromUrl = new URLSearchParams(window.location.search).get("token");
     if (fromUrl) {
       window.localStorage.setItem(TOKEN_KEY, fromUrl);
+      const url = new URL(window.location.href);
+      url.searchParams.delete("token");
+      window.history.replaceState(window.history.state, document.title, `${url.pathname}${url.search}${url.hash}`);
       return fromUrl;
     }
     return window.localStorage.getItem(TOKEN_KEY) ?? "";

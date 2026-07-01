@@ -59,6 +59,11 @@ import { useAudioPlayback } from "./useAudioPlayback";
 import { useMicCapture } from "./useMicCapture";
 
 const storedSettings = loadStoredSettings();
+const LOCATION_START_GRACE_MS = 900;
+
+function delay(ms: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+}
 
 export function useHelmetAgent() {
   const [connected, setConnected] = useState(false);
@@ -527,8 +532,15 @@ export function useHelmetAgent() {
     const socket = socketRef.current;
     if (!socket) throw new Error("语音连接未创建");
     if (socket.readyState === WebSocket.OPEN) return socket;
+    if (socket.readyState === WebSocket.CLOSING || socket.readyState === WebSocket.CLOSED) {
+      throw new Error("语音连接已关闭，请重试");
+    }
 
     return new Promise<WebSocket>((resolve, reject) => {
+      const timeout = window.setTimeout(() => {
+        cleanup();
+        reject(new Error("语音连接打开超时"));
+      }, 8000);
       const handleOpen = () => {
         cleanup();
         resolve(socket);
@@ -537,13 +549,20 @@ export function useHelmetAgent() {
         cleanup();
         reject(new Error("语音连接打开失败"));
       };
+      const handleClose = () => {
+        cleanup();
+        reject(new Error("语音连接已关闭，请重试"));
+      };
       const cleanup = () => {
+        window.clearTimeout(timeout);
         socket.removeEventListener("open", handleOpen);
         socket.removeEventListener("error", handleError);
+        socket.removeEventListener("close", handleClose);
       };
 
       socket.addEventListener("open", handleOpen);
       socket.addEventListener("error", handleError);
+      socket.addEventListener("close", handleClose);
     });
   }, [connect]);
 
@@ -552,17 +571,19 @@ export function useHelmetAgent() {
   const startMic = useCallback(async () => {
     try {
       // Geolocation is best-effort for live weather; fire it in parallel so a slow
-      // or pending GPS prompt never delays opening the relay or the mic. If it
-      // resolves before the session opens, connect()'s open handler includes it.
+      // or pending GPS prompt never blocks opening the relay or the mic. A short
+      // grace window lets cached/fast coordinates make the first session.start.
       if (!locationRef.current) {
-        void getRiderLocation().then((location) => {
+        const locationLookup = getRiderLocation().then((location) => {
           if (location) {
             locationRef.current = location;
             setLocationPermission("granted");
           }
           // On null (denied/timeout) we leave the label to the navigator.permissions
           // tracker, which reports "denied" accurately — don't clobber it here.
+          return location;
         });
+        await Promise.race([locationLookup, delay(LOCATION_START_GRACE_MS)]);
       }
       const socket = await waitForSocket();
       await ensureMic();

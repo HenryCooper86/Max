@@ -3,13 +3,19 @@ import { randomUUID } from "node:crypto";
 import type { AgentProvider, SessionStartEvent, VoiceGender } from "./types";
 import { DOUBAO_CAPABILITIES } from "../../shared/agent";
 import { type AdasSeverity } from "../../shared/adas";
-import { containsWakePhrase, WAKE_FOLLOWUP_WINDOW_MS, WAKE_PHRASE_LABEL } from "../../shared/wake";
+import {
+  containsWakePhrase,
+  WAKE_FOLLOWUP_MAX_CHAIN_MS,
+  WAKE_FOLLOWUP_WINDOW_MS,
+  WAKE_PHRASE_LABEL
+} from "../../shared/wake";
 import { config as appConfig } from "../config";
 import { createHazardInjector } from "../hazard-injector";
 import { createLogger, type Logger } from "../logger";
 import { metrics } from "../metrics";
 import { fetchRiderWeather } from "../weather";
 import {
+  approxDistanceKm,
   buildRideContextSummary,
   combineHazardLevels,
   describeRideMode,
@@ -155,6 +161,8 @@ export type ParsedDoubaoFrame = {
   sessionId: string;
   serialization: number;
   payload: Buffer;
+  /** Set only for ErrorInformation frames, which carry a code instead of an event. */
+  errorCode?: number;
 };
 
 function requireEnv(name: string) {
@@ -263,6 +271,27 @@ export function parseDoubaoFrame(raw: RawData): ParsedDoubaoFrame {
   }
 
   const serialization = (data[2] >> 4) & 0b1111;
+  // The relay requests no compression; a compressed payload would otherwise
+  // fail JSON.parse on every frame with a misleading per-frame error.
+  const compression = data[2] & 0b1111;
+  if (compression !== 0) throw new Error(`Unsupported Doubao compression flag ${compression}`);
+
+  // Error frames use a different layout: header + errorCode(4) + payloadSize(4)
+  // + payload — no session-id section. Parsing them with the standard layout
+  // would misread the payload size as a session length and always throw.
+  if (messageType === MessageType.ErrorInformation) {
+    const errorCode = data.readUInt32BE(4);
+    const payloadLength = data.readUInt32BE(8);
+    if (data.length < 12 + payloadLength) throw new Error("Doubao frame payload is incomplete");
+    return {
+      event: 0,
+      sessionId: "",
+      serialization,
+      payload: data.subarray(12, 12 + payloadLength),
+      errorCode
+    };
+  }
+
   const event = data.readUInt32BE(4);
   const sessionLength = data.readUInt32BE(8);
   const sessionStart = 12;
@@ -365,6 +394,13 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
   // which matches the voice — instead of concatenating both and duplicating it.
   let chatText = "";
   let ttsText = "";
+  // Text of the last TtsSentence event, so the Start/End pair carrying the same
+  // sentence is appended once — without dropping later sentences that merely
+  // repeat earlier text (a substring check against all of ttsText did that).
+  let lastTtsSentence = "";
+  // One "thinking" status per agent turn; per-token statuses only re-send the
+  // same state and waste the rider's cellular link.
+  let sentThinkingStatus = false;
   let receivedTtsAudio = false;
   let ttsFallbackTimer: NodeJS.Timeout | undefined;
   // Measured chat→first-audio latency of the previous turn; the TTS fallback
@@ -372,6 +408,10 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
   // the browser-speech fallback while real audio is still in flight.
   let lastFirstAudioLatencyMs = 0;
   let weatherRefreshTimer: NodeJS.Timeout | undefined;
+  // Where the rider is, for weather. Seeded at session.start, then kept fresh
+  // by mid-ride location.update events so a long ride's weather doesn't stay
+  // pinned to the start point.
+  let weatherLocation: { lat: number; lon: number; source: "rider" | "configured" | "demo" } | undefined;
   // Wake-word ("Max") gating. The rider transcript for the current turn
   // accumulates in riderTurnText; addressedUntil holds the conversation window.
   // replyDecided/replyAddressed latch the decision for the whole agent turn so
@@ -379,6 +419,9 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
   const wakeWordEnabled = appConfig.wakeWord;
   let riderTurnText = "";
   let addressedUntil = 0;
+  // When the rider last said "Max" explicitly — follow-up turns slide the
+  // window but never past this + WAKE_FOLLOWUP_MAX_CHAIN_MS.
+  let lastExplicitWakeAt = 0;
   let replyDecided = false;
   let replyAddressed = false;
   let lastFlushedAgentTextKey = "";
@@ -422,6 +465,7 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
     if (!replyDecided) {
       replyAddressed = Date.now() <= addressedUntil;
       replyDecided = true;
+      if (!replyAddressed) log.debug("reply suppressed — rider did not address Max", { riderTurnText });
     }
     return replyAddressed;
   }
@@ -434,6 +478,7 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
   function resetPendingReply() {
     chatText = "";
     ttsText = "";
+    lastTtsSentence = "";
   }
 
   function flushPendingAgentText(useBrowserSpeech: boolean) {
@@ -514,6 +559,33 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
   // so normal voice sessions aren't interrupted. See server/hazard-injector.ts.
   const hazardInjector = createHazardInjector({ send: sendClient, emitRideContext });
 
+  /** Refetches weather for the current location and pushes the HUD update. */
+  async function refreshWeather(trigger: "interval" | "location") {
+    const location = weatherLocation;
+    if (!location) return;
+    try {
+      const weather = await fetchRiderWeather(location.lat, location.lon);
+      sendClient({
+        type: "weather",
+        description: weather.description,
+        temperatureC: weather.temperatureC,
+        windSpeedKmh: weather.windSpeedKmh,
+        isDay: weather.isDay,
+        riskLevel: weather.riskLevel,
+        riderAdvice: weather.riderAdvice
+      });
+      log.info("weather refreshed", {
+        trigger,
+        description: weather.description,
+        temperatureC: weather.temperatureC,
+        windSpeedKmh: weather.windSpeedKmh,
+        riskLevel: weather.riskLevel
+      });
+    } catch {
+      log.warn("weather refresh failed — keeping last reading", { trigger });
+    }
+  }
+
   function emitTelemetry(totalEnd = Date.now()) {
     const asrMs = asrStartedAt && asrFirstTextAt ? asrFirstTextAt - asrStartedAt : 0;
     const thinkMs = asrFirstTextAt && chatStartedAt ? chatStartedAt - asrFirstTextAt : 0;
@@ -535,9 +607,39 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
       sendClient({ type: "status", state: "connecting", detail: "豆包语音连接已打开" });
     });
 
+    // Handlers that suspend (awaiting the weather promise) must verify they
+    // still belong to the CURRENT upstream: after an in-place reconnect the
+    // shared `upstream` variable points at the replacement socket, and a stale
+    // continuation would double-send StartSession on it.
+    const socket = upstream;
+
     upstream.on("message", async (message) => {
       try {
         const frame = parseDoubaoFrame(message);
+
+        if (frame.errorCode !== undefined) {
+          const detail = frame.payload.toString().slice(0, 300);
+          metrics.upstreamFailure();
+          log.error("doubao error frame", { code: frame.errorCode, detail });
+          sendClient({ type: "status", state: "degraded", detail: "豆包连接异常，已保留浏览器 TTS 备用通道" });
+          sendClient({ type: "error", message: `豆包错误 ${frame.errorCode}：${detail || "未知错误"}` });
+          return;
+        }
+
+        // Once this turn is decided unaddressed, the reply stream is dead
+        // weight — Doubao synthesizes the full reply regardless — so drop the
+        // per-token/per-chunk frames before any JSON parsing. End-of-turn
+        // events (ChatEnded/TtsEnded) still run their bookkeeping.
+        if (
+          wakeWordEnabled &&
+          (frame.event === EventReceive.TtsResponse ||
+            frame.event === EventReceive.ChatResponse ||
+            frame.event === EventReceive.TtsSentenceStart ||
+            frame.event === EventReceive.TtsSentenceEnd) &&
+          !replyIsAddressed()
+        ) {
+          return;
+        }
 
         if (frame.event === EventReceive.ConnectionStarted) {
           sessionId = randomUUID();
@@ -555,9 +657,10 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
               `请继续之前的对话，不要重新自我介绍或重新问候。` +
               `\n[恢复的短期记忆] ${buildSessionMemoryPrompt(memory)}。`;
           }
-          // The socket may have closed while the weather fetch was in flight.
-          if (upstream?.readyState !== WebSocket.OPEN) return;
-          upstream.send(
+          // The socket may have closed — or been superseded by an in-place
+          // reconnect — while the weather fetch was in flight.
+          if (upstream !== socket || socket.readyState !== WebSocket.OPEN) return;
+          socket.send(
             buildFullClientRequest(
               EventSend.StartSession,
               sessionId,
@@ -601,10 +704,12 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
               lastFirstAudioLatencyMs = firstAudioAt - chatStartedAt;
               sendClient({ type: "metric", latencyMs: lastFirstAudioLatencyMs });
             }
+            // Once per turn, on the transition into speaking — not per audio
+            // chunk, which repeated the same status dozens of times a reply.
+            sendClient({ type: "status", state: "speaking", detail: "已收到豆包语音音频" });
           }
           receivedTtsAudio = true;
           clearTtsFallbackTimer();
-          sendClient({ type: "status", state: "speaking", detail: "已收到豆包语音音频" });
           // Backpressure guard: if the client socket cannot drain (slow or stalled
           // link), drop voice frames instead of queueing them in server memory.
           if (client.readyState === client.OPEN && client.bufferedAmount < MAX_CLIENT_BUFFERED_BYTES) {
@@ -615,12 +720,24 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
 
         const payload = parseJsonPayload(frame);
         if (frame.event === EventReceive.AsrInfo) {
-          // New rider turn: anchor the per-turn latency timers and reset the
-          // wake-word accumulation, decision latch, and double-speak guard.
+          // New rider turn: the previous turn's reply machinery must be torn
+          // down first. A still-armed fallback timer would fire mid-turn,
+          // speak the stale turn's text via browser speech, and set
+          // fallbackSpoke — silently muting all of THIS turn's real audio.
+          clearTtsFallbackTimer();
+          // If the interrupted reply was partially spoken, record it in the
+          // transcript (without re-speaking); otherwise drop it so it can't
+          // prepend itself to the next turn's flush.
+          if (receivedTtsAudio && pendingReplyText()) flushPendingAgentText(false);
+          resetPendingReply();
+          receivedTtsAudio = false;
+          // Anchor the per-turn latency timers and reset the wake-word
+          // accumulation, decision latch, and double-speak guard.
           asrStartedAt = Date.now();
           asrFirstTextAt = 0;
           chatStartedAt = 0;
           firstAudioAt = 0;
+          sentThinkingStatus = false;
           fallbackSpoke = false;
           riderTurnText = "";
           replyDecided = false;
@@ -635,9 +752,21 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
             if (!asrFirstTextAt) asrFirstTextAt = Date.now();
             // Accumulate the turn transcript and (re)open the conversation window
             // when the rider says "Max" or is already inside an open window.
+            // Follow-ups slide the window but never past the chain cap after the
+            // last explicit wake — continuous chatter otherwise kept the agent
+            // addressed forever.
             riderTurnText = riderTurnText ? `${riderTurnText} ${text}` : text;
-            if (wakeWordEnabled && (containsWakePhrase(riderTurnText) || Date.now() <= addressedUntil)) {
-              addressedUntil = Date.now() + WAKE_FOLLOWUP_WINDOW_MS;
+            if (wakeWordEnabled) {
+              const now = Date.now();
+              if (containsWakePhrase(riderTurnText)) {
+                lastExplicitWakeAt = now;
+                addressedUntil = now + WAKE_FOLLOWUP_WINDOW_MS;
+              } else if (now <= addressedUntil) {
+                addressedUntil = Math.min(
+                  now + WAKE_FOLLOWUP_WINDOW_MS,
+                  lastExplicitWakeAt + WAKE_FOLLOWUP_MAX_CHAIN_MS
+                );
+              }
             }
             memory = updateSessionMemory(memory, text, rideContext.mode);
             log.debug("rider asr", { text });
@@ -653,16 +782,30 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
           const text = extractChatText(payload);
           if (text) {
             chatText += text;
-            if (replyIsAddressed()) sendClient({ type: "status", state: "thinking", detail: "豆包已生成回复文本" });
+            if (!sentThinkingStatus && replyIsAddressed()) {
+              sentThinkingStatus = true;
+              sendClient({ type: "status", state: "thinking", detail: "豆包已生成回复文本" });
+            }
           }
           return;
         }
 
         if (frame.event === EventReceive.TtsSentenceStart || frame.event === EventReceive.TtsSentenceEnd) {
           const text = extractChatText(payload);
-          if (text && !ttsText.includes(text)) {
+          if (text && text !== lastTtsSentence) {
             ttsText += text;
-            if (replyIsAddressed()) sendClient({ type: "status", state: "thinking", detail: "豆包已生成语音文本" });
+            lastTtsSentence = text;
+            if (!sentThinkingStatus && replyIsAddressed()) {
+              sentThinkingStatus = true;
+              sendClient({ type: "status", state: "thinking", detail: "豆包已生成语音文本" });
+            }
+            // Live caption: stream the accumulated spoken text as a non-final
+            // agent transcript. Clients merge non-final items in place and the
+            // TtsEnded flush finalizes the entry, so nothing is duplicated.
+            // No useBrowserSpeech on partials — final !== false gates client TTS.
+            if (replyIsAddressed() && !fallbackSpoke && ttsText.trim()) {
+              sendClient({ type: "transcript", speaker: "agent", text: ttsText.trim(), final: false });
+            }
           }
           return;
         }
@@ -673,12 +816,24 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
           // and isn't emitted twice. If no audio is coming, the fallback timer
           // flushes the text for browser speech.
           if (!receivedTtsAudio && pendingReplyText()) armTtsFallbackTimer();
-          sendClient({ type: "status", state: "ready", detail: "豆包回复文本已完成" });
+          if (replyIsAddressed()) sendClient({ type: "status", state: "ready", detail: "豆包回复文本已完成" });
           return;
         }
 
         if (frame.event === EventReceive.TtsEnded) {
           clearTtsFallbackTimer();
+          if (!replyIsAddressed()) {
+            // Suppressed turn: no audio was forwarded on purpose — reporting
+            // "TTS 未返回音频，浏览器备用" here would read as a fault. Just go
+            // back to listening, and don't pollute latency telemetry either.
+            receivedTtsAudio = false;
+            sendClient({
+              type: "status",
+              state: "listening",
+              detail: `正在收听 —— 说一声 "${WAKE_PHRASE_LABEL}" 唤醒 Max`
+            });
+            return;
+          }
           // Flush exactly once, using browser speech only when no audio arrived.
           if (pendingReplyText()) flushPendingAgentText(!receivedTtsAudio);
           sendClient({
@@ -782,6 +937,10 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
     });
 
     upstream.on("error", (error) => {
+      // close() aborting our own still-CONNECTING handshake (rider left early)
+      // emits an error too; counting it would make /health's upstream-failure
+      // signal look like Doubao flapping.
+      if (closedByProvider) return;
       metrics.upstreamFailure();
       log.error("doubao upstream error", { message: error.message });
       sendClient({ type: "status", state: "degraded", detail: "豆包音频不可用，浏览器 TTS 备用通道待命" });
@@ -824,10 +983,11 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
       // Always resolved: a rider location wins, otherwise the configured or demo
       // fallback (see config.resolveDefaultWeatherLocation), so there is no
       // "no weather location" branch to handle here.
-      const weatherLocation =
+      weatherLocation =
         typeof event.lat === "number" && typeof event.lon === "number"
           ? { lat: event.lat, lon: event.lon, source: "rider" as const }
           : appConfig.defaultWeatherLocation;
+      const initialLocation = weatherLocation;
 
       // Kick the weather fetch off WITHOUT awaiting it here: it now runs
       // concurrently with the upstream connection handshake and is folded into
@@ -837,11 +997,11 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
       // promise resolves to the weather system-prompt addendum and never rejects.
       const weatherRolePromise = (async (): Promise<string> => {
         try {
-          const weather = await fetchRiderWeather(weatherLocation.lat, weatherLocation.lon);
+          const weather = await fetchRiderWeather(initialLocation.lat, initialLocation.lon);
           const locationLabel =
-            weatherLocation.source === "rider"
+            initialLocation.source === "rider"
               ? "骑手当前位置"
-              : weatherLocation.source === "configured"
+              : initialLocation.source === "configured"
                 ? "默认位置"
                 : "演示位置";
           sendClient({
@@ -856,46 +1016,26 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
           sendClient({
             type: "status",
             state: "ready",
-            detail: `已接入${weatherLocation.source === "rider" ? "实时" : locationLabel}天气：${weather.description} ${weather.temperatureC}°C`
+            detail: `已接入${initialLocation.source === "rider" ? "实时" : locationLabel}天气：${weather.description} ${weather.temperatureC}°C`
           });
           return (
             `\n\n[实时骑行情报] ${locationLabel}${weather.summary}` +
             `${weather.riderAdvice}当骑手询问天气、风力或路况时，请基于这条真实数据简短回答。`
           );
         } catch {
-          log.warn("initial weather fetch failed", { lat: weatherLocation.lat, lon: weatherLocation.lon });
+          log.warn("initial weather fetch failed", { lat: initialLocation.lat, lon: initialLocation.lon });
           sendClient({ type: "status", state: "ready", detail: "实时天气暂不可用，使用通用回答" });
           return "";
         }
       })();
 
       // Mid-ride refresh: long rides outlive the session-start snapshot, so
-      // re-fetch on an interval and push the HUD update. The Doubao system
-      // role is fixed once the session starts, so the agent's own context
-      // freshens on the next session; the HUD and hazard fusion stay live.
+      // re-fetch on an interval — always against the CURRENT rider location
+      // (kept fresh by location.update events). The Doubao system role is
+      // fixed once the session starts, so the agent's own context freshens on
+      // the next session; the HUD and hazard fusion stay live.
       if (appConfig.weatherRefreshMs > 0) {
-        weatherRefreshTimer = setInterval(async () => {
-          try {
-            const weather = await fetchRiderWeather(weatherLocation.lat, weatherLocation.lon);
-            sendClient({
-              type: "weather",
-              description: weather.description,
-              temperatureC: weather.temperatureC,
-              windSpeedKmh: weather.windSpeedKmh,
-              isDay: weather.isDay,
-              riskLevel: weather.riskLevel,
-              riderAdvice: weather.riderAdvice
-            });
-            log.info("weather refreshed", {
-              description: weather.description,
-              temperatureC: weather.temperatureC,
-              windSpeedKmh: weather.windSpeedKmh,
-              riskLevel: weather.riskLevel
-            });
-          } catch {
-            log.warn("weather refresh failed — keeping last reading");
-          }
-        }, appConfig.weatherRefreshMs);
+        weatherRefreshTimer = setInterval(() => void refreshWeather("interval"), appConfig.weatherRefreshMs);
       }
 
       // Kept for in-place upstream reconnects; the weather promise is resolved
@@ -932,6 +1072,16 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
       // so the rider's first words aren't lost. Bounded; oldest frames drop first.
       if (pendingAudio.length >= MAX_PENDING_AUDIO_FRAMES) pendingAudio.shift();
       pendingAudio.push(chunk);
+    },
+    async updateLocation(lat: number, lon: number) {
+      const previous = weatherLocation;
+      weatherLocation = { lat, lon, source: "rider" };
+      // Refetch right away when the rider has moved far enough for the weather
+      // to plausibly differ; otherwise the periodic refresh picks up the new
+      // coordinates on its own. 20 km ≈ a fresh forecast cell.
+      if (!previous || previous.source !== "rider" || approxDistanceKm(previous, { lat, lon }) >= 20) {
+        await refreshWeather("location");
+      }
     },
     async stopAudio() {
       hazardInjector.stop();

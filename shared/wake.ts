@@ -10,9 +10,19 @@ export const WAKE_PHRASE_LABEL = "Max";
 /**
  * After the rider addresses Max, follow-up utterances within this window count
  * as addressed too, so a back-and-forth conversation doesn't need the phrase on
- * every turn. Each addressed rider turn slides the window forward.
+ * every turn. Each addressed rider turn slides the window forward — but never
+ * past WAKE_FOLLOWUP_MAX_CHAIN_MS after the last explicit "Max": without that
+ * cap, continuous speech (passenger chatter, intercom) that produced a turn at
+ * least every 12 s kept the agent answering everyone indefinitely.
  */
 export const WAKE_FOLLOWUP_WINDOW_MS = 12_000;
+
+/**
+ * Hard ceiling on how long a follow-up chain may extend past the last explicit
+ * wake phrase. A genuine conversation re-says "Max" once a minute at most; a
+ * false wake (or overheard chatter) is cut off here.
+ */
+export const WAKE_FOLLOWUP_MAX_CHAIN_MS = 60_000;
 
 // Optional greeting tokens that may precede the name (English + common Chinese),
 // and name variants covering frequent ASR mishearings of "Max". The Chinese
@@ -33,8 +43,11 @@ const LATIN_WAKE_REGEX = new RegExp(
 );
 
 // Chinese renderings of the name match anywhere — Han text has no token
-// boundaries, and none of these appear embedded in common words.
+// boundaries. Known false friends that embed a variant inside an unrelated
+// common word are blanked out first: 马克思 in 马克思主义 (Marxism) and 麦克斯
+// in 麦克斯韦 (Maxwell, as in the physicist/equations).
 const CJK_WAKE_REGEX = new RegExp(CJK_NAME_VARIANTS.join("|"), "u");
+const CJK_FALSE_FRIENDS = /马克思主义|麦克斯韦/gu;
 
 /**
  * NFKC-fold (so fullwidth "Ｍａｘ" and CJK punctuation variants compare equal),
@@ -55,5 +68,5 @@ function normalize(text: string): string {
 export function containsWakePhrase(text: string): boolean {
   if (!text) return false;
   const normalized = normalize(text);
-  return LATIN_WAKE_REGEX.test(normalized) || CJK_WAKE_REGEX.test(normalized);
+  return LATIN_WAKE_REGEX.test(normalized) || CJK_WAKE_REGEX.test(normalized.replace(CJK_FALSE_FRIENDS, " "));
 }

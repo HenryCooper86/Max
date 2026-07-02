@@ -225,9 +225,21 @@ export function createMockProvider(client: WebSocket): AgentProvider {
     send({ type: "weather", ...weather });
   }
 
+  // The in-flight turn's staged timeouts, so stopAudio/close can cancel them —
+  // an orphaned pair would report "speaking"/"listening" up to 2.15 s after the
+  // rider stopped the mic.
+  let turnTimers: NodeJS.Timeout[] = [];
+
+  function clearTurnTimers() {
+    for (const turnTimer of turnTimers) clearTimeout(turnTimer);
+    turnTimers = [];
+  }
+
   // Walks the turn states (hearing → thinking → speaking → listening) so the
   // hands-free HUD can be exercised without Doubao credentials.
   function emitConversation() {
+    // The previous turn's timers have fired or are being superseded.
+    clearTurnTimers();
     const profile = SCENARIOS[scenario];
     const turn = profile.turns[promptIndex % profile.turns.length];
     promptIndex += 1;
@@ -242,21 +254,25 @@ export function createMockProvider(client: WebSocket): AgentProvider {
     emitMemory();
     send({ type: "status", state: "thinking", detail: "Max 正在思考" });
 
-    setTimeout(() => {
-      send({ type: "status", state: "speaking", detail: "Max 正在回答" });
-      send({ type: "transcript", speaker: "agent", text: turn.agent, final: true });
-      send({ type: "metric", latencyMs: firstAudioMs });
-      send({
-        type: "telemetry",
-        asrMs,
-        thinkMs,
-        firstAudioMs,
-        // Per-turn total, like the live path — not time since audio.start,
-        // which would grow without bound over a long hands-free session.
-        totalMs: asrMs + thinkMs + firstAudioMs
-      });
-      setTimeout(() => send({ type: "status", state: "listening", detail: "免提待命，请讲话" }), 1500);
-    }, 650);
+    turnTimers.push(
+      setTimeout(() => {
+        send({ type: "status", state: "speaking", detail: "Max 正在回答" });
+        send({ type: "transcript", speaker: "agent", text: turn.agent, final: true });
+        send({ type: "metric", latencyMs: firstAudioMs });
+        send({
+          type: "telemetry",
+          asrMs,
+          thinkMs,
+          firstAudioMs,
+          // Per-turn total, like the live path — not time since audio.start,
+          // which would grow without bound over a long hands-free session.
+          totalMs: asrMs + thinkMs + firstAudioMs
+        });
+        turnTimers.push(
+          setTimeout(() => send({ type: "status", state: "listening", detail: "免提待命，请讲话" }), 1500)
+        );
+      }, 650)
+    );
   }
 
   // Simulates an ADAS sensor event: the agent interrupts whatever it is saying
@@ -359,6 +375,7 @@ export function createMockProvider(client: WebSocket): AgentProvider {
     async stopAudio() {
       if (timer) clearInterval(timer);
       timer = undefined;
+      clearTurnTimers();
       stopGuidedTour();
       hazardInjector.stop();
       send({ type: "status", state: "ready", detail: "免提已暂停" });
@@ -377,6 +394,7 @@ export function createMockProvider(client: WebSocket): AgentProvider {
     },
     async close() {
       if (timer) clearInterval(timer);
+      clearTurnTimers();
       stopGuidedTour();
       hazardInjector.stop();
     }

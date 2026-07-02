@@ -35,7 +35,9 @@ export function recordSentFrame(
     window: { startedAt: now, sent: 0, dropped: window.dropped },
     metric: {
       outgoingFrames: sent,
-      outgoingFps: Math.round((sent * 1000) / Math.max(1, elapsed)),
+      // The anchor frame contributes zero elapsed time, so the rate covers the
+      // sent-1 frames after it — counting it inflated a true 50 fps to 51.
+      outgoingFps: Math.round(((sent - 1) * 1000) / Math.max(1, elapsed)),
       droppedFrames: window.dropped
     }
   };

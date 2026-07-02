@@ -7,14 +7,15 @@ import type { TurnState } from "../components/HelmetVisual";
 import type { Weather } from "../components/Instruments";
 import {
   IDLE_CLOSE_CODE,
-  type AgentEvent,
   type AgentHealth,
   type ConnectionState,
   type ProviderCapabilities,
   type VoicePersonality
 } from "../../shared/agent";
+import { validateAgentEvent } from "../../shared/events";
 import { detectLanguage } from "../../shared/language";
 import {
+  approxDistanceKm,
   combineHazardLevels,
   scenarioDefaultMode,
   scenarioLabel,
@@ -61,6 +62,10 @@ import { useMicCapture } from "./useMicCapture";
 
 const storedSettings = loadStoredSettings();
 const LOCATION_START_GRACE_MS = 900;
+// Mid-ride location updates: send at most one per interval, and only after
+// real movement — the relay only refetches weather past ~20 km anyway.
+const LOCATION_UPDATE_MIN_INTERVAL_MS = 60_000;
+const LOCATION_UPDATE_MIN_MOVE_KM = 0.25;
 
 function delay(ms: number) {
   return new Promise<void>((resolve) => window.setTimeout(resolve, ms));
@@ -108,6 +113,8 @@ export function useHelmetAgent() {
   // Latest server-issued session memory, echoed back in session.start so a
   // settings-change restart keeps the agent's short-term memory.
   const sessionMemoryRef = useRef<SessionMemoryState>(DEFAULT_MEMORY);
+  // Last agent text handed to speak(), for duplicate-final suppression.
+  const lastSpokenRef = useRef<{ text: string; at: number } | null>(null);
 
   const onInterrupted = useCallback(() => {
     setTurnState("listening");
@@ -140,8 +147,13 @@ export function useHelmetAgent() {
   }, []);
 
   // Persist the conversation so a refresh or crash doesn't lose the ride log.
+  // Debounced: live ASR revises the last item several times a second, and each
+  // write is a synchronous JSON.stringify of up to 200 items on the same main
+  // thread doing 16 kHz audio work. Restored items are forced final anyway, so
+  // trailing-edge writes lose nothing.
   useEffect(() => {
-    saveStoredTranscript(transcript);
+    const timer = window.setTimeout(() => saveStoredTranscript(transcript), 400);
+    return () => window.clearTimeout(timer);
   }, [transcript]);
 
   const pushTranscript = useCallback((speaker: "rider" | "agent", text: string, final = true) => {
@@ -246,6 +258,21 @@ export function useHelmetAgent() {
     };
   }, []);
 
+  // Stops transmitting but keeps the audio graph alive (the track is disabled,
+  // so no real audio is captured) for an instant restart next time. Declared
+  // before connect() so the close-handler paths that end hands-free can use it.
+  const stopMic = useCallback(() => {
+    transmittingRef.current = false;
+    setTrackEnabled(false);
+    resetFrameWindow();
+    setListening(false);
+    setTurnState("idle");
+    const socket = socketRef.current;
+    if (socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: "audio.stop" }));
+    }
+  }, [resetFrameWindow, setTrackEnabled]);
+
   const connect = useCallback(() => {
     const existing = socketRef.current;
     if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) {
@@ -297,7 +324,11 @@ export function useHelmetAgent() {
       }
 
       try {
-        const event = JSON.parse(String(message.data)) as AgentEvent;
+        // Validate instead of blind-casting: a malformed event from a skewed
+        // relay is dropped here rather than rendering NaN/undefined in the HUD.
+        // Unknown event types (newer relay) are ignored silently.
+        const event = validateAgentEvent(JSON.parse(String(message.data)));
+        if (!event) return;
         if (event.type === "session.started") {
           setProvider(event.provider);
           setCapabilities(event.capabilities);
@@ -319,14 +350,31 @@ export function useHelmetAgent() {
         if (event.type === "transcript") {
           if (event.speaker === "rider") stopAgentSpeech();
           pushTranscript(event.speaker, event.text, event.final !== false);
-          if (event.speaker === "agent" && (event.useBrowserSpeech ?? event.final !== false)) speak(event.text);
+          if (event.speaker === "agent" && (event.useBrowserSpeech ?? event.final !== false)) {
+            // Mirror pushTranscript's duplicate-final dedupe: speak() starts by
+            // cancelling the current utterance, so replaying a duplicate final
+            // mid-utterance would audibly restart the reply from the beginning.
+            const normalized = normalizeTranscriptText(event.text);
+            const lastSpoken = lastSpokenRef.current;
+            const now = Date.now();
+            if (!(lastSpoken && lastSpoken.text === normalized && now - lastSpoken.at < 8000)) {
+              lastSpokenRef.current = { text: normalized, at: now };
+              speak(event.text);
+            }
+          }
         }
         if (event.type === "hazard.alert") {
           // Proactive ADAS warning: cut any in-progress agent speech so the
           // alert is heard immediately, speak it, then surface it and auto-dismiss.
           if (event.interrupt) stopAgentSpeech();
           speak(`${event.message} ${event.advice}`);
-          setTurnState("speaking");
+          // Only status events (gated on transmittingRef) ever map turnState
+          // back, so don't set "speaking" when hands-free is off — it would
+          // stick until the next mic toggle.
+          if (transmittingRef.current) setTurnState("speaking");
+          // A non-numeric TTC would make the auto-dismiss timeout NaN, which
+          // fires immediately — flashing the safety banner for one frame.
+          const ttcSeconds = Number.isFinite(event.ttcSeconds) ? event.ttcSeconds : 6;
           setHazardAlert({
             threat: event.threat,
             direction: event.direction,
@@ -334,10 +382,10 @@ export function useHelmetAgent() {
             label: event.label,
             message: event.message,
             advice: event.advice,
-            ttcSeconds: event.ttcSeconds
+            ttcSeconds
           });
           if (hazardClearTimerRef.current) window.clearTimeout(hazardClearTimerRef.current);
-          hazardClearTimerRef.current = window.setTimeout(() => setHazardAlert(null), (event.ttcSeconds + 2) * 1000);
+          hazardClearTimerRef.current = window.setTimeout(() => setHazardAlert(null), (ttcSeconds + 2) * 1000);
         }
         if (event.type === "metric") {
           setLatencyMs(event.latencyMs);
@@ -423,10 +471,11 @@ export function useHelmetAgent() {
       }
       // The relay closed us for inactivity to free the upstream slot; an
       // auto-reconnect would immediately re-open it, so stay offline until the
-      // rider starts hands-free again.
+      // rider starts hands-free again. stopMic also halts transmission — leaving
+      // transmittingRef set would keep the mic hot and burn a dropped-frame
+      // state update per 20 ms captured frame.
       if (event.code === IDLE_CLOSE_CODE) {
-        setListening(false);
-        setTurnState("idle");
+        stopMic();
         setStatus("会话闲置已断开，开启免提后重新连接");
         return;
       }
@@ -435,6 +484,7 @@ export function useHelmetAgent() {
       reconnectAttemptsRef.current += 1;
       if (reconnectAttemptsRef.current > MAX_RECONNECT_ATTEMPTS) {
         reconnectAttemptsRef.current = 0;
+        stopMic();
         setConnectionState("degraded");
         setStatus("语音中继连接失败，请重新开启免提");
         return;
@@ -445,10 +495,13 @@ export function useHelmetAgent() {
     });
 
     socket.addEventListener("error", () => {
+      // Ignore a socket already superseded by a newer one (e.g. a restart);
+      // its abort error would otherwise flip the fresh session to "degraded".
+      if (socketRef.current !== socket) return;
       setConnectionState("degraded");
       setStatus("连接错误");
     });
-  }, [playPcm16, pushTranscript, setPacketStats, speak, stopAgentSpeech]);
+  }, [playPcm16, pushTranscript, setPacketStats, speak, stopAgentSpeech, stopMic]);
 
   useEffect(() => {
     connectRef.current = connect;
@@ -469,15 +522,17 @@ export function useHelmetAgent() {
       voiceGenderRef.current = gender;
       setVoiceGenderState(gender);
       saveStoredSettings({ voiceGender: gender, voicePersonality: voicePersonalityRef.current });
-      const isDoubaoProvider = provider === "doubao" || health?.provider === "doubao";
-      if (isLiveRef.current || isDoubaoProvider || socketRef.current) {
+      // Only show the progressive "switching…" status when a session restart is
+      // actually happening; without a socket nothing ever resolves it, so the
+      // switch simply takes effect at the next session start.
+      if (socketRef.current) {
         setStatus(gender === "male" ? "正在切换到男声…" : "正在切换到女声…");
-        if (socketRef.current) restartSession();
+        restartSession();
       } else {
         setStatus(gender === "male" ? "已切换到男声" : "已切换到女声");
       }
     },
-    [health?.provider, provider, restartSession]
+    [restartSession]
   );
 
   const setVoicePersonality = useCallback(
@@ -630,20 +685,6 @@ export function useHelmetAgent() {
     waitForSocket
   ]);
 
-  // Stops transmitting but keeps the audio graph alive (the track is disabled,
-  // so no real audio is captured) for an instant restart next time.
-  const stopMic = useCallback(() => {
-    transmittingRef.current = false;
-    setTrackEnabled(false);
-    resetFrameWindow();
-    setListening(false);
-    setTurnState("idle");
-    const socket = socketRef.current;
-    if (socket?.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: "audio.stop" }));
-    }
-  }, [resetFrameWindow, setTrackEnabled]);
-
   const disconnect = useCallback(() => {
     intentionalCloseRef.current = true;
     if (reconnectTimerRef.current) {
@@ -669,6 +710,41 @@ export function useHelmetAgent() {
   }, [closePlayback, releaseMic, stopAgentSpeech, stopMic]);
 
   useEffect(() => () => disconnect(), [disconnect]);
+
+  // Track the rider mid-ride so live weather follows the bike instead of the
+  // start point: while hands-free is active, watch geolocation and push
+  // throttled location.update events to the relay (which refetches weather
+  // when the rider has moved far enough). The watch only runs while listening,
+  // so a stopped session sends nothing and the relay's idle timeout still works.
+  useEffect(() => {
+    if (!listening) return;
+    if (typeof navigator === "undefined" || !navigator.geolocation?.watchPosition) return;
+
+    let lastSentAt = 0;
+    let lastSent: RiderLocation | null = locationRef.current;
+    const watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        const next = { lat: position.coords.latitude, lon: position.coords.longitude };
+        // Future session.starts (settings-change restarts) carry fresh coords too.
+        locationRef.current = next;
+        const now = Date.now();
+        if (now - lastSentAt < LOCATION_UPDATE_MIN_INTERVAL_MS) return;
+        if (lastSent && approxDistanceKm(lastSent, next) < LOCATION_UPDATE_MIN_MOVE_KM) return;
+        const socket = socketRef.current;
+        if (socket?.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "location.update", lat: next.lat, lon: next.lon }));
+          lastSentAt = now;
+          lastSent = next;
+        }
+      },
+      () => {
+        /* denied/unavailable — session-start coordinates (or the server default) stay in effect */
+      },
+      { enableHighAccuracy: false, maximumAge: 30_000 }
+    );
+
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [listening]);
 
   // Keep the screen awake while a hands-free session is active. Mobile browsers
   // (iOS Safari 16.4+, Android Chrome) dim and then lock the screen on idle,

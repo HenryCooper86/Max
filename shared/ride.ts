@@ -107,3 +107,14 @@ export function combineHazardLevels(
 
   return rank[first] >= rank[second] ? first : second;
 }
+
+/**
+ * Approximate distance between two coordinates in km (equirectangular — good
+ * to ~1% at ride scales). Used to decide whether a mid-ride location update
+ * has moved far enough to make cached weather stale.
+ */
+export function approxDistanceKm(a: { lat: number; lon: number }, b: { lat: number; lon: number }): number {
+  const dLat = (b.lat - a.lat) * 111.32;
+  const dLon = (b.lon - a.lon) * 111.32 * Math.cos((((a.lat + b.lat) / 2) * Math.PI) / 180);
+  return Math.hypot(dLat, dLon);
+}

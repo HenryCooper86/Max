@@ -122,6 +122,10 @@ class AgentSession(
     private var relayUrl: String = ""
     private var reconnectAttempts = 0
     private var reconnectJob: Job? = null
+    /** The 150 ms deferred reconnect of a settings-change restart, so stop()
+     * can cancel it — otherwise it would resurrect the session (and clobber
+     * intentionalClose) after the rider ended hands-free inside that window. */
+    private var restartJob: Job? = null
     /** Bumped on each hazard alert so a stale auto-clear can't dismiss a newer one. */
     private var hazardAlertGeneration = 0
 
@@ -221,6 +225,7 @@ class AgentSession(
         micMuted = false
         intentionalClose = true
         reconnectJob?.cancel()
+        restartJob?.cancel()
         webSocket?.send(AUDIO_STOP_EVENT)
         webSocket?.close(1000, "rider stopped")
         socketOpen = false
@@ -365,8 +370,12 @@ class AgentSession(
         webSocket = null
         intentionalClose = true
         socket?.close(1000, "session restart")
-        scope.launch {
+        restartJob?.cancel()
+        restartJob = scope.launch {
             delay(150)
+            // The rider may have ended hands-free inside the delay window;
+            // reconnecting anyway would open a zombie session with no mic.
+            if (!_state.value.handsFree) return@launch
             intentionalClose = false
             reconnectAttempts = 0
             connect()
@@ -383,7 +392,17 @@ class AgentSession(
             )
         }
 
-        val request = Request.Builder().url(relayUrl).build()
+        // The relay address is a free-text settings field: an invalid or
+        // scheme-less URL throws here, and an uncaught exception in the
+        // connect coroutine would crash the whole app (the iOS client guards
+        // its URL parse the same way).
+        val request = runCatching { Request.Builder().url(relayUrl).build() }.getOrElse { error ->
+            Log.w(TAG, "Invalid relay URL", error)
+            _state.update {
+                it.copy(connection = ConnectionState.DEGRADED, statusText = "中继地址无效，请在设置中检查服务器地址")
+            }
+            return
+        }
         webSocket = httpClient.newWebSocket(request, object : WebSocketListener() {
 
             override fun onOpen(socket: WebSocket, response: Response) {
@@ -451,11 +470,14 @@ class AgentSession(
             return
         }
 
-        // The relay closed an idle session to free its upstream slot. Stay
-        // offline — the rider restarts hands-free when they actually need it.
+        // The relay closed an idle session to free its upstream slot. End
+        // hands-free entirely (mirrors the web client's stopMic on 4001):
+        // leaving it half-alive kept the mic capturing, Bluetooth SCO routed,
+        // and the orb pulsing "listening" with no session behind it.
         if (closeCode == IDLE_CLOSE_CODE) {
             reconnectAttempts = 0
-            _state.update { it.copy(connection = ConnectionState.OFFLINE, statusText = "会话闲置已断开，请重新开启免提") }
+            stop()
+            _state.update { it.copy(statusText = "会话闲置已断开，请重新开启免提") }
             return
         }
 

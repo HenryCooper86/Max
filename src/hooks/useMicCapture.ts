@@ -21,6 +21,10 @@ export function useMicCapture({ socketRef, transmittingRef }: Params) {
   const streamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
+  // In-flight setup promise: two rapid start triggers (double Space press,
+  // double-click) must share one getUserMedia, or the loser's MediaStream
+  // leaks (mic indicator stays on) and both worklets stream duplicate frames.
+  const micSetupRef = useRef<Promise<void> | null>(null);
   const frameWindowRef = useRef<PacketWindow>(createPacketWindow());
   // Last visor level pushed to React state; used to skip re-renders when the
   // quantized level is unchanged (e.g. steady silence during a ride).
@@ -32,73 +36,84 @@ export function useMicCapture({ socketRef, transmittingRef }: Params) {
       if (audioContextRef.current.state === "suspended") await audioContextRef.current.resume();
       return;
     }
-
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-        channelCount: { ideal: 1 },
-        sampleRate: { ideal: SAMPLE_RATE },
-        sampleSize: { ideal: 16 }
-      } as MediaTrackConstraints
-    });
-    const [track] = stream.getAudioTracks();
-    if (track) setAudioProcessing(readAudioProcessingSettings(track));
-    const audioContext = new AudioContext();
-    if (!audioContext.audioWorklet) {
-      stream.getTracks().forEach((track) => track.stop());
-      await audioContext.close();
-      throw new Error("此浏览器不支持 AudioWorklet 麦克风采集");
+    if (!micSetupRef.current) {
+      micSetupRef.current = buildMicGraph().catch((error) => {
+        // Failed setup must not poison later retries.
+        micSetupRef.current = null;
+        throw error;
+      });
     }
+    return micSetupRef.current;
 
-    await audioContext.audioWorklet.addModule("/pcm-worklet.js");
-    const source = audioContext.createMediaStreamSource(stream);
-    const workletNode = new AudioWorkletNode(audioContext, "pcm-capture", {
-      numberOfInputs: 1,
-      numberOfOutputs: 1,
-      outputChannelCount: [1],
-      channelCount: 1,
-      channelCountMode: "explicit"
-    });
-
-    workletNode.port.onmessage = (event: MessageEvent<WorkletMessage>) => {
-      const message = event.data;
-      if (message.type === "frame") {
-        if (!transmittingRef.current) return;
-        const socket = socketRef.current;
-        if (socket?.readyState === WebSocket.OPEN) {
-          socket.send(message.pcm);
-          const now = performance.now();
-          const result = recordSentFrame(frameWindowRef.current, now);
-          frameWindowRef.current = result.window;
-          if (result.metric) setPacketStats(result.metric);
-        } else {
-          const result = recordDroppedFrame(frameWindowRef.current);
-          frameWindowRef.current = result.window;
-          setPacketStats((stats) => ({ ...stats, droppedFrames: result.metric.droppedFrames }));
-        }
-      } else if (message.type === "level") {
-        // Quantize to ~0.02 and drop no-change updates so a steady level (notably
-        // silence) doesn't re-render the whole HUD ~23×/s while transmitting.
-        const next = Math.round((transmittingRef.current ? message.value : 0) * 50) / 50;
-        if (next !== lastVoiceLevelRef.current) {
-          lastVoiceLevelRef.current = next;
-          setVoiceLevel(next);
-        }
+    async function buildMicGraph() {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: { ideal: 1 },
+          sampleRate: { ideal: SAMPLE_RATE },
+          sampleSize: { ideal: 16 }
+        } as MediaTrackConstraints
+      });
+      const [track] = stream.getAudioTracks();
+      if (track) setAudioProcessing(readAudioProcessingSettings(track));
+      const audioContext = new AudioContext();
+      if (!audioContext.audioWorklet) {
+        stream.getTracks().forEach((track) => track.stop());
+        await audioContext.close();
+        throw new Error("此浏览器不支持 AudioWorklet 麦克风采集");
       }
-    };
 
-    source.connect(workletNode);
-    workletNode.connect(audioContext.destination);
+      await audioContext.audioWorklet.addModule("/pcm-worklet.js");
+      const source = audioContext.createMediaStreamSource(stream);
+      const workletNode = new AudioWorkletNode(audioContext, "pcm-capture", {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [1],
+        channelCount: 1,
+        channelCountMode: "explicit"
+      });
 
-    streamRef.current = stream;
-    audioContextRef.current = audioContext;
-    workletNodeRef.current = workletNode;
+      workletNode.port.onmessage = (event: MessageEvent<WorkletMessage>) => {
+        const message = event.data;
+        if (message.type === "frame") {
+          if (!transmittingRef.current) return;
+          const socket = socketRef.current;
+          if (socket?.readyState === WebSocket.OPEN) {
+            socket.send(message.pcm);
+            const now = performance.now();
+            const result = recordSentFrame(frameWindowRef.current, now);
+            frameWindowRef.current = result.window;
+            if (result.metric) setPacketStats(result.metric);
+          } else {
+            const result = recordDroppedFrame(frameWindowRef.current);
+            frameWindowRef.current = result.window;
+            setPacketStats((stats) => ({ ...stats, droppedFrames: result.metric.droppedFrames }));
+          }
+        } else if (message.type === "level") {
+          // Quantize to ~0.02 and drop no-change updates so a steady level (notably
+          // silence) doesn't re-render the whole HUD ~23×/s while transmitting.
+          const next = Math.round((transmittingRef.current ? message.value : 0) * 50) / 50;
+          if (next !== lastVoiceLevelRef.current) {
+            lastVoiceLevelRef.current = next;
+            setVoiceLevel(next);
+          }
+        }
+      };
+
+      source.connect(workletNode);
+      workletNode.connect(audioContext.destination);
+
+      streamRef.current = stream;
+      audioContextRef.current = audioContext;
+      workletNodeRef.current = workletNode;
+    }
   }, [socketRef, transmittingRef]);
 
   const releaseMic = useCallback(() => {
     transmittingRef.current = false;
+    micSetupRef.current = null;
     if (workletNodeRef.current) {
       workletNodeRef.current.port.onmessage = null;
       workletNodeRef.current.disconnect();

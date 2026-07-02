@@ -269,10 +269,17 @@ h2 {
   z-index: 1;
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
-  /* Top-align the columns so the helmet panel keeps its own (shorter) height
-     instead of being stretched to match the tall status column — that stretch
-     is what used to push the start button far below the fold. */
-  align-items: start;
+  /* The status column is by far the tallest, so it gets its own full-height
+     track while the helmet (height-capped, keeping the start button on screen)
+     and the transcript stack beside it. The transcript row flexes to absorb
+     what used to be a huge dead gap between the helmet panel and a full-width
+     transcript below the whole grid. The helmet panel itself has a definite
+     height (see .helmetPanel), so default stretch alignment cannot re-inflate
+     it — that stretch was what once pushed the start button below the fold. */
+  grid-template-areas:
+    "helmet status"
+    "transcript status";
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 18px;
   min-width: 0;
   padding: clamp(16px, 3vw, 36px);
@@ -290,6 +297,7 @@ h2 {
    Helmet panel + cinematic centerpiece
    ============================================================ */
 .helmetPanel {
+  grid-area: helmet;
   display: grid;
   /* minmax(0, 1fr): without the 0 floor the helmet row keeps its natural
      min-content height and the panel ignores the cap below — this floor is what
@@ -744,6 +752,7 @@ h2 {
    Status panel + instruments
    ============================================================ */
 .statusPanel {
+  grid-area: status;
   display: grid;
   align-content: start;
   gap: 14px;
@@ -1089,8 +1098,14 @@ h2 {
    Transcript
    ============================================================ */
 .transcriptPanel {
-  grid-column: 1 / -1;
+  grid-area: transcript;
   padding: 18px;
+  /* Fill the flexible row: header and ride-history keep their natural height,
+     the message list takes the rest and scrolls. min-height: 0 lets the panel
+     shrink to the row instead of overflowing it. */
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .panelHeader {
@@ -1163,10 +1178,16 @@ h2 {
 }
 
 .transcriptList {
+  /* Grow into whatever the transcript row grants (the space between the helmet
+     panel and the bottom of the status column); never collapse below a usable
+     couple of rows. align-content keeps message cards at natural height instead
+     of stretching them apart when the list is taller than its content. */
+  flex: 1 1 auto;
+  min-height: 232px;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 12px;
-  max-height: 720px;
+  align-content: start;
   overflow-y: auto;
   padding-right: 4px;
   scroll-behavior: smooth;
@@ -1335,6 +1356,21 @@ h2 {
   .grid,
   .transcriptList {
     grid-template-columns: 1fr;
+  }
+
+  /* Single column: helmet, then status, then transcript — the two-column
+     areas above don't apply here. The list gets its height cap back so a long
+     ride log scrolls inside the panel instead of stretching the page. */
+  .grid {
+    grid-template-areas:
+      "helmet"
+      "status"
+      "transcript";
+    grid-template-rows: auto;
+  }
+
+  .transcriptList {
+    max-height: 720px;
   }
 
   .topbar {

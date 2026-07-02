@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-07-02 — Web: transcript fills the gap beside the status column
+
+### Fixed
+
+- **Huge dead space between the helmet panel and the transcript** (`src/styles.css`)
+  — the auto-fit change capped the helmet panel's height, but the grid's first
+  row was still as tall as the much longer status column and the transcript
+  spanned full-width _below_ it, leaving up to ~1000 px of empty page between
+  the start button and the conversation. The grid now uses named areas: helmet
+  and transcript stack in the left column while the status column spans both
+  rows, and the transcript row flexes to absorb the leftover height (message
+  list scrolls inside it, cards keep natural height via `align-content: start`).
+  Single-column layouts (≤900 px) stack helmet → status → transcript as before,
+  with the list's height cap restored there.
+
 ## 2026-07-02 — Roadmap sweep: watchdog, upstream self-healing, memory continuity, native parity
 
 Six improvements from the post-review roadmap, focused on making live sessions

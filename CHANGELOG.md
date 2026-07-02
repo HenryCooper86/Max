@@ -70,6 +70,13 @@ across restarts) and on closing the remaining web ↔ native feature gaps.
   runs: mock conversation, ADAS banners, per-turn telemetry, memory chips
   surviving a voice-switch restart, the new iOS 骑行情报 panel with live relay
   data, and the native 巡游 guided tour advancing scenarios.
+- **Android emulator pass + settings-sheet scroll fix** (`ui/AgentScreen.kt`) —
+  the same live verification on the Android emulator (session against the local
+  relay, ADAS banners, 骑行情报 panel, 巡游 tour advancing 通勤 → 横风, memory
+  chips surviving a voice-switch restart). The pass surfaced a real bug: the
+  settings bottom sheet's content column wasn't scrollable, so on short or
+  landscape screens (tablets) the 巡游 row and the whole 诊断 card were simply
+  unreachable — the sheet now scrolls vertically.
 
 ## 2026-07-02 — Session-resilience sweep across relay, web, iOS, and Android
 

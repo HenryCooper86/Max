@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -722,6 +723,9 @@ private fun SheetContent(title: String, content: @Composable ColumnScope.() -> U
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            // The sections outgrow the sheet on short/landscape screens (e.g.
+            // tablets); without this the lower cards are simply unreachable.
+            .verticalScroll(rememberScrollState())
             .navigationBarsPadding()
             .padding(horizontal = 18.dp)
             .padding(bottom = 24.dp),

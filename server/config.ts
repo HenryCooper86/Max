@@ -19,7 +19,9 @@ const DEMO_WEATHER_LOCATION = {
 
 /** Backend configuration resolved from environment variables at startup. */
 export const config = {
-  port: Number(process.env.PORT ?? 8787),
+  // Bounded like every other numeric env var: PORT="" would otherwise become 0
+  // (bind a random ephemeral port) and a typo would crash listen() with NaN.
+  port: resolveBoundedInt(process.env.PORT, 8787, 1, 65_535),
   voiceProvider: (process.env.VOICE_PROVIDER === "doubao" ? "doubao" : "mock") as VoiceProvider,
   defaultWeatherLocation: resolveDefaultWeatherLocation(),
   // When on, the live agent only replies when the rider addresses it by name

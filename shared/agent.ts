@@ -52,7 +52,11 @@ export type ClientEvent =
   | { type: "audio.stop" }
   // Guided demo ride: the mock provider auto-advances through the scenario
   // catalog so a hands-off demo shows every capability. Live provider ignores it.
-  | { type: "demo.guided"; enabled: boolean };
+  | { type: "demo.guided"; enabled: boolean }
+  // Mid-ride rider position update. The session-start coordinates go stale
+  // fast on a moving motorcycle; this keeps the live weather (and any future
+  // location-aware context) tracking the rider. Clients throttle sends.
+  | { type: "location.update"; lat: number; lon: number };
 
 export type AgentEvent =
   | {

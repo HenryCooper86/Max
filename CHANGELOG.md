@@ -1,5 +1,171 @@
 # Changelog
 
+## 2026-07-03 — Roadmap: wake-chain cap, mid-ride location, live captions, event validation
+
+The five improvements queued by the morning's review, implemented together:
+132 tests green (17 new), tsc/eslint clean.
+
+### Added
+
+- **Mid-ride location updates** (`location.update` client event) — the
+  session-start coordinates went stale fast on a moving bike, so the "live"
+  weather was for the start point. The web HUD now watches geolocation while
+  hands-free is active and sends throttled updates (≥60 s apart, ≥250 m of
+  movement); the relay validates them (`server/session-controller.ts`), keeps
+  the periodic weather refresh pointed at the current position, and refetches
+  immediately when the rider has moved ≥20 km (`approxDistanceKm` in
+  `shared/ride.ts`). Native clients speak the same protocol; wiring their
+  location watchers is follow-up work.
+- **Live agent captions** (`server/providers/doubao.ts`) — each Doubao TTS
+  sentence now streams a non-final agent `transcript` event, so captions appear
+  while Max is speaking instead of all at once at reply end. All three clients
+  already merge non-final items in place and the TtsEnded flush finalizes the
+  entry, so no client changes were needed (native TTS gates on
+  `useBrowserSpeech ?? final`, which partials never set).
+- **Shared event validation** (`shared/events.ts`) — `validateAgentEvent`
+  admits a relay event only when every field the clients dereference is
+  present and well-typed, sanitizes optional numerics (a missing hazard TTC
+  becomes 6 s instead of NaN), and ignores unknown event types so older
+  clients tolerate newer relays. The web client now validates instead of
+  blind-casting `JSON.parse(...) as AgentEvent`.
+
+### Changed
+
+- **Wake follow-up window is now capped** (`shared/wake.ts`
+  `WAKE_FOLLOWUP_MAX_CHAIN_MS`) — the 12 s window still slides on every turn
+  inside it, but never extends past 60 s after the last explicit "Max".
+  Previously any speech that produced a turn at least every 12 s (passenger
+  chatter, intercom) kept the agent answering everyone indefinitely.
+- **Wake suppression is now a fast path** — once a turn is decided
+  unaddressed, the reply-stream frames (chat tokens, TTS sentences, voice
+  audio) are dropped before any JSON parsing. Doubao synthesizes the full
+  reply regardless (the protocol exposes no cancel), but the relay does no
+  work on it. Suppressed turns also end with a quiet return-to-"listening"
+  status instead of the misleading "TTS 未返回音频，浏览器备用" warning, and no
+  longer emit latency telemetry (both pre-existing noise).
+
+### Tests
+
+- New end-to-end wake-gating suite (`tests/doubao-wake.test.ts`) driving the
+  provider through a mock upstream: unaddressed suppression (no audio, no
+  transcript, no telemetry, clean status), addressed reply with streamed
+  captions, follow-up-without-name, the 60 s chain cap, a barge-in regression
+  for yesterday's fallback-timer fix, and distance-gated weather refetch on
+  `location.update`. Plus validator coverage (`tests/events.test.ts`) and
+  `location.update` parsing in `tests/websocket.test.ts`.
+
+## 2026-07-03 — Bug sweep: barge-in turn state, hot-mic teardown paths, intent/wake accuracy
+
+A four-track review (relay, web, shared logic, native clients) with every
+finding verified against the code before fixing. TypeScript: 115 tests green,
+tsc/eslint clean; Android compiles; the iOS edits are parse-checked (no Xcode
+on this machine — needs a build + device pass).
+
+### Fixed — relay
+
+- **Barge-in corrupted the next turn** (`server/providers/doubao.ts`) — a new
+  rider turn (`AsrInfo`) reset the latency anchors but not the pending reply:
+  the previous turn's TTS-fallback timer stayed armed, fired mid-turn, spoke
+  the stale reply via browser speech, and set `fallbackSpoke` — silently
+  dropping ALL of the new turn's real Doubao audio. The turn reset now clears
+  the timer, flushes a partially spoken reply to the transcript (without
+  re-speaking), and resets the pending text/audio flags.
+- **Doubao error frames were unreadable** (`parseDoubaoFrame`) — `ErrorInformation`
+  (0b1111) frames use a different layout (code + payload, no session-id
+  section), so parsing them with the standard layout always threw and the real
+  error (auth/quota/protocol) was reduced to a cryptic status. They now parse
+  into `errorCode` + payload, log at error level, count as upstream failures,
+  and reach the client as a proper `error` event.
+- **Duplicate StartSession after in-place reconnect** — the `ConnectionStarted`
+  handler suspends on the weather fetch and then checked the shared `upstream`
+  variable, so a stale continuation from a dropped socket could double-send
+  `StartSession` on the replacement connection. Handlers now verify they still
+  own the current socket.
+- **Compressed frames now rejected up front** with a descriptive error instead
+  of failing at `JSON.parse` on every frame; **client-abort during handshake**
+  no longer counts as an upstream failure on `/health`; **TTS sentence dedupe**
+  compares against the previous sentence instead of `includes()` over the whole
+  reply (which dropped legitimately repeated text); **per-chunk status spam**
+  (one "thinking"/"speaking" status per token/audio chunk) coalesced to one per
+  transition; **`PORT`** is now bounded like every other numeric env var
+  (`PORT=""` used to bind a random port); **mock provider** cancels its staged
+  turn timeouts on `audio.stop` (they used to report "speaking/listening" up to
+  2.15 s after the mic stopped).
+
+### Fixed — web
+
+- **Idle-close (4001) left the mic hot** (`useHelmetAgent.ts`) — the branch
+  reset the UI but not `transmittingRef`/the track, so the mic kept capturing
+  and every 20 ms frame burned a dropped-frame state update (~50 HUD re-renders
+  per second) until the rider toggled hands-free. Both the idle-close and the
+  reconnect-exhausted branches now run `stopMic()` (the exhausted branch also
+  left the mic button stuck on "结束免提").
+- **Double-start leaked a live mic** (`useMicCapture.ts`) — two rapid start
+  triggers (double Space press / double-click) both passed the null-ref check
+  and both called `getUserMedia`; the loser's MediaStream was never stopped
+  (browser mic indicator stayed on) and both worklets streamed duplicate frames,
+  garbling ASR. Setup is now a shared in-flight promise.
+- **Duplicate agent finals restarted speech** — `speak()` begins with
+  `speechSynthesis.cancel()`, so a duplicate final mid-utterance audibly
+  restarted the reply; speak now applies the same 8 s dedupe the transcript
+  already used. Also: malformed `hazard.alert` TTC no longer flash-dismisses
+  the safety banner (`NaN` timeout fired immediately); a hazard while hands-free
+  is off no longer wedges the caption at "Max 回答中"; a superseded socket's
+  `error` event no longer flips the fresh session to "degraded"; the "switching
+  voice…" status resolves when no session restart happens; transcript
+  persistence is debounced (was a synchronous localStorage write per partial
+  ASR revision).
+
+### Fixed — shared logic
+
+- **Emergency intent missed the most common crash phrasings** (`shared/session.ts`)
+  — 摔倒/车祸/受了伤/fell/hurt/injured/accident now escalate; previously a rider
+  saying 我摔倒了 got casual-mode handling.
+- **Intent keywords matched inside unrelated words** — "rain" in **train**,
+  "tire" in **tired**, "eta" in **details**, "wind" in **window**, 风 in 麦克风
+  all misclassified; Latin keywords are now whole-word and 风 excludes 麦克风.
+  Navigation now outranks weather for mixed asks.
+- **Garbage destinations stuck in memory** — 到/回 are everyday verb
+  complements (听到/迟到), so 我听到异响 set `目的地：异响` in the prompt for
+  the rest of the ride. Destination capture now only runs on navigation-shaped
+  turns, stops at fullwidth punctuation, and caps English places at the phrase
+  instead of a mid-word 28-char cut.
+- **Stale emergency snapshot pinned emergency verbosity** — a settings toggle
+  hours after 报警 restored command-style replies while parked; restore now
+  re-derives verbosity from the current ride mode only.
+- **Wake word fired inside 马克思主义 (Marxism) and 麦克斯韦 (Maxwell)** — both
+  false friends are excluded before matching (`shared/wake.ts`), each previously
+  opened the 12 s answer-everything window.
+- **Outgoing FPS was inflated by one** (`shared/audio.ts`) — the window's anchor
+  frame contributes no elapsed time but was counted in the rate (a true 50 fps
+  reported 51); the old test pinned the buggy value and has been corrected.
+
+### Fixed — native clients
+
+- **Android: malformed relay URL crashed the app** — the free-text server
+  address reached `Request.Builder().url()` inside a coroutine with no handler;
+  a scheme-less or blank URL now degrades with 中继地址无效 instead of killing
+  the process (iOS already guarded its parse).
+- **Both: ending hands-free during a settings-change restart resurrected the
+  session** — the 150 ms deferred reconnect wasn't cancellable and clobbered
+  `intentionalClose`, opening a zombie session (with its own reconnect loop)
+  after `stop()`. The deferred reconnect is now cancelled by `stop()` and
+  re-checks `handsFree`.
+- **Both: idle-close (4001) left the mic, audio route, and "listening" orb
+  alive indefinitely** — native clients now end hands-free entirely on 4001,
+  mirroring the web fix.
+- **iOS: mic frames could be delivered ahead of `session.start`** —
+  URLSession queues sends while connecting, so restart-window frames violated
+  the handshake order; frames are now gated on the same `socketOpen` flag
+  Android uses.
+
+### Tests
+
+- +10 regression tests: crash-phrasing and keyword-collision intent cases,
+  verb-complement destination cases, the stale-emergency restore, wake-word
+  false friends, true-FPS at the real 20 ms cadence, Doubao error-frame
+  parsing, and compressed-frame rejection.
+
 ## 2026-07-02 — Web: transcript fills the gap beside the status column
 
 ### Fixed

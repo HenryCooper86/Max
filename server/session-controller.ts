@@ -33,6 +33,12 @@ function assertOptionalCoordinate(value: unknown, min: number, max: number, fiel
   }
 }
 
+function assertCoordinate(value: unknown, min: number, max: number, field: string) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < min || value > max) {
+    throw new Error(`Invalid ${field}`);
+  }
+}
+
 /** The optional session-memory snapshot echoed back by restarting clients. */
 function assertOptionalMemory(value: unknown) {
   if (value === undefined) return;
@@ -65,6 +71,12 @@ export function parseClientEvent(data: RawData): ClientEvent {
   if (value.type === "demo.guided") {
     if (typeof value.enabled !== "boolean") throw new Error("Invalid demo.guided enabled flag");
     return { type: "demo.guided", enabled: value.enabled };
+  }
+
+  if (value.type === "location.update") {
+    assertCoordinate(value.lat, -90, 90, "lat");
+    assertCoordinate(value.lon, -180, 180, "lon");
+    return { type: "location.update", lat: value.lat as number, lon: value.lon as number };
   }
 
   if (value.type !== "session.start") {
@@ -122,6 +134,7 @@ export class AgentSessionController {
       if (event.type === "audio.start") await this.provider.startAudio();
       if (event.type === "audio.stop") await this.provider.stopAudio();
       if (event.type === "demo.guided") await this.provider.setGuidedDemo?.(event.enabled);
+      if (event.type === "location.update") await this.provider.updateLocation?.(event.lat, event.lon);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Voice relay failed";
       this.log?.warn("client message failed", { message });

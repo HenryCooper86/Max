@@ -67,9 +67,19 @@ final class AgentSession: NSObject, ObservableObject {
     private var authToken = ""
     private var reconnectAttempts = 0
     private var reconnectWorkItem: DispatchWorkItem?
+    /// The 150 ms deferred reconnect of a settings-change restart, so stop()
+    /// can cancel it — otherwise it would resurrect the session (and clobber
+    /// intentionalClose) after the rider ended hands-free inside that window.
+    private var restartWorkItem: DispatchWorkItem?
 
     private var intentionalClose = false
     private var transmitting = false
+    /// True only between handleSocketOpened (after session.start/audio.start
+    /// are enqueued) and the socket being closed/superseded. URLSession queues
+    /// messages sent while CONNECTING and flushes them FIFO after the
+    /// handshake, so ungated mic frames would reach the relay AHEAD of
+    /// session.start (Android guards this with the same flag).
+    private var socketOpen = false
     /// Plain mirror of `state.micMuted`, read off the audio thread alongside
     /// `transmitting` so the mic callback never touches `@Published` state.
     private var micMuted = false
@@ -89,7 +99,7 @@ final class AgentSession: NSObject, ObservableObject {
     private lazy var mic = MicStreamer(
         engine: voiceEngine,
         onFrame: { [weak self] frame in
-            guard let self, self.transmitting, !self.micMuted else { return }
+            guard let self, self.transmitting, !self.micMuted, self.socketOpen else { return }
             self.webSocket?.send(.data(frame)) { _ in }
         },
         onLevel: { [weak self] level in
@@ -186,8 +196,10 @@ final class AgentSession: NSObject, ObservableObject {
         micMuted = false
         intentionalClose = true
         reconnectWorkItem?.cancel()
+        restartWorkItem?.cancel()
         webSocket?.send(.string(audioStopEvent)) { _ in }
         webSocket?.cancel(with: .normalClosure, reason: nil)
+        socketOpen = false
         webSocket = nil
         mic.stop()
         synthesizer.stopSpeaking(at: .immediate)
@@ -323,14 +335,21 @@ final class AgentSession: NSObject, ObservableObject {
     private func restartSession() {
         let socket = webSocket
         webSocket = nil
+        socketOpen = false
         intentionalClose = true
         socket?.cancel(with: .normalClosure, reason: nil)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+        restartWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
+            // The rider may have ended hands-free inside the delay window;
+            // reconnecting anyway would open a zombie session with no mic.
+            guard self.state.value.handsFree else { return }
             self.intentionalClose = false
             self.reconnectAttempts = 0
             self.connect()
         }
+        restartWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
     }
 
     /// The relay endpoint with the optional shared auth token appended as a
@@ -347,6 +366,7 @@ final class AgentSession: NSObject, ObservableObject {
 
     private func connect() {
         guard !intentionalClose, let url = relayEndpointURL() else { return }
+        socketOpen = false
         update {
             $0.connection = .connecting
             $0.statusText = self.reconnectAttempts > 0 ? "重新连接中…（第 \(self.reconnectAttempts) 次）" : "连接中"
@@ -386,6 +406,9 @@ final class AgentSession: NSObject, ObservableObject {
         // must be told about it again (mirrors the web client's open handler).
         if current.guidedDemo { task.send(.string(buildGuidedDemo(enabled: true))) { _ in } }
         if transmitting { task.send(.string(audioStartEvent)) { _ in } }
+        // Only now may mic frames flow: they are guaranteed to be queued
+        // behind the session.start/audio.start just sent above.
+        socketOpen = true
     }
 
     private func receive(on task: URLSessionWebSocketTask) {
@@ -431,6 +454,7 @@ final class AgentSession: NSObject, ObservableObject {
         assert(Thread.isMainThread)
         // Ignore a socket already superseded by a newer one (e.g. a restart).
         if let current = webSocket, task !== current { return }
+        socketOpen = false
         webSocket = nil
 
         if intentionalClose {
@@ -442,14 +466,14 @@ final class AgentSession: NSObject, ObservableObject {
             return
         }
 
-        // The relay closed an idle session to free its upstream slot. Stay
-        // offline — the rider restarts hands-free when they actually need it.
+        // The relay closed an idle session to free its upstream slot. End
+        // hands-free entirely (mirrors the web client's stopMic on 4001):
+        // leaving it half-alive kept the mic capturing, the audio route
+        // claimed, and the orb pulsing "listening" with no session behind it.
         if task.closeCode.rawValue == Self.idleCloseCode {
             reconnectAttempts = 0
-            update {
-                $0.connection = .offline
-                $0.statusText = "会话闲置已断开，请重新开启免提"
-            }
+            stop()
+            update { $0.statusText = "会话闲置已断开，请重新开启免提" }
             return
         }
 

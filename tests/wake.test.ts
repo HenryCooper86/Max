@@ -50,6 +50,14 @@ describe("containsWakePhrase", () => {
     expect(containsWakePhrase("maximize the range")).toBe(false);
   });
 
+  it("does not match Chinese false friends that embed a name variant", () => {
+    // 马克思主义 (Marxism) embeds 马克思; 麦克斯韦 (Maxwell) embeds 麦克斯.
+    expect(containsWakePhrase("我在读马克思主义的书")).toBe(false);
+    expect(containsWakePhrase("麦克斯韦方程很难")).toBe(false);
+    // The bare name variants still wake outside those words.
+    expect(containsWakePhrase("马克思前面堵吗")).toBe(true);
+  });
+
   it("does not trigger without the name", () => {
     expect(containsWakePhrase("今天天气怎么样")).toBe(false);
     expect(containsWakePhrase("hey there, nice ride")).toBe(false);

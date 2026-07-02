@@ -120,6 +120,21 @@ describe("client event validation", () => {
     }
   });
 
+  it("accepts a valid location.update and rejects malformed coordinates", () => {
+    const event = parseClientEvent(Buffer.from(JSON.stringify({ type: "location.update", lat: 35.1, lon: 129.07 })));
+    expect(event).toEqual({ type: "location.update", lat: 35.1, lon: 129.07 });
+
+    expect(() => parseClientEvent(Buffer.from(JSON.stringify({ type: "location.update", lat: 91, lon: 0 })))).toThrow(
+      "Invalid lat"
+    );
+    expect(() =>
+      parseClientEvent(Buffer.from(JSON.stringify({ type: "location.update", lat: 10, lon: "east" })))
+    ).toThrow("Invalid lon");
+    expect(() => parseClientEvent(Buffer.from(JSON.stringify({ type: "location.update", lat: 10 })))).toThrow(
+      "Invalid lon"
+    );
+  });
+
   it("rejects unsupported client event values before they reach a provider", () => {
     expect(() =>
       parseClientEvent(Buffer.from(JSON.stringify({ type: "session.start", sampleRate: 44100, channels: 1 })))

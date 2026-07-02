@@ -17,6 +17,23 @@ describe("session memory and safety policy", () => {
     expect(responseModeForRide("ride", "emergency")).toBe("emergency");
   });
 
+  it("detects common crash phrasings as emergencies", () => {
+    expect(inferIntent("我摔倒了")).toBe("emergency");
+    expect(inferIntent("我出车祸了")).toBe("emergency");
+    expect(inferIntent("受了伤，需要帮忙")).toBe("emergency");
+    expect(inferIntent("quick, I fell and I'm hurt")).toBe("emergency");
+  });
+
+  it("does not match intent keywords inside unrelated words", () => {
+    // "rain" in "train", "tire" in "tired", "eta" in "details", "wind" in
+    // "window", 风 in 麦克风 — all previously misclassified.
+    expect(inferIntent("route to the train station")).toBe("navigation");
+    expect(inferIntent("I'm tired, let's stop soon")).toBe("casual");
+    expect(inferIntent("give me the details")).toBe("casual");
+    expect(inferIntent("close the helmet window vents")).toBe("casual");
+    expect(inferIntent("麦克风好像坏了")).toBe("casual");
+  });
+
   it("keeps riding and navigation responses concise", () => {
     expect(responseModeForRide("ride", "casual")).toBe("concise");
     expect(responseModeForRide("navigation", "weather")).toBe("concise");
@@ -30,6 +47,29 @@ describe("session memory and safety policy", () => {
     expect(memory.lastIntent).toBe("navigation");
     expect(memory.destination).toBe("家");
     expect(memory.responseMode).toBe("concise");
+  });
+
+  it("does not capture Chinese verb complements as destinations", () => {
+    // 到/回 appear in everyday verbs (听到 "heard", 迟到 "was late") — only
+    // navigation-shaped turns may set a destination.
+    expect(updateSessionMemory(createSessionMemory("ride"), "我听到异响了", "ride").destination).toBeUndefined();
+    expect(updateSessionMemory(createSessionMemory("ride"), "刚才迟到了十分钟", "ride").destination).toBeUndefined();
+    // Fullwidth punctuation ends the capture.
+    expect(updateSessionMemory(createSessionMemory("navigation"), "带我回家！", "navigation").destination).toBe("家");
+  });
+
+  it("keeps the previous destination when a non-navigation turn follows", () => {
+    const withDestination = updateSessionMemory(createSessionMemory("navigation"), "导航回家", "navigation");
+    expect(withDestination.destination).toBe("家");
+    const afterCasual = updateSessionMemory(withDestination, "今天有点累", "navigation");
+    expect(afterCasual.destination).toBe("家");
+  });
+
+  it("caps an English destination at the place name, not the trailing clause", () => {
+    expect(
+      updateSessionMemory(createSessionMemory("navigation"), "navigate to busan station right now please", "navigation")
+        .destination
+    ).toBe("busan station");
   });
 
   it("infers an English destination only from destination-bearing phrases", () => {
@@ -79,6 +119,16 @@ describe("session memory and safety policy", () => {
     expect(memory.lastIntent).toBe("navigation");
     // responseMode is re-derived from the current mode + intent, not restored.
     expect(memory.responseMode).toBe("concise");
+  });
+
+  it("does not let a stale emergency intent pin emergency verbosity after restart", () => {
+    // The rider said 报警 hours ago, then toggled a setting while parked: the
+    // restored snapshot must not resurrect emergency command-style replies.
+    const memory = restoreSessionMemory({ language: "zh", lastIntent: "emergency" }, "stop");
+    expect(memory.lastIntent).toBe("emergency");
+    expect(memory.responseMode).toBe("normal");
+    // A genuinely ongoing emergency is carried by the current ride mode.
+    expect(restoreSessionMemory({ lastIntent: "emergency" }, "emergency").responseMode).toBe("emergency");
   });
 
   it("falls back to fresh memory for missing or invalid snapshots", () => {

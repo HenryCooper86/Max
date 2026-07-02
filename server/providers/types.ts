@@ -10,4 +10,6 @@ export type AgentProvider = {
   close(): Promise<void>;
   /** Toggles the guided demo ride. Providers without a demo tour omit this. */
   setGuidedDemo?(enabled: boolean): Promise<void>;
+  /** Mid-ride rider position update. Providers without location context omit this. */
+  updateLocation?(lat: number, lon: number): Promise<void>;
 };

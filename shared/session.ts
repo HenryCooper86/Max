@@ -12,11 +12,16 @@ export type SessionMemory = {
   responseMode: ResponseMode;
 };
 
-const EMERGENCY_PATTERN = /事故|摔车|撞|救命|急救|报警|受伤|help|crash|crashed|emergency|ambulance/i;
-const WEATHER_PATTERN = /天气|下雨|风|温度|weather|rain|wind/i;
-const NAVIGATION_PATTERN = /导航|路线|回家|出口|左转|右转|route|navigate|home|turn/i;
-const DIAGNOSTIC_PATTERN = /异响|故障|轮胎|刹车|发动机|油量|diagnostic|engine|brake|tire|tyre|fuel/i;
-const GROUP_PATTERN = /小队|队友|发送|ETA|group|team|share/i;
+// Latin keywords are whole-word (\b): without boundaries "rain" fired inside
+// "train", "tire" inside "tired", "eta" inside "details". Chinese keywords have
+// no word boundaries; single characters that collide inside common words get a
+// targeted lookbehind instead (风 in 麦克风 "microphone").
+const EMERGENCY_PATTERN =
+  /事故|车祸|摔车|摔倒|摔了|撞|救命|急救|报警|受伤|受了伤|\b(?:help|crash(?:ed)?|emergency|ambulance|fell|hurt|injured|accident)\b/i;
+const WEATHER_PATTERN = /天气|下雨|(?<!麦克)风|温度|\b(?:weather|rain(?:y|ing)?|wind(?:y)?)\b/i;
+const NAVIGATION_PATTERN = /导航|路线|回家|出口|左转|右转|\b(?:route|navigate|home|turn)\b/i;
+const DIAGNOSTIC_PATTERN = /异响|故障|轮胎|刹车|发动机|油量|\b(?:diagnostics?|engine|brake|tires?|tyres?|fuel)\b/i;
+const GROUP_PATTERN = /小队|队友|发送|\b(?:eta|group|team|share)\b/i;
 
 const PERSONALITY_PROMPTS: Record<VoicePersonality, string> = {
   concise: "人格风格：极简。回答冷静、直接、少寒暄。",
@@ -27,8 +32,10 @@ const PERSONALITY_PROMPTS: Record<VoicePersonality, string> = {
 
 export function inferIntent(text: string): RiderIntent {
   if (EMERGENCY_PATTERN.test(text)) return "emergency";
-  if (WEATHER_PATTERN.test(text)) return "weather";
+  // Navigation outranks weather: a mixed ask ("navigate home, will it rain?")
+  // needs the next-action guidance more than the forecast framing.
   if (NAVIGATION_PATTERN.test(text)) return "navigation";
+  if (WEATHER_PATTERN.test(text)) return "weather";
   if (DIAGNOSTIC_PATTERN.test(text)) return "diagnostics";
   if (GROUP_PATTERN.test(text)) return "group";
   return "casual";
@@ -42,7 +49,11 @@ export function responseModeForRide(mode: RideMode, intent: RiderIntent): Respon
 
 export function updateSessionMemory(memory: SessionMemory, text: string, rideMode: RideMode): SessionMemory {
   const intent = inferIntent(text);
-  const destination = inferDestination(text) ?? memory.destination;
+  // Only navigation-shaped turns can set a destination. 到/回 are everyday verb
+  // complements (听到 "heard", 迟到 "late"), so an unrestricted capture turned
+  // phrases like 我听到异响 into destination 异响 — which then stuck in memory
+  // and was injected into the prompt as 目的地 for the rest of the ride.
+  const destination = (intent === "navigation" ? inferDestination(text) : undefined) ?? memory.destination;
   return {
     language: detectLanguage(text),
     destination,
@@ -96,7 +107,11 @@ export function restoreSessionMemory(
     language: snapshot.language === "en" ? "en" : base.language,
     destination,
     lastIntent,
-    responseMode: lastIntent ? responseModeForRide(mode, lastIntent) : base.responseMode
+    // Re-derive verbosity from the CURRENT mode. A restored emergency intent
+    // must not pin emergency verbosity on its own (responseModeForRide would):
+    // the intent may be hours stale, while a genuinely ongoing emergency is
+    // reflected in the current ride mode, which base already accounts for.
+    responseMode: lastIntent && lastIntent !== "emergency" ? responseModeForRide(mode, lastIntent) : base.responseMode
   };
 }
 
@@ -157,13 +172,19 @@ export function buildPersonalityPrompt(personality: VoicePersonality): string {
 }
 
 function inferDestination(text: string): string | undefined {
-  const zhMatch = text.match(/(?:去|到|回)([^，。,.!?]{1,12})/);
+  // Stop at any punctuation — including the fullwidth ？！、 that Chinese ASR
+  // emits — so 带我回家！ captures 家, not 家！.
+  const zhMatch = text.match(/(?:去|到|回)([^，。,.!?？！、；：\s]{1,12})/);
   if (zhMatch?.[1]) return zhMatch[1].trim();
   // Require a destination-bearing phrase. A bare "to" would over-match ordinary
-  // infinitives ("I want to ride") and capture them as a destination.
+  // infinitives ("I want to ride") and capture them as a destination. Cap the
+  // place at four words so a trailing clause ("… right now please") isn't
+  // captured and hard-cut mid-word at a character limit.
   const enMatch = text.match(
-    /\b(?:home to|navigate to|route to|head(?:ing|ed)? to|drive to|going to|take me to)\s+([a-z0-9\s-]{3,28})/i
+    /\b(?:home to|navigate to|route to|head(?:ing|ed)? to|drive to|going to|take me to)\s+([a-z0-9-]+(?:\s+[a-z0-9-]+){0,3})/i
   );
-  if (enMatch?.[1]) return enMatch[1].trim();
+  if (enMatch?.[1]) {
+    return enMatch[1].replace(/(?:\s+(?:please|now|asap|right))+$/i, "").trim();
+  }
   return undefined;
 }

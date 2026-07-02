@@ -66,6 +66,23 @@ describe("parseDoubaoFrame", () => {
     expect(parsed.payload.equals(audio)).toBe(true);
   });
 
+  it("parses an error frame's code and payload (no session-id section)", () => {
+    // ErrorInformation layout: header + errorCode(4) + payloadSize(4) + payload.
+    const payload = Buffer.from(JSON.stringify({ error: "quota exceeded" }));
+    const header = Buffer.from([0x11, (0b1111 << 4) | 0b0100, 0b0001 << 4, 0x00]);
+    const frame = Buffer.concat([header, uint32(45000001), uint32(payload.length), payload]);
+
+    const parsed = parseDoubaoFrame(frame);
+    expect(parsed.errorCode).toBe(45000001);
+    expect(JSON.parse(parsed.payload.toString())).toEqual({ error: "quota exceeded" });
+  });
+
+  it("rejects compressed frames instead of failing later at JSON.parse", () => {
+    const frame = buildServerFrame(550, "s", Buffer.from("{}"));
+    frame[2] |= 0b0001; // gzip compression flag
+    expect(() => parseDoubaoFrame(frame)).toThrow("compression");
+  });
+
   it("rejects frames that are too short", () => {
     expect(() => parseDoubaoFrame(Buffer.alloc(8))).toThrow();
   });

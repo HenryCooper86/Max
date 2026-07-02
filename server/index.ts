@@ -8,7 +8,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { authorizeUpgrade, clientAddress } from "./auth";
 import { buildHealth, config, describeConfig, validateConfig } from "./config";
 import { createLogger, shortSessionId } from "./logger";
-import { metrics } from "./metrics";
+import { metrics, startMetricsHistory } from "./metrics";
 import { createDoubaoProvider } from "./providers/doubao";
 import { createMockProvider } from "./providers/mock";
 import type { AgentProvider } from "./providers/types";
@@ -102,6 +102,9 @@ wss.on("connection", (client, request) => {
     sessionLog.warn("client socket error", { message: error.message });
   });
 });
+
+// Once-a-minute counter snapshots so /health can report trailing-window rates.
+startMetricsHistory();
 
 // Liveness + idle watchdog: terminates half-open links and closes forgotten
 // sessions so their Doubao upstream slots are released. See server/watchdog.ts.

@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { providerCapabilities, type AgentHealth } from "../shared/agent";
-import { metrics } from "./metrics";
+import { metrics, metricsWindow } from "./metrics";
 
 export type VoiceProvider = "mock" | "doubao";
 export type WeatherLocation = {
@@ -90,6 +90,11 @@ export function credentialStatus(): AgentHealth["credentials"] {
   return hasApiKey || hasLegacy ? "configured" : "missing";
 }
 
+/** "45 s" below one minute, "10 min" from there up. */
+function describeDuration(ms: number): string {
+  return ms < 60_000 ? `${Math.round(ms / 1000)} s` : `${Math.round(ms / 60_000)} min`;
+}
+
 /** Human-readable summary printed on startup. */
 export function describeConfig(): string[] {
   return [
@@ -102,7 +107,7 @@ export function describeConfig(): string[] {
     `Relay origin allowlist: ${config.allowedOrigins.length ? config.allowedOrigins.join(", ") : "any"}`,
     `Relay rate limit: ${config.connPerMinute ? `${config.connPerMinute} conn/min/IP (sliding)` : "off"}`,
     `Relay heartbeat: ${config.heartbeatMs ? `ping every ${Math.round(config.heartbeatMs / 1000)} s` : "off"}`,
-    `Relay idle timeout: ${config.idleTimeoutMs ? `${Math.round(config.idleTimeoutMs / 60000)} min` : "off"}`,
+    `Relay idle timeout: ${config.idleTimeoutMs ? describeDuration(config.idleTimeoutMs) : "off"}`,
     `Relay proxy trust: ${config.trustProxy ? `on (${config.trustedProxyHops} hop${config.trustedProxyHops === 1 ? "" : "s"} via X-Forwarded-For)` : "off (client IP = socket address)"}`
   ];
 }
@@ -155,6 +160,7 @@ export function buildHealth(uptimeSec: number): AgentHealth {
     credentials: credentialStatus(),
     weather: "available",
     capabilities: providerCapabilities(config.voiceProvider),
-    metrics: { ...metrics.snapshot() }
+    metrics: { ...metrics.snapshot() },
+    metricsWindow: { ...metricsWindow() }
   };
 }

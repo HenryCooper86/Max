@@ -52,6 +52,25 @@ across restarts) and on closing the remaining web ↔ native feature gaps.
   README client-resilience section covers the watchdog, upstream self-healing,
   memory continuity, and the `/health` metrics object.
 
+### Follow-up (same day)
+
+- **`/health` trailing-window rates** (`server/metrics.ts`) — a per-minute
+  snapshot ring buffer adds a `metricsWindow` object (counter deltas over the
+  trailing 15 min, window shrinks gracefully right after startup), so one curl
+  distinguishes "failed a lot last month" from "failing right now".
+- **Android: mic survives transient capture glitches** (`MicStreamer.kt`) — a
+  single `AudioRecord.read()` returning 0 used to end capture for the rest of
+  the session; empty reads now back off briefly (~0.5 s budget) and error codes
+  get one in-place stop/startRecording recovery before giving up.
+- **Startup log duration display** — sub-minute idle timeouts printed as
+  "0 min"; durations under a minute now print in seconds.
+- **Live verification pass** — end-to-end WebSocket smoke test against the
+  running relay (session start, memory-snapshot echo, watchdog idle close 4001
+  with courtesy status, metrics counters) plus manual browser and iOS-simulator
+  runs: mock conversation, ADAS banners, per-turn telemetry, memory chips
+  surviving a voice-switch restart, the new iOS 骑行情报 panel with live relay
+  data, and the native 巡游 guided tour advancing scenarios.
+
 ## 2026-07-02 — Session-resilience sweep across relay, web, iOS, and Android
 
 A cross-platform review pass: every confirmed finding is a session-lifecycle or

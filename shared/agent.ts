@@ -125,6 +125,8 @@ export type AgentHealth = {
   capabilities: ProviderCapabilities;
   /** Relay counters since startup (see server/metrics.ts); absent on old relays. */
   metrics?: Record<string, number>;
+  /** Counter deltas over the trailing window (server/metrics.ts metricsWindow). */
+  metricsWindow?: Record<string, number>;
 };
 
 /**

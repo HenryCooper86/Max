@@ -22,6 +22,12 @@ class MicStreamer(
         const val SAMPLE_RATE = 16_000
         const val FRAME_SAMPLES = 320 // 20 ms, matches the worklet frame size
         const val FRAME_BYTES = FRAME_SAMPLES * 2
+
+        /** Consecutive empty reads tolerated (~0.5 s at 5 ms/backoff) before giving up. */
+        private const val MAX_ZERO_READS = 100
+
+        /** In-place stop()/startRecording() recoveries attempted per session. */
+        private const val MAX_RESTARTS = 2
     }
 
     private var record: AudioRecord? = null
@@ -68,15 +74,46 @@ class MicStreamer(
 
         captureThread = thread(name = "mic-streamer") {
             val frame = ByteArray(FRAME_BYTES)
+            var zeroReads = 0
+            var restarts = 0
             while (running) {
                 var offset = 0
                 while (offset < FRAME_BYTES && running) {
                     val read = audioRecord.read(frame, offset, FRAME_BYTES - offset)
-                    if (read <= 0) {
-                        running = false
-                        break
+                    when {
+                        read > 0 -> {
+                            zeroReads = 0
+                            offset += read
+                        }
+                        read == 0 -> {
+                            // Nothing buffered yet — a transient stall, not a dead
+                            // mic. Back off briefly and keep reading; give up only
+                            // after a sustained dry spell so one hiccup doesn't end
+                            // capture for the rest of the session.
+                            zeroReads += 1
+                            if (zeroReads >= MAX_ZERO_READS) {
+                                running = false
+                            } else {
+                                runCatching { Thread.sleep(5) }
+                            }
+                        }
+                        else -> {
+                            // Error code (e.g. a routing change glitch). Try one
+                            // in-place restart before declaring the mic dead.
+                            val recovered = restarts < MAX_RESTARTS &&
+                                runCatching {
+                                    audioRecord.stop()
+                                    audioRecord.startRecording()
+                                }.isSuccess &&
+                                audioRecord.recordingState == AudioRecord.RECORDSTATE_RECORDING
+                            if (recovered) {
+                                restarts += 1
+                                offset = 0
+                            } else {
+                                running = false
+                            }
+                        }
                     }
-                    offset += read
                 }
                 if (offset == FRAME_BYTES) {
                     onLevel(frameRms(frame))

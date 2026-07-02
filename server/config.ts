@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { providerCapabilities, type AgentHealth } from "../shared/agent";
+import { metrics } from "./metrics";
 
 export type VoiceProvider = "mock" | "doubao";
 export type WeatherLocation = {
@@ -41,6 +42,14 @@ export const config = {
   // the RIGHT of X-Forwarded-For; entries further left are client-supplied and
   // must never be trusted. Only consulted when trustProxy is on.
   trustedProxyHops: resolveBoundedInt(process.env.RELAY_TRUSTED_PROXY_HOPS, 1, 1, 10),
+  // Liveness heartbeat for /agent clients: ping cadence; a client that misses
+  // a full interval without a pong is terminated (half-open TCP links would
+  // otherwise hold their Doubao upstream forever). 0 disables pinging.
+  heartbeatMs: resolveBoundedInt(process.env.RELAY_HEARTBEAT_MS, 30_000, 0, 300_000),
+  // Close /agent sessions with no client traffic (events or mic frames) for
+  // this long, freeing the upstream slot held by a forgotten tab. Clients see
+  // close code 4001 (IDLE_CLOSE_CODE) and must not auto-reconnect. 0 disables.
+  idleTimeoutMs: resolveBoundedInt(process.env.RELAY_IDLE_TIMEOUT_MS, 10 * 60_000, 0, 24 * 3_600_000),
   // How often a live session re-fetches weather mid-ride. 0 turns refresh off.
   weatherRefreshMs: resolveBoundedInt(process.env.WEATHER_REFRESH_MS, 10 * 60_000, 0, 6 * 3_600_000),
   // Base wait for Doubao TTS audio before falling back to browser speech. The
@@ -92,6 +101,8 @@ export function describeConfig(): string[] {
     `Relay auth token: ${config.relayAuthToken ? "required" : "open"}`,
     `Relay origin allowlist: ${config.allowedOrigins.length ? config.allowedOrigins.join(", ") : "any"}`,
     `Relay rate limit: ${config.connPerMinute ? `${config.connPerMinute} conn/min/IP (sliding)` : "off"}`,
+    `Relay heartbeat: ${config.heartbeatMs ? `ping every ${Math.round(config.heartbeatMs / 1000)} s` : "off"}`,
+    `Relay idle timeout: ${config.idleTimeoutMs ? `${Math.round(config.idleTimeoutMs / 60000)} min` : "off"}`,
     `Relay proxy trust: ${config.trustProxy ? `on (${config.trustedProxyHops} hop${config.trustedProxyHops === 1 ? "" : "s"} via X-Forwarded-For)` : "off (client IP = socket address)"}`
   ];
 }
@@ -143,6 +154,7 @@ export function buildHealth(uptimeSec: number): AgentHealth {
     uptimeSec,
     credentials: credentialStatus(),
     weather: "available",
-    capabilities: providerCapabilities(config.voiceProvider)
+    capabilities: providerCapabilities(config.voiceProvider),
+    metrics: { ...metrics.snapshot() }
   };
 }

@@ -7,6 +7,7 @@ import {
   createSessionMemory,
   inferIntent,
   responseModeForRide,
+  restoreSessionMemory,
   updateSessionMemory
 } from "../shared/session";
 
@@ -65,6 +66,31 @@ describe("session memory and safety policy", () => {
     expect(prompt).toContain("72");
     expect(prompt).toContain("highway");
     expect(prompt).toContain("64%");
+  });
+
+  it("restores a client memory snapshot across a session restart", () => {
+    const memory = restoreSessionMemory(
+      { language: "en", destination: "  busan station  ", lastIntent: "navigation" },
+      "navigation"
+    );
+
+    expect(memory.language).toBe("en");
+    expect(memory.destination).toBe("busan station");
+    expect(memory.lastIntent).toBe("navigation");
+    // responseMode is re-derived from the current mode + intent, not restored.
+    expect(memory.responseMode).toBe("concise");
+  });
+
+  it("falls back to fresh memory for missing or invalid snapshots", () => {
+    expect(restoreSessionMemory(undefined, "ride")).toEqual(createSessionMemory("ride"));
+
+    const sanitized = restoreSessionMemory(
+      { language: "fr", destination: "x".repeat(200), lastIntent: "hack-the-planet" },
+      "ride"
+    );
+    expect(sanitized.language).toBe("zh");
+    expect(sanitized.destination).toHaveLength(64);
+    expect(sanitized.lastIntent).toBeUndefined();
   });
 
   it("builds compact prompt fragments for Doubao", () => {

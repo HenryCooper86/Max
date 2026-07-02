@@ -70,7 +70,9 @@ class AgentSession(
         val telemetry: Telemetry? = null,
         val bluetoothRouted: Boolean = false,
         /** The active ADAS hazard alert, shown as a banner until it auto-clears. */
-        val hazardAlert: AgentEvent.HazardAlert? = null
+        val hazardAlert: AgentEvent.HazardAlert? = null,
+        /** Guided demo ride: the mock provider auto-tours the scenario catalog. */
+        val guidedDemo: Boolean = false
     ) {
         /** 态势摘要 fusion: ride hazard + weather risk (fusedHazard in src/main.tsx). */
         val fusedHazard: HazardLevel
@@ -82,6 +84,10 @@ class AgentSession(
 
         /** Mirrors MAX_RECONNECT_ATTEMPTS in src/main.tsx. */
         const val MAX_RECONNECT_ATTEMPTS = 6
+
+        /** Mirrors IDLE_CLOSE_CODE in shared/agent.ts: the relay closed this idle
+         * session to free its upstream slot; auto-reconnecting would defeat it. */
+        const val IDLE_CLOSE_CODE = 4001
 
         /** Repeated agent lines inside this window are dropped (src/main.tsx). */
         private const val AGENT_DEDUPE_WINDOW_MS = 8_000L
@@ -300,6 +306,25 @@ class AgentSession(
     /** Builds the transcript export JSON (port of exportTranscriptLog in src/main.tsx). */
     fun buildTranscriptExport(): String = buildTranscriptExportJson(_state.value.transcript)
 
+    /**
+     * Toggles the guided demo ride (mock provider only — the live provider
+     * ignores it). Mirrors setGuidedDemo in useHelmetAgent.ts: send now when the
+     * socket is up; onOpen re-sends it for fresh sessions.
+     */
+    fun setGuidedDemo(enabled: Boolean) {
+        _state.update {
+            it.copy(
+                guidedDemo = enabled,
+                statusText = if (enabled && it.connection != ConnectionState.READY) {
+                    "巡游演示已开启，开启免提后自动巡游场景"
+                } else {
+                    it.statusText
+                }
+            )
+        }
+        webSocket?.send(buildGuidedDemo(enabled))
+    }
+
     /** Clears both the live transcript and its persisted copy (清空对话记录). */
     fun clearTranscript() {
         _state.update { it.copy(transcript = emptyList()) }
@@ -373,9 +398,13 @@ class AgentSession(
                         rideMode = current.rideContext.mode,
                         scenario = current.rideContext.scenario,
                         lat = location?.first,
-                        lon = location?.second
+                        lon = location?.second,
+                        memory = current.sessionMemory
                     )
                 )
+                // The guided tour lives in the provider instance, so a fresh session
+                // must be told about it again (mirrors the web client's open handler).
+                if (current.guidedDemo) socket.send(buildGuidedDemo(enabled = true))
                 // Resume the audio stream if the rider was transmitting before a drop.
                 if (transmitting) socket.send(AUDIO_START_EVENT)
                 // Only now may mic frames flow: they are guaranteed to be queued
@@ -401,7 +430,7 @@ class AgentSession(
             }
 
             override fun onClosed(socket: WebSocket, code: Int, reason: String) {
-                handleSocketClosed(socket)
+                handleSocketClosed(socket, code)
             }
 
             override fun onFailure(socket: WebSocket, t: Throwable, response: Response?) {
@@ -411,7 +440,7 @@ class AgentSession(
         })
     }
 
-    private fun handleSocketClosed(socket: WebSocket) {
+    private fun handleSocketClosed(socket: WebSocket, closeCode: Int = 0) {
         // Ignore a socket already superseded by a newer one (e.g. a restart).
         if (webSocket != null && socket !== webSocket) return
         socketOpen = false
@@ -419,6 +448,14 @@ class AgentSession(
         if (intentionalClose) {
             if (_state.value.handsFree) return // restartSession() will reconnect
             _state.update { it.copy(connection = ConnectionState.OFFLINE, statusText = "离线") }
+            return
+        }
+
+        // The relay closed an idle session to free its upstream slot. Stay
+        // offline — the rider restarts hands-free when they actually need it.
+        if (closeCode == IDLE_CLOSE_CODE) {
+            reconnectAttempts = 0
+            _state.update { it.copy(connection = ConnectionState.OFFLINE, statusText = "会话闲置已断开，请重新开启免提") }
             return
         }
 

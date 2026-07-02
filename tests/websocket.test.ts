@@ -134,6 +134,32 @@ describe("client event validation", () => {
     );
   });
 
+  it("accepts a valid memory snapshot and rejects malformed ones", () => {
+    const event = parseClientEvent(
+      Buffer.from(
+        JSON.stringify({
+          type: "session.start",
+          sampleRate: 16000,
+          channels: 1,
+          memory: { language: "en", destination: "busan station", lastIntent: "navigation", responseMode: "concise" }
+        })
+      )
+    );
+    expect(event.type === "session.start" && event.memory?.destination).toBe("busan station");
+
+    const base = { type: "session.start", sampleRate: 16000, channels: 1 };
+    expect(() => parseClientEvent(Buffer.from(JSON.stringify({ ...base, memory: "yes" })))).toThrow("Invalid memory");
+    expect(() => parseClientEvent(Buffer.from(JSON.stringify({ ...base, memory: { language: "fr" } })))).toThrow(
+      "Invalid memory.language"
+    );
+    expect(() => parseClientEvent(Buffer.from(JSON.stringify({ ...base, memory: { lastIntent: "hacking" } })))).toThrow(
+      "Invalid memory.lastIntent"
+    );
+    expect(() =>
+      parseClientEvent(Buffer.from(JSON.stringify({ ...base, memory: { destination: "x".repeat(300) } })))
+    ).toThrow("Invalid memory.destination");
+  });
+
   it("accepts and validates the guided-demo toggle", () => {
     const event = parseClientEvent(Buffer.from(JSON.stringify({ type: "demo.guided", enabled: true })));
     expect(event).toEqual({ type: "demo.guided", enabled: true });

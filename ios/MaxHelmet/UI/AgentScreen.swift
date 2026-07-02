@@ -755,6 +755,52 @@ private struct SettingsPanel: View {
             }
         }
 
+        // Live ride intelligence: weather, route, and session memory. The data
+        // already flows over the protocol (weather / ride.context /
+        // session.memory events); this surfaces it like the web HUD instruments.
+        SectionCard(title: "骑行情报") {
+            if let weather = state.weather {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("\(weather.temperatureC)°")
+                        .font(.system(size: 26, weight: .bold, design: .rounded))
+                        .foregroundColor(HudColors.text)
+                    Text(weather.description)
+                        .font(.system(size: 14))
+                        .foregroundColor(HudColors.text)
+                    Text("风速 \(weather.windSpeedKmh) km/h")
+                        .font(.system(size: 12))
+                        .foregroundColor(HudColors.muted)
+                    Spacer()
+                    Text(weather.riskLevel == .critical ? "高风险" : weather.riskLevel == .caution ? "注意" : "正常")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(hazardColor(weather.riskLevel))
+                }
+                Text(weather.riderAdvice)
+                    .font(.system(size: 12))
+                    .foregroundColor(HudColors.muted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Text("激活后接入定位天气")
+                    .font(.system(size: 12))
+                    .foregroundColor(HudColors.muted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Text("\(state.rideContext.speedKmh) km/h · \(state.rideContext.routePhase)")
+                .font(.system(size: 12))
+                .foregroundColor(HudColors.muted)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 6) {
+                InfoChip(label: state.sessionMemory.language == "zh" ? "中文" : "English")
+                InfoChip(label: responseModeLabel(state.sessionMemory.responseMode))
+                InfoChip(label: state.sessionMemory.lastIntent ?? "待识别")
+                if let destination = state.sessionMemory.destination {
+                    InfoChip(label: destination, tint: HudColors.accentCyan)
+                }
+                Spacer(minLength: 0)
+                InfoChip(label: "电量 \(state.rideContext.batteryPct)%")
+            }
+        }
+
         // Demo scenarios (ADAS hazard injection).
         SectionCard(title: "演示场景") {
             ChipRow(label: "场景") {
@@ -764,6 +810,16 @@ private struct SettingsPanel: View {
                         selected: state.rideContext.scenario == scenario,
                         selectedColor: hazardColor(scenario.hazard)
                     ) { viewModel.setScenario(scenario) }
+                }
+            }
+            // Guided tour of every scenario — mock provider only, like the web.
+            if state.provider == "mock" {
+                ChipRow(label: "巡游") {
+                    HudChip(
+                        label: state.guidedDemo ? "■ 巡游中" : "▶ 巡游演示",
+                        selected: state.guidedDemo,
+                        selectedColor: HudColors.accentCyan
+                    ) { viewModel.setGuidedDemo(!state.guidedDemo) }
                 }
             }
         }
@@ -795,6 +851,22 @@ private struct SettingsPanel: View {
                 .foregroundColor(HudColors.muted)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+/// Small read-only status chip (session memory / battery readouts).
+private struct InfoChip: View {
+    let label: String
+    var tint: Color = HudColors.muted
+
+    var body: some View {
+        Text(label)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundColor(tint)
+            .lineLimit(1)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(HudColors.panel))
     }
 }
 

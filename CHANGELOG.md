@@ -1,5 +1,57 @@
 # Changelog
 
+## 2026-07-02 — Roadmap sweep: watchdog, upstream self-healing, memory continuity, native parity
+
+Six improvements from the post-review roadmap, focused on making live sessions
+self-maintaining (leaked slots reclaimed, dropouts healed in place, memory kept
+across restarts) and on closing the remaining web ↔ native feature gaps.
+
+### Added
+
+- **Relay session watchdog** (`server/watchdog.ts`, `RELAY_HEARTBEAT_MS`,
+  `RELAY_IDLE_TIMEOUT_MS`) — the relay now pings every `/agent` client and
+  terminates half-open links that stop ponging (a phone that lost signal used to
+  hold its Doubao upstream slot forever), and closes sessions with no client
+  traffic for the idle window (default 10 min) so a forgotten tab releases its
+  slot too. Idle closes use the new shared close code **4001**
+  (`IDLE_CLOSE_CODE`); web, iOS, and Android all treat it as intentional and
+  stay offline instead of auto-reconnecting (which would defeat the timeout).
+- **Doubao upstream self-healing with context replay** (`server/providers/doubao.ts`)
+  — when the upstream socket drops mid-session, the relay now reconnects it in
+  place (3 attempts, 0.5/1/2 s backoff) and replays the full persona plus the
+  live session memory with a 会话恢复 addendum telling the agent it's the same
+  conversation — dropouts become a status blip instead of a lost session. Only
+  after retries are exhausted does it fall back to bouncing the client socket.
+  Also fixed: a failed Doubao handshake (`unexpected-response`) used to leave
+  the upstream stuck in CONNECTING forever; the request is now destroyed so the
+  close/retry path runs.
+- **Session memory across restarts** (`shared/agent.ts` `SessionMemorySnapshot`,
+  `shared/session.ts` `restoreSessionMemory`) — voice/personality/mode toggles
+  restart the relay session, which used to wipe the agent's short-term memory.
+  All three clients now echo the last `session.memory` event back in
+  `session.start`; the relay validates the snapshot (enums, destination length)
+  and re-derives the response mode from the current ride mode. Covered by
+  parser and restore tests.
+- **Relay metrics on `/health`** (`server/metrics.ts`) — active/total sessions,
+  rejected upgrades, upstream failures and in-place reconnects, TTS-fallback
+  count, and watchdog closes, so the Lightsail deploy can be checked with one
+  curl. Counters reset with the process; `uptimeSec` says when that was.
+- **iOS/Android: ride-intelligence panel** — the settings sheet now surfaces the
+  live weather (temperature, condition, wind, risk level, advice), route phase,
+  speed, battery, and the session-memory chips (language, response mode, last
+  intent, destination) that both clients already parsed but never displayed —
+  reaching web-HUD parity.
+- **iOS/Android: guided demo ride** — both native clients can now toggle the
+  mock provider's scenario tour (`demo.guided`), shown only when the relay
+  reports the mock provider, and re-send it when a fresh session opens —
+  matching the web behavior.
+
+### Docs
+
+- `.env.example` documents `RELAY_HEARTBEAT_MS` / `RELAY_IDLE_TIMEOUT_MS`; the
+  README client-resilience section covers the watchdog, upstream self-healing,
+  memory continuity, and the `/health` metrics object.
+
 ## 2026-07-02 — Session-resilience sweep across relay, web, iOS, and Android
 
 A cross-platform review pass: every confirmed finding is a session-lifecycle or

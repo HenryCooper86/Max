@@ -126,6 +126,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setScenario(scenario: DemoScenario) = session.setScenario(scenario)
 
+    fun setGuidedDemo(enabled: Boolean) = session.setGuidedDemo(enabled)
+
     /** 清空对话记录: drops both the live and the persisted conversation log. */
     fun clearTranscript() = session.clearTranscript()
 

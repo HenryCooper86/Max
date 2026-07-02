@@ -82,6 +82,7 @@ const START_EVENT: SessionStartEvent = {
 
 afterEach(() => {
   upstreamInstances.length = 0;
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -224,7 +225,8 @@ describe("createDoubaoProvider — concurrent weather + audio buffering", () => 
     await provider.close();
   });
 
-  it("closes the client socket when the upstream dies, so the client can rebuild the session", async () => {
+  it("revives a dropped upstream in place and replays the session as a resume", async () => {
+    vi.useFakeTimers();
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => ({
@@ -239,15 +241,66 @@ describe("createDoubaoProvider — concurrent weather + audio buffering", () => 
       silentLog
     );
     await provider.start(START_EVENT);
-    const upstream = upstreamInstances[0];
+    const first = upstreamInstances[0];
 
-    upstream.emit("open");
-    await upstream.emit("message", serverFrame(EVENT_CONNECTION_STARTED));
-    await tick();
-    upstream.emit("message", serverFrame(EVENT_SESSION_STARTED));
+    first.emit("open");
+    await first.emit("message", serverFrame(EVENT_CONNECTION_STARTED));
+    first.emit("message", serverFrame(EVENT_SESSION_STARTED));
 
-    // The Doubao side drops: the relay must not leave a zombie session behind.
-    upstream.emit("close");
+    // The Doubao side drops: the relay reconnects in place instead of bouncing
+    // the client, so the rider keeps their session.
+    first.emit("close");
+    expect(clientClose).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(600);
+    expect(upstreamInstances).toHaveLength(2);
+
+    // The resumed StartSession replays the context with the resume addendum.
+    const second = upstreamInstances[1];
+    second.emit("open");
+    await second.emit("message", serverFrame(EVENT_CONNECTION_STARTED));
+    const startSession = String(second.sent[second.sent.length - 1]);
+    expect(startSession).toContain("会话恢复");
+    expect(startSession).toContain("恢复的短期记忆");
+
+    vi.useRealTimers();
+    await provider.close();
+  });
+
+  it("closes the client socket only after upstream retries are exhausted", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ current: { temperature_2m: 21, weather_code: 0, wind_speed_10m: 5, is_day: 1 } })
+      }))
+    );
+
+    const clientClose = vi.fn();
+    const provider = createDoubaoProvider(
+      { readyState: 1, OPEN: 1, send: vi.fn(), close: clientClose } as never,
+      silentLog
+    );
+    await provider.start(START_EVENT);
+
+    upstreamInstances[0].emit("open");
+    await upstreamInstances[0].emit("message", serverFrame(EVENT_CONNECTION_STARTED));
+    upstreamInstances[0].emit("message", serverFrame(EVENT_SESSION_STARTED));
+
+    // Every reconnect attempt dies too (Doubao outage). Walk through the
+    // backoff ladder until the retry budget is spent.
+    upstreamInstances[0].emit("close");
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      expect(clientClose).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(upstreamInstances).toHaveLength(attempt + 1);
+      upstreamInstances[attempt].emit("close");
+    }
+
+    // Out of retries: now the client socket is bounced so its own reconnect
+    // logic rebuilds a fresh relay session.
     expect(clientClose).toHaveBeenCalled();
+
+    vi.useRealTimers();
   });
 });

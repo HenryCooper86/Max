@@ -35,6 +35,8 @@ final class AgentSession: NSObject, ObservableObject {
         var bluetoothRouted = false
         /// The active ADAS hazard alert, shown as a banner until it auto-clears.
         var hazardAlert: HazardAlert? = nil
+        /// Guided demo ride: the mock provider auto-tours the scenario catalog.
+        var guidedDemo = false
 
         /// 态势摘要 fusion: ride hazard + weather risk (fusedHazard in src/main.tsx).
         var fusedHazard: HazardLevel {
@@ -44,6 +46,9 @@ final class AgentSession: NSObject, ObservableObject {
 
     /// Mirrors MAX_RECONNECT_ATTEMPTS in src/main.tsx.
     static let maxReconnectAttempts = 6
+    /// Mirrors IDLE_CLOSE_CODE in shared/agent.ts: the relay closed this idle
+    /// session to free its upstream slot; auto-reconnecting would defeat it.
+    static let idleCloseCode = 4001
     /// Repeated agent lines inside this window are dropped (src/main.tsx).
     private static let agentDedupeWindowMs: TimeInterval = 8.0
 
@@ -198,6 +203,19 @@ final class AgentSession: NSObject, ObservableObject {
             $0.bluetoothRouted = false
             $0.hazardAlert = nil
         }
+    }
+
+    /// Toggles the guided demo ride (mock provider only — the live provider
+    /// ignores it). Mirrors setGuidedDemo in useHelmetAgent.ts: send now when the
+    /// socket is up, and handleSocketOpened re-sends it for fresh sessions.
+    func setGuidedDemo(_ enabled: Bool) {
+        update {
+            $0.guidedDemo = enabled
+            if enabled && $0.connection != .ready {
+                $0.statusText = "巡游演示已开启，开启免提后自动巡游场景"
+            }
+        }
+        webSocket?.send(.string(buildGuidedDemo(enabled: enabled))) { _ in }
     }
 
     /// Mutes/unmutes the rider's microphone without ending the session, so Max can
@@ -361,8 +379,12 @@ final class AgentSession: NSObject, ObservableObject {
             rideMode: current.rideContext.mode,
             scenario: current.rideContext.scenario,
             lat: location?.latitude,
-            lon: location?.longitude
+            lon: location?.longitude,
+            memory: current.sessionMemory
         ))) { _ in }
+        // The guided tour lives in the provider instance, so a fresh session
+        // must be told about it again (mirrors the web client's open handler).
+        if current.guidedDemo { task.send(.string(buildGuidedDemo(enabled: true))) { _ in } }
         if transmitting { task.send(.string(audioStartEvent)) { _ in } }
     }
 
@@ -416,6 +438,17 @@ final class AgentSession: NSObject, ObservableObject {
             update {
                 $0.connection = .offline
                 $0.statusText = "离线"
+            }
+            return
+        }
+
+        // The relay closed an idle session to free its upstream slot. Stay
+        // offline — the rider restarts hands-free when they actually need it.
+        if task.closeCode.rawValue == Self.idleCloseCode {
+            reconnectAttempts = 0
+            update {
+                $0.connection = .offline
+                $0.statusText = "会话闲置已断开，请重新开启免提"
             }
             return
         }

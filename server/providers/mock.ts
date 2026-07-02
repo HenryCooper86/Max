@@ -10,7 +10,12 @@ import {
   type DemoScenario,
   type RideContext
 } from "../../shared/ride";
-import { createSessionMemory, updateSessionMemory, type SessionMemory } from "../../shared/session";
+import {
+  createSessionMemory,
+  restoreSessionMemory,
+  updateSessionMemory,
+  type SessionMemory
+} from "../../shared/session";
 import { type AdasSeverity } from "../../shared/adas";
 import { createHazardInjector } from "../hazard-injector";
 
@@ -315,7 +320,8 @@ export function createMockProvider(client: WebSocket): AgentProvider {
         network: profile.network,
         batteryPct: profile.batteryPct
       };
-      memory = createSessionMemory(rideContext.mode);
+      // Mirror the live path: a restarting client's memory snapshot survives.
+      memory = restoreSessionMemory(event.memory, rideContext.mode);
       send({ type: "session.started", provider: "mock", mode: "mock", capabilities: MOCK_CAPABILITIES });
       emitRideContext();
       emitMemory();

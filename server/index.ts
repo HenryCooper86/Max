@@ -8,10 +8,12 @@ import { WebSocketServer, WebSocket } from "ws";
 import { authorizeUpgrade, clientAddress } from "./auth";
 import { buildHealth, config, describeConfig, validateConfig } from "./config";
 import { createLogger, shortSessionId } from "./logger";
+import { metrics } from "./metrics";
 import { createDoubaoProvider } from "./providers/doubao";
 import { createMockProvider } from "./providers/mock";
 import type { AgentProvider } from "./providers/types";
 import { AgentSessionController } from "./session-controller";
+import { markClientActivity, startWatchdog, trackClient } from "./watchdog";
 import type { Logger } from "./logger";
 
 const app = express();
@@ -43,6 +45,7 @@ server.on("upgrade", (request, socket, head) => {
 
   const decision = authorizeUpgrade(request);
   if (!decision.ok) {
+    metrics.rejectedUpgrade();
     log.warn("rejected /agent upgrade", {
       address: clientAddress(request),
       code: decision.code,
@@ -68,9 +71,12 @@ function selectProvider(client: WebSocket, sessionLog: Logger): AgentProvider {
 wss.on("connection", (client, request) => {
   const sessionLog = createLogger(`sess:${shortSessionId(randomUUID())}`);
   sessionLog.info("client connected", { address: clientAddress(request), provider: config.voiceProvider });
+  metrics.sessionOpened();
+  trackClient(client);
   const session = new AgentSessionController(client, (socket) => selectProvider(socket, sessionLog), sessionLog);
 
   client.on("message", async (data, isBinary) => {
+    markClientActivity(client);
     try {
       await session.handleMessage(data, isBinary);
     } catch (error) {
@@ -82,6 +88,7 @@ wss.on("connection", (client, request) => {
 
   client.on("close", async (code) => {
     sessionLog.info("client disconnected", { code });
+    metrics.sessionClosed();
     try {
       await session.close();
     } catch (error) {
@@ -94,6 +101,15 @@ wss.on("connection", (client, request) => {
   client.on("error", (error) => {
     sessionLog.warn("client socket error", { message: error.message });
   });
+});
+
+// Liveness + idle watchdog: terminates half-open links and closes forgotten
+// sessions so their Doubao upstream slots are released. See server/watchdog.ts.
+startWatchdog({
+  clients: () => wss.clients,
+  heartbeatMs: config.heartbeatMs,
+  idleTimeoutMs: config.idleTimeoutMs,
+  log
 });
 
 const warnings = validateConfig();

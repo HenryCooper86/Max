@@ -668,11 +668,18 @@ export function useHelmetAgent() {
 
     const acquire = async () => {
       try {
-        sentinel = await navigator.wakeLock.request("screen");
+        const lock = await navigator.wakeLock.request("screen");
         if (cancelled) {
-          void sentinel.release();
-          sentinel = null;
+          void lock.release();
+          return;
         }
+        sentinel = lock;
+        // The browser releases the lock on its own when the tab is hidden; drop
+        // our handle then, or the visibility handler would see a stale sentinel
+        // and never re-acquire.
+        lock.addEventListener("release", () => {
+          if (sentinel === lock) sentinel = null;
+        });
       } catch {
         /* lost user activation or unsupported — leave the screen on its default */
       }

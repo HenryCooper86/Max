@@ -95,7 +95,10 @@ describe("createDoubaoProvider — concurrent weather + audio buffering", () => 
       vi.fn(() => new Promise(() => {}))
     );
 
-    const provider = createDoubaoProvider({ readyState: 1, OPEN: 1, send: vi.fn() } as never, silentLog);
+    const provider = createDoubaoProvider(
+      { readyState: 1, OPEN: 1, send: vi.fn(), close: vi.fn() } as never,
+      silentLog
+    );
     await provider.start(START_EVENT);
 
     // The connection was opened concurrently, not gated behind the (still pending) fetch.
@@ -120,7 +123,10 @@ describe("createDoubaoProvider — concurrent weather + audio buffering", () => 
       })
     );
 
-    const provider = createDoubaoProvider({ readyState: 1, OPEN: 1, send: vi.fn() } as never, silentLog);
+    const provider = createDoubaoProvider(
+      { readyState: 1, OPEN: 1, send: vi.fn(), close: vi.fn() } as never,
+      silentLog
+    );
     await provider.start(START_EVENT);
     const upstream = upstreamInstances[0];
 
@@ -154,7 +160,10 @@ describe("createDoubaoProvider — concurrent weather + audio buffering", () => 
       }))
     );
 
-    const provider = createDoubaoProvider({ readyState: 1, OPEN: 1, send: vi.fn() } as never, silentLog);
+    const provider = createDoubaoProvider(
+      { readyState: 1, OPEN: 1, send: vi.fn(), close: vi.fn() } as never,
+      silentLog
+    );
     await provider.start(START_EVENT);
     const upstream = upstreamInstances[0];
 
@@ -177,5 +186,68 @@ describe("createDoubaoProvider — concurrent weather + audio buffering", () => 
     expect(flushed).toBe(true);
 
     await provider.close();
+  });
+
+  it("drops buffered pre-session frames when the rider stops the mic", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ current: { temperature_2m: 21, weather_code: 0, wind_speed_10m: 5, is_day: 1 } })
+      }))
+    );
+
+    const provider = createDoubaoProvider(
+      { readyState: 1, OPEN: 1, send: vi.fn(), close: vi.fn() } as never,
+      silentLog
+    );
+    await provider.start(START_EVENT);
+    const upstream = upstreamInstances[0];
+
+    upstream.emit("open");
+    await upstream.emit("message", serverFrame(EVENT_CONNECTION_STARTED));
+    await tick();
+
+    // Frames arrive before the session is ready, then the rider mutes the mic.
+    const marker = Buffer.from([0xde, 0xad, 0xbe, 0xef]);
+    await provider.sendAudio(marker);
+    await provider.stopAudio();
+    const sentBeforeReady = upstream.sent.length;
+
+    // SessionStarted must not replay the stale frames from the ended stream.
+    upstream.emit("message", serverFrame(EVENT_SESSION_STARTED));
+    const replayed = upstream.sent
+      .slice(sentBeforeReady)
+      .some((frame) => Buffer.isBuffer(frame) && frame.includes(marker));
+    expect(replayed).toBe(false);
+
+    await provider.close();
+  });
+
+  it("closes the client socket when the upstream dies, so the client can rebuild the session", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ current: { temperature_2m: 21, weather_code: 0, wind_speed_10m: 5, is_day: 1 } })
+      }))
+    );
+
+    const clientClose = vi.fn();
+    const provider = createDoubaoProvider(
+      { readyState: 1, OPEN: 1, send: vi.fn(), close: clientClose } as never,
+      silentLog
+    );
+    await provider.start(START_EVENT);
+    const upstream = upstreamInstances[0];
+
+    upstream.emit("open");
+    await upstream.emit("message", serverFrame(EVENT_CONNECTION_STARTED));
+    await tick();
+    upstream.emit("message", serverFrame(EVENT_SESSION_STARTED));
+
+    // The Doubao side drops: the relay must not leave a zombie session behind.
+    upstream.emit("close");
+    expect(clientClose).toHaveBeenCalled();
   });
 });

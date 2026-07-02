@@ -465,6 +465,8 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
           state: "ready",
           detail: "豆包 TTS 未返回音频，正在使用浏览器语音备用模式"
         });
+        // TtsEnded may never arrive on this turn, so report telemetry here.
+        emitTelemetry();
       }
       receivedTtsAudio = false;
       ttsFallbackTimer = undefined;
@@ -664,7 +666,7 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
         }
 
         if (frame.event === EventReceive.AsrEnded) {
-          sendClient({ type: "status", state: "ready", detail: "豆包回复已完成" });
+          sendClient({ type: "status", state: "ready", detail: "豆包语音识别完成" });
           return;
         }
 
@@ -707,6 +709,14 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
       }
       if (pendingReplyText()) flushPendingAgentText(true);
       sendClient({ type: "status", state: "closed", detail: "豆包实时代理已断开" });
+      // A dead upstream cannot be revived on this relay session (start() runs
+      // once per provider), so mic audio would stream into a void forever.
+      // Close the client socket too: its reconnect logic then builds a fresh
+      // session (session.start + audio.start) with backoff. No-op when the
+      // close originated from the client side, where the socket is already gone.
+      if (client.readyState === client.OPEN) {
+        client.close(1011, "doubao upstream closed");
+      }
     });
 
     upstream.on("unexpected-response", (_request, response) => {
@@ -865,6 +875,10 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
     },
     async stopAudio() {
       hazardInjector.stop();
+      // Frames still waiting for the session to become ready belong to a mic
+      // stream the rider just ended — flushing them later would replay stale
+      // audio into a fresh turn.
+      pendingAudio.length = 0;
       if (upstream?.readyState === WebSocket.OPEN && sessionReady) {
         upstream.send(buildFullClientRequest(EventSend.EndAsr, sessionId));
       }

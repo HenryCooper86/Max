@@ -183,7 +183,6 @@ export function createMockProvider(client: WebSocket): AgentProvider {
     network: SCENARIOS.commute.network,
     batteryPct: SCENARIOS.commute.batteryPct
   };
-  let audioStartedAt = 0;
   let memory: SessionMemory = createSessionMemory("navigation");
 
   function send(payload: unknown) {
@@ -247,7 +246,9 @@ export function createMockProvider(client: WebSocket): AgentProvider {
         asrMs,
         thinkMs,
         firstAudioMs,
-        totalMs: Date.now() - audioStartedAt + firstAudioMs
+        // Per-turn total, like the live path — not time since audio.start,
+        // which would grow without bound over a long hands-free session.
+        totalMs: asrMs + thinkMs + firstAudioMs
       });
       setTimeout(() => send({ type: "status", state: "listening", detail: "免提待命，请讲话" }), 1500);
     }, 650);
@@ -325,7 +326,6 @@ export function createMockProvider(client: WebSocket): AgentProvider {
       });
     },
     async startAudio() {
-      audioStartedAt = Date.now();
       send({ type: "status", state: "listening", detail: "免提待命，请讲话" });
       emitRideContext();
       emitWeather();

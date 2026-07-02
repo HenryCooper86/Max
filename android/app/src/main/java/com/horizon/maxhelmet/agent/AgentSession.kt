@@ -100,7 +100,19 @@ class AgentSession(
     private var httpClient: OkHttpClient = buildHttpClient(allowSelfSigned = false)
     private var allowSelfSigned = false
 
+    // @Volatile: read from the mic capture thread (onFrame), written on OkHttp
+    // listener threads and coroutine dispatchers.
+    @Volatile
     private var webSocket: WebSocket? = null
+
+    /** True only between onOpen (after session.start/audio.start are enqueued)
+     * and the socket being closed/superseded. Mic frames sent while OkHttp is
+     * still connecting would be buffered and flushed AHEAD of the handshake
+     * events, so the server would receive raw audio before session.start —
+     * the web client drops those frames too (useMicCapture readyState check). */
+    @Volatile
+    private var socketOpen = false
+
     private var relayUrl: String = ""
     private var reconnectAttempts = 0
     private var reconnectJob: Job? = null
@@ -129,7 +141,7 @@ class AgentSession(
     private val player = PcmPlayer()
     private val audioRouter = AudioRouter(context)
     private val mic = MicStreamer(
-        onFrame = { frame -> if (transmitting && !micMuted) webSocket?.send(frame.toByteString()) },
+        onFrame = { frame -> if (transmitting && !micMuted && socketOpen) webSocket?.send(frame.toByteString()) },
         onLevel = { level -> _state.update { it.copy(voiceLevel = if (transmitting && !micMuted) level else 0f) } }
     )
 
@@ -205,6 +217,7 @@ class AgentSession(
         reconnectJob?.cancel()
         webSocket?.send(AUDIO_STOP_EVENT)
         webSocket?.close(1000, "rider stopped")
+        socketOpen = false
         webSocket = null
         mic.stop()
         tts?.stop()
@@ -337,6 +350,7 @@ class AgentSession(
 
     private fun connect() {
         if (intentionalClose) return
+        socketOpen = false
         _state.update {
             it.copy(
                 connection = ConnectionState.CONNECTING,
@@ -364,6 +378,9 @@ class AgentSession(
                 )
                 // Resume the audio stream if the rider was transmitting before a drop.
                 if (transmitting) socket.send(AUDIO_START_EVENT)
+                // Only now may mic frames flow: they are guaranteed to be queued
+                // behind the session.start/audio.start just sent above.
+                socketOpen = true
             }
 
             override fun onMessage(socket: WebSocket, text: String) {
@@ -397,6 +414,7 @@ class AgentSession(
     private fun handleSocketClosed(socket: WebSocket) {
         // Ignore a socket already superseded by a newer one (e.g. a restart).
         if (webSocket != null && socket !== webSocket) return
+        socketOpen = false
         webSocket = null
         if (intentionalClose) {
             if (_state.value.handsFree) return // restartSession() will reconnect

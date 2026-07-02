@@ -1,5 +1,61 @@
 # Changelog
 
+## 2026-07-02 — Session-resilience sweep across relay, web, iOS, and Android
+
+A cross-platform review pass: every confirmed finding is a session-lifecycle or
+audio-ordering bug rather than a feature gap — a zombie relay session after an
+upstream drop, a wake lock that never came back, agent audio lost around
+permission prompts, and mic audio that could outrun the session handshake.
+
+### Fixed
+
+- **Relay: dead Doubao upstream left a zombie session** (`server/providers/doubao.ts`)
+  — when the upstream socket dropped mid-session, the relay kept the client
+  connection open even though the provider can never be restarted on it
+  (`start()` runs once per session): the rider's mic kept streaming into the
+  pending buffer forever and nothing recovered without a page refresh. The relay
+  now closes the client socket (1011) when the upstream dies, so every client's
+  existing backoff reconnect rebuilds a fresh session (`session.start` +
+  `audio.start`) automatically. Regression test included.
+- **Web: screen wake lock was never re-acquired** (`src/hooks/useHelmetAgent.ts`)
+  — the browser auto-releases the Wake Lock whenever the tab is hidden, but the
+  released sentinel was kept, so the `visibilitychange` re-acquire path saw a
+  "held" lock and never requested a new one; after the first backgrounding the
+  screen could lock mid-ride. The sentinel now clears itself on the lock's
+  `release` event, letting the re-acquire logic actually run.
+- **iOS: agent audio dropped before the mic engine started** (`ios/…/PcmPlayer.swift`,
+  `AgentSession.swift`) — `PcmPlayer.play()` discarded PCM while the shared
+  `AVAudioEngine` wasn't running, and the engine only starts after the async
+  mic-permission grant — so the agent's opening words during the first-launch
+  permission dialog were silently lost. Early PCM is now held in a bounded
+  (~5 s) buffer, flushed once `MicStreamer` starts the engine; barge-in and
+  release clear it.
+- **Android: mic frames could reach the server before `session.start`**
+  (`android/…/AgentSession.kt`) — `onFrame` sent PCM without checking that the
+  socket was open, and OkHttp buffers pre-open sends, so audio captured while
+  the socket was still connecting was flushed _ahead of_ the `session.start` /
+  `audio.start` that `onOpen` enqueues (the web client already drops such
+  frames). A `@Volatile socketOpen` gate now only admits frames after the
+  handshake events are queued; `webSocket` itself is also `@Volatile` for the
+  mic-thread read.
+- **Relay: stale pre-session mic audio replayed after mute** (`server/providers/doubao.ts`)
+  — frames buffered while the upstream session was still starting were kept
+  after `audio.stop`, so a later `SessionStarted` flushed audio from a mic
+  stream the rider had already ended. The buffer is cleared on `stopAudio`.
+  Regression test included.
+- **Mock: telemetry `totalMs` grew without bound** (`server/providers/mock.ts`)
+  — it reported time since `audio.start` rather than a per-turn total, so the
+  HUD's 总计 reading climbed into the hundreds of seconds over a demo. Now the
+  per-turn sum, matching the live path's semantics.
+- **Relay: minor status/telemetry polish** (`server/providers/doubao.ts`) —
+  `AsrEnded` no longer claims "豆包回复已完成" (it now reports ASR completion),
+  and turns that finish via the browser-TTS fallback emit `telemetry` too.
+
+### Docs
+
+- README client-resilience section documents the upstream-death recovery path
+  and the wake-lock re-acquire behavior.
+
 ## 2026-07-01 — Web auto-fit, weather/audio startup fix, relay limiter hardening
 
 A review pass with three focused fixes: the web HUD always shows the start

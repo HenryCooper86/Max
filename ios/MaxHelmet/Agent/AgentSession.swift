@@ -163,6 +163,10 @@ final class AgentSession: NSObject, ObservableObject {
                     // is the echo-cancellation reference signal.
                     self.player.prepare()
                     try self.mic.start()
+                    // Any agent audio that arrived while the permission dialog was
+                    // up (e.g. the opening greeting) was buffered — play it now
+                    // that the shared engine is running.
+                    self.player.flushPending()
                 } catch {
                     self.update { $0.statusText = "麦克风不可用，请检查录音权限" }
                 }

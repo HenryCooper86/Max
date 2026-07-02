@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -74,6 +75,7 @@ import com.horizon.maxhelmet.agent.DemoScenario
 import com.horizon.maxhelmet.agent.HazardLevel
 import com.horizon.maxhelmet.agent.RideMode
 import com.horizon.maxhelmet.agent.Speaker
+import com.horizon.maxhelmet.agent.responseModeLabel
 import com.horizon.maxhelmet.agent.TranscriptItem
 import com.horizon.maxhelmet.agent.TurnState
 import com.horizon.maxhelmet.agent.VoiceGender
@@ -721,6 +723,9 @@ private fun SheetContent(title: String, content: @Composable ColumnScope.() -> U
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            // The sections outgrow the sheet on short/landscape screens (e.g.
+            // tablets); without this the lower cards are simply unreachable.
+            .verticalScroll(rememberScrollState())
             .navigationBarsPadding()
             .padding(horizontal = 18.dp)
             .padding(bottom = 24.dp),
@@ -816,6 +821,47 @@ private fun SettingsPanel(
         }
     }
 
+    // Live ride intelligence: weather, route, and session memory. The data
+    // already flows over the protocol (weather / ride.context / session.memory
+    // events); this surfaces it like the web HUD instruments.
+    SectionCard("骑行情报") {
+        val weather = state.weather
+        if (weather != null) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("${weather.temperatureC}°", color = HudColors.Text, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                Text(weather.description, color = HudColors.Text, fontSize = 14.sp)
+                Text("风速 ${weather.windSpeedKmh} km/h", color = HudColors.Muted, fontSize = 12.sp)
+                Spacer(Modifier.weight(1f))
+                Text(
+                    when (weather.riskLevel) {
+                        HazardLevel.CRITICAL -> "高风险"
+                        HazardLevel.CAUTION -> "注意"
+                        else -> "正常"
+                    },
+                    color = hazardColor(weather.riskLevel),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Text(weather.riderAdvice, color = HudColors.Muted, fontSize = 12.sp)
+        } else {
+            Text("激活后接入定位天气", color = HudColors.Muted, fontSize = 12.sp)
+        }
+        Text(
+            "${state.rideContext.speedKmh} km/h · ${state.rideContext.routePhase}",
+            color = HudColors.Muted,
+            fontSize = 12.sp
+        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            InfoChip(if (state.sessionMemory.language == "zh") "中文" else "English")
+            InfoChip(responseModeLabel(state.sessionMemory.responseMode))
+            InfoChip(state.sessionMemory.lastIntent ?: "待识别")
+            state.sessionMemory.destination?.let { InfoChip(it, tint = HudColors.AccentCyan) }
+            Spacer(Modifier.weight(1f))
+            InfoChip("电量 ${state.rideContext.batteryPct}%")
+        }
+    }
+
     // Demo scenarios (ADAS hazard injection).
     SectionCard("演示场景") {
         ChipRow(label = "场景") {
@@ -825,6 +871,17 @@ private fun SettingsPanel(
                     state.rideContext.scenario == scenario,
                     { viewModel.setScenario(scenario) },
                     selectedColor = hazardColor(scenario.hazard)
+                )
+            }
+        }
+        // Guided tour of every scenario — mock provider only, like the web.
+        if (state.provider == "mock") {
+            ChipRow(label = "巡游") {
+                HudChip(
+                    if (state.guidedDemo) "■ 巡游中" else "▶ 巡游演示",
+                    state.guidedDemo,
+                    { viewModel.setGuidedDemo(!state.guidedDemo) },
+                    selectedColor = HudColors.AccentCyan
                 )
             }
         }
@@ -921,6 +978,19 @@ private fun HudChip(
             fontSize = 13.sp,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
         )
+    }
+}
+
+/** Small read-only status chip (session memory / battery readouts). */
+@Composable
+private fun InfoChip(label: String, tint: Color = HudColors.Muted) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(HudColors.Panel)
+            .padding(horizontal = 9.dp, vertical = 5.dp)
+    ) {
+        Text(label, color = tint, fontSize = 11.sp, fontWeight = FontWeight.Medium, maxLines = 1)
     }
 }
 

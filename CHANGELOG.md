@@ -1,5 +1,139 @@
 # Changelog
 
+## 2026-07-02 — Roadmap sweep: watchdog, upstream self-healing, memory continuity, native parity
+
+Six improvements from the post-review roadmap, focused on making live sessions
+self-maintaining (leaked slots reclaimed, dropouts healed in place, memory kept
+across restarts) and on closing the remaining web ↔ native feature gaps.
+
+### Added
+
+- **Relay session watchdog** (`server/watchdog.ts`, `RELAY_HEARTBEAT_MS`,
+  `RELAY_IDLE_TIMEOUT_MS`) — the relay now pings every `/agent` client and
+  terminates half-open links that stop ponging (a phone that lost signal used to
+  hold its Doubao upstream slot forever), and closes sessions with no client
+  traffic for the idle window (default 10 min) so a forgotten tab releases its
+  slot too. Idle closes use the new shared close code **4001**
+  (`IDLE_CLOSE_CODE`); web, iOS, and Android all treat it as intentional and
+  stay offline instead of auto-reconnecting (which would defeat the timeout).
+- **Doubao upstream self-healing with context replay** (`server/providers/doubao.ts`)
+  — when the upstream socket drops mid-session, the relay now reconnects it in
+  place (3 attempts, 0.5/1/2 s backoff) and replays the full persona plus the
+  live session memory with a 会话恢复 addendum telling the agent it's the same
+  conversation — dropouts become a status blip instead of a lost session. Only
+  after retries are exhausted does it fall back to bouncing the client socket.
+  Also fixed: a failed Doubao handshake (`unexpected-response`) used to leave
+  the upstream stuck in CONNECTING forever; the request is now destroyed so the
+  close/retry path runs.
+- **Session memory across restarts** (`shared/agent.ts` `SessionMemorySnapshot`,
+  `shared/session.ts` `restoreSessionMemory`) — voice/personality/mode toggles
+  restart the relay session, which used to wipe the agent's short-term memory.
+  All three clients now echo the last `session.memory` event back in
+  `session.start`; the relay validates the snapshot (enums, destination length)
+  and re-derives the response mode from the current ride mode. Covered by
+  parser and restore tests.
+- **Relay metrics on `/health`** (`server/metrics.ts`) — active/total sessions,
+  rejected upgrades, upstream failures and in-place reconnects, TTS-fallback
+  count, and watchdog closes, so the Lightsail deploy can be checked with one
+  curl. Counters reset with the process; `uptimeSec` says when that was.
+- **iOS/Android: ride-intelligence panel** — the settings sheet now surfaces the
+  live weather (temperature, condition, wind, risk level, advice), route phase,
+  speed, battery, and the session-memory chips (language, response mode, last
+  intent, destination) that both clients already parsed but never displayed —
+  reaching web-HUD parity.
+- **iOS/Android: guided demo ride** — both native clients can now toggle the
+  mock provider's scenario tour (`demo.guided`), shown only when the relay
+  reports the mock provider, and re-send it when a fresh session opens —
+  matching the web behavior.
+
+### Docs
+
+- `.env.example` documents `RELAY_HEARTBEAT_MS` / `RELAY_IDLE_TIMEOUT_MS`; the
+  README client-resilience section covers the watchdog, upstream self-healing,
+  memory continuity, and the `/health` metrics object.
+
+### Follow-up (same day)
+
+- **`/health` trailing-window rates** (`server/metrics.ts`) — a per-minute
+  snapshot ring buffer adds a `metricsWindow` object (counter deltas over the
+  trailing 15 min, window shrinks gracefully right after startup), so one curl
+  distinguishes "failed a lot last month" from "failing right now".
+- **Android: mic survives transient capture glitches** (`MicStreamer.kt`) — a
+  single `AudioRecord.read()` returning 0 used to end capture for the rest of
+  the session; empty reads now back off briefly (~0.5 s budget) and error codes
+  get one in-place stop/startRecording recovery before giving up.
+- **Startup log duration display** — sub-minute idle timeouts printed as
+  "0 min"; durations under a minute now print in seconds.
+- **Live verification pass** — end-to-end WebSocket smoke test against the
+  running relay (session start, memory-snapshot echo, watchdog idle close 4001
+  with courtesy status, metrics counters) plus manual browser and iOS-simulator
+  runs: mock conversation, ADAS banners, per-turn telemetry, memory chips
+  surviving a voice-switch restart, the new iOS 骑行情报 panel with live relay
+  data, and the native 巡游 guided tour advancing scenarios.
+- **Android emulator pass + settings-sheet scroll fix** (`ui/AgentScreen.kt`) —
+  the same live verification on the Android emulator (session against the local
+  relay, ADAS banners, 骑行情报 panel, 巡游 tour advancing 通勤 → 横风, memory
+  chips surviving a voice-switch restart). The pass surfaced a real bug: the
+  settings bottom sheet's content column wasn't scrollable, so on short or
+  landscape screens (tablets) the 巡游 row and the whole 诊断 card were simply
+  unreachable — the sheet now scrolls vertically.
+
+## 2026-07-02 — Session-resilience sweep across relay, web, iOS, and Android
+
+A cross-platform review pass: every confirmed finding is a session-lifecycle or
+audio-ordering bug rather than a feature gap — a zombie relay session after an
+upstream drop, a wake lock that never came back, agent audio lost around
+permission prompts, and mic audio that could outrun the session handshake.
+
+### Fixed
+
+- **Relay: dead Doubao upstream left a zombie session** (`server/providers/doubao.ts`)
+  — when the upstream socket dropped mid-session, the relay kept the client
+  connection open even though the provider can never be restarted on it
+  (`start()` runs once per session): the rider's mic kept streaming into the
+  pending buffer forever and nothing recovered without a page refresh. The relay
+  now closes the client socket (1011) when the upstream dies, so every client's
+  existing backoff reconnect rebuilds a fresh session (`session.start` +
+  `audio.start`) automatically. Regression test included.
+- **Web: screen wake lock was never re-acquired** (`src/hooks/useHelmetAgent.ts`)
+  — the browser auto-releases the Wake Lock whenever the tab is hidden, but the
+  released sentinel was kept, so the `visibilitychange` re-acquire path saw a
+  "held" lock and never requested a new one; after the first backgrounding the
+  screen could lock mid-ride. The sentinel now clears itself on the lock's
+  `release` event, letting the re-acquire logic actually run.
+- **iOS: agent audio dropped before the mic engine started** (`ios/…/PcmPlayer.swift`,
+  `AgentSession.swift`) — `PcmPlayer.play()` discarded PCM while the shared
+  `AVAudioEngine` wasn't running, and the engine only starts after the async
+  mic-permission grant — so the agent's opening words during the first-launch
+  permission dialog were silently lost. Early PCM is now held in a bounded
+  (~5 s) buffer, flushed once `MicStreamer` starts the engine; barge-in and
+  release clear it.
+- **Android: mic frames could reach the server before `session.start`**
+  (`android/…/AgentSession.kt`) — `onFrame` sent PCM without checking that the
+  socket was open, and OkHttp buffers pre-open sends, so audio captured while
+  the socket was still connecting was flushed _ahead of_ the `session.start` /
+  `audio.start` that `onOpen` enqueues (the web client already drops such
+  frames). A `@Volatile socketOpen` gate now only admits frames after the
+  handshake events are queued; `webSocket` itself is also `@Volatile` for the
+  mic-thread read.
+- **Relay: stale pre-session mic audio replayed after mute** (`server/providers/doubao.ts`)
+  — frames buffered while the upstream session was still starting were kept
+  after `audio.stop`, so a later `SessionStarted` flushed audio from a mic
+  stream the rider had already ended. The buffer is cleared on `stopAudio`.
+  Regression test included.
+- **Mock: telemetry `totalMs` grew without bound** (`server/providers/mock.ts`)
+  — it reported time since `audio.start` rather than a per-turn total, so the
+  HUD's 总计 reading climbed into the hundreds of seconds over a demo. Now the
+  per-turn sum, matching the live path's semantics.
+- **Relay: minor status/telemetry polish** (`server/providers/doubao.ts`) —
+  `AsrEnded` no longer claims "豆包回复已完成" (it now reports ASR completion),
+  and turns that finish via the browser-TTS fallback emit `telemetry` too.
+
+### Docs
+
+- README client-resilience section documents the upstream-death recovery path
+  and the wake-lock re-acquire behavior.
+
 ## 2026-07-01 — Web auto-fit, weather/audio startup fix, relay limiter hardening
 
 A review pass with three focused fixes: the web HUD always shows the start

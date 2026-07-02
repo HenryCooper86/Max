@@ -10,6 +10,10 @@ const VOICE_GENDERS = new Set(["female", "male"]);
 const VOICE_PERSONALITIES = new Set(["concise", "friendly", "technical", "rally"]);
 const RIDE_MODES = new Set(["ride", "stop", "navigation", "emergency"]);
 const DEMO_SCENARIOS = new Set(["commute", "wind", "fuel", "group", "emergency", "adas"]);
+const MEMORY_LANGUAGES = new Set(["zh", "en"]);
+const RESPONSE_MODES = new Set(["concise", "normal", "emergency"]);
+const RIDER_INTENTS = new Set(["navigation", "weather", "emergency", "diagnostics", "group", "casual"]);
+const MAX_MEMORY_DESTINATION_BYTES = 256;
 
 export function normalizeRawData(data: RawData): Buffer {
   if (Buffer.isBuffer(data)) return data;
@@ -26,6 +30,22 @@ function assertOptionalEnum(value: unknown, allowed: Set<string>, field: string)
 function assertOptionalCoordinate(value: unknown, min: number, max: number, field: string) {
   if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value) || value < min || value > max)) {
     throw new Error(`Invalid ${field}`);
+  }
+}
+
+/** The optional session-memory snapshot echoed back by restarting clients. */
+function assertOptionalMemory(value: unknown) {
+  if (value === undefined) return;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid memory");
+  const memory = value as Record<string, unknown>;
+  assertOptionalEnum(memory.language, MEMORY_LANGUAGES, "memory.language");
+  assertOptionalEnum(memory.responseMode, RESPONSE_MODES, "memory.responseMode");
+  assertOptionalEnum(memory.lastIntent, RIDER_INTENTS, "memory.lastIntent");
+  if (
+    memory.destination !== undefined &&
+    (typeof memory.destination !== "string" || memory.destination.length > MAX_MEMORY_DESTINATION_BYTES)
+  ) {
+    throw new Error("Invalid memory.destination");
   }
 }
 
@@ -59,6 +79,7 @@ export function parseClientEvent(data: RawData): ClientEvent {
   assertOptionalEnum(value.scenario, DEMO_SCENARIOS, "scenario");
   assertOptionalCoordinate(value.lat, -90, 90, "lat");
   assertOptionalCoordinate(value.lon, -180, 180, "lon");
+  assertOptionalMemory(value.memory);
 
   return value as ClientEvent;
 }

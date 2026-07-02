@@ -58,6 +58,48 @@ export function createSessionMemory(mode: RideMode): SessionMemory {
   };
 }
 
+const RIDER_INTENT_VALUES: ReadonlySet<string> = new Set([
+  "navigation",
+  "weather",
+  "emergency",
+  "diagnostics",
+  "group",
+  "casual"
+]);
+
+/** Longest destination a restart snapshot may carry back into the prompt. */
+export const MAX_MEMORY_DESTINATION_CHARS = 64;
+
+/**
+ * Rebuilds session memory from a client-echoed snapshot (see
+ * SessionMemorySnapshot in shared/agent.ts). Untrusted input: every field is
+ * revalidated, and responseMode is re-derived from the CURRENT ride mode
+ * rather than restored, so a stale snapshot can't pin the wrong verbosity.
+ */
+export function restoreSessionMemory(
+  snapshot: { language?: string; destination?: string; lastIntent?: string } | undefined,
+  mode: RideMode
+): SessionMemory {
+  const base = createSessionMemory(mode);
+  if (!snapshot) return base;
+
+  const lastIntent =
+    typeof snapshot.lastIntent === "string" && RIDER_INTENT_VALUES.has(snapshot.lastIntent)
+      ? (snapshot.lastIntent as RiderIntent)
+      : undefined;
+  const destination =
+    typeof snapshot.destination === "string" && snapshot.destination.trim()
+      ? snapshot.destination.trim().slice(0, MAX_MEMORY_DESTINATION_CHARS)
+      : undefined;
+
+  return {
+    language: snapshot.language === "en" ? "en" : base.language,
+    destination,
+    lastIntent,
+    responseMode: lastIntent ? responseModeForRide(mode, lastIntent) : base.responseMode
+  };
+}
+
 export function buildSessionMemoryPrompt(memory: SessionMemory): string {
   const parts = [
     `语言偏好：${memory.language === "zh" ? "中文" : "English"}`,

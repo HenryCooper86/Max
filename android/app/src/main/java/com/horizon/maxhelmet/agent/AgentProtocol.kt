@@ -337,7 +337,8 @@ fun buildSessionStart(
     rideMode: RideMode,
     scenario: DemoScenario,
     lat: Double?,
-    lon: Double?
+    lon: Double?,
+    memory: SessionMemory? = null
 ): String =
     JSONObject().apply {
         put("type", "session.start")
@@ -351,7 +352,23 @@ fun buildSessionStart(
             put("lat", lat)
             put("lon", lon)
         }
+        // Echo the last session.memory snapshot so a settings-change restart
+        // keeps the agent's short-term memory (shared/agent.ts SessionMemorySnapshot).
+        if (memory != null) {
+            put(
+                "memory",
+                JSONObject().apply {
+                    put("language", memory.language)
+                    put("responseMode", memory.responseMode)
+                    memory.destination?.let { put("destination", it) }
+                    memory.lastIntent?.let { put("lastIntent", it) }
+                }
+            )
+        }
     }.toString()
+
+/** Guided-demo toggle (mock provider tours the scenario catalog hands-off). */
+fun buildGuidedDemo(enabled: Boolean): String = """{"type":"demo.guided","enabled":$enabled}"""
 
 const val AUDIO_START_EVENT = """{"type":"audio.start"}"""
 const val AUDIO_STOP_EVENT = """{"type":"audio.stop"}"""

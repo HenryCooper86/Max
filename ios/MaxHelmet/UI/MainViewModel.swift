@@ -114,6 +114,7 @@ final class MainViewModel: ObservableObject {
     func setVoicePersonality(_ personality: VoicePersonality) { session.setVoicePersonality(personality) }
     func setRideMode(_ mode: RideMode) { session.setRideMode(mode) }
     func setScenario(_ scenario: DemoScenario) { session.setScenario(scenario) }
+    func setGuidedDemo(_ enabled: Bool) { session.setGuidedDemo(enabled) }
 
     /// Exports the conversation log as JSON to a temp file and triggers the share
     /// sheet — the iOS counterpart of exportTranscriptLog's file download.

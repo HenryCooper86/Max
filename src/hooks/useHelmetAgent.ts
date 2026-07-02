@@ -5,12 +5,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { TurnState } from "../components/HelmetVisual";
 import type { Weather } from "../components/Instruments";
-import type {
-  AgentEvent,
-  AgentHealth,
-  ConnectionState,
-  ProviderCapabilities,
-  VoicePersonality
+import {
+  IDLE_CLOSE_CODE,
+  type AgentEvent,
+  type AgentHealth,
+  type ConnectionState,
+  type ProviderCapabilities,
+  type VoicePersonality
 } from "../../shared/agent";
 import { detectLanguage } from "../../shared/language";
 import {
@@ -104,6 +105,9 @@ export function useHelmetAgent() {
   const transcriptTurnRef = useRef(0);
   const hazardClearTimerRef = useRef<number | null>(null);
   const guidedDemoRef = useRef(false);
+  // Latest server-issued session memory, echoed back in session.start so a
+  // settings-change restart keeps the agent's short-term memory.
+  const sessionMemoryRef = useRef<SessionMemoryState>(DEFAULT_MEMORY);
 
   const onInterrupted = useCallback(() => {
     setTurnState("listening");
@@ -270,7 +274,8 @@ export function useHelmetAgent() {
           voicePersonality: voicePersonalityRef.current,
           rideMode: rideModeRef.current,
           scenario: scenarioRef.current,
-          ...(location ? { lat: location.lat, lon: location.lon } : {})
+          ...(location ? { lat: location.lat, lon: location.lon } : {}),
+          memory: sessionMemoryRef.current
         })
       );
       // The guided tour and audio stream live in the provider instance, so a
@@ -382,12 +387,14 @@ export function useHelmetAgent() {
           rideModeRef.current = event.mode;
         }
         if (event.type === "session.memory") {
-          setSessionMemory({
+          const memory = {
             language: event.language,
             destination: event.destination,
             lastIntent: event.lastIntent,
             responseMode: event.responseMode
-          });
+          };
+          sessionMemoryRef.current = memory;
+          setSessionMemory(memory);
         }
         if (event.type === "telemetry") {
           setTelemetry({
@@ -403,7 +410,7 @@ export function useHelmetAgent() {
       }
     });
 
-    socket.addEventListener("close", () => {
+    socket.addEventListener("close", (event) => {
       // Ignore a socket already superseded by a newer one (e.g. a restart).
       if (socketRef.current !== socket) return;
       setConnected(false);
@@ -412,6 +419,15 @@ export function useHelmetAgent() {
       isLiveRef.current = false;
       if (intentionalCloseRef.current) {
         setStatus("离线");
+        return;
+      }
+      // The relay closed us for inactivity to free the upstream slot; an
+      // auto-reconnect would immediately re-open it, so stay offline until the
+      // rider starts hands-free again.
+      if (event.code === IDLE_CLOSE_CODE) {
+        setListening(false);
+        setTurnState("idle");
+        setStatus("会话闲置已断开，开启免提后重新连接");
         return;
       }
 
@@ -668,11 +684,18 @@ export function useHelmetAgent() {
 
     const acquire = async () => {
       try {
-        sentinel = await navigator.wakeLock.request("screen");
+        const lock = await navigator.wakeLock.request("screen");
         if (cancelled) {
-          void sentinel.release();
-          sentinel = null;
+          void lock.release();
+          return;
         }
+        sentinel = lock;
+        // The browser releases the lock on its own when the tab is hidden; drop
+        // our handle then, or the visibility handler would see a stale sentinel
+        // and never re-acquire.
+        lock.addEventListener("release", () => {
+          if (sentinel === lock) sentinel = null;
+        });
       } catch {
         /* lost user activation or unsupported — leave the screen on its default */
       }

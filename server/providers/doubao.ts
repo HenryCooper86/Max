@@ -7,6 +7,7 @@ import { containsWakePhrase, WAKE_FOLLOWUP_WINDOW_MS, WAKE_PHRASE_LABEL } from "
 import { config as appConfig } from "../config";
 import { createHazardInjector } from "../hazard-injector";
 import { createLogger, type Logger } from "../logger";
+import { metrics } from "../metrics";
 import { fetchRiderWeather } from "../weather";
 import {
   buildRideContextSummary,
@@ -23,6 +24,7 @@ import {
   buildSafetyPrompt,
   buildSessionMemoryPrompt,
   createSessionMemory,
+  restoreSessionMemory,
   updateSessionMemory,
   type SessionMemory
 } from "../../shared/session";
@@ -339,11 +341,24 @@ export function extractAsrText(payload: Record<string, unknown>) {
     .trim();
 }
 
+/** In-place upstream reconnect attempts before giving up and bouncing the client. */
+const MAX_UPSTREAM_RETRIES = 3;
+
 export function createDoubaoProvider(client: WebSocket, log: Logger = createLogger("doubao")): AgentProvider {
   let upstream: WebSocket | undefined;
   let started = false;
   let sessionId = randomUUID();
   let sessionReady = false;
+  // Upstream self-healing: when the Doubao socket drops mid-session, the relay
+  // reconnects in place (replaying the persona + current session memory) so the
+  // dropout is nearly invisible to the rider. Only after MAX_UPSTREAM_RETRIES
+  // consecutive failures does it close the client socket, handing recovery to
+  // the client's own backoff reconnect.
+  let connectConfig: ConnectConfig | undefined;
+  let upstreamRetries = 0;
+  let resumedSession = false;
+  let closedByProvider = false;
+  let upstreamReconnectTimer: NodeJS.Timeout | undefined;
   // Doubao streams the agent reply over two channels: ChatResponse (raw LLM
   // tokens, often missing spaces) and TtsSentence (the spoken text, properly
   // spaced). They're kept separate so the transcript can use the spoken text —
@@ -457,6 +472,7 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
     ttsFallbackTimer = setTimeout(() => {
       if (!receivedTtsAudio) {
         log.warn("TTS fallback fired — no Doubao audio", { waitedMs: delayMs });
+        metrics.ttsFallback();
         flushPendingAgentText(true);
         // Browser speech now owns this reply; suppress any late Doubao audio.
         fallbackSpoke = true;
@@ -465,6 +481,8 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
           state: "ready",
           detail: "豆包 TTS 未返回音频，正在使用浏览器语音备用模式"
         });
+        // TtsEnded may never arrive on this turn, so report telemetry here.
+        emitTelemetry();
       }
       receivedTtsAudio = false;
       ttsFallbackTimer = undefined;
@@ -527,7 +545,16 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
           // then start the session. Doubao sends nothing until StartSession, so
           // awaiting here only defers our own next send.
           const weatherRole = await config.weatherRolePromise;
-          const systemRole = config.baseSystemRole + weatherRole;
+          let systemRole = config.baseSystemRole + weatherRole;
+          if (resumedSession) {
+            // Context replay for an in-place upstream reconnect: same ride, same
+            // conversation — carry the live session memory forward and stop the
+            // agent from greeting the rider like a stranger.
+            systemRole +=
+              `\n\n[会话恢复] 与骑手的实时连接曾短暂中断，现已恢复。这是同一次骑行中的同一个会话，` +
+              `请继续之前的对话，不要重新自我介绍或重新问候。` +
+              `\n[恢复的短期记忆] ${buildSessionMemoryPrompt(memory)}。`;
+          }
           // The socket may have closed while the weather fetch was in flight.
           if (upstream?.readyState !== WebSocket.OPEN) return;
           upstream.send(
@@ -547,7 +574,8 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
 
         if (frame.event === EventReceive.SessionStarted) {
           sessionReady = true;
-          log.info("doubao session started", {
+          upstreamRetries = 0;
+          log.info(resumedSession ? "doubao session resumed after reconnect" : "doubao session started", {
             sessionId: sessionId.slice(0, 8),
             pendingAudioFrames: pendingAudio.length
           });
@@ -664,7 +692,7 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
         }
 
         if (frame.event === EventReceive.AsrEnded) {
-          sendClient({ type: "status", state: "ready", detail: "豆包回复已完成" });
+          sendClient({ type: "status", state: "ready", detail: "豆包语音识别完成" });
           return;
         }
 
@@ -699,25 +727,62 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
       sessionReady = false;
       log.info("doubao upstream closed");
       clearTtsFallbackTimer();
-      // The session is dead; stop the mid-ride weather refresh so it doesn't keep
-      // pushing HUD updates for a connection that's gone.
+      if (pendingReplyText()) flushPendingAgentText(true);
+
+      // Torn down by the relay itself (client disconnected / provider closed):
+      // nothing to revive.
+      if (closedByProvider) return;
+
+      // Try to revive the upstream in place first: reconnect with backoff and
+      // replay the persona + session memory (see the resumedSession addendum),
+      // so a transient Doubao dropout doesn't cost the rider their session.
+      if (connectConfig && upstreamRetries < MAX_UPSTREAM_RETRIES && client.readyState === client.OPEN) {
+        upstreamRetries += 1;
+        resumedSession = true;
+        metrics.upstreamReconnect();
+        const delayMs = Math.min(4000, 500 * 2 ** (upstreamRetries - 1));
+        log.warn("doubao upstream dropped — reconnecting in place", { attempt: upstreamRetries, delayMs });
+        sendClient({
+          type: "status",
+          state: "connecting",
+          detail: `豆包连接中断，正在自动恢复（第 ${upstreamRetries} 次）…`
+        });
+        const config = connectConfig;
+        upstreamReconnectTimer = setTimeout(() => {
+          upstreamReconnectTimer = undefined;
+          if (client.readyState === client.OPEN) connectUpstream(config);
+        }, delayMs);
+        return;
+      }
+
+      // Out of retries: stop the mid-ride weather refresh and close the client
+      // socket so its own backoff reconnect builds a fresh relay session —
+      // a dead upstream cannot be revived here once retries are exhausted.
       if (weatherRefreshTimer) {
         clearInterval(weatherRefreshTimer);
         weatherRefreshTimer = undefined;
       }
-      if (pendingReplyText()) flushPendingAgentText(true);
       sendClient({ type: "status", state: "closed", detail: "豆包实时代理已断开" });
+      if (client.readyState === client.OPEN) {
+        client.close(1011, "doubao upstream closed");
+      }
     });
 
-    upstream.on("unexpected-response", (_request, response) => {
+    upstream.on("unexpected-response", (request, response) => {
+      metrics.upstreamFailure();
       log.error("doubao handshake failed", { statusCode: response.statusCode });
       sendClient({
         type: "error",
         message: `豆包语音握手失败，HTTP ${response.statusCode}。请检查 speech-dialog App ID、Access Token、Resource ID 和权限。`
       });
+      // With an unexpected-response listener attached, ws does NOT abort the
+      // handshake itself — without this the socket would sit in CONNECTING
+      // forever and the close/retry path above would never run.
+      request.destroy();
     });
 
     upstream.on("error", (error) => {
+      metrics.upstreamFailure();
       log.error("doubao upstream error", { message: error.message });
       sendClient({ type: "status", state: "degraded", detail: "豆包音频不可用，浏览器 TTS 备用通道待命" });
       sendClient({ type: "error", message: error.message });
@@ -736,7 +801,9 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
         scenario,
         network: "online"
       };
-      memory = createSessionMemory(rideContext.mode);
+      // A restarting client (voice/personality/mode switch) echoes back its last
+      // session.memory snapshot so the agent keeps its short-term memory.
+      memory = restoreSessionMemory(event.memory, rideContext.mode);
       systemRole +=
         `\n\n${buildIdentityPrompt()}` +
         `\n\n[骑行上下文] ${buildRideContextSummary(rideContext)}。` +
@@ -831,13 +898,16 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
         }, appConfig.weatherRefreshMs);
       }
 
-      connectUpstream({
+      // Kept for in-place upstream reconnects; the weather promise is resolved
+      // by then, so replays reuse the same (fast) addendum.
+      connectConfig = {
         sampleRate: event.sampleRate,
         channels: event.channels,
         voiceGender: event.voiceGender ?? "female",
         baseSystemRole: systemRole,
         weatherRolePromise
-      });
+      };
+      connectUpstream(connectConfig);
     },
     async startAudio() {
       // Per-turn latency timers are anchored at each AsrInfo, so there's nothing
@@ -865,14 +935,23 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
     },
     async stopAudio() {
       hazardInjector.stop();
+      // Frames still waiting for the session to become ready belong to a mic
+      // stream the rider just ended — flushing them later would replay stale
+      // audio into a fresh turn.
+      pendingAudio.length = 0;
       if (upstream?.readyState === WebSocket.OPEN && sessionReady) {
         upstream.send(buildFullClientRequest(EventSend.EndAsr, sessionId));
       }
       sendClient({ type: "status", state: "ready", detail: "麦克风已静音" });
     },
     async close() {
+      closedByProvider = true;
       hazardInjector.stop();
       clearTtsFallbackTimer();
+      if (upstreamReconnectTimer) {
+        clearTimeout(upstreamReconnectTimer);
+        upstreamReconnectTimer = undefined;
+      }
       if (weatherRefreshTimer) {
         clearInterval(weatherRefreshTimer);
         weatherRefreshTimer = undefined;

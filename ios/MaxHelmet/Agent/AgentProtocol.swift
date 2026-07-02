@@ -405,7 +405,8 @@ func buildSessionStart(
     rideMode: RideMode,
     scenario: DemoScenario,
     lat: Double?,
-    lon: Double?
+    lon: Double?,
+    memory: SessionMemory? = nil
 ) -> String {
     var payload: [String: Any] = [
         "type": "session.start",
@@ -420,8 +421,24 @@ func buildSessionStart(
         payload["lat"] = lat
         payload["lon"] = lon
     }
+    // Echo the last session.memory snapshot so a settings-change restart keeps
+    // the agent's short-term memory (shared/agent.ts SessionMemorySnapshot).
+    if let memory {
+        var snapshot: [String: Any] = [
+            "language": memory.language,
+            "responseMode": memory.responseMode
+        ]
+        if let destination = memory.destination { snapshot["destination"] = destination }
+        if let lastIntent = memory.lastIntent { snapshot["lastIntent"] = lastIntent }
+        payload["memory"] = snapshot
+    }
     let data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
     return String(data: data, encoding: .utf8) ?? "{}"
+}
+
+/// Guided-demo toggle (mock provider tours the scenario catalog hands-off).
+func buildGuidedDemo(enabled: Bool) -> String {
+    #"{"type":"demo.guided","enabled":\#(enabled)}"#
 }
 
 let audioStartEvent = #"{"type":"audio.start"}"#

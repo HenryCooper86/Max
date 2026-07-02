@@ -31,6 +31,13 @@ final class PcmPlayer {
     private var playing = false
     /// Bumped by barge-in so scheduled completions for the old utterance are ignored.
     private var generation = 0
+    /// PCM that arrived before the shared engine was running — typically the
+    /// agent's opening words while the mic-permission dialog is still up
+    /// (MicStreamer.start() only runs once permission is granted). Bounded;
+    /// oldest chunks drop first. Drained by flushPending()/the next play().
+    private var pendingChunks: [Data] = []
+    /// ~5 s of 24 kHz mono PCM16 in relay-sized chunks.
+    private static let maxPendingChunks = 256
 
     init(engine: AVAudioEngine) {
         self.engine = engine
@@ -64,23 +71,57 @@ final class PcmPlayer {
     /// Queues a 24 kHz PCM16 buffer. Called from the WebSocket reader.
     func play(_ pcm: Data) {
         queue.async { [weak self] in
-            guard let self, self.attached, self.engine.isRunning else { return }
-            if !self.playing {
-                self.playerNode.play()   // arm the node now that the engine runs
-                self.playing = true
+            guard let self else { return }
+            guard self.attached, self.engine.isRunning else {
+                // The engine isn't up yet (mic permission still pending): hold
+                // the audio instead of dropping it, so the agent's greeting
+                // plays once the engine starts.
+                if self.pendingChunks.count >= Self.maxPendingChunks {
+                    self.pendingChunks.removeFirst()
+                }
+                self.pendingChunks.append(pcm)
+                return
             }
-            guard let buffer = self.makeFloatBuffer(from: pcm) else { return }
-            // stopPlayback() (barge-in) flushes the node, so any buffer scheduled
-            // before it is discarded — the generation counter mirrors the Android
-            // logic and guards against late callbacks if a completion handler is added.
-            self.playerNode.scheduleBuffer(buffer, completionHandler: nil)
+            self.drainPendingLocked()
+            self.schedule(pcm)
         }
+    }
+
+    /// Schedules any audio buffered before the engine was running. Called by
+    /// AgentSession right after MicStreamer starts the shared engine.
+    func flushPending() {
+        queue.async { [weak self] in
+            guard let self, self.attached, self.engine.isRunning else { return }
+            self.drainPendingLocked()
+        }
+    }
+
+    /// Must run on `queue` with the engine running.
+    private func drainPendingLocked() {
+        guard !pendingChunks.isEmpty else { return }
+        let chunks = pendingChunks
+        pendingChunks.removeAll()
+        for chunk in chunks { schedule(chunk) }
+    }
+
+    /// Must run on `queue` with the engine running.
+    private func schedule(_ pcm: Data) {
+        if !playing {
+            playerNode.play()   // arm the node now that the engine runs
+            playing = true
+        }
+        guard let buffer = makeFloatBuffer(from: pcm) else { return }
+        // stopPlayback() (barge-in) flushes the node, so any buffer scheduled
+        // before it is discarded — the generation counter mirrors the Android
+        // logic and guards against late callbacks if a completion handler is added.
+        playerNode.scheduleBuffer(buffer, completionHandler: nil)
     }
 
     /// Barge-in: drop queued audio and cut the current utterance immediately.
     func stopPlayback() {
         queue.sync {
             generation += 1
+            pendingChunks.removeAll()   // buffered audio belongs to the cut utterance
             guard playing else { return }
             playerNode.stop()
             playerNode.play()   // re-arm for the next utterance
@@ -90,6 +131,7 @@ final class PcmPlayer {
     func release() {
         queue.sync {
             generation += 1
+            pendingChunks.removeAll()
             guard playing else { return }
             playerNode.stop()   // MicStreamer.stop() stops the shared engine
             playing = false

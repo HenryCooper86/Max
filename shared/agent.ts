@@ -19,6 +19,20 @@ export type ProviderCapabilities = {
   emergencyMode: boolean;
 };
 
+/**
+ * Session-memory snapshot a client may echo back in `session.start` — the
+ * fields of the last `session.memory` event it received. Settings changes
+ * (voice, personality, mode) restart the relay session; without this the
+ * agent's short-term memory (destination, intent, language preference) would
+ * reset with every toggle.
+ */
+export type SessionMemorySnapshot = {
+  language?: "zh" | "en";
+  destination?: string;
+  lastIntent?: string;
+  responseMode?: "concise" | "normal" | "emergency";
+};
+
 export type SessionStartEvent = {
   type: "session.start";
   sampleRate: number;
@@ -29,6 +43,7 @@ export type SessionStartEvent = {
   scenario?: DemoScenario;
   lat?: number;
   lon?: number;
+  memory?: SessionMemorySnapshot;
 };
 
 export type ClientEvent =
@@ -108,7 +123,19 @@ export type AgentHealth = {
   credentials: "configured" | "missing" | "not-required";
   weather: "available";
   capabilities: ProviderCapabilities;
+  /** Relay counters since startup (see server/metrics.ts); absent on old relays. */
+  metrics?: Record<string, number>;
+  /** Counter deltas over the trailing window (server/metrics.ts metricsWindow). */
+  metricsWindow?: Record<string, number>;
 };
+
+/**
+ * WebSocket close code the relay uses when it closes an idle session (see
+ * server/watchdog.ts). Clients must treat it as an intentional close and NOT
+ * auto-reconnect — reconnecting would immediately re-open the upstream session
+ * the idle timeout just freed. Mirrored by the iOS/Android clients.
+ */
+export const IDLE_CLOSE_CODE = 4001;
 
 export const MOCK_CAPABILITIES: ProviderCapabilities = {
   serverVad: true,

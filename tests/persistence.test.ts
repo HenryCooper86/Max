@@ -3,10 +3,13 @@ import { normalizeStoredSettings } from "../src/lib/persistence";
 
 describe("stored HUD settings", () => {
   it("keeps supported voice settings", () => {
-    expect(normalizeStoredSettings({ voiceGender: "male", voicePersonality: "rally" })).toEqual({
-      voiceGender: "male",
-      voicePersonality: "rally"
-    });
+    expect(normalizeStoredSettings({ voiceGender: "male", voicePersonality: "rally", testerId: " qa rider " })).toEqual(
+      {
+        voiceGender: "male",
+        voicePersonality: "rally",
+        testerId: "qa rider"
+      }
+    );
   });
 
   it("drops malformed or unsupported persisted values", () => {
@@ -15,5 +18,6 @@ describe("stored HUD settings", () => {
     expect(normalizeStoredSettings({ voiceGender: "female", voicePersonality: 42 })).toEqual({
       voiceGender: "female"
     });
+    expect(normalizeStoredSettings({ testerId: "\u0000".repeat(4) })).toEqual({});
   });
 });

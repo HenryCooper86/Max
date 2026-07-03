@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { providerCapabilities, type AgentHealth } from "../shared/agent";
-import { metrics, metricsWindow } from "./metrics";
+import { metrics, metricsWindow, testingSnapshot } from "./metrics";
 
 export type VoiceProvider = "mock" | "doubao";
 export type WeatherLocation = {
@@ -163,6 +163,7 @@ export function buildHealth(uptimeSec: number): AgentHealth {
     weather: "available",
     capabilities: providerCapabilities(config.voiceProvider),
     metrics: { ...metrics.snapshot() },
-    metricsWindow: { ...metricsWindow() }
+    metricsWindow: { ...metricsWindow() },
+    testing: testingSnapshot()
   };
 }

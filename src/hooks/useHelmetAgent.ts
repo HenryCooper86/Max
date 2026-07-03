@@ -61,7 +61,9 @@ import { useAudioPlayback } from "./useAudioPlayback";
 import { useMicCapture } from "./useMicCapture";
 
 const storedSettings = loadStoredSettings();
+const initialTesterId = storedSettings.testerId ?? `tester-${Math.random().toString(36).slice(2, 8)}`;
 const LOCATION_START_GRACE_MS = 900;
+const HEALTH_POLL_MS = 5000;
 // Mid-ride location updates: send at most one per interval, and only after
 // real movement — the relay only refetches weather past ~20 km anyway.
 const LOCATION_UPDATE_MIN_INTERVAL_MS = 60_000;
@@ -69,6 +71,16 @@ const LOCATION_UPDATE_MIN_MOVE_KM = 0.25;
 
 function delay(ms: number) {
   return new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+}
+
+function stripControlChars(value: string) {
+  return value
+    .split("")
+    .filter((char) => {
+      const code = char.charCodeAt(0);
+      return code >= 32 && code !== 127;
+    })
+    .join("");
 }
 
 export function useHelmetAgent() {
@@ -85,6 +97,7 @@ export function useHelmetAgent() {
   const [voicePersonality, setVoicePersonalityState] = useState<VoicePersonality>(
     storedSettings.voicePersonality ?? "concise"
   );
+  const [testerId, setTesterIdState] = useState(initialTesterId);
   const [turnState, setTurnState] = useState<TurnState>("idle");
   const [weather, setWeather] = useState<Weather | null>(null);
   const [rideContext, setRideContext] = useState<RideHudContext>(DEFAULT_RIDE_CONTEXT);
@@ -104,6 +117,7 @@ export function useHelmetAgent() {
   const isLiveRef = useRef(false);
   const voiceGenderRef = useRef<VoiceGender>(storedSettings.voiceGender ?? "female");
   const voicePersonalityRef = useRef<VoicePersonality>(storedSettings.voicePersonality ?? "concise");
+  const testerIdRef = useRef(initialTesterId);
   const locationRef = useRef<RiderLocation | null>(null);
   const rideModeRef = useRef<RideMode>(DEFAULT_RIDE_CONTEXT.mode);
   const scenarioRef = useRef<DemoScenario>(DEFAULT_RIDE_CONTEXT.scenario);
@@ -206,15 +220,30 @@ export function useHelmetAgent() {
   }, []);
 
   useEffect(() => {
+    if (!storedSettings.testerId) {
+      saveStoredSettings({
+        voiceGender: voiceGenderRef.current,
+        voicePersonality: voicePersonalityRef.current,
+        testerId: testerIdRef.current
+      });
+    }
+    // Run once on mount to persist the generated id only when needed.
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
-    void fetchAgentHealth().then((nextHealth) => {
+    const refreshHealth = async () => {
+      const nextHealth = await fetchAgentHealth();
       if (cancelled || !nextHealth) return;
       setHealth(nextHealth);
       setProvider(nextHealth.provider);
       setCapabilities(nextHealth.capabilities);
-    });
+    };
+    void refreshHealth();
+    const timer = window.setInterval(refreshHealth, HEALTH_POLL_MS);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
     };
   }, []);
 
@@ -297,6 +326,7 @@ export function useHelmetAgent() {
           type: "session.start",
           sampleRate: SAMPLE_RATE,
           channels: 1,
+          testerId: testerIdRef.current || "anonymous",
           voiceGender: voiceGenderRef.current,
           voicePersonality: voicePersonalityRef.current,
           rideMode: rideModeRef.current,
@@ -521,7 +551,11 @@ export function useHelmetAgent() {
     (gender: VoiceGender) => {
       voiceGenderRef.current = gender;
       setVoiceGenderState(gender);
-      saveStoredSettings({ voiceGender: gender, voicePersonality: voicePersonalityRef.current });
+      saveStoredSettings({
+        voiceGender: gender,
+        voicePersonality: voicePersonalityRef.current,
+        testerId: testerIdRef.current
+      });
       // Only show the progressive "switching…" status when a session restart is
       // actually happening; without a socket nothing ever resolves it, so the
       // switch simply takes effect at the next session start.
@@ -539,12 +573,27 @@ export function useHelmetAgent() {
     (personality: VoicePersonality) => {
       voicePersonalityRef.current = personality;
       setVoicePersonalityState(personality);
-      saveStoredSettings({ voiceGender: voiceGenderRef.current, voicePersonality: personality });
+      saveStoredSettings({
+        voiceGender: voiceGenderRef.current,
+        voicePersonality: personality,
+        testerId: testerIdRef.current
+      });
       setStatus(`已切换语气：${PERSONALITY_LABELS[personality]}`);
       if (socketRef.current) restartSession();
     },
     [restartSession]
   );
+
+  const setTesterId = useCallback((value: string) => {
+    const next = stripControlChars(value.normalize("NFKC")).replace(/\s+/g, " ").trim().slice(0, 80);
+    testerIdRef.current = next;
+    setTesterIdState(next);
+    saveStoredSettings({
+      voiceGender: voiceGenderRef.current,
+      voicePersonality: voicePersonalityRef.current,
+      testerId: next
+    });
+  }, []);
 
   const setRideMode = useCallback(
     (mode: RideMode) => {
@@ -806,6 +855,7 @@ export function useHelmetAgent() {
     transcript,
     voiceGender,
     voicePersonality,
+    testerId,
     turnState,
     weather,
     rideContext,
@@ -818,6 +868,7 @@ export function useHelmetAgent() {
     guidedDemo,
     setVoiceGender,
     setVoicePersonality,
+    setTesterId,
     setRideMode,
     setScenario,
     setGuidedDemo,

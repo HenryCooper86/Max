@@ -64,6 +64,38 @@ export function formatClockTime(timestamp: number) {
   }).format(timestamp);
 }
 
+export function formatBytes(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"] as const;
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value >= 10 || unitIndex === 0 ? Math.round(value) : value.toFixed(1)} ${units[unitIndex]}`;
+}
+
+export function formatDuration(ms: number) {
+  if (!Number.isFinite(ms) || ms <= 0) return "0s";
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) return `${minutes}m ${seconds.toString().padStart(2, "0")}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${(minutes % 60).toString().padStart(2, "0")}m`;
+}
+
+export function formatRelativeTime(timestamp: number) {
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return "—";
+  const elapsedMs = Date.now() - timestamp;
+  if (elapsedMs < 60_000) return "just now";
+  if (elapsedMs < 3_600_000) return `${Math.round(elapsedMs / 60_000)}m ago`;
+  if (elapsedMs < 86_400_000) return `${Math.round(elapsedMs / 3_600_000)}h ago`;
+  return `${Math.round(elapsedMs / 86_400_000)}d ago`;
+}
+
 export function normalizeTranscriptText(text: string) {
   return text
     .normalize("NFKC")
@@ -94,6 +126,28 @@ export function exportTranscriptLog(items: TranscriptItem[]) {
   link.remove();
   // Defer revocation: some browsers (e.g. Firefox) cancel the download if the
   // blob URL is revoked synchronously before the download has started.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+export function exportTestingReport(health: AgentHealth | null, testerId: string) {
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    testerId,
+    provider: health?.provider,
+    uptimeSec: health?.uptimeSec,
+    metrics: health?.metrics,
+    metricsWindow: health?.metricsWindow,
+    testing: health?.testing
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `max-testing-report-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 

@@ -1,5 +1,5 @@
 import type { WebSocket } from "ws";
-import type { AgentProvider, SessionStartEvent } from "./types";
+import type { AgentProvider, ProviderTelemetry, SessionStartEvent } from "./types";
 import { MOCK_CAPABILITIES } from "../../shared/agent";
 import {
   buildRideContextSummary,
@@ -172,7 +172,7 @@ const GUIDED_TOUR: DemoScenario[] = ["commute", "wind", "fuel", "group", "adas",
 /** One guided chapter shows ~2 turns at the 6 s conversation cadence. */
 const GUIDED_CHAPTER_MS = 14_000;
 
-export function createMockProvider(client: WebSocket): AgentProvider {
+export function createMockProvider(client: WebSocket, telemetry?: ProviderTelemetry): AgentProvider {
   let frameCount = 0;
   let timer: NodeJS.Timeout | undefined;
   let promptIndex = 0;
@@ -192,7 +192,9 @@ export function createMockProvider(client: WebSocket): AgentProvider {
 
   function send(payload: unknown) {
     if (client.readyState === client.OPEN) {
-      client.send(JSON.stringify(payload));
+      const encoded = JSON.stringify(payload);
+      telemetry?.serverEvent(payload, Buffer.byteLength(encoded));
+      client.send(encoded);
     }
   }
 

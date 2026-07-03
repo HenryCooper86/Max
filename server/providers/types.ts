@@ -2,6 +2,12 @@ import type { SessionStartEvent } from "../../shared/agent";
 
 export type { ClientEvent, SessionStartEvent, VoiceGender } from "../../shared/agent";
 
+export type ProviderTelemetry = {
+  serverEvent(payload: unknown, bytes: number): void;
+  serverAudio(bytes: number): void;
+  ttsFallback(): void;
+};
+
 export type AgentProvider = {
   start(event: SessionStartEvent): Promise<void>;
   startAudio(): Promise<void>;

@@ -11,7 +11,7 @@ import { createLogger, shortSessionId } from "./logger";
 import { metrics, startMetricsHistory } from "./metrics";
 import { createDoubaoProvider } from "./providers/doubao";
 import { createMockProvider } from "./providers/mock";
-import type { AgentProvider } from "./providers/types";
+import type { AgentProvider, ProviderTelemetry } from "./providers/types";
 import { AgentSessionController } from "./session-controller";
 import { markClientActivity, startWatchdog, trackClient } from "./watchdog";
 import type { Logger } from "./logger";
@@ -61,11 +61,11 @@ server.on("upgrade", (request, socket, head) => {
   });
 });
 
-function selectProvider(client: WebSocket, sessionLog: Logger): AgentProvider {
+function selectProvider(client: WebSocket, sessionLog: Logger, telemetry: ProviderTelemetry): AgentProvider {
   if (config.voiceProvider === "doubao") {
-    return createDoubaoProvider(client, sessionLog);
+    return createDoubaoProvider(client, sessionLog, telemetry);
   }
-  return createMockProvider(client);
+  return createMockProvider(client, telemetry);
 }
 
 wss.on("connection", (client, request) => {
@@ -73,7 +73,11 @@ wss.on("connection", (client, request) => {
   sessionLog.info("client connected", { address: clientAddress(request), provider: config.voiceProvider });
   metrics.sessionOpened();
   trackClient(client);
-  const session = new AgentSessionController(client, (socket) => selectProvider(socket, sessionLog), sessionLog);
+  const session = new AgentSessionController(
+    client,
+    (socket, telemetry) => selectProvider(socket, sessionLog, telemetry),
+    sessionLog
+  );
 
   client.on("message", async (data, isBinary) => {
     markClientActivity(client);

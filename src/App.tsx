@@ -19,8 +19,21 @@ import {
   UI_TEXT,
   VOICE_PERSONALITIES
 } from "./lib/constants";
-import { audioProcessingLabel, exportTranscriptLog, formatClockTime } from "./lib/utils";
+import {
+  audioProcessingLabel,
+  exportTestingReport,
+  exportTranscriptLog,
+  formatBytes,
+  formatClockTime,
+  formatDuration,
+  formatRelativeTime
+} from "./lib/utils";
 import { useHelmetAgent } from "./hooks/useHelmetAgent";
+
+function barHeight(value: number, max: number) {
+  if (!Number.isFinite(value) || value <= 0 || max <= 0) return "3%";
+  return `${Math.max(6, Math.round((value / max) * 100))}%`;
+}
 
 export function App() {
   const agent = useHelmetAgent();
@@ -61,6 +74,24 @@ export function App() {
   const lastReply = [...agent.transcript].reverse().find((item) => item.speaker === "agent")?.text ?? "—";
   const weatherRisk = agent.weather?.riskLevel ?? "normal";
   const fusedHazard = combineHazardLevels(agent.rideContext.hazardLevel, weatherRisk);
+  const testing = agent.health?.testing;
+  const testingTotals = testing?.totals;
+  const testingTimeline = testing?.timeline ?? [];
+  const currentTester = testing?.users.find((user) => user.testerId === (agent.testerId || "anonymous"));
+  const topTesters = testing?.users.slice(0, 6) ?? [];
+  const totalDownBytes = (testingTotals?.audioDownBytes ?? 0) + (testingTotals?.controlDownBytes ?? 0);
+  const totalBandwidthBytes = (testingTotals?.audioUpBytes ?? 0) + totalDownBytes;
+  const maxBandwidthBucket = Math.max(
+    1,
+    ...testingTimeline.map((bucket) => bucket.audioUpBytes + bucket.audioDownBytes + bucket.controlDownBytes)
+  );
+  const maxLatencyBucket = Math.max(1, ...testingTimeline.map((bucket) => bucket.avgLatencyMs));
+  const qualityTone =
+    (testingTotals?.errorEvents ?? 0) > 0 || (testingTotals?.p95LatencyMs ?? 0) > 800
+      ? "alert"
+      : (testingTotals?.p95LatencyMs ?? 0) > 320 || (testingTotals?.ttsFallbacks ?? 0) > 0
+        ? "warn"
+        : "good";
   const preflight = [
     { label: t.mic, value: PERMISSION_LABELS[agent.micPermission] },
     { label: t.location, value: PERMISSION_LABELS[agent.locationPermission] },
@@ -199,6 +230,156 @@ export function App() {
                   </button>
                 )}
               </div>
+            </div>
+          </section>
+
+          <section className="hudPanel testingPanel" aria-label="测试统计">
+            <div className="panelHeader">
+              <h2>测试统计</h2>
+              <div className="panelActions">
+                <span>{testing ? `${testing.windowMinutes}m · ${testing.users.length} users` : "waiting"}</span>
+                <button type="button" onClick={() => exportTestingReport(agent.health, agent.testerId)}>
+                  导出统计
+                </button>
+              </div>
+            </div>
+
+            <div className="testerBar">
+              <label>
+                <span>Tester ID</span>
+                <input
+                  value={agent.testerId}
+                  onChange={(event) => agent.setTesterId(event.target.value)}
+                  placeholder="tester-name"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </label>
+              <div className={`testQuality ${qualityTone}`}>
+                <span>质量</span>
+                <strong>{qualityTone === "good" ? "PASS" : qualityTone === "warn" ? "WATCH" : "FAIL"}</strong>
+              </div>
+              <div>
+                <span>当前测试员</span>
+                <strong>{currentTester ? `${currentTester.totalSessions} sessions` : "new"}</strong>
+              </div>
+            </div>
+
+            <div className="statGrid">
+              <span>
+                <b>{testingTotals?.activeTestSessions ?? agent.health?.metrics?.activeSessions ?? 0}</b>
+                Active
+              </span>
+              <span>
+                <b>{testingTotals?.totalTestSessions ?? 0}</b>
+                Sessions
+              </span>
+              <span>
+                <b>{formatBytes(testingTotals?.audioUpBytes ?? 0)}</b>
+                Mic up
+              </span>
+              <span>
+                <b>{formatBytes(totalDownBytes)}</b>
+                Downlink
+              </span>
+              <span>
+                <b>{testingTotals?.avgLatencyMs ?? 0}ms</b>
+                Avg first audio
+              </span>
+              <span>
+                <b>{testingTotals?.p95LatencyMs ?? 0}ms</b>
+                P95
+              </span>
+              <span>
+                <b>{testingTotals?.errorEvents ?? 0}</b>
+                Errors
+              </span>
+              <span>
+                <b>{testingTotals?.ttsFallbacks ?? 0}</b>
+                TTS fallback
+              </span>
+            </div>
+
+            <div className="chartGrid">
+              <div className="chartBlock">
+                <div className="instrumentHead">
+                  <span>Bandwidth</span>
+                  <b>{formatBytes(totalBandwidthBytes)}</b>
+                </div>
+                <div className="miniChart" aria-label="最近带宽趋势">
+                  {testingTimeline.map((bucket) => {
+                    const bytes = bucket.audioUpBytes + bucket.audioDownBytes + bucket.controlDownBytes;
+                    return (
+                      <i
+                        key={bucket.at}
+                        style={{ height: barHeight(bytes, maxBandwidthBucket) }}
+                        title={`${formatClockTime(bucket.at)} · ${formatBytes(bytes)}`}
+                      />
+                    );
+                  })}
+                </div>
+                <div className="chartLegend">
+                  <span>up {formatBytes(testingTotals?.audioUpBytes ?? 0)}</span>
+                  <span>down {formatBytes(totalDownBytes)}</span>
+                </div>
+              </div>
+              <div className="chartBlock">
+                <div className="instrumentHead">
+                  <span>Latency</span>
+                  <b>{testingTotals?.p95LatencyMs ?? 0}ms p95</b>
+                </div>
+                <div className="miniChart latencyChart" aria-label="最近首音延迟趋势">
+                  {testingTimeline.map((bucket) => (
+                    <i
+                      key={bucket.at}
+                      style={{ height: barHeight(bucket.avgLatencyMs, maxLatencyBucket) }}
+                      title={`${formatClockTime(bucket.at)} · ${bucket.avgLatencyMs}ms`}
+                    />
+                  ))}
+                </div>
+                <div className="chartLegend">
+                  <span>{testingTimeline.reduce((sum, bucket) => sum + bucket.latencySamples, 0)} samples</span>
+                  <span>{testingTotals?.errorEvents ?? 0} errors</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="testerTableWrap">
+              <table className="testerTable">
+                <thead>
+                  <tr>
+                    <th>Tester</th>
+                    <th>Runs</th>
+                    <th>Time</th>
+                    <th>Data</th>
+                    <th>Latency</th>
+                    <th>Last</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {topTesters.length ? (
+                    topTesters.map((user) => (
+                      <tr key={user.testerId}>
+                        <td>
+                          <strong>{user.testerId}</strong>
+                          <span>{user.activeSessions ? "active" : `${user.errorEvents} errors`}</span>
+                        </td>
+                        <td>{user.totalSessions}</td>
+                        <td>{formatDuration(user.totalSessionMs)}</td>
+                        <td>{formatBytes(user.audioUpBytes + user.audioDownBytes + user.controlDownBytes)}</td>
+                        <td>
+                          {user.avgLatencyMs}/{user.p95LatencyMs}ms
+                        </td>
+                        <td>{formatRelativeTime(user.lastSeenAt)}</td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={6}>No test sessions yet</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           </section>
 

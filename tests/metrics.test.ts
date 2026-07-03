@@ -1,6 +1,18 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { buildHealth } from "../server/config";
-import { METRICS_WINDOW_MINUTES, metrics, metricsWindow, recordMetricsSnapshot } from "../server/metrics";
+import {
+  METRICS_WINDOW_MINUTES,
+  beginTesterSession,
+  endTesterSession,
+  metrics,
+  metricsWindow,
+  recordMetricsSnapshot,
+  recordTesterClientAudio,
+  recordTesterServerAudio,
+  recordTesterServerEvent,
+  recordTesterTtsFallback,
+  testingSnapshot
+} from "../server/metrics";
 
 afterEach(() => metrics.reset());
 
@@ -22,6 +34,9 @@ describe("relay metrics", () => {
     metrics.upstreamReconnect();
     metrics.ttsFallback();
     metrics.watchdogSweep(2, 1);
+    metrics.clientAudio(320);
+    metrics.serverAudio(640);
+    metrics.serverEvent(120);
 
     expect(metrics.snapshot()).toMatchObject({
       rejectedUpgrades: 1,
@@ -29,7 +44,10 @@ describe("relay metrics", () => {
       upstreamReconnects: 1,
       ttsFallbacks: 1,
       watchdogTerminations: 2,
-      watchdogIdleCloses: 1
+      watchdogIdleCloses: 1,
+      audioUpBytes: 320,
+      audioDownBytes: 640,
+      controlDownBytes: 120
     });
   });
 
@@ -68,5 +86,36 @@ describe("relay metrics", () => {
     expect(window.sessionsStarted).toBe(1);
     expect(window.minutes).toBeLessThanOrEqual(METRICS_WINDOW_MINUTES);
     expect(buildHealth(1).metricsWindow?.sessionsStarted).toBe(1);
+  });
+
+  it("tracks per-tester sessions, bandwidth, latency, and fallbacks", () => {
+    beginTesterSession("relay-1", " rider one ", 1_000);
+    recordTesterClientAudio("relay-1", 320, 1_100);
+    recordTesterServerAudio("relay-1", 640, 1_200);
+    recordTesterServerEvent("relay-1", { type: "metric", latencyMs: 123 }, 88, 1_300);
+    recordTesterServerEvent("relay-1", { type: "error", message: "boom" }, 42, 1_400);
+    recordTesterTtsFallback("relay-1", 1_500);
+    endTesterSession("relay-1", 61_000);
+
+    const snapshot = testingSnapshot(61_000);
+    expect(snapshot.totals).toMatchObject({
+      activeTestSessions: 0,
+      totalTestSessions: 1,
+      audioUpBytes: 320,
+      audioDownBytes: 640,
+      controlDownBytes: 130,
+      avgLatencyMs: 123,
+      p95LatencyMs: 123,
+      errorEvents: 1,
+      ttsFallbacks: 1
+    });
+    expect(snapshot.users[0]).toMatchObject({
+      testerId: "rider one",
+      totalSessions: 1,
+      totalSessionMs: 60_000,
+      micFrames: 1,
+      serverEvents: 2
+    });
+    expect(buildHealth(2).testing?.users[0]?.testerId).toBe("rider one");
   });
 });

@@ -19,6 +19,52 @@ export type ProviderCapabilities = {
   emergencyMode: boolean;
 };
 
+export type TesterStats = {
+  testerId: string;
+  activeSessions: number;
+  totalSessions: number;
+  totalSessionMs: number;
+  audioUpBytes: number;
+  audioDownBytes: number;
+  controlDownBytes: number;
+  micFrames: number;
+  serverEvents: number;
+  latencySamples: number;
+  avgLatencyMs: number;
+  p95LatencyMs: number;
+  errorEvents: number;
+  ttsFallbacks: number;
+  lastSeenAt: number;
+};
+
+export type TestingTimelineBucket = {
+  at: number;
+  sessionsStarted: number;
+  audioUpBytes: number;
+  audioDownBytes: number;
+  controlDownBytes: number;
+  latencySamples: number;
+  avgLatencyMs: number;
+  errorEvents: number;
+};
+
+export type TestingStats = {
+  windowMinutes: number;
+  totals: {
+    activeTestSessions: number;
+    totalTestSessions: number;
+    audioUpBytes: number;
+    audioDownBytes: number;
+    controlDownBytes: number;
+    avgLatencyMs: number;
+    p95LatencyMs: number;
+    errorEvents: number;
+    ttsFallbacks: number;
+  };
+  users: TesterStats[];
+  timeline: TestingTimelineBucket[];
+};
+
 /**
  * Session-memory snapshot a client may echo back in `session.start` — the
  * fields of the last `session.memory` event it received. Settings changes
@@ -37,6 +83,8 @@ export type SessionStartEvent = {
   type: "session.start";
   sampleRate: number;
   channels: number;
+  /** Human-readable tester/workstation identifier for QA statistics. */
+  testerId?: string;
   voiceGender?: VoiceGender;
   voicePersonality?: VoicePersonality;
   rideMode?: RideMode;
@@ -131,6 +179,8 @@ export type AgentHealth = {
   metrics?: Record<string, number>;
   /** Counter deltas over the trailing window (server/metrics.ts metricsWindow). */
   metricsWindow?: Record<string, number>;
+  /** Per-tester QA statistics and recent bandwidth/latency graph data. */
+  testing?: TestingStats;
 };
 
 /**

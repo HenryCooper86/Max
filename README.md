@@ -1,6 +1,6 @@
 # Max 摩托车头盔 AI
 
-Prototype AI voice agent for a motorcycle helmet. Max keeps the same name and motorcycle helmet assistant role, speaks Chinese by default, can also use English, and refuses other languages. The app is a single hands-free voice agent — click the main button or press Space to activate, then the rider just talks. It also pulls live weather for the rider's location so Max can answer weather questions with real data. Realtime Doubao voice defaults to the working female Chinese voice.
+Production-oriented AI voice testing framework for the Max motorcycle helmet assistant. Max keeps the same name and motorcycle helmet assistant role, speaks Chinese by default, can also use English, and refuses other languages. The framework combines the hands-free web HUD, iOS and Android clients, a secure realtime relay, mock/live providers, scenario injection, telemetry, and per-tester QA statistics for validating helmet voice behavior before field release. Realtime Doubao voice defaults to the working female Chinese voice.
 
 ## Frontend Preview
 
@@ -229,6 +229,7 @@ If Doubao returns reply _text_ but no audio, the browser falls back to its own `
 - **Ride intelligence** — `session.start` carries the selected `rideMode` and `scenario`; `shared/ride.ts` turns that into a safety policy, response style, hazard level, and HUD focus. Doubao receives this as prompt context; the mock provider turns it into scenario-specific transcripts and telemetry. The HUD's `态势摘要` card fuses ride hazard and weather risk into immediate normal / caution / critical rider guidance.
 - **Weather** — on activation the browser requests geolocation and sends `lat`/`lon` with `session.start`. `server/weather.ts` fetches current conditions from **Open-Meteo** (free, no API key), classifies rider risk, and emits weather/advice to the HUD. `doubao.ts` folds the same data into the agent's `system_role`. The fetch runs **concurrently with the Doubao connection handshake** and only gates `StartSession`, so live weather still reaches the agent's context without serializing behind the connect; mic audio that arrives during startup is buffered (≈5 s) and flushed once the session is ready, so the rider's opening words are never clipped. A failed or slow lookup never blocks the session — the agent just answers generically. Mid-ride, the web HUD watches geolocation while hands-free is active and sends throttled `location.update` events (at most one per minute, after ≥250 m of movement); the relay refetches weather immediately when the rider has moved ≥20 km and otherwise folds the fresh coordinates into the periodic refresh, so a long ride's weather follows the bike instead of staying pinned to the start point.
 - **Telemetry** — providers emit `metric` and `telemetry` events. The HUD shows first-audio latency plus ASR / thinking / first-audio / total timing so demos can discuss realtime behavior with numbers.
+- **Testing statistics** — the web HUD persists a tester/workstation ID and sends it in `session.start`. The relay aggregates per-tester sessions, active runs, test duration, mic uplink bytes, audio/control downlink bytes, first-audio average/p95 latency, errors, TTS fallbacks, and a trailing 30-minute bandwidth/latency timeline. The HUD renders summary metrics, graphs, a per-user table, and JSON export for QA evidence.
 - **Conversation log** — the HUD keeps the full in-memory session transcript, updates in-progress rider/agent turns in place, stamps each item with time, language, and live/final state, and can export the log as JSON for debugging. On the live path the agent's reply streams in as **live captions**: each Doubao TTS sentence emits a non-final `transcript` update that all three clients merge in place, and the entry finalizes when the reply completes — the caption machinery is the same in-place partial handling rider ASR already used.
 
 ### Client resilience
@@ -238,7 +239,7 @@ If Doubao returns reply _text_ but no audio, the browser falls back to its own `
 - **Session memory across restarts** — settings changes (voice, personality, mode, scenario) restart the relay session; all three clients echo the last `session.memory` snapshot back in `session.start`, so the agent keeps its language preference, destination, and last intent instead of meeting the rider as a stranger. The relay revalidates the snapshot and re-derives the response mode from the current ride mode.
 - **Session watchdog** — the relay pings every client (`RELAY_HEARTBEAT_MS`) and terminates half-open links that stop ponging, and closes sessions with no client traffic for `RELAY_IDLE_TIMEOUT_MS` so a forgotten tab can't hold a Doubao upstream slot forever. Idle closes use WebSocket code **4001** (`IDLE_CLOSE_CODE` in `shared/agent.ts`); all three clients treat it as intentional and stay offline until the rider restarts hands-free.
 - **Screen wake lock** — while hands-free is active the web client holds a screen Wake Lock so mobile browsers don't lock mid-ride, and re-acquires it after the browser auto-releases it (tab hidden → visible again).
-- **Relay metrics** — `/health` now includes a `metrics` object (active/total sessions, rejected upgrades, upstream failures/reconnects, TTS fallbacks, watchdog closes) plus a `metricsWindow` object with the same counters as deltas over the trailing 15 minutes, so one curl distinguishes "failed a lot last month" from "failing right now".
+- **Relay metrics** — `/health` now includes a `metrics` object (active/total sessions, rejected upgrades, upstream failures/reconnects, TTS fallbacks, watchdog closes, audio/control bytes), a `metricsWindow` object with the same counters as deltas over the trailing 15 minutes, and a `testing` object with per-tester QA statistics plus graph-ready timeline buckets.
 - **Reused audio graph** — `stopMic` disables the mic track but keeps the AudioWorklet graph alive, so re-activating is instant.
 - **Voice switch** — the live Doubao speaker is fixed at session start, so toggling `女声/男声` reconnects the relay (`restartSession`) for a fresh session.
 - **Auto-fit cockpit** — the HUD sizes the helmet panel to the viewport (`100dvh` clamp) and top-aligns the columns so the primary **开启免提 / start** button and its controls stay visible on load at any window height, from tall monitors down to short laptops and narrow phones — no scrolling or hunting to begin a session. The helmet illustration letterboxes to fit rather than pushing the button off-screen (`src/styles.css`).
@@ -433,6 +434,37 @@ The wake phrase and the 12 s follow-up window live in `shared/wake.ts`. The mock
 
 Returns backend health and the selected realtime voice provider.
 
+The response also carries production test counters:
+
+```json
+{
+  "metrics": {
+    "activeSessions": 1,
+    "totalSessions": 12,
+    "audioUpBytes": 245760,
+    "audioDownBytes": 983040,
+    "controlDownBytes": 18432
+  },
+  "metricsWindow": {
+    "minutes": 15,
+    "sessionsStarted": 3,
+    "audioUpBytes": 81920,
+    "audioDownBytes": 327680
+  },
+  "testing": {
+    "windowMinutes": 30,
+    "totals": {
+      "activeTestSessions": 1,
+      "totalTestSessions": 8,
+      "avgLatencyMs": 142,
+      "p95LatencyMs": 280
+    },
+    "users": [{ "testerId": "qa-rider-1", "totalSessions": 4, "audioUpBytes": 120000 }],
+    "timeline": [{ "at": 1760000000000, "audioUpBytes": 32000, "audioDownBytes": 96000, "avgLatencyMs": 140 }]
+  }
+}
+```
+
 ### `WS /agent`
 
 Audio relay endpoint used by all clients. JSON messages are UTF-8 text frames; mic and provider
@@ -445,6 +477,7 @@ Client → server events (`lat`/`lon` are optional and sent only when geolocatio
   "type": "session.start",
   "sampleRate": 16000,
   "channels": 1,
+  "testerId": "qa-rider-1",
   "voiceGender": "female",
   "voicePersonality": "concise",
   "rideMode": "navigation",

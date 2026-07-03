@@ -447,7 +447,41 @@ dropped frames increment rather than the stream stalling.
 
 ---
 
-## 14. Mock provider scenario cycling
+## 14. Per-tester testing statistics
+
+**What it does:** The web HUD persists a tester/workstation ID and sends it with
+`session.start`. The relay aggregates sessions, active runs, duration, mic
+uplink bytes, audio/control downlink bytes, first-audio average/p95 latency,
+errors, TTS fallbacks, and 30-minute graph buckets by tester.
+
+**Code:** `server/metrics.ts` (`beginTesterSession`,
+`recordTesterClientAudio`, `recordTesterServerEvent`, `testingSnapshot`),
+`server/session-controller.ts` (`testerId` validation + attribution), and
+`src/App.tsx` (testing dashboard).
+
+**Unit test:** `tests/metrics.test.ts` covers per-tester sessions, bandwidth,
+latency, errors, and fallbacks; `tests/websocket.test.ts` validates safe
+`testerId` values.
+
+```bash
+npm test -- "per-tester"
+npm test -- "tester ids"
+```
+
+**Live test:** Start the web client, set `Tester ID`, open hands-free, and speak
+through a short mock or Doubao run. Confirm the testing panel increments active
+sessions, mic up/downlink bandwidth, latency, and per-user rows. Then check:
+
+```bash
+curl -s http://localhost:8787/health | jq '.testing'
+```
+
+Expected: `testing.users[]` includes the tester ID, and `testing.timeline[]`
+contains graph-ready minute buckets.
+
+---
+
+## 15. Mock provider scenario cycling
 
 **What it does:** The mock provider replays scripted rider/agent transcripts and
 metrics per scenario, auto-cycles through scenarios in guided-cruise mode, and
@@ -505,27 +539,28 @@ What to confirm in one pass:
 
 ## Test matrix (all functions, one table)
 
-| #   | Function                  | Code                                          | Unit test                                       | Live layer                      |
-| --- | ------------------------- | --------------------------------------------- | ----------------------------------------------- | ------------------------------- |
-| 1   | Wake word "Max"           | `shared/wake.ts`                              | `tests/wake.test.ts`                            | Doubao                          |
-| 2   | Language detection        | `shared/language.ts`                          | `tests/language.test.ts`                        | any                             |
-| 3   | Provider capabilities     | `shared/agent.ts`                             | `tests/agent.test.ts`                           | any (inspect `session.started`) |
-| 4   | Session memory & safety   | `shared/session.ts`                           | `tests/session.test.ts`                         | mock + Doubao                   |
-| 5   | Ride intelligence         | `shared/ride.ts`                              | `tests/ride.test.ts`                            | mock                            |
-| 6   | Weather risk              | `server/weather.ts`                           | `tests/weather.test.ts`                         | any (location)                  |
-| 7   | ADAS hazard alerts        | `shared/adas.ts`, `server/hazard-injector.ts` | `tests/adas.test.ts`                            | mock (auto); Doubao (ADAS)      |
-| 8   | Doubao frame protocol     | `server/providers/doubao.ts`                  | `tests/doubao-frame.test.ts`                    | Doubao                          |
-| 9   | Doubao voice & prompts    | `server/providers/doubao.ts`                  | `tests/doubao-voice.test.ts`                    | Doubao                          |
-| 10  | Relay auth & rate limit   | `server/auth.ts`                              | `tests/auth.test.ts`                            | any (reconnect)                 |
-| 11  | WebSocket relay lifecycle | `server/session-controller.ts`                | `tests/websocket.test.ts`                       | any                             |
-| 12  | Client event validation   | `server/session-controller.ts`                | `tests/websocket.test.ts`                       | any (raw `ws`)                  |
-| 13  | Audio packet metrics      | `shared/audio.ts`                             | `tests/audio.test.ts`                           | web                             |
-| 14  | Mock scenario cycling     | `server/providers/mock.ts`                    | `tests/adas.test.ts`, `tests/websocket.test.ts` | mock                            |
+| #   | Function                  | Code                                          | Unit test                                          | Live layer                      |
+| --- | ------------------------- | --------------------------------------------- | -------------------------------------------------- | ------------------------------- |
+| 1   | Wake word "Max"           | `shared/wake.ts`                              | `tests/wake.test.ts`                               | Doubao                          |
+| 2   | Language detection        | `shared/language.ts`                          | `tests/language.test.ts`                           | any                             |
+| 3   | Provider capabilities     | `shared/agent.ts`                             | `tests/agent.test.ts`                              | any (inspect `session.started`) |
+| 4   | Session memory & safety   | `shared/session.ts`                           | `tests/session.test.ts`                            | mock + Doubao                   |
+| 5   | Ride intelligence         | `shared/ride.ts`                              | `tests/ride.test.ts`                               | mock                            |
+| 6   | Weather risk              | `server/weather.ts`                           | `tests/weather.test.ts`                            | any (location)                  |
+| 7   | ADAS hazard alerts        | `shared/adas.ts`, `server/hazard-injector.ts` | `tests/adas.test.ts`                               | mock (auto); Doubao (ADAS)      |
+| 8   | Doubao frame protocol     | `server/providers/doubao.ts`                  | `tests/doubao-frame.test.ts`                       | Doubao                          |
+| 9   | Doubao voice & prompts    | `server/providers/doubao.ts`                  | `tests/doubao-voice.test.ts`                       | Doubao                          |
+| 10  | Relay auth & rate limit   | `server/auth.ts`                              | `tests/auth.test.ts`                               | any (reconnect)                 |
+| 11  | WebSocket relay lifecycle | `server/session-controller.ts`                | `tests/websocket.test.ts`                          | any                             |
+| 12  | Client event validation   | `server/session-controller.ts`                | `tests/websocket.test.ts`                          | any (raw `ws`)                  |
+| 13  | Audio packet metrics      | `shared/audio.ts`                             | `tests/audio.test.ts`                              | web                             |
+| 14  | Per-tester statistics     | `server/metrics.ts`, `src/App.tsx`            | `tests/metrics.test.ts`, `tests/websocket.test.ts` | web + `/health`                 |
+| 15  | Mock scenario cycling     | `server/providers/mock.ts`                    | `tests/adas.test.ts`, `tests/websocket.test.ts`    | mock                            |
 
 Run the whole unit suite at any time:
 
 ```bash
-npm test      # 12 files, 79 tests
+npm test      # full Vitest suite
 npm run lint
 npm run format:check
 ```

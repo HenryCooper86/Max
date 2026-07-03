@@ -1,6 +1,6 @@
 import { WebSocket, type RawData } from "ws";
 import { randomUUID } from "node:crypto";
-import type { AgentProvider, SessionStartEvent, VoiceGender } from "./types";
+import type { AgentProvider, ProviderTelemetry, SessionStartEvent, VoiceGender } from "./types";
 import { DOUBAO_CAPABILITIES } from "../../shared/agent";
 import { type AdasSeverity } from "../../shared/adas";
 import {
@@ -373,7 +373,11 @@ export function extractAsrText(payload: Record<string, unknown>) {
 /** In-place upstream reconnect attempts before giving up and bouncing the client. */
 const MAX_UPSTREAM_RETRIES = 3;
 
-export function createDoubaoProvider(client: WebSocket, log: Logger = createLogger("doubao")): AgentProvider {
+export function createDoubaoProvider(
+  client: WebSocket,
+  log: Logger = createLogger("doubao"),
+  telemetry?: ProviderTelemetry
+): AgentProvider {
   let upstream: WebSocket | undefined;
   let started = false;
   let sessionId = randomUUID();
@@ -449,7 +453,9 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
 
   function sendClient(payload: unknown) {
     if (client.readyState === client.OPEN) {
-      client.send(JSON.stringify(payload));
+      const encoded = JSON.stringify(payload);
+      telemetry?.serverEvent(payload, Buffer.byteLength(encoded));
+      client.send(encoded);
     }
   }
 
@@ -518,6 +524,7 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
       if (!receivedTtsAudio) {
         log.warn("TTS fallback fired — no Doubao audio", { waitedMs: delayMs });
         metrics.ttsFallback();
+        telemetry?.ttsFallback();
         flushPendingAgentText(true);
         // Browser speech now owns this reply; suppress any late Doubao audio.
         fallbackSpoke = true;
@@ -713,6 +720,7 @@ export function createDoubaoProvider(client: WebSocket, log: Logger = createLogg
           // Backpressure guard: if the client socket cannot drain (slow or stalled
           // link), drop voice frames instead of queueing them in server memory.
           if (client.readyState === client.OPEN && client.bufferedAmount < MAX_CLIENT_BUFFERED_BYTES) {
+            telemetry?.serverAudio(frame.payload.byteLength);
             client.send(frame.payload, { binary: true });
           }
           return;

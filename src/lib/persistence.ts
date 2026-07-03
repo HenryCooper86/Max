@@ -17,10 +17,21 @@ const TRANSCRIPT_CAP = 200;
 type StoredSettings = {
   voiceGender?: VoiceGender;
   voicePersonality?: VoicePersonality;
+  testerId?: string;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function stripControlChars(value: string) {
+  return value
+    .split("")
+    .filter((char) => {
+      const code = char.charCodeAt(0);
+      return code >= 32 && code !== 127;
+    })
+    .join("");
 }
 
 export function normalizeStoredSettings(value: unknown): StoredSettings {
@@ -35,6 +46,10 @@ export function normalizeStoredSettings(value: unknown): StoredSettings {
     VOICE_PERSONALITIES.has(value.voicePersonality as VoicePersonality)
   ) {
     settings.voicePersonality = value.voicePersonality as VoicePersonality;
+  }
+  if (typeof value.testerId === "string") {
+    const testerId = stripControlChars(value.testerId.normalize("NFKC")).replace(/\s+/g, " ").trim().slice(0, 80);
+    if (testerId) settings.testerId = testerId;
   }
   return settings;
 }

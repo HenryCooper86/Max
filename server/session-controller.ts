@@ -1,8 +1,18 @@
 import type { RawData, WebSocket } from "ws";
+import { randomUUID } from "node:crypto";
 import type { Logger } from "./logger";
-import type { AgentProvider, ClientEvent } from "./providers/types";
+import type { AgentProvider, ClientEvent, ProviderTelemetry } from "./providers/types";
+import {
+  beginTesterSession,
+  endTesterSession,
+  metrics,
+  recordTesterClientAudio,
+  recordTesterServerAudio,
+  recordTesterServerEvent,
+  recordTesterTtsFallback
+} from "./metrics";
 
-export type ProviderFactory = (client: WebSocket) => AgentProvider;
+export type ProviderFactory = (client: WebSocket, telemetry: ProviderTelemetry) => AgentProvider;
 
 const MAX_CLIENT_JSON_BYTES = 8 * 1024;
 const MAX_CLIENT_AUDIO_BYTES = 32 * 1024;
@@ -14,6 +24,7 @@ const MEMORY_LANGUAGES = new Set(["zh", "en"]);
 const RESPONSE_MODES = new Set(["concise", "normal", "emergency"]);
 const RIDER_INTENTS = new Set(["navigation", "weather", "emergency", "diagnostics", "group", "casual"]);
 const MAX_MEMORY_DESTINATION_BYTES = 256;
+const MAX_TESTER_ID_BYTES = 80;
 
 export function normalizeRawData(data: RawData): Buffer {
   if (Buffer.isBuffer(data)) return data;
@@ -31,6 +42,21 @@ function assertOptionalCoordinate(value: unknown, min: number, max: number, fiel
   if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value) || value < min || value > max)) {
     throw new Error(`Invalid ${field}`);
   }
+}
+
+function assertOptionalTesterId(value: unknown) {
+  if (value === undefined) return;
+  if (typeof value !== "string" || Buffer.byteLength(value) > MAX_TESTER_ID_BYTES || hasControlCharacter(value)) {
+    throw new Error("Invalid testerId");
+  }
+}
+
+function hasControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 32 || code === 127) return true;
+  }
+  return false;
 }
 
 function assertCoordinate(value: unknown, min: number, max: number, field: string) {
@@ -89,6 +115,7 @@ export function parseClientEvent(data: RawData): ClientEvent {
   assertOptionalEnum(value.voicePersonality, VOICE_PERSONALITIES, "voicePersonality");
   assertOptionalEnum(value.rideMode, RIDE_MODES, "rideMode");
   assertOptionalEnum(value.scenario, DEMO_SCENARIOS, "scenario");
+  assertOptionalTesterId(value.testerId);
   assertOptionalCoordinate(value.lat, -90, 90, "lat");
   assertOptionalCoordinate(value.lon, -180, 180, "lon");
   assertOptionalMemory(value.memory);
@@ -97,6 +124,7 @@ export function parseClientEvent(data: RawData): ClientEvent {
 }
 
 export class AgentSessionController {
+  private readonly relaySessionId = randomUUID();
   private readonly provider: AgentProvider;
 
   constructor(
@@ -104,7 +132,17 @@ export class AgentSessionController {
     providerFactory: ProviderFactory,
     private readonly log?: Logger
   ) {
-    this.provider = providerFactory(client);
+    this.provider = providerFactory(client, {
+      serverEvent: (payload, bytes) => {
+        metrics.serverEvent(bytes);
+        recordTesterServerEvent(this.relaySessionId, payload, bytes);
+      },
+      serverAudio: (bytes) => {
+        metrics.serverAudio(bytes);
+        recordTesterServerAudio(this.relaySessionId, bytes);
+      },
+      ttsFallback: () => recordTesterTtsFallback(this.relaySessionId)
+    });
     this.send({ type: "connection", state: "relay", detail: "语音中继 WebSocket 已连接" });
   }
 
@@ -113,6 +151,8 @@ export class AgentSessionController {
       if (isBinary) {
         const chunk = normalizeRawData(data);
         if (chunk.byteLength > MAX_CLIENT_AUDIO_BYTES) throw new Error("Audio frame is too large");
+        metrics.clientAudio(chunk.byteLength);
+        recordTesterClientAudio(this.relaySessionId, chunk.byteLength);
         await this.provider.sendAudio(chunk);
         return;
       }
@@ -123,6 +163,7 @@ export class AgentSessionController {
           `client event: ${event.type}`,
           event.type === "session.start"
             ? {
+                testerId: event.testerId,
                 scenario: event.scenario,
                 rideMode: event.rideMode,
                 voiceGender: event.voiceGender
@@ -130,7 +171,10 @@ export class AgentSessionController {
             : undefined
         );
       }
-      if (event.type === "session.start") await this.provider.start(event);
+      if (event.type === "session.start") {
+        beginTesterSession(this.relaySessionId, event.testerId);
+        await this.provider.start(event);
+      }
       if (event.type === "audio.start") await this.provider.startAudio();
       if (event.type === "audio.stop") await this.provider.stopAudio();
       if (event.type === "demo.guided") await this.provider.setGuidedDemo?.(event.enabled);
@@ -144,11 +188,15 @@ export class AgentSessionController {
 
   async close() {
     await this.provider.close();
+    endTesterSession(this.relaySessionId);
   }
 
   private send(payload: unknown) {
     if (this.client.readyState === this.client.OPEN) {
-      this.client.send(JSON.stringify(payload));
+      const encoded = JSON.stringify(payload);
+      metrics.serverEvent(Buffer.byteLength(encoded));
+      recordTesterServerEvent(this.relaySessionId, payload, Buffer.byteLength(encoded));
+      this.client.send(encoded);
     }
   }
 }

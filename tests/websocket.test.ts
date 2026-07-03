@@ -4,6 +4,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import type { AgentEvent } from "../shared/agent";
 import { AgentSessionController, normalizeRawData, parseClientEvent } from "../server/session-controller";
 import { createMockProvider } from "../server/providers/mock";
+import { metrics } from "../server/metrics";
 
 let server: http.Server | undefined;
 let wss: WebSocketServer | undefined;
@@ -56,6 +57,7 @@ afterEach(async () => {
   await new Promise<void>((resolve) => server?.close(() => resolve()) ?? resolve());
   wss = undefined;
   server = undefined;
+  metrics.reset();
 });
 
 describe("/agent WebSocket relay", () => {
@@ -78,6 +80,7 @@ describe("/agent WebSocket relay", () => {
         type: "session.start",
         sampleRate: 16000,
         channels: 1,
+        testerId: "qa-rider-1",
         voiceGender: "female",
         voicePersonality: "concise",
         scenario: "commute"
@@ -103,6 +106,7 @@ describe("client event validation", () => {
           type: "session.start",
           sampleRate: 16000,
           channels: 1,
+          testerId: "qa-rider-1",
           voiceGender: "male",
           voicePersonality: "rally",
           rideMode: "navigation",
@@ -117,7 +121,18 @@ describe("client event validation", () => {
     if (event.type === "session.start") {
       expect(event.voiceGender).toBe("male");
       expect(event.scenario).toBe("wind");
+      expect(event.testerId).toBe("qa-rider-1");
     }
+  });
+
+  it("rejects unsafe tester ids", () => {
+    const base = { type: "session.start", sampleRate: 16000, channels: 1 };
+    expect(() => parseClientEvent(Buffer.from(JSON.stringify({ ...base, testerId: "qa\u0000rider" })))).toThrow(
+      "Invalid testerId"
+    );
+    expect(() => parseClientEvent(Buffer.from(JSON.stringify({ ...base, testerId: "x".repeat(100) })))).toThrow(
+      "Invalid testerId"
+    );
   });
 
   it("accepts a valid location.update and rejects malformed coordinates", () => {

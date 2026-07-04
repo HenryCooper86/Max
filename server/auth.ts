@@ -184,13 +184,17 @@ export function authorizeUpgrade(request: IncomingMessage, now = Date.now()): Up
     }
   }
 
-  if (config.relayAuthToken) {
+  // The voice line requires credentials once EITHER protection is in place:
+  // the shared relay token, or user accounts (site login gate). A logged-in
+  // user's session token is as good as the operator secret, so web testers
+  // are never handed the shared token. With neither configured the relay
+  // stays plug-and-play open, as documented.
+  if (config.relayAuthToken || authActive()) {
     const url = new URL(request.url ?? "/", "http://relay.local");
     const provided = url.searchParams.get("token") ?? "";
-    // A logged-in user's session token is as good as the shared secret, so
-    // web testers don't need to be handed the operator token separately.
-    if (!tokenMatches(provided, config.relayAuthToken) && !sessionUser(provided)) {
-      return { ok: false, code: 401, reason: "Invalid relay token" };
+    const relayTokenOk = config.relayAuthToken ? tokenMatches(provided, config.relayAuthToken) : false;
+    if (!relayTokenOk && !sessionUser(provided)) {
+      return { ok: false, code: 401, reason: "Login or relay token required" };
     }
   }
 

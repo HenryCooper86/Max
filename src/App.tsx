@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { HelmetVisual } from "./components/HelmetVisual";
 import { SignalBars, WeatherReadout } from "./components/Instruments";
+import { LoginGate } from "./components/LoginGate";
 import { TestingAdminPanel } from "./components/TestingAdminPanel";
+import { fetchCurrentUser, type AuthUser } from "./lib/auth";
 import { adasDirectionLabel } from "../shared/adas";
 import { combineHazardLevels, scenarioLabel } from "../shared/ride";
 import {
@@ -27,6 +29,41 @@ export function App() {
   const agent = useHelmetAgent();
   const t = UI_TEXT[agent.sessionMemory.language];
   const { listening, starting, startMic, stopMic } = agent;
+
+  // Site-wide access gate: once any account exists on the relay, the HUD is
+  // hidden behind the login page (the relay also refuses anonymous /agent
+  // connections, so this is enforcement, not decoration).
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  useEffect(() => {
+    let active = true;
+    void fetchCurrentUser().then((user) => {
+      if (!active) return;
+      setAuthUser(user);
+      setAuthChecked(true);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleSignedIn = useCallback(
+    (user: AuthUser) => {
+      setAuthUser(user);
+      // Tie the QA stats identity to the account.
+      if (agent.testerId !== user.username) agent.setTesterId(user.username);
+      void agent.refreshHealth();
+    },
+    [agent]
+  );
+
+  const handleSignedOut = useCallback(() => {
+    setAuthUser(null);
+    // Behind the gate nothing should stay live: stop the mic and close the
+    // relay socket, which was authorized by the session that just ended.
+    agent.disconnect();
+    void agent.refreshHealth();
+  }, [agent]);
 
   // While a start is in flight (permission prompts, socket open) a second
   // press means "stop" — treating it as another start inverted the intent.
@@ -69,6 +106,16 @@ export function App() {
   const weatherRisk = agent.weather?.riskLevel ?? "normal";
   const fusedHazard = combineHazardLevels(agent.rideContext.hazardLevel, weatherRisk);
   const currentTester = currentTesterSnapshot(agent.health, agent.testerId);
+  const authEnabled = agent.health?.auth?.enabled ?? false;
+  const registrationOpen = agent.health?.auth?.registrationOpen ?? true;
+
+  // Hold a blank frame for the initial session check (fast), then gate.
+  if (!authChecked) {
+    return <main className="shell loginShell" aria-busy="true" />;
+  }
+  if (authEnabled && !authUser) {
+    return <LoginGate registrationOpen={registrationOpen} onSignedIn={handleSignedIn} />;
+  }
   const preflight = [
     { label: t.mic, value: PERMISSION_LABELS[agent.micPermission] },
     { label: t.location, value: PERMISSION_LABELS[agent.locationPermission] },
@@ -209,7 +256,12 @@ export function App() {
             </div>
           </section>
 
-          <TestingAdminPanel agent={agent} />
+          <TestingAdminPanel
+            agent={agent}
+            authUser={authUser}
+            onSignedIn={handleSignedIn}
+            onSignedOut={handleSignedOut}
+          />
 
           <section className="hudPanel statusPanel">
             <div className="stateBlock">

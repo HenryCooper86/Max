@@ -1,51 +1,24 @@
-// Login / registration strip for the testing admin panel. Auth is off until
-// the first account is registered; after that the tester stats (and, for
-// admins, the clear actions) unlock by logging in.
+// Account UI building blocks. AccountForm is the login/registration form,
+// shared by the full-screen LoginGate (site-wide access) and the testing
+// panel's AccountBar (bootstrap registration of the very first account, and
+// the logged-in identity chip with logout).
 
 import { useState, type FormEvent } from "react";
 import { loginAccount, logoutAccount, registerAccount, type AuthUser } from "../lib/auth";
 
-type Props = {
+type FormProps = {
   authEnabled: boolean;
   registrationOpen: boolean;
-  user: AuthUser | null;
   onSignedIn: (user: AuthUser) => void;
-  onSignedOut: () => void;
 };
 
-export function AccountBar({ authEnabled, registrationOpen, user, onSignedIn, onSignedOut }: Props) {
+export function AccountForm({ authEnabled, registrationOpen, onSignedIn }: FormProps) {
   const [mode, setMode] = useState<"login" | "register">(authEnabled ? "login" : "register");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  if (user) {
-    return (
-      <div className="accountBar" aria-label="账号">
-        <div className="accountIdentity">
-          <strong>{user.displayName}</strong>
-          <span>
-            @{user.username} · {user.role === "admin" ? "管理员" : "测试员"}
-          </span>
-        </div>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => {
-            setBusy(true);
-            void logoutAccount().finally(() => {
-              setBusy(false);
-              onSignedOut();
-            });
-          }}
-        >
-          退出登录
-        </button>
-      </div>
-    );
-  }
 
   const registering = mode === "register" && registrationOpen;
 
@@ -70,7 +43,7 @@ export function AccountBar({ authEnabled, registrationOpen, user, onSignedIn, on
   };
 
   return (
-    <form className="accountBar" aria-label="登录或注册" onSubmit={submit}>
+    <form className="accountForm" aria-label="登录或注册" onSubmit={submit}>
       <div className="accountFields">
         <input
           value={username}
@@ -114,5 +87,46 @@ export function AccountBar({ authEnabled, registrationOpen, user, onSignedIn, on
         </p>
       ) : null}
     </form>
+  );
+}
+
+type BarProps = FormProps & {
+  user: AuthUser | null;
+  onSignedOut: () => void;
+};
+
+export function AccountBar({ authEnabled, registrationOpen, user, onSignedIn, onSignedOut }: BarProps) {
+  const [busy, setBusy] = useState(false);
+
+  if (user) {
+    return (
+      <div className="accountBar" aria-label="账号">
+        <div className="accountIdentity">
+          <strong>{user.displayName}</strong>
+          <span>
+            @{user.username} · {user.role === "admin" ? "管理员" : "测试员"}
+          </span>
+        </div>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            void logoutAccount().finally(() => {
+              setBusy(false);
+              onSignedOut();
+            });
+          }}
+        >
+          退出登录
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="accountBar">
+      <AccountForm authEnabled={authEnabled} registrationOpen={registrationOpen} onSignedIn={onSignedIn} />
+    </div>
   );
 }

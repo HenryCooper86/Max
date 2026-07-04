@@ -172,6 +172,21 @@ describe("user sessions in the gates", () => {
     expect(authorizeUpgrade(fakeRequest({ url: "/agent?token=s3cret" }))).toEqual({ ok: true });
   });
 
+  it("locks the /agent upgrade behind login once accounts exist, even with no relay token", async () => {
+    config.relayAuthToken = "";
+    expect(authorizeUpgrade(fakeRequest())).toEqual({ ok: true }); // open mode
+
+    const registered = await registerUser("rider", "password123");
+    expect(registered.ok).toBe(true);
+    if (!registered.ok) return;
+
+    // The site gate is enforcement, not decoration: anonymous voice sessions
+    // are refused as soon as the first account exists.
+    expect(authorizeUpgrade(fakeRequest()).ok).toBe(false);
+    expect(authorizeUpgrade(fakeRequest({ url: "/agent?token=sess_forged" })).ok).toBe(false);
+    expect(authorizeUpgrade(fakeRequest({ url: `/agent?token=${registered.token}` }))).toEqual({ ok: true });
+  });
+
   it("rate limits auth attempts per address independently of the upgrade limiter", () => {
     const now = 9_000_000;
     for (let attempt = 0; attempt < 10; attempt += 1) {

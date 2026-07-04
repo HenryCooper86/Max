@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-07-04 — Testing admin panel: clear per tester / per session / all, dashboard extraction
+
+161 tests green (5 new), tsc/eslint/prettier clean, production build verified,
+endpoint auth smoke-tested live.
+
+### Added
+
+- **`POST /testing/clear`** (`server/index.ts`, `server/metrics.ts`) — the QA
+  stats were append-only; conversations could be viewed and exported but never
+  removed. Three scopes: `tester` (aggregates + transcript drilldown + session
+  replays for one `testerKey`), `session` (one completed session, keeping the
+  owning tester's lifetime traffic counters), and `all` (everything including
+  the timeline buckets). Clears apply to memory and to the durable history
+  file, which is rewritten atomically (write-then-rename) on the same
+  serialized queue as appends so a clear can't interleave with a session
+  summary landing. Access follows the same rule as viewing the stats: open on
+  token-less internal relays, token-required (query or Bearer) once
+  `RELAY_AUTH_TOKEN` is set. Clearing a tester with a still-open live session
+  leaves the voice session running — it just stops being tracked.
+- **Admin controls on the web testing panel** — 清除全部 in the panel header,
+  清除此测试员 beside the conversation drilldown, 删除会话 beside the session
+  replay export. All destructive buttons use a two-step arm/confirm (first
+  click arms for 4 s, second executes) instead of a blocking dialog, refresh
+  the dashboard immediately via the new `refreshHealth`, and surface a notice
+  when the relay refuses (missing token).
+
+### Changed
+
+- **Testing dashboard extracted from `App.tsx`** into
+  `src/components/TestingAdminPanel.tsx` (~430 lines moved). `App.tsx` drops
+  from 925 to ~420 lines and now only composes panels; the tester-lookup
+  helper is shared via `currentTesterSnapshot` in `src/lib/utils.ts` instead
+  of duplicated. Vite dev proxy forwards `/testing` alongside `/health`.
+
 ## 2026-07-04 — Review sweep: statistics-framework hardening, wake-scoring parity, client races
 
 Full-project review (relay, shared modules, web client) with fixes applied

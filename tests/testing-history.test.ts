@@ -73,6 +73,23 @@ describe("testing history replay", () => {
     expect(ids.length).toBe(3);
   });
 
+  it("rewrites the file when a tester is cleared, and empties it on clear-all", async () => {
+    const file = historyFile([sessionLine(0), sessionLine(1), sessionLine(2)]);
+    const { testingSnapshot, clearTesterData, clearAllTesterData, flushTestingHistory } =
+      await loadMetricsWithHistory(file);
+    testingSnapshot(10_000); // lazy-load the history
+
+    // All seeded sessions belong to the same tester (see sessionLine).
+    const result = clearTesterData("history-tester@203.0.113.77");
+    expect(result.removedSessions).toBe(3);
+    await flushTestingHistory();
+    expect(fs.readFileSync(file, "utf8").trim()).toBe("");
+
+    clearAllTesterData();
+    await flushTestingHistory();
+    expect(fs.readFileSync(file, "utf8").trim()).toBe("");
+  });
+
   it("compacts a file that grew far past the cap", async () => {
     const total = MAX_SESSIONS * 4 + 10;
     const file = historyFile(Array.from({ length: total }, (_, index) => sessionLine(index)));

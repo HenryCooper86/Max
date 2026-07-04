@@ -1500,6 +1500,38 @@ h2 {
   cursor: not-allowed;
 }
 
+.testerConversationActions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Destructive admin actions: armed = first click landed, next click executes. */
+.panelActions button.danger,
+.testerConversationActions button.danger {
+  border-color: rgba(255, 118, 118, 0.42);
+  background: rgba(255, 118, 118, 0.1);
+  color: #ffd9d9;
+}
+
+.panelActions button.danger.armed,
+.testerConversationActions button.danger.armed {
+  border-color: rgba(255, 118, 118, 0.85);
+  background: rgba(255, 118, 118, 0.32);
+  color: #fff;
+}
+
+.adminNotice {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid rgba(255, 118, 118, 0.42);
+  border-radius: 10px;
+  background: rgba(255, 118, 118, 0.1);
+  color: #ffd9d9;
+  font-size: 0.8rem;
+}
+
 .sessionReplayGrid {
   display: grid;
   grid-template-columns: minmax(190px, 0.45fr) minmax(0, 1fr);

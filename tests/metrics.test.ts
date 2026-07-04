@@ -3,6 +3,9 @@ import { buildHealth } from "../server/config";
 import {
   METRICS_WINDOW_MINUTES,
   beginTesterSession,
+  clearAllTesterData,
+  clearTesterData,
+  clearTestingSession,
   endTesterSession,
   metrics,
   metricsWindow,
@@ -242,5 +245,63 @@ describe("relay metrics", () => {
       region: "private network",
       activeSessions: 1
     });
+  });
+});
+
+describe("admin clear actions", () => {
+  function seedTwoTesters() {
+    beginTesterSession("clear-a-1", { testerId: "alice", ipAddress: "203.0.113.1" }, 1_000);
+    recordTesterServerEvent("clear-a-1", { type: "transcript", speaker: "rider", text: "Max hello" }, 32, 1_100);
+    endTesterSession("clear-a-1", 2_000);
+    beginTesterSession("clear-a-2", { testerId: "alice", ipAddress: "203.0.113.1" }, 3_000);
+    endTesterSession("clear-a-2", 4_000);
+    beginTesterSession("clear-b-1", { testerId: "bob", ipAddress: "203.0.113.2" }, 5_000);
+    endTesterSession("clear-b-1", 6_000);
+  }
+
+  it("clears one tester's aggregates, transcripts, and sessions — others untouched", () => {
+    seedTwoTesters();
+    const result = clearTesterData("alice@203.0.113.1");
+    expect(result).toEqual({ removedTesters: 1, removedSessions: 2 });
+
+    const snapshot = testingSnapshot(10_000);
+    expect(snapshot.users.map((user) => user.testerId)).toEqual(["bob"]);
+    expect(snapshot.sessions.map((session) => session.sessionId)).toEqual(["clear-b-1"]);
+    // A repeat clear is a no-op.
+    expect(clearTesterData("alice@203.0.113.1")).toEqual({ removedTesters: 0, removedSessions: 0 });
+  });
+
+  it("clears a tester with a still-active session without leaking the session entry", () => {
+    beginTesterSession("clear-live", { testerId: "carol", ipAddress: "203.0.113.3" }, 1_000);
+    const result = clearTesterData("carol@203.0.113.3");
+    expect(result).toEqual({ removedTesters: 1, removedSessions: 1 });
+    // The relay session later closing must not resurrect anything.
+    endTesterSession("clear-live", 5_000);
+    const snapshot = testingSnapshot(10_000);
+    expect(snapshot.users.length).toBe(0);
+    expect(snapshot.sessions.length).toBe(0);
+  });
+
+  it("deletes a single completed session but keeps the tester's aggregates", () => {
+    seedTwoTesters();
+    expect(clearTestingSession("clear-a-1")).toEqual({ removedTesters: 0, removedSessions: 1 });
+    expect(clearTestingSession("clear-a-1")).toEqual({ removedTesters: 0, removedSessions: 0 });
+
+    const snapshot = testingSnapshot(10_000);
+    expect(snapshot.sessions.map((session) => session.sessionId).sort()).toEqual(["clear-a-2", "clear-b-1"]);
+    const alice = snapshot.users.find((user) => user.testerId === "alice");
+    expect(alice?.totalSessions).toBe(2); // lifetime traffic stats intentionally kept
+  });
+
+  it("clears everything at once, including the timeline", () => {
+    seedTwoTesters();
+    const result = clearAllTesterData();
+    expect(result).toEqual({ removedTesters: 2, removedSessions: 3 });
+
+    const snapshot = testingSnapshot(10_000);
+    expect(snapshot.users.length).toBe(0);
+    expect(snapshot.sessions.length).toBe(0);
+    expect(snapshot.totals.totalTestSessions).toBe(0);
+    expect(snapshot.timeline.every((bucket) => bucket.sessionsStarted === 0)).toBe(true);
   });
 });

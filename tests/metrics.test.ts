@@ -89,7 +89,11 @@ describe("relay metrics", () => {
   });
 
   it("tracks per-tester sessions, bandwidth, latency, and fallbacks", () => {
-    beginTesterSession("relay-1", " rider one ", 1_000);
+    beginTesterSession(
+      "relay-1",
+      { testerId: " rider one ", ipAddress: "::ffff:203.0.113.9", region: "Asia/Shanghai" },
+      1_000
+    );
     recordTesterClientAudio("relay-1", 320, 1_100);
     recordTesterServerAudio("relay-1", 640, 1_200);
     recordTesterServerEvent("relay-1", { type: "metric", latencyMs: 123 }, 88, 1_300);
@@ -110,12 +114,28 @@ describe("relay metrics", () => {
       ttsFallbacks: 1
     });
     expect(snapshot.users[0]).toMatchObject({
+      testerKey: "rider one@203.0.113.9",
       testerId: "rider one",
+      ipAddress: "203.0.113.9",
+      region: "Asia/Shanghai",
       totalSessions: 1,
       totalSessionMs: 60_000,
       micFrames: 1,
       serverEvents: 2
     });
     expect(buildHealth(2).testing?.users[0]?.testerId).toBe("rider one");
+  });
+
+  it("falls back to an IP-scoped tester when no tester id is provided", () => {
+    beginTesterSession("relay-2", { ipAddress: "10.0.0.4" }, 2_000);
+
+    const user = testingSnapshot(2_500).users[0];
+    expect(user).toMatchObject({
+      testerKey: "ip:10.0.0.4@10.0.0.4",
+      testerId: "ip:10.0.0.4",
+      ipAddress: "10.0.0.4",
+      region: "private network",
+      activeSessions: 1
+    });
   });
 });

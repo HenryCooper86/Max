@@ -44,6 +44,15 @@ export function clientAddress(request: IncomingMessage): string {
   return request.socket.remoteAddress ?? "unknown";
 }
 
+export function clientRegionHint(request: IncomingMessage): string | undefined {
+  const candidate =
+    request.headers["cf-ipcountry"] ??
+    request.headers["x-vercel-ip-country-region"] ??
+    request.headers["x-vercel-ip-country"];
+  const value = Array.isArray(candidate) ? candidate[0] : candidate;
+  return value?.trim() || undefined;
+}
+
 /**
  * Sliding-window upgrade-attempt limiter: allows at most `connPerMinute`
  * attempts per address across any trailing 60 s span (not a fixed bucket that

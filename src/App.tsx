@@ -77,7 +77,9 @@ export function App() {
   const testing = agent.health?.testing;
   const testingTotals = testing?.totals;
   const testingTimeline = testing?.timeline ?? [];
-  const currentTester = testing?.users.find((user) => user.testerId === (agent.testerId || "anonymous"));
+  const currentTester = testing?.users
+    .filter((user) => user.testerId === agent.testerId)
+    .sort((a, b) => Number(b.activeSessions) - Number(a.activeSessions) || b.lastSeenAt - a.lastSeenAt)[0];
   const topTesters = testing?.users.slice(0, 6) ?? [];
   const totalDownBytes = (testingTotals?.audioDownBytes ?? 0) + (testingTotals?.controlDownBytes ?? 0);
   const totalBandwidthBytes = (testingTotals?.audioUpBytes ?? 0) + totalDownBytes;
@@ -238,7 +240,10 @@ export function App() {
               <h2>测试统计</h2>
               <div className="panelActions">
                 <span>{testing ? `${testing.windowMinutes}m · ${testing.users.length} users` : "waiting"}</span>
-                <button type="button" onClick={() => exportTestingReport(agent.health, agent.testerId)}>
+                <button
+                  type="button"
+                  onClick={() => exportTestingReport(agent.health, agent.testerId, agent.testerRegion)}
+                >
                   导出统计
                 </button>
               </div>
@@ -262,6 +267,14 @@ export function App() {
               <div>
                 <span>当前测试员</span>
                 <strong>{currentTester ? `${currentTester.totalSessions} sessions` : "new"}</strong>
+              </div>
+              <div>
+                <span>IP / Region</span>
+                <strong>
+                  {currentTester
+                    ? `${currentTester.ipAddress} · ${currentTester.region}`
+                    : `pending · ${agent.testerRegion}`}
+                </strong>
               </div>
             </div>
 
@@ -349,6 +362,7 @@ export function App() {
                 <thead>
                   <tr>
                     <th>Tester</th>
+                    <th>IP / Region</th>
                     <th>Runs</th>
                     <th>Time</th>
                     <th>Data</th>
@@ -359,10 +373,14 @@ export function App() {
                 <tbody>
                   {topTesters.length ? (
                     topTesters.map((user) => (
-                      <tr key={user.testerId}>
+                      <tr key={user.testerKey}>
                         <td>
                           <strong>{user.testerId}</strong>
                           <span>{user.activeSessions ? "active" : `${user.errorEvents} errors`}</span>
+                        </td>
+                        <td>
+                          <strong>{user.ipAddress}</strong>
+                          <span>{user.region}</span>
                         </td>
                         <td>{user.totalSessions}</td>
                         <td>{formatDuration(user.totalSessionMs)}</td>
@@ -375,7 +393,7 @@ export function App() {
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={6}>No test sessions yet</td>
+                      <td colSpan={7}>No test sessions yet</td>
                     </tr>
                   )}
                 </tbody>
@@ -508,7 +526,9 @@ export function App() {
                 <span>{agent.transcript.length ? `${t.live} · ${agent.transcript.length}` : t.idle}</span>
                 <button
                   type="button"
-                  onClick={() => exportTranscriptLog(agent.transcript)}
+                  onClick={() =>
+                    exportTranscriptLog(agent.transcript, agent.health, agent.testerId, agent.testerRegion)
+                  }
                   disabled={!agent.transcript.length}
                 >
                   {t.exportLog}
@@ -534,6 +554,14 @@ export function App() {
               <div>
                 <span>{t.connection}</span>
                 <strong>{CONNECTION_LABELS[agent.connectionState]}</strong>
+              </div>
+              <div>
+                <span>Tester</span>
+                <strong>
+                  {currentTester
+                    ? `${currentTester.testerId} · ${currentTester.ipAddress} · ${currentTester.region}`
+                    : `${agent.testerId} · ${agent.testerRegion}`}
+                </strong>
               </div>
             </div>
             <div className="transcriptList">

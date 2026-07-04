@@ -83,6 +83,14 @@ function stripControlChars(value: string) {
     .join("");
 }
 
+function testerRegionLabel(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || navigator.language || "browser";
+  } catch {
+    return "browser";
+  }
+}
+
 export function useHelmetAgent() {
   const [connected, setConnected] = useState(false);
   const [listening, setListening] = useState(false);
@@ -326,7 +334,8 @@ export function useHelmetAgent() {
           type: "session.start",
           sampleRate: SAMPLE_RATE,
           channels: 1,
-          testerId: testerIdRef.current || "anonymous",
+          testerId: testerIdRef.current,
+          testerRegion: testerRegionLabel(),
           voiceGender: voiceGenderRef.current,
           voicePersonality: voicePersonalityRef.current,
           rideMode: rideModeRef.current,
@@ -856,6 +865,7 @@ export function useHelmetAgent() {
     voiceGender,
     voicePersonality,
     testerId,
+    testerRegion: testerRegionLabel(),
     turnState,
     weather,
     rideContext,

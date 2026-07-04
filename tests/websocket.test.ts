@@ -81,6 +81,7 @@ describe("/agent WebSocket relay", () => {
         sampleRate: 16000,
         channels: 1,
         testerId: "qa-rider-1",
+        testerRegion: "Asia/Shanghai",
         voiceGender: "female",
         voicePersonality: "concise",
         scenario: "commute"
@@ -107,6 +108,7 @@ describe("client event validation", () => {
           sampleRate: 16000,
           channels: 1,
           testerId: "qa-rider-1",
+          testerRegion: "Asia/Shanghai",
           voiceGender: "male",
           voicePersonality: "rally",
           rideMode: "navigation",
@@ -122,16 +124,23 @@ describe("client event validation", () => {
       expect(event.voiceGender).toBe("male");
       expect(event.scenario).toBe("wind");
       expect(event.testerId).toBe("qa-rider-1");
+      expect(event.testerRegion).toBe("Asia/Shanghai");
     }
   });
 
-  it("rejects unsafe tester ids", () => {
+  it("rejects unsafe tester ids and regions", () => {
     const base = { type: "session.start", sampleRate: 16000, channels: 1 };
     expect(() => parseClientEvent(Buffer.from(JSON.stringify({ ...base, testerId: "qa\u0000rider" })))).toThrow(
       "Invalid testerId"
     );
     expect(() => parseClientEvent(Buffer.from(JSON.stringify({ ...base, testerId: "x".repeat(100) })))).toThrow(
       "Invalid testerId"
+    );
+    expect(() =>
+      parseClientEvent(Buffer.from(JSON.stringify({ ...base, testerRegion: "Asia\u0000Shanghai" })))
+    ).toThrow("Invalid testerRegion");
+    expect(() => parseClientEvent(Buffer.from(JSON.stringify({ ...base, testerRegion: "x".repeat(120) })))).toThrow(
+      "Invalid testerRegion"
     );
   });
 

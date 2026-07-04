@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
-import { authorizeUpgrade, clientAddress } from "./auth";
+import { authorizeUpgrade, clientAddress, clientRegionHint } from "./auth";
 import { buildHealth, config, describeConfig, validateConfig } from "./config";
 import { createLogger, shortSessionId } from "./logger";
 import { metrics, startMetricsHistory } from "./metrics";
@@ -70,13 +70,17 @@ function selectProvider(client: WebSocket, sessionLog: Logger, telemetry: Provid
 
 wss.on("connection", (client, request) => {
   const sessionLog = createLogger(`sess:${shortSessionId(randomUUID())}`);
-  sessionLog.info("client connected", { address: clientAddress(request), provider: config.voiceProvider });
+  const address = clientAddress(request);
+  const region = clientRegionHint(request);
+  sessionLog.info("client connected", { address, region, provider: config.voiceProvider });
   metrics.sessionOpened();
   trackClient(client);
   const session = new AgentSessionController(
     client,
     (socket, telemetry) => selectProvider(socket, sessionLog, telemetry),
-    sessionLog
+    sessionLog,
+    address,
+    region
   );
 
   client.on("message", async (data, isBinary) => {

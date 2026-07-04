@@ -285,15 +285,17 @@ export function useHelmetAgent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Shared with the admin panel so a clear action can refresh the dashboard
+  // immediately instead of waiting out the poll interval.
+  const refreshHealth = useCallback(async () => {
+    const nextHealth = await fetchAgentHealth();
+    if (!nextHealth) return;
+    setHealth(nextHealth);
+    setProvider(nextHealth.provider);
+    setCapabilities(nextHealth.capabilities);
+  }, []);
+
   useEffect(() => {
-    let cancelled = false;
-    const refreshHealth = async () => {
-      const nextHealth = await fetchAgentHealth();
-      if (cancelled || !nextHealth) return;
-      setHealth(nextHealth);
-      setProvider(nextHealth.provider);
-      setCapabilities(nextHealth.capabilities);
-    };
     // Skip polls while the tab is hidden — a backgrounded HUD refreshing the
     // QA dashboard 12×/min serves nobody. Refresh immediately on return.
     const poll = () => {
@@ -306,11 +308,10 @@ export function useHelmetAgent() {
     const timer = window.setInterval(poll, HEALTH_POLL_MS);
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
-      cancelled = true;
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, []);
+  }, [refreshHealth]);
 
   // Warm the speech-synthesis voice list. `getVoices()` is empty until the async
   // `voiceschanged` event fires in Chrome, so the first TTS-fallback reply on a
@@ -1031,7 +1032,11 @@ export function useHelmetAgent() {
     setScenario,
     setGuidedDemo,
     clearTranscript,
+    refreshHealth,
     startMic,
     stopMic
   };
 }
+
+/** The full agent surface, for components that receive the hook's return. */
+export type HelmetAgent = ReturnType<typeof useHelmetAgent>;

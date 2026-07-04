@@ -833,6 +833,84 @@ export function flushTestingHistory(): Promise<void> {
   return persistQueue;
 }
 
+/**
+ * Rewrites the on-disk history to mirror the in-memory completed sessions.
+ * Serialized on the same queue as appends so a clear can't interleave with a
+ * session summary landing, and write-then-rename so a crash never truncates.
+ */
+function rewriteTestingHistory() {
+  const filePath = TESTING_HISTORY_PATH;
+  if (!filePath) return;
+  // completedSessions is newest-first; the file is append-order (oldest first).
+  const lines = [...completedSessions].reverse().map((session) => JSON.stringify(session));
+  persistQueue = persistQueue
+    .then(async () => {
+      await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+      const tempPath = `${filePath}.rewrite`;
+      await fs.promises.writeFile(tempPath, lines.length ? `${lines.join("\n")}\n` : "");
+      await fs.promises.rename(tempPath, filePath);
+    })
+    .catch(() => {
+      // Best-effort like the append path; memory already reflects the clear.
+    });
+}
+
+// --- admin: clearing tester QA data ------------------------------------------
+// The stats are append-only during normal operation; these are the explicit
+// admin actions behind POST /testing/clear (token-gated when a relay token is
+// configured). Clearing removes drilldown data (transcripts, session replays)
+// and tester aggregates; live relay connections are unaffected — a cleared
+// tester's still-open session simply stops being tracked.
+
+export type TestingClearResult = { removedTesters: number; removedSessions: number };
+
+/** Removes one tester: their aggregates, transcripts, and session history. */
+export function clearTesterData(testerKey: string): TestingClearResult {
+  ensureTestingHistoryLoaded();
+  const removedTesters = testers.delete(testerKey) ? 1 : 0;
+  let removedSessions = 0;
+  for (const [sessionId, session] of testingSessions) {
+    if (session.testerKey === testerKey) {
+      testingSessions.delete(sessionId);
+      removedSessions += 1;
+    }
+  }
+  const before = completedSessions.length;
+  for (let index = completedSessions.length - 1; index >= 0; index -= 1) {
+    if (completedSessions[index].testerKey === testerKey) completedSessions.splice(index, 1);
+  }
+  removedSessions += before - completedSessions.length;
+  if (removedTesters || removedSessions) rewriteTestingHistory();
+  return { removedTesters, removedSessions };
+}
+
+/**
+ * Removes one completed session from the history/replay. The owning tester's
+ * lifetime aggregates are intentionally left as-is — they describe traffic
+ * that did happen; use clearTesterData to reset a tester entirely.
+ */
+export function clearTestingSession(sessionId: string): TestingClearResult {
+  ensureTestingHistoryLoaded();
+  const index = completedSessions.findIndex((session) => session.sessionId === sessionId);
+  if (index < 0) return { removedTesters: 0, removedSessions: 0 };
+  completedSessions.splice(index, 1);
+  rewriteTestingHistory();
+  return { removedTesters: 0, removedSessions: 1 };
+}
+
+/** Removes every tester, session, transcript, and the timeline buckets. */
+export function clearAllTesterData(): TestingClearResult {
+  ensureTestingHistoryLoaded();
+  const removedTesters = testers.size;
+  const removedSessions = completedSessions.length + testingSessions.size;
+  testers.clear();
+  testingSessions.clear();
+  completedSessions.length = 0;
+  testingTimeline.clear();
+  rewriteTestingHistory();
+  return { removedTesters, removedSessions };
+}
+
 function rememberCompletedSession(session: TesterSessionSummary) {
   ensureTestingHistoryLoaded();
   completedSessions.unshift(session);

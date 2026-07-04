@@ -8,7 +8,14 @@ import { WebSocketServer, WebSocket } from "ws";
 import { authorizeUpgrade, clientAddress, clientRegionHint, testingStatsAuthorized } from "./auth";
 import { buildHealth, config, describeConfig, validateConfig } from "./config";
 import { createLogger, shortSessionId } from "./logger";
-import { metrics, startMetricsHistory } from "./metrics";
+import {
+  clearAllTesterData,
+  clearTesterData,
+  clearTestingSession,
+  metrics,
+  startMetricsHistory,
+  type TestingClearResult
+} from "./metrics";
 import { createDoubaoProvider } from "./providers/doubao";
 import { createMockProvider } from "./providers/mock";
 import type { AgentProvider, ProviderTelemetry } from "./providers/types";
@@ -26,6 +33,33 @@ app.get("/health", (req, res) => {
   // Liveness stays open; the per-tester QA block (IPs, transcripts) requires
   // the relay token once one is configured.
   res.json(buildHealth(Math.round(process.uptime()), testingStatsAuthorized(req)));
+});
+
+// Admin: clear tester QA data. Same gate as viewing it — open in the no-token
+// internal mode, token-required (query or Bearer) once RELAY_AUTH_TOKEN is set.
+app.post("/testing/clear", express.json(), (req, res) => {
+  if (!testingStatsAuthorized(req)) {
+    res.status(401).json({ ok: false, error: "relay token required" });
+    return;
+  }
+  const body = (req.body ?? {}) as { scope?: unknown; testerKey?: unknown; sessionId?: unknown };
+  let result: TestingClearResult;
+  if (body.scope === "all") {
+    result = clearAllTesterData();
+  } else if (body.scope === "tester" && typeof body.testerKey === "string" && body.testerKey) {
+    result = clearTesterData(body.testerKey);
+  } else if (body.scope === "session" && typeof body.sessionId === "string" && body.sessionId) {
+    result = clearTestingSession(body.sessionId);
+  } else {
+    res.status(400).json({ ok: false, error: "scope must be all, tester (testerKey), or session (sessionId)" });
+    return;
+  }
+  log.info("testing data cleared", {
+    scope: body.scope,
+    target: body.scope === "tester" ? body.testerKey : body.scope === "session" ? body.sessionId : undefined,
+    ...result
+  });
+  res.json({ ok: true, ...result });
 });
 
 // Serve the built client when a production bundle exists. In development the

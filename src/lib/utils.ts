@@ -28,6 +28,33 @@ export async function fetchAgentHealth(): Promise<AgentHealth | null> {
   }
 }
 
+export type TestingClearScope =
+  | { scope: "all" }
+  | { scope: "tester"; testerKey: string }
+  | { scope: "session"; sessionId: string };
+
+/**
+ * Asks the relay to clear tester QA data (POST /testing/clear). Same access
+ * rule as viewing the stats: open on token-less internal relays, otherwise the
+ * stored relay token must come along. Resolves false on any failure.
+ */
+export async function requestTestingClear(payload: TestingClearScope): Promise<boolean> {
+  try {
+    const token = relayAuthToken();
+    const response = await fetch("/testing/clear", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify(payload)
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 // Best-effort rider geolocation for live weather. Resolves null when the rider
 // declines, the API is missing, or the lookup times out — weather is optional.
 export function getRiderLocation(): Promise<RiderLocation | null> {
@@ -108,7 +135,8 @@ export function normalizeTranscriptText(text: string) {
     .replace(/[^\p{Letter}\p{Number}\p{Script=Han}]+/gu, "");
 }
 
-function currentTesterSnapshot(health: AgentHealth | null, testerId: string) {
+/** The server-side stats row for this browser's tester id, if any. */
+export function currentTesterSnapshot(health: AgentHealth | null, testerId: string) {
   return health?.testing?.users
     .filter((user) => user.testerId === testerId)
     .sort((a, b) => Number(b.activeSessions) - Number(a.activeSessions) || b.lastSeenAt - a.lastSeenAt)[0];

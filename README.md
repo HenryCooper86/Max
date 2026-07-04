@@ -441,6 +441,23 @@ set, it is included only for callers presenting the token (`?token=…` or
 so `curl /health` keeps working as a deployment check. With no token
 configured (the internal-test default) the full response stays open:
 
+### `POST /testing/clear`
+
+Admin action behind the same access rule as viewing the testing stats (open
+without a token, token-required once `RELAY_AUTH_TOKEN` is set). Clears tester
+QA data both in memory and in the durable history file (rewritten atomically).
+The web HUD exposes these as two-step-confirm buttons on the testing panel.
+
+```json
+{ "scope": "all" }
+{ "scope": "tester", "testerKey": "rider one@203.0.113.9" }
+{ "scope": "session", "sessionId": "be8f4322-…" }
+```
+
+Responds `{ "ok": true, "removedTesters": n, "removedSessions": n }`. Clearing
+a tester removes their aggregates, transcript drilldown, and session replays;
+deleting a single session keeps the owning tester's lifetime traffic counters.
+
 ```json
 {
   "metrics": {

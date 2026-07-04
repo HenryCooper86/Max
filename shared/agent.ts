@@ -1,5 +1,6 @@
 import type { AdasDirection, AdasSeverity, AdasThreat } from "./adas";
 import type { DemoScenario, RideIntelligence, RideMode } from "./ride";
+import type { TestingCatalog, TestingEvaluationSummary, TestingQuality } from "./testing";
 
 export type VoiceGender = "female" | "male";
 export type VoicePersonality = "concise" | "friendly" | "technical" | "rally";
@@ -16,14 +17,21 @@ export type TesterTranscriptTurn = {
   final: boolean;
 };
 
-export type TestingQuality = "pass" | "watch" | "fail";
-
 export type TesterSessionSummary = {
   sessionId: string;
   testerKey: string;
   testerId: string;
   ipAddress: string;
   region: string;
+  campaignId: string;
+  campaignName: string;
+  testCaseId: string;
+  testCaseName: string;
+  appVersion: string;
+  gitCommit: string;
+  deviceLabel: string;
+  browserLanguage: string;
+  networkType: string;
   startedAt: number;
   endedAt: number;
   durationMs: number;
@@ -40,6 +48,7 @@ export type TesterSessionSummary = {
   quality: TestingQuality;
   flags: string[];
   notes: string;
+  evaluation: TestingEvaluationSummary;
   turns: TesterTranscriptTurn[];
 };
 
@@ -89,6 +98,7 @@ export type TestingTimelineBucket = {
 
 export type TestingStats = {
   windowMinutes: number;
+  catalog: TestingCatalog;
   history: {
     persistent: boolean;
     maxSessions: number;
@@ -133,6 +143,17 @@ export type SessionStartEvent = {
   testerId?: string;
   /** Client-reported region/time zone label for QA attribution. */
   testerRegion?: string;
+  /** QA campaign selected by the tester. */
+  testingCampaignId?: string;
+  /** QA test case selected by the tester. */
+  testingTestCaseId?: string;
+  /** Build metadata for release comparison. */
+  appVersion?: string;
+  gitCommit?: string;
+  /** Browser/device metadata for issue reports. */
+  deviceLabel?: string;
+  browserLanguage?: string;
+  networkType?: string;
   voiceGender?: VoiceGender;
   voicePersonality?: VoicePersonality;
   rideMode?: RideMode;

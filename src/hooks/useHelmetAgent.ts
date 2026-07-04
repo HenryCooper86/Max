@@ -15,6 +15,12 @@ import {
 import { validateAgentEvent } from "../../shared/events";
 import { detectLanguage } from "../../shared/language";
 import {
+  defaultTestCaseForCampaign,
+  findTestingCampaign,
+  findTestingTestCase,
+  type TestingTestCase
+} from "../../shared/testing";
+import {
   approxDistanceKm,
   combineHazardLevels,
   scenarioDefaultMode,
@@ -68,6 +74,7 @@ const HEALTH_POLL_MS = 5000;
 // real movement — the relay only refetches weather past ~20 km anyway.
 const LOCATION_UPDATE_MIN_INTERVAL_MS = 60_000;
 const LOCATION_UPDATE_MIN_MOVE_KM = 0.25;
+const clientEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
 
 function delay(ms: number) {
   return new Promise<void>((resolve) => window.setTimeout(resolve, ms));
@@ -91,6 +98,21 @@ function testerRegionLabel(): string {
   }
 }
 
+function deviceLabel(): string {
+  const userAgent = navigator.userAgent || "browser";
+  if (/iPhone/i.test(userAgent)) return "iPhone Safari";
+  if (/iPad/i.test(userAgent)) return "iPad Safari";
+  if (/Android/i.test(userAgent)) return "Android browser";
+  if (/Macintosh/i.test(userAgent)) return "macOS browser";
+  if (/Windows/i.test(userAgent)) return "Windows browser";
+  return userAgent.slice(0, 120);
+}
+
+function networkType(): string {
+  const connection = (navigator as Navigator & { connection?: { effectiveType?: string; type?: string } }).connection;
+  return connection?.effectiveType || connection?.type || "unknown";
+}
+
 export function useHelmetAgent() {
   const [connected, setConnected] = useState(false);
   const [listening, setListening] = useState(false);
@@ -106,6 +128,12 @@ export function useHelmetAgent() {
     storedSettings.voicePersonality ?? "concise"
   );
   const [testerId, setTesterIdState] = useState(initialTesterId);
+  const [testingCampaignId, setTestingCampaignIdState] = useState(
+    findTestingCampaign(storedSettings.testingCampaignId).id
+  );
+  const [testingTestCaseId, setTestingTestCaseIdState] = useState(
+    findTestingTestCase(storedSettings.testingTestCaseId).id
+  );
   const [turnState, setTurnState] = useState<TurnState>("idle");
   const [weather, setWeather] = useState<Weather | null>(null);
   const [rideContext, setRideContext] = useState<RideHudContext>(DEFAULT_RIDE_CONTEXT);
@@ -126,6 +154,8 @@ export function useHelmetAgent() {
   const voiceGenderRef = useRef<VoiceGender>(storedSettings.voiceGender ?? "female");
   const voicePersonalityRef = useRef<VoicePersonality>(storedSettings.voicePersonality ?? "concise");
   const testerIdRef = useRef(initialTesterId);
+  const testingCampaignIdRef = useRef(findTestingCampaign(storedSettings.testingCampaignId).id);
+  const testingTestCaseIdRef = useRef(findTestingTestCase(storedSettings.testingTestCaseId).id);
   const locationRef = useRef<RiderLocation | null>(null);
   const rideModeRef = useRef<RideMode>(DEFAULT_RIDE_CONTEXT.mode);
   const scenarioRef = useRef<DemoScenario>(DEFAULT_RIDE_CONTEXT.scenario);
@@ -232,7 +262,9 @@ export function useHelmetAgent() {
       saveStoredSettings({
         voiceGender: voiceGenderRef.current,
         voicePersonality: voicePersonalityRef.current,
-        testerId: testerIdRef.current
+        testerId: testerIdRef.current,
+        testingCampaignId: testingCampaignIdRef.current,
+        testingTestCaseId: testingTestCaseIdRef.current
       });
     }
     // Run once on mount to persist the generated id only when needed.
@@ -336,6 +368,13 @@ export function useHelmetAgent() {
           channels: 1,
           testerId: testerIdRef.current,
           testerRegion: testerRegionLabel(),
+          testingCampaignId: testingCampaignIdRef.current,
+          testingTestCaseId: testingTestCaseIdRef.current,
+          appVersion: clientEnv.VITE_APP_VERSION ?? "0.1.0",
+          gitCommit: clientEnv.VITE_GIT_COMMIT ?? "local",
+          deviceLabel: deviceLabel(),
+          browserLanguage: navigator.language || "unknown",
+          networkType: networkType(),
           voiceGender: voiceGenderRef.current,
           voicePersonality: voicePersonalityRef.current,
           rideMode: rideModeRef.current,
@@ -563,7 +602,9 @@ export function useHelmetAgent() {
       saveStoredSettings({
         voiceGender: gender,
         voicePersonality: voicePersonalityRef.current,
-        testerId: testerIdRef.current
+        testerId: testerIdRef.current,
+        testingCampaignId: testingCampaignIdRef.current,
+        testingTestCaseId: testingTestCaseIdRef.current
       });
       // Only show the progressive "switching…" status when a session restart is
       // actually happening; without a socket nothing ever resolves it, so the
@@ -585,7 +626,9 @@ export function useHelmetAgent() {
       saveStoredSettings({
         voiceGender: voiceGenderRef.current,
         voicePersonality: personality,
-        testerId: testerIdRef.current
+        testerId: testerIdRef.current,
+        testingCampaignId: testingCampaignIdRef.current,
+        testingTestCaseId: testingTestCaseIdRef.current
       });
       setStatus(`已切换语气：${PERSONALITY_LABELS[personality]}`);
       if (socketRef.current) restartSession();
@@ -600,9 +643,74 @@ export function useHelmetAgent() {
     saveStoredSettings({
       voiceGender: voiceGenderRef.current,
       voicePersonality: voicePersonalityRef.current,
-      testerId: next
+      testerId: next,
+      testingCampaignId: testingCampaignIdRef.current,
+      testingTestCaseId: testingTestCaseIdRef.current
     });
   }, []);
+
+  const applyTestingRideContext = useCallback((testCase: TestingTestCase) => {
+    scenarioRef.current = testCase.scenario;
+    rideModeRef.current = testCase.rideMode;
+    const hazardLevel = combineHazardLevels(
+      testCase.rideMode === "emergency" ? "critical" : testCase.rideMode === "navigation" ? "caution" : "normal",
+      SCENARIO_HAZARDS[testCase.scenario]
+    );
+    setRideContext((context) => ({
+      ...context,
+      scenario: testCase.scenario,
+      scenarioLabel: scenarioLabel(testCase.scenario),
+      mode: testCase.rideMode,
+      modeLabel: RIDE_MODE_LABELS[testCase.rideMode],
+      hazardLevel
+    }));
+  }, []);
+
+  const setTestingCampaignId = useCallback(
+    (campaignId: string) => {
+      const campaign = findTestingCampaign(campaignId);
+      const currentCase = findTestingTestCase(testingTestCaseIdRef.current);
+      const nextCase: TestingTestCase =
+        currentCase.campaignId === campaign.id ? currentCase : defaultTestCaseForCampaign(campaign.id);
+      testingCampaignIdRef.current = campaign.id;
+      testingTestCaseIdRef.current = nextCase.id;
+      setTestingCampaignIdState(campaign.id);
+      setTestingTestCaseIdState(nextCase.id);
+      saveStoredSettings({
+        voiceGender: voiceGenderRef.current,
+        voicePersonality: voicePersonalityRef.current,
+        testerId: testerIdRef.current,
+        testingCampaignId: campaign.id,
+        testingTestCaseId: nextCase.id
+      });
+      applyTestingRideContext(nextCase);
+      setStatus(`测试活动：${campaign.name}`);
+      if (socketRef.current) restartSession();
+    },
+    [applyTestingRideContext, restartSession]
+  );
+
+  const setTestingTestCaseId = useCallback(
+    (testCaseId: string) => {
+      const testCase = findTestingTestCase(testCaseId);
+      const campaign = findTestingCampaign(testCase.campaignId);
+      testingCampaignIdRef.current = campaign.id;
+      testingTestCaseIdRef.current = testCase.id;
+      setTestingCampaignIdState(campaign.id);
+      setTestingTestCaseIdState(testCase.id);
+      saveStoredSettings({
+        voiceGender: voiceGenderRef.current,
+        voicePersonality: voicePersonalityRef.current,
+        testerId: testerIdRef.current,
+        testingCampaignId: campaign.id,
+        testingTestCaseId: testCase.id
+      });
+      applyTestingRideContext(testCase);
+      setStatus(`测试用例：${testCase.name}`);
+      if (socketRef.current) restartSession();
+    },
+    [applyTestingRideContext, restartSession]
+  );
 
   const setRideMode = useCallback(
     (mode: RideMode) => {
@@ -865,6 +973,8 @@ export function useHelmetAgent() {
     voiceGender,
     voicePersonality,
     testerId,
+    testingCampaignId,
+    testingTestCaseId,
     testerRegion: testerRegionLabel(),
     turnState,
     weather,
@@ -879,6 +989,8 @@ export function useHelmetAgent() {
     setVoiceGender,
     setVoicePersonality,
     setTesterId,
+    setTestingCampaignId,
+    setTestingTestCaseId,
     setRideMode,
     setScenario,
     setGuidedDemo,

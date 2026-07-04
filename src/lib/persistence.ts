@@ -3,6 +3,7 @@
 // (private browsing, quota) must never break the voice session.
 
 import type { VoicePersonality } from "../../shared/agent";
+import { DEFAULT_TESTING_CAMPAIGN_ID, DEFAULT_TESTING_TEST_CASE_ID } from "../../shared/testing";
 import type { TranscriptItem, VoiceGender } from "../types";
 
 const TRANSCRIPT_KEY = "max.transcript.v1";
@@ -18,6 +19,8 @@ type StoredSettings = {
   voiceGender?: VoiceGender;
   voicePersonality?: VoicePersonality;
   testerId?: string;
+  testingCampaignId?: string;
+  testingTestCaseId?: string;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -50,6 +53,14 @@ export function normalizeStoredSettings(value: unknown): StoredSettings {
   if (typeof value.testerId === "string") {
     const testerId = stripControlChars(value.testerId.normalize("NFKC")).replace(/\s+/g, " ").trim().slice(0, 80);
     if (testerId) settings.testerId = testerId;
+  }
+  if (typeof value.testingCampaignId === "string") {
+    const campaignId = stripControlChars(value.testingCampaignId.normalize("NFKC")).trim().slice(0, 80);
+    if (campaignId) settings.testingCampaignId = campaignId;
+  }
+  if (typeof value.testingTestCaseId === "string") {
+    const testCaseId = stripControlChars(value.testingTestCaseId.normalize("NFKC")).trim().slice(0, 80);
+    if (testCaseId) settings.testingTestCaseId = testCaseId;
   }
   return settings;
 }
@@ -103,7 +114,12 @@ export function clearStoredTranscript() {
 }
 
 export function loadStoredSettings(): StoredSettings {
-  return normalizeStoredSettings(readJson<unknown>(SETTINGS_KEY));
+  const settings = normalizeStoredSettings(readJson<unknown>(SETTINGS_KEY));
+  return {
+    ...settings,
+    testingCampaignId: settings.testingCampaignId ?? DEFAULT_TESTING_CAMPAIGN_ID,
+    testingTestCaseId: settings.testingTestCaseId ?? DEFAULT_TESTING_TEST_CASE_ID
+  };
 }
 
 export function saveStoredSettings(settings: StoredSettings) {

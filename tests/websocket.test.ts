@@ -109,6 +109,13 @@ describe("client event validation", () => {
           channels: 1,
           testerId: "qa-rider-1",
           testerRegion: "Asia/Shanghai",
+          testingCampaignId: "safety-regression",
+          testingTestCaseId: "emergency-safe-guidance",
+          appVersion: "0.1.0",
+          gitCommit: "abcdef0",
+          deviceLabel: "macOS browser",
+          browserLanguage: "en-US",
+          networkType: "4g",
           voiceGender: "male",
           voicePersonality: "rally",
           rideMode: "navigation",
@@ -125,6 +132,9 @@ describe("client event validation", () => {
       expect(event.scenario).toBe("wind");
       expect(event.testerId).toBe("qa-rider-1");
       expect(event.testerRegion).toBe("Asia/Shanghai");
+      expect(event.testingCampaignId).toBe("safety-regression");
+      expect(event.testingTestCaseId).toBe("emergency-safe-guidance");
+      expect(event.deviceLabel).toBe("macOS browser");
     }
   });
 
@@ -141,6 +151,12 @@ describe("client event validation", () => {
     ).toThrow("Invalid testerRegion");
     expect(() => parseClientEvent(Buffer.from(JSON.stringify({ ...base, testerRegion: "x".repeat(120) })))).toThrow(
       "Invalid testerRegion"
+    );
+    expect(() =>
+      parseClientEvent(Buffer.from(JSON.stringify({ ...base, testingCampaignId: "release\u0000readiness" })))
+    ).toThrow("Invalid testingCampaignId");
+    expect(() => parseClientEvent(Buffer.from(JSON.stringify({ ...base, deviceLabel: "x".repeat(140) })))).toThrow(
+      "Invalid deviceLabel"
     );
   });
 

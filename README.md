@@ -229,7 +229,7 @@ If Doubao returns reply _text_ but no audio, the browser falls back to its own `
 - **Ride intelligence** — `session.start` carries the selected `rideMode` and `scenario`; `shared/ride.ts` turns that into a safety policy, response style, hazard level, and HUD focus. Doubao receives this as prompt context; the mock provider turns it into scenario-specific transcripts and telemetry. The HUD's `态势摘要` card fuses ride hazard and weather risk into immediate normal / caution / critical rider guidance.
 - **Weather** — on activation the browser requests geolocation and sends `lat`/`lon` with `session.start`. `server/weather.ts` fetches current conditions from **Open-Meteo** (free, no API key), classifies rider risk, and emits weather/advice to the HUD. `doubao.ts` folds the same data into the agent's `system_role`. The fetch runs **concurrently with the Doubao connection handshake** and only gates `StartSession`, so live weather still reaches the agent's context without serializing behind the connect; mic audio that arrives during startup is buffered (≈5 s) and flushed once the session is ready, so the rider's opening words are never clipped. A failed or slow lookup never blocks the session — the agent just answers generically. Mid-ride, the web HUD watches geolocation while hands-free is active and sends throttled `location.update` events (at most one per minute, after ≥250 m of movement); the relay refetches weather immediately when the rider has moved ≥20 km and otherwise folds the fresh coordinates into the periodic refresh, so a long ride's weather follows the bike instead of staying pinned to the start point.
 - **Telemetry** — providers emit `metric` and `telemetry` events. The HUD shows first-audio latency plus ASR / thinking / first-audio / total timing so demos can discuss realtime behavior with numbers.
-- **Testing statistics** — the web HUD persists a tester/workstation ID and sends it in `session.start` with the browser time zone as the tester region. The relay keys tester rows by **tester ID + client IP**, so the same name from different networks stays auditable; clients without a tester ID fall back to `ip:<address>` instead of a shared anonymous bucket. It aggregates sessions, active runs, test duration, mic uplink bytes, audio/control downlink bytes, first-audio average/p95 latency, errors, TTS fallbacks, recent per-tester transcript turns, completed session replays, quality flags, and a trailing 30-minute bandwidth/latency timeline. The HUD renders summary metrics, graphs, searchable tester/IP rows, clickable transcript drilldown, session replay/export, and JSON export for QA evidence.
+- **Testing framework** — the web HUD persists a tester/workstation ID and sends it in `session.start` with the browser time zone, selected campaign, selected test case, app version, git commit, device label, browser language, and network type. The relay keys tester rows by **tester ID + client IP**, so the same name from different networks stays auditable; clients without a tester ID fall back to `ip:<address>` instead of a shared anonymous bucket. It aggregates sessions, active runs, test duration, mic uplink bytes, audio/control downlink bytes, first-audio average/p95 latency, errors, TTS fallbacks, recent per-tester transcript turns, completed session replays, deterministic evaluation checks, quality flags, golden replay fixtures, and a trailing 30-minute bandwidth/latency timeline. The HUD renders campaign/test-case controls, summary metrics, graphs, searchable tester/IP rows, clickable transcript drilldown, session replay/export, evaluation details, and JSON export for QA evidence.
 - **Conversation log** — the HUD keeps the full in-memory session transcript, updates in-progress rider/agent turns in place, stamps each item with time, language, and live/final state, and can export the log as JSON for debugging. On the live path the agent's reply streams in as **live captions**: each Doubao TTS sentence emits a non-final `transcript` update that all three clients merge in place, and the entry finalizes when the reply completes — the caption machinery is the same in-place partial handling rider ASR already used.
 
 ### Client resilience
@@ -453,6 +453,11 @@ The response also carries production test counters:
   },
   "testing": {
     "windowMinutes": 30,
+    "catalog": {
+      "campaigns": [{ "id": "release-readiness", "name": "Release Readiness" }],
+      "testCases": [{ "id": "baseline-live-session", "name": "Baseline Live Session" }],
+      "goldenReplays": [{ "id": "golden-wake-word-clean", "testCaseId": "wake-word-addressed-only" }]
+    },
     "history": {
       "persistent": true,
       "maxSessions": 200,
@@ -491,11 +496,27 @@ The response also carries production test counters:
         "testerId": "qa-rider-1",
         "ipAddress": "203.0.113.9",
         "region": "Asia/Shanghai",
+        "campaignId": "release-readiness",
+        "campaignName": "Release Readiness",
+        "testCaseId": "baseline-live-session",
+        "testCaseName": "Baseline Live Session",
+        "appVersion": "0.1.0",
+        "gitCommit": "abcdef0",
+        "deviceLabel": "macOS browser",
+        "browserLanguage": "en-US",
+        "networkType": "4g",
         "startedAt": 1760000000000,
         "endedAt": 1760000060000,
         "durationMs": 60000,
         "quality": "pass",
         "flags": [],
+        "evaluation": {
+          "testCaseId": "baseline-live-session",
+          "testCaseName": "Baseline Live Session",
+          "score": 100,
+          "quality": "pass",
+          "checks": [{ "id": "safety", "label": "Unsafe advice", "status": "pass" }]
+        },
         "turns": [
           {
             "sessionId": "relay-abc",
@@ -526,6 +547,13 @@ Client → server events (`lat`/`lon` are optional and sent only when geolocatio
   "channels": 1,
   "testerId": "qa-rider-1",
   "testerRegion": "Asia/Shanghai",
+  "testingCampaignId": "release-readiness",
+  "testingTestCaseId": "baseline-live-session",
+  "appVersion": "0.1.0",
+  "gitCommit": "abcdef0",
+  "deviceLabel": "macOS browser",
+  "browserLanguage": "en-US",
+  "networkType": "4g",
   "voiceGender": "female",
   "voicePersonality": "concise",
   "rideMode": "navigation",

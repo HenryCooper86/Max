@@ -7,11 +7,14 @@ import type { AuthUser } from "../lib/auth";
 import { AccountForm } from "./AccountBar";
 
 type Props = {
+  /** False until the first account exists — the gate then offers first-run
+   *  (admin) registration instead of plain login. */
+  authEnabled: boolean;
   registrationOpen: boolean;
   onSignedIn: (user: AuthUser) => void;
 };
 
-export function LoginGate({ registrationOpen, onSignedIn }: Props) {
+export function LoginGate({ authEnabled, registrationOpen, onSignedIn }: Props) {
   return (
     <main className="shell loginShell">
       <section className="loginGate" aria-label="登录">
@@ -28,11 +31,13 @@ export function LoginGate({ registrationOpen, onSignedIn }: Props) {
         <div className="loginCard">
           <h2>内部测试平台</h2>
           <p className="loginHint">
-            {registrationOpen
-              ? "登录后进入语音测试座舱；没有账号可以注册（需管理员知晓）。"
-              : "登录后进入语音测试座舱。注册已关闭 — 需要账号请联系管理员。"}
+            {!authEnabled
+              ? "首次使用：注册第一个账号，该账号将成为管理员。"
+              : registrationOpen
+                ? "登录后进入语音测试座舱；没有账号可以注册（需管理员知晓）。"
+                : "登录后进入语音测试座舱。注册已关闭 — 需要账号请联系管理员。"}
           </p>
-          <AccountForm authEnabled registrationOpen={registrationOpen} onSignedIn={onSignedIn} />
+          <AccountForm authEnabled={authEnabled} registrationOpen={registrationOpen} onSignedIn={onSignedIn} />
         </div>
       </section>
     </main>

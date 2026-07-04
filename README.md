@@ -460,6 +460,15 @@ stop self-registration; `AUTH_SESSION_DAYS` controls session lifetime
 (default 30). With zero accounts and no relay token, everything stays open —
 the plug-and-play local demo mode.
 
+Admins onboard testers without reopening registration: the 账号管理 block on
+the testing panel lists every account, generates **single-use 7-day invite
+links** (`/?invite=inv_…`, auto-copied; `POST /auth/admin/invites`, revoke via
+`/auth/admin/invites/revoke`), and deletes tester accounts (their sessions die
+with them; admin accounts cannot be deleted — `POST /auth/admin/users/delete`,
+overview at `GET /auth/admin/overview`). Any logged-in user can copy their
+session token from the account bar (复制令牌) and paste it into the iOS/Android
+认证令牌 field to connect the native apps.
+
 ### `POST /testing/clear`
 
 Admin action. Open only while no relay token is set **and** no user accounts

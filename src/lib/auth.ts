@@ -48,8 +48,13 @@ async function postAuth(path: string, body: Record<string, unknown>): Promise<Au
   }
 }
 
-export function registerAccount(username: string, password: string, displayName?: string): Promise<AuthResponse> {
-  return postAuth("/auth/register", { username, password, displayName });
+export function registerAccount(
+  username: string,
+  password: string,
+  displayName?: string,
+  inviteCode?: string
+): Promise<AuthResponse> {
+  return postAuth("/auth/register", { username, password, displayName, inviteCode });
 }
 
 export function loginAccount(username: string, password: string): Promise<AuthResponse> {
@@ -69,6 +74,69 @@ export async function logoutAccount(): Promise<void> {
   } catch {
     /* the local token is already dropped; server session expires on its own */
   }
+}
+
+export type InviteInfo = { code: string; createdAt: number; expiresAt: number; createdBy: string };
+export type AdminOverview = { users: AuthUser[]; invites: InviteInfo[] };
+
+function adminHeaders(): Record<string, string> {
+  const token = authToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+/** Users + outstanding invites; admin only (null on any failure). */
+export async function fetchAdminOverview(): Promise<AdminOverview | null> {
+  try {
+    const response = await fetch("/auth/admin/overview", { headers: adminHeaders() });
+    if (!response.ok) return null;
+    const payload = (await response.json()) as { ok: boolean } & AdminOverview;
+    return payload.ok ? { users: payload.users, invites: payload.invites } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Creates a single-use registration invite; admin only. */
+export async function createInviteLink(): Promise<InviteInfo | null> {
+  try {
+    const response = await fetch("/auth/admin/invites", { method: "POST", headers: adminHeaders() });
+    if (!response.ok) return null;
+    const payload = (await response.json()) as { ok: boolean; invite?: InviteInfo };
+    return payload.ok && payload.invite ? payload.invite : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function revokeInviteLink(code: string): Promise<boolean> {
+  try {
+    const response = await fetch("/auth/admin/invites/revoke", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...adminHeaders() },
+      body: JSON.stringify({ code })
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function deleteUserAccount(username: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const response = await fetch("/auth/admin/users/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...adminHeaders() },
+      body: JSON.stringify({ username })
+    });
+    return (await response.json()) as { ok: boolean; error?: string };
+  } catch {
+    return { ok: false, error: "无法连接服务器。" };
+  }
+}
+
+/** The full invite URL a new tester opens to register. */
+export function inviteUrl(code: string): string {
+  return `${window.location.origin}/?invite=${encodeURIComponent(code)}`;
 }
 
 /** The logged-in user for the stored session token, or null (also on expiry). */

@@ -5,7 +5,16 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
-import { loginUser, logoutSession, registerUser } from "./accounts";
+import {
+  createInvite,
+  deleteUser,
+  listInvites,
+  listUsers,
+  loginUser,
+  logoutSession,
+  registerUser,
+  revokeInvite
+} from "./accounts";
 import {
   authorizeUpgrade,
   checkAuthRateLimit,
@@ -53,7 +62,7 @@ app.post("/auth/register", express.json(), (req, res) => {
     return;
   }
   const body = (req.body ?? {}) as Record<string, unknown>;
-  registerUser(body.username, body.password, body.displayName)
+  registerUser(body.username, body.password, body.displayName, Date.now(), body.inviteCode)
     .then((result) => {
       if (result.ok) {
         log.info("user registered", { username: result.user.username, role: result.user.role });
@@ -98,6 +107,49 @@ app.get("/auth/me", (req, res) => {
     return;
   }
   res.json({ ok: true, user });
+});
+
+// Admin: user + invite management for onboarding testers while
+// self-registration stays closed.
+function requireAdmin(req: express.Request, res: express.Response) {
+  const user = requestUser(req);
+  if (user?.role === "admin") return user;
+  res.status(user ? 403 : 401).json({ ok: false, error: "需要管理员登录。" });
+  return null;
+}
+
+app.get("/auth/admin/overview", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  res.json({ ok: true, users: listUsers(), invites: listInvites() });
+});
+
+app.post("/auth/admin/invites", express.json(), (req, res) => {
+  const admin = requireAdmin(req, res);
+  if (!admin) return;
+  const invite = createInvite(admin.username);
+  log.info("invite created", { by: admin.username, code: invite.code });
+  res.json({ ok: true, invite });
+});
+
+app.post("/auth/admin/invites/revoke", express.json(), (req, res) => {
+  const admin = requireAdmin(req, res);
+  if (!admin) return;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  revokeInvite(body.code);
+  res.json({ ok: true });
+});
+
+app.post("/auth/admin/users/delete", express.json(), (req, res) => {
+  const admin = requireAdmin(req, res);
+  if (!admin) return;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const result = deleteUser(body.username);
+  if (result.ok) {
+    log.info("user deleted", { by: admin.username, username: body.username });
+    res.json(result);
+  } else {
+    res.status(400).json(result);
+  }
 });
 
 // Admin: clear tester QA data. Stricter than viewing — once user accounts

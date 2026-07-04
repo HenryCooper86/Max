@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-07-04 — Invites, admin account management, App token copy, futuristic login
+
+174 tests green (3 new), tsc/eslint/prettier clean, production build verified;
+full invite round trip (create → link → invited registration → consumption →
+tester deletion) verified live in a real browser.
+
+### Added
+
+- **Single-use invite links** — admins onboard testers while
+  `AUTH_REGISTRATION=off` keeps strangers out. `POST /auth/admin/invites`
+  mints a 7-day, single-use code; the tester opens `/?invite=inv_…`, the login
+  gate switches to registration with an invited hint, and the code is consumed
+  by the registration it admitted (expired/revoked codes are refused).
+- **账号管理 admin block** on the testing panel — lists all accounts (role,
+  last login), generates/copies/revokes invites, and deletes tester accounts
+  with the two-step confirm (sessions die with the account; admins can never
+  be deleted, so the relay can't end up administered by nobody).
+- **复制令牌（App 用）** on the account bar — copies the login session token
+  for pasting into the iOS/Android 认证令牌 field, so native apps connect with
+  a personal session instead of a shared operator secret.
+- **Futuristic login page** — drifting aurora orbs, panning perspective grid,
+  pulsing horizon line, breathing helmet logo, glowing card border with a
+  periodic scanline sweep, animated status dot, and glow focus states. All
+  pure CSS, fully disabled under `prefers-reduced-motion`.
+
 ## 2026-07-04 — Site-wide login gate: the whole HUD (and the voice line) now requires an account
 
 **Follow-up (same day):** the login page now ALWAYS comes first, like a normal

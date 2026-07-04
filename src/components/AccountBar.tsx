@@ -4,23 +4,27 @@
 // the logged-in identity chip with logout).
 
 import { useState, type FormEvent } from "react";
-import { loginAccount, logoutAccount, registerAccount, type AuthUser } from "../lib/auth";
+import { authToken, loginAccount, logoutAccount, registerAccount, type AuthUser } from "../lib/auth";
 
 type FormProps = {
   authEnabled: boolean;
   registrationOpen: boolean;
+  /** A single-use invite code (?invite=…) unlocks registration even when
+   *  self-registration is closed. */
+  inviteCode?: string;
   onSignedIn: (user: AuthUser) => void;
 };
 
-export function AccountForm({ authEnabled, registrationOpen, onSignedIn }: FormProps) {
-  const [mode, setMode] = useState<"login" | "register">(authEnabled ? "login" : "register");
+export function AccountForm({ authEnabled, registrationOpen, inviteCode, onSignedIn }: FormProps) {
+  const canRegister = registrationOpen || Boolean(inviteCode);
+  const [mode, setMode] = useState<"login" | "register">(authEnabled && !inviteCode ? "login" : "register");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const registering = mode === "register" && registrationOpen;
+  const registering = mode === "register" && canRegister;
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -28,7 +32,7 @@ export function AccountForm({ authEnabled, registrationOpen, onSignedIn }: FormP
     setBusy(true);
     setError(null);
     const request = registering
-      ? registerAccount(username, password, displayName || undefined)
+      ? registerAccount(username, password, displayName || undefined, inviteCode)
       : loginAccount(username, password);
     void request
       .then((result) => {
@@ -75,7 +79,7 @@ export function AccountForm({ authEnabled, registrationOpen, onSignedIn }: FormP
         <button type="submit" disabled={busy}>
           {registering ? "注册" : "登录"}
         </button>
-        {registrationOpen ? (
+        {canRegister ? (
           <button type="button" className="accountSwitch" onClick={() => setMode(registering ? "login" : "register")}>
             {registering ? "已有账号？登录" : authEnabled ? "注册新账号" : "注册第一个账号（管理员）"}
           </button>
@@ -97,6 +101,7 @@ type BarProps = FormProps & {
 
 export function AccountBar({ authEnabled, registrationOpen, user, onSignedIn, onSignedOut }: BarProps) {
   const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   if (user) {
     return (
@@ -107,19 +112,34 @@ export function AccountBar({ authEnabled, registrationOpen, user, onSignedIn, on
             @{user.username} · {user.role === "admin" ? "管理员" : "测试员"}
           </span>
         </div>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => {
-            setBusy(true);
-            void logoutAccount().finally(() => {
-              setBusy(false);
-              onSignedOut();
-            });
-          }}
-        >
-          退出登录
-        </button>
+        <div className="accountActions">
+          <button
+            type="button"
+            className="accountSwitch"
+            title="复制会话令牌，粘贴到 iOS/Android App 的认证令牌栏即可连接"
+            onClick={() => {
+              void navigator.clipboard?.writeText(authToken()).then(() => {
+                setCopied(true);
+                window.setTimeout(() => setCopied(false), 2000);
+              });
+            }}
+          >
+            {copied ? "已复制 ✓" : "复制令牌（App 用）"}
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              void logoutAccount().finally(() => {
+                setBusy(false);
+                onSignedOut();
+              });
+            }}
+          >
+            退出登录
+          </button>
+        </div>
       </div>
     );
   }

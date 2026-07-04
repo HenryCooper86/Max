@@ -179,8 +179,12 @@ fun AgentScreen(
     // The relay requires a login (HTTP 401): open the settings sheet on the
     // 账号 section so the rider can sign in right where the fix is.
     LaunchedEffect(state.authRequired) {
-        if (state.authRequired && !viewModel.isLoggedIn) {
-            viewModel.showPreferences = true
+        // Handles the stale-identity case too: a 401 while "logged in" means
+        // the stored session died server-side — the view model drops it so
+        // the login form (not the identity row) is what opens. The flag is
+        // consumed there, so rotation/recomposition can't re-open the sheet.
+        if (state.authRequired) {
+            viewModel.handleAuthRequired()
         }
     }
 
@@ -792,8 +796,9 @@ private fun LoginFields(viewModel: MainViewModel) {
     }
     Button(
         onClick = {
+            // Not cleared eagerly: on failure the rider shouldn't retype it;
+            // on success this form leaves composition (state discarded) anyway.
             viewModel.login(username, password)
-            password = ""
         },
         enabled = !viewModel.loginBusy,
         colors = ButtonDefaults.buttonColors(containerColor = HudColors.Accent),

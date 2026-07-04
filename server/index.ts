@@ -6,6 +6,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import {
+  changePassword,
   createInvite,
   deleteUser,
   listInvites,
@@ -20,6 +21,7 @@ import {
   checkAuthRateLimit,
   clientAddress,
   clientRegionHint,
+  relayTokenPresented,
   requestUser,
   testingClearAuthorized,
   testingStatsAuthorized
@@ -58,10 +60,19 @@ app.get("/health", (req, res) => {
 // token-protected relays — the /agent WebSocket.
 app.post("/auth/register", express.json(), (req, res) => {
   if (!checkAuthRateLimit(clientAddress(req))) {
+    log.warn("auth rate limit hit", { address: clientAddress(req), route: "register" });
     res.status(429).json({ ok: false, error: "尝试过于频繁，请稍后再试。" });
     return;
   }
   const body = (req.body ?? {}) as Record<string, unknown>;
+  // On a token-protected relay, open self-registration would mint sessions
+  // that bypass the token (and could hand admin to a stranger) — require the
+  // relay token or an invite there. The zero-config bootstrap (no token) and
+  // the invite flow are unaffected.
+  if (config.relayAuthToken && !relayTokenPresented(req) && typeof body.inviteCode !== "string") {
+    res.status(403).json({ ok: false, error: "该中继需要邀请链接（或中继令牌）才能注册。" });
+    return;
+  }
   registerUser(body.username, body.password, body.displayName, Date.now(), body.inviteCode)
     .then((result) => {
       if (result.ok) {
@@ -76,6 +87,7 @@ app.post("/auth/register", express.json(), (req, res) => {
 
 app.post("/auth/login", express.json(), (req, res) => {
   if (!checkAuthRateLimit(clientAddress(req))) {
+    log.warn("auth rate limit hit", { address: clientAddress(req), route: "login" });
     res.status(429).json({ ok: false, error: "尝试过于频繁，请稍后再试。" });
     return;
   }
@@ -86,10 +98,37 @@ app.post("/auth/login", express.json(), (req, res) => {
         log.info("user logged in", { username: result.user.username });
         res.json(result);
       } else {
+        // Brute-force attempts should be visible in the log (no password, and
+        // the username only truncated — it may be a typo of a real one).
+        log.warn("login failed", {
+          address: clientAddress(req),
+          username: typeof body.username === "string" ? body.username.slice(0, 32) : "?"
+        });
         res.status(401).json(result);
       }
     })
     .catch(() => res.status(500).json({ ok: false, error: "登录失败，请重试。" }));
+});
+
+// Self-service password change; revokes the user's other sessions.
+app.post("/auth/password", express.json(), (req, res) => {
+  if (!checkAuthRateLimit(clientAddress(req))) {
+    res.status(429).json({ ok: false, error: "尝试过于频繁，请稍后再试。" });
+    return;
+  }
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const authorization = req.headers.authorization ?? "";
+  const bearer = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length).trim() : "";
+  changePassword(typeof body.token === "string" ? body.token : bearer, body.currentPassword, body.newPassword)
+    .then((result) => {
+      if (result.ok) {
+        log.info("password changed", { username: requestUser(req)?.username });
+        res.json(result);
+      } else {
+        res.status(400).json(result);
+      }
+    })
+    .catch(() => res.status(500).json({ ok: false, error: "修改失败，请重试。" }));
 });
 
 app.post("/auth/logout", express.json(), (req, res) => {
@@ -127,7 +166,7 @@ app.post("/auth/admin/invites", express.json(), (req, res) => {
   const admin = requireAdmin(req, res);
   if (!admin) return;
   const invite = createInvite(admin.username);
-  log.info("invite created", { by: admin.username, code: invite.code });
+  log.info("invite created", { by: admin.username, code: `${invite.code.slice(0, 10)}…` });
   res.json({ ok: true, invite });
 });
 

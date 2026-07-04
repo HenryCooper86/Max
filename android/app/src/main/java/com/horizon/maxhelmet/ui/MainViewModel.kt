@@ -35,6 +35,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val PREFS = "max_helmet"
         private const val KEY_RELAY_URL = "relay_url"
         private const val KEY_AUTH_TOKEN = "relay_auth_token"
+        private const val KEY_SESSION_TOKEN = "auth_session_token"
         private const val KEY_AUTH_USERNAME = "auth_username"
         private const val KEY_AUTH_DISPLAY_NAME = "auth_display_name"
         private const val KEY_AUTH_ROLE = "auth_role"
@@ -74,9 +75,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         prefs.edit().putBoolean(KEY_ALLOW_SELF_SIGNED, allow).apply()
     }
 
-    // The signed-in account behind `authToken` (empty when the token was pasted
-    // manually or the rider is signed out). Persisted so the identity row
-    // survives relaunches, like the web HUD's stored session.
+    /**
+     * The login session token, stored SEPARATELY from the manual 认证令牌 field
+     * so signing in/out never destroys a pasted operator relay token.
+     */
+    var sessionToken by mutableStateOf(prefs.getString(KEY_SESSION_TOKEN, "") ?: "")
+        private set
+
+    /**
+     * What the WebSocket presents: the login session first (a dead one is
+     * cleared on 401 by handleAuthRequired, so it can't shadow a valid manual
+     * token for long), the manual field as fallback.
+     */
+    val effectiveToken: String
+        get() = sessionToken.trim().ifEmpty { authToken.trim() }
+
+    /** Set when a 401 interrupted hands-free; a successful login then restarts
+     *  the session automatically instead of demanding another helmet tap. */
+    private var pendingHandsFreeRetry = false
+
+    // The signed-in account (empty when signed out). Persisted so the identity
+    // row survives relaunches, like the web HUD's stored session.
     var authUsername by mutableStateOf(prefs.getString(KEY_AUTH_USERNAME, "") ?: "")
         private set
     var authDisplayName by mutableStateOf(prefs.getString(KEY_AUTH_DISPLAY_NAME, "") ?: "")
@@ -88,7 +107,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var loginError by mutableStateOf<String?>(null)
         private set
 
-    val isLoggedIn: Boolean get() = authUsername.isNotEmpty() && authToken.isNotEmpty()
+    val isLoggedIn: Boolean get() = authUsername.isNotEmpty() && sessionToken.isNotEmpty()
+
+    /**
+     * A 401 from the relay: the session (if any) is dead — drop the stale
+     * identity so the login form shows, consume the flag, and open settings
+     * on the 账号 section. Called by the screen when authRequired flips on.
+     */
+    fun handleAuthRequired() {
+        session.acknowledgeAuthRequired()
+        if (isLoggedIn) {
+            sessionToken = ""
+            authUsername = ""
+            authDisplayName = ""
+            authRole = ""
+            prefs.edit()
+                .remove(KEY_SESSION_TOKEN)
+                .remove(KEY_AUTH_USERNAME)
+                .remove(KEY_AUTH_DISPLAY_NAME)
+                .remove(KEY_AUTH_ROLE)
+                .apply()
+        }
+        pendingHandsFreeRetry = true
+        showPreferences = true
+    }
 
     /**
      * POST /auth/login against the configured relay; on success the session
@@ -105,16 +147,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         authClient.login(relayUrl.trim(), name, password, allowSelfSigned) { login, error ->
             loginBusy = false
             if (login != null) {
-                updateAuthToken(login.token)
+                sessionToken = login.token
                 authUsername = login.user.username
                 authDisplayName = login.user.displayName
                 authRole = login.user.role
                 prefs.edit()
+                    .putString(KEY_SESSION_TOKEN, login.token)
                     .putString(KEY_AUTH_USERNAME, login.user.username)
                     .putString(KEY_AUTH_DISPLAY_NAME, login.user.displayName)
                     .putString(KEY_AUTH_ROLE, login.user.role)
                     .apply()
                 loginError = null
+                // A 401 cut the last attempt short — resume hands-free with
+                // the fresh session instead of demanding another tap.
+                if (pendingHandsFreeRetry && !session.state.value.handsFree) {
+                    pendingHandsFreeRetry = false
+                    toggleHandsFree()
+                }
             } else {
                 loginError = error ?: "登录失败，请重试"
             }
@@ -127,13 +176,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * that authorized it just ended.
      */
     fun logout() {
-        authClient.logout(relayUrl.trim(), authToken, allowSelfSigned)
-        updateAuthToken("")
+        authClient.logout(relayUrl.trim(), sessionToken, allowSelfSigned)
+        sessionToken = ""
         authUsername = ""
         authDisplayName = ""
         authRole = ""
         loginError = null
+        pendingHandsFreeRetry = false
         prefs.edit()
+            .remove(KEY_SESSION_TOKEN)
             .remove(KEY_AUTH_USERNAME)
             .remove(KEY_AUTH_DISPLAY_NAME)
             .remove(KEY_AUTH_ROLE)
@@ -185,8 +236,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             session.stop()
             VoiceAgentService.stop(app)
         } else {
+            pendingHandsFreeRetry = false
             VoiceAgentService.start(app)
-            session.start(relayUrl.trim(), allowSelfSigned, authToken.trim())
+            session.start(relayUrl.trim(), allowSelfSigned, effectiveToken)
         }
     }
 

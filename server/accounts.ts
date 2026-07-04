@@ -12,6 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { config } from "./config";
+import { createLogger } from "./logger";
 
 const scrypt = promisify(scryptCallback) as (password: string, salt: string, keylen: number) => Promise<Buffer>;
 
@@ -56,6 +57,7 @@ const MAX_DISPLAY_NAME_LENGTH = 60;
 const SCRYPT_KEY_LENGTH = 64;
 
 const ACCOUNTS_PATH = resolveAccountsPath();
+const log = createLogger("accounts");
 
 const INVITE_LIFETIME_MS = 7 * 86_400_000;
 
@@ -63,6 +65,7 @@ const users = new Map<string, StoredUser>(); // keyed by normalized username
 const sessions = new Map<string, StoredSession>(); // keyed by token
 const invites = new Map<string, InviteInfo>(); // keyed by code
 let accountsLoaded = ACCOUNTS_PATH === null;
+let accountsLoadFailed = false;
 let persistQueue: Promise<void> = Promise.resolve();
 
 function resolveAccountsPath(): string | null {
@@ -189,9 +192,18 @@ function ensureAccountsLoaded() {
         if (invite) invites.set(invite.code, invite);
       }
     }
-  } catch {
-    // Missing or unreadable accounts file must not take the relay down; auth
-    // simply starts from an empty (open) state.
+  } catch (error) {
+    // A MISSING file is the normal first run: auth starts from an empty
+    // (open) state. Anything else (corrupt JSON, permissions) must not fail
+    // open — that would silently expose transcripts and the voice line — so
+    // the gates lock (authActive() reports true) until an operator fixes it.
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      accountsLoadFailed = true;
+      log.error("accounts file unreadable — auth gates locked until fixed", {
+        path: ACCOUNTS_PATH,
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
   }
 }
 
@@ -226,6 +238,8 @@ function pruneExpiredSessions(now: number) {
   if (removed) persistAccounts();
 }
 
+const MAX_SESSIONS_PER_USER = 20;
+
 function createSession(user: StoredUser, now: number): StoredSession {
   const session: StoredSession = {
     token: `sess_${randomBytes(32).toString("hex")}`,
@@ -234,13 +248,23 @@ function createSession(user: StoredUser, now: number): StoredSession {
     expiresAt: now + config.authSessionDays * 86_400_000
   };
   sessions.set(session.token, session);
+  // Cap live sessions per user (oldest first) so a login loop can't grow the
+  // accounts file with a month-long tail of tokens.
+  const mine = [...sessions.values()]
+    .filter((candidate) => candidate.userId === user.id)
+    .sort((a, b) => a.createdAt - b.createdAt);
+  while (mine.length > MAX_SESSIONS_PER_USER) {
+    sessions.delete(mine.shift()!.token);
+  }
   return session;
 }
 
-/** True once at least one user is registered — this is what turns auth on. */
+/** True once at least one user is registered — this is what turns auth on.
+ *  Also true when the accounts file exists but could not be read: corruption
+ *  fails CLOSED (gates locked) rather than silently reopening everything. */
 export function authActive(): boolean {
   ensureAccountsLoaded();
-  return users.size > 0;
+  return users.size > 0 || accountsLoadFailed;
 }
 
 export function registrationOpen(): boolean {
@@ -286,6 +310,11 @@ export async function registerUser(
   inviteCodeInput?: unknown
 ): Promise<AuthResult> {
   ensureAccountsLoaded();
+  // With the stored accounts unreadable, a registration would make a stranger
+  // the "first" (admin) user over data that actually exists. Refuse.
+  if (accountsLoadFailed) {
+    return { ok: false, error: "账号数据无法读取，请管理员检查服务器上的 accounts.json。" };
+  }
   const inviteCode = typeof inviteCodeInput === "string" ? inviteCodeInput.trim() : "";
   const invite = inviteCode ? validInvite(inviteCode, now) : null;
   if (!registrationOpen() && !invite) {
@@ -318,13 +347,18 @@ export async function registerUser(
     passwordHash: await hashPassword(passwordInput, salt),
     salt
   };
-  // Re-check after the await: two concurrent registrations of the same name
-  // must not both insert.
+  // Re-check EVERYTHING that was validated before the await: a concurrent
+  // registration may have taken the username, spent the single-use invite, or
+  // an admin may have revoked it while scrypt ran.
   if (users.has(username)) return { ok: false, error: "用户名已被使用。" };
+  const inviteAfterHash = inviteCode ? validInvite(inviteCode, now) : null;
+  if (!registrationOpen() && !inviteAfterHash) {
+    return { ok: false, error: "邀请链接无效或已过期，请向管理员索取新邀请。" };
+  }
   if (user.role === "admin" && users.size > 0) user.role = "tester";
   users.set(username, user);
   // Invites are single-use: consumed by the registration they admitted.
-  if (invite) invites.delete(invite.code);
+  if (inviteAfterHash) invites.delete(inviteAfterHash.code);
   const session = createSession(user, now);
   pruneExpiredSessions(now);
   persistAccounts();
@@ -337,7 +371,7 @@ export async function registerUser(
 export function createInvite(createdBy: string, now = Date.now()): InviteInfo {
   ensureAccountsLoaded();
   const invite: InviteInfo = {
-    code: `inv_${randomBytes(8).toString("hex")}`,
+    code: `inv_${randomBytes(16).toString("hex")}`,
     createdAt: now,
     expiresAt: now + INVITE_LIFETIME_MS,
     createdBy
@@ -408,11 +442,59 @@ export async function loginUser(usernameInput: unknown, passwordInput: unknown, 
   if (!user || !provided || !hashesMatch(hash, expected)) {
     return { ok: false, error: "用户名或密码不正确。" };
   }
+  // Re-check after the await: an admin may have deleted this account while
+  // scrypt ran — success here would hand out a token that can never work and
+  // persist an orphan session.
+  if (users.get(username) !== user) {
+    return { ok: false, error: "用户名或密码不正确。" };
+  }
   user.lastLoginAt = now;
   const session = createSession(user, now);
   pruneExpiredSessions(now);
   persistAccounts();
   return { ok: true, token: session.token, user: publicUser(user) };
+}
+
+/**
+ * Self-service password change for the session's own user. Verifies the
+ * current password, then revokes every OTHER session — a stolen token dies
+ * with the password — while keeping the one that made the change.
+ */
+export async function changePassword(
+  token: unknown,
+  currentPassword: unknown,
+  newPassword: unknown,
+  now = Date.now()
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  ensureAccountsLoaded();
+  if (typeof token !== "string" || !token.startsWith("sess_")) return { ok: false, error: "未登录或会话已过期。" };
+  const session = sessions.get(token);
+  if (!session || session.expiresAt <= now) return { ok: false, error: "未登录或会话已过期。" };
+  const user = [...users.values()].find((candidate) => candidate.id === session.userId);
+  if (!user) return { ok: false, error: "未登录或会话已过期。" };
+
+  if (typeof newPassword !== "string" || newPassword.length < MIN_PASSWORD_LENGTH) {
+    return { ok: false, error: `新密码至少 ${MIN_PASSWORD_LENGTH} 位。` };
+  }
+  if (newPassword.length > MAX_PASSWORD_LENGTH) return { ok: false, error: "新密码过长。" };
+
+  const provided = typeof currentPassword === "string" ? currentPassword : "";
+  const currentHash = await hashPassword(provided.slice(0, MAX_PASSWORD_LENGTH), user.salt);
+  if (!provided || !hashesMatch(currentHash, user.passwordHash)) {
+    return { ok: false, error: "当前密码不正确。" };
+  }
+
+  const salt = randomBytes(16).toString("hex");
+  const passwordHash = await hashPassword(newPassword, salt);
+  // Re-check after the awaits: the account may have been deleted meanwhile.
+  if (users.get(user.username) !== user) return { ok: false, error: "未登录或会话已过期。" };
+  user.salt = salt;
+  user.passwordHash = passwordHash;
+  for (const [candidateToken, candidate] of sessions) {
+    if (candidate.userId === user.id && candidateToken !== token) sessions.delete(candidateToken);
+  }
+  persistAccounts();
+  return { ok: true };
 }
 
 /** Invalidates one session token. Idempotent. */
@@ -435,4 +517,5 @@ export function resetAccounts() {
   sessions.clear();
   invites.clear();
   accountsLoaded = ACCOUNTS_PATH === null;
+  accountsLoadFailed = false;
 }

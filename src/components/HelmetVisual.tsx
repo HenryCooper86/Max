@@ -149,7 +149,7 @@ function VisorWaveform({
   const mode = speaking ? "speaking" : thinking ? "thinking" : "";
 
   return (
-    <div className={`visorVisualizer ${mode} ${listening ? "active" : ""}`}>
+    <div className={["visorVisualizer", mode, listening ? "active" : ""].filter(Boolean).join(" ")}>
       {BAR_AMPS.map((amp, index) => {
         const style: CSSProperties = { "--amp": amp, "--i": index } as CSSProperties;
         // Inline transforms only in mic-driven/idle modes — the speaking and

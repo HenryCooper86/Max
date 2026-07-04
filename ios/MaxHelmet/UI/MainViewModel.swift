@@ -31,6 +31,7 @@ final class MainViewModel: ObservableObject {
     private enum Keys {
         static let relayURL = "relay_url"
         static let authToken = "auth_token"
+        static let sessionToken = "auth_session_token"
         static let authUsername = "auth_username"
         static let authDisplayName = "auth_display_name"
         static let authRole = "auth_role"
@@ -57,9 +58,26 @@ final class MainViewModel: ObservableObject {
         didSet { defaults.set(allowSelfSigned, forKey: Keys.allowSelfSigned) }
     }
 
-    // The signed-in account behind `authToken` (empty when the token was pasted
-    // manually or the rider is signed out). Persisted so the identity row
-    // survives relaunches, like the web HUD's stored session.
+    /// The login session token, stored SEPARATELY from the manual 认证令牌
+    /// field so signing in/out never destroys a pasted operator relay token.
+    @Published var sessionToken: String {
+        didSet { defaults.set(sessionToken, forKey: Keys.sessionToken) }
+    }
+
+    /// What the WebSocket presents: the login session first (a dead one is
+    /// cleared on 401 by handleAuthRequired, so it can't shadow a valid manual
+    /// token for long), the manual field as fallback.
+    var effectiveToken: String {
+        let session = sessionToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        return session.isEmpty ? authToken.trimmingCharacters(in: .whitespacesAndNewlines) : session
+    }
+
+    /// Set when a 401 interrupted hands-free; a successful login then restarts
+    /// the session automatically instead of demanding another helmet tap.
+    private var pendingHandsFreeRetry = false
+
+    // The signed-in account (empty when signed out). Persisted so the identity
+    // row survives relaunches, like the web HUD's stored session.
     @Published var authUsername: String {
         didSet { defaults.set(authUsername, forKey: Keys.authUsername) }
     }
@@ -72,7 +90,22 @@ final class MainViewModel: ObservableObject {
     @Published var loginBusy = false
     @Published var loginError: String?
 
-    var isLoggedIn: Bool { !authUsername.isEmpty && !authToken.isEmpty }
+    var isLoggedIn: Bool { !authUsername.isEmpty && !sessionToken.isEmpty }
+
+    /// A 401 from the relay: the session (if any) is dead — drop the stale
+    /// identity so the login form shows, consume the flag, and open settings
+    /// on the 账号 section. Called by the screen when authRequired flips on.
+    func handleAuthRequired() {
+        session.acknowledgeAuthRequired()
+        if isLoggedIn {
+            sessionToken = ""
+            authUsername = ""
+            authDisplayName = ""
+            authRole = ""
+        }
+        pendingHandsFreeRetry = true
+        showPreferences = true
+    }
 
     /// POST /auth/login against the configured relay; on success the session
     /// token lands in `authToken`, so the WebSocket connect just works.
@@ -94,11 +127,17 @@ final class MainViewModel: ObservableObject {
             self.loginBusy = false
             switch result {
             case .success(let login):
-                self.authToken = login.token
+                self.sessionToken = login.token
                 self.authUsername = login.user.username
                 self.authDisplayName = login.user.displayName
                 self.authRole = login.user.role
                 self.loginError = nil
+                // A 401 cut the last attempt short — resume hands-free with
+                // the fresh session instead of demanding another tap.
+                if self.pendingHandsFreeRetry, !self.session.state.handsFree {
+                    self.pendingHandsFreeRetry = false
+                    self.toggleHandsFree()
+                }
             case .failure(let failure):
                 self.loginError = failure.message
             }
@@ -111,14 +150,15 @@ final class MainViewModel: ObservableObject {
     func logout() {
         authClient.logout(
             relayURL: relayURL.trimmingCharacters(in: .whitespacesAndNewlines),
-            token: authToken,
+            token: sessionToken,
             allowSelfSignedTls: allowSelfSigned
         )
-        authToken = ""
+        sessionToken = ""
         authUsername = ""
         authDisplayName = ""
         authRole = ""
         loginError = nil
+        pendingHandsFreeRetry = false
         if session.state.handsFree { session.stop() }
     }
 
@@ -152,6 +192,7 @@ final class MainViewModel: ObservableObject {
     init() {
         relayURL = defaults.string(forKey: Keys.relayURL) ?? Self.defaultRelayURL
         authToken = defaults.string(forKey: Keys.authToken) ?? ""
+        sessionToken = defaults.string(forKey: Keys.sessionToken) ?? ""
         authUsername = defaults.string(forKey: Keys.authUsername) ?? ""
         authDisplayName = defaults.string(forKey: Keys.authDisplayName) ?? ""
         authRole = defaults.string(forKey: Keys.authRole) ?? ""
@@ -170,8 +211,9 @@ final class MainViewModel: ObservableObject {
         if session.state.handsFree {
             session.stop()
         } else {
+            pendingHandsFreeRetry = false
             session.start(url: relayURL.trimmingCharacters(in: .whitespacesAndNewlines),
-                          authToken: authToken.trimmingCharacters(in: .whitespacesAndNewlines),
+                          authToken: effectiveToken,
                           allowSelfSignedTls: allowSelfSigned)
         }
     }

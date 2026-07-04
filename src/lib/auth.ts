@@ -14,6 +14,8 @@ export type AuthUser = {
 
 export type AuthResponse = { ok: true; token: string; user: AuthUser } | { ok: false; error: string };
 
+import { relayAuthToken } from "./persistence";
+
 const AUTH_TOKEN_KEY = "max.authToken";
 
 export function authToken(): string {
@@ -35,9 +37,15 @@ function storeAuthToken(token: string) {
 
 async function postAuth(path: string, body: Record<string, unknown>): Promise<AuthResponse> {
   try {
+    // A stored operator relay token rides along: token-protected relays
+    // require it (or an invite) for self-registration.
+    const relayToken = relayAuthToken();
     const response = await fetch(path, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(relayToken ? { Authorization: `Bearer ${relayToken}` } : {})
+      },
       body: JSON.stringify(body)
     });
     const payload = (await response.json()) as AuthResponse;
@@ -73,6 +81,25 @@ export async function logoutAccount(): Promise<void> {
     });
   } catch {
     /* the local token is already dropped; server session expires on its own */
+  }
+}
+
+/** Self-service password change; the relay revokes the user's OTHER sessions. */
+export async function changePasswordAccount(
+  currentPassword: string,
+  newPassword: string
+): Promise<{ ok: boolean; error?: string }> {
+  const token = authToken();
+  if (!token) return { ok: false, error: "未登录或会话已过期。" };
+  try {
+    const response = await fetch("/auth/password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ currentPassword, newPassword })
+    });
+    return (await response.json()) as { ok: boolean; error?: string };
+  } catch {
+    return { ok: false, error: "无法连接服务器，请稍后再试。" };
   }
 }
 

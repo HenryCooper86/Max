@@ -134,9 +134,10 @@ struct AgentScreen: View {
         // The relay requires a login (HTTP 401): open the settings sheet on the
         // 账号 section so the rider can sign in right where the fix is.
         .onChange(of: state.authRequired) { _, required in
-            if required && !viewModel.isLoggedIn {
-                viewModel.showPreferences = true
-            }
+            // Handles the stale-identity case too: a 401 while "logged in"
+            // means the stored session died server-side — the view model drops
+            // it so the login form (not the identity row) is what opens.
+            if required { viewModel.handleAuthRequired() }
         }
         .sheet(isPresented: $viewModel.showPreferences) {
             SettingsSheet(title: "设置") {
@@ -715,8 +716,9 @@ private struct LoginFields: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         Button {
+            // Not cleared eagerly: on failure the rider shouldn't retype it;
+            // on success this form unmounts (state discarded) anyway.
             viewModel.login(username: username, password: password)
-            password = ""
         } label: {
             Text(viewModel.loginBusy ? "登录中…" : "登录")
                 .font(.system(size: 14, weight: .semibold))

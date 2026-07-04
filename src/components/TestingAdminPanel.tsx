@@ -109,8 +109,10 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
   const testing = agent.health?.testing;
   const testingTotals = testing?.totals;
   const testingTimeline = testing?.timeline ?? [];
-  const testingCampaigns = testing?.catalog.campaigns ?? TESTING_CAMPAIGNS;
-  const testingTestCases = testing?.catalog.testCases ?? TESTING_TEST_CASES;
+  // Guard against a relay shipping an empty catalog: selectedCampaign.id
+  // below must never dereference undefined.
+  const testingCampaigns = testing?.catalog?.campaigns?.length ? testing.catalog.campaigns : TESTING_CAMPAIGNS;
+  const testingTestCases = testing?.catalog?.testCases?.length ? testing.catalog.testCases : TESTING_TEST_CASES;
   const selectedCampaign =
     testingCampaigns.find((campaign) => campaign.id === agent.testingCampaignId) ?? testingCampaigns[0];
   const selectedTestCase =
@@ -161,8 +163,10 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
   const authEnabled = agent.health?.auth?.enabled ?? false;
   const registrationOpen = agent.health?.auth?.registrationOpen ?? true;
   // Once accounts exist, the relay refuses non-admin clears; mirror that in
-  // the UI. A stored operator relay token remains the master key.
-  const canClear = !authEnabled || authUser?.role === "admin" || Boolean(relayAuthToken());
+  // the UI. The relay token only helps when it is what we actually SEND —
+  // requests carry the login session first (see credentialToken), so a
+  // logged-in tester cannot clear even with a relay token stored.
+  const canClear = !authEnabled || authUser?.role === "admin" || (!authUser && Boolean(relayAuthToken()));
   const statsLocked = Boolean(agent.health) && authEnabled && !testing;
 
   return (
@@ -453,18 +457,20 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
             </button>
             <button
               type="button"
-              className={`danger ${armedAction === "clear-tester" ? "armed" : ""}`}
+              className={`danger ${armedAction === `clear-tester:${selectedTester?.testerKey}` ? "armed" : ""}`}
               disabled={clearing || !selectedTester || !canClear}
               title={canClear ? undefined : "需要管理员登录"}
               onClick={() =>
                 selectedTester &&
+                // The armed key carries the target: re-selection between arm
+                // and confirm must never clear a different tester.
                 confirmable(
-                  "clear-tester",
+                  `clear-tester:${selectedTester.testerKey}`,
                   () => void runClear({ scope: "tester", testerKey: selectedTester.testerKey })
                 )
               }
             >
-              {armedAction === "clear-tester" ? "确认清除?" : "清除此测试员"}
+              {armedAction === `clear-tester:${selectedTester?.testerKey}` ? "确认清除?" : "清除此测试员"}
             </button>
           </div>
         </div>
@@ -512,18 +518,18 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
             </button>
             <button
               type="button"
-              className={`danger ${armedAction === "clear-session" ? "armed" : ""}`}
+              className={`danger ${armedAction === `clear-session:${selectedSession?.sessionId}` ? "armed" : ""}`}
               disabled={clearing || !selectedSession || !canClear}
               title={canClear ? undefined : "需要管理员登录"}
               onClick={() =>
                 selectedSession &&
                 confirmable(
-                  "clear-session",
+                  `clear-session:${selectedSession.sessionId}`,
                   () => void runClear({ scope: "session", sessionId: selectedSession.sessionId })
                 )
               }
             >
-              {armedAction === "clear-session" ? "确认删除?" : "删除会话"}
+              {armedAction === `clear-session:${selectedSession?.sessionId}` ? "确认删除?" : "删除会话"}
             </button>
           </div>
         </div>

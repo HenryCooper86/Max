@@ -380,8 +380,12 @@ const val AUDIO_STOP_EVENT = """{"type":"audio.stop"}"""
 fun appendAuthToken(url: String, token: String): String {
     val clean = token.trim()
     if (clean.isEmpty()) return url
-    val separator = if ('?' in url) '&' else '?'
-    return url + separator + "token=" + URLEncoder.encode(clean, "UTF-8")
+    // Replace, never duplicate: a pasted relay URL may already carry ?token=.
+    val stripped = url
+        .replace(Regex("([?&])token=[^&#]*&"), "$1")
+        .replace(Regex("[?&]token=[^&#]*"), "")
+    val separator = if ('?' in stripped) '&' else '?'
+    return stripped + separator + "token=" + URLEncoder.encode(clean, "UTF-8")
 }
 
 /** Serializes finished turns for SharedPreferences (saveStoredTranscript in src/lib/persistence.ts). */

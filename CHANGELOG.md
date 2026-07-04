@@ -1,5 +1,82 @@
 # Changelog
 
+## 2026-07-05 — Final hardening sweep: 20+ fixes across relay, web, iOS, Android + password change
+
+Three parallel deep reviews over the auth stack, the web auth UI, and both
+native apps; every confirmed finding fixed in one pass. 181 tests green (7
+new), tsc/eslint/prettier clean, Android compile + unit tests green, Swift
+parse clean, key web flows re-verified in a real browser.
+
+### Security (relay)
+
+- **Registration on token-protected relays requires the relay token or an
+  invite** — open self-registration let any stranger mint a session that
+  bypassed `RELAY_AUTH_TOKEN` (and become admin on a fresh relay). The web
+  client sends its stored relay token with auth POSTs; `validateConfig` now
+  warns about the token+open-registration combination.
+- **Invites are single-use under concurrency** — the code was validated before
+  the scrypt hash and consumed after, so two concurrent registrations (or one
+  racing an admin revocation) could both ride one invite. Re-validated and
+  consumed post-hash; regression tests cover both races.
+- **Corrupt accounts file now fails CLOSED** — a truncated `accounts.json` was
+  indistinguishable from "no users yet" and silently reopened transcripts,
+  clears, and the voice line. Non-ENOENT load errors now lock the gates, log
+  loudly, and refuse registration (no stranger-becomes-admin over broken data).
+- Login racing a user deletion no longer mints a dead token; sessions capped
+  at 20 per user (oldest evicted); invite codes doubled to 128-bit and only
+  logged truncated; failed logins and rate-limit hits are logged;
+  `AUTH_ATTEMPTS_PER_MINUTE` is configurable and the proxy warning now covers
+  the auth limiter.
+
+### Added
+
+- **修改密码** — `POST /auth/password` verifies the current password, swaps
+  salt+hash, and revokes every OTHER session (a stolen token dies with the
+  password) while keeping the caller's. Web UI on the account bar; verified
+  end-to-end in the browser.
+
+### Fixed (web)
+
+- The login gate **booted into "register the first admin" mode for every
+  anonymous visitor** on an established relay (health raced the render) and
+  stuck there. The gate now waits for `/health` (4 s grace), then opens in
+  login mode; the form re-derives when auth status changes.
+- **Space could start a hidden mic session behind the login gate** — the
+  hands-free hotkey now exists only inside the unlocked HUD.
+- **Expired sessions re-lock the gate** — `/auth/me` is revalidated every
+  minute; a dead session drops the identity, closes the socket, and returns to
+  the login page (previously the HUD stayed unlocked with a stale identity
+  forever).
+- One credential precedence everywhere (`credentialToken()`): the WS used
+  relay-token-first while HTTP used session-first, so a stale credential could
+  shadow a valid one differently per channel; `canClear` now mirrors what is
+  actually sent. Health responses are monotonic (no post-login flash of the
+  locked-stats banner); the two-step clear confirms carry their target id (a
+  poll reshuffle can no longer retarget an armed delete); the admin overview
+  refreshes every 30 s and shows a real error instead of eternal "loading";
+  restored sessions re-tie the tester id to the account; empty testing
+  catalogs can't crash the panel.
+
+### Fixed (iOS + Android)
+
+- **A refused upgrade (401) left a zombie hands-free session** — mic
+  capturing, audio route claimed, no reconnect — and the next helmet tap
+  stopped the zombie instead of retrying, so login "didn't work" without a
+  second tap. The rejection now ends hands-free like the idle-close path, and
+  a successful login **auto-restarts the session**.
+- **Stale-identity recovery**: a 401 while "logged in" (expired/revoked
+  session) now drops the dead identity and opens the login form — previously
+  the sheet never auto-opened and showed only the identity row.
+- **The login session token is stored separately** from the manual 认证令牌
+  field, so signing in/out no longer destroys a pasted operator relay token;
+  the socket presents session-first with manual fallback.
+- Android: the settings sheet no longer re-opens on rotation while a 401 is
+  outstanding (the flag is consumed when handled); transcript ids are computed
+  outside the retryable state update. iOS: URLSessions are invalidated when
+  replaced (delegate retain leak). Both: `?token=` is replaced, not
+  duplicated, when the relay URL already carries one; the password field is no
+  longer cleared before a failed login's result.
+
 ## 2026-07-04 — Fix: cumulative ASR partials no longer concatenate into garbage transcripts
 
 Doubao streams cumulative whole-utterance hypotheses within a rider turn

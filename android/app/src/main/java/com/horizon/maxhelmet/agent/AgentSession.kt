@@ -334,6 +334,15 @@ class AgentSession(
         webSocket?.send(buildGuidedDemo(enabled))
     }
 
+    /**
+     * The UI handled the 401 (opened the account settings): consume the flag
+     * so recomposition (rotation, process restore) can't re-open the sheet the
+     * rider just dismissed. A fresh 401 sets it true again.
+     */
+    fun acknowledgeAuthRequired() {
+        _state.update { it.copy(authRequired = false) }
+    }
+
     /** Clears both the live transcript and its persisted copy (清空对话记录). */
     fun clearTranscript() {
         _state.update { it.copy(transcript = emptyList()) }
@@ -494,6 +503,11 @@ class AgentSession(
         // anything else is a configuration problem (e.g. wrong path → 400).
         if (httpStatus != null && httpStatus != 101) {
             reconnectAttempts = 0
+            // End hands-free entirely, like the idle-close branch: a rejected
+            // upgrade left a zombie session (mic capturing, audio routed, no
+            // reconnect) and the next helmet tap STOPPED the zombie instead of
+            // retrying with the fresh login.
+            stop()
             _state.update {
                 it.copy(
                     connection = ConnectionState.DEGRADED,
@@ -597,6 +611,10 @@ class AgentSession(
         if (clean.isEmpty()) return
         val now = System.currentTimeMillis()
         val language = detectLanguage(clean)
+        // Computed OUTSIDE the update lambda: MutableStateFlow.update may
+        // invoke the transform more than once under contention, and a retried
+        // `transcriptTurn += 1` would burn ids (or duplicate them).
+        val nextTurnId = ++transcriptTurn
 
         _state.update { state ->
             val items = state.transcript
@@ -624,9 +642,8 @@ class AgentSession(
             } else {
                 items
             }
-            transcriptTurn += 1
             state.copy(
-                transcript = finalized + TranscriptItem(transcriptTurn, now, speaker, clean, final, language)
+                transcript = finalized + TranscriptItem(nextTurnId, now, speaker, clean, final, language)
             )
         }
         persistTranscript()

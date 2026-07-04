@@ -1,6 +1,6 @@
 // Stateless helpers shared by the agent hook and the HUD components.
 
-import type { AgentHealth } from "../../shared/agent";
+import type { AgentHealth, TesterSessionSummary } from "../../shared/agent";
 import type { TurnState } from "../components/HelmetVisual";
 import type { AudioProcessingState, RiderLocation, TranscriptItem } from "../types";
 import { AUDIO_PROCESSING_LABELS } from "./constants";
@@ -171,6 +171,31 @@ export function exportTestingReport(health: AgentHealth | null, testerId: string
   const link = document.createElement("a");
   link.href = url;
   link.download = `max-testing-report-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+export function exportTestingSession(session: TesterSessionSummary) {
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    session: {
+      ...session,
+      startedAtIso: new Date(session.startedAt).toISOString(),
+      endedAtIso: new Date(session.endedAt).toISOString(),
+      turns: session.turns.map((turn) => ({
+        ...turn,
+        atIso: new Date(turn.at).toISOString()
+      }))
+    }
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `max-test-session-${session.sessionId}-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
   link.style.display = "none";
   document.body.appendChild(link);
   link.click();

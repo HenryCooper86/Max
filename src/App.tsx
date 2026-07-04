@@ -21,6 +21,7 @@ import {
 } from "./lib/constants";
 import {
   audioProcessingLabel,
+  exportTestingSession,
   exportTestingReport,
   exportTranscriptLog,
   formatBytes,
@@ -29,6 +30,30 @@ import {
   formatRelativeTime
 } from "./lib/utils";
 import { useHelmetAgent } from "./hooks/useHelmetAgent";
+
+const TEST_QUALITY_FILTERS = ["all", "pass", "watch", "fail"] as const;
+type TestQualityFilter = (typeof TEST_QUALITY_FILTERS)[number];
+
+function testQualityLabel(quality: TestQualityFilter) {
+  if (quality === "all") return "All";
+  if (quality === "pass") return "Pass";
+  if (quality === "watch") return "Watch";
+  return "Fail";
+}
+
+function testQualityClass(quality: "pass" | "watch" | "fail") {
+  return quality === "pass" ? "good" : quality === "watch" ? "warn" : "alert";
+}
+
+function formatSessionDate(timestamp: number) {
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).format(timestamp);
+}
 
 function barHeight(value: number, max: number) {
   if (!Number.isFinite(value) || value <= 0 || max <= 0) return "3%";
@@ -39,6 +64,9 @@ export function App() {
   const agent = useHelmetAgent();
   const t = UI_TEXT[agent.sessionMemory.language];
   const [selectedTesterKey, setSelectedTesterKey] = useState<string | null>(null);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [testerFilter, setTesterFilter] = useState("");
+  const [qualityFilter, setQualityFilter] = useState<TestQualityFilter>("all");
   const { listening, startMic, stopMic } = agent;
 
   useEffect(() => {
@@ -79,6 +107,7 @@ export function App() {
   const testingTotals = testing?.totals;
   const testingTimeline = testing?.timeline ?? [];
   const testerUsers = testing?.users ?? [];
+  const testingSessions = testing?.sessions ?? [];
   const currentTester = testerUsers
     .filter((user) => user.testerId === agent.testerId)
     .sort((a, b) => Number(b.activeSessions) - Number(a.activeSessions) || b.lastSeenAt - a.lastSeenAt)[0];
@@ -87,6 +116,22 @@ export function App() {
     currentTester ??
     testerUsers[0];
   const selectedTesterTurns = selectedTester?.recentTurns ?? [];
+  const normalizedTesterFilter = testerFilter.trim().toLowerCase();
+  const filteredTesterUsers = testerUsers.filter((user) => {
+    if (!normalizedTesterFilter) return true;
+    return `${user.testerId} ${user.ipAddress} ${user.region}`.toLowerCase().includes(normalizedTesterFilter);
+  });
+  const selectedTesterSessions = selectedTester
+    ? testingSessions.filter((session) => session.testerKey === selectedTester.testerKey)
+    : testingSessions;
+  const filteredTestingSessions = selectedTesterSessions.filter(
+    (session) => qualityFilter === "all" || session.quality === qualityFilter
+  );
+  const selectedSession =
+    (selectedSessionId
+      ? filteredTestingSessions.find((session) => session.sessionId === selectedSessionId)
+      : undefined) ?? filteredTestingSessions[0];
+  const selectedSessionTurns = selectedSession?.turns ?? [];
   const totalDownBytes = (testingTotals?.audioDownBytes ?? 0) + (testingTotals?.controlDownBytes ?? 0);
   const totalBandwidthBytes = (testingTotals?.audioUpBytes ?? 0) + totalDownBytes;
   const maxBandwidthBucket = Math.max(
@@ -111,6 +156,10 @@ export function App() {
       value: `${agent.voiceGender === "female" ? "女声" : "男声"} · ${PERSONALITY_LABELS[agent.voicePersonality]}`
     }
   ];
+  const selectTester = (testerKey: string) => {
+    setSelectedTesterKey(testerKey);
+    setSelectedSessionId(null);
+  };
 
   return (
     <main className="shell">
@@ -284,6 +333,42 @@ export function App() {
               </div>
             </div>
 
+            <div className="testingFilterBar">
+              <label>
+                <span>Find tester</span>
+                <input
+                  value={testerFilter}
+                  onChange={(event) => setTesterFilter(event.target.value)}
+                  placeholder="ID, IP, or region"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </label>
+              <div className="qualityFilter" role="group" aria-label="Session quality filter">
+                {TEST_QUALITY_FILTERS.map((quality) => (
+                  <button
+                    key={quality}
+                    type="button"
+                    className={qualityFilter === quality ? "active" : ""}
+                    aria-pressed={qualityFilter === quality}
+                    onClick={() => {
+                      setQualityFilter(quality);
+                      setSelectedSessionId(null);
+                    }}
+                  >
+                    {testQualityLabel(quality)}
+                  </button>
+                ))}
+              </div>
+              <div className="historyRetention">
+                <span>History</span>
+                <strong>
+                  {testing?.history.persistent ? "persistent" : "memory"} · {testing?.sessions.length ?? 0}/
+                  {testing?.history.maxSessions ?? 0}
+                </strong>
+              </div>
+            </div>
+
             <div className="statGrid">
               <span>
                 <b>{testingTotals?.activeTestSessions ?? agent.health?.metrics?.activeSessions ?? 0}</b>
@@ -377,28 +462,20 @@ export function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {testerUsers.length ? (
-                    testerUsers.map((user) => (
+                  {filteredTesterUsers.length ? (
+                    filteredTesterUsers.map((user) => (
                       <tr
                         className={selectedTester?.testerKey === user.testerKey ? "selected" : ""}
                         key={user.testerKey}
                       >
                         <td>
-                          <button
-                            className="testerLink"
-                            type="button"
-                            onClick={() => setSelectedTesterKey(user.testerKey)}
-                          >
+                          <button className="testerLink" type="button" onClick={() => selectTester(user.testerKey)}>
                             <strong>{user.testerId}</strong>
                             <span>{user.activeSessions ? "active" : `${user.errorEvents} errors`}</span>
                           </button>
                         </td>
                         <td>
-                          <button
-                            className="testerLink"
-                            type="button"
-                            onClick={() => setSelectedTesterKey(user.testerKey)}
-                          >
+                          <button className="testerLink" type="button" onClick={() => selectTester(user.testerKey)}>
                             <strong>{user.ipAddress}</strong>
                             <span>{user.region}</span>
                           </button>
@@ -414,7 +491,7 @@ export function App() {
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={7}>No test sessions yet</td>
+                      <td colSpan={7}>{testerUsers.length ? "No testers match the filter" : "No test sessions yet"}</td>
                     </tr>
                   )}
                 </tbody>
@@ -435,7 +512,10 @@ export function App() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setSelectedTesterKey(currentTester?.testerKey ?? null)}
+                  onClick={() => {
+                    setSelectedTesterKey(currentTester?.testerKey ?? null);
+                    setSelectedSessionId(null);
+                  }}
                   disabled={!currentTester}
                 >
                   Current tester
@@ -460,6 +540,117 @@ export function App() {
                 ) : (
                   <p className="testerConversationEmpty">No transcript captured yet.</p>
                 )}
+              </div>
+            </div>
+
+            <div className="testerSessionPanel">
+              <div className="testerConversationHeader">
+                <div>
+                  <span>Session replay</span>
+                  <strong>
+                    {selectedSession ? formatSessionDate(selectedSession.startedAt) : "No completed session"}
+                  </strong>
+                  {selectedSession ? (
+                    <p>
+                      {selectedSession.testerId} · {selectedSession.ipAddress} ·{" "}
+                      {formatDuration(selectedSession.durationMs)}
+                    </p>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => selectedSession && exportTestingSession(selectedSession)}
+                  disabled={!selectedSession}
+                >
+                  Export session
+                </button>
+              </div>
+              <div className="sessionReplayGrid">
+                <div className="sessionList" aria-label="Completed test sessions">
+                  {filteredTestingSessions.length ? (
+                    filteredTestingSessions.slice(0, 12).map((session) => (
+                      <button
+                        className={`sessionButton ${selectedSession?.sessionId === session.sessionId ? "active" : ""}`}
+                        key={session.sessionId}
+                        type="button"
+                        onClick={() => setSelectedSessionId(session.sessionId)}
+                      >
+                        <span className={`sessionQuality ${testQualityClass(session.quality)}`}>
+                          {testQualityLabel(session.quality)}
+                        </span>
+                        <strong>{formatSessionDate(session.startedAt)}</strong>
+                        <span>
+                          {formatDuration(session.durationMs)} · {session.turns.length} turns
+                        </span>
+                      </button>
+                    ))
+                  ) : (
+                    <p className="testerConversationEmpty">No completed sessions match this view.</p>
+                  )}
+                </div>
+                <div className="sessionDetail">
+                  {selectedSession ? (
+                    <>
+                      <div className="sessionMetricGrid">
+                        <span>
+                          <b>{testQualityLabel(selectedSession.quality)}</b>
+                          Quality
+                        </span>
+                        <span>
+                          <b>{formatBytes(selectedSession.audioUpBytes)}</b>
+                          Mic up
+                        </span>
+                        <span>
+                          <b>{formatBytes(selectedSession.audioDownBytes + selectedSession.controlDownBytes)}</b>
+                          Down
+                        </span>
+                        <span>
+                          <b>
+                            {selectedSession.avgLatencyMs}/{selectedSession.p95LatencyMs}ms
+                          </b>
+                          Avg / P95
+                        </span>
+                        <span>
+                          <b>{selectedSession.errorEvents}</b>
+                          Errors
+                        </span>
+                        <span>
+                          <b>{selectedSession.ttsFallbacks}</b>
+                          Fallbacks
+                        </span>
+                      </div>
+                      <div className="sessionFlags">
+                        {selectedSession.flags.length ? (
+                          selectedSession.flags.map((flag) => <span key={flag}>{flag}</span>)
+                        ) : (
+                          <span>clean run</span>
+                        )}
+                      </div>
+                      <div className="sessionTranscriptList">
+                        {selectedSessionTurns.length ? (
+                          selectedSessionTurns.map((turn, index) => (
+                            <article
+                              className={`testerTurn ${turn.speaker}`}
+                              key={`${turn.sessionId}-${turn.at}-${turn.speaker}-${index}`}
+                            >
+                              <div>
+                                <strong>{turn.speaker === "rider" ? "Rider" : "Max"}</strong>
+                                <span>
+                                  {formatClockTime(turn.at)} · {turn.final ? "final" : "live"}
+                                </span>
+                              </div>
+                              <p>{turn.text}</p>
+                            </article>
+                          ))
+                        ) : (
+                          <p className="testerConversationEmpty">This session has no transcript turns.</p>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <p className="testerConversationEmpty">Select a tester after completing a run to replay it here.</p>
+                  )}
+                </div>
               </div>
             </div>
           </section>

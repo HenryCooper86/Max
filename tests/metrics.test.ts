@@ -103,6 +103,11 @@ describe("relay metrics", () => {
     endTesterSession("relay-1", 61_000);
 
     const snapshot = testingSnapshot(61_000);
+    expect(snapshot.history).toMatchObject({
+      persistent: false,
+      maxTranscriptTurnsPerTester: 80,
+      maxTranscriptTurnsPerSession: 120
+    });
     expect(snapshot.totals).toMatchObject({
       activeTestSessions: 0,
       totalTestSessions: 1,
@@ -113,6 +118,37 @@ describe("relay metrics", () => {
       p95LatencyMs: 123,
       errorEvents: 1,
       ttsFallbacks: 1
+    });
+    expect(snapshot.sessions[0]).toMatchObject({
+      sessionId: "relay-1",
+      testerKey: "rider one@203.0.113.9",
+      testerId: "rider one",
+      ipAddress: "203.0.113.9",
+      region: "Asia/Shanghai",
+      startedAt: 1_000,
+      endedAt: 61_000,
+      durationMs: 60_000,
+      audioUpBytes: 320,
+      audioDownBytes: 640,
+      controlDownBytes: 194,
+      micFrames: 1,
+      serverEvents: 3,
+      latencySamples: 1,
+      avgLatencyMs: 123,
+      p95LatencyMs: 123,
+      errorEvents: 1,
+      ttsFallbacks: 1,
+      quality: "fail",
+      flags: ["errors", "tts-fallback"],
+      turns: [
+        {
+          sessionId: "relay-1",
+          at: 1_350,
+          speaker: "rider",
+          text: "Max, weather?",
+          final: true
+        }
+      ]
     });
     expect(snapshot.users[0]).toMatchObject({
       testerKey: "rider one@203.0.113.9",

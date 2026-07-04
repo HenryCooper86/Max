@@ -50,6 +50,7 @@ const TTS_RESPONSE = 352;
 const TTS_ENDED = 359;
 const ASR_INFO = 450;
 const ASR_RESPONSE = 451;
+const ASR_ENDED = 459;
 const CHAT_RESPONSE = 550;
 const CHAT_ENDED = 559;
 const FULL_SERVER_RESPONSE = 0b1001;
@@ -143,6 +144,32 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe("createDoubaoProvider — cumulative ASR partials", () => {
+  it("finalizes the rider turn as the LAST hypothesis, not the concatenated pile", async () => {
+    stubWeatherFetch();
+    const { client, send } = makeClient();
+    const { provider, upstream } = await startLiveSession(client);
+
+    // Doubao streams cumulative whole-utterance hypotheses within one turn.
+    await upstream.emit("message", jsonFrame(ASR_INFO, {}));
+    for (const hypothesis of ["Max", "Max 前面", "Max 前面堵吗"]) {
+      await upstream.emit("message", jsonFrame(ASR_RESPONSE, { results: [{ text: hypothesis }] }));
+    }
+    await upstream.emit("message", jsonFrame(ASR_ENDED, {}));
+
+    const riderTranscripts = clientEvents(send).filter(
+      (event) => event.type === "transcript" && event.speaker === "rider"
+    );
+    // Three streamed partials plus exactly one final.
+    expect(riderTranscripts).toHaveLength(4);
+    expect(riderTranscripts.at(-1)).toMatchObject({ text: "Max 前面堵吗", final: true });
+    // Regression: appending the cumulative hypotheses produced "Max Max 前面 …".
+    expect(riderTranscripts.at(-1)?.text).not.toContain("Max Max");
+
+    await provider.close();
+  });
 });
 
 describe("createDoubaoProvider — wake-word gating", () => {

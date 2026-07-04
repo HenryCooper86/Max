@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { HelmetVisual } from "./components/HelmetVisual";
 import { SignalBars, WeatherReadout } from "./components/Instruments";
 import { adasDirectionLabel } from "../shared/adas";
@@ -38,6 +38,7 @@ function barHeight(value: number, max: number) {
 export function App() {
   const agent = useHelmetAgent();
   const t = UI_TEXT[agent.sessionMemory.language];
+  const [selectedTesterKey, setSelectedTesterKey] = useState<string | null>(null);
   const { listening, startMic, stopMic } = agent;
 
   useEffect(() => {
@@ -77,10 +78,15 @@ export function App() {
   const testing = agent.health?.testing;
   const testingTotals = testing?.totals;
   const testingTimeline = testing?.timeline ?? [];
-  const currentTester = testing?.users
+  const testerUsers = testing?.users ?? [];
+  const currentTester = testerUsers
     .filter((user) => user.testerId === agent.testerId)
     .sort((a, b) => Number(b.activeSessions) - Number(a.activeSessions) || b.lastSeenAt - a.lastSeenAt)[0];
-  const topTesters = testing?.users.slice(0, 6) ?? [];
+  const selectedTester =
+    (selectedTesterKey ? testerUsers.find((user) => user.testerKey === selectedTesterKey) : undefined) ??
+    currentTester ??
+    testerUsers[0];
+  const selectedTesterTurns = selectedTester?.recentTurns ?? [];
   const totalDownBytes = (testingTotals?.audioDownBytes ?? 0) + (testingTotals?.controlDownBytes ?? 0);
   const totalBandwidthBytes = (testingTotals?.audioUpBytes ?? 0) + totalDownBytes;
   const maxBandwidthBucket = Math.max(
@@ -371,16 +377,31 @@ export function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {topTesters.length ? (
-                    topTesters.map((user) => (
-                      <tr key={user.testerKey}>
+                  {testerUsers.length ? (
+                    testerUsers.map((user) => (
+                      <tr
+                        className={selectedTester?.testerKey === user.testerKey ? "selected" : ""}
+                        key={user.testerKey}
+                      >
                         <td>
-                          <strong>{user.testerId}</strong>
-                          <span>{user.activeSessions ? "active" : `${user.errorEvents} errors`}</span>
+                          <button
+                            className="testerLink"
+                            type="button"
+                            onClick={() => setSelectedTesterKey(user.testerKey)}
+                          >
+                            <strong>{user.testerId}</strong>
+                            <span>{user.activeSessions ? "active" : `${user.errorEvents} errors`}</span>
+                          </button>
                         </td>
                         <td>
-                          <strong>{user.ipAddress}</strong>
-                          <span>{user.region}</span>
+                          <button
+                            className="testerLink"
+                            type="button"
+                            onClick={() => setSelectedTesterKey(user.testerKey)}
+                          >
+                            <strong>{user.ipAddress}</strong>
+                            <span>{user.region}</span>
+                          </button>
                         </td>
                         <td>{user.totalSessions}</td>
                         <td>{formatDuration(user.totalSessionMs)}</td>
@@ -398,6 +419,48 @@ export function App() {
                   )}
                 </tbody>
               </table>
+            </div>
+
+            <div className="testerConversationPanel">
+              <div className="testerConversationHeader">
+                <div>
+                  <span>Conversation history</span>
+                  <strong>{selectedTester?.testerId ?? "No tester selected"}</strong>
+                  {selectedTester ? (
+                    <p>
+                      {selectedTester.ipAddress} · {selectedTester.region} · {selectedTester.totalSessions} sessions ·{" "}
+                      {formatRelativeTime(selectedTester.lastSeenAt)}
+                    </p>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedTesterKey(currentTester?.testerKey ?? null)}
+                  disabled={!currentTester}
+                >
+                  Current tester
+                </button>
+              </div>
+              <div className="testerConversationList">
+                {selectedTesterTurns.length ? (
+                  selectedTesterTurns.map((turn, index) => (
+                    <article
+                      className={`testerTurn ${turn.speaker}`}
+                      key={`${turn.sessionId}-${turn.at}-${turn.speaker}-${index}`}
+                    >
+                      <div>
+                        <strong>{turn.speaker === "rider" ? "Rider" : "Max"}</strong>
+                        <span>
+                          {formatClockTime(turn.at)} · {turn.final ? "final" : "live"}
+                        </span>
+                      </div>
+                      <p>{turn.text}</p>
+                    </article>
+                  ))
+                ) : (
+                  <p className="testerConversationEmpty">No transcript captured yet.</p>
+                )}
+              </div>
             </div>
           </section>
 

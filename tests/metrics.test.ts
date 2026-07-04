@@ -97,6 +97,7 @@ describe("relay metrics", () => {
     recordTesterClientAudio("relay-1", 320, 1_100);
     recordTesterServerAudio("relay-1", 640, 1_200);
     recordTesterServerEvent("relay-1", { type: "metric", latencyMs: 123 }, 88, 1_300);
+    recordTesterServerEvent("relay-1", { type: "transcript", speaker: "rider", text: " Max, weather? " }, 64, 1_350);
     recordTesterServerEvent("relay-1", { type: "error", message: "boom" }, 42, 1_400);
     recordTesterTtsFallback("relay-1", 1_500);
     endTesterSession("relay-1", 61_000);
@@ -107,7 +108,7 @@ describe("relay metrics", () => {
       totalTestSessions: 1,
       audioUpBytes: 320,
       audioDownBytes: 640,
-      controlDownBytes: 130,
+      controlDownBytes: 194,
       avgLatencyMs: 123,
       p95LatencyMs: 123,
       errorEvents: 1,
@@ -121,7 +122,16 @@ describe("relay metrics", () => {
       totalSessions: 1,
       totalSessionMs: 60_000,
       micFrames: 1,
-      serverEvents: 2
+      serverEvents: 3,
+      recentTurns: [
+        {
+          sessionId: "relay-1",
+          at: 1_350,
+          speaker: "rider",
+          text: "Max, weather?",
+          final: true
+        }
+      ]
     });
     expect(buildHealth(2).testing?.users[0]?.testerId).toBe("rider one");
   });

@@ -8,6 +8,14 @@ export type ProviderMode = "mock" | "live";
 export type NetworkState = "online" | "degraded" | "offline";
 export type HazardLevel = RideIntelligence["hazardLevel"];
 
+export type TesterTranscriptTurn = {
+  sessionId: string;
+  at: number;
+  speaker: "rider" | "agent";
+  text: string;
+  final: boolean;
+};
+
 export type ProviderCapabilities = {
   serverVad: boolean;
   synthesizedAudio: boolean;
@@ -38,6 +46,7 @@ export type TesterStats = {
   errorEvents: number;
   ttsFallbacks: number;
   lastSeenAt: number;
+  recentTurns: TesterTranscriptTurn[];
 };
 
 export type TestingTimelineBucket = {

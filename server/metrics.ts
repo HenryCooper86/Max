@@ -1,4 +1,4 @@
-import type { TestingStats, TestingTimelineBucket, TesterStats } from "../shared/agent";
+import type { TestingStats, TestingTimelineBucket, TesterStats, TesterTranscriptTurn } from "../shared/agent";
 
 // In-process relay counters, exposed on /health so the Lightsail deployment
 // can be checked with one curl: how many sessions are live, whether the Doubao
@@ -177,6 +177,7 @@ const UNKNOWN_TESTER_ID = "unknown-tester";
 const UNKNOWN_IP = "unknown-ip";
 const MAX_TESTERS = 50;
 const MAX_LATENCY_SAMPLES_PER_TESTER = 128;
+const MAX_TRANSCRIPT_TURNS_PER_TESTER = 80;
 
 type MutableTesterStats = {
   testerKey: string;
@@ -195,6 +196,7 @@ type MutableTesterStats = {
   ttsFallbacks: number;
   lastSeenAt: number;
   latencyMs: number[];
+  recentTurns: TesterTranscriptTurn[];
 };
 
 type ActiveTestingSession = {
@@ -322,7 +324,8 @@ function getTester(identity: ReturnType<typeof normalizeTesterIdentity>, now: nu
       errorEvents: 0,
       ttsFallbacks: 0,
       lastSeenAt: now,
-      latencyMs: []
+      latencyMs: [],
+      recentTurns: []
     };
     testers.set(identity.testerKey, tester);
     trimInactiveTesters();
@@ -364,6 +367,37 @@ function recordLatency(tester: MutableTesterStats, latencyMs: number, now: numbe
   bucket.latencyTotalMs += rounded;
 }
 
+function normalizeTranscriptSpeaker(value: unknown): TesterTranscriptTurn["speaker"] | null {
+  return value === "rider" || value === "agent" ? value : null;
+}
+
+function recordTranscriptTurn(
+  tester: MutableTesterStats,
+  sessionId: string,
+  payload: Record<string, unknown>,
+  now: number
+) {
+  if (payload.type !== "transcript") return;
+  const speaker = normalizeTranscriptSpeaker(payload.speaker);
+  if (!speaker || typeof payload.text !== "string") return;
+  const text = cleanText(payload.text).slice(0, 2_000);
+  if (!text) return;
+  const final = payload.final !== false;
+  const lastTurn = tester.recentTurns[tester.recentTurns.length - 1];
+
+  if (lastTurn && lastTurn.sessionId === sessionId && lastTurn.speaker === speaker && !lastTurn.final) {
+    lastTurn.at = now;
+    lastTurn.text = text;
+    lastTurn.final = final;
+    return;
+  }
+
+  tester.recentTurns.push({ sessionId, at: now, speaker, text, final });
+  if (tester.recentTurns.length > MAX_TRANSCRIPT_TURNS_PER_TESTER) {
+    tester.recentTurns.splice(0, tester.recentTurns.length - MAX_TRANSCRIPT_TURNS_PER_TESTER);
+  }
+}
+
 function average(values: number[]): number {
   if (!values.length) return 0;
   return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
@@ -395,7 +429,8 @@ function testerSnapshot(tester: MutableTesterStats): TesterStats {
     p95LatencyMs: percentile(tester.latencyMs, 95),
     errorEvents: tester.errorEvents,
     ttsFallbacks: tester.ttsFallbacks,
-    lastSeenAt: tester.lastSeenAt
+    lastSeenAt: tester.lastSeenAt,
+    recentTurns: tester.recentTurns.map((turn) => ({ ...turn }))
   };
 }
 
@@ -488,6 +523,7 @@ export function recordTesterServerEvent(sessionId: string, payload: unknown, byt
   if (payload.type === "metric" && typeof payload.latencyMs === "number") {
     recordLatency(tester, payload.latencyMs, now);
   }
+  recordTranscriptTurn(tester, sessionId, payload, now);
 }
 
 export function recordTesterTtsFallback(sessionId: string, now = Date.now()) {

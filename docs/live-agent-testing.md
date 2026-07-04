@@ -449,17 +449,26 @@ dropped frames increment rather than the stream stalling.
 
 ## 14. Per-tester testing statistics
 
-**What it does:** The web HUD persists a tester/workstation ID and sends it with
-`session.start`, along with the browser time zone as the region. The relay keys
-rows by tester ID + client IP, so a tester name is attached to the network that
-ran it; clients that omit `testerId` become `ip:<address>` instead of
-`anonymous`. The relay aggregates sessions, active runs, duration, mic uplink
-bytes, audio/control downlink bytes, first-audio average/p95 latency, errors,
-TTS fallbacks, recent transcript turns, completed session summaries, quality
-flags, and 30-minute graph buckets by tester/IP. In the HUD, selecting a tester
-ID or IP opens that tester's recent chat history; the session replay panel then
-filters retained runs by pass/watch/fail, shows per-run bandwidth/latency/error
-metrics, and exports one session as JSON evidence.
+**What it does:** The web HUD persists a tester/workstation ID plus the selected
+campaign and test case, then sends them with `session.start` alongside browser
+time zone, app version, git commit, device label, browser language, and network
+type. The relay keys rows by tester ID + client IP, so a tester name is
+attached to the network that ran it; clients that omit `testerId` become
+`ip:<address>` instead of `anonymous`. The relay aggregates sessions, active
+runs, duration, mic uplink bytes, audio/control downlink bytes, first-audio
+average/p95 latency, errors, TTS fallbacks, recent transcript turns, completed
+session summaries, deterministic evaluation checks, quality flags, and
+30-minute graph buckets by tester/IP. In the HUD, selecting a campaign/test case
+sets the expected scenario and mode; selecting a tester ID or IP opens that
+tester's recent chat history; the session replay panel filters retained runs by
+pass/watch/fail, shows per-run bandwidth/latency/error/evaluation metrics, and
+exports one session as JSON evidence.
+
+The catalog lives in `shared/testing.ts`: campaigns, test cases, and golden
+replay fixtures. `server/testing-evaluator.ts` scores completed sessions with
+deterministic checks for server errors, p95 latency, provider fallback, mic
+audio, transcript capture, wake-word gating, language policy, unsafe riding
+advice, emergency guidance, and ADAS alert language.
 
 Completed sessions are appended to `~/.horizon-helmet-testing/sessions.jsonl`
 by default. This path is intentionally outside `/home/ubuntu/app`, so rsync
@@ -467,18 +476,22 @@ deploys do not delete QA evidence. Use `TESTING_HISTORY_DIR=off` to disable
 disk persistence, `TESTING_HISTORY_DIR=/path/to/dir` to move it, or
 `TESTING_HISTORY_MAX_SESSIONS=500` to raise the retained window.
 
-**Code:** `server/metrics.ts` (`beginTesterSession`,
-`recordTesterClientAudio`, `recordTesterServerEvent`, `testingSnapshot`),
-`server/session-controller.ts` (`testerId` validation + attribution), and
-`src/App.tsx` (testing dashboard).
+**Code:** `shared/testing.ts` (campaign/test-case/golden catalog),
+`server/testing-evaluator.ts` (deterministic scoring), `server/metrics.ts`
+(`beginTesterSession`, `recordTesterClientAudio`, `recordTesterServerEvent`,
+`testingSnapshot`), `server/session-controller.ts` (`testerId` + QA metadata
+validation/attribution), and `src/App.tsx` (testing dashboard).
 
 **Unit test:** `tests/metrics.test.ts` covers per-tester sessions, IP fallback,
 region, bandwidth, latency, transcript turns, completed session summaries,
-quality flags, errors, and fallbacks; `tests/websocket.test.ts` validates safe
-`testerId` and `testerRegion` values.
+quality flags, errors, and fallbacks; `tests/testing-evaluator.test.ts` covers
+deterministic scoring; `tests/golden-replay.test.ts` keeps golden fixtures
+passing; `tests/websocket.test.ts` validates safe tester and QA metadata values.
 
 ```bash
 npm test -- "per-tester"
+npm test -- "testing evaluator"
+npm test -- "golden replay"
 npm test -- "tester ids"
 ```
 
@@ -490,10 +503,12 @@ sessions, mic up/downlink bandwidth, latency, and per-user rows. Then check:
 curl -s http://localhost:8787/health | jq '.testing'
 ```
 
-Expected: `testing.users[]` includes `testerKey`, `testerId`, `ipAddress`,
-`region`, and a bounded `recentTurns[]` transcript list; `testing.sessions[]`
-contains retained completed runs with `quality`, `flags`, per-session counters,
-and `turns[]`; `testing.timeline[]` contains graph-ready minute buckets. Behind
+Expected: `testing.catalog` includes campaigns, test cases, and golden replays;
+`testing.users[]` includes `testerKey`, `testerId`, `ipAddress`, `region`, and
+a bounded `recentTurns[]` transcript list; `testing.sessions[]` contains
+retained completed runs with campaign/test/build/device metadata, `quality`,
+`flags`, `evaluation.checks[]`, per-session counters, and `turns[]`;
+`testing.timeline[]` contains graph-ready minute buckets. Behind
 Caddy/Lightsail, `RELAY_TRUST_PROXY=on` is required or the IP will be the local
 proxy address instead of the tester address.
 

@@ -1148,6 +1148,55 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+.testingWorkflowBar {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.75fr) minmax(220px, 0.9fr) minmax(260px, 1.35fr);
+  gap: 10px;
+}
+
+.testingWorkflowBar label,
+.testCaseBrief {
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.testingWorkflowBar span,
+.testCaseBrief span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.testingWorkflowBar select {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  margin-top: 6px;
+  border: 1px solid rgba(196, 218, 216, 0.2);
+  border-radius: 8px;
+  background: rgba(4, 7, 8, 0.72);
+  color: var(--text);
+  padding: 0 10px;
+}
+
+.testCaseBrief strong {
+  display: block;
+  margin-top: 5px;
+  color: #f5fbfa;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.testCaseBrief p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
 .testingFilterBar {
   display: grid;
   grid-template-columns: minmax(180px, 1.1fr) minmax(220px, 1fr) minmax(150px, 0.7fr);
@@ -1566,6 +1615,54 @@ h2 {
   font-size: 0.72rem;
 }
 
+.evaluationList {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.evaluationCheck {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 8px;
+  padding: 8px 10px;
+  border-left: 3px solid rgba(196, 218, 216, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.evaluationCheck.pass {
+  border-left-color: var(--accent);
+}
+
+.evaluationCheck.warn {
+  border-left-color: var(--warn);
+}
+
+.evaluationCheck.fail {
+  border-left-color: var(--danger);
+}
+
+.evaluationCheck strong {
+  color: #f5fbfa;
+  font-size: 0.78rem;
+}
+
+.evaluationCheck span {
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.evaluationCheck p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
 .sessionTranscriptList {
   display: grid;
   gap: 8px;
@@ -1939,6 +2036,7 @@ h2 {
   }
 
   .testerBar,
+  .testingWorkflowBar,
   .testingFilterBar,
   .chartGrid,
   .sessionReplayGrid {

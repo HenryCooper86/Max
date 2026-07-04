@@ -3,12 +3,20 @@ import os from "node:os";
 import path from "node:path";
 import type {
   TesterSessionSummary,
-  TestingQuality,
   TestingStats,
   TestingTimelineBucket,
   TesterStats,
   TesterTranscriptTurn
 } from "../shared/agent";
+import {
+  findTestingCampaign,
+  findTestingTestCase,
+  testingCatalog,
+  type TestingCheckStatus,
+  type TestingEvaluationSummary,
+  type TestingQuality
+} from "../shared/testing";
+import { evaluateTestingSession } from "./testing-evaluator";
 
 // In-process relay counters, exposed on /health so the Lightsail deployment
 // can be checked with one curl: how many sessions are live, whether the Doubao
@@ -217,6 +225,15 @@ type MutableTesterStats = {
 type ActiveTestingSession = {
   sessionId: string;
   testerKey: string;
+  campaignId: string;
+  campaignName: string;
+  testCaseId: string;
+  testCaseName: string;
+  appVersion: string;
+  gitCommit: string;
+  deviceLabel: string;
+  browserLanguage: string;
+  networkType: string;
   startedAt: number;
   audioUpBytes: number;
   audioDownBytes: number;
@@ -233,6 +250,13 @@ type TesterIdentity = {
   testerId?: unknown;
   ipAddress?: unknown;
   region?: unknown;
+  testingCampaignId?: unknown;
+  testingTestCaseId?: unknown;
+  appVersion?: unknown;
+  gitCommit?: unknown;
+  deviceLabel?: unknown;
+  browserLanguage?: unknown;
+  networkType?: unknown;
 };
 
 type MutableTestingBucket = Omit<TestingTimelineBucket, "avgLatencyMs"> & {
@@ -310,16 +334,42 @@ function normalizeRegion(value: unknown, ipAddress: string): string {
   return ipRegion(ipAddress);
 }
 
+function normalizeMetaString(value: unknown, fallback: string, maxLength = 120): string {
+  if (typeof value !== "string") return fallback;
+  const text = cleanText(value).slice(0, maxLength);
+  return text || fallback;
+}
+
+function normalizeSessionMeta(input: TesterIdentity) {
+  const campaign = findTestingCampaign(normalizeMetaString(input.testingCampaignId, "", 80));
+  const testCase = findTestingTestCase(normalizeMetaString(input.testingTestCaseId, "", 80));
+  const campaignForCase = findTestingCampaign(testCase.campaignId);
+  const resolvedCampaign = campaign.id === testCase.campaignId ? campaign : campaignForCase;
+  return {
+    campaignId: resolvedCampaign.id,
+    campaignName: resolvedCampaign.name,
+    testCaseId: testCase.id,
+    testCaseName: testCase.name,
+    appVersion: normalizeMetaString(input.appVersion, process.env.npm_package_version || "0.1.0", 40),
+    gitCommit: normalizeMetaString(input.gitCommit, process.env.GIT_COMMIT || "unknown", 80),
+    deviceLabel: normalizeMetaString(input.deviceLabel, "unknown device", 120),
+    browserLanguage: normalizeMetaString(input.browserLanguage, "unknown language", 40),
+    networkType: normalizeMetaString(input.networkType, "unknown network", 40)
+  };
+}
+
 function normalizeTesterIdentity(input: TesterIdentity | unknown) {
   const profile = isRecord(input) ? input : { testerId: input };
   const ipAddress = normalizeIpAddress(profile.ipAddress);
   const testerId = normalizeTesterId(profile.testerId, ipAddress);
   const region = normalizeRegion(profile.region, ipAddress);
+  const meta = normalizeSessionMeta(profile);
   return {
     testerKey: `${testerId}@${ipAddress}`,
     testerId,
     ipAddress,
-    region
+    region,
+    ...meta
   };
 }
 
@@ -465,19 +515,23 @@ function percentile(values: number[], percentileRank: number): number {
   return sorted[Math.max(0, index)];
 }
 
-function scoreSession(session: ActiveTestingSession): { quality: TestingQuality; flags: string[] } {
-  const flags: string[] = [];
-  const p95LatencyMs = percentile(session.latencyMs, 95);
-  if (session.errorEvents > 0) flags.push("errors");
-  if (session.ttsFallbacks > 0) flags.push("tts-fallback");
-  if (p95LatencyMs > 800) flags.push("p95-latency-critical");
-  else if (p95LatencyMs > 320) flags.push("p95-latency-watch");
-  if (session.micFrames === 0) flags.push("no-mic-audio");
-  if (!session.turns.length) flags.push("no-transcript");
-
-  const quality: TestingQuality =
-    session.errorEvents > 0 || p95LatencyMs > 800 ? "fail" : flags.length > 0 ? "watch" : "pass";
-  return { quality, flags };
+function scoreSession(session: ActiveTestingSession): {
+  quality: TestingQuality;
+  flags: string[];
+  evaluation: TestingEvaluationSummary;
+} {
+  const evaluation = evaluateTestingSession({
+    testCaseId: session.testCaseId,
+    p95LatencyMs: percentile(session.latencyMs, 95),
+    micFrames: session.micFrames,
+    errorEvents: session.errorEvents,
+    ttsFallbacks: session.ttsFallbacks,
+    turns: session.turns
+  });
+  const flags = evaluation.checks
+    .filter((check) => check.status === "fail" || check.status === "warn")
+    .map((check) => check.id);
+  return { quality: evaluation.quality, flags, evaluation };
 }
 
 function completedSessionSummary(
@@ -485,13 +539,22 @@ function completedSessionSummary(
   tester: MutableTesterStats,
   endedAt: number
 ): TesterSessionSummary {
-  const { quality, flags } = scoreSession(session);
+  const { quality, flags, evaluation } = scoreSession(session);
   return {
     sessionId: session.sessionId,
     testerKey: tester.testerKey,
     testerId: tester.testerId,
     ipAddress: tester.ipAddress,
     region: tester.region,
+    campaignId: session.campaignId,
+    campaignName: session.campaignName,
+    testCaseId: session.testCaseId,
+    testCaseName: session.testCaseName,
+    appVersion: session.appVersion,
+    gitCommit: session.gitCommit,
+    deviceLabel: session.deviceLabel,
+    browserLanguage: session.browserLanguage,
+    networkType: session.networkType,
     startedAt: session.startedAt,
     endedAt,
     durationMs: Math.max(0, endedAt - session.startedAt),
@@ -508,12 +571,52 @@ function completedSessionSummary(
     quality,
     flags,
     notes: "",
+    evaluation,
     turns: session.turns.map((turn) => ({ ...turn }))
   };
 }
 
 function normalizeQuality(value: unknown): TestingQuality {
   return value === "pass" || value === "watch" || value === "fail" ? value : "watch";
+}
+
+function normalizeEvaluation(
+  value: unknown,
+  input: {
+    testCaseId: string;
+    p95LatencyMs: number;
+    micFrames: number;
+    errorEvents: number;
+    ttsFallbacks: number;
+    turns: TesterTranscriptTurn[];
+  }
+): TestingEvaluationSummary {
+  if (isRecord(value) && Array.isArray(value.checks)) {
+    const testCase = findTestingTestCase(typeof value.testCaseId === "string" ? value.testCaseId : input.testCaseId);
+    const checks = value.checks.filter(isRecord).map((check) => {
+      const status: TestingCheckStatus =
+        check.status === "pass" || check.status === "warn" || check.status === "fail" || check.status === "skipped"
+          ? check.status
+          : "warn";
+      return {
+        id: normalizeMetaString(check.id, "unknown-check", 80),
+        label: normalizeMetaString(check.label, "Unknown check", 120),
+        status,
+        detail: normalizeMetaString(check.detail, "No detail", 240)
+      };
+    });
+    return {
+      testCaseId: testCase.id,
+      testCaseName: testCase.name,
+      score:
+        typeof value.score === "number" && Number.isFinite(value.score)
+          ? Math.max(0, Math.min(100, Math.round(value.score)))
+          : 0,
+      quality: normalizeQuality(value.quality),
+      checks
+    };
+  }
+  return evaluateTestingSession(input);
 }
 
 function normalizeTranscriptTurn(value: unknown): TesterTranscriptTurn | null {
@@ -537,6 +640,8 @@ function normalizeCompletedSession(value: unknown): TesterSessionSummary | null 
       ? cleanText(value.testerKey).slice(0, 180)
       : `${testerId}@${ipAddress}`;
   const region = normalizeRegion(value.region, ipAddress);
+  const testCase = findTestingTestCase(normalizeMetaString(value.testCaseId, "", 80));
+  const campaign = findTestingCampaign(normalizeMetaString(value.campaignId, testCase.campaignId, 80));
   const startedAt = typeof value.startedAt === "number" && Number.isFinite(value.startedAt) ? value.startedAt : 0;
   const endedAt = typeof value.endedAt === "number" && Number.isFinite(value.endedAt) ? value.endedAt : startedAt;
   if (!sessionId || !startedAt) return null;
@@ -547,6 +652,21 @@ function normalizeCompletedSession(value: unknown): TesterSessionSummary | null 
   const turns = Array.isArray(value.turns)
     ? value.turns.map(normalizeTranscriptTurn).filter((turn): turn is TesterTranscriptTurn => Boolean(turn))
     : [];
+  const p95LatencyMs = numberField("p95LatencyMs");
+  const micFrames = numberField("micFrames");
+  const errorEvents = numberField("errorEvents");
+  const ttsFallbacks = numberField("ttsFallbacks");
+  const evaluation = normalizeEvaluation(value.evaluation, {
+    testCaseId: testCase.id,
+    p95LatencyMs,
+    micFrames,
+    errorEvents,
+    ttsFallbacks,
+    turns
+  });
+  const flags = evaluation.checks
+    .filter((check) => check.status === "fail" || check.status === "warn")
+    .map((check) => check.id);
 
   return {
     sessionId,
@@ -554,26 +674,32 @@ function normalizeCompletedSession(value: unknown): TesterSessionSummary | null 
     testerId,
     ipAddress,
     region,
+    campaignId: campaign.id,
+    campaignName: campaign.name,
+    testCaseId: testCase.id,
+    testCaseName: testCase.name,
+    appVersion: normalizeMetaString(value.appVersion, "unknown", 40),
+    gitCommit: normalizeMetaString(value.gitCommit, "unknown", 80),
+    deviceLabel: normalizeMetaString(value.deviceLabel, "unknown device", 120),
+    browserLanguage: normalizeMetaString(value.browserLanguage, "unknown language", 40),
+    networkType: normalizeMetaString(value.networkType, "unknown network", 40),
     startedAt,
     endedAt,
     durationMs: numberField("durationMs") || Math.max(0, endedAt - startedAt),
     audioUpBytes: numberField("audioUpBytes"),
     audioDownBytes: numberField("audioDownBytes"),
     controlDownBytes: numberField("controlDownBytes"),
-    micFrames: numberField("micFrames"),
+    micFrames,
     serverEvents: numberField("serverEvents"),
     latencySamples: numberField("latencySamples"),
     avgLatencyMs: numberField("avgLatencyMs"),
-    p95LatencyMs: numberField("p95LatencyMs"),
-    errorEvents: numberField("errorEvents"),
-    ttsFallbacks: numberField("ttsFallbacks"),
-    quality: normalizeQuality(value.quality),
-    flags: Array.isArray(value.flags)
-      ? value.flags
-          .filter((flag): flag is string => typeof flag === "string")
-          .map((flag) => cleanText(flag).slice(0, 80))
-      : [],
+    p95LatencyMs,
+    errorEvents,
+    ttsFallbacks,
+    quality: evaluation.quality,
+    flags,
     notes: typeof value.notes === "string" ? cleanText(value.notes).slice(0, 1_000) : "",
+    evaluation,
     turns: turns.slice(-MAX_TRANSCRIPT_TURNS_PER_SESSION)
   };
 }
@@ -739,6 +865,15 @@ export function beginTesterSession(sessionId: string, identityInput: TesterIdent
   testingSessions.set(sessionId, {
     sessionId,
     testerKey: identity.testerKey,
+    campaignId: identity.campaignId,
+    campaignName: identity.campaignName,
+    testCaseId: identity.testCaseId,
+    testCaseName: identity.testCaseName,
+    appVersion: identity.appVersion,
+    gitCommit: identity.gitCommit,
+    deviceLabel: identity.deviceLabel,
+    browserLanguage: identity.browserLanguage,
+    networkType: identity.networkType,
     startedAt: now,
     audioUpBytes: 0,
     audioDownBytes: 0,
@@ -836,6 +971,7 @@ export function testingSnapshot(now = Date.now()): TestingStats {
   });
   return {
     windowMinutes: TESTING_WINDOW_MINUTES,
+    catalog: testingCatalog(),
     history: {
       persistent: Boolean(TESTING_HISTORY_PATH),
       maxSessions: MAX_COMPLETED_SESSIONS,

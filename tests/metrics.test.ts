@@ -91,7 +91,18 @@ describe("relay metrics", () => {
   it("tracks per-tester sessions, bandwidth, latency, and fallbacks", () => {
     beginTesterSession(
       "relay-1",
-      { testerId: " rider one ", ipAddress: "::ffff:203.0.113.9", region: "Asia/Shanghai" },
+      {
+        testerId: " rider one ",
+        ipAddress: "::ffff:203.0.113.9",
+        region: "Asia/Shanghai",
+        testingCampaignId: "wake-word-regression",
+        testingTestCaseId: "wake-word-addressed-only",
+        appVersion: "1.2.3",
+        gitCommit: "abc123",
+        deviceLabel: "macOS browser",
+        browserLanguage: "en-US",
+        networkType: "4g"
+      },
       1_000
     );
     recordTesterClientAudio("relay-1", 320, 1_100);
@@ -108,6 +119,7 @@ describe("relay metrics", () => {
       maxTranscriptTurnsPerTester: 80,
       maxTranscriptTurnsPerSession: 120
     });
+    expect(snapshot.catalog.testCases.some((testCase) => testCase.id === "wake-word-addressed-only")).toBe(true);
     expect(snapshot.totals).toMatchObject({
       activeTestSessions: 0,
       totalTestSessions: 1,
@@ -125,6 +137,15 @@ describe("relay metrics", () => {
       testerId: "rider one",
       ipAddress: "203.0.113.9",
       region: "Asia/Shanghai",
+      campaignId: "wake-word-regression",
+      campaignName: "Wake Word Regression",
+      testCaseId: "wake-word-addressed-only",
+      testCaseName: "Wake Word Addressed Only",
+      appVersion: "1.2.3",
+      gitCommit: "abc123",
+      deviceLabel: "macOS browser",
+      browserLanguage: "en-US",
+      networkType: "4g",
       startedAt: 1_000,
       endedAt: 61_000,
       durationMs: 60_000,
@@ -140,6 +161,11 @@ describe("relay metrics", () => {
       ttsFallbacks: 1,
       quality: "fail",
       flags: ["errors", "tts-fallback"],
+      evaluation: {
+        testCaseId: "wake-word-addressed-only",
+        score: expect.any(Number),
+        quality: "fail"
+      },
       turns: [
         {
           sessionId: "relay-1",

@@ -26,6 +26,7 @@ const RIDER_INTENTS = new Set(["navigation", "weather", "emergency", "diagnostic
 const MAX_MEMORY_DESTINATION_BYTES = 256;
 const MAX_TESTER_ID_BYTES = 80;
 const MAX_TESTER_REGION_BYTES = 96;
+const MAX_TESTING_META_BYTES = 160;
 
 export function normalizeRawData(data: RawData): Buffer {
   if (Buffer.isBuffer(data)) return data;
@@ -56,6 +57,13 @@ function assertOptionalTesterRegion(value: unknown) {
   if (value === undefined) return;
   if (typeof value !== "string" || Buffer.byteLength(value) > MAX_TESTER_REGION_BYTES || hasControlCharacter(value)) {
     throw new Error("Invalid testerRegion");
+  }
+}
+
+function assertOptionalMetadataString(value: unknown, field: string, maxBytes = MAX_TESTING_META_BYTES) {
+  if (value === undefined) return;
+  if (typeof value !== "string" || Buffer.byteLength(value) > maxBytes || hasControlCharacter(value)) {
+    throw new Error(`Invalid ${field}`);
   }
 }
 
@@ -125,6 +133,13 @@ export function parseClientEvent(data: RawData): ClientEvent {
   assertOptionalEnum(value.scenario, DEMO_SCENARIOS, "scenario");
   assertOptionalTesterId(value.testerId);
   assertOptionalTesterRegion(value.testerRegion);
+  assertOptionalMetadataString(value.testingCampaignId, "testingCampaignId", 80);
+  assertOptionalMetadataString(value.testingTestCaseId, "testingTestCaseId", 80);
+  assertOptionalMetadataString(value.appVersion, "appVersion", 40);
+  assertOptionalMetadataString(value.gitCommit, "gitCommit", 80);
+  assertOptionalMetadataString(value.deviceLabel, "deviceLabel", 120);
+  assertOptionalMetadataString(value.browserLanguage, "browserLanguage", 40);
+  assertOptionalMetadataString(value.networkType, "networkType", 40);
   assertOptionalCoordinate(value.lat, -90, 90, "lat");
   assertOptionalCoordinate(value.lon, -180, 180, "lon");
   assertOptionalMemory(value.memory);
@@ -176,6 +191,8 @@ export class AgentSessionController {
             ? {
                 testerId: event.testerId,
                 testerRegion: event.testerRegion,
+                testingCampaignId: event.testingCampaignId,
+                testingTestCaseId: event.testingTestCaseId,
                 clientIp: this.clientIp,
                 scenario: event.scenario,
                 rideMode: event.rideMode,
@@ -188,7 +205,14 @@ export class AgentSessionController {
         beginTesterSession(this.relaySessionId, {
           testerId: event.testerId,
           ipAddress: this.clientIp,
-          region: event.testerRegion ?? this.requestRegion
+          region: event.testerRegion ?? this.requestRegion,
+          testingCampaignId: event.testingCampaignId,
+          testingTestCaseId: event.testingTestCaseId,
+          appVersion: event.appVersion,
+          gitCommit: event.gitCommit,
+          deviceLabel: event.deviceLabel,
+          browserLanguage: event.browserLanguage,
+          networkType: event.networkType
         });
         await this.provider.start(event);
       }

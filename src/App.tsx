@@ -3,6 +3,7 @@ import { HelmetVisual } from "./components/HelmetVisual";
 import { SignalBars, WeatherReadout } from "./components/Instruments";
 import { adasDirectionLabel } from "../shared/adas";
 import { combineHazardLevels, scenarioLabel } from "../shared/ride";
+import { TESTING_CAMPAIGNS, TESTING_TEST_CASES, defaultTestCaseForCampaign } from "../shared/testing";
 import {
   CONNECTION_LABELS,
   CREDENTIAL_LABELS,
@@ -106,6 +107,14 @@ export function App() {
   const testing = agent.health?.testing;
   const testingTotals = testing?.totals;
   const testingTimeline = testing?.timeline ?? [];
+  const testingCampaigns = testing?.catalog.campaigns ?? TESTING_CAMPAIGNS;
+  const testingTestCases = testing?.catalog.testCases ?? TESTING_TEST_CASES;
+  const selectedCampaign =
+    testingCampaigns.find((campaign) => campaign.id === agent.testingCampaignId) ?? testingCampaigns[0];
+  const selectedTestCase =
+    testingTestCases.find((testCase) => testCase.id === agent.testingTestCaseId) ??
+    defaultTestCaseForCampaign(selectedCampaign.id);
+  const testCasesForCampaign = testingTestCases.filter((testCase) => testCase.campaignId === selectedCampaign.id);
   const testerUsers = testing?.users ?? [];
   const testingSessions = testing?.sessions ?? [];
   const currentTester = testerUsers
@@ -333,6 +342,43 @@ export function App() {
               </div>
             </div>
 
+            <div className="testingWorkflowBar">
+              <label>
+                <span>Campaign</span>
+                <select
+                  value={agent.testingCampaignId}
+                  onChange={(event) => agent.setTestingCampaignId(event.target.value)}
+                >
+                  {testingCampaigns.map((campaign) => (
+                    <option key={campaign.id} value={campaign.id}>
+                      {campaign.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Test case</span>
+                <select
+                  value={agent.testingTestCaseId}
+                  onChange={(event) => agent.setTestingTestCaseId(event.target.value)}
+                >
+                  {testCasesForCampaign.map((testCase) => (
+                    <option key={testCase.id} value={testCase.id}>
+                      {testCase.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="testCaseBrief">
+                <span>{selectedTestCase.id}</span>
+                <strong>{selectedTestCase.description}</strong>
+                <p>
+                  {scenarioLabel(selectedTestCase.scenario)} · {selectedTestCase.rideMode} · p95 ≤{" "}
+                  {selectedTestCase.maxP95LatencyMs}ms
+                </p>
+              </div>
+            </div>
+
             <div className="testingFilterBar">
               <label>
                 <span>Find tester</span>
@@ -552,7 +598,7 @@ export function App() {
                   </strong>
                   {selectedSession ? (
                     <p>
-                      {selectedSession.testerId} · {selectedSession.ipAddress} ·{" "}
+                      {selectedSession.campaignName} · {selectedSession.testCaseName} ·{" "}
                       {formatDuration(selectedSession.durationMs)}
                     </p>
                   ) : null}
@@ -618,6 +664,18 @@ export function App() {
                           <b>{selectedSession.ttsFallbacks}</b>
                           Fallbacks
                         </span>
+                        <span>
+                          <b>{selectedSession.evaluation.score}</b>
+                          Eval score
+                        </span>
+                        <span>
+                          <b>{selectedSession.deviceLabel}</b>
+                          Device
+                        </span>
+                        <span>
+                          <b>{selectedSession.networkType}</b>
+                          Network
+                        </span>
                       </div>
                       <div className="sessionFlags">
                         {selectedSession.flags.length ? (
@@ -625,6 +683,15 @@ export function App() {
                         ) : (
                           <span>clean run</span>
                         )}
+                      </div>
+                      <div className="evaluationList">
+                        {selectedSession.evaluation.checks.map((check) => (
+                          <div className={`evaluationCheck ${check.status}`} key={check.id}>
+                            <strong>{check.label}</strong>
+                            <span>{check.status}</span>
+                            <p>{check.detail}</p>
+                          </div>
+                        ))}
                       </div>
                       <div className="sessionTranscriptList">
                         {selectedSessionTurns.length ? (

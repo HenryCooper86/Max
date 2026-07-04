@@ -86,6 +86,64 @@ describe("validateAgentEvent", () => {
     expect(validateAgentEvent({ ...base, hazardLevel: "purple" })).toBeNull();
   });
 
+  it("rejects hazard alerts with unknown threat or direction values", () => {
+    const base = {
+      type: "hazard.alert",
+      threat: "rear_approach",
+      direction: "rear",
+      severity: "critical",
+      label: "后方",
+      message: "后方车辆快速接近",
+      advice: "保持车道"
+    };
+    expect(validateAgentEvent(base)).toMatchObject({ threat: "rear_approach", direction: "rear" });
+    // "behind" would render an undefined direction chip on the safety banner.
+    expect(validateAgentEvent({ ...base, direction: "behind" })).toBeNull();
+    expect(validateAgentEvent({ ...base, threat: "meteor_strike" })).toBeNull();
+  });
+
+  it("sanitizes session.started capabilities instead of blind-casting the record", () => {
+    const event = validateAgentEvent({
+      type: "session.started",
+      provider: "doubao",
+      mode: "live",
+      capabilities: { serverVad: "yes", bargeIn: true, extraField: 1 },
+      unexpected: "field"
+    });
+    expect(event).toEqual({
+      type: "session.started",
+      provider: "doubao",
+      mode: "live",
+      capabilities: {
+        serverVad: false, // "yes" is not the boolean true
+        synthesizedAudio: false,
+        transcriptEvents: false,
+        bargeIn: true,
+        voiceSelection: false,
+        weatherContext: false,
+        sessionMemory: false,
+        emergencyMode: false
+      }
+    });
+  });
+
+  it("accepts the numeric Open-Meteo is_day form without flipping night to day", () => {
+    expect(validateAgentEvent({ type: "weather", description: "晴", isDay: 0 })).toMatchObject({ isDay: false });
+    expect(validateAgentEvent({ type: "weather", description: "晴", isDay: 1 })).toMatchObject({ isDay: true });
+    expect(validateAgentEvent({ type: "weather", description: "晴", isDay: false })).toMatchObject({ isDay: false });
+  });
+
+  it("clamps session.memory destination by code point", () => {
+    const long = "旗".repeat(80);
+    const event = validateAgentEvent({
+      type: "session.memory",
+      language: "zh",
+      responseMode: "concise",
+      destination: long
+    });
+    expect(event).toMatchObject({ destination: "旗".repeat(64) });
+  });
+
   it("validates session.memory enums", () => {
     expect(validateAgentEvent({ type: "session.memory", language: "zh", responseMode: "concise" })).toMatchObject({
       language: "zh",

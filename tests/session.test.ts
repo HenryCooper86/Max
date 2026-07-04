@@ -49,6 +49,28 @@ describe("session memory and safety policy", () => {
     expect(memory.responseMode).toBe("concise");
   });
 
+  it("keeps the session language when a Chinese rider drops one short Latin token", () => {
+    const zhMemory = updateSessionMemory(createSessionMemory("ride"), "帮我看看天气", "ride");
+    expect(zhMemory.language).toBe("zh");
+    // "OK" / "yes" must not flip the whole session (prompt + TTS voice) to English…
+    expect(updateSessionMemory(zhMemory, "OK", "ride").language).toBe("zh");
+    expect(updateSessionMemory(zhMemory, "yes", "ride").language).toBe("zh");
+    // …while distinctly English speech still switches…
+    expect(updateSessionMemory(zhMemory, "what's the weather like", "ride").language).toBe("en");
+    // …and any Han character switches straight back.
+    const enMemory = updateSessionMemory(zhMemory, "navigate home please", "ride");
+    expect(enMemory.language).toBe("en");
+    expect(updateSessionMemory(enMemory, "好的", "ride").language).toBe("zh");
+  });
+
+  it("does not classify 风格 (style) or 中风 (stroke) as weather", () => {
+    expect(inferIntent("换个说话风格")).toBe("casual");
+    expect(inferIntent("有人中风了怎么办")).toBe("casual");
+    // Real weather words still match.
+    expect(inferIntent("外面风大吗")).toBe("weather");
+    expect(inferIntent("台风要来了吗")).toBe("weather");
+  });
+
   it("does not capture Chinese verb complements as destinations", () => {
     // 到/回 appear in everyday verbs (听到 "heard", 迟到 "was late") — only
     // navigation-shaped turns may set a destination.

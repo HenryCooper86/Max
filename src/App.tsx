@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { HelmetVisual } from "./components/HelmetVisual";
 import { SignalBars, WeatherReadout } from "./components/Instruments";
 import { adasDirectionLabel } from "../shared/adas";
@@ -68,7 +68,17 @@ export function App() {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [testerFilter, setTesterFilter] = useState("");
   const [qualityFilter, setQualityFilter] = useState<TestQualityFilter>("all");
-  const { listening, startMic, stopMic } = agent;
+  const { listening, starting, startMic, stopMic } = agent;
+
+  // While a start is in flight (permission prompts, socket open) a second
+  // press means "stop" — treating it as another start inverted the intent.
+  const toggleHandsFreeSession = useCallback(() => {
+    if (listening || starting) {
+      stopMic();
+    } else {
+      void startMic();
+    }
+  }, [listening, starting, startMic, stopMic]);
 
   useEffect(() => {
     const toggleHandsFree = (event: KeyboardEvent) => {
@@ -82,16 +92,12 @@ export function App() {
       }
 
       event.preventDefault();
-      if (listening) {
-        stopMic();
-      } else {
-        void startMic();
-      }
+      toggleHandsFreeSession();
     };
 
     window.addEventListener("keydown", toggleHandsFree);
     return () => window.removeEventListener("keydown", toggleHandsFree);
-  }, [listening, startMic, stopMic]);
+  }, [toggleHandsFreeSession]);
 
   const agentState = useMemo(() => {
     if (agent.listening) return agent.sessionMemory.language === "en" ? "Hands-free" : "免提中";
@@ -262,7 +268,7 @@ export function App() {
               <button
                 className={`micButton ${agent.listening ? "active" : ""}`}
                 aria-pressed={agent.listening}
-                onClick={agent.listening ? agent.stopMic : agent.startMic}
+                onClick={toggleHandsFreeSession}
                 type="button"
               >
                 {agent.listening ? "结束免提" : "开启免提"}

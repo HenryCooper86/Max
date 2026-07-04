@@ -23,6 +23,21 @@ export type AdasThreat =
 /** ADAS alerts only ever raise caution or critical — never "normal". */
 export type AdasSeverity = "caution" | "critical";
 
+// Canonical value lists, for runtime validation of relay events (shared/events.ts)
+// so a skewed relay can't push an unknown direction/threat into client state.
+export const ADAS_DIRECTIONS: readonly AdasDirection[] = ["front", "rear", "left", "right", "left_rear", "right_rear"];
+export const ADAS_THREATS: readonly AdasThreat[] = [
+  "rear_approach",
+  "forward_collision",
+  "left_blind_spot",
+  "right_blind_spot",
+  "lane_departure",
+  "left_cross_traffic",
+  "right_cross_traffic",
+  "pedestrian_ahead",
+  "tailgating"
+];
+
 export type AdasScenario = {
   threat: AdasThreat;
   direction: AdasDirection;

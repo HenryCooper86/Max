@@ -386,6 +386,14 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
       guided = enabled;
       if (!enabled) {
         stopGuidedTour();
+        // The tour's ADAS chapter runs the injector on a fast cadence; turning
+        // the tour off must not leave it firing. If hands-free audio is still
+        // running, fall back to the normal per-scenario cadence.
+        hazardInjector.stop();
+        if (timer) {
+          const adasDemo = scenario === "adas";
+          hazardInjector.start(adasDemo ? 5000 : 11000, adasDemo ? 2000 : 4000);
+        }
         send({ type: "status", state: "ready", detail: "巡游演示已关闭" });
         return;
       }

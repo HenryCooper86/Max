@@ -1,5 +1,105 @@
 # Changelog
 
+## 2026-07-04 — Review sweep: statistics-framework hardening, wake-scoring parity, client races
+
+Full-project review (relay, shared modules, web client) with fixes applied
+together: 156 tests green (16 new), tsc/eslint/prettier clean, production
+build verified.
+
+### Security
+
+- **Testing stats on `/health` are token-gated** — the new QA block carries
+  tester IPs, regions, and full chat transcripts, and `/health` is
+  unauthenticated by design. When `RELAY_AUTH_TOKEN` is set, the `testing`
+  block is now included only for callers presenting the token (`?token=…` or
+  `Authorization: Bearer …`, timing-safe compare in
+  `server/auth.ts testingStatsAuthorized`); liveness fields stay open so the
+  one-curl deployment check keeps working, and the open no-token internal mode
+  is unchanged. The web HUD sends its stored token with the health poll, so
+  the dashboard works on protected relays.
+
+### Fixed
+
+- **Tester accounting under load** (`server/metrics.ts`) — creating tester
+  #51 while 50 were busy evicted the just-created record (trim ran before the
+  session was marked active), which orphaned the session in the active map
+  forever and dropped its completed summary. Trim now runs after activation,
+  `endTesterSession` removes the session unconditionally and builds the
+  summary from identity denormalized onto the session, and
+  `AgentSessionController.close()` settles the stats in a `finally` so a
+  provider close failure can't leave a phantom active session.
+- **Durable history replay** (`server/metrics.ts`) — the loader counted the
+  file's trailing newline as a line (silently losing the oldest retained
+  session at the cap) and one corrupt line (partial write from a crash)
+  discarded every session recorded after it. Blank lines are filtered before
+  the cap slice and each line parses in its own try/catch. The append path is
+  now async (serialized queue) instead of `appendFileSync` inside the
+  WebSocket close handler, and a file grown past 4× the cap is compacted at
+  startup via write-then-rename.
+- **Wake-word scoring parity** (`server/testing-evaluator.ts`) — the
+  evaluator's private regex accepted only literal "max"/"麦克斯" while the live
+  gate accepts the full variant list ("mack", 马克斯, 迈克斯, …), so
+  correctly-gated sessions scored as deterministic wake-word failures in the
+  exact campaign built to catch regressions. It now calls
+  `containsWakePhrase` from `shared/wake.ts` (which also stops counting
+  false friends like 麦克斯韦). Negated safety phrasing ("don't speed up",
+  不要看手机) no longer trips the unsafe-advice check.
+- **Rider utterances no longer merge in the drilldown**
+  (`server/providers/doubao.ts`) — rider transcripts were only ever emitted
+  non-final, so two separate utterances with no agent turn between them
+  (exactly the suppressed-reply case) merged and destroyed the earlier text
+  in the tester chat history. `AsrEnded` now flushes the accumulated turn as
+  a final rider transcript, once per turn.
+- **Guided-demo hazard injector leak** (`server/providers/mock.ts`) — turning
+  the guided tour off during its ADAS chapter left alerts firing every 5 s;
+  the injector is now stopped and, if hands-free is still running, restarted
+  at the normal per-scenario cadence.
+- **Event validation gaps** (`shared/events.ts`) — `hazard.alert`
+  threat/direction are validated against the canonical catalogs (new
+  `ADAS_THREATS`/`ADAS_DIRECTIONS` exports); `session.started` builds a
+  sanitized capabilities object instead of blind-casting the record; numeric
+  Open-Meteo `is_day: 0` no longer renders night as day; `session.memory`
+  destination is clamped by code point to the shared 64-char cap.
+- **Session language no longer thrashes** (`shared/session.ts`) — one short
+  Latin token ("OK", "yes") flipped a Chinese session's prompt and TTS voice
+  to English until the next Han turn; the preference now switches to English
+  only on distinctly English speech. 风格 (style) and 中风 (stroke) no longer
+  classify as weather; memory-snapshot destinations truncate by code point so
+  a surrogate pair can't be bisected into the prompt.
+- **Web client races** (`src/`) — a second Space press/button click during
+  the multi-await hands-free startup now stops the session instead of
+  launching a parallel start (the old path inverted the rider's intent and
+  double-sent `audio.start`); `releaseMic` during an in-flight mic setup no
+  longer resurrects a live MediaStream and AudioContext nobody will stop
+  (stuck mic indicator); the WebSocket message handler gained the same
+  stale-socket guard as close/error so a superseded session can't play PCM
+  into the new one; the playback context is created inside the user gesture
+  (before the location/socket/permission awaits) so Safari doesn't mute the
+  first reply; barge-in status ("已打断 Max") only shows when agent speech was
+  actually cut; a frames-only metric no longer zeroes the latency readout;
+  empty PCM frames can't resurrect a closed AudioContext; restored transcript
+  rows re-derive a missing `language` instead of rendering Chinese as "EN";
+  clearing the Tester ID field mid-edit no longer burns the tester's stats
+  continuity on reload.
+
+### Changed
+
+- Health polling pauses while the tab is hidden and refreshes immediately on
+  return; dropped-frame stats update at most once a second during reconnect
+  backoff (was one render per 20 ms frame); a pending reconnect timer is
+  cleared once a connection opens; the five duplicated settings-persistence
+  blocks in `useHelmetAgent` collapsed into one `persistSettings()` helper.
+
+### Tests
+
+- New: `tests/testing-history.test.ts` (trailing-newline cap, corrupt-line
+  resilience, startup compaction — fresh module import per case). Extended:
+  auth (`testingStatsAuthorized`), metrics (gated `/health`, 51-concurrent-
+  tester accounting), evaluator (live-gate wake variants, 麦克斯韦 false
+  friend, negated advice), events (unknown threat/direction, capabilities
+  sanitization, numeric `is_day`, destination clamp), session (language
+  stickiness, 风格/中风).
+
 ## 2026-07-03 — Roadmap: wake-chain cap, mid-ride location, live captions, event validation
 
 The five improvements queued by the morning's review, implemented together:

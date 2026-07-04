@@ -18,7 +18,9 @@ export type SessionMemory = {
 // targeted lookbehind instead (风 in 麦克风 "microphone").
 const EMERGENCY_PATTERN =
   /事故|车祸|摔车|摔倒|摔了|撞|救命|急救|报警|受伤|受了伤|\b(?:help|crash(?:ed)?|emergency|ambulance|fell|hurt|injured|accident)\b/i;
-const WEATHER_PATTERN = /天气|下雨|(?<!麦克)风|温度|\b(?:weather|rain(?:y|ing)?|wind(?:y)?)\b/i;
+// 风 alone also appears in non-weather words: 麦克风 (microphone), 中风
+// (stroke), 风格 (style) — exclude those specific collisions.
+const WEATHER_PATTERN = /天气|下雨|(?<!麦克|中)风(?!格)|温度|\b(?:weather|rain(?:y|ing)?|wind(?:y)?)\b/i;
 const NAVIGATION_PATTERN = /导航|路线|回家|出口|左转|右转|\b(?:route|navigate|home|turn)\b/i;
 const DIAGNOSTIC_PATTERN = /异响|故障|轮胎|刹车|发动机|油量|\b(?:diagnostics?|engine|brake|tires?|tyres?|fuel)\b/i;
 const GROUP_PATTERN = /小队|队友|发送|\b(?:eta|group|team|share)\b/i;
@@ -55,11 +57,25 @@ export function updateSessionMemory(memory: SessionMemory, text: string, rideMod
   // and was injected into the prompt as 目的地 for the rest of the ride.
   const destination = (intent === "navigation" ? inferDestination(text) : undefined) ?? memory.destination;
   return {
-    language: detectLanguage(text),
+    language: preferredLanguage(text, memory.language),
     destination,
     lastIntent: intent,
     responseMode: responseModeForRide(rideMode, intent)
   };
+}
+
+/**
+ * Session-level language preference. detectLanguage is per-utterance
+ * best-effort; adopting it wholesale made one Latin token ("OK", "yes", a road
+ * name) flip a Chinese session to English TTS/prompting until the next Han
+ * turn. Switch to English only on distinctly English speech; any Han character
+ * still switches to Chinese immediately.
+ */
+function preferredLanguage(text: string, previous: SupportedLanguage): SupportedLanguage {
+  if (detectLanguage(text) === "zh") return "zh";
+  const latinWords = text.match(/[a-z]+/gi) ?? [];
+  const letterCount = latinWords.reduce((sum, word) => sum + word.length, 0);
+  return latinWords.length >= 2 || letterCount >= 6 ? "en" : previous;
 }
 
 export function createSessionMemory(mode: RideMode): SessionMemory {
@@ -100,7 +116,9 @@ export function restoreSessionMemory(
       : undefined;
   const destination =
     typeof snapshot.destination === "string" && snapshot.destination.trim()
-      ? snapshot.destination.trim().slice(0, MAX_MEMORY_DESTINATION_CHARS)
+      ? // Slice by code point — a UTF-16 slice can bisect a surrogate pair and
+        // embed a lone surrogate in the prompt.
+        [...snapshot.destination.trim()].slice(0, MAX_MEMORY_DESTINATION_CHARS).join("")
       : undefined;
 
   return {

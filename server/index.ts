@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
-import { authorizeUpgrade, clientAddress, clientRegionHint } from "./auth";
+import { authorizeUpgrade, clientAddress, clientRegionHint, testingStatsAuthorized } from "./auth";
 import { buildHealth, config, describeConfig, validateConfig } from "./config";
 import { createLogger, shortSessionId } from "./logger";
 import { metrics, startMetricsHistory } from "./metrics";
@@ -22,8 +22,10 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 const log = createLogger("relay");
 
-app.get("/health", (_req, res) => {
-  res.json(buildHealth(Math.round(process.uptime())));
+app.get("/health", (req, res) => {
+  // Liveness stays open; the per-tester QA block (IPs, transcripts) requires
+  // the relay token once one is configured.
+  res.json(buildHealth(Math.round(process.uptime()), testingStatsAuthorized(req)));
 });
 
 // Serve the built client when a production bundle exists. In development the

@@ -25,7 +25,15 @@ export function useMicCapture({ socketRef, transmittingRef }: Params) {
   // double-click) must share one getUserMedia, or the loser's MediaStream
   // leaks (mic indicator stays on) and both worklets stream duplicate frames.
   const micSetupRef = useRef<Promise<void> | null>(null);
+  // Bumped by releaseMic. A build that started before the bump finished after
+  // teardown would otherwise repopulate the refs with a live MediaStream and
+  // running AudioContext nothing will ever stop (mic indicator stuck on).
+  const micGenerationRef = useRef(0);
   const frameWindowRef = useRef<PacketWindow>(createPacketWindow());
+  // Last time a dropped-frame count was pushed to React state. During a
+  // reconnect with the mic hot, every 20 ms frame is dropped — rendering the
+  // HUD 50×/s for a counter nobody can read that fast.
+  const lastDropUpdateRef = useRef(0);
   // Last visor level pushed to React state; used to skip re-renders when the
   // quantized level is unchanged (e.g. steady silence during a ride).
   const lastVoiceLevelRef = useRef(0);
@@ -46,6 +54,7 @@ export function useMicCapture({ socketRef, transmittingRef }: Params) {
     return micSetupRef.current;
 
     async function buildMicGraph() {
+      const generation = micGenerationRef.current;
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -56,6 +65,12 @@ export function useMicCapture({ socketRef, transmittingRef }: Params) {
           sampleSize: { ideal: 16 }
         } as MediaTrackConstraints
       });
+      // releaseMic ran while getUserMedia was pending (unmount/disconnect):
+      // free the stream instead of resurrecting a graph nobody will stop.
+      if (generation !== micGenerationRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        throw new Error("麦克风已在启动过程中被释放");
+      }
       const [track] = stream.getAudioTracks();
       if (track) setAudioProcessing(readAudioProcessingSettings(track));
       const audioContext = new AudioContext();
@@ -89,7 +104,13 @@ export function useMicCapture({ socketRef, transmittingRef }: Params) {
           } else {
             const result = recordDroppedFrame(frameWindowRef.current);
             frameWindowRef.current = result.window;
-            setPacketStats((stats) => ({ ...stats, droppedFrames: result.metric.droppedFrames }));
+            // At most one state update per second — during reconnect backoff
+            // every 20 ms frame lands here.
+            const now = performance.now();
+            if (now - lastDropUpdateRef.current >= 1000) {
+              lastDropUpdateRef.current = now;
+              setPacketStats((stats) => ({ ...stats, droppedFrames: result.metric.droppedFrames }));
+            }
           }
         } else if (message.type === "level") {
           // Quantize to ~0.02 and drop no-change updates so a steady level (notably
@@ -102,6 +123,14 @@ export function useMicCapture({ socketRef, transmittingRef }: Params) {
         }
       };
 
+      // Second checkpoint: addModule/worklet setup is async too.
+      if (generation !== micGenerationRef.current) {
+        workletNode.port.onmessage = null;
+        stream.getTracks().forEach((track) => track.stop());
+        void audioContext.close();
+        throw new Error("麦克风已在启动过程中被释放");
+      }
+
       source.connect(workletNode);
       workletNode.connect(audioContext.destination);
 
@@ -113,6 +142,7 @@ export function useMicCapture({ socketRef, transmittingRef }: Params) {
 
   const releaseMic = useCallback(() => {
     transmittingRef.current = false;
+    micGenerationRef.current += 1;
     micSetupRef.current = null;
     if (workletNodeRef.current) {
       workletNodeRef.current.port.onmessage = null;

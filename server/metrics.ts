@@ -225,6 +225,11 @@ type MutableTesterStats = {
 type ActiveTestingSession = {
   sessionId: string;
   testerKey: string;
+  // Identity is denormalized onto the session so a completed-session summary
+  // can still be written when the tester record was evicted mid-session.
+  testerId: string;
+  ipAddress: string;
+  region: string;
   campaignId: string;
   campaignName: string;
   testCaseId: string;
@@ -423,7 +428,6 @@ function getTester(identity: ReturnType<typeof normalizeTesterIdentity>, now: nu
       recentTurns: []
     };
     testers.set(identity.testerKey, tester);
-    trimInactiveTesters();
   }
   tester.ipAddress = identity.ipAddress;
   tester.region = identity.region;
@@ -534,18 +538,14 @@ function scoreSession(session: ActiveTestingSession): {
   return { quality: evaluation.quality, flags, evaluation };
 }
 
-function completedSessionSummary(
-  session: ActiveTestingSession,
-  tester: MutableTesterStats,
-  endedAt: number
-): TesterSessionSummary {
+function completedSessionSummary(session: ActiveTestingSession, endedAt: number): TesterSessionSummary {
   const { quality, flags, evaluation } = scoreSession(session);
   return {
     sessionId: session.sessionId,
-    testerKey: tester.testerKey,
-    testerId: tester.testerId,
-    ipAddress: tester.ipAddress,
-    region: tester.region,
+    testerKey: session.testerKey,
+    testerId: session.testerId,
+    ipAddress: session.ipAddress,
+    region: session.region,
     campaignId: session.campaignId,
     campaignName: session.campaignName,
     testCaseId: session.testCaseId,
@@ -768,30 +768,69 @@ function ensureTestingHistoryLoaded() {
   if (!TESTING_HISTORY_PATH) return;
   try {
     const raw = fs.readFileSync(TESTING_HISTORY_PATH, "utf8");
-    for (const line of raw.split("\n").slice(-MAX_COMPLETED_SESSIONS)) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      const session = normalizeCompletedSession(JSON.parse(trimmed));
-      if (session) {
-        completedSessions.push(session);
-        applyCompletedSessionToTester(session);
+    // Drop blank lines BEFORE slicing: the file ends with "\n", so slicing the
+    // raw split would count a trailing "" and silently lose the oldest session.
+    const lines = raw.split("\n").filter((line) => line.trim());
+    for (const line of lines.slice(-MAX_COMPLETED_SESSIONS)) {
+      try {
+        const session = normalizeCompletedSession(JSON.parse(line));
+        if (session) {
+          completedSessions.push(session);
+          applyCompletedSessionToTester(session);
+        }
+      } catch {
+        // One corrupt line (e.g. a partial write from a crash) must not
+        // discard every session recorded after it.
       }
     }
     trimCompletedSessions();
     trimInactiveTesters();
+    compactTestingHistory(lines);
   } catch {
     // History is best-effort. Missing or unreadable files must not break /health.
   }
 }
 
-function persistCompletedSession(session: TesterSessionSummary) {
-  if (!TESTING_HISTORY_PATH) return;
+/**
+ * The history file is append-only, but only the newest MAX_COMPLETED_SESSIONS
+ * lines are ever used. Once startup finds the file has grown well past that,
+ * rewrite it (write-then-rename, so a crash never truncates the original) to
+ * bound disk usage and future startup reads.
+ */
+function compactTestingHistory(lines: string[]) {
+  if (!TESTING_HISTORY_PATH || lines.length <= MAX_COMPLETED_SESSIONS * 4) return;
   try {
-    fs.mkdirSync(path.dirname(TESTING_HISTORY_PATH), { recursive: true });
-    fs.appendFileSync(TESTING_HISTORY_PATH, `${JSON.stringify(session)}\n`);
+    const retained = lines.slice(-MAX_COMPLETED_SESSIONS);
+    const tempPath = `${TESTING_HISTORY_PATH}.compact`;
+    fs.writeFileSync(tempPath, `${retained.join("\n")}\n`);
+    fs.renameSync(tempPath, TESTING_HISTORY_PATH);
   } catch {
-    // Persistence failure should not interrupt a live voice session.
+    // Compaction is opportunistic; the append path still works without it.
   }
+}
+
+// Appends are chained on one promise so summaries land in completion order
+// without blocking the event loop — a sync write in the WebSocket close
+// handler would stall live PCM relaying for every other rider on a slow disk.
+let persistQueue: Promise<void> = Promise.resolve();
+
+function persistCompletedSession(session: TesterSessionSummary) {
+  const filePath = TESTING_HISTORY_PATH;
+  if (!filePath) return;
+  const line = `${JSON.stringify(session)}\n`;
+  persistQueue = persistQueue
+    .then(async () => {
+      await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.promises.appendFile(filePath, line);
+    })
+    .catch(() => {
+      // Persistence failure should not interrupt a live voice session.
+    });
+}
+
+/** Test hook: resolves when every queued history append has hit disk. */
+export function flushTestingHistory(): Promise<void> {
+  return persistQueue;
 }
 
 function rememberCompletedSession(session: TesterSessionSummary) {
@@ -862,9 +901,16 @@ export function beginTesterSession(sessionId: string, identityInput: TesterIdent
   tester.activeSessions += 1;
   tester.totalSessions += 1;
   tester.lastSeenAt = now;
+  // Trim only after this tester is marked active — trimming inside getTester
+  // could evict the just-created record (it is the only inactive one when the
+  // relay is at MAX_TESTERS busy testers), orphaning the session's stats.
+  trimInactiveTesters();
   testingSessions.set(sessionId, {
     sessionId,
     testerKey: identity.testerKey,
+    testerId: identity.testerId,
+    ipAddress: identity.ipAddress,
+    region: identity.region,
     campaignId: identity.campaignId,
     campaignName: identity.campaignName,
     testCaseId: identity.testCaseId,
@@ -891,13 +937,16 @@ export function beginTesterSession(sessionId: string, identityInput: TesterIdent
 export function endTesterSession(sessionId: string, now = Date.now()) {
   const session = testingSessions.get(sessionId);
   if (!session) return;
-  const tester = testers.get(session.testerKey);
-  if (!tester) return;
-  tester.activeSessions = Math.max(0, tester.activeSessions - 1);
-  tester.totalSessionMs += Math.max(0, now - session.startedAt);
-  tester.lastSeenAt = now;
+  // Remove the active entry unconditionally — an evicted tester record must
+  // not leave the session in the map forever (unbounded growth).
   testingSessions.delete(sessionId);
-  rememberCompletedSession(completedSessionSummary(session, tester, now));
+  const tester = testers.get(session.testerKey);
+  if (tester) {
+    tester.activeSessions = Math.max(0, tester.activeSessions - 1);
+    tester.totalSessionMs += Math.max(0, now - session.startedAt);
+    tester.lastSeenAt = now;
+  }
+  rememberCompletedSession(completedSessionSummary(session, now));
 }
 
 export function recordTesterClientAudio(sessionId: string, bytes: number, now = Date.now()) {

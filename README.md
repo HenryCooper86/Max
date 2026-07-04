@@ -794,16 +794,16 @@ on a developer machine.
 
 ## Troubleshooting
 
-| Symptom                                 | Check                                                                                                                                                               |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/health` fails                         | Make sure `npm run dev:server` is running and port `8787` is not already occupied.                                                                                  |
-| Browser cannot open mic                 | Use `localhost` or HTTPS; browsers block mic capture on insecure non-local origins.                                                                                 |
-| Native app says offline                 | Verify the relay URL for emulator/simulator/LAN and confirm the server listens on `0.0.0.0`.                                                                        |
-| Native app says 需要登录令牌 (HTTP 401) | Accounts are active on the relay: log in on the web HUD, tap 复制令牌（App 用）, and paste it into the app's 认证令牌 field (long-press the Max logo for settings). |
-| Doubao session starts but no voice      | Confirm `DOUBAO_API_KEY` or legacy credentials, resource ID, realtime model, and voice IDs.                                                                         |
-| Weather does not appear                 | Grant location permission or set `DEFAULT_RIDER_LAT` / `DEFAULT_RIDER_LON` in `.env`.                                                                               |
-| Self-signed test server fails mobile    | Enable the native app's test-only self-signed certificate toggle.                                                                                                   |
-| WebSocket test fails with `EPERM`       | The test binds `127.0.0.1`; rerun in an environment that permits local loopback listeners.                                                                          |
+| Symptom                              | Check                                                                                                                                                                                                                                                              |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `/health` fails                      | Make sure `npm run dev:server` is running and port `8787` is not already occupied.                                                                                                                                                                                 |
+| Browser cannot open mic              | Use `localhost` or HTTPS; browsers block mic capture on insecure non-local origins.                                                                                                                                                                                |
+| Native app says offline              | Verify the relay URL for emulator/simulator/LAN and confirm the server listens on `0.0.0.0`.                                                                                                                                                                       |
+| Native app says 需要登录 (HTTP 401)  | Accounts are active on the relay: open 设置 → 账号 in the app and sign in with your web-platform username/password (the settings sheet opens automatically on 401). Pasting a token from the web HUD's 复制令牌（App 用） into 认证令牌 still works as a fallback. |
+| Doubao session starts but no voice   | Confirm `DOUBAO_API_KEY` or legacy credentials, resource ID, realtime model, and voice IDs.                                                                                                                                                                        |
+| Weather does not appear              | Grant location permission or set `DEFAULT_RIDER_LAT` / `DEFAULT_RIDER_LON` in `.env`.                                                                                                                                                                              |
+| Self-signed test server fails mobile | Enable the native app's test-only self-signed certificate toggle.                                                                                                                                                                                                  |
+| WebSocket test fails with `EPERM`    | The test binds `127.0.0.1`; rerun in an environment that permits local loopback listeners.                                                                                                                                                                         |
 
 ## Next Steps
 

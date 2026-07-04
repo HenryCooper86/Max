@@ -38,6 +38,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -47,10 +49,13 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -64,6 +69,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -169,6 +175,14 @@ fun AgentScreen(
 ) {
     val state by viewModel.sessionState.collectAsStateWithLifecycle()
     val color = orbColor(state)
+
+    // The relay requires a login (HTTP 401): open the settings sheet on the
+    // 账号 section so the rider can sign in right where the fix is.
+    LaunchedEffect(state.authRequired) {
+        if (state.authRequired && !viewModel.isLoggedIn) {
+            viewModel.showPreferences = true
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -736,7 +750,60 @@ private fun SheetContent(title: String, content: @Composable ColumnScope.() -> U
     }
 }
 
-// ---- settings (voice · connection · demo · diagnostics) ------------------------------
+// ---- inline login form (settings → 账号) ----------------------------------------------
+
+@Composable
+private fun LoginFields(viewModel: MainViewModel) {
+    var username by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+
+    Text("使用网页测试平台的账号登录；登录后自动获取会话令牌。", color = HudColors.Muted, fontSize = 11.sp)
+    OutlinedTextField(
+        value = username,
+        onValueChange = { username = it },
+        singleLine = true,
+        label = { Text("用户名", fontSize = 12.sp) },
+        textStyle = MaterialTheme.typography.bodySmall.copy(color = HudColors.Text),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = HudColors.AccentCyan,
+            unfocusedBorderColor = HudColors.Border,
+            focusedLabelColor = HudColors.AccentCyan,
+            unfocusedLabelColor = HudColors.Muted
+        ),
+        modifier = Modifier.fillMaxWidth()
+    )
+    OutlinedTextField(
+        value = password,
+        onValueChange = { password = it },
+        singleLine = true,
+        label = { Text("密码", fontSize = 12.sp) },
+        visualTransformation = PasswordVisualTransformation(),
+        textStyle = MaterialTheme.typography.bodySmall.copy(color = HudColors.Text),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = HudColors.AccentCyan,
+            unfocusedBorderColor = HudColors.Border,
+            focusedLabelColor = HudColors.AccentCyan,
+            unfocusedLabelColor = HudColors.Muted
+        ),
+        modifier = Modifier.fillMaxWidth()
+    )
+    viewModel.loginError?.let { error ->
+        Text(error, color = HudColors.Danger, fontSize = 12.sp)
+    }
+    Button(
+        onClick = {
+            viewModel.login(username, password)
+            password = ""
+        },
+        enabled = !viewModel.loginBusy,
+        colors = ButtonDefaults.buttonColors(containerColor = HudColors.Accent),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text(if (viewModel.loginBusy) "登录中…" else "登录", color = Color(0xFF07221A), fontSize = 14.sp)
+    }
+}
+
+// ---- settings (account · voice · connection · demo · diagnostics) ---------------------
 
 @Composable
 private fun SettingsPanel(
@@ -744,6 +811,38 @@ private fun SettingsPanel(
     viewModel: MainViewModel,
     onExportTranscript: () -> Unit
 ) {
+    // Account: sign in with the same username/password as the web HUD; the
+    // session token then rides the /agent URL automatically. The manual
+    // 认证令牌 field below stays as the operator fallback.
+    SectionCard("账号") {
+        if (viewModel.isLoggedIn) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        viewModel.authDisplayName.ifEmpty { viewModel.authUsername },
+                        color = HudColors.Text,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        "@${viewModel.authUsername} · ${if (viewModel.authRole == "admin") "管理员" else "测试员"}",
+                        color = HudColors.Muted,
+                        fontSize = 12.sp
+                    )
+                }
+                TextButton(onClick = viewModel::logout) {
+                    Text("退出登录", color = HudColors.Danger, fontSize = 13.sp)
+                }
+            }
+        } else {
+            LoginFields(viewModel)
+        }
+    }
+
     // Rider voice preferences.
     SectionCard("语音") {
         ChipRow(label = "声音") {

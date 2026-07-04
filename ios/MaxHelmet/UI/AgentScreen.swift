@@ -131,6 +131,13 @@ struct AgentScreen: View {
         .background(HudColors.background.ignoresSafeArea())
         .animation(.easeInOut(duration: 0.25), value: viewModel.showCaptions)
         .animation(.easeInOut(duration: 0.25), value: state.micMuted)
+        // The relay requires a login (HTTP 401): open the settings sheet on the
+        // 账号 section so the rider can sign in right where the fix is.
+        .onChange(of: state.authRequired) { _, required in
+            if required && !viewModel.isLoggedIn {
+                viewModel.showPreferences = true
+            }
+        }
         .sheet(isPresented: $viewModel.showPreferences) {
             SettingsSheet(title: "设置") {
                 SettingsPanel(state: state, viewModel: viewModel)
@@ -678,13 +685,81 @@ private struct SettingsSheet<Content: View>: View {
     }
 }
 
-// MARK: - settings (voice · connection · demo · diagnostics)
+// MARK: - inline login form (settings → 账号)
+
+private struct LoginFields: View {
+    @ObservedObject var viewModel: MainViewModel
+    @State private var username = ""
+    @State private var password = ""
+
+    var body: some View {
+        Text("使用网页测试平台的账号登录；登录后自动获取会话令牌。")
+            .font(.system(size: 11)).foregroundColor(HudColors.muted)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        TextField("用户名", text: $username)
+            .font(.system(size: 14))
+            .foregroundColor(HudColors.text)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled(true)
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 10).fill(HudColors.panelElevated))
+        SecureField("密码", text: $password)
+            .font(.system(size: 14))
+            .foregroundColor(HudColors.text)
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 10).fill(HudColors.panelElevated))
+        if let error = viewModel.loginError {
+            Text(error)
+                .font(.system(size: 12))
+                .foregroundColor(HudColors.danger)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        Button {
+            viewModel.login(username: username, password: password)
+            password = ""
+        } label: {
+            Text(viewModel.loginBusy ? "登录中…" : "登录")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(HudColors.background)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(RoundedRectangle(cornerRadius: 10).fill(HudColors.accent))
+        }
+        .disabled(viewModel.loginBusy)
+    }
+}
+
+// MARK: - settings (account · voice · connection · demo · diagnostics)
 
 private struct SettingsPanel: View {
     let state: AgentSession.State
     @ObservedObject var viewModel: MainViewModel
 
     var body: some View {
+        // Account: sign in with the same username/password as the web HUD; the
+        // session token then rides the /agent URL automatically. The manual
+        // 认证令牌 field below stays as the operator fallback.
+        SectionCard(title: "账号") {
+            if viewModel.isLoggedIn {
+                HStack(alignment: .center) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(viewModel.authDisplayName.isEmpty ? viewModel.authUsername : viewModel.authDisplayName)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(HudColors.text)
+                        Text("@\(viewModel.authUsername) · \(viewModel.authRole == "admin" ? "管理员" : "测试员")")
+                            .font(.system(size: 12))
+                            .foregroundColor(HudColors.muted)
+                    }
+                    Spacer()
+                    Button("退出登录") { viewModel.logout() }
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(HudColors.danger)
+                }
+            } else {
+                LoginFields(viewModel: viewModel)
+            }
+        }
+
         // Rider voice preferences.
         SectionCard(title: "语音") {
             ChipRow(label: "声音") {

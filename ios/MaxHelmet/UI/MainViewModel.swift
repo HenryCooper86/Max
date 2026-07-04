@@ -31,12 +31,16 @@ final class MainViewModel: ObservableObject {
     private enum Keys {
         static let relayURL = "relay_url"
         static let authToken = "auth_token"
+        static let authUsername = "auth_username"
+        static let authDisplayName = "auth_display_name"
+        static let authRole = "auth_role"
         static let allowSelfSigned = "allow_self_signed"
         static let devMode = "dev_mode"
     }
 
     let session = AgentSession.shared
     private let defaults = UserDefaults.standard
+    private let authClient = AuthClient()
 
     @Published var relayURL: String {
         didSet { defaults.set(relayURL, forKey: Keys.relayURL) }
@@ -51,6 +55,71 @@ final class MainViewModel: ObservableObject {
     /// Trust the test relay's self-signed certificate for wss:// (prototype only).
     @Published var allowSelfSigned: Bool {
         didSet { defaults.set(allowSelfSigned, forKey: Keys.allowSelfSigned) }
+    }
+
+    // The signed-in account behind `authToken` (empty when the token was pasted
+    // manually or the rider is signed out). Persisted so the identity row
+    // survives relaunches, like the web HUD's stored session.
+    @Published var authUsername: String {
+        didSet { defaults.set(authUsername, forKey: Keys.authUsername) }
+    }
+    @Published var authDisplayName: String {
+        didSet { defaults.set(authDisplayName, forKey: Keys.authDisplayName) }
+    }
+    @Published var authRole: String {
+        didSet { defaults.set(authRole, forKey: Keys.authRole) }
+    }
+    @Published var loginBusy = false
+    @Published var loginError: String?
+
+    var isLoggedIn: Bool { !authUsername.isEmpty && !authToken.isEmpty }
+
+    /// POST /auth/login against the configured relay; on success the session
+    /// token lands in `authToken`, so the WebSocket connect just works.
+    func login(username: String, password: String) {
+        let name = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !password.isEmpty else {
+            loginError = "请输入用户名和密码"
+            return
+        }
+        loginBusy = true
+        loginError = nil
+        authClient.login(
+            relayURL: relayURL.trimmingCharacters(in: .whitespacesAndNewlines),
+            username: name,
+            password: password,
+            allowSelfSignedTls: allowSelfSigned
+        ) { [weak self] result in
+            guard let self else { return }
+            self.loginBusy = false
+            switch result {
+            case .success(let login):
+                self.authToken = login.token
+                self.authUsername = login.user.username
+                self.authDisplayName = login.user.displayName
+                self.authRole = login.user.role
+                self.loginError = nil
+            case .failure(let failure):
+                self.loginError = failure.message
+            }
+        }
+    }
+
+    /// Invalidates the session on the relay (best-effort) and drops the local
+    /// identity + token. An active hands-free session is stopped — the login
+    /// that authorized it just ended.
+    func logout() {
+        authClient.logout(
+            relayURL: relayURL.trimmingCharacters(in: .whitespacesAndNewlines),
+            token: authToken,
+            allowSelfSignedTls: allowSelfSigned
+        )
+        authToken = ""
+        authUsername = ""
+        authDisplayName = ""
+        authRole = ""
+        loginError = nil
+        if session.state.handsFree { session.stop() }
     }
 
     /// A transcript export ready to share. Wrapping the URL keeps it usable with
@@ -83,6 +152,9 @@ final class MainViewModel: ObservableObject {
     init() {
         relayURL = defaults.string(forKey: Keys.relayURL) ?? Self.defaultRelayURL
         authToken = defaults.string(forKey: Keys.authToken) ?? ""
+        authUsername = defaults.string(forKey: Keys.authUsername) ?? ""
+        authDisplayName = defaults.string(forKey: Keys.authDisplayName) ?? ""
+        authRole = defaults.string(forKey: Keys.authRole) ?? ""
         allowSelfSigned = defaults.object(forKey: Keys.allowSelfSigned) as? Bool ?? Self.defaultAllowSelfSigned
         devMode = defaults.bool(forKey: Keys.devMode)
     }

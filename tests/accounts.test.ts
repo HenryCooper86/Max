@@ -4,10 +4,15 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   authActive,
+  createInvite,
+  deleteUser,
+  listInvites,
+  listUsers,
   loginUser,
   logoutSession,
   registerUser,
   resetAccounts,
+  revokeInvite,
   sessionUser,
   userCount
 } from "../server/accounts";
@@ -15,7 +20,12 @@ import { config } from "../server/config";
 
 const DAY_MS = 86_400_000;
 
-afterEach(() => resetAccounts());
+const originalRegistration = config.authRegistration;
+
+afterEach(() => {
+  resetAccounts();
+  config.authRegistration = originalRegistration;
+});
 
 describe("user accounts", () => {
   it("registers the first user as admin and later users as testers", async () => {
@@ -76,6 +86,58 @@ describe("user accounts", () => {
     expect(logoutSession(login.token)).toBe(true);
     expect(sessionUser(login.token, 4_000)).toBeNull();
     expect(logoutSession(login.token)).toBe(false); // idempotent
+  });
+});
+
+describe("invites and admin user management", () => {
+  it("admits a registration through a single-use invite while registration is closed", async () => {
+    await registerUser("boss", "hunter2-hunter2", undefined, 1_000);
+    config.authRegistration = false;
+
+    // Closed: plain registration refused.
+    expect((await registerUser("rider", "password123", undefined, 2_000)).ok).toBe(false);
+
+    const invite = createInvite("boss", 2_000);
+    expect(listInvites(2_500).map((item) => item.code)).toEqual([invite.code]);
+
+    const invited = await registerUser("rider", "password123", undefined, 3_000, invite.code);
+    expect(invited.ok).toBe(true);
+    if (!invited.ok) return;
+    expect(invited.user.role).toBe("tester");
+
+    // Single-use: the same code no longer works, and the list is empty.
+    expect(listInvites(3_500)).toEqual([]);
+    const reused = await registerUser("rider-two", "password123", undefined, 4_000, invite.code);
+    expect(reused).toMatchObject({ ok: false, error: expect.stringContaining("邀请") });
+  });
+
+  it("expires and revokes invites", async () => {
+    await registerUser("boss", "hunter2-hunter2", undefined, 1_000);
+    config.authRegistration = false;
+
+    const expiring = createInvite("boss", 1_000);
+    const eightDaysLater = 1_000 + 8 * DAY_MS;
+    expect((await registerUser("late", "password123", undefined, eightDaysLater, expiring.code)).ok).toBe(false);
+    expect(listInvites(eightDaysLater)).toEqual([]);
+
+    const revoked = createInvite("boss", 2_000);
+    expect(revokeInvite(revoked.code)).toBe(true);
+    expect((await registerUser("nope", "password123", undefined, 3_000, revoked.code)).ok).toBe(false);
+  });
+
+  it("deletes testers (with their sessions) but never admins", async () => {
+    await registerUser("boss", "hunter2-hunter2", undefined, 1_000);
+    const tester = await registerUser("rider", "password123", undefined, 2_000);
+    expect(tester.ok).toBe(true);
+    if (!tester.ok) return;
+
+    expect(deleteUser("boss")).toMatchObject({ ok: false, error: expect.stringContaining("管理员") });
+    expect(deleteUser("ghost").ok).toBe(false);
+
+    expect(deleteUser("rider")).toEqual({ ok: true });
+    expect(listUsers().map((user) => user.username)).toEqual(["boss"]);
+    // The deleted tester's session died with the account.
+    expect(sessionUser(tester.token, 3_000)).toBeNull();
   });
 });
 

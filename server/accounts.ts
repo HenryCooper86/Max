@@ -38,6 +38,15 @@ type StoredSession = {
   expiresAt: number;
 };
 
+/** Single-use registration invite, so admins can onboard testers while
+ *  AUTH_REGISTRATION=off keeps strangers out. */
+export type InviteInfo = {
+  code: string;
+  createdAt: number;
+  expiresAt: number;
+  createdBy: string;
+};
+
 export type AuthResult = { ok: true; token: string; user: PublicUser } | { ok: false; error: string };
 
 const USERNAME_PATTERN = /^[a-z0-9][a-z0-9_-]{2,31}$/;
@@ -48,8 +57,11 @@ const SCRYPT_KEY_LENGTH = 64;
 
 const ACCOUNTS_PATH = resolveAccountsPath();
 
+const INVITE_LIFETIME_MS = 7 * 86_400_000;
+
 const users = new Map<string, StoredUser>(); // keyed by normalized username
 const sessions = new Map<string, StoredSession>(); // keyed by token
+const invites = new Map<string, InviteInfo>(); // keyed by code
 let accountsLoaded = ACCOUNTS_PATH === null;
 let persistQueue: Promise<void> = Promise.resolve();
 
@@ -127,6 +139,20 @@ function loadStoredUser(value: unknown): StoredUser | null {
   };
 }
 
+function loadStoredInvite(value: unknown): InviteInfo | null {
+  if (!isRecord(value)) return null;
+  if (typeof value.code !== "string" || !value.code.startsWith("inv_")) return null;
+  const createdAt = typeof value.createdAt === "number" && Number.isFinite(value.createdAt) ? value.createdAt : 0;
+  const expiresAt = typeof value.expiresAt === "number" && Number.isFinite(value.expiresAt) ? value.expiresAt : 0;
+  if (!createdAt || !expiresAt) return null;
+  return {
+    code: value.code,
+    createdAt,
+    expiresAt,
+    createdBy: typeof value.createdBy === "string" ? value.createdBy : "unknown"
+  };
+}
+
 function loadStoredSession(value: unknown): StoredSession | null {
   if (!isRecord(value)) return null;
   if (typeof value.token !== "string" || !value.token) return null;
@@ -157,6 +183,12 @@ function ensureAccountsLoaded() {
         if (session && userIds.has(session.userId)) sessions.set(session.token, session);
       }
     }
+    if (Array.isArray(raw.invites)) {
+      for (const entry of raw.invites) {
+        const invite = loadStoredInvite(entry);
+        if (invite) invites.set(invite.code, invite);
+      }
+    }
   } catch {
     // Missing or unreadable accounts file must not take the relay down; auth
     // simply starts from an empty (open) state.
@@ -166,7 +198,11 @@ function ensureAccountsLoaded() {
 function persistAccounts() {
   const filePath = ACCOUNTS_PATH;
   if (!filePath) return;
-  const snapshot = JSON.stringify({ users: [...users.values()], sessions: [...sessions.values()] }, null, 2);
+  const snapshot = JSON.stringify(
+    { users: [...users.values()], sessions: [...sessions.values()], invites: [...invites.values()] },
+    null,
+    2
+  );
   persistQueue = persistQueue
     .then(async () => {
       await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
@@ -230,14 +266,34 @@ export function sessionUser(token: unknown, now = Date.now()): PublicUser | null
   return user ? publicUser(user) : null;
 }
 
+function validInvite(codeInput: unknown, now: number): InviteInfo | null {
+  if (typeof codeInput !== "string") return null;
+  const invite = invites.get(codeInput.trim());
+  if (!invite) return null;
+  if (invite.expiresAt <= now) {
+    invites.delete(invite.code);
+    persistAccounts();
+    return null;
+  }
+  return invite;
+}
+
 export async function registerUser(
   usernameInput: unknown,
   passwordInput: unknown,
   displayNameInput?: unknown,
-  now = Date.now()
+  now = Date.now(),
+  inviteCodeInput?: unknown
 ): Promise<AuthResult> {
   ensureAccountsLoaded();
-  if (!registrationOpen()) return { ok: false, error: "注册已关闭，请联系管理员。" };
+  const inviteCode = typeof inviteCodeInput === "string" ? inviteCodeInput.trim() : "";
+  const invite = inviteCode ? validInvite(inviteCode, now) : null;
+  if (!registrationOpen() && !invite) {
+    return {
+      ok: false,
+      error: inviteCode ? "邀请链接无效或已过期，请向管理员索取新邀请。" : "注册已关闭，请联系管理员。"
+    };
+  }
   const username = normalizeUsername(usernameInput);
   if (!USERNAME_PATTERN.test(username)) {
     return { ok: false, error: "用户名需为 3–32 位小写字母、数字、_ 或 -。" };
@@ -267,10 +323,76 @@ export async function registerUser(
   if (users.has(username)) return { ok: false, error: "用户名已被使用。" };
   if (user.role === "admin" && users.size > 0) user.role = "tester";
   users.set(username, user);
+  // Invites are single-use: consumed by the registration they admitted.
+  if (invite) invites.delete(invite.code);
   const session = createSession(user, now);
   pruneExpiredSessions(now);
   persistAccounts();
   return { ok: true, token: session.token, user: publicUser(user) };
+}
+
+// --- admin: user + invite management ------------------------------------------
+
+/** Creates a single-use, 7-day registration invite. Admin action. */
+export function createInvite(createdBy: string, now = Date.now()): InviteInfo {
+  ensureAccountsLoaded();
+  const invite: InviteInfo = {
+    code: `inv_${randomBytes(8).toString("hex")}`,
+    createdAt: now,
+    expiresAt: now + INVITE_LIFETIME_MS,
+    createdBy
+  };
+  invites.set(invite.code, invite);
+  persistAccounts();
+  return invite;
+}
+
+/** Withdraws an outstanding invite. Idempotent. */
+export function revokeInvite(codeInput: unknown): boolean {
+  ensureAccountsLoaded();
+  if (typeof codeInput !== "string") return false;
+  const removed = invites.delete(codeInput.trim());
+  if (removed) persistAccounts();
+  return removed;
+}
+
+/** Outstanding (non-expired) invites, newest first. */
+export function listInvites(now = Date.now()): InviteInfo[] {
+  ensureAccountsLoaded();
+  let pruned = false;
+  for (const [code, invite] of invites) {
+    if (invite.expiresAt <= now) {
+      invites.delete(code);
+      pruned = true;
+    }
+  }
+  if (pruned) persistAccounts();
+  return [...invites.values()].sort((a, b) => b.createdAt - a.createdAt);
+}
+
+/** Every registered account (public fields only), oldest first. */
+export function listUsers(): PublicUser[] {
+  ensureAccountsLoaded();
+  return [...users.values()].map(publicUser).sort((a, b) => a.createdAt - b.createdAt);
+}
+
+/**
+ * Removes a tester account and all of their sessions. Admin accounts cannot
+ * be deleted — that both protects the bootstrap admin and guarantees the
+ * relay can never end up auth-enabled with nobody able to administer it.
+ */
+export function deleteUser(usernameInput: unknown): { ok: true } | { ok: false; error: string } {
+  ensureAccountsLoaded();
+  const username = normalizeUsername(usernameInput);
+  const user = users.get(username);
+  if (!user) return { ok: false, error: "用户不存在。" };
+  if (user.role === "admin") return { ok: false, error: "不能删除管理员账号。" };
+  users.delete(username);
+  for (const [token, session] of sessions) {
+    if (session.userId === user.id) sessions.delete(token);
+  }
+  persistAccounts();
+  return { ok: true };
 }
 
 export async function loginUser(usernameInput: unknown, passwordInput: unknown, now = Date.now()): Promise<AuthResult> {
@@ -307,9 +429,10 @@ export function flushAccounts(): Promise<void> {
   return persistQueue;
 }
 
-/** Test hook: clears users and sessions. */
+/** Test hook: clears users, sessions, and invites. */
 export function resetAccounts() {
   users.clear();
   sessions.clear();
+  invites.clear();
   accountsLoaded = ACCOUNTS_PATH === null;
 }

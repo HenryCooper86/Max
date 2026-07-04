@@ -9,6 +9,7 @@ import { TESTING_CAMPAIGNS, TESTING_TEST_CASES, defaultTestCaseForCampaign } fro
 import type { HelmetAgent } from "../hooks/useHelmetAgent";
 import type { AuthUser } from "../lib/auth";
 import { relayAuthToken } from "../lib/persistence";
+import { AccountAdmin } from "./AccountAdmin";
 import { AccountBar } from "./AccountBar";
 import {
   currentTesterSnapshot,
@@ -192,6 +193,8 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
         onSignedIn={onSignedIn}
         onSignedOut={onSignedOut}
       />
+
+      {authUser?.role === "admin" ? <AccountAdmin adminUsername={authUser.username} /> : null}
 
       {statsLocked ? (
         <p className="adminNotice" role="status">

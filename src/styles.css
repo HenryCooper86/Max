@@ -1509,14 +1509,16 @@ h2 {
 
 /* Destructive admin actions: armed = first click landed, next click executes. */
 .panelActions button.danger,
-.testerConversationActions button.danger {
+.testerConversationActions button.danger,
+.accountAdmin button.danger {
   border-color: rgba(255, 118, 118, 0.42);
   background: rgba(255, 118, 118, 0.1);
   color: #ffd9d9;
 }
 
 .panelActions button.danger.armed,
-.testerConversationActions button.danger.armed {
+.testerConversationActions button.danger.armed,
+.accountAdmin button.danger.armed {
   border-color: rgba(255, 118, 118, 0.85);
   background: rgba(255, 118, 118, 0.32);
   color: #fff;
@@ -2444,5 +2446,375 @@ h2 {
 @media (prefers-reduced-motion: reduce) {
   .hazardBanner {
     animation: none;
+  }
+}
+
+/* --- admin account management ------------------------------------------- */
+
+.accountAdmin {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(196, 218, 216, 0.16);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.accountAdminHead {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.accountAdminHead > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.accountAdminHead span {
+  color: rgba(216, 224, 221, 0.6);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.accountAdminHead strong {
+  font-size: 0.86rem;
+}
+
+.accountAdmin button {
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid rgba(107, 238, 174, 0.34);
+  border-radius: 999px;
+  background: rgba(107, 238, 174, 0.1);
+  color: #dffdf0;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.accountAdmin button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.accountAdminList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.accountAdminRow {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border: 1px solid rgba(196, 218, 216, 0.1);
+  border-radius: 10px;
+  background: rgba(6, 15, 13, 0.5);
+}
+
+.accountAdminRow.invite {
+  border-style: dashed;
+  border-color: rgba(107, 238, 174, 0.25);
+}
+
+.accountAdminUser {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.accountAdminUser strong {
+  font-size: 0.84rem;
+}
+
+.accountAdminUser span {
+  color: rgba(216, 224, 221, 0.62);
+  font-size: 0.74rem;
+}
+
+.accountAdminSelf {
+  flex: 0 0 auto;
+  color: rgba(107, 238, 174, 0.8);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.accountAdminInviteActions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+/* --- futuristic login gate ------------------------------------------------ */
+
+.loginShell {
+  position: relative;
+  overflow: hidden;
+}
+
+.loginBackdrop {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.loginOrb {
+  position: absolute;
+  width: 46vmax;
+  height: 46vmax;
+  border-radius: 50%;
+  filter: blur(90px);
+  opacity: 0.32;
+}
+
+.loginOrb.orbA {
+  top: -18vmax;
+  left: -10vmax;
+  background: radial-gradient(circle, rgba(107, 238, 174, 0.55), transparent 65%);
+  animation: loginDriftA 26s ease-in-out infinite alternate;
+}
+
+.loginOrb.orbB {
+  right: -14vmax;
+  bottom: -20vmax;
+  background: radial-gradient(circle, rgba(255, 138, 76, 0.4), transparent 65%);
+  animation: loginDriftB 32s ease-in-out infinite alternate;
+}
+
+@keyframes loginDriftA {
+  from {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  to {
+    transform: translate3d(9vmax, 7vmax, 0) scale(1.15);
+  }
+}
+
+@keyframes loginDriftB {
+  from {
+    transform: translate3d(0, 0, 0) scale(1.1);
+  }
+  to {
+    transform: translate3d(-8vmax, -6vmax, 0) scale(0.95);
+  }
+}
+
+.loginGrid {
+  position: absolute;
+  inset: 0;
+  background:
+    repeating-linear-gradient(0deg, rgba(107, 238, 174, 0.05) 0 1px, transparent 1px 56px),
+    repeating-linear-gradient(90deg, rgba(107, 238, 174, 0.05) 0 1px, transparent 1px 56px);
+  mask-image: radial-gradient(ellipse 90% 70% at 50% 45%, rgba(0, 0, 0, 0.9), transparent 75%);
+  animation: loginGridPan 24s linear infinite;
+}
+
+@keyframes loginGridPan {
+  from {
+    background-position:
+      0 0,
+      0 0;
+  }
+  to {
+    background-position:
+      0 56px,
+      56px 0;
+  }
+}
+
+.loginHorizon {
+  position: absolute;
+  right: 8%;
+  bottom: 26%;
+  left: 8%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(107, 238, 174, 0.5), transparent);
+  animation: loginHorizonPulse 4.5s ease-in-out infinite;
+}
+
+@keyframes loginHorizonPulse {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 0.75;
+  }
+}
+
+.loginGate {
+  position: relative;
+  animation: loginEnter 0.8s cubic-bezier(0.2, 0.9, 0.25, 1) both;
+}
+
+@keyframes loginEnter {
+  from {
+    opacity: 0;
+    transform: translateY(22px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.loginLogo {
+  animation: loginLogoBreath 3.4s ease-in-out infinite;
+}
+
+@keyframes loginLogoBreath {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 6px rgba(107, 238, 174, 0.35));
+    transform: scale(1);
+  }
+  50% {
+    filter: drop-shadow(0 0 18px rgba(107, 238, 174, 0.75));
+    transform: scale(1.05);
+  }
+}
+
+.loginEyebrow {
+  letter-spacing: 0.42em;
+  animation: loginEyebrowGlow 5s ease-in-out infinite;
+}
+
+@keyframes loginEyebrowGlow {
+  0%,
+  100% {
+    color: rgba(107, 238, 174, 0.55);
+    text-shadow: none;
+  }
+  50% {
+    color: rgba(107, 238, 174, 0.95);
+    text-shadow: 0 0 14px rgba(107, 238, 174, 0.45);
+  }
+}
+
+.loginCard {
+  position: relative;
+  overflow: hidden;
+  backdrop-filter: blur(14px);
+  animation: loginCardGlow 6s ease-in-out infinite;
+}
+
+@keyframes loginCardGlow {
+  0%,
+  100% {
+    border-color: rgba(107, 238, 174, 0.22);
+    box-shadow:
+      0 24px 60px rgba(0, 0, 0, 0.4),
+      0 0 0 rgba(107, 238, 174, 0);
+  }
+  50% {
+    border-color: rgba(107, 238, 174, 0.5);
+    box-shadow:
+      0 24px 60px rgba(0, 0, 0, 0.45),
+      0 0 34px rgba(107, 238, 174, 0.12);
+  }
+}
+
+.loginScanline {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 46px;
+  background: linear-gradient(180deg, transparent, rgba(107, 238, 174, 0.07), transparent);
+  animation: loginScan 5.5s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes loginScan {
+  0% {
+    transform: translateY(-60px);
+    opacity: 0;
+  }
+  12% {
+    opacity: 1;
+  }
+  55% {
+    transform: translateY(420px);
+    opacity: 1;
+  }
+  70%,
+  100% {
+    transform: translateY(420px);
+    opacity: 0;
+  }
+}
+
+.loginCardHead {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.loginStatusDot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #6beeae;
+  animation: loginDotPulse 2.2s ease-in-out infinite;
+}
+
+@keyframes loginDotPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(107, 238, 174, 0.55);
+  }
+  60% {
+    box-shadow: 0 0 0 9px rgba(107, 238, 174, 0);
+  }
+}
+
+.loginCard .accountFields input {
+  transition:
+    border-color 0.25s ease,
+    box-shadow 0.25s ease,
+    background 0.25s ease;
+}
+
+.loginCard .accountFields input:focus {
+  border-color: rgba(107, 238, 174, 0.65);
+  outline: none;
+  background: rgba(8, 22, 18, 0.85);
+  box-shadow: 0 0 0 3px rgba(107, 238, 174, 0.14);
+}
+
+.loginFootnote {
+  margin: 4px 0 0;
+  color: rgba(216, 224, 221, 0.4);
+  font-size: 0.62rem;
+  letter-spacing: 0.28em;
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loginOrb,
+  .loginGrid,
+  .loginHorizon,
+  .loginGate,
+  .loginLogo,
+  .loginEyebrow,
+  .loginCard,
+  .loginScanline,
+  .loginStatusDot {
+    animation: none;
+  }
+
+  .loginScanline {
+    display: none;
   }
 }

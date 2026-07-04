@@ -1034,7 +1034,8 @@ export function useHelmetAgent() {
     clearTranscript,
     refreshHealth,
     startMic,
-    stopMic
+    stopMic,
+    disconnect
   };
 }
 

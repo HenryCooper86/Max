@@ -448,13 +448,17 @@ User accounts for the testing framework, stored dependency-free in
 writes). Registration (`{username, password, displayName?}`) returns
 `{ok, token, user}` and logs the user in; the **first** registered account
 becomes the admin, later ones are testers. Auth switches on automatically once
-any account exists: the `testing` block then requires a login session (or the
-relay token), and `/testing/clear` requires an **admin** login. A login
-session token also satisfies the `/agent` WebSocket gate on token-protected
-relays, so testers never need the operator secret. Login/registration attempts
-are rate-limited to 10/min per IP. Set `AUTH_REGISTRATION=off` after
-onboarding to stop self-registration; `AUTH_SESSION_DAYS` controls session
-lifetime (default 30).
+any account exists, and it gates the whole site: the web HUD shows a
+full-screen login page to anyone without a session, the `/health` `testing`
+block requires a login (or the relay token), `/testing/clear` requires an
+**admin** login, and the `/agent` WebSocket refuses anonymous connections —
+so an account is required to use the voice assistant at all, like a normal
+authenticated web app. Native apps connect by pasting the relay token (or a
+session token) into their 认证令牌 field. Login/registration attempts are
+rate-limited to 10/min per IP. Set `AUTH_REGISTRATION=off` after onboarding to
+stop self-registration; `AUTH_SESSION_DAYS` controls session lifetime
+(default 30). With zero accounts and no relay token, everything stays open —
+the plug-and-play local demo mode.
 
 ### `POST /testing/clear`
 

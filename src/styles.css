@@ -1617,6 +1617,97 @@ h2 {
   font-size: 0.78rem;
 }
 
+.accountForm {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+/* Full-screen access gate shown before the HUD when accounts exist. */
+.loginShell {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+}
+
+.loginGate {
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+  align-items: center;
+  width: min(460px, calc(100vw - 32px));
+  padding: 24px 0;
+}
+
+.loginBrand {
+  justify-content: center;
+}
+
+.loginCard {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  padding: 26px 24px;
+  border: 1px solid rgba(196, 218, 216, 0.18);
+  border-radius: 18px;
+  background: rgba(10, 22, 19, 0.86);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.4);
+}
+
+.loginCard h2 {
+  margin: 0;
+  font-size: 1.06rem;
+}
+
+.loginHint {
+  margin: 0 0 6px;
+  color: rgba(216, 224, 221, 0.72);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.loginCard .accountForm {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.loginCard .accountFields {
+  /* Same trap as the inputs: the 320px row basis must not become height. */
+  flex: 0 0 auto;
+  flex-direction: column;
+}
+
+.loginCard .accountFields input {
+  /* In a column flex the 130px basis from .accountFields input would become
+     HEIGHT — keep the fields at their natural height here. */
+  flex: 0 0 auto;
+  min-height: 40px;
+  font-size: 0.92rem;
+}
+
+.loginBrand h1 {
+  font-size: 1.55rem;
+  white-space: nowrap;
+}
+
+.loginCard .accountActions {
+  justify-content: space-between;
+}
+
+.loginCard .accountActions button[type="submit"] {
+  min-height: 40px;
+  padding: 0 26px;
+  font-size: 0.86rem;
+}
+
+.loginCard .accountBar button,
+.loginCard .accountForm button {
+  min-height: 36px;
+}
+
 .sessionReplayGrid {
   display: grid;
   grid-template-columns: minmax(190px, 0.45fr) minmax(0, 1fr);

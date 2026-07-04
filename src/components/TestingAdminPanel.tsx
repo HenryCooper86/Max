@@ -7,7 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 import { scenarioLabel } from "../../shared/ride";
 import { TESTING_CAMPAIGNS, TESTING_TEST_CASES, defaultTestCaseForCampaign } from "../../shared/testing";
 import type { HelmetAgent } from "../hooks/useHelmetAgent";
-import { fetchCurrentUser, type AuthUser } from "../lib/auth";
+import type { AuthUser } from "../lib/auth";
 import { relayAuthToken } from "../lib/persistence";
 import { AccountBar } from "./AccountBar";
 import {
@@ -51,7 +51,15 @@ function barHeight(value: number, max: number) {
   return `${Math.max(6, Math.round((value / max) * 100))}%`;
 }
 
-export function TestingAdminPanel({ agent }: { agent: HelmetAgent }) {
+type Props = {
+  agent: HelmetAgent;
+  /** Auth state lives in App — the LoginGate and this panel share it. */
+  authUser: AuthUser | null;
+  onSignedIn: (user: AuthUser) => void;
+  onSignedOut: () => void;
+};
+
+export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: Props) {
   const [selectedTesterKey, setSelectedTesterKey] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [testerFilter, setTesterFilter] = useState("");
@@ -61,18 +69,6 @@ export function TestingAdminPanel({ agent }: { agent: HelmetAgent }) {
   const [armedAction, setArmedAction] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
   const [adminNotice, setAdminNotice] = useState<string | null>(null);
-  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
-
-  // Restore the logged-in user from a stored session token on mount.
-  useEffect(() => {
-    let active = true;
-    void fetchCurrentUser().then((user) => {
-      if (active) setAuthUser(user);
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
 
   useEffect(() => {
     if (!armedAction) return;
@@ -168,21 +164,6 @@ export function TestingAdminPanel({ agent }: { agent: HelmetAgent }) {
   const canClear = !authEnabled || authUser?.role === "admin" || Boolean(relayAuthToken());
   const statsLocked = Boolean(agent.health) && authEnabled && !testing;
 
-  const handleSignedIn = useCallback(
-    (user: AuthUser) => {
-      setAuthUser(user);
-      // Tie the QA stats identity to the account.
-      if (agent.testerId !== user.username) agent.setTesterId(user.username);
-      void agent.refreshHealth();
-    },
-    [agent]
-  );
-
-  const handleSignedOut = useCallback(() => {
-    setAuthUser(null);
-    void agent.refreshHealth();
-  }, [agent]);
-
   return (
     <section className="hudPanel testingPanel" aria-label="测试统计与管理">
       <div className="panelHeader">
@@ -208,8 +189,8 @@ export function TestingAdminPanel({ agent }: { agent: HelmetAgent }) {
         authEnabled={authEnabled}
         registrationOpen={registrationOpen}
         user={authUser}
-        onSignedIn={handleSignedIn}
-        onSignedOut={handleSignedOut}
+        onSignedIn={onSignedIn}
+        onSignedOut={onSignedOut}
       />
 
       {statsLocked ? (

@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-07-04 — Site-wide login gate: the whole HUD (and the voice line) now requires an account
+
+171 tests green (1 new), tsc/eslint/prettier clean, production build verified,
+full register → logout → gate → login round trip verified in a real browser.
+
+### Added
+
+- **Full-screen login page** (`src/components/LoginGate.tsx`) — once any
+  account exists on the relay, unauthenticated visitors see a branded login
+  card instead of the HUD, like a normal authenticated website. Registration
+  is offered on the same card while `AUTH_REGISTRATION=on`. Auth state now
+  lives in `App` (shared by the gate and the testing panel); the login/register
+  form is one component (`AccountForm`) reused by both the gate and the
+  panel's bootstrap register bar.
+- **The gate is enforcement, not decoration** (`server/auth.ts`) — the
+  `/agent` WebSocket now refuses anonymous connections as soon as the first
+  account exists (previously it only required a token when `RELAY_AUTH_TOKEN`
+  was set), so hiding the UI can't be bypassed by talking to the relay
+  directly. Session tokens and the relay token both satisfy the gate; with
+  zero accounts and no relay token the relay stays plug-and-play open.
+
+### Changed
+
+- Logging out stops the mic and closes the relay socket (the session that
+  authorized it just ended) before dropping back to the gate; `disconnect` is
+  now part of the agent hook's public surface.
+
 ## 2026-07-04 — User accounts: registration, login, roles, and gated admin actions
 
 170 tests green (9 new), tsc/eslint/prettier clean, production build verified.

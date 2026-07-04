@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-07-04 — Web visor: sound-wave visualizer replaces the LED segment strip
+
+The nine chunky "LED teeth" on the helmet visor are now a 27-bar waveform
+(`src/components/HelmetVisual.tsx`): thin bars whose amplitudes follow a bell
+envelope with a deterministic ripple. While **Max replies**, a CSS travelling
+wave rolls through the bars (one shared keyframe phase-shifted per bar with
+negative delays, each bar peaking at its own `--amp`); while the **rider
+talks**, the bars are driven live by the mic level as before; while Max
+**thinks**, the same phase trick at low amplitude reads as a scanning shimmer;
+at rest it settles into a faint flat line. `prefers-reduced-motion` holds a
+steady mid-height instead of animating. All four states verified in a real
+browser (screenshots of travelling crest at two phases, shimmer, and idle).
+
 ## 2026-07-04 — Native in-app login for iOS and Android
 
 Riders sign in with the same username/password as the web platform, right in

@@ -564,16 +564,16 @@ h2 {
 /* On-visor voice visualizer */
 .visorVisualizer {
   position: absolute;
-  left: 33%;
-  top: 32%;
+  left: 31%;
+  top: 30%;
   z-index: 2;
-  width: 40%;
-  height: 20%;
+  width: 44%;
+  height: 24%;
   display: grid;
-  grid-template-columns: repeat(9, 1fr);
+  grid-template-columns: repeat(27, 1fr);
   align-items: center;
-  gap: clamp(2px, 0.7vw, 7px);
-  opacity: 0.32;
+  gap: clamp(1px, 0.28vw, 3px);
+  opacity: 0.35;
   pointer-events: none;
   transform: skewX(-7deg);
   transition: opacity 0.2s ease;
@@ -584,13 +584,55 @@ h2 {
 }
 
 .visorVisualizer span {
-  height: 82%;
-  min-height: 6px;
+  justify-self: center;
+  width: clamp(2px, 0.42vw, 4px);
+  height: 92%;
+  min-height: 8px;
   border-radius: 999px;
   background: linear-gradient(180deg, #ccfff4 0%, var(--ring) 56%, #1b7b77 100%);
-  box-shadow: 0 0 12px var(--ring-soft);
+  box-shadow: 0 0 10px var(--ring-soft);
+  transform: scaleY(0.1);
   transform-origin: center;
   transition: transform 90ms linear;
+}
+
+/* Max is replying: a travelling wave rolls through the bars. The negative,
+   per-bar delay phase-shifts one shared keyframe into a moving waveform and
+   starts it mid-motion (no visible ramp-up). Each bar peaks at its envelope
+   amplitude (--amp), so the wave keeps the bell-curve silhouette. */
+.visorVisualizer.speaking span {
+  animation: visorWave 1.1s ease-in-out infinite;
+  animation-delay: calc(var(--i) * -74ms);
+  transition: none;
+}
+
+@keyframes visorWave {
+  0%,
+  100% {
+    transform: scaleY(0.12);
+  }
+  50% {
+    transform: scaleY(var(--amp));
+  }
+}
+
+/* Max is thinking: the same phase trick at low amplitude reads as a calm
+   scanning shimmer rather than speech. */
+.visorVisualizer.thinking span {
+  animation: visorThink 1.7s ease-in-out infinite;
+  animation-delay: calc(var(--i) * -58ms);
+  transition: none;
+  opacity: 0.85;
+}
+
+@keyframes visorThink {
+  0%,
+  100% {
+    transform: scaleY(0.1);
+  }
+  50% {
+    transform: scaleY(calc(var(--amp) * 0.34));
+  }
 }
 
 /* Floating state caption */
@@ -2357,6 +2399,13 @@ h2 {
   .transcriptList {
     transition: none;
     scroll-behavior: auto;
+  }
+
+  /* The waveform holds a steady mid-height instead of animating. */
+  .visorVisualizer.speaking span,
+  .visorVisualizer.thinking span {
+    animation: none;
+    transform: scaleY(calc(var(--amp) * 0.5));
   }
 }
 

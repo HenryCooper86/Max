@@ -103,9 +103,29 @@ export function normalizeTranscriptText(text: string) {
     .replace(/[^\p{Letter}\p{Number}\p{Script=Han}]+/gu, "");
 }
 
-export function exportTranscriptLog(items: TranscriptItem[]) {
+function currentTesterSnapshot(health: AgentHealth | null, testerId: string) {
+  return health?.testing?.users
+    .filter((user) => user.testerId === testerId)
+    .sort((a, b) => Number(b.activeSessions) - Number(a.activeSessions) || b.lastSeenAt - a.lastSeenAt)[0];
+}
+
+export function exportTranscriptLog(
+  items: TranscriptItem[],
+  health: AgentHealth | null,
+  testerId: string,
+  testerRegion: string
+) {
+  const tester = currentTesterSnapshot(health, testerId);
   const payload = {
     exportedAt: new Date().toISOString(),
+    tester: {
+      testerId,
+      testerKey: tester?.testerKey,
+      ipAddress: tester?.ipAddress ?? "pending",
+      region: tester?.region ?? testerRegion,
+      lastSeenAt: tester ? new Date(tester.lastSeenAt).toISOString() : undefined
+    },
+    provider: health?.provider,
     turns: items.map((item) => ({
       id: item.id,
       at: new Date(item.at).toISOString(),
@@ -129,10 +149,17 @@ export function exportTranscriptLog(items: TranscriptItem[]) {
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
-export function exportTestingReport(health: AgentHealth | null, testerId: string) {
+export function exportTestingReport(health: AgentHealth | null, testerId: string, testerRegion: string) {
+  const tester = currentTesterSnapshot(health, testerId);
   const payload = {
     exportedAt: new Date().toISOString(),
-    testerId,
+    tester: {
+      testerId,
+      testerKey: tester?.testerKey,
+      ipAddress: tester?.ipAddress ?? "pending",
+      region: tester?.region ?? testerRegion,
+      lastSeenAt: tester ? new Date(tester.lastSeenAt).toISOString() : undefined
+    },
     provider: health?.provider,
     uptimeSec: health?.uptimeSec,
     metrics: health?.metrics,

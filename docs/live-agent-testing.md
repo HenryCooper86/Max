@@ -450,18 +450,21 @@ dropped frames increment rather than the stream stalling.
 ## 14. Per-tester testing statistics
 
 **What it does:** The web HUD persists a tester/workstation ID and sends it with
-`session.start`. The relay aggregates sessions, active runs, duration, mic
-uplink bytes, audio/control downlink bytes, first-audio average/p95 latency,
-errors, TTS fallbacks, and 30-minute graph buckets by tester.
+`session.start`, along with the browser time zone as the region. The relay keys
+rows by tester ID + client IP, so a tester name is attached to the network that
+ran it; clients that omit `testerId` become `ip:<address>` instead of
+`anonymous`. The relay aggregates sessions, active runs, duration, mic uplink
+bytes, audio/control downlink bytes, first-audio average/p95 latency, errors,
+TTS fallbacks, and 30-minute graph buckets by tester/IP.
 
 **Code:** `server/metrics.ts` (`beginTesterSession`,
 `recordTesterClientAudio`, `recordTesterServerEvent`, `testingSnapshot`),
 `server/session-controller.ts` (`testerId` validation + attribution), and
 `src/App.tsx` (testing dashboard).
 
-**Unit test:** `tests/metrics.test.ts` covers per-tester sessions, bandwidth,
-latency, errors, and fallbacks; `tests/websocket.test.ts` validates safe
-`testerId` values.
+**Unit test:** `tests/metrics.test.ts` covers per-tester sessions, IP fallback,
+region, bandwidth, latency, errors, and fallbacks; `tests/websocket.test.ts`
+validates safe `testerId` and `testerRegion` values.
 
 ```bash
 npm test -- "per-tester"
@@ -476,8 +479,10 @@ sessions, mic up/downlink bandwidth, latency, and per-user rows. Then check:
 curl -s http://localhost:8787/health | jq '.testing'
 ```
 
-Expected: `testing.users[]` includes the tester ID, and `testing.timeline[]`
-contains graph-ready minute buckets.
+Expected: `testing.users[]` includes `testerKey`, `testerId`, `ipAddress`, and
+`region`; `testing.timeline[]` contains graph-ready minute buckets. Behind
+Caddy/Lightsail, `RELAY_TRUST_PROXY=on` is required or the IP will be the local
+proxy address instead of the tester address.
 
 ---
 

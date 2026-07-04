@@ -25,6 +25,7 @@ const RESPONSE_MODES = new Set(["concise", "normal", "emergency"]);
 const RIDER_INTENTS = new Set(["navigation", "weather", "emergency", "diagnostics", "group", "casual"]);
 const MAX_MEMORY_DESTINATION_BYTES = 256;
 const MAX_TESTER_ID_BYTES = 80;
+const MAX_TESTER_REGION_BYTES = 96;
 
 export function normalizeRawData(data: RawData): Buffer {
   if (Buffer.isBuffer(data)) return data;
@@ -48,6 +49,13 @@ function assertOptionalTesterId(value: unknown) {
   if (value === undefined) return;
   if (typeof value !== "string" || Buffer.byteLength(value) > MAX_TESTER_ID_BYTES || hasControlCharacter(value)) {
     throw new Error("Invalid testerId");
+  }
+}
+
+function assertOptionalTesterRegion(value: unknown) {
+  if (value === undefined) return;
+  if (typeof value !== "string" || Buffer.byteLength(value) > MAX_TESTER_REGION_BYTES || hasControlCharacter(value)) {
+    throw new Error("Invalid testerRegion");
   }
 }
 
@@ -116,6 +124,7 @@ export function parseClientEvent(data: RawData): ClientEvent {
   assertOptionalEnum(value.rideMode, RIDE_MODES, "rideMode");
   assertOptionalEnum(value.scenario, DEMO_SCENARIOS, "scenario");
   assertOptionalTesterId(value.testerId);
+  assertOptionalTesterRegion(value.testerRegion);
   assertOptionalCoordinate(value.lat, -90, 90, "lat");
   assertOptionalCoordinate(value.lon, -180, 180, "lon");
   assertOptionalMemory(value.memory);
@@ -130,7 +139,9 @@ export class AgentSessionController {
   constructor(
     private readonly client: WebSocket,
     providerFactory: ProviderFactory,
-    private readonly log?: Logger
+    private readonly log?: Logger,
+    private readonly clientIp = "unknown-ip",
+    private readonly requestRegion?: string
   ) {
     this.provider = providerFactory(client, {
       serverEvent: (payload, bytes) => {
@@ -164,6 +175,8 @@ export class AgentSessionController {
           event.type === "session.start"
             ? {
                 testerId: event.testerId,
+                testerRegion: event.testerRegion,
+                clientIp: this.clientIp,
                 scenario: event.scenario,
                 rideMode: event.rideMode,
                 voiceGender: event.voiceGender
@@ -172,7 +185,11 @@ export class AgentSessionController {
         );
       }
       if (event.type === "session.start") {
-        beginTesterSession(this.relaySessionId, event.testerId);
+        beginTesterSession(this.relaySessionId, {
+          testerId: event.testerId,
+          ipAddress: this.clientIp,
+          region: event.testerRegion ?? this.requestRegion
+        });
         await this.provider.start(event);
       }
       if (event.type === "audio.start") await this.provider.startAudio();

@@ -20,7 +20,10 @@ export type ProviderCapabilities = {
 };
 
 export type TesterStats = {
+  testerKey: string;
   testerId: string;
+  ipAddress: string;
+  region: string;
   activeSessions: number;
   totalSessions: number;
   totalSessionMs: number;
@@ -85,6 +88,8 @@ export type SessionStartEvent = {
   channels: number;
   /** Human-readable tester/workstation identifier for QA statistics. */
   testerId?: string;
+  /** Client-reported region/time zone label for QA attribution. */
+  testerRegion?: string;
   voiceGender?: VoiceGender;
   voicePersonality?: VoicePersonality;
   rideMode?: RideMode;

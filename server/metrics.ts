@@ -173,12 +173,16 @@ export function startMetricsHistory(): () => void {
 // audio moved, and how the realtime path behaved" between process restarts.
 
 export const TESTING_WINDOW_MINUTES = 30;
-const ANONYMOUS_TESTER_ID = "anonymous";
+const UNKNOWN_TESTER_ID = "unknown-tester";
+const UNKNOWN_IP = "unknown-ip";
 const MAX_TESTERS = 50;
 const MAX_LATENCY_SAMPLES_PER_TESTER = 128;
 
 type MutableTesterStats = {
+  testerKey: string;
   testerId: string;
+  ipAddress: string;
+  region: string;
   activeSessions: number;
   totalSessions: number;
   totalSessionMs: number;
@@ -194,8 +198,14 @@ type MutableTesterStats = {
 };
 
 type ActiveTestingSession = {
-  testerId: string;
+  testerKey: string;
   startedAt: number;
+};
+
+type TesterIdentity = {
+  testerId?: unknown;
+  ipAddress?: unknown;
+  region?: unknown;
 };
 
 type MutableTestingBucket = Omit<TestingTimelineBucket, "avgLatencyMs"> & {
@@ -206,9 +216,8 @@ const testers = new Map<string, MutableTesterStats>();
 const testingSessions = new Map<string, ActiveTestingSession>();
 const testingTimeline = new Map<number, MutableTestingBucket>();
 
-export function normalizeTesterId(value: unknown): string {
-  if (typeof value !== "string") return ANONYMOUS_TESTER_ID;
-  const withoutControls = value
+function cleanText(value: string): string {
+  return value
     .normalize("NFKC")
     .split("")
     .filter((char) => {
@@ -218,7 +227,53 @@ export function normalizeTesterId(value: unknown): string {
     .join("")
     .replace(/\s+/g, " ")
     .trim();
-  return withoutControls.slice(0, 80) || ANONYMOUS_TESTER_ID;
+}
+
+export function normalizeTesterId(value: unknown, ipAddress?: string): string {
+  if (typeof value !== "string") return ipAddress && ipAddress !== UNKNOWN_IP ? `ip:${ipAddress}` : UNKNOWN_TESTER_ID;
+  const withoutControls = cleanText(value);
+  if (withoutControls) return withoutControls.slice(0, 80);
+  return ipAddress && ipAddress !== UNKNOWN_IP ? `ip:${ipAddress}` : UNKNOWN_TESTER_ID;
+}
+
+function normalizeIpAddress(value: unknown): string {
+  if (typeof value !== "string") return UNKNOWN_IP;
+  const ip = cleanText(value)
+    .replace(/^::ffff:/, "")
+    .replace(/^\[(.*)]$/, "$1")
+    .slice(0, 96);
+  return ip || UNKNOWN_IP;
+}
+
+function ipRegion(ipAddress: string): string {
+  if (ipAddress === UNKNOWN_IP) return "unknown";
+  if (ipAddress === "::1" || ipAddress === "127.0.0.1" || ipAddress === "localhost") return "local";
+  const [a = 0, b = 0] = ipAddress.split(".").map((part) => Number(part));
+  if (a === 10 || a === 127 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31)) {
+    return "private network";
+  }
+  return "public IP";
+}
+
+function normalizeRegion(value: unknown, ipAddress: string): string {
+  if (typeof value === "string") {
+    const region = cleanText(value).slice(0, 96);
+    if (region) return region;
+  }
+  return ipRegion(ipAddress);
+}
+
+function normalizeTesterIdentity(input: TesterIdentity | unknown) {
+  const profile = isRecord(input) ? input : { testerId: input };
+  const ipAddress = normalizeIpAddress(profile.ipAddress);
+  const testerId = normalizeTesterId(profile.testerId, ipAddress);
+  const region = normalizeRegion(profile.region, ipAddress);
+  return {
+    testerKey: `${testerId}@${ipAddress}`,
+    testerId,
+    ipAddress,
+    region
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -248,12 +303,14 @@ function currentBucket(now: number): MutableTestingBucket {
   return bucket;
 }
 
-function getTester(testerId: string, now: number): MutableTesterStats {
-  const id = normalizeTesterId(testerId);
-  let tester = testers.get(id);
+function getTester(identity: ReturnType<typeof normalizeTesterIdentity>, now: number): MutableTesterStats {
+  let tester = testers.get(identity.testerKey);
   if (!tester) {
     tester = {
-      testerId: id,
+      testerKey: identity.testerKey,
+      testerId: identity.testerId,
+      ipAddress: identity.ipAddress,
+      region: identity.region,
       activeSessions: 0,
       totalSessions: 0,
       totalSessionMs: 0,
@@ -267,9 +324,11 @@ function getTester(testerId: string, now: number): MutableTesterStats {
       lastSeenAt: now,
       latencyMs: []
     };
-    testers.set(id, tester);
+    testers.set(identity.testerKey, tester);
     trimInactiveTesters();
   }
+  tester.ipAddress = identity.ipAddress;
+  tester.region = identity.region;
   tester.lastSeenAt = now;
   return tester;
 }
@@ -280,14 +339,19 @@ function trimInactiveTesters() {
     .filter((tester) => tester.activeSessions === 0)
     .sort((a, b) => a.lastSeenAt - b.lastSeenAt);
   while (testers.size > MAX_TESTERS && inactive.length) {
-    testers.delete(inactive.shift()!.testerId);
+    testers.delete(inactive.shift()!.testerKey);
   }
 }
 
 function activeTester(sessionId: string, now: number): MutableTesterStats | null {
   const session = testingSessions.get(sessionId);
   if (!session) return null;
-  return getTester(session.testerId, now);
+  const tester = testers.get(session.testerKey);
+  if (tester) {
+    tester.lastSeenAt = now;
+    return tester;
+  }
+  return null;
 }
 
 function recordLatency(tester: MutableTesterStats, latencyMs: number, now: number) {
@@ -315,6 +379,9 @@ function percentile(values: number[], percentileRank: number): number {
 function testerSnapshot(tester: MutableTesterStats): TesterStats {
   return {
     testerId: tester.testerId,
+    testerKey: tester.testerKey,
+    ipAddress: tester.ipAddress,
+    region: tester.region,
     activeSessions: tester.activeSessions,
     totalSessions: tester.totalSessions,
     totalSessionMs: tester.totalSessionMs,
@@ -362,21 +429,22 @@ function timelineSnapshot(now: number): TestingTimelineBucket[] {
   });
 }
 
-export function beginTesterSession(sessionId: string, testerId: unknown, now = Date.now()) {
+export function beginTesterSession(sessionId: string, identityInput: TesterIdentity | unknown, now = Date.now()) {
   if (testingSessions.has(sessionId)) return;
-  const id = normalizeTesterId(testerId);
-  const tester = getTester(id, now);
+  const identity = normalizeTesterIdentity(identityInput);
+  const tester = getTester(identity, now);
   tester.activeSessions += 1;
   tester.totalSessions += 1;
   tester.lastSeenAt = now;
-  testingSessions.set(sessionId, { testerId: id, startedAt: now });
+  testingSessions.set(sessionId, { testerKey: identity.testerKey, startedAt: now });
   currentBucket(now).sessionsStarted += 1;
 }
 
 export function endTesterSession(sessionId: string, now = Date.now()) {
   const session = testingSessions.get(sessionId);
   if (!session) return;
-  const tester = getTester(session.testerId, now);
+  const tester = testers.get(session.testerKey);
+  if (!tester) return;
   tester.activeSessions = Math.max(0, tester.activeSessions - 1);
   tester.totalSessionMs += Math.max(0, now - session.startedAt);
   tester.lastSeenAt = now;
@@ -436,7 +504,7 @@ export function testingSnapshot(now = Date.now()): TestingStats {
     return b.totalSessions - a.totalSessions;
   });
   const latency = users.flatMap((user) => {
-    const tester = testers.get(user.testerId);
+    const tester = testers.get(user.testerKey);
     return tester?.latencyMs ?? [];
   });
   return {

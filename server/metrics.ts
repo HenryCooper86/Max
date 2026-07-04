@@ -664,12 +664,9 @@ function normalizeCompletedSession(value: unknown): TesterSessionSummary | null 
     ttsFallbacks,
     turns
   });
-  const flags = Array.isArray(value.flags)
-    ? value.flags
-        .filter((flag): flag is string => typeof flag === "string")
-        .map((flag) => cleanText(flag).slice(0, 80))
-        .filter(Boolean)
-    : evaluation.checks.filter((check) => check.status === "fail" || check.status === "warn").map((check) => check.id);
+  const flags = evaluation.checks
+    .filter((check) => check.status === "fail" || check.status === "warn")
+    .map((check) => check.id);
 
   return {
     sessionId,

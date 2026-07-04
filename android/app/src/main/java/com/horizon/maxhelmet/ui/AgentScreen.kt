@@ -793,7 +793,7 @@ private fun SettingsPanel(
                 value = viewModel.authToken,
                 onValueChange = viewModel::updateAuthToken,
                 singleLine = true,
-                label = { Text("认证令牌（可选）", fontSize = 12.sp) },
+                label = { Text("认证令牌（网页「复制令牌」获取）", fontSize = 12.sp) },
                 textStyle = MaterialTheme.typography.bodySmall.copy(color = HudColors.Text),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = HudColors.AccentCyan,

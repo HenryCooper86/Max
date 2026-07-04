@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-07-04 — Native apps: clear 401 guidance now that the relay requires login
+
+The site-wide login gate broke anonymous native-app connections by design
+(the relay refuses `/agent` without a token once accounts exist), but both
+apps handled the rejection badly. iOS showed "中继拒绝连接（HTTP 401），请检查
+中继地址" — pointing at the address when the fix is a token; Android ignored
+the HTTP response entirely and burned six reconnect attempts against a hard
+401 before a generic failure line.
+
+- **iOS** (`AgentSession.swift`): a 401 upgrade rejection now shows
+  step-by-step guidance — log in on the web HUD, tap 复制令牌（App 用）,
+  long-press the Max logo, paste into 认证令牌 — and does not retry.
+- **Android** (`AgentSession.kt`): `onFailure` now passes the HTTP response
+  code through; any non-101 upgrade rejection stops the retry loop and shows
+  the same 401 guidance / generic status message as iOS.
+- Both settings sheets relabel 认证令牌 from "可选" to "网页「复制令牌」获取",
+  and the README troubleshooting table gains the 401 row.
+
+Verified: `swiftc -parse` clean, Android `compileDebugKotlin` green. (No
+Xcode on this Mac — iOS build/UI verification happens on the dev machine.)
+
 ## 2026-07-04 — Invites, admin account management, App token copy, futuristic login
 
 174 tests green (3 new), tsc/eslint/prettier clean, production build verified;

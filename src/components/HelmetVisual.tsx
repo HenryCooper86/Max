@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import type { HazardLevel } from "../../shared/agent";
 
 /** Conversational state of the hands-free session, driven by server events. */
@@ -12,8 +13,18 @@ type Props = {
   hazardLevel?: HazardLevel;
 };
 
-// Relative heights of the on-visor voice bars.
-const BARS = [0.42, 0.78, 0.56, 0.94, 0.68, 0.84, 0.48, 0.72, 0.6];
+// On-visor waveform: many thin bars whose amplitudes follow a bell envelope
+// with a deterministic ripple, so the line reads as an organic sound wave
+// rather than a row of LED segments. While Max speaks a CSS animation runs a
+// travelling wave through them (see .visorVisualizer.speaking); while the
+// rider talks the bars are driven live by the mic level.
+const BAR_COUNT = 27;
+const BAR_AMPS = Array.from({ length: BAR_COUNT }, (_, index) => {
+  const t = index / (BAR_COUNT - 1);
+  const bell = Math.exp(-((t - 0.5) ** 2) / 0.09);
+  const ripple = 0.16 * Math.sin(index * 2.1);
+  return Math.max(0.18, Math.min(1, 0.28 + 0.72 * bell + ripple));
+});
 
 const CAPTIONS: Record<TurnState, string> = {
   idle: "待机",
@@ -112,18 +123,43 @@ export function HelmetVisual({ connected, listening, voiceLevel, turnState, haza
           <circle className="greenDot" cx="282" cy="205" r="9" />
         </svg>
 
-        <div className={`visorVisualizer ${listening ? "active" : ""}`}>
-          {BARS.map((weight, index) => {
-            const scale = listening ? Math.max(0.14, Math.min(1, voiceLevel * weight + 0.1)) : 0.14;
-            return <span key={index} style={{ transform: `scaleY(${scale})` }} />;
-          })}
-        </div>
+        <VisorWaveform connected={connected} listening={listening} voiceLevel={voiceLevel} turnState={turnState} />
       </div>
 
       <div className="helmetCaption">
         <span className="captionDot" />
         {caption}
       </div>
+    </div>
+  );
+}
+
+/** The waveform on the visor. Three drive modes: a CSS travelling wave while
+ *  Max replies, live mic level while the rider talks, and a low scanning
+ *  shimmer while Max thinks; otherwise a calm flat line. */
+function VisorWaveform({
+  connected,
+  listening,
+  voiceLevel,
+  turnState
+}: Pick<Props, "connected" | "listening" | "voiceLevel" | "turnState">) {
+  const speaking = connected && turnState === "speaking";
+  const thinking = connected && turnState === "thinking";
+  const micDriven = listening && !speaking && !thinking;
+  const mode = speaking ? "speaking" : thinking ? "thinking" : "";
+
+  return (
+    <div className={`visorVisualizer ${mode} ${listening ? "active" : ""}`}>
+      {BAR_AMPS.map((amp, index) => {
+        const style: CSSProperties = { "--amp": amp, "--i": index } as CSSProperties;
+        // Inline transforms only in mic-driven/idle modes — the speaking and
+        // thinking waves are CSS animations, which must own the transform.
+        if (!speaking && !thinking) {
+          const scale = micDriven ? Math.max(0.1, Math.min(1, voiceLevel * 1.7 * amp + 0.07)) : 0.1;
+          style.transform = `scaleY(${scale})`;
+        }
+        return <span key={index} style={style} />;
+      })}
     </div>
   );
 }

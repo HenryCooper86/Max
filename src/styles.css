@@ -1273,6 +1273,14 @@ h2 {
   white-space: normal;
 }
 
+.testerTable td:nth-child(2) {
+  white-space: normal;
+}
+
+.testerTable tr.selected td {
+  background: rgba(95, 233, 214, 0.07);
+}
+
 .testerTable strong {
   display: block;
   max-width: 180px;
@@ -1285,6 +1293,135 @@ h2 {
   margin-top: 2px;
   color: var(--muted);
   font-size: 0.72rem;
+}
+
+.testerLink {
+  all: unset;
+  display: block;
+  min-width: 0;
+  max-width: 220px;
+  padding: 2px 3px;
+  margin: -2px -3px;
+  border-radius: 6px;
+  color: inherit;
+  cursor: pointer;
+}
+
+.testerLink:hover strong,
+.testerLink:focus-visible strong {
+  color: var(--accent);
+}
+
+.testerLink:focus-visible {
+  outline: 2px solid rgba(95, 233, 214, 0.8);
+  outline-offset: 2px;
+}
+
+.testerConversationPanel {
+  min-width: 0;
+  padding-top: 12px;
+  border-top: 1px solid rgba(196, 218, 216, 0.12);
+}
+
+.testerConversationHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.testerConversationHeader > div {
+  min-width: 0;
+}
+
+.testerConversationHeader span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.testerConversationHeader strong {
+  display: block;
+  margin-top: 4px;
+  color: #f5fbfa;
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.testerConversationHeader p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.testerConversationHeader button {
+  flex: 0 0 auto;
+  min-height: 32px;
+  border: 1px solid rgba(196, 218, 216, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.testerConversationHeader button:disabled {
+  color: rgba(216, 224, 221, 0.38);
+  cursor: not-allowed;
+}
+
+.testerConversationList {
+  display: grid;
+  gap: 8px;
+  max-height: 280px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.testerTurn {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent-cyan);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.testerTurn.agent {
+  border-left-color: var(--accent);
+}
+
+.testerTurn > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.testerTurn strong {
+  color: #f5fbfa;
+  font-size: 0.78rem;
+}
+
+.testerTurn span {
+  color: var(--muted);
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+.testerTurn p,
+.testerConversationEmpty {
+  margin: 0;
+  color: #d8e0dd;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.testerConversationEmpty {
+  color: var(--muted);
 }
 
 /* ============================================================
@@ -1603,6 +1740,14 @@ h2 {
   .testerBar,
   .chartGrid {
     grid-template-columns: 1fr;
+  }
+
+  .testerConversationHeader {
+    flex-direction: column;
+  }
+
+  .testerConversationHeader button {
+    width: 100%;
   }
 
   .rideIntelGrid {

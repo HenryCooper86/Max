@@ -455,7 +455,10 @@ rows by tester ID + client IP, so a tester name is attached to the network that
 ran it; clients that omit `testerId` become `ip:<address>` instead of
 `anonymous`. The relay aggregates sessions, active runs, duration, mic uplink
 bytes, audio/control downlink bytes, first-audio average/p95 latency, errors,
-TTS fallbacks, and 30-minute graph buckets by tester/IP.
+TTS fallbacks, recent transcript turns, and 30-minute graph buckets by
+tester/IP. In the HUD, selecting a tester ID or IP opens that tester's recent
+chat history alongside the tester's IP, region, session count, and last-seen
+time.
 
 **Code:** `server/metrics.ts` (`beginTesterSession`,
 `recordTesterClientAudio`, `recordTesterServerEvent`, `testingSnapshot`),
@@ -463,8 +466,8 @@ TTS fallbacks, and 30-minute graph buckets by tester/IP.
 `src/App.tsx` (testing dashboard).
 
 **Unit test:** `tests/metrics.test.ts` covers per-tester sessions, IP fallback,
-region, bandwidth, latency, errors, and fallbacks; `tests/websocket.test.ts`
-validates safe `testerId` and `testerRegion` values.
+region, bandwidth, latency, transcript turns, errors, and fallbacks;
+`tests/websocket.test.ts` validates safe `testerId` and `testerRegion` values.
 
 ```bash
 npm test -- "per-tester"
@@ -479,10 +482,11 @@ sessions, mic up/downlink bandwidth, latency, and per-user rows. Then check:
 curl -s http://localhost:8787/health | jq '.testing'
 ```
 
-Expected: `testing.users[]` includes `testerKey`, `testerId`, `ipAddress`, and
-`region`; `testing.timeline[]` contains graph-ready minute buckets. Behind
-Caddy/Lightsail, `RELAY_TRUST_PROXY=on` is required or the IP will be the local
-proxy address instead of the tester address.
+Expected: `testing.users[]` includes `testerKey`, `testerId`, `ipAddress`,
+`region`, and a bounded `recentTurns[]` transcript list; `testing.timeline[]`
+contains graph-ready minute buckets. Behind Caddy/Lightsail,
+`RELAY_TRUST_PROXY=on` is required or the IP will be the local proxy address
+instead of the tester address.
 
 ---
 

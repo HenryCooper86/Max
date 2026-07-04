@@ -248,6 +248,8 @@ export type AgentHealth = {
   metrics?: Record<string, number>;
   /** Counter deltas over the trailing window (server/metrics.ts metricsWindow). */
   metricsWindow?: Record<string, number>;
+  /** User-account status: auth turns on once the first user registers. */
+  auth?: { enabled: boolean; registrationOpen: boolean };
   /** Per-tester QA statistics and recent bandwidth/latency graph data. */
   testing?: TestingStats;
 };

@@ -8,6 +8,7 @@
 
 import type { IncomingMessage } from "node:http";
 import { timingSafeEqual } from "node:crypto";
+import { authActive, sessionUser, type PublicUser } from "./accounts";
 import { config } from "./config";
 
 export type UpgradeDecision = { ok: true } | { ok: false; code: number; reason: string };
@@ -91,20 +92,81 @@ export function resetRateLimit() {
   rateHits.clear();
 }
 
-/**
- * Whether an HTTP request may see the per-tester QA statistics (IPs, regions,
- * chat transcripts). Open when no relay token is configured — the documented
- * internal-test mode — but once RELAY_AUTH_TOKEN is set, the same secret must
- * come along (?token=… or Authorization: Bearer …); /health itself stays open
- * so the one-curl liveness check keeps working.
- */
-export function testingStatsAuthorized(request: IncomingMessage): boolean {
-  if (!config.relayAuthToken) return true;
+/** The credentials a request presented: `?token=…` and/or a Bearer header. */
+function presentedTokens(request: IncomingMessage): string[] {
   const url = new URL(request.url ?? "/", "http://relay.local");
   const fromQuery = url.searchParams.get("token") ?? "";
   const authorization = request.headers.authorization ?? "";
   const fromHeader = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length).trim() : "";
-  return tokenMatches(fromQuery, config.relayAuthToken) || tokenMatches(fromHeader, config.relayAuthToken);
+  return [fromQuery, fromHeader].filter(Boolean);
+}
+
+function matchesRelayToken(tokens: string[]): boolean {
+  if (!config.relayAuthToken) return false;
+  return tokens.some((token) => tokenMatches(token, config.relayAuthToken));
+}
+
+/** The logged-in user behind a request's session token, if any. */
+export function requestUser(request: IncomingMessage): PublicUser | null {
+  for (const token of presentedTokens(request)) {
+    const user = sessionUser(token);
+    if (user) return user;
+  }
+  return null;
+}
+
+/**
+ * Whether an HTTP request may see the per-tester QA statistics (IPs, regions,
+ * chat transcripts). Open only while NEITHER a relay token is configured NOR
+ * any user account exists — the documented plug-and-play internal mode. Once
+ * either is in place, the request must present the relay token (?token=… or
+ * Authorization: Bearer …) or a valid login session. /health liveness fields
+ * stay open either way, so the one-curl deployment check keeps working.
+ */
+export function testingStatsAuthorized(request: IncomingMessage): boolean {
+  if (!config.relayAuthToken && !authActive()) return true;
+  return matchesRelayToken(presentedTokens(request)) || requestUser(request) !== null;
+}
+
+/**
+ * Whether a request may DELETE tester QA data (/testing/clear). Stricter than
+ * viewing: once user accounts exist, only an admin login (or the relay token,
+ * which remains the operator master key) may clear.
+ */
+export function testingClearAuthorized(request: IncomingMessage): boolean {
+  if (!config.relayAuthToken && !authActive()) return true;
+  if (matchesRelayToken(presentedTokens(request))) return true;
+  return requestUser(request)?.role === "admin";
+}
+
+// Login/registration attempts get their own, deliberately tight sliding
+// window per client IP — independent of the /agent upgrade limiter so a
+// password-guessing loop can't ride on a generous RELAY_CONN_PER_MINUTE.
+const AUTH_ATTEMPTS_PER_MINUTE = 10;
+const authHits = new Map<string, number[]>();
+
+export function checkAuthRateLimit(address: string, now = Date.now()): boolean {
+  const cutoff = now - RATE_WINDOW_MS;
+  const recent = (authHits.get(address) ?? []).filter((at) => at > cutoff);
+  if (recent.length >= AUTH_ATTEMPTS_PER_MINUTE) {
+    authHits.set(address, recent);
+    return false;
+  }
+  recent.push(now);
+  authHits.set(address, recent);
+  if (authHits.size > 10_000) {
+    for (const [key, value] of authHits) {
+      const pruned = value.filter((at) => at > cutoff);
+      if (pruned.length === 0) authHits.delete(key);
+      else authHits.set(key, pruned);
+    }
+  }
+  return true;
+}
+
+/** Test hook: clears auth rate-limit state between cases. */
+export function resetAuthRateLimit() {
+  authHits.clear();
 }
 
 export function authorizeUpgrade(request: IncomingMessage, now = Date.now()): UpgradeDecision {
@@ -125,7 +187,9 @@ export function authorizeUpgrade(request: IncomingMessage, now = Date.now()): Up
   if (config.relayAuthToken) {
     const url = new URL(request.url ?? "/", "http://relay.local");
     const provided = url.searchParams.get("token") ?? "";
-    if (!tokenMatches(provided, config.relayAuthToken)) {
+    // A logged-in user's session token is as good as the shared secret, so
+    // web testers don't need to be handed the operator token separately.
+    if (!tokenMatches(provided, config.relayAuthToken) && !sessionUser(provided)) {
       return { ok: false, code: 401, reason: "Invalid relay token" };
     }
   }

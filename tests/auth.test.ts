@@ -1,10 +1,14 @@
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { registerUser, resetAccounts } from "../server/accounts";
 import {
   authorizeUpgrade,
+  checkAuthRateLimit,
   checkRateLimit,
   clientAddress,
+  resetAuthRateLimit,
   resetRateLimit,
+  testingClearAuthorized,
   testingStatsAuthorized
 } from "../server/auth";
 import { config } from "../server/config";
@@ -39,6 +43,8 @@ const original = {
 
 beforeEach(() => {
   resetRateLimit();
+  resetAuthRateLimit();
+  resetAccounts();
 });
 
 afterEach(() => {
@@ -118,6 +124,62 @@ describe("testingStatsAuthorized", () => {
     expect(testingStatsAuthorized(fakeRequest({ url: "/health", authorization: "Bearer nope" }))).toBe(false);
     expect(testingStatsAuthorized(fakeRequest({ url: "/health?token=s3cret" }))).toBe(true);
     expect(testingStatsAuthorized(fakeRequest({ url: "/health", authorization: "Bearer s3cret" }))).toBe(true);
+  });
+});
+
+describe("user sessions in the gates", () => {
+  it("locks the testing stats once the first user registers, unlocked by login session", async () => {
+    config.relayAuthToken = "";
+    expect(testingStatsAuthorized(fakeRequest({ url: "/health" }))).toBe(true); // open mode
+
+    const registered = await registerUser("boss", "hunter2-hunter2");
+    expect(registered.ok).toBe(true);
+    if (!registered.ok) return;
+
+    expect(testingStatsAuthorized(fakeRequest({ url: "/health" }))).toBe(false); // now locked
+    expect(testingStatsAuthorized(fakeRequest({ url: "/health", authorization: `Bearer ${registered.token}` }))).toBe(
+      true
+    );
+    expect(testingStatsAuthorized(fakeRequest({ url: `/health?token=${registered.token}` }))).toBe(true);
+  });
+
+  it("restricts clears to admins (relay token stays the master key)", async () => {
+    config.relayAuthToken = "";
+    expect(testingClearAuthorized(fakeRequest({ url: "/testing/clear" }))).toBe(true); // open mode
+
+    const admin = await registerUser("boss", "hunter2-hunter2");
+    const tester = await registerUser("rider", "password123");
+    expect(admin.ok && tester.ok).toBe(true);
+    if (!admin.ok || !tester.ok) return;
+
+    expect(testingClearAuthorized(fakeRequest({ url: "/testing/clear" }))).toBe(false);
+    expect(testingClearAuthorized(fakeRequest({ authorization: `Bearer ${tester.token}` }))).toBe(false); // can view…
+    expect(testingStatsAuthorized(fakeRequest({ authorization: `Bearer ${tester.token}` }))).toBe(true); // …not clear
+    expect(testingClearAuthorized(fakeRequest({ authorization: `Bearer ${admin.token}` }))).toBe(true);
+
+    config.relayAuthToken = "s3cret";
+    expect(testingClearAuthorized(fakeRequest({ url: "/testing/clear?token=s3cret" }))).toBe(true);
+  });
+
+  it("accepts a login session for the /agent upgrade on token-protected relays", async () => {
+    config.relayAuthToken = "s3cret";
+    const registered = await registerUser("rider", "password123");
+    expect(registered.ok).toBe(true);
+    if (!registered.ok) return;
+
+    expect(authorizeUpgrade(fakeRequest({ url: `/agent?token=${registered.token}` }))).toEqual({ ok: true });
+    expect(authorizeUpgrade(fakeRequest({ url: "/agent?token=sess_forged" })).ok).toBe(false);
+    expect(authorizeUpgrade(fakeRequest({ url: "/agent?token=s3cret" }))).toEqual({ ok: true });
+  });
+
+  it("rate limits auth attempts per address independently of the upgrade limiter", () => {
+    const now = 9_000_000;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      expect(checkAuthRateLimit("198.51.100.7", now + attempt)).toBe(true);
+    }
+    expect(checkAuthRateLimit("198.51.100.7", now + 20)).toBe(false);
+    expect(checkAuthRateLimit("198.51.100.8", now + 20)).toBe(true); // other address unaffected
+    expect(checkAuthRateLimit("198.51.100.7", now + 61_000)).toBe(true); // window slides
   });
 });
 

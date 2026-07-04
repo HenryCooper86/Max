@@ -1,5 +1,8 @@
 import "dotenv/config";
 import { providerCapabilities, type AgentHealth } from "../shared/agent";
+// Runtime-only use inside buildHealth/describeConfig; accounts.ts references
+// config only inside functions, so this import cycle never bites at load time.
+import { authActive, registrationOpen } from "./accounts";
 import { metrics, metricsWindow, testingSnapshot } from "./metrics";
 
 export type VoiceProvider = "mock" | "doubao";
@@ -57,7 +60,12 @@ export const config = {
   // Base wait for Doubao TTS audio before falling back to browser speech. The
   // doubao provider adapts upward from this floor using measured first-audio
   // latency, so a slow link doesn't trigger spurious fallbacks.
-  ttsFallbackMs: resolveBoundedInt(process.env.TTS_FALLBACK_MS, 1800, 400, 10_000)
+  ttsFallbackMs: resolveBoundedInt(process.env.TTS_FALLBACK_MS, 1800, 400, 10_000),
+  // User accounts (/auth/register): set AUTH_REGISTRATION=off once the test
+  // team is onboarded so strangers can't self-register on a reachable relay.
+  authRegistration: process.env.AUTH_REGISTRATION?.trim().toLowerCase() !== "off",
+  // Login session lifetime, in days.
+  authSessionDays: resolveBoundedInt(process.env.AUTH_SESSION_DAYS, 30, 1, 365)
 };
 
 function resolveBoundedInt(raw: string | undefined, fallback: number, min: number, max: number): number {
@@ -106,6 +114,7 @@ export function describeConfig(): string[] {
     `Weather mid-ride refresh: ${config.weatherRefreshMs ? `every ${Math.round(config.weatherRefreshMs / 60000)} min` : "off"}`,
     `Wake word ("Max"): ${config.wakeWord ? "on" : "off"}`,
     `Relay auth token: ${config.relayAuthToken ? "required" : "open"}`,
+    `User accounts: ${authActive() ? "active" : "none yet"} · registration ${config.authRegistration ? "open" : "closed"}`,
     `Relay origin allowlist: ${config.allowedOrigins.length ? config.allowedOrigins.join(", ") : "any"}`,
     `Relay rate limit: ${config.connPerMinute ? `${config.connPerMinute} conn/min/IP (sliding)` : "off"}`,
     `Relay heartbeat: ${config.heartbeatMs ? `ping every ${Math.round(config.heartbeatMs / 1000)} s` : "off"}`,
@@ -164,6 +173,8 @@ export function buildHealth(uptimeSec: number, includeTesting = true): AgentHeal
     capabilities: providerCapabilities(config.voiceProvider),
     metrics: { ...metrics.snapshot() },
     metricsWindow: { ...metricsWindow() },
+    // Lets clients decide whether to show the login/registration UI.
+    auth: { enabled: authActive(), registrationOpen: registrationOpen() },
     // The testing block carries tester IPs, regions, and chat transcripts —
     // callers must gate it (see testingStatsAuthorized) so an unauthenticated
     // /health poll can't dump every tester's conversation history.

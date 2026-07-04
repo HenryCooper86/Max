@@ -7,6 +7,9 @@ import { useCallback, useEffect, useState } from "react";
 import { scenarioLabel } from "../../shared/ride";
 import { TESTING_CAMPAIGNS, TESTING_TEST_CASES, defaultTestCaseForCampaign } from "../../shared/testing";
 import type { HelmetAgent } from "../hooks/useHelmetAgent";
+import { fetchCurrentUser, type AuthUser } from "../lib/auth";
+import { relayAuthToken } from "../lib/persistence";
+import { AccountBar } from "./AccountBar";
 import {
   currentTesterSnapshot,
   exportTestingReport,
@@ -58,6 +61,18 @@ export function TestingAdminPanel({ agent }: { agent: HelmetAgent }) {
   const [armedAction, setArmedAction] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
   const [adminNotice, setAdminNotice] = useState<string | null>(null);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+
+  // Restore the logged-in user from a stored session token on mount.
+  useEffect(() => {
+    let active = true;
+    void fetchCurrentUser().then((user) => {
+      if (active) setAuthUser(user);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!armedAction) return;
@@ -75,7 +90,7 @@ export function TestingAdminPanel({ agent }: { agent: HelmetAgent }) {
         if (payload.scope !== "session") setSelectedTesterKey(null);
         await agent.refreshHealth();
       } else {
-        setAdminNotice("清除失败 — 检查中继连接与访问令牌。");
+        setAdminNotice("清除失败 — 需要管理员登录（或有效的中继令牌），并确认中继在线。");
       }
       setClearing(false);
     },
@@ -146,6 +161,27 @@ export function TestingAdminPanel({ agent }: { agent: HelmetAgent }) {
     setSelectedTesterKey(testerKey);
     setSelectedSessionId(null);
   };
+  const authEnabled = agent.health?.auth?.enabled ?? false;
+  const registrationOpen = agent.health?.auth?.registrationOpen ?? true;
+  // Once accounts exist, the relay refuses non-admin clears; mirror that in
+  // the UI. A stored operator relay token remains the master key.
+  const canClear = !authEnabled || authUser?.role === "admin" || Boolean(relayAuthToken());
+  const statsLocked = Boolean(agent.health) && authEnabled && !testing;
+
+  const handleSignedIn = useCallback(
+    (user: AuthUser) => {
+      setAuthUser(user);
+      // Tie the QA stats identity to the account.
+      if (agent.testerId !== user.username) agent.setTesterId(user.username);
+      void agent.refreshHealth();
+    },
+    [agent]
+  );
+
+  const handleSignedOut = useCallback(() => {
+    setAuthUser(null);
+    void agent.refreshHealth();
+  }, [agent]);
 
   return (
     <section className="hudPanel testingPanel" aria-label="测试统计与管理">
@@ -159,13 +195,28 @@ export function TestingAdminPanel({ agent }: { agent: HelmetAgent }) {
           <button
             type="button"
             className={`danger ${armedAction === "clear-all" ? "armed" : ""}`}
-            disabled={clearing || !testerUsers.length}
+            disabled={clearing || !testerUsers.length || !canClear}
+            title={canClear ? undefined : "需要管理员登录"}
             onClick={() => confirmable("clear-all", () => void runClear({ scope: "all" }))}
           >
             {armedAction === "clear-all" ? "确认清除全部?" : "清除全部"}
           </button>
         </div>
       </div>
+
+      <AccountBar
+        authEnabled={authEnabled}
+        registrationOpen={registrationOpen}
+        user={authUser}
+        onSignedIn={handleSignedIn}
+        onSignedOut={handleSignedOut}
+      />
+
+      {statsLocked ? (
+        <p className="adminNotice" role="status">
+          测试统计已启用账号保护 — 登录后查看测试员数据、会话回放与聊天记录。
+        </p>
+      ) : null}
 
       {adminNotice ? (
         <p className="adminNotice" role="alert">
@@ -419,7 +470,8 @@ export function TestingAdminPanel({ agent }: { agent: HelmetAgent }) {
             <button
               type="button"
               className={`danger ${armedAction === "clear-tester" ? "armed" : ""}`}
-              disabled={clearing || !selectedTester}
+              disabled={clearing || !selectedTester || !canClear}
+              title={canClear ? undefined : "需要管理员登录"}
               onClick={() =>
                 selectedTester &&
                 confirmable(
@@ -477,7 +529,8 @@ export function TestingAdminPanel({ agent }: { agent: HelmetAgent }) {
             <button
               type="button"
               className={`danger ${armedAction === "clear-session" ? "armed" : ""}`}
-              disabled={clearing || !selectedSession}
+              disabled={clearing || !selectedSession || !canClear}
+              title={canClear ? undefined : "需要管理员登录"}
               onClick={() =>
                 selectedSession &&
                 confirmable(

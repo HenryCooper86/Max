@@ -1532,6 +1532,91 @@ h2 {
   font-size: 0.8rem;
 }
 
+.accountBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border: 1px solid rgba(196, 218, 216, 0.16);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.accountFields {
+  display: flex;
+  flex: 1 1 320px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.accountFields input {
+  flex: 1 1 130px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid rgba(196, 218, 216, 0.2);
+  border-radius: 8px;
+  background: rgba(6, 15, 13, 0.6);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.82rem;
+}
+
+.accountActions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.accountBar button {
+  min-height: 32px;
+  padding: 0 14px;
+  border: 1px solid rgba(107, 238, 174, 0.34);
+  border-radius: 999px;
+  background: rgba(107, 238, 174, 0.1);
+  color: #dffdf0;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.accountBar button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.accountBar button.accountSwitch {
+  border-color: rgba(196, 218, 216, 0.2);
+  background: transparent;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.accountIdentity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.accountIdentity strong {
+  font-size: 0.88rem;
+}
+
+.accountIdentity span {
+  color: rgba(216, 224, 221, 0.68);
+  font-size: 0.74rem;
+}
+
+.accountError {
+  flex-basis: 100%;
+  margin: 0;
+  color: #ffd9d9;
+  font-size: 0.78rem;
+}
+
 .sessionReplayGrid {
   display: grid;
   grid-template-columns: minmax(190px, 0.45fr) minmax(0, 1fr);

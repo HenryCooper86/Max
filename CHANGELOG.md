@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-07-04 — Fix: cumulative ASR partials no longer concatenate into garbage transcripts
+
+Doubao streams cumulative whole-utterance hypotheses within a rider turn
+("我", "我也", "我也看到"…), but the relay APPENDED each one to the turn text.
+Live captions looked fine (clients replace non-final items in place), but the
+final rider transcript introduced in the review sweep flushed the whole
+concatenated pile — the 上一指令 card and the tester chat drilldown showed
+"我 我也 我也看到 我也看到你的 …" walls of text. The newest hypothesis now
+REPLACES the turn text (`server/providers/doubao.ts`), matching the
+replacement semantics clients and the stats merge already use; the wake
+window latches once opened, so gating is unaffected. New end-to-end
+regression test streams three cumulative hypotheses and asserts the final
+turn is exactly the last one.
+
+Note: previously recorded sessions keep their garbled rider text in the
+testing history — clear the affected tester (or session) from the admin
+panel to drop them.
+
 ## 2026-07-04 — Web visor: sound-wave visualizer replaces the LED segment strip
 
 The nine chunky "LED teeth" on the helmet visor are now a 27-bar waveform

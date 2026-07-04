@@ -762,12 +762,18 @@ export function createDoubaoProvider(
           const text = extractAsrText(payload);
           if (text) {
             if (!asrFirstTextAt) asrFirstTextAt = Date.now();
-            // Accumulate the turn transcript and (re)open the conversation window
-            // when the rider says "Max" or is already inside an open window.
-            // Follow-ups slide the window but never past the chain cap after the
-            // last explicit wake — continuous chatter otherwise kept the agent
-            // addressed forever.
-            riderTurnText = riderTurnText ? `${riderTurnText} ${text}` : text;
+            // Doubao ASR partials are CUMULATIVE: each AsrResponse carries the
+            // current best hypothesis of the WHOLE utterance ("我", "我也",
+            // "我也看到"…), so the newest one replaces the turn text. Appending
+            // them concatenated every hypothesis into an unreadable pile that
+            // the AsrEnded flush then stamped into the transcript. Clients
+            // already treat non-final rider items as replacements, and the
+            // wake window below latches once opened, so replace is safe.
+            riderTurnText = text;
+            // (Re)open the conversation window when the rider says "Max" or is
+            // already inside an open window. Follow-ups slide the window but
+            // never past the chain cap after the last explicit wake —
+            // continuous chatter otherwise kept the agent addressed forever.
             if (wakeWordEnabled) {
               const now = Date.now();
               if (containsWakePhrase(riderTurnText)) {

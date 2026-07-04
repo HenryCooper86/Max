@@ -454,12 +454,15 @@ class AgentSession(
 
             override fun onFailure(socket: WebSocket, t: Throwable, response: Response?) {
                 Log.w(TAG, "Relay socket failure", t)
-                handleSocketClosed(socket)
+                // A non-null response means the relay answered but refused the
+                // upgrade (e.g. 401 login required) — surface that instead of
+                // retrying into the same rejection.
+                handleSocketClosed(socket, httpStatus = response?.code)
             }
         })
     }
 
-    private fun handleSocketClosed(socket: WebSocket, closeCode: Int = 0) {
+    private fun handleSocketClosed(socket: WebSocket, closeCode: Int = 0, httpStatus: Int? = null) {
         // Ignore a socket already superseded by a newer one (e.g. a restart).
         if (webSocket != null && socket !== webSocket) return
         socketOpen = false
@@ -478,6 +481,25 @@ class AgentSession(
             reconnectAttempts = 0
             stop()
             _state.update { it.copy(statusText = "会话闲置已断开，请重新开启免提") }
+            return
+        }
+
+        // The relay answered but refused the WebSocket upgrade. Retrying can't
+        // fix either case: 401 means a login token is required (accounts are
+        // active on the shared relay — see the web HUD's 复制令牌 button),
+        // anything else is a configuration problem (e.g. wrong path → 400).
+        if (httpStatus != null && httpStatus != 101) {
+            reconnectAttempts = 0
+            _state.update {
+                it.copy(
+                    connection = ConnectionState.DEGRADED,
+                    statusText = if (httpStatus == 401) {
+                        "需要登录令牌：网页登录后点「复制令牌（App 用）」，长按 Max 标志打开设置，粘贴到认证令牌"
+                    } else {
+                        "中继拒绝连接（HTTP $httpStatus），请检查中继地址"
+                    }
+                )
+            }
             return
         }
 

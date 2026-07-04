@@ -734,7 +734,7 @@ private struct SettingsPanel: View {
                     .autocorrectionDisabled(true)
                     .padding(12)
                     .background(RoundedRectangle(cornerRadius: 10).fill(HudColors.panelElevated))
-                Text("认证令牌（可选，服务器未配置时留空）")
+                Text("认证令牌（网页登录后点「复制令牌（App 用）」获取；开放模式可留空）")
                     .font(.system(size: 11)).foregroundColor(HudColors.muted)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 TextField("认证令牌", text: $viewModel.authToken)

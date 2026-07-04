@@ -477,13 +477,17 @@ final class AgentSession: NSObject, ObservableObject {
             return
         }
 
-        // The relay answered but refused the WebSocket upgrade (e.g. a wrong path
-        // → HTTP 400). That's a configuration problem; retrying can't fix it.
+        // The relay answered but refused the WebSocket upgrade. Retrying can't
+        // fix either case: 401 means the relay requires a login token (accounts
+        // are active on the shared relay — see the web HUD's 复制令牌 button),
+        // anything else is a configuration problem (e.g. wrong path → HTTP 400).
         if let status = (task.response as? HTTPURLResponse)?.statusCode, status != 101 {
             reconnectAttempts = 0
             update {
                 $0.connection = .degraded
-                $0.statusText = "中继拒绝连接（HTTP \(status)），请检查中继地址"
+                $0.statusText = status == 401
+                    ? "需要登录令牌：网页登录后点「复制令牌（App 用）」，长按 Max 标志打开设置，粘贴到认证令牌"
+                    : "中继拒绝连接（HTTP \(status)），请检查中继地址"
             }
             return
         }

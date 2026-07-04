@@ -5,7 +5,16 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
-import { authorizeUpgrade, clientAddress, clientRegionHint, testingStatsAuthorized } from "./auth";
+import { loginUser, logoutSession, registerUser } from "./accounts";
+import {
+  authorizeUpgrade,
+  checkAuthRateLimit,
+  clientAddress,
+  clientRegionHint,
+  requestUser,
+  testingClearAuthorized,
+  testingStatsAuthorized
+} from "./auth";
 import { buildHealth, config, describeConfig, validateConfig } from "./config";
 import { createLogger, shortSessionId } from "./logger";
 import {
@@ -35,11 +44,67 @@ app.get("/health", (req, res) => {
   res.json(buildHealth(Math.round(process.uptime()), testingStatsAuthorized(req)));
 });
 
-// Admin: clear tester QA data. Same gate as viewing it — open in the no-token
-// internal mode, token-required (query or Bearer) once RELAY_AUTH_TOKEN is set.
+// User accounts. Registration turns authentication on (first user = admin);
+// login sessions then unlock the testing stats, admin actions, and — on
+// token-protected relays — the /agent WebSocket.
+app.post("/auth/register", express.json(), (req, res) => {
+  if (!checkAuthRateLimit(clientAddress(req))) {
+    res.status(429).json({ ok: false, error: "尝试过于频繁，请稍后再试。" });
+    return;
+  }
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  registerUser(body.username, body.password, body.displayName)
+    .then((result) => {
+      if (result.ok) {
+        log.info("user registered", { username: result.user.username, role: result.user.role });
+        res.json(result);
+      } else {
+        res.status(400).json(result);
+      }
+    })
+    .catch(() => res.status(500).json({ ok: false, error: "注册失败，请重试。" }));
+});
+
+app.post("/auth/login", express.json(), (req, res) => {
+  if (!checkAuthRateLimit(clientAddress(req))) {
+    res.status(429).json({ ok: false, error: "尝试过于频繁，请稍后再试。" });
+    return;
+  }
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  loginUser(body.username, body.password)
+    .then((result) => {
+      if (result.ok) {
+        log.info("user logged in", { username: result.user.username });
+        res.json(result);
+      } else {
+        res.status(401).json(result);
+      }
+    })
+    .catch(() => res.status(500).json({ ok: false, error: "登录失败，请重试。" }));
+});
+
+app.post("/auth/logout", express.json(), (req, res) => {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const authorization = req.headers.authorization ?? "";
+  const bearer = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length).trim() : "";
+  logoutSession(typeof body.token === "string" ? body.token : bearer);
+  res.json({ ok: true });
+});
+
+app.get("/auth/me", (req, res) => {
+  const user = requestUser(req);
+  if (!user) {
+    res.status(401).json({ ok: false, error: "未登录或会话已过期。" });
+    return;
+  }
+  res.json({ ok: true, user });
+});
+
+// Admin: clear tester QA data. Stricter than viewing — once user accounts
+// exist, only an admin login (or the operator relay token) may clear.
 app.post("/testing/clear", express.json(), (req, res) => {
-  if (!testingStatsAuthorized(req)) {
-    res.status(401).json({ ok: false, error: "relay token required" });
+  if (!testingClearAuthorized(req)) {
+    res.status(requestUser(req) ? 403 : 401).json({ ok: false, error: "需要管理员登录或中继令牌。" });
     return;
   }
   const body = (req.body ?? {}) as { scope?: unknown; testerKey?: unknown; sessionId?: unknown };

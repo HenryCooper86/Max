@@ -3,21 +3,24 @@
 import type { AgentHealth, TesterSessionSummary } from "../../shared/agent";
 import type { TurnState } from "../components/HelmetVisual";
 import type { AudioProcessingState, RiderLocation, TranscriptItem } from "../types";
+import { authToken } from "./auth";
 import { AUDIO_PROCESSING_LABELS } from "./constants";
 import { relayAuthToken } from "./persistence";
 
 export function createAgentSocket() {
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  const token = relayAuthToken();
+  // The shared relay token or a login session token — the relay accepts both.
+  const token = relayAuthToken() || authToken();
   const query = token ? `?token=${encodeURIComponent(token)}` : "";
   return new WebSocket(`${protocol}://${window.location.host}/agent${query}`);
 }
 
 export async function fetchAgentHealth(): Promise<AgentHealth | null> {
   try {
-    // The token unlocks the per-tester QA block on token-protected relays;
-    // /health itself never requires it.
-    const token = relayAuthToken();
+    // The token unlocks the per-tester QA block on protected relays; /health
+    // itself never requires it. A login session counts the same as the
+    // operator relay token here.
+    const token = authToken() || relayAuthToken();
     const response = await fetch("/health", {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined
     });
@@ -40,7 +43,9 @@ export type TestingClearScope =
  */
 export async function requestTestingClear(payload: TestingClearScope): Promise<boolean> {
   try {
-    const token = relayAuthToken();
+    // Clears need an admin login once accounts exist; the operator relay
+    // token remains the master key.
+    const token = authToken() || relayAuthToken();
     const response = await fetch("/testing/clear", {
       method: "POST",
       headers: {

@@ -441,12 +441,28 @@ set, it is included only for callers presenting the token (`?token=…` or
 so `curl /health` keeps working as a deployment check. With no token
 configured (the internal-test default) the full response stays open:
 
+### `POST /auth/register` · `POST /auth/login` · `POST /auth/logout` · `GET /auth/me`
+
+User accounts for the testing framework, stored dependency-free in
+`~/.horizon-helmet-testing/accounts.json` (scrypt password hashes, atomic
+writes). Registration (`{username, password, displayName?}`) returns
+`{ok, token, user}` and logs the user in; the **first** registered account
+becomes the admin, later ones are testers. Auth switches on automatically once
+any account exists: the `testing` block then requires a login session (or the
+relay token), and `/testing/clear` requires an **admin** login. A login
+session token also satisfies the `/agent` WebSocket gate on token-protected
+relays, so testers never need the operator secret. Login/registration attempts
+are rate-limited to 10/min per IP. Set `AUTH_REGISTRATION=off` after
+onboarding to stop self-registration; `AUTH_SESSION_DAYS` controls session
+lifetime (default 30).
+
 ### `POST /testing/clear`
 
-Admin action behind the same access rule as viewing the testing stats (open
-without a token, token-required once `RELAY_AUTH_TOKEN` is set). Clears tester
-QA data both in memory and in the durable history file (rewritten atomically).
-The web HUD exposes these as two-step-confirm buttons on the testing panel.
+Admin action. Open only while no relay token is set **and** no user accounts
+exist; afterwards it requires an admin login session or the operator relay
+token. Clears tester QA data both in memory and in the durable history file
+(rewritten atomically). The web HUD exposes these as two-step-confirm buttons
+on the testing panel.
 
 ```json
 { "scope": "all" }

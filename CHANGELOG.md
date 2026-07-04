@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026-07-04 — User accounts: registration, login, roles, and gated admin actions
+
+170 tests green (9 new), tsc/eslint/prettier clean, production build verified.
+
+### Added
+
+- **User accounts, dependency-free** (`server/accounts.ts`) — register/login
+  with scrypt password hashing (node:crypto, per-user salt, timing-safe
+  compares), opaque `sess_…` tokens with a configurable lifetime
+  (`AUTH_SESSION_DAYS`, default 30), persisted to
+  `~/.horizon-helmet-testing/accounts.json` with atomic write-then-rename on a
+  serialized queue (mode 0600). The **first** registered account becomes the
+  admin; later accounts are testers. Login failures return one uniform message
+  so responses don't reveal which usernames exist, and unknown-user logins
+  still run a dummy scrypt so timing doesn't either.
+- **Endpoints** (`server/index.ts`) — `POST /auth/register`,
+  `POST /auth/login` (both rate-limited to 10 attempts/min per client IP,
+  independent of the upgrade limiter), `POST /auth/logout`, `GET /auth/me`.
+  `AUTH_REGISTRATION=off` closes self-registration after onboarding.
+- **Auth-aware gates** (`server/auth.ts`) — registering the first user turns
+  authentication on: the `/health` `testing` block then requires a login
+  session or the relay token; `/testing/clear` requires an **admin** login
+  (the relay token remains the operator master key); and on token-protected
+  relays a session token satisfies the `/agent` WebSocket gate, so testers
+  never need the shared secret. With zero users and no relay token, nothing
+  changes — the plug-and-play internal mode is preserved.
+- **Web account bar** (`src/components/AccountBar.tsx`) — login/registration
+  form on the testing panel (register-first flow when no accounts exist,
+  labeled 注册第一个账号（管理员）), logged-in identity chip with role and
+  logout. Logging in adopts the account name as the Tester ID so QA stats tie
+  to the account, refreshes the dashboard immediately, and the session token
+  automatically rides the health poll, clear requests, and the `/agent`
+  WebSocket (`src/lib/auth.ts`). When stats are locked, the panel explains
+  instead of showing an empty dashboard, and clear buttons disable for
+  non-admins.
+
 ## 2026-07-04 — Testing admin panel: clear per tester / per session / all, dashboard extraction
 
 161 tests green (5 new), tsc/eslint/prettier clean, production build verified,

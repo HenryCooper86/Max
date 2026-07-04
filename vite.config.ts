@@ -12,6 +12,9 @@ export default defineConfig({
       "/testing": {
         target: "http://localhost:8787"
       },
+      "/auth": {
+        target: "http://localhost:8787"
+      },
       "/agent": {
         target: "ws://localhost:8787",
         ws: true

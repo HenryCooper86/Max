@@ -10,6 +10,7 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import com.horizon.maxhelmet.agent.AgentSession
 import com.horizon.maxhelmet.agent.AgentSessionHolder
+import com.horizon.maxhelmet.agent.AuthClient
 import com.horizon.maxhelmet.agent.DemoScenario
 import com.horizon.maxhelmet.agent.RideMode
 import com.horizon.maxhelmet.agent.VoiceGender
@@ -34,12 +35,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val PREFS = "max_helmet"
         private const val KEY_RELAY_URL = "relay_url"
         private const val KEY_AUTH_TOKEN = "relay_auth_token"
+        private const val KEY_AUTH_USERNAME = "auth_username"
+        private const val KEY_AUTH_DISPLAY_NAME = "auth_display_name"
+        private const val KEY_AUTH_ROLE = "auth_role"
         private const val KEY_ALLOW_SELF_SIGNED = "allow_self_signed"
         private const val KEY_DEV_MODE = "dev_mode"
     }
 
     private val session: AgentSession = AgentSessionHolder.get(application)
     private val prefs = application.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private val authClient = AuthClient()
 
     val sessionState: StateFlow<AgentSession.State> = session.state
 
@@ -67,6 +72,76 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun updateAllowSelfSigned(allow: Boolean) {
         allowSelfSigned = allow
         prefs.edit().putBoolean(KEY_ALLOW_SELF_SIGNED, allow).apply()
+    }
+
+    // The signed-in account behind `authToken` (empty when the token was pasted
+    // manually or the rider is signed out). Persisted so the identity row
+    // survives relaunches, like the web HUD's stored session.
+    var authUsername by mutableStateOf(prefs.getString(KEY_AUTH_USERNAME, "") ?: "")
+        private set
+    var authDisplayName by mutableStateOf(prefs.getString(KEY_AUTH_DISPLAY_NAME, "") ?: "")
+        private set
+    var authRole by mutableStateOf(prefs.getString(KEY_AUTH_ROLE, "") ?: "")
+        private set
+    var loginBusy by mutableStateOf(false)
+        private set
+    var loginError by mutableStateOf<String?>(null)
+        private set
+
+    val isLoggedIn: Boolean get() = authUsername.isNotEmpty() && authToken.isNotEmpty()
+
+    /**
+     * POST /auth/login against the configured relay; on success the session
+     * token lands in `authToken`, so the WebSocket connect just works.
+     */
+    fun login(username: String, password: String) {
+        val name = username.trim()
+        if (name.isEmpty() || password.isEmpty()) {
+            loginError = "请输入用户名和密码"
+            return
+        }
+        loginBusy = true
+        loginError = null
+        authClient.login(relayUrl.trim(), name, password, allowSelfSigned) { login, error ->
+            loginBusy = false
+            if (login != null) {
+                updateAuthToken(login.token)
+                authUsername = login.user.username
+                authDisplayName = login.user.displayName
+                authRole = login.user.role
+                prefs.edit()
+                    .putString(KEY_AUTH_USERNAME, login.user.username)
+                    .putString(KEY_AUTH_DISPLAY_NAME, login.user.displayName)
+                    .putString(KEY_AUTH_ROLE, login.user.role)
+                    .apply()
+                loginError = null
+            } else {
+                loginError = error ?: "登录失败，请重试"
+            }
+        }
+    }
+
+    /**
+     * Invalidates the session on the relay (best-effort) and drops the local
+     * identity + token. An active hands-free session is stopped — the login
+     * that authorized it just ended.
+     */
+    fun logout() {
+        authClient.logout(relayUrl.trim(), authToken, allowSelfSigned)
+        updateAuthToken("")
+        authUsername = ""
+        authDisplayName = ""
+        authRole = ""
+        loginError = null
+        prefs.edit()
+            .remove(KEY_AUTH_USERNAME)
+            .remove(KEY_AUTH_DISPLAY_NAME)
+            .remove(KEY_AUTH_ROLE)
+            .apply()
+        if (session.state.value.handsFree) {
+            session.stop()
+            VoiceAgentService.stop(getApplication())
+        }
     }
 
     /**

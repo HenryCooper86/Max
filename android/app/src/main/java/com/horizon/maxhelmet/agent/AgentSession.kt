@@ -72,7 +72,10 @@ class AgentSession(
         /** The active ADAS hazard alert, shown as a banner until it auto-clears. */
         val hazardAlert: AgentEvent.HazardAlert? = null,
         /** Guided demo ride: the mock provider auto-tours the scenario catalog. */
-        val guidedDemo: Boolean = false
+        val guidedDemo: Boolean = false,
+        /** The relay refused the connection with HTTP 401 — a login (or token)
+         *  is required. The UI opens the account settings when this flips on. */
+        val authRequired: Boolean = false
     ) {
         /** 态势摘要 fusion: ride hazard + weather risk (fusedHazard in src/main.tsx). */
         val fusedHazard: HazardLevel
@@ -203,7 +206,8 @@ class AgentSession(
                 handsFree = true,
                 turnState = TurnState.LISTENING,
                 micMuted = false,
-                bluetoothRouted = bluetoothRouted
+                bluetoothRouted = bluetoothRouted,
+                authRequired = false
             )
         }
         scope.launch {
@@ -493,8 +497,9 @@ class AgentSession(
             _state.update {
                 it.copy(
                     connection = ConnectionState.DEGRADED,
+                    authRequired = httpStatus == 401,
                     statusText = if (httpStatus == 401) {
-                        "需要登录令牌：网页登录后点「复制令牌（App 用）」，长按 Max 标志打开设置，粘贴到认证令牌"
+                        "需要登录：在设置的「账号」里登录（或粘贴认证令牌）"
                     } else {
                         "中继拒绝连接（HTTP $httpStatus），请检查中继地址"
                     }

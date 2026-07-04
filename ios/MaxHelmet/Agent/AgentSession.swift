@@ -37,6 +37,9 @@ final class AgentSession: NSObject, ObservableObject {
         var hazardAlert: HazardAlert? = nil
         /// Guided demo ride: the mock provider auto-tours the scenario catalog.
         var guidedDemo = false
+        /// The relay refused the connection with HTTP 401 — a login (or token)
+        /// is required. The UI opens the account settings when this flips on.
+        var authRequired = false
 
         /// 态势摘要 fusion: ride hazard + weather risk (fusedHazard in src/main.tsx).
         var fusedHazard: HazardLevel {
@@ -152,6 +155,7 @@ final class AgentSession: NSObject, ObservableObject {
             $0.turnState = .listening
             $0.micMuted = false
             $0.bluetoothRouted = bluetoothRouted
+            $0.authRequired = false
         }
 
         locationProvider.resolve { [weak self] coordinate in
@@ -485,8 +489,9 @@ final class AgentSession: NSObject, ObservableObject {
             reconnectAttempts = 0
             update {
                 $0.connection = .degraded
+                $0.authRequired = status == 401
                 $0.statusText = status == 401
-                    ? "需要登录令牌：网页登录后点「复制令牌（App 用）」，长按 Max 标志打开设置，粘贴到认证令牌"
+                    ? "需要登录：在设置的「账号」里登录（或粘贴认证令牌）"
                     : "中继拒绝连接（HTTP \(status)），请检查中继地址"
             }
             return

@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-07-04 — Native in-app login for iOS and Android
+
+Riders sign in with the same username/password as the web platform, right in
+the apps — no more copying session tokens between devices. Verified:
+`swiftc -parse` clean on all four changed Swift files, Android
+`compileDebugKotlin` + unit tests green.
+
+### Added
+
+- **AuthClient** (`ios/.../Agent/AuthClient.swift`,
+  `android/.../agent/AuthClient.kt`) — POSTs `/auth/login` / `/auth/logout`
+  against the relay, deriving the HTTP base from the relay WebSocket URL
+  (ws→http, wss→https) and honoring the self-signed trust toggle exactly like
+  the socket. Relay error messages (wrong password, rate limited) surface
+  verbatim.
+- **设置 → 账号 section** on both platforms — logged out: username/password
+  inline form; logged in: identity row (显示名 · @username · 管理员/测试员)
+  with 退出登录. On success the session token lands in the existing
+  `authToken` setting, so the WebSocket connect, reconnects, and
+  settings-change restarts all just work; the manual 认证令牌 field stays as
+  the operator fallback. Logging out stops an active hands-free session (its
+  authorization just ended) and invalidates the relay session best-effort.
+- **401 auto-recovery** — the session state grew `authRequired`; when the
+  relay refuses the upgrade with 401 and nobody is signed in, the settings
+  sheet opens automatically on the 账号 section, and the status line now says
+  "需要登录：在设置的「账号」里登录" instead of pointing at the token field.
+
 ## 2026-07-04 — Native apps: clear 401 guidance now that the relay requires login
 
 The site-wide login gate broke anonymous native-app connections by design

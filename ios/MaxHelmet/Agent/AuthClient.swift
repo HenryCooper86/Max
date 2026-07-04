@@ -25,6 +25,11 @@ final class AuthClient: NSObject {
     private var allowSelfSigned = false
     private lazy var session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
 
+    deinit {
+        // URLSession retains its delegate until invalidated.
+        session.finishTasksAndInvalidate()
+    }
+
     /// ws://host:8787/agent → http://host:8787 ; wss://host/agent → https://host
     static func authBaseURL(fromRelay relayURL: String) -> URL? {
         guard var components = URLComponents(string: relayURL.trimmingCharacters(in: .whitespacesAndNewlines)),

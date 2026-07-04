@@ -72,6 +72,7 @@ export function LoginGate({ authEnabled, registrationOpen, onSignedIn }: Props) 
           </div>
           <p className="loginHint">{hint}</p>
           <AccountForm
+            key={`${authEnabled}-${inviteCode}`}
             authEnabled={authEnabled}
             registrationOpen={registrationOpen}
             inviteCode={inviteCode || undefined}

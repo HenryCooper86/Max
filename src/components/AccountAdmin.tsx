@@ -14,6 +14,7 @@ import { formatRelativeTime } from "../lib/utils";
 
 export function AccountAdmin({ adminUsername }: { adminUsername: string }) {
   const [overview, setOverview] = useState<AdminOverview | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
@@ -22,11 +23,17 @@ export function AccountAdmin({ adminUsername }: { adminUsername: string }) {
   const [armedDelete, setArmedDelete] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    setOverview(await fetchAdminOverview());
+    const next = await fetchAdminOverview();
+    setOverview(next);
+    setLoadFailed(next === null);
   }, []);
 
+  // Refresh on mount and keep it current: invites get consumed by testers
+  // registering, and sessions expire — a fetch-once list goes stale silently.
   useEffect(() => {
     void refresh();
+    const timer = window.setInterval(() => void refresh(), 30_000);
+    return () => window.clearInterval(timer);
   }, [refresh]);
 
   useEffect(() => {
@@ -143,7 +150,11 @@ export function AccountAdmin({ adminUsername }: { adminUsername: string }) {
             </div>
           </div>
         ))}
-        {!users.length && !invites.length ? <p className="testerConversationEmpty">正在加载账号数据…</p> : null}
+        {!users.length && !invites.length ? (
+          <p className="testerConversationEmpty">
+            {loadFailed ? "无法加载账号数据 — 会话可能已过期，请重新登录。" : "正在加载账号数据…"}
+          </p>
+        ) : null}
       </div>
     </div>
   );

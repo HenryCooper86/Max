@@ -106,6 +106,11 @@ function matchesRelayToken(tokens: string[]): boolean {
   return tokens.some((token) => tokenMatches(token, config.relayAuthToken));
 }
 
+/** True when the request presented the configured operator relay token. */
+export function relayTokenPresented(request: IncomingMessage): boolean {
+  return matchesRelayToken(presentedTokens(request));
+}
+
 /** The logged-in user behind a request's session token, if any. */
 export function requestUser(request: IncomingMessage): PublicUser | null {
   for (const token of presentedTokens(request)) {
@@ -142,13 +147,12 @@ export function testingClearAuthorized(request: IncomingMessage): boolean {
 // Login/registration attempts get their own, deliberately tight sliding
 // window per client IP — independent of the /agent upgrade limiter so a
 // password-guessing loop can't ride on a generous RELAY_CONN_PER_MINUTE.
-const AUTH_ATTEMPTS_PER_MINUTE = 10;
 const authHits = new Map<string, number[]>();
 
 export function checkAuthRateLimit(address: string, now = Date.now()): boolean {
   const cutoff = now - RATE_WINDOW_MS;
   const recent = (authHits.get(address) ?? []).filter((at) => at > cutoff);
-  if (recent.length >= AUTH_ATTEMPTS_PER_MINUTE) {
+  if (recent.length >= config.authAttemptsPerMinute) {
     authHits.set(address, recent);
     return false;
   }

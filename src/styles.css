@@ -1669,6 +1669,12 @@ h2 {
   align-items: center;
 }
 
+.accountForm.passwordForm {
+  flex-basis: 100%;
+  padding-top: 4px;
+  border-top: 1px dashed rgba(196, 218, 216, 0.14);
+}
+
 /* Full-screen access gate shown before the HUD when accounts exist. */
 .loginShell {
   display: grid;

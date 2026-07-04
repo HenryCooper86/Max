@@ -7,10 +7,20 @@ import { authToken } from "./auth";
 import { AUDIO_PROCESSING_LABELS } from "./constants";
 import { relayAuthToken } from "./persistence";
 
+/**
+ * The ONE credential this client presents everywhere (WebSocket and HTTP):
+ * the login session first, the operator relay token as fallback. A dead
+ * session token is cleared by the periodic /auth/me revalidation, after which
+ * this naturally falls back to the relay token — so the precedence never
+ * strands a working credential behind a stale one.
+ */
+export function credentialToken(): string {
+  return authToken() || relayAuthToken();
+}
+
 export function createAgentSocket() {
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  // The shared relay token or a login session token — the relay accepts both.
-  const token = relayAuthToken() || authToken();
+  const token = credentialToken();
   const query = token ? `?token=${encodeURIComponent(token)}` : "";
   return new WebSocket(`${protocol}://${window.location.host}/agent${query}`);
 }
@@ -18,9 +28,8 @@ export function createAgentSocket() {
 export async function fetchAgentHealth(): Promise<AgentHealth | null> {
   try {
     // The token unlocks the per-tester QA block on protected relays; /health
-    // itself never requires it. A login session counts the same as the
-    // operator relay token here.
-    const token = authToken() || relayAuthToken();
+    // itself never requires it.
+    const token = credentialToken();
     const response = await fetch("/health", {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined
     });
@@ -45,7 +54,7 @@ export async function requestTestingClear(payload: TestingClearScope): Promise<b
   try {
     // Clears need an admin login once accounts exist; the operator relay
     // token remains the master key.
-    const token = authToken() || relayAuthToken();
+    const token = credentialToken();
     const response = await fetch("/testing/clear", {
       method: "POST",
       headers: {

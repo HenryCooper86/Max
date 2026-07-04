@@ -65,7 +65,9 @@ export const config = {
   // team is onboarded so strangers can't self-register on a reachable relay.
   authRegistration: process.env.AUTH_REGISTRATION?.trim().toLowerCase() !== "off",
   // Login session lifetime, in days.
-  authSessionDays: resolveBoundedInt(process.env.AUTH_SESSION_DAYS, 30, 1, 365)
+  authSessionDays: resolveBoundedInt(process.env.AUTH_SESSION_DAYS, 30, 1, 365),
+  // Login/registration attempts allowed per client IP per minute.
+  authAttemptsPerMinute: resolveBoundedInt(process.env.AUTH_ATTEMPTS_PER_MINUTE, 10, 3, 1000)
 };
 
 function resolveBoundedInt(raw: string | undefined, fallback: number, min: number, max: number): number {
@@ -144,6 +146,16 @@ export function validateConfig(): string[] {
     }
   }
 
+  // With a relay token set, open self-registration would let any stranger
+  // mint a session that bypasses that token (and the FIRST registrant becomes
+  // the admin). Registration on a token-protected relay should go through
+  // invites, so flag the combination loudly.
+  if (config.relayAuthToken && config.authRegistration && !authActive()) {
+    warnings.push(
+      "RELAY_AUTH_TOKEN 已设置但 AUTH_REGISTRATION=on 且尚无账号：任何人都可以自助注册并成为管理员，从而绕过中继令牌。请先注册管理员账号，或设置 AUTH_REGISTRATION=off 之后用邀请链接注册。"
+    );
+  }
+
   if (config.allowedOrigins.length && !config.relayAuthToken) {
     warnings.push(
       "RELAY_ALLOWED_ORIGINS 已设置但 RELAY_AUTH_TOKEN 未设置：来源白名单只能拦截浏览器，不发送 Origin 头的原生 App 或脚本仍可连接。请同时设置令牌。"
@@ -154,9 +166,10 @@ export function validateConfig(): string[] {
   // shares the proxy's socket address unless X-Forwarded-For is trusted, so the
   // per-IP limiter collapses into a single global bucket that can lock everyone
   // out. Flag it when running the real backend without proxy trust enabled.
-  if (config.voiceProvider === "doubao" && config.connPerMinute > 0 && !config.trustProxy) {
+  if (config.voiceProvider === "doubao" && !config.trustProxy) {
     warnings.push(
-      "RELAY_CONN_PER_MINUTE 已启用但 RELAY_TRUST_PROXY=off：若本服务位于反向代理（如部署文档中的 Caddy）之后，所有客户端会被算作同一个代理 IP，速率限制会退化为全局限制并可能锁死所有人。反代后请设置 RELAY_TRUST_PROXY=on（并按需设置 RELAY_TRUSTED_PROXY_HOPS）。"
+      "RELAY_TRUST_PROXY=off：若本服务位于反向代理（如部署文档中的 Caddy）之后，所有客户端会被算作同一个代理 IP —— WebSocket 速率限制和 /auth 登录限制（每 IP 每分钟 " +
+        `${config.authAttemptsPerMinute} 次）都会退化为全局限制并可能锁死所有人。反代后请设置 RELAY_TRUST_PROXY=on（并按需设置 RELAY_TRUSTED_PROXY_HOPS）。`
     );
   }
 

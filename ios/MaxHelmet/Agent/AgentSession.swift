@@ -141,6 +141,10 @@ final class AgentSession: NSObject, ObservableObject {
         let trustedSelfSigned = allowSelfSignedTls
         if trustedSelfSigned != allowSelfSigned {
             allowSelfSigned = trustedSelfSigned
+            // URLSession retains its delegate until invalidated — replacing
+            // without this leaked the old session (and pinned self) each time
+            // the trust toggle changed.
+            urlSession.finishTasksAndInvalidate()
             urlSession = makeSession()
         }
 
@@ -219,6 +223,13 @@ final class AgentSession: NSObject, ObservableObject {
             $0.bluetoothRouted = false
             $0.hazardAlert = nil
         }
+    }
+
+    /// The UI handled the 401 (opened the account settings): consume the flag
+    /// so re-composition or repeated observation can't re-trigger it. A fresh
+    /// 401 sets it true again.
+    func acknowledgeAuthRequired() {
+        update { $0.authRequired = false }
     }
 
     /// Toggles the guided demo ride (mock provider only — the live provider
@@ -361,7 +372,8 @@ final class AgentSession: NSObject, ObservableObject {
     private func relayEndpointURL() -> URL? {
         guard var components = URLComponents(string: relayURL) else { return nil }
         if !authToken.isEmpty {
-            var items = components.queryItems ?? []
+            // Replace, never duplicate: a pasted URL may already carry ?token=.
+            var items = (components.queryItems ?? []).filter { $0.name != "token" }
             items.append(URLQueryItem(name: "token", value: authToken))
             components.queryItems = items
         }
@@ -487,6 +499,12 @@ final class AgentSession: NSObject, ObservableObject {
         // anything else is a configuration problem (e.g. wrong path → HTTP 400).
         if let status = (task.response as? HTTPURLResponse)?.statusCode, status != 101 {
             reconnectAttempts = 0
+            // End hands-free entirely, like the idle-close branch: a rejected
+            // upgrade left a zombie session (mic capturing, audio route
+            // claimed, no reconnect), the token field hidden behind the
+            // read-only 连接 view, and the next helmet tap STOPPING the
+            // zombie instead of retrying with the fresh login.
+            stop()
             update {
                 $0.connection = .degraded
                 $0.authRequired = status == 401

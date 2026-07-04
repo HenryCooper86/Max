@@ -287,9 +287,13 @@ export function useHelmetAgent() {
 
   // Shared with the admin panel so a clear action can refresh the dashboard
   // immediately instead of waiting out the poll interval.
+  // Monotonic: a slow token-less poll must not overwrite the fresh post-login
+  // response (last-write-wins made the locked-stats banner flash after login).
+  const healthRequestSeqRef = useRef(0);
   const refreshHealth = useCallback(async () => {
+    const seq = ++healthRequestSeqRef.current;
     const nextHealth = await fetchAgentHealth();
-    if (!nextHealth) return;
+    if (!nextHealth || seq !== healthRequestSeqRef.current) return;
     setHealth(nextHealth);
     setProvider(nextHealth.provider);
     setCapabilities(nextHealth.capabilities);

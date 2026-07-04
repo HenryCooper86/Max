@@ -35,17 +35,50 @@ export function App() {
   // connections, so this is enforcement, not decoration).
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
+  const { setTesterId, refreshHealth, disconnect } = agent;
   useEffect(() => {
     let active = true;
     void fetchCurrentUser().then((user) => {
       if (!active) return;
       setAuthUser(user);
+      // Same identity tie as a fresh login — a restored session must not
+      // leave the stats identity diverged from the account.
+      if (user) setTesterId(user.username);
       setAuthChecked(true);
     });
     return () => {
       active = false;
     };
-  }, []);
+  }, [setTesterId]);
+
+  // Sessions expire (or get revoked server-side): revalidate periodically so
+  // the gate re-locks instead of leaving a dead HUD with a stale identity.
+  // fetchCurrentUser clears the stored token itself on a 401.
+  useEffect(() => {
+    if (!authUser) return;
+    const timer = window.setInterval(() => {
+      void fetchCurrentUser().then((user) => {
+        if (user) {
+          setAuthUser(user);
+          return;
+        }
+        setAuthUser(null);
+        disconnect();
+        void refreshHealth();
+      });
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [authUser, disconnect, refreshHealth]);
+
+  // The gate decision needs /health (is auth enabled? registration open?).
+  // Hold the blank frame until it arrives, but never forever — if the relay is
+  // unreachable, fall through to the login-first gate after a short grace.
+  const [healthTimedOut, setHealthTimedOut] = useState(false);
+  useEffect(() => {
+    if (agent.health) return;
+    const timer = window.setTimeout(() => setHealthTimedOut(true), 4000);
+    return () => window.clearTimeout(timer);
+  }, [agent.health]);
 
   const handleSignedIn = useCallback(
     (user: AuthUser) => {
@@ -76,6 +109,9 @@ export function App() {
   }, [listening, starting, startMic, stopMic]);
 
   useEffect(() => {
+    // The hotkey exists only inside the unlocked HUD — behind the login gate
+    // Space must not be able to open a hidden mic session.
+    if (!authUser) return;
     const toggleHandsFree = (event: KeyboardEvent) => {
       if (event.code !== "Space" || event.repeat) return;
       const target = event.target;
@@ -92,7 +128,7 @@ export function App() {
 
     window.addEventListener("keydown", toggleHandsFree);
     return () => window.removeEventListener("keydown", toggleHandsFree);
-  }, [toggleHandsFreeSession]);
+  }, [authUser, toggleHandsFreeSession]);
 
   const agentState = useMemo(() => {
     if (agent.listening) return agent.sessionMemory.language === "en" ? "Hands-free" : "免提中";
@@ -106,17 +142,28 @@ export function App() {
   const weatherRisk = agent.weather?.riskLevel ?? "normal";
   const fusedHazard = combineHazardLevels(agent.rideContext.hazardLevel, weatherRisk);
   const currentTester = currentTesterSnapshot(agent.health, agent.testerId);
+  const authKnown = agent.health !== null;
   const authEnabled = agent.health?.auth?.enabled ?? false;
   const registrationOpen = agent.health?.auth?.registrationOpen ?? true;
 
-  // Hold a blank frame for the initial session check (fast), then gate.
-  if (!authChecked) {
+  // Hold the blank frame until the session check AND the relay's auth status
+  // are in (bounded by the grace timer) — rendering earlier flashed the
+  // "register the first account" hint at every anonymous visitor.
+  if (!authChecked || (!authUser && !authKnown && !healthTimedOut)) {
     return <main className="shell loginShell" aria-busy="true" />;
   }
   // The login page ALWAYS comes first, like a normal website — on a fresh
-  // relay (no accounts yet) it offers first-run admin registration.
+  // relay (no accounts yet) it offers first-run admin registration. With the
+  // relay unreachable (health unknown), default to the login form: attempts
+  // will surface the connection error.
   if (!authUser) {
-    return <LoginGate authEnabled={authEnabled} registrationOpen={registrationOpen} onSignedIn={handleSignedIn} />;
+    return (
+      <LoginGate
+        authEnabled={authKnown ? authEnabled : true}
+        registrationOpen={registrationOpen}
+        onSignedIn={handleSignedIn}
+      />
+    );
   }
   const preflight = [
     { label: t.mic, value: PERMISSION_LABELS[agent.micPermission] },

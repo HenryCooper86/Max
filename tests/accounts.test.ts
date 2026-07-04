@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   authActive,
+  changePassword,
   createInvite,
   deleteUser,
   listInvites,
@@ -141,6 +142,80 @@ describe("invites and admin user management", () => {
   });
 });
 
+describe("hardening regressions", () => {
+  it("a single-use invite admits exactly ONE of two concurrent registrations", async () => {
+    await registerUser("boss", "hunter2-hunter2", undefined, 1_000);
+    config.authRegistration = false;
+    const invite = createInvite("boss", 1_500);
+
+    // Both requests validate the invite before the scrypt await — only one
+    // may survive the post-hash re-check.
+    const [first, second] = await Promise.all([
+      registerUser("rider-one", "password123", undefined, 2_000, invite.code),
+      registerUser("rider-two", "password123", undefined, 2_001, invite.code)
+    ]);
+    expect([first.ok, second.ok].filter(Boolean)).toHaveLength(1);
+    expect(userCount()).toBe(2); // boss + exactly one invitee
+  });
+
+  it("a revoked invite cannot admit a registration already past validation", async () => {
+    await registerUser("boss", "hunter2-hunter2", undefined, 1_000);
+    config.authRegistration = false;
+    const invite = createInvite("boss", 1_500);
+
+    const [attempt] = await Promise.all([
+      registerUser("rider", "password123", undefined, 2_000, invite.code),
+      Promise.resolve(revokeInvite(invite.code)) // races the scrypt hash
+    ]);
+    expect(attempt.ok).toBe(false);
+  });
+
+  it("login racing an admin deletion fails instead of minting a dead token", async () => {
+    await registerUser("boss", "hunter2-hunter2", undefined, 1_000);
+    await registerUser("rider", "password123", undefined, 2_000);
+
+    const loginPromise = loginUser("rider", "password123", 3_000);
+    expect(deleteUser("rider").ok).toBe(true); // lands mid-hash
+    const result = await loginPromise;
+    expect(result.ok).toBe(false);
+  });
+
+  it("caps live sessions per user at 20, dropping the oldest", async () => {
+    const registered = await registerUser("rider", "password123", undefined, 1_000);
+    expect(registered.ok).toBe(true);
+    if (!registered.ok) return;
+
+    let latest = "";
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      const login = await loginUser("rider", "password123", 2_000 + attempt);
+      expect(login.ok).toBe(true);
+      if (login.ok) latest = login.token;
+    }
+    // Newest still valid; the registration session (oldest) was evicted.
+    expect(sessionUser(latest, 3_000)?.username).toBe("rider");
+    expect(sessionUser(registered.token, 3_000)).toBeNull();
+  });
+
+  it("changes the password, revoking every other session but keeping the caller's", async () => {
+    const registered = await registerUser("rider", "password123", undefined, 1_000);
+    expect(registered.ok).toBe(true);
+    if (!registered.ok) return;
+    const other = await loginUser("rider", "password123", 2_000);
+    expect(other.ok).toBe(true);
+    if (!other.ok) return;
+
+    expect((await changePassword(registered.token, "wrong-password", "new-password-1", 2_500)).ok).toBe(false);
+    expect((await changePassword(registered.token, "password123", "short", 2_600)).ok).toBe(false);
+    expect((await changePassword(registered.token, "password123", "new-password-1", 2_700)).ok).toBe(true);
+
+    // Caller's session survives; the other one died with the old password.
+    expect(sessionUser(registered.token, 3_000)?.username).toBe("rider");
+    expect(sessionUser(other.token, 3_000)).toBeNull();
+    expect((await loginUser("rider", "password123", 4_000)).ok).toBe(false);
+    expect((await loginUser("rider", "new-password-1", 5_000)).ok).toBe(true);
+  });
+});
+
 describe("accounts persistence", () => {
   let tempDir: string | null = null;
 
@@ -151,6 +226,21 @@ describe("accounts persistence", () => {
       fs.rmSync(tempDir, { recursive: true, force: true });
       tempDir = null;
     }
+  });
+
+  it("fails CLOSED when the accounts file exists but is corrupt", async () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "max-accounts-"));
+    const file = path.join(tempDir, "accounts.json");
+    fs.writeFileSync(file, "{ this is not json");
+    vi.stubEnv("ACCOUNTS_FILE", file);
+
+    vi.resetModules();
+    const accounts = await import("../server/accounts");
+    // Gates lock (corruption must not silently reopen transcripts/voice)…
+    expect(accounts.authActive()).toBe(true);
+    // …and a stranger can't become the "first" admin over the broken state.
+    const attempt = await accounts.registerUser("intruder", "password123");
+    expect(attempt.ok).toBe(false);
   });
 
   it("persists users and sessions across a relay restart", async () => {

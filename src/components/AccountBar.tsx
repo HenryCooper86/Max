@@ -4,7 +4,14 @@
 // the logged-in identity chip with logout).
 
 import { useState, type FormEvent } from "react";
-import { authToken, loginAccount, logoutAccount, registerAccount, type AuthUser } from "../lib/auth";
+import {
+  authToken,
+  changePasswordAccount,
+  loginAccount,
+  logoutAccount,
+  registerAccount,
+  type AuthUser
+} from "../lib/auth";
 
 type FormProps = {
   authEnabled: boolean;
@@ -99,9 +106,70 @@ type BarProps = FormProps & {
   onSignedOut: () => void;
 };
 
+function PasswordChangeForm({ onDone }: { onDone: (changed: boolean) => void }) {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    void changePasswordAccount(currentPassword, newPassword)
+      .then((result) => {
+        if (result.ok) {
+          onDone(true);
+        } else {
+          setError(result.error ?? "修改失败，请重试。");
+        }
+      })
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <form className="accountForm passwordForm" aria-label="修改密码" onSubmit={submit}>
+      <div className="accountFields">
+        <input
+          type="password"
+          value={currentPassword}
+          onChange={(event) => setCurrentPassword(event.target.value)}
+          placeholder="当前密码"
+          autoComplete="current-password"
+          required
+        />
+        <input
+          type="password"
+          value={newPassword}
+          onChange={(event) => setNewPassword(event.target.value)}
+          placeholder="新密码（至少 8 位）"
+          autoComplete="new-password"
+          required
+        />
+      </div>
+      <div className="accountActions">
+        <button type="submit" disabled={busy}>
+          {busy ? "修改中…" : "确认修改"}
+        </button>
+        <button type="button" className="accountSwitch" onClick={() => onDone(false)}>
+          取消
+        </button>
+      </div>
+      {error ? (
+        <p className="accountError" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </form>
+  );
+}
+
 export function AccountBar({ authEnabled, registrationOpen, user, onSignedIn, onSignedOut }: BarProps) {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [passwordChanged, setPasswordChanged] = useState(false);
 
   if (user) {
     return (
@@ -128,6 +196,16 @@ export function AccountBar({ authEnabled, registrationOpen, user, onSignedIn, on
           </button>
           <button
             type="button"
+            className="accountSwitch"
+            onClick={() => {
+              setChangingPassword((open) => !open);
+              setPasswordChanged(false);
+            }}
+          >
+            {passwordChanged ? "密码已修改 ✓" : "修改密码"}
+          </button>
+          <button
+            type="button"
             disabled={busy}
             onClick={() => {
               setBusy(true);
@@ -140,6 +218,17 @@ export function AccountBar({ authEnabled, registrationOpen, user, onSignedIn, on
             退出登录
           </button>
         </div>
+        {changingPassword ? (
+          <PasswordChangeForm
+            onDone={(changed) => {
+              setChangingPassword(false);
+              if (changed) {
+                setPasswordChanged(true);
+                window.setTimeout(() => setPasswordChanged(false), 3000);
+              }
+            }}
+          />
+        ) : null}
       </div>
     );
   }

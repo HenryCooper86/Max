@@ -455,10 +455,17 @@ rows by tester ID + client IP, so a tester name is attached to the network that
 ran it; clients that omit `testerId` become `ip:<address>` instead of
 `anonymous`. The relay aggregates sessions, active runs, duration, mic uplink
 bytes, audio/control downlink bytes, first-audio average/p95 latency, errors,
-TTS fallbacks, recent transcript turns, and 30-minute graph buckets by
-tester/IP. In the HUD, selecting a tester ID or IP opens that tester's recent
-chat history alongside the tester's IP, region, session count, and last-seen
-time.
+TTS fallbacks, recent transcript turns, completed session summaries, quality
+flags, and 30-minute graph buckets by tester/IP. In the HUD, selecting a tester
+ID or IP opens that tester's recent chat history; the session replay panel then
+filters retained runs by pass/watch/fail, shows per-run bandwidth/latency/error
+metrics, and exports one session as JSON evidence.
+
+Completed sessions are appended to `~/.horizon-helmet-testing/sessions.jsonl`
+by default. This path is intentionally outside `/home/ubuntu/app`, so rsync
+deploys do not delete QA evidence. Use `TESTING_HISTORY_DIR=off` to disable
+disk persistence, `TESTING_HISTORY_DIR=/path/to/dir` to move it, or
+`TESTING_HISTORY_MAX_SESSIONS=500` to raise the retained window.
 
 **Code:** `server/metrics.ts` (`beginTesterSession`,
 `recordTesterClientAudio`, `recordTesterServerEvent`, `testingSnapshot`),
@@ -466,8 +473,9 @@ time.
 `src/App.tsx` (testing dashboard).
 
 **Unit test:** `tests/metrics.test.ts` covers per-tester sessions, IP fallback,
-region, bandwidth, latency, transcript turns, errors, and fallbacks;
-`tests/websocket.test.ts` validates safe `testerId` and `testerRegion` values.
+region, bandwidth, latency, transcript turns, completed session summaries,
+quality flags, errors, and fallbacks; `tests/websocket.test.ts` validates safe
+`testerId` and `testerRegion` values.
 
 ```bash
 npm test -- "per-tester"
@@ -483,10 +491,11 @@ curl -s http://localhost:8787/health | jq '.testing'
 ```
 
 Expected: `testing.users[]` includes `testerKey`, `testerId`, `ipAddress`,
-`region`, and a bounded `recentTurns[]` transcript list; `testing.timeline[]`
-contains graph-ready minute buckets. Behind Caddy/Lightsail,
-`RELAY_TRUST_PROXY=on` is required or the IP will be the local proxy address
-instead of the tester address.
+`region`, and a bounded `recentTurns[]` transcript list; `testing.sessions[]`
+contains retained completed runs with `quality`, `flags`, per-session counters,
+and `turns[]`; `testing.timeline[]` contains graph-ready minute buckets. Behind
+Caddy/Lightsail, `RELAY_TRUST_PROXY=on` is required or the IP will be the local
+proxy address instead of the tester address.
 
 ---
 

@@ -16,6 +16,33 @@ export type TesterTranscriptTurn = {
   final: boolean;
 };
 
+export type TestingQuality = "pass" | "watch" | "fail";
+
+export type TesterSessionSummary = {
+  sessionId: string;
+  testerKey: string;
+  testerId: string;
+  ipAddress: string;
+  region: string;
+  startedAt: number;
+  endedAt: number;
+  durationMs: number;
+  audioUpBytes: number;
+  audioDownBytes: number;
+  controlDownBytes: number;
+  micFrames: number;
+  serverEvents: number;
+  latencySamples: number;
+  avgLatencyMs: number;
+  p95LatencyMs: number;
+  errorEvents: number;
+  ttsFallbacks: number;
+  quality: TestingQuality;
+  flags: string[];
+  notes: string;
+  turns: TesterTranscriptTurn[];
+};
+
 export type ProviderCapabilities = {
   serverVad: boolean;
   synthesizedAudio: boolean;
@@ -62,6 +89,12 @@ export type TestingTimelineBucket = {
 
 export type TestingStats = {
   windowMinutes: number;
+  history: {
+    persistent: boolean;
+    maxSessions: number;
+    maxTranscriptTurnsPerTester: number;
+    maxTranscriptTurnsPerSession: number;
+  };
   totals: {
     activeTestSessions: number;
     totalTestSessions: number;
@@ -74,6 +107,7 @@ export type TestingStats = {
     ttsFallbacks: number;
   };
   users: TesterStats[];
+  sessions: TesterSessionSummary[];
   timeline: TestingTimelineBucket[];
 };
 

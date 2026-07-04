@@ -1,4 +1,14 @@
-import type { TestingStats, TestingTimelineBucket, TesterStats, TesterTranscriptTurn } from "../shared/agent";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import type {
+  TesterSessionSummary,
+  TestingQuality,
+  TestingStats,
+  TestingTimelineBucket,
+  TesterStats,
+  TesterTranscriptTurn
+} from "../shared/agent";
 
 // In-process relay counters, exposed on /health so the Lightsail deployment
 // can be checked with one curl: how many sessions are live, whether the Doubao
@@ -90,6 +100,8 @@ export const metrics = {
     testingSessions.clear();
     testers.clear();
     testingTimeline.clear();
+    completedSessions.length = 0;
+    testingHistoryLoaded = TESTING_HISTORY_PATH === null;
     processStartedAt = Date.now();
   }
 };
@@ -178,6 +190,9 @@ const UNKNOWN_IP = "unknown-ip";
 const MAX_TESTERS = 50;
 const MAX_LATENCY_SAMPLES_PER_TESTER = 128;
 const MAX_TRANSCRIPT_TURNS_PER_TESTER = 80;
+const MAX_TRANSCRIPT_TURNS_PER_SESSION = 120;
+const MAX_COMPLETED_SESSIONS = readBoundedInt(process.env.TESTING_HISTORY_MAX_SESSIONS, 200, 20, 5_000);
+const TESTING_HISTORY_PATH = resolveTestingHistoryPath();
 
 type MutableTesterStats = {
   testerKey: string;
@@ -200,8 +215,18 @@ type MutableTesterStats = {
 };
 
 type ActiveTestingSession = {
+  sessionId: string;
   testerKey: string;
   startedAt: number;
+  audioUpBytes: number;
+  audioDownBytes: number;
+  controlDownBytes: number;
+  micFrames: number;
+  serverEvents: number;
+  errorEvents: number;
+  ttsFallbacks: number;
+  latencyMs: number[];
+  turns: TesterTranscriptTurn[];
 };
 
 type TesterIdentity = {
@@ -217,6 +242,26 @@ type MutableTestingBucket = Omit<TestingTimelineBucket, "avgLatencyMs"> & {
 const testers = new Map<string, MutableTesterStats>();
 const testingSessions = new Map<string, ActiveTestingSession>();
 const testingTimeline = new Map<number, MutableTestingBucket>();
+const completedSessions: TesterSessionSummary[] = [];
+let testingHistoryLoaded = TESTING_HISTORY_PATH === null;
+
+function readBoundedInt(raw: string | undefined, fallback: number, min: number, max: number): number {
+  const trimmed = raw?.trim();
+  if (!trimmed) return fallback;
+  const value = Number(trimmed);
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+function resolveTestingHistoryPath(): string | null {
+  if (process.env.NODE_ENV === "test") return null;
+  const configuredFile = process.env.TESTING_HISTORY_FILE?.trim();
+  if (configuredFile) return configuredFile;
+  const configuredDir = process.env.TESTING_HISTORY_DIR?.trim();
+  if (configuredDir?.toLowerCase() === "off") return null;
+  const directory = configuredDir || path.join(os.homedir(), ".horizon-helmet-testing");
+  return path.join(directory, "sessions.jsonl");
+}
 
 function cleanText(value: string): string {
   return value
@@ -346,22 +391,26 @@ function trimInactiveTesters() {
   }
 }
 
-function activeTester(sessionId: string, now: number): MutableTesterStats | null {
+function activeSession(
+  sessionId: string,
+  now: number
+): { session: ActiveTestingSession; tester: MutableTesterStats } | null {
   const session = testingSessions.get(sessionId);
   if (!session) return null;
   const tester = testers.get(session.testerKey);
   if (tester) {
     tester.lastSeenAt = now;
-    return tester;
+    return { session, tester };
   }
   return null;
 }
 
-function recordLatency(tester: MutableTesterStats, latencyMs: number, now: number) {
+function recordLatency(tester: MutableTesterStats, session: ActiveTestingSession, latencyMs: number, now: number) {
   if (!Number.isFinite(latencyMs) || latencyMs < 0) return;
   const rounded = Math.round(latencyMs);
   tester.latencyMs.push(rounded);
   if (tester.latencyMs.length > MAX_LATENCY_SAMPLES_PER_TESTER) tester.latencyMs.shift();
+  session.latencyMs.push(rounded);
   const bucket = currentBucket(now);
   bucket.latencySamples += 1;
   bucket.latencyTotalMs += rounded;
@@ -371,9 +420,25 @@ function normalizeTranscriptSpeaker(value: unknown): TesterTranscriptTurn["speak
   return value === "rider" || value === "agent" ? value : null;
 }
 
+function mergeTranscriptTurn(turns: TesterTranscriptTurn[], turn: TesterTranscriptTurn, maxTurns: number) {
+  const lastTurn = turns[turns.length - 1];
+
+  if (lastTurn && lastTurn.sessionId === turn.sessionId && lastTurn.speaker === turn.speaker && !lastTurn.final) {
+    lastTurn.at = turn.at;
+    lastTurn.text = turn.text;
+    lastTurn.final = turn.final;
+    return;
+  }
+
+  turns.push(turn);
+  if (turns.length > maxTurns) {
+    turns.splice(0, turns.length - maxTurns);
+  }
+}
+
 function recordTranscriptTurn(
   tester: MutableTesterStats,
-  sessionId: string,
+  session: ActiveTestingSession,
   payload: Record<string, unknown>,
   now: number
 ) {
@@ -383,19 +448,9 @@ function recordTranscriptTurn(
   const text = cleanText(payload.text).slice(0, 2_000);
   if (!text) return;
   const final = payload.final !== false;
-  const lastTurn = tester.recentTurns[tester.recentTurns.length - 1];
-
-  if (lastTurn && lastTurn.sessionId === sessionId && lastTurn.speaker === speaker && !lastTurn.final) {
-    lastTurn.at = now;
-    lastTurn.text = text;
-    lastTurn.final = final;
-    return;
-  }
-
-  tester.recentTurns.push({ sessionId, at: now, speaker, text, final });
-  if (tester.recentTurns.length > MAX_TRANSCRIPT_TURNS_PER_TESTER) {
-    tester.recentTurns.splice(0, tester.recentTurns.length - MAX_TRANSCRIPT_TURNS_PER_TESTER);
-  }
+  const turn = { sessionId: session.sessionId, at: now, speaker, text, final };
+  mergeTranscriptTurn(tester.recentTurns, { ...turn }, MAX_TRANSCRIPT_TURNS_PER_TESTER);
+  mergeTranscriptTurn(session.turns, turn, MAX_TRANSCRIPT_TURNS_PER_SESSION);
 }
 
 function average(values: number[]): number {
@@ -408,6 +463,216 @@ function percentile(values: number[], percentileRank: number): number {
   const sorted = [...values].sort((a, b) => a - b);
   const index = Math.min(sorted.length - 1, Math.ceil((percentileRank / 100) * sorted.length) - 1);
   return sorted[Math.max(0, index)];
+}
+
+function scoreSession(session: ActiveTestingSession): { quality: TestingQuality; flags: string[] } {
+  const flags: string[] = [];
+  const p95LatencyMs = percentile(session.latencyMs, 95);
+  if (session.errorEvents > 0) flags.push("errors");
+  if (session.ttsFallbacks > 0) flags.push("tts-fallback");
+  if (p95LatencyMs > 800) flags.push("p95-latency-critical");
+  else if (p95LatencyMs > 320) flags.push("p95-latency-watch");
+  if (session.micFrames === 0) flags.push("no-mic-audio");
+  if (!session.turns.length) flags.push("no-transcript");
+
+  const quality: TestingQuality =
+    session.errorEvents > 0 || p95LatencyMs > 800 ? "fail" : flags.length > 0 ? "watch" : "pass";
+  return { quality, flags };
+}
+
+function completedSessionSummary(
+  session: ActiveTestingSession,
+  tester: MutableTesterStats,
+  endedAt: number
+): TesterSessionSummary {
+  const { quality, flags } = scoreSession(session);
+  return {
+    sessionId: session.sessionId,
+    testerKey: tester.testerKey,
+    testerId: tester.testerId,
+    ipAddress: tester.ipAddress,
+    region: tester.region,
+    startedAt: session.startedAt,
+    endedAt,
+    durationMs: Math.max(0, endedAt - session.startedAt),
+    audioUpBytes: session.audioUpBytes,
+    audioDownBytes: session.audioDownBytes,
+    controlDownBytes: session.controlDownBytes,
+    micFrames: session.micFrames,
+    serverEvents: session.serverEvents,
+    latencySamples: session.latencyMs.length,
+    avgLatencyMs: average(session.latencyMs),
+    p95LatencyMs: percentile(session.latencyMs, 95),
+    errorEvents: session.errorEvents,
+    ttsFallbacks: session.ttsFallbacks,
+    quality,
+    flags,
+    notes: "",
+    turns: session.turns.map((turn) => ({ ...turn }))
+  };
+}
+
+function normalizeQuality(value: unknown): TestingQuality {
+  return value === "pass" || value === "watch" || value === "fail" ? value : "watch";
+}
+
+function normalizeTranscriptTurn(value: unknown): TesterTranscriptTurn | null {
+  if (!isRecord(value)) return null;
+  const speaker = normalizeTranscriptSpeaker(value.speaker);
+  if (!speaker || typeof value.text !== "string") return null;
+  const sessionId = typeof value.sessionId === "string" ? cleanText(value.sessionId).slice(0, 120) : "";
+  const at = typeof value.at === "number" && Number.isFinite(value.at) ? value.at : 0;
+  const text = cleanText(value.text).slice(0, 2_000);
+  if (!sessionId || !at || !text) return null;
+  return { sessionId, at, speaker, text, final: value.final !== false };
+}
+
+function normalizeCompletedSession(value: unknown): TesterSessionSummary | null {
+  if (!isRecord(value)) return null;
+  const sessionId = typeof value.sessionId === "string" ? cleanText(value.sessionId).slice(0, 120) : "";
+  const ipAddress = normalizeIpAddress(value.ipAddress);
+  const testerId = normalizeTesterId(value.testerId, ipAddress);
+  const testerKey =
+    typeof value.testerKey === "string" && cleanText(value.testerKey)
+      ? cleanText(value.testerKey).slice(0, 180)
+      : `${testerId}@${ipAddress}`;
+  const region = normalizeRegion(value.region, ipAddress);
+  const startedAt = typeof value.startedAt === "number" && Number.isFinite(value.startedAt) ? value.startedAt : 0;
+  const endedAt = typeof value.endedAt === "number" && Number.isFinite(value.endedAt) ? value.endedAt : startedAt;
+  if (!sessionId || !startedAt) return null;
+  const numberField = (key: string) => {
+    const field = value[key];
+    return typeof field === "number" && Number.isFinite(field) ? Math.max(0, Math.round(field)) : 0;
+  };
+  const turns = Array.isArray(value.turns)
+    ? value.turns.map(normalizeTranscriptTurn).filter((turn): turn is TesterTranscriptTurn => Boolean(turn))
+    : [];
+
+  return {
+    sessionId,
+    testerKey,
+    testerId,
+    ipAddress,
+    region,
+    startedAt,
+    endedAt,
+    durationMs: numberField("durationMs") || Math.max(0, endedAt - startedAt),
+    audioUpBytes: numberField("audioUpBytes"),
+    audioDownBytes: numberField("audioDownBytes"),
+    controlDownBytes: numberField("controlDownBytes"),
+    micFrames: numberField("micFrames"),
+    serverEvents: numberField("serverEvents"),
+    latencySamples: numberField("latencySamples"),
+    avgLatencyMs: numberField("avgLatencyMs"),
+    p95LatencyMs: numberField("p95LatencyMs"),
+    errorEvents: numberField("errorEvents"),
+    ttsFallbacks: numberField("ttsFallbacks"),
+    quality: normalizeQuality(value.quality),
+    flags: Array.isArray(value.flags)
+      ? value.flags
+          .filter((flag): flag is string => typeof flag === "string")
+          .map((flag) => cleanText(flag).slice(0, 80))
+      : [],
+    notes: typeof value.notes === "string" ? cleanText(value.notes).slice(0, 1_000) : "",
+    turns: turns.slice(-MAX_TRANSCRIPT_TURNS_PER_SESSION)
+  };
+}
+
+function testerFromCompletedSession(session: TesterSessionSummary): MutableTesterStats {
+  let tester = testers.get(session.testerKey);
+  if (!tester) {
+    tester = {
+      testerKey: session.testerKey,
+      testerId: session.testerId,
+      ipAddress: session.ipAddress,
+      region: session.region,
+      activeSessions: 0,
+      totalSessions: 0,
+      totalSessionMs: 0,
+      audioUpBytes: 0,
+      audioDownBytes: 0,
+      controlDownBytes: 0,
+      micFrames: 0,
+      serverEvents: 0,
+      errorEvents: 0,
+      ttsFallbacks: 0,
+      lastSeenAt: session.endedAt,
+      latencyMs: [],
+      recentTurns: []
+    };
+    testers.set(session.testerKey, tester);
+  }
+  return tester;
+}
+
+function applyCompletedSessionToTester(session: TesterSessionSummary) {
+  const tester = testerFromCompletedSession(session);
+  tester.testerId = session.testerId;
+  tester.ipAddress = session.ipAddress;
+  tester.region = session.region;
+  tester.totalSessions += 1;
+  tester.totalSessionMs += session.durationMs;
+  tester.audioUpBytes += session.audioUpBytes;
+  tester.audioDownBytes += session.audioDownBytes;
+  tester.controlDownBytes += session.controlDownBytes;
+  tester.micFrames += session.micFrames;
+  tester.serverEvents += session.serverEvents;
+  tester.errorEvents += session.errorEvents;
+  tester.ttsFallbacks += session.ttsFallbacks;
+  tester.lastSeenAt = Math.max(tester.lastSeenAt, session.endedAt);
+  if (session.latencySamples > 0 && session.avgLatencyMs > 0) {
+    tester.latencyMs.push(...Array.from({ length: Math.min(4, session.latencySamples) }, () => session.avgLatencyMs));
+    while (tester.latencyMs.length > MAX_LATENCY_SAMPLES_PER_TESTER) tester.latencyMs.shift();
+  }
+  for (const turn of session.turns) {
+    mergeTranscriptTurn(tester.recentTurns, { ...turn }, MAX_TRANSCRIPT_TURNS_PER_TESTER);
+  }
+}
+
+function trimCompletedSessions() {
+  completedSessions.sort((a, b) => b.endedAt - a.endedAt);
+  if (completedSessions.length > MAX_COMPLETED_SESSIONS) {
+    completedSessions.length = MAX_COMPLETED_SESSIONS;
+  }
+}
+
+function ensureTestingHistoryLoaded() {
+  if (testingHistoryLoaded) return;
+  testingHistoryLoaded = true;
+  if (!TESTING_HISTORY_PATH) return;
+  try {
+    const raw = fs.readFileSync(TESTING_HISTORY_PATH, "utf8");
+    for (const line of raw.split("\n").slice(-MAX_COMPLETED_SESSIONS)) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const session = normalizeCompletedSession(JSON.parse(trimmed));
+      if (session) {
+        completedSessions.push(session);
+        applyCompletedSessionToTester(session);
+      }
+    }
+    trimCompletedSessions();
+    trimInactiveTesters();
+  } catch {
+    // History is best-effort. Missing or unreadable files must not break /health.
+  }
+}
+
+function persistCompletedSession(session: TesterSessionSummary) {
+  if (!TESTING_HISTORY_PATH) return;
+  try {
+    fs.mkdirSync(path.dirname(TESTING_HISTORY_PATH), { recursive: true });
+    fs.appendFileSync(TESTING_HISTORY_PATH, `${JSON.stringify(session)}\n`);
+  } catch {
+    // Persistence failure should not interrupt a live voice session.
+  }
+}
+
+function rememberCompletedSession(session: TesterSessionSummary) {
+  ensureTestingHistoryLoaded();
+  completedSessions.unshift(session);
+  trimCompletedSessions();
+  persistCompletedSession(session);
 }
 
 function testerSnapshot(tester: MutableTesterStats): TesterStats {
@@ -471,7 +736,20 @@ export function beginTesterSession(sessionId: string, identityInput: TesterIdent
   tester.activeSessions += 1;
   tester.totalSessions += 1;
   tester.lastSeenAt = now;
-  testingSessions.set(sessionId, { testerKey: identity.testerKey, startedAt: now });
+  testingSessions.set(sessionId, {
+    sessionId,
+    testerKey: identity.testerKey,
+    startedAt: now,
+    audioUpBytes: 0,
+    audioDownBytes: 0,
+    controlDownBytes: 0,
+    micFrames: 0,
+    serverEvents: 0,
+    errorEvents: 0,
+    ttsFallbacks: 0,
+    latencyMs: [],
+    turns: []
+  });
   currentBucket(now).sessionsStarted += 1;
 }
 
@@ -484,56 +762,69 @@ export function endTesterSession(sessionId: string, now = Date.now()) {
   tester.totalSessionMs += Math.max(0, now - session.startedAt);
   tester.lastSeenAt = now;
   testingSessions.delete(sessionId);
+  rememberCompletedSession(completedSessionSummary(session, tester, now));
 }
 
 export function recordTesterClientAudio(sessionId: string, bytes: number, now = Date.now()) {
-  const tester = activeTester(sessionId, now);
-  if (!tester) return;
+  const active = activeSession(sessionId, now);
+  if (!active) return;
+  const { session, tester } = active;
   const safeBytes = Math.max(0, bytes);
   tester.audioUpBytes += safeBytes;
   tester.micFrames += 1;
   tester.lastSeenAt = now;
+  session.audioUpBytes += safeBytes;
+  session.micFrames += 1;
   currentBucket(now).audioUpBytes += safeBytes;
 }
 
 export function recordTesterServerAudio(sessionId: string, bytes: number, now = Date.now()) {
-  const tester = activeTester(sessionId, now);
-  if (!tester) return;
+  const active = activeSession(sessionId, now);
+  if (!active) return;
+  const { session, tester } = active;
   const safeBytes = Math.max(0, bytes);
   tester.audioDownBytes += safeBytes;
   tester.lastSeenAt = now;
+  session.audioDownBytes += safeBytes;
   currentBucket(now).audioDownBytes += safeBytes;
 }
 
 export function recordTesterServerEvent(sessionId: string, payload: unknown, bytes: number, now = Date.now()) {
-  const tester = activeTester(sessionId, now);
-  if (!tester) return;
+  const active = activeSession(sessionId, now);
+  if (!active) return;
+  const { session, tester } = active;
   const safeBytes = Math.max(0, bytes);
   tester.controlDownBytes += safeBytes;
   tester.serverEvents += 1;
   tester.lastSeenAt = now;
+  session.controlDownBytes += safeBytes;
+  session.serverEvents += 1;
   const bucket = currentBucket(now);
   bucket.controlDownBytes += safeBytes;
 
   if (!isRecord(payload) || typeof payload.type !== "string") return;
   if (payload.type === "error") {
     tester.errorEvents += 1;
+    session.errorEvents += 1;
     bucket.errorEvents += 1;
   }
   if (payload.type === "metric" && typeof payload.latencyMs === "number") {
-    recordLatency(tester, payload.latencyMs, now);
+    recordLatency(tester, session, payload.latencyMs, now);
   }
-  recordTranscriptTurn(tester, sessionId, payload, now);
+  recordTranscriptTurn(tester, session, payload, now);
 }
 
 export function recordTesterTtsFallback(sessionId: string, now = Date.now()) {
-  const tester = activeTester(sessionId, now);
-  if (!tester) return;
+  const active = activeSession(sessionId, now);
+  if (!active) return;
+  const { session, tester } = active;
   tester.ttsFallbacks += 1;
   tester.lastSeenAt = now;
+  session.ttsFallbacks += 1;
 }
 
 export function testingSnapshot(now = Date.now()): TestingStats {
+  ensureTestingHistoryLoaded();
   const users = [...testers.values()].map(testerSnapshot).sort((a, b) => {
     if (b.activeSessions !== a.activeSessions) return b.activeSessions - a.activeSessions;
     if (b.lastSeenAt !== a.lastSeenAt) return b.lastSeenAt - a.lastSeenAt;
@@ -545,6 +836,12 @@ export function testingSnapshot(now = Date.now()): TestingStats {
   });
   return {
     windowMinutes: TESTING_WINDOW_MINUTES,
+    history: {
+      persistent: Boolean(TESTING_HISTORY_PATH),
+      maxSessions: MAX_COMPLETED_SESSIONS,
+      maxTranscriptTurnsPerTester: MAX_TRANSCRIPT_TURNS_PER_TESTER,
+      maxTranscriptTurnsPerSession: MAX_TRANSCRIPT_TURNS_PER_SESSION
+    },
     totals: {
       activeTestSessions: users.reduce((sum, user) => sum + user.activeSessions, 0),
       totalTestSessions: users.reduce((sum, user) => sum + user.totalSessions, 0),
@@ -557,6 +854,11 @@ export function testingSnapshot(now = Date.now()): TestingStats {
       ttsFallbacks: users.reduce((sum, user) => sum + user.ttsFallbacks, 0)
     },
     users,
+    sessions: completedSessions.map((session) => ({
+      ...session,
+      flags: [...session.flags],
+      turns: session.turns.map((turn) => ({ ...turn }))
+    })),
     timeline: timelineSnapshot(now)
   };
 }

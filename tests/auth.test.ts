@@ -1,13 +1,26 @@
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { authorizeUpgrade, checkRateLimit, clientAddress, resetRateLimit } from "../server/auth";
+import {
+  authorizeUpgrade,
+  checkRateLimit,
+  clientAddress,
+  resetRateLimit,
+  testingStatsAuthorized
+} from "../server/auth";
 import { config } from "../server/config";
 
 function fakeRequest(
-  options: { url?: string; origin?: string; address?: string; forwardedFor?: string | string[] } = {}
+  options: {
+    url?: string;
+    origin?: string;
+    address?: string;
+    forwardedFor?: string | string[];
+    authorization?: string;
+  } = {}
 ): IncomingMessage {
   const headers: Record<string, unknown> = {};
   if (options.origin) headers.origin = options.origin;
+  if (options.authorization) headers.authorization = options.authorization;
   if (options.forwardedFor !== undefined) headers["x-forwarded-for"] = options.forwardedFor;
   return {
     url: options.url ?? "/agent",
@@ -89,6 +102,22 @@ describe("authorizeUpgrade", () => {
     // window would have reset the whole bucket at t+60s and allowed a fresh burst.
     expect(checkRateLimit("a", t + 61_000)).toBe(true); // only the t hit expired
     expect(checkRateLimit("a", t + 62_000)).toBe(false); // hits @ +30s/+40s/+61s still count
+  });
+});
+
+describe("testingStatsAuthorized", () => {
+  it("stays open when no relay token is configured (internal test mode)", () => {
+    config.relayAuthToken = "";
+    expect(testingStatsAuthorized(fakeRequest({ url: "/health" }))).toBe(true);
+  });
+
+  it("requires the token once one is configured — tester transcripts/IPs must not leak", () => {
+    config.relayAuthToken = "s3cret";
+    expect(testingStatsAuthorized(fakeRequest({ url: "/health" }))).toBe(false);
+    expect(testingStatsAuthorized(fakeRequest({ url: "/health?token=wrong" }))).toBe(false);
+    expect(testingStatsAuthorized(fakeRequest({ url: "/health", authorization: "Bearer nope" }))).toBe(false);
+    expect(testingStatsAuthorized(fakeRequest({ url: "/health?token=s3cret" }))).toBe(true);
+    expect(testingStatsAuthorized(fakeRequest({ url: "/health", authorization: "Bearer s3cret" }))).toBe(true);
   });
 });
 

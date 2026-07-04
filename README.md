@@ -434,7 +434,12 @@ The wake phrase and the 12 s follow-up window live in `shared/wake.ts`. The mock
 
 Returns backend health and the selected realtime voice provider.
 
-The response also carries production test counters:
+The response also carries production test counters. The `testing` block holds
+per-tester data (IPs, regions, chat transcripts): when `RELAY_AUTH_TOKEN` is
+set, it is included only for callers presenting the token (`?token=…` or
+`Authorization: Bearer …`); the liveness fields below stay open either way,
+so `curl /health` keeps working as a deployment check. With no token
+configured (the internal-test default) the full response stays open:
 
 ```json
 {

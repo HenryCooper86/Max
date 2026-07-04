@@ -144,8 +144,15 @@ export function useHelmetAgent() {
   const [locationPermission, setLocationPermission] = useState<PermissionStateLabel>("unknown");
   const [guidedDemo, setGuidedDemoState] = useState(false);
 
+  const [starting, setStarting] = useState(false);
+
   const socketRef = useRef<WebSocket | null>(null);
   const transmittingRef = useRef(false);
+  // Re-entrancy guard + cancellation token for startMic: a second toggle while
+  // the (multi-await) start is in flight must not launch a parallel start, and
+  // stopMic must be able to cancel a start already past its awaits.
+  const startingRef = useRef(false);
+  const startAttemptRef = useRef(0);
   const intentionalCloseRef = useRef(false);
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -257,17 +264,25 @@ export function useHelmetAgent() {
     clearStoredTranscript();
   }, []);
 
+  // Persist the settings refs in one place. The tester id keeps its last
+  // non-empty value: persisting "" (a field cleared mid-edit) would generate a
+  // fresh random id on the next load and orphan the tester's server-side stats.
+  const lastNonEmptyTesterIdRef = useRef(initialTesterId);
+  const persistSettings = useCallback(() => {
+    if (testerIdRef.current) lastNonEmptyTesterIdRef.current = testerIdRef.current;
+    saveStoredSettings({
+      voiceGender: voiceGenderRef.current,
+      voicePersonality: voicePersonalityRef.current,
+      testerId: lastNonEmptyTesterIdRef.current,
+      testingCampaignId: testingCampaignIdRef.current,
+      testingTestCaseId: testingTestCaseIdRef.current
+    });
+  }, []);
+
   useEffect(() => {
-    if (!storedSettings.testerId) {
-      saveStoredSettings({
-        voiceGender: voiceGenderRef.current,
-        voicePersonality: voicePersonalityRef.current,
-        testerId: testerIdRef.current,
-        testingCampaignId: testingCampaignIdRef.current,
-        testingTestCaseId: testingTestCaseIdRef.current
-      });
-    }
+    if (!storedSettings.testerId) persistSettings();
     // Run once on mount to persist the generated id only when needed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -279,11 +294,21 @@ export function useHelmetAgent() {
       setProvider(nextHealth.provider);
       setCapabilities(nextHealth.capabilities);
     };
+    // Skip polls while the tab is hidden — a backgrounded HUD refreshing the
+    // QA dashboard 12×/min serves nobody. Refresh immediately on return.
+    const poll = () => {
+      if (!document.hidden) void refreshHealth();
+    };
+    const onVisibility = () => {
+      if (!document.hidden) void refreshHealth();
+    };
     void refreshHealth();
-    const timer = window.setInterval(refreshHealth, HEALTH_POLL_MS);
+    const timer = window.setInterval(poll, HEALTH_POLL_MS);
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, []);
 
@@ -331,6 +356,11 @@ export function useHelmetAgent() {
   // so no real audio is captured) for an instant restart next time. Declared
   // before connect() so the close-handler paths that end hands-free can use it.
   const stopMic = useCallback(() => {
+    // Invalidate any in-flight startMic so it can't re-enable transmission
+    // after its awaits resolve.
+    startAttemptRef.current += 1;
+    startingRef.current = false;
+    setStarting(false);
     transmittingRef.current = false;
     setTrackEnabled(false);
     resetFrameWindow();
@@ -357,6 +387,11 @@ export function useHelmetAgent() {
 
     socket.addEventListener("open", () => {
       reconnectAttemptsRef.current = 0;
+      // A pending backoff retry is moot once a connection is open.
+      if (reconnectTimerRef.current) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
       setConnected(true);
       setConnectionState("relay");
       setStatus("就绪");
@@ -366,7 +401,8 @@ export function useHelmetAgent() {
           type: "session.start",
           sampleRate: SAMPLE_RATE,
           channels: 1,
-          testerId: testerIdRef.current,
+          // Mid-edit (field cleared) the last real id keeps stats continuity.
+          testerId: testerIdRef.current || lastNonEmptyTesterIdRef.current,
           testerRegion: testerRegionLabel(),
           testingCampaignId: testingCampaignIdRef.current,
           testingTestCaseId: testingTestCaseIdRef.current,
@@ -390,6 +426,11 @@ export function useHelmetAgent() {
     });
 
     socket.addEventListener("message", (message) => {
+      // Ignore a socket already superseded by a newer one (same guard as the
+      // close/error handlers): after a settings-change restart, messages
+      // queued on the old socket still dispatch and would play stale PCM and
+      // mutate the fresh session's transcript/turn state.
+      if (socketRef.current !== socket) return;
       if (message.data instanceof ArrayBuffer) {
         // playPcm16 can throw (e.g. AudioContext creation limits); keep it from
         // escaping the WebSocket message handler as an unhandled error.
@@ -426,7 +467,12 @@ export function useHelmetAgent() {
           if (transmittingRef.current) setTurnState((prev) => mapTurnState(event.state, prev));
         }
         if (event.type === "transcript") {
-          if (event.speaker === "rider") stopAgentSpeech();
+          if (event.speaker === "rider") {
+            stopAgentSpeech();
+            // The rider spoke: a duplicate agent final replayed after this is
+            // a genuine re-delivery, not a double-speak — let it through.
+            lastSpokenRef.current = null;
+          }
           pushTranscript(event.speaker, event.text, event.final !== false);
           if (event.speaker === "agent" && (event.useBrowserSpeech ?? event.final !== false)) {
             // Mirror pushTranscript's duplicate-final dedupe: speak() starts by
@@ -466,7 +512,9 @@ export function useHelmetAgent() {
           hazardClearTimerRef.current = window.setTimeout(() => setHazardAlert(null), (ttcSeconds + 2) * 1000);
         }
         if (event.type === "metric") {
-          setLatencyMs(event.latencyMs);
+          // A frames-only metric arrives with latencyMs 0 — keep the last
+          // real reading instead of zeroing the HUD readout.
+          if (event.latencyMs > 0) setLatencyMs(event.latencyMs);
           setPacketStats((stats) => ({
             ...stats,
             outgoingFps: event.outgoingFps ?? stats.outgoingFps,
@@ -599,13 +647,7 @@ export function useHelmetAgent() {
     (gender: VoiceGender) => {
       voiceGenderRef.current = gender;
       setVoiceGenderState(gender);
-      saveStoredSettings({
-        voiceGender: gender,
-        voicePersonality: voicePersonalityRef.current,
-        testerId: testerIdRef.current,
-        testingCampaignId: testingCampaignIdRef.current,
-        testingTestCaseId: testingTestCaseIdRef.current
-      });
+      persistSettings();
       // Only show the progressive "switching…" status when a session restart is
       // actually happening; without a socket nothing ever resolves it, so the
       // switch simply takes effect at the next session start.
@@ -616,38 +658,29 @@ export function useHelmetAgent() {
         setStatus(gender === "male" ? "已切换到男声" : "已切换到女声");
       }
     },
-    [restartSession]
+    [persistSettings, restartSession]
   );
 
   const setVoicePersonality = useCallback(
     (personality: VoicePersonality) => {
       voicePersonalityRef.current = personality;
       setVoicePersonalityState(personality);
-      saveStoredSettings({
-        voiceGender: voiceGenderRef.current,
-        voicePersonality: personality,
-        testerId: testerIdRef.current,
-        testingCampaignId: testingCampaignIdRef.current,
-        testingTestCaseId: testingTestCaseIdRef.current
-      });
+      persistSettings();
       setStatus(`已切换语气：${PERSONALITY_LABELS[personality]}`);
       if (socketRef.current) restartSession();
     },
-    [restartSession]
+    [persistSettings, restartSession]
   );
 
-  const setTesterId = useCallback((value: string) => {
-    const next = stripControlChars(value.normalize("NFKC")).replace(/\s+/g, " ").trim().slice(0, 80);
-    testerIdRef.current = next;
-    setTesterIdState(next);
-    saveStoredSettings({
-      voiceGender: voiceGenderRef.current,
-      voicePersonality: voicePersonalityRef.current,
-      testerId: next,
-      testingCampaignId: testingCampaignIdRef.current,
-      testingTestCaseId: testingTestCaseIdRef.current
-    });
-  }, []);
+  const setTesterId = useCallback(
+    (value: string) => {
+      const next = stripControlChars(value.normalize("NFKC")).replace(/\s+/g, " ").trim().slice(0, 80);
+      testerIdRef.current = next;
+      setTesterIdState(next);
+      persistSettings();
+    },
+    [persistSettings]
+  );
 
   const applyTestingRideContext = useCallback((testCase: TestingTestCase) => {
     scenarioRef.current = testCase.scenario;
@@ -676,18 +709,12 @@ export function useHelmetAgent() {
       testingTestCaseIdRef.current = nextCase.id;
       setTestingCampaignIdState(campaign.id);
       setTestingTestCaseIdState(nextCase.id);
-      saveStoredSettings({
-        voiceGender: voiceGenderRef.current,
-        voicePersonality: voicePersonalityRef.current,
-        testerId: testerIdRef.current,
-        testingCampaignId: campaign.id,
-        testingTestCaseId: nextCase.id
-      });
+      persistSettings();
       applyTestingRideContext(nextCase);
       setStatus(`测试活动：${campaign.name}`);
       if (socketRef.current) restartSession();
     },
-    [applyTestingRideContext, restartSession]
+    [applyTestingRideContext, persistSettings, restartSession]
   );
 
   const setTestingTestCaseId = useCallback(
@@ -698,18 +725,12 @@ export function useHelmetAgent() {
       testingTestCaseIdRef.current = testCase.id;
       setTestingCampaignIdState(campaign.id);
       setTestingTestCaseIdState(testCase.id);
-      saveStoredSettings({
-        voiceGender: voiceGenderRef.current,
-        voicePersonality: voicePersonalityRef.current,
-        testerId: testerIdRef.current,
-        testingCampaignId: campaign.id,
-        testingTestCaseId: testCase.id
-      });
+      persistSettings();
       applyTestingRideContext(testCase);
       setStatus(`测试用例：${testCase.name}`);
       if (socketRef.current) restartSession();
     },
-    [applyTestingRideContext, restartSession]
+    [applyTestingRideContext, persistSettings, restartSession]
   );
 
   const setRideMode = useCallback(
@@ -806,7 +827,16 @@ export function useHelmetAgent() {
   // Start the hands-free session: grab geolocation (for live weather), open the
   // relay, and stream the mic continuously — Doubao's VAD handles turn-taking.
   const startMic = useCallback(async () => {
+    if (startingRef.current) return; // a start is already in flight
+    startingRef.current = true;
+    setStarting(true);
+    const attempt = ++startAttemptRef.current;
     try {
+      // The playback context must be created inside THIS user gesture — after
+      // the location grace, socket open, and a possible mic-permission prompt
+      // below, transient activation has expired and Safari would keep the
+      // context suspended, muting the first agent reply.
+      ensurePlaybackContext();
       // Geolocation is best-effort for live weather; fire it in parallel so a slow
       // or pending GPS prompt never blocks opening the relay or the mic. A short
       // grace window lets cached/fast coordinates make the first session.start.
@@ -824,7 +854,8 @@ export function useHelmetAgent() {
       }
       const socket = await waitForSocket();
       await ensureMic();
-      ensurePlaybackContext();
+      // stopMic ran while we were awaiting: honor the rider's stop.
+      if (attempt !== startAttemptRef.current) return;
       stopAgentSpeech();
       setTrackEnabled(true);
       transmittingRef.current = true;
@@ -836,10 +867,14 @@ export function useHelmetAgent() {
       setStatus("免提已开启，请讲话");
       socket.send(JSON.stringify({ type: "audio.start" }));
     } catch (error) {
+      if (attempt !== startAttemptRef.current) return; // superseded, not a failure
       transmittingRef.current = false;
       setListening(false);
       setTurnState("idle");
       setStatus(error instanceof Error ? error.message : "无法访问麦克风");
+    } finally {
+      startingRef.current = false;
+      setStarting(false);
     }
   }, [
     ensureMic,
@@ -961,6 +996,7 @@ export function useHelmetAgent() {
   return {
     connected,
     listening,
+    starting,
     status,
     provider,
     connectionState,

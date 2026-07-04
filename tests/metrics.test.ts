@@ -198,6 +198,39 @@ describe("relay metrics", () => {
     expect(buildHealth(2).testing?.users[0]?.testerId).toBe("rider one");
   });
 
+  it("omits the testing block from /health when the caller is not authorized", () => {
+    beginTesterSession("relay-private", { testerId: "qa", ipAddress: "203.0.113.5" }, 1_000);
+    const health = buildHealth(1, false);
+    expect(health.testing).toBeUndefined();
+    expect(health.metrics).toBeDefined(); // liveness data still present
+    expect(buildHealth(1, true).testing?.users.length).toBe(1);
+  });
+
+  it("keeps accounting intact when more testers than MAX_TESTERS are active at once", () => {
+    // Regression: creating tester #51 used to trim the just-created record
+    // (the only inactive one), so its session leaked in the active map forever
+    // and its completed summary was never written.
+    const count = 51;
+    for (let index = 0; index < count; index += 1) {
+      beginTesterSession(
+        `relay-bulk-${index}`,
+        { testerId: `tester-${index}`, ipAddress: `198.51.100.${index}` },
+        1_000 + index
+      );
+    }
+    expect(testingSnapshot(2_000).totals.activeTestSessions).toBe(count);
+
+    for (let index = 0; index < count; index += 1) {
+      endTesterSession(`relay-bulk-${index}`, 60_000 + index);
+    }
+    const snapshot = testingSnapshot(70_000);
+    expect(snapshot.totals.activeTestSessions).toBe(0);
+    // Every session produced a completed summary — none were orphaned.
+    expect(snapshot.sessions.length).toBe(count);
+    const ids = new Set(snapshot.sessions.map((session) => session.sessionId));
+    expect(ids.size).toBe(count);
+  });
+
   it("falls back to an IP-scoped tester when no tester id is provided", () => {
     beginTesterSession("relay-2", { ipAddress: "10.0.0.4" }, 2_000);
 

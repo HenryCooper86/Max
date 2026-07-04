@@ -422,6 +422,9 @@ export function createDoubaoProvider(
   // a late window expiry can't clip a reply that already started.
   const wakeWordEnabled = appConfig.wakeWord;
   let riderTurnText = "";
+  // Whether the current rider turn's transcript was already closed with a
+  // final event (AsrEnded can repeat without new speech in between).
+  let riderTurnFinalized = false;
   let addressedUntil = 0;
   // When the rider last said "Max" explicitly — follow-up turns slide the
   // window but never past this + WAKE_FOLLOWUP_MAX_CHAIN_MS.
@@ -748,6 +751,7 @@ export function createDoubaoProvider(
           sentThinkingStatus = false;
           fallbackSpoke = false;
           riderTurnText = "";
+          riderTurnFinalized = false;
           replyDecided = false;
           replyAddressed = false;
           sendClient({ type: "status", state: "hearing", detail: "豆包检测到骑手语音" });
@@ -855,6 +859,15 @@ export function createDoubaoProvider(
         }
 
         if (frame.event === EventReceive.AsrEnded) {
+          // Close the rider turn with a final transcript carrying the full
+          // accumulated utterance. Without it, rider turns stayed non-final
+          // forever and two separate utterances (e.g. around a suppressed
+          // wake-word reply) merged into one, destroying the earlier text in
+          // the tester chat-history drilldown.
+          if (!riderTurnFinalized && riderTurnText.trim()) {
+            riderTurnFinalized = true;
+            sendClient({ type: "transcript", speaker: "rider", text: riderTurnText.trim(), final: true });
+          }
           sendClient({ type: "status", state: "ready", detail: "豆包语音识别完成" });
           return;
         }

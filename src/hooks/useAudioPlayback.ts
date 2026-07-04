@@ -24,6 +24,11 @@ export function useAudioPlayback({ voiceGenderRef, transmittingRef, onInterrupte
   // Barge-in: silence whatever the agent is currently saying so the rider can
   // interrupt. Covers both browser TTS and queued Doubao voice audio.
   const stopAgentSpeech = useCallback(() => {
+    // Only report a barge-in when the agent was audibly saying something —
+    // this runs on every rider ASR partial, and claiming "已打断 Max" while
+    // Max was silent fought the server's hearing/asr turn states.
+    const wasSpeaking =
+      playbackSourcesRef.current.length > 0 || ("speechSynthesis" in window && window.speechSynthesis.speaking);
     if ("speechSynthesis" in window) window.speechSynthesis.cancel();
     for (const source of playbackSourcesRef.current) {
       try {
@@ -37,7 +42,7 @@ export function useAudioPlayback({ voiceGenderRef, transmittingRef, onInterrupte
     if (playbackContextRef.current) {
       playbackCursorRef.current = playbackContextRef.current.currentTime;
     }
-    if (transmittingRef.current) onInterrupted();
+    if (wasSpeaking && transmittingRef.current) onInterrupted();
   }, [onInterrupted, transmittingRef]);
 
   // Browser-TTS fallback, used when Doubao returns reply text but no audio.
@@ -70,11 +75,13 @@ export function useAudioPlayback({ voiceGenderRef, transmittingRef, onInterrupte
   );
 
   const playPcm16 = useCallback((audioData: ArrayBuffer) => {
+    // Reject empty/odd frames BEFORE lazily creating a context — a stray frame
+    // after closePlayback must not resurrect an AudioContext outside a gesture.
+    if (!audioData.byteLength || audioData.byteLength % 2 !== 0) return;
+    const pcm = new Int16Array(audioData);
+
     const audioContext = playbackContextRef.current ?? new AudioContext({ sampleRate: PLAYBACK_SAMPLE_RATE });
     playbackContextRef.current = audioContext;
-
-    const pcm = new Int16Array(audioData);
-    if (!pcm.length) return;
 
     // Lazily build a shared gain → limiter → destination chain so every agent
     // buffer is boosted by PLAYBACK_GAIN while the limiter tames the loud peaks.

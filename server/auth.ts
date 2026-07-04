@@ -91,6 +91,22 @@ export function resetRateLimit() {
   rateHits.clear();
 }
 
+/**
+ * Whether an HTTP request may see the per-tester QA statistics (IPs, regions,
+ * chat transcripts). Open when no relay token is configured — the documented
+ * internal-test mode — but once RELAY_AUTH_TOKEN is set, the same secret must
+ * come along (?token=… or Authorization: Bearer …); /health itself stays open
+ * so the one-curl liveness check keeps working.
+ */
+export function testingStatsAuthorized(request: IncomingMessage): boolean {
+  if (!config.relayAuthToken) return true;
+  const url = new URL(request.url ?? "/", "http://relay.local");
+  const fromQuery = url.searchParams.get("token") ?? "";
+  const authorization = request.headers.authorization ?? "";
+  const fromHeader = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length).trim() : "";
+  return tokenMatches(fromQuery, config.relayAuthToken) || tokenMatches(fromHeader, config.relayAuthToken);
+}
+
 export function authorizeUpgrade(request: IncomingMessage, now = Date.now()): UpgradeDecision {
   if (!checkRateLimit(clientAddress(request), now)) {
     return { ok: false, code: 429, reason: "Too many connection attempts" };

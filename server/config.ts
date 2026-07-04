@@ -154,7 +154,7 @@ export function validateConfig(): string[] {
   return warnings;
 }
 
-export function buildHealth(uptimeSec: number): AgentHealth {
+export function buildHealth(uptimeSec: number, includeTesting = true): AgentHealth {
   return {
     ok: true,
     provider: config.voiceProvider,
@@ -164,6 +164,9 @@ export function buildHealth(uptimeSec: number): AgentHealth {
     capabilities: providerCapabilities(config.voiceProvider),
     metrics: { ...metrics.snapshot() },
     metricsWindow: { ...metricsWindow() },
-    testing: testingSnapshot()
+    // The testing block carries tester IPs, regions, and chat transcripts —
+    // callers must gate it (see testingStatsAuthorized) so an unauthenticated
+    // /health poll can't dump every tester's conversation history.
+    ...(includeTesting ? { testing: testingSnapshot() } : {})
   };
 }

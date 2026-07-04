@@ -228,8 +228,13 @@ export class AgentSessionController {
   }
 
   async close() {
-    await this.provider.close();
-    endTesterSession(this.relaySessionId);
+    try {
+      await this.provider.close();
+    } finally {
+      // Always settle the tester stats — a provider close failure must not
+      // leave a phantom active session (and an untrimmable tester) behind.
+      endTesterSession(this.relaySessionId);
+    }
   }
 
   private send(payload: unknown) {

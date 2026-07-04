@@ -15,7 +15,12 @@ export function createAgentSocket() {
 
 export async function fetchAgentHealth(): Promise<AgentHealth | null> {
   try {
-    const response = await fetch("/health");
+    // The token unlocks the per-tester QA block on token-protected relays;
+    // /health itself never requires it.
+    const token = relayAuthToken();
+    const response = await fetch("/health", {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined
+    });
     if (!response.ok) return null;
     return (await response.json()) as AgentHealth;
   } catch {

@@ -3,6 +3,7 @@
 // (private browsing, quota) must never break the voice session.
 
 import type { VoicePersonality } from "../../shared/agent";
+import { detectLanguage } from "../../shared/language";
 import { DEFAULT_TESTING_CAMPAIGN_ID, DEFAULT_TESTING_TEST_CASE_ID } from "../../shared/testing";
 import type { TranscriptItem, VoiceGender } from "../types";
 
@@ -95,8 +96,14 @@ export function loadStoredTranscript(): TranscriptItem[] {
           typeof item.text === "string" &&
           (item.speaker === "rider" || item.speaker === "agent")
       )
-      // Anything restored is by definition a finished turn.
-      .map((item) => ({ ...item, final: true }))
+      // Anything restored is by definition a finished turn. `language` may be
+      // missing from an older stored schema — re-derive it rather than letting
+      // Chinese rows silently render as "EN".
+      .map((item) => ({
+        ...item,
+        final: true,
+        language: item.language === "zh" || item.language === "en" ? item.language : detectLanguage(item.text)
+      }))
       .slice(-TRANSCRIPT_CAP)
   );
 }

@@ -6,9 +6,10 @@
 // numerics, and returns null for malformed or unknown events (unknown types
 // are ignored, not errors, so older clients tolerate newer relays).
 
-import type { AdasDirection, AdasSeverity, AdasThreat } from "./adas";
-import type { AgentEvent, ConnectionState } from "./agent";
+import { ADAS_DIRECTIONS, ADAS_THREATS, type AdasDirection, type AdasSeverity, type AdasThreat } from "./adas";
+import type { AgentEvent, ConnectionState, ProviderCapabilities } from "./agent";
 import type { DemoScenario, RideMode } from "./ride";
+import { MAX_MEMORY_DESTINATION_CHARS } from "./session";
 
 const CONNECTION_STATES = new Set(["offline", "connecting", "relay", "provider", "ready", "degraded"]);
 const PROVIDER_MODES = new Set(["mock", "live"]);
@@ -18,6 +19,9 @@ const RIDE_MODES = new Set(["ride", "stop", "navigation", "emergency"]);
 const DEMO_SCENARIOS = new Set(["commute", "wind", "fuel", "group", "emergency", "adas"]);
 const MEMORY_LANGUAGES = new Set(["zh", "en"]);
 const RESPONSE_MODES = new Set(["concise", "normal", "emergency"]);
+const NETWORK_STATES = new Set(["online", "degraded", "offline"]);
+const ADAS_THREAT_SET = new Set<string>(ADAS_THREATS);
+const ADAS_DIRECTION_SET = new Set<string>(ADAS_DIRECTIONS);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -57,7 +61,25 @@ export function validateAgentEvent(value: unknown): AgentEvent | null {
       if (!isString(value.provider)) return null;
       if (!isString(value.mode) || !PROVIDER_MODES.has(value.mode)) return null;
       if (!isRecord(value.capabilities)) return null;
-      return value as AgentEvent;
+      // Build a sanitized object like every other branch — returning the raw
+      // record let unchecked capability values (and extra fields) into state.
+      const raw = value.capabilities;
+      const capabilities: ProviderCapabilities = {
+        serverVad: raw.serverVad === true,
+        synthesizedAudio: raw.synthesizedAudio === true,
+        transcriptEvents: raw.transcriptEvents === true,
+        bargeIn: raw.bargeIn === true,
+        voiceSelection: raw.voiceSelection === true,
+        weatherContext: raw.weatherContext === true,
+        sessionMemory: raw.sessionMemory === true,
+        emergencyMode: raw.emergencyMode === true
+      };
+      return {
+        type: "session.started",
+        provider: value.provider,
+        mode: value.mode as "mock" | "live",
+        capabilities
+      };
     }
 
     case "connection": {
@@ -99,7 +121,9 @@ export function validateAgentEvent(value: unknown): AgentEvent | null {
         description: value.description,
         temperatureC: finiteOr(value.temperatureC, 0),
         windSpeedKmh: finiteOr(value.windSpeedKmh, 0),
-        isDay: value.isDay !== false,
+        // Accept the upstream Open-Meteo numeric form (is_day: 0|1) too — a
+        // bare `!== false` coerced numeric 0 (night) into daytime rendering.
+        isDay: typeof value.isDay === "boolean" ? value.isDay : value.isDay !== 0,
         riskLevel: enumOrUndefined(value.riskLevel, HAZARD_LEVELS),
         riderAdvice: isString(value.riderAdvice) ? value.riderAdvice : undefined
       };
@@ -119,7 +143,7 @@ export function validateAgentEvent(value: unknown): AgentEvent | null {
         scenarioLabel: value.scenarioLabel,
         speedKmh: finiteOrUndefined(value.speedKmh),
         routePhase: isString(value.routePhase) ? value.routePhase : undefined,
-        network: enumOrUndefined(value.network, new Set(["online", "degraded", "offline"])),
+        network: enumOrUndefined(value.network, NETWORK_STATES),
         batteryPct: finiteOrUndefined(value.batteryPct),
         hazardLevel,
         glanceableFocus: isString(value.glanceableFocus) ? value.glanceableFocus : ""
@@ -133,7 +157,11 @@ export function validateAgentEvent(value: unknown): AgentEvent | null {
       return {
         type: "session.memory",
         language,
-        destination: isString(value.destination) ? value.destination : undefined,
+        // Clamp by code point (not UTF-16 units, which can bisect a surrogate
+        // pair) and to the same cap the server applies on restore.
+        destination: isString(value.destination)
+          ? [...value.destination].slice(0, MAX_MEMORY_DESTINATION_CHARS).join("")
+          : undefined,
         lastIntent: isString(value.lastIntent) ? value.lastIntent : undefined,
         responseMode
       };
@@ -153,7 +181,10 @@ export function validateAgentEvent(value: unknown): AgentEvent | null {
       // The safety banner renders these strings directly — a missing message
       // must not put "undefined" in front of the rider.
       if (!isString(value.label) || !isString(value.message) || !isString(value.advice)) return null;
-      if (!isString(value.threat) || !isString(value.direction)) return null;
+      // threat/direction feed Record lookups (adasDirectionLabel) — an unknown
+      // value from a skewed relay must be rejected, not cast through.
+      if (!isString(value.threat) || !ADAS_THREAT_SET.has(value.threat)) return null;
+      if (!isString(value.direction) || !ADAS_DIRECTION_SET.has(value.direction)) return null;
       const severity = enumOrUndefined<AdasSeverity>(value.severity, new Set(["caution", "critical"]));
       if (!severity) return null;
       return {

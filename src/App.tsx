@@ -113,8 +113,10 @@ export function App() {
   if (!authChecked) {
     return <main className="shell loginShell" aria-busy="true" />;
   }
-  if (authEnabled && !authUser) {
-    return <LoginGate registrationOpen={registrationOpen} onSignedIn={handleSignedIn} />;
+  // The login page ALWAYS comes first, like a normal website — on a fresh
+  // relay (no accounts yet) it offers first-run admin registration.
+  if (!authUser) {
+    return <LoginGate authEnabled={authEnabled} registrationOpen={registrationOpen} onSignedIn={handleSignedIn} />;
   }
   const preflight = [
     { label: t.mic, value: PERMISSION_LABELS[agent.micPermission] },

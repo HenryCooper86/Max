@@ -2,6 +2,13 @@
 
 ## 2026-07-04 — Site-wide login gate: the whole HUD (and the voice line) now requires an account
 
+**Follow-up (same day):** the login page now ALWAYS comes first, like a normal
+website — on a fresh relay (zero accounts) it shows first-run admin
+registration ("首次使用：注册第一个账号，该账号将成为管理员") instead of booting
+into the open HUD with the register form buried in the testing panel, which
+proved unfindable in practice. The relay-side open mode (WS, stats) with zero
+accounts is unchanged.
+
 171 tests green (1 new), tsc/eslint/prettier clean, production build verified,
 full register → logout → gate → login round trip verified in a real browser.
 

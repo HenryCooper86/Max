@@ -52,6 +52,28 @@ function barHeight(value: number, max: number) {
   return `${Math.max(6, Math.round((value / max) * 100))}%`;
 }
 
+// "New failures" watermark: fail sessions that ended after this timestamp
+// count as unseen. Local to this browser — it tracks what THIS admin has
+// looked at, not global state.
+const FAIL_SEEN_AT_KEY = "max.testing.failSeenAt";
+
+function readFailSeenAt(): number {
+  try {
+    const value = Number(window.localStorage.getItem(FAIL_SEEN_AT_KEY));
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function saveFailSeenAt(at: number) {
+  try {
+    window.localStorage.setItem(FAIL_SEEN_AT_KEY, String(at));
+  } catch {
+    /* storage unavailable — badge just stays until next visit */
+  }
+}
+
 type Props = {
   agent: HelmetAgent;
   /** Auth state lives in App — the LoginGate and this panel share it. */
@@ -70,6 +92,7 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
   const [armedAction, setArmedAction] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
   const [adminNotice, setAdminNotice] = useState<string | null>(null);
+  const [failSeenAt, setFailSeenAt] = useState(readFailSeenAt);
 
   useEffect(() => {
     if (!armedAction) return;
@@ -160,6 +183,24 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
     setSelectedTesterKey(testerKey);
     setSelectedSessionId(null);
   };
+  // Failures the admin hasn't looked at yet (across ALL testers, ignoring the
+  // current tester/quality filters — a fail must not hide behind a filter).
+  const unseenFailSessions = testingSessions.filter(
+    (session) => session.quality === "fail" && session.endedAt > failSeenAt
+  );
+  const reviewFailures = () => {
+    // Jump straight to the newest unseen failure (the session list is scoped
+    // to one tester, so also select that session's tester).
+    const newest = [...unseenFailSessions].sort((a, b) => b.endedAt - a.endedAt)[0];
+    if (newest) {
+      setSelectedTesterKey(newest.testerKey);
+      setSelectedSessionId(newest.sessionId);
+    }
+    setQualityFilter("fail");
+    const latest = Math.max(failSeenAt, ...unseenFailSessions.map((session) => session.endedAt));
+    setFailSeenAt(latest);
+    saveFailSeenAt(latest);
+  };
   const authEnabled = agent.health?.auth?.enabled ?? false;
   const registrationOpen = agent.health?.auth?.registrationOpen ?? true;
   // Once accounts exist, the relay refuses non-admin clears; mirror that in
@@ -174,7 +215,15 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
       <div className="panelHeader">
         <h2>测试统计</h2>
         <div className="panelActions">
-          <span>{testing ? `${testing.windowMinutes}m · ${testing.users.length} users` : "waiting"}</span>
+          <span>
+            {testing ? `${testing.windowMinutes}m · ${testing.users.length} users` : "waiting"}
+            {agent.health?.build ? ` · 构建 ${agent.health.build.gitCommit}` : ""}
+          </span>
+          {unseenFailSessions.length ? (
+            <button type="button" className="danger" onClick={reviewFailures}>
+              {unseenFailSessions.length} 个新失败
+            </button>
+          ) : null}
           <button type="button" onClick={() => exportTestingReport(agent.health, agent.testerId, agent.testerRegion)}>
             导出统计
           </button>
@@ -486,6 +535,7 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
                   <span>
                     {formatClockTime(turn.at)} · {turn.final ? "final" : "live"}
                   </span>
+                  {turn.feedback ? <span className="turnFlagChip">⚑ {turn.feedback}</span> : null}
                 </div>
                 <p>{turn.text}</p>
               </article>
@@ -598,6 +648,12 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
                     <b>{selectedSession.networkType}</b>
                     Network
                   </span>
+                  <span>
+                    <b>
+                      {selectedSession.appVersion} · {selectedSession.gitCommit}
+                    </b>
+                    Build
+                  </span>
                 </div>
                 <div className="sessionFlags">
                   {selectedSession.flags.length ? (
@@ -627,6 +683,7 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
                           <span>
                             {formatClockTime(turn.at)} · {turn.final ? "final" : "live"}
                           </span>
+                          {turn.feedback ? <span className="turnFlagChip">⚑ {turn.feedback}</span> : null}
                         </div>
                         <p>{turn.text}</p>
                       </article>

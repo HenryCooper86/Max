@@ -143,6 +143,9 @@ export function useHelmetAgent() {
   const [micPermission, setMicPermission] = useState<PermissionStateLabel>("unknown");
   const [locationPermission, setLocationPermission] = useState<PermissionStateLabel>("unknown");
   const [guidedDemo, setGuidedDemoState] = useState(false);
+  // Transcript ids above this floor belong to the current relay session and
+  // may be flagged via turn.feedback. MAX_SAFE_INTEGER = nothing flaggable.
+  const [feedbackFloorId, setFeedbackFloorId] = useState(Number.MAX_SAFE_INTEGER);
 
   const [starting, setStarting] = useState(false);
 
@@ -400,6 +403,10 @@ export function useHelmetAgent() {
       setConnected(true);
       setConnectionState("relay");
       setStatus("就绪");
+      // Only turns from THIS relay session are flaggable: the relay matches
+      // turn.feedback against its current session transcript, so flagging a
+      // restored/previous-session turn could tag the wrong turn.
+      setFeedbackFloorId(transcriptTurnRef.current);
       const location = locationRef.current;
       socket.send(
         JSON.stringify({
@@ -594,6 +601,7 @@ export function useHelmetAgent() {
       if (socketRef.current !== socket) return;
       setConnected(false);
       setConnectionState("offline");
+      setFeedbackFloorId(Number.MAX_SAFE_INTEGER);
       socketRef.current = null;
       isLiveRef.current = false;
       if (intentionalCloseRef.current) {
@@ -789,6 +797,23 @@ export function useHelmetAgent() {
       setStatus("巡游演示已开启，开启免提后自动巡游场景");
     }
   }, []);
+
+  // Tester flags a bad turn. Works only while the relay session is live (the
+  // relay attaches the flag to the matching server-side transcript turn);
+  // returns false so the UI can explain instead of silently dropping it.
+  const sendTurnFeedback = useCallback((item: TranscriptItem, reason: string): boolean => {
+    const socket = socketRef.current;
+    if (socket?.readyState !== WebSocket.OPEN) return false;
+    socket.send(JSON.stringify({ type: "turn.feedback", speaker: item.speaker, text: item.text, reason }));
+    setTranscript((items) => items.map((turn) => (turn.id === item.id ? { ...turn, feedback: reason } : turn)));
+    return true;
+  }, []);
+
+  /** Whether the flag control should show for a transcript item at all. */
+  const canFlagTurn = useCallback(
+    (item: TranscriptItem) => connected && item.final && !item.feedback && item.id > feedbackFloorId,
+    [connected, feedbackFloorId]
+  );
 
   const waitForSocket = useCallback(async () => {
     connect();
@@ -1036,6 +1061,8 @@ export function useHelmetAgent() {
     setScenario,
     setGuidedDemo,
     clearTranscript,
+    sendTurnFeedback,
+    canFlagTurn,
     refreshHealth,
     startMic,
     stopMic,

@@ -130,3 +130,41 @@ describe("testing evaluator", () => {
     expect(evaluation.checks).toContainEqual(expect.objectContaining({ id: "emergency", status: "pass" }));
   });
 });
+
+describe("tester turn feedback", () => {
+  it("downgrades a session to watch when the tester flagged a turn", () => {
+    const evaluation = evaluateTestingSession({
+      testCaseId: "baseline-live-session",
+      p95LatencyMs: 180,
+      micFrames: 5,
+      errorEvents: 0,
+      ttsFallbacks: 0,
+      turns: [
+        { sessionId: "s1", at: 1, speaker: "rider", text: "Max, 今天天气怎么样", final: true },
+        { sessionId: "s1", at: 2, speaker: "agent", text: "今天晴天，适合骑行。", final: true, feedback: "回答不对" }
+      ]
+    });
+
+    expect(evaluation.quality).toBe("watch");
+    expect(evaluation.checks).toContainEqual(
+      expect.objectContaining({ id: "tester-feedback", status: "warn", detail: expect.stringContaining("回答不对") })
+    );
+  });
+
+  it("skips (not passes) the feedback check when no turn was flagged", () => {
+    const evaluation = evaluateTestingSession({
+      testCaseId: "baseline-live-session",
+      p95LatencyMs: 180,
+      micFrames: 5,
+      errorEvents: 0,
+      ttsFallbacks: 0,
+      turns: [
+        { sessionId: "s1", at: 1, speaker: "rider", text: "Max, 今天天气怎么样", final: true },
+        { sessionId: "s1", at: 2, speaker: "agent", text: "今天晴天，适合骑行。", final: true }
+      ]
+    });
+
+    expect(evaluation.quality).toBe("pass");
+    expect(evaluation.checks).toContainEqual(expect.objectContaining({ id: "tester-feedback", status: "skipped" }));
+  });
+});

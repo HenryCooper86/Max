@@ -2108,6 +2108,62 @@ h2 {
   font-weight: 650;
 }
 
+/* Tester turn feedback: the "有问题?" trigger sits with the meta chips, the
+   reason presets expand below the message, and the landed flag is a red chip
+   (both in the HUD transcript and the admin replays). */
+.turnFlagButton {
+  min-height: 0;
+  padding: 3px 7px;
+  border: 1px solid rgba(255, 118, 118, 0.36);
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(255, 190, 190, 0.85);
+  font-size: 0.68rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.turnFlagButton:hover,
+.turnFlagButton[aria-expanded="true"] {
+  border-color: rgba(255, 118, 118, 0.7);
+  background: rgba(255, 118, 118, 0.12);
+  color: #ffd9d9;
+}
+
+.messageMeta .turnFlagChip,
+.testerTurn .turnFlagChip {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(255, 118, 118, 0.16);
+  color: #ffd9d9;
+  font-size: 0.68rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.turnFlagReasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.turnFlagReasons button {
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 118, 118, 0.36);
+  border-radius: 999px;
+  background: rgba(255, 118, 118, 0.08);
+  color: #ffd9d9;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.turnFlagReasons button:hover {
+  border-color: rgba(255, 118, 118, 0.7);
+  background: rgba(255, 118, 118, 0.2);
+}
+
 /* ============================================================
    Error boundary screen
    ============================================================ */

@@ -14,6 +14,8 @@ export type TranscriptItem = {
   text: string;
   final: boolean;
   language: SupportedLanguage;
+  /** Reason the tester flagged this turn as bad (mirrors the relay-side flag). */
+  feedback?: string;
 };
 
 // Messages posted from public/pcm-worklet.js.

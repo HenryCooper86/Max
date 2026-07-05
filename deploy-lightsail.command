@@ -13,6 +13,14 @@ if [[ ! -f "$KEY" ]]; then
   exit 1
 fi
 
+# Stamp the build identity before rsync: .git is excluded from the sync, so
+# the server-side client build and the relay read this file to tag sessions
+# and /health with the deployed commit (see server/build-info.ts).
+GIT_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+printf '{\n  "gitCommit": "%s",\n  "deployedAt": "%s"\n}\n' \
+  "$GIT_COMMIT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > build-info.json
+echo "==> Build stamp: $GIT_COMMIT"
+
 echo "==> 1/3 Pushing source to $HOST (server .env, node_modules, dist are protected)"
 rsync -az --delete \
   --exclude='.git' --exclude='.env' --exclude='node_modules' \

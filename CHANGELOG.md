@@ -1,5 +1,42 @@
 # Changelog
 
+## 2026-07-05 — Testing platform: turn feedback, build tagging, fail alerting
+
+Three additions aimed at the tester and admin experience. 187 tests green (6
+new), tsc/eslint clean, verified end-to-end against a live relay (WS drive
+script + real browser walkthrough of the admin panel).
+
+### Tester turn feedback (web HUD → relay → admin replay)
+
+- Testers can flag any turn of the live session in the HUD transcript
+  ("有问题?" → one-tap preset reasons: 听错了 / 回答不对 / 太慢 / 不安全). A new
+  `turn.feedback` client event carries it to the relay, which attaches the
+  reason to the matching transcript turn (speaker + text match, latest-final
+  fallback) and mirrors it into the tester's rolling conversation history.
+- The evaluator gained a `tester-feedback` check: any flagged turn downgrades
+  the session to **watch**; with no feedback the check is **skipped**, not
+  passed — silence must not inflate the score.
+- Flags survive history persistence and show as red ⚑ chips in both admin
+  replay views. Only current-session turns are flaggable client-side (a
+  restored turn could otherwise tag the wrong server-side turn).
+
+### Build tagging for release comparison
+
+- `deploy-lightsail.command` stamps `build-info.json` (short SHA + deploy
+  time) before rsync; the vite build and the relay read it (env `GIT_COMMIT`
+  → stamp file → local git → "local"), so web sessions and `/health` now
+  carry the real deployed commit instead of hardcoded `"local"`/`"unknown"`.
+- The admin panel shows the relay build in the 测试统计 header (构建 abc1234)
+  and each session replay gets a Build cell (`appVersion · gitCommit`) — a
+  latency regression can now be pinned to the deploy that introduced it.
+
+### Fail alerting in the admin panel
+
+- New failures are impossible to miss: a red "N 个新失败" pill in the stats
+  header counts fail sessions this admin hasn't reviewed (watermark in
+  localStorage), ignoring the current tester/quality filters. Clicking it
+  jumps straight to the newest failing session with the Fail filter applied.
+
 ## 2026-07-05 — Final hardening sweep: 20+ fixes across relay, web, iOS, Android + password change
 
 Three parallel deep reviews over the auth stack, the web auth UI, and both

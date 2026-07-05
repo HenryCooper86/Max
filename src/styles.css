@@ -1614,7 +1614,8 @@ h2 {
   align-items: center;
 }
 
-.accountBar button {
+.accountBar button,
+.accountForm button {
   min-height: 32px;
   padding: 0 14px;
   border: 1px solid rgba(107, 238, 174, 0.34);
@@ -1627,12 +1628,14 @@ h2 {
   cursor: pointer;
 }
 
-.accountBar button:disabled {
+.accountBar button:disabled,
+.accountForm button:disabled {
   cursor: not-allowed;
   opacity: 0.45;
 }
 
-.accountBar button.accountSwitch {
+.accountBar button.accountSwitch,
+.accountForm button.accountSwitch {
   border-color: rgba(196, 218, 216, 0.2);
   background: transparent;
   color: var(--text);

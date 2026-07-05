@@ -1529,17 +1529,6 @@ h2 {
 
 .testerConversationHeader button {
   flex: 0 0 auto;
-  min-height: 32px;
-  border: 1px solid rgba(196, 218, 216, 0.18);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text);
-  cursor: pointer;
-}
-
-.testerConversationHeader button:disabled {
-  color: rgba(216, 224, 221, 0.38);
-  cursor: not-allowed;
 }
 
 .testerConversationActions {
@@ -1614,8 +1603,14 @@ h2 {
   align-items: center;
 }
 
+/* Shared action-pill design for all panel/account buttons. Variants
+   (.accountSwitch, .danger, login-card sizing) layer on top via higher
+   specificity — add new action buttons to this list, don't re-declare it. */
 .accountBar button,
-.accountForm button {
+.accountForm button,
+.accountAdmin button,
+.panelActions button,
+.testerConversationHeader button {
   min-height: 32px;
   padding: 0 14px;
   border: 1px solid rgba(107, 238, 174, 0.34);
@@ -1629,7 +1624,10 @@ h2 {
 }
 
 .accountBar button:disabled,
-.accountForm button:disabled {
+.accountForm button:disabled,
+.accountAdmin button:disabled,
+.panelActions button:disabled,
+.testerConversationHeader button:disabled {
   cursor: not-allowed;
   opacity: 0.45;
 }
@@ -2015,24 +2013,6 @@ h2 {
   display: flex;
   align-items: center;
   gap: 10px;
-}
-
-.panelActions button {
-  min-height: 32px;
-  padding: 0 12px;
-  border: 1px solid rgba(107, 238, 174, 0.34);
-  border-radius: 999px;
-  background: rgba(107, 238, 174, 0.1);
-  color: #dffdf0;
-  font: inherit;
-  font-size: 0.78rem;
-  font-weight: 750;
-  cursor: pointer;
-}
-
-.panelActions button:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
 }
 
 .rideHistory {
@@ -2542,24 +2522,6 @@ h2 {
 
 .accountAdminHead strong {
   font-size: 0.86rem;
-}
-
-.accountAdmin button {
-  min-height: 30px;
-  padding: 0 12px;
-  border: 1px solid rgba(107, 238, 174, 0.34);
-  border-radius: 999px;
-  background: rgba(107, 238, 174, 0.1);
-  color: #dffdf0;
-  font: inherit;
-  font-size: 0.76rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.accountAdmin button:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
 }
 
 .accountAdminList {

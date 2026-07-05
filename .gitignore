@@ -3,6 +3,9 @@
 dist
 node_modules
 
+# Deploy-time build stamp (written by deploy-lightsail.command)
+build-info.json
+
 # Agent/local workflow notes
 AGENTS.md
 CLAUDE.md

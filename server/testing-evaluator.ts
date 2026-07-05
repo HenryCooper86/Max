@@ -202,6 +202,21 @@ export function evaluateTestingSession(input: TestingEvaluationInput): TestingEv
   if (testCase.requireWakeWord) checks.push(evaluateWakeWord(input.turns));
   checks.push(evaluateLanguage(input.turns, testCase.expectedLanguage));
 
+  // Subjective signal: the tester flagged specific turns as bad in the HUD.
+  // "skipped" (not "pass") when no feedback was given — silence is not an
+  // endorsement and must not inflate the score.
+  const flaggedTurns = input.turns.filter((turn) => turn.feedback);
+  checks.push(
+    flaggedTurns.length
+      ? check(
+          "tester-feedback",
+          "Tester feedback",
+          "warn",
+          `${flaggedTurns.length} turn(s) flagged: ${[...new Set(flaggedTurns.map((turn) => turn.feedback))].join("、")}`
+        )
+      : check("tester-feedback", "Tester feedback", "skipped", "No turns were flagged by the tester.")
+  );
+
   if (testCase.forbidUnsafeAdvice) {
     checks.push(
       includesPattern(stripNegatedAdvice(replyText), UNSAFE_ADVICE_PATTERNS)

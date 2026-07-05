@@ -16,6 +16,7 @@ import {
   type TestingEvaluationSummary,
   type TestingQuality
 } from "../shared/testing";
+import { buildInfo } from "./build-info";
 import { evaluateTestingSession } from "./testing-evaluator";
 
 // In-process relay counters, exposed on /health so the Lightsail deployment
@@ -355,8 +356,8 @@ function normalizeSessionMeta(input: TesterIdentity) {
     campaignName: resolvedCampaign.name,
     testCaseId: testCase.id,
     testCaseName: testCase.name,
-    appVersion: normalizeMetaString(input.appVersion, process.env.npm_package_version || "0.1.0", 40),
-    gitCommit: normalizeMetaString(input.gitCommit, process.env.GIT_COMMIT || "unknown", 80),
+    appVersion: normalizeMetaString(input.appVersion, buildInfo.appVersion, 40),
+    gitCommit: normalizeMetaString(input.gitCommit, buildInfo.gitCommit, 80),
     deviceLabel: normalizeMetaString(input.deviceLabel, "unknown device", 120),
     browserLanguage: normalizeMetaString(input.browserLanguage, "unknown language", 40),
     networkType: normalizeMetaString(input.networkType, "unknown network", 40)
@@ -627,7 +628,12 @@ function normalizeTranscriptTurn(value: unknown): TesterTranscriptTurn | null {
   const at = typeof value.at === "number" && Number.isFinite(value.at) ? value.at : 0;
   const text = cleanText(value.text).slice(0, 2_000);
   if (!sessionId || !at || !text) return null;
-  return { sessionId, at, speaker, text, final: value.final !== false };
+  const turn: TesterTranscriptTurn = { sessionId, at, speaker, text, final: value.final !== false };
+  if (typeof value.feedback === "string") {
+    const feedback = cleanText(value.feedback).slice(0, 120);
+    if (feedback) turn.feedback = feedback;
+  }
+  return turn;
 }
 
 function normalizeCompletedSession(value: unknown): TesterSessionSummary | null {
@@ -1083,6 +1089,35 @@ export function recordTesterTtsFallback(sessionId: string, now = Date.now()) {
   tester.ttsFallbacks += 1;
   tester.lastSeenAt = now;
   session.ttsFallbacks += 1;
+}
+
+/** Attach a tester-reported problem to a transcript turn. Client and server
+ *  timestamps differ, so the turn is matched by speaker + cleaned text; if the
+ *  exact text is not found (e.g. divergent whitespace normalization), the
+ *  feedback falls back to that speaker's most recent final turn. */
+export function recordTesterTurnFeedback(
+  sessionId: string,
+  input: { speaker: TesterTranscriptTurn["speaker"]; text: string; reason: string },
+  now = Date.now()
+) {
+  const active = activeSession(sessionId, now);
+  if (!active) return;
+  const { session, tester } = active;
+  const text = cleanText(input.text).slice(0, 2_000);
+  const reason = cleanText(input.reason).slice(0, 120);
+  if (!reason) return;
+  const target =
+    [...session.turns].reverse().find((turn) => turn.speaker === input.speaker && turn.text === text) ??
+    [...session.turns].reverse().find((turn) => turn.speaker === input.speaker && turn.final);
+  if (!target) return;
+  target.feedback = reason;
+  tester.lastSeenAt = now;
+  // The tester's rolling transcript holds copies of the same turns; mirror the
+  // flag so the per-tester conversation history shows it too.
+  const mirrored = tester.recentTurns.find(
+    (turn) => turn.sessionId === target.sessionId && turn.at === target.at && turn.speaker === target.speaker
+  );
+  if (mirrored) mirrored.feedback = reason;
 }
 
 export function testingSnapshot(now = Date.now()): TestingStats {

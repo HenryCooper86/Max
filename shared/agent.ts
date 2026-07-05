@@ -15,6 +15,9 @@ export type TesterTranscriptTurn = {
   speaker: "rider" | "agent";
   text: string;
   final: boolean;
+  /** Tester-reported problem with this turn (e.g. 回答不对) — set via the
+   *  `turn.feedback` client event, surfaced in the admin session replay. */
+  feedback?: string;
 };
 
 export type TesterSessionSummary = {
@@ -173,7 +176,11 @@ export type ClientEvent =
   // Mid-ride rider position update. The session-start coordinates go stale
   // fast on a moving motorcycle; this keeps the live weather (and any future
   // location-aware context) tracking the rider. Clients throttle sends.
-  | { type: "location.update"; lat: number; lon: number };
+  | { type: "location.update"; lat: number; lon: number }
+  // Tester flags a transcript turn as problematic. Turns are matched by
+  // speaker + text (client and server timestamps differ); the reason lands on
+  // the matched turn's `feedback` and downgrades the session evaluation.
+  | { type: "turn.feedback"; speaker: "rider" | "agent"; text: string; reason: string };
 
 export type AgentEvent =
   | {
@@ -250,6 +257,8 @@ export type AgentHealth = {
   metricsWindow?: Record<string, number>;
   /** User-account status: auth turns on once the first user registers. */
   auth?: { enabled: boolean; registrationOpen: boolean };
+  /** Relay build identity (deploy stamps build-info.json); absent on old relays. */
+  build?: { appVersion: string; gitCommit: string };
   /** Per-tester QA statistics and recent bandwidth/latency graph data. */
   testing?: TestingStats;
 };

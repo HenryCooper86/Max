@@ -14,6 +14,7 @@ import {
   recordTesterServerAudio,
   recordTesterServerEvent,
   recordTesterTtsFallback,
+  recordTesterTurnFeedback,
   testingSnapshot
 } from "../server/metrics";
 
@@ -303,5 +304,44 @@ describe("admin clear actions", () => {
     expect(snapshot.sessions.length).toBe(0);
     expect(snapshot.totals.totalTestSessions).toBe(0);
     expect(snapshot.timeline.every((bucket) => bucket.sessionsStarted === 0)).toBe(true);
+  });
+});
+
+describe("tester turn feedback recording", () => {
+  it("attaches feedback to the matching turn and downgrades the session", () => {
+    beginTesterSession("relay-fb", { testerId: "qa-fb", ipAddress: "203.0.113.20" }, 1_000);
+    recordTesterServerEvent("relay-fb", { type: "transcript", speaker: "rider", text: "Max, 天气怎么样" }, 40, 1_100);
+    recordTesterServerEvent("relay-fb", { type: "transcript", speaker: "agent", text: "今天晴天。" }, 40, 1_200);
+    recordTesterServerEvent("relay-fb", { type: "metric", latencyMs: 150 }, 40, 1_250);
+    recordTesterClientAudio("relay-fb", 320, 1_260);
+    recordTesterTurnFeedback("relay-fb", { speaker: "agent", text: "今天晴天。", reason: "回答不对" }, 1_300);
+    endTesterSession("relay-fb", 2_000);
+
+    const snapshot = testingSnapshot(2_000);
+    const session = snapshot.sessions.find((item) => item.testerId === "qa-fb");
+    expect(session).toBeDefined();
+    expect(session?.turns.find((turn) => turn.speaker === "agent")?.feedback).toBe("回答不对");
+    expect(session?.quality).toBe("watch");
+    expect(session?.flags).toContain("tester-feedback");
+    // The per-tester rolling transcript mirrors the flag.
+    const tester = snapshot.users.find((user) => user.testerId === "qa-fb");
+    expect(tester?.recentTurns.find((turn) => turn.speaker === "agent")?.feedback).toBe("回答不对");
+
+    clearAllTesterData();
+  });
+
+  it("falls back to the speaker's latest final turn when the text does not match", () => {
+    beginTesterSession("relay-fb2", { testerId: "qa-fb2", ipAddress: "203.0.113.21" }, 1_000);
+    recordTesterServerEvent("relay-fb2", { type: "transcript", speaker: "agent", text: "第一句回复。" }, 40, 1_100);
+    recordTesterServerEvent("relay-fb2", { type: "transcript", speaker: "agent", text: "第二句回复。" }, 40, 1_200);
+    recordTesterTurnFeedback("relay-fb2", { speaker: "agent", text: "对不上的文本", reason: "太慢" }, 1_300);
+    endTesterSession("relay-fb2", 2_000);
+
+    const session = testingSnapshot(2_000).sessions.find((item) => item.testerId === "qa-fb2");
+    const agentTurns = session?.turns.filter((turn) => turn.speaker === "agent") ?? [];
+    expect(agentTurns.at(-1)?.feedback).toBe("太慢");
+    expect(agentTurns.at(0)?.feedback).toBeUndefined();
+
+    clearAllTesterData();
   });
 });

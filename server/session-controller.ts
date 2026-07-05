@@ -9,7 +9,8 @@ import {
   recordTesterClientAudio,
   recordTesterServerAudio,
   recordTesterServerEvent,
-  recordTesterTtsFallback
+  recordTesterTtsFallback,
+  recordTesterTurnFeedback
 } from "./metrics";
 
 export type ProviderFactory = (client: WebSocket, telemetry: ProviderTelemetry) => AgentProvider;
@@ -121,6 +122,17 @@ export function parseClientEvent(data: RawData): ClientEvent {
     return { type: "location.update", lat: value.lat as number, lon: value.lon as number };
   }
 
+  if (value.type === "turn.feedback") {
+    if (value.speaker !== "rider" && value.speaker !== "agent") throw new Error("Invalid turn.feedback speaker");
+    if (typeof value.text !== "string" || !value.text.trim() || value.text.length > 2_000) {
+      throw new Error("Invalid turn.feedback text");
+    }
+    if (typeof value.reason !== "string" || !value.reason.trim() || value.reason.length > 120) {
+      throw new Error("Invalid turn.feedback reason");
+    }
+    return { type: "turn.feedback", speaker: value.speaker, text: value.text, reason: value.reason };
+  }
+
   if (value.type !== "session.start") {
     throw new Error(`Unsupported client event ${value.type}`);
   }
@@ -220,6 +232,7 @@ export class AgentSessionController {
       if (event.type === "audio.stop") await this.provider.stopAudio();
       if (event.type === "demo.guided") await this.provider.setGuidedDemo?.(event.enabled);
       if (event.type === "location.update") await this.provider.updateLocation?.(event.lat, event.lon);
+      if (event.type === "turn.feedback") recordTesterTurnFeedback(this.relaySessionId, event);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Voice relay failed";
       this.log?.warn("client message failed", { message });

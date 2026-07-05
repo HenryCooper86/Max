@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { providerCapabilities, type AgentHealth } from "../shared/agent";
+import { buildInfo } from "./build-info";
 // Runtime-only use inside buildHealth/describeConfig; accounts.ts references
 // config only inside functions, so this import cycle never bites at load time.
 import { authActive, registrationOpen } from "./accounts";
@@ -188,6 +189,7 @@ export function buildHealth(uptimeSec: number, includeTesting = true): AgentHeal
     metricsWindow: { ...metricsWindow() },
     // Lets clients decide whether to show the login/registration UI.
     auth: { enabled: authActive(), registrationOpen: registrationOpen() },
+    build: { ...buildInfo },
     // The testing block carries tester IPs, regions, and chat transcripts —
     // callers must gate it (see testingStatsAuthorized) so an unauthenticated
     // /health poll can't dump every tester's conversation history.

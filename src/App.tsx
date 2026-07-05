@@ -24,6 +24,11 @@ import {
 } from "./lib/constants";
 import { audioProcessingLabel, currentTesterSnapshot, exportTranscriptLog, formatClockTime } from "./lib/utils";
 import { useHelmetAgent } from "./hooks/useHelmetAgent";
+import type { TranscriptItem } from "./types";
+
+// Preset turn-feedback reasons: single tap, no typing mid-ride. The string is
+// what lands on the relay-side turn and in the admin session replay.
+const TURN_FLAG_REASONS = ["听错了", "回答不对", "太慢", "不安全"] as const;
 
 export function App() {
   const agent = useHelmetAgent();
@@ -129,6 +134,17 @@ export function App() {
     window.addEventListener("keydown", toggleHandsFree);
     return () => window.removeEventListener("keydown", toggleHandsFree);
   }, [authUser, toggleHandsFreeSession]);
+
+  // Turn-feedback picker: id of the transcript item whose reason chips are
+  // open. Presets rather than free text — one tap with gloves on.
+  const [flagTargetId, setFlagTargetId] = useState<number | null>(null);
+  const flagTurn = useCallback(
+    (item: TranscriptItem, reason: string) => {
+      agent.sendTurnFeedback(item, reason);
+      setFlagTargetId(null);
+    },
+    [agent]
+  );
 
   const agentState = useMemo(() => {
     if (agent.listening) return agent.sessionMemory.language === "en" ? "Hands-free" : "免提中";
@@ -495,8 +511,29 @@ export function App() {
                     <b>{formatClockTime(item.at)}</b>
                     <b>{item.language === "zh" ? "中文" : "EN"}</b>
                     <b>{item.final ? "final" : "live"}</b>
+                    {agent.transcript.length > 0 && agent.canFlagTurn(item) ? (
+                      <button
+                        type="button"
+                        className="turnFlagButton"
+                        aria-expanded={flagTargetId === item.id}
+                        title="标记这条回复有问题"
+                        onClick={() => setFlagTargetId(flagTargetId === item.id ? null : item.id)}
+                      >
+                        有问题?
+                      </button>
+                    ) : null}
+                    {item.feedback ? <b className="turnFlagChip">⚑ {item.feedback}</b> : null}
                   </div>
                   <p>{item.text}</p>
+                  {flagTargetId === item.id && agent.canFlagTurn(item) ? (
+                    <div className="turnFlagReasons" role="group" aria-label="反馈原因">
+                      {TURN_FLAG_REASONS.map((reason) => (
+                        <button key={reason} type="button" onClick={() => flagTurn(item, reason)}>
+                          {reason}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                 </article>
               ))}
             </div>

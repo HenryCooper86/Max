@@ -183,7 +183,15 @@ struct TranscriptItem: Identifiable, Equatable, Codable {
     var text: String
     var final: Bool
     var language: String
+    /// Reason the tester flagged this turn as bad (mirrors the web client's
+    /// TranscriptItem.feedback); optional so older persisted logs still decode.
+    var feedback: String? = nil
 }
+
+/// Preset turn-feedback reasons — single tap, no typing mid-ride. Mirrors
+/// TURN_FLAG_REASONS in src/App.tsx; the string lands on the relay-side turn
+/// and in the admin session replay.
+let turnFlagReasons = ["听错了", "回答不对", "太慢", "不安全"]
 
 struct Weather: Equatable {
     let description: String
@@ -439,6 +447,20 @@ func buildSessionStart(
 /// Guided-demo toggle (mock provider tours the scenario catalog hands-off).
 func buildGuidedDemo(enabled: Bool) -> String {
     #"{"type":"demo.guided","enabled":\#(enabled)}"#
+}
+
+/// Client → server turn.feedback: the tester flags a bad transcript turn
+/// (validated by server/session-controller.ts; the relay matches the turn by
+/// speaker + text and attaches the reason for the admin session replay).
+func buildTurnFeedback(speaker: Speaker, text: String, reason: String) -> String {
+    let payload: [String: Any] = [
+        "type": "turn.feedback",
+        "speaker": speaker.wire,
+        "text": text,
+        "reason": reason
+    ]
+    let data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
+    return String(data: data, encoding: .utf8) ?? "{}"
 }
 
 let audioStartEvent = #"{"type":"audio.start"}"#

@@ -127,8 +127,18 @@ data class TranscriptItem(
     val speaker: Speaker,
     val text: String,
     val final: Boolean,
-    val language: String
+    val language: String,
+    /** Reason the tester flagged this turn as bad (mirrors the web client's
+     *  TranscriptItem.feedback); null = not flagged. */
+    val feedback: String? = null
 )
+
+/**
+ * Preset turn-feedback reasons — single tap, no typing mid-ride. Mirrors
+ * TURN_FLAG_REASONS in src/App.tsx; the string lands on the relay-side turn
+ * and in the admin session replay.
+ */
+val TURN_FLAG_REASONS = listOf("听错了", "回答不对", "太慢", "不安全")
 
 data class Weather(
     val description: String,
@@ -370,6 +380,19 @@ fun buildSessionStart(
 /** Guided-demo toggle (mock provider tours the scenario catalog hands-off). */
 fun buildGuidedDemo(enabled: Boolean): String = """{"type":"demo.guided","enabled":$enabled}"""
 
+/**
+ * Client → server turn.feedback: the tester flags a bad transcript turn
+ * (validated by server/session-controller.ts; the relay matches the turn by
+ * speaker + text and attaches the reason for the admin session replay).
+ */
+fun buildTurnFeedback(speaker: Speaker, text: String, reason: String): String =
+    JSONObject().apply {
+        put("type", "turn.feedback")
+        put("speaker", speaker.wire)
+        put("text", text)
+        put("reason", reason)
+    }.toString()
+
 const val AUDIO_START_EVENT = """{"type":"audio.start"}"""
 const val AUDIO_STOP_EVENT = """{"type":"audio.stop"}"""
 
@@ -399,6 +422,7 @@ fun encodeStoredTranscript(items: List<TranscriptItem>): String {
                 put("speaker", item.speaker.wire)
                 put("language", item.language)
                 put("text", item.text)
+                item.feedback?.let { put("feedback", it) }
             }
         )
     }
@@ -424,7 +448,8 @@ fun decodeStoredTranscript(raw: String?): List<TranscriptItem> {
                 speaker = Speaker.fromWire(json.optString("speaker")),
                 text = text,
                 final = true,
-                language = json.optString("language").ifEmpty { detectLanguage(text) }
+                language = json.optString("language").ifEmpty { detectLanguage(text) },
+                feedback = json.optString("feedback").ifEmpty { null }
             )
         }
     }.getOrElse { emptyList() }

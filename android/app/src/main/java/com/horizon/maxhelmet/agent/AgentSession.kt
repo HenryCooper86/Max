@@ -75,11 +75,26 @@ class AgentSession(
         val guidedDemo: Boolean = false,
         /** The relay refused the connection with HTTP 401 — a login (or token)
          *  is required. The UI opens the account settings when this flips on. */
-        val authRequired: Boolean = false
+        val authRequired: Boolean = false,
+        /** Transcript ids above this floor belong to the CURRENT relay session
+         *  and may be flagged via turn.feedback (the relay matches inside its
+         *  live session transcript, so a restored/previous-session turn could
+         *  tag the wrong turn). MAX_VALUE = nothing flaggable (offline). */
+        val feedbackFloorId: Int = Int.MAX_VALUE
     ) {
         /** 态势摘要 fusion: ride hazard + weather risk (fusedHazard in src/main.tsx). */
         val fusedHazard: HazardLevel
             get() = combineHazardLevels(rideContext.hazardLevel, weather?.riskLevel ?: HazardLevel.NORMAL)
+
+        /** Whether the flag control should show for a transcript item at all
+         *  (mirrors canFlagTurn in useHelmetAgent.ts). The connection check
+         *  covers every disconnect path without each one resetting the floor. */
+        fun canFlagTurn(item: TranscriptItem): Boolean {
+            val live = connection == ConnectionState.RELAY ||
+                connection == ConnectionState.PROVIDER ||
+                connection == ConnectionState.READY
+            return live && item.final && item.feedback == null && item.id > feedbackFloorId
+        }
     }
 
     companion object {
@@ -248,7 +263,26 @@ class AgentSession(
                 voiceLevel = 0f,
                 micMuted = false,
                 bluetoothRouted = false,
-                hazardAlert = null
+                hazardAlert = null,
+                feedbackFloorId = Int.MAX_VALUE
+            )
+        }
+    }
+
+    /**
+     * Tester flags a transcript turn as bad (mirrors sendTurnFeedback in
+     * useHelmetAgent.ts). The relay attaches the reason to the matching turn
+     * of its CURRENT session, so only turns above feedbackFloorId qualify —
+     * State.canFlagTurn gates the UI and this re-checks before sending.
+     */
+    fun sendTurnFeedback(item: TranscriptItem, reason: String) {
+        if (!socketOpen || !_state.value.canFlagTurn(item)) return
+        webSocket?.send(buildTurnFeedback(item.speaker, item.text, reason))
+        _state.update { state ->
+            state.copy(
+                transcript = state.transcript.map { turn ->
+                    if (turn.id == item.id) turn.copy(feedback = reason) else turn
+                }
             )
         }
     }
@@ -421,7 +455,15 @@ class AgentSession(
             override fun onOpen(socket: WebSocket, response: Response) {
                 if (socket !== webSocket) return
                 reconnectAttempts = 0
-                _state.update { it.copy(connection = ConnectionState.RELAY, statusText = "就绪") }
+                // Only turns appended from here on belong to this relay session
+                // and are eligible for turn.feedback.
+                _state.update {
+                    it.copy(
+                        connection = ConnectionState.RELAY,
+                        statusText = "就绪",
+                        feedbackFloorId = transcriptTurn
+                    )
+                }
                 val current = _state.value
                 socket.send(
                     buildSessionStart(

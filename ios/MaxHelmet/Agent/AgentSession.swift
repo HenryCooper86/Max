@@ -40,6 +40,19 @@ final class AgentSession: NSObject, ObservableObject {
         /// The relay refused the connection with HTTP 401 — a login (or token)
         /// is required. The UI opens the account settings when this flips on.
         var authRequired = false
+        /// Transcript ids above this floor belong to the CURRENT relay session
+        /// and may be flagged via turn.feedback (the relay matches inside its
+        /// live session transcript, so a restored/previous-session turn could
+        /// tag the wrong turn). Int.max = nothing flaggable (offline).
+        var feedbackFloorId = Int.max
+
+        /// Whether the flag control should show for a transcript item at all
+        /// (mirrors canFlagTurn in useHelmetAgent.ts). The connection check
+        /// covers every disconnect path without each one resetting the floor.
+        func canFlagTurn(_ item: TranscriptItem) -> Bool {
+            let live = connection == .relay || connection == .provider || connection == .ready
+            return live && item.final && item.feedback == nil && item.id > feedbackFloorId
+        }
 
         /// 态势摘要 fusion: ride hazard + weather risk (fusedHazard in src/main.tsx).
         var fusedHazard: HazardLevel {
@@ -222,6 +235,7 @@ final class AgentSession: NSObject, ObservableObject {
             $0.micMuted = false
             $0.bluetoothRouted = false
             $0.hazardAlert = nil
+            $0.feedbackFloorId = Int.max
         }
     }
 
@@ -243,6 +257,22 @@ final class AgentSession: NSObject, ObservableObject {
             }
         }
         webSocket?.send(.string(buildGuidedDemo(enabled: enabled))) { _ in }
+    }
+
+    /// Tester flags a transcript turn as bad (mirrors sendTurnFeedback in
+    /// useHelmetAgent.ts). The relay attaches the reason to the matching turn
+    /// of its CURRENT session, so only turns above feedbackFloorId qualify —
+    /// State.canFlagTurn gates the UI and this re-checks before sending.
+    func sendTurnFeedback(item: TranscriptItem, reason: String) {
+        guard socketOpen, state.value.canFlagTurn(item) else { return }
+        webSocket?.send(.string(buildTurnFeedback(
+            speaker: item.speaker, text: item.text, reason: reason
+        ))) { _ in }
+        update {
+            if let index = $0.transcript.firstIndex(where: { $0.id == item.id }) {
+                $0.transcript[index].feedback = reason
+            }
+        }
     }
 
     /// Mutes/unmutes the rider's microphone without ending the session, so Max can
@@ -407,6 +437,9 @@ final class AgentSession: NSObject, ObservableObject {
         update {
             $0.connection = .relay
             $0.statusText = "就绪"
+            // Only turns appended from here on belong to this relay session
+            // and are eligible for turn.feedback.
+            $0.feedbackFloorId = self.transcriptTurn
         }
         let current = state.value
         task.send(.string(buildSessionStart(

@@ -13,6 +13,7 @@ import com.horizon.maxhelmet.agent.AgentSessionHolder
 import com.horizon.maxhelmet.agent.AuthClient
 import com.horizon.maxhelmet.agent.DemoScenario
 import com.horizon.maxhelmet.agent.RideMode
+import com.horizon.maxhelmet.agent.TranscriptItem
 import com.horizon.maxhelmet.agent.VoiceGender
 import com.horizon.maxhelmet.agent.VoicePersonality
 import com.horizon.maxhelmet.service.VoiceAgentService
@@ -257,6 +258,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** 清空对话记录: drops both the live and the persisted conversation log. */
     fun clearTranscript() = session.clearTranscript()
+
+    /** Tester flags a bad turn in the captions overlay (字幕 → 有问题?). */
+    fun flagTurn(item: TranscriptItem, reason: String) = session.sendTurnFeedback(item, reason)
 
     /**
      * Exports the conversation log as JSON and opens the system share sheet —

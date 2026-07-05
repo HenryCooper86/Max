@@ -40,6 +40,8 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -82,6 +84,7 @@ import com.horizon.maxhelmet.agent.HazardLevel
 import com.horizon.maxhelmet.agent.RideMode
 import com.horizon.maxhelmet.agent.Speaker
 import com.horizon.maxhelmet.agent.responseModeLabel
+import com.horizon.maxhelmet.agent.TURN_FLAG_REASONS
 import com.horizon.maxhelmet.agent.TranscriptItem
 import com.horizon.maxhelmet.agent.TurnState
 import com.horizon.maxhelmet.agent.VoiceGender
@@ -238,7 +241,11 @@ fun AgentScreen(
             Spacer(Modifier.weight(1f))
 
             AnimatedVisibility(visible = viewModel.showCaptions) {
-                CaptionsOverlay(state.transcript)
+                CaptionsOverlay(
+                    items = state.transcript,
+                    canFlag = state::canFlagTurn,
+                    onFlag = viewModel::flagTurn
+                )
             }
             Spacer(Modifier.height(12.dp))
 
@@ -627,7 +634,11 @@ private fun CircleControl(
 // ---- optional captions overlay (字幕) -------------------------------------------------
 
 @Composable
-private fun CaptionsOverlay(items: List<TranscriptItem>) {
+private fun CaptionsOverlay(
+    items: List<TranscriptItem>,
+    canFlag: (TranscriptItem) -> Boolean = { false },
+    onFlag: (TranscriptItem, String) -> Unit = { _, _ -> }
+) {
     val listState = rememberLazyListState()
     val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
 
@@ -661,7 +672,12 @@ private fun CaptionsOverlay(items: List<TranscriptItem>) {
                     .height(190.dp)
             ) {
                 items(items, key = { it.id }) { item ->
-                    ChatBubble(item = item, time = timeFormat.format(Date(item.at)))
+                    ChatBubble(
+                        item = item,
+                        time = timeFormat.format(Date(item.at)),
+                        flaggable = canFlag(item),
+                        onFlag = { reason -> onFlag(item, reason) }
+                    )
                 }
             }
         }
@@ -669,7 +685,12 @@ private fun CaptionsOverlay(items: List<TranscriptItem>) {
 }
 
 @Composable
-private fun ChatBubble(item: TranscriptItem, time: String) {
+private fun ChatBubble(
+    item: TranscriptItem,
+    time: String,
+    flaggable: Boolean = false,
+    onFlag: (String) -> Unit = {}
+) {
     val isRider = item.speaker == Speaker.RIDER
     val bubbleColor = if (isRider) HudColors.Rider.copy(alpha = 0.16f) else HudColors.PanelElevated
     val speakerColor = if (isRider) HudColors.Rider else HudColors.Accent
@@ -703,6 +724,41 @@ private fun ChatBubble(item: TranscriptItem, time: String) {
                 )
                 Text(time, color = HudColors.Muted, fontSize = 10.sp)
                 if (!item.final) Text("…", color = HudColors.Muted, fontSize = 10.sp)
+                if (item.feedback != null) {
+                    Text(
+                        text = "⚑ ${item.feedback}",
+                        color = HudColors.Danger,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                } else if (flaggable) {
+                    // One tap opens the preset reasons — no typing mid-ride.
+                    var reasonsOpen by remember { mutableStateOf(false) }
+                    Box {
+                        Text(
+                            text = "有问题?",
+                            color = HudColors.Danger.copy(alpha = 0.85f),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .border(1.dp, HudColors.Danger.copy(alpha = 0.4f), RoundedCornerShape(999.dp))
+                                .clickable { reasonsOpen = true }
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                        DropdownMenu(expanded = reasonsOpen, onDismissRequest = { reasonsOpen = false }) {
+                            TURN_FLAG_REASONS.forEach { reason ->
+                                DropdownMenuItem(
+                                    text = { Text(reason) },
+                                    onClick = {
+                                        reasonsOpen = false
+                                        onFlag(reason)
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }

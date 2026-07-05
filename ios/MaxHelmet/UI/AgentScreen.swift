@@ -113,8 +113,12 @@ struct AgentScreen: View {
                 Spacer(minLength: 8)
 
                 if viewModel.showCaptions {
-                    CaptionsOverlay(items: state.transcript)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    CaptionsOverlay(
+                        items: state.transcript,
+                        canFlag: { state.canFlagTurn($0) },
+                        onFlag: { item, reason in viewModel.flagTurn(item, reason: reason) }
+                    )
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
 
                 SecondaryControls(viewModel: viewModel)
@@ -503,6 +507,8 @@ private struct CaptionLine: View {
 
 private struct CaptionsOverlay: View {
     let items: [TranscriptItem]
+    let canFlag: (TranscriptItem) -> Bool
+    let onFlag: (TranscriptItem, String) -> Void
 
     private let timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -523,8 +529,13 @@ private struct CaptionsOverlay: View {
                     ScrollView {
                         VStack(spacing: 8) {
                             ForEach(items) { item in
-                                ChatBubble(item: item, time: timeFormatter.string(from: item.at))
-                                    .id(item.id)
+                                ChatBubble(
+                                    item: item,
+                                    time: timeFormatter.string(from: item.at),
+                                    flaggable: canFlag(item),
+                                    onFlag: { reason in onFlag(item, reason) }
+                                )
+                                .id(item.id)
                             }
                         }
                         .frame(maxWidth: .infinity)
@@ -1006,6 +1017,8 @@ private struct HudChip: View {
 private struct ChatBubble: View {
     let item: TranscriptItem
     let time: String
+    var flaggable = false
+    var onFlag: (String) -> Void = { _ in }
 
     private var isRider: Bool { item.speaker == .rider }
 
@@ -1029,6 +1042,27 @@ private struct ChatBubble: View {
                     Text(time).font(.system(size: 10)).foregroundColor(HudColors.muted)
                     if !item.final {
                         Text("…").font(.system(size: 10)).foregroundColor(HudColors.muted)
+                    }
+                    if let feedback = item.feedback {
+                        Text("⚑ \(feedback)")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(HudColors.danger)
+                    } else if flaggable {
+                        // One tap opens the preset reasons — no typing mid-ride.
+                        Menu {
+                            ForEach(turnFlagReasons, id: \.self) { reason in
+                                Button(reason) { onFlag(reason) }
+                            }
+                        } label: {
+                            Text("有问题?")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(HudColors.danger.opacity(0.85))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .overlay(
+                                    Capsule().stroke(HudColors.danger.opacity(0.4), lineWidth: 1)
+                                )
+                        }
                     }
                 }
             }

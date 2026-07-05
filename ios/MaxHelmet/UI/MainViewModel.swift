@@ -224,6 +224,11 @@ final class MainViewModel: ObservableObject {
     /// Empties the conversation log and its persisted copy (设置 → 诊断 → 清空).
     func clearTranscript() { session.clearTranscript() }
 
+    /// Tester flags a bad turn in the captions overlay (字幕 → 有问题?).
+    func flagTurn(_ item: TranscriptItem, reason: String) {
+        session.sendTurnFeedback(item: item, reason: reason)
+    }
+
     func setVoiceGender(_ gender: VoiceGender) { session.setVoiceGender(gender) }
     func setVoicePersonality(_ personality: VoicePersonality) { session.setVoicePersonality(personality) }
     func setRideMode(_ mode: RideMode) { session.setRideMode(mode) }

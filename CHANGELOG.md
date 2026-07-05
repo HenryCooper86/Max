@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-07-05 — iOS & Android: tester turn feedback reaches parity with the web HUD
+
+Both native apps can now flag a bad turn from the captions overlay (字幕):
+tap "有问题?" on any final turn of the live session and pick a preset reason
+(听错了 / 回答不对 / 太慢 / 不安全). The same `turn.feedback` event the web
+client sends carries it to the relay, so flags land in the admin session
+replay and downgrade the evaluation to watch identically across platforms.
+Mirrors the web's safety rule: only current-session turns are flaggable
+(feedback floor set at socket open, connection-gated), so a restored
+transcript can't tag the wrong relay-side turn. Flags persist locally with
+the conversation log on both platforms. Android compile green; Swift parse
+clean (no Xcode on this machine — simulator walkthrough pending).
+
 ## 2026-07-05 — Testing platform: turn feedback, build tagging, fail alerting
 
 Three additions aimed at the tester and admin experience. 187 tests green (6

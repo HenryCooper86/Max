@@ -12,6 +12,17 @@ import {
 } from "../lib/auth";
 import { formatRelativeTime } from "../lib/utils";
 
+const INVITE_EXPIRING_SOON_MS = 2 * 24 * 60 * 60 * 1000;
+
+function formatInviteExpiry(timestamp: number) {
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return "—";
+  const remainingMs = timestamp - Date.now();
+  if (remainingMs <= 0) return "已过期";
+  if (remainingMs < 3_600_000) return `${Math.ceil(remainingMs / 60_000)} 分钟后`;
+  if (remainingMs < 86_400_000) return `${Math.ceil(remainingMs / 3_600_000)} 小时后`;
+  return `${Math.ceil(remainingMs / 86_400_000)} 天后`;
+}
+
 export function AccountAdmin({ adminUsername }: { adminUsername: string }) {
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -19,6 +30,7 @@ export function AccountAdmin({ adminUsername }: { adminUsername: string }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [createdCopied, setCreatedCopied] = useState(false);
+  const [accountFilter, setAccountFilter] = useState("");
   // Two-step confirm for tester removal, same pattern as the clear buttons.
   const [armedDelete, setArmedDelete] = useState<string | null>(null);
 
@@ -85,8 +97,25 @@ export function AccountAdmin({ adminUsername }: { adminUsername: string }) {
     setBusy(false);
   };
 
-  const users = overview?.users ?? [];
-  const invites = overview?.invites ?? [];
+  const users = [...(overview?.users ?? [])].sort(
+    (a, b) =>
+      Number(b.username === adminUsername) - Number(a.username === adminUsername) ||
+      Number(b.role === "admin") - Number(a.role === "admin") ||
+      b.lastLoginAt - a.lastLoginAt
+  );
+  const invites = [...(overview?.invites ?? [])].sort((a, b) => a.expiresAt - b.expiresAt);
+  const normalizedFilter = accountFilter.trim().toLowerCase();
+  const filteredUsers = users.filter((user) => {
+    if (!normalizedFilter) return true;
+    return `${user.displayName} ${user.username} ${user.role}`.toLowerCase().includes(normalizedFilter);
+  });
+  const filteredInvites = invites.filter((invite) => {
+    if (!normalizedFilter) return true;
+    return `${invite.code} ${invite.createdBy}`.toLowerCase().includes(normalizedFilter);
+  });
+  const adminCount = users.filter((user) => user.role === "admin").length;
+  const testerCount = users.length - adminCount;
+  const expiringInviteCount = invites.filter((invite) => invite.expiresAt - Date.now() <= INVITE_EXPIRING_SOON_MS).length;
 
   return (
     <div className="accountAdmin" aria-label="账号管理">
@@ -102,6 +131,36 @@ export function AccountAdmin({ adminUsername }: { adminUsername: string }) {
         </button>
       </div>
 
+      <div className="accountAdminSummary" aria-label="账号概览">
+        <span>
+          <b>{adminCount}</b>
+          管理员
+        </span>
+        <span>
+          <b>{testerCount}</b>
+          测试员
+        </span>
+        <span>
+          <b>{invites.length}</b>
+          未使用邀请
+        </span>
+        <span className={expiringInviteCount ? "warn" : ""}>
+          <b>{expiringInviteCount}</b>
+          即将过期
+        </span>
+      </div>
+
+      <label className="accountAdminFilter">
+        <span>Find account or invite</span>
+        <input
+          value={accountFilter}
+          onChange={(event) => setAccountFilter(event.target.value)}
+          placeholder="name, role, invite code"
+          autoComplete="off"
+          spellCheck={false}
+        />
+      </label>
+
       {notice ? (
         <p className="adminNotice" role="alert">
           {notice}
@@ -109,7 +168,7 @@ export function AccountAdmin({ adminUsername }: { adminUsername: string }) {
       ) : null}
 
       <div className="accountAdminList">
-        {users.map((user) => (
+        {filteredUsers.map((user) => (
           <div className="accountAdminRow" key={user.id}>
             <div className="accountAdminUser">
               <strong>{user.displayName}</strong>
@@ -132,12 +191,13 @@ export function AccountAdmin({ adminUsername }: { adminUsername: string }) {
             )}
           </div>
         ))}
-        {invites.map((invite) => (
+        {filteredInvites.map((invite) => (
           <div className="accountAdminRow invite" key={invite.code}>
             <div className="accountAdminUser">
               <strong>邀请 · {invite.code.slice(4, 12)}…</strong>
               <span>
-                由 {invite.createdBy} 创建 · {formatRelativeTime(invite.createdAt)} · 7 天内单次有效
+                由 {invite.createdBy} 创建 · {formatRelativeTime(invite.createdAt)} · 过期{" "}
+                {formatInviteExpiry(invite.expiresAt)}
               </span>
             </div>
             <div className="accountAdminInviteActions">
@@ -150,9 +210,13 @@ export function AccountAdmin({ adminUsername }: { adminUsername: string }) {
             </div>
           </div>
         ))}
-        {!users.length && !invites.length ? (
+        {!filteredUsers.length && !filteredInvites.length ? (
           <p className="testerConversationEmpty">
-            {loadFailed ? "无法加载账号数据 — 会话可能已过期，请重新登录。" : "正在加载账号数据…"}
+            {loadFailed
+              ? "无法加载账号数据 — 会话可能已过期，请重新登录。"
+              : users.length || invites.length
+                ? "没有账号或邀请匹配当前筛选。"
+                : "正在加载账号数据…"}
           </p>
         ) : null}
       </div>

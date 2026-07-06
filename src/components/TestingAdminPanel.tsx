@@ -5,7 +5,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { scenarioLabel } from "../../shared/ride";
-import { TESTING_CAMPAIGNS, TESTING_TEST_CASES, defaultTestCaseForCampaign } from "../../shared/testing";
+import {
+  TESTING_CAMPAIGNS,
+  TESTING_TEST_CASES,
+  defaultTestCaseForCampaign,
+  type TestingQuality,
+  type TestingTestCase
+} from "../../shared/testing";
 import type { HelmetAgent } from "../hooks/useHelmetAgent";
 import type { AuthUser } from "../lib/auth";
 import { relayAuthToken } from "../lib/persistence";
@@ -25,6 +31,9 @@ import {
 
 const TEST_QUALITY_FILTERS = ["all", "pass", "watch", "fail"] as const;
 type TestQualityFilter = (typeof TEST_QUALITY_FILTERS)[number];
+type QualityCounts = Record<TestingQuality, number>;
+
+const QUALITY_PRIORITY: Record<TestingQuality, number> = { fail: 3, watch: 2, pass: 1 };
 
 function testQualityLabel(quality: TestQualityFilter) {
   if (quality === "all") return "All";
@@ -35,6 +44,41 @@ function testQualityLabel(quality: TestQualityFilter) {
 
 function testQualityClass(quality: "pass" | "watch" | "fail") {
   return quality === "pass" ? "good" : quality === "watch" ? "warn" : "alert";
+}
+
+function emptyQualityCounts(): QualityCounts {
+  return { pass: 0, watch: 0, fail: 0 };
+}
+
+function qualityBreakdownLabel(counts: QualityCounts) {
+  return `${counts.fail} fail · ${counts.watch} watch · ${counts.pass} pass`;
+}
+
+function flaggedTurns(session: { turns: { feedback?: string }[] }) {
+  return session.turns.filter((turn) => Boolean(turn.feedback)).length;
+}
+
+function sessionIssueCount(session: {
+  quality: TestingQuality;
+  flags: string[];
+  turns: { feedback?: string }[];
+  evaluation: { checks: { status: string }[] };
+}) {
+  const failedOrWarnChecks = session.evaluation.checks.filter(
+    (check) => check.status === "fail" || check.status === "warn"
+  ).length;
+  return session.flags.length + flaggedTurns(session) + failedOrWarnChecks + (session.quality === "fail" ? 1 : 0);
+}
+
+function testRequirementLabels(testCase: TestingTestCase) {
+  return [
+    testCase.requireWakeWord ? "Wake word" : null,
+    testCase.requireMicAudio ? "Mic audio" : null,
+    testCase.requireTranscript ? "Transcript" : null,
+    testCase.requireEmergencyResponse ? "Emergency response" : null,
+    testCase.requireAdasAlert ? "ADAS alert" : null,
+    testCase.forbidUnsafeAdvice ? "No unsafe advice" : null
+  ].filter((requirement): requirement is string => Boolean(requirement));
 }
 
 function formatSessionDate(timestamp: number) {
@@ -86,6 +130,7 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
   const [selectedTesterKey, setSelectedTesterKey] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [testerFilter, setTesterFilter] = useState("");
+  const [sessionFilter, setSessionFilter] = useState("");
   const [qualityFilter, setQualityFilter] = useState<TestQualityFilter>("all");
   // Two-step confirm for destructive actions: first click arms the button,
   // the second within the window executes; anything else disarms.
@@ -151,21 +196,85 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
     testerUsers[0];
   const selectedTesterTurns = selectedTester?.recentTurns ?? [];
   const normalizedTesterFilter = testerFilter.trim().toLowerCase();
-  const filteredTesterUsers = testerUsers.filter((user) => {
-    if (!normalizedTesterFilter) return true;
-    return `${user.testerId} ${user.ipAddress} ${user.region}`.toLowerCase().includes(normalizedTesterFilter);
-  });
+  const qualityCountsByTester = testingSessions.reduce((map, session) => {
+    const counts = map.get(session.testerKey) ?? emptyQualityCounts();
+    counts[session.quality] += 1;
+    map.set(session.testerKey, counts);
+    return map;
+  }, new Map<string, QualityCounts>());
+  const getTesterQualityCounts = (testerKey: string) => qualityCountsByTester.get(testerKey) ?? emptyQualityCounts();
+  const filteredTesterUsers = testerUsers
+    .filter((user) => {
+      if (!normalizedTesterFilter) return true;
+      return `${user.testerId} ${user.ipAddress} ${user.region}`.toLowerCase().includes(normalizedTesterFilter);
+    })
+    .sort((a, b) => {
+      const aCounts = getTesterQualityCounts(a.testerKey);
+      const bCounts = getTesterQualityCounts(b.testerKey);
+      return (
+        b.activeSessions - a.activeSessions ||
+        bCounts.fail - aCounts.fail ||
+        bCounts.watch - aCounts.watch ||
+        b.errorEvents - a.errorEvents ||
+        b.p95LatencyMs - a.p95LatencyMs ||
+        b.lastSeenAt - a.lastSeenAt
+      );
+    });
   const selectedTesterSessions = selectedTester
     ? testingSessions.filter((session) => session.testerKey === selectedTester.testerKey)
     : testingSessions;
-  const filteredTestingSessions = selectedTesterSessions.filter(
-    (session) => qualityFilter === "all" || session.quality === qualityFilter
-  );
+  const normalizedSessionFilter = sessionFilter.trim().toLowerCase();
+  const filteredTestingSessions = [...selectedTesterSessions]
+    .sort(
+      (a, b) =>
+        QUALITY_PRIORITY[b.quality] - QUALITY_PRIORITY[a.quality] ||
+        sessionIssueCount(b) - sessionIssueCount(a) ||
+        b.endedAt - a.endedAt
+    )
+    .filter((session) => qualityFilter === "all" || session.quality === qualityFilter)
+    .filter((session) => {
+      if (!normalizedSessionFilter) return true;
+      const searchable = [
+        session.sessionId,
+        session.campaignName,
+        session.testCaseName,
+        session.deviceLabel,
+        session.networkType,
+        session.browserLanguage,
+        session.appVersion,
+        session.gitCommit,
+        session.notes,
+        ...session.flags,
+        ...session.evaluation.checks.map((check) => `${check.label} ${check.status} ${check.detail}`)
+      ];
+      return searchable.join(" ").toLowerCase().includes(normalizedSessionFilter);
+    });
   const selectedSession =
     (selectedSessionId
       ? filteredTestingSessions.find((session) => session.sessionId === selectedSessionId)
       : undefined) ?? filteredTestingSessions[0];
   const selectedSessionTurns = selectedSession?.turns ?? [];
+  const sessionQualityCounts = testingSessions.reduce((counts, session) => {
+    counts[session.quality] += 1;
+    return counts;
+  }, emptyQualityCounts());
+  const issueSessionCount = sessionQualityCounts.fail + sessionQualityCounts.watch;
+  const flaggedTurnCount = testingSessions.reduce((sum, session) => sum + flaggedTurns(session), 0);
+  const latestIssueSession = [...testingSessions]
+    .filter((session) => session.quality !== "pass" || sessionIssueCount(session) > 0)
+    .sort(
+      (a, b) =>
+        QUALITY_PRIORITY[b.quality] - QUALITY_PRIORITY[a.quality] ||
+        sessionIssueCount(b) - sessionIssueCount(a) ||
+        b.endedAt - a.endedAt
+    )[0];
+  const highestP95Session = [...testingSessions].sort((a, b) => b.p95LatencyMs - a.p95LatencyMs)[0];
+  const averageEvaluationScore = testingSessions.length
+    ? Math.round(testingSessions.reduce((sum, session) => sum + session.evaluation.score, 0) / testingSessions.length)
+    : 0;
+  const selectedTesterCounts = selectedTester ? getTesterQualityCounts(selectedTester.testerKey) : emptyQualityCounts();
+  const selectedSessionIssues = selectedSession ? sessionIssueCount(selectedSession) : 0;
+  const selectedTestRequirements = testRequirementLabels(selectedTestCase);
   const totalDownBytes = (testingTotals?.audioDownBytes ?? 0) + (testingTotals?.controlDownBytes ?? 0);
   const totalBandwidthBytes = (testingTotals?.audioUpBytes ?? 0) + totalDownBytes;
   const maxBandwidthBucket = Math.max(
@@ -200,6 +309,13 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
     const latest = Math.max(failSeenAt, ...unseenFailSessions.map((session) => session.endedAt));
     setFailSeenAt(latest);
     saveFailSeenAt(latest);
+  };
+  const reviewLatestIssue = () => {
+    if (!latestIssueSession) return;
+    setSelectedTesterKey(latestIssueSession.testerKey);
+    setSelectedSessionId(latestIssueSession.sessionId);
+    setQualityFilter(latestIssueSession.quality);
+    setSessionFilter("");
   };
   const authEnabled = agent.health?.auth?.enabled ?? false;
   const registrationOpen = agent.health?.auth?.registrationOpen ?? true;
@@ -288,6 +404,43 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
         </div>
       </div>
 
+      <div className={`testingOpsStrip ${qualityTone}`} aria-label="测试运营概览">
+        <div className="opsCard">
+          <span>Release health</span>
+          <strong>{qualityTone === "good" ? "PASS" : qualityTone === "warn" ? "WATCH" : "FAIL"}</strong>
+          <p>
+            {qualityBreakdownLabel(sessionQualityCounts)} · avg eval {averageEvaluationScore}
+          </p>
+        </div>
+        <button type="button" className="opsCard issueCard" disabled={!latestIssueSession} onClick={reviewLatestIssue}>
+          <span>Issue queue</span>
+          <strong>{issueSessionCount} sessions</strong>
+          <p>
+            {latestIssueSession
+              ? `${latestIssueSession.testerId} · ${latestIssueSession.testCaseName} · ${formatRelativeTime(
+                  latestIssueSession.endedAt
+                )}`
+              : "No watch/fail sessions"}
+          </p>
+        </button>
+        <div className="opsCard">
+          <span>Worst p95</span>
+          <strong>{highestP95Session ? `${highestP95Session.p95LatencyMs}ms` : "0ms"}</strong>
+          <p>
+            {highestP95Session
+              ? `${highestP95Session.testerId} · ${highestP95Session.testCaseName}`
+              : "No completed sessions"}
+          </p>
+        </div>
+        <div className="opsCard">
+          <span>Evidence</span>
+          <strong>{testing?.history.persistent ? "Persistent" : "Memory only"}</strong>
+          <p>
+            {testingSessions.length}/{testing?.history.maxSessions ?? 0} sessions · {flaggedTurnCount} flagged turns
+          </p>
+        </div>
+      </div>
+
       <div className="testingWorkflowBar">
         <label>
           <span>Campaign</span>
@@ -316,6 +469,11 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
             {scenarioLabel(selectedTestCase.scenario)} · {selectedTestCase.rideMode} · p95 ≤{" "}
             {selectedTestCase.maxP95LatencyMs}ms
           </p>
+          <div className="testRequirementChips">
+            {selectedTestRequirements.map((requirement) => (
+              <span key={requirement}>{requirement}</span>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -326,6 +484,19 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
             value={testerFilter}
             onChange={(event) => setTesterFilter(event.target.value)}
             placeholder="ID, IP, or region"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </label>
+        <label>
+          <span>Find session</span>
+          <input
+            value={sessionFilter}
+            onChange={(event) => {
+              setSessionFilter(event.target.value);
+              setSelectedSessionId(null);
+            }}
+            placeholder="case, device, flag, build"
             autoComplete="off"
             spellCheck={false}
           />
@@ -441,6 +612,8 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
               <th>Tester</th>
               <th>IP / Region</th>
               <th>Runs</th>
+              <th>Quality</th>
+              <th>Issues</th>
               <th>Time</th>
               <th>Data</th>
               <th>Latency</th>
@@ -449,32 +622,42 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
           </thead>
           <tbody>
             {filteredTesterUsers.length ? (
-              filteredTesterUsers.map((user) => (
-                <tr className={selectedTester?.testerKey === user.testerKey ? "selected" : ""} key={user.testerKey}>
-                  <td>
-                    <button className="testerLink" type="button" onClick={() => selectTester(user.testerKey)}>
-                      <strong>{user.testerId}</strong>
-                      <span>{user.activeSessions ? "active" : `${user.errorEvents} errors`}</span>
-                    </button>
-                  </td>
-                  <td>
-                    <button className="testerLink" type="button" onClick={() => selectTester(user.testerKey)}>
-                      <strong>{user.ipAddress}</strong>
-                      <span>{user.region}</span>
-                    </button>
-                  </td>
-                  <td>{user.totalSessions}</td>
-                  <td>{formatDuration(user.totalSessionMs)}</td>
-                  <td>{formatBytes(user.audioUpBytes + user.audioDownBytes + user.controlDownBytes)}</td>
-                  <td>
-                    {user.avgLatencyMs}/{user.p95LatencyMs}ms
-                  </td>
-                  <td>{formatRelativeTime(user.lastSeenAt)}</td>
-                </tr>
-              ))
+              filteredTesterUsers.map((user) => {
+                const counts = getTesterQualityCounts(user.testerKey);
+                const testerIssues = counts.fail + counts.watch + user.errorEvents;
+                return (
+                  <tr className={selectedTester?.testerKey === user.testerKey ? "selected" : ""} key={user.testerKey}>
+                    <td>
+                      <button className="testerLink" type="button" onClick={() => selectTester(user.testerKey)}>
+                        <strong>{user.testerId}</strong>
+                        <span>{user.activeSessions ? "active" : `${user.errorEvents} errors`}</span>
+                      </button>
+                    </td>
+                    <td>
+                      <button className="testerLink" type="button" onClick={() => selectTester(user.testerKey)}>
+                        <strong>{user.ipAddress}</strong>
+                        <span>{user.region}</span>
+                      </button>
+                    </td>
+                    <td>{user.totalSessions}</td>
+                    <td>
+                      <span className="qualityBreakdown">{qualityBreakdownLabel(counts)}</span>
+                    </td>
+                    <td>
+                      <span className={testerIssues ? "issueCount active" : "issueCount"}>{testerIssues}</span>
+                    </td>
+                    <td>{formatDuration(user.totalSessionMs)}</td>
+                    <td>{formatBytes(user.audioUpBytes + user.audioDownBytes + user.controlDownBytes)}</td>
+                    <td>
+                      {user.avgLatencyMs}/{user.p95LatencyMs}ms
+                    </td>
+                    <td>{formatRelativeTime(user.lastSeenAt)}</td>
+                  </tr>
+                );
+              })
             ) : (
               <tr>
-                <td colSpan={7}>{testerUsers.length ? "No testers match the filter" : "No test sessions yet"}</td>
+                <td colSpan={9}>{testerUsers.length ? "No testers match the filter" : "No test sessions yet"}</td>
               </tr>
             )}
           </tbody>
@@ -489,7 +672,7 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
             {selectedTester ? (
               <p>
                 {selectedTester.ipAddress} · {selectedTester.region} · {selectedTester.totalSessions} sessions ·{" "}
-                {formatRelativeTime(selectedTester.lastSeenAt)}
+                {qualityBreakdownLabel(selectedTesterCounts)} · {formatRelativeTime(selectedTester.lastSeenAt)}
               </p>
             ) : null}
           </div>
@@ -554,7 +737,7 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
             {selectedSession ? (
               <p>
                 {selectedSession.campaignName} · {selectedSession.testCaseName} ·{" "}
-                {formatDuration(selectedSession.durationMs)}
+                {formatDuration(selectedSession.durationMs)} · {selectedSessionIssues} issues
               </p>
             ) : null}
           </div>
@@ -586,22 +769,29 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
         <div className="sessionReplayGrid">
           <div className="sessionList" aria-label="Completed test sessions">
             {filteredTestingSessions.length ? (
-              filteredTestingSessions.slice(0, 12).map((session) => (
-                <button
-                  className={`sessionButton ${selectedSession?.sessionId === session.sessionId ? "active" : ""}`}
-                  key={session.sessionId}
-                  type="button"
-                  onClick={() => setSelectedSessionId(session.sessionId)}
-                >
-                  <span className={`sessionQuality ${testQualityClass(session.quality)}`}>
-                    {testQualityLabel(session.quality)}
-                  </span>
-                  <strong>{formatSessionDate(session.startedAt)}</strong>
-                  <span>
-                    {formatDuration(session.durationMs)} · {session.turns.length} turns
-                  </span>
-                </button>
-              ))
+              filteredTestingSessions.slice(0, 12).map((session) => {
+                const issues = sessionIssueCount(session);
+                return (
+                  <button
+                    className={`sessionButton ${selectedSession?.sessionId === session.sessionId ? "active" : ""}`}
+                    key={session.sessionId}
+                    type="button"
+                    onClick={() => setSelectedSessionId(session.sessionId)}
+                  >
+                    <span className={`sessionQuality ${testQualityClass(session.quality)}`}>
+                      {testQualityLabel(session.quality)}
+                    </span>
+                    <strong>{formatSessionDate(session.startedAt)}</strong>
+                    <span>{session.testCaseName}</span>
+                    <span>
+                      {formatDuration(session.durationMs)} · {session.turns.length} turns · {session.p95LatencyMs}ms p95
+                    </span>
+                    <span>
+                      score {session.evaluation.score} · {issues} issues
+                    </span>
+                  </button>
+                );
+              })
             ) : (
               <p className="testerConversationEmpty">No completed sessions match this view.</p>
             )}
@@ -641,8 +831,16 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
                     Eval score
                   </span>
                   <span>
+                    <b>{selectedSessionIssues}</b>
+                    Issues
+                  </span>
+                  <span>
                     <b>{selectedSession.deviceLabel}</b>
                     Device
+                  </span>
+                  <span>
+                    <b>{selectedSession.browserLanguage}</b>
+                    Browser
                   </span>
                   <span>
                     <b>{selectedSession.networkType}</b>

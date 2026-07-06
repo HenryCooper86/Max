@@ -1147,6 +1147,67 @@ h2 {
   padding: 18px;
 }
 
+.testingOpsStrip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.opsCard {
+  min-width: 0;
+  min-height: 86px;
+  padding: 12px;
+  border: 1px solid rgba(196, 218, 216, 0.14);
+  border-left: 3px solid rgba(95, 233, 214, 0.62);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  text-align: left;
+}
+
+button.opsCard {
+  cursor: pointer;
+}
+
+button.opsCard:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.testingOpsStrip.warn .opsCard {
+  border-left-color: var(--warn);
+}
+
+.testingOpsStrip.alert .opsCard,
+.opsCard.issueCard:not(:disabled) {
+  border-left-color: var(--danger);
+}
+
+.opsCard span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.opsCard strong {
+  display: block;
+  margin-top: 7px;
+  color: #f5fbfa;
+  font-size: 1rem;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.opsCard p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .testerBar {
   display: grid;
   grid-template-columns: minmax(180px, 1.1fr) repeat(3, minmax(120px, 0.8fr));
@@ -1239,9 +1300,26 @@ h2 {
   font-size: 0.76rem;
 }
 
+.testRequirementChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.testRequirementChips span {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(95, 233, 214, 0.1);
+  color: rgba(220, 255, 248, 0.84);
+  font-size: 0.68rem;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 .testingFilterBar {
   display: grid;
-  grid-template-columns: minmax(180px, 1.1fr) minmax(220px, 1fr) minmax(150px, 0.7fr);
+  grid-template-columns: minmax(160px, 1fr) minmax(180px, 1fr) minmax(220px, 1fr) minmax(150px, 0.7fr);
   gap: 10px;
 }
 
@@ -1263,7 +1341,8 @@ h2 {
   letter-spacing: 0.08em;
 }
 
-.testingFilterBar input {
+.testingFilterBar input,
+.accountAdminFilter input {
   width: 100%;
   min-width: 0;
   min-height: 30px;
@@ -1408,7 +1487,7 @@ h2 {
 
 .testerTable {
   width: 100%;
-  min-width: 820px;
+  min-width: 980px;
   border-collapse: collapse;
   font-size: 0.78rem;
 }
@@ -1456,6 +1535,30 @@ h2 {
   margin-top: 2px;
   color: var(--muted);
   font-size: 0.72rem;
+}
+
+.testerTable .qualityBreakdown {
+  max-width: 160px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.testerTable .issueCount {
+  display: inline-grid;
+  place-items: center;
+  min-width: 26px;
+  min-height: 22px;
+  margin-top: 0;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--muted);
+  font-weight: 750;
+}
+
+.testerTable .issueCount.active {
+  background: rgba(255, 118, 118, 0.16);
+  color: #ffd9d9;
 }
 
 .testerLink {
@@ -2327,7 +2430,9 @@ h2 {
 
   .preflightGrid,
   .pulseGrid,
+  .testingOpsStrip,
   .statGrid,
+  .accountAdminSummary,
   .rideHistory {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2346,6 +2451,16 @@ h2 {
 
   .testerConversationHeader button {
     width: 100%;
+  }
+
+  .testerConversationActions,
+  .accountAdminInviteActions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .accountAdminInviteActions button {
+    flex: 1 1 130px;
   }
 
   .sessionMetricGrid {
@@ -2396,15 +2511,32 @@ h2 {
   }
 
   .statGrid,
+  .testingOpsStrip,
   .preflightGrid,
   .pulseGrid,
   .rideHistory,
+  .accountAdminSummary,
   .sessionMetricGrid {
     grid-template-columns: 1fr;
   }
 
   .qualityFilter {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .panelHeader,
+  .accountAdminRow {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .panelActions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .panelActions button {
+    flex: 1 1 130px;
   }
 
   .helmetPanel {
@@ -2578,6 +2710,53 @@ h2 {
 
 .accountAdminHead strong {
   font-size: 0.86rem;
+}
+
+.accountAdminSummary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.accountAdminSummary span {
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(216, 224, 221, 0.62);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.accountAdminSummary b {
+  display: block;
+  margin-bottom: 3px;
+  color: #f5fbfa;
+  font-size: 1rem;
+  line-height: 1;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.accountAdminSummary span.warn b {
+  color: var(--warn);
+}
+
+.accountAdminFilter {
+  display: block;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.accountAdminFilter span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .accountAdminList {

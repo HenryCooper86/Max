@@ -47,7 +47,7 @@ npm test -- -t "rejects frames that are too short"
 npm run test:watch                # watch mode, reruns on change
 ```
 
-All 79 tests currently live in `tests/` and run in well under a second.
+The current Vitest suite is 187 tests across 22 files and runs in a few seconds.
 
 ---
 
@@ -449,20 +449,19 @@ dropped frames increment rather than the stream stalling.
 
 ## 14. Per-tester testing statistics
 
-**What it does:** The web HUD persists a tester/workstation ID plus the selected
-campaign and test case, then sends them with `session.start` alongside browser
-time zone, app version, git commit, device label, browser language, and network
-type. The relay keys rows by tester ID + client IP, so a tester name is
-attached to the network that ran it; clients that omit `testerId` become
-`ip:<address>` instead of `anonymous`. The relay aggregates sessions, active
-runs, duration, mic uplink bytes, audio/control downlink bytes, first-audio
-average/p95 latency, errors, TTS fallbacks, recent transcript turns, completed
-session summaries, deterministic evaluation checks, quality flags, and
-30-minute graph buckets by tester/IP. In the HUD, selecting a campaign/test case
-sets the expected scenario and mode; selecting a tester ID or IP opens that
-tester's recent chat history; the session replay panel filters retained runs by
-pass/watch/fail, shows per-run bandwidth/latency/error/evaluation metrics, and
-exports one session as JSON evidence.
+**What it does:** All clients send QA attribution with `session.start`: tester
+identity, campaign/test case, app/build identity, device label, locale, network
+class, and time-zone/region where available. The relay keys rows by tester ID +
+client IP, so a tester name is attached to the network that ran it; clients that
+omit `testerId` become `ip:<address>` instead of `anonymous`. The relay
+aggregates sessions, active runs, duration, mic uplink bytes, audio/control
+downlink bytes, first-audio average/p95 latency, errors, TTS fallbacks, recent
+transcript turns, completed session summaries, deterministic evaluation checks,
+quality flags, and 30-minute graph buckets by tester/IP. In the HUD, selecting a
+campaign/test case sets the expected scenario and mode; selecting a tester ID or
+IP opens that tester's recent chat history; the session replay panel filters
+retained runs by pass/watch/fail, shows per-run bandwidth/latency/error/evaluation
+metrics, and exports one session as JSON evidence.
 
 The catalog lives in `shared/testing.ts`: campaigns, test cases, and golden
 replay fixtures. `server/testing-evaluator.ts` scores completed sessions with

@@ -33,7 +33,16 @@ final class AgentProtocolTests: XCTestCase {
             rideMode: .emergency,
             scenario: .wind,
             lat: 31.2304,
-            lon: 121.4737
+            lon: 121.4737,
+            testerId: "ios-rider",
+            testerRegion: "Asia/Shanghai",
+            testingCampaignId: "safety-regression",
+            testingTestCaseId: "emergency-safe-guidance",
+            appVersion: "1.2.3",
+            gitCommit: "abcdef0",
+            deviceLabel: "iPhone iOS 18",
+            browserLanguage: "zh_CN",
+            networkType: "ios-native"
         )
         let data = try XCTUnwrap(json.data(using: .utf8))
         let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -45,6 +54,15 @@ final class AgentProtocolTests: XCTestCase {
         XCTAssertEqual(payload["voicePersonality"] as? String, "technical")
         XCTAssertEqual(payload["rideMode"] as? String, "emergency")
         XCTAssertEqual(payload["scenario"] as? String, "wind")
+        XCTAssertEqual(payload["testerId"] as? String, "ios-rider")
+        XCTAssertEqual(payload["testerRegion"] as? String, "Asia/Shanghai")
+        XCTAssertEqual(payload["testingCampaignId"] as? String, "safety-regression")
+        XCTAssertEqual(payload["testingTestCaseId"] as? String, "emergency-safe-guidance")
+        XCTAssertEqual(payload["appVersion"] as? String, "1.2.3")
+        XCTAssertEqual(payload["gitCommit"] as? String, "abcdef0")
+        XCTAssertEqual(payload["deviceLabel"] as? String, "iPhone iOS 18")
+        XCTAssertEqual(payload["browserLanguage"] as? String, "zh_CN")
+        XCTAssertEqual(payload["networkType"] as? String, "ios-native")
         XCTAssertEqual(payload["lat"] as? Double, 31.2304)
         XCTAssertEqual(payload["lon"] as? Double, 121.4737)
     }

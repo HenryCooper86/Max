@@ -214,7 +214,8 @@ final class MainViewModel: ObservableObject {
             pendingHandsFreeRetry = false
             session.start(url: relayURL.trimmingCharacters(in: .whitespacesAndNewlines),
                           authToken: effectiveToken,
-                          allowSelfSignedTls: allowSelfSigned)
+                          allowSelfSignedTls: allowSelfSigned,
+                          testerId: authUsername.isEmpty ? "ios-native" : authUsername)
         }
     }
 

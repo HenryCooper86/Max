@@ -239,7 +239,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             pendingHandsFreeRetry = false
             VoiceAgentService.start(app)
-            session.start(relayUrl.trim(), allowSelfSigned, effectiveToken)
+            session.start(
+                relayUrl.trim(),
+                allowSelfSigned,
+                effectiveToken,
+                testerId = authUsername.ifEmpty { "android-native" }
+            )
         }
     }
 

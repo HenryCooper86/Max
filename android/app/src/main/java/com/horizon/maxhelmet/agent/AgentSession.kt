@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
 import android.location.LocationManager
+import android.os.Build
 import android.speech.tts.TextToSpeech
 import android.util.Log
 import androidx.core.content.ContextCompat
@@ -29,6 +30,7 @@ import okio.ByteString.Companion.toByteString
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import java.util.Locale
+import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
@@ -138,6 +140,7 @@ class AgentSession(
     private var socketOpen = false
 
     private var relayUrl: String = ""
+    private var testerId: String = ""
     private var reconnectAttempts = 0
     private var reconnectJob: Job? = null
     /** The 150 ms deferred reconnect of a settings-change restart, so stop()
@@ -198,9 +201,10 @@ class AgentSession(
      * self-signed certificate for wss:// URLs. A non-empty `authToken` is sent
      * as the relay's `token` query parameter (server/auth.ts).
      */
-    fun start(url: String, allowSelfSignedTls: Boolean, authToken: String = "") {
+    fun start(url: String, allowSelfSignedTls: Boolean, authToken: String = "", testerId: String = "") {
         if (_state.value.handsFree) return
         relayUrl = appendAuthToken(url, authToken)
+        this.testerId = testerId.trim()
 
         if (allowSelfSignedTls != allowSelfSigned) {
             allowSelfSigned = allowSelfSignedTls
@@ -412,6 +416,17 @@ class AgentSession(
         if (_state.value.handsFree && webSocket != null) restartSession()
     }
 
+    private fun nativeDeviceLabel(): String =
+        "Android ${Build.MANUFACTURER} ${Build.MODEL}"
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .take(120)
+
+    private fun nativeAppVersion(): String =
+        runCatching {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.0"
+        }.getOrDefault("0.1.0").take(40)
+
     private fun restartSession() {
         val socket = webSocket
         webSocket = null
@@ -473,6 +488,13 @@ class AgentSession(
                         scenario = current.rideContext.scenario,
                         lat = location?.first,
                         lon = location?.second,
+                        testerId = this@AgentSession.testerId.ifEmpty { "android-native" },
+                        testerRegion = TimeZone.getDefault().id,
+                        appVersion = nativeAppVersion(),
+                        gitCommit = "android-local",
+                        deviceLabel = nativeDeviceLabel(),
+                        browserLanguage = Locale.getDefault().toLanguageTag(),
+                        networkType = "android-native",
                         memory = current.sessionMemory
                     )
                 )

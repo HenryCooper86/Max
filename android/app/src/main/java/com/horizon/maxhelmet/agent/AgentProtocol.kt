@@ -348,6 +348,15 @@ fun buildSessionStart(
     scenario: DemoScenario,
     lat: Double?,
     lon: Double?,
+    testerId: String? = null,
+    testerRegion: String? = null,
+    testingCampaignId: String = "release-readiness",
+    testingTestCaseId: String = "baseline-live-session",
+    appVersion: String? = null,
+    gitCommit: String? = null,
+    deviceLabel: String? = null,
+    browserLanguage: String? = null,
+    networkType: String? = null,
     memory: SessionMemory? = null
 ): String =
     JSONObject().apply {
@@ -358,6 +367,15 @@ fun buildSessionStart(
         put("voicePersonality", voicePersonality.wire)
         put("rideMode", rideMode.wire)
         put("scenario", scenario.wire)
+        testerId?.takeIf { it.isNotBlank() }?.let { put("testerId", it) }
+        testerRegion?.takeIf { it.isNotBlank() }?.let { put("testerRegion", it) }
+        put("testingCampaignId", testingCampaignId)
+        put("testingTestCaseId", testingTestCaseId)
+        appVersion?.takeIf { it.isNotBlank() }?.let { put("appVersion", it) }
+        gitCommit?.takeIf { it.isNotBlank() }?.let { put("gitCommit", it) }
+        deviceLabel?.takeIf { it.isNotBlank() }?.let { put("deviceLabel", it) }
+        browserLanguage?.takeIf { it.isNotBlank() }?.let { put("browserLanguage", it) }
+        networkType?.takeIf { it.isNotBlank() }?.let { put("networkType", it) }
         if (lat != null && lon != null) {
             put("lat", lat)
             put("lon", lon)

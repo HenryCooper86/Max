@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import CoreLocation
 import Combine
+import UIKit
 
 /// Owns one hands-free voice session end to end: relay WebSocket, mic streaming,
 /// voice playback, audio routing, TTS fallback, and the HUD state. This is the
@@ -81,6 +82,7 @@ final class AgentSession: NSObject, ObservableObject {
     private var relayURL = ""
     /// Optional shared relay auth token, appended to the /agent URL as ?token=….
     private var authToken = ""
+    private var testerId = ""
     private var reconnectAttempts = 0
     private var reconnectWorkItem: DispatchWorkItem?
     /// The 150 ms deferred reconnect of a settings-change restart, so stop()
@@ -145,10 +147,11 @@ final class AgentSession: NSObject, ObservableObject {
     /// as ?token=… (relays without a configured token ignore it).
     /// `allowSelfSignedTls` opts into trusting the test server's self-signed
     /// certificate for wss:// URLs.
-    func start(url: String, authToken: String = "", allowSelfSignedTls: Bool) {
+    func start(url: String, authToken: String = "", allowSelfSignedTls: Bool, testerId: String = "") {
         guard !state.value.handsFree else { return }
         relayURL = url
         self.authToken = authToken
+        self.testerId = testerId.trimmingCharacters(in: .whitespacesAndNewlines)
         reconnectWorkItem?.cancel()
 
         let trustedSelfSigned = allowSelfSignedTls
@@ -377,6 +380,11 @@ final class AgentSession: NSObject, ObservableObject {
         if state.value.handsFree && webSocket != nil { restartSession() }
     }
 
+    private func nativeDeviceLabel() -> String {
+        let device = UIDevice.current
+        return "\(device.model) \(device.systemName) \(device.systemVersion)"
+    }
+
     private func restartSession() {
         let socket = webSocket
         webSocket = nil
@@ -449,6 +457,13 @@ final class AgentSession: NSObject, ObservableObject {
             scenario: current.rideContext.scenario,
             lat: location?.latitude,
             lon: location?.longitude,
+            testerId: testerId.isEmpty ? "ios-native" : testerId,
+            testerRegion: TimeZone.current.identifier,
+            appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0",
+            gitCommit: "ios-local",
+            deviceLabel: nativeDeviceLabel(),
+            browserLanguage: Locale.current.identifier,
+            networkType: "ios-native",
             memory: current.sessionMemory
         ))) { _ in }
         // The guided tour lives in the provider instance, so a fresh session

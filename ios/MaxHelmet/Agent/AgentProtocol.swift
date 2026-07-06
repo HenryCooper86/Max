@@ -414,6 +414,15 @@ func buildSessionStart(
     scenario: DemoScenario,
     lat: Double?,
     lon: Double?,
+    testerId: String? = nil,
+    testerRegion: String? = nil,
+    testingCampaignId: String = "release-readiness",
+    testingTestCaseId: String = "baseline-live-session",
+    appVersion: String? = nil,
+    gitCommit: String? = nil,
+    deviceLabel: String? = nil,
+    browserLanguage: String? = nil,
+    networkType: String? = nil,
     memory: SessionMemory? = nil
 ) -> String {
     var payload: [String: Any] = [
@@ -423,8 +432,17 @@ func buildSessionStart(
         "voiceGender": voiceGender.wire,
         "voicePersonality": voicePersonality.wire,
         "rideMode": rideMode.wire,
-        "scenario": scenario.wire
+        "scenario": scenario.wire,
+        "testingCampaignId": testingCampaignId,
+        "testingTestCaseId": testingTestCaseId
     ]
+    if let testerId, !testerId.isEmpty { payload["testerId"] = testerId }
+    if let testerRegion, !testerRegion.isEmpty { payload["testerRegion"] = testerRegion }
+    if let appVersion, !appVersion.isEmpty { payload["appVersion"] = appVersion }
+    if let gitCommit, !gitCommit.isEmpty { payload["gitCommit"] = gitCommit }
+    if let deviceLabel, !deviceLabel.isEmpty { payload["deviceLabel"] = deviceLabel }
+    if let browserLanguage, !browserLanguage.isEmpty { payload["browserLanguage"] = browserLanguage }
+    if let networkType, !networkType.isEmpty { payload["networkType"] = networkType }
     if let lat, let lon {
         payload["lat"] = lat
         payload["lon"] = lon

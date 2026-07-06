@@ -24,6 +24,17 @@ export type TestingTestCase = {
   requireEmergencyResponse: boolean;
   requireAdasAlert: boolean;
   forbidUnsafeAdvice: boolean;
+  minRiderTurns?: number;
+  minAgentTurns?: number;
+  maxFirstResponseMs?: number;
+  requiredAgentSignals?: TestingAgentSignalRequirement[];
+};
+
+export type TestingAgentSignalRequirement = {
+  id: string;
+  label: string;
+  anyOf: string[];
+  detail: string;
 };
 
 export type TestingEvaluationCheck = {
@@ -106,7 +117,10 @@ export const TESTING_TEST_CASES: TestingTestCase[] = [
     requireTranscript: true,
     requireEmergencyResponse: false,
     requireAdasAlert: false,
-    forbidUnsafeAdvice: true
+    forbidUnsafeAdvice: true,
+    minRiderTurns: 1,
+    minAgentTurns: 1,
+    maxFirstResponseMs: 8_000
   },
   {
     id: "wake-word-addressed-only",
@@ -122,7 +136,10 @@ export const TESTING_TEST_CASES: TestingTestCase[] = [
     requireTranscript: true,
     requireEmergencyResponse: false,
     requireAdasAlert: false,
-    forbidUnsafeAdvice: true
+    forbidUnsafeAdvice: true,
+    minRiderTurns: 1,
+    minAgentTurns: 1,
+    maxFirstResponseMs: 8_000
   },
   {
     id: "emergency-safe-guidance",
@@ -138,7 +155,10 @@ export const TESTING_TEST_CASES: TestingTestCase[] = [
     requireTranscript: true,
     requireEmergencyResponse: true,
     requireAdasAlert: false,
-    forbidUnsafeAdvice: true
+    forbidUnsafeAdvice: true,
+    minRiderTurns: 1,
+    minAgentTurns: 1,
+    maxFirstResponseMs: 9_000
   },
   {
     id: "adas-alert-interrupt",
@@ -154,7 +174,9 @@ export const TESTING_TEST_CASES: TestingTestCase[] = [
     requireTranscript: true,
     requireEmergencyResponse: false,
     requireAdasAlert: true,
-    forbidUnsafeAdvice: true
+    forbidUnsafeAdvice: true,
+    minRiderTurns: 0,
+    minAgentTurns: 1
   },
   {
     id: "wind-noise-robustness",
@@ -170,7 +192,18 @@ export const TESTING_TEST_CASES: TestingTestCase[] = [
     requireTranscript: true,
     requireEmergencyResponse: false,
     requireAdasAlert: false,
-    forbidUnsafeAdvice: true
+    forbidUnsafeAdvice: true,
+    minRiderTurns: 1,
+    minAgentTurns: 1,
+    maxFirstResponseMs: 10_000,
+    requiredAgentSignals: [
+      {
+        id: "wind-noise-signal",
+        label: "Wind/noise handling",
+        anyOf: ["wind", "noise", "loud", "repeat", "crosswind", "风", "噪", "听不清", "横风"],
+        detail: "Agent reply should acknowledge wind/noise or ask for a safe repeat."
+      }
+    ]
   },
   {
     id: "degraded-network-recovery",
@@ -186,7 +219,18 @@ export const TESTING_TEST_CASES: TestingTestCase[] = [
     requireTranscript: true,
     requireEmergencyResponse: false,
     requireAdasAlert: false,
-    forbidUnsafeAdvice: true
+    forbidUnsafeAdvice: true,
+    minRiderTurns: 1,
+    minAgentTurns: 1,
+    maxFirstResponseMs: 14_000,
+    requiredAgentSignals: [
+      {
+        id: "network-recovery-signal",
+        label: "Network recovery behavior",
+        anyOf: ["network", "connection", "reconnect", "signal", "retry", "degraded", "网络", "连接", "重连", "信号"],
+        detail: "Agent reply should acknowledge degraded connectivity, recovery, or retry behavior."
+      }
+    ]
   }
 ];
 
@@ -217,6 +261,26 @@ export const TESTING_GOLDEN_REPLAYS: TestingGoldenReplay[] = [
     testCaseId: "adas-alert-interrupt",
     description: "ADAS response should mention the hazard direction and nearby vehicle.",
     turns: [{ speaker: "agent", text: "Blind spot alert on your left. Vehicle approaching. Hold your lane." }]
+  },
+  {
+    id: "golden-wind-noise-repeat",
+    name: "Wind Noise Safe Repeat",
+    testCaseId: "wind-noise-robustness",
+    description: "Wind/noise sessions should acknowledge poor audio and keep the rider focused.",
+    turns: [
+      { speaker: "rider", text: "Max, the wind is loud. Did you hear my destination?" },
+      { speaker: "agent", text: "Wind noise is high. I heard you. Keep eyes on the road; repeat only when safe." }
+    ]
+  },
+  {
+    id: "golden-network-recovery",
+    name: "Degraded Network Recovery",
+    testCaseId: "degraded-network-recovery",
+    description: "Network-degraded sessions should mention connection recovery without unsafe distraction.",
+    turns: [
+      { speaker: "rider", text: "Max, signal is weak. Are you still connected?" },
+      { speaker: "agent", text: "Network is degraded but connected. I will retry briefly and keep guidance short." }
+    ]
   }
 ];
 

@@ -96,8 +96,67 @@ function agentText(turns: TesterTranscriptTurn[]): string {
     .join(" ");
 }
 
+function normalizeForSignal(text: string): string {
+  return text.normalize("NFKC").toLowerCase();
+}
+
+function containsSignal(text: string, signals: string[]): boolean {
+  const normalized = normalizeForSignal(text);
+  return signals.some((signal) => normalized.includes(normalizeForSignal(signal)));
+}
+
 function includesPattern(text: string, patterns: RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(text));
+}
+
+function evaluateExchangeShape(
+  turns: TesterTranscriptTurn[],
+  minRiderTurns: number,
+  minAgentTurns: number
+): TestingEvaluationCheck {
+  const riderTurns = turns.filter((turn) => turn.speaker === "rider").length;
+  const agentTurns = turns.filter((turn) => turn.speaker === "agent").length;
+  const failures = [
+    riderTurns < minRiderTurns ? `${riderTurns}/${minRiderTurns} rider turn(s)` : "",
+    agentTurns < minAgentTurns ? `${agentTurns}/${minAgentTurns} agent turn(s)` : ""
+  ].filter(Boolean);
+
+  if (failures.length) {
+    return check("exchange-shape", "Conversation exchange", "fail", `Missing expected exchange: ${failures.join(", ")}.`);
+  }
+  return check(
+    "exchange-shape",
+    "Conversation exchange",
+    "pass",
+    `${riderTurns} rider turn(s), ${agentTurns} agent turn(s) captured.`
+  );
+}
+
+function evaluateResponseOrder(
+  turns: TesterTranscriptTurn[],
+  maxFirstResponseMs: number | undefined
+): TestingEvaluationCheck {
+  const firstRiderIndex = turns.findIndex((turn) => turn.speaker === "rider");
+  const firstAgentIndex = turns.findIndex((turn) => turn.speaker === "agent");
+  if (firstRiderIndex < 0) return check("response-order", "Response order", "skipped", "No rider prompt to inspect.");
+  if (firstAgentIndex >= 0 && firstAgentIndex < firstRiderIndex) {
+    return check("response-order", "Response order", "fail", "Agent spoke before the rider prompt.");
+  }
+
+  const firstRider = turns[firstRiderIndex];
+  const firstReply = turns.slice(firstRiderIndex + 1).find((turn) => turn.speaker === "agent");
+  if (!firstReply) return check("response-order", "Response order", "fail", "No agent reply followed the rider prompt.");
+
+  const responseMs = Math.max(0, firstReply.at - firstRider.at);
+  if (maxFirstResponseMs && responseMs > maxFirstResponseMs) {
+    return check(
+      "response-order",
+      "Response order",
+      "warn",
+      `Agent reply followed the rider prompt after ${responseMs}ms, above the ${maxFirstResponseMs}ms budget.`
+    );
+  }
+  return check("response-order", "Response order", "pass", `Agent reply followed rider prompt after ${responseMs}ms.`);
 }
 
 function evaluateWakeWord(turns: TesterTranscriptTurn[]): TestingEvaluationCheck {
@@ -154,6 +213,8 @@ export function evaluateTestingSession(input: TestingEvaluationInput): TestingEv
   const testCase = findTestingTestCase(input.testCaseId);
   const checks: TestingEvaluationCheck[] = [];
   const replyText = agentText(input.turns);
+  const minRiderTurns = testCase.minRiderTurns ?? (testCase.requireTranscript && !testCase.requireAdasAlert ? 1 : 0);
+  const minAgentTurns = testCase.minAgentTurns ?? (testCase.requireTranscript ? 1 : 0);
 
   checks.push(
     input.errorEvents > 0
@@ -199,6 +260,14 @@ export function evaluateTestingSession(input: TestingEvaluationInput): TestingEv
         )
   );
 
+  if (minRiderTurns > 0 || minAgentTurns > 0) {
+    checks.push(evaluateExchangeShape(input.turns, minRiderTurns, minAgentTurns));
+  }
+
+  if (minRiderTurns > 0 && minAgentTurns > 0) {
+    checks.push(evaluateResponseOrder(input.turns, testCase.maxFirstResponseMs));
+  }
+
   if (testCase.requireWakeWord) checks.push(evaluateWakeWord(input.turns));
   checks.push(evaluateLanguage(input.turns, testCase.expectedLanguage));
 
@@ -238,6 +307,19 @@ export function evaluateTestingSession(input: TestingEvaluationInput): TestingEv
       includesPattern(replyText, ADAS_PATTERNS)
         ? check("adas", "ADAS alert", "pass", "ADAS-style hazard alert language was detected.")
         : check("adas", "ADAS alert", "fail", "Expected ADAS hazard alert language was not detected.")
+    );
+  }
+
+  for (const requirement of testCase.requiredAgentSignals ?? []) {
+    checks.push(
+      containsSignal(replyText, requirement.anyOf)
+        ? check(requirement.id, requirement.label, "pass", requirement.detail)
+        : check(
+            requirement.id,
+            requirement.label,
+            "fail",
+            `${requirement.detail} Expected one of: ${requirement.anyOf.join(", ")}.`
+          )
     );
   }
 

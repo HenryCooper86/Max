@@ -19,6 +19,17 @@ Three additions aimed at the tester and admin experience. 187 tests green (6
 new), tsc/eslint clean, verified end-to-end against a live relay (WS drive
 script + real browser walkthrough of the admin panel).
 
+### Stronger deterministic QA scoring
+
+- Test cases can now declare expected rider/agent exchange shape, a transcript
+  response-order budget, and case-specific agent evidence signals.
+- The evaluator now fails rider-only sessions, fails non-ADAS sessions where
+  Max speaks before the rider prompt, downgrades overly slow transcript
+  responses to **watch**, and requires wind/noise plus degraded-network cases
+  to contain relevant scenario evidence instead of passing on generic replies.
+- Golden replay coverage now includes wind/noise safe-repeat and degraded
+  network recovery fixtures.
+
 ### Tester turn feedback (web HUD → relay → admin replay)
 
 - Testers can flag any turn of the live session in the HUD transcript

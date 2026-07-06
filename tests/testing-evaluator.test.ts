@@ -129,6 +129,104 @@ describe("testing evaluator", () => {
     expect(evaluation.quality).toBe("pass");
     expect(evaluation.checks).toContainEqual(expect.objectContaining({ id: "emergency", status: "pass" }));
   });
+
+  it("fails a required exchange when the rider speaks but Max never replies", () => {
+    const evaluation = evaluateTestingSession({
+      testCaseId: "baseline-live-session",
+      p95LatencyMs: 120,
+      micFrames: 5,
+      errorEvents: 0,
+      ttsFallbacks: 0,
+      turns: [{ sessionId: "s1", at: 1, speaker: "rider", text: "Max, route status?", final: true }]
+    });
+
+    expect(evaluation.quality).toBe("fail");
+    expect(evaluation.checks).toContainEqual(expect.objectContaining({ id: "exchange-shape", status: "fail" }));
+    expect(evaluation.checks).toContainEqual(expect.objectContaining({ id: "response-order", status: "fail" }));
+  });
+
+  it("fails non-ADAS sessions when the agent speaks before a rider prompt", () => {
+    const evaluation = evaluateTestingSession({
+      testCaseId: "baseline-live-session",
+      p95LatencyMs: 120,
+      micFrames: 5,
+      errorEvents: 0,
+      ttsFallbacks: 0,
+      turns: [
+        { sessionId: "s1", at: 1, speaker: "agent", text: "Route looks clear.", final: true },
+        { sessionId: "s1", at: 2, speaker: "rider", text: "Max, route status?", final: true },
+        { sessionId: "s1", at: 3, speaker: "agent", text: "Keep riding safely.", final: true }
+      ]
+    });
+
+    expect(evaluation.quality).toBe("fail");
+    expect(evaluation.checks).toContainEqual(expect.objectContaining({ id: "response-order", status: "fail" }));
+  });
+
+  it("downgrades a session when transcript response order is too slow", () => {
+    const evaluation = evaluateTestingSession({
+      testCaseId: "baseline-live-session",
+      p95LatencyMs: 120,
+      micFrames: 5,
+      errorEvents: 0,
+      ttsFallbacks: 0,
+      turns: [
+        { sessionId: "s1", at: 1_000, speaker: "rider", text: "Max, route status?", final: true },
+        { sessionId: "s1", at: 12_000, speaker: "agent", text: "Route looks clear. Ride safely.", final: true }
+      ]
+    });
+
+    expect(evaluation.quality).toBe("watch");
+    expect(evaluation.checks).toContainEqual(expect.objectContaining({ id: "response-order", status: "warn" }));
+  });
+
+  it("requires wind/noise evidence for the road-noise field case", () => {
+    const generic = evaluateTestingSession({
+      testCaseId: "wind-noise-robustness",
+      p95LatencyMs: 180,
+      micFrames: 5,
+      errorEvents: 0,
+      ttsFallbacks: 0,
+      turns: [
+        { sessionId: "s1", at: 1, speaker: "rider", text: "Max, can you hear me?", final: true },
+        { sessionId: "s1", at: 2, speaker: "agent", text: "Yes. Continue safely.", final: true }
+      ]
+    });
+    const specific = evaluateTestingSession({
+      testCaseId: "wind-noise-robustness",
+      p95LatencyMs: 180,
+      micFrames: 5,
+      errorEvents: 0,
+      ttsFallbacks: 0,
+      turns: [
+        { sessionId: "s1", at: 1, speaker: "rider", text: "Max, can you hear me?", final: true },
+        { sessionId: "s1", at: 2, speaker: "agent", text: "Wind noise is high. I can hear you.", final: true }
+      ]
+    });
+
+    expect(generic.quality).toBe("fail");
+    expect(generic.checks).toContainEqual(expect.objectContaining({ id: "wind-noise-signal", status: "fail" }));
+    expect(specific.checks).toContainEqual(expect.objectContaining({ id: "wind-noise-signal", status: "pass" }));
+  });
+
+  it("requires network recovery evidence for degraded network cases", () => {
+    const evaluation = evaluateTestingSession({
+      testCaseId: "degraded-network-recovery",
+      p95LatencyMs: 180,
+      micFrames: 5,
+      errorEvents: 0,
+      ttsFallbacks: 0,
+      turns: [
+        { sessionId: "s1", at: 1, speaker: "rider", text: "Max, are you still there?", final: true },
+        { sessionId: "s1", at: 2, speaker: "agent", text: "Connected. Network is degraded; I will retry briefly.", final: true }
+      ]
+    });
+
+    expect(evaluation.quality).toBe("pass");
+    expect(evaluation.checks).toContainEqual(
+      expect.objectContaining({ id: "network-recovery-signal", status: "pass" })
+    );
+  });
 });
 
 describe("tester turn feedback", () => {

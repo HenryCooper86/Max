@@ -164,7 +164,7 @@ describe("relay metrics", () => {
       errorEvents: 1,
       ttsFallbacks: 1,
       quality: "fail",
-      flags: ["errors", "tts-fallback"],
+      flags: expect.arrayContaining(["errors", "tts-fallback", "exchange-shape", "response-order"]),
       evaluation: {
         testCaseId: "wake-word-addressed-only",
         score: expect.any(Number),

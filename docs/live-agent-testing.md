@@ -466,8 +466,10 @@ metrics, and exports one session as JSON evidence.
 The catalog lives in `shared/testing.ts`: campaigns, test cases, and golden
 replay fixtures. `server/testing-evaluator.ts` scores completed sessions with
 deterministic checks for server errors, p95 latency, provider fallback, mic
-audio, transcript capture, wake-word gating, language policy, unsafe riding
-advice, emergency guidance, and ADAS alert language.
+audio, transcript capture, rider/agent exchange shape, response order and
+transcript response budget, wake-word gating, language policy, unsafe riding
+advice, emergency guidance, ADAS alert language, and case-specific evidence
+signals for wind/noise and degraded-network scenarios.
 
 Completed sessions are appended to `~/.horizon-helmet-testing/sessions.jsonl`
 by default. This path is intentionally outside `/home/ubuntu/app`, so rsync

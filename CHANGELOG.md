@@ -19,6 +19,21 @@ Three additions aimed at the tester and admin experience. 187 tests green (6
 new), tsc/eslint clean, verified end-to-end against a live relay (WS drive
 script + real browser walkthrough of the admin panel).
 
+### Release gate, regression comparison, and invalid evidence
+
+- `/health.testing` now exposes a release gate for the currently deployed build:
+  required test-case coverage, valid/invalid evidence counts, fail/watch
+  blockers, p95 latency, and per-case status.
+- The retained-session snapshot now compares the current build against the most
+  recent previous build with valid evidence, reporting p95, score, fail-rate,
+  and TTS fallback-rate drift.
+- Completed sessions now carry a validity classification. Too-short runs,
+  missing transcripts, missing required rider/agent turns, and missing required
+  mic audio are marked invalid evidence and excluded from release/regression
+  scoring instead of polluting pass/fail rates.
+- The admin testing panel now surfaces release gate details, regression findings,
+  and invalid evidence counts above the tester/session drilldowns.
+
 ### Stronger deterministic QA scoring
 
 - Test cases can now declare expected rider/agent exchange shape, a transcript

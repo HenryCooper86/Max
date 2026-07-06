@@ -9,12 +9,20 @@ import type {
   TesterTranscriptTurn
 } from "../shared/agent";
 import {
+  TESTING_TEST_CASES,
   findTestingCampaign,
   findTestingTestCase,
   testingCatalog,
+  type TestingBuildSummary,
   type TestingCheckStatus,
   type TestingEvaluationSummary,
-  type TestingQuality
+  type TestingInvalidReason,
+  type TestingQuality,
+  type TestingRegressionFinding,
+  type TestingRegressionSummary,
+  type TestingReleaseGate,
+  type TestingReleaseGateCase,
+  type TestingValiditySummary
 } from "../shared/testing";
 import { buildInfo } from "./build-info";
 import { evaluateTestingSession } from "./testing-evaluator";
@@ -202,6 +210,15 @@ const MAX_TRANSCRIPT_TURNS_PER_TESTER = 80;
 const MAX_TRANSCRIPT_TURNS_PER_SESSION = 120;
 const MAX_COMPLETED_SESSIONS = readBoundedInt(process.env.TESTING_HISTORY_MAX_SESSIONS, 200, 20, 5_000);
 const TESTING_HISTORY_PATH = resolveTestingHistoryPath();
+const MIN_VALID_SESSION_MS = 1_500;
+const RELEASE_GATE_REQUIRED_TEST_CASE_IDS = TESTING_TEST_CASES.map((testCase) => testCase.id);
+const RELEASE_GATE_CRITERIA = {
+  minValidSessionsPerRequiredCase: 1,
+  maxFailSessions: 0,
+  maxWatchSessions: 2,
+  maxInvalidSessions: 3,
+  maxP95LatencyMs: 1_400
+};
 
 type MutableTesterStats = {
   testerKey: string;
@@ -520,6 +537,270 @@ function percentile(values: number[], percentileRank: number): number {
   return sorted[Math.max(0, index)];
 }
 
+function validityDetail(reasons: TestingInvalidReason[]): string {
+  if (!reasons.length) return "Valid release evidence.";
+  const labels: Record<TestingInvalidReason, string> = {
+    "too-short": "session ended too quickly",
+    "missing-transcript": "required transcript missing",
+    "missing-rider-turn": "required rider turn missing",
+    "missing-agent-turn": "required agent reply missing",
+    "missing-mic-audio": "required mic audio missing"
+  };
+  return `Invalid release evidence: ${reasons.map((reason) => labels[reason]).join(", ")}.`;
+}
+
+function classifySessionEvidence(input: {
+  testCaseId: string;
+  durationMs: number;
+  micFrames: number;
+  turns: TesterTranscriptTurn[];
+}): TestingValiditySummary {
+  const testCase = findTestingTestCase(input.testCaseId);
+  const minRiderTurns = testCase.minRiderTurns ?? (testCase.requireTranscript && !testCase.requireAdasAlert ? 1 : 0);
+  const minAgentTurns = testCase.minAgentTurns ?? (testCase.requireTranscript ? 1 : 0);
+  const riderTurns = input.turns.filter((turn) => turn.speaker === "rider").length;
+  const agentTurns = input.turns.filter((turn) => turn.speaker === "agent").length;
+  const reasons: TestingInvalidReason[] = [];
+
+  if (input.durationMs < MIN_VALID_SESSION_MS) reasons.push("too-short");
+  if (testCase.requireTranscript && input.turns.length === 0) reasons.push("missing-transcript");
+  if (riderTurns < minRiderTurns) reasons.push("missing-rider-turn");
+  if (agentTurns < minAgentTurns) reasons.push("missing-agent-turn");
+  if (testCase.requireMicAudio && input.micFrames <= 0) reasons.push("missing-mic-audio");
+
+  return {
+    status: reasons.length ? "invalid" : "valid",
+    reasons,
+    detail: validityDetail(reasons)
+  };
+}
+
+function normalizeValidity(value: unknown, fallback: TestingValiditySummary): TestingValiditySummary {
+  if (!isRecord(value)) return fallback;
+  const rawReasons = Array.isArray(value.reasons) ? value.reasons : [];
+  const allowed = new Set<TestingInvalidReason>([
+    "too-short",
+    "missing-transcript",
+    "missing-rider-turn",
+    "missing-agent-turn",
+    "missing-mic-audio"
+  ]);
+  const reasons = rawReasons.filter((reason): reason is TestingInvalidReason => allowed.has(reason as TestingInvalidReason));
+  return {
+    status: value.status === "invalid" || reasons.length ? "invalid" : "valid",
+    reasons,
+    detail: typeof value.detail === "string" && cleanText(value.detail) ? cleanText(value.detail).slice(0, 240) : validityDetail(reasons)
+  };
+}
+
+function completedSessionsForBuild(build: string): TesterSessionSummary[] {
+  return completedSessions.filter((session) => session.gitCommit === build);
+}
+
+function summarizeBuild(build: string, sessions: TesterSessionSummary[]): TestingBuildSummary {
+  const validSessions = sessions.filter((session) => session.validity.status === "valid");
+  const invalidSessions = sessions.length - validSessions.length;
+  const failSessions = validSessions.filter((session) => session.quality === "fail").length;
+  const watchSessions = validSessions.filter((session) => session.quality === "watch").length;
+  const p95LatencyMs = percentile(
+    validSessions.filter((session) => session.p95LatencyMs > 0).map((session) => session.p95LatencyMs),
+    95
+  );
+  const avgScore = validSessions.length
+    ? Math.round(validSessions.reduce((sum, session) => sum + session.evaluation.score, 0) / validSessions.length)
+    : 0;
+  const rate = (count: number) => (validSessions.length ? Math.round((count / validSessions.length) * 100) : 0);
+  return {
+    build,
+    sessions: sessions.length,
+    validSessions: validSessions.length,
+    invalidSessions,
+    failSessions,
+    watchSessions,
+    p95LatencyMs,
+    avgScore,
+    ttsFallbackRatePct: rate(validSessions.filter((session) => session.ttsFallbacks > 0).length),
+    failRatePct: rate(failSessions),
+    latestAt: sessions.reduce((latest, session) => Math.max(latest, session.endedAt), 0)
+  };
+}
+
+function buildReleaseGate(now: number): TestingReleaseGate {
+  const build = buildInfo.gitCommit;
+  const sessions = completedSessionsForBuild(build);
+  const validSessions = sessions.filter((session) => session.validity.status === "valid");
+  const invalidSessions = sessions.length - validSessions.length;
+  const failSessions = validSessions.filter((session) => session.quality === "fail").length;
+  const watchSessions = validSessions.filter((session) => session.quality === "watch").length;
+  const p95LatencyMs = percentile(
+    validSessions.filter((session) => session.p95LatencyMs > 0).map((session) => session.p95LatencyMs),
+    95
+  );
+  const blockers: string[] = [];
+  const warnings: string[] = [];
+
+  const cases: TestingReleaseGateCase[] = RELEASE_GATE_REQUIRED_TEST_CASE_IDS.map((testCaseId) => {
+    const testCase = findTestingTestCase(testCaseId);
+    const caseSessions = sessions.filter((session) => session.testCaseId === testCaseId);
+    const caseValid = caseSessions.filter((session) => session.validity.status === "valid");
+    const caseInvalid = caseSessions.length - caseValid.length;
+    const latest = caseSessions[0];
+    const hasFail = caseValid.some((session) => session.quality === "fail");
+    const status: TestingReleaseGateCase["status"] =
+      caseValid.length >= RELEASE_GATE_CRITERIA.minValidSessionsPerRequiredCase
+        ? hasFail
+          ? "blocked"
+          : "pass"
+        : caseInvalid
+          ? "invalid"
+          : "missing";
+
+    if (status === "missing") blockers.push(`${testCase.name}: missing a valid current-build run.`);
+    if (status === "invalid") blockers.push(`${testCase.name}: only invalid current-build evidence is available.`);
+    if (status === "blocked") blockers.push(`${testCase.name}: latest valid evidence includes a failing run.`);
+
+    return {
+      testCaseId: testCase.id,
+      testCaseName: testCase.name,
+      status,
+      validSessions: caseValid.length,
+      invalidSessions: caseInvalid,
+      latestSessionId: latest?.sessionId,
+      latestQuality: latest?.quality,
+      latestAt: latest?.endedAt
+    };
+  });
+
+  if (failSessions > RELEASE_GATE_CRITERIA.maxFailSessions) {
+    blockers.push(`${failSessions} valid current-build session(s) failed.`);
+  }
+  if (watchSessions > RELEASE_GATE_CRITERIA.maxWatchSessions) {
+    blockers.push(`${watchSessions} valid current-build session(s) are watch, above ${RELEASE_GATE_CRITERIA.maxWatchSessions}.`);
+  } else if (watchSessions > 0) {
+    warnings.push(`${watchSessions} valid current-build session(s) are watch.`);
+  }
+  if (invalidSessions > RELEASE_GATE_CRITERIA.maxInvalidSessions) {
+    blockers.push(`${invalidSessions} invalid current-build session(s), above ${RELEASE_GATE_CRITERIA.maxInvalidSessions}.`);
+  } else if (invalidSessions > 0) {
+    warnings.push(`${invalidSessions} invalid current-build session(s) excluded from release scoring.`);
+  }
+  if (p95LatencyMs > RELEASE_GATE_CRITERIA.maxP95LatencyMs) {
+    blockers.push(`Current-build p95 ${p95LatencyMs}ms exceeds ${RELEASE_GATE_CRITERIA.maxP95LatencyMs}ms.`);
+  }
+
+  const status: TestingReleaseGate["status"] = !sessions.length
+    ? "waiting"
+    : blockers.length
+      ? "fail"
+      : warnings.length
+        ? "watch"
+        : "pass";
+
+  return {
+    status,
+    build,
+    generatedAt: now,
+    criteria: { ...RELEASE_GATE_CRITERIA },
+    requiredTestCaseIds: [...RELEASE_GATE_REQUIRED_TEST_CASE_IDS],
+    validSessions: validSessions.length,
+    invalidSessions,
+    failSessions,
+    watchSessions,
+    p95LatencyMs,
+    cases,
+    blockers,
+    warnings
+  };
+}
+
+function regressionStatus(findings: TestingRegressionFinding[]): TestingRegressionSummary["status"] {
+  if (findings.some((finding) => finding.status === "fail")) return "fail";
+  if (findings.some((finding) => finding.status === "watch")) return "watch";
+  return "pass";
+}
+
+function buildRegressionSummary(): TestingRegressionSummary {
+  const currentBuild = buildInfo.gitCommit;
+  const current = summarizeBuild(currentBuild, completedSessionsForBuild(currentBuild));
+  const baselineBuild = [...completedSessions]
+    .filter((session) => session.gitCommit !== currentBuild)
+    .sort((a, b) => b.endedAt - a.endedAt)[0]?.gitCommit;
+  const baseline = baselineBuild ? summarizeBuild(baselineBuild, completedSessionsForBuild(baselineBuild)) : undefined;
+  const findings: TestingRegressionFinding[] = [];
+
+  if (!current.validSessions) {
+    return {
+      status: "insufficient",
+      current,
+      baseline,
+      findings: [
+        {
+          id: "current-build-evidence",
+          status: "watch",
+          label: "Current build evidence",
+          detail: "No valid current-build sessions are available for regression comparison."
+        }
+      ]
+    };
+  }
+
+  if (!baseline || !baseline.validSessions) {
+    return {
+      status: "insufficient",
+      current,
+      baseline,
+      findings: [
+        {
+          id: "baseline-evidence",
+          status: "watch",
+          label: "Baseline evidence",
+          detail: "No valid previous-build sessions are available for regression comparison."
+        }
+      ]
+    };
+  }
+
+  const deltas = {
+    p95LatencyMs: current.p95LatencyMs - baseline.p95LatencyMs,
+    avgScore: current.avgScore - baseline.avgScore,
+    failRatePct: current.failRatePct - baseline.failRatePct,
+    ttsFallbackRatePct: current.ttsFallbackRatePct - baseline.ttsFallbackRatePct
+  };
+
+  findings.push({
+    id: "p95-latency-drift",
+    label: "P95 latency drift",
+    status: deltas.p95LatencyMs > 250 ? "fail" : deltas.p95LatencyMs > 100 ? "watch" : "pass",
+    detail: `Current p95 ${current.p95LatencyMs}ms vs baseline ${baseline.p95LatencyMs}ms (${deltas.p95LatencyMs >= 0 ? "+" : ""}${deltas.p95LatencyMs}ms).`
+  });
+  findings.push({
+    id: "score-drift",
+    label: "Evaluation score drift",
+    status: deltas.avgScore < -10 ? "fail" : deltas.avgScore < -5 ? "watch" : "pass",
+    detail: `Current avg score ${current.avgScore} vs baseline ${baseline.avgScore} (${deltas.avgScore >= 0 ? "+" : ""}${deltas.avgScore}).`
+  });
+  findings.push({
+    id: "fail-rate-drift",
+    label: "Fail-rate drift",
+    status: deltas.failRatePct > 10 ? "fail" : deltas.failRatePct > 0 ? "watch" : "pass",
+    detail: `Current fail rate ${current.failRatePct}% vs baseline ${baseline.failRatePct}% (${deltas.failRatePct >= 0 ? "+" : ""}${deltas.failRatePct}%).`
+  });
+  findings.push({
+    id: "fallback-rate-drift",
+    label: "Fallback-rate drift",
+    status: deltas.ttsFallbackRatePct > 25 ? "fail" : deltas.ttsFallbackRatePct > 10 ? "watch" : "pass",
+    detail: `Current fallback rate ${current.ttsFallbackRatePct}% vs baseline ${baseline.ttsFallbackRatePct}% (${deltas.ttsFallbackRatePct >= 0 ? "+" : ""}${deltas.ttsFallbackRatePct}%).`
+  });
+
+  return {
+    status: regressionStatus(findings),
+    current,
+    baseline,
+    deltas,
+    findings
+  };
+}
+
 function scoreSession(session: ActiveTestingSession): {
   quality: TestingQuality;
   flags: string[];
@@ -541,6 +822,13 @@ function scoreSession(session: ActiveTestingSession): {
 
 function completedSessionSummary(session: ActiveTestingSession, endedAt: number): TesterSessionSummary {
   const { quality, flags, evaluation } = scoreSession(session);
+  const durationMs = Math.max(0, endedAt - session.startedAt);
+  const validity = classifySessionEvidence({
+    testCaseId: session.testCaseId,
+    durationMs,
+    micFrames: session.micFrames,
+    turns: session.turns
+  });
   return {
     sessionId: session.sessionId,
     testerKey: session.testerKey,
@@ -558,7 +846,7 @@ function completedSessionSummary(session: ActiveTestingSession, endedAt: number)
     networkType: session.networkType,
     startedAt: session.startedAt,
     endedAt,
-    durationMs: Math.max(0, endedAt - session.startedAt),
+    durationMs,
     audioUpBytes: session.audioUpBytes,
     audioDownBytes: session.audioDownBytes,
     controlDownBytes: session.controlDownBytes,
@@ -570,6 +858,7 @@ function completedSessionSummary(session: ActiveTestingSession, endedAt: number)
     errorEvents: session.errorEvents,
     ttsFallbacks: session.ttsFallbacks,
     quality,
+    validity,
     flags,
     notes: "",
     evaluation,
@@ -662,6 +951,7 @@ function normalizeCompletedSession(value: unknown): TesterSessionSummary | null 
   const micFrames = numberField("micFrames");
   const errorEvents = numberField("errorEvents");
   const ttsFallbacks = numberField("ttsFallbacks");
+  const durationMs = numberField("durationMs") || Math.max(0, endedAt - startedAt);
   const evaluation = normalizeEvaluation(value.evaluation, {
     testCaseId: testCase.id,
     p95LatencyMs,
@@ -673,6 +963,15 @@ function normalizeCompletedSession(value: unknown): TesterSessionSummary | null 
   const flags = evaluation.checks
     .filter((check) => check.status === "fail" || check.status === "warn")
     .map((check) => check.id);
+  const validity = normalizeValidity(
+    value.validity,
+    classifySessionEvidence({
+      testCaseId: testCase.id,
+      durationMs,
+      micFrames,
+      turns
+    })
+  );
 
   return {
     sessionId,
@@ -691,7 +990,7 @@ function normalizeCompletedSession(value: unknown): TesterSessionSummary | null 
     networkType: normalizeMetaString(value.networkType, "unknown network", 40),
     startedAt,
     endedAt,
-    durationMs: numberField("durationMs") || Math.max(0, endedAt - startedAt),
+    durationMs,
     audioUpBytes: numberField("audioUpBytes"),
     audioDownBytes: numberField("audioDownBytes"),
     controlDownBytes: numberField("controlDownBytes"),
@@ -703,6 +1002,7 @@ function normalizeCompletedSession(value: unknown): TesterSessionSummary | null 
     errorEvents,
     ttsFallbacks,
     quality: evaluation.quality,
+    validity,
     flags,
     notes: typeof value.notes === "string" ? cleanText(value.notes).slice(0, 1_000) : "",
     evaluation,
@@ -1131,6 +1431,8 @@ export function testingSnapshot(now = Date.now()): TestingStats {
     const tester = testers.get(user.testerKey);
     return tester?.latencyMs ?? [];
   });
+  const validCompletedSessions = completedSessions.filter((session) => session.validity.status === "valid").length;
+  const invalidCompletedSessions = completedSessions.length - validCompletedSessions;
   return {
     windowMinutes: TESTING_WINDOW_MINUTES,
     catalog: testingCatalog(),
@@ -1149,11 +1451,19 @@ export function testingSnapshot(now = Date.now()): TestingStats {
       avgLatencyMs: average(latency),
       p95LatencyMs: percentile(latency, 95),
       errorEvents: users.reduce((sum, user) => sum + user.errorEvents, 0),
-      ttsFallbacks: users.reduce((sum, user) => sum + user.ttsFallbacks, 0)
+      ttsFallbacks: users.reduce((sum, user) => sum + user.ttsFallbacks, 0),
+      validTestSessions: validCompletedSessions,
+      invalidTestSessions: invalidCompletedSessions
     },
+    releaseGate: buildReleaseGate(now),
+    regression: buildRegressionSummary(),
     users,
     sessions: completedSessions.map((session) => ({
       ...session,
+      validity: {
+        ...session.validity,
+        reasons: [...session.validity.reasons]
+      },
       flags: [...session.flags],
       turns: session.turns.map((turn) => ({ ...turn }))
     })),

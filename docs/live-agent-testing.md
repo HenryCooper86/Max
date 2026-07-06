@@ -457,11 +457,14 @@ omit `testerId` become `ip:<address>` instead of `anonymous`. The relay
 aggregates sessions, active runs, duration, mic uplink bytes, audio/control
 downlink bytes, first-audio average/p95 latency, errors, TTS fallbacks, recent
 transcript turns, completed session summaries, deterministic evaluation checks,
-quality flags, and 30-minute graph buckets by tester/IP. In the HUD, selecting a
-campaign/test case sets the expected scenario and mode; selecting a tester ID or
-IP opens that tester's recent chat history; the session replay panel filters
-retained runs by pass/watch/fail, shows per-run bandwidth/latency/error/evaluation
-metrics, and exports one session as JSON evidence.
+quality flags, release-gate status, build-to-build regression, invalid-evidence
+classification, and 30-minute graph buckets by tester/IP. In the HUD, selecting
+a campaign/test case sets the expected scenario and mode; selecting a tester ID
+or IP opens that tester's recent chat history; the release/regression panels show
+current-build blockers and drift against the previous retained build; the session
+replay panel filters retained runs by pass/watch/fail, shows per-run
+bandwidth/latency/error/evaluation metrics, and exports one session as JSON
+evidence.
 
 The catalog lives in `shared/testing.ts`: campaigns, test cases, and golden
 replay fixtures. `server/testing-evaluator.ts` scores completed sessions with
@@ -469,7 +472,10 @@ deterministic checks for server errors, p95 latency, provider fallback, mic
 audio, transcript capture, rider/agent exchange shape, response order and
 transcript response budget, wake-word gating, language policy, unsafe riding
 advice, emergency guidance, ADAS alert language, and case-specific evidence
-signals for wind/noise and degraded-network scenarios.
+signals for wind/noise and degraded-network scenarios. Sessions that are too
+short, have no required rider/agent turns, lack transcript capture, or lack
+required mic audio are classified as invalid evidence and excluded from release
+gate and regression scoring.
 
 Completed sessions are appended to `~/.horizon-helmet-testing/sessions.jsonl`
 by default. This path is intentionally outside `/home/ubuntu/app`, so rsync

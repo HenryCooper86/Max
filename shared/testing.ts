@@ -2,6 +2,19 @@ import type { DemoScenario, RideMode } from "./ride";
 
 export type TestingQuality = "pass" | "watch" | "fail";
 export type TestingCheckStatus = "pass" | "warn" | "fail" | "skipped";
+export type TestingValidityStatus = "valid" | "invalid";
+export type TestingInvalidReason =
+  | "too-short"
+  | "missing-transcript"
+  | "missing-rider-turn"
+  | "missing-agent-turn"
+  | "missing-mic-audio";
+
+export type TestingValiditySummary = {
+  status: TestingValidityStatus;
+  reasons: TestingInvalidReason[];
+  detail: string;
+};
 
 export type TestingCampaign = {
   id: string;
@@ -50,6 +63,73 @@ export type TestingEvaluationSummary = {
   score: number;
   quality: TestingQuality;
   checks: TestingEvaluationCheck[];
+};
+
+export type TestingReleaseGateCase = {
+  testCaseId: string;
+  testCaseName: string;
+  status: "pass" | "missing" | "invalid" | "blocked";
+  validSessions: number;
+  invalidSessions: number;
+  latestSessionId?: string;
+  latestQuality?: TestingQuality;
+  latestAt?: number;
+};
+
+export type TestingReleaseGate = {
+  status: "pass" | "watch" | "fail" | "waiting";
+  build: string;
+  generatedAt: number;
+  criteria: {
+    minValidSessionsPerRequiredCase: number;
+    maxFailSessions: number;
+    maxWatchSessions: number;
+    maxInvalidSessions: number;
+    maxP95LatencyMs: number;
+  };
+  requiredTestCaseIds: string[];
+  validSessions: number;
+  invalidSessions: number;
+  failSessions: number;
+  watchSessions: number;
+  p95LatencyMs: number;
+  cases: TestingReleaseGateCase[];
+  blockers: string[];
+  warnings: string[];
+};
+
+export type TestingBuildSummary = {
+  build: string;
+  sessions: number;
+  validSessions: number;
+  invalidSessions: number;
+  failSessions: number;
+  watchSessions: number;
+  p95LatencyMs: number;
+  avgScore: number;
+  ttsFallbackRatePct: number;
+  failRatePct: number;
+  latestAt: number;
+};
+
+export type TestingRegressionFinding = {
+  id: string;
+  status: "pass" | "watch" | "fail";
+  label: string;
+  detail: string;
+};
+
+export type TestingRegressionSummary = {
+  status: "pass" | "watch" | "fail" | "insufficient";
+  current: TestingBuildSummary;
+  baseline?: TestingBuildSummary;
+  deltas?: {
+    p95LatencyMs: number;
+    avgScore: number;
+    failRatePct: number;
+    ttsFallbackRatePct: number;
+  };
+  findings: TestingRegressionFinding[];
 };
 
 export type TestingCatalog = {

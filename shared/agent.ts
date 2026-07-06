@@ -1,6 +1,13 @@
 import type { AdasDirection, AdasSeverity, AdasThreat } from "./adas";
 import type { DemoScenario, RideIntelligence, RideMode } from "./ride";
-import type { TestingCatalog, TestingEvaluationSummary, TestingQuality } from "./testing";
+import type {
+  TestingCatalog,
+  TestingEvaluationSummary,
+  TestingQuality,
+  TestingRegressionSummary,
+  TestingReleaseGate,
+  TestingValiditySummary
+} from "./testing";
 
 export type VoiceGender = "female" | "male";
 export type VoicePersonality = "concise" | "friendly" | "technical" | "rally";
@@ -49,6 +56,7 @@ export type TesterSessionSummary = {
   errorEvents: number;
   ttsFallbacks: number;
   quality: TestingQuality;
+  validity: TestingValiditySummary;
   flags: string[];
   notes: string;
   evaluation: TestingEvaluationSummary;
@@ -118,7 +126,11 @@ export type TestingStats = {
     p95LatencyMs: number;
     errorEvents: number;
     ttsFallbacks: number;
+    validTestSessions: number;
+    invalidTestSessions: number;
   };
+  releaseGate: TestingReleaseGate;
+  regression: TestingRegressionSummary;
   users: TesterStats[];
   sessions: TesterSessionSummary[];
   timeline: TestingTimelineBucket[];

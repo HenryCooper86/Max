@@ -1174,11 +1174,15 @@ button.opsCard:disabled {
   opacity: 0.58;
 }
 
-.testingOpsStrip.warn .opsCard {
+.opsCard.good {
+  border-left-color: var(--accent);
+}
+
+.opsCard.warn {
   border-left-color: var(--warn);
 }
 
-.testingOpsStrip.alert .opsCard,
+.opsCard.alert,
 .opsCard.issueCard:not(:disabled) {
   border-left-color: var(--danger);
 }
@@ -1206,6 +1210,120 @@ button.opsCard:disabled {
   font-size: 0.76rem;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.testingDecisionGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.decisionPanel {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(196, 218, 216, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.decisionPanelHead {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.decisionPanelHead span {
+  color: var(--muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.decisionPanelHead strong {
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+}
+
+.decisionPanelHead strong.good {
+  color: var(--accent);
+}
+
+.decisionPanelHead strong.warn {
+  color: var(--warn);
+}
+
+.decisionPanelHead strong.alert {
+  color: var(--danger);
+}
+
+.decisionCases {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.decisionCases span,
+.regressionCompare span {
+  min-width: 0;
+  padding: 8px;
+  border-left: 3px solid rgba(196, 218, 216, 0.18);
+  border-radius: 8px;
+  background: rgba(4, 7, 8, 0.28);
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.decisionCases span.pass {
+  border-left-color: var(--accent);
+}
+
+.decisionCases span.invalid,
+.decisionCases span.missing {
+  border-left-color: var(--warn);
+}
+
+.decisionCases span.blocked {
+  border-left-color: var(--danger);
+}
+
+.decisionCases b,
+.regressionCompare b {
+  display: block;
+  color: #f5fbfa;
+  font-size: 0.78rem;
+  line-height: 1.2;
+}
+
+.regressionCompare {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.decisionNotes {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.decisionNotes p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.74rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.decisionNotes p.fail {
+  color: #ffd9d9;
+}
+
+.decisionNotes p.watch {
+  color: #ffe3a0;
 }
 
 .testerBar {
@@ -2440,6 +2558,7 @@ button.opsCard:disabled {
   .testerBar,
   .testingWorkflowBar,
   .testingFilterBar,
+  .testingDecisionGrid,
   .chartGrid,
   .sessionReplayGrid {
     grid-template-columns: 1fr;
@@ -2512,6 +2631,8 @@ button.opsCard:disabled {
 
   .statGrid,
   .testingOpsStrip,
+  .decisionCases,
+  .regressionCompare,
   .preflightGrid,
   .pulseGrid,
   .rideHistory,

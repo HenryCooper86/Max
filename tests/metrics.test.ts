@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { buildInfo } from "../server/build-info";
 import { buildHealth } from "../server/config";
 import {
   METRICS_WINDOW_MINUTES,
@@ -17,8 +18,44 @@ import {
   recordTesterTurnFeedback,
   testingSnapshot
 } from "../server/metrics";
+import { TESTING_TEST_CASES } from "../shared/testing";
 
 afterEach(() => metrics.reset());
+
+function seedValidCompletedSession(sessionId: string, testCaseId: string, gitCommit = buildInfo.gitCommit, p95LatencyMs = 180) {
+  const agentText: Record<string, string> = {
+    "baseline-live-session": "Route looks clear. Keep your eyes on the road and ride safely.",
+    "wake-word-addressed-only": "Weather is clear. Keep your eyes on the road and ride safely.",
+    "emergency-safe-guidance": "Slow down and pull over safely when you can.",
+    "adas-alert-interrupt": "Blind spot alert on your left. Vehicle approaching. Hold your lane.",
+    "wind-noise-robustness": "Wind noise is high. I heard you. Repeat only when safe.",
+    "degraded-network-recovery": "Network is degraded but connected. I will retry briefly and keep guidance short."
+  };
+  beginTesterSession(
+    sessionId,
+    {
+      testerId: `qa-${testCaseId}`,
+      ipAddress: `203.0.113.${Math.max(1, sessionId.length % 240)}`,
+      testingTestCaseId: testCaseId,
+      gitCommit,
+      deviceLabel: "test browser",
+      networkType: "wifi"
+    },
+    1_000
+  );
+  if (testCaseId !== "adas-alert-interrupt") {
+    recordTesterClientAudio(sessionId, 320, 1_100);
+    recordTesterServerEvent(sessionId, { type: "transcript", speaker: "rider", text: "Max, run the test." }, 64, 1_150);
+  }
+  recordTesterServerEvent(sessionId, { type: "metric", latencyMs: p95LatencyMs }, 32, 1_200);
+  recordTesterServerEvent(
+    sessionId,
+    { type: "transcript", speaker: "agent", text: agentText[testCaseId] ?? agentText["baseline-live-session"] },
+    96,
+    1_260
+  );
+  endTesterSession(sessionId, 4_000);
+}
 
 describe("relay metrics", () => {
   it("tracks the session lifecycle without going negative", () => {
@@ -246,6 +283,56 @@ describe("relay metrics", () => {
       region: "private network",
       activeSessions: 1
     });
+  });
+
+  it("classifies invalid sessions and excludes them from release-gate evidence", () => {
+    beginTesterSession(
+      "invalid-no-reply",
+      { testerId: "invalid", ipAddress: "203.0.113.31", testingTestCaseId: "baseline-live-session" },
+      1_000
+    );
+    recordTesterClientAudio("invalid-no-reply", 320, 1_100);
+    recordTesterServerEvent(
+      "invalid-no-reply",
+      { type: "transcript", speaker: "rider", text: "Max, route status?" },
+      64,
+      1_200
+    );
+    endTesterSession("invalid-no-reply", 4_000);
+
+    const snapshot = testingSnapshot(5_000);
+    expect(snapshot.sessions[0].validity).toMatchObject({
+      status: "invalid",
+      reasons: expect.arrayContaining(["missing-agent-turn"])
+    });
+    expect(snapshot.totals).toMatchObject({ validTestSessions: 0, invalidTestSessions: 1 });
+    expect(snapshot.releaseGate.status).toBe("fail");
+    expect(snapshot.releaseGate.invalidSessions).toBe(1);
+    expect(snapshot.releaseGate.validSessions).toBe(0);
+  });
+
+  it("passes the release gate when every required case has valid current-build evidence", () => {
+    for (const testCase of TESTING_TEST_CASES) {
+      seedValidCompletedSession(`gate-${testCase.id}`, testCase.id);
+    }
+
+    const gate = testingSnapshot(5_000).releaseGate;
+    expect(gate.status).toBe("pass");
+    expect(gate.validSessions).toBe(TESTING_TEST_CASES.length);
+    expect(gate.invalidSessions).toBe(0);
+    expect(gate.blockers).toEqual([]);
+    expect(gate.cases.every((testCase) => testCase.status === "pass")).toBe(true);
+  });
+
+  it("reports regression when the current build drifts from the previous build", () => {
+    seedValidCompletedSession("baseline-prev", "baseline-live-session", "previous-build", 100);
+    seedValidCompletedSession("baseline-current", "baseline-live-session", buildInfo.gitCommit, 500);
+
+    const regression = testingSnapshot(5_000).regression;
+    expect(regression.status).toBe("fail");
+    expect(regression.baseline?.build).toBe("previous-build");
+    expect(regression.deltas?.p95LatencyMs).toBe(400);
+    expect(regression.findings).toContainEqual(expect.objectContaining({ id: "p95-latency-drift", status: "fail" }));
   });
 });
 

@@ -60,6 +60,7 @@ function flaggedTurns(session: { turns: { feedback?: string }[] }) {
 
 function sessionIssueCount(session: {
   quality: TestingQuality;
+  validity?: { status: string; reasons: string[] };
   flags: string[];
   turns: { feedback?: string }[];
   evaluation: { checks: { status: string }[] };
@@ -67,7 +68,10 @@ function sessionIssueCount(session: {
   const failedOrWarnChecks = session.evaluation.checks.filter(
     (check) => check.status === "fail" || check.status === "warn"
   ).length;
-  return session.flags.length + flaggedTurns(session) + failedOrWarnChecks + (session.quality === "fail" ? 1 : 0);
+  const invalidEvidence = session.validity?.status === "invalid" ? Math.max(1, session.validity.reasons.length) : 0;
+  return (
+    session.flags.length + flaggedTurns(session) + failedOrWarnChecks + invalidEvidence + (session.quality === "fail" ? 1 : 0)
+  );
 }
 
 function testRequirementLabels(testCase: TestingTestCase) {
@@ -94,6 +98,21 @@ function formatSessionDate(timestamp: number) {
 function barHeight(value: number, max: number) {
   if (!Number.isFinite(value) || value <= 0 || max <= 0) return "3%";
   return `${Math.max(6, Math.round((value / max) * 100))}%`;
+}
+
+function releaseStatusLabel(status: string | undefined) {
+  if (status === "pass") return "PASS";
+  if (status === "watch") return "WATCH";
+  if (status === "fail") return "FAIL";
+  if (status === "waiting") return "WAITING";
+  if (status === "insufficient") return "NEEDS DATA";
+  return "WAITING";
+}
+
+function statusTone(status: string | undefined) {
+  if (status === "pass") return "good";
+  if (status === "fail") return "alert";
+  return "warn";
 }
 
 // "New failures" watermark: fail sessions that ended after this timestamp
@@ -177,6 +196,8 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
   const testing = agent.health?.testing;
   const testingTotals = testing?.totals;
   const testingTimeline = testing?.timeline ?? [];
+  const releaseGate = testing?.releaseGate;
+  const regression = testing?.regression;
   // Guard against a relay shipping an empty catalog: selectedCampaign.id
   // below must never dereference undefined.
   const testingCampaigns = testing?.catalog?.campaigns?.length ? testing.catalog.campaigns : TESTING_CAMPAIGNS;
@@ -244,6 +265,8 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
         session.appVersion,
         session.gitCommit,
         session.notes,
+        session.validity.detail,
+        ...session.validity.reasons,
         ...session.flags,
         ...session.evaluation.checks.map((check) => `${check.label} ${check.status} ${check.detail}`)
       ];
@@ -268,7 +291,6 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
         sessionIssueCount(b) - sessionIssueCount(a) ||
         b.endedAt - a.endedAt
     )[0];
-  const highestP95Session = [...testingSessions].sort((a, b) => b.p95LatencyMs - a.p95LatencyMs)[0];
   const averageEvaluationScore = testingSessions.length
     ? Math.round(testingSessions.reduce((sum, session) => sum + session.evaluation.score, 0) / testingSessions.length)
     : 0;
@@ -404,15 +426,28 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
         </div>
       </div>
 
-      <div className={`testingOpsStrip ${qualityTone}`} aria-label="测试运营概览">
-        <div className="opsCard">
-          <span>Release health</span>
-          <strong>{qualityTone === "good" ? "PASS" : qualityTone === "warn" ? "WATCH" : "FAIL"}</strong>
+      <div className="testingOpsStrip" aria-label="测试运营概览">
+        <div className={`opsCard ${statusTone(releaseGate?.status)}`}>
+          <span>Release gate</span>
+          <strong>{releaseStatusLabel(releaseGate?.status)}</strong>
           <p>
-            {qualityBreakdownLabel(sessionQualityCounts)} · avg eval {averageEvaluationScore}
+            {releaseGate
+              ? `${releaseGate.validSessions} valid · ${releaseGate.invalidSessions} invalid · p95 ${releaseGate.p95LatencyMs}ms`
+              : `${qualityBreakdownLabel(sessionQualityCounts)} · avg eval ${averageEvaluationScore}`}
           </p>
         </div>
-        <button type="button" className="opsCard issueCard" disabled={!latestIssueSession} onClick={reviewLatestIssue}>
+        <div className={`opsCard ${statusTone(regression?.status)}`}>
+          <span>Regression</span>
+          <strong>{releaseStatusLabel(regression?.status)}</strong>
+          <p>
+            {regression?.baseline && regression.deltas
+              ? `${regression.current.build} vs ${regression.baseline.build} · p95 ${
+                  regression.deltas.p95LatencyMs >= 0 ? "+" : ""
+                }${regression.deltas.p95LatencyMs}ms`
+              : "Needs current and previous build evidence"}
+          </p>
+        </div>
+        <button type="button" className="opsCard issueCard alert" disabled={!latestIssueSession} onClick={reviewLatestIssue}>
           <span>Issue queue</span>
           <strong>{issueSessionCount} sessions</strong>
           <p>
@@ -420,25 +455,79 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
               ? `${latestIssueSession.testerId} · ${latestIssueSession.testCaseName} · ${formatRelativeTime(
                   latestIssueSession.endedAt
                 )}`
-              : "No watch/fail sessions"}
+            : "No watch/fail sessions"}
           </p>
         </button>
-        <div className="opsCard">
-          <span>Worst p95</span>
-          <strong>{highestP95Session ? `${highestP95Session.p95LatencyMs}ms` : "0ms"}</strong>
-          <p>
-            {highestP95Session
-              ? `${highestP95Session.testerId} · ${highestP95Session.testCaseName}`
-              : "No completed sessions"}
-          </p>
-        </div>
-        <div className="opsCard">
+        <div className={`opsCard ${(testingTotals?.invalidTestSessions ?? 0) ? "warn" : "good"}`}>
           <span>Evidence</span>
           <strong>{testing?.history.persistent ? "Persistent" : "Memory only"}</strong>
           <p>
-            {testingSessions.length}/{testing?.history.maxSessions ?? 0} sessions · {flaggedTurnCount} flagged turns
+            {testingTotals?.validTestSessions ?? 0} valid · {testingTotals?.invalidTestSessions ?? 0} invalid ·{" "}
+            {flaggedTurnCount} flagged turns
           </p>
         </div>
+      </div>
+
+      <div className="testingDecisionGrid">
+        <section className="decisionPanel" aria-label="发布门禁">
+          <div className="decisionPanelHead">
+            <span>Release gate</span>
+            <strong className={statusTone(releaseGate?.status)}>{releaseStatusLabel(releaseGate?.status)}</strong>
+          </div>
+          <div className="decisionCases">
+            {(releaseGate?.cases ?? []).map((testCase) => (
+              <span className={testCase.status} key={testCase.testCaseId}>
+                <b>{testCase.testCaseName}</b>
+                {testCase.validSessions} valid · {testCase.invalidSessions} invalid
+              </span>
+            ))}
+            {!releaseGate?.cases.length ? <p className="testerConversationEmpty">No release gate data yet.</p> : null}
+          </div>
+          <div className="decisionNotes">
+            {(releaseGate?.blockers.length ? releaseGate.blockers : releaseGate?.warnings ?? []).slice(0, 3).map((note) => (
+              <p key={note}>{note}</p>
+            ))}
+            {releaseGate && !releaseGate.blockers.length && !releaseGate.warnings.length ? <p>All current gate checks pass.</p> : null}
+          </div>
+        </section>
+
+        <section className="decisionPanel" aria-label="构建回归比较">
+          <div className="decisionPanelHead">
+            <span>Regression</span>
+            <strong className={statusTone(regression?.status)}>{releaseStatusLabel(regression?.status)}</strong>
+          </div>
+          <div className="regressionCompare">
+            <span>
+              <b>{regression?.current.validSessions ?? 0}</b>
+              Current valid
+            </span>
+            <span>
+              <b>{regression?.baseline?.validSessions ?? 0}</b>
+              Baseline valid
+            </span>
+            <span>
+              <b>
+                {regression?.deltas ? `${regression.deltas.avgScore >= 0 ? "+" : ""}${regression.deltas.avgScore}` : "—"}
+              </b>
+              Score drift
+            </span>
+            <span>
+              <b>
+                {regression?.deltas
+                  ? `${regression.deltas.failRatePct >= 0 ? "+" : ""}${regression.deltas.failRatePct}%`
+                  : "—"}
+              </b>
+              Fail drift
+            </span>
+          </div>
+          <div className="decisionNotes">
+            {(regression?.findings ?? []).slice(0, 3).map((finding) => (
+              <p className={finding.status} key={finding.id}>
+                {finding.label}: {finding.detail}
+              </p>
+            ))}
+          </div>
+        </section>
       </div>
 
       <div className="testingWorkflowBar">
@@ -789,6 +878,7 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
                     <span>
                       score {session.evaluation.score} · {issues} issues
                     </span>
+                    <span>{session.validity.status === "valid" ? "valid evidence" : session.validity.detail}</span>
                   </button>
                 );
               })
@@ -833,6 +923,10 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
                   <span>
                     <b>{selectedSessionIssues}</b>
                     Issues
+                  </span>
+                  <span>
+                    <b>{selectedSession.validity.status}</b>
+                    Evidence
                   </span>
                   <span>
                     <b>{selectedSession.deviceLabel}</b>

@@ -147,16 +147,6 @@ export function validateConfig(): string[] {
     }
   }
 
-  // With a relay token set, open self-registration would let any stranger
-  // mint a session that bypasses that token (and the FIRST registrant becomes
-  // the admin). Registration on a token-protected relay should go through
-  // invites, so flag the combination loudly.
-  if (config.relayAuthToken && config.authRegistration && !authActive()) {
-    warnings.push(
-      "RELAY_AUTH_TOKEN 已设置但 AUTH_REGISTRATION=on 且尚无账号：任何人都可以自助注册并成为管理员，从而绕过中继令牌。请先注册管理员账号，或设置 AUTH_REGISTRATION=off 之后用邀请链接注册。"
-    );
-  }
-
   if (config.allowedOrigins.length && !config.relayAuthToken) {
     warnings.push(
       "RELAY_ALLOWED_ORIGINS 已设置但 RELAY_AUTH_TOKEN 未设置：来源白名单只能拦截浏览器，不发送 Origin 头的原生 App 或脚本仍可连接。请同时设置令牌。"

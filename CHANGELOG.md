@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-07-15 — Security, QA evidence, and session-lifecycle hardening
+
+- Closed a remaining registration bypass on token-protected relays: an
+  arbitrary string in `inviteCode` no longer satisfies the HTTP guard when no
+  relay token was presented. The account layer now independently requires and
+  revalidates a real single-use invite before and after password hashing.
+- Retained JSONL sessions are re-evaluated with the current deterministic
+  policy on load. Persisted `quality`, `validity`, and check results are treated
+  as derived snapshots, so an old false pass cannot keep feeding today's
+  release gate after the evaluator changes.
+- Regression comparison now skips previous builds that contain only invalid
+  evidence and selects the latest previous build with at least one valid run.
+- Wake-word evaluation now mirrors the live bounded follow-up window instead
+  of leaving the gate open forever after the first "Max". Emergency cases
+  require actionable guidance, and ADAS cases require both a hazard cue and a
+  direction or safe response rather than passing on a generic direction word.
+- Temporary `/auth/me` network or 5xx failures no longer sign an active tester
+  out; only an explicit 401 invalidates the stored session. Failed microphone
+  or AudioWorklet setup now releases every media resource and closes the
+  just-opened upstream voice session instead of holding a mic/provider slot.
+- Relay event validation clamps negative counters/timers and out-of-range HUD
+  values. Updated `tsx`/`esbuild` in the lockfile to remove the remaining
+  low-severity development dependency advisory.
+
 ## 2026-07-05 — iOS & Android: tester turn feedback reaches parity with the web HUD
 
 Both native apps can now flag a bad turn from the captions overlay (字幕):

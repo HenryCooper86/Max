@@ -50,6 +50,13 @@ export type InviteInfo = {
 
 export type AuthResult = { ok: true; token: string; user: PublicUser } | { ok: false; error: string };
 
+type RegistrationOptions = {
+  /** Require a valid single-use invite even when AUTH_REGISTRATION is open.
+   *  Token-protected HTTP registration uses this when the request did not
+   *  present the operator relay token. */
+  requireInvite?: boolean;
+};
+
 const USERNAME_PATTERN = /^[a-z0-9][a-z0-9_-]{2,31}$/;
 const MIN_PASSWORD_LENGTH = 8;
 const MAX_PASSWORD_LENGTH = 128;
@@ -307,7 +314,8 @@ export async function registerUser(
   passwordInput: unknown,
   displayNameInput?: unknown,
   now = Date.now(),
-  inviteCodeInput?: unknown
+  inviteCodeInput?: unknown,
+  options: RegistrationOptions = {}
 ): Promise<AuthResult> {
   ensureAccountsLoaded();
   // With the stored accounts unreadable, a registration would make a stranger
@@ -317,7 +325,7 @@ export async function registerUser(
   }
   const inviteCode = typeof inviteCodeInput === "string" ? inviteCodeInput.trim() : "";
   const invite = inviteCode ? validInvite(inviteCode, now) : null;
-  if (!registrationOpen() && !invite) {
+  if ((options.requireInvite || !registrationOpen()) && !invite) {
     return {
       ok: false,
       error: inviteCode ? "邀请链接无效或已过期，请向管理员索取新邀请。" : "注册已关闭，请联系管理员。"
@@ -352,7 +360,7 @@ export async function registerUser(
   // an admin may have revoked it while scrypt ran.
   if (users.has(username)) return { ok: false, error: "用户名已被使用。" };
   const inviteAfterHash = inviteCode ? validInvite(inviteCode, now) : null;
-  if (!registrationOpen() && !inviteAfterHash) {
+  if ((options.requireInvite || !registrationOpen()) && !inviteAfterHash) {
     return { ok: false, error: "邀请链接无效或已过期，请向管理员索取新邀请。" };
   }
   if (user.role === "admin" && users.size > 0) user.role = "tester";

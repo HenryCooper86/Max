@@ -40,9 +40,17 @@ function finiteOr(value: unknown, fallback: number): number {
   return isFiniteNumber(value) ? value : fallback;
 }
 
+function finiteInRange(value: unknown, fallback: number, min: number, max = Number.POSITIVE_INFINITY): number {
+  return isFiniteNumber(value) ? Math.min(max, Math.max(min, value)) : fallback;
+}
+
 /** Optional numeric field: keep only finite values. */
-function finiteOrUndefined(value: unknown): number | undefined {
-  return isFiniteNumber(value) ? value : undefined;
+function finiteOrUndefined(
+  value: unknown,
+  min = Number.NEGATIVE_INFINITY,
+  max = Number.POSITIVE_INFINITY
+): number | undefined {
+  return isFiniteNumber(value) ? Math.min(max, Math.max(min, value)) : undefined;
 }
 
 function enumOrUndefined<T extends string>(value: unknown, allowed: Set<string>): T | undefined {
@@ -108,9 +116,9 @@ export function validateAgentEvent(value: unknown): AgentEvent | null {
     case "metric": {
       return {
         type: "metric",
-        latencyMs: finiteOr(value.latencyMs, 0),
-        droppedFrames: finiteOrUndefined(value.droppedFrames),
-        outgoingFps: finiteOrUndefined(value.outgoingFps)
+        latencyMs: finiteInRange(value.latencyMs, 0, 0),
+        droppedFrames: finiteOrUndefined(value.droppedFrames, 0),
+        outgoingFps: finiteOrUndefined(value.outgoingFps, 0)
       };
     }
 
@@ -120,7 +128,7 @@ export function validateAgentEvent(value: unknown): AgentEvent | null {
         type: "weather",
         description: value.description,
         temperatureC: finiteOr(value.temperatureC, 0),
-        windSpeedKmh: finiteOr(value.windSpeedKmh, 0),
+        windSpeedKmh: finiteInRange(value.windSpeedKmh, 0, 0),
         // Accept the upstream Open-Meteo numeric form (is_day: 0|1) too — a
         // bare `!== false` coerced numeric 0 (night) into daytime rendering.
         isDay: typeof value.isDay === "boolean" ? value.isDay : value.isDay !== 0,
@@ -141,10 +149,10 @@ export function validateAgentEvent(value: unknown): AgentEvent | null {
         modeLabel: value.modeLabel,
         scenario: value.scenario as DemoScenario,
         scenarioLabel: value.scenarioLabel,
-        speedKmh: finiteOrUndefined(value.speedKmh),
+        speedKmh: finiteOrUndefined(value.speedKmh, 0),
         routePhase: isString(value.routePhase) ? value.routePhase : undefined,
         network: enumOrUndefined(value.network, NETWORK_STATES),
-        batteryPct: finiteOrUndefined(value.batteryPct),
+        batteryPct: finiteOrUndefined(value.batteryPct, 0, 100),
         hazardLevel,
         glanceableFocus: isString(value.glanceableFocus) ? value.glanceableFocus : ""
       };
@@ -170,10 +178,10 @@ export function validateAgentEvent(value: unknown): AgentEvent | null {
     case "telemetry": {
       return {
         type: "telemetry",
-        asrMs: finiteOr(value.asrMs, 0),
-        thinkMs: finiteOr(value.thinkMs, 0),
-        firstAudioMs: finiteOr(value.firstAudioMs, 0),
-        totalMs: finiteOr(value.totalMs, 0)
+        asrMs: finiteInRange(value.asrMs, 0, 0),
+        thinkMs: finiteInRange(value.thinkMs, 0, 0),
+        firstAudioMs: finiteInRange(value.firstAudioMs, 0, 0),
+        totalMs: finiteInRange(value.totalMs, 0, 0)
       };
     }
 
@@ -196,7 +204,7 @@ export function validateAgentEvent(value: unknown): AgentEvent | null {
         message: value.message,
         advice: value.advice,
         // NaN here used to make the auto-dismiss timeout fire on the next tick.
-        ttcSeconds: finiteOr(value.ttcSeconds, 6),
+        ttcSeconds: finiteInRange(value.ttcSeconds, 6, 0, 300),
         interrupt: value.interrupt === true
       };
     }

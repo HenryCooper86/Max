@@ -898,7 +898,24 @@ export function useHelmetAgent() {
       socket.send(JSON.stringify({ type: "audio.start" }));
     } catch (error) {
       if (attempt !== startAttemptRef.current) return; // superseded, not a failure
+      // waitForSocket starts the upstream session before getUserMedia asks for
+      // permission. If mic/worklet setup fails, close that socket immediately
+      // instead of holding a live Doubao slot until the 10-minute idle timer;
+      // also cancel any reconnect that the failed open may have scheduled.
+      intentionalCloseRef.current = true;
+      if (reconnectTimerRef.current) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      reconnectAttemptsRef.current = 0;
+      const failedSocket = socketRef.current;
+      socketRef.current = null;
+      failedSocket?.close();
       transmittingRef.current = false;
+      setTrackEnabled(false);
+      resetFrameWindow();
+      setConnected(false);
+      setConnectionState("offline");
       setListening(false);
       setTurnState("idle");
       setStatus(error instanceof Error ? error.message : "无法访问麦克风");

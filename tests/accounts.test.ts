@@ -57,6 +57,27 @@ describe("user accounts", () => {
     expect(duplicate).toMatchObject({ ok: false, error: expect.stringContaining("已被使用") });
   });
 
+  it("does not treat an arbitrary invite string as authorization on a protected registration route", async () => {
+    // The HTTP route sets requireInvite when RELAY_AUTH_TOKEN is configured
+    // but the request did not present it. Previously, merely making
+    // inviteCode a string (including "fake") passed the route guard and open
+    // registration admitted the account anyway.
+    config.authRegistration = true;
+    const forged = await registerUser("intruder", "password123", undefined, 1_000, "fake", {
+      requireInvite: true
+    });
+    expect(forged).toMatchObject({ ok: false, error: expect.stringContaining("邀请") });
+    expect(userCount()).toBe(0);
+
+    const bootstrap = await registerUser("boss", "hunter2-hunter2", undefined, 2_000);
+    expect(bootstrap.ok).toBe(true);
+    const invite = createInvite("boss", 2_500);
+    const invited = await registerUser("rider", "password123", undefined, 3_000, invite.code, {
+      requireInvite: true
+    });
+    expect(invited.ok).toBe(true);
+  });
+
   it("logs in with the right password and rejects the wrong one uniformly", async () => {
     await registerUser("rider", "password123");
 

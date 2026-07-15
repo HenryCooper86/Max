@@ -115,7 +115,9 @@ export function AccountAdmin({ adminUsername }: { adminUsername: string }) {
   });
   const adminCount = users.filter((user) => user.role === "admin").length;
   const testerCount = users.length - adminCount;
-  const expiringInviteCount = invites.filter((invite) => invite.expiresAt - Date.now() <= INVITE_EXPIRING_SOON_MS).length;
+  const expiringInviteCount = invites.filter(
+    (invite) => invite.expiresAt - Date.now() <= INVITE_EXPIRING_SOON_MS
+  ).length;
 
   return (
     <div className="accountAdmin" aria-label="账号管理">

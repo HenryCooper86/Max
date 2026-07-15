@@ -69,11 +69,12 @@ app.post("/auth/register", express.json(), (req, res) => {
   // that bypass the token (and could hand admin to a stranger) — require the
   // relay token or an invite there. The zero-config bootstrap (no token) and
   // the invite flow are unaffected.
-  if (config.relayAuthToken && !relayTokenPresented(req) && typeof body.inviteCode !== "string") {
+  const requireInvite = Boolean(config.relayAuthToken && !relayTokenPresented(req));
+  if (requireInvite && typeof body.inviteCode !== "string") {
     res.status(403).json({ ok: false, error: "该中继需要邀请链接（或中继令牌）才能注册。" });
     return;
   }
-  registerUser(body.username, body.password, body.displayName, Date.now(), body.inviteCode)
+  registerUser(body.username, body.password, body.displayName, Date.now(), body.inviteCode, { requireInvite })
     .then((result) => {
       if (result.ok) {
         log.info("user registered", { username: result.user.username, role: result.user.role });

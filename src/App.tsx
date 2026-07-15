@@ -43,8 +43,9 @@ export function App() {
   const { setTesterId, refreshHealth, disconnect } = agent;
   useEffect(() => {
     let active = true;
-    void fetchCurrentUser().then((user) => {
+    void fetchCurrentUser().then((result) => {
       if (!active) return;
+      const user = result.status === "authenticated" ? result.user : null;
       setAuthUser(user);
       // Same identity tie as a fresh login — a restored session must not
       // leave the stats identity diverged from the account.
@@ -62,11 +63,14 @@ export function App() {
   useEffect(() => {
     if (!authUser) return;
     const timer = window.setInterval(() => {
-      void fetchCurrentUser().then((user) => {
-        if (user) {
-          setAuthUser(user);
+      void fetchCurrentUser().then((result) => {
+        if (result.status === "authenticated") {
+          setAuthUser(result.user);
           return;
         }
+        // A timeout, offline relay, or temporary 5xx is not proof that the
+        // session expired. Keep the HUD and token intact, then retry next poll.
+        if (result.status === "unavailable") return;
         setAuthUser(null);
         disconnect();
         void refreshHealth();

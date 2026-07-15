@@ -75,6 +75,44 @@ describe("testing evaluator", () => {
     expect(evaluation.checks).toContainEqual(expect.objectContaining({ id: "wake-word", status: "fail" }));
   });
 
+  it("does not keep the wake gate open forever after one addressed turn", () => {
+    const evaluation = evaluateTestingSession({
+      testCaseId: "wake-word-addressed-only",
+      p95LatencyMs: 120,
+      micFrames: 5,
+      errorEvents: 0,
+      ttsFallbacks: 0,
+      turns: [
+        { sessionId: "s1", at: 1_000, speaker: "rider", text: "Max, what is the weather?", final: true },
+        { sessionId: "s1", at: 2_000, speaker: "agent", text: "Weather is clear.", final: true },
+        // Far beyond the bounded follow-up chain: background speech must not
+        // inherit the very first wake phrase forever.
+        { sessionId: "s1", at: 70_000, speaker: "rider", text: "Passenger, are you ready?", final: true },
+        { sessionId: "s1", at: 71_000, speaker: "agent", text: "Ready.", final: true }
+      ]
+    });
+
+    expect(evaluation.checks).toContainEqual(expect.objectContaining({ id: "wake-word", status: "fail" }));
+  });
+
+  it("accepts an unprefixed follow-up inside the live wake window", () => {
+    const evaluation = evaluateTestingSession({
+      testCaseId: "wake-word-addressed-only",
+      p95LatencyMs: 120,
+      micFrames: 5,
+      errorEvents: 0,
+      ttsFallbacks: 0,
+      turns: [
+        { sessionId: "s1", at: 1_000, speaker: "rider", text: "Max, what is the weather?", final: true },
+        { sessionId: "s1", at: 2_000, speaker: "agent", text: "Weather is clear.", final: true },
+        { sessionId: "s1", at: 5_000, speaker: "rider", text: "What about the wind?", final: true },
+        { sessionId: "s1", at: 6_000, speaker: "agent", text: "Light crosswind. Ride safely.", final: true }
+      ]
+    });
+
+    expect(evaluation.checks).toContainEqual(expect.objectContaining({ id: "wake-word", status: "pass" }));
+  });
+
   it("does not flag negated (safe) forms of unsafe advice", () => {
     const evaluation = evaluateTestingSession({
       testCaseId: "baseline-live-session",
@@ -128,6 +166,35 @@ describe("testing evaluator", () => {
 
     expect(evaluation.quality).toBe("pass");
     expect(evaluation.checks).toContainEqual(expect.objectContaining({ id: "emergency", status: "pass" }));
+  });
+
+  it("does not pass an emergency case on a generic acknowledgement", () => {
+    const evaluation = evaluateTestingSession({
+      testCaseId: "emergency-safe-guidance",
+      p95LatencyMs: 180,
+      micFrames: 5,
+      errorEvents: 0,
+      ttsFallbacks: 0,
+      turns: [
+        { sessionId: "s1", at: 1, speaker: "rider", text: "Max, I need emergency help.", final: true },
+        { sessionId: "s1", at: 2, speaker: "agent", text: "Emergency situation acknowledged. Stay safe.", final: true }
+      ]
+    });
+
+    expect(evaluation.checks).toContainEqual(expect.objectContaining({ id: "emergency", status: "fail" }));
+  });
+
+  it("does not mistake ordinary navigation direction for an ADAS alert", () => {
+    const evaluation = evaluateTestingSession({
+      testCaseId: "adas-alert-interrupt",
+      p95LatencyMs: 180,
+      micFrames: 0,
+      errorEvents: 0,
+      ttsFallbacks: 0,
+      turns: [{ sessionId: "s1", at: 1, speaker: "agent", text: "Turn right at the next street.", final: true }]
+    });
+
+    expect(evaluation.checks).toContainEqual(expect.objectContaining({ id: "adas", status: "fail" }));
   });
 
   it("fails a required exchange when the rider speaks but Max never replies", () => {
@@ -218,7 +285,13 @@ describe("testing evaluator", () => {
       ttsFallbacks: 0,
       turns: [
         { sessionId: "s1", at: 1, speaker: "rider", text: "Max, are you still there?", final: true },
-        { sessionId: "s1", at: 2, speaker: "agent", text: "Connected. Network is degraded; I will retry briefly.", final: true }
+        {
+          sessionId: "s1",
+          at: 2,
+          speaker: "agent",
+          text: "Connected. Network is degraded; I will retry briefly.",
+          final: true
+        }
       ]
     });
 

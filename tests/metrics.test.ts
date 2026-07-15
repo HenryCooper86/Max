@@ -22,7 +22,12 @@ import { TESTING_TEST_CASES } from "../shared/testing";
 
 afterEach(() => metrics.reset());
 
-function seedValidCompletedSession(sessionId: string, testCaseId: string, gitCommit = buildInfo.gitCommit, p95LatencyMs = 180) {
+function seedValidCompletedSession(
+  sessionId: string,
+  testCaseId: string,
+  gitCommit = buildInfo.gitCommit,
+  p95LatencyMs = 180
+) {
   const agentText: Record<string, string> = {
     "baseline-live-session": "Route looks clear. Keep your eyes on the road and ride safely.",
     "wake-word-addressed-only": "Weather is clear. Keep your eyes on the road and ride safely.",
@@ -333,6 +338,29 @@ describe("relay metrics", () => {
     expect(regression.baseline?.build).toBe("previous-build");
     expect(regression.deltas?.p95LatencyMs).toBe(400);
     expect(regression.findings).toContainEqual(expect.objectContaining({ id: "p95-latency-drift", status: "fail" }));
+  });
+
+  it("skips a newer previous build that has only invalid evidence when choosing the regression baseline", () => {
+    seedValidCompletedSession("baseline-valid", "baseline-live-session", "previous-valid", 100);
+
+    beginTesterSession(
+      "baseline-invalid-newer",
+      {
+        testerId: "aborted-run",
+        ipAddress: "203.0.113.99",
+        testingTestCaseId: "baseline-live-session",
+        gitCommit: "previous-invalid"
+      },
+      5_000
+    );
+    // Long enough not to be only "too short", but still invalid because the
+    // required mic audio and transcript exchange never happened.
+    endTesterSession("baseline-invalid-newer", 9_000);
+    seedValidCompletedSession("baseline-current-valid", "baseline-live-session", buildInfo.gitCommit, 120);
+
+    const regression = testingSnapshot(10_000).regression;
+    expect(regression.baseline?.build).toBe("previous-valid");
+    expect(regression.status).not.toBe("insufficient");
   });
 });
 

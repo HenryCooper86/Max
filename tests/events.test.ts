@@ -66,6 +66,38 @@ describe("validateAgentEvent", () => {
     });
   });
 
+  it("clamps impossible negative counters and out-of-range HUD values", () => {
+    expect(validateAgentEvent({ type: "metric", latencyMs: -40, droppedFrames: -2 })).toMatchObject({
+      latencyMs: 0,
+      droppedFrames: 0
+    });
+    expect(
+      validateAgentEvent({
+        type: "ride.context",
+        mode: "ride",
+        scenario: "commute",
+        modeLabel: "骑行",
+        scenarioLabel: "通勤",
+        hazardLevel: "normal",
+        glanceableFocus: "速度",
+        speedKmh: -10,
+        batteryPct: 160
+      })
+    ).toMatchObject({ speedKmh: 0, batteryPct: 100 });
+    expect(
+      validateAgentEvent({
+        type: "hazard.alert",
+        threat: "rear_approach",
+        direction: "rear",
+        severity: "critical",
+        label: "后方",
+        message: "后方车辆快速接近",
+        advice: "保持车道",
+        ttcSeconds: -3
+      })
+    ).toMatchObject({ ttcSeconds: 0 });
+  });
+
   it("drops invalid optional enums instead of the whole event", () => {
     const weather = validateAgentEvent({ type: "weather", description: "晴", riskLevel: "apocalyptic" });
     expect(weather).toMatchObject({ type: "weather", riskLevel: undefined });

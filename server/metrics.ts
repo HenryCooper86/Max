@@ -14,7 +14,6 @@ import {
   findTestingTestCase,
   testingCatalog,
   type TestingBuildSummary,
-  type TestingCheckStatus,
   type TestingEvaluationSummary,
   type TestingInvalidReason,
   type TestingQuality,
@@ -575,24 +574,6 @@ function classifySessionEvidence(input: {
   };
 }
 
-function normalizeValidity(value: unknown, fallback: TestingValiditySummary): TestingValiditySummary {
-  if (!isRecord(value)) return fallback;
-  const rawReasons = Array.isArray(value.reasons) ? value.reasons : [];
-  const allowed = new Set<TestingInvalidReason>([
-    "too-short",
-    "missing-transcript",
-    "missing-rider-turn",
-    "missing-agent-turn",
-    "missing-mic-audio"
-  ]);
-  const reasons = rawReasons.filter((reason): reason is TestingInvalidReason => allowed.has(reason as TestingInvalidReason));
-  return {
-    status: value.status === "invalid" || reasons.length ? "invalid" : "valid",
-    reasons,
-    detail: typeof value.detail === "string" && cleanText(value.detail) ? cleanText(value.detail).slice(0, 240) : validityDetail(reasons)
-  };
-}
-
 function completedSessionsForBuild(build: string): TesterSessionSummary[] {
   return completedSessions.filter((session) => session.gitCommit === build);
 }
@@ -675,12 +656,16 @@ function buildReleaseGate(now: number): TestingReleaseGate {
     blockers.push(`${failSessions} valid current-build session(s) failed.`);
   }
   if (watchSessions > RELEASE_GATE_CRITERIA.maxWatchSessions) {
-    blockers.push(`${watchSessions} valid current-build session(s) are watch, above ${RELEASE_GATE_CRITERIA.maxWatchSessions}.`);
+    blockers.push(
+      `${watchSessions} valid current-build session(s) are watch, above ${RELEASE_GATE_CRITERIA.maxWatchSessions}.`
+    );
   } else if (watchSessions > 0) {
     warnings.push(`${watchSessions} valid current-build session(s) are watch.`);
   }
   if (invalidSessions > RELEASE_GATE_CRITERIA.maxInvalidSessions) {
-    blockers.push(`${invalidSessions} invalid current-build session(s), above ${RELEASE_GATE_CRITERIA.maxInvalidSessions}.`);
+    blockers.push(
+      `${invalidSessions} invalid current-build session(s), above ${RELEASE_GATE_CRITERIA.maxInvalidSessions}.`
+    );
   } else if (invalidSessions > 0) {
     warnings.push(`${invalidSessions} invalid current-build session(s) excluded from release scoring.`);
   }
@@ -723,7 +708,10 @@ function buildRegressionSummary(): TestingRegressionSummary {
   const currentBuild = buildInfo.gitCommit;
   const current = summarizeBuild(currentBuild, completedSessionsForBuild(currentBuild));
   const baselineBuild = [...completedSessions]
-    .filter((session) => session.gitCommit !== currentBuild)
+    // Pick the latest previous BUILD WITH VALID EVIDENCE. A newer build that
+    // only produced aborted/invalid runs must not hide an older usable
+    // baseline and downgrade regression reporting to "insufficient".
+    .filter((session) => session.gitCommit !== currentBuild && session.validity.status === "valid")
     .sort((a, b) => b.endedAt - a.endedAt)[0]?.gitCommit;
   const baseline = baselineBuild ? summarizeBuild(baselineBuild, completedSessionsForBuild(baselineBuild)) : undefined;
   const findings: TestingRegressionFinding[] = [];
@@ -866,49 +854,6 @@ function completedSessionSummary(session: ActiveTestingSession, endedAt: number)
   };
 }
 
-function normalizeQuality(value: unknown): TestingQuality {
-  return value === "pass" || value === "watch" || value === "fail" ? value : "watch";
-}
-
-function normalizeEvaluation(
-  value: unknown,
-  input: {
-    testCaseId: string;
-    p95LatencyMs: number;
-    micFrames: number;
-    errorEvents: number;
-    ttsFallbacks: number;
-    turns: TesterTranscriptTurn[];
-  }
-): TestingEvaluationSummary {
-  if (isRecord(value) && Array.isArray(value.checks)) {
-    const testCase = findTestingTestCase(typeof value.testCaseId === "string" ? value.testCaseId : input.testCaseId);
-    const checks = value.checks.filter(isRecord).map((check) => {
-      const status: TestingCheckStatus =
-        check.status === "pass" || check.status === "warn" || check.status === "fail" || check.status === "skipped"
-          ? check.status
-          : "warn";
-      return {
-        id: normalizeMetaString(check.id, "unknown-check", 80),
-        label: normalizeMetaString(check.label, "Unknown check", 120),
-        status,
-        detail: normalizeMetaString(check.detail, "No detail", 240)
-      };
-    });
-    return {
-      testCaseId: testCase.id,
-      testCaseName: testCase.name,
-      score:
-        typeof value.score === "number" && Number.isFinite(value.score)
-          ? Math.max(0, Math.min(100, Math.round(value.score)))
-          : 0,
-      quality: normalizeQuality(value.quality),
-      checks
-    };
-  }
-  return evaluateTestingSession(input);
-}
-
 function normalizeTranscriptTurn(value: unknown): TesterTranscriptTurn | null {
   if (!isRecord(value)) return null;
   const speaker = normalizeTranscriptSpeaker(value.speaker);
@@ -952,7 +897,11 @@ function normalizeCompletedSession(value: unknown): TesterSessionSummary | null 
   const errorEvents = numberField("errorEvents");
   const ttsFallbacks = numberField("ttsFallbacks");
   const durationMs = numberField("durationMs") || Math.max(0, endedAt - startedAt);
-  const evaluation = normalizeEvaluation(value.evaluation, {
+  // Evaluation and validity are DERIVED evidence, not historical authority.
+  // Re-run the current deterministic policy whenever JSONL history loads so
+  // a policy fix cannot leave old persisted "pass"/"valid" fields feeding the
+  // release gate indefinitely.
+  const evaluation = evaluateTestingSession({
     testCaseId: testCase.id,
     p95LatencyMs,
     micFrames,
@@ -963,15 +912,12 @@ function normalizeCompletedSession(value: unknown): TesterSessionSummary | null 
   const flags = evaluation.checks
     .filter((check) => check.status === "fail" || check.status === "warn")
     .map((check) => check.id);
-  const validity = normalizeValidity(
-    value.validity,
-    classifySessionEvidence({
-      testCaseId: testCase.id,
-      durationMs,
-      micFrames,
-      turns
-    })
-  );
+  const validity = classifySessionEvidence({
+    testCaseId: testCase.id,
+    durationMs,
+    micFrames,
+    turns
+  });
 
   return {
     sessionId,

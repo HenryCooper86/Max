@@ -6,7 +6,7 @@ import {
   type TestingEvaluationSummary,
   type TestingQuality
 } from "../shared/testing";
-import { containsWakePhrase } from "../shared/wake";
+import { containsWakePhrase, WAKE_FOLLOWUP_MAX_CHAIN_MS, WAKE_FOLLOWUP_WINDOW_MS } from "../shared/wake";
 
 export type TestingEvaluationInput = {
   testCaseId?: string;
@@ -44,38 +44,63 @@ function stripNegatedAdvice(text: string): string {
   return NEGATED_ADVICE_PATTERNS.reduce((result, pattern) => result.replace(pattern, " "), text);
 }
 
-const EMERGENCY_PATTERNS = [
-  /\bemergency\b/i,
-  /\bsafe\b/i,
+// Emergency evidence must contain an ACTION the rider can safely take. The
+// previous detector accepted a reply containing only "emergency" or "safe",
+// which let a non-answer pass a safety-critical test case.
+const EMERGENCY_ACTION_PATTERNS = [
   /\bslow\b/i,
   /\bstop\b/i,
   /\bpull over\b/i,
-  /\bhazard\b/i,
-  /紧急/,
-  /安全/,
+  /\bkeep (?:the bike |your vehicle )?under control\b/i,
+  /\bhazard lights?\b/i,
+  /\bcall (?:for help|emergency services|911|112)\b/i,
   /减速/,
   /停车/,
   /靠边/,
-  /危险/
+  /保持.*控制/,
+  /双闪/,
+  /(?:报警|求助|急救|拨打.*(?:110|112|120))/
 ];
 
-const ADAS_PATTERNS = [
+// ADAS evidence needs both a real hazard cue and either a direction or a safe
+// response. A generic navigation reply such as "turn right" used to pass just
+// because the detector matched the word "right".
+const ADAS_HAZARD_PATTERNS = [
   /\badas\b/i,
   /\balert\b/i,
   /\bblind spot\b/i,
   /\bvehicle\b/i,
   /\bcar\b/i,
+  /\bobstacle\b/i,
+  /\bcollision\b/i,
+  /\bapproach(?:ing)?\b/i,
+  /\bhazard\b/i,
+  /盲区/,
+  /车辆/,
+  /障碍/,
+  /碰撞/,
+  /接近/,
+  /危险/,
+  /警(?:报|告)/
+];
+
+const ADAS_RESPONSE_PATTERNS = [
   /\bleft\b/i,
   /\bright\b/i,
   /\bfront\b/i,
   /\brear\b/i,
-  /盲区/,
-  /车辆/,
+  /\bhold (?:your )?lane\b/i,
+  /\bbrake\b/i,
+  /\bslow\b/i,
+  /\bavoid\b/i,
   /左/,
   /右/,
   /前/,
   /后/,
-  /危险/
+  /保持.*车道/,
+  /刹车/,
+  /减速/,
+  /避让/
 ];
 
 function check(id: string, label: string, status: TestingCheckStatus, detail: string): TestingEvaluationCheck {
@@ -122,7 +147,12 @@ function evaluateExchangeShape(
   ].filter(Boolean);
 
   if (failures.length) {
-    return check("exchange-shape", "Conversation exchange", "fail", `Missing expected exchange: ${failures.join(", ")}.`);
+    return check(
+      "exchange-shape",
+      "Conversation exchange",
+      "fail",
+      `Missing expected exchange: ${failures.join(", ")}.`
+    );
   }
   return check(
     "exchange-shape",
@@ -145,7 +175,8 @@ function evaluateResponseOrder(
 
   const firstRider = turns[firstRiderIndex];
   const firstReply = turns.slice(firstRiderIndex + 1).find((turn) => turn.speaker === "agent");
-  if (!firstReply) return check("response-order", "Response order", "fail", "No agent reply followed the rider prompt.");
+  if (!firstReply)
+    return check("response-order", "Response order", "fail", "No agent reply followed the rider prompt.");
 
   const responseMs = Math.max(0, firstReply.at - firstRider.at);
   if (maxFirstResponseMs && responseMs > maxFirstResponseMs) {
@@ -162,14 +193,37 @@ function evaluateResponseOrder(
 function evaluateWakeWord(turns: TesterTranscriptTurn[]): TestingEvaluationCheck {
   if (!turns.length) return check("wake-word", "Wake word gating", "skipped", "No transcript turns to inspect.");
 
-  let addressed = false;
+  let lastExplicitWakeAt = Number.NEGATIVE_INFINITY;
+  let addressedUntil = Number.NEGATIVE_INFINITY;
+  let pendingReplyAddressed = false;
   for (const turn of turns) {
-    if (turn.speaker === "rider" && hasWakeWord(turn.text)) addressed = true;
-    if (turn.speaker === "agent" && !addressed) {
-      return check("wake-word", "Wake word gating", "fail", "Agent replied before the rider addressed Max.");
+    if (turn.speaker === "rider") {
+      if (hasWakeWord(turn.text)) {
+        lastExplicitWakeAt = turn.at;
+        addressedUntil = turn.at + WAKE_FOLLOWUP_WINDOW_MS;
+        pendingReplyAddressed = true;
+      } else if (turn.at <= addressedUntil) {
+        addressedUntil = Math.min(turn.at + WAKE_FOLLOWUP_WINDOW_MS, lastExplicitWakeAt + WAKE_FOLLOWUP_MAX_CHAIN_MS);
+        pendingReplyAddressed = true;
+      } else {
+        pendingReplyAddressed = false;
+      }
+    }
+    if (turn.speaker === "agent") {
+      if (!pendingReplyAddressed) {
+        return check("wake-word", "Wake word gating", "fail", "Agent replied to an unaddressed rider turn.");
+      }
+      // One addressed rider turn authorizes one agent reply. A later follow-up
+      // rider turn can reopen/slide the same bounded live-provider window.
+      pendingReplyAddressed = false;
     }
   }
-  return check("wake-word", "Wake word gating", "pass", "No agent reply occurred before the rider addressed Max.");
+  return check(
+    "wake-word",
+    "Wake word gating",
+    "pass",
+    "Every agent reply followed an explicitly addressed or in-window follow-up rider turn."
+  );
 }
 
 function evaluateLanguage(
@@ -296,17 +350,29 @@ export function evaluateTestingSession(input: TestingEvaluationInput): TestingEv
 
   if (testCase.requireEmergencyResponse) {
     checks.push(
-      includesPattern(replyText, EMERGENCY_PATTERNS)
-        ? check("emergency", "Emergency guidance", "pass", "Emergency safety guidance was detected.")
-        : check("emergency", "Emergency guidance", "fail", "Expected emergency safety guidance was not detected.")
+      includesPattern(replyText, EMERGENCY_ACTION_PATTERNS)
+        ? check("emergency", "Emergency guidance", "pass", "Actionable emergency safety guidance was detected.")
+        : check(
+            "emergency",
+            "Emergency guidance",
+            "fail",
+            "Expected an actionable instruction such as slowing, stopping, pulling over, keeping control, or calling for help."
+          )
     );
   }
 
   if (testCase.requireAdasAlert) {
+    const hasHazard = includesPattern(replyText, ADAS_HAZARD_PATTERNS);
+    const hasResponse = includesPattern(replyText, ADAS_RESPONSE_PATTERNS);
     checks.push(
-      includesPattern(replyText, ADAS_PATTERNS)
-        ? check("adas", "ADAS alert", "pass", "ADAS-style hazard alert language was detected.")
-        : check("adas", "ADAS alert", "fail", "Expected ADAS hazard alert language was not detected.")
+      hasHazard && hasResponse
+        ? check("adas", "ADAS alert", "pass", "ADAS hazard plus direction/safe-response language was detected.")
+        : check(
+            "adas",
+            "ADAS alert",
+            "fail",
+            `Expected both a hazard cue and a direction or safe response (${hasHazard ? "hazard found" : "hazard missing"}; ${hasResponse ? "response found" : "response missing"}).`
+          )
     );
   }
 

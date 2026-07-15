@@ -71,72 +71,94 @@ export function useMicCapture({ socketRef, transmittingRef }: Params) {
         stream.getTracks().forEach((track) => track.stop());
         throw new Error("麦克风已在启动过程中被释放");
       }
-      const [track] = stream.getAudioTracks();
-      if (track) setAudioProcessing(readAudioProcessingSettings(track));
-      const audioContext = new AudioContext();
-      if (!audioContext.audioWorklet) {
-        stream.getTracks().forEach((track) => track.stop());
-        await audioContext.close();
-        throw new Error("此浏览器不支持 AudioWorklet 麦克风采集");
-      }
+      let audioContext: AudioContext | null = null;
+      let workletNode: AudioWorkletNode | null = null;
+      try {
+        const [track] = stream.getAudioTracks();
+        if (track) setAudioProcessing(readAudioProcessingSettings(track));
+        audioContext = new AudioContext();
+        if (!audioContext.audioWorklet) {
+          throw new Error("此浏览器不支持 AudioWorklet 麦克风采集");
+        }
 
-      await audioContext.audioWorklet.addModule("/pcm-worklet.js");
-      const source = audioContext.createMediaStreamSource(stream);
-      const workletNode = new AudioWorkletNode(audioContext, "pcm-capture", {
-        numberOfInputs: 1,
-        numberOfOutputs: 1,
-        outputChannelCount: [1],
-        channelCount: 1,
-        channelCountMode: "explicit"
-      });
+        // addModule can fail on a missing/cached-bad worklet, CSP rejection,
+        // or browser implementation error. Everything after getUserMedia is
+        // inside this cleanup boundary so none of those failures leaves the
+        // mic indicator or an AudioContext alive.
+        await audioContext.audioWorklet.addModule("/pcm-worklet.js");
+        const source = audioContext.createMediaStreamSource(stream);
+        workletNode = new AudioWorkletNode(audioContext, "pcm-capture", {
+          numberOfInputs: 1,
+          numberOfOutputs: 1,
+          outputChannelCount: [1],
+          channelCount: 1,
+          channelCountMode: "explicit"
+        });
 
-      workletNode.port.onmessage = (event: MessageEvent<WorkletMessage>) => {
-        const message = event.data;
-        if (message.type === "frame") {
-          if (!transmittingRef.current) return;
-          const socket = socketRef.current;
-          if (socket?.readyState === WebSocket.OPEN) {
-            socket.send(message.pcm);
-            const now = performance.now();
-            const result = recordSentFrame(frameWindowRef.current, now);
-            frameWindowRef.current = result.window;
-            if (result.metric) setPacketStats(result.metric);
-          } else {
-            const result = recordDroppedFrame(frameWindowRef.current);
-            frameWindowRef.current = result.window;
-            // At most one state update per second — during reconnect backoff
-            // every 20 ms frame lands here.
-            const now = performance.now();
-            if (now - lastDropUpdateRef.current >= 1000) {
-              lastDropUpdateRef.current = now;
-              setPacketStats((stats) => ({ ...stats, droppedFrames: result.metric.droppedFrames }));
+        workletNode.port.onmessage = (event: MessageEvent<WorkletMessage>) => {
+          const message = event.data;
+          if (message.type === "frame") {
+            if (!transmittingRef.current) return;
+            const socket = socketRef.current;
+            if (socket?.readyState === WebSocket.OPEN) {
+              socket.send(message.pcm);
+              const now = performance.now();
+              const result = recordSentFrame(frameWindowRef.current, now);
+              frameWindowRef.current = result.window;
+              if (result.metric) setPacketStats(result.metric);
+            } else {
+              const result = recordDroppedFrame(frameWindowRef.current);
+              frameWindowRef.current = result.window;
+              // At most one state update per second — during reconnect backoff
+              // every 20 ms frame lands here.
+              const now = performance.now();
+              if (now - lastDropUpdateRef.current >= 1000) {
+                lastDropUpdateRef.current = now;
+                setPacketStats((stats) => ({ ...stats, droppedFrames: result.metric.droppedFrames }));
+              }
+            }
+          } else if (message.type === "level") {
+            // Quantize to ~0.02 and drop no-change updates so a steady level (notably
+            // silence) doesn't re-render the whole HUD ~23×/s while transmitting.
+            const next = Math.round((transmittingRef.current ? message.value : 0) * 50) / 50;
+            if (next !== lastVoiceLevelRef.current) {
+              lastVoiceLevelRef.current = next;
+              setVoiceLevel(next);
             }
           }
-        } else if (message.type === "level") {
-          // Quantize to ~0.02 and drop no-change updates so a steady level (notably
-          // silence) doesn't re-render the whole HUD ~23×/s while transmitting.
-          const next = Math.round((transmittingRef.current ? message.value : 0) * 50) / 50;
-          if (next !== lastVoiceLevelRef.current) {
-            lastVoiceLevelRef.current = next;
-            setVoiceLevel(next);
+        };
+
+        // Second checkpoint: addModule/worklet setup is async too.
+        if (generation !== micGenerationRef.current) {
+          throw new Error("麦克风已在启动过程中被释放");
+        }
+
+        source.connect(workletNode);
+        workletNode.connect(audioContext.destination);
+
+        streamRef.current = stream;
+        audioContextRef.current = audioContext;
+        workletNodeRef.current = workletNode;
+      } catch (error) {
+        if (workletNode) {
+          workletNode.port.onmessage = null;
+          try {
+            workletNode.disconnect();
+          } catch {
+            /* construction/connect may have failed before the node attached */
           }
         }
-      };
-
-      // Second checkpoint: addModule/worklet setup is async too.
-      if (generation !== micGenerationRef.current) {
-        workletNode.port.onmessage = null;
         stream.getTracks().forEach((track) => track.stop());
-        void audioContext.close();
-        throw new Error("麦克风已在启动过程中被释放");
+        if (audioContext && audioContext.state !== "closed") {
+          try {
+            await audioContext.close();
+          } catch {
+            /* preserve the setup error that explains why mic start failed */
+          }
+        }
+        setAudioProcessing(DEFAULT_AUDIO_PROCESSING);
+        throw error;
       }
-
-      source.connect(workletNode);
-      workletNode.connect(audioContext.destination);
-
-      streamRef.current = stream;
-      audioContextRef.current = audioContext;
-      workletNodeRef.current = workletNode;
     }
   }, [socketRef, transmittingRef]);
 

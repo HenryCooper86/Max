@@ -14,6 +14,11 @@ export type AuthUser = {
 
 export type AuthResponse = { ok: true; token: string; user: AuthUser } | { ok: false; error: string };
 
+export type CurrentUserResult =
+  | { status: "authenticated"; user: AuthUser }
+  | { status: "unauthenticated" }
+  | { status: "unavailable" };
+
 import { relayAuthToken } from "./persistence";
 
 const AUTH_TOKEN_KEY = "max.authToken";
@@ -166,19 +171,26 @@ export function inviteUrl(code: string): string {
   return `${window.location.origin}/?invite=${encodeURIComponent(code)}`;
 }
 
-/** The logged-in user for the stored session token, or null (also on expiry). */
-export async function fetchCurrentUser(): Promise<AuthUser | null> {
+/**
+ * Revalidates the stored login without confusing a temporary network/server
+ * failure with an expired session. Only an explicit 401 clears the token;
+ * callers can keep an already-unlocked HUD intact while the relay recovers.
+ */
+export async function fetchCurrentUser(): Promise<CurrentUserResult> {
   const token = authToken();
-  if (!token) return null;
+  if (!token) return { status: "unauthenticated" };
   try {
     const response = await fetch("/auth/me", { headers: { Authorization: `Bearer ${token}` } });
     if (!response.ok) {
-      if (response.status === 401) storeAuthToken("");
-      return null;
+      if (response.status === 401) {
+        storeAuthToken("");
+        return { status: "unauthenticated" };
+      }
+      return { status: "unavailable" };
     }
     const payload = (await response.json()) as { ok: boolean; user?: AuthUser };
-    return payload.ok && payload.user ? payload.user : null;
+    return payload.ok && payload.user ? { status: "authenticated", user: payload.user } : { status: "unavailable" };
   } catch {
-    return null;
+    return { status: "unavailable" };
   }
 }

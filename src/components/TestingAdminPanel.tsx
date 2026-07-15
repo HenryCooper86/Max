@@ -70,7 +70,11 @@ function sessionIssueCount(session: {
   ).length;
   const invalidEvidence = session.validity?.status === "invalid" ? Math.max(1, session.validity.reasons.length) : 0;
   return (
-    session.flags.length + flaggedTurns(session) + failedOrWarnChecks + invalidEvidence + (session.quality === "fail" ? 1 : 0)
+    session.flags.length +
+    flaggedTurns(session) +
+    failedOrWarnChecks +
+    invalidEvidence +
+    (session.quality === "fail" ? 1 : 0)
   );
 }
 
@@ -447,7 +451,12 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
               : "Needs current and previous build evidence"}
           </p>
         </div>
-        <button type="button" className="opsCard issueCard alert" disabled={!latestIssueSession} onClick={reviewLatestIssue}>
+        <button
+          type="button"
+          className="opsCard issueCard alert"
+          disabled={!latestIssueSession}
+          onClick={reviewLatestIssue}
+        >
           <span>Issue queue</span>
           <strong>{issueSessionCount} sessions</strong>
           <p>
@@ -455,7 +464,7 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
               ? `${latestIssueSession.testerId} · ${latestIssueSession.testCaseName} · ${formatRelativeTime(
                   latestIssueSession.endedAt
                 )}`
-            : "No watch/fail sessions"}
+              : "No watch/fail sessions"}
           </p>
         </button>
         <div className={`opsCard ${(testingTotals?.invalidTestSessions ?? 0) ? "warn" : "good"}`}>
@@ -484,10 +493,14 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
             {!releaseGate?.cases.length ? <p className="testerConversationEmpty">No release gate data yet.</p> : null}
           </div>
           <div className="decisionNotes">
-            {(releaseGate?.blockers.length ? releaseGate.blockers : releaseGate?.warnings ?? []).slice(0, 3).map((note) => (
-              <p key={note}>{note}</p>
-            ))}
-            {releaseGate && !releaseGate.blockers.length && !releaseGate.warnings.length ? <p>All current gate checks pass.</p> : null}
+            {(releaseGate?.blockers.length ? releaseGate.blockers : (releaseGate?.warnings ?? []))
+              .slice(0, 3)
+              .map((note) => (
+                <p key={note}>{note}</p>
+              ))}
+            {releaseGate && !releaseGate.blockers.length && !releaseGate.warnings.length ? (
+              <p>All current gate checks pass.</p>
+            ) : null}
           </div>
         </section>
 
@@ -507,7 +520,9 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
             </span>
             <span>
               <b>
-                {regression?.deltas ? `${regression.deltas.avgScore >= 0 ? "+" : ""}${regression.deltas.avgScore}` : "—"}
+                {regression?.deltas
+                  ? `${regression.deltas.avgScore >= 0 ? "+" : ""}${regression.deltas.avgScore}`
+                  : "—"}
               </b>
               Score drift
             </span>

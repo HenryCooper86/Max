@@ -73,6 +73,44 @@ describe("testing history replay", () => {
     expect(ids.length).toBe(3);
   });
 
+  it("re-evaluates persisted quality and validity with the current deterministic policy", async () => {
+    const stalePass = JSON.stringify({
+      sessionId: "stale-pass",
+      testerId: "history-tester",
+      ipAddress: "203.0.113.77",
+      testCaseId: "baseline-live-session",
+      startedAt: 1_000,
+      endedAt: 5_000,
+      durationMs: 4_000,
+      micFrames: 0,
+      p95LatencyMs: 120,
+      errorEvents: 0,
+      ttsFallbacks: 0,
+      turns: [
+        { sessionId: "stale-pass", at: 1_500, speaker: "rider", text: "Max, route status?", final: true },
+        { sessionId: "stale-pass", at: 1_800, speaker: "agent", text: "Route clear. Ride safely.", final: true }
+      ],
+      // Simulate an older policy snapshot that incorrectly trusted this run.
+      quality: "pass",
+      validity: { status: "valid", reasons: [], detail: "Old policy accepted this." },
+      evaluation: {
+        testCaseId: "baseline-live-session",
+        testCaseName: "Baseline Live Session",
+        score: 100,
+        quality: "pass",
+        checks: [{ id: "old-check", label: "Old check", status: "pass", detail: "Passed before policy update." }]
+      }
+    });
+    const file = historyFile([stalePass]);
+    const { testingSnapshot } = await loadMetricsWithHistory(file);
+
+    const [session] = testingSnapshot(10_000).sessions;
+    expect(session.quality).toBe("fail");
+    expect(session.validity).toMatchObject({ status: "invalid", reasons: ["missing-mic-audio"] });
+    expect(session.flags).toContain("mic-audio");
+    expect(session.flags).not.toContain("old-check");
+  });
+
   it("rewrites the file when a tester is cleared, and empties it on clear-all", async () => {
     const file = historyFile([sessionLine(0), sessionLine(1), sessionLine(2)]);
     const { testingSnapshot, clearTesterData, clearAllTesterData, flushTestingHistory } =

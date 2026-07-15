@@ -843,6 +843,30 @@ private struct SettingsPanel: View {
             }
         }
 
+        SectionCard(title: "QA 任务归因") {
+            Text("从网页管理台的 Release runs 复制任务标识。下一次会话会按构建、平台和任务进入发布证据矩阵。")
+                .font(.system(size: 11))
+                .foregroundColor(HudColors.muted)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Group {
+                TextField("Campaign ID", text: $viewModel.testingCampaignId)
+                TextField("Test case ID", text: $viewModel.testingTestCaseId)
+                TextField("Run ID（可选）", text: $viewModel.testingRunId)
+                TextField("Assignment ID（可选）", text: $viewModel.testingAssignmentId)
+            }
+            .font(.system(size: 13))
+            .foregroundColor(HudColors.text)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled(true)
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 9).fill(HudColors.panelElevated))
+            .disabled(state.handsFree)
+            Text("iOS · build \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown") · commit \(Bundle.main.infoDictionary?["HorizonGitCommit"] as? String ?? "unknown")")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(HudColors.muted)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+
         // Live ride intelligence: weather, route, and session memory. The data
         // already flows over the protocol (weather / ride.context /
         // session.memory events); this surfaces it like the web HUD instruments.

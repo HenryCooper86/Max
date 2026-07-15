@@ -111,11 +111,14 @@ describe("client event validation", () => {
           testerRegion: "Asia/Shanghai",
           testingCampaignId: "safety-regression",
           testingTestCaseId: "emergency-safe-guidance",
+          testingRunId: "release-run-1",
+          testingAssignmentId: "assignment-1",
           appVersion: "0.1.0",
           gitCommit: "abcdef0",
           deviceLabel: "macOS browser",
           browserLanguage: "en-US",
           networkType: "4g",
+          platform: "web",
           voiceGender: "male",
           voicePersonality: "rally",
           rideMode: "navigation",
@@ -134,6 +137,9 @@ describe("client event validation", () => {
       expect(event.testerRegion).toBe("Asia/Shanghai");
       expect(event.testingCampaignId).toBe("safety-regression");
       expect(event.testingTestCaseId).toBe("emergency-safe-guidance");
+      expect(event.testingRunId).toBe("release-run-1");
+      expect(event.testingAssignmentId).toBe("assignment-1");
+      expect(event.platform).toBe("web");
       expect(event.deviceLabel).toBe("macOS browser");
     }
   });
@@ -220,6 +226,33 @@ describe("client event validation", () => {
     expect(event).toEqual({ type: "demo.guided", enabled: true });
     expect(() => parseClientEvent(Buffer.from(JSON.stringify({ type: "demo.guided" })))).toThrow(
       "Invalid demo.guided enabled flag"
+    );
+  });
+
+  it("accepts bounded client audio-quality metrics", () => {
+    expect(
+      parseClientEvent(
+        Buffer.from(
+          JSON.stringify({
+            type: "testing.metric",
+            droppedFrames: 2,
+            outgoingFps: 49,
+            jitterMs: 1.5,
+            clippingPct: 0.2,
+            silencePct: 18
+          })
+        )
+      )
+    ).toEqual({
+      type: "testing.metric",
+      droppedFrames: 2,
+      outgoingFps: 49,
+      jitterMs: 1.5,
+      clippingPct: 0.2,
+      silencePct: 18
+    });
+    expect(() => parseClientEvent(Buffer.from(JSON.stringify({ type: "testing.metric", clippingPct: 101 })))).toThrow(
+      "Invalid testing.metric clippingPct"
     );
   });
 

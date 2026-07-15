@@ -19,7 +19,9 @@ export type TranscriptItem = {
 };
 
 // Messages posted from public/pcm-worklet.js.
-export type WorkletMessage = { type: "frame"; pcm: ArrayBuffer } | { type: "level"; value: number };
+export type WorkletMessage =
+  | { type: "frame"; pcm: ArrayBuffer }
+  | { type: "level"; value: number; clippingPct?: number; silencePct?: number };
 
 export type RiderLocation = { lat: number; lon: number };
 
@@ -63,6 +65,9 @@ export type SessionMemoryState = {
 export type PacketStats = {
   outgoingFps: number;
   droppedFrames: number;
+  jitterMs: number;
+  clippingPct: number;
+  silencePct: number;
 };
 
 export type PermissionStateLabel = "granted" | "prompt" | "denied" | "unknown";

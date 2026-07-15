@@ -177,7 +177,7 @@ export function AccountBar({ authEnabled, registrationOpen, user, onSignedIn, on
         <div className="accountIdentity">
           <strong>{user.displayName}</strong>
           <span>
-            @{user.username} · {user.role === "admin" ? "管理员" : "测试员"}
+            @{user.username} · {user.role === "admin" ? "管理员" : user.role === "reviewer" ? "审核员" : "测试员"}
           </span>
         </div>
         <div className="accountActions">

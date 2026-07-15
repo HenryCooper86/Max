@@ -9,22 +9,49 @@ import type {
   TesterTranscriptTurn
 } from "../shared/agent";
 import {
+  DEFAULT_TESTING_POLICY,
   TESTING_TEST_CASES,
   findTestingCampaign,
   findTestingTestCase,
+  normalizeTestingBuildIdentity,
+  testingBuildsMatch,
   testingCatalog,
+  type TestingAudioQuality,
   type TestingBuildSummary,
   type TestingEvaluationSummary,
   type TestingInvalidReason,
+  type TestingPlatform,
   type TestingQuality,
+  type TestingRegressionCohort,
   type TestingRegressionFinding,
   type TestingRegressionSummary,
   type TestingReleaseGate,
   type TestingReleaseGateCase,
+  type TestingSessionPage,
+  type TestingSessionQuery,
   type TestingValiditySummary
 } from "../shared/testing";
 import { buildInfo } from "./build-info";
 import { evaluateTestingSession } from "./testing-evaluator";
+import {
+  deleteAllStoredTestingSessions,
+  deleteStoredTesterSessions,
+  deleteStoredTestingSession,
+  evidenceHash,
+  getActiveTestingPolicy,
+  getApprovedBaselineBuild,
+  inferTestingPlatform,
+  loadStoredTestingSession,
+  loadTestingSessions,
+  loadTestingSessionsExcludingBuild,
+  loadTestingSessionsForBuild,
+  replaceStoredTestingSessions,
+  resetTestingStore,
+  saveTestingSession,
+  storedTestingSessionPage,
+  testingOperationsSnapshot,
+  testingStorePersistent
+} from "./testing-store";
 
 // In-process relay counters, exposed on /health so the Lightsail deployment
 // can be checked with one curl: how many sessions are live, whether the Doubao
@@ -117,7 +144,8 @@ export const metrics = {
     testers.clear();
     testingTimeline.clear();
     completedSessions.length = 0;
-    testingHistoryLoaded = TESTING_HISTORY_PATH === null;
+    testingHistoryLoaded = false;
+    resetTestingStore();
     processStartedAt = Date.now();
   }
 };
@@ -208,16 +236,12 @@ const MAX_LATENCY_SAMPLES_PER_TESTER = 128;
 const MAX_TRANSCRIPT_TURNS_PER_TESTER = 80;
 const MAX_TRANSCRIPT_TURNS_PER_SESSION = 120;
 const MAX_COMPLETED_SESSIONS = readBoundedInt(process.env.TESTING_HISTORY_MAX_SESSIONS, 200, 20, 5_000);
+const MAX_ARCHIVE_SESSIONS = process.env.TESTING_ARCHIVE_MAX_SESSIONS?.trim()
+  ? readBoundedInt(process.env.TESTING_ARCHIVE_MAX_SESSIONS, 0, 20, 100_000)
+  : 0;
 const TESTING_HISTORY_PATH = resolveTestingHistoryPath();
 const MIN_VALID_SESSION_MS = 1_500;
 const RELEASE_GATE_REQUIRED_TEST_CASE_IDS = TESTING_TEST_CASES.map((testCase) => testCase.id);
-const RELEASE_GATE_CRITERIA = {
-  minValidSessionsPerRequiredCase: 1,
-  maxFailSessions: 0,
-  maxWatchSessions: 2,
-  maxInvalidSessions: 3,
-  maxP95LatencyMs: 1_400
-};
 
 type MutableTesterStats = {
   testerKey: string;
@@ -256,6 +280,9 @@ type ActiveTestingSession = {
   deviceLabel: string;
   browserLanguage: string;
   networkType: string;
+  platform: TestingPlatform;
+  runId?: string;
+  assignmentId?: string;
   startedAt: number;
   audioUpBytes: number;
   audioDownBytes: number;
@@ -265,6 +292,8 @@ type ActiveTestingSession = {
   errorEvents: number;
   ttsFallbacks: number;
   latencyMs: number[];
+  audioQuality: TestingAudioQuality;
+  audioQualitySamples: number;
   turns: TesterTranscriptTurn[];
 };
 
@@ -279,6 +308,9 @@ type TesterIdentity = {
   deviceLabel?: unknown;
   browserLanguage?: unknown;
   networkType?: unknown;
+  platform?: unknown;
+  testingRunId?: unknown;
+  testingAssignmentId?: unknown;
 };
 
 type MutableTestingBucket = Omit<TestingTimelineBucket, "avgLatencyMs"> & {
@@ -289,7 +321,7 @@ const testers = new Map<string, MutableTesterStats>();
 const testingSessions = new Map<string, ActiveTestingSession>();
 const testingTimeline = new Map<number, MutableTestingBucket>();
 const completedSessions: TesterSessionSummary[] = [];
-let testingHistoryLoaded = TESTING_HISTORY_PATH === null;
+let testingHistoryLoaded = false;
 
 function readBoundedInt(raw: string | undefined, fallback: number, min: number, max: number): number {
   const trimmed = raw?.trim();
@@ -367,16 +399,21 @@ function normalizeSessionMeta(input: TesterIdentity) {
   const testCase = findTestingTestCase(normalizeMetaString(input.testingTestCaseId, "", 80));
   const campaignForCase = findTestingCampaign(testCase.campaignId);
   const resolvedCampaign = campaign.id === testCase.campaignId ? campaign : campaignForCase;
+  const deviceLabel = normalizeMetaString(input.deviceLabel, "unknown device", 120);
+  const networkType = normalizeMetaString(input.networkType, "unknown network", 40);
   return {
     campaignId: resolvedCampaign.id,
     campaignName: resolvedCampaign.name,
     testCaseId: testCase.id,
     testCaseName: testCase.name,
     appVersion: normalizeMetaString(input.appVersion, buildInfo.appVersion, 40),
-    gitCommit: normalizeMetaString(input.gitCommit, buildInfo.gitCommit, 80),
-    deviceLabel: normalizeMetaString(input.deviceLabel, "unknown device", 120),
+    gitCommit: normalizeTestingBuildIdentity(input.gitCommit, buildInfo.gitCommit),
+    deviceLabel,
     browserLanguage: normalizeMetaString(input.browserLanguage, "unknown language", 40),
-    networkType: normalizeMetaString(input.networkType, "unknown network", 40)
+    networkType,
+    platform: inferTestingPlatform(input.platform, deviceLabel, networkType),
+    runId: normalizeMetaString(input.testingRunId, "", 80) || undefined,
+    assignmentId: normalizeMetaString(input.testingAssignmentId, "", 80) || undefined
   };
 }
 
@@ -575,11 +612,36 @@ function classifySessionEvidence(input: {
 }
 
 function completedSessionsForBuild(build: string): TesterSessionSummary[] {
-  return completedSessions.filter((session) => session.gitCommit === build);
+  const cached = completedSessions.filter((session) => testingBuildsMatch(session.gitCommit, build));
+  try {
+    const durable = loadTestingSessionsForBuild(build)
+      .map(normalizeCompletedSession)
+      .filter((session): session is TesterSessionSummary => Boolean(session));
+    const durableIds = new Set(durable.map((session) => session.sessionId));
+    return [...durable, ...cached.filter((session) => !durableIds.has(session.sessionId))].sort(
+      (left, right) => right.endedAt - left.endedAt
+    );
+  } catch {
+    return cached;
+  }
+}
+
+function isDecisionGradeEvidence(session: TesterSessionSummary): boolean {
+  return session.validity.status === "valid" && session.evidenceIntegrity !== "mismatch";
+}
+
+function activeTestingPolicy() {
+  try {
+    return getActiveTestingPolicy();
+  } catch {
+    // Session capture and JSONL recovery must keep working when the SQLite
+    // operations index is temporarily unavailable.
+    return DEFAULT_TESTING_POLICY;
+  }
 }
 
 function summarizeBuild(build: string, sessions: TesterSessionSummary[]): TestingBuildSummary {
-  const validSessions = sessions.filter((session) => session.validity.status === "valid");
+  const validSessions = sessions.filter(isDecisionGradeEvidence);
   const invalidSessions = sessions.length - validSessions.length;
   const failSessions = validSessions.filter((session) => session.quality === "fail").length;
   const watchSessions = validSessions.filter((session) => session.quality === "watch").length;
@@ -602,14 +664,51 @@ function summarizeBuild(build: string, sessions: TesterSessionSummary[]): Testin
     avgScore,
     ttsFallbackRatePct: rate(validSessions.filter((session) => session.ttsFallbacks > 0).length),
     failRatePct: rate(failSessions),
-    latestAt: sessions.reduce((latest, session) => Math.max(latest, session.endedAt), 0)
+    latestAt: sessions.reduce((latest, session) => Math.max(latest, session.endedAt), 0),
+    cohorts: new Set(validSessions.map(regressionCohortKey)).size
   };
 }
 
-function buildReleaseGate(now: number): TestingReleaseGate {
+function normalizedNetworkCohort(value: string): string {
+  const network = value.toLowerCase();
+  if (/degraded|poor|loss|weak|2g|3g/.test(network)) return "degraded";
+  if (/4g|5g|cell|mobile/.test(network)) return "cellular";
+  if (/wifi|ethernet|lan/.test(network)) return "wifi";
+  if (/wind|field/.test(network)) return "field";
+  return network || "unknown";
+}
+
+function normalizedLanguage(session: TesterSessionSummary): string {
+  const language = session.browserLanguage.toLowerCase().split(/[-_]/)[0];
+  return language === "zh" || language === "en" ? language : "any";
+}
+
+function regressionCohortKey(session: TesterSessionSummary): string {
+  return [
+    session.testCaseId,
+    session.platform,
+    normalizedNetworkCohort(session.networkType),
+    normalizedLanguage(session)
+  ].join("|");
+}
+
+function buildReleaseGate(
+  now: number,
+  sessions: TesterSessionSummary[] = completedSessionsForBuild(buildInfo.gitCommit)
+): TestingReleaseGate {
+  const policy = activeTestingPolicy();
+  const criteria = {
+    minValidSessionsPerRequiredCase: policy.release.minStandardSessions,
+    maxFailSessions: policy.release.maxFailSessions,
+    maxWatchSessions: policy.release.maxWatchSessions,
+    maxInvalidSessions: policy.release.maxInvalidSessions,
+    maxP95LatencyMs: policy.release.maxP95LatencyMs,
+    minStandardSessions: policy.release.minStandardSessions,
+    minSafetyCriticalSessions: policy.release.minSafetyCriticalSessions,
+    requiredPlatforms: [...policy.release.requiredPlatforms]
+  };
   const build = buildInfo.gitCommit;
-  const sessions = completedSessionsForBuild(build);
-  const validSessions = sessions.filter((session) => session.validity.status === "valid");
+  const validSessions = sessions.filter(isDecisionGradeEvidence);
   const invalidSessions = sessions.length - validSessions.length;
   const failSessions = validSessions.filter((session) => session.quality === "fail").length;
   const watchSessions = validSessions.filter((session) => session.quality === "watch").length;
@@ -619,16 +718,53 @@ function buildReleaseGate(now: number): TestingReleaseGate {
   );
   const blockers: string[] = [];
   const warnings: string[] = [];
+  const integrityFailures = sessions.filter((session) => session.evidenceIntegrity === "mismatch");
+  const legacyEvidence = sessions.filter((session) => session.evidenceIntegrity === "legacy");
+  if (integrityFailures.length) {
+    blockers.push(`${integrityFailures.length} evidence record(s) failed SHA-256 integrity verification.`);
+  }
+  if (legacyEvidence.length) {
+    warnings.push(`${legacyEvidence.length} legacy evidence record(s) predate integrity signing.`);
+  }
 
   const cases: TestingReleaseGateCase[] = RELEASE_GATE_REQUIRED_TEST_CASE_IDS.map((testCaseId) => {
     const testCase = findTestingTestCase(testCaseId);
     const caseSessions = sessions.filter((session) => session.testCaseId === testCaseId);
-    const caseValid = caseSessions.filter((session) => session.validity.status === "valid");
+    const caseValid = caseSessions.filter(isDecisionGradeEvidence);
     const caseInvalid = caseSessions.length - caseValid.length;
     const latest = caseSessions[0];
     const hasFail = caseValid.some((session) => session.quality === "fail");
+    const requiredValidSessions = Math.max(
+      testCase.minimumValidSessions,
+      testCase.risk === "safety-critical" ? criteria.minSafetyCriticalSessions : criteria.minStandardSessions
+    );
+    const configuredPlatforms = testCase.requiredPlatforms.filter((platform) =>
+      policy.release.requiredPlatforms.includes(platform)
+    );
+    const requiredPlatforms = configuredPlatforms.length ? configuredPlatforms : testCase.requiredPlatforms;
+    const requiredPerPlatform = Math.max(1, Math.ceil(requiredValidSessions / requiredPlatforms.length));
+    const cohorts = requiredPlatforms.map((platform) => {
+      const platformSessions = caseSessions.filter((session) => session.platform === platform);
+      const platformValid = platformSessions.filter(isDecisionGradeEvidence);
+      const platformInvalid = platformSessions.length - platformValid.length;
+      const platformFailed = platformValid.some((session) => session.quality === "fail");
+      return {
+        platform,
+        required: requiredPerPlatform,
+        validSessions: platformValid.length,
+        invalidSessions: platformInvalid,
+        status: platformFailed
+          ? ("blocked" as const)
+          : platformValid.length >= requiredPerPlatform
+            ? ("pass" as const)
+            : platformInvalid
+              ? ("invalid" as const)
+              : ("missing" as const)
+      };
+    });
+    const missingPlatforms = cohorts.filter((cohort) => cohort.status !== "pass");
     const status: TestingReleaseGateCase["status"] =
-      caseValid.length >= RELEASE_GATE_CRITERIA.minValidSessionsPerRequiredCase
+      caseValid.length >= requiredValidSessions && missingPlatforms.length === 0
         ? hasFail
           ? "blocked"
           : "pass"
@@ -636,7 +772,13 @@ function buildReleaseGate(now: number): TestingReleaseGate {
           ? "invalid"
           : "missing";
 
-    if (status === "missing") blockers.push(`${testCase.name}: missing a valid current-build run.`);
+    if (status === "missing") {
+      const platforms = missingPlatforms.map((cohort) => cohort.platform).join(", ");
+      blockers.push(
+        `${testCase.name}: ${caseValid.length}/${requiredValidSessions} valid current-build runs` +
+          (platforms ? `; missing platform evidence for ${platforms}.` : ".")
+      );
+    }
     if (status === "invalid") blockers.push(`${testCase.name}: only invalid current-build evidence is available.`);
     if (status === "blocked") blockers.push(`${testCase.name}: latest valid evidence includes a failing run.`);
 
@@ -648,29 +790,28 @@ function buildReleaseGate(now: number): TestingReleaseGate {
       invalidSessions: caseInvalid,
       latestSessionId: latest?.sessionId,
       latestQuality: latest?.quality,
-      latestAt: latest?.endedAt
+      latestAt: latest?.endedAt,
+      requiredValidSessions,
+      risk: testCase.risk,
+      cohorts
     };
   });
 
-  if (failSessions > RELEASE_GATE_CRITERIA.maxFailSessions) {
+  if (failSessions > criteria.maxFailSessions) {
     blockers.push(`${failSessions} valid current-build session(s) failed.`);
   }
-  if (watchSessions > RELEASE_GATE_CRITERIA.maxWatchSessions) {
-    blockers.push(
-      `${watchSessions} valid current-build session(s) are watch, above ${RELEASE_GATE_CRITERIA.maxWatchSessions}.`
-    );
+  if (watchSessions > criteria.maxWatchSessions) {
+    blockers.push(`${watchSessions} valid current-build session(s) are watch, above ${criteria.maxWatchSessions}.`);
   } else if (watchSessions > 0) {
     warnings.push(`${watchSessions} valid current-build session(s) are watch.`);
   }
-  if (invalidSessions > RELEASE_GATE_CRITERIA.maxInvalidSessions) {
-    blockers.push(
-      `${invalidSessions} invalid current-build session(s), above ${RELEASE_GATE_CRITERIA.maxInvalidSessions}.`
-    );
+  if (invalidSessions > criteria.maxInvalidSessions) {
+    blockers.push(`${invalidSessions} invalid current-build session(s), above ${criteria.maxInvalidSessions}.`);
   } else if (invalidSessions > 0) {
     warnings.push(`${invalidSessions} invalid current-build session(s) excluded from release scoring.`);
   }
-  if (p95LatencyMs > RELEASE_GATE_CRITERIA.maxP95LatencyMs) {
-    blockers.push(`Current-build p95 ${p95LatencyMs}ms exceeds ${RELEASE_GATE_CRITERIA.maxP95LatencyMs}ms.`);
+  if (p95LatencyMs > criteria.maxP95LatencyMs) {
+    blockers.push(`Current-build p95 ${p95LatencyMs}ms exceeds ${criteria.maxP95LatencyMs}ms.`);
   }
 
   const status: TestingReleaseGate["status"] = !sessions.length
@@ -685,7 +826,7 @@ function buildReleaseGate(now: number): TestingReleaseGate {
     status,
     build,
     generatedAt: now,
-    criteria: { ...RELEASE_GATE_CRITERIA },
+    criteria,
     requiredTestCaseIds: [...RELEASE_GATE_REQUIRED_TEST_CASE_IDS],
     validSessions: validSessions.length,
     invalidSessions,
@@ -704,23 +845,67 @@ function regressionStatus(findings: TestingRegressionFinding[]): TestingRegressi
   return "pass";
 }
 
-function buildRegressionSummary(): TestingRegressionSummary {
+function buildRegressionSummary(
+  currentBuildSessions: TesterSessionSummary[] = completedSessionsForBuild(buildInfo.gitCommit)
+): TestingRegressionSummary {
+  const policy = activeTestingPolicy();
   const currentBuild = buildInfo.gitCommit;
-  const current = summarizeBuild(currentBuild, completedSessionsForBuild(currentBuild));
-  const baselineBuild = [...completedSessions]
+  const current = summarizeBuild(currentBuild, currentBuildSessions);
+  let approvedBaseline: string | undefined;
+  try {
+    approvedBaseline = getApprovedBaselineBuild();
+  } catch {
+    // Fall back to the latest valid build when the operations index is down.
+  }
+  const approvedBaselineSessions = approvedBaseline
+    ? testingBuildsMatch(approvedBaseline, currentBuild)
+      ? currentBuildSessions
+      : completedSessionsForBuild(approvedBaseline)
+    : [];
+  const approvedBaselineUsable = approvedBaselineSessions.some(isDecisionGradeEvidence);
+  let previousBuildSessions: TesterSessionSummary[];
+  try {
+    const durable = loadTestingSessionsExcludingBuild(currentBuild)
+      .map(normalizeCompletedSession)
+      .filter((session): session is TesterSessionSummary => Boolean(session));
+    const durableIds = new Set(durable.map((session) => session.sessionId));
+    previousBuildSessions = [
+      ...durable,
+      ...completedSessions.filter(
+        (session) => !testingBuildsMatch(session.gitCommit, currentBuild) && !durableIds.has(session.sessionId)
+      )
+    ];
+  } catch {
+    previousBuildSessions = completedSessions.filter((session) => !testingBuildsMatch(session.gitCommit, currentBuild));
+  }
+  const latestValidBaseline = previousBuildSessions
     // Pick the latest previous BUILD WITH VALID EVIDENCE. A newer build that
     // only produced aborted/invalid runs must not hide an older usable
     // baseline and downgrade regression reporting to "insufficient".
-    .filter((session) => session.gitCommit !== currentBuild && session.validity.status === "valid")
+    .filter((session) => !testingBuildsMatch(session.gitCommit, currentBuild) && isDecisionGradeEvidence(session))
     .sort((a, b) => b.endedAt - a.endedAt)[0]?.gitCommit;
-  const baseline = baselineBuild ? summarizeBuild(baselineBuild, completedSessionsForBuild(baselineBuild)) : undefined;
+  const baselineBuild = approvedBaselineUsable ? approvedBaseline : latestValidBaseline;
+  const baselineSource: TestingRegressionSummary["baselineSource"] = approvedBaselineUsable
+    ? "approved"
+    : baselineBuild
+      ? "latest-valid"
+      : "none";
+  const baselineSessions = baselineBuild
+    ? baselineBuild === approvedBaseline
+      ? approvedBaselineSessions
+      : completedSessionsForBuild(baselineBuild)
+    : [];
+  const baseline = baselineBuild ? summarizeBuild(baselineBuild, baselineSessions) : undefined;
   const findings: TestingRegressionFinding[] = [];
+  const cohorts: TestingRegressionCohort[] = [];
 
   if (!current.validSessions) {
     return {
       status: "insufficient",
       current,
       baseline,
+      baselineSource,
+      cohorts,
       findings: [
         {
           id: "current-build-evidence",
@@ -737,6 +922,8 @@ function buildRegressionSummary(): TestingRegressionSummary {
       status: "insufficient",
       current,
       baseline,
+      baselineSource,
+      cohorts,
       findings: [
         {
           id: "baseline-evidence",
@@ -755,37 +942,102 @@ function buildRegressionSummary(): TestingRegressionSummary {
     ttsFallbackRatePct: current.ttsFallbackRatePct - baseline.ttsFallbackRatePct
   };
 
-  findings.push({
-    id: "p95-latency-drift",
-    label: "P95 latency drift",
-    status: deltas.p95LatencyMs > 250 ? "fail" : deltas.p95LatencyMs > 100 ? "watch" : "pass",
-    detail: `Current p95 ${current.p95LatencyMs}ms vs baseline ${baseline.p95LatencyMs}ms (${deltas.p95LatencyMs >= 0 ? "+" : ""}${deltas.p95LatencyMs}ms).`
-  });
-  findings.push({
-    id: "score-drift",
-    label: "Evaluation score drift",
-    status: deltas.avgScore < -10 ? "fail" : deltas.avgScore < -5 ? "watch" : "pass",
-    detail: `Current avg score ${current.avgScore} vs baseline ${baseline.avgScore} (${deltas.avgScore >= 0 ? "+" : ""}${deltas.avgScore}).`
-  });
-  findings.push({
-    id: "fail-rate-drift",
-    label: "Fail-rate drift",
-    status: deltas.failRatePct > 10 ? "fail" : deltas.failRatePct > 0 ? "watch" : "pass",
-    detail: `Current fail rate ${current.failRatePct}% vs baseline ${baseline.failRatePct}% (${deltas.failRatePct >= 0 ? "+" : ""}${deltas.failRatePct}%).`
-  });
-  findings.push({
-    id: "fallback-rate-drift",
-    label: "Fallback-rate drift",
-    status: deltas.ttsFallbackRatePct > 25 ? "fail" : deltas.ttsFallbackRatePct > 10 ? "watch" : "pass",
-    detail: `Current fallback rate ${current.ttsFallbackRatePct}% vs baseline ${baseline.ttsFallbackRatePct}% (${deltas.ttsFallbackRatePct >= 0 ? "+" : ""}${deltas.ttsFallbackRatePct}%).`
-  });
+  const currentByCohort = new Map<string, TesterSessionSummary[]>();
+  const baselineByCohort = new Map<string, TesterSessionSummary[]>();
+  for (const session of currentBuildSessions.filter(isDecisionGradeEvidence)) {
+    const key = regressionCohortKey(session);
+    currentByCohort.set(key, [...(currentByCohort.get(key) ?? []), session]);
+  }
+  for (const session of baselineSessions.filter(isDecisionGradeEvidence)) {
+    const key = regressionCohortKey(session);
+    baselineByCohort.set(key, [...(baselineByCohort.get(key) ?? []), session]);
+  }
+  const cohortKeys = new Set([...currentByCohort.keys(), ...baselineByCohort.keys()]);
+  for (const key of cohortKeys) {
+    const currentSessions = currentByCohort.get(key) ?? [];
+    const baselineSessions = baselineByCohort.get(key) ?? [];
+    const sample = currentSessions[0] ?? baselineSessions[0];
+    if (!sample) continue;
+    const currentP95LatencyMs = percentile(
+      currentSessions.filter((session) => session.p95LatencyMs > 0).map((session) => session.p95LatencyMs),
+      95
+    );
+    const baselineP95LatencyMs = percentile(
+      baselineSessions.filter((session) => session.p95LatencyMs > 0).map((session) => session.p95LatencyMs),
+      95
+    );
+    const currentAvgScore = average(currentSessions.map((session) => session.evaluation.score));
+    const baselineAvgScore = average(baselineSessions.map((session) => session.evaluation.score));
+    const latencyDeltaMs = currentP95LatencyMs - baselineP95LatencyMs;
+    const scoreDelta = currentAvgScore - baselineAvgScore;
+    const sufficient =
+      currentSessions.length >= policy.regression.minimumMatchedCohortSessions &&
+      baselineSessions.length >= policy.regression.minimumMatchedCohortSessions;
+    const status: TestingRegressionCohort["status"] = !sufficient
+      ? "insufficient"
+      : latencyDeltaMs > policy.regression.latencyFailDeltaMs || scoreDelta < policy.regression.scoreFailDelta
+        ? "fail"
+        : latencyDeltaMs > policy.regression.latencyWatchDeltaMs || scoreDelta < policy.regression.scoreWatchDelta
+          ? "watch"
+          : "pass";
+    cohorts.push({
+      key,
+      testCaseId: sample.testCaseId,
+      platform: sample.platform,
+      networkType: normalizedNetworkCohort(sample.networkType),
+      language: normalizedLanguage(sample),
+      currentSessions: currentSessions.length,
+      baselineSessions: baselineSessions.length,
+      currentP95LatencyMs,
+      baselineP95LatencyMs,
+      latencyDeltaMs,
+      currentAvgScore,
+      baselineAvgScore,
+      scoreDelta,
+      status
+    });
+    if (status === "fail" || status === "watch") {
+      findings.push({
+        id: `cohort-${key}`,
+        label: `${sample.testCaseName} · ${sample.platform}`,
+        status,
+        detail: `Matched ${currentSessions.length}/${baselineSessions.length} sessions; latency ${latencyDeltaMs >= 0 ? "+" : ""}${latencyDeltaMs}ms, score ${scoreDelta >= 0 ? "+" : ""}${scoreDelta}.`
+      });
+    } else if (status === "insufficient") {
+      findings.push({
+        id: `cohort-${key}-coverage`,
+        label: `${sample.testCaseName} · ${sample.platform}`,
+        status: "watch",
+        detail: `Cohort needs ${policy.regression.minimumMatchedCohortSessions} sessions in both builds; current ${currentSessions.length}, baseline ${baselineSessions.length}.`
+      });
+    }
+  }
+
+  const matched = cohorts.filter((cohort) => cohort.status !== "insufficient");
+  if (!matched.length) {
+    findings.push({
+      id: "matched-cohort-evidence",
+      status: "watch",
+      label: "Matched cohort evidence",
+      detail: `No case/platform/network/language cohort has at least ${policy.regression.minimumMatchedCohortSessions} valid sessions in both builds.`
+    });
+  } else if (!findings.length) {
+    findings.push({
+      id: "matched-cohort-stable",
+      status: "pass",
+      label: "Matched cohort stability",
+      detail: `${matched.length} matched cohort(s) remain inside the active regression policy.`
+    });
+  }
 
   return {
-    status: regressionStatus(findings),
+    status: matched.length ? regressionStatus(findings) : "insufficient",
     current,
     baseline,
+    baselineSource,
     deltas,
-    findings
+    findings,
+    cohorts
   };
 }
 
@@ -817,7 +1069,8 @@ function completedSessionSummary(session: ActiveTestingSession, endedAt: number)
     micFrames: session.micFrames,
     turns: session.turns
   });
-  return {
+  const policyVersion = activeTestingPolicy().version;
+  const summary: Omit<TesterSessionSummary, "evidenceHash" | "evidenceIntegrity"> = {
     sessionId: session.sessionId,
     testerKey: session.testerKey,
     testerId: session.testerId,
@@ -832,6 +1085,9 @@ function completedSessionSummary(session: ActiveTestingSession, endedAt: number)
     deviceLabel: session.deviceLabel,
     browserLanguage: session.browserLanguage,
     networkType: session.networkType,
+    platform: session.platform,
+    runId: session.runId,
+    assignmentId: session.assignmentId,
     startedAt: session.startedAt,
     endedAt,
     durationMs,
@@ -849,9 +1105,14 @@ function completedSessionSummary(session: ActiveTestingSession, endedAt: number)
     validity,
     flags,
     notes: "",
+    policyVersion,
+    capturedEvaluation: { ...evaluation, checks: evaluation.checks.map((check) => ({ ...check })) },
+    capturedValidity: { ...validity, reasons: [...validity.reasons] },
+    audioQuality: { ...session.audioQuality },
     evaluation,
     turns: session.turns.map((turn) => ({ ...turn }))
   };
+  return { ...summary, evidenceHash: evidenceHash(summary), evidenceIntegrity: "verified" };
 }
 
 function normalizeTranscriptTurn(value: unknown): TesterTranscriptTurn | null {
@@ -918,8 +1179,23 @@ function normalizeCompletedSession(value: unknown): TesterSessionSummary | null 
     micFrames,
     turns
   });
-
-  return {
+  const deviceLabel = normalizeMetaString(value.deviceLabel, "unknown device", 120);
+  const networkType = normalizeMetaString(value.networkType, "unknown network", 40);
+  const platform = inferTestingPlatform(value.platform, deviceLabel, networkType);
+  const capturedEvaluation =
+    isRecord(value.capturedEvaluation) && Array.isArray(value.capturedEvaluation.checks)
+      ? (value.capturedEvaluation as unknown as TestingEvaluationSummary)
+      : evaluation;
+  const capturedValidity =
+    isRecord(value.capturedValidity) && Array.isArray(value.capturedValidity.reasons)
+      ? (value.capturedValidity as unknown as TestingValiditySummary)
+      : validity;
+  const qualityRecord = isRecord(value.audioQuality) ? value.audioQuality : {};
+  const qualityNumber = (key: string, max = Number.MAX_SAFE_INTEGER) => {
+    const field = qualityRecord[key];
+    return typeof field === "number" && Number.isFinite(field) ? Math.min(max, Math.max(0, field)) : 0;
+  };
+  const summary: Omit<TesterSessionSummary, "evidenceHash" | "evidenceIntegrity"> = {
     sessionId,
     testerKey,
     testerId,
@@ -931,9 +1207,12 @@ function normalizeCompletedSession(value: unknown): TesterSessionSummary | null 
     testCaseName: testCase.name,
     appVersion: normalizeMetaString(value.appVersion, "unknown", 40),
     gitCommit: normalizeMetaString(value.gitCommit, "unknown", 80),
-    deviceLabel: normalizeMetaString(value.deviceLabel, "unknown device", 120),
+    deviceLabel,
     browserLanguage: normalizeMetaString(value.browserLanguage, "unknown language", 40),
-    networkType: normalizeMetaString(value.networkType, "unknown network", 40),
+    networkType,
+    platform,
+    runId: normalizeMetaString(value.runId, "", 80) || undefined,
+    assignmentId: normalizeMetaString(value.assignmentId, "", 80) || undefined,
     startedAt,
     endedAt,
     durationMs,
@@ -951,9 +1230,32 @@ function normalizeCompletedSession(value: unknown): TesterSessionSummary | null 
     validity,
     flags,
     notes: typeof value.notes === "string" ? cleanText(value.notes).slice(0, 1_000) : "",
+    policyVersion: normalizeMetaString(value.policyVersion, "legacy", 80),
+    capturedEvaluation: {
+      ...capturedEvaluation,
+      checks: capturedEvaluation.checks.map((check) => ({ ...check }))
+    },
+    capturedValidity: { ...capturedValidity, reasons: [...capturedValidity.reasons] },
+    audioQuality: {
+      droppedFrames: Math.round(qualityNumber("droppedFrames")),
+      outgoingFps: qualityNumber("outgoingFps", 1_000),
+      jitterMs: qualityNumber("jitterMs", 60_000),
+      clippingPct: qualityNumber("clippingPct", 100),
+      silencePct: qualityNumber("silencePct", 100)
+    },
     evaluation,
     turns: turns.slice(-MAX_TRANSCRIPT_TURNS_PER_SESSION)
   };
+  const storedHash = normalizeMetaString(value.evidenceHash, "", 128);
+  const calculatedHash = evidenceHash(summary);
+  const evidenceIntegrity: TesterSessionSummary["evidenceIntegrity"] = !storedHash
+    ? "legacy"
+    : storedHash === calculatedHash
+      ? value.evidenceIntegrity === "legacy"
+        ? "legacy"
+        : "verified"
+      : "mismatch";
+  return { ...summary, evidenceHash: storedHash || calculatedHash, evidenceIntegrity };
 }
 
 function testerFromCompletedSession(session: TesterSessionSummary): MutableTesterStats {
@@ -1017,18 +1319,39 @@ function trimCompletedSessions() {
 function ensureTestingHistoryLoaded() {
   if (testingHistoryLoaded) return;
   testingHistoryLoaded = true;
+  try {
+    const stored = loadTestingSessions(MAX_COMPLETED_SESSIONS);
+    if (stored.length) {
+      for (const raw of stored) {
+        const session = normalizeCompletedSession(raw);
+        if (!session) continue;
+        completedSessions.push(session);
+        applyCompletedSessionToTester(session);
+      }
+      trimCompletedSessions();
+      trimInactiveTesters();
+      return;
+    }
+  } catch {
+    // The JSONL archive below remains a recovery path if SQLite is unavailable.
+  }
   if (!TESTING_HISTORY_PATH) return;
   try {
     const raw = fs.readFileSync(TESTING_HISTORY_PATH, "utf8");
     // Drop blank lines BEFORE slicing: the file ends with "\n", so slicing the
     // raw split would count a trailing "" and silently lose the oldest session.
     const lines = raw.split("\n").filter((line) => line.trim());
-    for (const line of lines.slice(-MAX_COMPLETED_SESSIONS)) {
+    const migrationLines = lines;
+    const migratedSessions: TesterSessionSummary[] = [];
+    for (const [index, line] of migrationLines.entries()) {
       try {
         const session = normalizeCompletedSession(JSON.parse(line));
         if (session) {
-          completedSessions.push(session);
-          applyCompletedSessionToTester(session);
+          migratedSessions.push(session);
+          if (index >= migrationLines.length - MAX_COMPLETED_SESSIONS) {
+            completedSessions.push(session);
+            applyCompletedSessionToTester(session);
+          }
         }
       } catch {
         // One corrupt line (e.g. a partial write from a crash) must not
@@ -1037,6 +1360,9 @@ function ensureTestingHistoryLoaded() {
     }
     trimCompletedSessions();
     trimInactiveTesters();
+    // One-time migration: preserve JSONL as the append-oriented archive while
+    // indexing the normalized evidence in SQLite for scoped/paginated reads.
+    replaceStoredTestingSessions(migratedSessions);
     compactTestingHistory(lines);
   } catch {
     // History is best-effort. Missing or unreadable files must not break /health.
@@ -1044,15 +1370,14 @@ function ensureTestingHistoryLoaded() {
 }
 
 /**
- * The history file is append-only, but only the newest MAX_COMPLETED_SESSIONS
- * lines are ever used. Once startup finds the file has grown well past that,
- * rewrite it (write-then-rename, so a crash never truncates the original) to
- * bound disk usage and future startup reads.
+ * Optional operator-configured archive retention. The production default is
+ * unbounded: the small in-memory dashboard window must never decide how much
+ * recovery evidence survives. Rewrites are atomic when a cap is configured.
  */
 function compactTestingHistory(lines: string[]) {
-  if (!TESTING_HISTORY_PATH || lines.length <= MAX_COMPLETED_SESSIONS * 4) return;
+  if (!TESTING_HISTORY_PATH || !MAX_ARCHIVE_SESSIONS || lines.length <= MAX_ARCHIVE_SESSIONS) return;
   try {
-    const retained = lines.slice(-MAX_COMPLETED_SESSIONS);
+    const retained = lines.slice(-MAX_ARCHIVE_SESSIONS);
     const tempPath = `${TESTING_HISTORY_PATH}.compact`;
     fs.writeFileSync(tempPath, `${retained.join("\n")}\n`);
     fs.renameSync(tempPath, TESTING_HISTORY_PATH);
@@ -1067,13 +1392,18 @@ function compactTestingHistory(lines: string[]) {
 let persistQueue: Promise<void> = Promise.resolve();
 
 function persistCompletedSession(session: TesterSessionSummary) {
+  try {
+    saveTestingSession(session);
+  } catch {
+    // JSONL remains the recovery archive if the database index is unavailable.
+  }
   const filePath = TESTING_HISTORY_PATH;
   if (!filePath) return;
   const line = `${JSON.stringify(session)}\n`;
   persistQueue = persistQueue
     .then(async () => {
       await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.promises.appendFile(filePath, line);
+      await fs.promises.appendFile(filePath, line, { mode: 0o600 });
     })
     .catch(() => {
       // Persistence failure should not interrupt a live voice session.
@@ -1085,21 +1415,34 @@ export function flushTestingHistory(): Promise<void> {
   return persistQueue;
 }
 
-/**
- * Rewrites the on-disk history to mirror the in-memory completed sessions.
- * Serialized on the same queue as appends so a clear can't interleave with a
- * session summary landing, and write-then-rename so a crash never truncates.
- */
-function rewriteTestingHistory() {
+/** Filters the complete recovery archive without replacing it with the much
+ * smaller in-memory gate window. Serialized with appends and atomically
+ * renamed, so deleting old evidence cannot truncate unrelated old records. */
+function filterTestingHistory(keep: (value: Record<string, unknown> | null) => boolean) {
   const filePath = TESTING_HISTORY_PATH;
   if (!filePath) return;
-  // completedSessions is newest-first; the file is append-order (oldest first).
-  const lines = [...completedSessions].reverse().map((session) => JSON.stringify(session));
   persistQueue = persistQueue
     .then(async () => {
       await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+      let raw = "";
+      try {
+        raw = await fs.promises.readFile(filePath, "utf8");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      const lines = raw
+        .split("\n")
+        .filter((line) => line.trim())
+        .filter((line) => {
+          try {
+            const value = JSON.parse(line) as unknown;
+            return keep(isRecord(value) ? value : null);
+          } catch {
+            return keep(null);
+          }
+        });
       const tempPath = `${filePath}.rewrite`;
-      await fs.promises.writeFile(tempPath, lines.length ? `${lines.join("\n")}\n` : "");
+      await fs.promises.writeFile(tempPath, lines.length ? `${lines.join("\n")}\n` : "", { mode: 0o600 });
       await fs.promises.rename(tempPath, filePath);
     })
     .catch(() => {
@@ -1120,19 +1463,32 @@ export type TestingClearResult = { removedTesters: number; removedSessions: numb
 export function clearTesterData(testerKey: string): TestingClearResult {
   ensureTestingHistoryLoaded();
   const removedTesters = testers.delete(testerKey) ? 1 : 0;
-  let removedSessions = 0;
+  let removedActiveSessions = 0;
   for (const [sessionId, session] of testingSessions) {
     if (session.testerKey === testerKey) {
       testingSessions.delete(sessionId);
-      removedSessions += 1;
+      removedActiveSessions += 1;
     }
   }
   const before = completedSessions.length;
   for (let index = completedSessions.length - 1; index >= 0; index -= 1) {
     if (completedSessions[index].testerKey === testerKey) completedSessions.splice(index, 1);
   }
-  removedSessions += before - completedSessions.length;
-  if (removedTesters || removedSessions) rewriteTestingHistory();
+  const removedCachedSessions = before - completedSessions.length;
+  let removedStoredSessions = removedCachedSessions;
+  try {
+    removedStoredSessions = deleteStoredTesterSessions(testerKey);
+  } catch {
+    // The in-memory/archive clear still succeeds if SQLite is unavailable.
+  }
+  const removedSessions = removedActiveSessions + Math.max(removedCachedSessions, removedStoredSessions);
+  if (removedTesters || removedSessions) {
+    filterTestingHistory((value) => {
+      if (!value) return true;
+      const archived = normalizeCompletedSession(value);
+      return !archived || archived.testerKey !== testerKey;
+    });
+  }
   return { removedTesters, removedSessions };
 }
 
@@ -1144,9 +1500,15 @@ export function clearTesterData(testerKey: string): TestingClearResult {
 export function clearTestingSession(sessionId: string): TestingClearResult {
   ensureTestingHistoryLoaded();
   const index = completedSessions.findIndex((session) => session.sessionId === sessionId);
-  if (index < 0) return { removedTesters: 0, removedSessions: 0 };
-  completedSessions.splice(index, 1);
-  rewriteTestingHistory();
+  if (index >= 0) completedSessions.splice(index, 1);
+  let removedStored = 0;
+  try {
+    removedStored = deleteStoredTestingSession(sessionId);
+  } catch {
+    // The in-memory/archive clear still succeeds if SQLite is unavailable.
+  }
+  if (index < 0 && !removedStored) return { removedTesters: 0, removedSessions: 0 };
+  filterTestingHistory((value) => !value || value.sessionId !== sessionId);
   return { removedTesters: 0, removedSessions: 1 };
 }
 
@@ -1154,12 +1516,20 @@ export function clearTestingSession(sessionId: string): TestingClearResult {
 export function clearAllTesterData(): TestingClearResult {
   ensureTestingHistoryLoaded();
   const removedTesters = testers.size;
-  const removedSessions = completedSessions.length + testingSessions.size;
+  const cachedSessions = completedSessions.length;
+  const activeSessions = testingSessions.size;
+  let storedSessions = cachedSessions;
+  try {
+    storedSessions = deleteAllStoredTestingSessions();
+  } catch {
+    // The in-memory/archive clear still succeeds if SQLite is unavailable.
+  }
+  const removedSessions = activeSessions + Math.max(cachedSessions, storedSessions);
   testers.clear();
   testingSessions.clear();
   completedSessions.length = 0;
   testingTimeline.clear();
-  rewriteTestingHistory();
+  filterTestingHistory(() => false);
   return { removedTesters, removedSessions };
 }
 
@@ -1250,6 +1620,9 @@ export function beginTesterSession(sessionId: string, identityInput: TesterIdent
     deviceLabel: identity.deviceLabel,
     browserLanguage: identity.browserLanguage,
     networkType: identity.networkType,
+    platform: identity.platform,
+    runId: identity.runId,
+    assignmentId: identity.assignmentId,
     startedAt: now,
     audioUpBytes: 0,
     audioDownBytes: 0,
@@ -1259,6 +1632,14 @@ export function beginTesterSession(sessionId: string, identityInput: TesterIdent
     errorEvents: 0,
     ttsFallbacks: 0,
     latencyMs: [],
+    audioQuality: {
+      droppedFrames: 0,
+      outgoingFps: 0,
+      jitterMs: 0,
+      clippingPct: 0,
+      silencePct: 0
+    },
+    audioQualitySamples: 0,
     turns: []
   });
   currentBucket(now).sessionsStarted += 1;
@@ -1337,6 +1718,27 @@ export function recordTesterTtsFallback(sessionId: string, now = Date.now()) {
   session.ttsFallbacks += 1;
 }
 
+export function recordTesterAudioQuality(sessionId: string, input: Partial<TestingAudioQuality>, now = Date.now()) {
+  const active = activeSession(sessionId, now);
+  if (!active) return;
+  const current = active.session.audioQuality;
+  const safe = (value: unknown, fallback: number, max = Number.MAX_SAFE_INTEGER) =>
+    typeof value === "number" && Number.isFinite(value) ? Math.min(max, Math.max(0, value)) : fallback;
+  const samples = active.session.audioQualitySamples;
+  const nextSamples = samples + 1;
+  const rollingAverage = (previous: number, value: number) =>
+    Math.round(((previous * samples + value) / nextSamples) * 10) / 10;
+  active.session.audioQuality = {
+    droppedFrames: Math.max(current.droppedFrames, Math.round(safe(input.droppedFrames, current.droppedFrames))),
+    outgoingFps: rollingAverage(current.outgoingFps, safe(input.outgoingFps, current.outgoingFps, 1_000)),
+    jitterMs: rollingAverage(current.jitterMs, safe(input.jitterMs, current.jitterMs, 60_000)),
+    clippingPct: rollingAverage(current.clippingPct, safe(input.clippingPct, current.clippingPct, 100)),
+    silencePct: rollingAverage(current.silencePct, safe(input.silencePct, current.silencePct, 100))
+  };
+  active.session.audioQualitySamples = nextSamples;
+  active.tester.lastSeenAt = now;
+}
+
 /** Attach a tester-reported problem to a transcript turn. Client and server
  *  timestamps differ, so the turn is matched by speaker + cleaned text; if the
  *  exact text is not found (e.g. divergent whitespace normalization), the
@@ -1366,24 +1768,53 @@ export function recordTesterTurnFeedback(
   if (mirrored) mirrored.feedback = reason;
 }
 
-export function testingSnapshot(now = Date.now()): TestingStats {
+type TestingSnapshotOptions = {
+  testerId?: string;
+  includeSessions?: boolean;
+  includeTurns?: boolean;
+  includeOperations?: boolean;
+};
+
+function clonedSession(session: TesterSessionSummary, includeTurns: boolean): TesterSessionSummary {
+  return {
+    ...session,
+    validity: { ...session.validity, reasons: [...session.validity.reasons] },
+    capturedValidity: { ...session.capturedValidity, reasons: [...session.capturedValidity.reasons] },
+    evaluation: { ...session.evaluation, checks: session.evaluation.checks.map((check) => ({ ...check })) },
+    capturedEvaluation: {
+      ...session.capturedEvaluation,
+      checks: session.capturedEvaluation.checks.map((check) => ({ ...check }))
+    },
+    audioQuality: { ...session.audioQuality },
+    flags: [...session.flags],
+    turns: includeTurns ? session.turns.map((turn) => ({ ...turn })) : []
+  };
+}
+
+export function testingSnapshot(now = Date.now(), options: TestingSnapshotOptions = {}): TestingStats {
   ensureTestingHistoryLoaded();
-  const users = [...testers.values()].map(testerSnapshot).sort((a, b) => {
-    if (b.activeSessions !== a.activeSessions) return b.activeSessions - a.activeSessions;
-    if (b.lastSeenAt !== a.lastSeenAt) return b.lastSeenAt - a.lastSeenAt;
-    return b.totalSessions - a.totalSessions;
-  });
+  const currentBuildSessions = completedSessionsForBuild(buildInfo.gitCommit);
+  const scopedTesterId = options.testerId ? normalizeTesterId(options.testerId) : undefined;
+  const users = [...testers.values()]
+    .filter((tester) => !scopedTesterId || tester.testerId === scopedTesterId)
+    .map(testerSnapshot)
+    .sort((a, b) => {
+      if (b.activeSessions !== a.activeSessions) return b.activeSessions - a.activeSessions;
+      if (b.lastSeenAt !== a.lastSeenAt) return b.lastSeenAt - a.lastSeenAt;
+      return b.totalSessions - a.totalSessions;
+    });
+  const scopedSessions = completedSessions.filter((session) => !scopedTesterId || session.testerId === scopedTesterId);
   const latency = users.flatMap((user) => {
     const tester = testers.get(user.testerKey);
     return tester?.latencyMs ?? [];
   });
-  const validCompletedSessions = completedSessions.filter((session) => session.validity.status === "valid").length;
-  const invalidCompletedSessions = completedSessions.length - validCompletedSessions;
+  const validCompletedSessions = scopedSessions.filter(isDecisionGradeEvidence).length;
+  const invalidCompletedSessions = scopedSessions.length - validCompletedSessions;
   return {
     windowMinutes: TESTING_WINDOW_MINUTES,
     catalog: testingCatalog(),
     history: {
-      persistent: Boolean(TESTING_HISTORY_PATH),
+      persistent: testingStorePersistent() || Boolean(TESTING_HISTORY_PATH),
       maxSessions: MAX_COMPLETED_SESSIONS,
       maxTranscriptTurnsPerTester: MAX_TRANSCRIPT_TURNS_PER_TESTER,
       maxTranscriptTurnsPerSession: MAX_TRANSCRIPT_TURNS_PER_SESSION
@@ -1401,18 +1832,132 @@ export function testingSnapshot(now = Date.now()): TestingStats {
       validTestSessions: validCompletedSessions,
       invalidTestSessions: invalidCompletedSessions
     },
-    releaseGate: buildReleaseGate(now),
-    regression: buildRegressionSummary(),
+    releaseGate: buildReleaseGate(now, currentBuildSessions),
+    regression: buildRegressionSummary(currentBuildSessions),
     users,
-    sessions: completedSessions.map((session) => ({
-      ...session,
-      validity: {
-        ...session.validity,
-        reasons: [...session.validity.reasons]
-      },
-      flags: [...session.flags],
-      turns: session.turns.map((turn) => ({ ...turn }))
-    })),
-    timeline: timelineSnapshot(now)
+    sessions:
+      options.includeSessions === false
+        ? []
+        : scopedSessions.map((session) => clonedSession(session, options.includeTurns !== false)),
+    timeline: timelineSnapshot(now),
+    ...(options.includeOperations ? { operations: testingOperationsSnapshot() } : {})
   };
+}
+
+function decodeCursor(cursor: string | undefined): { endedAt: number; sessionId: string } | null {
+  if (!cursor) return null;
+  try {
+    const value = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as unknown;
+    if (!isRecord(value) || typeof value.endedAt !== "number" || typeof value.sessionId !== "string") return null;
+    return { endedAt: value.endedAt, sessionId: value.sessionId };
+  } catch {
+    return null;
+  }
+}
+
+function encodeCursor(session: TesterSessionSummary): string {
+  return Buffer.from(JSON.stringify({ endedAt: session.endedAt, sessionId: session.sessionId })).toString("base64url");
+}
+
+export function testingSessionPage(
+  query: TestingSessionQuery = {},
+  requesterTesterId?: string
+): TestingSessionPage<TesterSessionSummary> {
+  ensureTestingHistoryLoaded();
+  const allowedTesterId = requesterTesterId ? normalizeTesterId(requesterTesterId) : undefined;
+
+  // SQLite is the durable evidence index and can contain substantially more
+  // history than the bounded in-memory release-gate window. Re-normalize rows
+  // on read so policy replay and integrity checks stay current.
+  try {
+    const storedPage = storedTestingSessionPage(query, allowedTesterId);
+    return {
+      ...storedPage,
+      items: storedPage.items
+        .map(normalizeCompletedSession)
+        .filter((session): session is TesterSessionSummary => Boolean(session))
+        .map((session) => clonedSession(session, false))
+    };
+  } catch {
+    // Keep the live, bounded cache usable if the durable index is unavailable.
+  }
+
+  const requestedLimit = typeof query.limit === "number" && Number.isFinite(query.limit) ? query.limit : 25;
+  const limit = Math.max(1, Math.min(100, Math.round(requestedLimit)));
+  const cursor = decodeCursor(query.cursor);
+  const search = cleanText(query.search ?? "").toLowerCase();
+  const filtered = completedSessions.filter((session) => {
+    if (allowedTesterId && session.testerId !== allowedTesterId) return false;
+    if (query.testerId && session.testerId !== normalizeTesterId(query.testerId)) return false;
+    if (query.testCaseId && session.testCaseId !== query.testCaseId) return false;
+    if (query.build && session.gitCommit !== query.build) return false;
+    if (query.quality && session.quality !== query.quality) return false;
+    if (query.platform && session.platform !== query.platform) return false;
+    if (query.runId && session.runId !== query.runId) return false;
+    if (
+      cursor &&
+      (session.endedAt > cursor.endedAt ||
+        (session.endedAt === cursor.endedAt && session.sessionId >= cursor.sessionId))
+    ) {
+      return false;
+    }
+    if (search) {
+      const haystack = [
+        session.sessionId,
+        session.testerId,
+        session.testCaseName,
+        session.deviceLabel,
+        session.networkType,
+        session.gitCommit,
+        session.notes,
+        ...session.flags
+      ]
+        .join(" ")
+        .toLowerCase();
+      if (!haystack.includes(search)) return false;
+    }
+    return true;
+  });
+  const page = filtered.slice(0, limit);
+  return {
+    items: page.map((session) => clonedSession(session, false)),
+    nextCursor: filtered.length > limit && page.length ? encodeCursor(page[page.length - 1]) : undefined,
+    total: filtered.length
+  };
+}
+
+export function testingSessionDetail(sessionId: string, requesterTesterId?: string): TesterSessionSummary | null {
+  ensureTestingHistoryLoaded();
+  let session: TesterSessionSummary | null | undefined;
+  try {
+    const stored = loadStoredTestingSession(sessionId);
+    session = stored ? normalizeCompletedSession(stored) : null;
+  } catch {
+    // Fall back to the live cache below.
+  }
+  session ??= completedSessions.find((item) => item.sessionId === sessionId);
+  if (!session) return null;
+  if (requesterTesterId && session.testerId !== normalizeTesterId(requesterTesterId)) return null;
+  return clonedSession(session, true);
+}
+
+export function updateTestingSessionNotes(sessionId: string, notes: unknown): TesterSessionSummary | null {
+  ensureTestingHistoryLoaded();
+  let session = completedSessions.find((item) => item.sessionId === sessionId);
+  if (!session) {
+    try {
+      const stored = loadStoredTestingSession(sessionId);
+      session = stored ? (normalizeCompletedSession(stored) ?? undefined) : undefined;
+    } catch {
+      // The cache fallback below still permits notes on recent evidence.
+    }
+  }
+  if (!session) return null;
+  session.notes = typeof notes === "string" ? cleanText(notes).slice(0, 1_000) : "";
+  try {
+    saveTestingSession(session);
+  } catch {
+    if (!completedSessions.some((item) => item.sessionId === sessionId)) return null;
+  }
+  return clonedSession(session, true);
 }

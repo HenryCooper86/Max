@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-07-15 — Live-agent QA control plane and release governance
+
+- Moved private tester evidence out of the public `/health` poll into
+  authenticated summary, cursor-paginated session, replay, run, review,
+  policy, and audit APIs. Testers are self-scoped; the new reviewer role can
+  operate QA without receiving account/policy/destructive admin privileges.
+- Added a SQLite operations/evidence index alongside the append-oriented JSONL
+  recovery archive: risk-weighted release runs, cross-platform assignments,
+  durable issue triage, reviewer notes, immutable policy history, audit events,
+  and an explicit approved regression baseline now survive deployments.
+- Added SHA-256 integrity verification over captured evidence. Reviewer notes
+  and current-policy replays remain mutable without changing the capture hash;
+  mismatched evidence is excluded from release and regression decisions.
+- Strengthened decisions with per-case sample minimums, required web/iOS/
+  Android cohorts, matched case/platform/network/language regression, strict
+  assignment credit, and admin-only approval blocked by incomplete coverage,
+  open reviews, gate failure, or baseline regression.
+- Expanded the admin UI with release-run planning, coverage assignments,
+  durable issue ownership/disposition, policy versions, audit history,
+  paginated evidence, captured-vs-current evaluation drift, audio quality, and
+  role management. The old browser-local failure watermark is replaced by the
+  shared review queue.
+- Web sessions now report aggregate frame rate, drops, jitter, clipping, and
+  silence. Native clients accept run/assignment/test-case attribution and no
+  longer send fake `ios-local`/`android-local` commits; Android resolves git at
+  build time and iOS accepts `HORIZON_GIT_COMMIT` as a build setting.
+- Added a 24-case deterministic fault matrix, a live release-gate report CLI,
+  and GitLab jobs that retain build and release-decision artifacts.
+
 ## 2026-07-15 — Security, QA evidence, and session-lifecycle hardening
 
 - Closed a remaining registration bypass on token-protected relays: an

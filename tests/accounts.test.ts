@@ -15,6 +15,7 @@ import {
   resetAccounts,
   revokeInvite,
   sessionUser,
+  setUserRole,
   userCount
 } from "../server/accounts";
 import { config } from "../server/config";
@@ -112,6 +113,17 @@ describe("user accounts", () => {
 });
 
 describe("invites and admin user management", () => {
+  it("supports reviewer roles while protecting the last administrator", async () => {
+    await registerUser("boss", "hunter2-hunter2", undefined, 1_000);
+    await registerUser("reviewer", "password123", undefined, 2_000);
+    expect(setUserRole("reviewer", "reviewer")).toMatchObject({ ok: true, user: { role: "reviewer" } });
+    expect(setUserRole("boss", "tester")).toMatchObject({ ok: false, error: expect.stringContaining("管理员") });
+
+    await registerUser("backup-admin", "password123", undefined, 3_000);
+    expect(setUserRole("backup-admin", "admin").ok).toBe(true);
+    expect(setUserRole("boss", "reviewer")).toMatchObject({ ok: true, user: { role: "reviewer" } });
+  });
+
   it("admits a registration through a single-use invite while registration is closed", async () => {
     await registerUser("boss", "hunter2-hunter2", undefined, 1_000);
     config.authRegistration = false;

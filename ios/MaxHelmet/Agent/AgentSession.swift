@@ -83,6 +83,10 @@ final class AgentSession: NSObject, ObservableObject {
     /// Optional shared relay auth token, appended to the /agent URL as ?token=….
     private var authToken = ""
     private var testerId = ""
+    private var testingCampaignId = "release-readiness"
+    private var testingTestCaseId = "baseline-live-session"
+    private var testingRunId = ""
+    private var testingAssignmentId = ""
     private var reconnectAttempts = 0
     private var reconnectWorkItem: DispatchWorkItem?
     /// The 150 ms deferred reconnect of a settings-change restart, so stop()
@@ -147,11 +151,24 @@ final class AgentSession: NSObject, ObservableObject {
     /// as ?token=… (relays without a configured token ignore it).
     /// `allowSelfSignedTls` opts into trusting the test server's self-signed
     /// certificate for wss:// URLs.
-    func start(url: String, authToken: String = "", allowSelfSignedTls: Bool, testerId: String = "") {
+    func start(
+        url: String,
+        authToken: String = "",
+        allowSelfSignedTls: Bool,
+        testerId: String = "",
+        testingCampaignId: String = "release-readiness",
+        testingTestCaseId: String = "baseline-live-session",
+        testingRunId: String = "",
+        testingAssignmentId: String = ""
+    ) {
         guard !state.value.handsFree else { return }
         relayURL = url
         self.authToken = authToken
         self.testerId = testerId.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.testingCampaignId = String(testingCampaignId.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
+        self.testingTestCaseId = String(testingTestCaseId.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
+        self.testingRunId = String(testingRunId.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
+        self.testingAssignmentId = String(testingAssignmentId.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
         reconnectWorkItem?.cancel()
 
         let trustedSelfSigned = allowSelfSignedTls
@@ -385,6 +402,21 @@ final class AgentSession: NSObject, ObservableObject {
         return "\(device.model) \(device.systemName) \(device.systemVersion)"
     }
 
+    private func nativeAppVersion() -> String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let version = info["CFBundleShortVersionString"] as? String ?? "unknown"
+        let build = info["CFBundleVersion"] as? String ?? "unknown"
+        return "\(version)+\(build)"
+    }
+
+    private func nativeGitCommit() -> String {
+        let value = (Bundle.main.infoDictionary?["HorizonGitCommit"] as? String ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, !value.contains("$(") else { return "unknown" }
+        let isGitCommit = value.range(of: "^[0-9a-fA-F]{7,40}$", options: .regularExpression) != nil
+        return isGitCommit ? String(value.prefix(12)).lowercased() : String(value.prefix(80))
+    }
+
     private func restartSession() {
         let socket = webSocket
         webSocket = nil
@@ -459,8 +491,12 @@ final class AgentSession: NSObject, ObservableObject {
             lon: location?.longitude,
             testerId: testerId.isEmpty ? "ios-native" : testerId,
             testerRegion: TimeZone.current.identifier,
-            appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0",
-            gitCommit: "ios-local",
+            testingCampaignId: testingCampaignId,
+            testingTestCaseId: testingTestCaseId,
+            testingRunId: testingRunId,
+            testingAssignmentId: testingAssignmentId,
+            appVersion: nativeAppVersion(),
+            gitCommit: nativeGitCommit(),
             deviceLabel: nativeDeviceLabel(),
             browserLanguage: Locale.current.identifier,
             networkType: "ios-native",

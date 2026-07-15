@@ -16,7 +16,7 @@ import { createLogger } from "./logger";
 
 const scrypt = promisify(scryptCallback) as (password: string, salt: string, keylen: number) => Promise<Buffer>;
 
-export type AccountRole = "admin" | "tester";
+export type AccountRole = "admin" | "reviewer" | "tester";
 
 export type PublicUser = {
   id: string;
@@ -141,7 +141,7 @@ function loadStoredUser(value: unknown): StoredUser | null {
     id: typeof value.id === "string" && value.id ? value.id : randomUUID(),
     username,
     displayName: normalizeDisplayName(value.displayName, username),
-    role: value.role === "admin" ? "admin" : "tester",
+    role: value.role === "admin" || value.role === "reviewer" ? value.role : "tester",
     createdAt: typeof value.createdAt === "number" && Number.isFinite(value.createdAt) ? value.createdAt : 0,
     lastLoginAt: typeof value.lastLoginAt === "number" && Number.isFinite(value.lastLoginAt) ? value.lastLoginAt : 0,
     passwordHash: value.passwordHash,
@@ -435,6 +435,27 @@ export function deleteUser(usernameInput: unknown): { ok: true } | { ok: false; 
   }
   persistAccounts();
   return { ok: true };
+}
+
+/** Changes QA access without ever leaving the service with zero admins. */
+export function setUserRole(
+  usernameInput: unknown,
+  roleInput: unknown
+): { ok: true; user: PublicUser } | { ok: false; error: string } {
+  ensureAccountsLoaded();
+  const username = normalizeUsername(usernameInput);
+  const user = users.get(username);
+  if (!user) return { ok: false, error: "用户不存在。" };
+  if (roleInput !== "admin" && roleInput !== "reviewer" && roleInput !== "tester") {
+    return { ok: false, error: "无效的账号角色。" };
+  }
+  if (user.role === "admin" && roleInput !== "admin") {
+    const adminCount = [...users.values()].filter((candidate) => candidate.role === "admin").length;
+    if (adminCount <= 1) return { ok: false, error: "必须至少保留一个管理员账号。" };
+  }
+  user.role = roleInput;
+  persistAccounts();
+  return { ok: true, user: publicUser(user) };
 }
 
 export async function loginUser(usernameInput: unknown, passwordInput: unknown, now = Date.now()): Promise<AuthResult> {

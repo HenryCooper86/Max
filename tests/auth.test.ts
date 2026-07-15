@@ -1,6 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { registerUser, resetAccounts } from "../server/accounts";
+import { registerUser, resetAccounts, setUserRole } from "../server/accounts";
 import {
   authorizeUpgrade,
   checkAuthRateLimit,
@@ -9,6 +9,7 @@ import {
   resetAuthRateLimit,
   resetRateLimit,
   testingClearAuthorized,
+  testingAccess,
   testingStatsAuthorized
 } from "../server/auth";
 import { config } from "../server/config";
@@ -128,6 +129,26 @@ describe("testingStatsAuthorized", () => {
 });
 
 describe("user sessions in the gates", () => {
+  it("scopes testers to their username while reviewers can inspect the full corpus", async () => {
+    config.relayAuthToken = "";
+    const admin = await registerUser("boss", "hunter2-hunter2");
+    const tester = await registerUser("rider", "password123");
+    const reviewer = await registerUser("reviewer", "password123");
+    expect(admin.ok && tester.ok && reviewer.ok).toBe(true);
+    if (!admin.ok || !tester.ok || !reviewer.ok) return;
+    expect(setUserRole("reviewer", "reviewer").ok).toBe(true);
+
+    expect(testingAccess(fakeRequest({ authorization: `Bearer ${tester.token}` }))).toEqual({
+      allowed: true,
+      role: "tester",
+      testerId: "rider"
+    });
+    expect(testingAccess(fakeRequest({ authorization: `Bearer ${reviewer.token}` }))).toEqual({
+      allowed: true,
+      role: "reviewer"
+    });
+  });
+
   it("locks the testing stats once the first user registers, unlocked by login session", async () => {
     config.relayAuthToken = "";
     expect(testingStatsAuthorized(fakeRequest({ url: "/health" }))).toBe(true); // open mode

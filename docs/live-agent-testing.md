@@ -47,7 +47,7 @@ npm test -- -t "rejects frames that are too short"
 npm run test:watch                # watch mode, reruns on change
 ```
 
-The current Vitest suite is 187 tests across 22 files and runs in a few seconds.
+The current Vitest suite is 223 tests across 24 files and runs in a few seconds.
 
 ---
 
@@ -447,7 +447,105 @@ dropped frames increment rather than the stream stalling.
 
 ---
 
-## 14. Per-tester testing statistics
+## 14. QA evidence and release operations
+
+The testing surface is a release control plane rather than a large health
+payload. Every completed session retains tester, run/assignment, case, build,
+device, platform, locale, network, latency, deterministic evaluation,
+captured-policy result, transcript, and aggregate audio-pipeline quality.
+
+### Roles and evidence scope
+
+| Role           | Access                                                                                       |
+| -------------- | -------------------------------------------------------------------------------------------- |
+| Tester         | Own summary, own evidence pages, and assigned release work only                              |
+| Reviewer       | All evidence, release runs/assignments, issue triage, notes, and audit history               |
+| Admin          | Reviewer access plus account roles, versioned policy changes, deletion, and release approval |
+| Operator token | Full operational API access for automation                                                   |
+
+The public `/health` response is deliberately small and contains liveness,
+build, provider, and counters only. Authenticated QA data uses:
+
+- `GET /testing/summary` — scoped dashboard totals, gate, regression, and catalog.
+- `GET /testing/sessions?limit=25&cursor=...` — scoped, filterable evidence
+  pages without transcript turns.
+- `GET /testing/sessions/:id` — one authorized full replay.
+- `GET/POST/PATCH /testing/runs...` — release runs and assignments.
+- `GET/POST /testing/reviews` — durable issue triage.
+- `GET/POST /testing/policies` — policy history; writes are admin-only.
+- `GET /testing/audit` — retained operational change history.
+
+### Release workflow
+
+1. A reviewer creates a run for the exact candidate git commit.
+2. The run expands the active risk-weighted policy into case/platform/network/
+   language requirements.
+3. Assign each requirement. Web testers can select **Use in next session**;
+   iOS and Android expose Campaign, Test case, Run, and Assignment fields in
+   the hidden developer panel.
+4. Capture evidence. An assignment receives credit only if assignee, run,
+   build, case, platform, network, language, validity, and evidence integrity
+   match. It auto-completes only after the required sample count.
+5. Triage watch/fail sessions in the durable issue queue. Reviewer notes and
+   dispositions are audit events.
+6. The run becomes `ready` after coverage is complete. Admin approval is
+   rejected unless the current-build gate passes, matched-cohort regression
+   passes when a baseline exists, coverage is complete, and no reviews remain
+   unresolved. Approval promotes that build to the explicit baseline.
+
+### Durable evidence and deterministic decisions
+
+SQLite at `~/.horizon-helmet-testing/testing.sqlite` indexes evidence, runs,
+assignments, reviews, policy versions, audit events, and the approved baseline.
+The append-oriented JSONL file at
+`~/.horizon-helmet-testing/sessions.jsonl` remains a recovery/export archive.
+Both live outside the deploy tree. Configure `TESTING_DATABASE` and
+`TESTING_HISTORY_DIR`; use `off` only for ephemeral/test environments.
+The recovery archive retains all captures by default. Set
+`TESTING_ARCHIVE_MAX_SESSIONS` only when an explicit retention policy requires
+compaction; `TESTING_HISTORY_MAX_SESSIONS` controls the dashboard cache, not
+durable evidence retention.
+
+New captures include a SHA-256 hash over immutable captured evidence. Mutable
+reviewer notes and current-policy replays are excluded from that hash; a hash
+mismatch is excluded from gate/regression decisions. The UI shows both the
+captured evaluation and a current-policy replay when they differ. Raw
+microphone audio is not retained by default—only aggregate FPS, dropped frames,
+jitter, clipping, and silence percentages.
+
+The release gate uses risk-weighted minimums and required platforms. Regression
+compares the approved baseline (or latest valid build before first approval)
+using matched case/platform/network/language cohorts. This prevents a fast
+desktop Wi-Fi run from hiding a mobile field regression.
+
+### Automated checks
+
+```bash
+npm test                    # 223 Vitest tests across 24 files
+npm run test:fault-matrix   # 24 nominal/error/latency/unsafe variants
+
+TESTING_GATE_URL=https://qa.example.com \
+TESTING_GATE_TOKEN=... \
+TESTING_GATE_EXPECTED_BUILD=$(git rev-parse --short=12 HEAD) \
+TESTING_GATE_REPORT=artifacts/release-gate.json \
+npm run test:release-gate
+```
+
+The GitLab pipeline runs formatting, lint, unit tests, the fault matrix, and the
+production build. Its live gate is a manual protected job when
+`TESTING_GATE_URL` and `TESTING_GATE_TOKEN` are configured, and retains the JSON
+decision report for 30 days. In GitLab it also compares the live build against
+`CI_COMMIT_SHA`; local callers can set `TESTING_GATE_EXPECTED_BUILD` explicitly.
+
+Native releases must carry the actual commit:
+
+```bash
+HORIZON_GIT_COMMIT=$(git rev-parse --short=12 HEAD) ./android/gradlew -p android assembleRelease
+xcodebuild -project ios/MaxHelmet.xcodeproj -scheme MaxHelmet \
+  HORIZON_GIT_COMMIT=$(git rev-parse --short=12 HEAD) build
+```
+
+### Evidence telemetry details
 
 **What it does:** All clients send QA attribution with `session.start`: tester
 identity, campaign/test case, app/build identity, device label, locale, network
@@ -477,11 +575,9 @@ short, have no required rider/agent turns, lack transcript capture, or lack
 required mic audio are classified as invalid evidence and excluded from release
 gate and regression scoring.
 
-Completed sessions are appended to `~/.horizon-helmet-testing/sessions.jsonl`
-by default. This path is intentionally outside `/home/ubuntu/app`, so rsync
-deploys do not delete QA evidence. Use `TESTING_HISTORY_DIR=off` to disable
-disk persistence, `TESTING_HISTORY_DIR=/path/to/dir` to move it, or
-`TESTING_HISTORY_MAX_SESSIONS=500` to raise the retained window.
+Completed sessions are indexed in SQLite and also appended to the JSONL
+recovery archive. Deploys do not delete either evidence store. Use
+`TESTING_HISTORY_MAX_SESSIONS=500` to raise the in-memory/replay window.
 
 **Code:** `shared/testing.ts` (campaign/test-case/golden catalog),
 `server/testing-evaluator.ts` (deterministic scoring), `server/metrics.ts`
@@ -489,11 +585,11 @@ disk persistence, `TESTING_HISTORY_DIR=/path/to/dir` to move it, or
 `testingSnapshot`), `server/session-controller.ts` (`testerId` + QA metadata
 validation/attribution), and `src/App.tsx` (testing dashboard).
 
-**Unit test:** `tests/metrics.test.ts` covers per-tester sessions, IP fallback,
-region, bandwidth, latency, transcript turns, completed session summaries,
-quality flags, errors, and fallbacks; `tests/testing-evaluator.test.ts` covers
-deterministic scoring; `tests/golden-replay.test.ts` keeps golden fixtures
-passing; `tests/websocket.test.ts` validates safe tester and QA metadata values.
+**Unit test:** `tests/metrics.test.ts` covers scoped paging, audio quality,
+evidence integrity, notes, gates, and matched cohorts;
+`tests/testing-store.test.ts` covers assignment credit, bounded policy versions,
+reviews, and audit; `tests/auth.test.ts` covers tester/reviewer scope;
+`tests/golden-replay.test.ts` and the fault matrix protect deterministic behavior.
 
 ```bash
 npm test -- "per-tester"
@@ -507,17 +603,15 @@ through a short mock or Doubao run. Confirm the testing panel increments active
 sessions, mic up/downlink bandwidth, latency, and per-user rows. Then check:
 
 ```bash
-curl -s http://localhost:8787/health | jq '.testing'
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8787/testing/summary | jq '.testing.releaseGate'
 ```
 
-Expected: `testing.catalog` includes campaigns, test cases, and golden replays;
-`testing.users[]` includes `testerKey`, `testerId`, `ipAddress`, `region`, and
-a bounded `recentTurns[]` transcript list; `testing.sessions[]` contains
-retained completed runs with campaign/test/build/device metadata, `quality`,
-`flags`, `evaluation.checks[]`, per-session counters, and `turns[]`;
-`testing.timeline[]` contains graph-ready minute buckets. Behind
-Caddy/Lightsail, `RELAY_TRUST_PROXY=on` is required or the IP will be the local
-proxy address instead of the tester address.
+Expected: the summary includes catalog, scoped users, graph buckets, release
+gate, and regression. Fetch operational state from `/testing/operations`, and
+session pages/replays from `/testing/sessions`; the summary never embeds the
+retained transcript corpus. Behind Caddy/Lightsail,
+`RELAY_TRUST_PROXY=on` is required or the IP will be the local proxy address.
 
 ---
 

@@ -134,6 +134,8 @@ export function useHelmetAgent() {
   const [testingTestCaseId, setTestingTestCaseIdState] = useState(
     findTestingTestCase(storedSettings.testingTestCaseId).id
   );
+  const [testingRunId, setTestingRunIdState] = useState(storedSettings.testingRunId ?? "");
+  const [testingAssignmentId, setTestingAssignmentIdState] = useState(storedSettings.testingAssignmentId ?? "");
   const [turnState, setTurnState] = useState<TurnState>("idle");
   const [weather, setWeather] = useState<Weather | null>(null);
   const [rideContext, setRideContext] = useState<RideHudContext>(DEFAULT_RIDE_CONTEXT);
@@ -166,6 +168,8 @@ export function useHelmetAgent() {
   const testerIdRef = useRef(initialTesterId);
   const testingCampaignIdRef = useRef(findTestingCampaign(storedSettings.testingCampaignId).id);
   const testingTestCaseIdRef = useRef(findTestingTestCase(storedSettings.testingTestCaseId).id);
+  const testingRunIdRef = useRef(storedSettings.testingRunId ?? "");
+  const testingAssignmentIdRef = useRef(storedSettings.testingAssignmentId ?? "");
   const locationRef = useRef<RiderLocation | null>(null);
   const rideModeRef = useRef<RideMode>(DEFAULT_RIDE_CONTEXT.mode);
   const scenarioRef = useRef<DemoScenario>(DEFAULT_RIDE_CONTEXT.scenario);
@@ -177,6 +181,7 @@ export function useHelmetAgent() {
   const sessionMemoryRef = useRef<SessionMemoryState>(DEFAULT_MEMORY);
   // Last agent text handed to speak(), for duplicate-final suppression.
   const lastSpokenRef = useRef<{ text: string; at: number } | null>(null);
+  const lastQualityReportAtRef = useRef(0);
 
   const onInterrupted = useCallback(() => {
     setTurnState("listening");
@@ -199,6 +204,18 @@ export function useHelmetAgent() {
     setTrackEnabled,
     resetFrameWindow
   } = useMicCapture({ socketRef, transmittingRef });
+
+  // Persist the browser-side transport/signal quality with the session
+  // evidence. One report per second is enough for QA without adding noisy
+  // control traffic to the real-time audio stream.
+  useEffect(() => {
+    const socket = socketRef.current;
+    if (!transmittingRef.current || socket?.readyState !== WebSocket.OPEN) return;
+    const now = Date.now();
+    if (now - lastQualityReportAtRef.current < 900) return;
+    lastQualityReportAtRef.current = now;
+    socket.send(JSON.stringify({ type: "testing.metric", ...packetStats }));
+  }, [packetStats]);
 
   // Seed the turn counter past any restored transcript so ids never collide.
   useEffect(() => {
@@ -278,7 +295,9 @@ export function useHelmetAgent() {
       voicePersonality: voicePersonalityRef.current,
       testerId: lastNonEmptyTesterIdRef.current,
       testingCampaignId: testingCampaignIdRef.current,
-      testingTestCaseId: testingTestCaseIdRef.current
+      testingTestCaseId: testingTestCaseIdRef.current,
+      testingRunId: testingRunIdRef.current,
+      testingAssignmentId: testingAssignmentIdRef.current
     });
   }, []);
 
@@ -418,11 +437,14 @@ export function useHelmetAgent() {
           testerRegion: testerRegionLabel(),
           testingCampaignId: testingCampaignIdRef.current,
           testingTestCaseId: testingTestCaseIdRef.current,
+          ...(testingRunIdRef.current ? { testingRunId: testingRunIdRef.current } : {}),
+          ...(testingAssignmentIdRef.current ? { testingAssignmentId: testingAssignmentIdRef.current } : {}),
           appVersion: clientEnv.VITE_APP_VERSION ?? "0.1.0",
           gitCommit: clientEnv.VITE_GIT_COMMIT ?? "local",
           deviceLabel: deviceLabel(),
           browserLanguage: navigator.language || "unknown",
           networkType: networkType(),
+          platform: "web",
           voiceGender: voiceGenderRef.current,
           voicePersonality: voicePersonalityRef.current,
           rideMode: rideModeRef.current,
@@ -746,6 +768,48 @@ export function useHelmetAgent() {
     [applyTestingRideContext, persistSettings, restartSession]
   );
 
+  const setTestingRunId = useCallback(
+    (runId: string) => {
+      const normalized = runId.normalize("NFKC").trim().slice(0, 80);
+      testingRunIdRef.current = normalized;
+      setTestingRunIdState(normalized);
+      persistSettings();
+      if (socketRef.current) restartSession();
+    },
+    [persistSettings, restartSession]
+  );
+
+  const setTestingAssignmentId = useCallback(
+    (assignmentId: string) => {
+      const normalized = assignmentId.normalize("NFKC").trim().slice(0, 80);
+      testingAssignmentIdRef.current = normalized;
+      setTestingAssignmentIdState(normalized);
+      persistSettings();
+      if (socketRef.current) restartSession();
+    },
+    [persistSettings, restartSession]
+  );
+
+  const setTestingAssignmentContext = useCallback(
+    (runId: string, assignmentId: string, testCaseId: string) => {
+      const testCase = findTestingTestCase(testCaseId);
+      const campaign = findTestingCampaign(testCase.campaignId);
+      testingRunIdRef.current = runId.normalize("NFKC").trim().slice(0, 80);
+      testingAssignmentIdRef.current = assignmentId.normalize("NFKC").trim().slice(0, 80);
+      testingCampaignIdRef.current = campaign.id;
+      testingTestCaseIdRef.current = testCase.id;
+      setTestingRunIdState(testingRunIdRef.current);
+      setTestingAssignmentIdState(testingAssignmentIdRef.current);
+      setTestingCampaignIdState(campaign.id);
+      setTestingTestCaseIdState(testCase.id);
+      persistSettings();
+      applyTestingRideContext(testCase);
+      setStatus(`测试任务：${testCase.name}`);
+      if (socketRef.current) restartSession();
+    },
+    [applyTestingRideContext, persistSettings, restartSession]
+  );
+
   const setRideMode = useCallback(
     (mode: RideMode) => {
       rideModeRef.current = mode;
@@ -1058,6 +1122,8 @@ export function useHelmetAgent() {
     testerId,
     testingCampaignId,
     testingTestCaseId,
+    testingRunId,
+    testingAssignmentId,
     testerRegion: testerRegionLabel(),
     turnState,
     weather,
@@ -1074,6 +1140,9 @@ export function useHelmetAgent() {
     setTesterId,
     setTestingCampaignId,
     setTestingTestCaseId,
+    setTestingRunId,
+    setTestingAssignmentId,
+    setTestingAssignmentContext,
     setRideMode,
     setScenario,
     setGuidedDemo,

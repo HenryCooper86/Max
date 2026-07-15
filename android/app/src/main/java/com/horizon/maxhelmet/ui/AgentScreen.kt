@@ -76,6 +76,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.horizon.maxhelmet.BuildConfig
 import com.horizon.maxhelmet.agent.AgentEvent
 import com.horizon.maxhelmet.agent.AgentSession
 import com.horizon.maxhelmet.agent.ConnectionState
@@ -979,6 +980,42 @@ private fun SettingsPanel(
                 )
             }
         }
+    }
+
+    SectionCard("QA 任务归因") {
+        Text(
+            "从网页管理台的 Release runs 复制任务标识。下一次会话会按构建、平台和任务进入发布证据矩阵。",
+            color = HudColors.Muted,
+            fontSize = 11.sp
+        )
+        val qaFields: List<Triple<String, String, (String) -> Unit>> = listOf(
+            Triple("Campaign ID", viewModel.testingCampaignId, viewModel::updateTestingCampaignId),
+            Triple("Test case ID", viewModel.testingTestCaseId, viewModel::updateTestingTestCaseId),
+            Triple("Run ID（可选）", viewModel.testingRunId, viewModel::updateTestingRunId),
+            Triple("Assignment ID（可选）", viewModel.testingAssignmentId, viewModel::updateTestingAssignmentId)
+        )
+        qaFields.forEach { (label, value, update) ->
+            OutlinedTextField(
+                value = value,
+                onValueChange = update,
+                enabled = !state.handsFree,
+                singleLine = true,
+                label = { Text(label, fontSize = 11.sp) },
+                textStyle = MaterialTheme.typography.bodySmall.copy(color = HudColors.Text),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = HudColors.AccentCyan,
+                    unfocusedBorderColor = HudColors.Border,
+                    focusedLabelColor = HudColors.AccentCyan,
+                    unfocusedLabelColor = HudColors.Muted
+                ),
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        Text(
+            "Android · ${BuildConfig.VERSION_NAME}+${BuildConfig.VERSION_CODE} · commit ${BuildConfig.GIT_COMMIT}",
+            color = HudColors.Muted,
+            fontSize = 10.sp
+        )
     }
 
     // Live ride intelligence: weather, route, and session memory. The data

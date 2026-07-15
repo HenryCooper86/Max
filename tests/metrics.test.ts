@@ -12,13 +12,18 @@ import {
   metricsWindow,
   recordMetricsSnapshot,
   recordTesterClientAudio,
+  recordTesterAudioQuality,
   recordTesterServerAudio,
   recordTesterServerEvent,
   recordTesterTtsFallback,
   recordTesterTurnFeedback,
-  testingSnapshot
+  testingSessionDetail,
+  testingSessionPage,
+  testingSnapshot,
+  updateTestingSessionNotes
 } from "../server/metrics";
-import { TESTING_TEST_CASES } from "../shared/testing";
+import { DEFAULT_TESTING_POLICY, TESTING_TEST_CASES, type TestingPlatform } from "../shared/testing";
+import { createTestingPolicy, getActiveTestingPolicy } from "../server/testing-store";
 
 afterEach(() => metrics.reset());
 
@@ -26,7 +31,8 @@ function seedValidCompletedSession(
   sessionId: string,
   testCaseId: string,
   gitCommit = buildInfo.gitCommit,
-  p95LatencyMs = 180
+  p95LatencyMs = 180,
+  platform: TestingPlatform = "web"
 ) {
   const agentText: Record<string, string> = {
     "baseline-live-session": "Route looks clear. Keep your eyes on the road and ride safely.",
@@ -44,7 +50,13 @@ function seedValidCompletedSession(
       testingTestCaseId: testCaseId,
       gitCommit,
       deviceLabel: "test browser",
-      networkType: "wifi"
+      networkType:
+        testCaseId === "degraded-network-recovery"
+          ? "degraded"
+          : testCaseId === "wind-noise-robustness"
+            ? "field"
+            : "wifi",
+      platform
     },
     1_000
   );
@@ -241,7 +253,7 @@ describe("relay metrics", () => {
         }
       ]
     });
-    expect(buildHealth(2).testing?.users[0]?.testerId).toBe("rider one");
+    expect(buildHealth(2, true).testing?.users[0]?.testerId).toBe("rider one");
   });
 
   it("omits the testing block from /health when the caller is not authorized", () => {
@@ -290,6 +302,65 @@ describe("relay metrics", () => {
     });
   });
 
+  it("captures audio quality, hash integrity, scoped paging, and mutable reviewer notes", () => {
+    seedValidCompletedSession("evidence-a", "baseline-live-session", "evidence-build", 120);
+    beginTesterSession(
+      "evidence-b",
+      {
+        testerId: "scoped-rider",
+        ipAddress: "203.0.113.55",
+        testingTestCaseId: "baseline-live-session",
+        gitCommit: "evidence-build",
+        platform: "web"
+      },
+      5_000
+    );
+    recordTesterAudioQuality(
+      "evidence-b",
+      { droppedFrames: 3, outgoingFps: 49, jitterMs: 1.2, clippingPct: 0.5, silencePct: 18 },
+      5_100
+    );
+    recordTesterAudioQuality(
+      "evidence-b",
+      { droppedFrames: 2, outgoingFps: 51, jitterMs: 1.8, clippingPct: 1.5, silencePct: 22 },
+      5_150
+    );
+    recordTesterClientAudio("evidence-b", 320, 5_200);
+    recordTesterServerEvent(
+      "evidence-b",
+      { type: "transcript", speaker: "rider", text: "Max, route status?" },
+      64,
+      5_300
+    );
+    recordTesterServerEvent(
+      "evidence-b",
+      { type: "transcript", speaker: "agent", text: "Route clear. Keep your eyes on the road." },
+      64,
+      5_400
+    );
+    endTesterSession("evidence-b", 9_000);
+
+    const first = testingSessionPage({ limit: 1 });
+    expect(first.items).toHaveLength(1);
+    expect(first.items[0].turns).toEqual([]);
+    expect(first.nextCursor).toBeDefined();
+    const second = testingSessionPage({ limit: 1, cursor: first.nextCursor });
+    expect(second.items).toHaveLength(1);
+
+    const scoped = testingSessionPage({}, "scoped-rider");
+    expect(scoped.items.map((session) => session.sessionId)).toEqual(["evidence-b"]);
+    const detail = testingSessionDetail("evidence-b", "scoped-rider");
+    expect(detail).toMatchObject({
+      evidenceIntegrity: "verified",
+      audioQuality: { droppedFrames: 3, outgoingFps: 50, jitterMs: 1.5, clippingPct: 1, silencePct: 20 }
+    });
+    expect(detail?.turns).toHaveLength(2);
+    const originalHash = detail?.evidenceHash;
+    const updated = updateTestingSessionNotes("evidence-b", "Investigated on device.");
+    expect(updated?.notes).toBe("Investigated on device.");
+    expect(updated?.evidenceHash).toBe(originalHash);
+  });
+
   it("classifies invalid sessions and excludes them from release-gate evidence", () => {
     beginTesterSession(
       "invalid-no-reply",
@@ -317,31 +388,104 @@ describe("relay metrics", () => {
   });
 
   it("passes the release gate when every required case has valid current-build evidence", () => {
+    let expectedSessions = 0;
     for (const testCase of TESTING_TEST_CASES) {
-      seedValidCompletedSession(`gate-${testCase.id}`, testCase.id);
+      const required = Math.max(
+        testCase.minimumValidSessions,
+        testCase.risk === "safety-critical"
+          ? DEFAULT_TESTING_POLICY.release.minSafetyCriticalSessions
+          : DEFAULT_TESTING_POLICY.release.minStandardSessions
+      );
+      const samplesPerPlatform = Math.ceil(required / testCase.requiredPlatforms.length);
+      for (const platform of testCase.requiredPlatforms) {
+        for (let index = 0; index < samplesPerPlatform; index += 1) {
+          seedValidCompletedSession(
+            `gate-${testCase.id}-${platform}-${index}`,
+            testCase.id,
+            buildInfo.gitCommit,
+            180,
+            platform
+          );
+          expectedSessions += 1;
+        }
+      }
     }
 
     const gate = testingSnapshot(5_000).releaseGate;
     expect(gate.status).toBe("pass");
-    expect(gate.validSessions).toBe(TESTING_TEST_CASES.length);
+    expect(gate.validSessions).toBe(expectedSessions);
     expect(gate.invalidSessions).toBe(0);
     expect(gate.blockers).toEqual([]);
     expect(gate.cases.every((testCase) => testCase.status === "pass")).toBe(true);
   });
 
+  it("uses the active policy platform set for release coverage", () => {
+    const active = getActiveTestingPolicy();
+    createTestingPolicy(
+      { version: "web-candidate", release: { ...active.release, requiredPlatforms: ["web"] } },
+      "admin",
+      1_000
+    );
+    for (const testCase of TESTING_TEST_CASES) {
+      const required = Math.max(
+        testCase.minimumValidSessions,
+        testCase.risk === "safety-critical"
+          ? active.release.minSafetyCriticalSessions
+          : active.release.minStandardSessions
+      );
+      for (let index = 0; index < required; index += 1) {
+        seedValidCompletedSession(`web-policy-${testCase.id}-${index}`, testCase.id, buildInfo.gitCommit, 180, "web");
+      }
+    }
+
+    const gate = testingSnapshot(5_000).releaseGate;
+    expect(gate.status).toBe("pass");
+    expect(gate.criteria.requiredPlatforms).toEqual(["web"]);
+    expect(gate.cases.every((testCase) => testCase.cohorts.map((cohort) => cohort.platform).join() === "web")).toBe(
+      true
+    );
+    expect(gate.cases.find((testCase) => testCase.testCaseId === "baseline-live-session")?.cohorts[0].required).toBe(2);
+    expect(gate.cases.find((testCase) => testCase.testCaseId === "emergency-safe-guidance")?.cohorts[0].required).toBe(
+      3
+    );
+  });
+
   it("reports regression when the current build drifts from the previous build", () => {
-    seedValidCompletedSession("baseline-prev", "baseline-live-session", "previous-build", 100);
-    seedValidCompletedSession("baseline-current", "baseline-live-session", buildInfo.gitCommit, 500);
+    seedValidCompletedSession("baseline-prev-1", "baseline-live-session", "previous-build", 100);
+    seedValidCompletedSession("baseline-prev-2", "baseline-live-session", "previous-build", 100);
+    seedValidCompletedSession("baseline-current-1", "baseline-live-session", buildInfo.gitCommit, 500);
+    seedValidCompletedSession("baseline-current-2", "baseline-live-session", buildInfo.gitCommit, 500);
 
     const regression = testingSnapshot(5_000).regression;
     expect(regression.status).toBe("fail");
     expect(regression.baseline?.build).toBe("previous-build");
     expect(regression.deltas?.p95LatencyMs).toBe(400);
-    expect(regression.findings).toContainEqual(expect.objectContaining({ id: "p95-latency-drift", status: "fail" }));
+    expect(regression.findings).toContainEqual(
+      expect.objectContaining({ id: expect.stringContaining("cohort-baseline-live-session"), status: "fail" })
+    );
+  });
+
+  it("does not silently pass a current cohort that lacks matched baseline evidence", () => {
+    seedValidCompletedSession("cohort-prev-1", "baseline-live-session", "cohort-previous", 100, "web");
+    seedValidCompletedSession("cohort-prev-2", "baseline-live-session", "cohort-previous", 100, "web");
+    seedValidCompletedSession("cohort-current-web-1", "baseline-live-session", buildInfo.gitCommit, 100, "web");
+    seedValidCompletedSession("cohort-current-web-2", "baseline-live-session", buildInfo.gitCommit, 100, "web");
+    seedValidCompletedSession("cohort-current-android-1", "baseline-live-session", buildInfo.gitCommit, 100, "android");
+    seedValidCompletedSession("cohort-current-android-2", "baseline-live-session", buildInfo.gitCommit, 100, "android");
+
+    const regression = testingSnapshot(10_000).regression;
+    expect(regression.status).toBe("watch");
+    expect(regression.cohorts).toContainEqual(
+      expect.objectContaining({ platform: "android", status: "insufficient", baselineSessions: 0 })
+    );
+    expect(regression.findings).toContainEqual(
+      expect.objectContaining({ id: expect.stringContaining("android"), status: "watch" })
+    );
   });
 
   it("skips a newer previous build that has only invalid evidence when choosing the regression baseline", () => {
-    seedValidCompletedSession("baseline-valid", "baseline-live-session", "previous-valid", 100);
+    seedValidCompletedSession("baseline-valid-1", "baseline-live-session", "previous-valid", 100);
+    seedValidCompletedSession("baseline-valid-2", "baseline-live-session", "previous-valid", 100);
 
     beginTesterSession(
       "baseline-invalid-newer",
@@ -356,11 +500,26 @@ describe("relay metrics", () => {
     // Long enough not to be only "too short", but still invalid because the
     // required mic audio and transcript exchange never happened.
     endTesterSession("baseline-invalid-newer", 9_000);
-    seedValidCompletedSession("baseline-current-valid", "baseline-live-session", buildInfo.gitCommit, 120);
+    seedValidCompletedSession("baseline-current-valid-1", "baseline-live-session", buildInfo.gitCommit, 120);
+    seedValidCompletedSession("baseline-current-valid-2", "baseline-live-session", buildInfo.gitCommit, 120);
 
     const regression = testingSnapshot(10_000).regression;
     expect(regression.baseline?.build).toBe("previous-valid");
     expect(regression.status).not.toBe("insufficient");
+  });
+
+  it("keeps a durable baseline after it leaves the in-memory dashboard window", () => {
+    seedValidCompletedSession("durable-baseline-1", "baseline-live-session", "durable-previous", 100);
+    seedValidCompletedSession("durable-baseline-2", "baseline-live-session", "durable-previous", 100);
+    for (let index = 0; index < 205; index += 1) {
+      seedValidCompletedSession(`durable-current-${index}`, "baseline-live-session", buildInfo.gitCommit, 100);
+    }
+
+    const snapshot = testingSnapshot(10_000);
+    expect(snapshot.sessions.some((session) => session.gitCommit === "durable-previous")).toBe(false);
+    expect(snapshot.regression.baseline?.build).toBe("durable-previous");
+    expect(snapshot.regression.baselineSource).toBe("latest-valid");
+    expect(snapshot.regression.status).toBe("pass");
   });
 });
 

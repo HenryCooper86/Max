@@ -26,6 +26,9 @@ async function loadMetricsWithHistory(file: string) {
   vi.stubEnv("NODE_ENV", "development");
   vi.stubEnv("TESTING_HISTORY_MAX_SESSIONS", String(MAX_SESSIONS));
   vi.stubEnv("TESTING_HISTORY_FILE", file);
+  // Each replay case owns its JSONL fixture; never merge the developer's
+  // durable SQLite corpus into this isolated loader test.
+  vi.stubEnv("TESTING_DATABASE", "off");
   return import("../server/metrics");
 }
 
@@ -49,6 +52,28 @@ afterEach(() => {
 });
 
 describe("testing history replay", () => {
+  it("detects a stored evidence hash mismatch", async () => {
+    const tampered = JSON.stringify({
+      sessionId: "tampered",
+      testerId: "history-tester",
+      ipAddress: "203.0.113.77",
+      testCaseId: "baseline-live-session",
+      startedAt: 1_000,
+      endedAt: 5_000,
+      durationMs: 4_000,
+      micFrames: 1,
+      p95LatencyMs: 120,
+      evidenceHash: "0".repeat(64),
+      turns: [
+        { sessionId: "tampered", at: 1_500, speaker: "rider", text: "Max, route status?", final: true },
+        { sessionId: "tampered", at: 1_800, speaker: "agent", text: "Route clear. Ride safely.", final: true }
+      ]
+    });
+    const file = historyFile([tampered]);
+    const { testingSnapshot } = await loadMetricsWithHistory(file);
+    expect(testingSnapshot(10_000).sessions[0].evidenceIntegrity).toBe("mismatch");
+  });
+
   it("retains the full session cap despite the trailing newline", async () => {
     // 25 sessions on disk, cap 20 → exactly the newest 20 must survive. The
     // old loader counted the trailing "" as a line and silently dropped the
@@ -62,6 +87,24 @@ describe("testing history replay", () => {
     expect(ids).toContain("hist-5"); // oldest retained (25 - 20 = 5)
     expect(ids).toContain("hist-24");
     expect(ids).not.toContain("hist-4");
+  });
+
+  it("indexes and can delete archive evidence older than the in-memory gate window", async () => {
+    const file = historyFile(Array.from({ length: 25 }, (_, index) => sessionLine(index)));
+    const { testingSnapshot, testingSessionPage, clearTestingSession, flushTestingHistory } =
+      await loadMetricsWithHistory(file);
+    expect(testingSnapshot(10_000).sessions).toHaveLength(MAX_SESSIONS);
+    expect(testingSessionPage({ search: "hist-0" }).items.map((session) => session.sessionId)).toEqual(["hist-0"]);
+
+    expect(clearTestingSession("hist-0")).toEqual({ removedTesters: 0, removedSessions: 1 });
+    await flushTestingHistory();
+    const retainedIds = fs
+      .readFileSync(file, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line).sessionId as string);
+    expect(retainedIds).toHaveLength(24);
+    expect(retainedIds).not.toContain("hist-0");
   });
 
   it("skips a corrupt line without discarding the sessions recorded after it", async () => {
@@ -131,6 +174,7 @@ describe("testing history replay", () => {
   it("compacts a file that grew far past the cap", async () => {
     const total = MAX_SESSIONS * 4 + 10;
     const file = historyFile(Array.from({ length: total }, (_, index) => sessionLine(index)));
+    vi.stubEnv("TESTING_ARCHIVE_MAX_SESSIONS", String(MAX_SESSIONS));
     const { testingSnapshot } = await loadMetricsWithHistory(file);
     testingSnapshot(10_000); // triggers the lazy load + compaction
 

@@ -56,7 +56,10 @@ export const DEFAULT_MEMORY: SessionMemoryState = {
 
 export const DEFAULT_PACKET_STATS: PacketStats = {
   outgoingFps: 0,
-  droppedFrames: 0
+  droppedFrames: 0,
+  jitterMs: 0,
+  clippingPct: 0,
+  silencePct: 0
 };
 
 export const DEFAULT_AUDIO_PROCESSING: AudioProcessingState = {

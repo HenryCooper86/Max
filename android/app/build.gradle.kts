@@ -4,6 +4,26 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+val horizonGitCommitRaw = (providers.environmentVariable("HORIZON_GIT_COMMIT").orNull
+    ?.trim()
+    ?.takeIf { it.isNotEmpty() }
+    ?: runCatching {
+            providers.exec {
+                workingDir(rootProject.projectDir.parentFile)
+                commandLine("git", "rev-parse", "--short=12", "HEAD")
+                isIgnoreExitValue = true
+            }.standardOutput.asText.get().trim()
+        }
+        .getOrDefault("unknown"))
+    .filter { it.isLetterOrDigit() || it == '.' || it == '_' || it == '-' }
+    .take(80)
+    .ifEmpty { "unknown" }
+val horizonGitCommit = if (horizonGitCommitRaw.matches(Regex("^[0-9a-fA-F]{7,40}$"))) {
+    horizonGitCommitRaw.take(12).lowercase()
+} else {
+    horizonGitCommitRaw
+}
+
 android {
     namespace = "com.horizon.maxhelmet"
     compileSdk = 34
@@ -14,6 +34,7 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1.0"
+        buildConfigField("String", "GIT_COMMIT", "\"$horizonGitCommit\"")
     }
 
     buildTypes {
@@ -31,6 +52,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

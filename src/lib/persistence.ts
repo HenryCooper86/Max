@@ -22,6 +22,8 @@ type StoredSettings = {
   testerId?: string;
   testingCampaignId?: string;
   testingTestCaseId?: string;
+  testingRunId?: string;
+  testingAssignmentId?: string;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -62,6 +64,14 @@ export function normalizeStoredSettings(value: unknown): StoredSettings {
   if (typeof value.testingTestCaseId === "string") {
     const testCaseId = stripControlChars(value.testingTestCaseId.normalize("NFKC")).trim().slice(0, 80);
     if (testCaseId) settings.testingTestCaseId = testCaseId;
+  }
+  if (typeof value.testingRunId === "string") {
+    const runId = stripControlChars(value.testingRunId.normalize("NFKC")).trim().slice(0, 80);
+    if (runId) settings.testingRunId = runId;
+  }
+  if (typeof value.testingAssignmentId === "string") {
+    const assignmentId = stripControlChars(value.testingAssignmentId.normalize("NFKC")).trim().slice(0, 80);
+    if (assignmentId) settings.testingAssignmentId = assignmentId;
   }
   return settings;
 }

@@ -7,7 +7,7 @@ export type AuthUser = {
   id: string;
   username: string;
   displayName: string;
-  role: "admin" | "tester";
+  role: "admin" | "reviewer" | "tester";
   createdAt: number;
   lastLoginAt: number;
 };
@@ -161,6 +161,22 @@ export async function deleteUserAccount(username: string): Promise<{ ok: boolean
       body: JSON.stringify({ username })
     });
     return (await response.json()) as { ok: boolean; error?: string };
+  } catch {
+    return { ok: false, error: "无法连接服务器。" };
+  }
+}
+
+export async function updateUserRole(
+  username: string,
+  role: AuthUser["role"]
+): Promise<{ ok: boolean; error?: string; user?: AuthUser }> {
+  try {
+    const response = await fetch("/auth/admin/users/role", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...adminHeaders() },
+      body: JSON.stringify({ username, role })
+    });
+    return (await response.json()) as { ok: boolean; error?: string; user?: AuthUser };
   } catch {
     return { ok: false, error: "无法连接服务器。" };
   }

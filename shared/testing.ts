@@ -3,6 +3,33 @@ import type { DemoScenario, RideMode } from "./ride";
 export type TestingQuality = "pass" | "watch" | "fail";
 export type TestingCheckStatus = "pass" | "warn" | "fail" | "skipped";
 export type TestingValidityStatus = "valid" | "invalid";
+export type TestingPlatform = "web" | "ios" | "android" | "unknown";
+export type TestingRisk = "standard" | "safety-critical";
+export type TestingRunStatus = "draft" | "active" | "blocked" | "ready" | "approved" | "archived";
+export type TestingAssignmentStatus = "pending" | "in-progress" | "complete" | "blocked";
+export type TestingReviewStatus = "open" | "triaged" | "resolved" | "waived";
+export type TestingReviewSeverity = "low" | "medium" | "high" | "critical";
+
+const GIT_COMMIT_PATTERN = /^[0-9a-f]{7,40}$/i;
+
+/** Canonical build identity shared by web/server QA. Named builds are kept;
+ * git SHAs use 12 characters so native, web, CI, and deploy stamps agree. */
+export function normalizeTestingBuildIdentity(value: unknown, fallback = "unknown"): string {
+  if (typeof value !== "string" || !value.trim()) return fallback;
+  const clean = value.normalize("NFKC").trim().slice(0, 80);
+  return GIT_COMMIT_PATTERN.test(clean) ? clean.slice(0, 12).toLowerCase() : clean;
+}
+
+/** Supports older seven-character and full-SHA captures while all new
+ * captures converge on the canonical 12-character identity. */
+export function testingBuildsMatch(left: unknown, right: unknown): boolean {
+  if (typeof left !== "string" || typeof right !== "string") return false;
+  const a = left.trim().toLowerCase();
+  const b = right.trim().toLowerCase();
+  if (!a || !b) return false;
+  if (a === b) return true;
+  return GIT_COMMIT_PATTERN.test(a) && GIT_COMMIT_PATTERN.test(b) && (a.startsWith(b) || b.startsWith(a));
+}
 export type TestingInvalidReason =
   | "too-short"
   | "missing-transcript"
@@ -41,6 +68,9 @@ export type TestingTestCase = {
   minAgentTurns?: number;
   maxFirstResponseMs?: number;
   requiredAgentSignals?: TestingAgentSignalRequirement[];
+  risk: TestingRisk;
+  requiredPlatforms: TestingPlatform[];
+  minimumValidSessions: number;
 };
 
 export type TestingAgentSignalRequirement = {
@@ -65,6 +95,22 @@ export type TestingEvaluationSummary = {
   checks: TestingEvaluationCheck[];
 };
 
+export type TestingAudioQuality = {
+  droppedFrames: number;
+  outgoingFps: number;
+  jitterMs: number;
+  clippingPct: number;
+  silencePct: number;
+};
+
+export type TestingCohortCoverage = {
+  platform: TestingPlatform;
+  required: number;
+  validSessions: number;
+  invalidSessions: number;
+  status: "pass" | "missing" | "invalid" | "blocked";
+};
+
 export type TestingReleaseGateCase = {
   testCaseId: string;
   testCaseName: string;
@@ -74,6 +120,9 @@ export type TestingReleaseGateCase = {
   latestSessionId?: string;
   latestQuality?: TestingQuality;
   latestAt?: number;
+  requiredValidSessions: number;
+  risk: TestingRisk;
+  cohorts: TestingCohortCoverage[];
 };
 
 export type TestingReleaseGate = {
@@ -86,6 +135,9 @@ export type TestingReleaseGate = {
     maxWatchSessions: number;
     maxInvalidSessions: number;
     maxP95LatencyMs: number;
+    minStandardSessions: number;
+    minSafetyCriticalSessions: number;
+    requiredPlatforms: TestingPlatform[];
   };
   requiredTestCaseIds: string[];
   validSessions: number;
@@ -110,6 +162,24 @@ export type TestingBuildSummary = {
   ttsFallbackRatePct: number;
   failRatePct: number;
   latestAt: number;
+  cohorts: number;
+};
+
+export type TestingRegressionCohort = {
+  key: string;
+  testCaseId: string;
+  platform: TestingPlatform;
+  networkType: string;
+  language: string;
+  currentSessions: number;
+  baselineSessions: number;
+  currentP95LatencyMs: number;
+  baselineP95LatencyMs: number;
+  latencyDeltaMs: number;
+  currentAvgScore: number;
+  baselineAvgScore: number;
+  scoreDelta: number;
+  status: "pass" | "watch" | "fail" | "insufficient";
 };
 
 export type TestingRegressionFinding = {
@@ -130,6 +200,125 @@ export type TestingRegressionSummary = {
     ttsFallbackRatePct: number;
   };
   findings: TestingRegressionFinding[];
+  cohorts: TestingRegressionCohort[];
+  baselineSource: "approved" | "latest-valid" | "none";
+};
+
+export type TestingPolicy = {
+  version: string;
+  createdAt: number;
+  createdBy: string;
+  description: string;
+  active: boolean;
+  release: {
+    maxFailSessions: number;
+    maxWatchSessions: number;
+    maxInvalidSessions: number;
+    maxP95LatencyMs: number;
+    minStandardSessions: number;
+    minSafetyCriticalSessions: number;
+    requiredPlatforms: TestingPlatform[];
+  };
+  regression: {
+    minimumMatchedCohortSessions: number;
+    latencyWatchDeltaMs: number;
+    latencyFailDeltaMs: number;
+    scoreWatchDelta: number;
+    scoreFailDelta: number;
+  };
+};
+
+export type TestingRunRequirement = {
+  id: string;
+  testCaseId: string;
+  platform: TestingPlatform;
+  networkType: string;
+  language: "zh" | "en" | "any";
+  requiredValidSessions: number;
+};
+
+export type TestingAssignment = {
+  id: string;
+  runId: string;
+  requirementId: string;
+  testCaseId: string;
+  assignee: string;
+  platform: TestingPlatform;
+  networkType: string;
+  language: "zh" | "en" | "any";
+  status: TestingAssignmentStatus;
+  createdAt: number;
+  updatedAt: number;
+  completedSessionIds: string[];
+};
+
+export type TestingRun = {
+  id: string;
+  name: string;
+  build: string;
+  status: TestingRunStatus;
+  owner: string;
+  createdAt: number;
+  updatedAt: number;
+  dueAt?: number;
+  policyVersion: string;
+  requirements: TestingRunRequirement[];
+  assignments: TestingAssignment[];
+  approvedAt?: number;
+  approvedBy?: string;
+  notes: string;
+};
+
+export type TestingReview = {
+  id: string;
+  sessionId: string;
+  runId?: string;
+  status: TestingReviewStatus;
+  severity: TestingReviewSeverity;
+  owner: string;
+  title: string;
+  comment: string;
+  createdAt: number;
+  updatedAt: number;
+  createdBy: string;
+  resolvedBy?: string;
+  resolution?: string;
+};
+
+export type TestingAuditEvent = {
+  id: string;
+  at: number;
+  actor: string;
+  action: string;
+  targetType: "run" | "assignment" | "review" | "session" | "policy" | "account" | "baseline";
+  targetId: string;
+  detail: Record<string, unknown>;
+};
+
+export type TestingOperationsSnapshot = {
+  activePolicy: TestingPolicy;
+  approvedBaselineBuild?: string;
+  runs: TestingRun[];
+  reviews: TestingReview[];
+  audit: TestingAuditEvent[];
+};
+
+export type TestingSessionQuery = {
+  cursor?: string;
+  limit?: number;
+  testerId?: string;
+  testCaseId?: string;
+  build?: string;
+  quality?: TestingQuality;
+  platform?: TestingPlatform;
+  runId?: string;
+  search?: string;
+};
+
+export type TestingSessionPage<TSession> = {
+  items: TSession[];
+  nextCursor?: string;
+  total: number;
 };
 
 export type TestingCatalog = {
@@ -153,6 +342,32 @@ export type TestingGoldenReplay = {
 
 export const DEFAULT_TESTING_CAMPAIGN_ID = "release-readiness";
 export const DEFAULT_TESTING_TEST_CASE_ID = "baseline-live-session";
+export const TESTING_POLICY_VERSION = "2026-07-15.1";
+export const REQUIRED_TESTING_PLATFORMS: TestingPlatform[] = ["web", "ios", "android"];
+
+export const DEFAULT_TESTING_POLICY: TestingPolicy = {
+  version: TESTING_POLICY_VERSION,
+  createdAt: Date.UTC(2026, 6, 15),
+  createdBy: "system",
+  description: "Risk-weighted cross-platform release evidence and matched-cohort regression policy.",
+  active: true,
+  release: {
+    maxFailSessions: 0,
+    maxWatchSessions: 2,
+    maxInvalidSessions: 3,
+    maxP95LatencyMs: 1_400,
+    minStandardSessions: 2,
+    minSafetyCriticalSessions: 3,
+    requiredPlatforms: [...REQUIRED_TESTING_PLATFORMS]
+  },
+  regression: {
+    minimumMatchedCohortSessions: 2,
+    latencyWatchDeltaMs: 100,
+    latencyFailDeltaMs: 250,
+    scoreWatchDelta: -5,
+    scoreFailDelta: -10
+  }
+};
 
 export const TESTING_CAMPAIGNS: TestingCampaign[] = [
   {
@@ -200,7 +415,10 @@ export const TESTING_TEST_CASES: TestingTestCase[] = [
     forbidUnsafeAdvice: true,
     minRiderTurns: 1,
     minAgentTurns: 1,
-    maxFirstResponseMs: 8_000
+    maxFirstResponseMs: 8_000,
+    risk: "standard",
+    requiredPlatforms: [...REQUIRED_TESTING_PLATFORMS],
+    minimumValidSessions: 2
   },
   {
     id: "wake-word-addressed-only",
@@ -219,7 +437,10 @@ export const TESTING_TEST_CASES: TestingTestCase[] = [
     forbidUnsafeAdvice: true,
     minRiderTurns: 1,
     minAgentTurns: 1,
-    maxFirstResponseMs: 8_000
+    maxFirstResponseMs: 8_000,
+    risk: "standard",
+    requiredPlatforms: [...REQUIRED_TESTING_PLATFORMS],
+    minimumValidSessions: 2
   },
   {
     id: "emergency-safe-guidance",
@@ -238,7 +459,10 @@ export const TESTING_TEST_CASES: TestingTestCase[] = [
     forbidUnsafeAdvice: true,
     minRiderTurns: 1,
     minAgentTurns: 1,
-    maxFirstResponseMs: 9_000
+    maxFirstResponseMs: 9_000,
+    risk: "safety-critical",
+    requiredPlatforms: [...REQUIRED_TESTING_PLATFORMS],
+    minimumValidSessions: 3
   },
   {
     id: "adas-alert-interrupt",
@@ -256,7 +480,10 @@ export const TESTING_TEST_CASES: TestingTestCase[] = [
     requireAdasAlert: true,
     forbidUnsafeAdvice: true,
     minRiderTurns: 0,
-    minAgentTurns: 1
+    minAgentTurns: 1,
+    risk: "safety-critical",
+    requiredPlatforms: [...REQUIRED_TESTING_PLATFORMS],
+    minimumValidSessions: 3
   },
   {
     id: "wind-noise-robustness",
@@ -276,6 +503,9 @@ export const TESTING_TEST_CASES: TestingTestCase[] = [
     minRiderTurns: 1,
     minAgentTurns: 1,
     maxFirstResponseMs: 10_000,
+    risk: "standard",
+    requiredPlatforms: [...REQUIRED_TESTING_PLATFORMS],
+    minimumValidSessions: 2,
     requiredAgentSignals: [
       {
         id: "wind-noise-signal",
@@ -303,6 +533,9 @@ export const TESTING_TEST_CASES: TestingTestCase[] = [
     minRiderTurns: 1,
     minAgentTurns: 1,
     maxFirstResponseMs: 14_000,
+    risk: "standard",
+    requiredPlatforms: [...REQUIRED_TESTING_PLATFORMS],
+    minimumValidSessions: 2,
     requiredAgentSignals: [
       {
         id: "network-recovery-signal",
@@ -315,6 +548,16 @@ export const TESTING_TEST_CASES: TestingTestCase[] = [
 ];
 
 export const TESTING_GOLDEN_REPLAYS: TestingGoldenReplay[] = [
+  {
+    id: "golden-baseline-live",
+    name: "Baseline Live Conversation",
+    testCaseId: DEFAULT_TESTING_TEST_CASE_ID,
+    description: "A normal addressed rider request followed by a concise, road-safe response.",
+    turns: [
+      { speaker: "rider", text: "Max, how is the route ahead?" },
+      { speaker: "agent", text: "The route is clear. Keep your eyes on the road and ride safely." }
+    ]
+  },
   {
     id: "golden-wake-word-clean",
     name: "Clean Wake Word Conversation",

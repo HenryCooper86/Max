@@ -13,7 +13,9 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:fault-matrix": "tsx scripts/testing-fault-matrix.ts",
+    "test:release-gate": "tsx scripts/testing-release-gate.ts"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.0.0",

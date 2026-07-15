@@ -7,6 +7,7 @@ import {
   endTesterSession,
   metrics,
   recordTesterClientAudio,
+  recordTesterAudioQuality,
   recordTesterServerAudio,
   recordTesterServerEvent,
   recordTesterTtsFallback,
@@ -24,6 +25,7 @@ const DEMO_SCENARIOS = new Set(["commute", "wind", "fuel", "group", "emergency",
 const MEMORY_LANGUAGES = new Set(["zh", "en"]);
 const RESPONSE_MODES = new Set(["concise", "normal", "emergency"]);
 const RIDER_INTENTS = new Set(["navigation", "weather", "emergency", "diagnostics", "group", "casual"]);
+const TESTING_PLATFORMS = new Set(["web", "ios", "android", "unknown"]);
 const MAX_MEMORY_DESTINATION_BYTES = 256;
 const MAX_TESTER_ID_BYTES = 80;
 const MAX_TESTER_REGION_BYTES = 96;
@@ -133,6 +135,25 @@ export function parseClientEvent(data: RawData): ClientEvent {
     return { type: "turn.feedback", speaker: value.speaker, text: value.text, reason: value.reason };
   }
 
+  if (value.type === "testing.metric") {
+    const metric = (field: string, max: number) => {
+      const candidate = value[field];
+      if (candidate === undefined) return undefined;
+      if (typeof candidate !== "number" || !Number.isFinite(candidate) || candidate < 0 || candidate > max) {
+        throw new Error(`Invalid testing.metric ${field}`);
+      }
+      return candidate;
+    };
+    return {
+      type: "testing.metric",
+      droppedFrames: metric("droppedFrames", 10_000_000),
+      outgoingFps: metric("outgoingFps", 1_000),
+      jitterMs: metric("jitterMs", 60_000),
+      clippingPct: metric("clippingPct", 100),
+      silencePct: metric("silencePct", 100)
+    };
+  }
+
   if (value.type !== "session.start") {
     throw new Error(`Unsupported client event ${value.type}`);
   }
@@ -147,11 +168,14 @@ export function parseClientEvent(data: RawData): ClientEvent {
   assertOptionalTesterRegion(value.testerRegion);
   assertOptionalMetadataString(value.testingCampaignId, "testingCampaignId", 80);
   assertOptionalMetadataString(value.testingTestCaseId, "testingTestCaseId", 80);
+  assertOptionalMetadataString(value.testingRunId, "testingRunId", 80);
+  assertOptionalMetadataString(value.testingAssignmentId, "testingAssignmentId", 80);
   assertOptionalMetadataString(value.appVersion, "appVersion", 40);
   assertOptionalMetadataString(value.gitCommit, "gitCommit", 80);
   assertOptionalMetadataString(value.deviceLabel, "deviceLabel", 120);
   assertOptionalMetadataString(value.browserLanguage, "browserLanguage", 40);
   assertOptionalMetadataString(value.networkType, "networkType", 40);
+  assertOptionalEnum(value.platform, TESTING_PLATFORMS, "platform");
   assertOptionalCoordinate(value.lat, -90, 90, "lat");
   assertOptionalCoordinate(value.lon, -180, 180, "lon");
   assertOptionalMemory(value.memory);
@@ -168,7 +192,8 @@ export class AgentSessionController {
     providerFactory: ProviderFactory,
     private readonly log?: Logger,
     private readonly clientIp = "unknown-ip",
-    private readonly requestRegion?: string
+    private readonly requestRegion?: string,
+    private readonly authenticatedTesterId?: string
   ) {
     this.provider = providerFactory(client, {
       serverEvent: (payload, bytes) => {
@@ -205,6 +230,8 @@ export class AgentSessionController {
                 testerRegion: event.testerRegion,
                 testingCampaignId: event.testingCampaignId,
                 testingTestCaseId: event.testingTestCaseId,
+                testingRunId: event.testingRunId,
+                testingAssignmentId: event.testingAssignmentId,
                 clientIp: this.clientIp,
                 scenario: event.scenario,
                 rideMode: event.rideMode,
@@ -215,16 +242,22 @@ export class AgentSessionController {
       }
       if (event.type === "session.start") {
         beginTesterSession(this.relaySessionId, {
-          testerId: event.testerId,
+          // Logged-in users cannot claim another tester's evidence row. The
+          // operator relay-token path has no account identity and keeps the
+          // explicit testerId for automation rigs.
+          testerId: this.authenticatedTesterId ?? event.testerId,
           ipAddress: this.clientIp,
           region: event.testerRegion ?? this.requestRegion,
           testingCampaignId: event.testingCampaignId,
           testingTestCaseId: event.testingTestCaseId,
+          testingRunId: event.testingRunId,
+          testingAssignmentId: event.testingAssignmentId,
           appVersion: event.appVersion,
           gitCommit: event.gitCommit,
           deviceLabel: event.deviceLabel,
           browserLanguage: event.browserLanguage,
-          networkType: event.networkType
+          networkType: event.networkType,
+          platform: event.platform
         });
         await this.provider.start(event);
       }
@@ -233,6 +266,7 @@ export class AgentSessionController {
       if (event.type === "demo.guided") await this.provider.setGuidedDemo?.(event.enabled);
       if (event.type === "location.update") await this.provider.updateLocation?.(event.lat, event.lon);
       if (event.type === "turn.feedback") recordTesterTurnFeedback(this.relaySessionId, event);
+      if (event.type === "testing.metric") recordTesterAudioQuality(this.relaySessionId, event);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Voice relay failed";
       this.log?.warn("client message failed", { message });

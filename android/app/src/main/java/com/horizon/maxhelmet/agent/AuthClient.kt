@@ -85,8 +85,8 @@ class AuthClient {
                 response.close()
                 val login = parsed?.takeIf { it.optBoolean("ok") }?.let { payload ->
                     val token = payload.optString("token")
-                    val user = payload.optJSONObject("user")
-                    val name = user?.optString("username").orEmpty()
+                    val user = payload.optJSONObject("user") ?: return@let null
+                    val name = user.optString("username")
                     if (token.isEmpty() || name.isEmpty()) return@let null
                     Login(
                         token = token,

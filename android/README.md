@@ -37,7 +37,8 @@ single caption and minimal controls. Every setting lives in the 设置 sheet.
 From this `android/` directory:
 
 ```bash
-JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew assembleDebug
+HORIZON_GIT_COMMIT=$(git -C .. rev-parse --short=12 HEAD) \
+  JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew assembleDebug
 ```
 
 The APK lands at `app/build/outputs/apk/debug/app-debug.apk`. Or open `android/` in
@@ -66,6 +67,12 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradle
 3. Tap 开启免提. The app asks for microphone (required) and location (optional, used for
    live weather). With `VOICE_PROVIDER=mock` you get the scripted demo session; with
    `VOICE_PROVIDER=doubao` you get real speech-to-speech.
+
+For release QA, the settings sheet's **QA 任务归因** section accepts Campaign, Test case, Run,
+and Assignment IDs from the web control plane. The app persists them and sends them atomically
+with `platform=android` on the next `session.start`. Gradle resolves the current repository commit
+automatically; CI can set `HORIZON_GIT_COMMIT` explicitly so the APK and release run always use the
+same candidate identity.
 
 ### Permissions
 
@@ -123,6 +130,7 @@ The emulator forwards the host Mac's microphone, so the full voice loop is testa
   mic (the Android analogue of the web's `getUserMedia({ echoCancellation })`). See _Audio
   notes_ below for a known built-in-speaker limitation.
 - `wss://` support with an opt-in "信任自签名证书" toggle for the Lightsail test server
+- Release-run/test-case/assignment attribution with explicit Android platform and stamped git commit
 
 ## Protocol parity checklist
 

@@ -1,6 +1,6 @@
 // Stateless helpers shared by the agent hook and the HUD components.
 
-import type { AgentHealth, TesterSessionSummary } from "../../shared/agent";
+import type { AgentHealth, TesterSessionSummary, TestingStats } from "../../shared/agent";
 import type { TurnState } from "../components/HelmetVisual";
 import type { AudioProcessingState, RiderLocation, TranscriptItem } from "../types";
 import { authToken } from "./auth";
@@ -196,8 +196,14 @@ export function exportTranscriptLog(
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
-export function exportTestingReport(health: AgentHealth | null, testerId: string, testerRegion: string) {
-  const tester = currentTesterSnapshot(health, testerId);
+export function exportTestingReport(
+  health: AgentHealth | null,
+  testerId: string,
+  testerRegion: string,
+  testingOverride?: TestingStats | null
+) {
+  const testing = testingOverride ?? health?.testing;
+  const tester = testing?.users.find((user) => user.testerId === testerId);
   const payload = {
     exportedAt: new Date().toISOString(),
     tester: {
@@ -211,7 +217,7 @@ export function exportTestingReport(health: AgentHealth | null, testerId: string
     uptimeSec: health?.uptimeSec,
     metrics: health?.metrics,
     metricsWindow: health?.metricsWindow,
-    testing: health?.testing
+    testing
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);

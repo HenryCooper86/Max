@@ -3,8 +3,9 @@
 // admin actions (clear one tester, delete one session, clear everything).
 // Destructive actions use a two-step arm/confirm instead of a blocking dialog.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { scenarioLabel } from "../../shared/ride";
+import type { TesterSessionSummary, TestingStats } from "../../shared/agent";
 import {
   TESTING_CAMPAIGNS,
   TESTING_TEST_CASES,
@@ -15,10 +16,16 @@ import {
 import type { HelmetAgent } from "../hooks/useHelmetAgent";
 import type { AuthUser } from "../lib/auth";
 import { relayAuthToken } from "../lib/persistence";
+import {
+  fetchTestingSession,
+  fetchTestingSessions,
+  fetchTestingSummary,
+  updateTestingSessionNotes
+} from "../lib/testing-api";
 import { AccountAdmin } from "./AccountAdmin";
 import { AccountBar } from "./AccountBar";
+import { TestingControlPlane } from "./TestingControlPlane";
 import {
-  currentTesterSnapshot,
   exportTestingReport,
   exportTestingSession,
   formatBytes,
@@ -65,17 +72,18 @@ function sessionIssueCount(session: {
   turns: { feedback?: string }[];
   evaluation: { checks: { status: string }[] };
 }) {
-  const failedOrWarnChecks = session.evaluation.checks.filter(
-    (check) => check.status === "fail" || check.status === "warn"
-  ).length;
-  const invalidEvidence = session.validity?.status === "invalid" ? Math.max(1, session.validity.reasons.length) : 0;
-  return (
-    session.flags.length +
-    flaggedTurns(session) +
-    failedOrWarnChecks +
-    invalidEvidence +
-    (session.quality === "fail" ? 1 : 0)
+  // Each evaluator check is one issue. `flags` and overall quality are derived
+  // from those checks, so adding all three double-counted a single failure.
+  const issues = new Set(
+    session.evaluation.checks
+      .filter((check) => check.status === "fail" || check.status === "warn")
+      .map((check, index) => `check:${index}`)
   );
+  for (let index = 0; index < flaggedTurns(session); index += 1) issues.add(`feedback:${index}`);
+  for (const reason of session.validity?.status === "invalid" ? session.validity.reasons : []) {
+    issues.add(`validity:${reason}`);
+  }
+  return issues.size;
 }
 
 function testRequirementLabels(testCase: TestingTestCase) {
@@ -119,28 +127,6 @@ function statusTone(status: string | undefined) {
   return "warn";
 }
 
-// "New failures" watermark: fail sessions that ended after this timestamp
-// count as unseen. Local to this browser — it tracks what THIS admin has
-// looked at, not global state.
-const FAIL_SEEN_AT_KEY = "max.testing.failSeenAt";
-
-function readFailSeenAt(): number {
-  try {
-    const value = Number(window.localStorage.getItem(FAIL_SEEN_AT_KEY));
-    return Number.isFinite(value) && value > 0 ? value : 0;
-  } catch {
-    return 0;
-  }
-}
-
-function saveFailSeenAt(at: number) {
-  try {
-    window.localStorage.setItem(FAIL_SEEN_AT_KEY, String(at));
-  } catch {
-    /* storage unavailable — badge just stays until next visit */
-  }
-}
-
 type Props = {
   agent: HelmetAgent;
   /** Auth state lives in App — the LoginGate and this panel share it. */
@@ -160,7 +146,72 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
   const [armedAction, setArmedAction] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
   const [adminNotice, setAdminNotice] = useState<string | null>(null);
-  const [failSeenAt, setFailSeenAt] = useState(readFailSeenAt);
+  const [testing, setTesting] = useState<TestingStats | null>(null);
+  const [testingSessions, setTestingSessions] = useState<TesterSessionSummary[]>([]);
+  const [sessionDetails, setSessionDetails] = useState<Record<string, TesterSessionSummary>>({});
+  const [nextSessionCursor, setNextSessionCursor] = useState<string | undefined>();
+  const [sessionTotal, setSessionTotal] = useState(0);
+  const [loadingSessions, setLoadingSessions] = useState(false);
+  const [sessionNotes, setSessionNotes] = useState("");
+  const loadedSessionCountRef = useRef(0);
+
+  const refreshTesting = useCallback(async (replaceSessions = false) => {
+    const [summary, page] = await Promise.all([fetchTestingSummary(), fetchTestingSessions({ limit: 100 })]);
+    if (!summary || !page) {
+      setAdminNotice("测试证据加载失败 — 请检查登录会话与中继连接。");
+      return false;
+    }
+    setTesting(summary);
+    const preserveExpandedHistory = !replaceSessions && loadedSessionCountRef.current > page.items.length;
+    if (preserveExpandedHistory) {
+      setTestingSessions((current) => {
+        const firstPageIds = new Set(page.items.map((session) => session.sessionId));
+        const merged = [...page.items, ...current.filter((session) => !firstPageIds.has(session.sessionId))];
+        loadedSessionCountRef.current = merged.length;
+        return merged;
+      });
+    } else {
+      loadedSessionCountRef.current = page.items.length;
+      setTestingSessions(page.items);
+      setNextSessionCursor(page.nextCursor);
+    }
+    setSessionTotal(page.total);
+    setAdminNotice(null);
+    return true;
+  }, []);
+
+  const loadMoreSessions = useCallback(async () => {
+    if (!nextSessionCursor || loadingSessions) return;
+    setLoadingSessions(true);
+    const page = await fetchTestingSessions({ cursor: nextSessionCursor, limit: 100 });
+    if (page) {
+      setTestingSessions((current) => {
+        const ids = new Set(current.map((session) => session.sessionId));
+        const merged = [...current, ...page.items.filter((session) => !ids.has(session.sessionId))];
+        loadedSessionCountRef.current = merged.length;
+        return merged;
+      });
+      setNextSessionCursor(page.nextCursor);
+      setSessionTotal(page.total);
+    } else {
+      setAdminNotice("更多测试证据加载失败。");
+    }
+    setLoadingSessions(false);
+  }, [loadingSessions, nextSessionCursor]);
+
+  useEffect(() => {
+    // Never retain a previous account's scoped evidence while credentials
+    // change. Polling preserves older pages only inside the same auth scope.
+    loadedSessionCountRef.current = 0;
+    setTesting(null);
+    setTestingSessions([]);
+    setSessionDetails({});
+    setNextSessionCursor(undefined);
+    setSessionTotal(0);
+    void refreshTesting(true);
+    const timer = window.setInterval(() => void refreshTesting(), 10_000);
+    return () => window.clearInterval(timer);
+  }, [authUser?.id, refreshTesting]);
 
   useEffect(() => {
     if (!armedAction) return;
@@ -176,13 +227,14 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
       if (ok) {
         setSelectedSessionId(null);
         if (payload.scope !== "session") setSelectedTesterKey(null);
-        await agent.refreshHealth();
+        setSessionDetails({});
+        await Promise.all([agent.refreshHealth(), refreshTesting(true)]);
       } else {
         setAdminNotice("清除失败 — 需要管理员登录（或有效的中继令牌），并确认中继在线。");
       }
       setClearing(false);
     },
-    [agent]
+    [agent, refreshTesting]
   );
 
   const confirmable = useCallback(
@@ -197,7 +249,6 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
     [armedAction]
   );
 
-  const testing = agent.health?.testing;
   const testingTotals = testing?.totals;
   const testingTimeline = testing?.timeline ?? [];
   const releaseGate = testing?.releaseGate;
@@ -213,12 +264,10 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
     defaultTestCaseForCampaign(selectedCampaign.id);
   const testCasesForCampaign = testingTestCases.filter((testCase) => testCase.campaignId === selectedCampaign.id);
   const testerUsers = testing?.users ?? [];
-  const testingSessions = testing?.sessions ?? [];
-  const currentTester = currentTesterSnapshot(agent.health, agent.testerId);
-  const selectedTester =
-    (selectedTesterKey ? testerUsers.find((user) => user.testerKey === selectedTesterKey) : undefined) ??
-    currentTester ??
-    testerUsers[0];
+  const currentTester = testerUsers.find((user) => user.testerId === agent.testerId);
+  const selectedTester = selectedTesterKey
+    ? testerUsers.find((user) => user.testerKey === selectedTesterKey)
+    : (currentTester ?? testerUsers[0]);
   const selectedTesterTurns = selectedTester?.recentTurns ?? [];
   const normalizedTesterFilter = testerFilter.trim().toLowerCase();
   const qualityCountsByTester = testingSessions.reduce((map, session) => {
@@ -245,9 +294,11 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
         b.lastSeenAt - a.lastSeenAt
       );
     });
-  const selectedTesterSessions = selectedTester
-    ? testingSessions.filter((session) => session.testerKey === selectedTester.testerKey)
-    : testingSessions;
+  const selectedTesterSessions = selectedTesterKey
+    ? testingSessions.filter((session) => session.testerKey === selectedTesterKey)
+    : selectedTester
+      ? testingSessions.filter((session) => session.testerKey === selectedTester.testerKey)
+      : testingSessions;
   const normalizedSessionFilter = sessionFilter.trim().toLowerCase();
   const filteredTestingSessions = [...selectedTesterSessions]
     .sort(
@@ -276,17 +327,40 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
       ];
       return searchable.join(" ").toLowerCase().includes(normalizedSessionFilter);
     });
-  const selectedSession =
+  const selectedSessionSummary =
     (selectedSessionId
       ? filteredTestingSessions.find((session) => session.sessionId === selectedSessionId)
       : undefined) ?? filteredTestingSessions[0];
+  const selectedSession = selectedSessionSummary
+    ? (sessionDetails[selectedSessionSummary.sessionId] ?? selectedSessionSummary)
+    : undefined;
   const selectedSessionTurns = selectedSession?.turns ?? [];
+
+  useEffect(() => {
+    const sessionId = selectedSessionSummary?.sessionId;
+    if (!sessionId) return;
+    let active = true;
+    void fetchTestingSession(sessionId).then((detail) => {
+      if (!active || !detail) return;
+      setSessionDetails((current) => ({ ...current, [detail.sessionId]: detail }));
+    });
+    return () => {
+      active = false;
+    };
+  }, [selectedSessionSummary?.sessionId]);
+
+  useEffect(() => {
+    setSessionNotes(selectedSession?.notes ?? "");
+  }, [selectedSession?.sessionId, selectedSession?.notes]);
   const sessionQualityCounts = testingSessions.reduce((counts, session) => {
     counts[session.quality] += 1;
     return counts;
   }, emptyQualityCounts());
   const issueSessionCount = sessionQualityCounts.fail + sessionQualityCounts.watch;
-  const flaggedTurnCount = testingSessions.reduce((sum, session) => sum + flaggedTurns(session), 0);
+  const flaggedTurnCount = testerUsers.reduce(
+    (sum, tester) => sum + tester.recentTurns.filter((turn) => Boolean(turn.feedback)).length,
+    0
+  );
   const latestIssueSession = [...testingSessions]
     .filter((session) => session.quality !== "pass" || sessionIssueCount(session) > 0)
     .sort(
@@ -318,30 +392,51 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
     setSelectedTesterKey(testerKey);
     setSelectedSessionId(null);
   };
-  // Failures the admin hasn't looked at yet (across ALL testers, ignoring the
-  // current tester/quality filters — a fail must not hide behind a filter).
-  const unseenFailSessions = testingSessions.filter(
-    (session) => session.quality === "fail" && session.endedAt > failSeenAt
-  );
-  const reviewFailures = () => {
-    // Jump straight to the newest unseen failure (the session list is scoped
-    // to one tester, so also select that session's tester).
-    const newest = [...unseenFailSessions].sort((a, b) => b.endedAt - a.endedAt)[0];
-    if (newest) {
-      setSelectedTesterKey(newest.testerKey);
-      setSelectedSessionId(newest.sessionId);
-    }
-    setQualityFilter("fail");
-    const latest = Math.max(failSeenAt, ...unseenFailSessions.map((session) => session.endedAt));
-    setFailSeenAt(latest);
-    saveFailSeenAt(latest);
-  };
   const reviewLatestIssue = () => {
     if (!latestIssueSession) return;
     setSelectedTesterKey(latestIssueSession.testerKey);
     setSelectedSessionId(latestIssueSession.sessionId);
     setQualityFilter(latestIssueSession.quality);
     setSessionFilter("");
+  };
+  const selectEvidenceSession = (sessionId: string) => {
+    const session = testingSessions.find((item) => item.sessionId === sessionId);
+    setQualityFilter("all");
+    setSessionFilter("");
+    if (session) {
+      setSelectedTesterKey(session.testerKey);
+      setSelectedSessionId(sessionId);
+      return;
+    }
+    void fetchTestingSession(sessionId).then((detail) => {
+      if (!detail) {
+        setAdminNotice("The selected review evidence is unavailable or outside your access scope.");
+        return;
+      }
+      setSessionDetails((current) => ({ ...current, [detail.sessionId]: detail }));
+      setTestingSessions((current) => [detail, ...current]);
+      setSelectedTesterKey(detail.testerKey);
+      setSelectedSessionId(detail.sessionId);
+    });
+  };
+  const saveSessionNotes = async () => {
+    if (!selectedSession) return;
+    const updated = await updateTestingSessionNotes(selectedSession.sessionId, sessionNotes);
+    if (!updated) {
+      setAdminNotice("Evidence notes could not be saved. Reviewer access is required.");
+      return;
+    }
+    setSessionDetails((current) => ({ ...current, [updated.sessionId]: updated }));
+    setTestingSessions((current) =>
+      current.map((session) =>
+        session.sessionId === updated.sessionId ? { ...session, notes: updated.notes } : session
+      )
+    );
+    setAdminNotice("Evidence notes saved and added to the audit trail.");
+  };
+  const useAssignment = (runId: string, assignmentId: string, testCaseId: string) => {
+    agent.setTestingAssignmentContext(runId, assignmentId, testCaseId);
+    setAdminNotice("Assignment linked. The next voice session will be attributed to this release task.");
   };
   const authEnabled = agent.health?.auth?.enabled ?? false;
   const registrationOpen = agent.health?.auth?.registrationOpen ?? true;
@@ -361,12 +456,15 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
             {testing ? `${testing.windowMinutes}m · ${testing.users.length} users` : "waiting"}
             {agent.health?.build ? ` · 构建 ${agent.health.build.gitCommit}` : ""}
           </span>
-          {unseenFailSessions.length ? (
-            <button type="button" className="danger" onClick={reviewFailures}>
-              {unseenFailSessions.length} 个新失败
+          {issueSessionCount ? (
+            <button type="button" className="danger" onClick={reviewLatestIssue}>
+              {issueSessionCount} 个待检查会话
             </button>
           ) : null}
-          <button type="button" onClick={() => exportTestingReport(agent.health, agent.testerId, agent.testerRegion)}>
+          <button
+            type="button"
+            onClick={() => exportTestingReport(agent.health, agent.testerId, agent.testerRegion, testing)}
+          >
             导出统计
           </button>
           <button
@@ -390,6 +488,16 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
       />
 
       {authUser?.role === "admin" ? <AccountAdmin adminUsername={authUser.username} /> : null}
+
+      {authUser ? (
+        <TestingControlPlane
+          user={authUser}
+          currentBuild={agent.health?.build?.gitCommit ?? "local"}
+          selectedSession={selectedSession}
+          onSelectSession={selectEvidenceSession}
+          onUseAssignment={useAssignment}
+        />
+      ) : null}
 
       {statsLocked ? (
         <p className="adminNotice" role="status">
@@ -487,7 +595,10 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
             {(releaseGate?.cases ?? []).map((testCase) => (
               <span className={testCase.status} key={testCase.testCaseId}>
                 <b>{testCase.testCaseName}</b>
-                {testCase.validSessions} valid · {testCase.invalidSessions} invalid
+                {testCase.validSessions}/{testCase.requiredValidSessions} valid · {testCase.invalidSessions} invalid ·{" "}
+                {testCase.cohorts
+                  .map((cohort) => `${cohort.platform} ${cohort.validSessions}/${cohort.required}`)
+                  .join(" · ")}
               </span>
             ))}
             {!releaseGate?.cases.length ? <p className="testerConversationEmpty">No release gate data yet.</p> : null}
@@ -624,8 +735,7 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
         <div className="historyRetention">
           <span>History</span>
           <strong>
-            {testing?.history.persistent ? "persistent" : "memory"} · {testing?.sessions.length ?? 0}/
-            {testing?.history.maxSessions ?? 0}
+            {testing?.history.persistent ? "persistent" : "memory"} · {testingSessions.length}/{sessionTotal} loaded
           </strong>
         </div>
       </div>
@@ -873,7 +983,7 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
         <div className="sessionReplayGrid">
           <div className="sessionList" aria-label="Completed test sessions">
             {filteredTestingSessions.length ? (
-              filteredTestingSessions.slice(0, 12).map((session) => {
+              filteredTestingSessions.map((session) => {
                 const issues = sessionIssueCount(session);
                 return (
                   <button
@@ -888,7 +998,7 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
                     <strong>{formatSessionDate(session.startedAt)}</strong>
                     <span>{session.testCaseName}</span>
                     <span>
-                      {formatDuration(session.durationMs)} · {session.turns.length} turns · {session.p95LatencyMs}ms p95
+                      {formatDuration(session.durationMs)} · {session.platform} · {session.p95LatencyMs}ms p95
                     </span>
                     <span>
                       score {session.evaluation.score} · {issues} issues
@@ -900,6 +1010,16 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
             ) : (
               <p className="testerConversationEmpty">No completed sessions match this view.</p>
             )}
+            {nextSessionCursor ? (
+              <button
+                type="button"
+                className="loadMoreEvidence"
+                disabled={loadingSessions}
+                onClick={() => void loadMoreSessions()}
+              >
+                {loadingSessions ? "Loading…" : `Load more evidence (${testingSessions.length}/${sessionTotal})`}
+              </button>
+            ) : null}
           </div>
           <div className="sessionDetail">
             {selectedSession ? (
@@ -956,12 +1076,70 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
                     Network
                   </span>
                   <span>
+                    <b>{selectedSession.platform}</b>
+                    Platform
+                  </span>
+                  <span>
                     <b>
                       {selectedSession.appVersion} · {selectedSession.gitCommit}
                     </b>
                     Build
                   </span>
+                  <span>
+                    <b>{selectedSession.policyVersion}</b>
+                    Captured policy
+                  </span>
+                  <span
+                    className={`integrity-${selectedSession.evidenceIntegrity}`}
+                    title={selectedSession.evidenceHash}
+                  >
+                    <b>
+                      {selectedSession.evidenceIntegrity} · {selectedSession.evidenceHash.slice(0, 12)}…
+                    </b>
+                    Evidence SHA-256
+                  </span>
+                  <span>
+                    <b>
+                      {selectedSession.audioQuality.outgoingFps}fps / {selectedSession.audioQuality.droppedFrames}{" "}
+                      dropped
+                    </b>
+                    Audio transport
+                  </span>
+                  <span>
+                    <b>
+                      {selectedSession.audioQuality.clippingPct}% clip / {selectedSession.audioQuality.silencePct}%
+                      silence
+                    </b>
+                    Signal quality
+                  </span>
                 </div>
+                {selectedSession.capturedEvaluation.score !== selectedSession.evaluation.score ||
+                selectedSession.capturedEvaluation.quality !== selectedSession.evaluation.quality ? (
+                  <p className="evaluationDriftNotice">
+                    Captured result {selectedSession.capturedEvaluation.quality} /{" "}
+                    {selectedSession.capturedEvaluation.score}; current policy replay{" "}
+                    {selectedSession.evaluation.quality} / {selectedSession.evaluation.score}.
+                  </p>
+                ) : null}
+                {authUser?.role === "admin" || authUser?.role === "reviewer" ? (
+                  <div className="evidenceNotes">
+                    <label>
+                      <span>Reviewer evidence notes</span>
+                      <textarea
+                        value={sessionNotes}
+                        onChange={(event) => setSessionNotes(event.target.value)}
+                        placeholder="Reproduction context, device conditions, investigation notes…"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      disabled={sessionNotes === selectedSession.notes}
+                      onClick={() => void saveSessionNotes()}
+                    >
+                      Save notes
+                    </button>
+                  </div>
+                ) : null}
                 <div className="sessionFlags">
                   {selectedSession.flags.length ? (
                     selectedSession.flags.map((flag) => <span key={flag}>{flag}</span>)

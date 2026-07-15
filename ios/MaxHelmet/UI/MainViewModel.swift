@@ -37,6 +37,10 @@ final class MainViewModel: ObservableObject {
         static let authRole = "auth_role"
         static let allowSelfSigned = "allow_self_signed"
         static let devMode = "dev_mode"
+        static let testingCampaignId = "testing_campaign_id"
+        static let testingTestCaseId = "testing_test_case_id"
+        static let testingRunId = "testing_run_id"
+        static let testingAssignmentId = "testing_assignment_id"
     }
 
     let session = AgentSession.shared
@@ -89,6 +93,19 @@ final class MainViewModel: ObservableObject {
     }
     @Published var loginBusy = false
     @Published var loginError: String?
+
+    @Published var testingCampaignId: String {
+        didSet { defaults.set(testingCampaignId, forKey: Keys.testingCampaignId) }
+    }
+    @Published var testingTestCaseId: String {
+        didSet { defaults.set(testingTestCaseId, forKey: Keys.testingTestCaseId) }
+    }
+    @Published var testingRunId: String {
+        didSet { defaults.set(testingRunId, forKey: Keys.testingRunId) }
+    }
+    @Published var testingAssignmentId: String {
+        didSet { defaults.set(testingAssignmentId, forKey: Keys.testingAssignmentId) }
+    }
 
     var isLoggedIn: Bool { !authUsername.isEmpty && !sessionToken.isEmpty }
 
@@ -198,6 +215,10 @@ final class MainViewModel: ObservableObject {
         authRole = defaults.string(forKey: Keys.authRole) ?? ""
         allowSelfSigned = defaults.object(forKey: Keys.allowSelfSigned) as? Bool ?? Self.defaultAllowSelfSigned
         devMode = defaults.bool(forKey: Keys.devMode)
+        testingCampaignId = defaults.string(forKey: Keys.testingCampaignId) ?? "release-readiness"
+        testingTestCaseId = defaults.string(forKey: Keys.testingTestCaseId) ?? "baseline-live-session"
+        testingRunId = defaults.string(forKey: Keys.testingRunId) ?? ""
+        testingAssignmentId = defaults.string(forKey: Keys.testingAssignmentId) ?? ""
     }
 
     func toggleDevMode() {
@@ -215,7 +236,11 @@ final class MainViewModel: ObservableObject {
             session.start(url: relayURL.trimmingCharacters(in: .whitespacesAndNewlines),
                           authToken: effectiveToken,
                           allowSelfSignedTls: allowSelfSigned,
-                          testerId: authUsername.isEmpty ? "ios-native" : authUsername)
+                          testerId: authUsername.isEmpty ? "ios-native" : authUsername,
+                          testingCampaignId: testingCampaignId,
+                          testingTestCaseId: testingTestCaseId,
+                          testingRunId: testingRunId,
+                          testingAssignmentId: testingAssignmentId)
         }
     }
 

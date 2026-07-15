@@ -39,7 +39,9 @@ body {
 }
 
 button,
-input {
+input,
+select,
+textarea {
   font: inherit;
 }
 
@@ -57,6 +59,8 @@ button:disabled {
    :focus-visible keeps mouse/touch clicks ring-free. */
 button:focus-visible,
 input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
 a:focus-visible {
   outline: 2px solid var(--accent-cyan);
   outline-offset: 2px;
@@ -2080,6 +2084,18 @@ button.opsCard:disabled {
   overflow-wrap: anywhere;
 }
 
+.sessionMetricGrid .integrity-verified b {
+  color: var(--accent);
+}
+
+.sessionMetricGrid .integrity-legacy b {
+  color: var(--warn);
+}
+
+.sessionMetricGrid .integrity-mismatch b {
+  color: var(--danger);
+}
+
 .sessionFlags {
   display: flex;
   flex-wrap: wrap;
@@ -2835,7 +2851,7 @@ button.opsCard:disabled {
 
 .accountAdminSummary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -2929,6 +2945,22 @@ button.opsCard:disabled {
   display: flex;
   flex: 0 0 auto;
   gap: 8px;
+}
+
+.accountAdminRoleActions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.accountAdminRoleActions select {
+  min-width: 104px;
+  padding: 6px 8px;
+  border: 1px solid rgba(196, 218, 216, 0.18);
+  border-radius: 7px;
+  background: #15201f;
+  color: var(--text);
 }
 
 /* --- futuristic login gate ------------------------------------------------ */
@@ -3192,5 +3224,519 @@ button.opsCard:disabled {
 
   .loginScanline {
     display: none;
+  }
+}
+
+/* --- live-agent QA control plane ----------------------------------------- */
+
+.testingControlPlane {
+  overflow: hidden;
+  border: 1px solid rgba(95, 233, 214, 0.2);
+  border-radius: 12px;
+  background: linear-gradient(120deg, rgba(62, 232, 159, 0.045), transparent 38%), rgba(4, 12, 12, 0.62);
+}
+
+.controlPlaneHead {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  justify-content: space-between;
+  padding: 12px;
+  border-bottom: 1px solid rgba(196, 218, 216, 0.12);
+}
+
+.controlPlaneHead > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.controlPlaneHead span,
+.testingControlPlane label > span {
+  color: var(--muted);
+  font-size: 0.67rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.controlPlaneHead strong {
+  font-size: 0.95rem;
+}
+
+.controlPlaneTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.controlPlaneTabs button {
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.72rem;
+}
+
+.controlPlaneTabs button.active {
+  border-color: rgba(62, 232, 159, 0.35);
+  background: rgba(62, 232, 159, 0.1);
+  color: var(--accent);
+}
+
+.testingControlPlane > .adminNotice {
+  margin: 10px 12px 0;
+}
+
+.controlPlaneBody,
+.issueWorkbench,
+.policyWorkbench,
+.auditTimeline {
+  padding: 12px;
+}
+
+.runCreateBar {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.4fr) repeat(3, minmax(120px, 1fr)) auto;
+  gap: 8px;
+  align-items: end;
+  margin-bottom: 10px;
+}
+
+.runCreateBar label,
+.assignmentOwner,
+.reviewFields label,
+.policyFields label,
+.evidenceNotes label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.testingControlPlane input,
+.testingControlPlane select,
+.testingControlPlane textarea,
+.evidenceNotes textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid rgba(196, 218, 216, 0.17);
+  border-radius: 7px;
+  background: rgba(5, 13, 13, 0.85);
+  color: var(--text);
+}
+
+.testingControlPlane textarea,
+.evidenceNotes textarea {
+  min-height: 70px;
+  resize: vertical;
+}
+
+.testingControlPlane button,
+.evidenceNotes button,
+.loadMoreEvidence {
+  padding: 7px 10px;
+  border: 1px solid rgba(95, 233, 214, 0.25);
+  border-radius: 7px;
+  background: rgba(95, 233, 214, 0.08);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.releaseRunGrid {
+  display: grid;
+  grid-template-columns: minmax(190px, 0.7fr) minmax(0, 2fr);
+  gap: 10px;
+}
+
+.releaseRunList {
+  display: flex;
+  max-height: 520px;
+  flex-direction: column;
+  gap: 6px;
+  overflow: auto;
+}
+
+.releaseRunList > button {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 8px;
+  text-align: left;
+}
+
+.releaseRunList > button.active {
+  border-color: var(--accent);
+  background: rgba(62, 232, 159, 0.12);
+}
+
+.releaseRunList button span {
+  color: var(--accent-cyan);
+  font-size: 0.64rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.releaseRunList button small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+}
+
+.releaseRunList button i {
+  grid-column: 1 / -1;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.releaseRunList button i b {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.releaseRunDetail {
+  min-width: 0;
+  padding: 11px;
+  border: 1px solid rgba(196, 218, 216, 0.12);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.releaseRunTitle {
+  display: flex;
+  gap: 10px;
+  align-items: start;
+  justify-content: space-between;
+}
+
+.releaseRunTitle > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.releaseRunTitle span,
+.runStatus {
+  color: var(--accent-cyan);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.releaseRunTitle p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.assignmentOwner {
+  max-width: 260px;
+  margin: 10px 0;
+}
+
+.coverageMatrix {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.coverageMatrix article {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 10px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid rgba(242, 193, 78, 0.2);
+  border-left: 3px solid var(--warn);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.coverageMatrix article.complete {
+  border-color: rgba(62, 232, 159, 0.18);
+  border-left-color: var(--accent);
+}
+
+.coverageMatrix article > div:first-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.coverageMatrix article span,
+.coverageMatrix article p,
+.coverageMatrix article small {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.coverageMatrix article > p {
+  text-align: right;
+}
+
+.coverageMatrix article > button,
+.coverageMatrix article > small {
+  grid-column: 2;
+}
+
+.coverageAssignments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.coverageAssignments span {
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.issueWorkbench {
+  display: grid;
+  grid-template-columns: minmax(250px, 0.8fr) minmax(0, 1.6fr);
+  gap: 10px;
+}
+
+.reviewComposer,
+.activePolicyCard,
+.policyFields {
+  padding: 11px;
+  border: 1px solid rgba(196, 218, 216, 0.12);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.reviewComposer > span,
+.activePolicyCard > span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+}
+
+.reviewComposer > strong,
+.activePolicyCard > strong {
+  display: block;
+  margin: 3px 0 10px;
+}
+
+.reviewFields,
+.policyFields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.reviewFields .wide,
+.policyFields .wide,
+.policyFields > button,
+.policyFields > p {
+  grid-column: 1 / -1;
+}
+
+.reviewQueue {
+  display: flex;
+  max-height: 510px;
+  flex-direction: column;
+  gap: 7px;
+  overflow: auto;
+}
+
+.reviewRow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid rgba(196, 218, 216, 0.12);
+  border-left: 3px solid var(--warn);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.reviewRow.critical,
+.reviewRow.high {
+  border-left-color: var(--danger);
+}
+
+.reviewEvidenceLink {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  border: 0 !important;
+  background: transparent !important;
+  text-align: left;
+}
+
+.reviewEvidenceLink span,
+.reviewEvidenceLink small {
+  color: var(--muted);
+  font-size: 0.66rem;
+}
+
+.reviewRow p {
+  grid-column: 1;
+  margin: 0 8px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.reviewRow select {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  width: auto;
+}
+
+.policyWorkbench {
+  display: grid;
+  grid-template-columns: minmax(190px, 0.65fr) minmax(0, 1.35fr);
+  gap: 10px;
+}
+
+.activePolicyCard p,
+.activePolicyCard small {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.policyHistory {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.policyHistory span {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 8px;
+  border: 1px solid rgba(196, 218, 216, 0.12);
+  border-radius: 7px;
+  color: var(--muted);
+  font-size: 0.65rem;
+}
+
+.policyHistory span.active {
+  border-color: rgba(62, 232, 159, 0.35);
+}
+
+.auditTimeline {
+  display: flex;
+  max-height: 480px;
+  flex-direction: column;
+  overflow: auto;
+}
+
+.auditTimeline article {
+  display: grid;
+  grid-template-columns: 105px 1fr;
+  gap: 12px;
+  padding: 8px 4px;
+  border-bottom: 1px solid rgba(196, 218, 216, 0.09);
+}
+
+.auditTimeline time,
+.auditTimeline span,
+.auditTimeline p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.auditTimeline article > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.loadMoreEvidence {
+  width: 100%;
+  margin-top: 7px;
+}
+
+.evaluationDriftNotice {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--warn);
+  background: rgba(242, 193, 78, 0.07);
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.evidenceNotes {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: end;
+  margin: 9px 0;
+  padding: 9px;
+  border: 1px solid rgba(196, 218, 216, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+@media (max-width: 980px) {
+  .runCreateBar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .runCreateBar > button {
+    grid-column: 1 / -1;
+  }
+
+  .releaseRunGrid,
+  .issueWorkbench,
+  .policyWorkbench {
+    grid-template-columns: 1fr;
+  }
+
+  .accountAdminSummary {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .coverageMatrix,
+  .reviewFields,
+  .policyFields,
+  .runCreateBar {
+    grid-template-columns: 1fr;
+  }
+
+  .reviewFields .wide,
+  .policyFields .wide,
+  .policyFields > button,
+  .policyFields > p,
+  .runCreateBar > button {
+    grid-column: 1;
+  }
+
+  .controlPlaneHead,
+  .releaseRunTitle,
+  .accountAdminRow {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .controlPlaneTabs,
+  .controlPlaneTabs button,
+  .accountAdminRoleActions,
+  .accountAdminRoleActions select {
+    width: 100%;
+  }
+
+  .accountAdminSummary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .evidenceNotes {
+    grid-template-columns: 1fr;
   }
 }

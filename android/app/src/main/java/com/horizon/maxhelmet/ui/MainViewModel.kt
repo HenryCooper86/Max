@@ -42,6 +42,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val KEY_AUTH_ROLE = "auth_role"
         private const val KEY_ALLOW_SELF_SIGNED = "allow_self_signed"
         private const val KEY_DEV_MODE = "dev_mode"
+        private const val KEY_TESTING_CAMPAIGN_ID = "testing_campaign_id"
+        private const val KEY_TESTING_TEST_CASE_ID = "testing_test_case_id"
+        private const val KEY_TESTING_RUN_ID = "testing_run_id"
+        private const val KEY_TESTING_ASSIGNMENT_ID = "testing_assignment_id"
     }
 
     private val session: AgentSession = AgentSessionHolder.get(application)
@@ -61,6 +65,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var allowSelfSigned by mutableStateOf(prefs.getBoolean(KEY_ALLOW_SELF_SIGNED, false))
         private set
 
+    var testingCampaignId by mutableStateOf(prefs.getString(KEY_TESTING_CAMPAIGN_ID, "release-readiness") ?: "release-readiness")
+        private set
+    var testingTestCaseId by mutableStateOf(prefs.getString(KEY_TESTING_TEST_CASE_ID, "baseline-live-session") ?: "baseline-live-session")
+        private set
+    var testingRunId by mutableStateOf(prefs.getString(KEY_TESTING_RUN_ID, "") ?: "")
+        private set
+    var testingAssignmentId by mutableStateOf(prefs.getString(KEY_TESTING_ASSIGNMENT_ID, "") ?: "")
+        private set
+
     fun updateRelayUrl(url: String) {
         relayUrl = url
         prefs.edit().putString(KEY_RELAY_URL, url).apply()
@@ -74,6 +87,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun updateAllowSelfSigned(allow: Boolean) {
         allowSelfSigned = allow
         prefs.edit().putBoolean(KEY_ALLOW_SELF_SIGNED, allow).apply()
+    }
+
+    fun updateTestingCampaignId(value: String) {
+        testingCampaignId = value.take(80)
+        prefs.edit().putString(KEY_TESTING_CAMPAIGN_ID, testingCampaignId).apply()
+    }
+
+    fun updateTestingTestCaseId(value: String) {
+        testingTestCaseId = value.take(80)
+        prefs.edit().putString(KEY_TESTING_TEST_CASE_ID, testingTestCaseId).apply()
+    }
+
+    fun updateTestingRunId(value: String) {
+        testingRunId = value.take(80)
+        prefs.edit().putString(KEY_TESTING_RUN_ID, testingRunId).apply()
+    }
+
+    fun updateTestingAssignmentId(value: String) {
+        testingAssignmentId = value.take(80)
+        prefs.edit().putString(KEY_TESTING_ASSIGNMENT_ID, testingAssignmentId).apply()
     }
 
     /**
@@ -243,7 +276,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 relayUrl.trim(),
                 allowSelfSigned,
                 effectiveToken,
-                testerId = authUsername.ifEmpty { "android-native" }
+                testerId = authUsername.ifEmpty { "android-native" },
+                testingCampaignId = testingCampaignId,
+                testingTestCaseId = testingTestCaseId,
+                testingRunId = testingRunId,
+                testingAssignmentId = testingAssignmentId
             )
         }
     }

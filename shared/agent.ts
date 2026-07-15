@@ -1,8 +1,11 @@
 import type { AdasDirection, AdasSeverity, AdasThreat } from "./adas";
 import type { DemoScenario, RideIntelligence, RideMode } from "./ride";
 import type {
+  TestingAudioQuality,
   TestingCatalog,
   TestingEvaluationSummary,
+  TestingOperationsSnapshot,
+  TestingPlatform,
   TestingQuality,
   TestingRegressionSummary,
   TestingReleaseGate,
@@ -42,6 +45,9 @@ export type TesterSessionSummary = {
   deviceLabel: string;
   browserLanguage: string;
   networkType: string;
+  platform: TestingPlatform;
+  runId?: string;
+  assignmentId?: string;
   startedAt: number;
   endedAt: number;
   durationMs: number;
@@ -59,6 +65,12 @@ export type TesterSessionSummary = {
   validity: TestingValiditySummary;
   flags: string[];
   notes: string;
+  policyVersion: string;
+  evidenceHash: string;
+  evidenceIntegrity: "verified" | "legacy" | "mismatch";
+  capturedEvaluation: TestingEvaluationSummary;
+  capturedValidity: TestingValiditySummary;
+  audioQuality: TestingAudioQuality;
   evaluation: TestingEvaluationSummary;
   turns: TesterTranscriptTurn[];
 };
@@ -134,6 +146,7 @@ export type TestingStats = {
   users: TesterStats[];
   sessions: TesterSessionSummary[];
   timeline: TestingTimelineBucket[];
+  operations?: TestingOperationsSnapshot;
 };
 
 /**
@@ -162,6 +175,9 @@ export type SessionStartEvent = {
   testingCampaignId?: string;
   /** QA test case selected by the tester. */
   testingTestCaseId?: string;
+  /** Release-run assignment supplied by the QA control plane. */
+  testingRunId?: string;
+  testingAssignmentId?: string;
   /** Build metadata for release comparison. */
   appVersion?: string;
   gitCommit?: string;
@@ -169,6 +185,7 @@ export type SessionStartEvent = {
   deviceLabel?: string;
   browserLanguage?: string;
   networkType?: string;
+  platform?: TestingPlatform;
   voiceGender?: VoiceGender;
   voicePersonality?: VoicePersonality;
   rideMode?: RideMode;
@@ -189,6 +206,16 @@ export type ClientEvent =
   // fast on a moving motorcycle; this keeps the live weather (and any future
   // location-aware context) tracking the rider. Clients throttle sends.
   | { type: "location.update"; lat: number; lon: number }
+  // Client-side audio-pipeline quality. This is aggregate telemetry only; raw
+  // microphone audio remains opt-in and is never retained by this event.
+  | {
+      type: "testing.metric";
+      droppedFrames?: number;
+      outgoingFps?: number;
+      jitterMs?: number;
+      clippingPct?: number;
+      silencePct?: number;
+    }
   // Tester flags a transcript turn as problematic. Turns are matched by
   // speaker + text (client and server timestamps differ); the reason lands on
   // the matched turn's `feedback` and downgrades the session evaluation.

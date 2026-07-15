@@ -55,7 +55,8 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild \
   -project ios/MaxHelmet.xcodeproj \
   -scheme MaxHelmet \
-  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+  HORIZON_GIT_COMMIT=$(git rev-parse --short=12 HEAD) build
 ```
 
 If `xcodebuild` reports that the active developer directory is Command Line Tools, use the
@@ -83,6 +84,12 @@ Point it back at a Mac relay by typing the LAN URL (and toggling self-signed off
 3. Tap 开启免提. The app asks for microphone (required) and location (optional, used for live
    weather). With `VOICE_PROVIDER=mock` you get the scripted demo session; with
    `VOICE_PROVIDER=doubao` you get real speech-to-speech.
+
+For release QA, the settings sheet's **QA 任务归因** section accepts Campaign, Test case, Run,
+and Assignment IDs from the web control plane. The app persists them and sends them atomically
+with `platform=ios` on the next `session.start`. Command-line/CI builds should always pass
+`HORIZON_GIT_COMMIT`; an unstamped local Xcode build reports `unknown` honestly and cannot receive
+credit for an assignment targeting a specific candidate commit.
 
 ### Simulator quick start
 
@@ -174,6 +181,7 @@ must never ship in a production build. `Info.plist` also enables
 - Transcript with in-place updates, deduplication, timestamps, and JSON export via share sheet.
 - `AVSpeechSynthesizer` fallback when the provider sends text without audio.
 - Optional trust-all TLS path for the self-signed Lightsail test server.
+- Release-run/test-case/assignment attribution with explicit iOS platform and stamped git commit.
 
 ## Architecture
 
@@ -228,7 +236,8 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild \
   -project ios/MaxHelmet.xcodeproj \
   -scheme MaxHelmet \
-  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+  HORIZON_GIT_COMMIT=$(git rev-parse --short=12 HEAD) build
 ```
 
 ## Troubleshooting

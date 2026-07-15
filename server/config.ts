@@ -167,7 +167,7 @@ export function validateConfig(): string[] {
   return warnings;
 }
 
-export function buildHealth(uptimeSec: number, includeTesting = true): AgentHealth {
+export function buildHealth(uptimeSec: number, includeTesting = false): AgentHealth {
   return {
     ok: true,
     provider: config.voiceProvider,
@@ -180,9 +180,8 @@ export function buildHealth(uptimeSec: number, includeTesting = true): AgentHeal
     // Lets clients decide whether to show the login/registration UI.
     auth: { enabled: authActive(), registrationOpen: registrationOpen() },
     build: { ...buildInfo },
-    // The testing block carries tester IPs, regions, and chat transcripts —
-    // callers must gate it (see testingStatsAuthorized) so an unauthenticated
-    // /health poll can't dump every tester's conversation history.
+    // Safe-by-default legacy/internal hook. The public route never opts in;
+    // authenticated evidence is served by the scoped /testing APIs.
     ...(includeTesting ? { testing: testingSnapshot() } : {})
   };
 }

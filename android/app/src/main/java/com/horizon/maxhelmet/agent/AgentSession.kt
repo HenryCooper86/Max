@@ -8,6 +8,7 @@ import android.location.LocationManager
 import android.os.Build
 import android.speech.tts.TextToSpeech
 import android.util.Log
+import com.horizon.maxhelmet.BuildConfig
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -141,6 +142,10 @@ class AgentSession(
 
     private var relayUrl: String = ""
     private var testerId: String = ""
+    private var testingCampaignId: String = "release-readiness"
+    private var testingTestCaseId: String = "baseline-live-session"
+    private var testingRunId: String = ""
+    private var testingAssignmentId: String = ""
     private var reconnectAttempts = 0
     private var reconnectJob: Job? = null
     /** The 150 ms deferred reconnect of a settings-change restart, so stop()
@@ -201,10 +206,23 @@ class AgentSession(
      * self-signed certificate for wss:// URLs. A non-empty `authToken` is sent
      * as the relay's `token` query parameter (server/auth.ts).
      */
-    fun start(url: String, allowSelfSignedTls: Boolean, authToken: String = "", testerId: String = "") {
+    fun start(
+        url: String,
+        allowSelfSignedTls: Boolean,
+        authToken: String = "",
+        testerId: String = "",
+        testingCampaignId: String = "release-readiness",
+        testingTestCaseId: String = "baseline-live-session",
+        testingRunId: String = "",
+        testingAssignmentId: String = ""
+    ) {
         if (_state.value.handsFree) return
         relayUrl = appendAuthToken(url, authToken)
         this.testerId = testerId.trim()
+        this.testingCampaignId = testingCampaignId.trim().take(80)
+        this.testingTestCaseId = testingTestCaseId.trim().take(80)
+        this.testingRunId = testingRunId.trim().take(80)
+        this.testingAssignmentId = testingAssignmentId.trim().take(80)
 
         if (allowSelfSignedTls != allowSelfSigned) {
             allowSelfSigned = allowSelfSignedTls
@@ -467,8 +485,8 @@ class AgentSession(
         }
         webSocket = httpClient.newWebSocket(request, object : WebSocketListener() {
 
-            override fun onOpen(socket: WebSocket, response: Response) {
-                if (socket !== webSocket) return
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (webSocket !== this@AgentSession.webSocket) return
                 reconnectAttempts = 0
                 // Only turns appended from here on belong to this relay session
                 // and are eligible for turn.feedback.
@@ -480,7 +498,7 @@ class AgentSession(
                     )
                 }
                 val current = _state.value
-                socket.send(
+                webSocket.send(
                     buildSessionStart(
                         voiceGender = current.voiceGender,
                         voicePersonality = current.voicePersonality,
@@ -490,8 +508,12 @@ class AgentSession(
                         lon = location?.second,
                         testerId = this@AgentSession.testerId.ifEmpty { "android-native" },
                         testerRegion = TimeZone.getDefault().id,
+                        testingCampaignId = testingCampaignId,
+                        testingTestCaseId = testingTestCaseId,
+                        testingRunId = testingRunId,
+                        testingAssignmentId = testingAssignmentId,
                         appVersion = nativeAppVersion(),
-                        gitCommit = "android-local",
+                        gitCommit = BuildConfig.GIT_COMMIT,
                         deviceLabel = nativeDeviceLabel(),
                         browserLanguage = Locale.getDefault().toLanguageTag(),
                         networkType = "android-native",
@@ -500,16 +522,16 @@ class AgentSession(
                 )
                 // The guided tour lives in the provider instance, so a fresh session
                 // must be told about it again (mirrors the web client's open handler).
-                if (current.guidedDemo) socket.send(buildGuidedDemo(enabled = true))
+                if (current.guidedDemo) webSocket.send(buildGuidedDemo(enabled = true))
                 // Resume the audio stream if the rider was transmitting before a drop.
-                if (transmitting) socket.send(AUDIO_START_EVENT)
+                if (transmitting) webSocket.send(AUDIO_START_EVENT)
                 // Only now may mic frames flow: they are guaranteed to be queued
                 // behind the session.start/audio.start just sent above.
                 socketOpen = true
             }
 
-            override fun onMessage(socket: WebSocket, text: String) {
-                if (socket !== webSocket) return
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                if (webSocket !== this@AgentSession.webSocket) return
                 val event = runCatching { parseAgentEvent(text) }.getOrElse {
                     _state.update { state -> state.copy(statusText = "收到异常代理消息") }
                     return
@@ -517,24 +539,24 @@ class AgentSession(
                 handleEvent(event)
             }
 
-            override fun onMessage(socket: WebSocket, bytes: ByteString) {
-                if (socket !== webSocket) return
+            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                if (webSocket !== this@AgentSession.webSocket) return
                 // AudioTrack setup can throw (unsupported config / bad state); keep it
                 // from escaping onto the reader thread and tearing down the listener.
                 runCatching { player.play(bytes.toByteArray()) }
                     .onFailure { Log.w(TAG, "PCM playback failed", it) }
             }
 
-            override fun onClosed(socket: WebSocket, code: Int, reason: String) {
-                handleSocketClosed(socket, code)
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                handleSocketClosed(webSocket, code)
             }
 
-            override fun onFailure(socket: WebSocket, t: Throwable, response: Response?) {
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.w(TAG, "Relay socket failure", t)
                 // A non-null response means the relay answered but refused the
                 // upgrade (e.g. 401 login required) — surface that instead of
                 // retrying into the same rejection.
-                handleSocketClosed(socket, httpStatus = response?.code)
+                handleSocketClosed(webSocket, httpStatus = response?.code)
             }
         })
     }

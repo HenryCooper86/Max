@@ -129,8 +129,23 @@ export function requestUser(request: IncomingMessage): PublicUser | null {
  * stay open either way, so the one-curl deployment check keeps working.
  */
 export function testingStatsAuthorized(request: IncomingMessage): boolean {
-  if (!config.relayAuthToken && !authActive()) return true;
-  return matchesRelayToken(presentedTokens(request)) || requestUser(request) !== null;
+  return testingAccess(request).allowed;
+}
+
+export type TestingAccess =
+  | { allowed: true; role: "operator" | "admin" | "reviewer"; testerId?: undefined }
+  | { allowed: true; role: "tester"; testerId: string }
+  | { allowed: false; role: "anonymous"; testerId?: undefined };
+
+/** Evidence scope for HTTP APIs: testers see only their own rows, while
+ * reviewers/admins/operator tokens may inspect the complete release corpus. */
+export function testingAccess(request: IncomingMessage): TestingAccess {
+  if (matchesRelayToken(presentedTokens(request))) return { allowed: true, role: "operator" };
+  if (!config.relayAuthToken && !authActive()) return { allowed: true, role: "admin" };
+  const user = requestUser(request);
+  if (!user) return { allowed: false, role: "anonymous" };
+  if (user.role === "admin" || user.role === "reviewer") return { allowed: true, role: user.role };
+  return { allowed: true, role: "tester", testerId: user.username };
 }
 
 /**

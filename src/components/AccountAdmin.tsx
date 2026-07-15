@@ -8,6 +8,7 @@ import {
   fetchAdminOverview,
   inviteUrl,
   revokeInviteLink,
+  updateUserRole,
   type AdminOverview
 } from "../lib/auth";
 import { formatRelativeTime } from "../lib/utils";
@@ -97,10 +98,20 @@ export function AccountAdmin({ adminUsername }: { adminUsername: string }) {
     setBusy(false);
   };
 
+  const changeRole = async (username: string, role: "admin" | "reviewer" | "tester") => {
+    setBusy(true);
+    setNotice(null);
+    const result = await updateUserRole(username, role);
+    setNotice(result.ok ? `@${username} 现在是 ${role}。` : (result.error ?? "角色更新失败。"));
+    await refresh();
+    setBusy(false);
+  };
+
   const users = [...(overview?.users ?? [])].sort(
     (a, b) =>
       Number(b.username === adminUsername) - Number(a.username === adminUsername) ||
       Number(b.role === "admin") - Number(a.role === "admin") ||
+      Number(b.role === "reviewer") - Number(a.role === "reviewer") ||
       b.lastLoginAt - a.lastLoginAt
   );
   const invites = [...(overview?.invites ?? [])].sort((a, b) => a.expiresAt - b.expiresAt);
@@ -114,7 +125,8 @@ export function AccountAdmin({ adminUsername }: { adminUsername: string }) {
     return `${invite.code} ${invite.createdBy}`.toLowerCase().includes(normalizedFilter);
   });
   const adminCount = users.filter((user) => user.role === "admin").length;
-  const testerCount = users.length - adminCount;
+  const reviewerCount = users.filter((user) => user.role === "reviewer").length;
+  const testerCount = users.filter((user) => user.role === "tester").length;
   const expiringInviteCount = invites.filter(
     (invite) => invite.expiresAt - Date.now() <= INVITE_EXPIRING_SOON_MS
   ).length;
@@ -137,6 +149,10 @@ export function AccountAdmin({ adminUsername }: { adminUsername: string }) {
         <span>
           <b>{adminCount}</b>
           管理员
+        </span>
+        <span>
+          <b>{reviewerCount}</b>
+          审核员
         </span>
         <span>
           <b>{testerCount}</b>
@@ -175,22 +191,36 @@ export function AccountAdmin({ adminUsername }: { adminUsername: string }) {
             <div className="accountAdminUser">
               <strong>{user.displayName}</strong>
               <span>
-                @{user.username} · {user.role === "admin" ? "管理员" : "测试员"} · 最近登录{" "}
-                {formatRelativeTime(user.lastLoginAt)}
+                @{user.username} · {user.role === "admin" ? "管理员" : user.role === "reviewer" ? "审核员" : "测试员"} ·
+                最近登录 {formatRelativeTime(user.lastLoginAt)}
               </span>
             </div>
-            {user.role === "admin" ? (
-              <span className="accountAdminSelf">{user.username === adminUsername ? "当前账号" : "管理员"}</span>
-            ) : (
-              <button
-                type="button"
-                className={`danger ${armedDelete === user.username ? "armed" : ""}`}
+            <div className="accountAdminRoleActions">
+              <select
+                value={user.role}
+                aria-label={`Role for ${user.username}`}
                 disabled={busy}
-                onClick={() => void removeUser(user.username)}
+                onChange={(event) =>
+                  void changeRole(user.username, event.target.value as "admin" | "reviewer" | "tester")
+                }
               >
-                {armedDelete === user.username ? "确认删除?" : "删除"}
-              </button>
-            )}
+                <option value="tester">Tester</option>
+                <option value="reviewer">Reviewer</option>
+                <option value="admin">Admin</option>
+              </select>
+              {user.username === adminUsername ? (
+                <span className="accountAdminSelf">当前账号</span>
+              ) : user.role !== "admin" ? (
+                <button
+                  type="button"
+                  className={`danger ${armedDelete === user.username ? "armed" : ""}`}
+                  disabled={busy}
+                  onClick={() => void removeUser(user.username)}
+                >
+                  {armedDelete === user.username ? "确认删除?" : "删除"}
+                </button>
+              ) : null}
+            </div>
           </div>
         ))}
         {filteredInvites.map((invite) => (

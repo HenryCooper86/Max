@@ -352,6 +352,8 @@ fun buildSessionStart(
     testerRegion: String? = null,
     testingCampaignId: String = "release-readiness",
     testingTestCaseId: String = "baseline-live-session",
+    testingRunId: String? = null,
+    testingAssignmentId: String? = null,
     appVersion: String? = null,
     gitCommit: String? = null,
     deviceLabel: String? = null,
@@ -371,11 +373,14 @@ fun buildSessionStart(
         testerRegion?.takeIf { it.isNotBlank() }?.let { put("testerRegion", it) }
         put("testingCampaignId", testingCampaignId)
         put("testingTestCaseId", testingTestCaseId)
+        testingRunId?.takeIf { it.isNotBlank() }?.let { put("testingRunId", it) }
+        testingAssignmentId?.takeIf { it.isNotBlank() }?.let { put("testingAssignmentId", it) }
         appVersion?.takeIf { it.isNotBlank() }?.let { put("appVersion", it) }
         gitCommit?.takeIf { it.isNotBlank() }?.let { put("gitCommit", it) }
         deviceLabel?.takeIf { it.isNotBlank() }?.let { put("deviceLabel", it) }
         browserLanguage?.takeIf { it.isNotBlank() }?.let { put("browserLanguage", it) }
         networkType?.takeIf { it.isNotBlank() }?.let { put("networkType", it) }
+        put("platform", "android")
         if (lat != null && lon != null) {
             put("lat", lat)
             put("lon", lon)

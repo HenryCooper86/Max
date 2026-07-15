@@ -30,6 +30,8 @@ export function useMicCapture({ socketRef, transmittingRef }: Params) {
   // running AudioContext nothing will ever stop (mic indicator stuck on).
   const micGenerationRef = useRef(0);
   const frameWindowRef = useRef<PacketWindow>(createPacketWindow());
+  const frameTimingRef = useRef({ lastAt: 0, deviationTotalMs: 0, samples: 0 });
+  const signalQualityRef = useRef({ clippingPct: 0, silencePct: 0 });
   // Last time a dropped-frame count was pushed to React state. During a
   // reconnect with the mic hot, every 20 ms frame is dropped — rendering the
   // HUD 50×/s for a counter nobody can read that fast.
@@ -103,9 +105,19 @@ export function useMicCapture({ socketRef, transmittingRef }: Params) {
             if (socket?.readyState === WebSocket.OPEN) {
               socket.send(message.pcm);
               const now = performance.now();
+              const timing = frameTimingRef.current;
+              if (timing.lastAt > 0) {
+                timing.deviationTotalMs += Math.abs(now - timing.lastAt - 20);
+                timing.samples += 1;
+              }
+              timing.lastAt = now;
               const result = recordSentFrame(frameWindowRef.current, now);
               frameWindowRef.current = result.window;
-              if (result.metric) setPacketStats(result.metric);
+              if (result.metric) {
+                const jitterMs = timing.samples ? Math.round((timing.deviationTotalMs / timing.samples) * 10) / 10 : 0;
+                frameTimingRef.current = { lastAt: now, deviationTotalMs: 0, samples: 0 };
+                setPacketStats({ ...result.metric, jitterMs, ...signalQualityRef.current });
+              }
             } else {
               const result = recordDroppedFrame(frameWindowRef.current);
               frameWindowRef.current = result.window;
@@ -118,6 +130,10 @@ export function useMicCapture({ socketRef, transmittingRef }: Params) {
               }
             }
           } else if (message.type === "level") {
+            signalQualityRef.current = {
+              clippingPct: message.clippingPct ?? signalQualityRef.current.clippingPct,
+              silencePct: message.silencePct ?? signalQualityRef.current.silencePct
+            };
             // Quantize to ~0.02 and drop no-change updates so a steady level (notably
             // silence) doesn't re-render the whole HUD ~23×/s while transmitting.
             const next = Math.round((transmittingRef.current ? message.value : 0) * 50) / 50;
@@ -189,6 +205,8 @@ export function useMicCapture({ socketRef, transmittingRef }: Params) {
 
   const resetFrameWindow = useCallback(() => {
     frameWindowRef.current = createPacketWindow();
+    frameTimingRef.current = { lastAt: 0, deviationTotalMs: 0, samples: 0 };
+    signalQualityRef.current = { clippingPct: 0, silencePct: 0 };
     lastVoiceLevelRef.current = 0;
     setVoiceLevel(0);
   }, []);

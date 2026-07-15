@@ -14,7 +14,8 @@ import {
   loginUser,
   logoutSession,
   registerUser,
-  revokeInvite
+  revokeInvite,
+  setUserRole
 } from "./accounts";
 import {
   authorizeUpgrade,
@@ -23,8 +24,8 @@ import {
   clientRegionHint,
   relayTokenPresented,
   requestUser,
-  testingClearAuthorized,
-  testingStatsAuthorized
+  testingAccess,
+  testingClearAuthorized
 } from "./auth";
 import { buildHealth, config, describeConfig, validateConfig } from "./config";
 import { createLogger, shortSessionId } from "./logger";
@@ -34,8 +35,30 @@ import {
   clearTestingSession,
   metrics,
   startMetricsHistory,
+  testingSessionDetail,
+  testingSessionPage,
+  testingSnapshot,
+  updateTestingSessionNotes,
   type TestingClearResult
 } from "./metrics";
+import { buildInfo } from "./build-info";
+import {
+  appendTestingAudit,
+  createTestingAssignment,
+  createTestingPolicy,
+  createTestingRun,
+  getActiveTestingPolicy,
+  getTestingRun,
+  listTestingAudit,
+  listTestingPolicies,
+  listTestingReviews,
+  listTestingRuns,
+  testingOperationsSnapshot,
+  updateTestingAssignment,
+  updateTestingRun,
+  upsertTestingReview
+} from "./testing-store";
+import { testingBuildsMatch, type TestingPlatform, type TestingQuality } from "../shared/testing";
 import { createDoubaoProvider } from "./providers/doubao";
 import { createMockProvider } from "./providers/mock";
 import type { AgentProvider, ProviderTelemetry } from "./providers/types";
@@ -50,9 +73,9 @@ const wss = new WebSocketServer({ noServer: true });
 const log = createLogger("relay");
 
 app.get("/health", (req, res) => {
-  // Liveness stays open; the per-tester QA block (IPs, transcripts) requires
-  // the relay token once one is configured.
-  res.json(buildHealth(Math.round(process.uptime()), testingStatsAuthorized(req)));
+  // Liveness stays small and public. Evidence moved to scoped /testing APIs;
+  // never resend every retained transcript on the five-second health poll.
+  res.json(buildHealth(Math.round(process.uptime()), false));
 });
 
 // User accounts. Registration turns authentication on (first user = admin);
@@ -192,6 +215,283 @@ app.post("/auth/admin/users/delete", express.json(), (req, res) => {
   }
 });
 
+app.post("/auth/admin/users/role", express.json(), (req, res) => {
+  const admin = requireAdmin(req, res);
+  if (!admin) return;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const result = setUserRole(body.username, body.role);
+  if (!result.ok) {
+    res.status(400).json(result);
+    return;
+  }
+  appendTestingAudit(admin.username, "account.role-changed", "account", result.user.username, {
+    role: result.user.role
+  });
+  res.json(result);
+});
+
+function requireTestingRead(req: express.Request, res: express.Response) {
+  const access = testingAccess(req);
+  if (access.allowed) return access;
+  res.status(401).json({ ok: false, error: "需要登录后查看测试证据。" });
+  return null;
+}
+
+function requireReviewer(req: express.Request, res: express.Response) {
+  const access = testingAccess(req);
+  if (access.allowed && access.role !== "tester") return access;
+  res.status(access.allowed ? 403 : 401).json({ ok: false, error: "需要 QA 审核员或管理员权限。" });
+  return null;
+}
+
+function accessActor(req: express.Request): string {
+  return requestUser(req)?.username ?? (relayTokenPresented(req) ? "operator-token" : "internal-admin");
+}
+
+// Lightweight dashboard summary. Testers receive only their own totals/rows;
+// operational state is fetched separately by authorized reviewers.
+app.get("/testing/summary", (req, res) => {
+  const access = requireTestingRead(req, res);
+  if (!access) return;
+  res.json({
+    ok: true,
+    testing: testingSnapshot(Date.now(), {
+      testerId: access.testerId,
+      includeSessions: false,
+      includeTurns: false
+    })
+  });
+});
+
+app.get("/testing/sessions", (req, res) => {
+  const access = requireTestingRead(req, res);
+  if (!access) return;
+  const quality = typeof req.query.quality === "string" ? req.query.quality : undefined;
+  const platform = typeof req.query.platform === "string" ? req.query.platform : undefined;
+  const page = testingSessionPage(
+    {
+      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
+      limit: typeof req.query.limit === "string" ? Number(req.query.limit) : undefined,
+      testerId:
+        access.role === "tester" ? undefined : typeof req.query.testerId === "string" ? req.query.testerId : undefined,
+      testCaseId: typeof req.query.testCaseId === "string" ? req.query.testCaseId : undefined,
+      build: typeof req.query.build === "string" ? req.query.build : undefined,
+      quality:
+        quality === "pass" || quality === "watch" || quality === "fail" ? (quality as TestingQuality) : undefined,
+      platform:
+        platform === "web" || platform === "ios" || platform === "android" || platform === "unknown"
+          ? (platform as TestingPlatform)
+          : undefined,
+      runId: typeof req.query.runId === "string" ? req.query.runId : undefined,
+      search: typeof req.query.search === "string" ? req.query.search : undefined
+    },
+    access.testerId
+  );
+  res.json({ ok: true, ...page });
+});
+
+app.get("/testing/sessions/:sessionId", (req, res) => {
+  const access = requireTestingRead(req, res);
+  if (!access) return;
+  const session = testingSessionDetail(req.params.sessionId, access.testerId);
+  if (!session) {
+    res.status(404).json({ ok: false, error: "测试会话不存在。" });
+    return;
+  }
+  res.json({ ok: true, session });
+});
+
+app.post("/testing/sessions/:sessionId/notes", express.json(), (req, res) => {
+  if (!requireReviewer(req, res)) return;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const session = updateTestingSessionNotes(req.params.sessionId, body.notes);
+  if (!session) {
+    res.status(404).json({ ok: false, error: "测试会话不存在。" });
+    return;
+  }
+  appendTestingAudit(accessActor(req), "session.notes-updated", "session", session.sessionId, {
+    notesLength: session.notes.length
+  });
+  res.json({ ok: true, session });
+});
+
+app.get("/testing/operations", (req, res) => {
+  if (!requireReviewer(req, res)) return;
+  res.json({ ok: true, operations: testingOperationsSnapshot(), policies: listTestingPolicies() });
+});
+
+app.get("/testing/runs", (req, res) => {
+  const access = requireTestingRead(req, res);
+  if (!access) return;
+  const runs = listTestingRuns();
+  if (access.role === "tester") {
+    res.json({
+      ok: true,
+      runs: runs
+        .map((run) => ({ ...run, assignments: run.assignments.filter((item) => item.assignee === access.testerId) }))
+        .filter((run) => run.assignments.length)
+    });
+    return;
+  }
+  res.json({ ok: true, runs });
+});
+
+app.post("/testing/runs", express.json(), (req, res) => {
+  if (!requireReviewer(req, res)) return;
+  const run = createTestingRun(req.body ?? {}, accessActor(req), buildInfo.gitCommit);
+  res.status(201).json({ ok: true, run });
+});
+
+app.patch("/testing/runs/:runId", express.json(), (req, res) => {
+  const access = requireReviewer(req, res);
+  if (!access) return;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const candidate = getTestingRun(req.params.runId);
+  if (!candidate) {
+    res.status(404).json({ ok: false, error: "测试运行不存在。" });
+    return;
+  }
+  if (
+    typeof body.status === "string" &&
+    ((candidate.status === "approved" && body.status !== "approved" && body.status !== "archived") ||
+      (candidate.status === "archived" && body.status !== "archived"))
+  ) {
+    res.status(409).json({ ok: false, error: "Approved or archived release records cannot be reopened." });
+    return;
+  }
+  if (body.status === "approved") {
+    if (access.role !== "admin" && access.role !== "operator") {
+      res.status(403).json({ ok: false, error: "Release approval requires an administrator." });
+      return;
+    }
+    const decision = testingSnapshot();
+    const coverageComplete = candidate.requirements.every((requirement) => {
+      const captured = candidate.assignments
+        .filter((assignment) => assignment.requirementId === requirement.id)
+        .reduce((sum, assignment) => sum + assignment.completedSessionIds.length, 0);
+      return captured >= requirement.requiredValidSessions;
+    });
+    const unresolvedReviews = listTestingReviews(500).filter(
+      (review) => review.runId === candidate.id && (review.status === "open" || review.status === "triaged")
+    );
+    const regressionBlocked = decision.regression.baselineSource !== "none" && decision.regression.status !== "pass";
+    if (
+      !testingBuildsMatch(candidate.build, decision.releaseGate.build) ||
+      decision.releaseGate.status !== "pass" ||
+      !coverageComplete ||
+      unresolvedReviews.length ||
+      regressionBlocked
+    ) {
+      res.status(409).json({
+        ok: false,
+        error: "Release approval is blocked by gate, coverage, review, or regression evidence.",
+        blockers: {
+          gate: decision.releaseGate.status,
+          buildMatches: testingBuildsMatch(candidate.build, decision.releaseGate.build),
+          coverageComplete,
+          unresolvedReviews: unresolvedReviews.length,
+          regression: decision.regression.status
+        }
+      });
+      return;
+    }
+  }
+  const run = updateTestingRun(req.params.runId, body, accessActor(req));
+  if (!run) {
+    res.status(404).json({ ok: false, error: "测试运行不存在。" });
+    return;
+  }
+  res.json({ ok: true, run });
+});
+
+app.post("/testing/runs/:runId/assignments", express.json(), (req, res) => {
+  const access = requireReviewer(req, res);
+  if (!access) return;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const assignee = typeof body.assignee === "string" ? body.assignee.trim() : "";
+  if (access.role !== "operator" && listUsers().length && !listUsers().some((user) => user.username === assignee)) {
+    res.status(400).json({ ok: false, error: "Assignment assignee must be a registered username." });
+    return;
+  }
+  const run = createTestingAssignment(req.params.runId, body, accessActor(req));
+  if (!run) {
+    res.status(400).json({ ok: false, error: "测试运行或覆盖要求不存在。" });
+    return;
+  }
+  res.status(201).json({ ok: true, run });
+});
+
+app.patch("/testing/runs/:runId/assignments/:assignmentId", express.json(), (req, res) => {
+  const access = requireReviewer(req, res);
+  if (!access) return;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const assignee = typeof body.assignee === "string" ? body.assignee.trim() : "";
+  if (
+    body.assignee !== undefined &&
+    access.role !== "operator" &&
+    listUsers().length &&
+    !listUsers().some((user) => user.username === assignee)
+  ) {
+    res.status(400).json({ ok: false, error: "Assignment assignee must be a registered username." });
+    return;
+  }
+  const run = updateTestingAssignment(req.params.runId, req.params.assignmentId, body, accessActor(req));
+  if (!run) {
+    res.status(404).json({ ok: false, error: "测试任务不存在。" });
+    return;
+  }
+  res.json({ ok: true, run });
+});
+
+app.get("/testing/reviews", (req, res) => {
+  if (!requireReviewer(req, res)) return;
+  res.json({ ok: true, reviews: listTestingReviews() });
+});
+
+app.post("/testing/reviews", express.json(), (req, res) => {
+  if (!requireReviewer(req, res)) return;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const requestedId = typeof body.id === "string" ? body.id : "";
+  const existing = requestedId ? listTestingReviews(500).find((review) => review.id === requestedId) : undefined;
+  const sessionId = existing?.sessionId ?? (typeof body.sessionId === "string" ? body.sessionId : "");
+  const session = testingSessionDetail(sessionId);
+  if (!existing && !session) {
+    res.status(404).json({ ok: false, error: "Review evidence session does not exist." });
+    return;
+  }
+  const review = upsertTestingReview(
+    {
+      ...body,
+      sessionId,
+      // Evidence attribution is authoritative; clients cannot move an issue
+      // between sessions or attach it to an unrelated release run.
+      runId: existing?.runId ?? session?.runId
+    },
+    accessActor(req)
+  );
+  if (!review) {
+    res.status(400).json({ ok: false, error: "sessionId is required" });
+    return;
+  }
+  res.json({ ok: true, review });
+});
+
+app.get("/testing/policies", (req, res) => {
+  if (!requireReviewer(req, res)) return;
+  res.json({ ok: true, activePolicy: getActiveTestingPolicy(), policies: listTestingPolicies() });
+});
+
+app.post("/testing/policies", express.json(), (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const policy = createTestingPolicy(req.body ?? {}, accessActor(req));
+  res.status(201).json({ ok: true, policy });
+});
+
+app.get("/testing/audit", (req, res) => {
+  if (!requireReviewer(req, res)) return;
+  res.json({ ok: true, events: listTestingAudit(200) });
+});
+
 // Admin: clear tester QA data. Stricter than viewing — once user accounts
 // exist, only an admin login (or the operator relay token) may clear.
 app.post("/testing/clear", express.json(), (req, res) => {
@@ -215,6 +515,11 @@ app.post("/testing/clear", express.json(), (req, res) => {
     scope: body.scope,
     target: body.scope === "tester" ? body.testerKey : body.scope === "session" ? body.sessionId : undefined,
     ...result
+  });
+  appendTestingAudit(accessActor(req), "session-data.cleared", "session", String(body.scope), {
+    scope: body.scope,
+    removedTesters: result.removedTesters,
+    removedSessions: result.removedSessions
   });
   res.json({ ok: true, ...result });
 });
@@ -273,7 +578,8 @@ wss.on("connection", (client, request) => {
     (socket, telemetry) => selectProvider(socket, sessionLog, telemetry),
     sessionLog,
     address,
-    region
+    region,
+    requestUser(request)?.username
   );
 
   client.on("message", async (data, isBinary) => {

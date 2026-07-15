@@ -229,7 +229,7 @@ If Doubao returns reply _text_ but no audio, the browser falls back to its own `
 - **Ride intelligence** — `session.start` carries the selected `rideMode` and `scenario`; `shared/ride.ts` turns that into a safety policy, response style, hazard level, and HUD focus. Doubao receives this as prompt context; the mock provider turns it into scenario-specific transcripts and telemetry. The HUD's `态势摘要` card fuses ride hazard and weather risk into immediate normal / caution / critical rider guidance.
 - **Weather** — on activation the browser requests geolocation and sends `lat`/`lon` with `session.start`. `server/weather.ts` fetches current conditions from **Open-Meteo** (free, no API key), classifies rider risk, and emits weather/advice to the HUD. `doubao.ts` folds the same data into the agent's `system_role`. The fetch runs **concurrently with the Doubao connection handshake** and only gates `StartSession`, so live weather still reaches the agent's context without serializing behind the connect; mic audio that arrives during startup is buffered (≈5 s) and flushed once the session is ready, so the rider's opening words are never clipped. A failed or slow lookup never blocks the session — the agent just answers generically. Mid-ride, the web HUD watches geolocation while hands-free is active and sends throttled `location.update` events (at most one per minute, after ≥250 m of movement); the relay refetches weather immediately when the rider has moved ≥20 km and otherwise folds the fresh coordinates into the periodic refresh, so a long ride's weather follows the bike instead of staying pinned to the start point.
 - **Telemetry** — providers emit `metric` and `telemetry` events. The HUD shows first-audio latency plus ASR / thinking / first-audio / total timing so demos can discuss realtime behavior with numbers.
-- **Testing framework** — each client sends QA attribution in `session.start`: tester identity, selected campaign/test case, app/build identity, device label, locale, network class, and time-zone/region where available. The relay keys tester rows by **tester ID + client IP**, so the same name from different networks stays auditable; clients without a tester ID fall back to `ip:<address>` instead of a shared anonymous bucket. It aggregates sessions, active runs, test duration, mic uplink bytes, audio/control downlink bytes, first-audio average/p95 latency, errors, TTS fallbacks, recent per-tester transcript turns, completed session replays, deterministic evaluation checks, quality flags, golden replay fixtures, release-gate status, build-to-build regression, invalid-evidence classification, and a trailing 30-minute bandwidth/latency timeline. Scoring verifies not only latency/safety/wake-word requirements, but also expected rider/agent exchange shape, response order, transcript response budget, and case-specific evidence for wind/noise and degraded-network sessions. The HUD renders campaign/test-case controls, summary metrics, release/regression decisions, graphs, searchable tester/IP rows, clickable transcript drilldown, session replay/export, evaluation details, and JSON export for QA evidence.
+- **Testing framework** — each client sends QA attribution in `session.start`: tester, campaign/case, release run/assignment, real build identity, platform, device, locale, network, and region. The authenticated admin panel adds risk-weighted release runs, cross-platform assignment coverage, SHA-256 evidence integrity, captured-vs-current policy replay, paginated session evidence, aggregate audio FPS/drop/jitter/clipping/silence metrics, durable issue triage, reviewer notes, versioned policies, explicit approved baselines, matched-cohort regression, role-scoped access, and an audit trail. Deterministic evaluation remains the release authority; no raw microphone audio is retained by default.
 - **Conversation log** — the HUD keeps the full in-memory session transcript, updates in-progress rider/agent turns in place, stamps each item with time, language, and live/final state, and can export the log as JSON for debugging. On the live path the agent's reply streams in as **live captions**: each Doubao TTS sentence emits a non-final `transcript` update that all three clients merge in place, and the entry finalizes when the reply completes — the caption machinery is the same in-place partial handling rider ASR already used.
 
 ### Client resilience
@@ -239,7 +239,7 @@ If Doubao returns reply _text_ but no audio, the browser falls back to its own `
 - **Session memory across restarts** — settings changes (voice, personality, mode, scenario) restart the relay session; all three clients echo the last `session.memory` snapshot back in `session.start`, so the agent keeps its language preference, destination, and last intent instead of meeting the rider as a stranger. The relay revalidates the snapshot and re-derives the response mode from the current ride mode.
 - **Session watchdog** — the relay pings every client (`RELAY_HEARTBEAT_MS`) and terminates half-open links that stop ponging, and closes sessions with no client traffic for `RELAY_IDLE_TIMEOUT_MS` so a forgotten tab can't hold a Doubao upstream slot forever. Idle closes use WebSocket code **4001** (`IDLE_CLOSE_CODE` in `shared/agent.ts`); all three clients treat it as intentional and stay offline until the rider restarts hands-free.
 - **Screen wake lock** — while hands-free is active the web client holds a screen Wake Lock so mobile browsers don't lock mid-ride, and re-acquires it after the browser auto-releases it (tab hidden → visible again).
-- **Relay metrics** — `/health` now includes a `metrics` object (active/total sessions, rejected upgrades, upstream failures/reconnects, TTS fallbacks, watchdog closes, audio/control bytes), a `metricsWindow` object with the same counters as deltas over the trailing 15 minutes, and a `testing` object with per-tester QA statistics plus graph-ready timeline buckets.
+- **Relay metrics** — public `/health` stays a small liveness/build response with `metrics` and `metricsWindow`. Authenticated, scoped QA summaries and evidence moved to `/testing/*`, so the five-second health poll never retransmits retained transcripts or tester IPs.
 - **Reused audio graph** — `stopMic` disables the mic track but keeps the AudioWorklet graph alive, so re-activating is instant.
 - **Voice switch** — the live Doubao speaker is fixed at session start, so toggling `女声/男声` reconnects the relay (`restartSession`) for a fresh session.
 - **Auto-fit cockpit** — the HUD sizes the helmet panel to the viewport (`100dvh` clamp) and top-aligns the columns so the primary **开启免提 / start** button and its controls stay visible on load at any window height, from tall monitors down to short laptops and narrow phones — no scrolling or hunting to begin a session. The helmet illustration letterboxes to fit rather than pushing the button off-screen (`src/styles.css`).
@@ -432,14 +432,18 @@ The wake phrase and the 12 s follow-up window live in `shared/wake.ts`. The mock
 
 ### `GET /health`
 
-Returns backend health and the selected realtime voice provider.
+Returns public backend liveness, selected provider, build identity, and relay
+counters. It never includes tester identities, evidence, or transcripts.
 
-The response also carries production test counters. The `testing` block holds
-per-tester data (IPs, regions, chat transcripts): when `RELAY_AUTH_TOKEN` is
-set, it is included only for callers presenting the token (`?token=…` or
-`Authorization: Bearer …`); the liveness fields below stay open either way,
-so `curl /health` keeps working as a deployment check. With no token
-configured (the internal-test default) the full response stays open:
+### `GET /testing/summary` · `GET /testing/sessions` · QA operations routes
+
+Authenticated QA APIs provide a scoped summary, cursor-paginated evidence,
+individual transcript replay, release runs/assignments, reviews, versioned
+policies, and audit history. Testers see only their own rows and assigned work;
+reviewers see the full QA corpus and operational workflows; administrators also
+manage policy, roles, destructive actions, and release approval. See
+[`docs/live-agent-testing.md`](docs/live-agent-testing.md) for route and workflow
+details.
 
 ### `POST /auth/register` · `POST /auth/login` · `POST /auth/logout` · `GET /auth/me`
 
@@ -447,10 +451,11 @@ User accounts for the testing framework, stored dependency-free in
 `~/.horizon-helmet-testing/accounts.json` (scrypt password hashes, atomic
 writes). Registration (`{username, password, displayName?}`) returns
 `{ok, token, user}` and logs the user in; the **first** registered account
-becomes the admin, later ones are testers. Auth switches on automatically once
+becomes the admin, later ones are testers. Admins can promote accounts to the
+reviewer or administrator role. Auth switches on automatically once
 any account exists, and it gates the whole site: the web HUD shows a
-full-screen login page to anyone without a session, the `/health` `testing`
-block requires a login (or the relay token), `/testing/clear` requires an
+full-screen login page to anyone without a session, the `/testing/*` evidence
+APIs require a login (or the relay token), `/testing/clear` requires an
 **admin** login, and the `/agent` WebSocket refuses anonymous connections —
 so an account is required to use the voice assistant at all, like a normal
 authenticated web app. Native apps connect by pasting the relay token (or a
@@ -556,7 +561,7 @@ deleting a single session keeps the owning tester's lifetime traffic counters.
         "testCaseId": "baseline-live-session",
         "testCaseName": "Baseline Live Session",
         "appVersion": "0.1.0",
-        "gitCommit": "abcdef0",
+        "gitCommit": "abcdef012345",
         "deviceLabel": "macOS browser",
         "browserLanguage": "en-US",
         "networkType": "4g",
@@ -605,7 +610,7 @@ Client → server events (`lat`/`lon` are optional and sent only when geolocatio
   "testingCampaignId": "release-readiness",
   "testingTestCaseId": "baseline-live-session",
   "appVersion": "0.1.0",
-  "gitCommit": "abcdef0",
+  "gitCommit": "abcdef012345",
   "deviceLabel": "macOS browser",
   "browserLanguage": "en-US",
   "networkType": "4g",
@@ -697,6 +702,7 @@ npm run dev      # vite :5173  +  tsx watch :8787
 npm run lint           # ESLint (typescript-eslint + react-hooks)
 npm run format:check   # Prettier check (npm run format to auto-fix)
 npm test               # Vitest unit tests
+npm run test:fault-matrix # deterministic latency/error/unsafe variants
 ```
 
 ### 3. Build
@@ -720,7 +726,7 @@ A shared test server runs on **AWS Lightsail** (region `ap-northeast-2`) so the 
 | Provider        | `VOICE_PROVIDER=doubao` — testers get real Doubao realtime voice                    |
 
 The Lightsail box cannot reach the internal GitLab, so deployment is an **rsync push from a developer machine** — not a `git pull` on the server.
-Completed QA sessions are appended to `~/.horizon-helmet-testing/sessions.jsonl` by default, outside `/home/ubuntu/app`, so deploys do not erase testing evidence. Set `TESTING_HISTORY_DIR=off` to disable disk persistence, `TESTING_HISTORY_DIR=/path/to/dir` to move it, or `TESTING_HISTORY_MAX_SESSIONS=500` to raise the retained session window.
+QA evidence and operations are indexed in `~/.horizon-helmet-testing/testing.sqlite`; completed sessions are also appended to `sessions.jsonl` as a recovery archive. Both live outside `/home/ubuntu/app`, so deploys do not erase evidence. Set `TESTING_DATABASE` or `TESTING_HISTORY_DIR` to relocate them, or `TESTING_HISTORY_MAX_SESSIONS=500` to raise the in-memory dashboard window. The recovery archive is unbounded by default; `TESTING_ARCHIVE_MAX_SESSIONS` adds an explicit retention cap without truncating SQLite.
 
 ### 5. Deploy to the test server
 

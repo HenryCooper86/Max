@@ -418,6 +418,8 @@ func buildSessionStart(
     testerRegion: String? = nil,
     testingCampaignId: String = "release-readiness",
     testingTestCaseId: String = "baseline-live-session",
+    testingRunId: String? = nil,
+    testingAssignmentId: String? = nil,
     appVersion: String? = nil,
     gitCommit: String? = nil,
     deviceLabel: String? = nil,
@@ -438,11 +440,14 @@ func buildSessionStart(
     ]
     if let testerId, !testerId.isEmpty { payload["testerId"] = testerId }
     if let testerRegion, !testerRegion.isEmpty { payload["testerRegion"] = testerRegion }
+    if let testingRunId, !testingRunId.isEmpty { payload["testingRunId"] = testingRunId }
+    if let testingAssignmentId, !testingAssignmentId.isEmpty { payload["testingAssignmentId"] = testingAssignmentId }
     if let appVersion, !appVersion.isEmpty { payload["appVersion"] = appVersion }
     if let gitCommit, !gitCommit.isEmpty { payload["gitCommit"] = gitCommit }
     if let deviceLabel, !deviceLabel.isEmpty { payload["deviceLabel"] = deviceLabel }
     if let browserLanguage, !browserLanguage.isEmpty { payload["browserLanguage"] = browserLanguage }
     if let networkType, !networkType.isEmpty { payload["networkType"] = networkType }
+    payload["platform"] = "ios"
     if let lat, let lon {
         payload["lat"] = lat
         payload["lon"] = lon

@@ -19,6 +19,9 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
     this.frameFill = 0;
     this.level = 0;
     this.levelCounter = 0;
+    this.qualityBlocks = 0;
+    this.clippedBlocks = 0;
+    this.silentBlocks = 0;
   }
 
   process(inputs) {
@@ -29,11 +32,22 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
     let sumSquares = 0;
     for (let i = 0; i < channel.length; i += 1) sumSquares += channel[i] * channel[i];
     const rms = Math.sqrt(sumSquares / channel.length);
+    this.qualityBlocks += 1;
+    if (rms < 0.005) this.silentBlocks += 1;
+    if (channel.some((sample) => Math.abs(sample) >= 0.98)) this.clippedBlocks += 1;
     this.level = this.level * 0.68 + Math.min(1, rms * 8) * 0.32;
     this.levelCounter += 1;
     if (this.levelCounter >= LEVEL_REPORT_EVERY) {
       this.levelCounter = 0;
-      this.port.postMessage({ type: "level", value: this.level });
+      this.port.postMessage({
+        type: "level",
+        value: this.level,
+        clippingPct: Math.round((this.clippedBlocks / Math.max(1, this.qualityBlocks)) * 1000) / 10,
+        silencePct: Math.round((this.silentBlocks / Math.max(1, this.qualityBlocks)) * 1000) / 10
+      });
+      this.qualityBlocks = 0;
+      this.clippedBlocks = 0;
+      this.silentBlocks = 0;
     }
 
     // Append this render quantum to the pending input buffer.

@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type {
   TesterSessionSummary,
@@ -33,6 +32,13 @@ import {
 } from "../shared/testing";
 import { buildInfo } from "./build-info";
 import { evaluateTestingSession } from "./testing-evaluator";
+import {
+  DEFAULT_TESTING_STORAGE_DIRECTORY,
+  ensureTestingStorageDirectory,
+  ensureTestingStorageDirectorySync,
+  secureTestingFile,
+  secureTestingFileSync
+} from "./testing-storage";
 import {
   deleteAllStoredTestingSessions,
   deleteStoredTesterSessions,
@@ -240,6 +246,10 @@ const MAX_ARCHIVE_SESSIONS = process.env.TESTING_ARCHIVE_MAX_SESSIONS?.trim()
   ? readBoundedInt(process.env.TESTING_ARCHIVE_MAX_SESSIONS, 0, 20, 100_000)
   : 0;
 const TESTING_HISTORY_PATH = resolveTestingHistoryPath();
+if (TESTING_HISTORY_PATH) {
+  ensureTestingStorageDirectorySync(TESTING_HISTORY_PATH);
+  secureTestingFileSync(TESTING_HISTORY_PATH);
+}
 const MIN_VALID_SESSION_MS = 1_500;
 const RELEASE_GATE_REQUIRED_TEST_CASE_IDS = TESTING_TEST_CASES.map((testCase) => testCase.id);
 
@@ -337,7 +347,7 @@ function resolveTestingHistoryPath(): string | null {
   if (configuredFile) return configuredFile;
   const configuredDir = process.env.TESTING_HISTORY_DIR?.trim();
   if (configuredDir?.toLowerCase() === "off") return null;
-  const directory = configuredDir || path.join(os.homedir(), ".horizon-helmet-testing");
+  const directory = configuredDir || DEFAULT_TESTING_STORAGE_DIRECTORY;
   return path.join(directory, "sessions.jsonl");
 }
 
@@ -1379,8 +1389,9 @@ function compactTestingHistory(lines: string[]) {
   try {
     const retained = lines.slice(-MAX_ARCHIVE_SESSIONS);
     const tempPath = `${TESTING_HISTORY_PATH}.compact`;
-    fs.writeFileSync(tempPath, `${retained.join("\n")}\n`);
+    fs.writeFileSync(tempPath, `${retained.join("\n")}\n`, { mode: 0o600 });
     fs.renameSync(tempPath, TESTING_HISTORY_PATH);
+    secureTestingFileSync(TESTING_HISTORY_PATH);
   } catch {
     // Compaction is opportunistic; the append path still works without it.
   }
@@ -1402,8 +1413,9 @@ function persistCompletedSession(session: TesterSessionSummary) {
   const line = `${JSON.stringify(session)}\n`;
   persistQueue = persistQueue
     .then(async () => {
-      await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+      await ensureTestingStorageDirectory(filePath);
       await fs.promises.appendFile(filePath, line, { mode: 0o600 });
+      await secureTestingFile(filePath);
     })
     .catch(() => {
       // Persistence failure should not interrupt a live voice session.
@@ -1423,7 +1435,7 @@ function filterTestingHistory(keep: (value: Record<string, unknown> | null) => b
   if (!filePath) return;
   persistQueue = persistQueue
     .then(async () => {
-      await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+      await ensureTestingStorageDirectory(filePath);
       let raw = "";
       try {
         raw = await fs.promises.readFile(filePath, "utf8");
@@ -1444,6 +1456,7 @@ function filterTestingHistory(keep: (value: Record<string, unknown> | null) => b
       const tempPath = `${filePath}.rewrite`;
       await fs.promises.writeFile(tempPath, lines.length ? `${lines.join("\n")}\n` : "", { mode: 0o600 });
       await fs.promises.rename(tempPath, filePath);
+      await secureTestingFile(filePath);
     })
     .catch(() => {
       // Best-effort like the append path; memory already reflects the clear.

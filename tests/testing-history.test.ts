@@ -52,6 +52,16 @@ afterEach(() => {
 });
 
 describe("testing history replay", () => {
+  it("locks down an existing transcript archive", async () => {
+    const file = historyFile([sessionLine(0)]);
+    fs.chmodSync(file, 0o664);
+
+    const { testingSnapshot } = await loadMetricsWithHistory(file);
+    testingSnapshot(10_000);
+
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+  });
+
   it("detects a stored evidence hash mismatch", async () => {
     const tampered = JSON.stringify({
       sessionId: "tampered",

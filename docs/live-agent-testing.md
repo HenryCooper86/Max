@@ -47,7 +47,7 @@ npm test -- -t "rejects frames that are too short"
 npm run test:watch                # watch mode, reruns on change
 ```
 
-The current Vitest suite is 223 tests across 24 files and runs in a few seconds.
+The current Vitest suite is 225 tests across 25 files and runs in a few seconds.
 
 ---
 
@@ -501,6 +501,9 @@ The append-oriented JSONL file at
 `~/.horizon-helmet-testing/sessions.jsonl` remains a recovery/export archive.
 Both live outside the deploy tree. Configure `TESTING_DATABASE` and
 `TESTING_HISTORY_DIR`; use `off` only for ephemeral/test environments.
+The default storage directory is enforced as owner-only (`0700`), and SQLite,
+its journal files, and the JSONL archive are enforced as `0600` because they
+may contain tester identities and transcripts.
 The recovery archive retains all captures by default. Set
 `TESTING_ARCHIVE_MAX_SESSIONS` only when an explicit retention policy requires
 compaction; `TESTING_HISTORY_MAX_SESSIONS` controls the dashboard cache, not
@@ -521,7 +524,7 @@ desktop Wi-Fi run from hiding a mobile field regression.
 ### Automated checks
 
 ```bash
-npm test                    # 223 Vitest tests across 24 files
+npm test                    # 225 Vitest tests across 25 files
 npm run test:fault-matrix   # 24 nominal/error/latency/unsafe variants
 
 TESTING_GATE_URL=https://qa.example.com \

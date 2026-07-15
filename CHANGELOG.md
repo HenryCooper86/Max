@@ -10,6 +10,9 @@
   recovery archive: risk-weighted release runs, cross-platform assignments,
   durable issue triage, reviewer notes, immutable policy history, audit events,
   and an explicit approved regression baseline now survive deployments.
+- Evidence startup now repairs older permissive filesystem modes: the default
+  storage directory is `0700`, while SQLite, its journals, and JSONL archives
+  are `0600` because they may contain tester identities and transcripts.
 - Added SHA-256 integrity verification over captured evidence. Reviewer notes
   and current-policy replays remain mutable without changing the capture hash;
   mismatched evidence is excluded from release and regression decisions.

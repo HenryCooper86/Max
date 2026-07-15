@@ -6,8 +6,6 @@
 // database lives outside the deploy tree beside the existing accounts/history.
 
 import { createHash, randomUUID } from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { TesterSessionSummary } from "../shared/agent";
@@ -31,6 +29,11 @@ import {
   type TestingSessionQuery
 } from "../shared/testing";
 import { createLogger } from "./logger";
+import {
+  DEFAULT_TESTING_STORAGE_DIRECTORY,
+  ensureTestingStorageDirectorySync,
+  secureTestingFileSync
+} from "./testing-storage";
 
 const log = createLogger("testing-store");
 
@@ -63,7 +66,7 @@ function resolveDatabasePath(): string {
   const configured = process.env.TESTING_DATABASE?.trim();
   if (configured?.toLowerCase() === "off" || process.env.NODE_ENV === "test") return ":memory:";
   if (configured) return configured;
-  return path.join(os.homedir(), ".horizon-helmet-testing", "testing.sqlite");
+  return path.join(DEFAULT_TESTING_STORAGE_DIRECTORY, "testing.sqlite");
 }
 
 export function testingStorePersistent(): boolean {
@@ -73,12 +76,21 @@ export function testingStorePersistent(): boolean {
 function database(): DatabaseSync {
   if (databaseInstance) return databaseInstance;
   const filePath = resolveDatabasePath();
-  if (filePath !== ":memory:") fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  if (filePath !== ":memory:") {
+    ensureTestingStorageDirectorySync(filePath);
+    secureTestingFileSync(filePath);
+    secureTestingFileSync(`${filePath}-wal`);
+    secureTestingFileSync(`${filePath}-shm`);
+  }
   const db = new DatabaseSync(filePath);
+  if (filePath !== ":memory:") secureTestingFileSync(filePath);
   db.exec("PRAGMA foreign_keys = ON");
   if (filePath !== ":memory:") {
     db.exec("PRAGMA journal_mode = WAL");
     db.exec("PRAGMA synchronous = NORMAL");
+    secureTestingFileSync(filePath);
+    secureTestingFileSync(`${filePath}-wal`);
+    secureTestingFileSync(`${filePath}-shm`);
   }
   db.exec(`
     CREATE TABLE IF NOT EXISTS testing_sessions (

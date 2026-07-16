@@ -393,6 +393,15 @@ export function useHelmetAgent() {
     resetFrameWindow();
     setListening(false);
     setTurnState("idle");
+    // Cancel any reconnect armed by an earlier unexpected drop. stopMic is the
+    // rider's explicit "stop hands-free"; letting a backed-off reconnect fire
+    // afterwards would silently re-open the relay (and a live upstream slot)
+    // against that stop — the same reason disconnect() clears it.
+    if (reconnectTimerRef.current) {
+      window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    reconnectAttemptsRef.current = 0;
     const socket = socketRef.current;
     if (socket?.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ type: "audio.stop" }));
@@ -984,8 +993,13 @@ export function useHelmetAgent() {
       setTurnState("idle");
       setStatus(error instanceof Error ? error.message : "无法访问麦克风");
     } finally {
-      startingRef.current = false;
-      setStarting(false);
+      // Only the latest attempt owns the guard. A superseded start (bumped by a
+      // newer start/stop) must not clear startingRef / flip `starting` off while
+      // the newer attempt is still awaiting — nor setState after unmount.
+      if (attempt === startAttemptRef.current) {
+        startingRef.current = false;
+        setStarting(false);
+      }
     }
   }, [
     ensureMic,

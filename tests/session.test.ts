@@ -63,6 +63,15 @@ describe("session memory and safety policy", () => {
     expect(updateSessionMemory(enMemory, "好的", "ride").language).toBe("zh");
   });
 
+  it("does not flip to English on a single long Latin token (e.g. a road name)", () => {
+    const zhMemory = updateSessionMemory(createSessionMemory("ride"), "帮我看看天气", "ride");
+    expect(zhMemory.language).toBe("zh");
+    // A lone proper noun — however long — is not "distinctly English" and must
+    // not flip the whole session (prompt + TTS voice) to English.
+    expect(updateSessionMemory(zhMemory, "Gangnam", "ride").language).toBe("zh");
+    expect(updateSessionMemory(zhMemory, "Broadway", "ride").language).toBe("zh");
+  });
+
   it("does not classify 风格 (style) or 中风 (stroke) as weather", () => {
     expect(inferIntent("换个说话风格")).toBe("casual");
     expect(inferIntent("有人中风了怎么办")).toBe("casual");
@@ -78,6 +87,23 @@ describe("session memory and safety policy", () => {
     expect(updateSessionMemory(createSessionMemory("ride"), "刚才迟到了十分钟", "ride").destination).toBeUndefined();
     // Fullwidth punctuation ends the capture.
     expect(updateSessionMemory(createSessionMemory("navigation"), "带我回家！", "navigation").destination).toBe("家");
+  });
+
+  it("trims a trailing action clause from a punctuation-free Chinese destination", () => {
+    // Chinese ASR often emits no mid-utterance punctuation, so the raw capture
+    // runs into the following verb clause — keep only the place.
+    expect(updateSessionMemory(createSessionMemory("navigation"), "导航到公司门口接我", "navigation").destination).toBe(
+      "公司门口"
+    );
+    expect(updateSessionMemory(createSessionMemory("navigation"), "回家吃个饭", "navigation").destination).toBe("家");
+    // …but a place name that merely begins with such a verb must survive intact
+    // (小吃街 keeps its 吃; 接待中心 keeps its 接).
+    expect(updateSessionMemory(createSessionMemory("navigation"), "导航去小吃街", "navigation").destination).toBe(
+      "小吃街"
+    );
+    expect(updateSessionMemory(createSessionMemory("navigation"), "导航去接待中心", "navigation").destination).toBe(
+      "接待中心"
+    );
   });
 
   it("keeps the previous destination when a non-navigation turn follows", () => {

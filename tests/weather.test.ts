@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { assessWeatherRisk, buildWeatherSummary, describeWeatherCode } from "../server/weather";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { assessWeatherRisk, buildWeatherSummary, describeWeatherCode, fetchRiderWeather } from "../server/weather";
 
 describe("describeWeatherCode", () => {
   it("maps clear sky", () => {
@@ -49,5 +49,34 @@ describe("buildWeatherSummary", () => {
 
   it("stays quiet about wind when it is calm", () => {
     expect(buildWeatherSummary("晴", 20, 5)).not.toContain("横风");
+  });
+});
+
+describe("fetchRiderWeather", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const stubFetch = (json: unknown, ok = true) =>
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok, status: ok ? 200 : 500, json: async () => json }))
+    );
+
+  it("throws on a 200 response whose body lacks current conditions", async () => {
+    // A malformed/partial 200 must NOT be coerced to a falsely reassuring
+    // "clear / 0°C / calm / normal" reading; it must throw so callers fall back.
+    stubFetch({});
+    await expect(fetchRiderWeather(1, 2)).rejects.toThrow();
+    stubFetch({ current: { temperature_2m: 21 } }); // missing weather_code / wind
+    await expect(fetchRiderWeather(1, 2)).rejects.toThrow();
+  });
+
+  it("parses a well-formed response", async () => {
+    stubFetch({ current: { temperature_2m: 21, weather_code: 0, wind_speed_10m: 5, is_day: 1 } });
+    const weather = await fetchRiderWeather(1, 2);
+    expect(weather.temperatureC).toBe(21);
+    expect(weather.windSpeedKmh).toBe(5);
+    expect(weather.description).toBe("晴");
+    expect(weather.riskLevel).toBe("normal");
+    expect(weather.isDay).toBe(true);
   });
 });

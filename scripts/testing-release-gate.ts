@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { TestingStats } from "../shared/agent";
+import { testingBuildsMatch } from "../shared/testing";
 
 const baseUrl = (process.env.TESTING_GATE_URL ?? "http://127.0.0.1:8787").replace(/\/$/, "");
 const token = process.env.TESTING_GATE_TOKEN?.trim() ?? "";
@@ -30,12 +31,10 @@ try {
   const { releaseGate, regression } = payload.testing;
   const operations = operationsPayload.operations;
   const baselineRequired = regression.baselineSource !== "none";
-  const buildMatches =
-    !expectedBuild ||
-    releaseGate.build === expectedBuild ||
-    (releaseGate.build.length >= 7 &&
-      expectedBuild.length >= 7 &&
-      (releaseGate.build.startsWith(expectedBuild) || expectedBuild.startsWith(releaseGate.build)));
+  // Reuse the shared identity check (exact match, or hex-SHA prefix on both
+  // sides). The old ad-hoc startsWith had no hex guard, so a named expected build
+  // like "release-2" false-matched a gate build of "release-2-hotfix".
+  const buildMatches = !expectedBuild || testingBuildsMatch(releaseGate.build, expectedBuild);
   const passed = buildMatches && releaseGate.status === "pass" && (!baselineRequired || regression.status === "pass");
   const report = {
     generatedAt: new Date().toISOString(),

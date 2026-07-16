@@ -270,30 +270,23 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
     : (currentTester ?? testerUsers[0]);
   const selectedTesterTurns = selectedTester?.recentTurns ?? [];
   const normalizedTesterFilter = testerFilter.trim().toLowerCase();
-  const qualityCountsByTester = testingSessions.reduce((map, session) => {
-    const counts = map.get(session.testerKey) ?? emptyQualityCounts();
-    counts[session.quality] += 1;
-    map.set(session.testerKey, counts);
-    return map;
-  }, new Map<string, QualityCounts>());
-  const getTesterQualityCounts = (testerKey: string) => qualityCountsByTester.get(testerKey) ?? emptyQualityCounts();
+  // Per-tester quality is server-aggregated over ALL of a tester's sessions
+  // (TesterStats.qualityCounts) — NOT re-derived from the paginated session page,
+  // which under-counts and visibly disagrees with the server's Runs total.
   const filteredTesterUsers = testerUsers
     .filter((user) => {
       if (!normalizedTesterFilter) return true;
       return `${user.testerId} ${user.ipAddress} ${user.region}`.toLowerCase().includes(normalizedTesterFilter);
     })
-    .sort((a, b) => {
-      const aCounts = getTesterQualityCounts(a.testerKey);
-      const bCounts = getTesterQualityCounts(b.testerKey);
-      return (
+    .sort(
+      (a, b) =>
         b.activeSessions - a.activeSessions ||
-        bCounts.fail - aCounts.fail ||
-        bCounts.watch - aCounts.watch ||
+        b.qualityCounts.fail - a.qualityCounts.fail ||
+        b.qualityCounts.watch - a.qualityCounts.watch ||
         b.errorEvents - a.errorEvents ||
         b.p95LatencyMs - a.p95LatencyMs ||
         b.lastSeenAt - a.lastSeenAt
-      );
-    });
+    );
   const selectedTesterSessions = selectedTesterKey
     ? testingSessions.filter((session) => session.testerKey === selectedTesterKey)
     : selectedTester
@@ -372,7 +365,7 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
   const averageEvaluationScore = testingSessions.length
     ? Math.round(testingSessions.reduce((sum, session) => sum + session.evaluation.score, 0) / testingSessions.length)
     : 0;
-  const selectedTesterCounts = selectedTester ? getTesterQualityCounts(selectedTester.testerKey) : emptyQualityCounts();
+  const selectedTesterCounts = selectedTester ? selectedTester.qualityCounts : emptyQualityCounts();
   const selectedSessionIssues = selectedSession ? sessionIssueCount(selectedSession) : 0;
   const selectedTestRequirements = testRequirementLabels(selectedTestCase);
   const totalDownBytes = (testingTotals?.audioDownBytes ?? 0) + (testingTotals?.controlDownBytes ?? 0);
@@ -837,7 +830,7 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
           <tbody>
             {filteredTesterUsers.length ? (
               filteredTesterUsers.map((user) => {
-                const counts = getTesterQualityCounts(user.testerKey);
+                const counts = user.qualityCounts;
                 const testerIssues = counts.fail + counts.watch + user.errorEvents;
                 return (
                   <tr className={selectedTester?.testerKey === user.testerKey ? "selected" : ""} key={user.testerKey}>

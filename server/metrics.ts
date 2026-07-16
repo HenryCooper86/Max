@@ -18,7 +18,6 @@ import {
   type TestingAudioQuality,
   type TestingBuildSummary,
   type TestingEvaluationSummary,
-  type TestingInvalidReason,
   type TestingPlatform,
   type TestingQuality,
   type TestingRegressionCohort,
@@ -31,7 +30,7 @@ import {
   type TestingValiditySummary
 } from "../shared/testing";
 import { buildInfo } from "./build-info";
-import { evaluateTestingSession } from "./testing-evaluator";
+import { classifySessionEvidence, evaluateTestingSession } from "./testing-evaluator";
 import {
   DEFAULT_TESTING_STORAGE_DIRECTORY,
   ensureTestingStorageDirectory,
@@ -239,6 +238,9 @@ const UNKNOWN_TESTER_ID = "unknown-tester";
 const UNKNOWN_IP = "unknown-ip";
 const MAX_TESTERS = 50;
 const MAX_LATENCY_SAMPLES_PER_TESTER = 128;
+// Raw latency samples persisted per session so build/gate/cohort p95 can pool
+// across sessions. Bounded to keep the JSONL history compact.
+const MAX_LATENCY_SAMPLES_PER_SESSION = 200;
 const MAX_TRANSCRIPT_TURNS_PER_TESTER = 80;
 const MAX_TRANSCRIPT_TURNS_PER_SESSION = 120;
 const MAX_COMPLETED_SESSIONS = readBoundedInt(process.env.TESTING_HISTORY_MAX_SESSIONS, 200, 20, 5_000);
@@ -250,7 +252,6 @@ if (TESTING_HISTORY_PATH) {
   ensureTestingStorageDirectorySync(TESTING_HISTORY_PATH);
   secureTestingFileSync(TESTING_HISTORY_PATH);
 }
-const MIN_VALID_SESSION_MS = 1_500;
 const RELEASE_GATE_REQUIRED_TEST_CASE_IDS = TESTING_TEST_CASES.map((testCase) => testCase.id);
 
 type MutableTesterStats = {
@@ -268,6 +269,8 @@ type MutableTesterStats = {
   serverEvents: number;
   errorEvents: number;
   ttsFallbacks: number;
+  // Pass/watch/fail counts across this tester's graded (completed) sessions.
+  qualityCounts: Record<TestingQuality, number>;
   lastSeenAt: number;
   latencyMs: number[];
   recentTurns: TesterTranscriptTurn[];
@@ -303,7 +306,10 @@ type ActiveTestingSession = {
   ttsFallbacks: number;
   latencyMs: number[];
   audioQuality: TestingAudioQuality;
-  audioQualitySamples: number;
+  // Per-field sample counts for the rolling averages. A shared counter biased
+  // every average whenever an update omitted a field (droppedFrames is a
+  // high-water mark and needs no count).
+  audioQualitySampleCounts: { outgoingFps: number; jitterMs: number; clippingPct: number; silencePct: number };
   turns: TesterTranscriptTurn[];
 };
 
@@ -487,6 +493,7 @@ function getTester(identity: ReturnType<typeof normalizeTesterIdentity>, now: nu
       serverEvents: 0,
       errorEvents: 0,
       ttsFallbacks: 0,
+      qualityCounts: { pass: 0, watch: 0, fail: 0 },
       lastSeenAt: now,
       latencyMs: [],
       recentTurns: []
@@ -583,42 +590,24 @@ function percentile(values: number[], percentileRank: number): number {
   return sorted[Math.max(0, index)];
 }
 
-function validityDetail(reasons: TestingInvalidReason[]): string {
-  if (!reasons.length) return "Valid release evidence.";
-  const labels: Record<TestingInvalidReason, string> = {
-    "too-short": "session ended too quickly",
-    "missing-transcript": "required transcript missing",
-    "missing-rider-turn": "required rider turn missing",
-    "missing-agent-turn": "required agent reply missing",
-    "missing-mic-audio": "required mic audio missing"
-  };
-  return `Invalid release evidence: ${reasons.map((reason) => labels[reason]).join(", ")}.`;
-}
-
-function classifySessionEvidence(input: {
-  testCaseId: string;
-  durationMs: number;
-  micFrames: number;
-  turns: TesterTranscriptTurn[];
-}): TestingValiditySummary {
-  const testCase = findTestingTestCase(input.testCaseId);
-  const minRiderTurns = testCase.minRiderTurns ?? (testCase.requireTranscript && !testCase.requireAdasAlert ? 1 : 0);
-  const minAgentTurns = testCase.minAgentTurns ?? (testCase.requireTranscript ? 1 : 0);
-  const riderTurns = input.turns.filter((turn) => turn.speaker === "rider").length;
-  const agentTurns = input.turns.filter((turn) => turn.speaker === "agent").length;
-  const reasons: TestingInvalidReason[] = [];
-
-  if (input.durationMs < MIN_VALID_SESSION_MS) reasons.push("too-short");
-  if (testCase.requireTranscript && input.turns.length === 0) reasons.push("missing-transcript");
-  if (riderTurns < minRiderTurns) reasons.push("missing-rider-turn");
-  if (agentTurns < minAgentTurns) reasons.push("missing-agent-turn");
-  if (testCase.requireMicAudio && input.micFrames <= 0) reasons.push("missing-mic-audio");
-
-  return {
-    status: reasons.length ? "invalid" : "valid",
-    reasons,
-    detail: validityDetail(reasons)
-  };
+/**
+ * A TRUE pooled p95 over the raw latency samples of the given sessions. Pooling
+ * the samples (not the per-session p95s) avoids the percentile-of-percentiles
+ * distortion where, at QA sample sizes, `percentile(perSessionP95s, 95)`
+ * collapses to the single worst session's p95. Sessions captured before raw
+ * samples were persisted fall back to contributing their p95LatencyMs.
+ */
+function pooledLatencyP95(sessions: TesterSessionSummary[]): number {
+  const pooled: number[] = [];
+  for (const session of sessions) {
+    const samples = session.latencyMsSamples?.filter((value) => Number.isFinite(value) && value > 0);
+    if (samples && samples.length) {
+      pooled.push(...samples);
+    } else if (session.p95LatencyMs > 0) {
+      pooled.push(session.p95LatencyMs);
+    }
+  }
+  return percentile(pooled, 95);
 }
 
 function completedSessionsForBuild(build: string): TesterSessionSummary[] {
@@ -655,10 +644,7 @@ function summarizeBuild(build: string, sessions: TesterSessionSummary[]): Testin
   const invalidSessions = sessions.length - validSessions.length;
   const failSessions = validSessions.filter((session) => session.quality === "fail").length;
   const watchSessions = validSessions.filter((session) => session.quality === "watch").length;
-  const p95LatencyMs = percentile(
-    validSessions.filter((session) => session.p95LatencyMs > 0).map((session) => session.p95LatencyMs),
-    95
-  );
+  const p95LatencyMs = pooledLatencyP95(validSessions);
   const avgScore = validSessions.length
     ? Math.round(validSessions.reduce((sum, session) => sum + session.evaluation.score, 0) / validSessions.length)
     : 0;
@@ -722,10 +708,7 @@ function buildReleaseGate(
   const invalidSessions = sessions.length - validSessions.length;
   const failSessions = validSessions.filter((session) => session.quality === "fail").length;
   const watchSessions = validSessions.filter((session) => session.quality === "watch").length;
-  const p95LatencyMs = percentile(
-    validSessions.filter((session) => session.p95LatencyMs > 0).map((session) => session.p95LatencyMs),
-    95
-  );
+  const p95LatencyMs = pooledLatencyP95(validSessions);
   const blockers: string[] = [];
   const warnings: string[] = [];
   const integrityFailures = sessions.filter((session) => session.evidenceIntegrity === "mismatch");
@@ -968,14 +951,8 @@ function buildRegressionSummary(
     const baselineSessions = baselineByCohort.get(key) ?? [];
     const sample = currentSessions[0] ?? baselineSessions[0];
     if (!sample) continue;
-    const currentP95LatencyMs = percentile(
-      currentSessions.filter((session) => session.p95LatencyMs > 0).map((session) => session.p95LatencyMs),
-      95
-    );
-    const baselineP95LatencyMs = percentile(
-      baselineSessions.filter((session) => session.p95LatencyMs > 0).map((session) => session.p95LatencyMs),
-      95
-    );
+    const currentP95LatencyMs = pooledLatencyP95(currentSessions);
+    const baselineP95LatencyMs = pooledLatencyP95(baselineSessions);
     const currentAvgScore = average(currentSessions.map((session) => session.evaluation.score));
     const baselineAvgScore = average(baselineSessions.map((session) => session.evaluation.score));
     const latencyDeltaMs = currentP95LatencyMs - baselineP95LatencyMs;
@@ -1109,6 +1086,7 @@ function completedSessionSummary(session: ActiveTestingSession, endedAt: number)
     latencySamples: session.latencyMs.length,
     avgLatencyMs: average(session.latencyMs),
     p95LatencyMs: percentile(session.latencyMs, 95),
+    latencyMsSamples: session.latencyMs.slice(-MAX_LATENCY_SAMPLES_PER_SESSION),
     errorEvents: session.errorEvents,
     ttsFallbacks: session.ttsFallbacks,
     quality,
@@ -1234,6 +1212,12 @@ function normalizeCompletedSession(value: unknown): TesterSessionSummary | null 
     latencySamples: numberField("latencySamples"),
     avgLatencyMs: numberField("avgLatencyMs"),
     p95LatencyMs,
+    latencyMsSamples: Array.isArray(value.latencyMsSamples)
+      ? value.latencyMsSamples
+          .filter((sample): sample is number => typeof sample === "number" && Number.isFinite(sample) && sample >= 0)
+          .map((sample) => Math.round(sample))
+          .slice(-MAX_LATENCY_SAMPLES_PER_SESSION)
+      : undefined,
     errorEvents,
     ttsFallbacks,
     quality: evaluation.quality,
@@ -1286,6 +1270,7 @@ function testerFromCompletedSession(session: TesterSessionSummary): MutableTeste
       serverEvents: 0,
       errorEvents: 0,
       ttsFallbacks: 0,
+      qualityCounts: { pass: 0, watch: 0, fail: 0 },
       lastSeenAt: session.endedAt,
       latencyMs: [],
       recentTurns: []
@@ -1309,6 +1294,7 @@ function applyCompletedSessionToTester(session: TesterSessionSummary) {
   tester.serverEvents += session.serverEvents;
   tester.errorEvents += session.errorEvents;
   tester.ttsFallbacks += session.ttsFallbacks;
+  tester.qualityCounts[session.quality] += 1;
   tester.lastSeenAt = Math.max(tester.lastSeenAt, session.endedAt);
   if (session.latencySamples > 0 && session.avgLatencyMs > 0) {
     tester.latencyMs.push(...Array.from({ length: Math.min(4, session.latencySamples) }, () => session.avgLatencyMs));
@@ -1572,6 +1558,7 @@ function testerSnapshot(tester: MutableTesterStats): TesterStats {
     p95LatencyMs: percentile(tester.latencyMs, 95),
     errorEvents: tester.errorEvents,
     ttsFallbacks: tester.ttsFallbacks,
+    qualityCounts: { ...tester.qualityCounts },
     lastSeenAt: tester.lastSeenAt,
     recentTurns: tester.recentTurns.map((turn) => ({ ...turn }))
   };
@@ -1652,7 +1639,7 @@ export function beginTesterSession(sessionId: string, identityInput: TesterIdent
       clippingPct: 0,
       silencePct: 0
     },
-    audioQualitySamples: 0,
+    audioQualitySampleCounts: { outgoingFps: 0, jitterMs: 0, clippingPct: 0, silencePct: 0 },
     turns: []
   });
   currentBucket(now).sessionsStarted += 1;
@@ -1664,13 +1651,16 @@ export function endTesterSession(sessionId: string, now = Date.now()) {
   // Remove the active entry unconditionally — an evicted tester record must
   // not leave the session in the map forever (unbounded growth).
   testingSessions.delete(sessionId);
+  const summary = completedSessionSummary(session, now);
   const tester = testers.get(session.testerKey);
   if (tester) {
     tester.activeSessions = Math.max(0, tester.activeSessions - 1);
     tester.totalSessionMs += Math.max(0, now - session.startedAt);
     tester.lastSeenAt = now;
+    // totalSessions was counted at session start; credit the graded quality now.
+    tester.qualityCounts[summary.quality] += 1;
   }
-  rememberCompletedSession(completedSessionSummary(session, now));
+  rememberCompletedSession(summary);
 }
 
 export function recordTesterClientAudio(sessionId: string, bytes: number, now = Date.now()) {
@@ -1735,20 +1725,26 @@ export function recordTesterAudioQuality(sessionId: string, input: Partial<Testi
   const active = activeSession(sessionId, now);
   if (!active) return;
   const current = active.session.audioQuality;
-  const safe = (value: unknown, fallback: number, max = Number.MAX_SAFE_INTEGER) =>
-    typeof value === "number" && Number.isFinite(value) ? Math.min(max, Math.max(0, value)) : fallback;
-  const samples = active.session.audioQualitySamples;
-  const nextSamples = samples + 1;
-  const rollingAverage = (previous: number, value: number) =>
-    Math.round(((previous * samples + value) / nextSamples) * 10) / 10;
-  active.session.audioQuality = {
-    droppedFrames: Math.max(current.droppedFrames, Math.round(safe(input.droppedFrames, current.droppedFrames))),
-    outgoingFps: rollingAverage(current.outgoingFps, safe(input.outgoingFps, current.outgoingFps, 1_000)),
-    jitterMs: rollingAverage(current.jitterMs, safe(input.jitterMs, current.jitterMs, 60_000)),
-    clippingPct: rollingAverage(current.clippingPct, safe(input.clippingPct, current.clippingPct, 100)),
-    silencePct: rollingAverage(current.silencePct, safe(input.silencePct, current.silencePct, 100))
+  const counts = active.session.audioQualitySampleCounts;
+  // Returns the clamped value, or undefined when the field is absent/invalid in
+  // this update (so it doesn't count toward that field's average).
+  const clamp = (value: unknown, max = Number.MAX_SAFE_INTEGER) =>
+    typeof value === "number" && Number.isFinite(value) ? Math.min(max, Math.max(0, value)) : undefined;
+  // Roll a field's average ONLY when this update carries it, weighting by that
+  // field's own sample count — a partial update must not dilute omitted fields.
+  const roll = (field: keyof typeof counts, value: number | undefined) => {
+    if (value === undefined) return current[field];
+    const previous = counts[field];
+    counts[field] = previous + 1;
+    return Math.round(((current[field] * previous + value) / (previous + 1)) * 10) / 10;
   };
-  active.session.audioQualitySamples = nextSamples;
+  active.session.audioQuality = {
+    droppedFrames: Math.max(current.droppedFrames, Math.round(clamp(input.droppedFrames) ?? current.droppedFrames)),
+    outgoingFps: roll("outgoingFps", clamp(input.outgoingFps, 1_000)),
+    jitterMs: roll("jitterMs", clamp(input.jitterMs, 60_000)),
+    clippingPct: roll("clippingPct", clamp(input.clippingPct, 100)),
+    silencePct: roll("silencePct", clamp(input.silencePct, 100))
+  };
   active.tester.lastSeenAt = now;
 }
 

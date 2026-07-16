@@ -81,10 +81,22 @@ export async function fetchRiderWeather(lat: number, lon: number): Promise<Rider
     throw new Error(`Weather request failed with HTTP ${response.status}`);
   }
 
-  const current = ((await response.json()) as OpenMeteoResponse).current ?? {};
-  const temperatureC = Math.round(Number(current.temperature_2m ?? 0));
-  const windSpeedKmh = Math.round(Number(current.wind_speed_10m ?? 0));
-  const description = describeWeatherCode(Number(current.weather_code ?? 0));
+  // A 200 with a malformed/partial body (API change, captive portal, proxy) must
+  // NOT be coerced to "clear / 0°C / calm / normal risk" — that folds a falsely
+  // reassuring reading into the rider's safety prompt. Throw instead so the
+  // callers' existing "weather unavailable" fallback fires.
+  const current = ((await response.json()) as OpenMeteoResponse).current;
+  if (
+    !current ||
+    !Number.isFinite(current.temperature_2m) ||
+    !Number.isFinite(current.weather_code) ||
+    !Number.isFinite(current.wind_speed_10m)
+  ) {
+    throw new Error("Weather response is missing current conditions");
+  }
+  const temperatureC = Math.round(current.temperature_2m as number);
+  const windSpeedKmh = Math.round(current.wind_speed_10m as number);
+  const description = describeWeatherCode(current.weather_code as number);
   const { riskLevel, riderAdvice } = assessWeatherRisk(description, windSpeedKmh);
 
   return {

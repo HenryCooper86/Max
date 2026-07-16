@@ -465,6 +465,102 @@ describe("relay metrics", () => {
     );
   });
 
+  it("pools raw latency samples for the build p95 instead of collapsing to the worst session", () => {
+    // Four clean sessions plus one whose only tail spike (1500ms) makes its OWN
+    // per-session p95 = 1500. The old percentile-of-per-session-p95s surfaced
+    // that 1500 as the whole build's p95; pooling the raw samples keeps it ~300.
+    const seed = (id: string, latencies: number[]) => {
+      beginTesterSession(
+        id,
+        {
+          testerId: "qa-pool",
+          ipAddress: "203.0.113.10",
+          testingTestCaseId: "baseline-live-session",
+          gitCommit: buildInfo.gitCommit,
+          deviceLabel: "test browser",
+          networkType: "wifi",
+          platform: "web"
+        },
+        1_000
+      );
+      recordTesterClientAudio(id, 320, 1_100);
+      recordTesterServerEvent(id, { type: "transcript", speaker: "rider", text: "Max, run the test." }, 64, 1_150);
+      latencies.forEach((ms, index) =>
+        recordTesterServerEvent(id, { type: "metric", latencyMs: ms }, 32, 1_200 + index)
+      );
+      recordTesterServerEvent(
+        id,
+        {
+          type: "transcript",
+          speaker: "agent",
+          text: "Route looks clear. Keep your eyes on the road and ride safely."
+        },
+        96,
+        1_400
+      );
+      endTesterSession(id, 4_000);
+    };
+    const clean = Array.from({ length: 10 }, () => 300);
+    seed("pool-a", clean);
+    seed("pool-b", clean);
+    seed("pool-c", clean);
+    seed("pool-d", clean);
+    seed("pool-e", [...Array.from({ length: 9 }, () => 300), 1500]);
+
+    // Pooled 95th percentile of 49×300 + 1×1500 is 300, not the spike session's 1500.
+    expect(testingSnapshot(5_000).releaseGate.p95LatencyMs).toBe(300);
+  });
+
+  it("does not let a partial audio-quality update dilute omitted fields", () => {
+    beginTesterSession(
+      "aq-partial",
+      {
+        testerId: "qa-aq",
+        ipAddress: "203.0.113.11",
+        testingTestCaseId: "baseline-live-session",
+        gitCommit: buildInfo.gitCommit,
+        deviceLabel: "test browser",
+        networkType: "wifi",
+        platform: "web"
+      },
+      1_000
+    );
+    recordTesterClientAudio("aq-partial", 320, 1_050);
+    recordTesterServerEvent("aq-partial", { type: "transcript", speaker: "rider", text: "Max, status?" }, 64, 1_080);
+    recordTesterAudioQuality("aq-partial", { outgoingFps: 30 }, 1_100);
+    recordTesterAudioQuality("aq-partial", { jitterMs: 5 }, 1_150); // no fps in this update
+    recordTesterAudioQuality("aq-partial", { outgoingFps: 90 }, 1_200);
+    recordTesterServerEvent(
+      "aq-partial",
+      { type: "transcript", speaker: "agent", text: "Route looks clear. Keep your eyes on the road and ride safely." },
+      96,
+      1_300
+    );
+    endTesterSession("aq-partial", 4_000);
+
+    const audio = testingSnapshot(5_000).sessions.find((session) => session.sessionId === "aq-partial")?.audioQuality;
+    // Mean of the two real fps samples (30, 90) is 60 — the jitter-only update
+    // in between must not pull it toward its stale 30 (old shared-counter bug: 50).
+    expect(audio?.outgoingFps).toBe(60);
+    expect(audio?.jitterMs).toBe(5);
+  });
+
+  it("exposes per-tester quality counts aggregated server-side across all sessions", () => {
+    // Two sessions for the same tester (same testerId + ip) plus one for another.
+    seedValidCompletedSession("tq-1", "baseline-live-session");
+    seedValidCompletedSession("tq-2", "baseline-live-session");
+    seedValidCompletedSession("tq-3", "emergency-safe-guidance");
+
+    const users = testingSnapshot(5_000).users;
+    const baselineTester = users.find((user) => user.testerId === "qa-baseline-live-session");
+    // Both baseline sessions graded pass — the count is a full server aggregate,
+    // matching totalSessions rather than whatever page the client happened to load.
+    expect(baselineTester?.qualityCounts).toEqual({ pass: 2, watch: 0, fail: 0 });
+    expect(baselineTester?.totalSessions).toBe(2);
+    const emergencyTester = users.find((user) => user.testerId === "qa-emergency-safe-guidance");
+    expect(emergencyTester?.qualityCounts.pass).toBe(1);
+  });
+
   it("does not silently pass a current cohort that lacks matched baseline evidence", () => {
     seedValidCompletedSession("cohort-prev-1", "baseline-live-session", "cohort-previous", 100, "web");
     seedValidCompletedSession("cohort-prev-2", "baseline-live-session", "cohort-previous", 100, "web");

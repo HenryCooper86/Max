@@ -137,6 +137,9 @@ export function useAudioPlayback({ voiceGenderRef, transmittingRef, onInterrupte
     }
     playbackGainRef.current = null;
     playbackCursorRef.current = 0;
+    // Drop references to sources whose context is now closed; leaving them would
+    // make the next stopAgentSpeech report speech and call .stop() on dead nodes.
+    playbackSourcesRef.current = [];
   }, []);
 
   return { playPcm16, stopAgentSpeech, speak, ensurePlaybackContext, closePlayback };

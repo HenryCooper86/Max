@@ -211,9 +211,20 @@ export function TestingControlPlane({ user, currentBuild, selectedSession, onSel
     setBusy(false);
   };
 
+  // A cleared number input parses to 0 (Number("") === 0). The server clamps these
+  // to their floors, so publishing a blank field would silently ship the minimum
+  // rather than what the admin intended — block publish until the fields are in range.
+  const policyFieldsValid =
+    Number.isFinite(policyLatency) &&
+    policyLatency >= 100 &&
+    Number.isFinite(policyInvalid) &&
+    policyInvalid >= 0 &&
+    Number.isFinite(policySafetySamples) &&
+    policySafetySamples >= 1;
+
   const publishPolicy = async () => {
     const active = operations?.activePolicy;
-    if (!active) return;
+    if (!active || !policyFieldsValid) return;
     setBusy(true);
     const next = await createTestingPolicy({
       ...active,
@@ -332,13 +343,13 @@ export function TestingControlPlane({ user, currentBuild, selectedSession, onSel
                         disabled={busy}
                         onChange={(event) => void changeRunStatus(selectedRun, event.target.value as TestingRunStatus)}
                       >
-                        {RUN_STATUSES.filter((status) => status !== "approved" || user.role === "admin").map(
-                          (status) => (
-                            <option key={status} value={status}>
-                              {status}
-                            </option>
-                          )
-                        )}
+                        {RUN_STATUSES.filter(
+                          (status) => status === selectedRun.status || status !== "approved" || user.role === "admin"
+                        ).map((status) => (
+                          <option key={status} value={status} disabled={status === "approved" && user.role !== "admin"}>
+                            {status}
+                          </option>
+                        ))}
                       </select>
                     ) : (
                       <span className={`runStatus ${selectedRun.status}`}>{selectedRun.status}</span>
@@ -536,7 +547,11 @@ export function TestingControlPlane({ user, currentBuild, selectedSession, onSel
               />
             </label>
             {user.role === "admin" ? (
-              <button type="button" disabled={busy || !policyDescription.trim()} onClick={() => void publishPolicy()}>
+              <button
+                type="button"
+                disabled={busy || !policyDescription.trim() || !policyFieldsValid}
+                onClick={() => void publishPolicy()}
+              >
                 Publish versioned policy
               </button>
             ) : (

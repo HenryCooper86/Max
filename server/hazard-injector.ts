@@ -54,9 +54,16 @@ export function createHazardInjector({ send, emitRideContext }: HazardInjectorOp
   return {
     /** Begins firing the first alert after `initialDelayMs`, then every `intervalMs`. */
     start(intervalMs: number, initialDelayMs: number) {
-      if (timer) return;
-      initialTimer = setTimeout(fire, initialDelayMs);
-      timer = setInterval(fire, intervalMs);
+      if (timer || initialTimer) return;
+      // Anchor the repeat to the first alert so the gap between alerts is exactly
+      // intervalMs. Arming setInterval at t=0 (alongside this timeout) instead
+      // measured the grid from call time, so the first two alerts landed
+      // intervalMs − initialDelayMs apart, not intervalMs.
+      initialTimer = setTimeout(() => {
+        initialTimer = undefined;
+        fire();
+        timer = setInterval(fire, intervalMs);
+      }, initialDelayMs);
     },
     stop() {
       if (initialTimer) clearTimeout(initialTimer);

@@ -149,15 +149,22 @@ export function saveStoredSettings(settings: StoredSettings) {
  * opening a single link.
  */
 export function relayAuthToken(): string {
-  try {
-    const fromUrl = new URLSearchParams(window.location.search).get("token");
-    if (fromUrl) {
+  const fromUrl = new URLSearchParams(window.location.search).get("token");
+  if (fromUrl) {
+    // A token that arrived in hand must survive even if remembering it fails
+    // (Safari private mode / quota-exceeded throws on setItem) — otherwise a
+    // rider onboarded via a single ?token= link gets an empty credential.
+    try {
       window.localStorage.setItem(TOKEN_KEY, fromUrl);
       const url = new URL(window.location.href);
       url.searchParams.delete("token");
       window.history.replaceState(window.history.state, document.title, `${url.pathname}${url.search}${url.hash}`);
-      return fromUrl;
+    } catch {
+      /* persistence/history rewrite is best-effort; the URL token still stands */
     }
+    return fromUrl;
+  }
+  try {
     return window.localStorage.getItem(TOKEN_KEY) ?? "";
   } catch {
     return "";

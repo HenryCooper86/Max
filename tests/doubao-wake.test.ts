@@ -214,6 +214,28 @@ describe("createDoubaoProvider — wake-word gating", () => {
     await provider.close();
   });
 
+  it("does not clip a reply whose first token lands after the window closes", async () => {
+    // Regression: the addressed/suppressed decision is latched when the rider's
+    // ASR is classified, NOT re-derived from the wall clock when the agent's
+    // first frame arrives. A slow first token (big prompt / bad link) must not
+    // drop a reply the rider explicitly addressed.
+    vi.useFakeTimers();
+    const t0 = 1_000_000;
+    vi.setSystemTime(t0);
+    stubWeatherFetch();
+    const { client, send } = makeClient();
+    const { provider, upstream } = await startLiveSession(client);
+
+    await riderTurn(upstream, "Max 前面路况怎么样"); // addressed at t0; window = t0 + 12 s
+    vi.setSystemTime(t0 + 13_000); // first token arrives AFTER addressedUntil
+    await agentReply(upstream, "前方畅通。");
+
+    // Latched-at-ASR means the reply still goes through.
+    expect(forwardedAudio(send)).toHaveLength(1);
+
+    await provider.close();
+  });
+
   it("answers follow-up turns inside the window without the name", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000_000);

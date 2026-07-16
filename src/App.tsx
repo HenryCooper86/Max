@@ -144,8 +144,10 @@ export function App() {
   const [flagTargetId, setFlagTargetId] = useState<number | null>(null);
   const flagTurn = useCallback(
     (item: TranscriptItem, reason: string) => {
-      agent.sendTurnFeedback(item, reason);
-      setFlagTargetId(null);
+      // sendTurnFeedback returns false when the socket isn't OPEN (connected can
+      // be true while it is momentarily CLOSING, e.g. mid restartSession). Keep
+      // the picker open on failure so the tap isn't silently dropped.
+      if (agent.sendTurnFeedback(item, reason)) setFlagTargetId(null);
     },
     [agent]
   );

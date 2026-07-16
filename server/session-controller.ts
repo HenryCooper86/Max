@@ -94,7 +94,7 @@ function assertOptionalMemory(value: unknown) {
   assertOptionalEnum(memory.lastIntent, RIDER_INTENTS, "memory.lastIntent");
   if (
     memory.destination !== undefined &&
-    (typeof memory.destination !== "string" || memory.destination.length > MAX_MEMORY_DESTINATION_BYTES)
+    (typeof memory.destination !== "string" || Buffer.byteLength(memory.destination) > MAX_MEMORY_DESTINATION_BYTES)
   ) {
     throw new Error("Invalid memory.destination");
   }

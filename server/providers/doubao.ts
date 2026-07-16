@@ -325,7 +325,11 @@ function parseJsonPayload(frame: ParsedDoubaoFrame) {
   if (frame.payload.length > MAX_JSON_PAYLOAD_BYTES) {
     throw new Error("Doubao JSON payload exceeds size limit");
   }
-  return JSON.parse(frame.payload.toString()) as Record<string, unknown>;
+  // A scalar payload (`null`, a number, a string) is valid JSON but not the
+  // record every consumer expects; coerce it to {} so field access (e.g.
+  // extractAsrText's payload.results) can't throw on it.
+  const parsed = JSON.parse(frame.payload.toString());
+  return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
 }
 
 function extractTextFields(value: unknown, depth = 0): string[] {
@@ -429,6 +433,11 @@ export function createDoubaoProvider(
   // When the rider last said "Max" explicitly — follow-up turns slide the
   // window but never past this + WAKE_FOLLOWUP_MAX_CHAIN_MS.
   let lastExplicitWakeAt = 0;
+  // Whether the CURRENT rider turn addressed Max, decided when the turn's ASR is
+  // classified (not re-derived from the wall clock when the agent's first frame
+  // lands — first-token latency could otherwise push past addressedUntil and
+  // silently drop a reply the rider legitimately addressed).
+  let riderTurnAddressed = false;
   let replyDecided = false;
   let replyAddressed = false;
   let lastFlushedAgentTextKey = "";
@@ -472,7 +481,7 @@ export function createDoubaoProvider(
   function replyIsAddressed(): boolean {
     if (!wakeWordEnabled) return true;
     if (!replyDecided) {
-      replyAddressed = Date.now() <= addressedUntil;
+      replyAddressed = riderTurnAddressed;
       replyDecided = true;
       if (!replyAddressed) log.debug("reply suppressed — rider did not address Max", { riderTurnText });
     }
@@ -718,11 +727,15 @@ export function createDoubaoProvider(
             // chunk, which repeated the same status dozens of times a reply.
             sendClient({ type: "status", state: "speaking", detail: "已收到豆包语音音频" });
           }
-          receivedTtsAudio = true;
-          clearTtsFallbackTimer();
           // Backpressure guard: if the client socket cannot drain (slow or stalled
           // link), drop voice frames instead of queueing them in server memory.
+          // Only mark the turn as having delivered audio (and cancel the
+          // browser-speech fallback) when a frame is actually forwarded —
+          // otherwise a fully-saturated link would report "spoke" while the rider
+          // heard nothing and got no fallback.
           if (client.readyState === client.OPEN && client.bufferedAmount < MAX_CLIENT_BUFFERED_BYTES) {
+            receivedTtsAudio = true;
+            clearTtsFallbackTimer();
             telemetry?.serverAudio(frame.payload.byteLength);
             client.send(frame.payload, { binary: true });
           }
@@ -752,6 +765,7 @@ export function createDoubaoProvider(
           fallbackSpoke = false;
           riderTurnText = "";
           riderTurnFinalized = false;
+          riderTurnAddressed = false;
           replyDecided = false;
           replyAddressed = false;
           sendClient({ type: "status", state: "hearing", detail: "豆包检测到骑手语音" });
@@ -779,11 +793,13 @@ export function createDoubaoProvider(
               if (containsWakePhrase(riderTurnText)) {
                 lastExplicitWakeAt = now;
                 addressedUntil = now + WAKE_FOLLOWUP_WINDOW_MS;
+                riderTurnAddressed = true;
               } else if (now <= addressedUntil) {
                 addressedUntil = Math.min(
                   now + WAKE_FOLLOWUP_WINDOW_MS,
                   lastExplicitWakeAt + WAKE_FOLLOWUP_MAX_CHAIN_MS
                 );
+                riderTurnAddressed = true;
               }
             }
             memory = updateSessionMemory(memory, text, rideContext.mode);

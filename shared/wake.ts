@@ -29,7 +29,10 @@ export const WAKE_FOLLOWUP_MAX_CHAIN_MS = 60_000;
 // renderings are kept separate: Chinese ASR output has no spaces, so they must
 // match inside a Han run ("麦克斯今天天气") where a token boundary never appears.
 const GREETINGS = ["hey", "hi", "hiya", "hello", "yo", "ok", "okay", "嘿", "嗨", "喂", "你好", "哈喽", "哈罗"];
-const LATIN_NAME_VARIANTS = ["max", "maxx", "maxs", "macks", "mack", "marks", "mac", "mags", "maximus", "maxwell"];
+// "maxwell"/"maximus" are deliberately excluded: they are full, distinct words
+// (Maxwell's equations, Maximus), not short ASR mishearings of "Max", and would
+// false-wake on ordinary speech — mirroring the CJK exclusion of 麦克斯韦.
+const LATIN_NAME_VARIANTS = ["max", "maxx", "maxs", "macks", "mack", "marks", "mac", "mags"];
 const CJK_NAME_VARIANTS = ["麦克斯", "马克斯", "马克思", "迈克斯", "麦克思"];
 
 // A Latin name variant as a standalone token, with an optional greeting in

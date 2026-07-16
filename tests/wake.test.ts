@@ -50,6 +50,13 @@ describe("containsWakePhrase", () => {
     expect(containsWakePhrase("maximize the range")).toBe(false);
   });
 
+  it("does not wake on full words that merely contain a name variant", () => {
+    // "maxwell"/"maximus" are whole words, not mishearings of "Max" — they must
+    // not false-wake (mirrors the CJK exclusion of 麦克斯韦 / Maxwell).
+    expect(containsWakePhrase("maxwell's equations are hard")).toBe(false);
+    expect(containsWakePhrase("maximus the gladiator")).toBe(false);
+  });
+
   it("does not match Chinese false friends that embed a name variant", () => {
     // 马克思主义 (Marxism) embeds 马克思; 麦克斯韦 (Maxwell) embeds 麦克斯.
     expect(containsWakePhrase("我在读马克思主义的书")).toBe(false);

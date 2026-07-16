@@ -17,7 +17,12 @@ const RATE_WINDOW_MS = 60_000;
 // Per-address timestamps of recent upgrade attempts within the trailing window.
 const rateHits = new Map<string, number[]>();
 
-/** Compares secrets without leaking length/prefix information via timing. */
+/**
+ * Compares secrets without leaking prefix information via timing. The length
+ * pre-check is mandatory — timingSafeEqual throws on unequal-length buffers — so
+ * the expected length is (negligibly, for a high-entropy token) observable; only
+ * the byte-by-byte comparison is constant-time.
+ */
 function tokenMatches(provided: string, expected: string): boolean {
   const a = Buffer.from(provided);
   const b = Buffer.from(expected);

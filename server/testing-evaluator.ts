@@ -1,10 +1,12 @@
-import type { TesterTranscriptTurn } from "../shared/agent";
+import type { TesterSessionSummary, TesterTranscriptTurn } from "../shared/agent";
 import {
   findTestingTestCase,
   type TestingCheckStatus,
   type TestingEvaluationCheck,
   type TestingEvaluationSummary,
-  type TestingQuality
+  type TestingInvalidReason,
+  type TestingQuality,
+  type TestingValiditySummary
 } from "../shared/testing";
 import { containsWakePhrase, WAKE_FOLLOWUP_MAX_CHAIN_MS, WAKE_FOLLOWUP_WINDOW_MS } from "../shared/wake";
 
@@ -396,4 +398,74 @@ export function evaluateTestingSession(input: TestingEvaluationInput): TestingEv
     quality: qualityFromChecks(checks),
     checks
   };
+}
+
+const MIN_VALID_SESSION_MS = 1_500;
+
+function validityDetail(reasons: TestingInvalidReason[]): string {
+  if (!reasons.length) return "Valid release evidence.";
+  const labels: Record<TestingInvalidReason, string> = {
+    "too-short": "session ended too quickly",
+    "missing-transcript": "required transcript missing",
+    "missing-rider-turn": "required rider turn missing",
+    "missing-agent-turn": "required agent reply missing",
+    "missing-mic-audio": "required mic audio missing"
+  };
+  return `Invalid release evidence: ${reasons.map((reason) => labels[reason]).join(", ")}.`;
+}
+
+/** Deterministic release-validity classification against the CURRENT catalog. */
+export function classifySessionEvidence(input: {
+  testCaseId: string;
+  durationMs: number;
+  micFrames: number;
+  turns: TesterTranscriptTurn[];
+}): TestingValiditySummary {
+  const testCase = findTestingTestCase(input.testCaseId);
+  const minRiderTurns = testCase.minRiderTurns ?? (testCase.requireTranscript && !testCase.requireAdasAlert ? 1 : 0);
+  const minAgentTurns = testCase.minAgentTurns ?? (testCase.requireTranscript ? 1 : 0);
+  const riderTurns = input.turns.filter((turn) => turn.speaker === "rider").length;
+  const agentTurns = input.turns.filter((turn) => turn.speaker === "agent").length;
+  const reasons: TestingInvalidReason[] = [];
+
+  if (input.durationMs < MIN_VALID_SESSION_MS) reasons.push("too-short");
+  if (testCase.requireTranscript && input.turns.length === 0) reasons.push("missing-transcript");
+  if (riderTurns < minRiderTurns) reasons.push("missing-rider-turn");
+  if (agentTurns < minAgentTurns) reasons.push("missing-agent-turn");
+  if (testCase.requireMicAudio && input.micFrames <= 0) reasons.push("missing-mic-audio");
+
+  return {
+    status: reasons.length ? "invalid" : "valid",
+    reasons,
+    detail: validityDetail(reasons)
+  };
+}
+
+/**
+ * Re-derive quality/validity/evaluation/flags for a STORED session against the
+ * current catalog, exactly as metrics does on read. The durable evidence layer
+ * (session page, assignment crediting) must use THIS — not the capture-time
+ * quality/validity frozen in the payload — so a post-capture policy change can't
+ * make the store credit/show a session the release gate now excludes. The
+ * capture-time snapshot stays available on captured*.
+ */
+export function reevaluateStoredSession(summary: TesterSessionSummary): TesterSessionSummary {
+  const evaluation = evaluateTestingSession({
+    testCaseId: summary.testCaseId,
+    p95LatencyMs: summary.p95LatencyMs,
+    micFrames: summary.micFrames,
+    errorEvents: summary.errorEvents,
+    ttsFallbacks: summary.ttsFallbacks,
+    turns: summary.turns
+  });
+  const flags = evaluation.checks
+    .filter((item) => item.status === "fail" || item.status === "warn")
+    .map((item) => item.id);
+  const validity = classifySessionEvidence({
+    testCaseId: summary.testCaseId,
+    durationMs: summary.durationMs,
+    micFrames: summary.micFrames,
+    turns: summary.turns
+  });
+  return { ...summary, quality: evaluation.quality, validity, flags, evaluation };
 }

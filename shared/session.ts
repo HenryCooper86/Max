@@ -74,8 +74,10 @@ export function updateSessionMemory(memory: SessionMemory, text: string, rideMod
 function preferredLanguage(text: string, previous: SupportedLanguage): SupportedLanguage {
   if (detectLanguage(text) === "zh") return "zh";
   const latinWords = text.match(/[a-z]+/gi) ?? [];
-  const letterCount = latinWords.reduce((sum, word) => sum + word.length, 0);
-  return latinWords.length >= 2 || letterCount >= 6 ? "en" : previous;
+  // Only a multi-word Latin utterance is "distinctly English." A lone token —
+  // however long — stays on the previous language: a single proper noun like a
+  // road name ("Gangnam") must not flip a Chinese session's prompt + TTS voice.
+  return latinWords.length >= 2 ? "en" : previous;
 }
 
 export function createSessionMemory(mode: RideMode): SessionMemory {
@@ -193,7 +195,18 @@ function inferDestination(text: string): string | undefined {
   // Stop at any punctuation — including the fullwidth ？！、 that Chinese ASR
   // emits — so 带我回家！ captures 家, not 家！.
   const zhMatch = text.match(/(?:去|到|回)([^，。,.!?？！、；：\s]{1,12})/);
-  if (zhMatch?.[1]) return zhMatch[1].trim();
+  if (zhMatch?.[1]) {
+    const raw = zhMatch[1].trim();
+    // Punctuation-free Chinese ASR over-captures the following action clause
+    // (到公司门口接我 → 公司门口接我). Trim a trailing verb+object clause so the
+    // stored 目的地 is place-like. The object is REQUIRED, so place names that
+    // merely start with such a verb (小吃街, 接待中心, 纽约) are left intact.
+    const trimmed = raw.replace(
+      /(?:接|送|找|见|等|叫|陪|带)(?:我|你|他|她|我们|你们|一下|一趟).*$|吃(?:个|顿)?(?:饭|东西|夜宵|早饭|午饭|晚饭).*$/,
+      ""
+    );
+    return (trimmed || raw).trim();
+  }
   // Require a destination-bearing phrase. A bare "to" would over-match ordinary
   // infinitives ("I want to ride") and capture them as a destination. Cap the
   // place at four words so a trailing clause ("… right now please") isn't

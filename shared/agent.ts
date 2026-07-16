@@ -59,6 +59,13 @@ export type TesterSessionSummary = {
   latencySamples: number;
   avgLatencyMs: number;
   p95LatencyMs: number;
+  /**
+   * Bounded raw per-turn latency samples, kept so build/gate/cohort p95 can be a
+   * TRUE pooled percentile instead of a percentile-of-per-session-p95s (which, at
+   * QA sample sizes, collapses to the single worst session). Optional: sessions
+   * captured before this field fall back to their p95LatencyMs.
+   */
+  latencyMsSamples?: number[];
   errorEvents: number;
   ttsFallbacks: number;
   quality: TestingQuality;
@@ -104,6 +111,12 @@ export type TesterStats = {
   p95LatencyMs: number;
   errorEvents: number;
   ttsFallbacks: number;
+  /**
+   * Server-aggregated pass/watch/fail counts across ALL of this tester's graded
+   * sessions. The admin table must read these, not re-derive them from the
+   * paginated session page (which under-counts and disagrees with totalSessions).
+   */
+  qualityCounts: Record<TestingQuality, number>;
   lastSeenAt: number;
   recentTurns: TesterTranscriptTurn[];
 };

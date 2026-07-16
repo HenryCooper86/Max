@@ -127,9 +127,12 @@ export function AccountAdmin({ adminUsername }: { adminUsername: string }) {
   const adminCount = users.filter((user) => user.role === "admin").length;
   const reviewerCount = users.filter((user) => user.role === "reviewer").length;
   const testerCount = users.filter((user) => user.role === "tester").length;
-  const expiringInviteCount = invites.filter(
-    (invite) => invite.expiresAt - Date.now() <= INVITE_EXPIRING_SOON_MS
-  ).length;
+  const expiringInviteCount = invites.filter((invite) => {
+    const remainingMs = invite.expiresAt - Date.now();
+    // "Expiring soon" excludes already-expired invites (remainingMs <= 0), which
+    // formatInviteExpiry renders separately as 已过期.
+    return remainingMs > 0 && remainingMs <= INVITE_EXPIRING_SOON_MS;
+  }).length;
 
   return (
     <div className="accountAdmin" aria-label="账号管理">

@@ -29,6 +29,7 @@ import {
   type TestingSessionQuery
 } from "../shared/testing";
 import { createLogger } from "./logger";
+import { reevaluateStoredSession } from "./testing-evaluator";
 import {
   DEFAULT_TESTING_STORAGE_DIRECTORY,
   ensureTestingStorageDirectorySync,
@@ -205,7 +206,10 @@ function canonicalEvidence(value: unknown, root = true): unknown {
             "testCaseName"
           ].includes(key)
       )
-      .sort(([left], [right]) => left.localeCompare(right))
+      // Codepoint order, NOT localeCompare: a canonical tamper-detection hash
+      // must not depend on the host's ICU/locale build. (For the current ASCII
+      // evidence keys both orders are identical, so no stored hash changes.)
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
       .map(([key, item]) => [key, canonicalEvidence(item, false)])
   );
 }
@@ -394,7 +398,12 @@ export function storedTestingSessionPage(
   const items = rows
     .slice(0, limit)
     .map((row) => parseJson<TesterSessionSummary>(row.payload_json))
-    .filter((session): session is TesterSessionSummary => Boolean(session));
+    .filter((session): session is TesterSessionSummary => Boolean(session))
+    // Re-derive quality/validity against the current catalog so the durable
+    // evidence page shows the SAME classification the release gate uses, not the
+    // capture-time value frozen in the payload (which a later policy change
+    // makes stale). The capture-time snapshot stays on captured*.
+    .map(reevaluateStoredSession);
   return {
     items,
     total: Number(count?.count ?? 0),
@@ -850,9 +859,13 @@ function completeAssignmentFromSession(assignmentId: string, sessionId: string, 
   const session = database()
     .prepare("SELECT payload_json FROM testing_sessions WHERE session_id = ?")
     .get(sessionId) as { payload_json?: string } | undefined;
-  const evidence = parseJson<TesterSessionSummary>(session?.payload_json);
+  const stored = parseJson<TesterSessionSummary>(session?.payload_json);
   const requirement = run.requirements.find((item) => item.id === assignment.requirementId);
-  if (!evidence || !requirement || evidence.runId !== run.id) return;
+  if (!stored || !requirement || stored.runId !== run.id) return;
+  // Credit on the CURRENT-catalog validity (matching the release gate), not the
+  // capture-time capturedValidity frozen in the payload — otherwise a run can be
+  // marked "ready" on evidence the gate now excludes.
+  const evidence = reevaluateStoredSession(stored);
   const language = evidence.browserLanguage.toLowerCase().split(/[-_]/)[0];
   const network = evidence.networkType.toLowerCase();
   const networkMatches =
@@ -863,7 +876,7 @@ function completeAssignmentFromSession(assignmentId: string, sessionId: string, 
     evidence.testerId === assignment.assignee &&
     evidence.testCaseId === assignment.testCaseId &&
     testingBuildsMatch(evidence.gitCommit, run.build) &&
-    evidence.capturedValidity.status === "valid" &&
+    evidence.validity.status === "valid" &&
     evidence.evidenceIntegrity !== "mismatch" &&
     (assignment.platform === "unknown" || evidence.platform === assignment.platform) &&
     (requirement.language === "any" || language === requirement.language) &&
@@ -918,10 +931,20 @@ export function upsertTestingReview(
   const sessionId = cleanString(input.sessionId, "", 120);
   if (!sessionId) return null;
   const requestedId = cleanString(input.id, "", 80);
+  // Look the target up with an indexed query, not a capped in-memory scan: with
+  // more than ~500 reviews, an older-but-open review (or an update-by-id for an
+  // old review) fell outside listTestingReviews' window and silently minted a
+  // duplicate instead of updating in place.
+  const findReviewRow = (sql: string, param: string): TestingReview | null => {
+    const row = database().prepare(sql).get(param) as { payload_json?: string } | undefined;
+    return row ? parseJson<TestingReview>(row.payload_json) : null;
+  };
   const existing = requestedId
-    ? listTestingReviews(500).find((review) => review.id === requestedId)
-    : listTestingReviews(500).find(
-        (review) => review.sessionId === sessionId && (review.status === "open" || review.status === "triaged")
+    ? findReviewRow("SELECT payload_json FROM testing_reviews WHERE id = ?", requestedId)
+    : findReviewRow(
+        "SELECT payload_json FROM testing_reviews WHERE session_id = ? AND status IN ('open', 'triaged') " +
+          "ORDER BY updated_at DESC LIMIT 1",
+        sessionId
       );
   const status =
     typeof input.status === "string" && REVIEW_STATUSES.has(input.status as TestingReviewStatus)

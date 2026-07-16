@@ -119,6 +119,40 @@ describe("testing operations store", () => {
     ]);
   });
 
+  it("credits and displays on re-evaluated validity, not the capture-time payload", () => {
+    const run = createTestingRun({ name: "Candidate", build: "candidate-build", owner: "lead" }, "lead", "current");
+    const requirement = run.requirements.find((item) => item.id === "baseline-live-session:web");
+    if (!requirement) return;
+    const assigned = createTestingAssignment(run.id, { requirementId: requirement.id, assignee: "rider" }, "lead");
+    const assignment = assigned?.assignments[0];
+    if (!assignment) return;
+
+    // The stored payload CLAIMS valid/pass, but its (empty) transcript would
+    // re-evaluate as invalid/fail under the current catalog — as if it were
+    // captured under an older, looser policy.
+    saveTestingSession(
+      sessionEvidence("stale-valid", run.id, assignment.id, {
+        turns: [],
+        micFrames: 0,
+        quality: "pass",
+        validity: { status: "valid", reasons: [], detail: "Valid release evidence." },
+        capturedValidity: { status: "valid", reasons: [], detail: "Valid release evidence." }
+      })
+    );
+
+    // Not credited: re-evaluated validity is invalid, matching the release gate.
+    expect(getTestingRun(run.id)?.assignments[0].completedSessionIds).toEqual([]);
+
+    // The durable page shows the re-evaluated classification, not the stale payload…
+    const shown = storedTestingSessionPage({ testCaseId: "baseline-live-session" }).items.find(
+      (session) => session.sessionId === "stale-valid"
+    );
+    expect(shown?.validity.status).toBe("invalid");
+    expect(shown?.quality).toBe("fail");
+    // …while the capture-time snapshot stays available for the audit trail.
+    expect(shown?.capturedValidity.status).toBe("valid");
+  });
+
   it("only credits matching decision-grade evidence to an assignment", () => {
     const active = getActiveTestingPolicy();
     createTestingPolicy(
@@ -281,5 +315,27 @@ describe("testing operations store", () => {
     const reopened = upsertTestingReview({ sessionId: first.sessionId, title: "New occurrence" }, "reviewer", 32_000);
     expect(reopened?.id).not.toBe(original.id);
     expect(reopened?.status).toBe("open");
+  });
+
+  it("updates an existing review in place even when it is buried beyond the recent window", () => {
+    // An open review created first, then buried under >500 newer reviews so it
+    // falls outside listTestingReviews' capped scan.
+    const target = upsertTestingReview({ sessionId: "buried-session", title: "Investigate" }, "reviewer", 1_000);
+    expect(target).toBeTruthy();
+    if (!target) return;
+    for (let i = 0; i < 600; i += 1) {
+      upsertTestingReview({ sessionId: `filler-${i}`, title: "Filler" }, "reviewer", 2_000 + i);
+    }
+
+    // Update by id must patch the buried review in place, not mint a duplicate.
+    const updated = upsertTestingReview(
+      { id: target.id, sessionId: "buried-session", status: "resolved", resolution: "Fixed" },
+      "lead",
+      700_000
+    );
+    expect(updated?.id).toBe(target.id);
+    expect(updated?.status).toBe("resolved");
+    const forSession = listTestingReviews(1_000).filter((review) => review.sessionId === "buried-session");
+    expect(forSession).toHaveLength(1);
   });
 });

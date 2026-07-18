@@ -5,6 +5,7 @@ import { buildInfo } from "./build-info";
 // config only inside functions, so this import cycle never bites at load time.
 import { authActive, registrationOpen } from "./accounts";
 import { metrics, metricsWindow, testingSnapshot } from "./metrics";
+import { userMemoryEnabled } from "./user-memory";
 
 export type VoiceProvider = "mock" | "doubao";
 export type WeatherLocation = {
@@ -118,6 +119,7 @@ export function describeConfig(): string[] {
     `Wake word ("Max"): ${config.wakeWord ? "on" : "off"}`,
     `Relay auth token: ${config.relayAuthToken ? "required" : "open"}`,
     `User accounts: ${authActive() ? "active" : "none yet"} · registration ${config.authRegistration ? "open" : "closed"}`,
+    `Per-user conversation memory: ${userMemoryEnabled() ? "on" : "off"}`,
     `Relay origin allowlist: ${config.allowedOrigins.length ? config.allowedOrigins.join(", ") : "any"}`,
     `Relay rate limit: ${config.connPerMinute ? `${config.connPerMinute} conn/min/IP (sliding)` : "off"}`,
     `Relay heartbeat: ${config.heartbeatMs ? `ping every ${Math.round(config.heartbeatMs / 1000)} s` : "off"}`,

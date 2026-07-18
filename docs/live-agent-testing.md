@@ -47,7 +47,7 @@ npm test -- -t "rejects frames that are too short"
 npm run test:watch                # watch mode, reruns on change
 ```
 
-The current Vitest suite is 225 tests across 25 files and runs in a few seconds.
+The current Vitest suite is 247 tests across 26 files and runs in a few seconds.
 
 ---
 
@@ -148,13 +148,19 @@ does its own VAD). The native apps surface this in the hidden developer panel
 ## 4. Session memory & safety policy
 
 **What it does:** Tracks language, last intent, destination, and response mode
-across a ride. Infers emergency intent and escalates the response mode; keeps
-riding/navigation answers concise; builds the safety, personality, intent, and
-session-memory prompt fragments fed to Doubao.
+across a ride. For authenticated users, the relay also stores a private,
+server-owned 24-turn window across later conversations and devices; the latest
+8 turns are supplied to Doubao as explicitly untrusted history. Anonymous and
+operator-token sessions never share memory. It infers emergency intent and
+escalates the response mode; keeps riding/navigation answers concise; and
+builds the safety, personality, intent, and session-memory prompt fragments fed
+to Doubao.
 
 **Code:** `shared/session.ts` (`createSessionMemory`, `updateSessionMemory`,
 `inferIntent`, `responseModeForRide`, `buildSafetyPrompt`,
-`buildPersonalityPrompt`, `buildIntentGuidancePrompt`, `buildSessionMemoryPrompt`).
+`buildPersonalityPrompt`, `buildIntentGuidancePrompt`, `buildSessionMemoryPrompt`),
+plus `server/user-memory.ts` (durable user isolation, bounds, sanitization,
+forgetting, and safe prompt formatting).
 
 **Unit test:** `tests/session.test.ts` — emergency escalation, concise-vs-normal
 mode, language/destination/intent inference (including the bare-infinitive
@@ -163,6 +169,7 @@ fallback, and high-speed safety policy (>60 km/h).
 
 ```bash
 npm test -- "session memory"
+npm test -- "per-user conversation memory"
 ```
 
 **Live test (mock):** Start the relay and web client, pick the `紧急` scenario.
@@ -174,7 +181,11 @@ developer panel to confirm `responseMode` and `destination` propagate.
 help" — `inferIntent` flips to `emergency`, `responseModeForRide` returns
 `emergency`, and Max switches to the emergency persona. Confirm the system
 prompt actually changed by inspecting the relay logs (`logger.ts` prints the
-session start).
+session start). Disconnect and start a new session with the same login; ask
+"上次我们聊到哪里？" and verify Max can use the prior context. Log in as a
+second user and verify it cannot. The account bar shows the saved-turn count
+and provides a two-step clear action; after clearing, a new session must not
+recall the old exchange.
 
 ---
 
@@ -524,8 +535,9 @@ desktop Wi-Fi run from hiding a mobile field regression.
 ### Automated checks
 
 ```bash
-npm test                    # 225 Vitest tests across 25 files
+npm test                    # 247 Vitest tests across 26 files
 npm run test:fault-matrix   # 24 nominal/error/latency/unsafe variants
+npm run check               # format + lint + both checks above + production build
 
 TESTING_GATE_URL=https://qa.example.com \
 TESTING_GATE_TOKEN=... \
@@ -676,23 +688,24 @@ What to confirm in one pass:
 
 ## Test matrix (all functions, one table)
 
-| #   | Function                  | Code                                          | Unit test                                          | Live layer                      |
-| --- | ------------------------- | --------------------------------------------- | -------------------------------------------------- | ------------------------------- |
-| 1   | Wake word "Max"           | `shared/wake.ts`                              | `tests/wake.test.ts`                               | Doubao                          |
-| 2   | Language detection        | `shared/language.ts`                          | `tests/language.test.ts`                           | any                             |
-| 3   | Provider capabilities     | `shared/agent.ts`                             | `tests/agent.test.ts`                              | any (inspect `session.started`) |
-| 4   | Session memory & safety   | `shared/session.ts`                           | `tests/session.test.ts`                            | mock + Doubao                   |
-| 5   | Ride intelligence         | `shared/ride.ts`                              | `tests/ride.test.ts`                               | mock                            |
-| 6   | Weather risk              | `server/weather.ts`                           | `tests/weather.test.ts`                            | any (location)                  |
-| 7   | ADAS hazard alerts        | `shared/adas.ts`, `server/hazard-injector.ts` | `tests/adas.test.ts`                               | mock (auto); Doubao (ADAS)      |
-| 8   | Doubao frame protocol     | `server/providers/doubao.ts`                  | `tests/doubao-frame.test.ts`                       | Doubao                          |
-| 9   | Doubao voice & prompts    | `server/providers/doubao.ts`                  | `tests/doubao-voice.test.ts`                       | Doubao                          |
-| 10  | Relay auth & rate limit   | `server/auth.ts`                              | `tests/auth.test.ts`                               | any (reconnect)                 |
-| 11  | WebSocket relay lifecycle | `server/session-controller.ts`                | `tests/websocket.test.ts`                          | any                             |
-| 12  | Client event validation   | `server/session-controller.ts`                | `tests/websocket.test.ts`                          | any (raw `ws`)                  |
-| 13  | Audio packet metrics      | `shared/audio.ts`                             | `tests/audio.test.ts`                              | web                             |
-| 14  | Per-tester statistics     | `server/metrics.ts`, `src/App.tsx`            | `tests/metrics.test.ts`, `tests/websocket.test.ts` | web + `/health`                 |
-| 15  | Mock scenario cycling     | `server/providers/mock.ts`                    | `tests/adas.test.ts`, `tests/websocket.test.ts`    | mock                            |
+| #   | Function                     | Code                                          | Unit test                                              | Live layer                      |
+| --- | ---------------------------- | --------------------------------------------- | ------------------------------------------------------ | ------------------------------- |
+| 1   | Wake word "Max"              | `shared/wake.ts`                              | `tests/wake.test.ts`                                   | Doubao                          |
+| 2   | Language detection           | `shared/language.ts`                          | `tests/language.test.ts`                               | any                             |
+| 3   | Provider capabilities        | `shared/agent.ts`                             | `tests/agent.test.ts`                                  | any (inspect `session.started`) |
+| 4   | Session memory & safety      | `shared/session.ts`                           | `tests/session.test.ts`                                | mock + Doubao                   |
+| 5   | Ride intelligence            | `shared/ride.ts`                              | `tests/ride.test.ts`                                   | mock                            |
+| 6   | Weather risk                 | `server/weather.ts`                           | `tests/weather.test.ts`                                | any (location)                  |
+| 7   | ADAS hazard alerts           | `shared/adas.ts`, `server/hazard-injector.ts` | `tests/adas.test.ts`                                   | mock (auto); Doubao (ADAS)      |
+| 8   | Doubao frame protocol        | `server/providers/doubao.ts`                  | `tests/doubao-frame.test.ts`                           | Doubao                          |
+| 9   | Doubao voice & prompts       | `server/providers/doubao.ts`                  | `tests/doubao-voice.test.ts`                           | Doubao                          |
+| 10  | Relay auth & rate limit      | `server/auth.ts`                              | `tests/auth.test.ts`                                   | any (reconnect)                 |
+| 11  | WebSocket relay lifecycle    | `server/session-controller.ts`                | `tests/websocket.test.ts`                              | any                             |
+| 12  | Client event validation      | `server/session-controller.ts`                | `tests/websocket.test.ts`                              | any (raw `ws`)                  |
+| 13  | Audio packet metrics         | `shared/audio.ts`                             | `tests/audio.test.ts`                                  | web                             |
+| 14  | Per-tester statistics        | `server/metrics.ts`, `src/App.tsx`            | `tests/metrics.test.ts`, `tests/websocket.test.ts`     | web + `/health`                 |
+| 15  | Mock scenario cycling        | `server/providers/mock.ts`                    | `tests/adas.test.ts`, `tests/websocket.test.ts`        | mock                            |
+| 16  | Per-user conversation memory | `server/user-memory.ts`                       | `tests/user-memory.test.ts`, `tests/websocket.test.ts` | authenticated mock + Doubao     |
 
 Run the whole unit suite at any time:
 
@@ -700,6 +713,7 @@ Run the whole unit suite at any time:
 npm test      # full Vitest suite
 npm run lint
 npm run format:check
+npm run check     # all local/CI gates in one command
 ```
 
 For the native clients, compile-check before relying on a run:

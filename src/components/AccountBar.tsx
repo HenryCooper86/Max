@@ -3,14 +3,17 @@
 // panel's AccountBar (bootstrap registration of the very first account, and
 // the logged-in identity chip with logout).
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import {
   authToken,
   changePasswordAccount,
+  fetchUserMemorySummary,
+  forgetUserMemory,
   loginAccount,
   logoutAccount,
   registerAccount,
-  type AuthUser
+  type AuthUser,
+  type UserMemorySummary
 } from "../lib/auth";
 
 type FormProps = {
@@ -170,6 +173,30 @@ export function AccountBar({ authEnabled, registrationOpen, user, onSignedIn, on
   const [copied, setCopied] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
   const [passwordChanged, setPasswordChanged] = useState(false);
+  const [memorySummary, setMemorySummary] = useState<UserMemorySummary | null>(null);
+  const [memoryBusy, setMemoryBusy] = useState(false);
+  const [memoryClearArmed, setMemoryClearArmed] = useState(false);
+  const [memoryNotice, setMemoryNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!user) {
+      setMemorySummary(null);
+      return;
+    }
+    let active = true;
+    void fetchUserMemorySummary().then((summary) => {
+      if (active) setMemorySummary(summary);
+    });
+    return () => {
+      active = false;
+    };
+  }, [user]);
+
+  useEffect(() => {
+    if (!memoryClearArmed) return;
+    const timer = window.setTimeout(() => setMemoryClearArmed(false), 4000);
+    return () => window.clearTimeout(timer);
+  }, [memoryClearArmed]);
 
   if (user) {
     return (
@@ -206,6 +233,29 @@ export function AccountBar({ authEnabled, registrationOpen, user, onSignedIn, on
           </button>
           <button
             type="button"
+            className={`danger ${memoryClearArmed ? "armed" : ""}`}
+            disabled={memoryBusy || !memorySummary?.turnCount}
+            title="清除 Max 为当前登录用户保存的跨会话记忆"
+            onClick={() => {
+              if (!memoryClearArmed) {
+                setMemoryClearArmed(true);
+                setMemoryNotice(null);
+                return;
+              }
+              setMemoryBusy(true);
+              setMemoryClearArmed(false);
+              void forgetUserMemory()
+                .then((ok) => {
+                  setMemoryNotice(ok ? "记忆已清除 ✓" : "清除记忆失败");
+                  if (ok) setMemorySummary((summary) => (summary ? { ...summary, turnCount: 0 } : summary));
+                })
+                .finally(() => setMemoryBusy(false));
+            }}
+          >
+            {memoryClearArmed ? "确认清除记忆?" : memorySummary ? `记忆 ${memorySummary.turnCount} 条` : "记忆…"}
+          </button>
+          <button
+            type="button"
             disabled={busy}
             onClick={() => {
               setBusy(true);
@@ -229,6 +279,7 @@ export function AccountBar({ authEnabled, registrationOpen, user, onSignedIn, on
             }}
           />
         ) : null}
+        {memoryNotice ? <p className="accountMemoryNotice">{memoryNotice}</p> : null}
       </div>
     );
   }

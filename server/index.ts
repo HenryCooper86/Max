@@ -13,6 +13,7 @@ import {
   listUsers,
   loginUser,
   logoutSession,
+  normalizeUsername,
   registerUser,
   revokeInvite,
   setUserRole
@@ -65,14 +66,16 @@ import type { AgentProvider, ProviderTelemetry } from "./providers/types";
 import { AgentSessionController } from "./session-controller";
 import { markClientActivity, startWatchdog, trackClient } from "./watchdog";
 import type { Logger } from "./logger";
+import { clearUserConversationMemory, userMemorySummary } from "./user-memory";
 
 const app = express();
 const server = http.createServer(app);
 // noServer: the upgrade is accepted only after authorizeUpgrade clears it.
 const wss = new WebSocketServer({ noServer: true });
+const authenticatedConnections = new Map<WebSocket, string>();
 const log = createLogger("relay");
 
-app.get("/health", (req, res) => {
+app.get("/health", (_req, res) => {
   // Liveness stays small and public. Evidence moved to scoped /testing APIs;
   // never resend every retained transcript on the five-second health poll.
   res.json(buildHealth(Math.round(process.uptime()), false));
@@ -172,6 +175,29 @@ app.get("/auth/me", (req, res) => {
   res.json({ ok: true, user });
 });
 
+// Self-service visibility/control for durable cross-conversation memory.
+// Raw history is intentionally not returned here; the summary is enough for
+// the UI to show whether memory exists without exposing transcripts again.
+app.get("/auth/memory", (req, res) => {
+  const user = requestUser(req);
+  if (!user) {
+    res.status(401).json({ ok: false, error: "未登录或会话已过期。" });
+    return;
+  }
+  res.json({ ok: true, memory: userMemorySummary(user.username) });
+});
+
+app.delete("/auth/memory", (req, res) => {
+  const user = requestUser(req);
+  if (!user) {
+    res.status(401).json({ ok: false, error: "未登录或会话已过期。" });
+    return;
+  }
+  const removed = clearUserConversationMemory(user.username);
+  log.info("user conversation memory cleared", { username: user.username, removed });
+  res.json({ ok: true, removed });
+});
+
 // Admin: user + invite management for onboarding testers while
 // self-registration stays closed.
 function requireAdmin(req: express.Request, res: express.Response) {
@@ -208,6 +234,11 @@ app.post("/auth/admin/users/delete", express.json(), (req, res) => {
   const body = (req.body ?? {}) as Record<string, unknown>;
   const result = deleteUser(body.username);
   if (result.ok) {
+    clearUserConversationMemory(body.username);
+    const deletedUsername = normalizeUsername(body.username);
+    for (const [client, username] of authenticatedConnections) {
+      if (username === deletedUsername) client.close(1008, "account deleted");
+    }
     log.info("user deleted", { by: admin.username, username: body.username });
     res.json(result);
   } else {
@@ -570,6 +601,8 @@ wss.on("connection", (client, request) => {
   const sessionLog = createLogger(`sess:${shortSessionId(randomUUID())}`);
   const address = clientAddress(request);
   const region = clientRegionHint(request);
+  const authenticatedUser = requestUser(request) ?? undefined;
+  if (authenticatedUser) authenticatedConnections.set(client, authenticatedUser.username);
   sessionLog.info("client connected", { address, region, provider: config.voiceProvider });
   metrics.sessionOpened();
   trackClient(client);
@@ -579,7 +612,7 @@ wss.on("connection", (client, request) => {
     sessionLog,
     address,
     region,
-    requestUser(request)?.username
+    authenticatedUser
   );
 
   client.on("message", async (data, isBinary) => {
@@ -594,6 +627,7 @@ wss.on("connection", (client, request) => {
   });
 
   client.on("close", async (code) => {
+    authenticatedConnections.delete(client);
     sessionLog.info("client disconnected", { code });
     metrics.sessionClosed();
     try {

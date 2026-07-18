@@ -1,10 +1,12 @@
 import http from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import type { AgentEvent } from "../shared/agent";
 import { AgentSessionController, normalizeRawData, parseClientEvent } from "../server/session-controller";
 import { createMockProvider } from "../server/providers/mock";
 import { metrics } from "../server/metrics";
+import type { AgentProvider, ProviderSessionContext, SessionStartEvent } from "../server/providers/types";
+import { recordUserMemoryEvent, resetUserMemoryForTests, userConversationMemory } from "../server/user-memory";
 
 let server: http.Server | undefined;
 let wss: WebSocketServer | undefined;
@@ -58,6 +60,7 @@ afterEach(async () => {
   wss = undefined;
   server = undefined;
   metrics.reset();
+  resetUserMemoryForTests();
 });
 
 describe("/agent WebSocket relay", () => {
@@ -96,6 +99,162 @@ describe("/agent WebSocket relay", () => {
     expect(events.some((event) => event.type === "transcript" && event.speaker === "rider")).toBe(true);
 
     socket.terminate();
+  });
+});
+
+describe("session controller ordering and lifecycle", () => {
+  function makeControllerProvider(overrides: Partial<AgentProvider> = {}): AgentProvider {
+    return {
+      start: async () => undefined,
+      startAudio: async () => undefined,
+      sendAudio: async () => undefined,
+      stopAudio: async () => undefined,
+      close: async () => undefined,
+      ...overrides
+    };
+  }
+
+  const startEvent = Buffer.from(JSON.stringify({ type: "session.start", sampleRate: 16000, channels: 1 }));
+
+  it("serializes async provider calls in WebSocket wire order", async () => {
+    const calls: string[] = [];
+    let releaseStart!: () => void;
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const provider = makeControllerProvider({
+      start: async () => {
+        calls.push("start:begin");
+        await startGate;
+        calls.push("start:end");
+      },
+      startAudio: async () => {
+        calls.push("audio:start");
+      },
+      sendAudio: async () => {
+        calls.push("audio:frame");
+      }
+    });
+    const client = { readyState: 1, OPEN: 1, send: vi.fn() } as never;
+    const controller = new AgentSessionController(client, () => provider);
+
+    const starting = controller.handleMessage(startEvent, false);
+    const audioStarting = controller.handleMessage(Buffer.from(JSON.stringify({ type: "audio.start" })), false);
+    const audioFrame = controller.handleMessage(Buffer.from([1, 2]), true);
+    await Promise.resolve();
+    expect(calls).toEqual(["start:begin"]);
+
+    releaseStart();
+    await Promise.all([starting, audioStarting, audioFrame]);
+    expect(calls).toEqual(["start:begin", "start:end", "audio:start", "audio:frame"]);
+    await controller.close();
+  });
+
+  it("rejects pre-start traffic and repeated session.start events", async () => {
+    const sendAudio = vi.fn(async () => undefined);
+    const start = vi.fn(async () => undefined);
+    const clientSend = vi.fn();
+    const client = { readyState: 1, OPEN: 1, send: clientSend } as never;
+    const controller = new AgentSessionController(client, () => makeControllerProvider({ start, sendAudio }));
+
+    await controller.handleMessage(Buffer.from([1, 2]), true);
+    await controller.handleMessage(startEvent, false);
+    await controller.handleMessage(startEvent, false);
+
+    expect(sendAudio).not.toHaveBeenCalled();
+    expect(start).toHaveBeenCalledTimes(1);
+    const errors = clientSend.mock.calls
+      .map(([payload]) => JSON.parse(String(payload)) as { type?: string; message?: string })
+      .filter((event) => event.type === "error");
+    expect(errors.map((event) => event.message)).toEqual([
+      "session.start must complete before audio",
+      "session.start has already been received"
+    ]);
+    await controller.close();
+  });
+
+  it("loads server-owned memory for an authenticated user and records new final turns", async () => {
+    recordUserMemoryEvent(
+      "alice",
+      { type: "session.memory", language: "zh", destination: "上海站", lastIntent: "navigation" },
+      10
+    );
+    recordUserMemoryEvent("alice", { type: "transcript", speaker: "rider", text: "上次去上海站" }, 11);
+
+    let capturedEvent: SessionStartEvent | undefined;
+    let capturedContext: ProviderSessionContext | undefined;
+    const client = { readyState: 1, OPEN: 1, send: vi.fn() } as never;
+    const controller = new AgentSessionController(
+      client,
+      (_socket, telemetry) =>
+        makeControllerProvider({
+          start: async (event, context) => {
+            capturedEvent = event;
+            capturedContext = context;
+            telemetry.serverEvent(
+              { type: "transcript", speaker: "agent", text: "我记得，上次目的地是上海站。", final: true },
+              1
+            );
+          }
+        }),
+      undefined,
+      "127.0.0.1",
+      undefined,
+      { username: "alice" }
+    );
+
+    await controller.handleMessage(
+      Buffer.from(
+        JSON.stringify({
+          type: "session.start",
+          sampleRate: 16000,
+          channels: 1,
+          memory: { language: "en", destination: "stale client destination" }
+        })
+      ),
+      false
+    );
+
+    expect(capturedEvent?.memory?.destination).toBe("上海站");
+    expect(capturedContext?.previousConversation?.turns.map((turn) => turn.text)).toEqual(["上次去上海站"]);
+    expect(userConversationMemory("alice")?.turns.map((turn) => turn.text)).toEqual([
+      "上次去上海站",
+      "我记得，上次目的地是上海站。"
+    ]);
+    await controller.close();
+  });
+
+  it("does not let a new authenticated user inherit another user's client snapshot", async () => {
+    let capturedEvent: SessionStartEvent | undefined;
+    const client = { readyState: 1, OPEN: 1, send: vi.fn() } as never;
+    const controller = new AgentSessionController(
+      client,
+      () =>
+        makeControllerProvider({
+          start: async (event) => {
+            capturedEvent = event;
+          }
+        }),
+      undefined,
+      "127.0.0.1",
+      undefined,
+      { username: "bob" }
+    );
+
+    await controller.handleMessage(
+      Buffer.from(
+        JSON.stringify({
+          type: "session.start",
+          sampleRate: 16000,
+          channels: 1,
+          memory: { language: "en", destination: "Alice's private destination", lastIntent: "navigation" }
+        })
+      ),
+      false
+    );
+
+    expect(capturedEvent?.memory).toBeUndefined();
+    await controller.close();
   });
 });
 

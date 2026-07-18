@@ -1,4 +1,5 @@
 import type { SessionStartEvent } from "../../shared/agent";
+import type { UserMemoryTurn } from "../user-memory";
 
 export type { ClientEvent, SessionStartEvent, VoiceGender } from "../../shared/agent";
 
@@ -8,8 +9,16 @@ export type ProviderTelemetry = {
   ttsFallback(): void;
 };
 
+export type ProviderSessionContext = {
+  /** Bounded, server-owned history for the authenticated user. */
+  previousConversation?: {
+    updatedAt: number;
+    turns: UserMemoryTurn[];
+  };
+};
+
 export type AgentProvider = {
-  start(event: SessionStartEvent): Promise<void>;
+  start(event: SessionStartEvent, context?: ProviderSessionContext): Promise<void>;
   startAudio(): Promise<void>;
   sendAudio(chunk: Buffer): Promise<void>;
   stopAudio(): Promise<void>;

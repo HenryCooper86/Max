@@ -19,6 +19,18 @@ export type CurrentUserResult =
   | { status: "unauthenticated" }
   | { status: "unavailable" };
 
+export type UserMemorySummary = {
+  enabled: boolean;
+  updatedAt?: number;
+  turnCount: number;
+  session?: {
+    language?: "zh" | "en";
+    destination?: string;
+    lastIntent?: string;
+    responseMode?: "concise" | "normal" | "emergency";
+  };
+};
+
 import { relayAuthToken } from "./persistence";
 
 const AUTH_TOKEN_KEY = "max.authToken";
@@ -208,5 +220,35 @@ export async function fetchCurrentUser(): Promise<CurrentUserResult> {
     return payload.ok && payload.user ? { status: "authenticated", user: payload.user } : { status: "unavailable" };
   } catch {
     return { status: "unavailable" };
+  }
+}
+
+/** Returns metadata only; raw remembered transcripts never leave the relay. */
+export async function fetchUserMemorySummary(): Promise<UserMemorySummary | null> {
+  const token = authToken();
+  if (!token) return null;
+  try {
+    const response = await fetch("/auth/memory", { headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) return null;
+    const payload = (await response.json()) as { ok?: boolean; memory?: UserMemorySummary };
+    return payload.ok && payload.memory ? payload.memory : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function forgetUserMemory(): Promise<boolean> {
+  const token = authToken();
+  if (!token) return false;
+  try {
+    const response = await fetch("/auth/memory", {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!response.ok) return false;
+    const payload = (await response.json()) as { ok?: boolean };
+    return payload.ok === true;
+  } catch {
+    return false;
   }
 }

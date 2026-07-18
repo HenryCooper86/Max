@@ -77,7 +77,7 @@ function sessionIssueCount(session: {
   const issues = new Set(
     session.evaluation.checks
       .filter((check) => check.status === "fail" || check.status === "warn")
-      .map((check, index) => `check:${index}`)
+      .map((_check, index) => `check:${index}`)
   );
   for (let index = 0; index < flaggedTurns(session); index += 1) issues.add(`feedback:${index}`);
   for (const reason of session.validity?.status === "invalid" ? session.validity.reasons : []) {

@@ -1,7 +1,7 @@
 import type { RawData, WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
 import type { Logger } from "./logger";
-import type { AgentProvider, ClientEvent, ProviderTelemetry } from "./providers/types";
+import type { AgentProvider, ClientEvent, ProviderSessionContext, ProviderTelemetry } from "./providers/types";
 import {
   beginTesterSession,
   endTesterSession,
@@ -13,6 +13,7 @@ import {
   recordTesterTtsFallback,
   recordTesterTurnFeedback
 } from "./metrics";
+import { recordUserMemoryEvent, userConversationMemory, userMemoryEnabled } from "./user-memory";
 
 export type ProviderFactory = (client: WebSocket, telemetry: ProviderTelemetry) => AgentProvider;
 
@@ -186,6 +187,10 @@ export function parseClientEvent(data: RawData): ClientEvent {
 export class AgentSessionController {
   private readonly relaySessionId = randomUUID();
   private readonly provider: AgentProvider;
+  private sessionStartReceived = false;
+  private providerStarted = false;
+  private closed = false;
+  private messageQueue: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly client: WebSocket,
@@ -193,12 +198,13 @@ export class AgentSessionController {
     private readonly log?: Logger,
     private readonly clientIp = "unknown-ip",
     private readonly requestRegion?: string,
-    private readonly authenticatedTesterId?: string
+    private readonly authenticatedUser?: { username: string }
   ) {
     this.provider = providerFactory(client, {
       serverEvent: (payload, bytes) => {
         metrics.serverEvent(bytes);
         recordTesterServerEvent(this.relaySessionId, payload, bytes);
+        if (this.authenticatedUser) recordUserMemoryEvent(this.authenticatedUser.username, payload);
       },
       serverAudio: (bytes) => {
         metrics.serverAudio(bytes);
@@ -209,9 +215,23 @@ export class AgentSessionController {
     this.send({ type: "connection", state: "relay", detail: "语音中继 WebSocket 已连接" });
   }
 
-  async handleMessage(data: RawData, isBinary: boolean) {
+  /**
+   * WebSocket EventEmitter callbacks do not await async listeners. Serialize
+   * messages here so session.start, audio.start, and PCM frames reach every
+   * provider in wire order instead of racing one another.
+   */
+  handleMessage(data: RawData, isBinary: boolean): Promise<void> {
+    if (this.closed) return Promise.resolve();
+    const task = this.messageQueue.then(() => this.processMessage(data, isBinary));
+    // Keep the queue usable even if an unexpected error escapes processMessage.
+    this.messageQueue = task.catch(() => undefined);
+    return task;
+  }
+
+  private async processMessage(data: RawData, isBinary: boolean) {
     try {
       if (isBinary) {
+        if (!this.providerStarted) throw new Error("session.start must complete before audio");
         const chunk = normalizeRawData(data);
         if (chunk.byteLength > MAX_CLIENT_AUDIO_BYTES) throw new Error("Audio frame is too large");
         metrics.clientAudio(chunk.byteLength);
@@ -221,6 +241,14 @@ export class AgentSessionController {
       }
 
       const event = parseClientEvent(data);
+      if (event.type === "session.start") {
+        if (this.sessionStartReceived) throw new Error("session.start has already been received");
+        this.sessionStartReceived = true;
+      } else if (!this.sessionStartReceived) {
+        throw new Error("session.start is required before control events");
+      } else if (!this.providerStarted) {
+        throw new Error("session.start did not complete");
+      }
       if (event.type !== "audio.start" && event.type !== "audio.stop") {
         this.log?.info(
           `client event: ${event.type}`,
@@ -241,11 +269,27 @@ export class AgentSessionController {
         );
       }
       if (event.type === "session.start") {
+        const durableMemory = this.authenticatedUser ? userConversationMemory(this.authenticatedUser.username) : null;
+        // Once durable memory is enabled, the server is authoritative for a
+        // login identity. A newly logged-in user must never inherit the
+        // previous user's device-local snapshot merely because their own
+        // server record does not exist yet. When the feature is explicitly
+        // disabled, retain the original client-echoed restart behaviour.
+        const providerEvent =
+          this.authenticatedUser && userMemoryEnabled() ? { ...event, memory: durableMemory?.session } : event;
+        const providerContext: ProviderSessionContext | undefined = durableMemory?.turns.length
+          ? {
+              previousConversation: {
+                updatedAt: durableMemory.updatedAt,
+                turns: durableMemory.turns
+              }
+            }
+          : undefined;
         beginTesterSession(this.relaySessionId, {
           // Logged-in users cannot claim another tester's evidence row. The
           // operator relay-token path has no account identity and keeps the
           // explicit testerId for automation rigs.
-          testerId: this.authenticatedTesterId ?? event.testerId,
+          testerId: this.authenticatedUser?.username ?? event.testerId,
           ipAddress: this.clientIp,
           region: event.testerRegion ?? this.requestRegion,
           testingCampaignId: event.testingCampaignId,
@@ -259,7 +303,8 @@ export class AgentSessionController {
           networkType: event.networkType,
           platform: event.platform
         });
-        await this.provider.start(event);
+        await this.provider.start(providerEvent, providerContext);
+        this.providerStarted = true;
       }
       if (event.type === "audio.start") await this.provider.startAudio();
       if (event.type === "audio.stop") await this.provider.stopAudio();
@@ -275,7 +320,10 @@ export class AgentSessionController {
   }
 
   async close() {
+    if (this.closed) return;
+    this.closed = true;
     try {
+      await this.messageQueue;
       await this.provider.close();
     } finally {
       // Always settle the tester stats — a provider close failure must not

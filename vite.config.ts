@@ -1,6 +1,6 @@
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
 function normalizeCommit(value: string): string {
@@ -35,6 +35,12 @@ function resolveGitCommit(): string {
 
 export default defineConfig({
   plugins: [react()],
+  test: {
+    // Live-provider protocol tests replace the upstream socket with a fake,
+    // but credential validation still runs before that socket is created.
+    // Keep the unit suite self-contained without weakening production checks.
+    setupFiles: ["./tests/setup.ts"]
+  },
   define: {
     "import.meta.env.VITE_GIT_COMMIT": JSON.stringify(resolveGitCommit())
   },

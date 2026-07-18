@@ -1,6 +1,6 @@
 import { WebSocket, type RawData } from "ws";
 import { randomUUID } from "node:crypto";
-import type { AgentProvider, ProviderTelemetry, SessionStartEvent, VoiceGender } from "./types";
+import type { AgentProvider, ProviderSessionContext, ProviderTelemetry, SessionStartEvent, VoiceGender } from "./types";
 import { DOUBAO_CAPABILITIES } from "../../shared/agent";
 import { type AdasSeverity } from "../../shared/adas";
 import {
@@ -34,6 +34,7 @@ import {
   updateSessionMemory,
   type SessionMemory
 } from "../../shared/session";
+import { buildPreviousConversationPrompt } from "../user-memory";
 
 // The "Max" persona prompt. Overridable per deployment with DOUBAO_SYSTEM_ROLE;
 // keep it consistent with the DOUBAO_SYSTEM_ROLE default in .env.example.
@@ -992,7 +993,7 @@ export function createDoubaoProvider(
   }
 
   return {
-    async start(event: SessionStartEvent) {
+    async start(event: SessionStartEvent, context?: ProviderSessionContext) {
       if (started) return;
       started = true;
 
@@ -1006,6 +1007,7 @@ export function createDoubaoProvider(
       // A restarting client (voice/personality/mode switch) echoes back its last
       // session.memory snapshot so the agent keeps its short-term memory.
       memory = restoreSessionMemory(event.memory, rideContext.mode);
+      const previousConversationPrompt = buildPreviousConversationPrompt(context?.previousConversation?.turns ?? []);
       systemRole +=
         `\n\n${buildIdentityPrompt()}` +
         `\n\n[骑行上下文] ${buildRideContextSummary(rideContext)}。` +
@@ -1016,7 +1018,8 @@ export function createDoubaoProvider(
           memory
         )}\n${buildIntentGuidancePrompt(memory.lastIntent)}\n${buildPersonalityPrompt(
           event.voicePersonality ?? "concise"
-        )}\n[短期记忆] ${buildSessionMemoryPrompt(memory)}。`;
+        )}\n[短期记忆] ${buildSessionMemoryPrompt(memory)}。` +
+        (previousConversationPrompt ? `\n\n${previousConversationPrompt}` : "");
       emitRideContext();
       emitMemory();
 

@@ -7,11 +7,7 @@ verify:
   image: node:22-bookworm-slim
   script:
     - npm ci
-    - npm run format:check
-    - npm run lint
-    - npm test
-    - npm run test:fault-matrix
-    - npm run build
+    - npm run check
   artifacts:
     when: always
     expire_in: 14 days

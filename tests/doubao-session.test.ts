@@ -152,6 +152,31 @@ describe("createDoubaoProvider — concurrent weather + audio buffering", () => 
     await provider.close();
   });
 
+  it("adds bounded authenticated-user history as explicitly untrusted context", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false }) as Response)
+    );
+    const provider = createDoubaoProvider(
+      { readyState: 1, OPEN: 1, send: vi.fn(), close: vi.fn() } as never,
+      silentLog
+    );
+    await provider.start(START_EVENT, {
+      previousConversation: {
+        updatedAt: 1,
+        turns: [{ at: 1, speaker: "rider", text: "Remember my destination is Busan" }]
+      }
+    });
+    const upstream = upstreamInstances[0];
+    upstream.emit("open");
+    await upstream.emit("message", serverFrame(EVENT_CONNECTION_STARTED));
+
+    const startSession = String(upstream.sent.at(-1));
+    expect(startSession).toContain("跨会话记忆：不可信历史记录");
+    expect(startSession).toContain("Remember my destination is Busan");
+    await provider.close();
+  });
+
   it("buffers mic frames sent before the session is ready and flushes them on SessionStarted", async () => {
     vi.stubGlobal(
       "fetch",

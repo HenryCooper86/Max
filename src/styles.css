@@ -1766,7 +1766,8 @@ button.opsCard:disabled {
 /* Destructive admin actions: armed = first click landed, next click executes. */
 .panelActions button.danger,
 .testerConversationActions button.danger,
-.accountAdmin button.danger {
+.accountAdmin button.danger,
+.accountBar button.danger {
   border-color: rgba(255, 118, 118, 0.42);
   background: rgba(255, 118, 118, 0.1);
   color: #ffd9d9;
@@ -1774,7 +1775,8 @@ button.opsCard:disabled {
 
 .panelActions button.danger.armed,
 .testerConversationActions button.danger.armed,
-.accountAdmin button.danger.armed {
+.accountAdmin button.danger.armed,
+.accountBar button.danger.armed {
   border-color: rgba(255, 118, 118, 0.85);
   background: rgba(255, 118, 118, 0.32);
   color: #fff;
@@ -1885,6 +1887,13 @@ button.opsCard:disabled {
   margin: 0;
   color: #ffd9d9;
   font-size: 0.78rem;
+}
+
+.accountMemoryNotice {
+  flex-basis: 100%;
+  margin: 0;
+  color: rgba(216, 224, 221, 0.78);
+  font-size: 0.74rem;
 }
 
 .accountForm {

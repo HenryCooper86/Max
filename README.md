@@ -237,6 +237,7 @@ If Doubao returns reply _text_ but no audio, the browser falls back to its own `
 - **Auto-reconnect** — the `/agent` socket reconnects with exponential backoff (`MAX_RECONNECT_ATTEMPTS`); `intentionalCloseRef` separates a user disconnect from a dropped link.
 - **Upstream-death recovery** — if the Doubao upstream socket dies mid-session, the relay first reconnects it **in place** (up to 3 attempts with backoff), replaying the persona plus the live session memory with a 会话恢复 addendum so the dropout is nearly invisible. Only when retries are exhausted does it close the client socket, letting the client's auto-reconnect rebuild a fresh session with `session.start` + `audio.start`.
 - **Session memory across restarts** — settings changes (voice, personality, mode, scenario) restart the relay session; all three clients echo the last `session.memory` snapshot back in `session.start`, so the agent keeps its language preference, destination, and last intent instead of meeting the rider as a stranger. The relay revalidates the snapshot and re-derives the response mode from the current ride mode.
+- **Per-user memory across conversations** — authenticated riders also receive server-owned memory across devices and later sessions: the latest validated preference/intent/destination plus a bounded 24-turn history. Only the most recent 8 turns enter the live prompt, where they are explicitly marked as untrusted history so an old transcript cannot override identity or safety rules. Anonymous/operator-token sessions are never pooled. Memory is stored privately (`0600`) and each user can inspect its count or clear it from the account bar.
 - **Session watchdog** — the relay pings every client (`RELAY_HEARTBEAT_MS`) and terminates half-open links that stop ponging, and closes sessions with no client traffic for `RELAY_IDLE_TIMEOUT_MS` so a forgotten tab can't hold a Doubao upstream slot forever. Idle closes use WebSocket code **4001** (`IDLE_CLOSE_CODE` in `shared/agent.ts`); all three clients treat it as intentional and stay offline until the rider restarts hands-free.
 - **Screen wake lock** — while hands-free is active the web client holds a screen Wake Lock so mobile browsers don't lock mid-ride, and re-acquires it after the browser auto-releases it (tab hidden → visible again).
 - **Relay metrics** — public `/health` stays a small liveness/build response with `metrics` and `metricsWindow`. Authenticated, scoped QA summaries and evidence moved to `/testing/*`, so the five-second health poll never retransmits retained transcripts or tester IPs.
@@ -478,6 +479,14 @@ overview at `GET /auth/admin/overview`). Any logged-in user can copy their
 session token from the account bar (复制令牌) and paste it into the iOS/Android
 认证令牌 field to connect the native apps.
 
+Authenticated conversation memory is stored separately in
+`~/.horizon-helmet-testing/user-memory.json`. `GET /auth/memory` returns only
+metadata (saved-turn count, update time, and the small preference snapshot),
+never raw history; `DELETE /auth/memory` forgets it. The account bar exposes
+the same operation with a two-step confirmation. Set `USER_MEMORY_FILE` to
+relocate the private file or to `off` to disable server-owned cross-conversation
+memory while retaining the clients' existing current-session restart snapshot.
+
 ### `POST /testing/clear`
 
 Admin action. Open only while no relay token is set **and** no user accounts
@@ -659,7 +668,7 @@ event instead of reaching Doubao.
 
 The upstream direction is bounded too: Doubao JSON payloads over 1 MB are rejected before
 parsing, reply-text extraction stops at a fixed nesting depth (so a pathological payload cannot
-overflow the stack), the pre-session mic buffer is capped at 3 s (oldest frames dropped first),
+overflow the stack), the pre-session mic buffer is capped at 5 s (oldest frames dropped first),
 and voice audio stops being relayed to a client whose socket write buffer exceeds 4 MB instead
 of queueing in server memory.
 
@@ -672,6 +681,7 @@ npm run preview      # Preview built client
 npm run lint         # Lint with ESLint
 npm run format       # Format with Prettier (format:check to verify only)
 npm test             # Run the Vitest unit tests (test:watch for watch mode)
+npm run check        # Local/CI gate: format, lint, unit, fault matrix, build
 ./start-relay.command # Double-clickable backend relay launcher for local mobile testing
 ```
 
@@ -703,6 +713,7 @@ npm run lint           # ESLint (typescript-eslint + react-hooks)
 npm run format:check   # Prettier check (npm run format to auto-fix)
 npm test               # Vitest unit tests
 npm run test:fault-matrix # deterministic latency/error/unsafe variants
+npm run check          # run the complete local/CI gate above in one command
 ```
 
 ### 3. Build

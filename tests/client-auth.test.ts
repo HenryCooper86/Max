@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { authToken, fetchCurrentUser } from "../src/lib/auth";
+import { authToken, fetchCurrentUser, fetchUserMemorySummary, forgetUserMemory } from "../src/lib/auth";
 
 function stubStorage(initialToken = "sess_valid") {
   const values = new Map<string, string>([["max.authToken", initialToken]]);
@@ -51,5 +51,29 @@ describe("current-user revalidation", () => {
     );
 
     await expect(fetchCurrentUser()).resolves.toEqual({ status: "authenticated", user });
+  });
+});
+
+describe("user memory controls", () => {
+  it("fetches metadata without exposing raw history and clears with the login token", async () => {
+    stubStorage();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ok: true, memory: { enabled: true, updatedAt: 10, turnCount: 4 } })
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true, removed: true }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchUserMemorySummary()).resolves.toEqual({ enabled: true, updatedAt: 10, turnCount: 4 });
+    await expect(forgetUserMemory()).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/auth/memory", {
+      headers: { Authorization: "Bearer sess_valid" }
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/auth/memory", {
+      method: "DELETE",
+      headers: { Authorization: "Bearer sess_valid" }
+    });
   });
 });

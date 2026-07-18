@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-07-19 — Per-user memory and relay protocol hardening
+
+- Added private, server-owned conversation memory for authenticated users:
+  the latest validated session snapshot and a bounded 24-turn history survive
+  reconnects, devices, and relay restarts. Only 8 recent turns enter the live
+  prompt, explicitly marked as untrusted transcript context.
+- Added authenticated memory metadata/forget endpoints and a two-step account
+  bar control. Deleted accounts also lose their saved memory; anonymous and
+  operator-token sessions never share a memory identity.
+- Serialized client WebSocket messages in wire order and reject pre-start
+  audio/control traffic plus duplicate `session.start` events, closing races
+  that could initialize providers and QA evidence out of order.
+- Made mocked Doubao tests credential-independent through Vitest-only setup,
+  added memory/persistence/isolation/prompt and protocol-order regressions,
+  and added `npm run check` as the single local/GitLab verification command.
+
 ## 2026-07-15 — Live-agent QA control plane and release governance
 
 - Moved private tester evidence out of the public `/health` poll into

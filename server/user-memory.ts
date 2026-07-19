@@ -161,12 +161,27 @@ function ensureLoaded(): void {
       throw new Error("user memory store is missing its users array");
     }
     const entries = parsed.users;
+    let needsLegacyCleanup = false;
     for (const entry of entries) {
+      // Builds before account UUID memory used mutable usernames as keys. That
+      // history cannot be assigned safely after usernames are deleted/reused,
+      // but it is an expected migration case rather than whole-store damage.
+      // Drop it and rewrite only the remaining UUID-owned records.
+      if (
+        isRecord(entry) &&
+        typeof entry.userId === "string" &&
+        entry.userId.trim() &&
+        !normalizeUserId(entry.userId)
+      ) {
+        needsLegacyCleanup = true;
+        continue;
+      }
       const memory = cleanMemory(entry);
       if (!memory) throw new Error("user memory store contains an invalid user record");
       if (memories.has(memory.userId)) throw new Error("user memory store contains duplicate user ids");
       memories.set(memory.userId, memory);
     }
+    if (needsLegacyCleanup) persistMemories();
   } catch (error) {
     // Do not expose or later persist a partial view of a damaged store.
     memories.clear();

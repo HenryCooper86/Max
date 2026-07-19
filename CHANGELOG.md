@@ -2,6 +2,8 @@
 
 ## 2026-07-19 — Cross-account privacy and production delivery guardrails
 
+- Migrated username-keyed legacy memory by discarding only the ambiguous
+  records instead of treating an otherwise healthy memory store as corrupt.
 - Scoped web, Android, and iOS transcript caches by immutable account UUID and
   discarded ambiguous device-global legacy caches, preventing a second login
   on a shared device from seeing the previous rider's local conversation.

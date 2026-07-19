@@ -115,7 +115,7 @@ describe("user memory persistence", () => {
     }
   });
 
-  it("rejects the whole memory store when one user record is malformed", async () => {
+  it("drops ambiguous username-keyed legacy memory while preserving UUID-owned records", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "max-user-memory-partial-"));
     const file = path.join(tempDir, "memory.json");
     fs.writeFileSync(
@@ -125,6 +125,30 @@ describe("user memory persistence", () => {
           { userId: "11111111-1111-4111-8111-111111111111", updatedAt: 1, turns: [] },
           { userId: "invalid", turns: [] }
         ]
+      })
+    );
+    vi.stubEnv("USER_MEMORY_FILE", file);
+
+    try {
+      vi.resetModules();
+      const memory = await import("../server/user-memory");
+      expect(memory.userMemoryStorageHealthy()).toBe(true);
+      expect(memory.userConversationMemory("11111111-1111-4111-8111-111111111111")).not.toBeNull();
+      await memory.flushUserMemory();
+      const stored = JSON.parse(fs.readFileSync(file, "utf8")) as { users: Array<{ userId: string }> };
+      expect(stored.users.map((item) => item.userId)).toEqual(["11111111-1111-4111-8111-111111111111"]);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects the whole memory store when one record has no identity", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "max-user-memory-malformed-"));
+    const file = path.join(tempDir, "memory.json");
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        users: [{ userId: "11111111-1111-4111-8111-111111111111", updatedAt: 1, turns: [] }, { turns: [] }]
       })
     );
     vi.stubEnv("USER_MEMORY_FILE", file);

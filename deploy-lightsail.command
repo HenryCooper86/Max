@@ -145,7 +145,11 @@ if [[ "$HEALTH_VERIFIED" != "on" ]]; then
 fi
 printf '%s\n' "$HEALTH_RESPONSE"
 
-READY_RESPONSE="$(curl --fail --silent --show-error --insecure --connect-timeout 5 --max-time 8 "$READY_URL")"
+READY_RESPONSE=""
+if ! READY_RESPONSE="$(curl --silent --show-error --insecure --connect-timeout 5 --max-time 8 "$READY_URL")"; then
+  echo "Deployment could not reach the readiness endpoint." >&2
+  exit 1
+fi
 if ! printf '%s' "$READY_RESPONSE" | EXPECTED_COMMIT="$GIT_COMMIT" node -e '
   let body = "";
   process.stdin.on("data", (chunk) => (body += chunk));

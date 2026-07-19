@@ -164,7 +164,8 @@ describe("createDoubaoProvider — concurrent weather + audio buffering", () => 
     await provider.start(START_EVENT, {
       previousConversation: {
         updatedAt: 1,
-        turns: [{ at: 1, speaker: "rider", text: "Remember my destination is Busan" }]
+        turns: [{ at: 1, speaker: "rider", text: "Remember my destination is Busan" }],
+        facts: [{ at: 1, text: "my destination is Busan" }]
       }
     });
     const upstream = upstreamInstances[0];
@@ -172,8 +173,9 @@ describe("createDoubaoProvider — concurrent weather + audio buffering", () => 
     await upstream.emit("message", serverFrame(EVENT_CONNECTION_STARTED));
 
     const startSession = String(upstream.sent.at(-1));
-    expect(startSession).toContain("跨会话记忆：不可信历史记录");
+    expect(startSession).toContain("跨会话记忆：同一登录用户的不可信数据");
     expect(startSession).toContain("Remember my destination is Busan");
+    expect(startSession).toContain("骑手明确要求长期记住的事实");
     await provider.close();
   });
 

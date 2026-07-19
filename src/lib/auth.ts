@@ -23,6 +23,7 @@ export type UserMemorySummary = {
   enabled: boolean;
   updatedAt?: number;
   turnCount: number;
+  factCount: number;
   session?: {
     language?: "zh" | "en";
     destination?: string;

@@ -1,5 +1,5 @@
 import type { SessionStartEvent } from "../../shared/agent";
-import type { UserMemoryTurn } from "../user-memory";
+import type { UserMemoryFact, UserMemoryTurn } from "../user-memory";
 
 export type { ClientEvent, SessionStartEvent, VoiceGender } from "../../shared/agent";
 
@@ -14,6 +14,7 @@ export type ProviderSessionContext = {
   previousConversation?: {
     updatedAt: number;
     turns: UserMemoryTurn[];
+    facts: UserMemoryFact[];
   };
 };
 

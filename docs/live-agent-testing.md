@@ -149,9 +149,10 @@ does its own VAD). The native apps surface this in the hidden developer panel
 
 **What it does:** Tracks language, last intent, destination, and response mode
 across a ride. For authenticated users, the relay also stores a private,
-server-owned 24-turn window across later conversations and devices; the latest
-8 turns are supplied to Doubao as explicitly untrusted history. Anonymous and
-operator-token sessions never share memory. It infers emergency intent and
+server-owned 24-turn window across later conversations and devices. The full
+24 turns plus up to 12 facts explicitly introduced with “remember” / “记住” are
+supplied to Doubao with direct recall instructions and as explicitly untrusted
+data. Anonymous and operator-token sessions never share memory. It infers emergency intent and
 escalates the response mode; keeps riding/navigation answers concise; and
 builds the safety, personality, intent, and session-memory prompt fragments fed
 to Doubao.
@@ -181,10 +182,11 @@ developer panel to confirm `responseMode` and `destination` propagate.
 help" — `inferIntent` flips to `emergency`, `responseModeForRide` returns
 `emergency`, and Max switches to the emergency persona. Confirm the system
 prompt actually changed by inspecting the relay logs (`logger.ts` prints the
-session start). Disconnect and start a new session with the same login; ask
-"上次我们聊到哪里？" and verify Max can use the prior context. Log in as a
+session start). Say “Max, remember that my bike is named Nova”, disconnect,
+and start a new session with the same login; ask “我的摩托车叫什么？” and
+“上次我们聊到哪里？” and verify Max uses the pinned fact and prior context. Log in as a
 second user and verify it cannot. The account bar shows the saved-turn count
-and provides a two-step clear action; after clearing, a new session must not
+and pinned-fact count (refreshing within 15 seconds) and provides a two-step clear action; after clearing, a new session must not
 recall the old exchange.
 
 ---

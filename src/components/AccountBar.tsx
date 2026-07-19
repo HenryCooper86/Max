@@ -184,11 +184,26 @@ export function AccountBar({ authEnabled, registrationOpen, user, onSignedIn, on
       return;
     }
     let active = true;
-    void fetchUserMemorySummary().then((summary) => {
-      if (active) setMemorySummary(summary);
-    });
+    let requestSequence = 0;
+    const refresh = () => {
+      const sequence = ++requestSequence;
+      void fetchUserMemorySummary().then((summary) => {
+        if (active && sequence === requestSequence) setMemorySummary(summary);
+      });
+    };
+    const refreshWhenVisible = () => {
+      if (!document.hidden) refresh();
+    };
+    refresh();
+    // A once-per-login snapshot made the badge look broken even while the
+    // server was saving turns. Keep this lightweight metadata honest during a
+    // long ride and refresh immediately when the rider returns to the tab.
+    const timer = window.setInterval(refreshWhenVisible, 15_000);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
     return () => {
       active = false;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
   }, [user]);
 
@@ -247,12 +262,17 @@ export function AccountBar({ authEnabled, registrationOpen, user, onSignedIn, on
               void forgetUserMemory()
                 .then((ok) => {
                   setMemoryNotice(ok ? "记忆已清除 ✓" : "清除记忆失败");
-                  if (ok) setMemorySummary((summary) => (summary ? { ...summary, turnCount: 0 } : summary));
+                  if (ok)
+                    setMemorySummary((summary) => (summary ? { ...summary, turnCount: 0, factCount: 0 } : summary));
                 })
                 .finally(() => setMemoryBusy(false));
             }}
           >
-            {memoryClearArmed ? "确认清除记忆?" : memorySummary ? `记忆 ${memorySummary.turnCount} 条` : "记忆…"}
+            {memoryClearArmed
+              ? "确认清除记忆?"
+              : memorySummary
+                ? `记忆 ${memorySummary.turnCount} 段${memorySummary.factCount ? ` · ${memorySummary.factCount} 条重点` : ""}`
+                : "记忆…"}
           </button>
           <button
             type="button"

@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-07-19 — Reliable per-user recall
+
+- Expanded authenticated recall from the last 8 turns to the full bounded
+  24-turn window and added direct, injection-resistant instructions for
+  answering follow-up questions from earlier conversations without invention.
+- Added up to 12 account-scoped facts that riders explicitly ask Max to
+  remember in Chinese or English; pinned facts persist beyond the rolling
+  dialogue window and are removed by the existing forget action.
+- Refreshed the account memory badge during active use so newly saved turns and
+  pinned facts no longer appear stuck at the login-time count.
+
 ## 2026-07-19 — Cross-account privacy and production delivery guardrails
 
 - Migrated username-keyed legacy memory by discarding only the ambiguous

@@ -1007,7 +1007,10 @@ export function createDoubaoProvider(
       // A restarting client (voice/personality/mode switch) echoes back its last
       // session.memory snapshot so the agent keeps its short-term memory.
       memory = restoreSessionMemory(event.memory, rideContext.mode);
-      const previousConversationPrompt = buildPreviousConversationPrompt(context?.previousConversation?.turns ?? []);
+      const previousConversationPrompt = buildPreviousConversationPrompt(
+        context?.previousConversation?.turns ?? [],
+        context?.previousConversation?.facts ?? []
+      );
       systemRole +=
         `\n\n${buildIdentityPrompt()}` +
         `\n\n[骑行上下文] ${buildRideContextSummary(rideContext)}。` +

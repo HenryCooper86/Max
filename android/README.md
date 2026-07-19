@@ -129,7 +129,9 @@ The emulator forwards the host Mac's microphone, so the full voice loop is testa
   `AcousticEchoCanceler` / `NoiseSuppressor`, so the agent's voice is not fed back into the
   mic (the Android analogue of the web's `getUserMedia({ echoCancellation })`). See _Audio
   notes_ below for a known built-in-speaker limitation.
-- `wss://` support with an opt-in "信任自签名证书" toggle for the Lightsail test server
+- `wss://` support with a debug-only "信任自签名证书" toggle for the Lightsail test server;
+  release builds require trusted TLS and block cleartext
+- Keystore-backed AES-GCM storage for relay/login tokens, including migration from older preferences
 - Release-run/test-case/assignment attribution with explicit Android platform and stamped git commit
 
 ## Protocol parity checklist
@@ -157,20 +159,20 @@ When changing shared web/server behavior, update Android at the same time:
 
 ## Connecting to the Lightsail test server
 
-Set the relay address to `wss://3.35.135.136/agent` and switch on 信任自签名证书 — the test
-server's certificate is self-signed, so the toggle is required until it gets a trusted cert.
+In a **Debug** build, set the relay address to `wss://3.35.135.136/agent` and switch on
+信任自签名证书. Release builds intentionally omit this option and require a trusted certificate.
 
 ## Troubleshooting
 
-| Symptom                              | Check                                                                                   |
-| ------------------------------------ | --------------------------------------------------------------------------------------- |
-| App stays offline in emulator        | Use `ws://10.0.2.2:8787/agent`, not `localhost`; `localhost` means the emulator itself. |
-| Physical phone cannot connect        | Put phone and Mac on the same LAN, use the Mac LAN IP, and allow firewall access.       |
-| USB device cannot connect            | Run `adb reverse tcp:8787 tcp:8787`, then use `ws://127.0.0.1:8787/agent`.              |
-| Mic does not start                   | Grant microphone permission and confirm no other app is holding exclusive audio focus.  |
-| Bluetooth headset is ignored         | Grant Bluetooth permission on Android 12+ and confirm the headset supports HFP/SCO.     |
-| Test server TLS fails                | Use `wss://3.35.135.136/agent` and enable the self-signed certificate toggle.           |
-| Build fails with Java version errors | Use Android Studio's JBR as `JAVA_HOME`; do not build with Homebrew Java 25+.           |
+| Symptom                              | Check                                                                                          |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| App stays offline in emulator        | Use `ws://10.0.2.2:8787/agent`, not `localhost`; `localhost` means the emulator itself.        |
+| Physical phone cannot connect        | Put phone and Mac on the same LAN, use the Mac LAN IP, and allow firewall access.              |
+| USB device cannot connect            | Run `adb reverse tcp:8787 tcp:8787`, then use `ws://127.0.0.1:8787/agent`.                     |
+| Mic does not start                   | Grant microphone permission and confirm no other app is holding exclusive audio focus.         |
+| Bluetooth headset is ignored         | Grant Bluetooth permission on Android 12+ and confirm the headset supports HFP/SCO.            |
+| Test server TLS fails                | Use a Debug build and enable its self-signed certificate toggle. Release requires trusted TLS. |
+| Build fails with Java version errors | Use Android Studio's JBR as `JAVA_HOME`; do not build with Homebrew Java 25+.                  |
 
 ## Audio notes
 
@@ -193,10 +195,9 @@ server's certificate is self-signed, so the toggle is required until it gets a t
 
 ## Release caveats
 
-- The self-signed certificate trust toggle is for the shared test server only. Remove or harden
-  it before release.
+- Release builds hide and compile-gate the self-signed trust path and reject cleartext traffic.
 - The debug APK is unsigned for distribution. Configure a release signing key before shipping.
-- `network_security_config.xml` permits development traffic; review it before production.
+- The app targets API 36 and compiles against Android 16 QPR2 (36.1), matching the 2026 Play gate.
 - Keep the foreground-service notification clear and user-visible for Android policy compliance.
 
 ## Not yet implemented (next steps)

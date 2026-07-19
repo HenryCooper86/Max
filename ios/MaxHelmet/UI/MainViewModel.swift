@@ -17,14 +17,13 @@ final class MainViewModel: ObservableObject {
         #endif
     }()
 
-    /// The Lightsail test relay terminates TLS with a self-signed certificate, so a
-    /// physical device must opt into trusting it on first launch; the simulator talks
-    /// plain ws:// to localhost and needs no exception.
+    /// Debug device builds can opt into the self-signed test relay. Release builds
+    /// always use normal platform certificate and hostname validation.
     static let defaultAllowSelfSigned: Bool = {
-        #if targetEnvironment(simulator)
-        return false
-        #else
+        #if DEBUG && !targetEnvironment(simulator)
         return true
+        #else
+        return false
         #endif
     }()
 
@@ -54,7 +53,7 @@ final class MainViewModel: ObservableObject {
     /// Optional shared auth token for the relay; appended to the /agent URL as
     /// `?token=…` when non-empty. Empty means the relay requires no token.
     @Published var authToken: String {
-        didSet { defaults.set(authToken, forKey: Keys.authToken) }
+        didSet { SecureTokenStore.write(authToken, account: Keys.authToken) }
     }
 
     /// Trust the test relay's self-signed certificate for wss:// (prototype only).
@@ -65,7 +64,7 @@ final class MainViewModel: ObservableObject {
     /// The login session token, stored SEPARATELY from the manual 认证令牌
     /// field so signing in/out never destroys a pasted operator relay token.
     @Published var sessionToken: String {
-        didSet { defaults.set(sessionToken, forKey: Keys.sessionToken) }
+        didSet { SecureTokenStore.write(sessionToken, account: Keys.sessionToken) }
     }
 
     /// What the WebSocket presents: the login session first (a dead one is
@@ -208,12 +207,16 @@ final class MainViewModel: ObservableObject {
 
     init() {
         relayURL = defaults.string(forKey: Keys.relayURL) ?? Self.defaultRelayURL
-        authToken = defaults.string(forKey: Keys.authToken) ?? ""
-        sessionToken = defaults.string(forKey: Keys.sessionToken) ?? ""
+        authToken = SecureTokenStore.migrate(account: Keys.authToken, defaults: defaults)
+        sessionToken = SecureTokenStore.migrate(account: Keys.sessionToken, defaults: defaults)
         authUsername = defaults.string(forKey: Keys.authUsername) ?? ""
         authDisplayName = defaults.string(forKey: Keys.authDisplayName) ?? ""
         authRole = defaults.string(forKey: Keys.authRole) ?? ""
+        #if DEBUG
         allowSelfSigned = defaults.object(forKey: Keys.allowSelfSigned) as? Bool ?? Self.defaultAllowSelfSigned
+        #else
+        allowSelfSigned = false
+        #endif
         devMode = defaults.bool(forKey: Keys.devMode)
         testingCampaignId = defaults.string(forKey: Keys.testingCampaignId) ?? "release-readiness"
         testingTestCaseId = defaults.string(forKey: Keys.testingTestCaseId) ?? "baseline-live-session"

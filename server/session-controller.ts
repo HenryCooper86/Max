@@ -198,13 +198,13 @@ export class AgentSessionController {
     private readonly log?: Logger,
     private readonly clientIp = "unknown-ip",
     private readonly requestRegion?: string,
-    private readonly authenticatedUser?: { username: string }
+    private readonly authenticatedUser?: { id: string; username: string }
   ) {
     this.provider = providerFactory(client, {
       serverEvent: (payload, bytes) => {
         metrics.serverEvent(bytes);
         recordTesterServerEvent(this.relaySessionId, payload, bytes);
-        if (this.authenticatedUser) recordUserMemoryEvent(this.authenticatedUser.username, payload);
+        if (this.authenticatedUser) recordUserMemoryEvent(this.authenticatedUser.id, payload);
       },
       serverAudio: (bytes) => {
         metrics.serverAudio(bytes);
@@ -269,7 +269,7 @@ export class AgentSessionController {
         );
       }
       if (event.type === "session.start") {
-        const durableMemory = this.authenticatedUser ? userConversationMemory(this.authenticatedUser.username) : null;
+        const durableMemory = this.authenticatedUser ? userConversationMemory(this.authenticatedUser.id) : null;
         // Once durable memory is enabled, the server is authoritative for a
         // login identity. A newly logged-in user must never inherit the
         // previous user's device-local snapshot merely because their own
@@ -303,8 +303,20 @@ export class AgentSessionController {
           networkType: event.networkType,
           platform: event.platform
         });
-        await this.provider.start(providerEvent, providerContext);
-        this.providerStarted = true;
+        try {
+          await this.provider.start(providerEvent, providerContext);
+          this.providerStarted = true;
+        } catch (error) {
+          // A failed start is not recoverable on this socket: the provider may
+          // be partially initialized and duplicate session.start is forbidden.
+          // Close so clients enter their bounded reconnect path instead of
+          // remaining connected in a permanent "start did not complete" loop.
+          const message = error instanceof Error ? error.message : "Provider session failed to start";
+          this.log?.error("provider session start failed", { message });
+          this.send({ type: "error", message: "语音服务暂时不可用，请重新连接。" });
+          this.client.close(1011, "provider start failed");
+          return;
+        }
       }
       if (event.type === "audio.start") await this.provider.startAudio();
       if (event.type === "audio.stop") await this.provider.stopAudio();

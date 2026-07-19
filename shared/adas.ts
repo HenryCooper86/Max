@@ -68,7 +68,7 @@ export function adasDirectionLabel(direction: AdasDirection): string {
 
 // The catalog. Ordered so the mock provider cycles through a representative mix
 // of directions (rear, front, sides) and severities.
-export const ADAS_SCENARIOS: AdasScenario[] = [
+export const ADAS_SCENARIOS: [AdasScenario, ...AdasScenario[]] = [
   {
     threat: "rear_approach",
     direction: "rear",

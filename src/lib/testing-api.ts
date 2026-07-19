@@ -1,6 +1,5 @@
 import type { TesterSessionSummary, TestingStats } from "../../shared/agent";
 import type {
-  TestingAuditEvent,
   TestingOperationsSnapshot,
   TestingPolicy,
   TestingReview,
@@ -127,18 +126,6 @@ export async function createTestingAssignment(
   return payload?.ok ? payload.run : null;
 }
 
-export async function updateTestingAssignment(
-  runId: string,
-  assignmentId: string,
-  patch: { status?: string; assignee?: string }
-): Promise<TestingRun | null> {
-  const payload = await request<ApiResult<{ run: TestingRun }>>(
-    `/testing/runs/${encodeURIComponent(runId)}/assignments/${encodeURIComponent(assignmentId)}`,
-    { method: "PATCH", headers: headers(true), body: JSON.stringify(patch) }
-  );
-  return payload?.ok ? payload.run : null;
-}
-
 export async function saveTestingReview(
   input: Partial<TestingReview> & { sessionId: string }
 ): Promise<TestingReview | null> {
@@ -157,11 +144,4 @@ export async function createTestingPolicy(input: Partial<TestingPolicy>): Promis
     body: JSON.stringify(input)
   });
   return payload?.ok ? payload.policy : null;
-}
-
-export async function fetchTestingAudit(): Promise<TestingAuditEvent[] | null> {
-  const payload = await request<ApiResult<{ events: TestingAuditEvent[] }>>("/testing/audit", {
-    headers: headers()
-  });
-  return payload?.ok ? payload.events : null;
 }

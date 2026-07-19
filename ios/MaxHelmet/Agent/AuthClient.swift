@@ -116,6 +116,7 @@ extension AuthClient: URLSessionDelegate {
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
+        #if DEBUG
         guard allowSelfSigned,
               challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
               let trust = challenge.protectionSpace.serverTrust else {
@@ -123,5 +124,8 @@ extension AuthClient: URLSessionDelegate {
             return
         }
         completionHandler(.useCredential, URLCredential(trust: trust))
+        #else
+        completionHandler(.performDefaultHandling, nil)
+        #endif
     }
 }

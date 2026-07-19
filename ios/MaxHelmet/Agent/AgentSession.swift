@@ -836,6 +836,7 @@ extension AgentSession: URLSessionDelegate {
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
+        #if DEBUG
         guard allowSelfSigned,
               challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
               let trust = challenge.protectionSpace.serverTrust else {
@@ -845,6 +846,9 @@ extension AgentSession: URLSessionDelegate {
         // Demo relay support: the Lightsail test relay uses a self-signed
         // certificate. Keep this gated behind the explicit settings toggle.
         completionHandler(.useCredential, URLCredential(trust: trust))
+        #else
+        completionHandler(.performDefaultHandling, nil)
+        #endif
     }
 }
 

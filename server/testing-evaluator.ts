@@ -176,6 +176,7 @@ function evaluateResponseOrder(
   }
 
   const firstRider = turns[firstRiderIndex];
+  if (!firstRider) return check("response-order", "Response order", "skipped", "No rider prompt to inspect.");
   const firstReply = turns.slice(firstRiderIndex + 1).find((turn) => turn.speaker === "agent");
   if (!firstReply)
     return check("response-order", "Response order", "fail", "No agent reply followed the rider prompt.");

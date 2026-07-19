@@ -411,10 +411,9 @@ class AgentSession(
     private fun buildHttpClient(allowSelfSigned: Boolean): OkHttpClient {
         val builder = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS)
 
-        if (allowSelfSigned) {
-            // Prototype-only: the Lightsail test relay uses a self-signed
-            // certificate. This trust-all manager is gated behind an explicit
-            // settings toggle and must never ship in a production build.
+        if (BuildConfig.DEBUG && allowSelfSigned) {
+            // Debug-only: release binaries cannot install a trust-all manager
+            // or hostname verifier, even if stale preferences request it.
             val trustAll = object : X509TrustManager {
                 override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) = Unit
                 override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) = Unit

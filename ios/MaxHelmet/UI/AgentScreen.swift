@@ -825,21 +825,23 @@ private struct SettingsPanel: View {
                 Text("认证令牌（网页登录后点「复制令牌（App 用）」获取；开放模式可留空）")
                     .font(.system(size: 11)).foregroundColor(HudColors.muted)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                TextField("认证令牌", text: $viewModel.authToken)
+                SecureField("认证令牌", text: $viewModel.authToken)
                     .font(.system(size: 14))
                     .foregroundColor(HudColors.text)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled(true)
                     .padding(12)
                     .background(RoundedRectangle(cornerRadius: 10).fill(HudColors.panelElevated))
+                #if DEBUG
                 HStack {
-                    Text("信任自签名证书（测试服务器）")
+                    Text("信任自签名证书（仅调试）")
                         .font(.system(size: 12)).foregroundColor(HudColors.muted)
                     Spacer()
                     Toggle("", isOn: $viewModel.allowSelfSigned)
                         .labelsHidden()
                         .tint(HudColors.accent)
                 }
+                #endif
             }
         }
 

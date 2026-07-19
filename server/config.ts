@@ -94,7 +94,7 @@ function resolveDefaultWeatherLocation(): WeatherLocation {
   return { lat, lon, source: "configured" };
 }
 
-export function credentialStatus(): AgentHealth["credentials"] {
+function credentialStatus(): AgentHealth["credentials"] {
   if (config.voiceProvider !== "doubao") return "not-required";
 
   const hasApiKey = Boolean(process.env.DOUBAO_API_KEY?.trim());
@@ -135,6 +135,7 @@ export function describeConfig(): string[] {
  */
 export function validateConfig(): string[] {
   const warnings: string[] = [];
+  const hasAccountProtection = authActive();
 
   if (config.voiceProvider === "doubao") {
     if (credentialStatus() === "missing") {
@@ -142,14 +143,14 @@ export function validateConfig(): string[] {
         "VOICE_PROVIDER=doubao 但缺少 DOUBAO_API_KEY 或完整的 DOUBAO_APP_ID/APP_KEY/ACCESS_KEY：实时语音会话将无法建立。"
       );
     }
-    if (!config.relayAuthToken) {
+    if (!config.relayAuthToken && !hasAccountProtection) {
       warnings.push(
         "RELAY_AUTH_TOKEN 未设置：任何发现该地址的人都能消耗豆包配额。生产部署请设置一个随机令牌，客户端通过 ?token=… 连接。"
       );
     }
   }
 
-  if (config.allowedOrigins.length && !config.relayAuthToken) {
+  if (config.allowedOrigins.length && !config.relayAuthToken && !hasAccountProtection) {
     warnings.push(
       "RELAY_ALLOWED_ORIGINS 已设置但 RELAY_AUTH_TOKEN 未设置：来源白名单只能拦截浏览器，不发送 Origin 头的原生 App 或脚本仍可连接。请同时设置令牌。"
     );
@@ -166,7 +167,30 @@ export function validateConfig(): string[] {
     );
   }
 
+  if (process.env.NODE_ENV === "production" && config.authRegistration && !config.relayAuthToken) {
+    warnings.push(
+      "AUTH_REGISTRATION 在生产环境仍为开放状态：完成首批账号引导后请设置 AUTH_REGISTRATION=off，并使用单次邀请链接添加测试员。"
+    );
+  }
+
   return warnings;
+}
+
+/** Fail-fast checks used by the readiness probe. Liveness remains available
+ * while a bad deployment is being repaired, but traffic should not be routed
+ * to a real provider with missing credentials or no access control. */
+export function readinessIssues(): string[] {
+  const issues: string[] = [];
+  if (config.voiceProvider === "doubao" && credentialStatus() === "missing") {
+    issues.push("provider-credentials-missing");
+  }
+  if (process.env.NODE_ENV === "production" && !config.relayAuthToken && !authActive()) {
+    issues.push("access-control-not-configured");
+  }
+  if (process.env.NODE_ENV === "production" && !config.relayAuthToken && config.authRegistration && authActive()) {
+    issues.push("open-registration-enabled");
+  }
+  return issues;
 }
 
 export function buildHealth(uptimeSec: number, includeTesting = false): AgentHealth {

@@ -174,12 +174,13 @@ describe("session controller ordering and lifecycle", () => {
   });
 
   it("loads server-owned memory for an authenticated user and records new final turns", async () => {
+    const aliceId = "11111111-1111-4111-8111-111111111111";
     recordUserMemoryEvent(
-      "alice",
+      aliceId,
       { type: "session.memory", language: "zh", destination: "上海站", lastIntent: "navigation" },
       10
     );
-    recordUserMemoryEvent("alice", { type: "transcript", speaker: "rider", text: "上次去上海站" }, 11);
+    recordUserMemoryEvent(aliceId, { type: "transcript", speaker: "rider", text: "上次去上海站" }, 11);
 
     let capturedEvent: SessionStartEvent | undefined;
     let capturedContext: ProviderSessionContext | undefined;
@@ -200,7 +201,7 @@ describe("session controller ordering and lifecycle", () => {
       undefined,
       "127.0.0.1",
       undefined,
-      { username: "alice" }
+      { id: aliceId, username: "alice" }
     );
 
     await controller.handleMessage(
@@ -217,7 +218,7 @@ describe("session controller ordering and lifecycle", () => {
 
     expect(capturedEvent?.memory?.destination).toBe("上海站");
     expect(capturedContext?.previousConversation?.turns.map((turn) => turn.text)).toEqual(["上次去上海站"]);
-    expect(userConversationMemory("alice")?.turns.map((turn) => turn.text)).toEqual([
+    expect(userConversationMemory(aliceId)?.turns.map((turn) => turn.text)).toEqual([
       "上次去上海站",
       "我记得，上次目的地是上海站。"
     ]);
@@ -238,7 +239,7 @@ describe("session controller ordering and lifecycle", () => {
       undefined,
       "127.0.0.1",
       undefined,
-      { username: "bob" }
+      { id: "22222222-2222-4222-8222-222222222222", username: "bob" }
     );
 
     await controller.handleMessage(
@@ -254,6 +255,28 @@ describe("session controller ordering and lifecycle", () => {
     );
 
     expect(capturedEvent?.memory).toBeUndefined();
+    await controller.close();
+  });
+
+  it("closes an unrecoverable socket when provider session startup fails", async () => {
+    const close = vi.fn();
+    const send = vi.fn();
+    const client = { readyState: 1, OPEN: 1, send, close } as never;
+    const provider = makeControllerProvider({
+      start: async () => {
+        throw new Error("upstream unavailable");
+      }
+    });
+    const controller = new AgentSessionController(client, () => provider);
+
+    await controller.handleMessage(startEvent, false);
+
+    expect(close).toHaveBeenCalledWith(1011, "provider start failed");
+    expect(
+      send.mock.calls
+        .map(([payload]) => JSON.parse(String(payload)) as { type?: string; message?: string })
+        .some((event) => event.type === "error" && event.message === "语音服务暂时不可用，请重新连接。")
+    ).toBe(true);
     await controller.close();
   });
 });

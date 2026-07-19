@@ -248,9 +248,9 @@ If Doubao returns reply _text_ but no audio, the browser falls back to its own `
 
 ## Setup
 
-Use the Node version already installed on the project machines, or any current Node release that
-supports Vite 6, TypeScript, `tsx`, and WebSocket APIs. Native mobile builds have their own
-toolchain requirements in [android/README.md](android/README.md) and [ios/README.md](ios/README.md).
+Use Node **22.13 or newer** (`node:sqlite` is used by the durable QA evidence store and is available
+without a feature flag from that release). Native mobile builds have their own toolchain
+requirements in [android/README.md](android/README.md) and [ios/README.md](ios/README.md).
 
 Install dependencies:
 
@@ -338,7 +338,7 @@ Start the backend relay before launching a native app:
 npm run dev:server
 ```
 
-Then set the app's relay URL. The relay field and the self-signed trust toggle live in the
+Then set the app's relay URL. The relay field and debug-only self-signed trust toggle live in the
 hidden developer panel — **long-press the Max logo** on the main screen to reveal it (the
 header subtitle shows `· 开发者模式` while enabled; long-press again to hide):
 
@@ -352,10 +352,10 @@ header subtitle shows `· 开发者模式` while enabled; long-press again to hi
 | Shared test server     | `wss://3.35.135.136/agent`     |
 
 The iOS app picks its default relay by environment: the simulator uses `ws://localhost:8787/agent`,
-while a physical device defaults to the shared Lightsail relay (`wss://3.35.135.136/agent`) with the
-self-signed trust toggle auto-enabled. For any other `wss://` self-signed host, enable the trust
-toggle inside the native app. That toggle is for this prototype test server only and should be
-removed or disabled before any production release.
+while a physical device defaults to the shared Lightsail relay (`wss://3.35.135.136/agent`). Debug
+builds on physical devices enable the self-signed test option by default. Release builds on both
+platforms enforce normal certificate/hostname validation, hide the exception toggle, and Android
+also blocks cleartext traffic. A release build therefore requires a trusted certificate and domain.
 
 ## Environment Variables
 
@@ -436,6 +436,14 @@ The wake phrase and the 12 s follow-up window live in `shared/wake.ts`. The mock
 Returns public backend liveness, selected provider, build identity, and relay
 counters. It never includes tester identities, evidence, or transcripts.
 
+### `GET /ready`
+
+Returns `200` only when the relay is ready to receive traffic. A production
+deployment returns `503` when Doubao credentials or access control are missing,
+when unprotected self-registration remains open, or while graceful shutdown is
+in progress. Load balancers should use `/ready`; process monitors should use
+`/health`.
+
 ### `GET /testing/summary` · `GET /testing/sessions` · QA operations routes
 
 Authenticated QA APIs provide a scoped summary, cursor-paginated evidence,
@@ -465,7 +473,9 @@ rate-limited per IP (`AUTH_ATTEMPTS_PER_MINUTE`, default 10). On relays with
 `RELAY_AUTH_TOKEN` set, self-registration additionally requires that token (or
 an invite) — otherwise a stranger could mint a session that bypasses it. Users
 change their own password via `POST /auth/password` (current + new password;
-revokes their other sessions). Set `AUTH_REGISTRATION=off` after onboarding to
+revokes their other sessions, including open WebSockets). Logout, account
+deletion, and session expiry also disconnect matching live sockets. Set
+`AUTH_REGISTRATION=off` after onboarding to
 stop self-registration; `AUTH_SESSION_DAYS` controls session lifetime
 (default 30). With zero accounts and no relay token, everything stays open —
 the plug-and-play local demo mode.
@@ -679,6 +689,7 @@ npm run dev          # Run Vite client and Express/WebSocket server
 npm run build        # Type-check and build production assets
 npm run preview      # Preview built client
 npm run lint         # Lint with ESLint
+npm run check:dead-code # Detect unused files, exports, and dependencies with Knip
 npm run format       # Format with Prettier (format:check to verify only)
 npm test             # Run the Vitest unit tests (test:watch for watch mode)
 npm run check        # Local/CI gate: format, lint, unit, fault matrix, build
@@ -692,10 +703,10 @@ npm run check        # Local/CI gate: format, lint, unit, fault matrix, build
 ```text
  Develop              Verify                 Build                Deploy to test server
  -------              ------                 -----                ---------------------
- npm install          npm run lint           npm run build        rsync push  ->  Lightsail
- npm run dev          npm run format:check     tsc --noEmit        npm install    (on server)
-   vite  :5173        npm test (vitest)        vite build          npm run build  (on server)
-   tsx   :8787                                 -> dist/            pm2 restart horizon
+ npm install          npm run lint           npm run build        archive committed source
+ npm run dev          npm run format:check     tsc --noEmit        build archive locally
+   vite  :5173        npm test (vitest)        vite build          rsync source + dist
+   tsx   :8787                                 -> dist/            npm ci --omit=dev + restart
    (Vite proxy)                                                    Caddy :443 -> :8787
 ```
 
@@ -710,6 +721,7 @@ npm run dev      # vite :5173  +  tsx watch :8787
 
 ```bash
 npm run lint           # ESLint (typescript-eslint + react-hooks)
+npm run check:dead-code # Knip unused-code/dependency audit
 npm run format:check   # Prettier check (npm run format to auto-fix)
 npm test               # Vitest unit tests
 npm run test:fault-matrix # deterministic latency/error/unsafe variants
@@ -741,36 +753,25 @@ QA evidence and operations are indexed in `~/.horizon-helmet-testing/testing.sql
 
 ### 5. Deploy to the test server
 
-Run from the project root on your machine. The server keeps its own `.env`; credentials are never copied from a developer machine.
+Run from the project root on your machine. The server keeps its own `.env`; credentials are never
+copied from a developer machine. The deploy command archives `HEAD`, stamps and builds that exact
+commit locally, copies the finished `dist/`, installs runtime-only packages remotely, restarts PM2,
+and checks liveness. Building locally avoids OOM failures on the small Lightsail instance.
 
 ```bash
-KEY=/path/to/LightsailDefaultKey-ap-northeast-2.pem
-HOST=ubuntu@3.35.135.136
-
-# (optional) preview exactly what will change
-rsync -azn --delete --exclude='.git' --exclude='.env' --exclude='node_modules' \
-  --exclude='dist' --exclude='.DS_Store' -e "ssh -i $KEY" ./ "$HOST":/home/ubuntu/app/
-
-# 1. Push source. --delete removes files deleted in the repo; the excludes
-#    protect the server .env, node_modules, dist, and .git.
-rsync -az --delete --exclude='.git' --exclude='.env' --exclude='node_modules' \
-  --exclude='dist' --exclude='.DS_Store' -e "ssh -i $KEY" ./ "$HOST":/home/ubuntu/app/
-
-# 2. Install deps, rebuild the client, and restart the process.
-ssh -i "$KEY" "$HOST" 'cd ~/app && npm install && npm run build && pm2 restart horizon'
-
-# 3. Verify health and confirm the rebuilt hashed client bundle is being served.
-curl -sk https://3.35.135.136/health      # expect {"ok":true,"provider":"doubao"}
-curl -sk https://3.35.135.136/ | sed -n '1,20p'
+LIGHTSAIL_KEY=/path/to/LightsailDefaultKey-ap-northeast-2.pem ./deploy-lightsail.command
 ```
 
-> **Note:** `react`, `react-dom`, and the `@types/*` packages live in `devDependencies`. The server only needs them to _build_ the client (the built `dist/` bundles React in), so the server must run a full `npm install` — a production-only install cannot rebuild the client.
+The health step expects `{ "ok": true, "provider": "doubao" }`. Check readiness separately with
+`curl -fsk https://3.35.135.136/ready`; it fails closed for a misconfigured production relay.
 
 ## Security Notes
 
 - `.env` is ignored by git.
 - Doubao credentials stay on the local server; the browser only talks to the WebSocket relay.
 - Do not commit real API keys, app keys, or access tokens.
+- Native bearer tokens are stored with Android Keystore-backed AES-GCM and the iOS Keychain;
+  legacy plain preferences are migrated on first launch.
 - The relay enforces resource limits in both directions (payload size, text-extraction depth,
   buffered-audio caps, client backpressure) so one bad session cannot exhaust server memory.
 - `/agent` access control (token, browser Origin allowlist, per-IP sliding-window rate limit) is
@@ -823,7 +824,7 @@ on a developer machine.
 | Native app says 需要登录 (HTTP 401)  | Accounts are active on the relay: open 设置 → 账号 in the app and sign in with your web-platform username/password (the settings sheet opens automatically on 401). Pasting a token from the web HUD's 复制令牌（App 用） into 认证令牌 still works as a fallback. |
 | Doubao session starts but no voice   | Confirm `DOUBAO_API_KEY` or legacy credentials, resource ID, realtime model, and voice IDs.                                                                                                                                                                        |
 | Weather does not appear              | Grant location permission or set `DEFAULT_RIDER_LAT` / `DEFAULT_RIDER_LON` in `.env`.                                                                                                                                                                              |
-| Self-signed test server fails mobile | Enable the native app's test-only self-signed certificate toggle.                                                                                                                                                                                                  |
+| Self-signed test server fails mobile | Use a Debug build and enable its test-only certificate toggle. Release builds intentionally require a trusted certificate and hostname.                                                                                                                            |
 | WebSocket test fails with `EPERM`    | The test binds `127.0.0.1`; rerun in an environment that permits local loopback listeners.                                                                                                                                                                         |
 
 ## Next Steps

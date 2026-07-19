@@ -475,7 +475,10 @@ captured-policy result, transcript, and aggregate audio-pipeline quality.
 | Operator token | Full operational API access for automation                                                   |
 
 The public `/health` response is deliberately small and contains liveness,
-build, provider, and counters only. Authenticated QA data uses:
+build, provider, and counters only. `/ready` is the production traffic gate: it
+returns `503` when provider credentials or access control are missing and while
+unprotected registration is open or the process is shutting down. Authenticated
+QA data uses:
 
 - `GET /testing/summary` — scoped dashboard totals, gate, regression, and catalog.
 - `GET /testing/sessions?limit=25&cursor=...` — scoped, filterable evidence
@@ -706,12 +709,14 @@ What to confirm in one pass:
 | 14  | Per-tester statistics        | `server/metrics.ts`, `src/App.tsx`            | `tests/metrics.test.ts`, `tests/websocket.test.ts`     | web + `/health`                 |
 | 15  | Mock scenario cycling        | `server/providers/mock.ts`                    | `tests/adas.test.ts`, `tests/websocket.test.ts`        | mock                            |
 | 16  | Per-user conversation memory | `server/user-memory.ts`                       | `tests/user-memory.test.ts`, `tests/websocket.test.ts` | authenticated mock + Doubao     |
+| 17  | Production process lifecycle | `server/index.ts`                             | `tests/server-integration.test.ts`                     | health/readiness/auth/logout    |
 
 Run the whole unit suite at any time:
 
 ```bash
 npm test      # full Vitest suite
 npm run lint
+npm run check:dead-code
 npm run format:check
 npm run check     # all local/CI gates in one command
 ```

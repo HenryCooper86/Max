@@ -10,6 +10,7 @@ import {
   TESTING_CAMPAIGNS,
   TESTING_TEST_CASES,
   defaultTestCaseForCampaign,
+  findTestingCampaign,
   type TestingQuality,
   type TestingTestCase
 } from "../../shared/testing";
@@ -258,7 +259,9 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
   const testingCampaigns = testing?.catalog?.campaigns?.length ? testing.catalog.campaigns : TESTING_CAMPAIGNS;
   const testingTestCases = testing?.catalog?.testCases?.length ? testing.catalog.testCases : TESTING_TEST_CASES;
   const selectedCampaign =
-    testingCampaigns.find((campaign) => campaign.id === agent.testingCampaignId) ?? testingCampaigns[0];
+    testingCampaigns.find((campaign) => campaign.id === agent.testingCampaignId) ??
+    testingCampaigns.at(0) ??
+    findTestingCampaign(undefined);
   const selectedTestCase =
     testingTestCases.find((testCase) => testCase.id === agent.testingTestCaseId) ??
     defaultTestCaseForCampaign(selectedCampaign.id);

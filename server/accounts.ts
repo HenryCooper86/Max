@@ -16,7 +16,7 @@ import { createLogger } from "./logger";
 
 const scrypt = promisify(scryptCallback) as (password: string, salt: string, keylen: number) => Promise<Buffer>;
 
-export type AccountRole = "admin" | "reviewer" | "tester";
+type AccountRole = "admin" | "reviewer" | "tester";
 
 export type PublicUser = {
   id: string;
@@ -62,6 +62,7 @@ const MIN_PASSWORD_LENGTH = 8;
 const MAX_PASSWORD_LENGTH = 128;
 const MAX_DISPLAY_NAME_LENGTH = 60;
 const SCRYPT_KEY_LENGTH = 64;
+const ACCOUNT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const ACCOUNTS_PATH = resolveAccountsPath();
 const log = createLogger("accounts");
@@ -87,7 +88,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-export function normalizeUsername(value: unknown): string {
+function normalizeUsername(value: unknown): string {
   if (typeof value !== "string") return "";
   return value.normalize("NFKC").trim().toLowerCase();
 }
@@ -138,7 +139,7 @@ function loadStoredUser(value: unknown): StoredUser | null {
   if (typeof value.passwordHash !== "string" || typeof value.salt !== "string") return null;
   if (!value.passwordHash || !value.salt) return null;
   return {
-    id: typeof value.id === "string" && value.id ? value.id : randomUUID(),
+    id: typeof value.id === "string" && ACCOUNT_ID_PATTERN.test(value.id) ? value.id.toLowerCase() : randomUUID(),
     username,
     displayName: normalizeDisplayName(value.displayName, username),
     role: value.role === "admin" || value.role === "reviewer" ? value.role : "tester",
@@ -229,8 +230,14 @@ function persistAccounts() {
       await fs.promises.writeFile(tempPath, `${snapshot}\n`, { mode: 0o600 });
       await fs.promises.rename(tempPath, filePath);
     })
-    .catch(() => {
-      // Best-effort durability; the in-memory state stays authoritative.
+    .catch((error) => {
+      // The in-memory state remains authoritative for this process, but a
+      // silent write failure would make successful account/admin actions
+      // disappear at the next restart. Surface it prominently for operators.
+      log.error("failed to persist accounts", {
+        path: filePath,
+        message: error instanceof Error ? error.message : String(error)
+      });
     });
 }
 
@@ -423,18 +430,19 @@ export function listUsers(): PublicUser[] {
  * be deleted — that both protects the bootstrap admin and guarantees the
  * relay can never end up auth-enabled with nobody able to administer it.
  */
-export function deleteUser(usernameInput: unknown): { ok: true } | { ok: false; error: string } {
+export function deleteUser(usernameInput: unknown): { ok: true; user: PublicUser } | { ok: false; error: string } {
   ensureAccountsLoaded();
   const username = normalizeUsername(usernameInput);
   const user = users.get(username);
   if (!user) return { ok: false, error: "用户不存在。" };
   if (user.role === "admin") return { ok: false, error: "不能删除管理员账号。" };
+  const deletedUser = publicUser(user);
   users.delete(username);
   for (const [token, session] of sessions) {
     if (session.userId === user.id) sessions.delete(token);
   }
   persistAccounts();
-  return { ok: true };
+  return { ok: true, user: deletedUser };
 }
 
 /** Changes QA access without ever leaving the service with zero admins. */

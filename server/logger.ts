@@ -2,7 +2,7 @@
 // timestamp, a level, and a scope (usually the short session id) so a single
 // grep can reconstruct one session's life cycle out of interleaved output.
 
-export type LogLevel = "debug" | "info" | "warn" | "error";
+type LogLevel = "debug" | "info" | "warn" | "error";
 
 const LEVEL_RANK: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
 

@@ -22,7 +22,7 @@ export function createHazardInjector({ send, emitRideContext }: HazardInjectorOp
   const restoreTimers = new Set<NodeJS.Timeout>();
 
   function fire() {
-    const hazard = ADAS_SCENARIOS[index % ADAS_SCENARIOS.length];
+    const hazard = ADAS_SCENARIOS[index % ADAS_SCENARIOS.length] ?? ADAS_SCENARIOS[0];
     index += 1;
 
     send({

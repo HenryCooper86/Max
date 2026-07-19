@@ -1,0 +1,3 @@
+{
+  "ignore": ["public/pcm-worklet.js"]
+}

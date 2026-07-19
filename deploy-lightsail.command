@@ -33,10 +33,23 @@ printf '{\n  "gitCommit": "%s",\n  "deployedAt": "%s"\n}\n' \
   "$GIT_COMMIT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$DEPLOY_STAGE/build-info.json"
 echo "==> Build stamp: $GIT_COMMIT"
 
-echo "==> 1/3 Pushing source to $HOST (server .env, node_modules, dist are protected)"
+# Build the exact archived commit locally. The Lightsail instance is deliberately
+# small and can be OOM-killed by TypeScript/Vite; it only needs runtime packages.
+if [[ ! -d node_modules ]]; then
+  echo "Local node_modules is missing; run npm ci before deploying." >&2
+  exit 1
+fi
+ln -s "$(pwd)/node_modules" "$DEPLOY_STAGE/node_modules"
+echo "==> 1/4 Building archived commit locally"
+(
+  cd "$DEPLOY_STAGE"
+  GIT_COMMIT="$GIT_COMMIT" npm run build
+)
+
+echo "==> 2/4 Pushing source and built client to $HOST (server .env is protected)"
 rsync -azc --delete \
   --exclude='.git' --exclude='.env' --exclude='node_modules' \
-  --exclude='dist' --exclude='.DS_Store' --exclude='.claude' \
+  --exclude='.DS_Store' --exclude='.claude' \
   --exclude='android/.gradle' --exclude='android/.idea' \
   --exclude='android/.kotlin' --exclude='android/local.properties' \
   --exclude='android/app/build' --exclude='ios/build' \
@@ -46,11 +59,11 @@ rsync -azc --delete \
   -e "ssh -i '$KEY' -o BatchMode=yes -o StrictHostKeyChecking=accept-new" \
   "$DEPLOY_STAGE/" "$HOST":"$REMOTE_APP_DIR/"
 
-echo "==> 2/3 Installing deps, rebuilding client, restarting pm2 process 'horizon'"
+echo "==> 3/4 Installing runtime deps and restarting pm2 process 'horizon'"
 ssh -i "$KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$HOST" \
-  "cd '$REMOTE_APP_DIR' && npm install && npm run build && pm2 restart horizon"
+  "cd '$REMOTE_APP_DIR' && npm ci --omit=dev --no-audit --no-fund && pm2 restart horizon --update-env"
 
-echo "==> 3/3 Health check"
+echo "==> 4/4 Health check"
 sleep 2
 curl -fsk "$HEALTH_URL"
 echo

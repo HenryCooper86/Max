@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The relay runs as plain ws:// on a developer machine or LAN box during
-     prototyping, so cleartext is allowed. Lock this down (cleartext off, pin
-     the relay host) before any production build. -->
+<!-- Release builds require TLS. The debug source set overrides this resource
+     so emulators and LAN development can still use a local ws:// relay. -->
 <network-security-config>
-    <base-config cleartextTrafficPermitted="true" />
+    <base-config cleartextTrafficPermitted="false" />
 </network-security-config>

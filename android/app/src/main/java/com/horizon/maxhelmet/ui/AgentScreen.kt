@@ -954,6 +954,7 @@ private fun SettingsPanel(
                 value = viewModel.authToken,
                 onValueChange = viewModel::updateAuthToken,
                 singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
                 label = { Text("认证令牌（网页「复制令牌」获取）", fontSize = 12.sp) },
                 textStyle = MaterialTheme.typography.bodySmall.copy(color = HudColors.Text),
                 colors = OutlinedTextFieldDefaults.colors(
@@ -964,20 +965,22 @@ private fun SettingsPanel(
                 ),
                 modifier = Modifier.fillMaxWidth()
             )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("信任自签名证书（测试服务器）", color = HudColors.Muted, fontSize = 12.sp)
-                Switch(
-                    checked = viewModel.allowSelfSigned,
-                    onCheckedChange = viewModel::updateAllowSelfSigned,
-                    colors = SwitchDefaults.colors(
-                        checkedTrackColor = HudColors.Accent,
-                        checkedThumbColor = Color(0xFF07221A)
+            if (BuildConfig.DEBUG) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("信任自签名证书（仅调试）", color = HudColors.Muted, fontSize = 12.sp)
+                    Switch(
+                        checked = viewModel.allowSelfSigned,
+                        onCheckedChange = viewModel::updateAllowSelfSigned,
+                        colors = SwitchDefaults.colors(
+                            checkedTrackColor = HudColors.Accent,
+                            checkedThumbColor = Color(0xFF07221A)
+                        )
                     )
-                )
+                }
             }
         }
     }

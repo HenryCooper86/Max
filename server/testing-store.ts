@@ -404,10 +404,11 @@ export function storedTestingSessionPage(
     // capture-time value frozen in the payload (which a later policy change
     // makes stale). The capture-time snapshot stays on captured*.
     .map(reevaluateStoredSession);
+  const lastItem = items.at(-1);
   return {
     items,
     total: Number(count?.count ?? 0),
-    nextCursor: hasMore && items.length ? encodeSessionCursor(items[items.length - 1]) : undefined
+    nextCursor: hasMore && lastItem ? encodeSessionCursor(lastItem) : undefined
   };
 }
 
@@ -416,13 +417,6 @@ export function loadStoredTestingSession(sessionId: string): TesterSessionSummar
     | { payload_json?: string }
     | undefined;
   return parseJson<TesterSessionSummary>(row?.payload_json);
-}
-
-export function testingSessionCount(): number {
-  const row = database().prepare("SELECT COUNT(*) AS count FROM testing_sessions").get() as
-    | { count?: number }
-    | undefined;
-  return Number(row?.count ?? 0);
 }
 
 function revokeTestingSessionCredits(sessionIds: string[], now = Date.now()): void {
@@ -1046,7 +1040,7 @@ export function getApprovedBaselineBuild(): string | undefined {
   return cleanString(row?.value, "", 80) || undefined;
 }
 
-export function setApprovedBaselineBuild(build: string, actor: string, now = Date.now()): string {
+function setApprovedBaselineBuild(build: string, actor: string, now = Date.now()): string {
   const cleanBuild = cleanString(build, "", 80);
   if (!cleanBuild) throw new Error("A baseline build is required");
   database()
@@ -1091,7 +1085,7 @@ export function resetTestingStore(): void {
   ensureDefaultPolicy();
 }
 
-export function closeTestingStoreForTests(): void {
+export function closeTestingStore(): void {
   try {
     databaseInstance?.close();
   } catch (error) {

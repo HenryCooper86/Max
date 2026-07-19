@@ -118,9 +118,15 @@ export function relayTokenPresented(request: IncomingMessage): boolean {
 
 /** The logged-in user behind a request's session token, if any. */
 export function requestUser(request: IncomingMessage): PublicUser | null {
+  return requestSession(request)?.user ?? null;
+}
+
+/** The concrete login session presented by a request, including its opaque
+ * token so an HTTP logout/password change can revoke matching live sockets. */
+export function requestSession(request: IncomingMessage): { token: string; user: PublicUser } | null {
   for (const token of presentedTokens(request)) {
     const user = sessionUser(token);
-    if (user) return user;
+    if (user) return { token, user };
   }
   return null;
 }

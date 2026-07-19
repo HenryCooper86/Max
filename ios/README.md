@@ -74,10 +74,10 @@ explicit `DEVELOPER_DIR` command above or switch the machine to full Xcode with 
 | Where the app runs    | Relay URL                                           | Default?                       |
 | --------------------- | --------------------------------------------------- | ------------------------------ |
 | iOS Simulator         | `ws://localhost:8787/agent`                         | ✅ on the simulator            |
-| Physical iPhone       | `wss://3.35.135.136/agent` (Lightsail, self-signed) | ✅ on a device (trust auto-on) |
+| Physical iPhone       | `wss://3.35.135.136/agent` (Lightsail, self-signed) | ✅ in Debug (trust auto-on)    |
 | Physical iPhone (LAN) | `ws://<Mac-LAN-IP>:8787/agent`                      | override for a local Mac relay |
 
-On a physical device `localhost` is the phone itself, so the app defaults to the shared AWS
+On a physical device `localhost` is the phone itself, so a Debug build defaults to the shared AWS
 Lightsail test relay and turns the self-signed trust toggle on for that first connection.
 Point it back at a Mac relay by typing the LAN URL (and toggling self-signed off for `ws://`).
 
@@ -150,18 +150,16 @@ re-run the build/install to refresh it. The installed app defaults to the Lights
 | `NSLocationWhenInUseUsageDescription` | Send coordinates for weather and ride-risk context.                     |
 | `NSLocalNetworkUsageDescription`      | Connect to a relay running on the same LAN during local development.    |
 | `UIBackgroundModes = audio`           | Keep mic/playback active when the app is backgrounded or screen sleeps. |
-| `NSAllowsArbitraryLoads`              | Prototype-only support for `ws://` dev relays and self-signed testing.  |
+| `NSAllowsArbitraryLoads`              | Debug-plist-only support for `ws://` development relays.                |
 
 Location is optional. If denied, the server can use fallback weather coordinates.
 
 ### Self-signed test server
 
-The Lightsail test box uses a self-signed certificate. The toggle **信任自签名证书（测试服务器）**
-gates a trust-all path for `wss://` hosts with such a cert. On a physical device it defaults **on**
-(via `MainViewModel.defaultAllowSelfSigned`) so the Lightsail default relay connects out of the box;
-the simulator defaults it **off** since it talks plain `ws://` to localhost. This trust-all path
-must never ship in a production build. `Info.plist` also enables
-`NSAllowsArbitraryLoads` so `ws://` (cleartext) dev relays work — tighten both before release.
+The Lightsail test box uses a self-signed certificate. In Debug only, the toggle
+**信任自签名证书（仅调试）** gates a trust-all path and defaults on for a physical device. The
+simulator defaults it off because it talks to local `ws://`. Release builds compile out the bypass,
+hide the toggle, use the hardened `Info.plist`, and require a trusted certificate and hostname.
 
 ## What's implemented
 
@@ -180,7 +178,8 @@ must never ship in a production build. `Info.plist` also enables
 - Live weather card and fused `态势摘要` ride-pulse card.
 - Transcript with in-place updates, deduplication, timestamps, and JSON export via share sheet.
 - `AVSpeechSynthesizer` fallback when the provider sends text without audio.
-- Optional trust-all TLS path for the self-signed Lightsail test server.
+- Debug-only trust-all TLS path for the self-signed Lightsail test server.
+- Keychain storage for relay/login bearer tokens, with migration from older `UserDefaults` values.
 - Release-run/test-case/assignment attribution with explicit iOS platform and stamped git commit.
 
 ## Architecture
@@ -196,7 +195,7 @@ audio + session logic; the `UI/` layer is the SwiftUI HUD.
 | `Agent/AudioRouter.swift`   | `AVAudioSession` voice-chat config + Bluetooth (HFP) routing                                                                                                        | `AudioRouter.kt`                                                                          |
 | `Agent/AgentSession.swift`  | Relay WebSocket, reconnect backoff, transcript dedup, barge-in, `AVSpeechSynthesizer` TTS fallback, location, self-signed TLS, published state                      | `useHelmetAgent` in `src/main.tsx`, `AgentSession.kt`                                     |
 | `UI/AgentScreen.swift`      | Voice-mode screen: animated helmet centerpiece (ported SVG), status caption, ADAS banner, captions overlay, minimal controls, and the unified 设置 sheet            | `src/components/HelmetVisual.tsx`, `AgentScreen.kt`                                       |
-| `UI/MainViewModel.swift`    | Relay-URL / cert prefs (`UserDefaults`), hands-free toggle, transcript export share sheet                                                                           | `MainViewModel.kt`                                                                        |
+| `UI/MainViewModel.swift`    | Relay/cert preferences, Keychain-backed tokens, hands-free toggle, transcript export share sheet                                                                    | `MainViewModel.kt`                                                                        |
 | `UI/HudTheme.swift`         | Design tokens                                                                                                                                                       | `src/styles.css`, `theme/Theme.kt`                                                        |
 | `MaxHelmetApp.swift`        | App entry; keeps the screen awake, forces dark mode                                                                                                                 | `MainActivity.kt`                                                                         |
 
@@ -249,13 +248,13 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 | Physical iPhone cannot connect        | Default is `wss://3.35.135.136/agent` (self-signed on); for a Mac relay use `ws://<Mac-LAN-IP>:8787/agent`, grant local-network permission, and check the firewall. |
 | Device app won't launch after ~7 days | Free personal-team signature expired — re-run the device build/install to refresh it.                                                                               |
 | Mic permission prompt does not appear | Reset app privacy in Simulator or delete/reinstall the app.                                                                                                         |
-| Self-signed test server fails         | Use `wss://3.35.135.136/agent` and enable the self-signed certificate toggle.                                                                                       |
+| Self-signed test server fails         | Use a Debug build and enable its self-signed certificate toggle. Release builds require trusted TLS.                                                                |
 | App launches but no live weather      | Grant location permission or configure fallback coordinates on the server.                                                                                          |
 | Bluetooth route is not selected       | Pair the headset before starting the session; iOS chooses HFP routing automatically.                                                                                |
 
 ## Release caveats
 
-- `NSAllowsArbitraryLoads` and the trust-all certificate path are prototype conveniences. Remove
-  or narrow them before production.
+- `NSAllowsArbitraryLoads` and the trust-all path are restricted to Debug; Release uses normal ATS
+  certificate and hostname validation.
 - Configure a real signing team, bundle ID, versioning, icons, and privacy text before TestFlight.
 - Keep the protocol parity checklist in sync with web and Android whenever `/agent` changes.

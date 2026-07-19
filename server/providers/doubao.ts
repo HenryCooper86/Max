@@ -264,17 +264,17 @@ export function parseDoubaoFrame(raw: RawData): ParsedDoubaoFrame {
   const data = Buffer.isBuffer(raw) ? raw : Array.isArray(raw) ? Buffer.concat(raw) : Buffer.from(raw);
   if (data.length < 12) throw new Error("Doubao frame is too short");
 
-  const messageType = (data[1] >> 4) & 0b1111;
+  const messageType = (data.readUInt8(1) >> 4) & 0b1111;
   if (
     ![MessageType.FullServerResponse, MessageType.AudioOnlyResponse, MessageType.ErrorInformation].includes(messageType)
   ) {
     throw new Error(`Unsupported Doubao message type ${messageType}`);
   }
 
-  const serialization = (data[2] >> 4) & 0b1111;
+  const serialization = (data.readUInt8(2) >> 4) & 0b1111;
   // The relay requests no compression; a compressed payload would otherwise
   // fail JSON.parse on every frame with a misleading per-frame error.
-  const compression = data[2] & 0b1111;
+  const compression = data.readUInt8(2) & 0b1111;
   if (compression !== 0) throw new Error(`Unsupported Doubao compression flag ${compression}`);
 
   // Error frames use a different layout: header + errorCode(4) + payloadSize(4)

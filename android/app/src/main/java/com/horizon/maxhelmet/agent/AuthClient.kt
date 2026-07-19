@@ -2,6 +2,7 @@ package com.horizon.maxhelmet.agent
 
 import android.os.Handler
 import android.os.Looper
+import com.horizon.maxhelmet.BuildConfig
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -128,17 +129,18 @@ class AuthClient {
     }
 
     private fun ensureClient(allowSelfSignedTls: Boolean) {
-        if (allowSelfSignedTls != allowSelfSigned) {
-            allowSelfSigned = allowSelfSignedTls
+        val debugTrustEnabled = BuildConfig.DEBUG && allowSelfSignedTls
+        if (debugTrustEnabled != allowSelfSigned) {
+            allowSelfSigned = debugTrustEnabled
             httpClient = buildClient(allowSelfSigned)
         }
     }
 
     private fun buildClient(allowSelfSigned: Boolean): OkHttpClient {
         val builder = OkHttpClient.Builder()
-        if (allowSelfSigned) {
-            // Prototype-only, mirroring AgentSession.buildHttpClient: gated
-            // behind the explicit settings toggle for the self-signed test relay.
+        if (BuildConfig.DEBUG && allowSelfSigned) {
+            // Debug-only, mirroring AgentSession.buildHttpClient. Release
+            // binaries cannot install a trust-all manager or hostname verifier.
             val trustAll = object : X509TrustManager {
                 override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) = Unit
                 override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) = Unit

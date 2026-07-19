@@ -2,11 +2,11 @@ import type { DemoScenario, RideMode } from "./ride";
 
 export type TestingQuality = "pass" | "watch" | "fail";
 export type TestingCheckStatus = "pass" | "warn" | "fail" | "skipped";
-export type TestingValidityStatus = "valid" | "invalid";
+type TestingValidityStatus = "valid" | "invalid";
 export type TestingPlatform = "web" | "ios" | "android" | "unknown";
-export type TestingRisk = "standard" | "safety-critical";
+type TestingRisk = "standard" | "safety-critical";
 export type TestingRunStatus = "draft" | "active" | "blocked" | "ready" | "approved" | "archived";
-export type TestingAssignmentStatus = "pending" | "in-progress" | "complete" | "blocked";
+type TestingAssignmentStatus = "pending" | "in-progress" | "complete" | "blocked";
 export type TestingReviewStatus = "open" | "triaged" | "resolved" | "waived";
 export type TestingReviewSeverity = "low" | "medium" | "high" | "critical";
 
@@ -73,7 +73,7 @@ export type TestingTestCase = {
   minimumValidSessions: number;
 };
 
-export type TestingAgentSignalRequirement = {
+type TestingAgentSignalRequirement = {
   id: string;
   label: string;
   anyOf: string[];
@@ -103,7 +103,7 @@ export type TestingAudioQuality = {
   silencePct: number;
 };
 
-export type TestingCohortCoverage = {
+type TestingCohortCoverage = {
   platform: TestingPlatform;
   required: number;
   validSessions: number;
@@ -327,7 +327,7 @@ export type TestingCatalog = {
   goldenReplays: TestingGoldenReplay[];
 };
 
-export type TestingGoldenReplayTurn = {
+type TestingGoldenReplayTurn = {
   speaker: "rider" | "agent";
   text: string;
 };
@@ -342,8 +342,8 @@ export type TestingGoldenReplay = {
 
 export const DEFAULT_TESTING_CAMPAIGN_ID = "release-readiness";
 export const DEFAULT_TESTING_TEST_CASE_ID = "baseline-live-session";
-export const TESTING_POLICY_VERSION = "2026-07-15.1";
-export const REQUIRED_TESTING_PLATFORMS: TestingPlatform[] = ["web", "ios", "android"];
+const TESTING_POLICY_VERSION = "2026-07-15.1";
+const REQUIRED_TESTING_PLATFORMS: TestingPlatform[] = ["web", "ios", "android"];
 
 export const DEFAULT_TESTING_POLICY: TestingPolicy = {
   version: TESTING_POLICY_VERSION,
@@ -369,7 +369,7 @@ export const DEFAULT_TESTING_POLICY: TestingPolicy = {
   }
 };
 
-export const TESTING_CAMPAIGNS: TestingCampaign[] = [
+export const TESTING_CAMPAIGNS: [TestingCampaign, ...TestingCampaign[]] = [
   {
     id: DEFAULT_TESTING_CAMPAIGN_ID,
     name: "Release Readiness",
@@ -397,7 +397,7 @@ export const TESTING_CAMPAIGNS: TestingCampaign[] = [
   }
 ];
 
-export const TESTING_TEST_CASES: TestingTestCase[] = [
+export const TESTING_TEST_CASES: [TestingTestCase, ...TestingTestCase[]] = [
   {
     id: DEFAULT_TESTING_TEST_CASE_ID,
     campaignId: DEFAULT_TESTING_CAMPAIGN_ID,

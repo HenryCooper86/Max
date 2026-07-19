@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
+import com.horizon.maxhelmet.BuildConfig
 import com.horizon.maxhelmet.agent.AgentSession
 import com.horizon.maxhelmet.agent.AgentSessionHolder
 import com.horizon.maxhelmet.agent.AuthClient
@@ -16,6 +17,7 @@ import com.horizon.maxhelmet.agent.RideMode
 import com.horizon.maxhelmet.agent.TranscriptItem
 import com.horizon.maxhelmet.agent.VoiceGender
 import com.horizon.maxhelmet.agent.VoicePersonality
+import com.horizon.maxhelmet.security.SecureTokenStore
 import com.horizon.maxhelmet.service.VoiceAgentService
 import kotlinx.coroutines.flow.StateFlow
 import java.io.File
@@ -50,6 +52,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val session: AgentSession = AgentSessionHolder.get(application)
     private val prefs = application.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private val secureTokens = SecureTokenStore(prefs)
     private val authClient = AuthClient()
 
     val sessionState: StateFlow<AgentSession.State> = session.state
@@ -58,11 +61,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
 
     /** Optional shared relay auth token, sent as the `token` query parameter. */
-    var authToken by mutableStateOf(prefs.getString(KEY_AUTH_TOKEN, "") ?: "")
+    var authToken by mutableStateOf(secureTokens.read(KEY_AUTH_TOKEN))
         private set
 
     /** Trust the test relay's self-signed certificate for wss:// (prototype only). */
-    var allowSelfSigned by mutableStateOf(prefs.getBoolean(KEY_ALLOW_SELF_SIGNED, false))
+    var allowSelfSigned by mutableStateOf(BuildConfig.DEBUG && prefs.getBoolean(KEY_ALLOW_SELF_SIGNED, false))
         private set
 
     var testingCampaignId by mutableStateOf(prefs.getString(KEY_TESTING_CAMPAIGN_ID, "release-readiness") ?: "release-readiness")
@@ -81,12 +84,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateAuthToken(token: String) {
         authToken = token
-        prefs.edit().putString(KEY_AUTH_TOKEN, token).apply()
+        secureTokens.write(KEY_AUTH_TOKEN, token)
     }
 
     fun updateAllowSelfSigned(allow: Boolean) {
-        allowSelfSigned = allow
-        prefs.edit().putBoolean(KEY_ALLOW_SELF_SIGNED, allow).apply()
+        allowSelfSigned = BuildConfig.DEBUG && allow
+        prefs.edit().putBoolean(KEY_ALLOW_SELF_SIGNED, allowSelfSigned).apply()
     }
 
     fun updateTestingCampaignId(value: String) {
@@ -113,7 +116,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * The login session token, stored SEPARATELY from the manual 认证令牌 field
      * so signing in/out never destroys a pasted operator relay token.
      */
-    var sessionToken by mutableStateOf(prefs.getString(KEY_SESSION_TOKEN, "") ?: "")
+    var sessionToken by mutableStateOf(secureTokens.read(KEY_SESSION_TOKEN))
         private set
 
     /**
@@ -152,11 +155,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         session.acknowledgeAuthRequired()
         if (isLoggedIn) {
             sessionToken = ""
+            secureTokens.remove(KEY_SESSION_TOKEN)
             authUsername = ""
             authDisplayName = ""
             authRole = ""
             prefs.edit()
-                .remove(KEY_SESSION_TOKEN)
                 .remove(KEY_AUTH_USERNAME)
                 .remove(KEY_AUTH_DISPLAY_NAME)
                 .remove(KEY_AUTH_ROLE)
@@ -182,11 +185,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             loginBusy = false
             if (login != null) {
                 sessionToken = login.token
+                secureTokens.write(KEY_SESSION_TOKEN, login.token)
                 authUsername = login.user.username
                 authDisplayName = login.user.displayName
                 authRole = login.user.role
                 prefs.edit()
-                    .putString(KEY_SESSION_TOKEN, login.token)
                     .putString(KEY_AUTH_USERNAME, login.user.username)
                     .putString(KEY_AUTH_DISPLAY_NAME, login.user.displayName)
                     .putString(KEY_AUTH_ROLE, login.user.role)
@@ -212,13 +215,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun logout() {
         authClient.logout(relayUrl.trim(), sessionToken, allowSelfSigned)
         sessionToken = ""
+        secureTokens.remove(KEY_SESSION_TOKEN)
         authUsername = ""
         authDisplayName = ""
         authRole = ""
         loginError = null
         pendingHandsFreeRetry = false
         prefs.edit()
-            .remove(KEY_SESSION_TOKEN)
             .remove(KEY_AUTH_USERNAME)
             .remove(KEY_AUTH_DISPLAY_NAME)
             .remove(KEY_AUTH_ROLE)

@@ -16,29 +16,37 @@ afterEach(() => {
 });
 
 describe("per-user conversation memory", () => {
+  const aliceId = "11111111-1111-4111-8111-111111111111";
+  const bobId = "22222222-2222-4222-8222-222222222222";
+
   it("isolates users, stores only final turns, deduplicates retries, and stays bounded", () => {
-    recordUserMemoryEvent("alice", { type: "transcript", speaker: "rider", text: "partial", final: false }, 1);
+    recordUserMemoryEvent(aliceId, { type: "transcript", speaker: "rider", text: "partial", final: false }, 1);
     for (let index = 0; index < 30; index += 1) {
       recordUserMemoryEvent(
-        "alice",
+        aliceId,
         { type: "transcript", speaker: index % 2 ? "agent" : "rider", text: `turn ${index}`, final: true },
         index + 10
       );
     }
-    recordUserMemoryEvent("alice", { type: "transcript", speaker: "agent", text: "turn 29", final: true }, 100);
-    recordUserMemoryEvent("bob", { type: "transcript", speaker: "rider", text: "private to bob" }, 200);
+    recordUserMemoryEvent(aliceId, { type: "transcript", speaker: "agent", text: "turn 29", final: true }, 100);
+    recordUserMemoryEvent(bobId, { type: "transcript", speaker: "rider", text: "private to bob" }, 200);
 
-    const alice = userConversationMemory("ALICE");
+    const alice = userConversationMemory(aliceId.toUpperCase());
     expect(alice?.turns).toHaveLength(24);
     expect(alice?.turns[0].text).toBe("turn 6");
     expect(alice?.turns.at(-1)?.text).toBe("turn 29");
     expect(alice?.turns.some((turn) => turn.text === "partial")).toBe(false);
-    expect(userConversationMemory("bob")?.turns.map((turn) => turn.text)).toEqual(["private to bob"]);
+    expect(userConversationMemory(bobId)?.turns.map((turn) => turn.text)).toEqual(["private to bob"]);
+  });
+
+  it("rejects mutable username keys so a recreated account cannot inherit deleted-user memory", () => {
+    recordUserMemoryEvent("alice", { type: "transcript", speaker: "rider", text: "private legacy turn" }, 1);
+    expect(userConversationMemory("alice")).toBeNull();
   });
 
   it("validates the short-term snapshot and supports self-service forgetting", () => {
     recordUserMemoryEvent(
-      "alice",
+      aliceId,
       {
         type: "session.memory",
         language: "en",
@@ -50,12 +58,12 @@ describe("per-user conversation memory", () => {
       1_000
     );
 
-    const memory = userConversationMemory("alice");
+    const memory = userConversationMemory(aliceId);
     expect(memory?.session).toMatchObject({ language: "en", lastIntent: "navigation", responseMode: "concise" });
     expect([...(memory?.session?.destination ?? "")].length).toBeLessThanOrEqual(64);
-    expect(clearUserConversationMemory("alice")).toBe(true);
-    expect(clearUserConversationMemory("alice")).toBe(false);
-    expect(userConversationMemory("alice")).toBeNull();
+    expect(clearUserConversationMemory(aliceId)).toBe(true);
+    expect(clearUserConversationMemory(aliceId)).toBe(false);
+    expect(userConversationMemory(aliceId)).toBeNull();
   });
 
   it("marks recalled transcript text as untrusted context", () => {
@@ -71,8 +79,8 @@ describe("per-user conversation memory", () => {
 
   it("can disable server-owned memory without affecting the relay", () => {
     vi.stubEnv("USER_MEMORY_FILE", "off");
-    recordUserMemoryEvent("alice", { type: "transcript", speaker: "rider", text: "do not store this" }, 1);
-    expect(userConversationMemory("alice")).toBeNull();
+    recordUserMemoryEvent(aliceId, { type: "transcript", speaker: "rider", text: "do not store this" }, 1);
+    expect(userConversationMemory(aliceId)).toBeNull();
   });
 });
 
@@ -85,12 +93,13 @@ describe("user memory persistence", () => {
     try {
       vi.resetModules();
       const first = await import("../server/user-memory");
-      first.recordUserMemoryEvent("alice", { type: "transcript", speaker: "rider", text: "Take me home" }, 10);
+      const userId = "11111111-1111-4111-8111-111111111111";
+      first.recordUserMemoryEvent(userId, { type: "transcript", speaker: "rider", text: "Take me home" }, 10);
       await first.flushUserMemory();
 
       vi.resetModules();
       const second = await import("../server/user-memory");
-      expect(second.userConversationMemory("alice")?.turns.map((turn) => turn.text)).toEqual(["Take me home"]);
+      expect(second.userConversationMemory(userId)?.turns.map((turn) => turn.text)).toEqual(["Take me home"]);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

@@ -3,7 +3,7 @@
 // The clients already echo a tiny session.memory snapshot across provider
 // restarts. This store adds the missing server-owned layer: a bounded set of
 // final transcript turns plus the latest validated snapshot, keyed by the
-// logged-in username. Anonymous/operator-token sessions deliberately get no
+// immutable account id. Anonymous/operator-token sessions deliberately get no
 // durable memory because the relay cannot safely tell one rider from another.
 
 import fs from "node:fs";
@@ -40,6 +40,7 @@ const DEFAULT_USER_MEMORY_PATH = path.join(os.homedir(), ".horizon-helmet-testin
 const MAX_STORED_TURNS = 24;
 const MAX_PROMPT_TURNS = 8;
 const MAX_TURN_CHARS = 500;
+const ACCOUNT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const memories = new Map<string, UserConversationMemory>();
 let loaded = false;
@@ -65,7 +66,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function normalizeUserId(value: unknown): string {
   if (typeof value !== "string") return "";
-  return value.normalize("NFKC").trim().toLowerCase().slice(0, 80);
+  const normalized = value.normalize("NFKC").trim().toLowerCase();
+  // Account ids are immutable UUIDs. Older builds keyed this file by mutable
+  // usernames, which could expose a deleted rider's history to a later account
+  // that reused the same name. Ignore those legacy keys rather than guessing.
+  return ACCOUNT_ID_PATTERN.test(normalized) ? normalized : "";
 }
 
 function cleanText(value: unknown, maxChars = MAX_TURN_CHARS): string {

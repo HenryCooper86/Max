@@ -15,8 +15,8 @@ import type {
 export type VoiceGender = "female" | "male";
 export type VoicePersonality = "concise" | "friendly" | "technical" | "rally";
 export type ConnectionState = "offline" | "connecting" | "relay" | "provider" | "ready" | "degraded";
-export type ProviderMode = "mock" | "live";
-export type NetworkState = "online" | "degraded" | "offline";
+type ProviderMode = "mock" | "live";
+type NetworkState = "online" | "degraded" | "offline";
 export type HazardLevel = RideIntelligence["hazardLevel"];
 
 export type TesterTranscriptTurn = {

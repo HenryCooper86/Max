@@ -103,7 +103,7 @@ export function useAudioPlayback({ voiceGenderRef, transmittingRef, onInterrupte
     const buffer = audioContext.createBuffer(1, pcm.length, PLAYBACK_SAMPLE_RATE);
     const channel = buffer.getChannelData(0);
     for (let i = 0; i < pcm.length; i += 1) {
-      channel[i] = Math.max(-1, Math.min(1, pcm[i] / 0x8000));
+      channel[i] = Math.max(-1, Math.min(1, (pcm[i] ?? 0) / 0x8000));
     }
 
     const source = audioContext.createBufferSource();

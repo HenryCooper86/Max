@@ -5,17 +5,17 @@ type State = { error: Error | null };
 
 /** Catches render-time crashes so the helmet HUD shows a recoverable screen. */
 export class ErrorBoundary extends React.Component<Props, State> {
-  state: State = { error: null };
+  override state: State = { error: null };
 
   static getDerivedStateFromError(error: Error): State {
     return { error };
   }
 
-  componentDidCatch(error: Error, info: React.ErrorInfo) {
+  override componentDidCatch(error: Error, info: React.ErrorInfo) {
     console.error("Helmet HUD crashed", error, info);
   }
 
-  render() {
+  override render() {
     const { error } = this.state;
     if (!error) return this.props.children;
 

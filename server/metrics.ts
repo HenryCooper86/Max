@@ -31,6 +31,7 @@ import {
 } from "../shared/testing";
 import { buildInfo } from "./build-info";
 import { classifySessionEvidence, evaluateTestingSession } from "./testing-evaluator";
+import { createLogger } from "./logger";
 import {
   DEFAULT_TESTING_STORAGE_DIRECTORY,
   ensureTestingStorageDirectory,
@@ -57,6 +58,8 @@ import {
   testingOperationsSnapshot,
   testingStorePersistent
 } from "./testing-store";
+
+const log = createLogger("testing-history");
 
 // In-process relay counters, exposed on /health so the Lightsail deployment
 // can be checked with one curl: how many sessions are live, whether the Doubao
@@ -173,7 +176,11 @@ export function recordMetricsSnapshot(now = Date.now()) {
   history.push({ at: now, snapshot: metrics.snapshot() });
   // Keep one entry beyond the window so a baseline at exactly window-age exists.
   const cutoff = now - (METRICS_WINDOW_MINUTES + 1) * 60_000;
-  while (history.length > 1 && history[0].at < cutoff) history.shift();
+  while (history.length > 1) {
+    const oldest = history[0];
+    if (!oldest || oldest.at >= cutoff) break;
+    history.shift();
+  }
 }
 
 export type MetricsWindow = {
@@ -587,7 +594,7 @@ function percentile(values: number[], percentileRank: number): number {
   if (!values.length) return 0;
   const sorted = [...values].sort((a, b) => a - b);
   const index = Math.min(sorted.length - 1, Math.ceil((percentileRank / 100) * sorted.length) - 1);
-  return sorted[Math.max(0, index)];
+  return sorted[Math.max(0, index)] ?? 0;
 }
 
 /**
@@ -1391,8 +1398,12 @@ let persistQueue: Promise<void> = Promise.resolve();
 function persistCompletedSession(session: TesterSessionSummary) {
   try {
     saveTestingSession(session);
-  } catch {
+  } catch (error) {
     // JSONL remains the recovery archive if the database index is unavailable.
+    log.error("failed to index completed testing session", {
+      sessionId: session.sessionId,
+      message: error instanceof Error ? error.message : String(error)
+    });
   }
   const filePath = TESTING_HISTORY_PATH;
   if (!filePath) return;
@@ -1403,8 +1414,13 @@ function persistCompletedSession(session: TesterSessionSummary) {
       await fs.promises.appendFile(filePath, line, { mode: 0o600 });
       await secureTestingFile(filePath);
     })
-    .catch(() => {
+    .catch((error) => {
       // Persistence failure should not interrupt a live voice session.
+      log.error("failed to append testing history", {
+        path: filePath,
+        sessionId: session.sessionId,
+        message: error instanceof Error ? error.message : String(error)
+      });
     });
 }
 
@@ -1471,7 +1487,7 @@ export function clearTesterData(testerKey: string): TestingClearResult {
   }
   const before = completedSessions.length;
   for (let index = completedSessions.length - 1; index >= 0; index -= 1) {
-    if (completedSessions[index].testerKey === testerKey) completedSessions.splice(index, 1);
+    if (completedSessions[index]?.testerKey === testerKey) completedSessions.splice(index, 1);
   }
   const removedCachedSessions = before - completedSessions.length;
   let removedStoredSessions = removedCachedSessions;
@@ -1928,9 +1944,10 @@ export function testingSessionPage(
     return true;
   });
   const page = filtered.slice(0, limit);
+  const lastPageItem = page.at(-1);
   return {
     items: page.map((session) => clonedSession(session, false)),
-    nextCursor: filtered.length > limit && page.length ? encodeCursor(page[page.length - 1]) : undefined,
+    nextCursor: filtered.length > limit && lastPageItem ? encodeCursor(lastPageItem) : undefined,
     total: filtered.length
   };
 }

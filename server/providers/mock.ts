@@ -38,7 +38,7 @@ type ScenarioProfile = {
     riskLevel: "normal" | "caution" | "critical";
     riderAdvice: string;
   };
-  turns: MockTurn[];
+  turns: [MockTurn, ...MockTurn[]];
 };
 
 const SCENARIOS: Record<DemoScenario, ScenarioProfile> = {
@@ -168,7 +168,7 @@ const SCENARIOS: Record<DemoScenario, ScenarioProfile> = {
 
 // Order of scenarios on the guided demo ride: everyday riding first, then the
 // hazard-heavy chapters so the demo escalates naturally toward ADAS/emergency.
-const GUIDED_TOUR: DemoScenario[] = ["commute", "wind", "fuel", "group", "adas", "emergency"];
+const GUIDED_TOUR: [DemoScenario, ...DemoScenario[]] = ["commute", "wind", "fuel", "group", "adas", "emergency"];
 /** One guided chapter shows ~2 turns at the 6 s conversation cadence. */
 const GUIDED_CHAPTER_MS = 14_000;
 
@@ -243,7 +243,7 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
     // The previous turn's timers have fired or are being superseded.
     clearTurnTimers();
     const profile = SCENARIOS[scenario];
-    const turn = profile.turns[promptIndex % profile.turns.length];
+    const turn = profile.turns[promptIndex % profile.turns.length] ?? profile.turns[0];
     promptIndex += 1;
 
     const asrMs = 180 + Math.round(Math.random() * 80);
@@ -322,7 +322,7 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
         guidedStep = 0;
         send({ type: "status", state: "ready", detail: "巡游演示一轮结束，重新开始" });
       }
-      enterScenario(GUIDED_TOUR[guidedStep], true);
+      enterScenario(GUIDED_TOUR[guidedStep] ?? GUIDED_TOUR[0], true);
     }, GUIDED_CHAPTER_MS);
   }
 

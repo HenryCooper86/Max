@@ -27,6 +27,6 @@ describe("testing evidence storage", () => {
       const journalPath = `${databasePath}${suffix}`;
       if (fs.existsSync(journalPath)) expect(fs.statSync(journalPath).mode & 0o777).toBe(0o600);
     }
-    store.closeTestingStoreForTests();
+    store.closeTestingStore();
   });
 });

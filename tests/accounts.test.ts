@@ -168,7 +168,7 @@ describe("invites and admin user management", () => {
     expect(deleteUser("boss")).toMatchObject({ ok: false, error: expect.stringContaining("管理员") });
     expect(deleteUser("ghost").ok).toBe(false);
 
-    expect(deleteUser("rider")).toEqual({ ok: true });
+    expect(deleteUser("rider")).toMatchObject({ ok: true, user: { username: "rider", role: "tester" } });
     expect(listUsers().map((user) => user.username)).toEqual(["boss"]);
     // The deleted tester's session died with the account.
     expect(sessionUser(tester.token, 3_000)).toBeNull();

@@ -762,7 +762,7 @@ MRs but cannot push it directly:
 git switch -c improve/short-description
 # edit + npm run check
 git push -u origin improve/short-description
-# open MR, wait for pipeline/review, merge in GitLab
+# open MR, record local verification, complete review, merge in GitLab
 git switch main
 git pull --ff-only origin main
 ```
@@ -852,7 +852,7 @@ on a developer machine.
 ## Next Steps
 
 1. Add more agent tools (nearby stops, navigation).
-2. Wire up GitLab CI once a runner can reach the test host (deploy script already exists).
+2. Restore GitLab CI once an active runner is available (deploy script already exists).
 3. Replace the Lightsail self-signed certificate with a trusted cert behind a domain name.
 4. Replace the simulated ADAS hazard injector with real sensor input + confidence scoring.
 

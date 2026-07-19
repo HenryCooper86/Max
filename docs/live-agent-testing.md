@@ -549,15 +549,13 @@ TESTING_GATE_REPORT=artifacts/release-gate.json \
 npm run test:release-gate
 ```
 
-The GitLab pipeline runs a production dependency audit, formatting, lint,
-dead-code analysis, unit tests, the fault matrix, and the production build. Its
-live gate is a manual protected job when
-`TESTING_GATE_URL` and `TESTING_GATE_TOKEN` are configured, and retains the JSON
-decision report for 30 days. In GitLab it also compares the live build against
-`CI_COMMIT_SHA`; local callers can set `TESTING_GATE_EXPECTED_BUILD` explicitly.
-The job passes only after an administrator has approved that same build, so a
-passing metric snapshot without an audited release approval cannot authorize a
-deployment.
+GitLab CI is intentionally disabled until the project has an active runner.
+Before merging, reviewers must record the local `npm run check` and
+`npm audit --omit=dev` results in the MR. The live release-gate command remains
+available for an operator to run manually; set `TESTING_GATE_EXPECTED_BUILD` to
+the exact candidate SHA. It passes only after an administrator has approved that
+same build, so a passing metric snapshot without an audited release approval
+cannot authorize a deployment.
 
 Native releases must carry the actual commit:
 

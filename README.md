@@ -411,6 +411,7 @@ The `/agent` WebSocket holds the path to your Doubao quota, so the relay support
 RELAY_AUTH_TOKEN=          # shared secret; clients connect with ?token=…
 RELAY_ALLOWED_ORIGINS=     # comma-separated browser Origin allowlist
 RELAY_CONN_PER_MINUTE=30   # WebSocket upgrade attempts per client IP per minute (sliding 60s window)
+RELAY_MAX_PAYLOAD_BYTES=65536 # hard ceiling for one reassembled WS message
 RELAY_TRUST_PROXY=off      # read client IP from X-Forwarded-For (behind a proxy only)
 RELAY_TRUSTED_PROXY_HOPS=1 # trusted proxy count; client IP is this many entries from the right of XFF
 ```
@@ -440,9 +441,9 @@ counters. It never includes tester identities, evidence, or transcripts.
 
 Returns `200` only when the relay is ready to receive traffic. A production
 deployment returns `503` when Doubao credentials or access control are missing,
-when unprotected self-registration remains open, or while graceful shutdown is
-in progress. Load balancers should use `/ready`; process monitors should use
-`/health`.
+when unprotected self-registration remains open, when account/per-user-memory
+storage is unavailable, or while graceful shutdown is in progress. Load
+balancers should use `/ready`; process monitors should use `/health`.
 
 ### `GET /testing/summary` · `GET /testing/sessions` · QA operations routes
 
@@ -753,17 +754,36 @@ QA evidence and operations are indexed in `~/.horizon-helmet-testing/testing.sql
 
 ### 5. Deploy to the test server
 
-Run from the project root on your machine. The server keeps its own `.env`; credentials are never
-copied from a developer machine. The deploy command archives `HEAD`, stamps and builds that exact
-commit locally, copies the finished `dist/`, installs runtime-only packages remotely, restarts PM2,
-and checks liveness. Building locally avoids OOM failures on the small Lightsail instance.
+Use a branch and merge request for every delivery. Protect `main` in GitLab
+(`Settings → Repository → Protected branches`) so developers may merge approved
+MRs but cannot push it directly:
+
+```bash
+git switch -c improve/short-description
+# edit + npm run check
+git push -u origin improve/short-description
+# open MR, wait for pipeline/review, merge in GitLab
+git switch main
+git pull --ff-only origin main
+```
+
+Then run the deploy from the project root. The server keeps its own `.env`;
+credentials are never copied from a developer machine. The deploy command
+refuses a dirty tree, a non-`main` branch, or a commit that does not exactly
+match `origin/main`. It archives and stamps that reviewed commit, builds it
+locally, copies `dist/`, installs runtime-only packages remotely, activates the
+prepared release with directory renames, restarts PM2, and polls both liveness
+and readiness until they report the expected SHA. If activation, health, or
+readiness fails, the command restores and restarts the previous release
+automatically. Building locally avoids OOM failures on the small Lightsail
+instance.
 
 ```bash
 LIGHTSAIL_KEY=/path/to/LightsailDefaultKey-ap-northeast-2.pem ./deploy-lightsail.command
 ```
 
-The health step expects `{ "ok": true, "provider": "doubao" }`. Check readiness separately with
-`curl -fsk https://3.35.135.136/ready`; it fails closed for a misconfigured production relay.
+An intentional staging deployment from another branch requires the explicit
+`LIGHTSAIL_ALLOW_NON_MAIN=on` override. Production delivery should never use it.
 
 ## Security Notes
 
@@ -772,6 +792,8 @@ The health step expects `{ "ok": true, "provider": "doubao" }`. Check readiness 
 - Do not commit real API keys, app keys, or access tokens.
 - Native bearer tokens are stored with Android Keystore-backed AES-GCM and the iOS Keychain;
   legacy plain preferences are migrated on first launch.
+- Local transcript caches are keyed by immutable account UUID on web, Android,
+  and iOS; changing accounts never exposes another rider's cached conversation.
 - The relay enforces resource limits in both directions (payload size, text-extraction depth,
   buffered-audio caps, client backpressure) so one bad session cannot exhaust server memory.
 - `/agent` access control (token, browser Origin allowlist, per-IP sliding-window rate limit) is

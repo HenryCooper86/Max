@@ -39,6 +39,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val KEY_RELAY_URL = "relay_url"
         private const val KEY_AUTH_TOKEN = "relay_auth_token"
         private const val KEY_SESSION_TOKEN = "auth_session_token"
+        private const val KEY_AUTH_USER_ID = "auth_user_id"
         private const val KEY_AUTH_USERNAME = "auth_username"
         private const val KEY_AUTH_DISPLAY_NAME = "auth_display_name"
         private const val KEY_AUTH_ROLE = "auth_role"
@@ -133,6 +134,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // The signed-in account (empty when signed out). Persisted so the identity
     // row survives relaunches, like the web HUD's stored session.
+    var authUserId by mutableStateOf(prefs.getString(KEY_AUTH_USER_ID, "") ?: "")
+        private set
     var authUsername by mutableStateOf(prefs.getString(KEY_AUTH_USERNAME, "") ?: "")
         private set
     var authDisplayName by mutableStateOf(prefs.getString(KEY_AUTH_DISPLAY_NAME, "") ?: "")
@@ -146,6 +149,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val isLoggedIn: Boolean get() = authUsername.isNotEmpty() && sessionToken.isNotEmpty()
 
+    init {
+        session.selectTranscriptOwner(authUserId.takeIf { isLoggedIn && it.isNotEmpty() })
+    }
+
     /**
      * A 401 from the relay: the session (if any) is dead — drop the stale
      * identity so the login form shows, consume the flag, and open settings
@@ -156,15 +163,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (isLoggedIn) {
             sessionToken = ""
             secureTokens.remove(KEY_SESSION_TOKEN)
+            authUserId = ""
             authUsername = ""
             authDisplayName = ""
             authRole = ""
             prefs.edit()
+                .remove(KEY_AUTH_USER_ID)
                 .remove(KEY_AUTH_USERNAME)
                 .remove(KEY_AUTH_DISPLAY_NAME)
                 .remove(KEY_AUTH_ROLE)
                 .apply()
         }
+        session.selectTranscriptOwner(null)
         pendingHandsFreeRetry = true
         showPreferences = true
     }
@@ -186,14 +196,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (login != null) {
                 sessionToken = login.token
                 secureTokens.write(KEY_SESSION_TOKEN, login.token)
+                authUserId = login.user.id
                 authUsername = login.user.username
                 authDisplayName = login.user.displayName
                 authRole = login.user.role
                 prefs.edit()
+                    .putString(KEY_AUTH_USER_ID, login.user.id)
                     .putString(KEY_AUTH_USERNAME, login.user.username)
                     .putString(KEY_AUTH_DISPLAY_NAME, login.user.displayName)
                     .putString(KEY_AUTH_ROLE, login.user.role)
                     .apply()
+                session.selectTranscriptOwner(login.user.id)
                 loginError = null
                 // A 401 cut the last attempt short — resume hands-free with
                 // the fresh session instead of demanding another tap.
@@ -216,16 +229,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         authClient.logout(relayUrl.trim(), sessionToken, allowSelfSigned)
         sessionToken = ""
         secureTokens.remove(KEY_SESSION_TOKEN)
+        authUserId = ""
         authUsername = ""
         authDisplayName = ""
         authRole = ""
         loginError = null
         pendingHandsFreeRetry = false
         prefs.edit()
+            .remove(KEY_AUTH_USER_ID)
             .remove(KEY_AUTH_USERNAME)
             .remove(KEY_AUTH_DISPLAY_NAME)
             .remove(KEY_AUTH_ROLE)
             .apply()
+        session.selectTranscriptOwner(null)
         if (session.state.value.handsFree) {
             session.stop()
             VoiceAgentService.stop(getApplication())

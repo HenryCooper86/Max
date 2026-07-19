@@ -31,6 +31,7 @@ final class MainViewModel: ObservableObject {
         static let relayURL = "relay_url"
         static let authToken = "auth_token"
         static let sessionToken = "auth_session_token"
+        static let authUserId = "auth_user_id"
         static let authUsername = "auth_username"
         static let authDisplayName = "auth_display_name"
         static let authRole = "auth_role"
@@ -81,6 +82,9 @@ final class MainViewModel: ObservableObject {
 
     // The signed-in account (empty when signed out). Persisted so the identity
     // row survives relaunches, like the web HUD's stored session.
+    @Published var authUserId: String {
+        didSet { defaults.set(authUserId, forKey: Keys.authUserId) }
+    }
     @Published var authUsername: String {
         didSet { defaults.set(authUsername, forKey: Keys.authUsername) }
     }
@@ -115,10 +119,12 @@ final class MainViewModel: ObservableObject {
         session.acknowledgeAuthRequired()
         if isLoggedIn {
             sessionToken = ""
+            authUserId = ""
             authUsername = ""
             authDisplayName = ""
             authRole = ""
         }
+        session.selectTranscriptOwner(nil)
         pendingHandsFreeRetry = true
         showPreferences = true
     }
@@ -144,9 +150,11 @@ final class MainViewModel: ObservableObject {
             switch result {
             case .success(let login):
                 self.sessionToken = login.token
+                self.authUserId = login.user.id
                 self.authUsername = login.user.username
                 self.authDisplayName = login.user.displayName
                 self.authRole = login.user.role
+                self.session.selectTranscriptOwner(login.user.id)
                 self.loginError = nil
                 // A 401 cut the last attempt short — resume hands-free with
                 // the fresh session instead of demanding another tap.
@@ -170,11 +178,13 @@ final class MainViewModel: ObservableObject {
             allowSelfSignedTls: allowSelfSigned
         )
         sessionToken = ""
+        authUserId = ""
         authUsername = ""
         authDisplayName = ""
         authRole = ""
         loginError = nil
         pendingHandsFreeRetry = false
+        session.selectTranscriptOwner(nil)
         if session.state.handsFree { session.stop() }
     }
 
@@ -209,6 +219,7 @@ final class MainViewModel: ObservableObject {
         relayURL = defaults.string(forKey: Keys.relayURL) ?? Self.defaultRelayURL
         authToken = SecureTokenStore.migrate(account: Keys.authToken, defaults: defaults)
         sessionToken = SecureTokenStore.migrate(account: Keys.sessionToken, defaults: defaults)
+        authUserId = defaults.string(forKey: Keys.authUserId) ?? ""
         authUsername = defaults.string(forKey: Keys.authUsername) ?? ""
         authDisplayName = defaults.string(forKey: Keys.authDisplayName) ?? ""
         authRole = defaults.string(forKey: Keys.authRole) ?? ""
@@ -222,6 +233,7 @@ final class MainViewModel: ObservableObject {
         testingTestCaseId = defaults.string(forKey: Keys.testingTestCaseId) ?? "baseline-live-session"
         testingRunId = defaults.string(forKey: Keys.testingRunId) ?? ""
         testingAssignmentId = defaults.string(forKey: Keys.testingAssignmentId) ?? ""
+        session.selectTranscriptOwner(isLoggedIn && !authUserId.isEmpty ? authUserId : nil)
     }
 
     func toggleDevMode() {

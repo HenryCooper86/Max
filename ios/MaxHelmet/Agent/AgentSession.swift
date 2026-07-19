@@ -107,6 +107,7 @@ final class AgentSession: NSObject, ObservableObject {
     private var micMuted = false
 
     private var transcriptTurn = 0
+    private var transcriptOwnerId: String?
     /// Bumped on each hazard alert so a stale auto-clear can't dismiss a newer one.
     private var hazardAlertGeneration = 0
     private var location: CLLocationCoordinate2D?
@@ -137,11 +138,9 @@ final class AgentSession: NSObject, ObservableObject {
     override init() {
         super.init()
         urlSession = makeSession()
-        let restored = Self.loadStoredTranscript()
-        if !restored.isEmpty {
-            transcriptTurn = restored.map(\.id).max() ?? 0
-            state.transcript = restored
-        }
+        // The legacy cache was device-global and cannot be assigned safely to
+        // whichever account logs in first after an upgrade.
+        UserDefaults.standard.removeObject(forKey: Self.legacyTranscriptStoreKey)
     }
 
     // MARK: - public API
@@ -355,21 +354,44 @@ final class AgentSession: NSObject, ObservableObject {
     /// Builds the transcript export JSON (port of exportTranscriptLog in src/main.tsx).
     func buildTranscriptExport() -> String { buildTranscriptExportJSON(state.value.transcript) }
 
+    /// Selects the immutable account that owns the on-device transcript cache.
+    /// Signing out hides the log; another account loads a different record.
+    func selectTranscriptOwner(_ userId: String?) {
+        let candidate = userId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let owner = candidate?.range(
+            of: "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            options: .regularExpression
+        ) == nil ? nil : candidate
+        guard transcriptOwnerId != owner else { return }
+        transcriptOwnerId = owner
+        UserDefaults.standard.removeObject(forKey: Self.legacyTranscriptStoreKey)
+        let restored = owner.map { loadStoredTranscript(for: $0) } ?? []
+        transcriptTurn = restored.map(\.id).max() ?? 0
+        update {
+            $0.transcript = restored
+            $0.feedbackFloorId = .max
+            $0.sessionMemory = SessionMemory()
+        }
+    }
+
     /// Empties the conversation log and its persisted copy (设置 → 诊断 → 清空).
     func clearTranscript() {
         update { $0.transcript = [] }
-        UserDefaults.standard.removeObject(forKey: Self.transcriptStoreKey)
+        if let owner = transcriptOwnerId {
+            UserDefaults.standard.removeObject(forKey: Self.transcriptStoreKeyPrefix + owner)
+        }
     }
 
     // MARK: - transcript persistence
 
     /// The most recent final turns survive app restarts, stored as JSON in
     /// UserDefaults and refreshed on every transcript change (see update()).
-    private static let transcriptStoreKey = "transcript_log"
+    private static let legacyTranscriptStoreKey = "transcript_log"
+    private static let transcriptStoreKeyPrefix = "transcript_log_v2_"
     private static let transcriptStoreLimit = 200
 
-    private static func loadStoredTranscript() -> [TranscriptItem] {
-        guard let data = UserDefaults.standard.data(forKey: transcriptStoreKey),
+    private func loadStoredTranscript(for owner: String) -> [TranscriptItem] {
+        guard let data = UserDefaults.standard.data(forKey: Self.transcriptStoreKeyPrefix + owner),
               var items = try? JSONDecoder().decode([TranscriptItem].self, from: data) else {
             return []
         }
@@ -379,10 +401,11 @@ final class AgentSession: NSObject, ObservableObject {
         return items
     }
 
-    private static func storeTranscript(_ items: [TranscriptItem]) {
-        let finals = Array(items.filter(\.final).suffix(transcriptStoreLimit))
+    private func storeTranscript(_ items: [TranscriptItem]) {
+        guard let owner = transcriptOwnerId else { return }
+        let finals = Array(items.filter(\.final).suffix(Self.transcriptStoreLimit))
         guard let data = try? JSONEncoder().encode(finals) else { return }
-        UserDefaults.standard.set(data, forKey: transcriptStoreKey)
+        UserDefaults.standard.set(data, forKey: Self.transcriptStoreKeyPrefix + owner)
     }
 
     // MARK: - relay connection
@@ -789,7 +812,7 @@ final class AgentSession: NSObject, ObservableObject {
             var copy = self.state
             transform(&copy)
             if copy != self.state {
-                if copy.transcript != self.state.transcript { Self.storeTranscript(copy.transcript) }
+                if copy.transcript != self.state.transcript { self.storeTranscript(copy.transcript) }
                 self.state = copy
             }
         }

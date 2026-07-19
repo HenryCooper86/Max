@@ -75,7 +75,21 @@ import { clearUserConversationMemory, flushUserMemory, userMemorySummary } from 
 const app = express();
 const server = http.createServer(app);
 // noServer: the upgrade is accepted only after authorizeUpgrade clears it.
-const wss = new WebSocketServer({ noServer: true });
+const wss = new WebSocketServer({
+  noServer: true,
+  maxPayload: config.maxPayloadBytes,
+  // Voice PCM is already compact and per-message compression adds CPU and
+  // memory pressure while reopening compression-oracle risk for token-bearing
+  // control traffic.
+  perMessageDeflate: false
+});
+// Slow-client protection. Node's broad defaults are intended for general web
+// servers; this API has tiny JSON bodies and should not hold scarce sockets for
+// minutes while a client trickles headers or request bytes.
+server.headersTimeout = 15_000;
+server.requestTimeout = 30_000;
+server.keepAliveTimeout = 5_000;
+server.maxRequestsPerSocket = 1_000;
 type AuthenticatedConnection = { userId: string; token: string };
 const authenticatedConnections = new Map<WebSocket, AuthenticatedConnection>();
 const activeSessions = new Map<WebSocket, AgentSessionController>();
@@ -611,8 +625,21 @@ app.use(["/auth", "/testing"], (_req, res) => {
 // Vite dev server handles this instead and proxies /health and /agent here.
 const clientDir = fileURLToPath(new URL("../dist", import.meta.url));
 if (existsSync(clientDir)) {
-  app.use(express.static(clientDir));
+  app.use(
+    express.static(clientDir, {
+      setHeaders: (res, filePath) => {
+        const isHashedAsset = filePath.includes(`${path.sep}assets${path.sep}`);
+        res.setHeader(
+          "Cache-Control",
+          isHashedAsset ? "public, max-age=31536000, immutable" : "no-cache, max-age=0, must-revalidate"
+        );
+      }
+    })
+  );
   app.use((_req, res) => {
+    // The HTML shell points at hashed bundles and must revalidate so a deploy
+    // never leaves a returning rider pinned to yesterday's asset names.
+    res.setHeader("Cache-Control", "no-cache, max-age=0, must-revalidate");
     res.sendFile(path.join(clientDir, "index.html"));
   });
 }

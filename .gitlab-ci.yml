@@ -2,11 +2,15 @@ stages:
   - verify
   - release-gate
 
+default:
+  interruptible: true
+
 verify:
   stage: verify
   image: node:22-bookworm-slim
   script:
-    - npm ci
+    - npm ci --no-audit --no-fund
+    - npm audit --omit=dev --audit-level=high
     - npm run check
   artifacts:
     when: always
@@ -23,7 +27,7 @@ live-release-gate:
       when: manual
     - when: never
   script:
-    - npm ci
+    - npm ci --no-audit --no-fund
     - TESTING_GATE_REPORT=artifacts/release-gate.json npm run test:release-gate
   artifacts:
     when: always

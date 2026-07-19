@@ -45,6 +45,7 @@ const ACCOUNT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9
 const memories = new Map<string, UserConversationMemory>();
 let loaded = false;
 let loadFailed = false;
+let persistFailed = false;
 let persistQueue: Promise<void> = Promise.resolve();
 
 function memoryPath(): string | null {
@@ -156,16 +157,22 @@ function ensureLoaded(): void {
   if (!filePath) return;
   try {
     const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
-    const entries = isRecord(parsed) && Array.isArray(parsed.users) ? parsed.users : [];
+    if (!isRecord(parsed) || !Array.isArray(parsed.users)) {
+      throw new Error("user memory store is missing its users array");
+    }
+    const entries = parsed.users;
     for (const entry of entries) {
       const memory = cleanMemory(entry);
-      if (memory) memories.set(memory.userId, memory);
+      if (!memory) throw new Error("user memory store contains an invalid user record");
+      if (memories.has(memory.userId)) throw new Error("user memory store contains duplicate user ids");
+      memories.set(memory.userId, memory);
     }
   } catch (error) {
+    // Do not expose or later persist a partial view of a damaged store.
+    memories.clear();
     if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return;
-    // Memory is continuity data, not an authorization gate: a corrupt file
-    // should not take the voice line down. Do avoid overwriting it, so an
-    // operator still has a chance to recover the original data.
+    // Keep the relay process alive for diagnosis but fail readiness and avoid
+    // overwriting the file, preserving the operator's chance to recover it.
     loadFailed = true;
     log.error("user memory file unreadable — durable memory disabled until fixed", {
       path: filePath,
@@ -185,8 +192,10 @@ function persistMemories(): void {
       await fs.promises.writeFile(tempPath, snapshot, { mode: 0o600 });
       await fs.promises.rename(tempPath, filePath);
       await secureTestingFile(filePath);
+      persistFailed = false;
     })
     .catch((error) => {
+      persistFailed = true;
       log.error("failed to persist user memory", {
         path: filePath,
         message: error instanceof Error ? error.message : String(error)
@@ -209,11 +218,19 @@ export function userConversationMemory(userIdInput: unknown): UserConversationMe
 export function userMemorySummary(userIdInput: unknown): UserMemorySummary {
   const memory = userConversationMemory(userIdInput);
   return {
-    enabled: userMemoryEnabled() && !loadFailed,
+    enabled: userMemoryEnabled() && !loadFailed && !persistFailed,
     updatedAt: memory?.updatedAt || undefined,
     turnCount: memory?.turns.length ?? 0,
     session: memory?.session
   };
+}
+
+/** Readiness signal for durable account memory. Disabled/ephemeral memory is
+ * healthy by definition; configured storage must remain readable and writable. */
+export function userMemoryStorageHealthy(): boolean {
+  if (!userMemoryEnabled()) return true;
+  ensureLoaded();
+  return !loadFailed && !persistFailed;
 }
 
 /** Records only final transcript turns and validated session-memory events. */
@@ -291,5 +308,6 @@ export function resetUserMemoryForTests(): void {
   memories.clear();
   loaded = false;
   loadFailed = false;
+  persistFailed = false;
   persistQueue = Promise.resolve();
 }

@@ -121,6 +121,17 @@ describe("relay process integration", () => {
     const ready = await fetch(`${baseUrl}/ready`, { headers: { Connection: "close" } });
     expect(ready.status).toBe(200);
 
+    const oversizedSocket = new WebSocket(`ws://127.0.0.1:${port}/agent?token=${encodeURIComponent(registered.token)}`);
+    await new Promise<void>((resolve, reject) => {
+      oversizedSocket.once("open", resolve);
+      oversizedSocket.once("error", reject);
+    });
+    const oversizedSocketClosed = new Promise<number>((resolve) => {
+      oversizedSocket.once("close", (code) => resolve(code));
+    });
+    oversizedSocket.send(Buffer.alloc(65_537));
+    await expect(oversizedSocketClosed).resolves.toBe(1009);
+
     const socket = new WebSocket(`ws://127.0.0.1:${port}/agent?token=${encodeURIComponent(registered.token)}`);
     await new Promise<void>((resolve, reject) => {
       socket.once("open", resolve);

@@ -85,6 +85,60 @@ describe("per-user conversation memory", () => {
 });
 
 describe("user memory persistence", () => {
+  it("reports corrupt configured storage to readiness instead of silently claiming memory works", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "max-user-memory-corrupt-"));
+    const file = path.join(tempDir, "memory.json");
+    fs.writeFileSync(file, "{not json");
+    vi.stubEnv("USER_MEMORY_FILE", file);
+
+    try {
+      vi.resetModules();
+      const memory = await import("../server/user-memory");
+      expect(memory.userMemoryStorageHealthy()).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects structurally invalid memory JSON instead of treating it as an empty history", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "max-user-memory-structure-"));
+    const file = path.join(tempDir, "memory.json");
+    fs.writeFileSync(file, "{}");
+    vi.stubEnv("USER_MEMORY_FILE", file);
+
+    try {
+      vi.resetModules();
+      const memory = await import("../server/user-memory");
+      expect(memory.userMemoryStorageHealthy()).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects the whole memory store when one user record is malformed", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "max-user-memory-partial-"));
+    const file = path.join(tempDir, "memory.json");
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        users: [
+          { userId: "11111111-1111-4111-8111-111111111111", updatedAt: 1, turns: [] },
+          { userId: "invalid", turns: [] }
+        ]
+      })
+    );
+    vi.stubEnv("USER_MEMORY_FILE", file);
+
+    try {
+      vi.resetModules();
+      const memory = await import("../server/user-memory");
+      expect(memory.userMemoryStorageHealthy()).toBe(false);
+      expect(memory.userConversationMemory("11111111-1111-4111-8111-111111111111")).toBeNull();
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("survives a relay module reload", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "max-user-memory-"));
     const file = path.join(tempDir, "memory.json");

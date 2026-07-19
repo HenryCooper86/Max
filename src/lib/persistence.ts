@@ -7,7 +7,12 @@ import { detectLanguage } from "../../shared/language";
 import { DEFAULT_TESTING_CAMPAIGN_ID, DEFAULT_TESTING_TEST_CASE_ID } from "../../shared/testing";
 import type { TranscriptItem, VoiceGender } from "../types";
 
-const TRANSCRIPT_KEY = "max.transcript.v1";
+// v1 used one device-global key. That let a second account on a shared
+// browser inherit the previous rider's local transcript, even though server
+// memory was correctly account-scoped. v2 is keyed by the immutable account
+// UUID and deliberately does not migrate the ambiguous v1 data.
+const LEGACY_TRANSCRIPT_KEY = "max.transcript.v1";
+const TRANSCRIPT_KEY_PREFIX = "max.transcript.v2.";
 const SETTINGS_KEY = "max.settings.v1";
 const TOKEN_KEY = "max.relayToken";
 const VOICE_GENDERS = new Set<VoiceGender>(["female", "male"]);
@@ -93,8 +98,28 @@ function writeJson(key: string, value: unknown) {
   }
 }
 
-export function loadStoredTranscript(): TranscriptItem[] {
-  const items = readJson<TranscriptItem[]>(TRANSCRIPT_KEY);
+function transcriptKey(userId: string): string | null {
+  const normalized = userId.trim().toLowerCase();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(normalized)
+    ? `${TRANSCRIPT_KEY_PREFIX}${normalized}`
+    : null;
+}
+
+function discardLegacyTranscript() {
+  try {
+    window.localStorage.removeItem(LEGACY_TRANSCRIPT_KEY);
+  } catch {
+    /* best-effort */
+  }
+}
+
+export function loadStoredTranscript(userId: string): TranscriptItem[] {
+  // A device-global transcript cannot be assigned to a user safely. Drop it
+  // on first use instead of guessing and creating a cross-account disclosure.
+  discardLegacyTranscript();
+  const key = transcriptKey(userId);
+  if (!key) return [];
+  const items = readJson<TranscriptItem[]>(key);
   if (!Array.isArray(items)) return [];
   return (
     items
@@ -118,13 +143,16 @@ export function loadStoredTranscript(): TranscriptItem[] {
   );
 }
 
-export function saveStoredTranscript(items: TranscriptItem[]) {
-  writeJson(TRANSCRIPT_KEY, items.slice(-TRANSCRIPT_CAP));
+export function saveStoredTranscript(userId: string, items: TranscriptItem[]) {
+  const key = transcriptKey(userId);
+  if (key) writeJson(key, items.slice(-TRANSCRIPT_CAP));
 }
 
-export function clearStoredTranscript() {
+export function clearStoredTranscript(userId: string) {
+  const key = transcriptKey(userId);
   try {
-    window.localStorage.removeItem(TRANSCRIPT_KEY);
+    if (key) window.localStorage.removeItem(key);
+    window.localStorage.removeItem(LEGACY_TRANSCRIPT_KEY);
   } catch {
     /* best-effort */
   }

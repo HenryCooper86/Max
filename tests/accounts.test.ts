@@ -271,9 +271,87 @@ describe("accounts persistence", () => {
     const accounts = await import("../server/accounts");
     // Gates lock (corruption must not silently reopen transcripts/voice)…
     expect(accounts.authActive()).toBe(true);
+    expect(accounts.accountsStorageHealthy()).toBe(false);
     // …and a stranger can't become the "first" admin over the broken state.
     const attempt = await accounts.registerUser("intruder", "password123");
     expect(attempt.ok).toBe(false);
+    const { readinessIssues } = await import("../server/config");
+    expect(readinessIssues()).toContain("accounts-storage-unavailable");
+  });
+
+  it("fails closed for structurally invalid JSON instead of treating it as an empty account store", async () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "max-accounts-structure-"));
+    const file = path.join(tempDir, "accounts.json");
+    fs.writeFileSync(file, "{}");
+    vi.stubEnv("ACCOUNTS_FILE", file);
+
+    vi.resetModules();
+    const accounts = await import("../server/accounts");
+    expect(accounts.authActive()).toBe(true);
+    expect(accounts.accountsStorageHealthy()).toBe(false);
+  });
+
+  it("does not retain users parsed before a malformed account record", async () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "max-accounts-partial-"));
+    const file = path.join(tempDir, "accounts.json");
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        users: [
+          {
+            id: "11111111-1111-4111-8111-111111111111",
+            username: "valid-user",
+            displayName: "Valid User",
+            role: "tester",
+            createdAt: 1,
+            lastLoginAt: 1,
+            passwordHash: "00",
+            salt: "00"
+          },
+          { username: "broken" }
+        ]
+      })
+    );
+    vi.stubEnv("ACCOUNTS_FILE", file);
+
+    vi.resetModules();
+    const accounts = await import("../server/accounts");
+    expect(accounts.accountsStorageHealthy()).toBe(false);
+    expect(accounts.listUsers()).toEqual([]);
+  });
+
+  it("migrates a legacy missing account id once so the generated UUID remains stable", async () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "max-accounts-id-"));
+    const file = path.join(tempDir, "accounts.json");
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        users: [
+          {
+            username: "boss",
+            displayName: "Boss",
+            role: "admin",
+            createdAt: 1,
+            lastLoginAt: 1,
+            passwordHash: "00",
+            salt: "00"
+          }
+        ],
+        sessions: [],
+        invites: []
+      })
+    );
+    vi.stubEnv("ACCOUNTS_FILE", file);
+
+    vi.resetModules();
+    const first = await import("../server/accounts");
+    const firstId = first.listUsers()[0]?.id;
+    await first.flushAccounts();
+    vi.resetModules();
+    const second = await import("../server/accounts");
+
+    expect(firstId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(second.listUsers()[0]?.id).toBe(firstId);
   });
 
   it("persists users and sessions across a relay restart", async () => {

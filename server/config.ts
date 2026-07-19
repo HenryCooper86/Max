@@ -3,9 +3,9 @@ import { providerCapabilities, type AgentHealth } from "../shared/agent";
 import { buildInfo } from "./build-info";
 // Runtime-only use inside buildHealth/describeConfig; accounts.ts references
 // config only inside functions, so this import cycle never bites at load time.
-import { authActive, registrationOpen } from "./accounts";
+import { accountsStorageHealthy, authActive, registrationOpen } from "./accounts";
 import { metrics, metricsWindow, testingSnapshot } from "./metrics";
-import { userMemoryEnabled } from "./user-memory";
+import { userMemoryEnabled, userMemoryStorageHealthy } from "./user-memory";
 
 export type VoiceProvider = "mock" | "doubao";
 export type WeatherLocation = {
@@ -42,6 +42,10 @@ export const config = {
     .filter(Boolean),
   // Upgrade attempts allowed per client IP per minute; 0 disables the limiter.
   connPerMinute: resolveBoundedInt(process.env.RELAY_CONN_PER_MINUTE, 30, 0, 10_000),
+  // Hard ceiling for one reassembled WebSocket message. The ws package's
+  // default is 100 MiB, far beyond this relay's 8 KiB JSON / 32 KiB audio
+  // protocol and large enough to exhaust the small Lightsail host.
+  maxPayloadBytes: resolveBoundedInt(process.env.RELAY_MAX_PAYLOAD_BYTES, 64 * 1024, 32 * 1024, 1024 * 1024),
   // Honor X-Forwarded-For for rate limiting only behind a trusted proxy.
   trustProxy: process.env.RELAY_TRUST_PROXY?.trim().toLowerCase() === "on",
   // Number of trusted reverse proxies in front of the relay (e.g. 1 for the
@@ -122,6 +126,7 @@ export function describeConfig(): string[] {
     `Per-user conversation memory: ${userMemoryEnabled() ? "on" : "off"}`,
     `Relay origin allowlist: ${config.allowedOrigins.length ? config.allowedOrigins.join(", ") : "any"}`,
     `Relay rate limit: ${config.connPerMinute ? `${config.connPerMinute} conn/min/IP (sliding)` : "off"}`,
+    `Relay message ceiling: ${Math.round(config.maxPayloadBytes / 1024)} KiB`,
     `Relay heartbeat: ${config.heartbeatMs ? `ping every ${Math.round(config.heartbeatMs / 1000)} s` : "off"}`,
     `Relay idle timeout: ${config.idleTimeoutMs ? describeDuration(config.idleTimeoutMs) : "off"}`,
     `Relay proxy trust: ${config.trustProxy ? `on (${config.trustedProxyHops} hop${config.trustedProxyHops === 1 ? "" : "s"} via X-Forwarded-For)` : "off (client IP = socket address)"}`
@@ -181,6 +186,8 @@ export function validateConfig(): string[] {
  * to a real provider with missing credentials or no access control. */
 export function readinessIssues(): string[] {
   const issues: string[] = [];
+  if (!accountsStorageHealthy()) issues.push("accounts-storage-unavailable");
+  if (!userMemoryStorageHealthy()) issues.push("user-memory-storage-unavailable");
   if (config.voiceProvider === "doubao" && credentialStatus() === "missing") {
     issues.push("provider-credentials-missing");
   }

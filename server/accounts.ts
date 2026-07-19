@@ -74,6 +74,7 @@ const sessions = new Map<string, StoredSession>(); // keyed by token
 const invites = new Map<string, InviteInfo>(); // keyed by code
 let accountsLoaded = ACCOUNTS_PATH === null;
 let accountsLoadFailed = false;
+let accountsPersistFailed = false;
 let persistQueue: Promise<void> = Promise.resolve();
 
 function resolveAccountsPath(): string | null {
@@ -180,12 +181,19 @@ function ensureAccountsLoaded() {
   if (!ACCOUNTS_PATH) return;
   try {
     const raw = JSON.parse(fs.readFileSync(ACCOUNTS_PATH, "utf8")) as unknown;
-    if (!isRecord(raw)) return;
-    if (Array.isArray(raw.users)) {
-      for (const entry of raw.users) {
-        const user = loadStoredUser(entry);
-        if (user) users.set(user.username, user);
+    // Syntactically valid JSON is not automatically a valid account store.
+    // Treat a missing/malformed users array as corruption; otherwise `{}` or
+    // `[]` would be mistaken for a fresh relay and reopen every auth gate.
+    if (!isRecord(raw) || !Array.isArray(raw.users)) throw new Error("accounts store is missing its users array");
+    let needsIdMigration = false;
+    for (const entry of raw.users) {
+      const user = loadStoredUser(entry);
+      if (!user) throw new Error("accounts store contains an invalid user record");
+      if (users.has(user.username)) throw new Error("accounts store contains duplicate usernames");
+      if (!isRecord(entry) || typeof entry.id !== "string" || !ACCOUNT_ID_PATTERN.test(entry.id)) {
+        needsIdMigration = true;
       }
+      users.set(user.username, user);
     }
     if (Array.isArray(raw.sessions)) {
       const userIds = new Set([...users.values()].map((user) => user.id));
@@ -200,7 +208,17 @@ function ensureAccountsLoaded() {
         if (invite) invites.set(invite.code, invite);
       }
     }
+    // Older account stores may not carry UUID ids. Generate them once and
+    // persist immediately so per-user memory and device caches keep a stable
+    // identity across subsequent restarts. Legacy sessions are intentionally
+    // dropped because they reference the replaced id and cannot be trusted.
+    if (needsIdMigration) persistAccounts();
   } catch (error) {
+    // Never retain a partially parsed store. One malformed record after valid
+    // entries must not leave an incomplete account/session view in memory.
+    users.clear();
+    sessions.clear();
+    invites.clear();
     // A MISSING file is the normal first run: auth starts from an empty
     // (open) state. Anything else (corrupt JSON, permissions) must not fail
     // open — that would silently expose transcripts and the voice line — so
@@ -229,11 +247,13 @@ function persistAccounts() {
       const tempPath = `${filePath}.write`;
       await fs.promises.writeFile(tempPath, `${snapshot}\n`, { mode: 0o600 });
       await fs.promises.rename(tempPath, filePath);
+      accountsPersistFailed = false;
     })
     .catch((error) => {
       // The in-memory state remains authoritative for this process, but a
       // silent write failure would make successful account/admin actions
       // disappear at the next restart. Surface it prominently for operators.
+      accountsPersistFailed = true;
       log.error("failed to persist accounts", {
         path: filePath,
         message: error instanceof Error ? error.message : String(error)
@@ -279,6 +299,13 @@ function createSession(user: StoredUser, now: number): StoredSession {
 export function authActive(): boolean {
   ensureAccountsLoaded();
   return users.size > 0 || accountsLoadFailed;
+}
+
+/** Readiness signal for the authorization store. A corrupt load already locks
+ * all gates; a failed write means successful mutations could vanish on restart. */
+export function accountsStorageHealthy(): boolean {
+  ensureAccountsLoaded();
+  return !accountsLoadFailed && !accountsPersistFailed;
 }
 
 export function registrationOpen(): boolean {
@@ -555,4 +582,6 @@ export function resetAccounts() {
   invites.clear();
   accountsLoaded = ACCOUNTS_PATH === null;
   accountsLoadFailed = false;
+  accountsPersistFailed = false;
+  persistQueue = Promise.resolve();
 }

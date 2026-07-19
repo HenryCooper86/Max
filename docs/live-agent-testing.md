@@ -538,7 +538,7 @@ desktop Wi-Fi run from hiding a mobile field regression.
 ### Automated checks
 
 ```bash
-npm test                    # 247 Vitest tests across 26 files
+npm test                    # full Vitest regression suite
 npm run test:fault-matrix   # 24 nominal/error/latency/unsafe variants
 npm run check               # format + lint + both checks above + production build
 
@@ -549,11 +549,15 @@ TESTING_GATE_REPORT=artifacts/release-gate.json \
 npm run test:release-gate
 ```
 
-The GitLab pipeline runs formatting, lint, unit tests, the fault matrix, and the
-production build. Its live gate is a manual protected job when
+The GitLab pipeline runs a production dependency audit, formatting, lint,
+dead-code analysis, unit tests, the fault matrix, and the production build. Its
+live gate is a manual protected job when
 `TESTING_GATE_URL` and `TESTING_GATE_TOKEN` are configured, and retains the JSON
 decision report for 30 days. In GitLab it also compares the live build against
 `CI_COMMIT_SHA`; local callers can set `TESTING_GATE_EXPECTED_BUILD` explicitly.
+The job passes only after an administrator has approved that same build, so a
+passing metric snapshot without an audited release approval cannot authorize a
+deployment.
 
 Native releases must carry the actual commit:
 

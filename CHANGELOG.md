@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-07-19 — Cross-account privacy and production delivery guardrails
+
+- Scoped web, Android, and iOS transcript caches by immutable account UUID and
+  discarded ambiguous device-global legacy caches, preventing a second login
+  on a shared device from seeing the previous rider's local conversation.
+- Bounded reassembled WebSocket messages to 64 KiB, disabled per-message
+  compression, added slow-client HTTP timeouts, and gave hashed client assets
+  immutable caching while keeping the HTML shell revalidated.
+- Extended readiness to fail when account or durable user-memory storage is
+  corrupt/unwritable, and made build identity read the package version plus
+  deploy timestamp instead of relying on npm lifecycle environment variables.
+- Hardened deployment provenance: production deploys require a clean `main`
+  checkout matching `origin/main`, stage dependencies before an atomic directory
+  activation, automatically roll back failures, then poll health and readiness
+  for the exact build SHA. GitLab CI now audits production dependencies, and the
+  default MR template captures risk, verification, review, and delivery checks.
+- Required the manual live release gate to match an administrator-approved
+  build; passing metrics alone can no longer authorize deployment.
+
 ## 2026-07-19 — Per-user memory and relay protocol hardening
 
 - Added private, server-owned conversation memory for authenticated users:

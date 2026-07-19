@@ -122,7 +122,9 @@ export function useHelmetAgent() {
   const [health, setHealth] = useState<AgentHealth | null>(null);
   const [capabilities, setCapabilities] = useState<ProviderCapabilities>(DEFAULT_CAPABILITIES);
   const [latencyMs, setLatencyMs] = useState(0);
-  const [transcript, setTranscript] = useState<TranscriptItem[]>(() => loadStoredTranscript());
+  // Transcripts remain hidden until App resolves the authenticated account.
+  // The selected owner is an immutable account UUID, never a mutable username.
+  const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
   const [voiceGender, setVoiceGenderState] = useState<VoiceGender>(storedSettings.voiceGender ?? "female");
   const [voicePersonality, setVoicePersonalityState] = useState<VoicePersonality>(
     storedSettings.voicePersonality ?? "concise"
@@ -182,6 +184,7 @@ export function useHelmetAgent() {
   // Last agent text handed to speak(), for duplicate-final suppression.
   const lastSpokenRef = useRef<{ text: string; at: number } | null>(null);
   const lastQualityReportAtRef = useRef(0);
+  const transcriptOwnerRef = useRef<string | null>(null);
 
   const onInterrupted = useCallback(() => {
     setTurnState("listening");
@@ -217,12 +220,15 @@ export function useHelmetAgent() {
     socket.send(JSON.stringify({ type: "testing.metric", ...packetStats }));
   }, [packetStats]);
 
-  // Seed the turn counter past any restored transcript so ids never collide.
-  useEffect(() => {
-    const lastId = transcript.at(-1)?.id ?? 0;
-    if (transcriptTurnRef.current < lastId) transcriptTurnRef.current = lastId;
-    // Run once on mount; later ids are managed by pushTranscript.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  /** Switches the local ride log to the authenticated account. A logout hides
+   * it without deleting it; a different user receives only their own cache. */
+  const selectTranscriptOwner = useCallback((userId: string | null) => {
+    if (transcriptOwnerRef.current === userId) return;
+    transcriptOwnerRef.current = userId;
+    const restored = userId ? loadStoredTranscript(userId) : [];
+    transcriptTurnRef.current = restored.at(-1)?.id ?? 0;
+    setFeedbackFloorId(Number.MAX_SAFE_INTEGER);
+    setTranscript(restored);
   }, []);
 
   // Persist the conversation so a refresh or crash doesn't lose the ride log.
@@ -231,7 +237,9 @@ export function useHelmetAgent() {
   // thread doing 16 kHz audio work. Restored items are forced final anyway, so
   // trailing-edge writes lose nothing.
   useEffect(() => {
-    const timer = window.setTimeout(() => saveStoredTranscript(transcript), 400);
+    const ownerId = transcriptOwnerRef.current;
+    if (!ownerId) return;
+    const timer = window.setTimeout(() => saveStoredTranscript(ownerId, transcript), 400);
     return () => window.clearTimeout(timer);
   }, [transcript]);
 
@@ -281,7 +289,8 @@ export function useHelmetAgent() {
 
   const clearTranscript = useCallback(() => {
     setTranscript([]);
-    clearStoredTranscript();
+    const ownerId = transcriptOwnerRef.current;
+    if (ownerId) clearStoredTranscript(ownerId);
   }, []);
 
   // Persist the settings refs in one place. The tester id keeps its last
@@ -1160,6 +1169,7 @@ export function useHelmetAgent() {
     setRideMode,
     setScenario,
     setGuidedDemo,
+    selectTranscriptOwner,
     clearTranscript,
     sendTurnFeedback,
     canFlagTurn,

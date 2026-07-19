@@ -40,13 +40,14 @@ export function App() {
   // connections, so this is enforcement, not decoration).
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
-  const { setTesterId, refreshHealth, disconnect } = agent;
+  const { setTesterId, selectTranscriptOwner, refreshHealth, disconnect } = agent;
   useEffect(() => {
     let active = true;
     void fetchCurrentUser().then((result) => {
       if (!active) return;
       const user = result.status === "authenticated" ? result.user : null;
       setAuthUser(user);
+      selectTranscriptOwner(user?.id ?? null);
       // Same identity tie as a fresh login — a restored session must not
       // leave the stats identity diverged from the account.
       if (user) setTesterId(user.username);
@@ -55,7 +56,7 @@ export function App() {
     return () => {
       active = false;
     };
-  }, [setTesterId]);
+  }, [selectTranscriptOwner, setTesterId]);
 
   // Sessions expire (or get revoked server-side): revalidate periodically so
   // the gate re-locks instead of leaving a dead HUD with a stale identity.
@@ -66,18 +67,20 @@ export function App() {
       void fetchCurrentUser().then((result) => {
         if (result.status === "authenticated") {
           setAuthUser(result.user);
+          selectTranscriptOwner(result.user.id);
           return;
         }
         // A timeout, offline relay, or temporary 5xx is not proof that the
         // session expired. Keep the HUD and token intact, then retry next poll.
         if (result.status === "unavailable") return;
         setAuthUser(null);
+        selectTranscriptOwner(null);
         disconnect();
         void refreshHealth();
       });
     }, 60_000);
     return () => window.clearInterval(timer);
-  }, [authUser, disconnect, refreshHealth]);
+  }, [authUser, disconnect, refreshHealth, selectTranscriptOwner]);
 
   // The gate decision needs /health (is auth enabled? registration open?).
   // Hold the blank frame until it arrives, but never forever — if the relay is
@@ -92,6 +95,7 @@ export function App() {
   const handleSignedIn = useCallback(
     (user: AuthUser) => {
       setAuthUser(user);
+      agent.selectTranscriptOwner(user.id);
       // Tie the QA stats identity to the account.
       if (agent.testerId !== user.username) agent.setTesterId(user.username);
       void agent.refreshHealth();
@@ -101,6 +105,7 @@ export function App() {
 
   const handleSignedOut = useCallback(() => {
     setAuthUser(null);
+    agent.selectTranscriptOwner(null);
     // Behind the gate nothing should stay live: stop the mic and close the
     // relay socket, which was authorized by the session that just ended.
     agent.disconnect();

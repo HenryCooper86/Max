@@ -27,7 +27,7 @@ import javax.net.ssl.X509TrustManager
  */
 class AuthClient {
 
-    data class User(val username: String, val displayName: String, val role: String)
+    data class User(val id: String, val username: String, val displayName: String, val role: String)
 
     data class Login(val token: String, val user: User)
 
@@ -87,11 +87,13 @@ class AuthClient {
                 val login = parsed?.takeIf { it.optBoolean("ok") }?.let { payload ->
                     val token = payload.optString("token")
                     val user = payload.optJSONObject("user") ?: return@let null
+                    val id = user.optString("id")
                     val name = user.optString("username")
-                    if (token.isEmpty() || name.isEmpty()) return@let null
+                    if (token.isEmpty() || id.isEmpty() || name.isEmpty()) return@let null
                     Login(
                         token = token,
                         user = User(
+                            id = id,
                             username = name,
                             displayName = user.optString("displayName").ifEmpty { name },
                             role = user.optString("role").ifEmpty { "tester" }

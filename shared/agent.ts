@@ -310,7 +310,7 @@ export type AgentHealth = {
   /** User-account status: auth turns on once the first user registers. */
   auth?: { enabled: boolean; registrationOpen: boolean };
   /** Relay build identity (deploy stamps build-info.json); absent on old relays. */
-  build?: { appVersion: string; gitCommit: string };
+  build?: { appVersion: string; gitCommit: string; deployedAt?: string };
   /** Per-tester QA statistics and recent bandwidth/latency graph data. */
   testing?: TestingStats;
 };

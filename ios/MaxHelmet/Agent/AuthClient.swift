@@ -8,6 +8,7 @@ import Foundation
 final class AuthClient: NSObject {
 
     struct User {
+        let id: String
         let username: String
         let displayName: String
         let role: String
@@ -94,10 +95,11 @@ final class AuthClient: NSObject {
            object["ok"] as? Bool == true,
            let token = object["token"] as? String, !token.isEmpty,
            let userObject = object["user"] as? [String: Any],
+           let id = userObject["id"] as? String, !id.isEmpty,
            let username = userObject["username"] as? String, !username.isEmpty {
             let displayName = (userObject["displayName"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? username
             let role = userObject["role"] as? String ?? "tester"
-            return .success(Login(token: token, user: User(username: username, displayName: displayName, role: role)))
+            return .success(Login(token: token, user: User(id: id, username: username, displayName: displayName, role: role)))
         }
         // The relay reports failures as {ok:false, error:"…"} (e.g. wrong
         // password, rate limited) — show its message verbatim.

@@ -115,7 +115,8 @@ class AgentSession(
 
         /** Same prefs file the HUD settings use (MainViewModel.PREFS). */
         private const val PREFS = "max_helmet"
-        private const val KEY_TRANSCRIPT_LOG = "transcript_log"
+        private const val LEGACY_KEY_TRANSCRIPT_LOG = "transcript_log"
+        private const val KEY_TRANSCRIPT_PREFIX = "transcript_log_v2_"
 
         /** Keep the stored conversation bounded (TRANSCRIPT_CAP in src/lib/persistence.ts). */
         private const val TRANSCRIPT_CAP = 200
@@ -167,6 +168,7 @@ class AgentSession(
     private var micMuted = false
 
     private var transcriptTurn = 0
+    private var transcriptOwnerId: String? = null
     private var location: Pair<Double, Double>? = null
 
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -189,13 +191,9 @@ class AgentSession(
 
     init {
         tts = TextToSpeech(context) { status -> ttsReady = status == TextToSpeech.SUCCESS }
-        // Restore the persisted ride log so the conversation survives restarts,
-        // seeding the turn counter past it so ids never collide (useHelmetAgent.ts).
-        val restored = decodeStoredTranscript(prefs.getString(KEY_TRANSCRIPT_LOG, null))
-        if (restored.isNotEmpty()) {
-            transcriptTurn = restored.maxOf { it.id }
-            _state.update { it.copy(transcript = restored) }
-        }
+        // The legacy cache was device-global and cannot be assigned safely to
+        // whichever account logs in first after an upgrade.
+        prefs.edit().remove(LEGACY_KEY_TRANSCRIPT_LOG).apply()
     }
 
     // ---- public API --------------------------------------------------------
@@ -399,11 +397,30 @@ class AgentSession(
         _state.update { it.copy(authRequired = false) }
     }
 
+    /** Selects the immutable account that owns the on-device transcript cache.
+     * Signing out hides the log; another account loads a different record. */
+    fun selectTranscriptOwner(userId: String?) {
+        val owner = userId?.trim()?.lowercase()?.takeIf {
+            it.matches(Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"))
+        }
+        if (transcriptOwnerId == owner) return
+        transcriptOwnerId = owner
+        prefs.edit().remove(LEGACY_KEY_TRANSCRIPT_LOG).apply()
+        val restored = owner
+            ?.let { decodeStoredTranscript(prefs.getString("$KEY_TRANSCRIPT_PREFIX$it", null)) }
+            .orEmpty()
+        transcriptTurn = restored.maxOfOrNull { it.id } ?: 0
+        persistedTranscriptSignature = restored.size to (restored.lastOrNull()?.id ?: 0)
+        _state.update {
+            it.copy(transcript = restored, feedbackFloorId = Int.MAX_VALUE, sessionMemory = SessionMemory())
+        }
+    }
+
     /** Clears both the live transcript and its persisted copy (清空对话记录). */
     fun clearTranscript() {
         _state.update { it.copy(transcript = emptyList()) }
         persistedTranscriptSignature = null
-        prefs.edit().remove(KEY_TRANSCRIPT_LOG).apply()
+        transcriptOwnerId?.let { prefs.edit().remove("$KEY_TRANSCRIPT_PREFIX$it").apply() }
     }
 
     // ---- relay connection --------------------------------------------------
@@ -741,11 +758,12 @@ class AgentSession(
      * the disk write while a partial turn is still streaming in.
      */
     private fun persistTranscript() {
+        val owner = transcriptOwnerId ?: return
         val finals = _state.value.transcript.filter { it.final }.takeLast(TRANSCRIPT_CAP)
         val signature = finals.size to (finals.lastOrNull()?.id ?: 0)
         if (signature == persistedTranscriptSignature) return
         persistedTranscriptSignature = signature
-        prefs.edit().putString(KEY_TRANSCRIPT_LOG, encodeStoredTranscript(finals)).apply()
+        prefs.edit().putString("$KEY_TRANSCRIPT_PREFIX$owner", encodeStoredTranscript(finals)).apply()
     }
 
     // ---- ADAS hazard alerts ------------------------------------------------

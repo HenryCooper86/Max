@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { TestingStats } from "../shared/agent";
-import { testingBuildsMatch } from "../shared/testing";
+import { evaluateTestingReleaseDecision } from "./testing-release-decision";
 
 const baseUrl = (process.env.TESTING_GATE_URL ?? "http://127.0.0.1:8787").replace(/\/$/, "");
 const token = process.env.TESTING_GATE_TOKEN?.trim() ?? "";
@@ -30,18 +30,19 @@ try {
 
   const { releaseGate, regression } = payload.testing;
   const operations = operationsPayload.operations;
-  const baselineRequired = regression.baselineSource !== "none";
-  // Reuse the shared identity check (exact match, or hex-SHA prefix on both
-  // sides). The old ad-hoc startsWith had no hex guard, so a named expected build
-  // like "release-2" false-matched a gate build of "release-2-hotfix".
-  const buildMatches = !expectedBuild || testingBuildsMatch(releaseGate.build, expectedBuild);
-  const passed = buildMatches && releaseGate.status === "pass" && (!baselineRequired || regression.status === "pass");
+  const decision = evaluateTestingReleaseDecision({
+    releaseGate,
+    regression,
+    approvedBaselineBuild: operations.approvedBaselineBuild,
+    expectedBuild
+  });
   const report = {
     generatedAt: new Date().toISOString(),
-    passed,
+    passed: decision.passed,
     build: releaseGate.build,
     expectedBuild,
-    buildMatches,
+    buildMatches: decision.buildMatches,
+    approvalMatches: decision.approvalMatches,
     policyVersion: operations?.activePolicy.version,
     approvedBaselineBuild: operations?.approvedBaselineBuild,
     releaseGate,
@@ -54,7 +55,7 @@ try {
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, json, { mode: 0o600 });
   }
-  if (!passed) process.exitCode = 1;
+  if (!decision.passed) process.exitCode = 1;
 } catch (error) {
   process.stderr.write(`Release gate check failed: ${error instanceof Error ? error.message : String(error)}\n`);
   process.exitCode = 2;

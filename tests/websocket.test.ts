@@ -218,6 +218,7 @@ describe("session controller ordering and lifecycle", () => {
 
     expect(capturedEvent?.memory?.destination).toBe("上海站");
     expect(capturedContext?.previousConversation?.turns.map((turn) => turn.text)).toEqual(["上次去上海站"]);
+    expect(capturedContext?.previousConversation?.facts).toEqual([]);
     expect(userConversationMemory(aliceId)?.turns.map((turn) => turn.text)).toEqual([
       "上次去上海站",
       "我记得，上次目的地是上海站。"

@@ -277,14 +277,16 @@ export class AgentSessionController {
         // disabled, retain the original client-echoed restart behaviour.
         const providerEvent =
           this.authenticatedUser && userMemoryEnabled() ? { ...event, memory: durableMemory?.session } : event;
-        const providerContext: ProviderSessionContext | undefined = durableMemory?.turns.length
-          ? {
-              previousConversation: {
-                updatedAt: durableMemory.updatedAt,
-                turns: durableMemory.turns
+        const providerContext: ProviderSessionContext | undefined =
+          durableMemory && (durableMemory.turns.length || durableMemory.facts.length)
+            ? {
+                previousConversation: {
+                  updatedAt: durableMemory.updatedAt,
+                  turns: durableMemory.turns,
+                  facts: durableMemory.facts
+                }
               }
-            }
-          : undefined;
+            : undefined;
         beginTesterSession(this.relaySessionId, {
           // Logged-in users cannot claim another tester's evidence row. The
           // operator relay-token path has no account identity and keeps the

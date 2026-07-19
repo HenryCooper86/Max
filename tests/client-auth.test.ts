@@ -61,12 +61,17 @@ describe("user memory controls", () => {
       .fn()
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ ok: true, memory: { enabled: true, updatedAt: 10, turnCount: 4 } })
+        json: async () => ({ ok: true, memory: { enabled: true, updatedAt: 10, turnCount: 4, factCount: 1 } })
       })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true, removed: true }) });
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(fetchUserMemorySummary()).resolves.toEqual({ enabled: true, updatedAt: 10, turnCount: 4 });
+    await expect(fetchUserMemorySummary()).resolves.toEqual({
+      enabled: true,
+      updatedAt: 10,
+      turnCount: 4,
+      factCount: 1
+    });
     await expect(forgetUserMemory()).resolves.toBe(true);
     expect(fetchMock).toHaveBeenNthCalledWith(1, "/auth/memory", {
       headers: { Authorization: "Bearer sess_valid" }

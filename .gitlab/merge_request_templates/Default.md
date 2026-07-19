@@ -20,6 +20,5 @@ Describe the user-visible outcome and the concrete problem being solved.
 ## Delivery
 
 - [ ] Source branch is up to date with `main`
-- [ ] GitLab pipeline passes
 - [ ] Required review is complete
 - [ ] Merge to `main` before deploying; `deploy-lightsail.command` verifies local `HEAD` matches `origin/main`

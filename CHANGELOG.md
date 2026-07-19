@@ -16,8 +16,10 @@
 - Hardened deployment provenance: production deploys require a clean `main`
   checkout matching `origin/main`, stage dependencies before an atomic directory
   activation, automatically roll back failures, then poll health and readiness
-  for the exact build SHA. GitLab CI now audits production dependencies, and the
-  default MR template captures risk, verification, review, and delivery checks.
+  for the exact build SHA. The default MR template captures risk, local
+  verification, review, and delivery checks.
+- Removed the inactive GitLab CI configuration while the project has no runner;
+  full local checks and dependency auditing remain mandatory in every MR.
 - Required the manual live release gate to match an administrator-approved
   build; passing metrics alone can no longer authorize deployment.
 

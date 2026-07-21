@@ -3900,58 +3900,109 @@ button.opsCard:disabled {
   display: flex;
   align-items: center;
   flex-direction: column;
-  margin-top: 16px;
+  margin-top: 22px;
 }
 
 .voiceMicButton {
-  display: flex;
-  width: 92px;
-  height: 92px;
+  display: grid;
+  width: min(100%, 310px);
+  min-height: 66px;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  gap: 2px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 50%;
-  background: #ef693f;
-  box-shadow:
-    0 0 0 8px rgba(239, 105, 63, 0.07),
-    0 18px 42px rgba(222, 78, 39, 0.28);
-  color: #180b07;
+  gap: 14px;
+  padding: 8px 16px 8px 9px;
+  border: 1px solid rgba(180, 198, 190, 0.28);
+  border-radius: 22px;
+  background: rgba(18, 24, 22, 0.96);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.24);
+  color: #e8efec;
   cursor: pointer;
   transition:
     transform 0.16s ease,
+    border-color 0.16s ease,
     background 0.16s ease,
     box-shadow 0.16s ease;
 }
 
 .voiceMicButton:hover {
   transform: translateY(-2px);
-  box-shadow:
-    0 0 0 9px rgba(239, 105, 63, 0.09),
-    0 22px 48px rgba(222, 78, 39, 0.34);
+  border-color: rgba(239, 105, 63, 0.48);
+  background: rgba(23, 30, 27, 0.98);
+  box-shadow: 0 19px 42px rgba(0, 0, 0, 0.3);
 }
 
 .voiceMicButton:active {
-  transform: scale(0.97);
+  transform: translateY(0) scale(0.985);
 }
 
 .voiceMicButton.active {
-  background: var(--accent);
-  box-shadow:
-    0 0 0 8px rgba(62, 232, 159, 0.08),
-    0 16px 42px rgba(62, 232, 159, 0.25);
+  border-color: rgba(62, 232, 159, 0.48);
+  background: rgba(19, 31, 26, 0.98);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.28);
 }
 
-.voiceMicButton span {
-  font-size: 0.72rem;
-  font-weight: 800;
+.voiceMicKey {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border: 1px solid rgba(239, 105, 63, 0.24);
+  border-radius: 14px;
+  background: rgba(239, 105, 63, 0.12);
+  color: #ff7350;
+  transition:
+    border-color 0.16s ease,
+    background 0.16s ease,
+    color 0.16s ease;
 }
 
-.voicePrimaryControls > p {
-  margin: 11px 0 0;
-  color: #697570;
+.voiceMicButton.active .voiceMicKey {
+  border-color: rgba(62, 232, 159, 0.28);
+  background: rgba(62, 232, 159, 0.12);
+  color: var(--accent);
+}
+
+.voiceMicLabel {
+  min-width: 0;
+  padding-left: 14px;
+  border-left: 1px solid rgba(180, 198, 190, 0.15);
+  font-size: 0.94rem;
+  font-weight: 720;
+  letter-spacing: 0.02em;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.voiceMicButton kbd {
+  padding-left: 14px;
+  border: 0;
+  border-left: 1px solid rgba(180, 198, 190, 0.15);
+  background: transparent;
+  color: #687570;
+  font-family: inherit;
   font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.voiceInputSignal {
+  display: flex;
+  height: 25px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 8px;
+  color: rgba(107, 125, 118, 0.42);
+  transition:
+    color 0.2s ease,
+    opacity 0.2s ease;
+}
+
+.voiceInputSignal svg {
+  width: 164px;
+  height: 24px;
+}
+
+.voiceInputSignal.active {
+  color: rgba(62, 232, 159, 0.64);
 }
 
 /* Live captions appear as the same quiet lower card used by the iOS app. */
@@ -4585,8 +4636,7 @@ button.opsCard:disabled {
   }
 
   .voiceMicButton {
-    width: 84px;
-    height: 84px;
+    width: min(100%, 310px);
   }
 
   .settingsBackdrop {
@@ -4641,11 +4691,10 @@ button.opsCard:disabled {
   }
 
   .voiceMicButton {
-    width: 78px;
-    height: 78px;
+    min-height: 60px;
   }
 
-  .voicePrimaryControls > p {
+  .voiceInputSignal {
     display: none;
   }
 }

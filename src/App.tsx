@@ -1,4 +1,4 @@
-import { ChatCircleText, GearSix, Microphone, X } from "@phosphor-icons/react";
+import { ChatCircleText, GearSix, Microphone, Waveform, X } from "@phosphor-icons/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { adasDirectionLabel } from "../shared/adas";
 import { combineHazardLevels } from "../shared/ride";
@@ -193,16 +193,18 @@ export function App() {
             type="button"
             className={`voiceMicButton ${listening || starting ? "active" : ""}`}
             aria-pressed={listening || starting}
+            aria-label={starting ? "正在连接免提" : listening ? "结束免提" : "开始免提"}
             onClick={toggleHandsFreeSession}
           >
-            {listening || starting ? (
-              <X size={34} weight="bold" aria-hidden="true" />
-            ) : (
-              <Microphone size={34} weight="fill" aria-hidden="true" />
-            )}
-            <span>{starting ? "连接中" : listening ? "结束" : "开始"}</span>
+            <span className="voiceMicKey" aria-hidden="true">
+              {listening || starting ? <X size={24} weight="bold" /> : <Microphone size={25} weight="regular" />}
+            </span>
+            <span className="voiceMicLabel">{starting ? "连接中" : listening ? "结束免提" : "开始免提"}</span>
+            <kbd aria-hidden="true">空格键</kbd>
           </button>
-          <p>{listening ? "直接讲话，Max 正在听" : "点击开始免提 · 空格键也可以"}</p>
+          <div className={`voiceInputSignal ${listening ? "active" : ""}`} aria-hidden="true">
+            <Waveform size={164} weight="thin" />
+          </div>
         </div>
       </section>
 

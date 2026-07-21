@@ -81,3 +81,12 @@ export type AudioProcessingState = {
   autoGainControl: boolean | "unknown";
   sampleRate?: number;
 };
+
+export type Weather = {
+  description: string;
+  temperatureC: number;
+  windSpeedKmh: number;
+  isDay: boolean;
+  riskLevel: "normal" | "caution" | "critical";
+  riderAdvice: string;
+};

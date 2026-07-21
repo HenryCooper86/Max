@@ -141,7 +141,7 @@ export function formatRelativeTime(timestamp: number) {
 }
 
 /** The server-side stats row for this browser's tester id, if any. */
-export function currentTesterSnapshot(health: AgentHealth | null, testerId: string) {
+function currentTesterSnapshot(health: AgentHealth | null, testerId: string) {
   return health?.testing?.users
     .filter((user) => user.testerId === testerId)
     .sort((a, b) => Number(b.activeSessions) - Number(a.activeSessions) || b.lastSeenAt - a.lastSeenAt)[0];

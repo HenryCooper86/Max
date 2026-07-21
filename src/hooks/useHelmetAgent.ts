@@ -4,7 +4,6 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { TurnState } from "../components/HelmetVisual";
-import type { Weather } from "../components/Instruments";
 import {
   IDLE_CLOSE_CODE,
   type AgentHealth,
@@ -28,6 +27,7 @@ import {
   type DemoScenario,
   type RideMode
 } from "../../shared/ride";
+import type { Weather } from "../types";
 import {
   DEFAULT_CAPABILITIES,
   DEFAULT_MEMORY,

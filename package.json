@@ -25,6 +25,7 @@
     "test:release-gate": "tsx scripts/testing-release-gate.ts"
   },
   "dependencies": {
+    "@phosphor-icons/react": "^2.1.10",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "tsx": "^4.19.2",

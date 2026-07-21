@@ -4547,6 +4547,13 @@ button.opsCard:disabled {
   padding: 0;
 }
 
+/* Once expanded, let the admin tools join the settings flow instead of
+   stretching the collapsed card's side borders across several screens. */
+.advancedSettings[open] {
+  border: 0;
+  background: transparent;
+}
+
 .advancedSettings > summary {
   display: flex;
   min-height: 76px;
@@ -4591,9 +4598,16 @@ button.opsCard:disabled {
   color: var(--accent);
 }
 
+.advancedSettings[open] > summary {
+  border: 1px solid rgba(180, 198, 190, 0.12);
+  border-radius: 22px;
+  background: #131917;
+}
+
 .advancedSettingsBody {
-  padding: 0 12px 12px;
-  border-top: 1px solid rgba(180, 198, 190, 0.1);
+  width: 100%;
+  min-width: 0;
+  padding: 0;
 }
 
 .settingsAdminLoading {
@@ -4607,11 +4621,19 @@ button.opsCard:disabled {
 .settingsSheet .testingPanel {
   display: grid;
   width: 100%;
-  margin-top: 12px;
-  padding: 14px;
+  max-width: 100%;
+  min-width: 0;
+  margin-top: 14px;
+  padding: 0;
+  grid-template-columns: minmax(0, 1fr);
   grid-area: auto;
   border: 0;
-  background: #0a0f0d;
+  background: transparent;
+}
+
+.settingsSheet .testingPanel > * {
+  max-width: 100%;
+  min-width: 0;
 }
 
 @media (max-width: 700px) {

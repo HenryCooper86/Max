@@ -344,7 +344,7 @@ export function WebSettingsSheet({ agent, authUser, onSignedIn, onSignedOut, onC
                   <small>账号、发布验证、会话证据和运营工具</small>
                 </span>
               </span>
-              <span aria-hidden="true">展开</span>
+              <span aria-hidden="true">{advancedOpen ? "收起" : "展开"}</span>
             </summary>
             <div className="advancedSettingsBody">
               {advancedOpen ? (

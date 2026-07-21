@@ -123,6 +123,8 @@ enum class Speaker(val wire: String) {
 
 data class TranscriptItem(
     val id: Int,
+    val turnId: String? = null,
+    val deliveryId: String? = null,
     val at: Long,
     val speaker: Speaker,
     val text: String,
@@ -199,6 +201,8 @@ sealed interface AgentEvent {
     data class Connection(val state: String, val detail: String) : AgentEvent
     data class Status(val state: String, val detail: String) : AgentEvent
     data class Transcript(
+        val turnId: String,
+        val deliveryId: String,
         val speaker: Speaker,
         val text: String,
         val final: Boolean,
@@ -243,8 +247,11 @@ sealed interface AgentEvent {
 
 fun parseAgentEvent(text: String): AgentEvent {
     val json = JSONObject(text)
-    return when (json.optString("type")) {
-        "session.started" -> {
+    val type = json.optString("type")
+    val requiredFields = SERVER_EVENT_REQUIRED_FIELDS[type] ?: return AgentEvent.Unhandled
+    if (requiredFields.any { !json.has(it) }) return AgentEvent.Unhandled
+    return when (type) {
+        ServerEventTypes.SESSION_STARTED -> {
             val caps = json.optJSONObject("capabilities")
             AgentEvent.SessionStarted(
                 provider = json.optString("provider", "unknown"),
@@ -262,20 +269,22 @@ fun parseAgentEvent(text: String): AgentEvent {
             )
         }
 
-        "connection" -> AgentEvent.Connection(json.optString("state"), json.optString("detail"))
+        ServerEventTypes.CONNECTION -> AgentEvent.Connection(json.optString("state"), json.optString("detail"))
 
-        "status" -> AgentEvent.Status(json.optString("state"), json.optString("detail"))
+        ServerEventTypes.STATUS -> AgentEvent.Status(json.optString("state"), json.optString("detail"))
 
-        "transcript" -> AgentEvent.Transcript(
+        ServerEventTypes.TRANSCRIPT -> AgentEvent.Transcript(
+            turnId = json.optString("turnId"),
+            deliveryId = json.optString("deliveryId"),
             speaker = Speaker.fromWire(json.optString("speaker")),
             text = json.optString("text"),
             final = json.optBoolean("final", true),
             useBrowserSpeech = if (json.has("useBrowserSpeech")) json.optBoolean("useBrowserSpeech") else null
         )
 
-        "metric" -> AgentEvent.Metric(json.optInt("latencyMs"))
+        ServerEventTypes.METRIC -> AgentEvent.Metric(json.optInt("latencyMs"))
 
-        "weather" -> AgentEvent.WeatherUpdate(
+        ServerEventTypes.WEATHER -> AgentEvent.WeatherUpdate(
             Weather(
                 description = json.optString("description"),
                 temperatureC = json.optInt("temperatureC"),
@@ -286,7 +295,7 @@ fun parseAgentEvent(text: String): AgentEvent {
             )
         )
 
-        "ride.context" -> {
+        ServerEventTypes.RIDE_CONTEXT -> {
             val mode = RideMode.fromWire(json.optString("mode"))
             val scenario = DemoScenario.fromWire(json.optString("scenario"))
             AgentEvent.RideContextUpdate(
@@ -305,7 +314,7 @@ fun parseAgentEvent(text: String): AgentEvent {
             )
         }
 
-        "session.memory" -> AgentEvent.SessionMemoryUpdate(
+        ServerEventTypes.SESSION_MEMORY -> AgentEvent.SessionMemoryUpdate(
             SessionMemory(
                 language = json.optString("language", "zh"),
                 destination = json.optString("destination").takeIf { it.isNotEmpty() },
@@ -314,7 +323,7 @@ fun parseAgentEvent(text: String): AgentEvent {
             )
         )
 
-        "telemetry" -> AgentEvent.TelemetryUpdate(
+        ServerEventTypes.TELEMETRY -> AgentEvent.TelemetryUpdate(
             Telemetry(
                 asrMs = maxOf(0, json.optInt("asrMs")),
                 thinkMs = maxOf(0, json.optInt("thinkMs")),
@@ -323,7 +332,7 @@ fun parseAgentEvent(text: String): AgentEvent {
             )
         )
 
-        "hazard.alert" -> AgentEvent.HazardAlert(
+        ServerEventTypes.HAZARD_ALERT -> AgentEvent.HazardAlert(
             threat = json.optString("threat"),
             direction = json.optString("direction"),
             severity = HazardLevel.fromWire(json.optString("severity", "caution")),
@@ -334,7 +343,7 @@ fun parseAgentEvent(text: String): AgentEvent {
             interrupt = json.optBoolean("interrupt", true)
         )
 
-        "error" -> AgentEvent.ErrorEvent(json.optString("message", "Voice relay failed"))
+        ServerEventTypes.ERROR -> AgentEvent.ErrorEvent(json.optString("message", "Voice relay failed"))
 
         else -> AgentEvent.Unhandled
     }
@@ -408,9 +417,10 @@ fun buildGuidedDemo(enabled: Boolean): String = """{"type":"demo.guided","enable
  * (validated by server/session-controller.ts; the relay matches the turn by
  * speaker + text and attaches the reason for the admin session replay).
  */
-fun buildTurnFeedback(speaker: Speaker, text: String, reason: String): String =
+fun buildTurnFeedback(turnId: String, speaker: Speaker, text: String, reason: String): String =
     JSONObject().apply {
-        put("type", "turn.feedback")
+        put("type", ClientEventTypes.TURN_FEEDBACK)
+        put("turnId", turnId)
         put("speaker", speaker.wire)
         put("text", text)
         put("reason", reason)
@@ -426,12 +436,17 @@ const val AUDIO_STOP_EVENT = """{"type":"audio.stop"}"""
 fun appendAuthToken(url: String, token: String): String {
     val clean = token.trim()
     if (clean.isEmpty()) return url
+    // Query parameters must precede a URL fragment. Appending after `#…` makes
+    // the token client-side-only, so the relay receives an unauthenticated URL.
+    val fragmentIndex = url.indexOf('#')
+    val base = if (fragmentIndex >= 0) url.substring(0, fragmentIndex) else url
+    val fragment = if (fragmentIndex >= 0) url.substring(fragmentIndex) else ""
     // Replace, never duplicate: a pasted relay URL may already carry ?token=.
-    val stripped = url
+    val stripped = base
         .replace(Regex("([?&])token=[^&#]*&"), "$1")
         .replace(Regex("[?&]token=[^&#]*"), "")
     val separator = if ('?' in stripped) '&' else '?'
-    return stripped + separator + "token=" + URLEncoder.encode(clean, "UTF-8")
+    return stripped + separator + "token=" + URLEncoder.encode(clean, "UTF-8") + fragment
 }
 
 /** Serializes finished turns for SharedPreferences (saveStoredTranscript in src/lib/persistence.ts). */
@@ -441,6 +456,8 @@ fun encodeStoredTranscript(items: List<TranscriptItem>): String {
         array.put(
             JSONObject().apply {
                 put("id", item.id)
+                item.turnId?.let { put("turnId", it) }
+                item.deliveryId?.let { put("deliveryId", it) }
                 put("at", item.at)
                 put("speaker", item.speaker.wire)
                 put("language", item.language)
@@ -467,6 +484,8 @@ fun decodeStoredTranscript(raw: String?): List<TranscriptItem> {
             if (text.isEmpty()) return@mapNotNull null
             TranscriptItem(
                 id = json.optInt("id"),
+                turnId = json.optString("turnId").ifEmpty { null },
+                deliveryId = json.optString("deliveryId").ifEmpty { null },
                 at = json.optLong("at"),
                 speaker = Speaker.fromWire(json.optString("speaker")),
                 text = text,
@@ -531,6 +550,8 @@ fun buildTranscriptExportJson(items: List<TranscriptItem>): String {
         turns.put(
             JSONObject().apply {
                 put("id", item.id)
+                item.turnId?.let { put("turnId", it) }
+                item.deliveryId?.let { put("deliveryId", it) }
                 put("at", isoFormat.format(Date(item.at)))
                 put("speaker", item.speaker.wire)
                 put("language", item.language)

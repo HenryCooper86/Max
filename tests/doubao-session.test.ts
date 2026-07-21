@@ -49,6 +49,7 @@ import type { SessionStartEvent } from "../server/providers/types";
 // (EventReceive is a non-exported const enum, so mirror the two we need here.)
 const EVENT_CONNECTION_STARTED = 50;
 const EVENT_SESSION_STARTED = 150;
+const EVENT_SESSION_FAILED = 153;
 const MESSAGE_TYPE_FULL_SERVER_RESPONSE = 0b1001;
 
 function uint32(value: number) {
@@ -329,5 +330,38 @@ describe("createDoubaoProvider — concurrent weather + audio buffering", () => 
     expect(clientClose).toHaveBeenCalled();
 
     vi.useRealTimers();
+  });
+
+  it("reconnects when Doubao reports a terminal session failure without closing its socket", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ current: { temperature_2m: 21, weather_code: 0, wind_speed_10m: 5, is_day: 1 } })
+      }))
+    );
+
+    const clientClose = vi.fn();
+    const provider = createDoubaoProvider(
+      { readyState: 1, OPEN: 1, send: vi.fn(), close: clientClose } as never,
+      silentLog
+    );
+    await provider.start(START_EVENT);
+    const first = upstreamInstances[0];
+    first.emit("open");
+    await first.emit("message", serverFrame(EVENT_CONNECTION_STARTED));
+
+    // The upstream sends SessionFailed but deliberately does not close the
+    // transport itself. The provider must close it and enter its retry path.
+    first.emit("message", serverFrame(EVENT_SESSION_FAILED));
+    expect(first.readyState).toBe(MockWebSocket.CLOSED);
+    expect(clientClose).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(600);
+    expect(upstreamInstances).toHaveLength(2);
+
+    vi.useRealTimers();
+    await provider.close();
   });
 });

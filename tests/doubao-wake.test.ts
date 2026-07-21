@@ -165,6 +165,10 @@ describe("createDoubaoProvider — cumulative ASR partials", () => {
     // Three streamed partials plus exactly one final.
     expect(riderTranscripts).toHaveLength(4);
     expect(riderTranscripts.at(-1)).toMatchObject({ text: "Max 前面堵吗", final: true });
+    expect(new Set(riderTranscripts.map((event) => event.turnId)).size).toBe(1);
+    expect(new Set(riderTranscripts.map((event) => event.deliveryId)).size).toBe(1);
+    expect(riderTranscripts[0]?.turnId).toEqual(expect.any(String));
+    expect(riderTranscripts[0]?.deliveryId).toEqual(expect.any(String));
     // Regression: appending the cumulative hypotheses produced "Max Max 前面 …".
     expect(riderTranscripts.at(-1)?.text).not.toContain("Max Max");
 
@@ -210,6 +214,33 @@ describe("createDoubaoProvider — wake-word gating", () => {
       expect.objectContaining({ text: "前方畅通。", final: false }),
       expect.objectContaining({ text: "前方畅通。", final: true })
     ]);
+    expect(agentTranscripts[0]?.turnId).toBe(agentTranscripts[1]?.turnId);
+    expect(agentTranscripts[0]?.deliveryId).toBe(agentTranscripts[1]?.deliveryId);
+
+    await provider.close();
+  });
+
+  it("does not suppress a reply that starts before cumulative ASR discovers the wake phrase", async () => {
+    stubWeatherFetch();
+    const { client, send } = makeClient();
+    const { provider, upstream } = await startLiveSession(client);
+
+    await upstream.emit("message", jsonFrame(ASR_INFO, {}));
+    // The model starts generating while ASR still has an incomplete hypothesis.
+    // This used to latch the whole reply as unaddressed before the next ASR
+    // frame revealed that the rider had in fact said Max.
+    await upstream.emit("message", jsonFrame(CHAT_RESPONSE, { content: "前方畅通。" }));
+    await upstream.emit("message", jsonFrame(ASR_RESPONSE, { results: [{ text: "Max 前面路况怎么样" }] }));
+    await upstream.emit("message", jsonFrame(ASR_ENDED, {}));
+    await upstream.emit("message", jsonFrame(TTS_SENTENCE_START, { content: "前方畅通。" }));
+    await upstream.emit("message", audioFrame(Buffer.from([1, 2, 3, 4])));
+    await upstream.emit("message", jsonFrame(CHAT_ENDED, {}));
+    await upstream.emit("message", jsonFrame(TTS_ENDED, {}));
+
+    expect(forwardedAudio(send)).toHaveLength(1);
+    expect(
+      clientEvents(send).filter((event) => event.type === "transcript" && event.speaker === "agent")
+    ).toContainEqual(expect.objectContaining({ text: "前方畅通。", final: true }));
 
     await provider.close();
   });

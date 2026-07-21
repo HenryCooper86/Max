@@ -1,4 +1,5 @@
 import { ADAS_SCENARIOS, formatAdasAlert, type AdasSeverity } from "../shared/adas";
+import { createTranscriptDelivery, transcriptEvent } from "./transcript-events";
 
 // Simulated ADAS hazard source shared by the mock and Doubao providers. It cycles
 // the hazard catalog on a timer and emits the same `hazard.alert` events a real
@@ -37,7 +38,12 @@ export function createHazardInjector({ send, emitRideContext }: HazardInjectorOp
       interrupt: true
     });
     send({ type: "status", state: "speaking", detail: `⚠️ ${hazard.label}` });
-    send({ type: "transcript", speaker: "agent", text: formatAdasAlert(hazard), final: true, useBrowserSpeech: false });
+    send(
+      transcriptEvent(createTranscriptDelivery(), "agent", formatAdasAlert(hazard), {
+        final: true,
+        useBrowserSpeech: false
+      })
+    );
     emitRideContext(hazard.severity);
 
     const restore = setTimeout(

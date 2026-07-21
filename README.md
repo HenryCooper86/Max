@@ -75,16 +75,18 @@ single status caption and minimal controls.
 - `女声 / 男声` voice toggle that picks the live Doubao speaker, plus a 语气 personality selector (极简 / 友好 / 技术 / 领航).
 - Boosted, soft-limited playback so the agent is loud enough at the helmet speaker without the harsh clipping of a hard gain (web compressor; iOS/Android per-sample soft limiter).
 - Barge-in: agent speech stops as soon as the rider talks.
+- Server-issued turn and delivery IDs keep partial/final transcript updates together and make TTS fallback exactly-once across reconnects and repeated text.
 - Automatic WebSocket reconnect with exponential backoff if the relay drops.
+- Generated event contracts keep TypeScript, Kotlin, and Swift event names and required fields synchronized from one JSON Schema.
 - Startup config validation that warns about missing Doubao credentials.
 - Accessible web HUD — keyboard-visible focus rings on every control, `prefers-reduced-motion` support, and status labels tuned for outdoor glanceability.
 
 ## Tech Stack
 
 - React 19
-- Vite 6
-- TypeScript
-- Express
+- Vite 8
+- TypeScript 7 (with the TypeScript 6 compatibility API for ESLint)
+- Express 5
 - WebSocket relay with `ws`
 - Volcengine Doubao Speech realtime dialogue WebSocket
 - Vitest for pure helper/protocol tests
@@ -112,6 +114,8 @@ single status caption and minimal controls.
 │       ├── mock.ts           # Mock live voice provider
 │       └── types.ts
 ├── shared/                   # Shared language, ride, session, audio, and event helpers
+├── protocol/                 # Canonical JSON Schema for client/server agent events
+├── scripts/generate-agent-protocol.ts # Generates TypeScript, Kotlin, and Swift contracts
 ├── tests/                    # Vitest unit tests for the pure functions
 ├── android/                  # Native Kotlin + Jetpack Compose client
 ├── ios/                      # Native Swift + SwiftUI client
@@ -688,6 +692,8 @@ of queueing in server memory.
 ```bash
 npm run dev          # Run Vite client and Express/WebSocket server
 npm run build        # Type-check and build production assets
+npm run generate:protocol # Regenerate TypeScript/Kotlin/Swift event contracts
+npm run check:protocol # Fail when generated event contracts are stale
 npm run preview      # Preview built client
 npm run lint         # Lint with ESLint
 npm run check:dead-code # Detect unused files, exports, and dependencies with Knip
@@ -728,6 +734,9 @@ npm test               # Vitest unit tests
 npm run test:fault-matrix # deterministic latency/error/unsafe variants
 npm run check          # run the complete local/CI gate above in one command
 ```
+
+GitHub Actions runs this gate plus Android unit tests/lint and iOS simulator tests on every push
+and pull request (`.github/workflows/ci.yml`).
 
 ### 3. Build
 
@@ -804,7 +813,7 @@ An intentional staging deployment from another branch requires the explicit
 
 ## Verification
 
-Build, lint, and test:
+Build, lint, and test the web/relay stack:
 
 ```bash
 npm run build
@@ -821,15 +830,15 @@ curl -s http://localhost:8787/health
 Native verification:
 
 ```bash
-# Android debug APK
-(cd android && JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew assembleDebug)
+# Android unit tests and lint
+(cd android && JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew test lint)
 
 # iOS simulator build from the repo root
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild \
   -project ios/MaxHelmet.xcodeproj \
   -scheme MaxHelmet \
-  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 ```
 
 If Xcode's command-line tools are selected instead of full Xcode, use the explicit
@@ -852,7 +861,7 @@ on a developer machine.
 ## Next Steps
 
 1. Add more agent tools (nearby stops, navigation).
-2. Restore GitLab CI once an active runner is available (deploy script already exists).
+2. Mirror the cross-platform GitHub Actions gate to GitLab when an active runner is available.
 3. Replace the Lightsail self-signed certificate with a trusted cert behind a domain name.
 4. Replace the simulated ADAS hazard injector with real sensor input + confidence scoring.
 

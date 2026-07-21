@@ -67,6 +67,28 @@ final class AgentProtocolTests: XCTestCase {
         XCTAssertEqual(payload["lon"] as? Double, 121.4737)
     }
 
+    func testParsesServerIssuedTranscriptIdentifiers() {
+        let event = parseAgentEvent("""
+        {
+          "type": "transcript",
+          "turnId": "turn-1",
+          "deliveryId": "delivery-1",
+          "speaker": "agent",
+          "text": "前方畅通。",
+          "final": true
+        }
+        """)
+
+        guard case let .transcript(turnId, deliveryId, speaker, text, final, _) = event else {
+            return XCTFail("Expected transcript event")
+        }
+        XCTAssertEqual(turnId, "turn-1")
+        XCTAssertEqual(deliveryId, "delivery-1")
+        XCTAssertEqual(speaker, .agent)
+        XCTAssertEqual(text, "前方畅通。")
+        XCTAssertTrue(final)
+    }
+
     func testTranscriptNormalizationDedupesMixedPunctuation() {
         XCTAssertEqual(
             normalizeTranscriptText(" Max：保持 30 km/h！"),
@@ -77,7 +99,7 @@ final class AgentProtocolTests: XCTestCase {
     func testTranscriptExportIncludesStableTurnFields() throws {
         let date = Date(timeIntervalSince1970: 1_700_000_000)
         let items = [
-            TranscriptItem(id: 1, at: date, speaker: .rider, text: "天气怎么样？", final: true, language: "zh"),
+            TranscriptItem(id: 1, turnId: "turn-1", deliveryId: "delivery-1", at: date, speaker: .rider, text: "天气怎么样？", final: true, language: "zh"),
             TranscriptItem(id: 2, at: date, speaker: .agent, text: "风有点大，放缓一点。", final: true, language: "zh")
         ]
 
@@ -88,6 +110,8 @@ final class AgentProtocolTests: XCTestCase {
 
         XCTAssertEqual(turns.count, 2)
         XCTAssertEqual(turns[0]["id"] as? Int, 1)
+        XCTAssertEqual(turns[0]["turnId"] as? String, "turn-1")
+        XCTAssertEqual(turns[0]["deliveryId"] as? String, "delivery-1")
         XCTAssertEqual(turns[0]["speaker"] as? String, "rider")
         XCTAssertEqual(turns[0]["language"] as? String, "zh")
         XCTAssertEqual(turns[0]["final"] as? Bool, true)

@@ -52,7 +52,7 @@ final class AgentSession: NSObject, ObservableObject {
         /// covers every disconnect path without each one resetting the floor.
         func canFlagTurn(_ item: TranscriptItem) -> Bool {
             let live = connection == .relay || connection == .provider || connection == .ready
-            return live && item.final && item.feedback == nil && item.id > feedbackFloorId
+            return live && item.final && item.turnId != nil && item.feedback == nil && item.id > feedbackFloorId
         }
 
         /// 态势摘要 fusion: ride hazard + weather risk (fusedHazard in src/main.tsx).
@@ -66,8 +66,6 @@ final class AgentSession: NSObject, ObservableObject {
     /// Mirrors IDLE_CLOSE_CODE in shared/agent.ts: the relay closed this idle
     /// session to free its upstream slot; auto-reconnecting would defeat it.
     static let idleCloseCode = 4001
-    /// Repeated agent lines inside this window are dropped (src/main.tsx).
-    private static let agentDedupeWindowMs: TimeInterval = 8.0
 
     /// Process-wide owner of the single session, mirroring AgentSessionHolder in
     /// android/.../AgentSession.kt.
@@ -93,6 +91,8 @@ final class AgentSession: NSObject, ObservableObject {
     /// can cancel it — otherwise it would resurrect the session (and clobber
     /// intentionalClose) after the rider ended hands-free inside that window.
     private var restartWorkItem: DispatchWorkItem?
+    /// Pure generation gate for async location/permission startup.
+    private var lifecycle = SessionLifecycle()
 
     private var intentionalClose = false
     private var transmitting = false
@@ -108,6 +108,9 @@ final class AgentSession: NSObject, ObservableObject {
 
     private var transcriptTurn = 0
     private var transcriptOwnerId: String?
+    /// Relay-issued speech deliveries already handed to device TTS.
+    private var spokenDeliveryIds = Set<String>()
+    private var spokenDeliveryOrder: [String] = []
     /// Bumped on each hazard alert so a stale auto-clear can't dismiss a newer one.
     private var hazardAlertGeneration = 0
     private var location: CLLocationCoordinate2D?
@@ -160,7 +163,7 @@ final class AgentSession: NSObject, ObservableObject {
         testingRunId: String = "",
         testingAssignmentId: String = ""
     ) {
-        guard !state.value.handsFree else { return }
+        guard let generation = lifecycle.begin() else { return }
         relayURL = url
         self.authToken = authToken
         self.testerId = testerId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -184,6 +187,8 @@ final class AgentSession: NSObject, ObservableObject {
         reconnectAttempts = 0
         transmitting = true
         micMuted = false
+        spokenDeliveryIds.removeAll(keepingCapacity: true)
+        spokenDeliveryOrder.removeAll(keepingCapacity: true)
 
         let bluetoothRouted = audioRouter.startVoiceRouting()
         update {
@@ -196,22 +201,27 @@ final class AgentSession: NSObject, ObservableObject {
 
         locationProvider.resolve { [weak self] coordinate in
             guard let self else { return }
+            guard self.lifecycle.accepts(generation) else { return }
             self.location = coordinate
-            self.connect()
-            self.requestMicAndStart()
+            guard self.connect() else {
+                self.failHandsFreeStart(generation: generation, message: "中继地址无效，请在设置中检查服务器地址")
+                return
+            }
+            self.requestMicAndStart(generation: generation)
         }
     }
 
     /// Requests microphone permission (the iOS analogue of the Android RECORD_AUDIO
     /// runtime grant) and starts capture only once granted.
-    private func requestMicAndStart() {
+    private func requestMicAndStart(generation: Int) {
         AVAudioApplication.requestRecordPermission { [weak self] granted in
-            guard let self else { return }
-            guard granted else {
-                self.update { $0.statusText = "请在设置中允许麦克风权限" }
-                return
-            }
             DispatchQueue.main.async {
+                guard let self,
+                      self.lifecycle.accepts(generation) else { return }
+                guard granted else {
+                    self.failHandsFreeStart(generation: generation, message: "请在设置中允许麦克风权限")
+                    return
+                }
                 do {
                     // Attach the playback node first so it renders through the
                     // shared engine before the mic starts it — the engine's output
@@ -223,15 +233,25 @@ final class AgentSession: NSObject, ObservableObject {
                     // that the shared engine is running.
                     self.player.flushPending()
                 } catch {
-                    self.update { $0.statusText = "麦克风不可用，请检查录音权限" }
+                    self.failHandsFreeStart(generation: generation, message: "麦克风不可用，请检查录音权限")
                 }
             }
         }
     }
 
+    /// Tears down every resource acquired before an async start failed.
+    private func failHandsFreeStart(generation: Int, message: String) {
+        guard lifecycle.accepts(generation) else { return }
+        stop()
+        update {
+            $0.connection = .degraded
+            $0.statusText = message
+        }
+    }
+
     /// Deactivates hands-free: stop the mic, restore routing, close the relay.
     func stop() {
-        guard state.value.handsFree else { return }
+        guard lifecycle.stop() else { return }
         transmitting = false
         micMuted = false
         intentionalClose = true
@@ -283,9 +303,9 @@ final class AgentSession: NSObject, ObservableObject {
     /// of its CURRENT session, so only turns above feedbackFloorId qualify —
     /// State.canFlagTurn gates the UI and this re-checks before sending.
     func sendTurnFeedback(item: TranscriptItem, reason: String) {
-        guard socketOpen, state.value.canFlagTurn(item) else { return }
+        guard socketOpen, state.value.canFlagTurn(item), let turnId = item.turnId else { return }
         webSocket?.send(.string(buildTurnFeedback(
-            speaker: item.speaker, text: item.text, reason: reason
+            turnId: turnId, speaker: item.speaker, text: item.text, reason: reason
         ))) { _ in }
         update {
             if let index = $0.transcript.firstIndex(where: { $0.id == item.id }) {
@@ -463,7 +483,10 @@ final class AgentSession: NSObject, ObservableObject {
     /// The relay endpoint with the optional shared auth token appended as a
     /// `token` query parameter (URL-encoded, preserving any existing query).
     private func relayEndpointURL() -> URL? {
-        guard var components = URLComponents(string: relayURL) else { return nil }
+        guard var components = URLComponents(string: relayURL),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "ws" || scheme == "wss",
+              components.host != nil else { return nil }
         if !authToken.isEmpty {
             // Replace, never duplicate: a pasted URL may already carry ?token=.
             var items = (components.queryItems ?? []).filter { $0.name != "token" }
@@ -473,8 +496,9 @@ final class AgentSession: NSObject, ObservableObject {
         return components.url
     }
 
-    private func connect() {
-        guard !intentionalClose, let url = relayEndpointURL() else { return }
+    @discardableResult
+    private func connect() -> Bool {
+        guard !intentionalClose, let url = relayEndpointURL() else { return false }
         socketOpen = false
         update {
             $0.connection = .connecting
@@ -489,6 +513,7 @@ final class AgentSession: NSObject, ObservableObject {
         // actually completes — claiming "就绪" here would mask a rejected connection.
         receive(on: task)
         schedulePing(on: task)
+        return true
     }
 
     /// The relay accepted the WebSocket upgrade: report ready and run the
@@ -626,6 +651,7 @@ final class AgentSession: NSObject, ObservableObject {
         reconnectAttempts += 1
         if reconnectAttempts > Self.maxReconnectAttempts {
             reconnectAttempts = 0
+            stop()
             update {
                 $0.connection = .degraded
                 $0.statusText = "语音中继连接失败，请重新开启免提"
@@ -677,12 +703,24 @@ final class AgentSession: NSObject, ObservableObject {
                 }
             }
 
-        case let .transcript(speaker, text, final, useBrowserSpeech):
+        case let .transcript(turnId, deliveryId, speaker, text, final, useBrowserSpeech):
             // Barge-in: the rider talking always silences the agent.
-            if speaker == .rider { stopAgentSpeech() }
-            pushTranscript(speaker: speaker, text: text, final: final)
+            if speaker == .rider {
+                stopAgentSpeech()
+            }
+            pushTranscript(
+                speaker: speaker, text: text, final: final,
+                turnId: turnId, deliveryId: deliveryId
+            )
             let shouldSpeak = useBrowserSpeech ?? final
-            if speaker == .agent && shouldSpeak { speak(text) }
+            if speaker == .agent && shouldSpeak && spokenDeliveryIds.insert(deliveryId).inserted {
+                spokenDeliveryOrder.append(deliveryId)
+                if spokenDeliveryOrder.count > 512 {
+                    let oldest = spokenDeliveryOrder.removeFirst()
+                    spokenDeliveryIds.remove(oldest)
+                }
+                speak(text)
+            }
 
         case let .metric(latencyMs):
             update { $0.latencyMs = latencyMs }
@@ -715,8 +753,11 @@ final class AgentSession: NSObject, ObservableObject {
         }
     }
 
-    /// Port of pushTranscript in src/main.tsx, including the dedupe rules.
-    private func pushTranscript(speaker: Speaker, text: String, final: Bool) {
+    /// Upserts partial/final transcript events by their relay-issued turn id.
+    private func pushTranscript(
+        speaker: Speaker, text: String, final: Bool,
+        turnId: String, deliveryId: String
+    ) {
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return }
         let now = Date()
@@ -724,34 +765,26 @@ final class AgentSession: NSObject, ObservableObject {
 
         update {
             var items = $0.transcript
-            let last = items.last
-
-            // Repeated agent line within the dedupe window → drop it.
-            if speaker == .agent, let last, last.speaker == .agent,
-               normalizeTranscriptText(last.text) == normalizeTranscriptText(clean),
-               now.timeIntervalSince(last.at) < Self.agentDedupeWindowMs {
-                return
-            }
-
-            // Same speaker still mid-turn → update that entry in place.
-            if let last, last.speaker == speaker, !last.final {
-                var updated = last
+            if let existingIndex = items.firstIndex(where: { $0.turnId == turnId }) {
+                var updated = items[existingIndex]
                 updated.at = now
                 updated.text = clean
                 updated.final = final
                 updated.language = language
-                items[items.count - 1] = updated
+                updated.deliveryId = deliveryId
+                items[existingIndex] = updated
                 $0.transcript = items
                 return
             }
 
             // New turn: finalize any dangling in-progress entry, then append.
-            if let last, !last.final {
+            if let last = items.last, !last.final {
                 items[items.count - 1].final = true
             }
             self.transcriptTurn += 1
             items.append(TranscriptItem(
-                id: self.transcriptTurn, at: now, speaker: speaker,
+                id: self.transcriptTurn, turnId: turnId, deliveryId: deliveryId,
+                at: now, speaker: speaker,
                 text: clean, final: final, language: language
             ))
             $0.transcript = items

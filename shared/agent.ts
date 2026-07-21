@@ -21,6 +21,10 @@ export type HazardLevel = RideIntelligence["hazardLevel"];
 
 export type TesterTranscriptTurn = {
   sessionId: string;
+  /** Stable relay-issued identity for one logical rider/agent turn. */
+  turnId?: string;
+  /** Stable identity for the corresponding speech delivery. */
+  deliveryId?: string;
   at: number;
   speaker: "rider" | "agent";
   text: string;
@@ -229,10 +233,9 @@ export type ClientEvent =
       clippingPct?: number;
       silencePct?: number;
     }
-  // Tester flags a transcript turn as problematic. Turns are matched by
-  // speaker + text (client and server timestamps differ); the reason lands on
-  // the matched turn's `feedback` and downgrades the session evaluation.
-  | { type: "turn.feedback"; speaker: "rider" | "agent"; text: string; reason: string };
+  // Tester flags a transcript turn as problematic. The relay-issued turnId
+  // selects the exact server-side turn; speaker/text remain useful evidence.
+  | { type: "turn.feedback"; turnId: string; speaker: "rider" | "agent"; text: string; reason: string };
 
 export type AgentEvent =
   | {
@@ -243,7 +246,15 @@ export type AgentEvent =
     }
   | { type: "connection"; state: ConnectionState; detail: string }
   | { type: "status"; state: string; detail: string }
-  | { type: "transcript"; speaker: "rider" | "agent"; text: string; final?: boolean; useBrowserSpeech?: boolean }
+  | {
+      type: "transcript";
+      turnId: string;
+      deliveryId: string;
+      speaker: "rider" | "agent";
+      text: string;
+      final?: boolean;
+      useBrowserSpeech?: boolean;
+    }
   | { type: "metric"; latencyMs: number; droppedFrames?: number; outgoingFps?: number }
   | {
       type: "weather";

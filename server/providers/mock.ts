@@ -18,6 +18,7 @@ import {
 } from "../../shared/session";
 import { type AdasSeverity } from "../../shared/adas";
 import { createHazardInjector } from "../hazard-injector";
+import { createTranscriptDelivery, transcriptEvent } from "../transcript-events";
 
 type MockTurn = {
   rider: string;
@@ -249,9 +250,11 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
     const asrMs = 180 + Math.round(Math.random() * 80);
     const thinkMs = 260 + Math.round(Math.random() * 170);
     const firstAudioMs = turn.latencyBase + Math.round(Math.random() * 55);
+    const riderDelivery = createTranscriptDelivery();
+    const agentDelivery = createTranscriptDelivery();
 
     send({ type: "status", state: "hearing", detail: "正在聆听骑手讲话" });
-    send({ type: "transcript", speaker: "rider", text: turn.rider, final: true });
+    send(transcriptEvent(riderDelivery, "rider", turn.rider, { final: true }));
     memory = updateSessionMemory(memory, turn.rider, rideContext.mode);
     emitMemory();
     send({ type: "status", state: "thinking", detail: "Max 正在思考" });
@@ -259,7 +262,7 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
     turnTimers.push(
       setTimeout(() => {
         send({ type: "status", state: "speaking", detail: "Max 正在回答" });
-        send({ type: "transcript", speaker: "agent", text: turn.agent, final: true });
+        send(transcriptEvent(agentDelivery, "agent", turn.agent, { final: true }));
         send({ type: "metric", latencyMs: firstAudioMs });
         send({
           type: "telemetry",

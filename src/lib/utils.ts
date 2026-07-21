@@ -41,9 +41,7 @@ export async function fetchAgentHealth(): Promise<AgentHealth | null> {
 }
 
 export type TestingClearScope =
-  | { scope: "all" }
-  | { scope: "tester"; testerKey: string }
-  | { scope: "session"; sessionId: string };
+  { scope: "all" } | { scope: "tester"; testerKey: string } | { scope: "session"; sessionId: string };
 
 /**
  * Asks the relay to clear tester QA data (POST /testing/clear). Same access
@@ -140,13 +138,6 @@ export function formatRelativeTime(timestamp: number) {
   if (elapsedMs < 3_600_000) return `${Math.round(elapsedMs / 60_000)}m ago`;
   if (elapsedMs < 86_400_000) return `${Math.round(elapsedMs / 3_600_000)}h ago`;
   return `${Math.round(elapsedMs / 86_400_000)}d ago`;
-}
-
-export function normalizeTranscriptText(text: string) {
-  return text
-    .normalize("NFKC")
-    .toLowerCase()
-    .replace(/[^\p{Letter}\p{Number}\p{Script=Han}]+/gu, "");
 }
 
 /** The server-side stats row for this browser's tester id, if any. */

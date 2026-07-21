@@ -678,13 +678,66 @@ describe("admin clear actions", () => {
 });
 
 describe("tester turn feedback recording", () => {
+  it("keeps adjacent partials with different relay turn ids separate", () => {
+    beginTesterSession("relay-turns", { testerId: "qa-turns", ipAddress: "203.0.113.22" }, 1_000);
+    recordTesterServerEvent(
+      "relay-turns",
+      {
+        type: "transcript",
+        turnId: "turn-1",
+        deliveryId: "delivery-1",
+        speaker: "agent",
+        text: "第一句",
+        final: false
+      },
+      40,
+      1_100
+    );
+    recordTesterServerEvent(
+      "relay-turns",
+      {
+        type: "transcript",
+        turnId: "turn-2",
+        deliveryId: "delivery-2",
+        speaker: "agent",
+        text: "第二句",
+        final: false
+      },
+      40,
+      1_200
+    );
+
+    endTesterSession("relay-turns", 1_300);
+    const turns = testingSnapshot(1_400).sessions.find((item) => item.sessionId === "relay-turns")?.turns ?? [];
+    expect(turns.map((turn) => turn.turnId)).toEqual(["turn-1", "turn-2"]);
+    expect(turns[0]?.final).toBe(true);
+    expect(turns[1]?.final).toBe(false);
+
+    clearAllTesterData();
+  });
+
   it("attaches feedback to the matching turn and downgrades the session", () => {
     beginTesterSession("relay-fb", { testerId: "qa-fb", ipAddress: "203.0.113.20" }, 1_000);
     recordTesterServerEvent("relay-fb", { type: "transcript", speaker: "rider", text: "Max, 天气怎么样" }, 40, 1_100);
-    recordTesterServerEvent("relay-fb", { type: "transcript", speaker: "agent", text: "今天晴天。" }, 40, 1_200);
+    recordTesterServerEvent(
+      "relay-fb",
+      {
+        type: "transcript",
+        turnId: "agent-weather",
+        deliveryId: "delivery-weather",
+        speaker: "agent",
+        text: "今天晴天。"
+      },
+      40,
+      1_200
+    );
     recordTesterServerEvent("relay-fb", { type: "metric", latencyMs: 150 }, 40, 1_250);
     recordTesterClientAudio("relay-fb", 320, 1_260);
-    recordTesterTurnFeedback("relay-fb", { speaker: "agent", text: "今天晴天。", reason: "回答不对" }, 1_300);
+    recordTesterTurnFeedback(
+      "relay-fb",
+      { turnId: "agent-weather", speaker: "agent", text: "今天晴天。", reason: "回答不对" },
+      1_300
+    );
     endTesterSession("relay-fb", 2_000);
 
     const snapshot = testingSnapshot(2_000);
@@ -700,17 +753,30 @@ describe("tester turn feedback recording", () => {
     clearAllTesterData();
   });
 
-  it("falls back to the speaker's latest final turn when the text does not match", () => {
+  it("does not attach feedback when the relay-issued turn id is unknown", () => {
     beginTesterSession("relay-fb2", { testerId: "qa-fb2", ipAddress: "203.0.113.21" }, 1_000);
-    recordTesterServerEvent("relay-fb2", { type: "transcript", speaker: "agent", text: "第一句回复。" }, 40, 1_100);
-    recordTesterServerEvent("relay-fb2", { type: "transcript", speaker: "agent", text: "第二句回复。" }, 40, 1_200);
-    recordTesterTurnFeedback("relay-fb2", { speaker: "agent", text: "对不上的文本", reason: "太慢" }, 1_300);
+    recordTesterServerEvent(
+      "relay-fb2",
+      { type: "transcript", turnId: "turn-1", deliveryId: "delivery-1", speaker: "agent", text: "第一句回复。" },
+      40,
+      1_100
+    );
+    recordTesterServerEvent(
+      "relay-fb2",
+      { type: "transcript", turnId: "turn-2", deliveryId: "delivery-2", speaker: "agent", text: "第二句回复。" },
+      40,
+      1_200
+    );
+    recordTesterTurnFeedback(
+      "relay-fb2",
+      { turnId: "missing-turn", speaker: "agent", text: "对不上的文本", reason: "太慢" },
+      1_300
+    );
     endTesterSession("relay-fb2", 2_000);
 
     const session = testingSnapshot(2_000).sessions.find((item) => item.testerId === "qa-fb2");
     const agentTurns = session?.turns.filter((turn) => turn.speaker === "agent") ?? [];
-    expect(agentTurns.at(-1)?.feedback).toBe("太慢");
-    expect(agentTurns.at(0)?.feedback).toBeUndefined();
+    expect(agentTurns.every((turn) => turn.feedback === undefined)).toBe(true);
 
     clearAllTesterData();
   });

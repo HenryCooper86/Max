@@ -46,13 +46,7 @@ import {
   saveStoredSettings,
   saveStoredTranscript
 } from "../lib/persistence";
-import {
-  createAgentSocket,
-  fetchAgentHealth,
-  getRiderLocation,
-  mapTurnState,
-  normalizeTranscriptText
-} from "../lib/utils";
+import { createAgentSocket, fetchAgentHealth, getRiderLocation, mapTurnState } from "../lib/utils";
 import type {
   HazardAlertState,
   PermissionStateLabel,
@@ -181,8 +175,9 @@ export function useHelmetAgent() {
   // Latest server-issued session memory, echoed back in session.start so a
   // settings-change restart keeps the agent's short-term memory.
   const sessionMemoryRef = useRef<SessionMemoryState>(DEFAULT_MEMORY);
-  // Last agent text handed to speak(), for duplicate-final suppression.
-  const lastSpokenRef = useRef<{ text: string; at: number } | null>(null);
+  // Relay-issued delivery ids already spoken by browser TTS. Unlike text/time
+  // heuristics, these never suppress identical words from a genuine new turn.
+  const spokenDeliveryIdsRef = useRef(new Set<string>());
   const lastQualityReportAtRef = useRef(0);
   const transcriptOwnerRef = useRef<string | null>(null);
 
@@ -243,49 +238,44 @@ export function useHelmetAgent() {
     return () => window.clearTimeout(timer);
   }, [transcript]);
 
-  const pushTranscript = useCallback((speaker: "rider" | "agent", text: string, final = true) => {
-    const cleanText = text.trim();
-    if (!cleanText) return;
-    const language = detectLanguage(cleanText);
-    const now = Date.now();
-    setTranscript((items) => {
-      const last = items.at(-1);
-      if (
-        speaker === "agent" &&
-        last?.speaker === "agent" &&
-        normalizeTranscriptText(last.text) === normalizeTranscriptText(cleanText) &&
-        now - last.at < 8000
-      ) {
-        return items;
-      }
-      if (last?.speaker === speaker && !last.final) {
+  const pushTranscript = useCallback(
+    (speaker: "rider" | "agent", text: string, final: boolean, turnId: string, deliveryId: string) => {
+      const cleanText = text.trim();
+      if (!cleanText) return;
+      const language = detectLanguage(cleanText);
+      const now = Date.now();
+      setTranscript((items) => {
+        const last = items.at(-1);
+        const existingIndex = items.findIndex((item) => item.turnId === turnId);
+        if (existingIndex >= 0) {
+          const existing = items[existingIndex]!;
+          if (existing.text === cleanText && existing.final === final && existing.deliveryId === deliveryId) {
+            return items;
+          }
+          return items.map((item, index) =>
+            index === existingIndex ? { ...item, at: now, text: cleanText, final, language, deliveryId } : item
+          );
+        }
+
+        transcriptTurnRef.current += 1;
+        const finalizedItems = last && !last.final ? [...items.slice(0, -1), { ...last, final: true }] : items;
         return [
-          ...items.slice(0, -1),
+          ...finalizedItems,
           {
-            ...last,
+            id: transcriptTurnRef.current,
+            turnId,
+            deliveryId,
             at: now,
+            speaker,
             text: cleanText,
             final,
             language
           }
         ];
-      }
-
-      transcriptTurnRef.current += 1;
-      const finalizedItems = last && !last.final ? [...items.slice(0, -1), { ...last, final: true }] : items;
-      return [
-        ...finalizedItems,
-        {
-          id: transcriptTurnRef.current,
-          at: now,
-          speaker,
-          text: cleanText,
-          final,
-          language
-        }
-      ];
-    });
-  }, []);
+      });
+    },
+    []
+  );
 
   const clearTranscript = useCallback(() => {
     setTranscript([]);
@@ -521,20 +511,16 @@ export function useHelmetAgent() {
         if (event.type === "transcript") {
           if (event.speaker === "rider") {
             stopAgentSpeech();
-            // The rider spoke: a duplicate agent final replayed after this is
-            // a genuine re-delivery, not a double-speak — let it through.
-            lastSpokenRef.current = null;
           }
-          pushTranscript(event.speaker, event.text, event.final !== false);
+          pushTranscript(event.speaker, event.text, event.final !== false, event.turnId, event.deliveryId);
           if (event.speaker === "agent" && (event.useBrowserSpeech ?? event.final !== false)) {
-            // Mirror pushTranscript's duplicate-final dedupe: speak() starts by
-            // cancelling the current utterance, so replaying a duplicate final
-            // mid-utterance would audibly restart the reply from the beginning.
-            const normalized = normalizeTranscriptText(event.text);
-            const lastSpoken = lastSpokenRef.current;
-            const now = Date.now();
-            if (!(lastSpoken && lastSpoken.text === normalized && now - lastSpoken.at < 8000)) {
-              lastSpokenRef.current = { text: normalized, at: now };
+            const spoken = spokenDeliveryIdsRef.current;
+            if (!spoken.has(event.deliveryId)) {
+              spoken.add(event.deliveryId);
+              if (spoken.size > 512) {
+                const oldest = spoken.values().next().value;
+                if (oldest) spoken.delete(oldest);
+              }
               speak(event.text);
             }
           }
@@ -886,14 +872,18 @@ export function useHelmetAgent() {
   const sendTurnFeedback = useCallback((item: TranscriptItem, reason: string): boolean => {
     const socket = socketRef.current;
     if (socket?.readyState !== WebSocket.OPEN) return false;
-    socket.send(JSON.stringify({ type: "turn.feedback", speaker: item.speaker, text: item.text, reason }));
+    if (!item.turnId) return false;
+    socket.send(
+      JSON.stringify({ type: "turn.feedback", turnId: item.turnId, speaker: item.speaker, text: item.text, reason })
+    );
     setTranscript((items) => items.map((turn) => (turn.id === item.id ? { ...turn, feedback: reason } : turn)));
     return true;
   }, []);
 
   /** Whether the flag control should show for a transcript item at all. */
   const canFlagTurn = useCallback(
-    (item: TranscriptItem) => connected && item.final && !item.feedback && item.id > feedbackFloorId,
+    (item: TranscriptItem) =>
+      connected && item.final && Boolean(item.turnId) && !item.feedback && item.id > feedbackFloorId,
     [connected, feedbackFloorId]
   );
 

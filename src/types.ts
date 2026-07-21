@@ -9,6 +9,10 @@ export type VoiceGender = "female" | "male";
 
 export type TranscriptItem = {
   id: number;
+  /** Relay identity; optional only for transcripts persisted by older builds. */
+  turnId?: string;
+  /** Speech-delivery identity; optional only for older persisted transcripts. */
+  deliveryId?: string;
   at: number;
   speaker: "rider" | "agent";
   text: string;
@@ -20,8 +24,7 @@ export type TranscriptItem = {
 
 // Messages posted from public/pcm-worklet.js.
 export type WorkletMessage =
-  | { type: "frame"; pcm: ArrayBuffer }
-  | { type: "level"; value: number; clippingPct?: number; silencePct?: number };
+  { type: "frame"; pcm: ArrayBuffer } | { type: "level"; value: number; clippingPct?: number; silencePct?: number };
 
 export type RiderLocation = { lat: number; lon: number };
 

@@ -15,9 +15,7 @@ export type AuthUser = {
 export type AuthResponse = { ok: true; token: string; user: AuthUser } | { ok: false; error: string };
 
 export type CurrentUserResult =
-  | { status: "authenticated"; user: AuthUser }
-  | { status: "unauthenticated" }
-  | { status: "unavailable" };
+  { status: "authenticated"; user: AuthUser } | { status: "unauthenticated" } | { status: "unavailable" };
 
 export type UserMemorySummary = {
   enabled: boolean;

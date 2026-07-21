@@ -1,5 +1,6 @@
 import type { RawData, WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
+import { CLIENT_EVENT_TYPES } from "../shared/generated/agent-protocol";
 import type { Logger } from "./logger";
 import type { AgentProvider, ClientEvent, ProviderSessionContext, ProviderTelemetry } from "./providers/types";
 import {
@@ -109,6 +110,9 @@ export function parseClientEvent(data: RawData): ClientEvent {
   if (!value || typeof value !== "object" || typeof value.type !== "string") {
     throw new Error("Client event type is required");
   }
+  if (!(CLIENT_EVENT_TYPES as readonly string[]).includes(value.type)) {
+    throw new Error(`Unsupported client event ${value.type}`);
+  }
 
   if (value.type === "audio.start" || value.type === "audio.stop") {
     return { type: value.type };
@@ -126,6 +130,9 @@ export function parseClientEvent(data: RawData): ClientEvent {
   }
 
   if (value.type === "turn.feedback") {
+    if (typeof value.turnId !== "string" || !value.turnId.trim() || value.turnId.length > 120) {
+      throw new Error("Invalid turn.feedback turnId");
+    }
     if (value.speaker !== "rider" && value.speaker !== "agent") throw new Error("Invalid turn.feedback speaker");
     if (typeof value.text !== "string" || !value.text.trim() || value.text.length > 2_000) {
       throw new Error("Invalid turn.feedback text");
@@ -133,7 +140,13 @@ export function parseClientEvent(data: RawData): ClientEvent {
     if (typeof value.reason !== "string" || !value.reason.trim() || value.reason.length > 120) {
       throw new Error("Invalid turn.feedback reason");
     }
-    return { type: "turn.feedback", speaker: value.speaker, text: value.text, reason: value.reason };
+    return {
+      type: "turn.feedback",
+      turnId: value.turnId,
+      speaker: value.speaker,
+      text: value.text,
+      reason: value.reason
+    };
   }
 
   if (value.type === "testing.metric") {
@@ -155,9 +168,7 @@ export function parseClientEvent(data: RawData): ClientEvent {
     };
   }
 
-  if (value.type !== "session.start") {
-    throw new Error(`Unsupported client event ${value.type}`);
-  }
+  if (value.type !== "session.start") throw new Error(`Unsupported client event ${value.type}`);
 
   if (value.sampleRate !== 16000) throw new Error("Invalid sampleRate");
   if (value.channels !== 1) throw new Error("Invalid channels");

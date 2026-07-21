@@ -414,8 +414,7 @@ export function storedTestingSessionPage(
 
 export function loadStoredTestingSession(sessionId: string): TesterSessionSummary | null {
   const row = database().prepare("SELECT payload_json FROM testing_sessions WHERE session_id = ?").get(sessionId) as
-    | { payload_json?: string }
-    | undefined;
+    { payload_json?: string } | undefined;
   return parseJson<TesterSessionSummary>(row?.payload_json);
 }
 
@@ -724,8 +723,7 @@ export function listTestingRuns(limit = 50): TestingRun[] {
 
 export function getTestingRun(id: string): TestingRun | null {
   const row = database().prepare("SELECT payload_json FROM testing_runs WHERE id = ?").get(id) as
-    | { payload_json?: string }
-    | undefined;
+    { payload_json?: string } | undefined;
   return parseJson<TestingRun>(row?.payload_json);
 }
 
@@ -1035,8 +1033,7 @@ export function listTestingAudit(limit = 100): TestingAuditEvent[] {
 
 export function getApprovedBaselineBuild(): string | undefined {
   const row = database().prepare("SELECT value FROM testing_settings WHERE key = 'approvedBaselineBuild'").get() as
-    | { value?: string }
-    | undefined;
+    { value?: string } | undefined;
   return cleanString(row?.value, "", 80) || undefined;
 }
 

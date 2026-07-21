@@ -13,6 +13,7 @@ import { config as appConfig } from "../config";
 import { createHazardInjector } from "../hazard-injector";
 import { createLogger, type Logger } from "../logger";
 import { metrics } from "../metrics";
+import { createTranscriptDelivery, transcriptEvent } from "../transcript-events";
 import { fetchRiderWeather } from "../weather";
 import {
   approxDistanceKm,
@@ -441,8 +442,9 @@ export function createDoubaoProvider(
   let riderTurnAddressed = false;
   let replyDecided = false;
   let replyAddressed = false;
-  let lastFlushedAgentTextKey = "";
-  let lastFlushedAgentTextAt = 0;
+  let riderDelivery = createTranscriptDelivery();
+  let agentDelivery = createTranscriptDelivery();
+  let agentFinalDelivered = false;
   let rideContext: RideContext = { mode: "ride", scenario: "commute" };
   let memory: SessionMemory = createSessionMemory("ride");
   // Per-turn latency anchors. Reset at each rider turn (AsrInfo) so telemetry
@@ -481,10 +483,19 @@ export function createDoubaoProvider(
   // (or fell inside the follow-up window). Reset on each new rider turn.
   function replyIsAddressed(): boolean {
     if (!wakeWordEnabled) return true;
-    if (!replyDecided) {
-      replyAddressed = riderTurnAddressed;
+    // Doubao can interleave an early ChatResponse with cumulative ASR updates.
+    // A later hypothesis may add the wake phrase, so a negative decision is
+    // provisional until AsrEnded. A positive wake is safe to latch immediately.
+    if (riderTurnAddressed) {
+      replyAddressed = true;
       replyDecided = true;
-      if (!replyAddressed) log.debug("reply suppressed — rider did not address Max", { riderTurnText });
+      return true;
+    }
+    if (!riderTurnFinalized) return false;
+    if (!replyDecided) {
+      replyAddressed = false;
+      replyDecided = true;
+      log.debug("reply suppressed — rider did not address Max", { riderTurnText });
     }
     return replyAddressed;
   }
@@ -509,15 +520,12 @@ export function createDoubaoProvider(
     }
     const text = pendingReplyText();
     if (!text) return;
-    const now = Date.now();
-    const textKey = normalizeTranscriptText(text);
-    if (textKey === lastFlushedAgentTextKey && now - lastFlushedAgentTextAt < 8000) {
+    if (agentFinalDelivered) {
       resetPendingReply();
       return;
     }
-    lastFlushedAgentTextKey = textKey;
-    lastFlushedAgentTextAt = now;
-    sendClient({ type: "transcript", speaker: "agent", text, final: true, useBrowserSpeech });
+    agentFinalDelivered = true;
+    sendClient(transcriptEvent(agentDelivery, "agent", text, { final: true, useBrowserSpeech }));
     resetPendingReply();
   }
 
@@ -643,6 +651,13 @@ export function createDoubaoProvider(
           log.error("doubao error frame", { code: frame.errorCode, detail });
           sendClient({ type: "status", state: "degraded", detail: "豆包连接异常，已保留浏览器 TTS 备用通道" });
           sendClient({ type: "error", message: `豆包错误 ${frame.errorCode}：${detail || "未知错误"}` });
+          // ErrorInformation is terminal for this upstream exchange. Some
+          // gateways leave the WebSocket itself open after sending it; waiting
+          // for a close in that case strands the client in a permanently
+          // degraded session with audio only accumulating in pendingAudio.
+          // Close proactively so the existing bounded reconnect path runs.
+          sessionReady = false;
+          socket.close(1011, "doubao error frame");
           return;
         }
 
@@ -656,7 +671,8 @@ export function createDoubaoProvider(
             frame.event === EventReceive.ChatResponse ||
             frame.event === EventReceive.TtsSentenceStart ||
             frame.event === EventReceive.TtsSentenceEnd) &&
-          !replyIsAddressed()
+          replyDecided &&
+          !replyAddressed
         ) {
           return;
         }
@@ -769,6 +785,9 @@ export function createDoubaoProvider(
           riderTurnAddressed = false;
           replyDecided = false;
           replyAddressed = false;
+          riderDelivery = createTranscriptDelivery();
+          agentDelivery = createTranscriptDelivery();
+          agentFinalDelivered = false;
           sendClient({ type: "status", state: "hearing", detail: "豆包检测到骑手语音" });
           return;
         }
@@ -806,7 +825,7 @@ export function createDoubaoProvider(
             memory = updateSessionMemory(memory, text, rideContext.mode);
             log.debug("rider asr", { text });
             sendClient({ type: "status", state: "asr", detail: `豆包听到：${text}` });
-            sendClient({ type: "transcript", speaker: "rider", text, final: false });
+            sendClient(transcriptEvent(riderDelivery, "rider", text, { final: false }));
             emitMemory();
           }
           return;
@@ -839,7 +858,7 @@ export function createDoubaoProvider(
             // TtsEnded flush finalizes the entry, so nothing is duplicated.
             // No useBrowserSpeech on partials — final !== false gates client TTS.
             if (replyIsAddressed() && !fallbackSpoke && ttsText.trim()) {
-              sendClient({ type: "transcript", speaker: "agent", text: ttsText.trim(), final: false });
+              sendClient(transcriptEvent(agentDelivery, "agent", ttsText.trim(), { final: false }));
             }
           }
           return;
@@ -850,8 +869,9 @@ export function createDoubaoProvider(
           // single flush to TtsEnded so the transcript uses the full spoken text
           // and isn't emitted twice. If no audio is coming, the fallback timer
           // flushes the text for browser speech.
-          if (!receivedTtsAudio && pendingReplyText()) armTtsFallbackTimer();
-          if (replyIsAddressed()) sendClient({ type: "status", state: "ready", detail: "豆包回复文本已完成" });
+          const addressed = replyIsAddressed();
+          if (addressed && !receivedTtsAudio && pendingReplyText()) armTtsFallbackTimer();
+          if (addressed) sendClient({ type: "status", state: "ready", detail: "豆包回复文本已完成" });
           return;
         }
 
@@ -888,9 +908,12 @@ export function createDoubaoProvider(
           // wake-word reply) merged into one, destroying the earlier text in
           // the tester chat-history drilldown.
           if (!riderTurnFinalized && riderTurnText.trim()) {
-            riderTurnFinalized = true;
-            sendClient({ type: "transcript", speaker: "rider", text: riderTurnText.trim(), final: true });
+            sendClient(transcriptEvent(riderDelivery, "rider", riderTurnText.trim(), { final: true }));
           }
+          // Only now is an unaddressed classification final. Chat/TTS events
+          // may have arrived between cumulative ASR hypotheses, so deciding
+          // earlier could suppress a turn whose later hypothesis contains Max.
+          riderTurnFinalized = true;
           sendClient({ type: "status", state: "ready", detail: "豆包语音识别完成" });
           return;
         }
@@ -910,6 +933,14 @@ export function createDoubaoProvider(
             detail: "豆包连接异常，已保留浏览器 TTS 备用通道"
           });
           sendClient({ type: "error", message: String(payload.error ?? payload.message ?? "豆包语音会话失败") });
+          // ConnectionFailed and SessionFailed are terminal. Doubao may report
+          // them as protocol events without closing the transport, so force the
+          // close that drives our in-place retry logic. DialogCommonError can be
+          // scoped to one turn and remains recoverable on the same session.
+          if (frame.event === EventReceive.ConnectionFailed || frame.event === EventReceive.SessionFailed) {
+            sessionReady = false;
+            socket.close(1011, "doubao session failed");
+          }
           return;
         }
 

@@ -19,7 +19,18 @@ describe("validateAgentEvent", () => {
       state: "ready",
       detail: "ok"
     });
-    expect(validateAgentEvent({ type: "transcript", speaker: "agent", text: "前方畅通", final: false })).toMatchObject({
+    expect(
+      validateAgentEvent({
+        type: "transcript",
+        turnId: "turn-1",
+        deliveryId: "delivery-1",
+        speaker: "agent",
+        text: "前方畅通",
+        final: false
+      })
+    ).toMatchObject({
+      turnId: "turn-1",
+      deliveryId: "delivery-1",
       speaker: "agent",
       text: "前方畅通",
       final: false
@@ -27,8 +38,18 @@ describe("validateAgentEvent", () => {
   });
 
   it("rejects transcripts with a bad speaker or missing text", () => {
-    expect(validateAgentEvent({ type: "transcript", speaker: "server", text: "hi" })).toBeNull();
-    expect(validateAgentEvent({ type: "transcript", speaker: "agent" })).toBeNull();
+    expect(
+      validateAgentEvent({
+        type: "transcript",
+        turnId: "turn-1",
+        deliveryId: "delivery-1",
+        speaker: "server",
+        text: "hi"
+      })
+    ).toBeNull();
+    expect(
+      validateAgentEvent({ type: "transcript", turnId: "turn-1", deliveryId: "delivery-1", speaker: "agent" })
+    ).toBeNull();
   });
 
   it("sanitizes a hazard alert's non-finite TTC instead of letting NaN reach a timer", () => {

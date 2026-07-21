@@ -178,6 +178,9 @@ enum Speaker: String, Codable {
 /// Codable so AgentSession can persist the recent final turns across launches.
 struct TranscriptItem: Identifiable, Equatable, Codable {
     let id: Int
+    /// Optional only so transcripts persisted by older app builds still decode.
+    var turnId: String? = nil
+    var deliveryId: String? = nil
     var at: Date
     let speaker: Speaker
     var text: String
@@ -274,7 +277,7 @@ enum AgentEvent {
     case sessionStarted(provider: String, mode: String, capabilities: ProviderCapabilities)
     case connection(state: String, detail: String)
     case status(state: String, detail: String)
-    case transcript(speaker: Speaker, text: String, final: Bool, useBrowserSpeech: Bool?)
+    case transcript(turnId: String, deliveryId: String, speaker: Speaker, text: String, final: Bool, useBrowserSpeech: Bool?)
     case metric(latencyMs: Int)
     case weatherUpdate(Weather)
     case rideContextUpdate(RideContext)
@@ -294,6 +297,8 @@ func parseAgentEvent(_ text: String) -> AgentEvent {
         return .unhandled
     }
     let type = json["type"] as? String ?? ""
+    guard let requiredFields = serverEventRequiredFields[type],
+          requiredFields.allSatisfy({ json[$0] != nil }) else { return .unhandled }
 
     func str(_ key: String, _ fallback: String = "") -> String { json[key] as? String ?? fallback }
     func int(_ key: String, _ fallback: Int = 0) -> Int {
@@ -304,7 +309,7 @@ func parseAgentEvent(_ text: String) -> AgentEvent {
     func bool(_ key: String, _ fallback: Bool) -> Bool { json[key] as? Bool ?? fallback }
 
     switch type {
-    case "session.started":
+    case ServerEventTypes.sessionStarted:
         let caps = json["capabilities"] as? [String: Any] ?? [:]
         return .sessionStarted(
             provider: str("provider", "unknown"),
@@ -321,25 +326,27 @@ func parseAgentEvent(_ text: String) -> AgentEvent {
             )
         )
 
-    case "connection":
+    case ServerEventTypes.connection:
         return .connection(state: str("state"), detail: str("detail"))
 
-    case "status":
+    case ServerEventTypes.status:
         return .status(state: str("state"), detail: str("detail"))
 
-    case "transcript":
+    case ServerEventTypes.transcript:
         let useBrowserSpeech = json.keys.contains("useBrowserSpeech") ? bool("useBrowserSpeech", false) : nil
         return .transcript(
+            turnId: str("turnId"),
+            deliveryId: str("deliveryId"),
             speaker: Speaker.fromWire(str("speaker")),
             text: str("text"),
             final: bool("final", true),
             useBrowserSpeech: useBrowserSpeech
         )
 
-    case "metric":
+    case ServerEventTypes.metric:
         return .metric(latencyMs: int("latencyMs"))
 
-    case "weather":
+    case ServerEventTypes.weather:
         return .weatherUpdate(Weather(
             description: str("description"),
             temperatureC: int("temperatureC"),
@@ -349,7 +356,7 @@ func parseAgentEvent(_ text: String) -> AgentEvent {
             riderAdvice: str("riderAdvice", "天气风险较低，保持正常安全骑行。")
         ))
 
-    case "ride.context":
+    case ServerEventTypes.rideContext:
         let mode = RideMode.fromWire(str("mode"))
         let scenario = DemoScenario.fromWire(str("scenario"))
         let routePhase = str("routePhase")
@@ -367,7 +374,7 @@ func parseAgentEvent(_ text: String) -> AgentEvent {
             glanceableFocus: str("glanceableFocus")
         ))
 
-    case "session.memory":
+    case ServerEventTypes.sessionMemory:
         let destination = str("destination")
         let lastIntent = str("lastIntent")
         let responseMode = str("responseMode")
@@ -378,7 +385,7 @@ func parseAgentEvent(_ text: String) -> AgentEvent {
             responseMode: responseMode.isEmpty ? "concise" : responseMode
         ))
 
-    case "telemetry":
+    case ServerEventTypes.telemetry:
         return .telemetryUpdate(Telemetry(
             asrMs: max(0, int("asrMs")),
             thinkMs: max(0, int("thinkMs")),
@@ -386,7 +393,7 @@ func parseAgentEvent(_ text: String) -> AgentEvent {
             totalMs: max(0, int("totalMs"))
         ))
 
-    case "hazard.alert":
+    case ServerEventTypes.hazardAlert:
         return .hazardAlert(HazardAlert(
             threat: str("threat"),
             direction: str("direction"),
@@ -398,7 +405,7 @@ func parseAgentEvent(_ text: String) -> AgentEvent {
             interrupt: bool("interrupt", true)
         ))
 
-    case "error":
+    case ServerEventTypes.error:
         return .error(message: str("message", "Voice relay failed"))
 
     default:
@@ -475,9 +482,10 @@ func buildGuidedDemo(enabled: Bool) -> String {
 /// Client → server turn.feedback: the tester flags a bad transcript turn
 /// (validated by server/session-controller.ts; the relay matches the turn by
 /// speaker + text and attaches the reason for the admin session replay).
-func buildTurnFeedback(speaker: Speaker, text: String, reason: String) -> String {
+func buildTurnFeedback(turnId: String, speaker: Speaker, text: String, reason: String) -> String {
     let payload: [String: Any] = [
-        "type": "turn.feedback",
+        "type": ClientEventTypes.turnFeedback,
+        "turnId": turnId,
         "speaker": speaker.wire,
         "text": text,
         "reason": reason
@@ -555,7 +563,7 @@ func buildTranscriptExportJSON(_ items: [TranscriptItem]) -> String {
     iso.timeZone = TimeZone(identifier: "UTC")
 
     let turns: [[String: Any]] = items.map { item in
-        [
+        var turn: [String: Any] = [
             "id": item.id,
             "at": iso.string(from: item.at),
             "speaker": item.speaker.wire,
@@ -563,6 +571,9 @@ func buildTranscriptExportJSON(_ items: [TranscriptItem]) -> String {
             "final": item.final,
             "text": item.text
         ]
+        if let turnId = item.turnId { turn["turnId"] = turnId }
+        if let deliveryId = item.deliveryId { turn["deliveryId"] = deliveryId }
+        return turn
     }
     let payload: [String: Any] = [
         "exportedAt": iso.string(from: Date()),

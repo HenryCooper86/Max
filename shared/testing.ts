@@ -31,11 +31,7 @@ export function testingBuildsMatch(left: unknown, right: unknown): boolean {
   return GIT_COMMIT_PATTERN.test(a) && GIT_COMMIT_PATTERN.test(b) && (a.startsWith(b) || b.startsWith(a));
 }
 export type TestingInvalidReason =
-  | "too-short"
-  | "missing-transcript"
-  | "missing-rider-turn"
-  | "missing-agent-turn"
-  | "missing-mic-audio";
+  "too-short" | "missing-transcript" | "missing-rider-turn" | "missing-agent-turn" | "missing-mic-audio";
 
 export type TestingValiditySummary = {
   status: TestingValidityStatus;

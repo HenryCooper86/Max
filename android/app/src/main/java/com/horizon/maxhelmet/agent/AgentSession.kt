@@ -9,6 +9,7 @@ import android.os.Build
 import android.speech.tts.TextToSpeech
 import android.util.Log
 import com.horizon.maxhelmet.BuildConfig
+import com.horizon.maxhelmet.service.VoiceAgentService
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -96,7 +97,7 @@ class AgentSession(
             val live = connection == ConnectionState.RELAY ||
                 connection == ConnectionState.PROVIDER ||
                 connection == ConnectionState.READY
-            return live && item.final && item.feedback == null && item.id > feedbackFloorId
+            return live && item.final && item.turnId != null && item.feedback == null && item.id > feedbackFloorId
         }
     }
 
@@ -111,7 +112,6 @@ class AgentSession(
         const val IDLE_CLOSE_CODE = 4001
 
         /** Repeated agent lines inside this window are dropped (src/main.tsx). */
-        private const val AGENT_DEDUPE_WINDOW_MS = 8_000L
 
         /** Same prefs file the HUD settings use (MainViewModel.PREFS). */
         private const val PREFS = "max_helmet"
@@ -153,6 +153,8 @@ class AgentSession(
      * can cancel it — otherwise it would resurrect the session (and clobber
      * intentionalClose) after the rider ended hands-free inside that window. */
     private var restartJob: Job? = null
+    /** Pure generation gate for async location/microphone startup. */
+    private val lifecycle = SessionLifecycle()
     /** Bumped on each hazard alert so a stale auto-clear can't dismiss a newer one. */
     private var hazardAlertGeneration = 0
 
@@ -170,6 +172,8 @@ class AgentSession(
     private var transcriptTurn = 0
     private var transcriptOwnerId: String? = null
     private var location: Pair<Double, Double>? = null
+    /** Relay-issued speech deliveries already handed to device TTS. */
+    private val spokenDeliveryIds = linkedSetOf<String>()
 
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -214,7 +218,7 @@ class AgentSession(
         testingRunId: String = "",
         testingAssignmentId: String = ""
     ) {
-        if (_state.value.handsFree) return
+        val generation = lifecycle.begin() ?: return
         relayUrl = appendAuthToken(url, authToken)
         this.testerId = testerId.trim()
         this.testingCampaignId = testingCampaignId.trim().take(80)
@@ -231,6 +235,7 @@ class AgentSession(
         reconnectAttempts = 0
         transmitting = true
         micMuted = false
+        spokenDeliveryIds.clear()
 
         // In-helmet Bluetooth headset routing; playback follows the same path.
         val bluetoothRouted = audioRouter.startVoiceRouting()
@@ -246,20 +251,35 @@ class AgentSession(
             )
         }
         scope.launch {
-            location = resolveLocation()
+            val resolvedLocation = resolveLocation()
+            if (!lifecycle.accepts(generation)) return@launch
+            location = resolvedLocation
             connect()
+            if (webSocket == null) {
+                failHandsFreeStart(generation, "中继地址无效，请在设置中检查服务器地址")
+                return@launch
+            }
             try {
                 mic.start()
+                // stop() may have won the race while AudioRecord was starting.
+                if (!lifecycle.accepts(generation)) mic.stop()
             } catch (error: Exception) {
                 Log.w(TAG, "Mic start failed", error)
-                _state.update { it.copy(statusText = "麦克风不可用，请检查录音权限") }
+                failHandsFreeStart(generation, "麦克风不可用，请检查录音权限")
             }
         }
     }
 
+    /** Tears down every resource acquired before an async start failed. */
+    private fun failHandsFreeStart(generation: Int, message: String) {
+        if (!lifecycle.accepts(generation)) return
+        stop()
+        _state.update { it.copy(connection = ConnectionState.DEGRADED, statusText = message) }
+    }
+
     /** Deactivates hands-free: stop the mic, restore routing, close the relay. */
     fun stop() {
-        if (!_state.value.handsFree) return
+        if (!lifecycle.stop()) return
         transmitting = false
         micMuted = false
         intentionalClose = true
@@ -274,6 +294,9 @@ class AgentSession(
         // Release (not just flush) so the next session can pick a new audio route.
         player.release()
         audioRouter.stopVoiceRouting()
+        // stop() is also called internally on idle/auth/startup failures, not
+        // only through MainViewModel, so it owns foreground-service cleanup.
+        VoiceAgentService.stop(context)
         _state.update {
             it.copy(
                 handsFree = false,
@@ -297,7 +320,8 @@ class AgentSession(
      */
     fun sendTurnFeedback(item: TranscriptItem, reason: String) {
         if (!socketOpen || !_state.value.canFlagTurn(item)) return
-        webSocket?.send(buildTurnFeedback(item.speaker, item.text, reason))
+        val turnId = item.turnId ?: return
+        webSocket?.send(buildTurnFeedback(turnId, item.speaker, item.text, reason))
         _state.update { state ->
             state.copy(
                 transcript = state.transcript.map { turn ->
@@ -628,6 +652,7 @@ class AgentSession(
         reconnectAttempts += 1
         if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
             reconnectAttempts = 0
+            stop()
             _state.update {
                 it.copy(connection = ConnectionState.DEGRADED, statusText = "语音中继连接失败，请重新开启免提")
             }
@@ -677,10 +702,15 @@ class AgentSession(
 
             is AgentEvent.Transcript -> {
                 // Barge-in: the rider talking always silences the agent.
-                if (event.speaker == Speaker.RIDER) stopAgentSpeech()
-                pushTranscript(event.speaker, event.text, event.final)
+                if (event.speaker == Speaker.RIDER) {
+                    stopAgentSpeech()
+                }
+                pushTranscript(event.speaker, event.text, event.final, event.turnId, event.deliveryId)
                 val shouldSpeak = event.useBrowserSpeech ?: event.final
-                if (event.speaker == Speaker.AGENT && shouldSpeak) speak(event.text)
+                if (event.speaker == Speaker.AGENT && shouldSpeak && spokenDeliveryIds.add(event.deliveryId)) {
+                    if (spokenDeliveryIds.size > 512) spokenDeliveryIds.remove(spokenDeliveryIds.first())
+                    speak(event.text)
+                }
             }
 
             is AgentEvent.Metric -> _state.update { it.copy(latencyMs = event.latencyMs) }
@@ -707,36 +737,30 @@ class AgentSession(
         }
     }
 
-    /** Port of pushTranscript in src/main.tsx, including the dedupe rules. */
-    private fun pushTranscript(speaker: Speaker, text: String, final: Boolean) {
+    /** Upserts partial/final transcript events by their relay-issued turn id. */
+    private fun pushTranscript(speaker: Speaker, text: String, final: Boolean, turnId: String, deliveryId: String) {
         val clean = text.trim()
         if (clean.isEmpty()) return
         val now = System.currentTimeMillis()
         val language = detectLanguage(clean)
-        // Computed OUTSIDE the update lambda: MutableStateFlow.update may
-        // invoke the transform more than once under contention, and a retried
-        // `transcriptTurn += 1` would burn ids (or duplicate them).
-        val nextTurnId = ++transcriptTurn
+        val existingIndex = _state.value.transcript.indexOfFirst { it.turnId == turnId }
+        if (existingIndex >= 0) {
+            _state.update { state ->
+                state.copy(
+                    transcript = state.transcript.mapIndexed { index, item ->
+                        if (index == existingIndex) {
+                            item.copy(at = now, text = clean, final = final, language = language, deliveryId = deliveryId)
+                        } else item
+                    }
+                )
+            }
+            persistTranscript()
+            return
+        }
 
         _state.update { state ->
             val items = state.transcript
             val last = items.lastOrNull()
-
-            // Repeated agent line within the dedupe window → drop it.
-            if (speaker == Speaker.AGENT && last?.speaker == Speaker.AGENT &&
-                normalizeTranscriptText(last.text) == normalizeTranscriptText(clean) &&
-                now - last.at < AGENT_DEDUPE_WINDOW_MS
-            ) {
-                return@update state
-            }
-
-            // Same speaker still mid-turn → update that entry in place.
-            if (last != null && last.speaker == speaker && !last.final) {
-                return@update state.copy(
-                    transcript = items.dropLast(1) +
-                        last.copy(at = now, text = clean, final = final, language = language)
-                )
-            }
 
             // New turn: finalize any dangling in-progress entry, then append.
             val finalized = if (last != null && !last.final) {
@@ -745,7 +769,16 @@ class AgentSession(
                 items
             }
             state.copy(
-                transcript = finalized + TranscriptItem(nextTurnId, now, speaker, clean, final, language)
+                transcript = finalized + TranscriptItem(
+                    id = ++transcriptTurn,
+                    turnId = turnId,
+                    deliveryId = deliveryId,
+                    at = now,
+                    speaker = speaker,
+                    text = clean,
+                    final = final,
+                    language = language
+                )
             )
         }
         persistTranscript()

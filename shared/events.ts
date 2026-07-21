@@ -10,6 +10,7 @@ import { ADAS_DIRECTIONS, ADAS_THREATS, type AdasDirection, type AdasSeverity, t
 import type { AgentEvent, ConnectionState, ProviderCapabilities } from "./agent";
 import type { DemoScenario, RideMode } from "./ride";
 import { MAX_MEMORY_DESTINATION_CHARS } from "./session";
+import { SERVER_EVENT_REQUIRED_FIELDS, SERVER_EVENT_TYPES } from "./generated/agent-protocol";
 
 const CONNECTION_STATES = new Set(["offline", "connecting", "relay", "provider", "ready", "degraded"]);
 const PROVIDER_MODES = new Set(["mock", "live"]);
@@ -22,6 +23,7 @@ const RESPONSE_MODES = new Set(["concise", "normal", "emergency"]);
 const NETWORK_STATES = new Set(["online", "degraded", "offline"]);
 const ADAS_THREAT_SET = new Set<string>(ADAS_THREATS);
 const ADAS_DIRECTION_SET = new Set<string>(ADAS_DIRECTIONS);
+const SERVER_EVENT_TYPE_SET = new Set<string>(SERVER_EVENT_TYPES);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -63,6 +65,9 @@ function enumOrUndefined<T extends string>(value: unknown, allowed: Set<string>)
  */
 export function validateAgentEvent(value: unknown): AgentEvent | null {
   if (!isRecord(value) || !isString(value.type)) return null;
+  if (!SERVER_EVENT_TYPE_SET.has(value.type)) return null;
+  const requiredFields = SERVER_EVENT_REQUIRED_FIELDS[value.type as keyof typeof SERVER_EVENT_REQUIRED_FIELDS];
+  if (requiredFields.some((field) => !(field in value))) return null;
 
   switch (value.type) {
     case "session.started": {
@@ -104,8 +109,11 @@ export function validateAgentEvent(value: unknown): AgentEvent | null {
     case "transcript": {
       if (!isString(value.speaker) || !SPEAKERS.has(value.speaker)) return null;
       if (!isString(value.text)) return null;
+      if (!isString(value.turnId) || !value.turnId || !isString(value.deliveryId) || !value.deliveryId) return null;
       return {
         type: "transcript",
+        turnId: value.turnId,
+        deliveryId: value.deliveryId,
         speaker: value.speaker as "rider" | "agent",
         text: value.text,
         final: typeof value.final === "boolean" ? value.final : undefined,

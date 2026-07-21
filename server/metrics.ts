@@ -33,6 +33,16 @@ import { buildInfo } from "./build-info";
 import { classifySessionEvidence, evaluateTestingSession } from "./testing-evaluator";
 import { createLogger } from "./logger";
 import {
+  METRICS_WINDOW_MINUTES,
+  metricsWindow,
+  recordMetricsSnapshot,
+  relayMetrics,
+  resetRelayMetrics,
+  startMetricsHistory,
+  type MetricsWindow,
+  type RelayMetrics
+} from "./relay-metrics";
+import {
   DEFAULT_TESTING_STORAGE_DIRECTORY,
   ensureTestingStorageDirectory,
   ensureTestingStorageDirectorySync,
@@ -61,179 +71,28 @@ import {
 
 const log = createLogger("testing-history");
 
-// In-process relay counters, exposed on /health so the Lightsail deployment
-// can be checked with one curl: how many sessions are live, whether the Doubao
-// upstream is flapping, and how often the browser-TTS fallback is carrying
-// replies. Deliberately simple — no histograms, no external dependencies;
-// counters reset when the process restarts (uptimeSec says when that was).
-
-export type RelayMetrics = {
-  /** Currently connected /agent clients. */
-  activeSessions: number;
-  /** Sessions accepted since the relay started. */
-  totalSessions: number;
-  /** Upgrade attempts rejected by auth/origin/rate-limit. */
-  rejectedUpgrades: number;
-  /** Doubao upstream errors and failed handshakes. */
-  upstreamFailures: number;
-  /** In-place upstream reconnect attempts (see doubao.ts retry). */
-  upstreamReconnects: number;
-  /** Turns where the browser-TTS fallback spoke instead of Doubao audio. */
-  ttsFallbacks: number;
-  /** Sessions the watchdog terminated for missed pongs. */
-  watchdogTerminations: number;
-  /** Sessions the watchdog closed as idle. */
-  watchdogIdleCloses: number;
-  /** Rider mic audio bytes received from clients. */
-  audioUpBytes: number;
-  /** Agent PCM audio bytes sent back to clients. */
-  audioDownBytes: number;
-  /** JSON event bytes sent back to clients. */
-  controlDownBytes: number;
-};
-
-const counters: RelayMetrics = {
-  activeSessions: 0,
-  totalSessions: 0,
-  rejectedUpgrades: 0,
-  upstreamFailures: 0,
-  upstreamReconnects: 0,
-  ttsFallbacks: 0,
-  watchdogTerminations: 0,
-  watchdogIdleCloses: 0,
-  audioUpBytes: 0,
-  audioDownBytes: 0,
-  controlDownBytes: 0
-};
-
 export const metrics = {
-  sessionOpened() {
-    counters.activeSessions += 1;
-    counters.totalSessions += 1;
-  },
-  sessionClosed() {
-    counters.activeSessions = Math.max(0, counters.activeSessions - 1);
-  },
-  rejectedUpgrade() {
-    counters.rejectedUpgrades += 1;
-  },
-  upstreamFailure() {
-    counters.upstreamFailures += 1;
-  },
-  upstreamReconnect() {
-    counters.upstreamReconnects += 1;
-  },
-  ttsFallback() {
-    counters.ttsFallbacks += 1;
-  },
-  watchdogSweep(terminated: number, idled: number) {
-    counters.watchdogTerminations += terminated;
-    counters.watchdogIdleCloses += idled;
-  },
-  clientAudio(bytes: number) {
-    counters.audioUpBytes += Math.max(0, bytes);
-  },
-  serverAudio(bytes: number) {
-    counters.audioDownBytes += Math.max(0, bytes);
-  },
-  serverEvent(bytes: number) {
-    counters.controlDownBytes += Math.max(0, bytes);
-  },
-  snapshot(): RelayMetrics {
-    return { ...counters };
-  },
+  ...relayMetrics,
   /** Test hook. */
   reset() {
-    for (const key of Object.keys(counters) as Array<keyof RelayMetrics>) {
-      counters[key] = 0;
-    }
-    history.length = 0;
+    resetRelayMetrics();
     testingSessions.clear();
     testers.clear();
     testingTimeline.clear();
     completedSessions.length = 0;
     testingHistoryLoaded = false;
     resetTestingStore();
-    processStartedAt = Date.now();
   }
 };
 
-// --- trailing-window rates ---------------------------------------------------
-// Totals alone can't distinguish "the upstream failed 40 times last month" from
-// "it is failing right now". A per-minute snapshot ring buffer lets /health also
-// report deltas over the trailing window.
-
-/** Trailing window reported by metricsWindow(). */
-export const METRICS_WINDOW_MINUTES = 15;
-
-type HistoryEntry = { at: number; snapshot: RelayMetrics };
-
-const history: HistoryEntry[] = [];
-let processStartedAt = Date.now();
-
-/** Appends a snapshot and prunes entries older than the window. */
-export function recordMetricsSnapshot(now = Date.now()) {
-  history.push({ at: now, snapshot: metrics.snapshot() });
-  // Keep one entry beyond the window so a baseline at exactly window-age exists.
-  const cutoff = now - (METRICS_WINDOW_MINUTES + 1) * 60_000;
-  while (history.length > 1) {
-    const oldest = history[0];
-    if (!oldest || oldest.at >= cutoff) break;
-    history.shift();
-  }
-}
-
-export type MetricsWindow = {
-  /** Actual minutes the window covers (shorter right after startup). */
-  minutes: number;
-  sessionsStarted: number;
-  rejectedUpgrades: number;
-  upstreamFailures: number;
-  upstreamReconnects: number;
-  ttsFallbacks: number;
-  watchdogTerminations: number;
-  watchdogIdleCloses: number;
-  audioUpBytes: number;
-  audioDownBytes: number;
-  controlDownBytes: number;
+export {
+  METRICS_WINDOW_MINUTES,
+  metricsWindow,
+  recordMetricsSnapshot,
+  startMetricsHistory,
+  type MetricsWindow,
+  type RelayMetrics
 };
-
-/** Counter deltas over the trailing METRICS_WINDOW_MINUTES. */
-export function metricsWindow(now = Date.now()): MetricsWindow {
-  const cutoff = now - METRICS_WINDOW_MINUTES * 60_000;
-  // Baseline: the newest snapshot at or before the window start; a process
-  // younger than the window falls back to its zeroed start.
-  let baseline: HistoryEntry | undefined;
-  for (const entry of history) {
-    if (entry.at > cutoff) break;
-    baseline = entry;
-  }
-  const base = baseline?.snapshot;
-  const baseAt = baseline?.at ?? processStartedAt;
-  const current = metrics.snapshot();
-  const delta = (key: keyof RelayMetrics) => current[key] - (base?.[key] ?? 0);
-
-  return {
-    minutes: Math.min(METRICS_WINDOW_MINUTES, Math.max(1, Math.round((now - baseAt) / 60_000))),
-    sessionsStarted: delta("totalSessions"),
-    rejectedUpgrades: delta("rejectedUpgrades"),
-    upstreamFailures: delta("upstreamFailures"),
-    upstreamReconnects: delta("upstreamReconnects"),
-    ttsFallbacks: delta("ttsFallbacks"),
-    watchdogTerminations: delta("watchdogTerminations"),
-    watchdogIdleCloses: delta("watchdogIdleCloses"),
-    audioUpBytes: delta("audioUpBytes"),
-    audioDownBytes: delta("audioDownBytes"),
-    controlDownBytes: delta("controlDownBytes")
-  };
-}
-
-/** Starts the once-a-minute history recorder. Returns a stop function. */
-export function startMetricsHistory(): () => void {
-  const timer = setInterval(() => recordMetricsSnapshot(), 60_000);
-  timer.unref();
-  return () => clearInterval(timer);
-}
 
 // --- per-tester QA statistics -----------------------------------------------
 // These in-memory stats are intentionally dependency-free so the relay can run
@@ -556,10 +415,19 @@ function mergeTranscriptTurn(turns: TesterTranscriptTurn[], turn: TesterTranscri
   const lastTurn = turns[turns.length - 1];
 
   if (lastTurn && lastTurn.sessionId === turn.sessionId && lastTurn.speaker === turn.speaker && !lastTurn.final) {
-    lastTurn.at = turn.at;
-    lastTurn.text = turn.text;
-    lastTurn.final = turn.final;
-    return;
+    // Current relays issue a stable turnId across partial/final revisions.
+    // Only legacy id-less events may fall back to speaker adjacency; a new id
+    // must never overwrite a dangling partial from the preceding turn.
+    const sameTurn =
+      (lastTurn.turnId && turn.turnId && lastTurn.turnId === turn.turnId) || (!lastTurn.turnId && !turn.turnId);
+    if (sameTurn) {
+      lastTurn.at = turn.at;
+      lastTurn.text = turn.text;
+      lastTurn.final = turn.final;
+      lastTurn.deliveryId = turn.deliveryId;
+      return;
+    }
+    lastTurn.final = true;
   }
 
   turns.push(turn);
@@ -580,7 +448,15 @@ function recordTranscriptTurn(
   const text = cleanText(payload.text).slice(0, 2_000);
   if (!text) return;
   const final = payload.final !== false;
-  const turn = { sessionId: session.sessionId, at: now, speaker, text, final };
+  const turn = {
+    sessionId: session.sessionId,
+    turnId: typeof payload.turnId === "string" ? payload.turnId : undefined,
+    deliveryId: typeof payload.deliveryId === "string" ? payload.deliveryId : undefined,
+    at: now,
+    speaker,
+    text,
+    final
+  };
   mergeTranscriptTurn(tester.recentTurns, { ...turn }, MAX_TRANSCRIPT_TURNS_PER_TESTER);
   mergeTranscriptTurn(session.turns, turn, MAX_TRANSCRIPT_TURNS_PER_SESSION);
 }
@@ -1764,24 +1640,18 @@ export function recordTesterAudioQuality(sessionId: string, input: Partial<Testi
   active.tester.lastSeenAt = now;
 }
 
-/** Attach a tester-reported problem to a transcript turn. Client and server
- *  timestamps differ, so the turn is matched by speaker + cleaned text; if the
- *  exact text is not found (e.g. divergent whitespace normalization), the
- *  feedback falls back to that speaker's most recent final turn. */
+/** Attach a tester-reported problem to the exact relay-issued transcript turn. */
 export function recordTesterTurnFeedback(
   sessionId: string,
-  input: { speaker: TesterTranscriptTurn["speaker"]; text: string; reason: string },
+  input: { turnId: string; speaker: TesterTranscriptTurn["speaker"]; text: string; reason: string },
   now = Date.now()
 ) {
   const active = activeSession(sessionId, now);
   if (!active) return;
   const { session, tester } = active;
-  const text = cleanText(input.text).slice(0, 2_000);
   const reason = cleanText(input.reason).slice(0, 120);
   if (!reason) return;
-  const target =
-    [...session.turns].reverse().find((turn) => turn.speaker === input.speaker && turn.text === text) ??
-    [...session.turns].reverse().find((turn) => turn.speaker === input.speaker && turn.final);
+  const target = [...session.turns].reverse().find((turn) => turn.turnId === input.turnId);
   if (!target) return;
   target.feedback = reason;
   tester.lastSeenAt = now;

@@ -447,25 +447,51 @@ describe("client event validation", () => {
 describe("turn.feedback validation", () => {
   it("accepts a valid turn.feedback event", () => {
     const event = parseClientEvent(
-      Buffer.from(JSON.stringify({ type: "turn.feedback", speaker: "agent", text: "今天晴天。", reason: "回答不对" }))
+      Buffer.from(
+        JSON.stringify({
+          type: "turn.feedback",
+          turnId: "turn-1",
+          speaker: "agent",
+          text: "今天晴天。",
+          reason: "回答不对"
+        })
+      )
     );
-    expect(event).toEqual({ type: "turn.feedback", speaker: "agent", text: "今天晴天。", reason: "回答不对" });
+    expect(event).toEqual({
+      type: "turn.feedback",
+      turnId: "turn-1",
+      speaker: "agent",
+      text: "今天晴天。",
+      reason: "回答不对"
+    });
   });
 
   it("rejects malformed turn.feedback events", () => {
     expect(() =>
       parseClientEvent(
-        Buffer.from(JSON.stringify({ type: "turn.feedback", speaker: "narrator", text: "x", reason: "r" }))
+        Buffer.from(
+          JSON.stringify({ type: "turn.feedback", turnId: "turn-1", speaker: "narrator", text: "x", reason: "r" })
+        )
       )
     ).toThrow("Invalid turn.feedback speaker");
     expect(() =>
       parseClientEvent(
-        Buffer.from(JSON.stringify({ type: "turn.feedback", speaker: "agent", text: "  ", reason: "r" }))
+        Buffer.from(
+          JSON.stringify({ type: "turn.feedback", turnId: "turn-1", speaker: "agent", text: "  ", reason: "r" })
+        )
       )
     ).toThrow("Invalid turn.feedback text");
     expect(() =>
       parseClientEvent(
-        Buffer.from(JSON.stringify({ type: "turn.feedback", speaker: "agent", text: "x", reason: "r".repeat(121) }))
+        Buffer.from(
+          JSON.stringify({
+            type: "turn.feedback",
+            turnId: "turn-1",
+            speaker: "agent",
+            text: "x",
+            reason: "r".repeat(121)
+          })
+        )
       )
     ).toThrow("Invalid turn.feedback reason");
   });

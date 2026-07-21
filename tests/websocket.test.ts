@@ -159,6 +159,7 @@ describe("session controller ordering and lifecycle", () => {
 
     await controller.handleMessage(Buffer.from([1, 2]), true);
     await controller.handleMessage(startEvent, false);
+    await controller.handleMessage(Buffer.from([3, 4]), true);
     await controller.handleMessage(startEvent, false);
 
     expect(sendAudio).not.toHaveBeenCalled();
@@ -168,6 +169,7 @@ describe("session controller ordering and lifecycle", () => {
       .filter((event) => event.type === "error");
     expect(errors.map((event) => event.message)).toEqual([
       "session.start must complete before audio",
+      "audio.start is required before audio frames",
       "session.start has already been received"
     ]);
     await controller.close();

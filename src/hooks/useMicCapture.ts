@@ -11,9 +11,12 @@ import type { AudioProcessingState, PacketStats, WorkletMessage } from "../types
 type Params = {
   socketRef: MutableRefObject<WebSocket | null>;
   transmittingRef: MutableRefObject<boolean>;
+  providerReadyRef: MutableRefObject<boolean>;
 };
 
-export function useMicCapture({ socketRef, transmittingRef }: Params) {
+const MAX_SOCKET_BUFFERED_BYTES = 256 * 1024;
+
+export function useMicCapture({ socketRef, transmittingRef, providerReadyRef }: Params) {
   const [voiceLevel, setVoiceLevel] = useState(0);
   const [packetStats, setPacketStats] = useState<PacketStats>(DEFAULT_PACKET_STATS);
   const [audioProcessing, setAudioProcessing] = useState<AudioProcessingState>(DEFAULT_AUDIO_PROCESSING);
@@ -102,7 +105,11 @@ export function useMicCapture({ socketRef, transmittingRef }: Params) {
           if (message.type === "frame") {
             if (!transmittingRef.current) return;
             const socket = socketRef.current;
-            if (socket?.readyState === WebSocket.OPEN) {
+            if (
+              providerReadyRef.current &&
+              socket?.readyState === WebSocket.OPEN &&
+              socket.bufferedAmount + message.pcm.byteLength < MAX_SOCKET_BUFFERED_BYTES
+            ) {
               socket.send(message.pcm);
               const now = performance.now();
               const timing = frameTimingRef.current;
@@ -176,7 +183,7 @@ export function useMicCapture({ socketRef, transmittingRef }: Params) {
         throw error;
       }
     }
-  }, [socketRef, transmittingRef]);
+  }, [providerReadyRef, socketRef, transmittingRef]);
 
   const releaseMic = useCallback(() => {
     transmittingRef.current = false;

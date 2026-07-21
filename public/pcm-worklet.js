@@ -13,8 +13,9 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.ratio = sampleRate / TARGET_RATE;
-    this.readPos = 0;
-    this.pending = new Float32Array(0);
+    this.sourceWindowRemaining = this.ratio;
+    this.resampleSum = 0;
+    this.resampleWeight = 0;
     this.frame = new Int16Array(FRAME_SAMPLES);
     this.frameFill = 0;
     this.level = 0;
@@ -30,11 +31,15 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
 
     // Smoothed RMS level for the visor visualizer.
     let sumSquares = 0;
-    for (let i = 0; i < channel.length; i += 1) sumSquares += channel[i] * channel[i];
+    let clipped = false;
+    for (let i = 0; i < channel.length; i += 1) {
+      sumSquares += channel[i] * channel[i];
+      if (Math.abs(channel[i]) >= 0.98) clipped = true;
+    }
     const rms = Math.sqrt(sumSquares / channel.length);
     this.qualityBlocks += 1;
     if (rms < 0.005) this.silentBlocks += 1;
-    if (channel.some((sample) => Math.abs(sample) >= 0.98)) this.clippedBlocks += 1;
+    if (clipped) this.clippedBlocks += 1;
     this.level = this.level * 0.68 + Math.min(1, rms * 8) * 0.32;
     this.levelCounter += 1;
     if (this.levelCounter >= LEVEL_REPORT_EVERY) {
@@ -50,43 +55,36 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
       this.silentBlocks = 0;
     }
 
-    // Append this render quantum to the pending input buffer.
-    const merged = new Float32Array(this.pending.length + channel.length);
-    merged.set(this.pending);
-    merged.set(channel, this.pending.length);
-    this.pending = merged;
+    // Streaming box-average resampler. Each input sample contributes its
+    // fractional width to one or two output windows, so 44.1 kHz and 48 kHz
+    // both downsample correctly without allocating/copying a pending array on
+    // every 128-sample render quantum.
+    for (let index = 0; index < channel.length; index += 1) {
+      let inputRemaining = 1;
+      while (inputRemaining > 0) {
+        const weight = Math.min(inputRemaining, this.sourceWindowRemaining);
+        this.resampleSum += channel[index] * weight;
+        this.resampleWeight += weight;
+        inputRemaining -= weight;
+        this.sourceWindowRemaining -= weight;
 
-    // Downsample with a box-average filter: each 16 kHz output sample is the
-    // mean of the input samples its step spans. Averaging low-passes the signal
-    // before decimation, so energy above 8 kHz (sibilants) no longer aliases
-    // back into the band — plain point sampling (keeping every Nth sample) folds
-    // it in and blurs ASR. `readPos` tracks a fractional position in `pending`;
-    // we only emit once a full `ratio`-wide window is available.
-    while (this.readPos + this.ratio <= this.pending.length) {
-      const end = this.readPos + this.ratio;
-      let sum = 0;
-      let count = 0;
-      for (let i = Math.floor(this.readPos); i < end; i += 1) {
-        sum += this.pending[i];
-        count += 1;
+        if (this.sourceWindowRemaining <= 1e-9) {
+          const averaged = this.resampleWeight > 0 ? this.resampleSum / this.resampleWeight : 0;
+          const sample = Math.max(-1, Math.min(1, averaged));
+          this.frame[this.frameFill] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+          this.frameFill += 1;
+          this.sourceWindowRemaining = this.ratio;
+          this.resampleSum = 0;
+          this.resampleWeight = 0;
+
+          if (this.frameFill === FRAME_SAMPLES) {
+            const out = this.frame;
+            this.port.postMessage({ type: "frame", pcm: out.buffer }, [out.buffer]);
+            this.frame = new Int16Array(FRAME_SAMPLES);
+            this.frameFill = 0;
+          }
+        }
       }
-      const sample = Math.max(-1, Math.min(1, count > 0 ? sum / count : 0));
-      this.frame[this.frameFill] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
-      this.frameFill += 1;
-      this.readPos = end;
-
-      if (this.frameFill === FRAME_SAMPLES) {
-        const out = this.frame.slice(0);
-        this.port.postMessage({ type: "frame", pcm: out.buffer }, [out.buffer]);
-        this.frameFill = 0;
-      }
-    }
-
-    // Drop the consumed whole samples, keep the fractional remainder.
-    const consumed = Math.floor(this.readPos);
-    if (consumed > 0) {
-      this.pending = this.pending.slice(consumed);
-      this.readPos -= consumed;
     }
 
     return true;

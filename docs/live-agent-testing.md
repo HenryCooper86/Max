@@ -62,8 +62,10 @@ with `AGENT_WAKE_WORD=off` (mock is unaffected — its scripted demo always
 responds).
 
 **Code:** `shared/wake.ts` (`containsWakePhrase`, `WAKE_FOLLOWUP_WINDOW_MS`).
-Applied in `server/providers/doubao.ts` (suppresses Doubao's reply when the rider
-transcript lacks the name).
+Applied in `server/providers/doubao.ts`: cumulative ASR and early TTS stay in
+bounded private buffers until addressed. Unaddressed turns emit no rider/agent
+transcript, do not update memory, are not logged as text, and are deleted from
+the provider conversation.
 
 **Unit test:** `tests/wake.test.ts` — 12 cases covering bare name, name-anywhere,
 optional greeting, punctuation/fullwidth, mishearings, glued-to-Chinese,
@@ -89,9 +91,9 @@ Connect any client, open hands-free, and speak:
 - "Max，今天天气怎么样" → Max answers; status shows `speaking`.
 - Continue "前面路况呢？" within 12 s (no name) → Max still answers (follow-up window).
 
-Expected: transcript only appears (and TTS only fires) on utterances that include
-the name or fall inside the follow-up window. Toggle `AGENT_WAKE_WORD=off` and
-confirm every utterance now gets a reply.
+Expected: neither side of an unaddressed turn appears in transcript/history and
+the memory snapshot does not change. TTS only fires for the name or follow-up
+window. Toggle `AGENT_WAKE_WORD=off` and confirm every utterance gets a reply.
 
 ---
 
@@ -320,13 +322,16 @@ session drops with a parse error — that's the regression signal for this layer
 **What it does:** Picks the Doubao speaker voice by gender (with env overrides
 `DOUBAO_VOICE` / `DOUBAO_VOICE_MALE` and a fallback off the unsupported male
 realtime speaker), and builds the identity, language-interaction, and
-voice-setting prompts. The developer is attributed to neueHCT — **never**
-ByteDance/Doubao — and the agent speaks Chinese first, English second, nothing
-else.
+voice-setting prompts, provider-supported realtime controls, and an explicit
+capability boundary that prevents unsupported navigation, messaging, vehicle,
+phone, and emergency actions from being reported as completed. The developer is
+attributed to neueHCT — **never** ByteDance/Doubao — and the agent speaks Chinese
+first, English second, nothing else.
 
 **Code:** `server/providers/doubao.ts` (`doubaoSpeaker`,
 `DEFAULT_AGENT_SYSTEM_PROMPT`, `buildIdentityPrompt`,
-`buildLanguageInteractionPrompt`, `buildVoiceSettingPrompt`).
+`buildLanguageInteractionPrompt`, `buildVoiceSettingPrompt`,
+`buildToolGroundingPrompt`, `buildDoubaoSessionConfig`).
 
 **Unit test:** `tests/doubao-voice.test.ts` — default + overridden speakers per
 gender, the unsupported-speaker fallback, shared Max role / "音色只影响声音",

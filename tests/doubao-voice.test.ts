@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_AGENT_SYSTEM_PROMPT,
+  buildDoubaoDialogContext,
+  buildDoubaoSessionConfig,
   buildIdentityPrompt,
   buildLanguageInteractionPrompt,
+  buildToolGroundingPrompt,
   buildVoiceSettingPrompt,
   doubaoSpeaker
 } from "../server/providers/doubao";
@@ -67,5 +70,58 @@ describe("doubaoSpeaker", () => {
     expect(prompt).toContain("第二语言是 English");
     expect(prompt).toContain("只支持中文和 English");
     expect(prompt).toContain("中文和英文以外的语言");
+  });
+
+  it("states unsupported external actions honestly", () => {
+    const prompt = buildToolGroundingPrompt();
+    expect(prompt).toContain("当前没有地图导航");
+    expect(prompt).toContain("绝对不能声称");
+    expect(prompt).toContain("系统明确返回成功");
+  });
+});
+
+describe("Doubao realtime configuration", () => {
+  it("enables documented VAD, two-pass ASR, truncation, loudness, and speaking style controls", () => {
+    const config = buildDoubaoSessionConfig({
+      sampleRate: 16000,
+      channels: 1,
+      voiceGender: "female",
+      systemRole: "system",
+      speakingStyle: "brief",
+      location: { latitude: 31.2, longitude: 121.5 }
+    });
+
+    expect(config.dialog).toMatchObject({
+      system_role: "system",
+      speaking_style: "brief",
+      location: { latitude: 31.2, longitude: 121.5 },
+      extra: {
+        strict_audit: true,
+        enable_loudness_norm: true,
+        enable_conversation_truncate: true,
+        model: "1.2.1.1"
+      }
+    });
+    expect(config.asr.extra).toMatchObject({
+      end_smooth_window_ms: 900,
+      enable_custom_vad: true,
+      enable_asr_twopass: true
+    });
+    expect(config.asr.extra.context.hotwords.map(({ word }) => word)).toEqual(["Max", "马克斯", "麦克斯"]);
+    expect(config.tts.audio_config).toMatchObject({ speech_rate: 8, loudness_rate: 10 });
+  });
+
+  it("keeps only complete, bounded rider/assistant pairs in structured history", () => {
+    const turns = Array.from({ length: 45 }, (_, index) => ({
+      at: index + 1,
+      speaker: (index % 2 === 0 ? "rider" : "agent") as "rider" | "agent",
+      text: `turn-${index}`
+    }));
+    const context = buildDoubaoDialogContext(turns);
+
+    expect(context).toHaveLength(40);
+    expect(context[0]?.role).toBe("user");
+    expect(context.at(-1)?.role).toBe("assistant");
+    expect(context.every((item, index) => index === 0 || item.timestamp > context[index - 1]!.timestamp)).toBe(true);
   });
 });

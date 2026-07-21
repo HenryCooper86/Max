@@ -200,6 +200,7 @@ export class AgentSessionController {
   private readonly provider: AgentProvider;
   private sessionStartReceived = false;
   private providerStarted = false;
+  private audioActive = false;
   private closed = false;
   private messageQueue: Promise<void> = Promise.resolve();
 
@@ -243,6 +244,7 @@ export class AgentSessionController {
     try {
       if (isBinary) {
         if (!this.providerStarted) throw new Error("session.start must complete before audio");
+        if (!this.audioActive) throw new Error("audio.start is required before audio frames");
         const chunk = normalizeRawData(data);
         if (chunk.byteLength > MAX_CLIENT_AUDIO_BYTES) throw new Error("Audio frame is too large");
         metrics.clientAudio(chunk.byteLength);
@@ -331,8 +333,14 @@ export class AgentSessionController {
           return;
         }
       }
-      if (event.type === "audio.start") await this.provider.startAudio();
-      if (event.type === "audio.stop") await this.provider.stopAudio();
+      if (event.type === "audio.start" && !this.audioActive) {
+        await this.provider.startAudio();
+        this.audioActive = true;
+      }
+      if (event.type === "audio.stop" && this.audioActive) {
+        await this.provider.stopAudio();
+        this.audioActive = false;
+      }
       if (event.type === "demo.guided") await this.provider.setGuidedDemo?.(event.enabled);
       if (event.type === "location.update") await this.provider.updateLocation?.(event.lat, event.lon);
       if (event.type === "turn.feedback") recordTesterTurnFeedback(this.relaySessionId, event);
@@ -347,6 +355,7 @@ export class AgentSessionController {
   async close() {
     if (this.closed) return;
     this.closed = true;
+    this.audioActive = false;
     try {
       await this.messageQueue;
       await this.provider.close();

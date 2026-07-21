@@ -75,6 +75,19 @@ function audioFrame(pcm: Buffer, sessionId = "s") {
   return Buffer.concat([header, uint32(TTS_RESPONSE), uint32(session.length), session, uint32(pcm.length), pcm]);
 }
 
+function clientFrameEvent(frame: unknown): number | undefined {
+  return Buffer.isBuffer(frame) && frame.length >= 8 ? frame.readUInt32BE(4) : undefined;
+}
+
+function clientFramePayload(frame: unknown): Record<string, unknown> {
+  if (!Buffer.isBuffer(frame)) return {};
+  const sessionLength = frame.readUInt32BE(8);
+  const payloadLengthOffset = 12 + sessionLength;
+  const payloadLength = frame.readUInt32BE(payloadLengthOffset);
+  const payloadOffset = payloadLengthOffset + 4;
+  return JSON.parse(frame.subarray(payloadOffset, payloadOffset + payloadLength).toString()) as Record<string, unknown>;
+}
+
 const silentLog = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
 
 const START_EVENT: SessionStartEvent = {
@@ -122,13 +135,14 @@ async function startLiveSession(client: unknown): Promise<{ provider: AgentProvi
   const upstream = upstreamInstances[upstreamInstances.length - 1];
   upstream.emit("open");
   await upstream.emit("message", jsonFrame(CONNECTION_STARTED, {}));
-  upstream.emit("message", jsonFrame(SESSION_STARTED, {}));
+  upstream.emit("message", jsonFrame(SESSION_STARTED, { dialog_id: "dialog-live" }));
   return { provider, upstream };
 }
 
 async function riderTurn(upstream: MockWebSocket, text: string) {
   await upstream.emit("message", jsonFrame(ASR_INFO, {}));
   await upstream.emit("message", jsonFrame(ASR_RESPONSE, { results: [{ text }] }));
+  await upstream.emit("message", jsonFrame(ASR_ENDED, {}));
 }
 
 async function agentReply(upstream: MockWebSocket, text: string) {
@@ -158,11 +172,13 @@ describe("createDoubaoProvider — cumulative ASR partials", () => {
       await upstream.emit("message", jsonFrame(ASR_RESPONSE, { results: [{ text: hypothesis }] }));
     }
     await upstream.emit("message", jsonFrame(ASR_ENDED, {}));
+    await upstream.emit("message", jsonFrame(ASR_ENDED, {}));
 
     const riderTranscripts = clientEvents(send).filter(
       (event) => event.type === "transcript" && event.speaker === "rider"
     );
-    // Three streamed partials plus exactly one final.
+    // Three streamed partials plus exactly one final, even when the provider
+    // repeats its turn-end signal.
     expect(riderTranscripts).toHaveLength(4);
     expect(riderTranscripts.at(-1)).toMatchObject({ text: "Max 前面堵吗", final: true });
     expect(new Set(riderTranscripts.map((event) => event.turnId)).size).toBe(1);
@@ -181,6 +197,7 @@ describe("createDoubaoProvider — wake-word gating", () => {
     stubWeatherFetch();
     const { client, send } = makeClient();
     const { provider, upstream } = await startLiveSession(client);
+    const memoryEventsBeforeTurn = clientEvents(send).filter((event) => event.type === "session.memory").length;
 
     await riderTurn(upstream, "今天天气怎么样");
     await agentReply(upstream, "今天晴，气温二十一度。");
@@ -189,6 +206,9 @@ describe("createDoubaoProvider — wake-word gating", () => {
     const events = clientEvents(send);
     const agentTranscripts = events.filter((event) => event.type === "transcript" && event.speaker === "agent");
     expect(agentTranscripts).toHaveLength(0);
+    expect(events.filter((event) => event.type === "transcript" && event.speaker === "rider")).toHaveLength(0);
+    // Background speech must not update the durable-memory event stream either.
+    expect(events.filter((event) => event.type === "session.memory")).toHaveLength(memoryEventsBeforeTurn);
     // The suppressed turn ends back at "listening" (not a TTS-fallback warning)
     // and must not pollute latency telemetry.
     expect(events.at(-1)).toMatchObject({ type: "status", state: "listening" });
@@ -242,6 +262,94 @@ describe("createDoubaoProvider — wake-word gating", () => {
       clientEvents(send).filter((event) => event.type === "transcript" && event.speaker === "agent")
     ).toContainEqual(expect.objectContaining({ text: "前方畅通。", final: true }));
 
+    await provider.close();
+  });
+
+  it("holds early TTS audio until cumulative ASR proves the rider addressed Max", async () => {
+    stubWeatherFetch();
+    const { client, send } = makeClient();
+    const { provider, upstream } = await startLiveSession(client);
+
+    await upstream.emit("message", jsonFrame(ASR_INFO, { question_id: "q-addressed" }));
+    await upstream.emit("message", jsonFrame(ASR_RESPONSE, { results: [{ text: "前面" }] }));
+    await upstream.emit("message", audioFrame(Buffer.from([1, 2, 3, 4])));
+    expect(forwardedAudio(send)).toHaveLength(0);
+
+    await upstream.emit("message", jsonFrame(ASR_RESPONSE, { results: [{ text: "Max 前面堵吗" }] }));
+    await upstream.emit("message", jsonFrame(ASR_ENDED, {}));
+    expect(forwardedAudio(send)).toHaveLength(1);
+
+    await provider.close();
+  });
+
+  it("never reports negative latency when generation overlaps final ASR", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    stubWeatherFetch();
+    const { client, send } = makeClient();
+    const { provider, upstream } = await startLiveSession(client);
+
+    await upstream.emit("message", jsonFrame(ASR_INFO, {}));
+    vi.setSystemTime(1_000_050);
+    await upstream.emit("message", jsonFrame(ASR_RESPONSE, { results: [{ text: "Max 前面堵吗" }] }));
+    vi.setSystemTime(1_000_060);
+    await upstream.emit("message", jsonFrame(CHAT_RESPONSE, { content: "前方畅通。" }));
+    await upstream.emit("message", audioFrame(Buffer.from([1, 2, 3, 4])));
+    vi.setSystemTime(1_000_100);
+    await upstream.emit("message", jsonFrame(ASR_ENDED, {}));
+    vi.setSystemTime(1_000_120);
+    await upstream.emit("message", jsonFrame(TTS_ENDED, {}));
+
+    const telemetry = clientEvents(send).find((event) => event.type === "telemetry");
+    expect(telemetry).toMatchObject({ thinkMs: 0, firstAudioMs: 0 });
+    expect(
+      Object.values(telemetry ?? {})
+        .filter((value) => typeof value === "number")
+        .every((value) => value >= 0)
+    ).toBe(true);
+    await provider.close();
+  });
+
+  it("deletes an unaddressed background turn from provider context", async () => {
+    stubWeatherFetch();
+    const { client } = makeClient();
+    const { provider, upstream } = await startLiveSession(client);
+
+    await upstream.emit("message", jsonFrame(ASR_INFO, { question_id: "q-background" }));
+    await upstream.emit("message", jsonFrame(ASR_RESPONSE, { results: [{ text: "今天天气怎么样" }] }));
+    await upstream.emit("message", jsonFrame(ASR_ENDED, {}));
+
+    const deletion = upstream.sent.find((frame) => clientFrameEvent(frame) === 514);
+    expect(clientFramePayload(deletion)).toEqual({ items: [{ item_id: "q-background" }] });
+    await provider.close();
+  });
+
+  it("truncates interrupted provider context to the audio likely heard", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    let monotonicNow = 1_000;
+    vi.spyOn(performance, "now").mockImplementation(() => monotonicNow);
+    stubWeatherFetch();
+    const { client } = makeClient();
+    const { provider, upstream } = await startLiveSession(client);
+
+    await upstream.emit("message", jsonFrame(ASR_INFO, { question_id: "q1" }));
+    await upstream.emit("message", jsonFrame(ASR_RESPONSE, { results: [{ text: "Max 介绍一下路线" }] }));
+    await upstream.emit("message", jsonFrame(ASR_ENDED, {}));
+    await upstream.emit(
+      "message",
+      jsonFrame(TTS_SENTENCE_START, { question_id: "q1", reply_id: "reply-1", content: "先直行。" })
+    );
+    await upstream.emit("message", audioFrame(Buffer.alloc(48_000))); // one second of PCM24k mono
+    vi.setSystemTime(1_000_600);
+    monotonicNow = 1_600;
+    await upstream.emit("message", jsonFrame(ASR_INFO, { question_id: "q2" }));
+
+    const truncation = upstream.sent.find((frame) => clientFrameEvent(frame) === 513);
+    expect(clientFramePayload(truncation)).toEqual({
+      item_id: "reply-1",
+      audio_end_ms: 250
+    });
     await provider.close();
   });
 
@@ -353,13 +461,20 @@ describe("createDoubaoProvider — mid-ride location updates", () => {
   it("refetches weather immediately after a far move, but not for GPS jitter", async () => {
     const fetchMock = stubWeatherFetch();
     const { client } = makeClient();
-    const { provider } = await startLiveSession(client);
+    const { provider, upstream } = await startLiveSession(client);
     const initialFetches = fetchMock.mock.calls.length;
     expect(initialFetches).toBe(1); // session-start weather
 
     // ~1.5 km of drift: coordinates update, but no immediate refetch.
     await provider.updateLocation?.(1.01, 2.01);
     expect(fetchMock.mock.calls.length).toBe(initialFetches);
+    const update = upstream.sent.filter((frame) => clientFrameEvent(frame) === 201).at(-1);
+    expect(clientFramePayload(update)).toMatchObject({
+      dialog: {
+        dialog_id: "dialog-live",
+        location: { latitude: 1.01, longitude: 2.01 }
+      }
+    });
 
     // A genuinely different area (>20 km): refetch right away with new coords.
     await provider.updateLocation?.(2.5, 3.5);

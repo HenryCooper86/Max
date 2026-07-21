@@ -96,12 +96,13 @@ final class AgentSession: NSObject, ObservableObject {
 
     private var intentionalClose = false
     private var transmitting = false
-    /// True only between handleSocketOpened (after session.start/audio.start
-    /// are enqueued) and the socket being closed/superseded. URLSession queues
-    /// messages sent while CONNECTING and flushes them FIFO after the
-    /// handshake, so ungated mic frames would reach the relay AHEAD of
-    /// session.start (Android guards this with the same flag).
+    /// True only after session.started confirms the upstream provider is ready.
+    /// A transport-level open is not enough: streaming earlier builds a burst
+    /// in the relay while Doubao is still starting its session.
     private var socketOpen = false
+    private let micSendLock = NSLock()
+    private var micSendsInFlight = 0
+    private static let maxMicSendsInFlight = 4
     /// Plain mirror of `state.micMuted`, read off the audio thread alongside
     /// `transmitting` so the mic callback never touches `@Published` state.
     private var micMuted = false
@@ -126,7 +127,7 @@ final class AgentSession: NSObject, ObservableObject {
         engine: voiceEngine,
         onFrame: { [weak self] frame in
             guard let self, self.transmitting, !self.micMuted, self.socketOpen else { return }
-            self.webSocket?.send(.data(frame)) { _ in }
+            self.sendMicFrame(frame)
         },
         onLevel: { [weak self] level in
             guard let self else { return }
@@ -554,9 +555,8 @@ final class AgentSession: NSObject, ObservableObject {
         // must be told about it again (mirrors the web client's open handler).
         if current.guidedDemo { task.send(.string(buildGuidedDemo(enabled: true))) { _ in } }
         if transmitting { task.send(.string(audioStartEvent)) { _ in } }
-        // Only now may mic frames flow: they are guaranteed to be queued
-        // behind the session.start/audio.start just sent above.
-        socketOpen = true
+        // Mic frames wait for session.started, not merely the relay handshake.
+        socketOpen = false
     }
 
     private func receive(on task: URLSessionWebSocketTask) {
@@ -673,6 +673,7 @@ final class AgentSession: NSObject, ObservableObject {
     private func handleEvent(_ event: AgentEvent) {
         switch event {
         case let .sessionStarted(provider, mode, capabilities):
+            socketOpen = true
             update {
                 $0.provider = provider
                 $0.isLive = mode != "mock"
@@ -688,6 +689,7 @@ final class AgentSession: NSObject, ObservableObject {
             }
 
         case let .status(connState, detail):
+            if connState == "hearing" { stopAgentSpeech() }
             update {
                 let connection: ConnectionState
                 switch connState {
@@ -750,6 +752,31 @@ final class AgentSession: NSObject, ObservableObject {
 
         case .unhandled:
             break
+        }
+    }
+
+    /// URLSession has no public buffered-byte counter. Bound concurrent sends
+    /// so slow links shed stale 20 ms frames instead of growing without limit.
+    private func sendMicFrame(_ frame: Data) {
+        micSendLock.lock()
+        guard micSendsInFlight < Self.maxMicSendsInFlight else {
+            micSendLock.unlock()
+            return
+        }
+        micSendsInFlight += 1
+        micSendLock.unlock()
+
+        guard let task = webSocket else {
+            micSendLock.lock()
+            micSendsInFlight = max(0, micSendsInFlight - 1)
+            micSendLock.unlock()
+            return
+        }
+        task.send(.data(frame)) { [weak self] _ in
+            guard let self else { return }
+            self.micSendLock.lock()
+            self.micSendsInFlight = max(0, self.micSendsInFlight - 1)
+            self.micSendLock.unlock()
         }
     }
 

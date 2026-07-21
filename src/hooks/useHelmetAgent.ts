@@ -149,6 +149,9 @@ export function useHelmetAgent() {
 
   const socketRef = useRef<WebSocket | null>(null);
   const transmittingRef = useRef(false);
+  // Mic frames are accepted only after the relay confirms the upstream
+  // provider session. The WebSocket opening alone is not provider readiness.
+  const providerReadyRef = useRef(false);
   // Re-entrancy guard + cancellation token for startMic: a second toggle while
   // the (multi-await) start is in flight must not launch a parallel start, and
   // stopMic must be able to cancel a start already past its awaits.
@@ -201,7 +204,7 @@ export function useHelmetAgent() {
     releaseMic,
     setTrackEnabled,
     resetFrameWindow
-  } = useMicCapture({ socketRef, transmittingRef });
+  } = useMicCapture({ socketRef, transmittingRef, providerReadyRef });
 
   // Persist the browser-side transport/signal quality with the session
   // evidence. One report per second is enough for QA without adding noisy
@@ -419,6 +422,7 @@ export function useHelmetAgent() {
     const socket = createAgentSocket();
     socket.binaryType = "arraybuffer";
     socketRef.current = socket;
+    providerReadyRef.current = false;
 
     socket.addEventListener("open", () => {
       reconnectAttemptsRef.current = 0;
@@ -491,6 +495,7 @@ export function useHelmetAgent() {
         const event = validateAgentEvent(JSON.parse(String(message.data)));
         if (!event) return;
         if (event.type === "session.started") {
+          providerReadyRef.current = true;
           setProvider(event.provider);
           setCapabilities(event.capabilities);
           isLiveRef.current = event.mode !== "mock";
@@ -503,6 +508,7 @@ export function useHelmetAgent() {
         }
         if (event.type === "status") {
           setStatus(event.detail);
+          if (event.state === "hearing") stopAgentSpeech();
           if (event.state === "connecting") setConnectionState("provider");
           if (event.state === "ready") setConnectionState("ready");
           if (event.state === "closed") setConnectionState("offline");
@@ -630,6 +636,7 @@ export function useHelmetAgent() {
       setFeedbackFloorId(Number.MAX_SAFE_INTEGER);
       socketRef.current = null;
       isLiveRef.current = false;
+      providerReadyRef.current = false;
       if (intentionalCloseRef.current) {
         setStatus("离线");
         return;
@@ -982,6 +989,7 @@ export function useHelmetAgent() {
       reconnectAttemptsRef.current = 0;
       const failedSocket = socketRef.current;
       socketRef.current = null;
+      providerReadyRef.current = false;
       failedSocket?.close();
       transmittingRef.current = false;
       setTrackEnabled(false);
@@ -1028,6 +1036,7 @@ export function useHelmetAgent() {
     closePlayback();
     socketRef.current?.close();
     socketRef.current = null;
+    providerReadyRef.current = false;
     setConnected(false);
     setConnectionState("offline");
     setTurnState("idle");

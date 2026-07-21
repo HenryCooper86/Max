@@ -120,6 +120,7 @@ class AgentSession(
 
         /** Keep the stored conversation bounded (TRANSCRIPT_CAP in src/lib/persistence.ts). */
         private const val TRANSCRIPT_CAP = 200
+        private const val MAX_MIC_QUEUE_BYTES = 256L * 1024L
     }
 
     private val _state = MutableStateFlow(State())
@@ -133,11 +134,8 @@ class AgentSession(
     @Volatile
     private var webSocket: WebSocket? = null
 
-    /** True only between onOpen (after session.start/audio.start are enqueued)
-     * and the socket being closed/superseded. Mic frames sent while OkHttp is
-     * still connecting would be buffered and flushed AHEAD of the handshake
-     * events, so the server would receive raw audio before session.start —
-     * the web client drops those frames too (useMicCapture readyState check). */
+    /** True only after session.started confirms the upstream provider is ready.
+     * The relay transport opening alone is not provider readiness. */
     @Volatile
     private var socketOpen = false
 
@@ -183,7 +181,15 @@ class AgentSession(
     private val player = PcmPlayer()
     private val audioRouter = AudioRouter(context)
     private val mic = MicStreamer(
-        onFrame = { frame -> if (transmitting && !micMuted && socketOpen) webSocket?.send(frame.toByteString()) },
+        onFrame = { frame ->
+            val socket = webSocket
+            if (
+                transmitting && !micMuted && socketOpen &&
+                socket != null && socket.queueSize() + frame.size < MAX_MIC_QUEUE_BYTES
+            ) {
+                socket.send(frame.toByteString())
+            }
+        },
         onLevel = { level -> _state.update { it.copy(voiceLevel = if (transmitting && !micMuted) level else 0f) } }
     )
 
@@ -565,9 +571,8 @@ class AgentSession(
                 if (current.guidedDemo) webSocket.send(buildGuidedDemo(enabled = true))
                 // Resume the audio stream if the rider was transmitting before a drop.
                 if (transmitting) webSocket.send(AUDIO_START_EVENT)
-                // Only now may mic frames flow: they are guaranteed to be queued
-                // behind the session.start/audio.start just sent above.
-                socketOpen = true
+                // Mic frames wait for session.started, not merely the relay handshake.
+                socketOpen = false
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -672,32 +677,38 @@ class AgentSession(
 
     private fun handleEvent(event: AgentEvent) {
         when (event) {
-            is AgentEvent.SessionStarted -> _state.update {
-                it.copy(
-                    provider = event.provider,
-                    isLive = event.mode != "mock",
-                    capabilities = event.capabilities,
-                    connection = ConnectionState.READY,
-                    statusText = if (event.mode == "mock") "模拟路线已启用" else "豆包实时语音在线"
-                )
+            is AgentEvent.SessionStarted -> {
+                socketOpen = true
+                _state.update {
+                    it.copy(
+                        provider = event.provider,
+                        isLive = event.mode != "mock",
+                        capabilities = event.capabilities,
+                        connection = ConnectionState.READY,
+                        statusText = if (event.mode == "mock") "模拟路线已启用" else "豆包实时语音在线"
+                    )
+                }
             }
 
             is AgentEvent.Connection -> _state.update {
                 it.copy(connection = mapConnectionState(event.state, it.connection), statusText = event.detail)
             }
 
-            is AgentEvent.Status -> _state.update {
-                val connection = when (event.state) {
-                    "connecting" -> ConnectionState.PROVIDER
-                    "ready" -> ConnectionState.READY
-                    "closed" -> ConnectionState.OFFLINE
-                    else -> it.connection
+            is AgentEvent.Status -> {
+                if (event.state == "hearing") stopAgentSpeech()
+                _state.update {
+                    val connection = when (event.state) {
+                        "connecting" -> ConnectionState.PROVIDER
+                        "ready" -> ConnectionState.READY
+                        "closed" -> ConnectionState.OFFLINE
+                        else -> it.connection
+                    }
+                    it.copy(
+                        statusText = event.detail,
+                        connection = connection,
+                        turnState = if (transmitting) mapTurnState(event.state, it.turnState) else it.turnState
+                    )
                 }
-                it.copy(
-                    statusText = event.detail,
-                    connection = connection,
-                    turnState = if (transmitting) mapTurnState(event.state, it.turnState) else it.turnState
-                )
             }
 
             is AgentEvent.Transcript -> {

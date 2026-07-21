@@ -165,7 +165,10 @@ describe("createDoubaoProvider — concurrent weather + audio buffering", () => 
     await provider.start(START_EVENT, {
       previousConversation: {
         updatedAt: 1,
-        turns: [{ at: 1, speaker: "rider", text: "Remember my destination is Busan" }],
+        turns: [
+          { at: 1, speaker: "rider", text: "Remember my destination is Busan" },
+          { at: 2, speaker: "agent", text: "I will remember that destination." }
+        ],
         facts: [{ at: 1, text: "my destination is Busan" }]
       }
     });
@@ -202,11 +205,13 @@ describe("createDoubaoProvider — concurrent weather + audio buffering", () => 
 
     // Rider starts speaking before the session is ready — a unique byte marker.
     const marker = Buffer.from([0xde, 0xad, 0xbe, 0xef]);
+    await provider.startAudio();
     await provider.sendAudio(marker);
     const sentBeforeReady = upstream.sent.length;
 
     // SessionStarted flushes the buffered frame upstream instead of dropping it.
     upstream.emit("message", serverFrame(EVENT_SESSION_STARTED));
+    await new Promise((resolve) => setTimeout(resolve, 25));
 
     expect(upstream.sent.length).toBeGreaterThan(sentBeforeReady);
     const flushed = upstream.sent
@@ -239,6 +244,7 @@ describe("createDoubaoProvider — concurrent weather + audio buffering", () => 
 
     // Frames arrive before the session is ready, then the rider mutes the mic.
     const marker = Buffer.from([0xde, 0xad, 0xbe, 0xef]);
+    await provider.startAudio();
     await provider.sendAudio(marker);
     await provider.stopAudio();
     const sentBeforeReady = upstream.sent.length;
@@ -250,6 +256,54 @@ describe("createDoubaoProvider — concurrent weather + audio buffering", () => 
       .some((frame) => Buffer.isBuffer(frame) && frame.includes(marker));
     expect(replayed).toBe(false);
 
+    await provider.close();
+  });
+
+  it("sends EndASR only for push-to-talk sessions", async () => {
+    vi.stubEnv("DOUBAO_INPUT_MODE", "push_to_talk");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false }) as Response)
+    );
+    const provider = createDoubaoProvider(
+      { readyState: 1, OPEN: 1, send: vi.fn(), close: vi.fn() } as never,
+      silentLog
+    );
+    await provider.start(START_EVENT);
+    const upstream = upstreamInstances[0];
+    upstream.emit("open");
+    await upstream.emit("message", serverFrame(EVENT_CONNECTION_STARTED));
+    upstream.emit("message", serverFrame(EVENT_SESSION_STARTED));
+    await provider.startAudio();
+    await provider.stopAudio();
+
+    expect(
+      upstream.sent.some((frame) => Buffer.isBuffer(frame) && frame.length >= 8 && frame.readUInt32BE(4) === 400)
+    ).toBe(true);
+    await provider.close();
+  });
+
+  it("does not send EndASR when keep-alive VAD owns turn boundaries", async () => {
+    vi.stubEnv("DOUBAO_INPUT_MODE", "keep_alive");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false }) as Response)
+    );
+    const provider = createDoubaoProvider(
+      { readyState: 1, OPEN: 1, send: vi.fn(), close: vi.fn() } as never,
+      silentLog
+    );
+    await provider.start(START_EVENT);
+    const upstream = upstreamInstances[0];
+    upstream.emit("open");
+    await upstream.emit("message", serverFrame(EVENT_CONNECTION_STARTED));
+    upstream.emit("message", serverFrame(EVENT_SESSION_STARTED));
+    await provider.startAudio();
+    await provider.stopAudio();
+
+    expect(
+      upstream.sent.some((frame) => Buffer.isBuffer(frame) && frame.length >= 8 && frame.readUInt32BE(4) === 400)
+    ).toBe(false);
     await provider.close();
   });
 

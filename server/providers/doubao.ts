@@ -40,7 +40,7 @@ import { buildPreviousConversationPrompt } from "../user-memory";
 // The "Max" persona prompt. Overridable per deployment with DOUBAO_SYSTEM_ROLE;
 // keep it consistent with the DOUBAO_SYSTEM_ROLE default in .env.example.
 export const DEFAULT_AGENT_SYSTEM_PROMPT =
-  "你是 Max，一位友好、冷静、以安全为先的摩托车头盔 AI 助手，由 Horizon Continental Technology（neueHCT）开发。你的名字保持 Max，角色保持 Motorcycle Helmet AI assistant。默认语言是中文，第二语言是 English；如果骑手明确使用英文，可以用英文回答。只允许中文和 English 两种语言，不要使用其他语言。如果骑手使用其他语言或要求你使用其他语言，请用中文简短说明：我只支持中文和 English。帮助骑手处理摩托车相关问题、导航、天气、路况、附近停靠点和骑行安全事项。回答要简短、清晰、适合免手操作。骑行中遇到危险、分心请求或超出头盔助手范围的请求时，先保护骑行安全，给出更安全的替代方案，必要时建议停车后继续。男声和女声只是当前会话音色，必须共享同一个 Max 角色、同一语言规则、同一安全策略和同一默认行为。";
+  "你是 Max，一位友好、冷静、以安全为先的摩托车头盔 AI 助手，由 Horizon Continental Technology（neueHCT）开发。你的名字保持 Max，角色保持 Motorcycle Helmet AI assistant。默认语言是中文，第二语言是 English；如果骑手明确使用英文，可以用英文回答。只允许中文和 English 两种语言，不要使用其他语言。如果骑手使用其他语言或要求你使用其他语言，请用中文简短说明：我只支持中文和 English。帮助骑手理解摩托车、导航、天气、路况、附近停靠点和骑行安全事项。回答要简短、清晰、适合免手操作。骑行中遇到危险、分心请求或超出头盔助手范围的请求时，先保护骑行安全，给出更安全的替代方案，必要时建议停车后继续。男声和女声只是当前会话音色，必须共享同一个 Max 角色、同一语言规则、同一安全策略和同一默认行为。";
 
 type DoubaoSessionConfig = {
   sampleRate: number;
@@ -48,6 +48,16 @@ type DoubaoSessionConfig = {
   voiceGender: VoiceGender;
   // Persona prompt, possibly augmented with live weather for this session.
   systemRole: string;
+  speakingStyle: string;
+  dialogId?: string;
+  dialogContext?: DoubaoDialogContextItem[];
+  location?: { latitude: number; longitude: number };
+};
+
+type DoubaoDialogContextItem = {
+  role: "user" | "assistant";
+  text: string;
+  timestamp: number;
 };
 
 // Passed to connectUpstream. The upstream handshake opens immediately while the
@@ -60,6 +70,8 @@ type ConnectConfig = {
   voiceGender: VoiceGender;
   // Persona prompt without weather; the weather addendum is appended once resolved.
   baseSystemRole: string;
+  speakingStyle: string;
+  dialogContext: DoubaoDialogContextItem[];
   // Resolves to the weather addendum for the system prompt ("" when weather is
   // unavailable). Never rejects — the session must start regardless.
   weatherRolePromise: Promise<string>;
@@ -116,6 +128,18 @@ export function buildIdentityPrompt(): string {
   );
 }
 
+/** Prevents a language model from presenting an unsupported external action as
+ * completed. Weather and ride context are explicitly injected by the relay;
+ * maps, traffic, vehicle control, emergency calling, and messaging are not. */
+export function buildToolGroundingPrompt(): string {
+  return (
+    "[真实能力边界] 只有系统明确提供的天气和骑行情报可以当作实时事实。" +
+    "当前没有地图导航、实时交通、附近地点搜索、车辆控制/诊断、小队消息、电话或报警执行工具。" +
+    "你可以给一般性建议或说明需要接入相应服务，但绝对不能声称已经设置路线、查到实时路况或地点、发送消息、控制车辆、拨打电话或完成报警。" +
+    "任何外部动作只有在系统明确返回成功结果时才可以说已完成。"
+  );
+}
+
 const enum MessageType {
   FullClientRequest = 0b0001,
   AudioOnlyRequest = 0b0010,
@@ -134,8 +158,11 @@ export const enum EventSend {
   FinishConnection = 2,
   StartSession = 100,
   FinishSession = 102,
+  UpdateConfig = 201,
   TaskRequest = 200,
-  EndAsr = 400
+  EndAsr = 400,
+  ConversationTruncate = 513,
+  ConversationDelete = 514
 }
 
 const enum EventReceive {
@@ -198,6 +225,24 @@ function buildDoubaoHeaders() {
   };
 }
 
+function envEnabled(name: string, fallback: boolean): boolean {
+  const value = process.env[name]?.trim().toLowerCase();
+  if (!value) return fallback;
+  return !["0", "false", "off", "no"].includes(value);
+}
+
+function boundedEnvInt(name: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+function doubaoInputMode(): "keep_alive" | "push_to_talk" {
+  return process.env.DOUBAO_INPUT_MODE?.trim() === "push_to_talk" ? "push_to_talk" : "keep_alive";
+}
+
 function uint32(value: number) {
   const buffer = Buffer.alloc(4);
   buffer.writeUInt32BE(value);
@@ -233,17 +278,34 @@ export function buildAudioRequest(sessionId: string, audio: Buffer) {
   ]);
 }
 
-function buildDoubaoSessionConfig(config: DoubaoSessionConfig) {
+export function buildDoubaoSessionConfig(config: DoubaoSessionConfig) {
+  const inputMode = doubaoInputMode();
   return {
     dialog: {
       bot_name: process.env.DOUBAO_BOT_NAME ?? "Max",
       system_role: config.systemRole,
+      speaking_style: config.speakingStyle,
+      ...(config.dialogId ? { dialog_id: config.dialogId } : {}),
+      ...(config.dialogContext?.length ? { dialog_context: config.dialogContext } : {}),
+      ...(config.location ? { location: config.location } : {}),
       extra: {
-        input_mod: process.env.DOUBAO_INPUT_MODE ?? "keep_alive",
+        strict_audit: true,
+        audit_response: process.env.DOUBAO_AUDIT_RESPONSE ?? "这个请求我不能帮助执行。请把注意力放在安全骑行上。",
+        input_mod: inputMode,
+        enable_loudness_norm: envEnabled("DOUBAO_LOUDNESS_NORMALIZATION", true),
+        enable_conversation_truncate: true,
         model: process.env.DOUBAO_REALTIME_MODEL ?? "1.2.1.1"
       }
     },
     asr: {
+      extra: {
+        end_smooth_window_ms: boundedEnvInt("DOUBAO_VAD_END_MS", 900, 500, 50_000),
+        enable_custom_vad: true,
+        enable_asr_twopass: envEnabled("DOUBAO_ASR_TWOPASS", true),
+        context: {
+          hotwords: [{ word: "Max" }, { word: "马克斯" }, { word: "麦克斯" }]
+        }
+      },
       audio_info: {
         format: "pcm",
         sample_rate: config.sampleRate,
@@ -255,7 +317,9 @@ function buildDoubaoSessionConfig(config: DoubaoSessionConfig) {
       audio_config: {
         channel: 1,
         format: "pcm_s16le",
-        sample_rate: 24000
+        sample_rate: 24000,
+        speech_rate: boundedEnvInt("DOUBAO_SPEECH_RATE", 8, -50, 100),
+        loudness_rate: boundedEnvInt("DOUBAO_LOUDNESS_RATE", 10, -50, 100)
       }
     }
   };
@@ -317,7 +381,7 @@ export function parseDoubaoFrame(raw: RawData): ParsedDoubaoFrame {
 const MAX_JSON_PAYLOAD_BYTES = 1024 * 1024;
 
 /** Stop relaying voice audio to a client whose socket write buffer is this full. */
-const MAX_CLIENT_BUFFERED_BYTES = 4 * 1024 * 1024;
+const MAX_CLIENT_BUFFERED_BYTES = 512 * 1024;
 
 /** Maximum nesting depth explored when mining reply text out of upstream JSON. */
 const MAX_TEXT_EXTRACTION_DEPTH = 8;
@@ -376,6 +440,42 @@ export function extractAsrText(payload: Record<string, unknown>) {
     .trim();
 }
 
+/** Converts server-owned transcript history into the provider's structured QA
+ * context. Only complete rider/assistant pairs are included: the API rejects
+ * odd-length context and an orphaned turn would give the model a false state. */
+export function buildDoubaoDialogContext(
+  turns: Array<{ at: number; speaker: "rider" | "agent"; text: string }>
+): DoubaoDialogContextItem[] {
+  const pairs: Array<[DoubaoDialogContextItem, DoubaoDialogContextItem]> = [];
+  let pendingUser: DoubaoDialogContextItem | undefined;
+  let lastTimestamp = 0;
+  const item = (turn: (typeof turns)[number], role: "user" | "assistant"): DoubaoDialogContextItem | null => {
+    const text = turn.text.trim().slice(0, 500);
+    if (!text) return null;
+    const sourceTimestamp = Number.isFinite(turn.at) ? Math.round(turn.at) : Date.now();
+    const timestamp = Math.max(lastTimestamp + 1, Math.min(Date.now(), sourceTimestamp));
+    lastTimestamp = timestamp;
+    return { role, text, timestamp };
+  };
+
+  for (const turn of turns) {
+    if (turn.speaker === "rider") {
+      pendingUser = item(turn, "user") ?? undefined;
+      continue;
+    }
+    if (!pendingUser) continue;
+    const assistant = item(turn, "assistant");
+    if (assistant) pairs.push([pendingUser, assistant]);
+    pendingUser = undefined;
+  }
+  return pairs.slice(-20).flat();
+}
+
+function stringField(payload: Record<string, unknown>, key: string): string | undefined {
+  const value = payload[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 /** In-place upstream reconnect attempts before giving up and bouncing the client. */
 const MAX_UPSTREAM_RETRIES = 3;
 
@@ -388,6 +488,7 @@ export function createDoubaoProvider(
   let started = false;
   let sessionId = randomUUID();
   let sessionReady = false;
+  let providerDialogId: string | undefined;
   // Upstream self-healing: when the Doubao socket drops mid-session, the relay
   // reconnects in place (replaying the persona + current session memory) so the
   // dropout is nearly invisible to the rider. Only after MAX_UPSTREAM_RETRIES
@@ -413,11 +514,12 @@ export function createDoubaoProvider(
   let sentThinkingStatus = false;
   let receivedTtsAudio = false;
   let ttsFallbackTimer: NodeJS.Timeout | undefined;
-  // Measured chat→first-audio latency of the previous turn; the TTS fallback
-  // wait adapts upward from the configured floor so a slow link doesn't trip
-  // the browser-speech fallback while real audio is still in flight.
+  // Measured end-of-ASR→first-audio latency of the previous turn; the TTS
+  // fallback wait adapts upward from the configured floor so a slow link does
+  // not trip the browser-speech fallback while real audio is still in flight.
   let lastFirstAudioLatencyMs = 0;
   let weatherRefreshTimer: NodeJS.Timeout | undefined;
+  let currentWeatherRole = "";
   // Where the rider is, for weather. Seeded at session.start, then kept fresh
   // by mid-ride location.update events so a long ride's weather doesn't stay
   // pinned to the start point.
@@ -454,6 +556,14 @@ export function createDoubaoProvider(
   let asrFirstTextAt = 0;
   let chatStartedAt = 0;
   let firstAudioAt = 0;
+  let asrEndedAt = 0;
+  let currentQuestionId: string | undefined;
+  let currentReplyId: string | undefined;
+  const suppressedItemIds = new Set<string>();
+  let forwardedReplyBytes = 0;
+  let firstForwardedReplyAt: number | undefined;
+  const pendingUndecidedAudio: Buffer[] = [];
+  let pendingUndecidedAudioBytes = 0;
   // True once the TTS fallback has already spoken this turn via browser speech,
   // so late-arriving Doubao audio for the same reply isn't also played.
   let fallbackSpoke = false;
@@ -465,6 +575,16 @@ export function createDoubaoProvider(
   // 5 s of 20 ms audio (~160 KB); older frames are dropped first.
   const MAX_PENDING_AUDIO_FRAMES = 250;
   const pendingAudio: Buffer[] = [];
+  let pendingAudioFlushTimer: NodeJS.Timeout | undefined;
+  let latencyMetricSent = false;
+  let downstreamAudioAbandoned = false;
+  let audioActive = false;
+  let ttsEndedBeforeWakeDecision = false;
+
+  const MAX_UNDECIDED_TTS_BYTES = 240_000; // 5 s of 24 kHz PCM16 mono
+  const MAX_UPSTREAM_BUFFERED_BYTES = 1024 * 1024;
+  const CONNECTION_TIMEOUT_MS = boundedEnvInt("DOUBAO_CONNECTION_TIMEOUT_MS", 8_000, 1_000, 30_000);
+  const SESSION_TIMEOUT_MS = boundedEnvInt("DOUBAO_SESSION_TIMEOUT_MS", 10_000, 1_000, 30_000);
 
   function sendClient(payload: unknown) {
     if (client.readyState === client.OPEN) {
@@ -472,6 +592,154 @@ export function createDoubaoProvider(
       telemetry?.serverEvent(payload, Buffer.byteLength(encoded));
       client.send(encoded);
     }
+  }
+
+  function sendUpstreamControl(event: EventSend, metadata: unknown = {}): boolean {
+    if (!upstream || upstream.readyState !== WebSocket.OPEN || !sessionReady) return false;
+    upstream.send(buildFullClientRequest(event, sessionId, metadata));
+    return true;
+  }
+
+  function currentDoubaoConfig(
+    config: ConnectConfig,
+    systemRole: string,
+    includeHistory: boolean
+  ): DoubaoSessionConfig {
+    const location = weatherLocation ? { latitude: weatherLocation.lat, longitude: weatherLocation.lon } : undefined;
+    return {
+      sampleRate: config.sampleRate,
+      channels: config.channels,
+      voiceGender: config.voiceGender,
+      systemRole,
+      speakingStyle: config.speakingStyle,
+      // Undefined on the first StartSession; populated from SessionStarted for
+      // later UpdateConfig calls and in-place reconnects.
+      dialogId: providerDialogId,
+      dialogContext: includeHistory ? config.dialogContext : undefined,
+      location
+    };
+  }
+
+  /** UpdateConfig is a full overwrite for the supplied dialog/TTS sections. */
+  function updateProviderConfig(): void {
+    const config = connectConfig;
+    if (!config || !sessionReady) return;
+    const full = buildDoubaoSessionConfig(
+      currentDoubaoConfig(config, config.baseSystemRole + currentWeatherRole, false)
+    );
+    sendUpstreamControl(EventSend.UpdateConfig, { dialog: full.dialog, tts: full.tts });
+  }
+
+  function recordFirstAudioLatency(): void {
+    if (latencyMetricSent || !firstAudioAt || !asrEndedAt) return;
+    lastFirstAudioLatencyMs = Math.max(0, firstAudioAt - asrEndedAt);
+    latencyMetricSent = true;
+    sendClient({ type: "metric", latencyMs: lastFirstAudioLatencyMs });
+  }
+
+  function forwardTtsAudio(chunk: Buffer): void {
+    if (fallbackSpoke || downstreamAudioAbandoned) return;
+    if (client.readyState !== client.OPEN) return;
+    if (client.bufferedAmount >= MAX_CLIENT_BUFFERED_BYTES) {
+      downstreamAudioAbandoned = true;
+      sendClient({ type: "status", state: "degraded", detail: "网络拥塞，本轮剩余语音已停止发送" });
+      return;
+    }
+    if (!firstAudioAt) {
+      firstAudioAt = Date.now();
+      firstForwardedReplyAt = performance.now();
+      recordFirstAudioLatency();
+      sendClient({ type: "status", state: "speaking", detail: "已收到豆包语音音频" });
+    }
+    receivedTtsAudio = true;
+    forwardedReplyBytes += chunk.byteLength;
+    clearTtsFallbackTimer();
+    telemetry?.serverAudio(chunk.byteLength);
+    client.send(chunk, { binary: true });
+  }
+
+  function bufferUndecidedTtsAudio(chunk: Buffer): void {
+    if (pendingUndecidedAudioBytes + chunk.byteLength > MAX_UNDECIDED_TTS_BYTES) return;
+    const copy = Buffer.from(chunk);
+    pendingUndecidedAudio.push(copy);
+    pendingUndecidedAudioBytes += copy.byteLength;
+  }
+
+  function flushUndecidedTtsAudio(): void {
+    if (!replyIsAddressed()) return;
+    for (const chunk of pendingUndecidedAudio) forwardTtsAudio(chunk);
+    pendingUndecidedAudio.length = 0;
+    pendingUndecidedAudioBytes = 0;
+  }
+
+  function clearUndecidedTtsAudio(): void {
+    pendingUndecidedAudio.length = 0;
+    pendingUndecidedAudioBytes = 0;
+  }
+
+  function truncateInterruptedReply(): void {
+    if (!currentReplyId || !forwardedReplyBytes || firstForwardedReplyAt === undefined) return;
+    const forwardedMs = Math.round(forwardedReplyBytes / 48); // 48 bytes/ms at 24 kHz PCM16 mono
+    // Keep a small safety margin for client/network buffering. This is
+    // deliberately conservative: exposing less context is safer than claiming
+    // the rider heard words that were still queued when barge-in happened.
+    const safetyMs = boundedEnvInt("DOUBAO_PLAYBACK_SAFETY_MS", 350, 0, 2_000);
+    const elapsedMs = Math.max(0, performance.now() - firstForwardedReplyAt - safetyMs);
+    const audioEndMs = Math.min(forwardedMs, elapsedMs);
+    if (
+      sendUpstreamControl(EventSend.ConversationTruncate, {
+        item_id: currentReplyId,
+        audio_end_ms: audioEndMs
+      })
+    ) {
+      log.info("doubao conversation truncated", { replyId: currentReplyId.slice(0, 12), audioEndMs });
+    }
+  }
+
+  function deleteSuppressedTurns(): void {
+    for (const itemId of suppressedItemIds) {
+      if (sendUpstreamControl(EventSend.ConversationDelete, { items: [{ item_id: itemId }] })) {
+        suppressedItemIds.delete(itemId);
+      }
+    }
+  }
+
+  // Deleting either side removes the complete QA pair upstream. Prefer the
+  // rider item so one suppressed turn never generates two delete requests.
+  function markCurrentTurnSuppressed(): void {
+    const itemId = currentQuestionId ?? currentReplyId;
+    if (itemId) suppressedItemIds.add(itemId);
+  }
+
+  function queuePendingAudio(chunk: Buffer): void {
+    if (pendingAudio.length >= MAX_PENDING_AUDIO_FRAMES) pendingAudio.shift();
+    pendingAudio.push(Buffer.from(chunk));
+  }
+
+  function clearPendingAudioFlush(): void {
+    if (pendingAudioFlushTimer) clearInterval(pendingAudioFlushTimer);
+    pendingAudioFlushTimer = undefined;
+  }
+
+  /** Replay at capture cadence after a reconnect. A tight while-loop creates a
+   * several-second upstream burst that can confuse VAD and inflate latency. */
+  function startPendingAudioFlush(): void {
+    if (pendingAudioFlushTimer || !pendingAudio.length) return;
+    pendingAudioFlushTimer = setInterval(() => {
+      const socket = upstream;
+      if (!audioActive || !sessionReady || !socket || socket.readyState !== WebSocket.OPEN) {
+        clearPendingAudioFlush();
+        return;
+      }
+      if (socket.bufferedAmount >= MAX_UPSTREAM_BUFFERED_BYTES) return;
+      // Two 20 ms frames per tick lets a reconnect catch up gradually without
+      // reproducing the old all-at-once VAD-confusing burst.
+      for (let count = 0; count < 2 && pendingAudio.length; count += 1) {
+        const frame = pendingAudio.shift();
+        if (frame) socket.send(buildAudioRequest(sessionId, frame));
+      }
+      if (!pendingAudio.length) clearPendingAudioFlush();
+    }, 20);
   }
 
   function clearTtsFallbackTimer() {
@@ -495,7 +763,7 @@ export function createDoubaoProvider(
     if (!replyDecided) {
       replyAddressed = false;
       replyDecided = true;
-      log.debug("reply suppressed — rider did not address Max", { riderTurnText });
+      log.debug("reply suppressed — rider did not address Max", { characters: riderTurnText.length });
     }
     return replyAddressed;
   }
@@ -514,7 +782,7 @@ export function createDoubaoProvider(
   function flushPendingAgentText(useBrowserSpeech: boolean) {
     // Drop the reply entirely when the rider did not address Max.
     if (!replyIsAddressed()) {
-      log.debug("reply suppressed — rider did not address Max", { riderTurnText });
+      log.debug("reply suppressed — rider did not address Max", { characters: riderTurnText.length });
       resetPendingReply();
       return;
     }
@@ -609,16 +877,21 @@ export function createDoubaoProvider(
         windSpeedKmh: weather.windSpeedKmh,
         riskLevel: weather.riskLevel
       });
+      currentWeatherRole =
+        `\n\n[实时骑行情报] 骑手当前位置${weather.summary}` +
+        `${weather.riderAdvice}当骑手询问天气或风力时，只基于这条实时数据简短回答。`;
+      updateProviderConfig();
     } catch {
       log.warn("weather refresh failed — keeping last reading", { trigger });
     }
   }
 
   function emitTelemetry(totalEnd = Date.now()) {
-    const asrMs = asrStartedAt && asrFirstTextAt ? asrFirstTextAt - asrStartedAt : 0;
-    const thinkMs = asrFirstTextAt && chatStartedAt ? chatStartedAt - asrFirstTextAt : 0;
-    const firstAudioMs = chatStartedAt && firstAudioAt ? firstAudioAt - chatStartedAt : 0;
-    const totalMs = asrStartedAt ? totalEnd - asrStartedAt : 0;
+    recordFirstAudioLatency();
+    const asrMs = asrStartedAt && asrFirstTextAt ? Math.max(0, asrFirstTextAt - asrStartedAt) : 0;
+    const thinkMs = asrEndedAt && chatStartedAt ? Math.max(0, chatStartedAt - asrEndedAt) : 0;
+    const firstAudioMs = asrEndedAt && firstAudioAt ? Math.max(0, firstAudioAt - asrEndedAt) : 0;
+    const totalMs = asrStartedAt ? Math.max(0, totalEnd - asrStartedAt) : 0;
     if (asrMs || thinkMs || firstAudioMs || totalMs) {
       log.info("turn telemetry", { asrMs, thinkMs, firstAudioMs, totalMs });
       sendClient({ type: "telemetry", asrMs, thinkMs, firstAudioMs, totalMs });
@@ -627,11 +900,30 @@ export function createDoubaoProvider(
 
   function connectUpstream(config: ConnectConfig) {
     const url = process.env.DOUBAO_AGENT_WS_URL ?? "wss://openspeech.bytedance.com/api/v3/realtime/dialogue";
-    upstream = new WebSocket(url, { headers: buildDoubaoHeaders() });
+    upstream = new WebSocket(url, {
+      headers: buildDoubaoHeaders(),
+      handshakeTimeout: CONNECTION_TIMEOUT_MS
+    });
+    const socket = upstream;
 
-    upstream.on("open", () => {
+    let connectionTimer: NodeJS.Timeout | undefined = setTimeout(() => {
+      connectionTimer = undefined;
+      metrics.upstreamFailure();
+      log.error("doubao connection start timed out", { timeoutMs: CONNECTION_TIMEOUT_MS });
+      sendClient({ type: "error", message: "豆包语音连接超时，正在重试。" });
+      socket.terminate();
+    }, CONNECTION_TIMEOUT_MS);
+    let sessionTimer: NodeJS.Timeout | undefined;
+    const clearStateTimers = () => {
+      if (connectionTimer) clearTimeout(connectionTimer);
+      if (sessionTimer) clearTimeout(sessionTimer);
+      connectionTimer = undefined;
+      sessionTimer = undefined;
+    };
+
+    socket.on("open", () => {
       log.info("doubao upstream opened");
-      upstream?.send(buildFullClientRequest(EventSend.StartConnection));
+      socket.send(buildFullClientRequest(EventSend.StartConnection));
       sendClient({ type: "status", state: "connecting", detail: "豆包语音连接已打开" });
     });
 
@@ -639,10 +931,14 @@ export function createDoubaoProvider(
     // still belong to the CURRENT upstream: after an in-place reconnect the
     // shared `upstream` variable points at the replacement socket, and a stale
     // continuation would double-send StartSession on it.
-    const socket = upstream;
+    socket.on("upgrade", (response) => {
+      const requestId = response.headers["x-tt-logid"];
+      if (requestId) log.info("doubao handshake accepted", { requestId });
+    });
 
-    upstream.on("message", async (message) => {
+    socket.on("message", async (message) => {
       try {
+        if (upstream !== socket) return;
         const frame = parseDoubaoFrame(message);
 
         if (frame.errorCode !== undefined) {
@@ -665,25 +961,26 @@ export function createDoubaoProvider(
         // weight — Doubao synthesizes the full reply regardless — so drop the
         // per-token/per-chunk frames before any JSON parsing. End-of-turn
         // events (ChatEnded/TtsEnded) still run their bookkeeping.
-        if (
-          wakeWordEnabled &&
-          (frame.event === EventReceive.TtsResponse ||
-            frame.event === EventReceive.ChatResponse ||
-            frame.event === EventReceive.TtsSentenceStart ||
-            frame.event === EventReceive.TtsSentenceEnd) &&
-          replyDecided &&
-          !replyAddressed
-        ) {
+        if (wakeWordEnabled && frame.event === EventReceive.TtsResponse && replyDecided && !replyAddressed) {
           return;
         }
 
         if (frame.event === EventReceive.ConnectionStarted) {
+          if (connectionTimer) clearTimeout(connectionTimer);
+          connectionTimer = undefined;
+          sessionTimer = setTimeout(() => {
+            sessionTimer = undefined;
+            metrics.upstreamFailure();
+            log.error("doubao session start timed out", { timeoutMs: SESSION_TIMEOUT_MS });
+            sendClient({ type: "error", message: "豆包语音会话启动超时，正在重试。" });
+            socket.terminate();
+          }, SESSION_TIMEOUT_MS);
           sessionId = randomUUID();
           // Fold in the concurrently-fetched weather (bounded; "" if unavailable),
           // then start the session. Doubao sends nothing until StartSession, so
           // awaiting here only defers our own next send.
-          const weatherRole = await config.weatherRolePromise;
-          let systemRole = config.baseSystemRole + weatherRole;
+          currentWeatherRole = await config.weatherRolePromise;
+          let systemRole = config.baseSystemRole + currentWeatherRole;
           if (resumedSession) {
             // Context replay for an in-place upstream reconnect: same ride, same
             // conversation — carry the live session memory forward and stop the
@@ -700,18 +997,17 @@ export function createDoubaoProvider(
             buildFullClientRequest(
               EventSend.StartSession,
               sessionId,
-              buildDoubaoSessionConfig({
-                sampleRate: config.sampleRate,
-                channels: config.channels,
-                voiceGender: config.voiceGender,
-                systemRole
-              })
+              buildDoubaoSessionConfig(currentDoubaoConfig(config, systemRole, !resumedSession))
             )
           );
           return;
         }
 
         if (frame.event === EventReceive.SessionStarted) {
+          if (sessionTimer) clearTimeout(sessionTimer);
+          sessionTimer = undefined;
+          const sessionPayload = parseJsonPayload(frame);
+          providerDialogId = stringField(sessionPayload, "dialog_id") ?? providerDialogId;
           sessionReady = true;
           upstreamRetries = 0;
           log.info(resumedSession ? "doubao session resumed after reconnect" : "doubao session started", {
@@ -722,45 +1018,49 @@ export function createDoubaoProvider(
           emitRideContext();
           emitMemory();
           sendClient({ type: "status", state: "ready", detail: "豆包实时语音已连接" });
-          while (pendingAudio.length) {
-            upstream?.send(buildAudioRequest(sessionId, pendingAudio.shift()!));
-          }
+          startPendingAudioFlush();
           return;
         }
 
         if (frame.event === EventReceive.TtsResponse) {
-          // Suppress the agent's voice when the rider did not address Max.
-          if (!replyIsAddressed()) return;
-          // If the fallback already spoke this reply via browser speech, drop the
-          // late Doubao audio so the rider doesn't hear it twice.
           if (fallbackSpoke) return;
-          if (!firstAudioAt) {
-            firstAudioAt = Date.now();
-            if (chatStartedAt) {
-              lastFirstAudioLatencyMs = firstAudioAt - chatStartedAt;
-              sendClient({ type: "metric", latencyMs: lastFirstAudioLatencyMs });
-            }
-            // Once per turn, on the transition into speaking — not per audio
-            // chunk, which repeated the same status dozens of times a reply.
-            sendClient({ type: "status", state: "speaking", detail: "已收到豆包语音音频" });
+          // ASR and TTS may overlap. Hold a short bounded prefix until the wake
+          // decision is final; otherwise background speech can leak audible Max
+          // output before the final ASR hypothesis proves it was unaddressed.
+          if (wakeWordEnabled && !replyIsAddressed()) {
+            if (!replyDecided) bufferUndecidedTtsAudio(frame.payload);
+            return;
           }
-          // Backpressure guard: if the client socket cannot drain (slow or stalled
-          // link), drop voice frames instead of queueing them in server memory.
-          // Only mark the turn as having delivered audio (and cancel the
-          // browser-speech fallback) when a frame is actually forwarded —
-          // otherwise a fully-saturated link would report "spoke" while the rider
-          // heard nothing and got no fallback.
-          if (client.readyState === client.OPEN && client.bufferedAmount < MAX_CLIENT_BUFFERED_BYTES) {
-            receivedTtsAudio = true;
-            clearTtsFallbackTimer();
-            telemetry?.serverAudio(frame.payload.byteLength);
-            client.send(frame.payload, { binary: true });
-          }
+          flushUndecidedTtsAudio();
+          forwardTtsAudio(frame.payload);
           return;
         }
 
         const payload = parseJsonPayload(frame);
+        if (
+          wakeWordEnabled &&
+          (frame.event === EventReceive.ChatResponse ||
+            frame.event === EventReceive.TtsSentenceStart ||
+            frame.event === EventReceive.TtsSentenceEnd) &&
+          replyDecided &&
+          !replyAddressed
+        ) {
+          currentQuestionId = stringField(payload, "question_id") ?? currentQuestionId;
+          currentReplyId = stringField(payload, "reply_id") ?? stringField(payload, "item_id") ?? currentReplyId;
+          markCurrentTurnSuppressed();
+          deleteSuppressedTurns();
+          return;
+        }
         if (frame.event === EventReceive.AsrInfo) {
+          // A new rider utterance means the currently playing reply was
+          // interrupted. Tell the provider how much was plausibly heard so its
+          // next turn does not rely on text that never reached the rider.
+          if (fallbackSpoke && currentReplyId) {
+            markCurrentTurnSuppressed();
+            deleteSuppressedTurns();
+          } else {
+            truncateInterruptedReply();
+          }
           // New rider turn: the previous turn's reply machinery must be torn
           // down first. A still-armed fallback timer would fire mid-turn,
           // speak the stale turn's text via browser speech, and set
@@ -771,6 +1071,7 @@ export function createDoubaoProvider(
           // prepend itself to the next turn's flush.
           if (receivedTtsAudio && pendingReplyText()) flushPendingAgentText(false);
           resetPendingReply();
+          clearUndecidedTtsAudio();
           receivedTtsAudio = false;
           // Anchor the per-turn latency timers and reset the wake-word
           // accumulation, decision latch, and double-speak guard.
@@ -778,6 +1079,14 @@ export function createDoubaoProvider(
           asrFirstTextAt = 0;
           chatStartedAt = 0;
           firstAudioAt = 0;
+          asrEndedAt = 0;
+          currentQuestionId = stringField(payload, "question_id") ?? stringField(payload, "item_id");
+          currentReplyId = undefined;
+          forwardedReplyBytes = 0;
+          firstForwardedReplyAt = undefined;
+          latencyMetricSent = false;
+          downstreamAudioAbandoned = false;
+          ttsEndedBeforeWakeDecision = false;
           sentThinkingStatus = false;
           fallbackSpoke = false;
           riderTurnText = "";
@@ -788,6 +1097,8 @@ export function createDoubaoProvider(
           riderDelivery = createTranscriptDelivery();
           agentDelivery = createTranscriptDelivery();
           agentFinalDelivered = false;
+          // This contains no transcript content, but gives every client an
+          // immediate, privacy-safe signal to clear queued playback on barge-in.
           sendClient({ type: "status", state: "hearing", detail: "豆包检测到骑手语音" });
           return;
         }
@@ -822,16 +1133,22 @@ export function createDoubaoProvider(
                 riderTurnAddressed = true;
               }
             }
-            memory = updateSessionMemory(memory, text, rideContext.mode);
-            log.debug("rider asr", { text });
-            sendClient({ type: "status", state: "asr", detail: `豆包听到：${text}` });
-            sendClient(transcriptEvent(riderDelivery, "rider", text, { final: false }));
-            emitMemory();
+            log.debug("rider asr", { characters: text.length, addressed: !wakeWordEnabled || riderTurnAddressed });
+            // Never expose or persist background speech while wake gating is
+            // enabled. Once the wake phrase (or follow-up window) is proven,
+            // the cumulative hypothesis is safe to display as a live caption.
+            if (!wakeWordEnabled || riderTurnAddressed) {
+              flushUndecidedTtsAudio();
+              sendClient({ type: "status", state: "asr", detail: `豆包听到：${text}` });
+              sendClient(transcriptEvent(riderDelivery, "rider", text, { final: false }));
+            }
           }
           return;
         }
 
         if (frame.event === EventReceive.ChatResponse) {
+          currentQuestionId = stringField(payload, "question_id") ?? currentQuestionId;
+          currentReplyId = stringField(payload, "reply_id") ?? stringField(payload, "item_id") ?? currentReplyId;
           if (!chatStartedAt) chatStartedAt = Date.now();
           const text = extractChatText(payload);
           if (text) {
@@ -845,6 +1162,8 @@ export function createDoubaoProvider(
         }
 
         if (frame.event === EventReceive.TtsSentenceStart || frame.event === EventReceive.TtsSentenceEnd) {
+          currentQuestionId = stringField(payload, "question_id") ?? currentQuestionId;
+          currentReplyId = stringField(payload, "reply_id") ?? stringField(payload, "item_id") ?? currentReplyId;
           const text = extractChatText(payload);
           if (text && text !== lastTtsSentence) {
             ttsText += text;
@@ -865,6 +1184,8 @@ export function createDoubaoProvider(
         }
 
         if (frame.event === EventReceive.ChatEnded) {
+          currentQuestionId = stringField(payload, "question_id") ?? currentQuestionId;
+          currentReplyId = stringField(payload, "reply_id") ?? stringField(payload, "item_id") ?? currentReplyId;
           // The reply text is complete, but TTS may still be streaming. Defer the
           // single flush to TtsEnded so the transcript uses the full spoken text
           // and isn't emitted twice. If no audio is coming, the fallback timer
@@ -878,10 +1199,18 @@ export function createDoubaoProvider(
         if (frame.event === EventReceive.TtsEnded) {
           clearTtsFallbackTimer();
           if (!replyIsAddressed()) {
+            if (!replyDecided) {
+              ttsEndedBeforeWakeDecision = true;
+              return;
+            }
             // Suppressed turn: no audio was forwarded on purpose — reporting
             // "TTS 未返回音频，浏览器备用" here would read as a fault. Just go
             // back to listening, and don't pollute latency telemetry either.
             receivedTtsAudio = false;
+            clearUndecidedTtsAudio();
+            resetPendingReply();
+            markCurrentTurnSuppressed();
+            deleteSuppressedTurns();
             sendClient({
               type: "status",
               state: "listening",
@@ -893,8 +1222,12 @@ export function createDoubaoProvider(
           if (pendingReplyText()) flushPendingAgentText(!receivedTtsAudio);
           sendClient({
             type: "status",
-            state: "ready",
-            detail: receivedTtsAudio ? "豆包回复已完成" : "豆包 TTS 未返回音频，正在使用浏览器语音备用模式"
+            state: downstreamAudioAbandoned ? "degraded" : "ready",
+            detail: downstreamAudioAbandoned
+              ? "网络拥塞，本轮语音未完整播放"
+              : receivedTtsAudio
+                ? "豆包回复已完成"
+                : "豆包 TTS 未返回音频，正在使用浏览器语音备用模式"
           });
           receivedTtsAudio = false;
           emitTelemetry();
@@ -902,19 +1235,39 @@ export function createDoubaoProvider(
         }
 
         if (frame.event === EventReceive.AsrEnded) {
-          // Close the rider turn with a final transcript carrying the full
-          // accumulated utterance. Without it, rider turns stayed non-final
-          // forever and two separate utterances (e.g. around a suppressed
-          // wake-word reply) merged into one, destroying the earlier text in
-          // the tester chat-history drilldown.
-          if (!riderTurnFinalized && riderTurnText.trim()) {
-            sendClient(transcriptEvent(riderDelivery, "rider", riderTurnText.trim(), { final: true }));
-          }
           // Only now is an unaddressed classification final. Chat/TTS events
           // may have arrived between cumulative ASR hypotheses, so deciding
           // earlier could suppress a turn whose later hypothesis contains Max.
+          if (riderTurnFinalized) return;
           riderTurnFinalized = true;
-          sendClient({ type: "status", state: "ready", detail: "豆包语音识别完成" });
+          asrEndedAt = Date.now();
+          recordFirstAudioLatency();
+          const addressed = replyIsAddressed();
+          if (addressed) {
+            const text = riderTurnText.trim();
+            if (text) {
+              memory = updateSessionMemory(memory, text, rideContext.mode);
+              sendClient(transcriptEvent(riderDelivery, "rider", text, { final: true }));
+              emitMemory();
+            }
+            flushUndecidedTtsAudio();
+            sendClient({ type: "status", state: "ready", detail: "豆包语音识别完成" });
+            if (ttsEndedBeforeWakeDecision) {
+              if (pendingReplyText()) flushPendingAgentText(!receivedTtsAudio);
+              emitTelemetry();
+              ttsEndedBeforeWakeDecision = false;
+            }
+          } else {
+            clearUndecidedTtsAudio();
+            resetPendingReply();
+            markCurrentTurnSuppressed();
+            deleteSuppressedTurns();
+            sendClient({
+              type: "status",
+              state: "listening",
+              detail: `正在收听 —— 说一声 "${WAKE_PHRASE_LABEL}" 唤醒 Max`
+            });
+          }
           return;
         }
 
@@ -945,15 +1298,21 @@ export function createDoubaoProvider(
         }
 
         if (frame.event === EventReceive.Usage) {
-          sendClient({ type: "status", state: "usage", detail: "已收到豆包用量事件" });
+          log.info("doubao usage", { usage: payload });
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : "收到无效豆包载荷";
-        sendClient({ type: "status", state: "doubao", detail: message });
+        metrics.upstreamFailure();
+        log.error("invalid doubao protocol frame", { message });
+        sendClient({ type: "status", state: "degraded", detail: "豆包返回了无效数据，正在重新连接" });
+        socket.terminate();
       }
     });
 
-    upstream.on("close", () => {
+    socket.on("close", () => {
+      if (upstream !== socket) return;
+      clearStateTimers();
+      clearPendingAudioFlush();
       sessionReady = false;
       log.info("doubao upstream closed");
       clearTtsFallbackTimer();
@@ -998,9 +1357,14 @@ export function createDoubaoProvider(
       }
     });
 
-    upstream.on("unexpected-response", (request, response) => {
+    socket.on("unexpected-response", (request, response) => {
+      if (upstream !== socket) return;
+      clearStateTimers();
       metrics.upstreamFailure();
-      log.error("doubao handshake failed", { statusCode: response.statusCode });
+      log.error("doubao handshake failed", {
+        statusCode: response.statusCode,
+        requestId: response.headers["x-tt-logid"]
+      });
       sendClient({
         type: "error",
         message: `豆包语音握手失败，HTTP ${response.statusCode}。请检查 speech-dialog App ID、Access Token、Resource ID 和权限。`
@@ -1009,9 +1373,11 @@ export function createDoubaoProvider(
       // handshake itself — without this the socket would sit in CONNECTING
       // forever and the close/retry path above would never run.
       request.destroy();
+      socket.terminate();
     });
 
-    upstream.on("error", (error) => {
+    socket.on("error", (error) => {
+      if (upstream !== socket) return;
       // close() aborting our own still-CONNECTING handshake (rider left early)
       // emits an error too; counting it would make /health's upstream-failure
       // signal look like Doubao flapping.
@@ -1039,20 +1405,21 @@ export function createDoubaoProvider(
       // session.memory snapshot so the agent keeps its short-term memory.
       memory = restoreSessionMemory(event.memory, rideContext.mode);
       const previousConversationPrompt = buildPreviousConversationPrompt(
-        context?.previousConversation?.turns ?? [],
+        [],
         context?.previousConversation?.facts ?? []
       );
+      const dialogContext = buildDoubaoDialogContext(context?.previousConversation?.turns ?? []);
+      const speakingStyle = buildPersonalityPrompt(event.voicePersonality ?? "concise");
       systemRole +=
         `\n\n${buildIdentityPrompt()}` +
+        `\n\n${buildToolGroundingPrompt()}` +
         `\n\n[骑行上下文] ${buildRideContextSummary(rideContext)}。` +
         `\n${buildVoiceSettingPrompt(event.voiceGender ?? "female")}` +
         `\n${buildLanguageInteractionPrompt()}` +
         `你必须根据模式调整回答长度和安全策略；紧急模式优先生命安全，导航模式只给下一步。\n${buildSafetyPrompt(
           rideContext,
           memory
-        )}\n${buildIntentGuidancePrompt(memory.lastIntent)}\n${buildPersonalityPrompt(
-          event.voicePersonality ?? "concise"
-        )}\n[短期记忆] ${buildSessionMemoryPrompt(memory)}。` +
+        )}\n${buildIntentGuidancePrompt(memory.lastIntent)}\n${speakingStyle}\n[短期记忆] ${buildSessionMemoryPrompt(memory)}。` +
         (previousConversationPrompt ? `\n\n${previousConversationPrompt}` : "");
       emitRideContext();
       emitMemory();
@@ -1098,10 +1465,10 @@ export function createDoubaoProvider(
             state: "ready",
             detail: `已接入${initialLocation.source === "rider" ? "实时" : locationLabel}天气：${weather.description} ${weather.temperatureC}°C`
           });
-          return (
+          currentWeatherRole =
             `\n\n[实时骑行情报] ${locationLabel}${weather.summary}` +
-            `${weather.riderAdvice}当骑手询问天气、风力或路况时，请基于这条真实数据简短回答。`
-          );
+            `${weather.riderAdvice}当骑手询问天气或风力时，只基于这条真实数据简短回答。`;
+          return currentWeatherRole;
         } catch {
           log.warn("initial weather fetch failed", { lat: initialLocation.lat, lon: initialLocation.lon });
           sendClient({ type: "status", state: "ready", detail: "实时天气暂不可用，使用通用回答" });
@@ -1111,9 +1478,9 @@ export function createDoubaoProvider(
 
       // Mid-ride refresh: long rides outlive the session-start snapshot, so
       // re-fetch on an interval — always against the CURRENT rider location
-      // (kept fresh by location.update events). The Doubao system role is
-      // fixed once the session starts, so the agent's own context freshens on
-      // the next session; the HUD and hazard fusion stay live.
+      // (kept fresh by location.update events). UpdateConfig keeps the model's
+      // location and weather context aligned
+      // with the HUD during the same live session.
       if (appConfig.weatherRefreshMs > 0) {
         weatherRefreshTimer = setInterval(() => void refreshWeather("interval"), appConfig.weatherRefreshMs);
       }
@@ -1125,6 +1492,8 @@ export function createDoubaoProvider(
         channels: event.channels,
         voiceGender: event.voiceGender ?? "female",
         baseSystemRole: systemRole,
+        speakingStyle,
+        dialogContext,
         weatherRolePromise
       };
       connectUpstream(connectConfig);
@@ -1132,7 +1501,9 @@ export function createDoubaoProvider(
     async startAudio() {
       // Per-turn latency timers are anchored at each AsrInfo, so there's nothing
       // session-level to seed here.
+      audioActive = true;
       emitRideContext();
+      if (sessionReady) startPendingAudioFlush();
       sendClient({
         type: "status",
         state: "listening",
@@ -1143,19 +1514,27 @@ export function createDoubaoProvider(
       if (rideContext.scenario === "adas") hazardInjector.start(5000, 2000);
     },
     async sendAudio(chunk: Buffer) {
-      if (sessionReady && upstream?.readyState === WebSocket.OPEN) {
-        upstream.send(buildAudioRequest(sessionId, chunk));
+      if (!audioActive) return;
+      const socket = upstream;
+      if (
+        sessionReady &&
+        socket?.readyState === WebSocket.OPEN &&
+        !pendingAudioFlushTimer &&
+        socket.bufferedAmount < MAX_UPSTREAM_BUFFERED_BYTES
+      ) {
+        socket.send(buildAudioRequest(sessionId, chunk));
         return;
       }
       // Buffer frames that arrive before the upstream session is ready —
       // including during start()'s weather fetch, before `upstream` even exists —
       // so the rider's first words aren't lost. Bounded; oldest frames drop first.
-      if (pendingAudio.length >= MAX_PENDING_AUDIO_FRAMES) pendingAudio.shift();
-      pendingAudio.push(chunk);
+      queuePendingAudio(chunk);
+      if (sessionReady && socket?.readyState === WebSocket.OPEN) startPendingAudioFlush();
     },
     async updateLocation(lat: number, lon: number) {
       const previous = weatherLocation;
       weatherLocation = { lat, lon, source: "rider" };
+      updateProviderConfig();
       // Refetch right away when the rider has moved far enough for the weather
       // to plausibly differ; otherwise the periodic refresh picks up the new
       // coordinates on its own. 20 km ≈ a fresh forecast cell.
@@ -1164,20 +1543,26 @@ export function createDoubaoProvider(
       }
     },
     async stopAudio() {
+      audioActive = false;
       hazardInjector.stop();
       // Frames still waiting for the session to become ready belong to a mic
       // stream the rider just ended — flushing them later would replay stale
       // audio into a fresh turn.
       pendingAudio.length = 0;
-      if (upstream?.readyState === WebSocket.OPEN && sessionReady) {
+      clearPendingAudioFlush();
+      if (doubaoInputMode() === "push_to_talk" && upstream?.readyState === WebSocket.OPEN && sessionReady) {
         upstream.send(buildFullClientRequest(EventSend.EndAsr, sessionId));
       }
       sendClient({ type: "status", state: "ready", detail: "麦克风已静音" });
     },
     async close() {
       closedByProvider = true;
+      audioActive = false;
       hazardInjector.stop();
       clearTtsFallbackTimer();
+      clearPendingAudioFlush();
+      pendingAudio.length = 0;
+      clearUndecidedTtsAudio();
       if (upstreamReconnectTimer) {
         clearTimeout(upstreamReconnectTimer);
         upstreamReconnectTimer = undefined;

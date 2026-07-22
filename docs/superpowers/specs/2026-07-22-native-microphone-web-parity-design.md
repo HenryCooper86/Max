@@ -58,7 +58,7 @@ The dock remains centered beneath the utility row. It replaces all current circu
 | Hands-free off | Microphone | 开始免提 | Ember | Quiet three-bar meter at rest | Start session |
 | Starting or reconnecting | X | 连接中 | Amber transitioning to lume | Quiet progress shimmer | Cancel/end session |
 | Live and unmuted | X | 结束免提 | Lume | Live input meter | End session |
-| Live and muted | X | 结束免提 | Lume border with muted amber cue | Static muted symbol or resting meter | End session |
+| Live and muted | X | 结束免提 | Lume border with muted amber cue | Static microphone-slash symbol | End session |
 
 The dock always represents the hands-free session action. Muting is not assigned to the dock tap, preventing an ambiguous control whose action changes between End and Mute.
 
@@ -118,7 +118,7 @@ Use standard `Button`, `RoundedRectangle`, `Image(systemName:)`, and layout view
 
 Add a focused Compose `VoiceMicDock` composable with the same inputs and state mapping. `PrimaryControls` hosts the dock, while `SecondaryControls` conditionally includes the Mute pill.
 
-Use `Modifier.clickable` or a Material button surface with an explicit role and content description. The decorative meter is excluded from TalkBack semantics.
+Use a Material surface with an explicit button role and content description. The decorative meter is excluded from TalkBack semantics.
 
 ### Shared Rules
 

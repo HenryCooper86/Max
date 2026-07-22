@@ -628,10 +628,20 @@ if (existsSync(clientDir)) {
   app.use(
     express.static(clientDir, {
       setHeaders: (res, filePath) => {
+        // Vite's content-hashed bundles (…/assets/) are safe to cache forever.
+        // The self-hosted fonts (…/fonts/) are stable but keep fixed names, so
+        // cache them long without `immutable` — a same-name swap still updates on
+        // a hard reload. Everything else (the HTML shell) must revalidate so a
+        // deploy never pins a returning rider to yesterday's asset names.
         const isHashedAsset = filePath.includes(`${path.sep}assets${path.sep}`);
+        const isFont = filePath.includes(`${path.sep}fonts${path.sep}`);
         res.setHeader(
           "Cache-Control",
-          isHashedAsset ? "public, max-age=31536000, immutable" : "no-cache, max-age=0, must-revalidate"
+          isHashedAsset
+            ? "public, max-age=31536000, immutable"
+            : isFont
+              ? "public, max-age=31536000"
+              : "no-cache, max-age=0, must-revalidate"
         );
       }
     })

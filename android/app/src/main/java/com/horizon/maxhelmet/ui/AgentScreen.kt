@@ -174,12 +174,15 @@ private fun gaugeMode(state: AgentSession.State): GaugeMode {
 }
 
 /** The single line under the helmet — the only words on the clean screen. */
-private fun orbCaption(state: AgentSession.State): String {
+internal fun orbCaption(state: AgentSession.State): String {
     if (!state.handsFree) return "点按头盔，开始对话"
-    if (state.micMuted) return "麦克风已静音"
-    val caption = when (state.connection) {
-        ConnectionState.READY -> TURN_CAPTIONS.getValue(state.turnState)
-        else -> connectionLabel(state.connection)
+    val caption = if (state.micMuted) {
+        "麦克风已静音"
+    } else {
+        when (state.connection) {
+            ConnectionState.READY -> TURN_CAPTIONS.getValue(state.turnState)
+            else -> connectionLabel(state.connection)
+        }
     }
     // A non-normal fused hazard leads the caption (HAZARD_CAPTIONS in HelmetVisual.tsx).
     val presentedHazard = if (isHazardPresentationActive(state)) state.fusedHazard else HazardLevel.NORMAL

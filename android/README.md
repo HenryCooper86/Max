@@ -108,6 +108,7 @@ The emulator forwards the host Mac's microphone, so the full voice loop is testa
 ## What's implemented (full HUD parity)
 
 - Hands-free toggle: the 开始 / 结束 button **or tapping the helmet** starts/stops mic streaming + relay session
+- Web-parity microphone dock — the native 300 × 64 start/end control mirrors the web HUD; its three-bar meter, key, and lume glow react only to live rider input, while Mute remains a separate utility action.
 - Turn-state ring with the web HUD's captions and palette (待机 / 请讲话 / 聆听 / 思考 / 回答)
 - Live transcript with in-place partial updates and agent-line dedup (same rules as the web client)
 - Transcript JSON export via the system share sheet (导出日志, same payload as the web export)

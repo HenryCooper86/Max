@@ -46,7 +46,7 @@ private func connectionLabel(_ state: ConnectionState) -> String {
 /// hazard (ride + weather, see State.fusedHazard) overrides the conversational
 /// palette — safety tint always wins, mirroring the web HelmetVisual.
 private func orbColor(_ state: AgentSession.State) -> Color {
-    if state.fusedHazard != .normal { return hazardColor(state.fusedHazard) }
+    if isHazardPresentationActive(state) { return hazardColor(state.fusedHazard) }
     guard state.handsFree else { return HudColors.lume }
     switch state.connection {
     case .offline, .degraded: return HudColors.danger2
@@ -59,8 +59,9 @@ private func orbColor(_ state: AgentSession.State) -> Color {
 /// monospaced face here (Space Mono on web). Deliberately English: it reads as a
 /// gauge label, not primary copy. Mirrors the web HelmetVisual TELLTALE map.
 private func stateTelltale(_ state: AgentSession.State) -> String {
-    if state.fusedHazard == .critical { return "HAZARD" }
-    if state.fusedHazard == .caution { return "CAUTION" }
+    if isHazardPresentationActive(state) {
+        return state.fusedHazard == .critical ? "HAZARD" : "CAUTION"
+    }
     if !state.handsFree { return "STANDBY" }
     if state.micMuted { return "MUTED" }
     switch state.connection {
@@ -82,7 +83,7 @@ private func stateTelltale(_ state: AgentSession.State) -> String {
 enum GaugeMode { case offline, idle, connecting, mic, thinking, speaking, hazard }
 
 private func gaugeMode(_ state: AgentSession.State) -> GaugeMode {
-    if state.handsFree && state.fusedHazard != .normal { return .hazard }
+    if isHazardPresentationActive(state) { return .hazard }
     guard state.handsFree else { return .idle }
     switch state.connection {
     case .offline, .degraded: return .offline
@@ -110,7 +111,8 @@ private func orbCaption(_ state: AgentSession.State) -> String {
     } else {
         base = connectionLabel(state.connection)
     }
-    switch state.fusedHazard {
+    let presentedHazard = isHazardPresentationActive(state) ? state.fusedHazard : .normal
+    switch presentedHazard {
     case .normal: return base
     case .caution: return "注意路况 · " + base
     case .critical: return "高风险 · 优先安全 · " + base
@@ -130,6 +132,7 @@ struct AgentScreen: View {
 
     var body: some View {
         let color = orbColor(state)
+        let presentedHazard = isHazardPresentationActive(state) ? state.fusedHazard : .normal
 
         ZStack {
             BackgroundGlow(color: color)
@@ -148,7 +151,7 @@ struct AgentScreen: View {
                     turnState: state.turnState,
                     voiceLevel: state.voiceLevel,
                     dimmed: state.micMuted,
-                    hazard: state.fusedHazard,
+                    hazard: presentedHazard,
                     gauge: gaugeMode(state),
                     onTap: viewModel.toggleHandsFree
                 )
@@ -311,6 +314,8 @@ private struct HelmetVisual: View {
     let gauge: GaugeMode
     var onTap: () -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     private var breatheSpeed: Double {
         switch turnState {
         case .idle: return 0.9
@@ -330,8 +335,11 @@ private struct HelmetVisual: View {
     }
 
     var body: some View {
-        TimelineView(.animation) { timeline in
-            let t = timeline.date.timeIntervalSinceReferenceDate
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { timeline in
+            let t = helmetMotionTime(
+                elapsed: timeline.date.timeIntervalSinceReferenceDate,
+                reduceMotion: reduceMotion
+            )
             let level = Double(max(0, min(1, voiceLevel)))
             let breathe = 0.5 + 0.5 * sin(t * breatheSpeed)
             let pulse = pulseAmplitude * breathe + 0.06 * level

@@ -77,17 +77,21 @@ struct VoiceMicDock: View {
             .accessibilityLabel(presentation.accessibilityLabel)
         }
         .onAppear { displayedLevel = presentation.displayLevel }
-        .onChange(of: presentation.displayLevel) { _, target in
-            if reduceMotion {
-                displayedLevel = target
-            } else {
-                withAnimation(.linear(duration: target > displayedLevel ? 0.08 : 0.18)) {
-                    displayedLevel = target
-                }
+        .onChange(of: presentation) { previous, next in
+            switch micDockLevelTransition(
+                from: previous,
+                to: next,
+                displayedLevel: displayedLevel,
+                reduceMotion: reduceMotion
+            ) {
+            case .snap(let target):
+                withAnimation(nil) { displayedLevel = target }
+            case .animate(let target, let duration):
+                withAnimation(.linear(duration: duration)) { displayedLevel = target }
             }
         }
         .onChange(of: reduceMotion) { _, enabled in
-            if enabled { displayedLevel = presentation.displayLevel }
+            if enabled { withAnimation(nil) { displayedLevel = presentation.displayLevel } }
         }
     }
 
@@ -157,6 +161,8 @@ struct MuteUtilityPill: View {
             .background(Capsule().fill(muted ? HudColors.amber.opacity(0.16) : HudColors.panelElevated))
         }
         .buttonStyle(.plain)
+        .frame(minHeight: muteUtilityMinimumHitHeight)
+        .contentShape(Rectangle())
         .accessibilityLabel(muted ? "取消静音" : "静音")
     }
 }

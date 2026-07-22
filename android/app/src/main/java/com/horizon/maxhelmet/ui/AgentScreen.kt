@@ -122,14 +122,13 @@ private fun connectionLabel(state: ConnectionState): String = when (state) {
  * amber while connecting, then the per-turn ring color once live. */
 private fun orbColor(state: AgentSession.State): Color {
     if (!state.handsFree) return HudColors.Lume
+    if (isHazardPresentationActive(state)) return hazardColor(state.fusedHazard)
     return when (state.connection) {
         ConnectionState.OFFLINE, ConnectionState.DEGRADED -> HudColors.Red
         ConnectionState.CONNECTING, ConnectionState.PROVIDER -> HudColors.Amber
         // The fused hazard overrides the conversational palette: a rider glancing
         // at the helmet must see danger first, turn state second (HelmetVisual.tsx).
-        ConnectionState.RELAY, ConnectionState.READY ->
-            if (state.fusedHazard != HazardLevel.NORMAL) hazardColor(state.fusedHazard)
-            else ringColor(true, state.turnState)
+        ConnectionState.RELAY, ConnectionState.READY -> ringColor(true, state.turnState)
     }
 }
 
@@ -137,8 +136,9 @@ private fun orbColor(state: AgentSession.State): Color {
  *  face here (Space Mono on web). Deliberately English: a gauge label, not primary
  *  copy. Mirrors the web HelmetVisual TELLTALE map. */
 private fun stateTelltale(state: AgentSession.State): String {
-    if (state.fusedHazard == HazardLevel.CRITICAL) return "HAZARD"
-    if (state.fusedHazard == HazardLevel.CAUTION) return "CAUTION"
+    if (isHazardPresentationActive(state)) {
+        return if (state.fusedHazard == HazardLevel.CRITICAL) "HAZARD" else "CAUTION"
+    }
     if (!state.handsFree) return "STANDBY"
     if (state.micMuted) return "MUTED"
     return when (state.connection) {
@@ -159,7 +159,7 @@ private fun stateTelltale(state: AgentSession.State): String {
 private enum class GaugeMode { OFFLINE, IDLE, CONNECTING, MIC, THINKING, SPEAKING, HAZARD }
 
 private fun gaugeMode(state: AgentSession.State): GaugeMode {
-    if (state.handsFree && state.fusedHazard != HazardLevel.NORMAL) return GaugeMode.HAZARD
+    if (isHazardPresentationActive(state)) return GaugeMode.HAZARD
     if (!state.handsFree) return GaugeMode.IDLE
     return when (state.connection) {
         ConnectionState.OFFLINE, ConnectionState.DEGRADED -> GaugeMode.OFFLINE
@@ -182,7 +182,8 @@ private fun orbCaption(state: AgentSession.State): String {
         else -> connectionLabel(state.connection)
     }
     // A non-normal fused hazard leads the caption (HAZARD_CAPTIONS in HelmetVisual.tsx).
-    val hazardPrefix = HAZARD_CAPTIONS[state.fusedHazard]
+    val presentedHazard = if (isHazardPresentationActive(state)) state.fusedHazard else HazardLevel.NORMAL
+    val hazardPrefix = HAZARD_CAPTIONS[presentedHazard]
     return if (hazardPrefix != null) "$hazardPrefix · $caption" else caption
 }
 
@@ -250,7 +251,7 @@ fun AgentScreen(
                 turnState = state.turnState,
                 voiceLevel = state.voiceLevel,
                 dimmed = state.micMuted,
-                hazard = if (state.handsFree) state.fusedHazard else HazardLevel.NORMAL,
+                hazard = if (isHazardPresentationActive(state)) state.fusedHazard else HazardLevel.NORMAL,
                 gauge = gaugeMode(state),
                 onTap = onToggleHandsFree
             )

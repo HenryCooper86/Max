@@ -2,6 +2,7 @@ import Foundation
 
 let micDockNoiseFloor: Float = 0.035
 let micDockSensitivity: Float = 1.7
+let muteUtilityMinimumHitHeight: CGFloat = 44
 
 enum MicDockMode: Equatable {
     case idle, connecting, live, muted
@@ -12,6 +13,24 @@ struct MicDockPresentation: Equatable {
     let label: String
     let accessibilityLabel: String
     let displayLevel: Float
+}
+
+enum MicDockLevelTransition: Equatable {
+    case snap(to: Float)
+    case animate(to: Float, duration: TimeInterval)
+}
+
+func micDockLevelTransition(
+    from _: MicDockPresentation,
+    to next: MicDockPresentation,
+    displayedLevel: Float,
+    reduceMotion: Bool
+) -> MicDockLevelTransition {
+    if reduceMotion || next.mode != .live {
+        return .snap(to: next.displayLevel)
+    }
+    let duration = next.displayLevel > displayedLevel ? 0.08 : 0.18
+    return .animate(to: next.displayLevel, duration: duration)
 }
 
 func isVoiceInputActive(_ state: AgentSession.State) -> Bool {

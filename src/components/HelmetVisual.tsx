@@ -13,19 +13,6 @@ type Props = {
   hazardLevel?: HazardLevel;
 };
 
-// On-visor waveform: many thin bars whose amplitudes follow a bell envelope
-// with a deterministic ripple, so the line reads as an organic sound wave
-// rather than a row of LED segments. While Max speaks a CSS animation runs a
-// travelling wave through them (see .visorVisualizer.speaking); while the
-// rider talks the bars are driven live by the mic level.
-const BAR_COUNT = 27;
-const BAR_AMPS = Array.from({ length: BAR_COUNT }, (_, index) => {
-  const t = index / (BAR_COUNT - 1);
-  const bell = Math.exp(-((t - 0.5) ** 2) / 0.09);
-  const ripple = 0.16 * Math.sin(index * 2.1);
-  return Math.max(0.18, Math.min(1, 0.28 + 0.72 * bell + ripple));
-});
-
 // Instrument bezel: a 270° tick ring (gap at the bottom, like a tachometer)
 // wrapped around the helmet. Its luminous arc IS the state gauge — how far it
 // fills, and in what colour, reads the session state at a glance. Ticks are
@@ -218,45 +205,21 @@ export function HelmetVisual({ connected, listening, voiceLevel, turnState, haza
             fill="url(#visorGrad)"
             d="M155 88h155c22 0 40 18 40 40v13c-48 18-106 25-178 21-27-1-49-24-49-51 0-13 11-23 32-23Z"
           />
+          {/* State glow — the visor lights with the ring colour while Max is
+              live, in place of a separate on-visor visualizer (the gauge bezel
+              now carries the live mic signal). Matches the iOS/Android visor. */}
+          <path
+            className="visorGlow"
+            fill="var(--ring)"
+            d="M155 88h155c22 0 40 18 40 40v13c-48 18-106 25-178 21-27-1-49-24-49-51 0-13 11-23 32-23Z"
+          />
           <ellipse className="visorGlare" cx="206" cy="106" rx="58" ry="11" />
           {/* Crisp specular streak across the upper visor for a glassy read. */}
           <ellipse className="visorSpec" cx="190" cy="99" rx="44" ry="3.4" />
           <circle className="micDot" cx="258" cy="205" r="9" />
           <circle className="greenDot" cx="282" cy="205" r="9" />
         </svg>
-
-        <VisorWaveform connected={connected} listening={listening} voiceLevel={voiceLevel} turnState={turnState} />
       </div>
-    </div>
-  );
-}
-
-/** The waveform on the visor. Three drive modes: a CSS travelling wave while
- *  Max replies, live mic level while the rider talks, and a low scanning
- *  shimmer while Max thinks; otherwise a calm flat line. */
-function VisorWaveform({
-  connected,
-  listening,
-  voiceLevel,
-  turnState
-}: Pick<Props, "connected" | "listening" | "voiceLevel" | "turnState">) {
-  const speaking = connected && turnState === "speaking";
-  const thinking = connected && turnState === "thinking";
-  const micDriven = listening && !speaking && !thinking;
-  const mode = speaking ? "speaking" : thinking ? "thinking" : "";
-
-  return (
-    <div className={["visorVisualizer", mode, listening ? "active" : ""].filter(Boolean).join(" ")}>
-      {BAR_AMPS.map((amp, index) => {
-        const style: CSSProperties = { "--amp": amp, "--i": index } as CSSProperties;
-        // Inline transforms only in mic-driven/idle modes — the speaking and
-        // thinking waves are CSS animations, which must own the transform.
-        if (!speaking && !thinking) {
-          const scale = micDriven ? Math.max(0.1, Math.min(1, voiceLevel * 1.7 * amp + 0.07)) : 0.1;
-          style.transform = `scaleY(${scale})`;
-        }
-        return <span key={index} style={style} />;
-      })}
     </div>
   );
 }

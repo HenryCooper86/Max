@@ -1,4 +1,33 @@
 /* ============================================================
+   Self-hosted type — Space Grotesk (display) + Space Mono (instrument data).
+   Bundled as woff2 (latin subset) under /public/fonts so the voice HUD keeps
+   its typographic voice offline and where Google's font CDN is unreachable
+   (e.g. mainland China, the primary rider audience). Chinese stays a system
+   stack; only Latin is web-loaded.
+   ============================================================ */
+@font-face {
+  font-family: "Space Grotesk";
+  src: url("/fonts/space-grotesk-var.woff2") format("woff2");
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Space Mono";
+  src: url("/fonts/space-mono-400.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Space Mono";
+  src: url("/fonts/space-mono-700.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ============================================================
    Design tokens
    ============================================================ */
 :root {
@@ -12,6 +41,12 @@
   --warn: #f2c14e;
   --panel: rgba(7, 11, 12, 0.5);
   --border: rgba(196, 218, 216, 0.16);
+
+  /* Type roles. Display = Space Grotesk (wordmark, big Latin); mono = Space Mono
+     (telltales, timing, keycaps, tick labels); cjk = system Chinese stack. */
+  --font-display: "Space Grotesk", Inter, ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Space Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-cjk: "PingFang SC", "HarmonyOS Sans SC", "Source Han Sans SC", "Noto Sans SC", system-ui, sans-serif;
 
   color: var(--text);
   background: var(--bg);
@@ -332,58 +367,62 @@ h2 {
   max-height: 100%;
   min-height: 0;
 
-  --ring: var(--danger);
-  --ring-soft: rgba(255, 111, 87, 0.5);
-  --ring-faint: rgba(255, 111, 87, 0.18);
-  --glow: rgba(255, 111, 87, 0.22);
+  /* Gauge/ring palette — defaults to the offline (danger) read; the turn-state
+     and hazard classes below override it. Green is reserved for live/ready,
+     amber for thinking, red for danger — the cyan "listening" hue is retired
+     so the resting HUD carries fewer accent hues. */
+  --ring: var(--red, #ff5b47);
+  --ring-soft: rgba(255, 91, 71, 0.5);
+  --ring-faint: rgba(255, 91, 71, 0.18);
+  --glow: rgba(255, 91, 71, 0.22);
 }
 
 .helmetStage.online {
-  --ring: var(--accent);
-  --ring-soft: rgba(62, 232, 159, 0.5);
-  --ring-faint: rgba(62, 232, 159, 0.18);
-  --glow: rgba(62, 232, 159, 0.2);
+  --ring: var(--lume, #47e39b);
+  --ring-soft: rgba(71, 227, 155, 0.5);
+  --ring-faint: rgba(71, 227, 155, 0.18);
+  --glow: rgba(71, 227, 155, 0.2);
 }
 
 .helmetStage.listening {
-  --ring: var(--accent-cyan);
-  --ring-soft: rgba(95, 233, 214, 0.6);
-  --ring-faint: rgba(95, 233, 214, 0.22);
-  --glow: rgba(95, 233, 214, 0.32);
+  --ring: var(--lume, #47e39b);
+  --ring-soft: rgba(71, 227, 155, 0.62);
+  --ring-faint: rgba(71, 227, 155, 0.24);
+  --glow: rgba(71, 227, 155, 0.32);
 }
 
 .helmetStage.thinking {
-  --ring: var(--warn);
-  --ring-soft: rgba(242, 193, 78, 0.55);
-  --ring-faint: rgba(242, 193, 78, 0.2);
-  --glow: rgba(242, 193, 78, 0.24);
+  --ring: var(--amber, #f5b843);
+  --ring-soft: rgba(245, 184, 67, 0.58);
+  --ring-faint: rgba(245, 184, 67, 0.22);
+  --glow: rgba(245, 184, 67, 0.26);
 }
 
 .helmetStage.speaking {
-  --ring: var(--accent);
-  --ring-soft: rgba(62, 232, 159, 0.6);
-  --ring-faint: rgba(62, 232, 159, 0.24);
-  --glow: rgba(62, 232, 159, 0.34);
+  --ring: var(--lume, #47e39b);
+  --ring-soft: rgba(71, 227, 155, 0.62);
+  --ring-faint: rgba(71, 227, 155, 0.26);
+  --glow: rgba(71, 227, 155, 0.34);
 }
 
 /* Fused hazard (ride mode + weather + ADAS) overrides the conversational
    palette — declared after the turn-state classes so it wins at equal
-   specificity. Caution = amber; critical = red with an urgent ring pulse. */
+   specificity. Caution = amber; critical = red with an urgent gauge pulse. */
 .helmetStage.hazard-caution {
-  --ring: var(--warn);
-  --ring-soft: rgba(242, 193, 78, 0.6);
-  --ring-faint: rgba(242, 193, 78, 0.24);
-  --glow: rgba(242, 193, 78, 0.3);
+  --ring: var(--amber, #f5b843);
+  --ring-soft: rgba(245, 184, 67, 0.62);
+  --ring-faint: rgba(245, 184, 67, 0.26);
+  --glow: rgba(245, 184, 67, 0.32);
 }
 
 .helmetStage.hazard-critical {
-  --ring: var(--danger);
-  --ring-soft: rgba(255, 111, 87, 0.65);
-  --ring-faint: rgba(255, 111, 87, 0.26);
-  --glow: rgba(255, 111, 87, 0.36);
+  --ring: var(--red, #ff5b47);
+  --ring-soft: rgba(255, 91, 71, 0.68);
+  --ring-faint: rgba(255, 91, 71, 0.28);
+  --glow: rgba(255, 91, 71, 0.36);
 }
 
-.helmetStage.hazard-critical .reticle {
+.helmetStage.hazard-critical .gaugeBezel {
   animation: hazardPulse 0.9s ease-in-out infinite;
 }
 
@@ -391,18 +430,15 @@ h2 {
   0%,
   100% {
     opacity: 1;
-    transform: translate(-50%, -50%) scale(1);
   }
   50% {
-    opacity: 0.55;
-    transform: translate(-50%, -50%) scale(1.015);
+    opacity: 0.62;
   }
 }
 
-/* Layered ambient glow — the calm "voice orb" aura the mobile apps lead with,
-   instead of a hard targeting frame. Elliptical (not circular) so the bloom
-   fades to transparent before every edge of this wide box; a `circle` gradient
-   would still be opaque at the nearer top/bottom edges and clip into a rectangle. */
+/* Layered ambient glow — the calm aura behind the helmet, matching the mobile
+   apps. Elliptical (not circular) so the bloom fades to transparent before every
+   edge of this wide box. */
 .helmetStage::before {
   content: "";
   position: absolute;
@@ -414,92 +450,97 @@ h2 {
   filter: blur(2px);
 }
 
-/* HUD corner brackets */
-.hudFrame {
-  position: absolute;
-  inset: 0;
-  z-index: 3;
-  pointer-events: none;
-}
-
-.corner {
-  position: absolute;
-  width: 18px;
-  height: 18px;
-  border: 1.5px solid var(--ring);
-  opacity: 0.32;
-  transition:
-    border-color 0.4s ease,
-    opacity 0.4s ease;
-}
-
-.corner.tl {
-  top: 0;
-  left: 0;
-  border-right: 0;
-  border-bottom: 0;
-}
-
-.corner.tr {
-  top: 0;
-  right: 0;
-  border-left: 0;
-  border-bottom: 0;
-}
-
-.corner.bl {
-  bottom: 0;
-  left: 0;
-  border-right: 0;
-  border-top: 0;
-}
-
-.corner.br {
-  bottom: 0;
-  right: 0;
-  border-left: 0;
-  border-top: 0;
-}
-
-/* Targeting reticle */
-/* Soft concentric halo rings (calm, breathing) rather than a dashed targeting
-   reticle — closer to the mobile orb while keeping a sense of the HUD. */
-.reticle {
+/* ---- Instrument bezel (the signature) --------------------------------------
+   A 270° tick ring (gap at the bottom, like a tachometer) whose luminous arc
+   reads the session state: a small "ready" nub at standby, an arc tracking the
+   mic level while listening, a travelling shimmer while thinking, a near-full
+   calm breath while speaking, and a wide urgent arc on hazard. Ticks are
+   individual <line>s in a 400×400 SVG; React lights the leading `litCount`,
+   while CSS owns the thinking/speaking animations. */
+.gaugeBezel {
   position: absolute;
   top: 50%;
   left: 50%;
   z-index: 1;
-  width: 96%;
-  height: 100%;
-  transform: translate(-50%, -50%);
-  border-radius: 50%;
-  border: 1px solid var(--ring-faint);
-  animation: reticlePulse 4.5s ease-in-out infinite;
-}
-
-.reticle::before {
-  content: "";
-  position: absolute;
-  inset: 9%;
-  border-radius: 50%;
-  border: 1px solid var(--ring-faint);
-  opacity: 0.7;
-}
-
-.reticle::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  height: 92%;
+  width: 116%;
   aspect-ratio: 1;
   transform: translate(-50%, -50%);
-  border-radius: 50%;
-  border: 1.5px solid var(--ring);
-  border-left-color: transparent;
-  border-right-color: transparent;
-  opacity: 0.32;
-  animation: reticleSpin 30s linear infinite;
+  overflow: visible;
+}
+
+.gaugeGuide {
+  fill: none;
+  stroke: var(--hair, rgba(196, 218, 216, 0.12));
+  stroke-width: 1;
+}
+
+.gaugeGuideInner {
+  opacity: 0.5;
+}
+
+.gaugeTick {
+  stroke: var(--tick, #37443f);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  transition:
+    stroke 0.14s ease,
+    stroke-width 0.14s ease;
+}
+
+.gaugeTick.major {
+  stroke-width: 2.3;
+}
+
+.gaugeTick.lit {
+  stroke: var(--ring);
+  stroke-width: 2.5;
+  filter: drop-shadow(0 0 3px var(--ring));
+}
+
+.gaugeTick.lit.major {
+  stroke-width: 3.2;
+}
+
+/* Max is replying: every tick is coloured but breathes together at low
+   amplitude, so the whole ring reads as a calm exhale. */
+.gaugeBezel.speaking .gaugeTick {
+  stroke: var(--ring);
+  animation: gaugeBreathe 1.9s ease-in-out infinite;
+  animation-delay: calc(var(--i) * -12ms);
+}
+
+@keyframes gaugeBreathe {
+  0%,
+  100% {
+    opacity: 0.42;
+    filter: none;
+  }
+  50% {
+    opacity: 1;
+    filter: drop-shadow(0 0 3px var(--ring));
+  }
+}
+
+/* Max is thinking: a low travelling shimmer runs around the ring (the same
+   negative-delay phase trick as the visor waveform) — reads as working, not
+   speaking. */
+.gaugeBezel.thinking .gaugeTick {
+  stroke: var(--ring);
+  opacity: 0.16;
+  animation: gaugeSweep 1.7s ease-in-out infinite;
+  animation-delay: calc(var(--i) * -26ms);
+}
+
+@keyframes gaugeSweep {
+  0%,
+  100% {
+    opacity: 0.12;
+    filter: none;
+  }
+  50% {
+    opacity: 0.95;
+    filter: drop-shadow(0 0 3px var(--ring));
+  }
 }
 
 /* Helmet illustration */
@@ -639,36 +680,8 @@ h2 {
   }
 }
 
-/* Floating state caption */
-.helmetCaption {
-  position: absolute;
-  left: 50%;
-  bottom: 1%;
-  z-index: 4;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 14px;
-  transform: translateX(-50%);
-  border-radius: 999px;
-  border: 1px solid var(--ring-faint);
-  background: rgba(8, 13, 14, 0.72);
-  color: var(--ring);
-  font-size: 0.74rem;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  -webkit-backdrop-filter: blur(4px);
-  backdrop-filter: blur(4px);
-}
-
-.captionDot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--ring);
-  box-shadow: 0 0 10px var(--ring);
-  animation: softPulse 1.5s ease-in-out infinite;
-}
+/* The floating helmet caption is retired — the session state now lives in the
+   larger .voiceReadout block below the helmet (see the voice HUD section). */
 
 /* ============================================================
    Buttons
@@ -2458,25 +2471,6 @@ button.opsCard:disabled {
   }
 }
 
-@keyframes reticleSpin {
-  from {
-    transform: translate(-50%, -50%) rotate(0deg);
-  }
-  to {
-    transform: translate(-50%, -50%) rotate(360deg);
-  }
-}
-
-@keyframes reticlePulse {
-  0%,
-  100% {
-    opacity: 0.45;
-  }
-  50% {
-    opacity: 0.8;
-  }
-}
-
 @keyframes softPulse {
   0%,
   100% {
@@ -2707,14 +2701,26 @@ button.opsCard:disabled {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .reticle,
-  .reticle::after,
-  .captionDot,
+  .gaugeBezel,
   .signal.online span,
   .signalBars.active span,
   .micDot,
   .greenDot {
     animation: none;
+  }
+
+  /* The gauge holds its lit arc steady rather than breathing/sweeping. The
+     thinking sweep would otherwise leave every tick mid-fade, so pin them on. */
+  .gaugeBezel .gaugeTick {
+    animation: none;
+  }
+
+  .gaugeBezel.thinking .gaugeTick {
+    opacity: 0.7;
+  }
+
+  .gaugeBezel.speaking .gaugeTick {
+    opacity: 0.9;
   }
 
   .visorVisualizer span,
@@ -3754,9 +3760,28 @@ button.opsCard:disabled {
    iOS-aligned voice face
    ============================================================ */
 .voiceShell {
+  /* Night-instrument palette — scoped here so the rest of the app (admin,
+     testing console) keeps the original tokens. Green = live/ready, ember =
+     the action, amber/red = the safety ladder. */
+  --void: #0a0e0d;
+  --lume: #47e39b;
+  --ember: #ff6a3d;
+  --amber: #f5b843;
+  --red: #ff5b47;
+  --hud-ink: #ecf3f0;
+  --hud-dim: #8a9a94;
+  --tick: #37443f;
+  --hair: rgba(196, 218, 216, 0.12);
+
   min-height: 100dvh;
   overflow-x: hidden;
-  background: radial-gradient(ellipse 58% 52% at 50% 43%, rgba(33, 126, 86, 0.16), transparent 72%), #050807;
+  color: var(--hud-ink);
+  /* Cool teal bloom behind the helmet + a warm tungsten wash at the bottom
+     (a bike dash's glow) over deep graphite — the warm/cool tension is the
+     atmosphere, and it reads distinct from a flat near-black. */
+  background:
+    radial-gradient(120% 74% at 50% 24%, rgba(34, 120, 86, 0.16), transparent 58%),
+    radial-gradient(100% 60% at 50% 116%, rgba(255, 138, 66, 0.1), transparent 66%), var(--void);
 }
 
 .voiceFace {
@@ -3770,45 +3795,73 @@ button.opsCard:disabled {
   align-items: center;
 }
 
-.voiceStatusPill {
+/* Top bar: MAX wordmark + a mono relay telltale, split apart so brand and
+   connection each read cleanly, instead of one crowded status pill. */
+.voiceTopbar {
   z-index: 5;
-  display: inline-flex;
-  min-height: 38px;
+  display: flex;
+  width: 100%;
   align-items: center;
-  gap: 7px;
-  padding: 0 17px;
-  border: 1px solid rgba(169, 187, 179, 0.18);
-  border-radius: 999px;
-  background: rgba(19, 25, 23, 0.92);
-  box-shadow: 0 10px 35px rgba(0, 0, 0, 0.28);
-  color: #c7d1cd;
-  font-size: 0.78rem;
-  letter-spacing: 0.02em;
+  justify-content: space-between;
+  gap: 12px;
 }
 
-.voiceStatusPill > span:first-child {
+.voiceBrand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.voiceBrandDot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #65706c;
+  background: #5a6a64;
+  transition:
+    background 0.3s ease,
+    box-shadow 0.3s ease;
 }
 
-.voiceStatusPill.online > span:first-child {
-  background: var(--accent);
-  box-shadow: 0 0 12px rgba(62, 232, 159, 0.8);
+.voiceTopbar.online .voiceBrandDot {
+  background: var(--lume);
+  box-shadow: 0 0 10px rgba(71, 227, 155, 0.8);
 }
 
-.voiceStatusPill strong {
-  color: #f2f7f5;
-  font-size: inherit;
+.voiceWordmark {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.02rem;
+  letter-spacing: 0.24em;
+  /* tracking adds trailing space; nudge so the mark sits flush left */
+  text-indent: 0.24em;
+  color: var(--hud-ink);
 }
 
-.voiceStatusPill small {
-  color: #68736f;
+.voiceRelay {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.2em;
+  color: var(--hud-dim);
 }
 
-.voiceStatusPill > span:last-child {
-  color: #9ba9a4;
+.voiceRelayDot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--lume);
+  box-shadow: 0 0 8px rgba(71, 227, 155, 0.7);
+}
+
+.voiceTopbar.offline .voiceRelay {
+  color: #b9776c;
+}
+
+.voiceTopbar.offline .voiceRelayDot {
+  background: var(--red);
+  box-shadow: 0 0 8px rgba(255, 91, 71, 0.7);
 }
 
 .voiceHazard {
@@ -3821,78 +3874,129 @@ button.opsCard:disabled {
 .voiceHero {
   display: grid;
   width: 100%;
-  min-height: 330px;
-  max-height: 58dvh;
-  flex: 1 1 480px;
+  min-height: 320px;
+  max-height: 56dvh;
+  flex: 1 1 460px;
   place-items: center;
 }
 
+/* Square stage in the voice view so the tick bezel reads as a true circle. */
 .voiceHero .helmetStage {
-  width: min(92vw, 720px);
+  width: min(84vw, 440px);
   max-width: 100%;
+  aspect-ratio: 1;
 }
 
-.voiceHero .hudFrame {
-  display: none;
+.voiceHero .gaugeBezel {
+  width: 105%;
 }
 
 .voiceHero .helmetStage::before {
-  inset: -18%;
-  filter: blur(12px);
-  opacity: 0.92;
+  inset: -4%;
+  filter: blur(11px);
+  opacity: 0.9;
 }
 
-.voiceHero .reticle {
-  width: 88%;
-  height: 106%;
-  opacity: 0.78;
+/* Helmet sits inside the tick ring with air around it, so the bezel never
+   collides with the shell. */
+.voiceHero .helmetVisual {
+  inset: 9% 13%;
 }
 
-.voiceHero .helmetCaption {
-  bottom: -3%;
-  border: 0;
-  background: transparent;
-  font-size: 0.76rem;
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
+.voiceFace .visorVisualizer {
+  left: 33%;
+  top: 40%;
+  width: 34%;
+  height: 12%;
 }
 
+/* State readout — the glanceable centerpiece text. Large Chinese state word
+   with a Space Mono Latin telltale, coloured by state. */
+.voiceReadout {
+  z-index: 5;
+  margin-top: 6px;
+  text-align: center;
+}
+
+.voiceReadoutState {
+  font-family: var(--font-cjk);
+  font-size: clamp(1.15rem, 4.4vw, 1.5rem);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--hud-ink);
+}
+
+.voiceReadoutTell {
+  margin-top: 7px;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.42em;
+  /* tracking adds trailing space; indent keeps the label optically centered */
+  text-indent: 0.42em;
+  text-transform: uppercase;
+  color: var(--lume);
+}
+
+.voiceReadout.online .voiceReadoutTell,
+.voiceReadout.listening .voiceReadoutTell,
+.voiceReadout.speaking .voiceReadoutTell {
+  color: var(--lume);
+  text-shadow: 0 0 14px rgba(71, 227, 155, 0.4);
+}
+
+.voiceReadout.thinking .voiceReadoutTell,
+.voiceReadout.hazard-caution .voiceReadoutTell {
+  color: var(--amber);
+  text-shadow: 0 0 14px rgba(245, 184, 67, 0.4);
+}
+
+.voiceReadout.hazard-critical .voiceReadoutTell {
+  color: var(--red);
+  text-shadow: 0 0 14px rgba(255, 91, 71, 0.4);
+}
+
+.voiceReadout.offline .voiceReadoutTell {
+  color: #b9776c;
+  text-shadow: none;
+}
+
+/* Quiet, de-pilled utilities — text + icon, so they never compete with the
+   primary control. */
 .voiceUtilities {
   z-index: 5;
   display: flex;
   justify-content: center;
-  gap: 10px;
-  margin-top: 10px;
+  gap: 26px;
+  margin-top: 16px;
 }
 
 .voiceUtilities button {
   display: inline-flex;
-  min-height: 42px;
+  min-height: 40px;
   align-items: center;
   gap: 8px;
-  padding: 0 16px;
-  border: 1px solid rgba(166, 183, 177, 0.18);
-  border-radius: 999px;
-  background: rgba(24, 31, 29, 0.92);
-  color: #aebbb6;
+  padding: 0 6px;
+  border: 0;
+  background: none;
+  color: var(--hud-dim);
   cursor: pointer;
-  font-size: 0.82rem;
+  font-size: 0.86rem;
+  letter-spacing: 0.04em;
   transition:
-    border-color 0.16s ease,
-    background 0.16s ease,
     color 0.16s ease,
     transform 0.16s ease;
 }
 
-.voiceUtilities button:hover,
+.voiceUtilities button:hover {
+  color: var(--hud-ink);
+}
+
 .voiceUtilities button.active {
-  border-color: rgba(62, 232, 159, 0.42);
-  background: rgba(32, 50, 43, 0.94);
-  color: #e9f2ee;
+  color: var(--lume);
 }
 
 .voiceUtilities button:active {
-  transform: scale(0.97);
+  transform: scale(0.96);
 }
 
 .voicePrimaryControls {
@@ -3900,35 +4004,42 @@ button.opsCard:disabled {
   display: flex;
   align-items: center;
   flex-direction: column;
-  margin-top: 22px;
+  margin-top: 20px;
 }
 
+/* Primary control as a machined key: inset, tactile, ember-lit at rest and
+   flipping to lume-green while a session is live. */
 .voiceMicButton {
   display: grid;
-  width: min(100%, 310px);
-  min-height: 66px;
-  grid-template-columns: 48px minmax(0, 1fr) auto;
+  width: min(100%, 300px);
+  min-height: 64px;
+  grid-template-columns: 46px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 14px;
-  padding: 8px 16px 8px 9px;
-  border: 1px solid rgba(180, 198, 190, 0.28);
-  border-radius: 22px;
-  background: rgba(18, 24, 22, 0.96);
-  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.24);
-  color: #e8efec;
+  gap: 13px;
+  padding: 8px 15px 8px 8px;
+  border: 1px solid rgba(255, 106, 61, 0.34);
+  border-radius: 19px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 42%), linear-gradient(180deg, #181d1b, #11100e);
+  box-shadow:
+    0 16px 34px rgba(0, 0, 0, 0.4),
+    0 1px 0 rgba(255, 255, 255, 0.06) inset,
+    0 -10px 20px rgba(0, 0, 0, 0.3) inset;
+  color: var(--hud-ink);
   cursor: pointer;
   transition:
     transform 0.16s ease,
     border-color 0.16s ease,
-    background 0.16s ease,
     box-shadow 0.16s ease;
 }
 
 .voiceMicButton:hover {
   transform: translateY(-2px);
-  border-color: rgba(239, 105, 63, 0.48);
-  background: rgba(23, 30, 27, 0.98);
-  box-shadow: 0 19px 42px rgba(0, 0, 0, 0.3);
+  border-color: rgba(255, 106, 61, 0.6);
+  box-shadow:
+    0 20px 42px rgba(0, 0, 0, 0.46),
+    0 1px 0 rgba(255, 255, 255, 0.07) inset,
+    0 -10px 20px rgba(0, 0, 0, 0.3) inset;
 }
 
 .voiceMicButton:active {
@@ -3936,20 +4047,18 @@ button.opsCard:disabled {
 }
 
 .voiceMicButton.active {
-  border-color: rgba(62, 232, 159, 0.48);
-  background: rgba(19, 31, 26, 0.98);
-  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.28);
+  border-color: rgba(71, 227, 155, 0.44);
 }
 
 .voiceMicKey {
   display: grid;
-  width: 48px;
-  height: 48px;
+  width: 46px;
+  height: 46px;
   place-items: center;
-  border: 1px solid rgba(239, 105, 63, 0.24);
-  border-radius: 14px;
-  background: rgba(239, 105, 63, 0.12);
-  color: #ff7350;
+  border: 1px solid rgba(255, 106, 61, 0.3);
+  border-radius: 13px;
+  background: rgba(255, 106, 61, 0.13);
+  color: #ff7d55;
   transition:
     border-color 0.16s ease,
     background 0.16s ease,
@@ -3957,52 +4066,33 @@ button.opsCard:disabled {
 }
 
 .voiceMicButton.active .voiceMicKey {
-  border-color: rgba(62, 232, 159, 0.28);
-  background: rgba(62, 232, 159, 0.12);
-  color: var(--accent);
+  border-color: rgba(71, 227, 155, 0.32);
+  background: rgba(71, 227, 155, 0.13);
+  color: var(--lume);
 }
 
 .voiceMicLabel {
   min-width: 0;
-  padding-left: 14px;
-  border-left: 1px solid rgba(180, 198, 190, 0.15);
-  font-size: 0.94rem;
-  font-weight: 720;
-  letter-spacing: 0.02em;
+  padding-left: 13px;
+  border-left: 1px solid rgba(196, 218, 216, 0.14);
+  font-family: var(--font-cjk);
+  font-size: 0.98rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
   text-align: left;
   white-space: nowrap;
 }
 
 .voiceMicButton kbd {
-  padding-left: 14px;
-  border: 0;
-  border-left: 1px solid rgba(180, 198, 190, 0.15);
-  background: transparent;
-  color: #687570;
-  font-family: inherit;
-  font-size: 0.72rem;
+  padding: 5px 8px;
+  border: 1px solid rgba(196, 218, 216, 0.16);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--hud-dim);
+  font-family: var(--font-cjk);
+  font-size: 0.64rem;
+  letter-spacing: 0.04em;
   white-space: nowrap;
-}
-
-.voiceInputSignal {
-  display: flex;
-  height: 25px;
-  align-items: center;
-  justify-content: center;
-  margin-top: 8px;
-  color: rgba(107, 125, 118, 0.42);
-  transition:
-    color 0.2s ease,
-    opacity 0.2s ease;
-}
-
-.voiceInputSignal svg {
-  width: 164px;
-  height: 24px;
-}
-
-.voiceInputSignal.active {
-  color: rgba(62, 232, 159, 0.64);
 }
 
 /* Live captions appear as the same quiet lower card used by the iOS app. */
@@ -4714,10 +4804,6 @@ button.opsCard:disabled {
 
   .voiceMicButton {
     min-height: 60px;
-  }
-
-  .voiceInputSignal {
-    display: none;
   }
 }
 

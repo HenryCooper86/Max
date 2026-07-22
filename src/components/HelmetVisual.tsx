@@ -9,7 +9,7 @@ type Props = {
   listening: boolean;
   voiceLevel: number;
   turnState: TurnState;
-  /** Fused ride/weather/ADAS hazard; tints the ring when above normal. */
+  /** Fused ride/weather/ADAS hazard; tints the gauge when above normal. */
   hazardLevel?: HazardLevel;
 };
 
@@ -26,6 +26,45 @@ const BAR_AMPS = Array.from({ length: BAR_COUNT }, (_, index) => {
   return Math.max(0.18, Math.min(1, 0.28 + 0.72 * bell + ripple));
 });
 
+// Instrument bezel: a 270° tick ring (gap at the bottom, like a tachometer)
+// wrapped around the helmet. Its luminous arc IS the state gauge — how far it
+// fills, and in what colour, reads the session state at a glance. Ticks are
+// laid out in a 400×400 SVG so the whole ring scales with the stage.
+const TICK_COUNT = 60;
+const GAUGE_START = -135; // degrees from top (12 o'clock)
+const GAUGE_SWEEP = 270;
+const GAUGE_R = 176;
+const TICKS = Array.from({ length: TICK_COUNT }, (_, i) => {
+  const t = i / (TICK_COUNT - 1);
+  const angle = GAUGE_START + t * GAUGE_SWEEP;
+  const major = i % 6 === 0;
+  const len = major ? 15 : 9;
+  return { i, angle, major, y1: 200 - GAUGE_R, y2: 200 - (GAUGE_R - len) };
+});
+
+/** Drive mode for the gauge arc — mirrors the visor waveform's modes so the two
+ *  instruments always agree on what Max is doing. */
+type GaugeMode = "offline" | "idle" | "mic" | "thinking" | "speaking" | "hazard";
+
+/** How many ticks light up. `mic`/`idle`/`speaking`/`hazard` fill a real arc;
+ *  `thinking` lights nothing here (a CSS travelling wave owns those ticks). */
+function gaugeLitCount(mode: GaugeMode, voiceLevel: number): number {
+  switch (mode) {
+    case "idle":
+      return 3; // a small "ready" nub at the start of the sweep
+    case "mic": {
+      const level = Math.max(0, Math.min(1, voiceLevel * 1.7));
+      return Math.round((0.08 + level * 0.82) * TICK_COUNT);
+    }
+    case "speaking":
+      return Math.round(0.9 * TICK_COUNT);
+    case "hazard":
+      return Math.round(0.82 * TICK_COUNT);
+    default:
+      return 0; // offline, thinking
+  }
+}
+
 const CAPTIONS: Record<TurnState, string> = {
   idle: "待机",
   listening: "免提待命 · 请讲话",
@@ -34,7 +73,17 @@ const CAPTIONS: Record<TurnState, string> = {
   speaking: "Max 回答中"
 };
 
-// Maps each turn state to a helmet ring palette (see .helmetStage.* in styles).
+// Latin telltale shown under the Chinese state word — Space Mono, instrument
+// register. Deliberately English: it reads as a gauge label, not primary copy.
+const TELLTALE: Record<TurnState, string> = {
+  idle: "STANDBY",
+  listening: "LISTENING",
+  hearing: "HEARING",
+  thinking: "THINKING",
+  speaking: "SPEAKING"
+};
+
+// Maps each turn state to a gauge/ring palette (see .helmetStage.* in styles).
 const RING_CLASS: Record<TurnState, string> = {
   idle: "online",
   listening: "listening",
@@ -48,28 +97,81 @@ const HAZARD_CAPTIONS: Record<Exclude<HazardLevel, "normal">, string> = {
   critical: "高风险 · 优先安全"
 };
 
-/** Cinematic helmet centerpiece: gradient shell, animated state reticle, and
- *  an on-visor voice visualizer driven by the live mic level. */
+const HAZARD_TELLTALE: Record<Exclude<HazardLevel, "normal">, string> = {
+  caution: "CAUTION",
+  critical: "HAZARD"
+};
+
+/** The state readout that sits below the helmet: a large Chinese state word with
+ *  a Space Mono Latin telltale beneath it. Rendered as a sibling of the helmet
+ *  (not inside the gauge) so it always has room to breathe. */
+export function VoiceStateReadout({
+  connected,
+  turnState,
+  hazardLevel = "normal"
+}: Pick<Props, "connected" | "turnState" | "hazardLevel">) {
+  const hazard = connected && hazardLevel !== "normal" ? hazardLevel : null;
+  const caption = !connected
+    ? "离线"
+    : hazard
+      ? `${HAZARD_CAPTIONS[hazard]} · ${CAPTIONS[turnState]}`
+      : CAPTIONS[turnState];
+  const telltale = !connected ? "OFFLINE" : hazard ? HAZARD_TELLTALE[hazard] : TELLTALE[turnState];
+  const stateClass = !connected ? "offline" : hazard ? `hazard-${hazard}` : RING_CLASS[turnState];
+
+  return (
+    <div className={`voiceReadout ${stateClass}`} aria-live="polite">
+      <div className="voiceReadoutState">{caption}</div>
+      <div className="voiceReadoutTell">{telltale}</div>
+    </div>
+  );
+}
+
+/** Cinematic helmet centerpiece: gradient shell, a tick-marked instrument gauge
+ *  whose luminous arc reads the session state, and an on-visor voice visualizer
+ *  driven by the live mic level. */
 export function HelmetVisual({ connected, listening, voiceLevel, turnState, hazardLevel = "normal" }: Props) {
   const stateClass = connected ? RING_CLASS[turnState] : "offline";
   // The fused hazard overrides the conversational palette: a rider glancing at
   // the helmet must see danger first, turn state second.
   const hazardClass = connected && hazardLevel !== "normal" ? `hazard-${hazardLevel}` : "";
-  const caption = !connected
-    ? "离线"
+
+  const gaugeMode: GaugeMode = !connected
+    ? "offline"
     : hazardLevel !== "normal"
-      ? `${HAZARD_CAPTIONS[hazardLevel]} · ${CAPTIONS[turnState]}`
-      : CAPTIONS[turnState];
+      ? "hazard"
+      : turnState === "thinking"
+        ? "thinking"
+        : turnState === "speaking"
+          ? "speaking"
+          : listening
+            ? "mic"
+            : "idle";
+  const litCount = gaugeLitCount(gaugeMode, voiceLevel);
 
   return (
     <div className={`helmetStage ${stateClass} ${hazardClass}`}>
-      <div className="hudFrame" aria-hidden="true">
-        <span className="corner tl" />
-        <span className="corner tr" />
-        <span className="corner bl" />
-        <span className="corner br" />
-      </div>
-      <div className="reticle" aria-hidden="true" />
+      <svg className={`gaugeBezel ${gaugeMode}`} viewBox="0 0 400 400" aria-hidden="true">
+        <circle className="gaugeGuide" cx="200" cy="200" r="182" />
+        <circle className="gaugeGuide gaugeGuideInner" cx="200" cy="200" r="140" />
+        {TICKS.map(({ i, angle, major, y1, y2 }) => {
+          const lit = i < litCount;
+          const cls = ["gaugeTick", major ? "major" : "", lit ? "lit" : ""].filter(Boolean).join(" ");
+          const style = { "--i": i } as CSSProperties;
+          return (
+            <line
+              key={i}
+              className={cls}
+              style={style}
+              x1="200"
+              y1={y1}
+              x2="200"
+              y2={y2}
+              transform={`rotate(${angle} 200 200)`}
+            />
+          );
+        })}
+      </svg>
 
       <div className="helmetVisual" aria-hidden="true">
         <svg viewBox="0 0 420 270" role="img">
@@ -124,11 +226,6 @@ export function HelmetVisual({ connected, listening, voiceLevel, turnState, haza
         </svg>
 
         <VisorWaveform connected={connected} listening={listening} voiceLevel={voiceLevel} turnState={turnState} />
-      </div>
-
-      <div className="helmetCaption">
-        <span className="captionDot" />
-        {caption}
       </div>
     </div>
   );

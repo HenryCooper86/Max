@@ -1,8 +1,8 @@
-import { ChatCircleText, GearSix, Microphone, Waveform, X } from "@phosphor-icons/react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { ChatCircleText, GearSix, Microphone, X } from "@phosphor-icons/react";
+import { useCallback, useEffect, useState } from "react";
 import { adasDirectionLabel } from "../shared/adas";
 import { combineHazardLevels } from "../shared/ride";
-import { HelmetVisual } from "./components/HelmetVisual";
+import { HelmetVisual, VoiceStateReadout } from "./components/HelmetVisual";
 import { LoginGate } from "./components/LoginGate";
 import { VoiceTranscript } from "./components/VoiceTranscript";
 import { WebSettingsSheet } from "./components/WebSettingsSheet";
@@ -128,12 +128,6 @@ export function App() {
     return () => window.removeEventListener("keydown", toggleHandsFree);
   }, [authUser, settingsOpen, toggleHandsFreeSession]);
 
-  const agentState = useMemo(() => {
-    if (agent.listening) return agent.sessionMemory.language === "en" ? "Hands-free" : "免提中";
-    if (agent.connected) return agent.sessionMemory.language === "en" ? "Standby" : "待命";
-    return agent.sessionMemory.language === "en" ? "Offline" : "离线";
-  }, [agent.connected, agent.listening, agent.sessionMemory.language]);
-
   const fusedHazard = combineHazardLevels(agent.rideContext.hazardLevel, agent.weather?.riskLevel ?? "normal");
   const authKnown = agent.health !== null;
   const authEnabled = agent.health?.auth?.enabled ?? false;
@@ -156,11 +150,15 @@ export function App() {
   return (
     <main className="voiceShell">
       <section className={`voiceFace ${captionsOpen ? "captionsVisible" : ""}`} aria-label="Max 头盔语音助手">
-        <header className={`voiceStatusPill ${agent.connected ? "online" : ""}`}>
-          <span aria-hidden="true" />
-          <strong>Max</strong>
-          <small>·</small>
-          <span>{agentState}</span>
+        <header className={`voiceTopbar ${agent.connected ? "online" : "offline"}`}>
+          <div className="voiceBrand">
+            <span className="voiceBrandDot" aria-hidden="true" />
+            <span className="voiceWordmark">MAX</span>
+          </div>
+          <div className="voiceRelay">
+            <span className="voiceRelayDot" aria-hidden="true" />
+            {agent.connected ? "RELAY ONLINE" : "RELAY OFFLINE"}
+          </div>
         </header>
 
         {agent.hazardAlert ? (
@@ -185,6 +183,8 @@ export function App() {
             hazardLevel={fusedHazard}
           />
         </div>
+
+        <VoiceStateReadout connected={agent.connected} turnState={agent.turnState} hazardLevel={fusedHazard} />
 
         {captionsOpen ? <VoiceTranscript agent={agent} /> : null}
 
@@ -218,9 +218,6 @@ export function App() {
             <span className="voiceMicLabel">{starting ? "连接中" : listening ? "结束免提" : "开始免提"}</span>
             <kbd aria-hidden="true">空格键</kbd>
           </button>
-          <div className={`voiceInputSignal ${listening ? "active" : ""}`} aria-hidden="true">
-            <Waveform size={164} weight="thin" />
-          </div>
         </div>
       </section>
 

@@ -55,9 +55,12 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -75,6 +78,9 @@ import com.horizon.maxhelmet.ui.theme.HudColors
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 
 // Captions and palette ported from src/components/HelmetVisual.tsx.
 private val TURN_CAPTIONS = mapOf(
@@ -92,19 +98,21 @@ private val HAZARD_CAPTIONS = mapOf(
 )
 
 private fun ringColor(connected: Boolean, turnState: TurnState): Color {
-    if (!connected) return HudColors.Danger
+    if (!connected) return HudColors.Red
     return when (turnState) {
-        TurnState.IDLE -> HudColors.Accent
-        TurnState.LISTENING, TurnState.HEARING -> HudColors.AccentCyan
-        TurnState.THINKING -> HudColors.Warn
-        TurnState.SPEAKING -> HudColors.Accent
+        // Green = live/ready for every conversational state; amber = thinking.
+        // The cyan "listening" hue is retired (Night Instrument palette).
+        TurnState.IDLE -> HudColors.Lume
+        TurnState.LISTENING, TurnState.HEARING -> HudColors.Lume
+        TurnState.THINKING -> HudColors.Amber
+        TurnState.SPEAKING -> HudColors.Lume
     }
 }
 
 internal fun hazardColor(hazard: HazardLevel): Color = when (hazard) {
-    HazardLevel.NORMAL -> HudColors.Accent
-    HazardLevel.CAUTION -> HudColors.Warn
-    HazardLevel.CRITICAL -> HudColors.Danger
+    HazardLevel.NORMAL -> HudColors.Lume
+    HazardLevel.CAUTION -> HudColors.Amber
+    HazardLevel.CRITICAL -> HudColors.Red
 }
 
 private fun connectionLabel(state: ConnectionState): String = when (state) {
@@ -119,15 +127,55 @@ private fun connectionLabel(state: ConnectionState): String = when (state) {
 /** The glow's hue follows the session: a calm green invites a tap when idle,
  * amber while connecting, then the per-turn ring color once live. */
 private fun orbColor(state: AgentSession.State): Color {
-    if (!state.handsFree) return HudColors.Accent
+    if (!state.handsFree) return HudColors.Lume
     return when (state.connection) {
-        ConnectionState.OFFLINE, ConnectionState.DEGRADED -> HudColors.Danger
-        ConnectionState.CONNECTING, ConnectionState.PROVIDER -> HudColors.Warn
+        ConnectionState.OFFLINE, ConnectionState.DEGRADED -> HudColors.Red
+        ConnectionState.CONNECTING, ConnectionState.PROVIDER -> HudColors.Amber
         // The fused hazard overrides the conversational palette: a rider glancing
         // at the helmet must see danger first, turn state second (HelmetVisual.tsx).
         ConnectionState.RELAY, ConnectionState.READY ->
             if (state.fusedHazard != HazardLevel.NORMAL) hazardColor(state.fusedHazard)
             else ringColor(true, state.turnState)
+    }
+}
+
+/** Latin instrument telltale under the Chinese state word — the system monospaced
+ *  face here (Space Mono on web). Deliberately English: a gauge label, not primary
+ *  copy. Mirrors the web HelmetVisual TELLTALE map. */
+private fun stateTelltale(state: AgentSession.State): String {
+    if (state.fusedHazard == HazardLevel.CRITICAL) return "HAZARD"
+    if (state.fusedHazard == HazardLevel.CAUTION) return "CAUTION"
+    if (!state.handsFree) return "STANDBY"
+    if (state.micMuted) return "MUTED"
+    return when (state.connection) {
+        ConnectionState.OFFLINE, ConnectionState.DEGRADED -> "OFFLINE"
+        ConnectionState.CONNECTING, ConnectionState.PROVIDER -> "CONNECTING"
+        ConnectionState.RELAY, ConnectionState.READY -> when (state.turnState) {
+            TurnState.IDLE -> "STANDBY"
+            TurnState.LISTENING -> "LISTENING"
+            TurnState.HEARING -> "HEARING"
+            TurnState.THINKING -> "THINKING"
+            TurnState.SPEAKING -> "SPEAKING"
+        }
+    }
+}
+
+/** Drive mode for the instrument bezel — mirrors the web HelmetVisual gauge, so
+ *  the tick ring and the caption always agree on what Max is doing. */
+private enum class GaugeMode { OFFLINE, IDLE, CONNECTING, MIC, THINKING, SPEAKING, HAZARD }
+
+private fun gaugeMode(state: AgentSession.State): GaugeMode {
+    if (state.handsFree && state.fusedHazard != HazardLevel.NORMAL) return GaugeMode.HAZARD
+    if (!state.handsFree) return GaugeMode.IDLE
+    return when (state.connection) {
+        ConnectionState.OFFLINE, ConnectionState.DEGRADED -> GaugeMode.OFFLINE
+        ConnectionState.CONNECTING, ConnectionState.PROVIDER -> GaugeMode.CONNECTING
+        ConnectionState.RELAY, ConnectionState.READY -> when (state.turnState) {
+            TurnState.THINKING -> GaugeMode.THINKING
+            TurnState.SPEAKING -> GaugeMode.SPEAKING
+            TurnState.LISTENING, TurnState.HEARING -> GaugeMode.MIC
+            TurnState.IDLE -> GaugeMode.IDLE
+        }
     }
 }
 
@@ -176,7 +224,7 @@ fun AgentScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(HudColors.Background),
+            .background(HudColors.Void),
         contentAlignment = Alignment.TopCenter
     ) {
         Box(
@@ -194,7 +242,7 @@ fun AgentScreen(
                 .padding(horizontal = 20.dp, vertical = 14.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            StatusPill(state = state)
+            TopBar(state = state)
 
             state.hazardAlert?.let {
                 Spacer(Modifier.height(12.dp))
@@ -209,16 +257,28 @@ fun AgentScreen(
                 voiceLevel = state.voiceLevel,
                 dimmed = state.micMuted,
                 hazard = if (state.handsFree) state.fusedHazard else HazardLevel.NORMAL,
+                gauge = gaugeMode(state),
                 onTap = onToggleHandsFree
             )
             Spacer(Modifier.height(18.dp))
-            Text(
-                text = orbCaption(state),
-                color = HudColors.Text,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Medium,
-                textAlign = TextAlign.Center
-            )
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = orbCaption(state),
+                    color = HudColors.HudInk,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = stateTelltale(state),
+                    color = color,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    letterSpacing = 4.sp,
+                    fontWeight = FontWeight.Normal
+                )
+            }
 
             Spacer(Modifier.weight(1f))
 
@@ -250,27 +310,37 @@ fun AgentScreen(
 // ---- top status pill -----------------------------------------------------------------
 
 @Composable
-private fun StatusPill(state: AgentSession.State) {
-    val online = state.connection == ConnectionState.READY
+private fun TopBar(state: AgentSession.State) {
+    val online = state.connection == ConnectionState.RELAY || state.connection == ConnectionState.READY
     Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(50))
-            .background(HudColors.PanelElevated.copy(alpha = 0.7f))
-            .padding(horizontal = 14.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(7.dp)
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            modifier = Modifier
-                .size(7.dp)
-                .clip(CircleShape)
-                .background(if (online) HudColors.Accent else HudColors.Muted)
-        )
-        Text("Max", color = HudColors.Text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-        Text("·", color = HudColors.Muted, fontSize = 13.sp)
-        Text(connectionLabel(state.connection), color = HudColors.Muted, fontSize = 13.sp)
-        if (state.bluetoothRouted) {
-            Text("🎧", fontSize = 11.sp)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(
+                modifier = Modifier
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(if (online) HudColors.Lume else HudColors.HudDim)
+            )
+            Text("MAX", color = HudColors.HudInk, fontSize = 15.sp, fontWeight = FontWeight.Bold, letterSpacing = 4.sp)
+        }
+        Spacer(Modifier.weight(1f))
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            if (state.bluetoothRouted) Text("🎧", fontSize = 11.sp)
+            Box(
+                modifier = Modifier
+                    .size(5.dp)
+                    .clip(CircleShape)
+                    .background(if (online) HudColors.Lume else HudColors.Red)
+            )
+            Text(
+                text = if (online) "RELAY ONLINE" else "RELAY OFFLINE",
+                color = if (online) HudColors.HudDim else Color(0xFFB9776C),
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                letterSpacing = 2.sp
+            )
         }
     }
 }
@@ -295,6 +365,7 @@ private fun HelmetVisual(
     voiceLevel: Float,
     dimmed: Boolean,
     hazard: HazardLevel,
+    gauge: GaugeMode,
     onTap: () -> Unit
 ) {
     val breatheDuration = when (turnState) {
@@ -329,6 +400,14 @@ private fun HelmetVisual(
     )
     val critical = hazard == HazardLevel.CRITICAL
 
+    // Phase for the gauge's travelling shimmer (thinking / connecting).
+    val gaugePhase by rememberInfiniteTransition(label = "gauge").animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(2400, easing = LinearEasing), RepeatMode.Restart),
+        label = "gaugePhase"
+    )
+
     val shell = remember { svgToPath(HELMET_SHELL) }
     val chin = remember { svgToPath(HELMET_CHIN) }
     val visor = remember { svgToPath(HELMET_VISOR) }
@@ -349,6 +428,9 @@ private fun HelmetVisual(
 
         // Critical hazard throbs the glow; otherwise it holds steady.
         val urgency = if (critical) 0.6f + 0.4f * hazardPulse else 1f
+
+        // Instrument bezel behind the helmet — its arc reads the session state.
+        drawGauge(color = color, mode = gauge, level = level, phase = gaugePhase)
 
         // Halo — soft state-tinted bloom behind the helmet.
         val haloR = minOf(size.width * 0.34f * (1f + 0.16f * breathe + 0.45f * level), maxR)
@@ -420,8 +502,58 @@ private fun HelmetVisual(
                 size = Size(88f, 6.8f)
             )
             // Mic + status dots.
-            drawCircle(if (listening) HudColors.AccentCyan else HudColors.Muted, radius = 9f, center = Offset(258f, 205f))
+            drawCircle(if (listening) HudColors.Lume else HudColors.HudDim, radius = 9f, center = Offset(258f, 205f))
             drawCircle(color, radius = 9f, center = Offset(282f, 205f))
+        }
+    }
+}
+
+// ---- instrument bezel (the signature) ------------------------------------------------
+
+/**
+ * A 270° tick ring (gap at the bottom, tachometer-style) around the helmet, whose
+ * luminous arc reads the session state — a ready nub at standby, an arc tracking the
+ * mic level while listening, a travelling shimmer while thinking/connecting, a
+ * near-full arc while speaking, and a wide arc on hazard. Mirrors web .gaugeBezel.
+ */
+private const val GAUGE_TICKS = 56
+
+private fun gaugeLit(mode: GaugeMode, i: Int, level: Float, phase: Float): Boolean {
+    val n = GAUGE_TICKS
+    return when (mode) {
+        GaugeMode.OFFLINE -> false
+        GaugeMode.IDLE -> i < 3 // a small "ready" nub at the start of the sweep
+        GaugeMode.MIC -> i < ((0.08f + minOf(1f, level * 1.7f) * 0.82f) * n).toInt()
+        GaugeMode.SPEAKING -> i < (0.9f * n).toInt()
+        GaugeMode.HAZARD -> i < (0.82f * n).toInt()
+        GaugeMode.THINKING, GaugeMode.CONNECTING -> {
+            // A travelling window of lit ticks reads as "working".
+            val head = phase * n
+            val rel = (i - head + n) % n
+            rel < 9f
+        }
+    }
+}
+
+private fun DrawScope.drawGauge(color: Color, mode: GaugeMode, level: Float, phase: Float) {
+    val cx = size.width / 2f
+    val cy = size.height / 2f
+    val unit = size.width / 400f
+    val rOut = size.width * 0.46f
+    for (i in 0 until GAUGE_TICKS) {
+        val frac = i.toFloat() / (GAUGE_TICKS - 1)
+        val ang = ((-135f + frac * 270f) * PI / 180f).toFloat()
+        val major = i % 6 == 0
+        val len = (if (major) 15f else 9f) * unit
+        val s = sin(ang)
+        val cc = cos(ang)
+        val p1 = Offset(cx + rOut * s, cy - rOut * cc)
+        val p2 = Offset(cx + (rOut - len) * s, cy - (rOut - len) * cc)
+        if (gaugeLit(mode, i, level, phase)) {
+            drawLine(color.copy(alpha = 0.32f), p1, p2, strokeWidth = (if (major) 6f else 5f) * unit, cap = StrokeCap.Round)
+            drawLine(color, p1, p2, strokeWidth = (if (major) 3f else 2.4f) * unit, cap = StrokeCap.Round)
+        } else {
+            drawLine(HudColors.Tick, p1, p2, strokeWidth = (if (major) 2.2f else 1.6f) * unit, cap = StrokeCap.Round)
         }
     }
 }
@@ -530,8 +662,8 @@ private fun SecondaryControls(viewModel: MainViewModel) {
 
 @Composable
 private fun PillToggle(glyph: String, label: String, on: Boolean, onClick: () -> Unit) {
-    val tint = if (on) HudColors.Accent else HudColors.Muted
-    val background = if (on) HudColors.Accent.copy(alpha = 0.16f) else HudColors.PanelElevated
+    val tint = if (on) HudColors.Lume else HudColors.HudDim
+    val background = if (on) HudColors.Lume.copy(alpha = 0.16f) else HudColors.PanelElevated
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(50))
@@ -558,7 +690,7 @@ private fun PrimaryControls(
         Row(horizontalArrangement = Arrangement.spacedBy(44.dp), verticalAlignment = Alignment.CenterVertically) {
             CircleControl(
                 icon = if (state.micMuted) Icons.Filled.MicOff else Icons.Filled.Mic,
-                iconColor = if (state.micMuted) HudColors.Warn else HudColors.Text,
+                iconColor = if (state.micMuted) HudColors.Amber else HudColors.HudInk,
                 background = HudColors.PanelElevated,
                 label = if (state.micMuted) "取消静音" else "静音",
                 onClick = onToggleMute
@@ -566,7 +698,7 @@ private fun PrimaryControls(
             CircleControl(
                 icon = Icons.Filled.Close,
                 iconColor = Color.White,
-                background = HudColors.Danger,
+                background = HudColors.Red,
                 label = "结束",
                 onClick = onToggleHandsFree
             )
@@ -574,8 +706,8 @@ private fun PrimaryControls(
     } else {
         CircleControl(
             icon = Icons.Filled.Mic,
-            iconColor = Color(0xFF07221A),
-            background = HudColors.Accent,
+            iconColor = HudColors.OnEmber,
+            background = HudColors.Ember,
             diameter = 76.dp,
             label = "开始",
             onClick = onToggleHandsFree

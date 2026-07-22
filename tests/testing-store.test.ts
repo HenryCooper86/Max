@@ -153,6 +153,49 @@ describe("testing operations store", () => {
     expect(shown?.capturedValidity.status).toBe("valid");
   });
 
+  it("filters and counts the evidence page by re-derived quality, not the capture-time value", () => {
+    // Re-derives to "pass" (full transcript, mic audio, low latency) but was
+    // frozen as "fail" — as if captured under a stricter policy since relaxed.
+    saveTestingSession(sessionEvidence("fresh-pass", "", "", { endedAt: 3_000, quality: "fail" }));
+    // Frozen as "pass" but re-derives to "fail": empty transcript, no mic audio.
+    saveTestingSession(
+      sessionEvidence("stale-fail", "", "", { endedAt: 2_000, turns: [], micFrames: 0, quality: "pass" })
+    );
+
+    // The filter must honor the re-derived classification shown for each row, not
+    // the stale payload column — otherwise ?quality=pass would hide fresh-pass
+    // (stored "fail") and surface stale-fail (stored "pass", renders "fail").
+    const pass = storedTestingSessionPage({ quality: "pass" });
+    expect(pass.items.map((session) => session.sessionId)).toEqual(["fresh-pass"]);
+    expect(pass.items[0]?.quality).toBe("pass");
+    expect(pass.total).toBe(1);
+
+    const fail = storedTestingSessionPage({ quality: "fail" });
+    expect(fail.items.map((session) => session.sessionId)).toEqual(["stale-fail"]);
+    expect(fail.items[0]?.quality).toBe("fail");
+    expect(fail.total).toBe(1);
+  });
+
+  it("paginates the quality-filtered evidence page with a cursor", () => {
+    for (const [sessionId, endedAt] of [
+      ["fail-a", 3_000],
+      ["fail-b", 2_000],
+      ["fail-c", 1_000]
+    ] as const) {
+      saveTestingSession(sessionEvidence(sessionId, "", "", { endedAt, turns: [], micFrames: 0 }));
+    }
+
+    const first = storedTestingSessionPage({ quality: "fail", limit: 2 });
+    expect(first.items.map((session) => session.sessionId)).toEqual(["fail-a", "fail-b"]);
+    expect(first.total).toBe(3);
+    expect(first.nextCursor).toBeDefined();
+
+    const second = storedTestingSessionPage({ quality: "fail", limit: 2, cursor: first.nextCursor });
+    expect(second.items.map((session) => session.sessionId)).toEqual(["fail-c"]);
+    expect(second.total).toBe(3);
+    expect(second.nextCursor).toBeUndefined();
+  });
+
   it("only credits matching decision-grade evidence to an assignment", () => {
     const active = getActiveTestingPolicy();
     createTestingPolicy(

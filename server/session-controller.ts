@@ -329,6 +329,11 @@ export class AgentSessionController {
           const message = error instanceof Error ? error.message : "Provider session failed to start";
           this.log?.error("provider session start failed", { message });
           this.send({ type: "error", message: "语音服务暂时不可用，请重新连接。" });
+          // Mark closed before asking the socket to close so any messages the
+          // client already pipelined behind session.start (audio.start,
+          // location.update) are dropped by handleMessage instead of each
+          // throwing "session.start did not complete" until the TCP close lands.
+          this.closed = true;
           this.client.close(1011, "provider start failed");
           return;
         }

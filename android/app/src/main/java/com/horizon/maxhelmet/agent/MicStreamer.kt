@@ -16,7 +16,14 @@ import kotlin.math.sqrt
  */
 class MicStreamer(
     private val onFrame: (ByteArray) -> Unit,
-    private val onLevel: (Float) -> Unit
+    private val onLevel: (Float) -> Unit,
+    /**
+     * Invoked once, from the capture thread, when capture gives up on its own — a
+     * sustained dry mic (MAX_ZERO_READS) or an unrecoverable read error — as
+     * opposed to a caller-initiated stop(). Lets the session tear down instead of
+     * appearing to keep listening with a mic that will never emit another frame.
+     */
+    private val onError: () -> Unit
 ) {
     companion object {
         const val SAMPLE_RATE = 16_000
@@ -76,6 +83,9 @@ class MicStreamer(
             val frame = ByteArray(FRAME_BYTES)
             var zeroReads = 0
             var restarts = 0
+            // Distinguishes capture dying on its own (→ notify the session) from a
+            // caller-initiated stop() that just flips `running` off.
+            var failed = false
             while (running) {
                 var offset = 0
                 while (offset < FRAME_BYTES && running) {
@@ -92,12 +102,16 @@ class MicStreamer(
                             // capture for the rest of the session.
                             zeroReads += 1
                             if (zeroReads >= MAX_ZERO_READS) {
+                                failed = true
                                 running = false
                             } else {
                                 runCatching { Thread.sleep(5) }
                             }
                         }
                         else -> {
+                            // stop() unblocks a blocked read() with a negative code
+                            // too; that is expected teardown, not a capture failure.
+                            if (!running) break
                             // Error code (e.g. a routing change glitch). Try one
                             // in-place restart before declaring the mic dead.
                             val recovered = restarts < MAX_RESTARTS &&
@@ -110,6 +124,7 @@ class MicStreamer(
                                 restarts += 1
                                 offset = 0
                             } else {
+                                failed = true
                                 running = false
                             }
                         }
@@ -120,6 +135,10 @@ class MicStreamer(
                     onFrame(frame.copyOf())
                 }
             }
+            // Capture ended on its own (dead mic / unrecoverable read), not through
+            // stop(). Signal the owner so it can end the zombie session; resource
+            // release stays on the single stop() path the owner then triggers.
+            if (failed) onError()
         }
     }
 

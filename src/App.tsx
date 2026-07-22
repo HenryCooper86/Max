@@ -24,16 +24,32 @@ export function App() {
 
   useEffect(() => {
     let active = true;
-    void fetchCurrentUser().then((result) => {
-      if (!active) return;
-      const user = result.status === "authenticated" ? result.user : null;
-      setAuthUser(user);
-      selectTranscriptOwner(user?.id ?? null);
-      if (user) setTesterId(user.username);
-      setAuthChecked(true);
-    });
+    let retryTimer: number | undefined;
+    let attempts = 0;
+    const resolveAuth = () => {
+      void fetchCurrentUser().then((result) => {
+        if (!active) return;
+        // A transient relay hiccup ("unavailable") is not a logout — the stored
+        // token is still valid, and fetchCurrentUser deliberately keeps it. Retry
+        // a few times before falling back to the login gate (matching the
+        // periodic re-lock effect below), so a live session isn't dropped and the
+        // rider forced to sign in again on a momentary blip at page load.
+        if (result.status === "unavailable" && attempts < 3) {
+          attempts += 1;
+          retryTimer = window.setTimeout(resolveAuth, 1500);
+          return;
+        }
+        const user = result.status === "authenticated" ? result.user : null;
+        setAuthUser(user);
+        selectTranscriptOwner(user?.id ?? null);
+        if (user) setTesterId(user.username);
+        setAuthChecked(true);
+      });
+    };
+    resolveAuth();
     return () => {
       active = false;
+      if (retryTimer) window.clearTimeout(retryTimer);
     };
   }, [selectTranscriptOwner, setTesterId]);
 

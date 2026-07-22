@@ -90,7 +90,11 @@ export async function fetchRiderWeather(lat: number, lon: number): Promise<Rider
     !current ||
     !Number.isFinite(current.temperature_2m) ||
     !Number.isFinite(current.weather_code) ||
-    !Number.isFinite(current.wind_speed_10m)
+    !Number.isFinite(current.wind_speed_10m) ||
+    // is_day is requested alongside the others, so a missing value signals the
+    // same partial/malformed body — don't let `undefined !== 0` silently report
+    // daytime at night, which the day/night HUD and prompt would trust.
+    !Number.isFinite(current.is_day)
   ) {
     throw new Error("Weather response is missing current conditions");
   }

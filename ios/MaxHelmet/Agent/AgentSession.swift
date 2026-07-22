@@ -106,6 +106,15 @@ final class AgentSession: NSObject, ObservableObject {
     /// Plain mirror of `state.micMuted`, read off the audio thread alongside
     /// `transmitting` so the mic callback never touches `@Published` state.
     private var micMuted = false
+    /// Serializes the transport-gate fields (`webSocket`, `transmitting`,
+    /// `micMuted`, `socketOpen`): the main thread writes them, but the
+    /// audio-render thread (mic callbacks, `sendMicFrame`), the URLSession
+    /// delegate queue (`receive`), and the ping queue read them. The key hazard is
+    /// the `webSocket` reference — an off-main read otherwise races ARC
+    /// retain/release against a main-thread reassignment (ThreadSanitizer-flagged;
+    /// rare use-after-free / over-release). All writes go through
+    /// `withTransportLock`; off-main reads go through the gate helpers below.
+    private let transportLock = NSLock()
 
     private var transcriptTurn = 0
     private var transcriptOwnerId: String?
@@ -126,12 +135,12 @@ final class AgentSession: NSObject, ObservableObject {
     private lazy var mic = MicStreamer(
         engine: voiceEngine,
         onFrame: { [weak self] frame in
-            guard let self, self.transmitting, !self.micMuted, self.socketOpen else { return }
-            self.sendMicFrame(frame)
+            guard let self, let task = self.micSendTarget() else { return }
+            self.sendMicFrame(frame, on: task)
         },
         onLevel: { [weak self] level in
             guard let self else { return }
-            let active = self.transmitting && !self.micMuted
+            let active = self.captureActive()
             self.update { $0.voiceLevel = active ? level : 0 }
         }
     )
@@ -186,8 +195,10 @@ final class AgentSession: NSObject, ObservableObject {
 
         intentionalClose = false
         reconnectAttempts = 0
-        transmitting = true
-        micMuted = false
+        withTransportLock {
+            transmitting = true
+            micMuted = false
+        }
         spokenDeliveryIds.removeAll(keepingCapacity: true)
         spokenDeliveryOrder.removeAll(keepingCapacity: true)
 
@@ -253,15 +264,19 @@ final class AgentSession: NSObject, ObservableObject {
     /// Deactivates hands-free: stop the mic, restore routing, close the relay.
     func stop() {
         guard lifecycle.stop() else { return }
-        transmitting = false
-        micMuted = false
+        withTransportLock {
+            transmitting = false
+            micMuted = false
+        }
         intentionalClose = true
         reconnectWorkItem?.cancel()
         restartWorkItem?.cancel()
         webSocket?.send(.string(audioStopEvent)) { _ in }
         webSocket?.cancel(with: .normalClosure, reason: nil)
-        socketOpen = false
-        webSocket = nil
+        withTransportLock {
+            socketOpen = false
+            webSocket = nil
+        }
         mic.stop()
         synthesizer.stopSpeaking(at: .immediate)
         player.release()
@@ -319,8 +334,8 @@ final class AgentSession: NSObject, ObservableObject {
     /// keep talking while the rider's audio is withheld (the bottom mute control).
     func toggleMute() {
         guard state.value.handsFree else { return }
-        micMuted.toggle()
-        let muted = micMuted
+        let muted = !micMuted
+        withTransportLock { micMuted = muted }
         update {
             $0.micMuted = muted
             if muted { $0.voiceLevel = 0 }
@@ -463,8 +478,10 @@ final class AgentSession: NSObject, ObservableObject {
 
     private func restartSession() {
         let socket = webSocket
-        webSocket = nil
-        socketOpen = false
+        withTransportLock {
+            webSocket = nil
+            socketOpen = false
+        }
         intentionalClose = true
         socket?.cancel(with: .normalClosure, reason: nil)
         restartWorkItem?.cancel()
@@ -500,14 +517,14 @@ final class AgentSession: NSObject, ObservableObject {
     @discardableResult
     private func connect() -> Bool {
         guard !intentionalClose, let url = relayEndpointURL() else { return false }
-        socketOpen = false
+        withTransportLock { socketOpen = false }
         update {
             $0.connection = .connecting
             $0.statusText = self.reconnectAttempts > 0 ? "重新连接中…（第 \(self.reconnectAttempts) 次）" : "连接中"
         }
 
         let task = urlSession.webSocketTask(with: url)
-        webSocket = task
+        withTransportLock { webSocket = task }
         task.resume()
 
         // The relay handshake is sent from handleSocketOpened() once the upgrade
@@ -556,12 +573,12 @@ final class AgentSession: NSObject, ObservableObject {
         if current.guidedDemo { task.send(.string(buildGuidedDemo(enabled: true))) { _ in } }
         if transmitting { task.send(.string(audioStartEvent)) { _ in } }
         // Mic frames wait for session.started, not merely the relay handshake.
-        socketOpen = false
+        withTransportLock { socketOpen = false }
     }
 
     private func receive(on task: URLSessionWebSocketTask) {
         task.receive { [weak self] result in
-            guard let self, task === self.webSocket else { return }
+            guard let self, self.isCurrentSocket(task) else { return }
             switch result {
             case .success(let message):
                 switch message {
@@ -592,7 +609,7 @@ final class AgentSession: NSObject, ObservableObject {
 
     private func schedulePing(on task: URLSessionWebSocketTask) {
         DispatchQueue.global().asyncAfter(deadline: .now() + 20) { [weak self] in
-            guard let self, task === self.webSocket else { return }
+            guard let self, self.isCurrentSocket(task) else { return }
             task.sendPing { _ in }
             self.schedulePing(on: task)
         }
@@ -602,8 +619,10 @@ final class AgentSession: NSObject, ObservableObject {
         assert(Thread.isMainThread)
         // Ignore a socket already superseded by a newer one (e.g. a restart).
         if let current = webSocket, task !== current { return }
-        socketOpen = false
-        webSocket = nil
+        withTransportLock {
+            socketOpen = false
+            webSocket = nil
+        }
 
         if intentionalClose {
             if state.value.handsFree { return } // restartSession() will reconnect
@@ -673,7 +692,7 @@ final class AgentSession: NSObject, ObservableObject {
     private func handleEvent(_ event: AgentEvent) {
         switch event {
         case let .sessionStarted(provider, mode, capabilities):
-            socketOpen = true
+            withTransportLock { socketOpen = true }
             update {
                 $0.provider = provider
                 $0.isLive = mode != "mock"
@@ -755,9 +774,45 @@ final class AgentSession: NSObject, ObservableObject {
         }
     }
 
+    /// Runs `body` while holding the transport lock. Every write to `webSocket`,
+    /// `transmitting`, `micMuted`, or `socketOpen` goes through here so the
+    /// off-main gate helpers observe a consistent value (and, for `webSocket`, a
+    /// safely retained reference). Bodies are leaf field assignments — never take
+    /// the lock recursively.
+    private func withTransportLock(_ body: () -> Void) {
+        transportLock.lock()
+        defer { transportLock.unlock() }
+        body()
+    }
+
+    /// Audio-thread mic gate: the socket to send this frame on — retained under
+    /// the lock so a concurrent main-thread teardown can't over-release it — or
+    /// nil to stay silent (not transmitting / muted / provider not yet ready).
+    private func micSendTarget() -> URLSessionWebSocketTask? {
+        transportLock.lock()
+        defer { transportLock.unlock() }
+        return (transmitting && !micMuted && socketOpen) ? webSocket : nil
+    }
+
+    /// Audio-thread visualizer gate: whether capture is actively feeding frames.
+    private func captureActive() -> Bool {
+        transportLock.lock()
+        defer { transportLock.unlock() }
+        return transmitting && !micMuted
+    }
+
+    /// Off-main identity check (URLSession delegate / ping queues) against the
+    /// socket currently owned by the session.
+    private func isCurrentSocket(_ task: URLSessionWebSocketTask) -> Bool {
+        transportLock.lock()
+        defer { transportLock.unlock() }
+        return task === webSocket
+    }
+
     /// URLSession has no public buffered-byte counter. Bound concurrent sends
     /// so slow links shed stale 20 ms frames instead of growing without limit.
-    private func sendMicFrame(_ frame: Data) {
+    /// The target socket is captured on the audio thread via `micSendTarget()`.
+    private func sendMicFrame(_ frame: Data, on task: URLSessionWebSocketTask) {
         micSendLock.lock()
         guard micSendsInFlight < Self.maxMicSendsInFlight else {
             micSendLock.unlock()
@@ -766,12 +821,6 @@ final class AgentSession: NSObject, ObservableObject {
         micSendsInFlight += 1
         micSendLock.unlock()
 
-        guard let task = webSocket else {
-            micSendLock.lock()
-            micSendsInFlight = max(0, micSendsInFlight - 1)
-            micSendLock.unlock()
-            return
-        }
         task.send(.data(frame)) { [weak self] _ in
             guard let self else { return }
             self.micSendLock.lock()

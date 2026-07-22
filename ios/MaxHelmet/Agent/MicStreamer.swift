@@ -17,10 +17,18 @@ final class MicStreamer {
     /// playback as its echo-cancellation reference — see start().
     private let engine: AVAudioEngine
     private var converter: AVAudioConverter?
+    /// The input format `converter` was built for. process() rebuilds the
+    /// converter when the tap starts delivering a different format (a mid-ride
+    /// route change), so resampling never runs from a stale hardware format.
+    private var converterInputFormat: AVAudioFormat?
     private let outputFormat: AVAudioFormat
     /// Accumulates resampled PCM16 bytes until a full 320-sample frame is ready.
     private var pending = Data()
     private var running = false
+    /// Observes AVAudioEngineConfigurationChange so a mid-session route change
+    /// (a Bluetooth helmet connecting, AirPods dropping) reinstalls the tap for
+    /// the new hardware format and restarts the engine if the change stopped it.
+    private var configObserver: NSObjectProtocol?
 
     init(engine: AVAudioEngine,
          onFrame: @escaping (Data) -> Void,
@@ -59,6 +67,7 @@ final class MicStreamer {
                           userInfo: [NSLocalizedDescriptionKey: "microphone unavailable"])
         }
         converter = AVAudioConverter(from: inputFormat, to: outputFormat)
+        converterInputFormat = inputFormat
         pending.removeAll(keepingCapacity: true)
 
         input.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
@@ -74,25 +83,75 @@ final class MicStreamer {
             // of start() would install a second tap on the same bus and crash.
             input.removeTap(onBus: 0)
             converter = nil
+            converterInputFormat = nil
             pending.removeAll(keepingCapacity: true)
             throw error
         }
         running = true
+
+        // A mid-session route change (a Bluetooth helmet connecting, AirPods
+        // dropping) can change the input hardware format and stop the engine.
+        // Reinstall the tap for the new format and restart the engine so capture
+        // continues instead of resampling from a stale format or going silent.
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleConfigurationChange()
+        }
     }
 
     func stop() {
         guard running || engine.isRunning else { return }
         running = false
+        if let observer = configObserver {
+            NotificationCenter.default.removeObserver(observer)
+            configObserver = nil
+        }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         converter = nil
+        converterInputFormat = nil
         pending.removeAll(keepingCapacity: true)
+    }
+
+    /// Reconfigures capture for a new audio route: reinstall the tap for the
+    /// current input format and restart the engine if the change stopped it.
+    /// Runs on the main queue (see start()); process() rebuilds the resampler
+    /// when it sees the new format, so the converter stays owned by the audio
+    /// thread and is never mutated across threads here.
+    private func handleConfigurationChange() {
+        guard running else { return }
+        let input = engine.inputNode
+        let format = input.inputFormat(forBus: 0)
+        guard format.sampleRate > 0 else { return }
+        input.removeTap(onBus: 0)
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+            self?.process(buffer)
+        }
+        if !engine.isRunning {
+            engine.prepare()
+            try? engine.start()
+        }
     }
 
     // MARK: - resample + frame slicing
 
     private func process(_ inputBuffer: AVAudioPCMBuffer) {
-        guard running, let converter else { return }
+        guard running else { return }
+
+        // Rebuild the resampler if the input format changed under us — a route
+        // change (headset connect/disconnect) shifts the hardware sample rate or
+        // channel count, and a converter built for the old format would emit the
+        // wrong pitch/speed. Owned solely on this callback thread: no cross-thread
+        // converter mutation (the route-change handler only touches the tap/engine).
+        if converterInputFormat != inputBuffer.format {
+            converter = AVAudioConverter(from: inputBuffer.format, to: outputFormat)
+            converterInputFormat = inputBuffer.format
+            pending.removeAll(keepingCapacity: true)
+        }
+        guard let converter else { return }
 
         // Estimate the output capacity from the sample-rate ratio.
         let ratio = outputFormat.sampleRate / inputBuffer.format.sampleRate

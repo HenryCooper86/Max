@@ -38,6 +38,12 @@ import {
 
 const log = createLogger("testing-store");
 
+/** Upper bound on rows scanned when filtering the evidence page by re-derived
+ * quality (which has no SQL column, so it is filtered in memory). Scoped to the
+ * most recent matching sessions so a growing store can't load unbounded rows on
+ * one request; hitting it is logged rather than silently truncating the totals. */
+const QUALITY_FILTER_SCAN_LIMIT = 5000;
+
 let databaseInstance: DatabaseSync | null = null;
 
 function clone<T>(value: T): T {
@@ -366,10 +372,12 @@ export function storedTestingSessionPage(
     where.push("run_id = ?");
     parameters.push(query.runId);
   }
-  if (query.quality) {
-    where.push("json_extract(payload_json, '$.quality') = ?");
-    parameters.push(query.quality);
-  }
+  // NOTE: quality is deliberately NOT a SQL predicate. Every returned row's
+  // quality is re-derived against the current catalog (reevaluateStoredSession
+  // below), so filtering/counting on the frozen json_extract(payload_json,
+  // '$.quality') disagreed with the classification actually shown — it hid a
+  // now-failing row from ?quality=fail and surfaced rows under ?quality=watch
+  // that render as "fail". Applied in memory instead (see the branch below).
   const search = cleanString(query.search, "", 160).toLowerCase();
   if (search) {
     const escaped = search.replace(/[\\%_]/g, (character) => `\\${character}`);
@@ -377,19 +385,56 @@ export function storedTestingSessionPage(
     parameters.push(`%${escaped}%`);
   }
   const baseWhere = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+  const cursor = decodeSessionCursor(query.cursor);
+  const requestedLimit = typeof query.limit === "number" && Number.isFinite(query.limit) ? query.limit : 25;
+  const limit = Math.max(1, Math.min(100, Math.round(requestedLimit)));
+  // Keyset predicate applied in either path (SQL below, in memory here) so both
+  // page consistently against a cursor.
+  const afterCursor = (session: TesterSessionSummary): boolean =>
+    !cursor ||
+    session.endedAt < cursor.endedAt ||
+    (session.endedAt === cursor.endedAt && session.sessionId < cursor.sessionId);
+
+  if (query.quality) {
+    // Re-derived quality has no SQL column, so filter, count, and paginate in
+    // memory after reevaluateStoredSession. Bounded to the most recent
+    // QUALITY_FILTER_SCAN_LIMIT sessions matching the other predicates so a
+    // growing store cannot load unbounded rows on a single request.
+    const scanned = database()
+      .prepare(`SELECT payload_json FROM testing_sessions ${baseWhere} ORDER BY ended_at DESC, session_id DESC LIMIT ?`)
+      .all(...parameters, QUALITY_FILTER_SCAN_LIMIT) as Array<{ payload_json?: string }>;
+    if (scanned.length === QUALITY_FILTER_SCAN_LIMIT) {
+      log.warn("quality filter scan hit its bound; totals cover the most recent sessions only", {
+        scanned: scanned.length,
+        quality: query.quality
+      });
+    }
+    const matches = scanned
+      .map((row) => parseJson<TesterSessionSummary>(row.payload_json))
+      .filter((session): session is TesterSessionSummary => Boolean(session))
+      .map(reevaluateStoredSession)
+      .filter((session) => session.quality === query.quality);
+    const afterCursorMatches = matches.filter(afterCursor);
+    const items = afterCursorMatches.slice(0, limit);
+    const lastItem = items.at(-1);
+    return {
+      items,
+      total: matches.length,
+      nextCursor: afterCursorMatches.length > limit && lastItem ? encodeSessionCursor(lastItem) : undefined
+    };
+  }
+
   const count = database()
     .prepare(`SELECT COUNT(*) AS count FROM testing_sessions ${baseWhere}`)
     .get(...parameters) as { count?: number } | undefined;
 
   const pageWhere = [...where];
   const pageParameters = [...parameters];
-  const cursor = decodeSessionCursor(query.cursor);
   if (cursor) {
     pageWhere.push("(ended_at < ? OR (ended_at = ? AND session_id < ?))");
     pageParameters.push(cursor.endedAt, cursor.endedAt, cursor.sessionId);
   }
-  const requestedLimit = typeof query.limit === "number" && Number.isFinite(query.limit) ? query.limit : 25;
-  const limit = Math.max(1, Math.min(100, Math.round(requestedLimit)));
   const sqlWhere = pageWhere.length ? `WHERE ${pageWhere.join(" AND ")}` : "";
   const rows = database()
     .prepare(`SELECT payload_json FROM testing_sessions ${sqlWhere} ORDER BY ended_at DESC, session_id DESC LIMIT ?`)

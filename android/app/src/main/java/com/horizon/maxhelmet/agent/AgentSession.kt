@@ -134,6 +134,11 @@ class AgentSession(
     @Volatile
     private var webSocket: WebSocket? = null
 
+    /** The socket already routed through handleSocketClosed, so a server-initiated
+     * close that fires both onClosing (when we complete the handshake) and a later
+     * onClosed for the same socket is processed exactly once. */
+    private var closedSocket: WebSocket? = null
+
     /** True only after session.started confirms the upstream provider is ready.
      * The relay transport opening alone is not provider readiness. */
     @Volatile
@@ -190,7 +195,22 @@ class AgentSession(
                 socket.send(frame.toByteString())
             }
         },
-        onLevel = { level -> _state.update { it.copy(voiceLevel = if (transmitting && !micMuted) level else 0f) } }
+        onLevel = { level -> _state.update { it.copy(voiceLevel = if (transmitting && !micMuted) level else 0f) } },
+        onError = {
+            // Capture died on its own (dead mic / unrecoverable read error).
+            // Marshal off the capture thread and end hands-free — leaving the HUD
+            // pulsing "listening" behind a mic that will never emit another frame
+            // is worse than stopping and letting the rider restart (mirrors the
+            // web/iOS mic-failure handling). stop() releases the AudioRecord and
+            // effects, and its lifecycle guard makes a late signal a no-op.
+            scope.launch {
+                if (!_state.value.handsFree) return@launch
+                stop()
+                _state.update {
+                    it.copy(connection = ConnectionState.DEGRADED, statusText = "麦克风已中断，请重新开启免提")
+                }
+            }
+        }
     )
 
     // Device-TTS fallback, the counterpart of the browser speechSynthesis path:
@@ -246,6 +266,10 @@ class AgentSession(
         // In-helmet Bluetooth headset routing; playback follows the same path.
         val bluetoothRouted = audioRouter.startVoiceRouting()
         player.useVoiceCall = bluetoothRouted
+        // Arm playback for this session. stop() release()s the player; arming here
+        // is what lets a late frame from a previous session be dropped instead of
+        // resurrecting a track nothing would release.
+        player.prepare()
 
         _state.update {
             it.copy(
@@ -592,6 +616,19 @@ class AgentSession(
                     .onFailure { Log.w(TAG, "PCM playback failed", it) }
             }
 
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                if (webSocket !== this@AgentSession.webSocket) return
+                // Unlike a browser, OkHttp does NOT auto-complete the closing
+                // handshake or deliver onClosed for a server-initiated close unless
+                // we close our side. Without this, the relay's graceful closes —
+                // idle 4001, auth-revoke/expire 1008, shutdown 1001 — would only
+                // surface ~pingInterval later as an onFailure (code 0) and wrongly
+                // auto-reconnect into the session the relay just shed. Handle the
+                // close with the server's code now, then complete the handshake.
+                handleSocketClosed(webSocket, code)
+                runCatching { webSocket.close(1000, null) }
+            }
+
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 handleSocketClosed(webSocket, code)
             }
@@ -609,6 +646,12 @@ class AgentSession(
     private fun handleSocketClosed(socket: WebSocket, closeCode: Int = 0, httpStatus: Int? = null) {
         // Ignore a socket already superseded by a newer one (e.g. a restart).
         if (webSocket != null && socket !== webSocket) return
+        // Process each socket's terminal callback once: onClosing (which completes
+        // the server's close handshake) and the onClosed it then triggers both land
+        // here for the same socket, and after the first run webSocket is null so the
+        // guard above no longer distinguishes them.
+        if (socket === closedSocket) return
+        closedSocket = socket
         socketOpen = false
         webSocket = null
         if (intentionalClose) {

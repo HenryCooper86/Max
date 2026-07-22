@@ -577,14 +577,26 @@ export function createDoubaoProvider(
   const pendingAudio: Buffer[] = [];
   let pendingAudioFlushTimer: NodeJS.Timeout | undefined;
   let latencyMetricSent = false;
+  // One telemetry event per agent turn. TtsEnded and the TTS-fallback timer can
+  // both reach emitTelemetry for the same turn, which double-counted latency on
+  // clients that aggregate it. Reset at each rider turn (AsrInfo).
+  let telemetrySent = false;
   let downstreamAudioAbandoned = false;
   let audioActive = false;
   let ttsEndedBeforeWakeDecision = false;
+  // Wall-clock of the last SessionStarted, used to distinguish a genuinely
+  // recovered upstream (dropped after running a while → fresh retry budget) from
+  // one that flaps immediately after StartSession (kept counting so it can't
+  // reconnect forever). See the close handler's stability check.
+  let upstreamOpenedAt = 0;
 
   const MAX_UNDECIDED_TTS_BYTES = 240_000; // 5 s of 24 kHz PCM16 mono
   const MAX_UPSTREAM_BUFFERED_BYTES = 1024 * 1024;
   const CONNECTION_TIMEOUT_MS = boundedEnvInt("DOUBAO_CONNECTION_TIMEOUT_MS", 8_000, 1_000, 30_000);
   const SESSION_TIMEOUT_MS = boundedEnvInt("DOUBAO_SESSION_TIMEOUT_MS", 10_000, 1_000, 30_000);
+  // A session that stayed up at least this long before dropping counts as
+  // recovered and earns a fresh in-place reconnect budget.
+  const UPSTREAM_STABILITY_RESET_MS = 60_000;
 
   function sendClient(payload: unknown) {
     if (client.readyState === client.OPEN) {
@@ -888,11 +900,13 @@ export function createDoubaoProvider(
 
   function emitTelemetry(totalEnd = Date.now()) {
     recordFirstAudioLatency();
+    if (telemetrySent) return;
     const asrMs = asrStartedAt && asrFirstTextAt ? Math.max(0, asrFirstTextAt - asrStartedAt) : 0;
     const thinkMs = asrEndedAt && chatStartedAt ? Math.max(0, chatStartedAt - asrEndedAt) : 0;
     const firstAudioMs = asrEndedAt && firstAudioAt ? Math.max(0, firstAudioAt - asrEndedAt) : 0;
     const totalMs = asrStartedAt ? Math.max(0, totalEnd - asrStartedAt) : 0;
     if (asrMs || thinkMs || firstAudioMs || totalMs) {
+      telemetrySent = true;
       log.info("turn telemetry", { asrMs, thinkMs, firstAudioMs, totalMs });
       sendClient({ type: "telemetry", asrMs, thinkMs, firstAudioMs, totalMs });
     }
@@ -1009,7 +1023,12 @@ export function createDoubaoProvider(
           const sessionPayload = parseJsonPayload(frame);
           providerDialogId = stringField(sessionPayload, "dialog_id") ?? providerDialogId;
           sessionReady = true;
-          upstreamRetries = 0;
+          // NOT reset here: an upstream that reaches SessionStarted then drops a
+          // moment later (quota/model error surfacing once the dialogue is live)
+          // would otherwise clear its retry count on every flap and reconnect
+          // forever. The close handler grants a fresh budget only once the
+          // session has actually stayed up (UPSTREAM_STABILITY_RESET_MS).
+          upstreamOpenedAt = Date.now();
           log.info(resumedSession ? "doubao session resumed after reconnect" : "doubao session started", {
             sessionId: sessionId.slice(0, 8),
             pendingAudioFrames: pendingAudio.length
@@ -1085,6 +1104,7 @@ export function createDoubaoProvider(
           forwardedReplyBytes = 0;
           firstForwardedReplyAt = undefined;
           latencyMetricSent = false;
+          telemetrySent = false;
           downstreamAudioAbandoned = false;
           ttsEndedBeforeWakeDecision = false;
           sentThinkingStatus = false;
@@ -1321,6 +1341,16 @@ export function createDoubaoProvider(
       // Torn down by the relay itself (client disconnected / provider closed):
       // nothing to revive.
       if (closedByProvider) return;
+
+      // A session that stayed up long enough before dropping is a genuine
+      // recovery, so refresh the retry budget. A session that drops within the
+      // window (e.g. Doubao accepts StartSession then fails on quota/model) keeps
+      // its count climbing, so repeated flaps hit MAX_UPSTREAM_RETRIES and hand
+      // recovery to the client instead of reconnecting forever.
+      if (upstreamOpenedAt && Date.now() - upstreamOpenedAt >= UPSTREAM_STABILITY_RESET_MS) {
+        upstreamRetries = 0;
+      }
+      upstreamOpenedAt = 0;
 
       // Try to revive the upstream in place first: reconnect with backoff and
       // replay the persona + session memory (see the resumedSession addendum),

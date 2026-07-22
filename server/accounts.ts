@@ -13,6 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { config } from "./config";
 import { createLogger } from "./logger";
+import { ensureTestingStorageDirectory } from "./testing-storage";
 
 const scrypt = promisify(scryptCallback) as (password: string, salt: string, keylen: number) => Promise<Buffer>;
 
@@ -243,7 +244,10 @@ function persistAccounts() {
   );
   persistQueue = persistQueue
     .then(async () => {
-      await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+      // The accounts file holds password hashes and session tokens; create its
+      // directory 0o700 (private) via the shared helper instead of a bare mkdir,
+      // which inherits a possibly world-listable umask (0o755) on multi-user hosts.
+      await ensureTestingStorageDirectory(filePath);
       const tempPath = `${filePath}.write`;
       await fs.promises.writeFile(tempPath, `${snapshot}\n`, { mode: 0o600 });
       await fs.promises.rename(tempPath, filePath);

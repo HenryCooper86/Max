@@ -42,6 +42,15 @@ class PcmPlayer {
     @Volatile
     private var running = false
 
+    /**
+     * Whether the player is armed for the current hands-free session. [prepare]
+     * sets it, [release] clears it, and [play] only lazily starts the track while
+     * armed — so a frame that arrives after the session stopped cannot resurrect
+     * an AudioTrack + feeder thread that nothing would ever release.
+     */
+    @Volatile
+    private var active = false
+
     /** Bumped by barge-in so the feeder abandons the buffer it is writing. */
     @Volatile
     private var generation = 0
@@ -104,10 +113,26 @@ class PcmPlayer {
         }
     }
 
+    /** Arms the player for a new session so [play] may lazily (re)start the track.
+     *  Paired with [release]; called by AgentSession.start(). */
+    @Synchronized
+    fun prepare() {
+        active = true
+    }
+
     /** Queues a 24 kHz PCM16 buffer. Called from the WebSocket reader thread. */
     fun play(pcm: ByteArray) {
-        if (!running) start()
-        queue.put(applyGain(pcm))
+        val buffer = applyGain(pcm)
+        // Gate the check-and-start under the same lock release() holds. A frame on
+        // the reader thread and a main-thread release() otherwise race: a play()
+        // that lands after release() would see !running, start(), and rebuild an
+        // orphaned track + feeder thread. The `active` gate closes that window
+        // while still allowing the next session to arm and lazily start again.
+        synchronized(this) {
+            if (!active) return
+            if (!running) start()
+            queue.put(buffer)
+        }
     }
 
     /**
@@ -157,6 +182,7 @@ class PcmPlayer {
 
     @Synchronized
     fun release() {
+        active = false
         running = false
         generation += 1
         queue.clear()

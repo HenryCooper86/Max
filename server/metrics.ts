@@ -639,11 +639,15 @@ function buildReleaseGate(
       };
     });
     const missingPlatforms = cohorts.filter((cohort) => cohort.status !== "pass");
-    const status: TestingReleaseGateCase["status"] =
-      caseValid.length >= requiredValidSessions && missingPlatforms.length === 0
-        ? hasFail
-          ? "blocked"
-          : "pass"
+    // A failing valid run is "blocked" regardless of platform coverage. Testing
+    // coverage first let a failing run on a required platform fall through to
+    // "missing" (its cohort is "blocked", so it counts in missingPlatforms),
+    // mislabeling a failing run as absent evidence and shadowing the dedicated
+    // "failing run" blocker below.
+    const status: TestingReleaseGateCase["status"] = hasFail
+      ? "blocked"
+      : caseValid.length >= requiredValidSessions && missingPlatforms.length === 0
+        ? "pass"
         : caseInvalid
           ? "invalid"
           : "missing";

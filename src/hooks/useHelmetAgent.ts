@@ -965,6 +965,12 @@ export function useHelmetAgent() {
       await ensureMic();
       // stopMic ran while we were awaiting: honor the rider's stop.
       if (attempt !== startAttemptRef.current) return;
+      // A settings-change restart or a backoff reconnect during the (multi-second)
+      // mic-permission prompt can replace socketRef with a newer socket. Don't
+      // arm transmission against the socket we opened once it's no longer current
+      // — audio.start would land on the dead socket while the live one never gets
+      // it, and the catch below would tear down the wrong (newer) socket.
+      if (socketRef.current !== socket) return;
       stopAgentSpeech();
       setTrackEnabled(true);
       transmittingRef.current = true;

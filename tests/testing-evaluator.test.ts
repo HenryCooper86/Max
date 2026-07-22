@@ -126,7 +126,7 @@ describe("testing evaluator", () => {
           sessionId: "s1",
           at: 2,
           speaker: "agent",
-          text: "Don't speed up in the rain. 不要看手机，注意路面。",
+          text: "Don't speed up in the rain. Don't ignore traffic. 不要看手机，别忽略后方车辆。",
           final: true
         }
       ]

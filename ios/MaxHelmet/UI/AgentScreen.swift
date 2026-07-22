@@ -11,20 +11,22 @@ private let turnCaptions: [TurnState: String] = [
 ]
 
 private func ringColor(connected: Bool, turnState: TurnState) -> Color {
-    guard connected else { return HudColors.danger }
+    guard connected else { return HudColors.danger2 }
     switch turnState {
-    case .idle: return HudColors.accent
-    case .listening, .hearing: return HudColors.accentCyan
-    case .thinking: return HudColors.warn
-    case .speaking: return HudColors.accent
+    // Green = live/ready for every conversational state; amber = thinking. The
+    // cyan "listening" hue is retired (mirrors the web Night Instrument palette).
+    case .idle: return HudColors.lume
+    case .listening, .hearing: return HudColors.lume
+    case .thinking: return HudColors.amber
+    case .speaking: return HudColors.lume
     }
 }
 
 func hazardColor(_ hazard: HazardLevel) -> Color {
     switch hazard {
-    case .normal: return HudColors.accent
-    case .caution: return HudColors.warn
-    case .critical: return HudColors.danger
+    case .normal: return HudColors.lume
+    case .caution: return HudColors.amber
+    case .critical: return HudColors.danger2
     }
 }
 
@@ -45,11 +47,53 @@ private func connectionLabel(_ state: ConnectionState) -> String {
 /// palette — safety tint always wins, mirroring the web HelmetVisual.
 private func orbColor(_ state: AgentSession.State) -> Color {
     if state.fusedHazard != .normal { return hazardColor(state.fusedHazard) }
-    guard state.handsFree else { return HudColors.accent }
+    guard state.handsFree else { return HudColors.lume }
     switch state.connection {
-    case .offline, .degraded: return HudColors.danger
-    case .connecting, .provider: return HudColors.warn
+    case .offline, .degraded: return HudColors.danger2
+    case .connecting, .provider: return HudColors.amber
     case .relay, .ready: return ringColor(connected: true, turnState: state.turnState)
+    }
+}
+
+/// Latin instrument telltale shown under the Chinese state word — the system
+/// monospaced face here (Space Mono on web). Deliberately English: it reads as a
+/// gauge label, not primary copy. Mirrors the web HelmetVisual TELLTALE map.
+private func stateTelltale(_ state: AgentSession.State) -> String {
+    if state.fusedHazard == .critical { return "HAZARD" }
+    if state.fusedHazard == .caution { return "CAUTION" }
+    if !state.handsFree { return "STANDBY" }
+    if state.micMuted { return "MUTED" }
+    switch state.connection {
+    case .offline, .degraded: return "OFFLINE"
+    case .connecting, .provider: return "CONNECTING"
+    case .relay, .ready:
+        switch state.turnState {
+        case .idle: return "STANDBY"
+        case .listening: return "LISTENING"
+        case .hearing: return "HEARING"
+        case .thinking: return "THINKING"
+        case .speaking: return "SPEAKING"
+        }
+    }
+}
+
+/// Drive mode for the instrument bezel — mirrors the web HelmetVisual gauge, so
+/// the tick ring and the caption always agree on what Max is doing.
+enum GaugeMode { case offline, idle, connecting, mic, thinking, speaking, hazard }
+
+private func gaugeMode(_ state: AgentSession.State) -> GaugeMode {
+    if state.handsFree && state.fusedHazard != .normal { return .hazard }
+    guard state.handsFree else { return .idle }
+    switch state.connection {
+    case .offline, .degraded: return .offline
+    case .connecting, .provider: return .connecting
+    case .relay, .ready:
+        switch state.turnState {
+        case .thinking: return .thinking
+        case .speaking: return .speaking
+        case .listening, .hearing: return .mic
+        case .idle: return .idle
+        }
     }
 }
 
@@ -91,7 +135,7 @@ struct AgentScreen: View {
             BackgroundGlow(color: color)
 
             VStack(spacing: 14) {
-                StatusPill(state: state)
+                TopBar(state: state)
 
                 if let alert = state.hazardAlert {
                     HazardBanner(alert: alert).padding(.horizontal, 4)
@@ -105,10 +149,11 @@ struct AgentScreen: View {
                     voiceLevel: state.voiceLevel,
                     dimmed: state.micMuted,
                     hazard: state.fusedHazard,
+                    gauge: gaugeMode(state),
                     onTap: viewModel.toggleHandsFree
                 )
 
-                CaptionLine(text: orbCaption(state))
+                StateReadout(caption: orbCaption(state), telltale: stateTelltale(state), color: color)
 
                 Spacer(minLength: 8)
 
@@ -132,7 +177,7 @@ struct AgentScreen: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(HudColors.background.ignoresSafeArea())
+        .background(HudColors.void.ignoresSafeArea())
         .animation(.easeInOut(duration: 0.25), value: viewModel.showCaptions)
         .animation(.easeInOut(duration: 0.25), value: state.micMuted)
         // The relay requires a login (HTTP 401): open the settings sheet on the
@@ -177,31 +222,38 @@ private struct BackgroundGlow: View {
 
 // MARK: - top status pill
 
-private struct StatusPill: View {
+private struct TopBar: View {
     let state: AgentSession.State
 
     var body: some View {
-        let online = state.connection == .ready
-        HStack(spacing: 8) {
-            Circle()
-                .fill(online ? HudColors.accent : HudColors.muted)
-                .frame(width: 7, height: 7)
-            Text("Max")
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
-                .foregroundColor(HudColors.text)
-            Text("·").foregroundColor(HudColors.muted)
-            Text(connectionLabel(state.connection))
-                .font(.system(size: 13))
-                .foregroundColor(HudColors.muted)
-            if state.bluetoothRouted {
-                Image(systemName: "headphones")
-                    .font(.system(size: 11))
-                    .foregroundColor(HudColors.muted)
+        let online = state.connection == .relay || state.connection == .ready
+        HStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(online ? HudColors.lume : HudColors.hudDim)
+                    .frame(width: 7, height: 7)
+                Text("MAX")
+                    .font(.system(size: 15, weight: .bold))
+                    .tracking(4)
+                    .foregroundColor(HudColors.hudInk)
+            }
+            Spacer(minLength: 0)
+            HStack(spacing: 7) {
+                if state.bluetoothRouted {
+                    Image(systemName: "headphones")
+                        .font(.system(size: 11))
+                        .foregroundColor(HudColors.hudDim)
+                }
+                Circle()
+                    .fill(online ? HudColors.lume : HudColors.danger2)
+                    .frame(width: 5, height: 5)
+                Text(online ? "RELAY ONLINE" : "RELAY OFFLINE")
+                    .font(.system(size: 10, weight: .regular, design: .monospaced))
+                    .tracking(2)
+                    .foregroundColor(online ? HudColors.hudDim : Color(hex: 0xB9776C))
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .background(Capsule().fill(HudColors.panelElevated.opacity(0.7)))
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -255,6 +307,8 @@ private struct HelmetVisual: View {
     let dimmed: Bool
     /// Fused ride + weather hazard; critical adds a ~0.9s opacity pulse.
     let hazard: HazardLevel
+    /// Which arc the instrument bezel lights (mirrors the web gauge).
+    let gauge: GaugeMode
     var onTap: () -> Void
 
     private var breatheSpeed: Double {
@@ -288,6 +342,7 @@ private struct HelmetVisual: View {
                 : 1.0
 
             Canvas { context, size in
+                drawGauge(in: &context, size: size, color: color, mode: gauge, level: level, t: t)
                 drawHelmet(
                     in: &context, size: size, color: color, level: level,
                     breathe: breathe, pulse: pulse,
@@ -391,12 +446,75 @@ private func drawHelmet(
     // Mic + status dots.
     context.fill(
         Path(ellipseIn: CGRect(x: 258 - 9, y: 205 - 9, width: 18, height: 18)),
-        with: .color(listening ? HudColors.accentCyan : HudColors.muted)
+        with: .color(listening ? HudColors.lume : HudColors.hudDim)
     )
     context.fill(
         Path(ellipseIn: CGRect(x: 282 - 9, y: 205 - 9, width: 18, height: 18)),
         with: .color(color)
     )
+}
+
+// MARK: - instrument bezel (the signature)
+
+/// A 270° tick ring (gap at the bottom, tachometer-style) wrapped around the
+/// helmet. Its luminous arc reads the session state — a small "ready" nub at
+/// standby, an arc tracking the mic level while listening, a travelling shimmer
+/// while thinking/connecting, a near-full arc while speaking, and a wide arc on
+/// hazard. Mirrors the web .gaugeBezel signature.
+private let gaugeTickCount = 56
+
+private func gaugeLit(mode: GaugeMode, index i: Int, level: Double, t: Double) -> Bool {
+    let n = gaugeTickCount
+    switch mode {
+    case .offline: return false
+    case .idle: return i < 3 // a small "ready" nub at the start of the sweep
+    case .mic:
+        let lit = Int((0.08 + min(1.0, level * 1.7) * 0.82) * Double(n))
+        return i < lit
+    case .speaking: return i < Int(0.9 * Double(n))
+    case .hazard: return i < Int(0.82 * Double(n))
+    case .thinking, .connecting:
+        // A travelling window of lit ticks reads as "working".
+        let head = (t * 22).truncatingRemainder(dividingBy: Double(n))
+        let rel = (Double(i) - head + Double(n)).truncatingRemainder(dividingBy: Double(n))
+        return rel < 9
+    }
+}
+
+private func drawGauge(
+    in context: inout GraphicsContext, size: CGSize, color: Color, mode: GaugeMode, level: Double, t: Double
+) {
+    let center = CGPoint(x: size.width / 2, y: size.height / 2)
+    let unit = size.width / 400
+    let rOut = size.width * 0.46
+    for i in 0..<gaugeTickCount {
+        let frac = Double(i) / Double(gaugeTickCount - 1)
+        let ang = (-135.0 + frac * 270.0) * .pi / 180
+        let major = i % 6 == 0
+        let len = (major ? 15.0 : 9.0) * unit
+        // sin/cos return Double; CGFloat math below needs an explicit conversion.
+        let s = CGFloat(sin(ang)), c = CGFloat(cos(ang))
+        let p1 = CGPoint(x: center.x + rOut * s, y: center.y - rOut * c)
+        let p2 = CGPoint(x: center.x + (rOut - len) * s, y: center.y - (rOut - len) * c)
+        var line = Path()
+        line.move(to: p1)
+        line.addLine(to: p2)
+        if gaugeLit(mode: mode, index: i, level: level, t: t) {
+            context.stroke(
+                line, with: .color(color.opacity(0.32)),
+                style: StrokeStyle(lineWidth: (major ? 6.0 : 5.0) * unit, lineCap: .round)
+            )
+            context.stroke(
+                line, with: .color(color),
+                style: StrokeStyle(lineWidth: (major ? 3.0 : 2.4) * unit, lineCap: .round)
+            )
+        } else {
+            context.stroke(
+                line, with: .color(HudColors.tick),
+                style: StrokeStyle(lineWidth: (major ? 2.2 : 1.6) * unit, lineCap: .round)
+            )
+        }
+    }
 }
 
 // MARK: - minimal SVG path parser (supports M/m L/l H/h V/v C/c Z)
@@ -490,16 +608,27 @@ private func svgTokens(_ s: String) -> [SVGToken] {
 
 // MARK: - caption line
 
-private struct CaptionLine: View {
-    let text: String
+/// The state readout below the helmet: the large Chinese state word with a
+/// monospaced Latin telltale beneath it, coloured by state. Mirrors the web
+/// .voiceReadout.
+private struct StateReadout: View {
+    let caption: String
+    let telltale: String
+    let color: Color
 
     var body: some View {
-        Text(text)
-            .font(.system(size: 18, weight: .medium, design: .rounded))
-            .foregroundColor(HudColors.text)
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: .infinity)
-            .animation(.easeInOut(duration: 0.2), value: text)
+        VStack(spacing: 6) {
+            Text(caption)
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundColor(HudColors.hudInk)
+                .multilineTextAlignment(.center)
+            Text(telltale)
+                .font(.system(size: 11, weight: .regular, design: .monospaced))
+                .tracking(4)
+                .foregroundColor(color)
+        }
+        .frame(maxWidth: .infinity)
+        .animation(.easeInOut(duration: 0.2), value: caption)
     }
 }
 
@@ -590,11 +719,11 @@ private struct PillToggle: View {
                 Image(systemName: icon).font(.system(size: 13, weight: .semibold))
                 Text(label).font(.system(size: 13, weight: .medium))
             }
-            .foregroundColor(on ? HudColors.accent : HudColors.muted)
+            .foregroundColor(on ? HudColors.lume : HudColors.hudDim)
             .padding(.horizontal, 14)
             .padding(.vertical, 9)
             .background(
-                Capsule().fill(on ? HudColors.accent.opacity(0.16) : HudColors.panelElevated)
+                Capsule().fill(on ? HudColors.lume.opacity(0.16) : HudColors.panelElevated)
             )
         }
         .buttonStyle(.plain)
@@ -613,7 +742,7 @@ private struct PrimaryControls: View {
                 HStack(spacing: 44) {
                     CircleControl(
                         icon: state.micMuted ? "mic.slash.fill" : "mic.fill",
-                        tint: state.micMuted ? HudColors.warn : HudColors.text,
+                        tint: state.micMuted ? HudColors.amber : HudColors.hudInk,
                         background: HudColors.panelElevated,
                         label: state.micMuted ? "取消静音" : "静音",
                         action: viewModel.toggleMute
@@ -621,7 +750,7 @@ private struct PrimaryControls: View {
                     CircleControl(
                         icon: "xmark",
                         tint: .white,
-                        background: HudColors.danger,
+                        background: HudColors.danger2,
                         label: "结束",
                         action: viewModel.toggleHandsFree
                     )
@@ -629,8 +758,8 @@ private struct PrimaryControls: View {
             } else {
                 CircleControl(
                     icon: "mic.fill",
-                    tint: HudColors.onAccent,
-                    background: HudColors.accent,
+                    tint: HudColors.onEmber,
+                    background: HudColors.ember,
                     diameter: 76,
                     label: "开始",
                     action: viewModel.toggleHandsFree

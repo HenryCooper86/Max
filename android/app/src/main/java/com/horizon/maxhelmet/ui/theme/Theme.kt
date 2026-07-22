@@ -20,6 +20,21 @@ object HudColors {
     /** Softer raised surface for borderless cards (modern, production look). */
     val PanelElevated = Color(0xFF181F20)
     val Border = Color(0x29C4DAD8)
+
+    // "Night Instrument" voice-HUD palette — mirrors the .voiceShell tokens in
+    // src/styles.css. Green = live/ready, ember = the action, amber/red = the
+    // safety ladder; the old cyan "listening" hue is retired.
+    val Void = Color(0xFF0A0E0D)
+    val Lume = Color(0xFF47E39B)
+    val Ember = Color(0xFFFF6A3D)
+    val Amber = Color(0xFFF5B843)
+    val Red = Color(0xFFFF5B47)
+    val HudInk = Color(0xFFECF3F0)
+    val HudDim = Color(0xFF8A9A94)
+    val Tick = Color(0xFF37443F)
+
+    /** Dark ink for labels on the ember action key. */
+    val OnEmber = Color(0xFF1A0E08)
 }
 
 private val DarkColorScheme = darkColorScheme(

@@ -17,6 +17,20 @@ enum HudColors {
     static let border = Color(hex: 0xC4DAD8, alpha: 0.16)
     /// Button label on accent backgrounds (Android onPrimary).
     static let onAccent = Color(hex: 0x07221A)
+
+    // "Night Instrument" voice-HUD palette — mirrors the .voiceShell tokens in
+    // src/styles.css. Green = live/ready, ember = the action, amber/red = the
+    // safety ladder; the old cyan "listening" hue is retired.
+    static let void = Color(hex: 0x0A0E0D)
+    static let lume = Color(hex: 0x47E39B)
+    static let ember = Color(hex: 0xFF6A3D)
+    static let amber = Color(hex: 0xF5B843)
+    static let danger2 = Color(hex: 0xFF5B47)
+    static let hudInk = Color(hex: 0xECF3F0)
+    static let hudDim = Color(hex: 0x8A9A94)
+    static let tick = Color(hex: 0x37443F)
+    /// Dark ink for labels on the ember action key.
+    static let onEmber = Color(hex: 0x1A0E08)
 }
 
 extension Color {

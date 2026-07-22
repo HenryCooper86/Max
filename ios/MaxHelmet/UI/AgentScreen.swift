@@ -166,9 +166,9 @@ struct AgentScreen: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
 
-                SecondaryControls(viewModel: viewModel)
+                SecondaryControls(state: state, viewModel: viewModel)
 
-                PrimaryControls(state: state, viewModel: viewModel)
+                VoiceMicDock(state: state, action: viewModel.toggleHandsFree)
             }
             .padding(.horizontal, 20)
             .padding(.top, 10)
@@ -688,17 +688,21 @@ private struct CaptionsOverlay: View {
 // MARK: - secondary controls (字幕 · 设置)
 
 private struct SecondaryControls: View {
+    let state: AgentSession.State
     @ObservedObject var viewModel: MainViewModel
 
     var body: some View {
-        HStack(spacing: 10) {
-            PillToggle(
-                icon: "captions.bubble",
-                label: "字幕",
-                on: viewModel.showCaptions
-            ) { viewModel.showCaptions.toggle() }
+        HStack {
+            PillToggle(icon: "text.bubble", label: "字幕", on: viewModel.showCaptions) {
+                viewModel.showCaptions.toggle()
+            }
 
-            Spacer(minLength: 0)
+            Spacer(minLength: 8)
+
+            if state.handsFree {
+                MuteUtilityPill(muted: state.micMuted, action: viewModel.toggleMute)
+                Spacer(minLength: 8)
+            }
 
             PillToggle(icon: "gearshape.fill", label: "设置", on: false) {
                 viewModel.showPreferences = true
@@ -727,72 +731,6 @@ private struct PillToggle: View {
             )
         }
         .buttonStyle(.plain)
-    }
-}
-
-// MARK: - primary controls (start · mute · end)
-
-private struct PrimaryControls: View {
-    let state: AgentSession.State
-    @ObservedObject var viewModel: MainViewModel
-
-    var body: some View {
-        Group {
-            if state.handsFree {
-                HStack(spacing: 44) {
-                    CircleControl(
-                        icon: state.micMuted ? "mic.slash.fill" : "mic.fill",
-                        tint: state.micMuted ? HudColors.amber : HudColors.hudInk,
-                        background: HudColors.panelElevated,
-                        label: state.micMuted ? "取消静音" : "静音",
-                        action: viewModel.toggleMute
-                    )
-                    CircleControl(
-                        icon: "xmark",
-                        tint: .white,
-                        background: HudColors.danger2,
-                        label: "结束",
-                        action: viewModel.toggleHandsFree
-                    )
-                }
-            } else {
-                CircleControl(
-                    icon: "mic.fill",
-                    tint: HudColors.onEmber,
-                    background: HudColors.ember,
-                    diameter: 76,
-                    label: "开始",
-                    action: viewModel.toggleHandsFree
-                )
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 2)
-    }
-}
-
-private struct CircleControl: View {
-    let icon: String
-    let tint: Color
-    let background: Color
-    var diameter: CGFloat = 64
-    let label: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 7) {
-                ZStack {
-                    Circle().fill(background).frame(width: diameter, height: diameter)
-                    Image(systemName: icon)
-                        .font(.system(size: diameter * 0.34, weight: .semibold))
-                        .foregroundColor(tint)
-                }
-                Text(label).font(.system(size: 12)).foregroundColor(HudColors.muted)
-            }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
     }
 }
 

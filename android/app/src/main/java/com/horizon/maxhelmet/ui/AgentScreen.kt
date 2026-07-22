@@ -30,14 +30,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -58,7 +53,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -291,9 +285,9 @@ fun AgentScreen(
             }
             Spacer(Modifier.height(12.dp))
 
-            SecondaryControls(viewModel)
+            SecondaryControls(state = state, viewModel = viewModel)
             Spacer(Modifier.height(16.dp))
-            PrimaryControls(state = state, onToggleHandsFree = onToggleHandsFree, onToggleMute = viewModel::toggleMute)
+            VoiceMicDock(state = state, onClick = onToggleHandsFree)
         }
     }
 
@@ -646,16 +640,19 @@ private fun svgTokens(s: String): List<SvgToken> {
     return out
 }
 
-// ---- secondary controls (字幕 · 设置) ------------------------------------------------
+// ---- secondary controls (字幕 · 静音 · 设置) ----------------------------------------
 
 @Composable
-private fun SecondaryControls(viewModel: MainViewModel) {
+private fun SecondaryControls(state: AgentSession.State, viewModel: MainViewModel) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
     ) {
         PillToggle(glyph = "💬", label = "字幕", on = viewModel.showCaptions, onClick = viewModel::toggleCaptions)
-        Spacer(Modifier.weight(1f))
+        if (state.handsFree) {
+            MuteUtilityPill(muted = state.micMuted, onClick = viewModel::toggleMute)
+        }
         PillToggle(glyph = "⚙", label = "设置", on = false, onClick = { viewModel.showPreferences = true })
     }
 }
@@ -675,73 +672,6 @@ private fun PillToggle(glyph: String, label: String, on: Boolean, onClick: () ->
     ) {
         Text(glyph, fontSize = 13.sp)
         Text(label, color = tint, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-    }
-}
-
-// ---- primary controls (start · mute · end) -------------------------------------------
-
-@Composable
-private fun PrimaryControls(
-    state: AgentSession.State,
-    onToggleHandsFree: () -> Unit,
-    onToggleMute: () -> Unit
-) {
-    if (state.handsFree) {
-        Row(horizontalArrangement = Arrangement.spacedBy(44.dp), verticalAlignment = Alignment.CenterVertically) {
-            CircleControl(
-                icon = if (state.micMuted) Icons.Filled.MicOff else Icons.Filled.Mic,
-                iconColor = if (state.micMuted) HudColors.Amber else HudColors.HudInk,
-                background = HudColors.PanelElevated,
-                label = if (state.micMuted) "取消静音" else "静音",
-                onClick = onToggleMute
-            )
-            CircleControl(
-                icon = Icons.Filled.Close,
-                iconColor = Color.White,
-                background = HudColors.Red,
-                label = "结束",
-                onClick = onToggleHandsFree
-            )
-        }
-    } else {
-        CircleControl(
-            icon = Icons.Filled.Mic,
-            iconColor = HudColors.OnEmber,
-            background = HudColors.Ember,
-            diameter = 76.dp,
-            label = "开始",
-            onClick = onToggleHandsFree
-        )
-    }
-}
-
-@Composable
-private fun CircleControl(
-    icon: ImageVector,
-    background: Color,
-    label: String,
-    onClick: () -> Unit,
-    iconColor: Color = HudColors.Text,
-    diameter: androidx.compose.ui.unit.Dp = 64.dp
-) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(
-            modifier = Modifier
-                .size(diameter)
-                .clip(CircleShape)
-                .background(background)
-                .clickable(onClick = onClick),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = label,
-                tint = iconColor,
-                modifier = Modifier.size(diameter * 0.42f)
-            )
-        }
-        Spacer(Modifier.height(7.dp))
-        Text(label, color = HudColors.Muted, fontSize = 12.sp)
     }
 }
 

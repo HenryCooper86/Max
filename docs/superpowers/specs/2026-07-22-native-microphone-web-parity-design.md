@@ -53,12 +53,12 @@ The dock remains centered beneath the utility row. It replaces all current circu
 
 ### State Mapping
 
-| State | Leading key | Label | Border/key palette | Trailing region | Tap action |
-| --- | --- | --- | --- | --- | --- |
-| Hands-free off | Microphone | 开始免提 | Ember | Quiet three-bar meter at rest | Start session |
-| Starting or reconnecting | X | 连接中 | Amber transitioning to lume | Quiet progress shimmer | Cancel/end session |
-| Live and unmuted | X | 结束免提 | Lume | Live input meter | End session |
-| Live and muted | X | 结束免提 | Lume border with muted amber cue | Static microphone-slash symbol | End session |
+| State                    | Leading key | Label    | Border/key palette               | Trailing region                | Tap action         |
+| ------------------------ | ----------- | -------- | -------------------------------- | ------------------------------ | ------------------ |
+| Hands-free off           | Microphone  | 开始免提 | Ember                            | Quiet three-bar meter at rest  | Start session      |
+| Starting or reconnecting | X           | 连接中   | Amber transitioning to lume      | Quiet progress shimmer         | Cancel/end session |
+| Live and unmuted         | X           | 结束免提 | Lume                             | Live input meter               | End session        |
+| Live and muted           | X           | 结束免提 | Lume border with muted amber cue | Static microphone-slash symbol | End session        |
 
 The dock always represents the hands-free session action. Muting is not assigned to the dock tap, preventing an ambiguous control whose action changes between End and Mute.
 

@@ -39,10 +39,12 @@
 ### Task 1: Android microphone-dock presentation model
 
 **Files:**
+
 - Create: `android/app/src/main/java/com/horizon/maxhelmet/ui/VoiceMicDockModel.kt`
 - Test: `android/app/src/test/java/com/horizon/maxhelmet/ui/VoiceMicDockTest.kt`
 
 **Interfaces:**
+
 - Consumes: `AgentSession.State`, `ConnectionState`, and `TurnState` from the existing Android agent package.
 - Produces: `MicDockMode`, `MicDockPresentation`, `isVoiceInputActive(state)`, `micDisplayLevel(state)`, `micDockPresentation(state)`, and `micMeterHeights(level)` for Task 2.
 
@@ -214,10 +216,12 @@ git commit -m "test(android): define microphone dock states"
 ### Task 2: Android Compose dock and screen integration
 
 **Files:**
+
 - Create: `android/app/src/main/java/com/horizon/maxhelmet/ui/VoiceMicDock.kt`
 - Modify: `android/app/src/main/java/com/horizon/maxhelmet/ui/AgentScreen.kt:25-65, 286-297, 650-744`
 
 **Interfaces:**
+
 - Consumes: all Task 1 model interfaces plus `HudColors`.
 - Produces: `VoiceMicDock(state, onClick)` and `MuteUtilityPill(muted, onClick)` for `AgentScreen`.
 
@@ -511,10 +515,12 @@ git commit -m "feat(android): add web-style voice mic dock"
 ### Task 3: iOS microphone-dock presentation model
 
 **Files:**
+
 - Create: `ios/MaxHelmet/UI/VoiceMicDockModel.swift`
 - Test: `ios/MaxHelmetTests/VoiceMicDockTests.swift`
 
 **Interfaces:**
+
 - Consumes: `AgentSession.State`, `ConnectionState`, and `TurnState` from the existing iOS target.
 - Produces: `MicDockMode`, `MicDockPresentation`, `isVoiceInputActive(_:)`, `micDisplayLevel(_:)`, `micDockPresentation(_:)`, and `micMeterHeights(_:)` for Task 4.
 
@@ -696,10 +702,12 @@ git commit -m "test(ios): define microphone dock states"
 ### Task 4: iOS SwiftUI dock and screen integration
 
 **Files:**
+
 - Create: `ios/MaxHelmet/UI/VoiceMicDock.swift`
 - Modify: `ios/MaxHelmet/UI/AgentScreen.swift:158-172, 688-797`
 
 **Interfaces:**
+
 - Consumes: all Task 3 model interfaces plus `HudColors`.
 - Produces: `VoiceMicDock(state:action:)` and `MuteUtilityPill(muted:action:)` for `AgentScreen`.
 
@@ -936,11 +944,13 @@ git commit -m "feat(ios): add web-style voice mic dock"
 ### Task 5: Cross-platform verification and documentation
 
 **Files:**
+
 - Modify: `README.md:44-62`
 - Modify: `android/README.md:108-118`
 - Modify: `ios/README.md:130-145`
 
 **Interfaces:**
+
 - Consumes: completed Android and iOS docks from Tasks 2 and 4.
 - Produces: verified parity evidence and accurate repository documentation.
 

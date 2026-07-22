@@ -30,14 +30,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -58,7 +53,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -128,14 +122,13 @@ private fun connectionLabel(state: ConnectionState): String = when (state) {
  * amber while connecting, then the per-turn ring color once live. */
 private fun orbColor(state: AgentSession.State): Color {
     if (!state.handsFree) return HudColors.Lume
+    if (isHazardPresentationActive(state)) return hazardColor(state.fusedHazard)
     return when (state.connection) {
         ConnectionState.OFFLINE, ConnectionState.DEGRADED -> HudColors.Red
         ConnectionState.CONNECTING, ConnectionState.PROVIDER -> HudColors.Amber
         // The fused hazard overrides the conversational palette: a rider glancing
         // at the helmet must see danger first, turn state second (HelmetVisual.tsx).
-        ConnectionState.RELAY, ConnectionState.READY ->
-            if (state.fusedHazard != HazardLevel.NORMAL) hazardColor(state.fusedHazard)
-            else ringColor(true, state.turnState)
+        ConnectionState.RELAY, ConnectionState.READY -> ringColor(true, state.turnState)
     }
 }
 
@@ -143,8 +136,9 @@ private fun orbColor(state: AgentSession.State): Color {
  *  face here (Space Mono on web). Deliberately English: a gauge label, not primary
  *  copy. Mirrors the web HelmetVisual TELLTALE map. */
 private fun stateTelltale(state: AgentSession.State): String {
-    if (state.fusedHazard == HazardLevel.CRITICAL) return "HAZARD"
-    if (state.fusedHazard == HazardLevel.CAUTION) return "CAUTION"
+    if (isHazardPresentationActive(state)) {
+        return if (state.fusedHazard == HazardLevel.CRITICAL) "HAZARD" else "CAUTION"
+    }
     if (!state.handsFree) return "STANDBY"
     if (state.micMuted) return "MUTED"
     return when (state.connection) {
@@ -165,7 +159,7 @@ private fun stateTelltale(state: AgentSession.State): String {
 private enum class GaugeMode { OFFLINE, IDLE, CONNECTING, MIC, THINKING, SPEAKING, HAZARD }
 
 private fun gaugeMode(state: AgentSession.State): GaugeMode {
-    if (state.handsFree && state.fusedHazard != HazardLevel.NORMAL) return GaugeMode.HAZARD
+    if (isHazardPresentationActive(state)) return GaugeMode.HAZARD
     if (!state.handsFree) return GaugeMode.IDLE
     return when (state.connection) {
         ConnectionState.OFFLINE, ConnectionState.DEGRADED -> GaugeMode.OFFLINE
@@ -180,15 +174,19 @@ private fun gaugeMode(state: AgentSession.State): GaugeMode {
 }
 
 /** The single line under the helmet — the only words on the clean screen. */
-private fun orbCaption(state: AgentSession.State): String {
+internal fun orbCaption(state: AgentSession.State): String {
     if (!state.handsFree) return "点按头盔，开始对话"
-    if (state.micMuted) return "麦克风已静音"
-    val caption = when (state.connection) {
-        ConnectionState.READY -> TURN_CAPTIONS.getValue(state.turnState)
-        else -> connectionLabel(state.connection)
+    val caption = if (state.micMuted) {
+        "麦克风已静音"
+    } else {
+        when (state.connection) {
+            ConnectionState.READY -> TURN_CAPTIONS.getValue(state.turnState)
+            else -> connectionLabel(state.connection)
+        }
     }
     // A non-normal fused hazard leads the caption (HAZARD_CAPTIONS in HelmetVisual.tsx).
-    val hazardPrefix = HAZARD_CAPTIONS[state.fusedHazard]
+    val presentedHazard = if (isHazardPresentationActive(state)) state.fusedHazard else HazardLevel.NORMAL
+    val hazardPrefix = HAZARD_CAPTIONS[presentedHazard]
     return if (hazardPrefix != null) "$hazardPrefix · $caption" else caption
 }
 
@@ -256,7 +254,7 @@ fun AgentScreen(
                 turnState = state.turnState,
                 voiceLevel = state.voiceLevel,
                 dimmed = state.micMuted,
-                hazard = if (state.handsFree) state.fusedHazard else HazardLevel.NORMAL,
+                hazard = if (isHazardPresentationActive(state)) state.fusedHazard else HazardLevel.NORMAL,
                 gauge = gaugeMode(state),
                 onTap = onToggleHandsFree
             )
@@ -291,9 +289,9 @@ fun AgentScreen(
             }
             Spacer(Modifier.height(12.dp))
 
-            SecondaryControls(viewModel)
+            SecondaryControls(state = state, viewModel = viewModel)
             Spacer(Modifier.height(16.dp))
-            PrimaryControls(state = state, onToggleHandsFree = onToggleHandsFree, onToggleMute = viewModel::toggleMute)
+            VoiceMicDock(state = state, onClick = onToggleHandsFree)
         }
     }
 
@@ -646,16 +644,19 @@ private fun svgTokens(s: String): List<SvgToken> {
     return out
 }
 
-// ---- secondary controls (字幕 · 设置) ------------------------------------------------
+// ---- secondary controls (字幕 · 静音 · 设置) ----------------------------------------
 
 @Composable
-private fun SecondaryControls(viewModel: MainViewModel) {
+private fun SecondaryControls(state: AgentSession.State, viewModel: MainViewModel) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
     ) {
         PillToggle(glyph = "💬", label = "字幕", on = viewModel.showCaptions, onClick = viewModel::toggleCaptions)
-        Spacer(Modifier.weight(1f))
+        if (state.handsFree) {
+            MuteUtilityPill(muted = state.micMuted, onClick = viewModel::toggleMute)
+        }
         PillToggle(glyph = "⚙", label = "设置", on = false, onClick = { viewModel.showPreferences = true })
     }
 }
@@ -675,73 +676,6 @@ private fun PillToggle(glyph: String, label: String, on: Boolean, onClick: () ->
     ) {
         Text(glyph, fontSize = 13.sp)
         Text(label, color = tint, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-    }
-}
-
-// ---- primary controls (start · mute · end) -------------------------------------------
-
-@Composable
-private fun PrimaryControls(
-    state: AgentSession.State,
-    onToggleHandsFree: () -> Unit,
-    onToggleMute: () -> Unit
-) {
-    if (state.handsFree) {
-        Row(horizontalArrangement = Arrangement.spacedBy(44.dp), verticalAlignment = Alignment.CenterVertically) {
-            CircleControl(
-                icon = if (state.micMuted) Icons.Filled.MicOff else Icons.Filled.Mic,
-                iconColor = if (state.micMuted) HudColors.Amber else HudColors.HudInk,
-                background = HudColors.PanelElevated,
-                label = if (state.micMuted) "取消静音" else "静音",
-                onClick = onToggleMute
-            )
-            CircleControl(
-                icon = Icons.Filled.Close,
-                iconColor = Color.White,
-                background = HudColors.Red,
-                label = "结束",
-                onClick = onToggleHandsFree
-            )
-        }
-    } else {
-        CircleControl(
-            icon = Icons.Filled.Mic,
-            iconColor = HudColors.OnEmber,
-            background = HudColors.Ember,
-            diameter = 76.dp,
-            label = "开始",
-            onClick = onToggleHandsFree
-        )
-    }
-}
-
-@Composable
-private fun CircleControl(
-    icon: ImageVector,
-    background: Color,
-    label: String,
-    onClick: () -> Unit,
-    iconColor: Color = HudColors.Text,
-    diameter: androidx.compose.ui.unit.Dp = 64.dp
-) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(
-            modifier = Modifier
-                .size(diameter)
-                .clip(CircleShape)
-                .background(background)
-                .clickable(onClick = onClick),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = label,
-                tint = iconColor,
-                modifier = Modifier.size(diameter * 0.42f)
-            )
-        }
-        Spacer(Modifier.height(7.dp))
-        Text(label, color = HudColors.Muted, fontSize = 12.sp)
     }
 }
 

@@ -164,6 +164,7 @@ hide the toggle, use the hardened `Info.plist`, and require a trusted certificat
 ## What's implemented
 
 - Hands-free toggle: the 开始/结束 button **or tapping the helmet** starts/stops mic streaming and the relay session.
+- Web-parity microphone dock — the native 300 × 64 start/end control mirrors the web HUD; its three-bar meter, key, and lume glow react only to live rider input, while Mute remains a separate utility action.
 - SwiftUI turn-state HUD with the same captions, colors, controls, and ride cards as Android/web.
 - Voice gender, personality, ride mode, and demo scenario selectors.
 - 16 kHz PCM16 mono microphone streaming through `AVAudioEngine`.

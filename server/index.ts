@@ -70,6 +70,7 @@ import type { AgentProvider, ProviderTelemetry } from "./providers/types";
 import { AgentSessionController } from "./session-controller";
 import { markClientActivity, startWatchdog, trackClient } from "./watchdog";
 import type { Logger } from "./logger";
+import { staticCacheControl } from "./static-cache";
 import { clearUserConversationMemory, flushUserMemory, userMemorySummary } from "./user-memory";
 
 const app = express();
@@ -629,20 +630,9 @@ if (existsSync(clientDir)) {
     express.static(clientDir, {
       setHeaders: (res, filePath) => {
         // Vite's content-hashed bundles (…/assets/) are safe to cache forever.
-        // The self-hosted fonts (…/fonts/) are stable but keep fixed names, so
-        // cache them long without `immutable` — a same-name swap still updates on
-        // a hard reload. Everything else (the HTML shell) must revalidate so a
-        // deploy never pins a returning rider to yesterday's asset names.
-        const isHashedAsset = filePath.includes(`${path.sep}assets${path.sep}`);
-        const isFont = filePath.includes(`${path.sep}fonts${path.sep}`);
-        res.setHeader(
-          "Cache-Control",
-          isHashedAsset
-            ? "public, max-age=31536000, immutable"
-            : isFont
-              ? "public, max-age=31536000"
-              : "no-cache, max-age=0, must-revalidate"
-        );
+        // Fixed-name fonts revalidate so a deploy can safely replace them;
+        // content-hashed bundles remain immutable for one year.
+        res.setHeader("Cache-Control", staticCacheControl(filePath));
       }
     })
   );

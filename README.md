@@ -53,7 +53,7 @@ single status caption and minimal controls.
 
 ## Current Capabilities
 
-- Hands-free operation — click the main button, **tap the helmet** (iOS/Android), or press Space (web) to start/stop; once active, the rider just talks and Doubao's server-side VAD handles turn-taking.
+- Web-parity microphone dock — the native 300 × 64 start/end control mirrors the web HUD; its three-bar meter, key, and lume glow react only to live rider input, while Mute remains a separate utility action.
 - Wake word — on the live agent, Max only replies when addressed by name ("Max"), so chit-chat and passenger talk don't trigger it; a 12 s follow-up window keeps a conversation going (capped at 60 s after the last explicit "Max", so continuous chatter can't hold the agent open forever).
 - ADAS proactive safety alerts — simulated directional hazards (rear approach, forward collision, blind spot, cross-traffic, pedestrian, lane departure, tailgating) **interrupt** the agent and announce the danger; fires on mock and, for the `ADAS` scenario, on the live Doubao path.
 - Agent identity — attributes its development to Horizon Continental Technology (neueHCT) and names the CEO (Li Biao / Stone Li), in Chinese and English.

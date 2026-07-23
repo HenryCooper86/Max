@@ -9,13 +9,21 @@ const INVITE_EXPIRING_SOON_MS = 2 * 24 * 60 * 60 * 1000;
 type LoadStatus = "loading" | "ready" | "stale";
 type Notice = { tone: "success" | "error"; message: string };
 
-function formatInviteExpiry(timestamp: number) {
+function formatInviteExpiry(timestamp: number, language: "zh-CN" | "en-US" = "zh-CN") {
   if (!Number.isFinite(timestamp) || timestamp <= 0) return "—";
   const remainingMs = timestamp - Date.now();
-  if (remainingMs <= 0) return "已过期";
-  if (remainingMs < 3_600_000) return `${Math.ceil(remainingMs / 60_000)} 分钟后`;
-  if (remainingMs < 86_400_000) return `${Math.ceil(remainingMs / 3_600_000)} 小时后`;
-  return `${Math.ceil(remainingMs / 86_400_000)} 天后`;
+  if (remainingMs <= 0) return language === "en-US" ? "Expired" : "已过期";
+  if (remainingMs < 3_600_000)
+    return language === "en-US"
+      ? `in ${Math.ceil(remainingMs / 60_000)} min`
+      : `${Math.ceil(remainingMs / 60_000)} 分钟后`;
+  if (remainingMs < 86_400_000)
+    return language === "en-US"
+      ? `in ${Math.ceil(remainingMs / 3_600_000)} hr`
+      : `${Math.ceil(remainingMs / 3_600_000)} 小时后`;
+  return language === "en-US"
+    ? `in ${Math.ceil(remainingMs / 86_400_000)} days`
+    : `${Math.ceil(remainingMs / 86_400_000)} 天后`;
 }
 
 async function writeClipboard(value: string): Promise<boolean> {
@@ -208,7 +216,14 @@ export function AccountManagement({
     } else {
       setCopiedCode(null);
       setManualInviteUrl(url);
-      setActionNotice({ tone: "error", message: "无法写入剪贴板，请手动复制邀请链接。" });
+      setActionNotice({
+        tone: "error",
+        message: localized(
+          language,
+          "无法写入剪贴板，请手动复制邀请链接。",
+          "Could not write to clipboard; copy the invite link manually."
+        )
+      });
     }
   };
 
@@ -370,7 +385,7 @@ export function AccountManagement({
 
       {status === "stale" ? (
         <p className="adminNotice" role="status">
-          数据可能已过期
+          {localized(language, "数据可能已过期", "Data may be stale")}
         </p>
       ) : null}
       {loadNotice ? (
@@ -402,7 +417,8 @@ export function AccountManagement({
               <strong>{account.displayName}</strong>
               <span>
                 @{account.username} · {adminRoleLabel(account.role, language)} ·{" "}
-                {language === "en-US" ? "Last login " : "最近登录 "} {formatAdminRelativeTime(account.lastLoginAt)}
+                {language === "en-US" ? "Last login " : "最近登录 "}{" "}
+                {formatAdminRelativeTime(account.lastLoginAt, language)}
               </span>
             </div>
             <div className="adminAccountRoleActions">
@@ -429,7 +445,9 @@ export function AccountManagement({
                       disabled={busyTarget !== null}
                       onClick={() => void removeUser(account.username)}
                     >
-                      {armedDelete === account.username ? confirmationCopy("user", `@${account.username}`) : "删除"}
+                      {armedDelete === account.username
+                        ? confirmationCopy("user", `@${account.username}`, language)
+                        : localized(language, "删除", "Delete")}
                     </button>
                   ) : null}
                 </>
@@ -442,13 +460,16 @@ export function AccountManagement({
             <div className="adminAccountUser">
               <strong>邀请 · {item.code.slice(4, 12)}…</strong>
               <span>
-                由 {item.createdBy} 创建 · {formatAdminRelativeTime(item.createdAt)} · 过期{" "}
-                {formatInviteExpiry(item.expiresAt)}
+                {localized(language, "由", "Created by")} {item.createdBy} ·{" "}
+                {formatAdminRelativeTime(item.createdAt, language)} · {localized(language, "过期", "expires")}{" "}
+                {formatInviteExpiry(item.expiresAt, language)}
               </span>
             </div>
             <div className="adminAccountInviteActions">
               <button type="button" disabled={busyTarget !== null} onClick={() => void copyInvite(item.code)}>
-                {copiedCode === item.code ? "已复制 ✓" : "复制链接"}
+                {copiedCode === item.code
+                  ? localized(language, "已复制 ✓", "Copied ✓")
+                  : localized(language, "复制链接", "Copy link")}
               </button>
               <button
                 type="button"
@@ -457,10 +478,10 @@ export function AccountManagement({
                 onClick={() => void removeInvite(item.code)}
               >
                 {busyTarget === `invite:${item.code}`
-                  ? "正在撤销…"
+                  ? localized(language, "正在撤销…", "Revoking…")
                   : armedInvite === item.code
-                    ? confirmationCopy("invite", item.code)
-                    : "撤销"}
+                    ? confirmationCopy("invite", item.code, language)
+                    : localized(language, "撤销", "Revoke")}
               </button>
             </div>
           </div>
@@ -468,12 +489,12 @@ export function AccountManagement({
         {!filteredUsers.length && !filteredInvites.length ? (
           <p className="testerConversationEmpty">
             {status === "loading"
-              ? "正在加载账号数据…"
+              ? localized(language, "正在加载账号数据…", "Loading account data…")
               : users.length || invites.length
-                ? "没有账号或邀请匹配当前筛选。"
+                ? localized(language, "没有账号或邀请匹配当前筛选。", "No accounts or invites match this filter.")
                 : status === "stale"
-                  ? "暂时无法加载账号数据。"
-                  : "暂无账号或未使用邀请。"}
+                  ? localized(language, "暂时无法加载账号数据。", "Account data is temporarily unavailable.")
+                  : localized(language, "暂无账号或未使用邀请。", "No accounts or unused invites.")}
           </p>
         ) : null}
       </div>

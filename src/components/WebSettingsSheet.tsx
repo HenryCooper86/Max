@@ -16,15 +16,22 @@ import { localized } from "../lib/i18n";
 import type { HelmetAgent } from "../hooks/useHelmetAgent";
 import {
   CONNECTION_LABELS,
+  CONNECTION_LABELS_EN,
   CREDENTIAL_LABELS,
   HAZARD_ACTIONS,
+  HAZARD_ACTIONS_EN,
   HAZARD_LABELS,
+  HAZARD_LABELS_EN,
   NETWORK_LABELS,
   PERMISSION_LABELS,
+  PERMISSION_LABELS_EN,
   PERSONALITY_LABELS,
+  PERSONALITY_LABELS_EN,
   RESPONSE_MODE_LABELS,
   RIDE_MODES,
   RIDE_MODE_LABELS,
+  RIDE_MODE_LABELS_EN,
+  RESPONSE_MODE_LABELS_EN,
   SAMPLE_RATE,
   SCENARIOS,
   VOICE_PERSONALITIES
@@ -150,7 +157,7 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
                     aria-pressed={agent.voicePersonality === personality}
                     onClick={() => agent.setVoicePersonality(personality)}
                   >
-                    {PERSONALITY_LABELS[personality]}
+                    {(language === "en-US" ? PERSONALITY_LABELS_EN : PERSONALITY_LABELS)[personality]}
                   </button>
                 ))}
               </div>
@@ -180,7 +187,7 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
                     aria-pressed={agent.rideContext.mode === mode}
                     onClick={() => agent.setRideMode(mode)}
                   >
-                    {RIDE_MODE_LABELS[mode]}
+                    {(language === "en-US" ? RIDE_MODE_LABELS_EN : RIDE_MODE_LABELS)[mode]}
                   </button>
                 ))}
               </div>
@@ -200,7 +207,16 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
                     aria-pressed={agent.rideContext.scenario === scenario}
                     onClick={() => agent.setScenario(scenario)}
                   >
-                    {scenarioLabel(scenario)}
+                    {language === "en-US"
+                      ? {
+                          commute: "Commute",
+                          wind: "Wind",
+                          fuel: "Fuel",
+                          group: "Group",
+                          emergency: "Emergency",
+                          adas: "ADAS"
+                        }[scenario]
+                      : scenarioLabel(scenario)}
                   </button>
                 ))}
                 {agent.provider === "mock" ? (
@@ -223,8 +239,8 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
                 <span>km/h</span>
               </div>
               <p>
-                <strong>{HAZARD_LABELS[fusedHazard]}</strong>
-                {HAZARD_ACTIONS[fusedHazard]}
+                <strong>{(language === "en-US" ? HAZARD_LABELS_EN : HAZARD_LABELS)[fusedHazard]}</strong>
+                {(language === "en-US" ? HAZARD_ACTIONS_EN : HAZARD_ACTIONS)[fusedHazard]}
               </p>
               <dl>
                 <div>
@@ -270,10 +286,10 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
               <SlidersHorizontal size={22} aria-hidden="true" />
               <div>
                 <h2>{t("settings.connection")}</h2>
-                <p>{agent.status}</p>
+                <p>{(language === "en-US" ? CONNECTION_LABELS_EN : CONNECTION_LABELS)[agent.connectionState]}</p>
               </div>
               <span className={`settingsStatus ${agent.connected ? "online" : ""}`}>
-                {CONNECTION_LABELS[agent.connectionState]}
+                {(language === "en-US" ? CONNECTION_LABELS_EN : CONNECTION_LABELS)[agent.connectionState]}
               </span>
             </div>
             <dl className="settingsMetrics">
@@ -287,11 +303,11 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
               </div>
               <div>
                 <dt>{localized(language, "麦克风", "Microphone")}</dt>
-                <dd>{PERMISSION_LABELS[agent.micPermission]}</dd>
+                <dd>{(language === "en-US" ? PERMISSION_LABELS_EN : PERMISSION_LABELS)[agent.micPermission]}</dd>
               </div>
               <div>
                 <dt>{localized(language, "定位", "Location")}</dt>
-                <dd>{PERMISSION_LABELS[agent.locationPermission]}</dd>
+                <dd>{(language === "en-US" ? PERMISSION_LABELS_EN : PERMISSION_LABELS)[agent.locationPermission]}</dd>
               </div>
             </dl>
           </section>
@@ -336,7 +352,13 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
               </div>
               <div>
                 <dt>{localized(language, "响应", "Response")}</dt>
-                <dd>{RESPONSE_MODE_LABELS[agent.sessionMemory.responseMode]}</dd>
+                <dd>
+                  {
+                    (language === "en-US" ? RESPONSE_MODE_LABELS_EN : RESPONSE_MODE_LABELS)[
+                      agent.sessionMemory.responseMode
+                    ]
+                  }
+                </dd>
               </div>
             </dl>
             <div className="settingsActions">

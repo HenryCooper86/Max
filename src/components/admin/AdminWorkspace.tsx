@@ -80,7 +80,7 @@ export function AdminWorkspace({ agent, user, onAuthenticationExpired, onClose }
           </span>
           <small>
             {data.lastSyncedAt
-              ? `${localized(language, "最近同步", "Last synced")} ${formatAdminRelativeTime(data.lastSyncedAt)}`
+              ? `${localized(language, "最近同步", "Last synced")} ${formatAdminRelativeTime(data.lastSyncedAt, language)}`
               : localized(language, "等待首次同步", "Waiting for first sync")}
           </small>
           <button ref={closeRef} type="button" onClick={onClose}>

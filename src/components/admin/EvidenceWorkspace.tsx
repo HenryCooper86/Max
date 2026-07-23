@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { scenarioLabel } from "../../../shared/ride";
 import {
   TESTING_CAMPAIGNS,
@@ -25,6 +25,11 @@ import type { AdminTestingData } from "./useAdminTestingData";
 const TEST_QUALITY_FILTERS = ["all", "pass", "watch", "fail"] as const;
 type TestQualityFilter = (typeof TEST_QUALITY_FILTERS)[number];
 type QualityCounts = Record<TestingQuality, number>;
+type PendingNoteSave = {
+  requestId: number;
+  sessionId: string;
+  notes: string;
+};
 
 const QUALITY_PRIORITY: Record<TestingQuality, number> = { fail: 3, watch: 2, pass: 1 };
 
@@ -96,6 +101,7 @@ function barHeight(value: number, max: number) {
 
 type Props = {
   active: boolean;
+  focusRequestKey?: number;
   requestedSessionId: string | null;
   onRequestedSessionHandled: (sessionId: string) => void;
   agent: HelmetAgent;
@@ -103,7 +109,15 @@ type Props = {
   data: AdminTestingData;
 };
 
-export function EvidenceWorkspace({ active, requestedSessionId, onRequestedSessionHandled, agent, user, data }: Props) {
+export function EvidenceWorkspace({
+  active,
+  focusRequestKey = 0,
+  requestedSessionId,
+  onRequestedSessionHandled,
+  agent,
+  user,
+  data
+}: Props) {
   const [selectedTesterKey, setSelectedTesterKey] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [testerFilter, setTesterFilter] = useState("");
@@ -112,13 +126,20 @@ export function EvidenceWorkspace({ active, requestedSessionId, onRequestedSessi
   const [armedAction, setArmedAction] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [savingNotes, setSavingNotes] = useState(false);
+  const [pendingNoteSave, setPendingNoteSave] = useState<PendingNoteSave | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [sessionNotes, setSessionNotes] = useState("");
   const [notesDirty, setNotesDirty] = useState(false);
   const notesDirtyRef = useRef(false);
   const noteSessionIdRef = useRef<string | null>(null);
+  const sessionNotesRef = useRef("");
+  const noteSaveRequestRef = useRef(0);
   const workspaceRef = useRef<HTMLElement>(null);
+  const handledFocusRequestRef = useRef(0);
+  const writeSessionNotes = useCallback((notes: string) => {
+    sessionNotesRef.current = notes;
+    setSessionNotes(notes);
+  }, []);
 
   const { loadSession } = data;
   const testing = data.testing;
@@ -218,6 +239,10 @@ export function EvidenceWorkspace({ active, requestedSessionId, onRequestedSessi
         ? "warn"
         : "good";
   const canClear = user.role === "admin";
+  const currentDraftIsSaving =
+    pendingNoteSave !== null &&
+    pendingNoteSave.sessionId === selectedSession?.sessionId &&
+    pendingNoteSave.notes === sessionNotes;
 
   useEffect(() => {
     if (!armedAction) return;
@@ -252,11 +277,11 @@ export function EvidenceWorkspace({ active, requestedSessionId, onRequestedSessi
     noteSessionIdRef.current = sessionId;
     notesDirtyRef.current = false;
     setNotesDirty(false);
-    setSessionNotes(selectedSession?.notes ?? "");
-  }, [selectedSession?.notes, selectedSession?.sessionId]);
+    writeSessionNotes(selectedSession?.notes ?? "");
+  }, [selectedSession?.notes, selectedSession?.sessionId, writeSessionNotes]);
 
   useEffect(() => {
-    if (!requestedSessionId) return;
+    if (!active || !requestedSessionId) return;
     let current = true;
     setArmedAction(null);
     setTesterFilter("");
@@ -267,7 +292,7 @@ export function EvidenceWorkspace({ active, requestedSessionId, onRequestedSessi
     noteSessionIdRef.current = requestedSessionId;
     notesDirtyRef.current = false;
     setNotesDirty(false);
-    setSessionNotes(requestedSessionSummary?.notes ?? "");
+    writeSessionNotes(requestedSessionSummary?.notes ?? "");
     void loadSession(requestedSessionId).then((detail) => {
       if (!current) return;
       if (detail) {
@@ -277,25 +302,37 @@ export function EvidenceWorkspace({ active, requestedSessionId, onRequestedSessi
         noteSessionIdRef.current = detail.sessionId;
         notesDirtyRef.current = false;
         setNotesDirty(false);
-        setSessionNotes(detail.notes);
+        writeSessionNotes(detail.notes);
         setNotice(null);
       } else {
         setNotice("所选证据不可用，或已超出当前账号的访问范围。");
       }
-      onRequestedSessionHandled(requestedSessionId);
+      handledFocusRequestRef.current = focusRequestKey;
       workspaceRef.current?.focus();
+      onRequestedSessionHandled(requestedSessionId);
     });
     return () => {
       current = false;
     };
   }, [
+    active,
+    focusRequestKey,
     loadSession,
     onRequestedSessionHandled,
     requestedSessionId,
     requestedSessionSummary?.notes,
     requestedSessionSummary?.quality,
-    requestedSessionSummary?.testerKey
+    requestedSessionSummary?.testerKey,
+    writeSessionNotes
   ]);
+
+  useEffect(() => {
+    if (!active || requestedSessionId || focusRequestKey === 0 || handledFocusRequestRef.current === focusRequestKey) {
+      return;
+    }
+    handledFocusRequestRef.current = focusRequestKey;
+    workspaceRef.current?.focus();
+  }, [active, focusRequestKey, requestedSessionId]);
 
   const arm = (key: string, action: () => void) => {
     if (armedAction === key) {
@@ -311,7 +348,7 @@ export function EvidenceWorkspace({ active, requestedSessionId, onRequestedSessi
     noteSessionIdRef.current = null;
     notesDirtyRef.current = false;
     setNotesDirty(false);
-    setSessionNotes("");
+    writeSessionNotes("");
     setSelectedTesterKey(testerKey);
     setSelectedSessionId(null);
   };
@@ -322,7 +359,7 @@ export function EvidenceWorkspace({ active, requestedSessionId, onRequestedSessi
     noteSessionIdRef.current = sessionId;
     notesDirtyRef.current = false;
     setNotesDirty(false);
-    setSessionNotes(session?.notes ?? "");
+    writeSessionNotes(session?.notes ?? "");
     setSelectedSessionId(sessionId);
   };
 
@@ -335,7 +372,7 @@ export function EvidenceWorkspace({ active, requestedSessionId, onRequestedSessi
       notesDirtyRef.current = false;
       setNotesDirty(false);
       setSelectedSessionId(null);
-      setSessionNotes("");
+      writeSessionNotes("");
       if (payload.scope !== "session") setSelectedTesterKey(null);
       await agent.refreshHealth();
       setNotice(`已清除 ${targetLabel}。`);
@@ -353,16 +390,22 @@ export function EvidenceWorkspace({ active, requestedSessionId, onRequestedSessi
 
   const saveSessionNotes = async () => {
     if (!selectedSession) return;
-    setSavingNotes(true);
+    const submittedSessionId = selectedSession.sessionId;
+    const submittedNotes = sessionNotesRef.current;
+    const requestId = ++noteSaveRequestRef.current;
+    setPendingNoteSave({ requestId, sessionId: submittedSessionId, notes: submittedNotes });
     setNotice(null);
-    const ok = await data.saveNotes(selectedSession.sessionId, sessionNotes);
-    if (ok) {
-      noteSessionIdRef.current = selectedSession.sessionId;
+    const ok = await data.saveNotes(submittedSessionId, submittedNotes);
+    const ownsCurrentDraft =
+      noteSessionIdRef.current === submittedSessionId && sessionNotesRef.current === submittedNotes;
+    if (ok && ownsCurrentDraft) {
       notesDirtyRef.current = false;
       setNotesDirty(false);
     }
-    setNotice(ok ? "证据备注已保存并写入审计记录。" : "证据备注保存失败；请确认审核员权限和中继状态。");
-    setSavingNotes(false);
+    if (requestId === noteSaveRequestRef.current && noteSessionIdRef.current === submittedSessionId) {
+      setNotice(ok ? "证据备注已保存并写入审计记录。" : "证据备注保存失败；请确认审核员权限和中继状态。");
+    }
+    setPendingNoteSave((current) => (current?.requestId === requestId ? null : current));
   };
 
   if (!testing) {
@@ -521,7 +564,12 @@ export function EvidenceWorkspace({ active, requestedSessionId, onRequestedSessi
             value={sessionFilter}
             onChange={(event) => {
               setArmedAction(null);
+              noteSessionIdRef.current = null;
+              notesDirtyRef.current = false;
+              setNotesDirty(false);
+              writeSessionNotes("");
               setSessionFilter(event.target.value);
+              setSelectedSessionId(null);
             }}
             placeholder="用例、设备、标记或构建"
             autoComplete="off"
@@ -537,7 +585,12 @@ export function EvidenceWorkspace({ active, requestedSessionId, onRequestedSessi
               aria-pressed={qualityFilter === quality}
               onClick={() => {
                 setArmedAction(null);
+                noteSessionIdRef.current = null;
+                notesDirtyRef.current = false;
+                setNotesDirty(false);
+                writeSessionNotes("");
                 setQualityFilter(quality);
+                setSelectedSessionId(null);
               }}
             >
               {testQualityLabel(quality)}
@@ -713,7 +766,7 @@ export function EvidenceWorkspace({ active, requestedSessionId, onRequestedSessi
                 noteSessionIdRef.current = null;
                 notesDirtyRef.current = false;
                 setNotesDirty(false);
-                setSessionNotes("");
+                writeSessionNotes("");
                 setSelectedTesterKey(currentTester?.testerKey ?? null);
                 setSelectedSessionId(null);
               }}
@@ -962,7 +1015,7 @@ export function EvidenceWorkspace({ active, requestedSessionId, onRequestedSessi
                         onChange={(event) => {
                           notesDirtyRef.current = event.target.value !== selectedSession.notes;
                           setNotesDirty(notesDirtyRef.current);
-                          setSessionNotes(event.target.value);
+                          writeSessionNotes(event.target.value);
                         }}
                         placeholder="复现上下文、设备条件和调查记录…"
                       />
@@ -970,11 +1023,13 @@ export function EvidenceWorkspace({ active, requestedSessionId, onRequestedSessi
                     <button
                       type="button"
                       disabled={
-                        savingNotes || !notesDirty || busyAction === `clear-session:${selectedSession.sessionId}`
+                        currentDraftIsSaving ||
+                        !notesDirty ||
+                        busyAction === `clear-session:${selectedSession.sessionId}`
                       }
                       onClick={() => void saveSessionNotes()}
                     >
-                      {savingNotes ? "正在保存…" : "保存备注"}
+                      {currentDraftIsSaving ? "正在保存…" : "保存备注"}
                     </button>
                   </div>
                 ) : null}

@@ -27,6 +27,7 @@ type Props = {
 export function AdminWorkspace({ agent, user, onAuthenticationExpired, onClose }: Props) {
   const [section, setSection] = useState<AdminSection>("overview");
   const [requestedEvidenceSessionId, setRequestedEvidenceSessionId] = useState<string | null>(null);
+  const [evidenceFocusRequestKey, setEvidenceFocusRequestKey] = useState(0);
   const closeRef = useRef<HTMLButtonElement>(null);
   const data = useAdminTestingData({ user, onAuthenticationExpired });
   const allowed = allowedAdminSections(user.role);
@@ -118,6 +119,7 @@ export function AdminWorkspace({ agent, user, onAuthenticationExpired, onClose }
               operations={data.operations}
               onOpenEvidence={(sessionId) => {
                 setRequestedEvidenceSessionId(sessionId ?? null);
+                setEvidenceFocusRequestKey((current) => current + 1);
                 setSection("evidence");
               }}
               onOpenReleases={() => setSection("releases")}
@@ -125,6 +127,7 @@ export function AdminWorkspace({ agent, user, onAuthenticationExpired, onClose }
           ) : null}
           <EvidenceWorkspace
             active={active === "evidence"}
+            focusRequestKey={evidenceFocusRequestKey}
             requestedSessionId={requestedEvidenceSessionId}
             onRequestedSessionHandled={handleRequestedSessionHandled}
             agent={agent}

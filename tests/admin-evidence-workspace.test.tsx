@@ -247,6 +247,14 @@ async function flush() {
   });
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
+
 let renderer: ReactTestRenderer | null = null;
 
 beforeEach(() => {
@@ -284,6 +292,7 @@ describe("EvidenceWorkspace navigation state", () => {
       renderer = create(
         <EvidenceWorkspace
           active
+          focusRequestKey={0}
           requestedSessionId={null}
           onRequestedSessionHandled={onRequestedSessionHandled}
           agent={agent()}
@@ -308,6 +317,7 @@ describe("EvidenceWorkspace navigation state", () => {
       renderer!.update(
         <EvidenceWorkspace
           active
+          focusRequestKey={1}
           requestedSessionId="target-session"
           onRequestedSessionHandled={onRequestedSessionHandled}
           agent={agent()}
@@ -362,6 +372,9 @@ describe("EvidenceWorkspace navigation state", () => {
     await act(async () => {
       input(renderer!, "ID、IP 或区域").props.onChange({ target: { value: "华东" } });
       input(renderer!, "用例、设备、标记或构建").props.onChange({ target: { value: "目标用例" } });
+    });
+    await flush();
+    await act(async () => {
       renderer!.root.findByType("textarea").props.onChange({ target: { value: "未保存草稿" } });
     });
 
@@ -436,6 +449,205 @@ describe("EvidenceWorkspace navigation state", () => {
       );
     });
     expect(renderer!.root.findByType("textarea").props.value).toBe("服务端确认备注");
+  });
+
+  it("repins explicit session filters while passive polling keeps the current selection", async () => {
+    const pass = session("pass-session", "current-key", "current", "pass", "PASS 备注");
+    const fail = session("fail-session", "current-key", "current", "fail", "FAIL 备注");
+    const sharedData = data([pass, fail], [tester("current-key", "current", { pass: 1, watch: 0, fail: 1 })]);
+    await act(async () => {
+      renderer = create(
+        <EvidenceWorkspace
+          active
+          requestedSessionId={null}
+          onRequestedSessionHandled={vi.fn()}
+          agent={agent()}
+          user={user()}
+          data={sharedData}
+        />
+      );
+    });
+    await flush();
+
+    await act(async () => {
+      renderer!.root.find((node) => node.type === "button" && text(node) === "PASS").props.onClick();
+    });
+    await flush();
+    expect(renderer!.root.findByType("textarea").props.value).toBe("PASS 备注");
+
+    await act(async () => {
+      renderer!.root.find((node) => node.type === "button" && text(node) === "FAIL").props.onClick();
+    });
+    await flush();
+
+    const failSelection = renderer!.root.find(
+      (node) => node.type === "button" && node.props.className === "sessionButton active"
+    );
+    expect(text(failSelection)).toContain("FAIL");
+    expect(renderer!.root.findByType("textarea").props.value).toBe("FAIL 备注");
+
+    await act(async () => {
+      renderer!.root.find((node) => node.type === "button" && text(node) === "删除会话").props.onClick();
+    });
+    await act(async () => {
+      renderer!.root.find((node) => node.type === "button" && text(node).includes("fail-session")).props.onClick();
+      await Promise.resolve();
+    });
+    expect(sharedData.clearEvidence).toHaveBeenCalledWith({ scope: "session", sessionId: "fail-session" });
+
+    await act(async () => {
+      renderer!.root.find((node) => node.type === "button" && text(node) === "全部").props.onClick();
+    });
+    await flush();
+    await act(async () => {
+      input(renderer!, "用例、设备、标记或构建").props.onChange({ target: { value: "不存在" } });
+    });
+    await flush();
+    expect(renderer!.root.findAllByType("textarea")).toHaveLength(0);
+    expect(renderer!.root.find((node) => node.type === "button" && text(node) === "导出会话").props.disabled).toBe(
+      true
+    );
+    expect(renderer!.root.find((node) => node.type === "button" && text(node) === "删除会话").props.disabled).toBe(
+      true
+    );
+
+    await act(async () => {
+      input(renderer!, "用例、设备、标记或构建").props.onChange({ target: { value: "pass-session" } });
+    });
+    await flush();
+    expect(renderer!.root.findByType("textarea").props.value).toBe("PASS 备注");
+  });
+
+  it("keeps edits made during a deferred note save dirty and save-enabled", async () => {
+    const selected = session("selected-session", "current-key", "current", "pass", "A");
+    const sharedData = data([selected], [tester("current-key", "current", { pass: 1, watch: 0, fail: 0 })]);
+    const save = deferred<boolean>();
+    sharedData.saveNotes = vi.fn(() => save.promise);
+    const sharedAgent = agent();
+    const sharedUser = user();
+    await act(async () => {
+      renderer = create(
+        <EvidenceWorkspace
+          active
+          requestedSessionId={null}
+          onRequestedSessionHandled={vi.fn()}
+          agent={sharedAgent}
+          user={sharedUser}
+          data={sharedData}
+        />
+      );
+    });
+    await flush();
+
+    await act(async () => {
+      renderer!.root.findByType("textarea").props.onChange({ target: { value: "B" } });
+    });
+    await act(async () => {
+      renderer!.root.find((node) => node.type === "button" && text(node) === "保存备注").props.onClick();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      renderer!.root.findByType("textarea").props.onChange({ target: { value: "C" } });
+    });
+
+    const saveEditedDraft = renderer!.root.find((node) => node.type === "button" && text(node) === "保存备注");
+    expect(renderer!.root.findByType("textarea").props.value).toBe("C");
+    expect(saveEditedDraft.props.disabled).toBe(false);
+
+    await act(async () => {
+      save.resolve(true);
+      await save.promise;
+    });
+    expect(renderer!.root.findByType("textarea").props.value).toBe("C");
+    expect(renderer!.root.find((node) => node.type === "button" && text(node) === "保存备注").props.disabled).toBe(
+      false
+    );
+
+    const savedEcho = data(
+      [{ ...selected, notes: "B" }],
+      [tester("current-key", "current", { pass: 1, watch: 0, fail: 0 })]
+    );
+    await act(async () => {
+      renderer!.update(
+        <EvidenceWorkspace
+          active
+          requestedSessionId={null}
+          onRequestedSessionHandled={vi.fn()}
+          agent={sharedAgent}
+          user={sharedUser}
+          data={savedEcho}
+        />
+      );
+    });
+    expect(renderer!.root.findByType("textarea").props.value).toBe("C");
+  });
+
+  it("focuses an untargeted overview handoff once without focusing ordinary navigation", async () => {
+    const selected = session("selected-session", "current-key", "current", "pass", "服务端备注");
+    const sharedData = data([selected], [tester("current-key", "current", { pass: 1, watch: 0, fail: 0 })]);
+    const focusEvidence = vi.fn();
+    const sharedAgent = agent();
+    const sharedUser = user();
+    const onRequestedSessionHandled = vi.fn();
+    await act(async () => {
+      renderer = create(
+        <EvidenceWorkspace
+          active={false}
+          focusRequestKey={0}
+          requestedSessionId={null}
+          onRequestedSessionHandled={onRequestedSessionHandled}
+          agent={sharedAgent}
+          user={sharedUser}
+          data={sharedData}
+        />,
+        {
+          createNodeMock: (element) =>
+            element.type === "section" && element.props["aria-label"] === "证据与问题" ? { focus: focusEvidence } : null
+        }
+      );
+    });
+
+    await act(async () => {
+      renderer!.update(
+        <EvidenceWorkspace
+          active
+          focusRequestKey={1}
+          requestedSessionId={null}
+          onRequestedSessionHandled={onRequestedSessionHandled}
+          agent={sharedAgent}
+          user={sharedUser}
+          data={sharedData}
+        />
+      );
+    });
+    expect(focusEvidence).toHaveBeenCalledTimes(1);
+    expect(onRequestedSessionHandled).not.toHaveBeenCalled();
+
+    await act(async () => {
+      renderer!.update(
+        <EvidenceWorkspace
+          active={false}
+          focusRequestKey={1}
+          requestedSessionId={null}
+          onRequestedSessionHandled={onRequestedSessionHandled}
+          agent={sharedAgent}
+          user={sharedUser}
+          data={sharedData}
+        />
+      );
+      renderer!.update(
+        <EvidenceWorkspace
+          active
+          focusRequestKey={1}
+          requestedSessionId={null}
+          onRequestedSessionHandled={onRequestedSessionHandled}
+          agent={sharedAgent}
+          user={sharedUser}
+          data={sharedData}
+        />
+      );
+    });
+    expect(focusEvidence).toHaveBeenCalledTimes(1);
   });
 
   it("preserves evidence filters after a confirmed all-evidence clear", async () => {

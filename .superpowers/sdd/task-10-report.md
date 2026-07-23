@@ -63,5 +63,13 @@ The initial repository-wide formatter run also found two ignored local
 formatted locally so `npm run format:check` could pass; they are not tracked
 and are not part of the commit.
 
-Pending after this report: rerun the aggregate `npm run check`, run
-`git diff --check`, and commit the complete Task 10 diff.
+Final completion evidence:
+
+```text
+npm run check                                                 pass
+git diff --check                                              pass
+git diff --cached --check                                     pass
+```
+
+The complete Task 10 diff was committed without amend or push as
+`chore: restore full repository quality gate`.

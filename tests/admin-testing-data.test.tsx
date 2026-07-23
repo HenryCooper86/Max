@@ -310,7 +310,7 @@ describe("useAdminTestingData concurrency", () => {
     expect(hook.current.operations?.runs[0]?.id).toBe("replacement");
   });
 
-  it("keeps replacement mode after a failed post-clear reload and reports that failure", async () => {
+  it("reports confirmed clear success while keeping failed replacement mode stale and retryable", async () => {
     const hook = await trackedHook(user("admin"));
     vi.mocked(testingApi.fetchSummary).mockResolvedValue(success(stats("after-clear")));
     vi.mocked(testingApi.fetchOperations).mockResolvedValue(
@@ -326,7 +326,7 @@ describe("useAdminTestingData concurrency", () => {
       cleared = await hook.current.clearEvidence({ scope: "all" });
     });
 
-    expect(cleared).toBe(false);
+    expect(cleared).toBe(true);
     expect(hook.current.sessions).toEqual([]);
     expect(hook.current.status).toBe("stale");
     expect(hook.current.error?.message).toBe("替换加载失败");

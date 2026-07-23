@@ -95,12 +95,15 @@ function barHeight(value: number, max: number) {
 }
 
 type Props = {
+  active: boolean;
+  requestedSessionId: string | null;
+  onRequestedSessionHandled: (sessionId: string) => void;
   agent: HelmetAgent;
   user: AuthUser;
   data: AdminTestingData;
 };
 
-export function EvidenceWorkspace({ agent, user, data }: Props) {
+export function EvidenceWorkspace({ active, requestedSessionId, onRequestedSessionHandled, agent, user, data }: Props) {
   const [selectedTesterKey, setSelectedTesterKey] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [testerFilter, setTesterFilter] = useState("");
@@ -190,6 +193,9 @@ export function EvidenceWorkspace({ agent, user, data }: Props) {
   const selectedSession = selectedSessionSummary
     ? (sessionDetails[selectedSessionSummary.sessionId] ?? selectedSessionSummary)
     : undefined;
+  const requestedSessionSummary = requestedSessionId
+    ? testingSessions.find((session) => session.sessionId === requestedSessionId)
+    : undefined;
   const selectedSessionTurns = selectedSession?.turns ?? [];
   const selectedTesterCounts = selectedTester?.qualityCounts ?? emptyQualityCounts();
   const selectedSessionIssues = selectedSession ? sessionIssueCount(selectedSession) : 0;
@@ -221,13 +227,45 @@ export function EvidenceWorkspace({ agent, user, data }: Props) {
 
   useEffect(() => {
     const sessionId = selectedSessionSummary?.sessionId;
-    if (!sessionId) return;
+    if (!active || requestedSessionId || !sessionId) return;
     void loadSession(sessionId);
-  }, [loadSession, selectedSessionSummary?.sessionId]);
+  }, [active, loadSession, requestedSessionId, selectedSessionSummary?.sessionId]);
 
   useEffect(() => {
     setSessionNotes(selectedSession?.notes ?? "");
   }, [selectedSession?.notes, selectedSession?.sessionId]);
+
+  useEffect(() => {
+    if (!requestedSessionId) return;
+    let current = true;
+    setArmedAction(null);
+    setTesterFilter("");
+    setSessionFilter("");
+    setQualityFilter(requestedSessionSummary?.quality ?? "all");
+    setSelectedTesterKey(requestedSessionSummary?.testerKey ?? null);
+    setSelectedSessionId(requestedSessionId);
+    void loadSession(requestedSessionId).then((detail) => {
+      if (!current) return;
+      if (detail) {
+        setQualityFilter(detail.quality);
+        setSelectedTesterKey(detail.testerKey);
+        setSelectedSessionId(detail.sessionId);
+        setNotice(null);
+      } else {
+        setNotice("所选证据不可用，或已超出当前账号的访问范围。");
+      }
+      onRequestedSessionHandled(requestedSessionId);
+    });
+    return () => {
+      current = false;
+    };
+  }, [
+    loadSession,
+    onRequestedSessionHandled,
+    requestedSessionId,
+    requestedSessionSummary?.quality,
+    requestedSessionSummary?.testerKey
+  ]);
 
   const arm = (key: string, action: () => void) => {
     if (armedAction === key) {
@@ -257,13 +295,8 @@ export function EvidenceWorkspace({ agent, user, data }: Props) {
       setSelectedSessionId(null);
       setSessionNotes("");
       if (payload.scope !== "session") setSelectedTesterKey(null);
-      if (payload.scope === "all") {
-        setTesterFilter("");
-        setSessionFilter("");
-        setQualityFilter("all");
-      }
       await agent.refreshHealth();
-      setNotice(`已清除 ${targetLabel}，证据汇总已刷新。`);
+      setNotice(`已清除 ${targetLabel}。`);
     } else {
       setNotice(`清除 ${targetLabel} 失败。需要管理员权限，并请确认中继在线。`);
     }
@@ -285,8 +318,29 @@ export function EvidenceWorkspace({ agent, user, data }: Props) {
     setSavingNotes(false);
   };
 
+  if (!testing) {
+    return (
+      <section
+        className="hudPanel testingPanel"
+        aria-label="证据与问题"
+        aria-busy={data.status === "loading"}
+        hidden={!active}
+        inert={!active ? true : undefined}
+      >
+        <p className="adminWorkspaceLoading">
+          {data.status === "loading" ? "正在加载证据与问题…" : "暂无可用证据数据。"}
+        </p>
+      </section>
+    );
+  }
+
   return (
-    <section className="hudPanel testingPanel" aria-label="证据与问题">
+    <section
+      className="hudPanel testingPanel"
+      aria-label="证据与问题"
+      hidden={!active}
+      inert={!active ? true : undefined}
+    >
       <div className="panelHeader">
         <div>
           <h2>证据与问题</h2>

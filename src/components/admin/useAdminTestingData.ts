@@ -420,7 +420,8 @@ export function useAdminTestingData({
       setSessionDetails({});
       setNextCursor(undefined);
       setSessionTotal(0);
-      return refreshForScope(true, scope);
+      await refreshForScope(true, scope);
+      return true;
     },
     [expireAuthentication, isCurrent, refreshForScope, setSyncFailure]
   );

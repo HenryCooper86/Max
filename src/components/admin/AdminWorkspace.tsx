@@ -1,5 +1,5 @@
 import { ArrowLeft, Broadcast, ShieldCheck } from "@phosphor-icons/react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AccountBar } from "../AccountBar";
 import type { HelmetAgent } from "../../hooks/useHelmetAgent";
 import type { AuthUser } from "../../lib/auth";
@@ -26,10 +26,14 @@ type Props = {
 
 export function AdminWorkspace({ agent, user, onAuthenticationExpired, onClose }: Props) {
   const [section, setSection] = useState<AdminSection>("overview");
+  const [requestedEvidenceSessionId, setRequestedEvidenceSessionId] = useState<string | null>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const data = useAdminTestingData({ user, onAuthenticationExpired });
   const allowed = allowedAdminSections(user.role);
   const active = normalizeAdminSection(section, user.role);
+  const handleRequestedSessionHandled = useCallback((sessionId: string) => {
+    setRequestedEvidenceSessionId((current) => (current === sessionId ? null : current));
+  }, []);
 
   useEffect(() => {
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -89,7 +93,7 @@ export function AdminWorkspace({ agent, user, onAuthenticationExpired, onClose }
             onSignedOut={onAuthenticationExpired}
           />
         </nav>
-        <section className="adminWorkspaceContent" aria-live="polite">
+        <section className="adminWorkspaceContent">
           {data.error ? (
             <div className={`adminSyncNotice ${data.error.kind}`} role="status">
               <strong>{data.status === "stale" ? "数据可能已过期" : "加载失败"}</strong>
@@ -101,20 +105,32 @@ export function AdminWorkspace({ agent, user, onAuthenticationExpired, onClose }
               ) : null}
             </div>
           ) : null}
-          {active === "overview" ? (
+          {active === "overview" && !data.testing ? (
+            <p className="adminWorkspaceLoading">
+              {data.status === "loading" ? "正在加载概览…" : "暂无可用概览数据。"}
+            </p>
+          ) : null}
+          {active === "overview" && data.testing ? (
             <AdminOverview
               agent={agent}
               testing={data.testing}
               sessions={data.sessions}
               operations={data.operations}
               onOpenEvidence={(sessionId) => {
-                if (sessionId) void data.loadSession(sessionId);
+                setRequestedEvidenceSessionId(sessionId ?? null);
                 setSection("evidence");
               }}
               onOpenReleases={() => setSection("releases")}
             />
           ) : null}
-          {active === "evidence" ? <EvidenceWorkspace agent={agent} user={user} data={data} /> : null}
+          <EvidenceWorkspace
+            active={active === "evidence"}
+            requestedSessionId={requestedEvidenceSessionId}
+            onRequestedSessionHandled={handleRequestedSessionHandled}
+            agent={agent}
+            user={user}
+            data={data}
+          />
           {active !== "overview" && active !== "evidence" ? (
             <p className="adminWorkspaceLoading">正在加载 {ADMIN_SECTION_LABELS[active]}…</p>
           ) : null}

@@ -310,4 +310,147 @@ describe("relay process integration", () => {
     await expect(relayExit).resolves.toEqual({ code: 0, signal: null });
     relay = null;
   });
+
+  it("keeps a buried review attributed to its original session and run on POST update", async () => {
+    const port = await reservePort();
+    const baseUrl = `http://127.0.0.1:${port}`;
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "max-relay-review-attribution-"));
+    relay = spawn(process.execPath, [tsxCli, "server/index.ts"], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PORT: String(port),
+        NODE_ENV: "production",
+        VOICE_PROVIDER: "mock",
+        RELAY_AUTH_TOKEN: "integration-operator-token",
+        AUTH_REGISTRATION: "on",
+        ACCOUNTS_FILE: path.join(tempDir, "accounts.json"),
+        USER_MEMORY_FILE: "off",
+        TESTING_DATABASE: "off",
+        TESTING_HISTORY_DIR: "off"
+      },
+      stdio: ["ignore", "ignore", "ignore"]
+    });
+    await waitForServer(baseUrl);
+
+    const registration = await fetch(`${baseUrl}/auth/register`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer integration-operator-token",
+        Connection: "close"
+      },
+      body: JSON.stringify({ username: "review-admin", password: "password123" })
+    });
+    expect(registration.status).toBe(200);
+    const { token } = (await registration.json()) as { token: string };
+    const authenticatedJson = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      Connection: "close"
+    };
+
+    async function createRun(build: string): Promise<{ id: string }> {
+      const response = await fetch(`${baseUrl}/testing/runs`, {
+        method: "POST",
+        headers: authenticatedJson,
+        body: JSON.stringify({ build })
+      });
+      expect(response.status).toBe(201);
+      return ((await response.json()) as { run: { id: string } }).run;
+    }
+
+    async function createCompletedSession(runId: string): Promise<string> {
+      const socket = new WebSocket(`ws://127.0.0.1:${port}/agent?token=${encodeURIComponent(token)}`);
+      await new Promise<void>((resolve, reject) => {
+        socket.once("open", resolve);
+        socket.once("error", reject);
+      });
+      const started = new Promise<void>((resolve, reject) => {
+        socket.on("message", (data) => {
+          const event = JSON.parse(String(data)) as { type?: string };
+          if (event.type === "session.started") resolve();
+        });
+        socket.once("error", reject);
+      });
+      socket.send(
+        JSON.stringify({
+          type: "session.start",
+          sampleRate: 16_000,
+          channels: 1,
+          testingRunId: runId,
+          testingTestCaseId: "baseline-live-session",
+          deviceLabel: "integration browser",
+          platform: "web"
+        })
+      );
+      await started;
+      const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+      socket.close();
+      await closed;
+
+      const sessions = await fetch(`${baseUrl}/testing/sessions?runId=${encodeURIComponent(runId)}`, {
+        headers: { Authorization: `Bearer ${token}`, Connection: "close" }
+      });
+      expect(sessions.status).toBe(200);
+      const page = (await sessions.json()) as { items: Array<{ sessionId: string }> };
+      expect(page.items).toHaveLength(1);
+      return page.items[0].sessionId;
+    }
+
+    const originalRun = await createRun("review-original-build");
+    const unrelatedRun = await createRun("review-unrelated-build");
+    const originalSessionId = await createCompletedSession(originalRun.id);
+    const unrelatedSessionId = await createCompletedSession(unrelatedRun.id);
+    const created = await fetch(`${baseUrl}/testing/reviews`, {
+      method: "POST",
+      headers: authenticatedJson,
+      body: JSON.stringify({ sessionId: originalSessionId, title: "Original critical review", severity: "critical" })
+    });
+    expect(created.status).toBe(200);
+    const originalReview = (await created.json()) as { review: { id: string } };
+
+    for (let index = 0; index < 601; index += 1) {
+      const filler = await fetch(`${baseUrl}/testing/reviews`, {
+        method: "POST",
+        headers: authenticatedJson,
+        body: JSON.stringify({
+          id: `newer-unrelated-review-${index}`,
+          sessionId: unrelatedSessionId,
+          runId: unrelatedRun.id,
+          title: "Unrelated review"
+        })
+      });
+      expect(filler.status).toBe(200);
+    }
+
+    const updated = await fetch(`${baseUrl}/testing/reviews`, {
+      method: "POST",
+      headers: authenticatedJson,
+      body: JSON.stringify({
+        id: originalReview.review.id,
+        sessionId: unrelatedSessionId,
+        runId: unrelatedRun.id,
+        title: "Updated critical review",
+        status: "triaged"
+      })
+    });
+    expect(updated.status).toBe(200);
+    await expect(updated.json()).resolves.toMatchObject({
+      review: {
+        id: originalReview.review.id,
+        sessionId: originalSessionId,
+        runId: originalRun.id,
+        status: "triaged"
+      }
+    });
+
+    const approval = await fetch(`${baseUrl}/testing/runs/${encodeURIComponent(originalRun.id)}`, {
+      method: "PATCH",
+      headers: authenticatedJson,
+      body: JSON.stringify({ status: "approved" })
+    });
+    expect(approval.status).toBe(409);
+    await expect(approval.json()).resolves.toMatchObject({ blockers: { unresolvedReviews: 1 } });
+  }, 30_000);
 });

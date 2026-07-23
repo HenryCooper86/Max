@@ -361,24 +361,36 @@ describe("testing operations store", () => {
     expect(reopened?.status).toBe("open");
   });
 
-  it("updates an existing review in place even when it is buried beyond the recent window", () => {
+  it("updates an existing buried review in place without changing its authoritative attribution", () => {
     // An open review created first, then buried under >500 newer reviews so it
     // falls outside listTestingReviews' capped scan.
-    const target = upsertTestingReview({ sessionId: "buried-session", title: "Investigate" }, "reviewer", 1_000);
+    const target = upsertTestingReview(
+      { sessionId: "buried-session", runId: "original-run", title: "Investigate" },
+      "reviewer",
+      1_000
+    );
     expect(target).toBeTruthy();
     if (!target) return;
     for (let i = 0; i < 600; i += 1) {
       upsertTestingReview({ sessionId: `filler-${i}`, title: "Filler" }, "reviewer", 2_000 + i);
     }
 
-    // Update by id must patch the buried review in place, not mint a duplicate.
+    // Update by id must patch the buried review in place, not mint a duplicate
+    // or let a client move its evidence attribution to another session/run.
     const updated = upsertTestingReview(
-      { id: target.id, sessionId: "buried-session", status: "resolved", resolution: "Fixed" },
+      {
+        id: target.id,
+        sessionId: "unrelated-session",
+        runId: "unrelated-run",
+        status: "resolved",
+        resolution: "Fixed"
+      },
       "lead",
       700_000
     );
     expect(updated?.id).toBe(target.id);
     expect(updated?.status).toBe("resolved");
+    expect(updated).toMatchObject({ sessionId: "buried-session", runId: "original-run" });
     const forSession = listTestingReviews(1_000).filter((review) => review.sessionId === "buried-session");
     expect(forSession).toHaveLength(1);
   });

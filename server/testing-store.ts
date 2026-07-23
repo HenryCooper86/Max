@@ -965,8 +965,6 @@ export function upsertTestingReview(
   actor: string,
   now = Date.now()
 ): TestingReview | null {
-  const sessionId = cleanString(input.sessionId, "", 120);
-  if (!sessionId) return null;
   const requestedId = cleanString(input.id, "", 80);
   // Look the target up with an indexed query, not a capped in-memory scan: with
   // more than ~500 reviews, an older-but-open review (or an update-by-id for an
@@ -976,13 +974,19 @@ export function upsertTestingReview(
     const row = database().prepare(sql).get(param) as { payload_json?: string } | undefined;
     return row ? parseJson<TestingReview>(row.payload_json) : null;
   };
+  const requestedSessionId = cleanString(input.sessionId, "", 120);
   const existing = requestedId
-    ? findReviewRow("SELECT payload_json FROM testing_reviews WHERE id = ?", requestedId)
+    ? getTestingReview(requestedId)
     : findReviewRow(
         "SELECT payload_json FROM testing_reviews WHERE session_id = ? AND status IN ('open', 'triaged') " +
           "ORDER BY updated_at DESC LIMIT 1",
-        sessionId
+        requestedSessionId
       );
+  // Existing reviews keep the evidence attribution they were created with.
+  // This invariant holds in the store as well as at the HTTP boundary so an
+  // uncapped update-by-id cannot move a review between sessions or runs.
+  const sessionId = existing?.sessionId ?? requestedSessionId;
+  if (!sessionId) return null;
   const status =
     typeof input.status === "string" && REVIEW_STATUSES.has(input.status as TestingReviewStatus)
       ? (input.status as TestingReviewStatus)
@@ -994,7 +998,7 @@ export function upsertTestingReview(
   const review: TestingReview = {
     id: existing?.id ?? randomUUID(),
     sessionId,
-    runId: cleanString(input.runId, existing?.runId ?? "", 80) || undefined,
+    runId: existing ? existing.runId : cleanString(input.runId, "", 80) || undefined,
     status,
     severity,
     owner: cleanString(input.owner, existing?.owner ?? actor, 80),
@@ -1023,6 +1027,17 @@ export function upsertTestingReview(
     owner: review.owner
   });
   return clone(review);
+}
+
+/** Retrieves one review by its primary key without relying on the bounded
+ * reviewer-feed query.  Updates use this to find old reviews after hundreds of
+ * newer reviews have been created. */
+export function getTestingReview(id: string): TestingReview | null {
+  const reviewId = cleanString(id, "", 80);
+  if (!reviewId) return null;
+  const row = database().prepare("SELECT payload_json FROM testing_reviews WHERE id = ?").get(reviewId) as
+    { payload_json?: string } | undefined;
+  return row ? parseJson<TestingReview>(row.payload_json) : null;
 }
 
 export function listTestingReviews(limit = 200): TestingReview[] {

@@ -53,6 +53,7 @@ import {
   createTestingRun,
   countUnresolvedTestingReviewsForRun,
   getActiveTestingPolicy,
+  getTestingReview,
   getTestingRun,
   listTestingAudit,
   listTestingPolicies,
@@ -552,7 +553,10 @@ app.post("/testing/reviews", (req, res) => {
   if (!requireReviewer(req, res)) return;
   const body = (req.body ?? {}) as Record<string, unknown>;
   const requestedId = typeof body.id === "string" ? body.id : "";
-  const existing = requestedId ? listTestingReviews(500).find((review) => review.id === requestedId) : undefined;
+  // The reviewer feed is intentionally bounded. Updating an old review must
+  // use its primary-key lookup instead, otherwise a buried review is treated
+  // as new and client-supplied attribution can be applied to it.
+  const existing = requestedId ? getTestingReview(requestedId) : undefined;
   const sessionId = existing?.sessionId ?? (typeof body.sessionId === "string" ? body.sessionId : "");
   const session = testingSessionDetail(sessionId);
   if (!existing && !session) {

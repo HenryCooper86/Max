@@ -4214,6 +4214,8 @@ button.opsCard:disabled {
 .settingsSheet {
   width: min(100%, 820px);
   max-height: calc(100dvh - 32px);
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   border: 1px solid rgba(180, 198, 190, 0.15);
   border-bottom: 0;
@@ -4267,6 +4269,8 @@ button.opsCard:disabled {
 
 .settingsContent {
   display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
   max-height: calc(100dvh - 128px);
   padding: 22px clamp(16px, 4vw, 32px) 42px;
   flex-direction: column;
@@ -4274,6 +4278,66 @@ button.opsCard:disabled {
   overflow-y: auto;
   -ms-overflow-style: none;
   scrollbar-width: none;
+}
+
+.settingsAdminFooter {
+  flex: 0 0 auto;
+  padding: 12px clamp(16px, 4vw, 32px) 18px;
+  border-top: 1px solid rgba(180, 198, 190, 0.11);
+  background: rgba(13, 18, 16, 0.97);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+}
+
+.settingsAdminAction {
+  display: grid;
+  width: 100%;
+  min-height: 58px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 15px;
+  border: 1px solid rgba(62, 232, 159, 0.3);
+  border-radius: 15px;
+  background: radial-gradient(circle at 100% 0%, rgba(62, 232, 159, 0.12), transparent 55%), rgba(62, 232, 159, 0.075);
+  color: #eaf2ee;
+  cursor: pointer;
+  text-align: left;
+}
+
+.settingsAdminAction > svg {
+  color: var(--accent);
+}
+
+.settingsAdminAction > span:not(.settingsAdminActionLabel) {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settingsAdminAction strong {
+  font-size: 0.86rem;
+}
+
+.settingsAdminAction small {
+  overflow: hidden;
+  color: #89a198;
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settingsAdminActionLabel {
+  color: var(--accent);
+  font-size: 0.76rem;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.settingsAdminAction:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
 }
 
 .settingsContent::-webkit-scrollbar {
@@ -4570,48 +4634,6 @@ button.opsCard:disabled {
 }
 
 /* --- Admin workspace ----------------------------------------------------- */
-
-.adminEntryCard {
-  position: relative;
-  overflow: hidden;
-  border-color: rgba(62, 232, 159, 0.2);
-  background: radial-gradient(circle at 100% 0%, rgba(62, 232, 159, 0.09), transparent 48%), #121816;
-}
-
-.adminEntryCard::after {
-  position: absolute;
-  top: 0;
-  right: 22px;
-  width: 52px;
-  height: 2px;
-  background: var(--accent);
-  content: "";
-}
-
-.adminEntryAction {
-  display: flex;
-  width: 100%;
-  min-height: 52px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 0 15px;
-  border: 1px solid rgba(62, 232, 159, 0.24);
-  border-radius: 13px;
-  background: rgba(62, 232, 159, 0.075);
-  color: #eaf2ee;
-  cursor: pointer;
-  text-align: left;
-}
-
-.adminEntryAction span {
-  font-weight: 720;
-}
-
-.adminEntryAction small {
-  color: #89a198;
-  font-size: 0.7rem;
-}
 
 .adminWorkspace {
   --admin-bg: #0b100e;
@@ -5272,7 +5294,7 @@ button.opsCard:disabled {
 
 @media (prefers-reduced-motion: reduce) {
   .adminWorkspace *,
-  .adminEntryAction {
+  .settingsAdminAction {
     scroll-behavior: auto !important;
     transition-duration: 0s !important;
     animation-duration: 0s !important;
@@ -5321,7 +5343,11 @@ button.opsCard:disabled {
   }
 
   .settingsContent {
-    max-height: calc(100dvh - 96px);
+    max-height: none;
+  }
+
+  .settingsAdminFooter {
+    padding-bottom: max(14px, env(safe-area-inset-bottom));
   }
 
   .settingsGroup {

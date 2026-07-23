@@ -326,21 +326,17 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
               </button>
             </div>
           </section>
-
-          <section className="settingsCard adminEntryCard">
-            <div className="settingsCardTitle">
-              <Flask size={22} aria-hidden="true" />
-              <div>
-                <h2>测试与管理</h2>
-                <p>账号、发布验证、会话证据和运营工具</p>
-              </div>
-            </div>
-            <button type="button" className="adminEntryAction" onClick={onOpenAdmin}>
-              <span>进入 Admin 工作区</span>
-              <small>独立全宽视图</small>
-            </button>
-          </section>
         </div>
+        <footer className="settingsAdminFooter">
+          <button type="button" className="settingsAdminAction" onClick={onOpenAdmin}>
+            <Flask size={22} aria-hidden="true" />
+            <span>
+              <strong>测试与管理</strong>
+              <small>账号、发布验证、会话证据和运营工具</small>
+            </span>
+            <span className="settingsAdminActionLabel">进入工作区</span>
+          </button>
+        </footer>
       </section>
     </div>
   );

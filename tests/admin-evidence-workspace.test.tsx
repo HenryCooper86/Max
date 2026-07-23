@@ -1512,6 +1512,19 @@ describe("Admin evidence presentation guards", () => {
     );
   });
 
+  it("stacks overview and detail work areas at the tablet breakpoint", () => {
+    const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+    const tabletStyles = [
+      ...styles.matchAll(/@media \(max-width: 900px\) \{([\s\S]*?)(?=\n\}\n\n@media|\n\}\n\n\/\*)/g)
+    ].find((match) => match[1].includes(".adminWorkspaceLayout"))?.[1];
+    const singleColumnSelectors = [...(tabletStyles?.matchAll(/([^{}]+)\{[^{}]*grid-template-columns:\s*1fr;/g) ?? [])]
+      .map((match) => match[1])
+      .join("\n");
+
+    expect(singleColumnSelectors).toContain(".adminWorkGrid");
+    expect(singleColumnSelectors).toContain(".adminDataSplit");
+  });
+
   it("collapses every operational form grid through the 640px breakpoint", () => {
     const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
     const mobileStyles = [

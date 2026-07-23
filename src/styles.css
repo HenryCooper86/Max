@@ -5164,6 +5164,11 @@ button.opsCard:disabled {
   .adminWorkspaceContent {
     max-width: 100vw;
   }
+
+  .adminDataSplit,
+  .adminWorkGrid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 640px) {

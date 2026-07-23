@@ -11,6 +11,8 @@ import {
   normalizeAdminSection,
   type AdminSection
 } from "./admin-model";
+import { AdminOverview } from "./AdminOverview";
+import { EvidenceWorkspace } from "./EvidenceWorkspace";
 import { useAdminTestingData } from "./useAdminTestingData";
 
 function ignoreSignedIn() {}
@@ -99,7 +101,23 @@ export function AdminWorkspace({ agent, user, onAuthenticationExpired, onClose }
               ) : null}
             </div>
           ) : null}
-          <p className="adminWorkspaceLoading">正在加载 {ADMIN_SECTION_LABELS[active]}…</p>
+          {active === "overview" ? (
+            <AdminOverview
+              agent={agent}
+              testing={data.testing}
+              sessions={data.sessions}
+              operations={data.operations}
+              onOpenEvidence={(sessionId) => {
+                if (sessionId) void data.loadSession(sessionId);
+                setSection("evidence");
+              }}
+              onOpenReleases={() => setSection("releases")}
+            />
+          ) : null}
+          {active === "evidence" ? <EvidenceWorkspace agent={agent} user={user} data={data} /> : null}
+          {active !== "overview" && active !== "evidence" ? (
+            <p className="adminWorkspaceLoading">正在加载 {ADMIN_SECTION_LABELS[active]}…</p>
+          ) : null}
         </section>
       </div>
     </main>

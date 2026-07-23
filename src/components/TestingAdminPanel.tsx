@@ -25,6 +25,7 @@ import {
 } from "../lib/testing-api";
 import { AccountAdmin } from "./AccountAdmin";
 import { AccountBar } from "./AccountBar";
+import { corpusIssueCount } from "./admin/admin-model";
 import { TestingControlPlane } from "./TestingControlPlane";
 import {
   exportTestingReport,
@@ -352,7 +353,7 @@ export function TestingAdminPanel({ agent, authUser, onSignedIn, onSignedOut }: 
     counts[session.quality] += 1;
     return counts;
   }, emptyQualityCounts());
-  const issueSessionCount = sessionQualityCounts.fail + sessionQualityCounts.watch;
+  const issueSessionCount = corpusIssueCount(testerUsers);
   const flaggedTurnCount = testerUsers.reduce(
     (sum, tester) => sum + tester.recentTurns.filter((turn) => Boolean(turn.feedback)).length,
     0

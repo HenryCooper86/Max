@@ -3,8 +3,12 @@ import type { TesterSessionSummary, TestingStats } from "../../../shared/agent";
 import type { TestingOperationsSnapshot, TestingPolicy, TestingReview, TestingRun } from "../../../shared/testing";
 import type { ApiError, ApiResult } from "../../lib/api-client";
 import type { AuthUser } from "../../lib/auth";
-import { testingApi, type CreateTestingRunInput, type UpdateTestingRunPatch } from "../../lib/testing-api";
-import type { TestingClearScope } from "../../lib/utils";
+import {
+  testingApi,
+  type CreateTestingRunInput,
+  type TestingClearScope,
+  type UpdateTestingRunPatch
+} from "../../lib/testing-api";
 import { adminStatusAfterFailure, mergeAdminSessions, type AdminDataStatus } from "./admin-model";
 
 type RoleData =

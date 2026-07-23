@@ -13,14 +13,14 @@ import {
 } from "../../../shared/testing";
 import type { HelmetAgent } from "../../hooks/useHelmetAgent";
 import type { AuthUser } from "../../lib/auth";
+import type { TestingClearScope } from "../../lib/testing-api";
 import {
   exportTestingReport,
   exportTestingSession,
   formatBytes,
   formatClockTime,
   formatDuration,
-  formatRelativeTime,
-  type TestingClearScope
+  formatRelativeTime
 } from "../../lib/utils";
 import { confirmationCopy, corpusIssueCount } from "./admin-model";
 import type { AdminTestingData } from "./useAdminTestingData";

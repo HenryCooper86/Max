@@ -1,5 +1,4 @@
-export type ApiErrorKind =
-  "unauthorized" | "forbidden" | "not-found" | "conflict" | "invalid" | "server" | "unavailable";
+type ApiErrorKind = "unauthorized" | "forbidden" | "not-found" | "conflict" | "invalid" | "server" | "unavailable";
 
 export type ApiError = { kind: ApiErrorKind; message: string; status?: number };
 export type ApiResult<T> = { ok: true; data: T } | { ok: false; error: ApiError };

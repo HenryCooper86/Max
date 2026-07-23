@@ -1,6 +1,6 @@
 import { ArrowLeft, Broadcast, ShieldCheck } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AccountBar } from "../AccountBar";
+import { AccountSessionControls } from "../AccountBar";
 import type { HelmetAgent } from "../../hooks/useHelmetAgent";
 import type { AuthUser } from "../../lib/auth";
 import { formatRelativeTime } from "../../lib/utils";
@@ -11,13 +11,12 @@ import {
   normalizeAdminSection,
   type AdminSection
 } from "./admin-model";
+import { AccountManagement } from "./AccountManagement";
 import { AdminOverview } from "./AdminOverview";
 import { EvidenceWorkspace } from "./EvidenceWorkspace";
 import { GovernanceWorkspace } from "./GovernanceWorkspace";
 import { ReleaseValidation } from "./ReleaseValidation";
 import { useAdminTestingData } from "./useAdminTestingData";
-
-function ignoreSignedIn() {}
 
 type Props = {
   agent: HelmetAgent;
@@ -87,14 +86,7 @@ export function AdminWorkspace({ agent, user, onAuthenticationExpired, onClose }
               {ADMIN_SECTION_LABELS[item]}
             </button>
           ))}
-          {/* Task 8 replaces this compatibility bridge with authenticated-only AccountSessionControls. */}
-          <AccountBar
-            authEnabled
-            registrationOpen={false}
-            user={user}
-            onSignedIn={ignoreSignedIn}
-            onSignedOut={onAuthenticationExpired}
-          />
+          <AccountSessionControls user={user} onSignedOut={onAuthenticationExpired} />
         </nav>
         <section className="adminWorkspaceContent">
           {data.error ? (
@@ -138,8 +130,8 @@ export function AdminWorkspace({ agent, user, onAuthenticationExpired, onClose }
           />
           {active === "releases" ? <ReleaseValidation agent={agent} user={user} data={data} /> : null}
           {active === "governance" ? <GovernanceWorkspace user={user} data={data} /> : null}
-          {active === "accounts" ? (
-            <p className="adminWorkspaceLoading">正在加载 {ADMIN_SECTION_LABELS[active]}…</p>
+          {active === "accounts" && user.role === "admin" ? (
+            <AccountManagement user={user} onAuthenticationExpired={onAuthenticationExpired} />
           ) : null}
         </section>
       </div>

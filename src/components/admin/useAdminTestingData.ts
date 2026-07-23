@@ -11,6 +11,14 @@ type RoleData =
   | { kind: "operations"; operations: TestingOperationsSnapshot; policies: TestingPolicy[] }
   | { kind: "runs"; runs: TestingRun[] };
 
+type SyncFailureSource = "full" | "role";
+
+type ReplacementRefresh = {
+  scope: number;
+  evidenceGeneration: number;
+  promise: Promise<boolean>;
+};
+
 export type AdminTestingData = {
   testing: TestingStats | null;
   sessions: TesterSessionSummary[];
@@ -70,6 +78,7 @@ export function useAdminTestingData({
   user: AuthUser;
   onAuthenticationExpired: () => void;
 }): AdminTestingData {
+  const scopeKey = `${user.id}\u0000${user.role}`;
   const [testing, setTesting] = useState<TestingStats | null>(null);
   const [sessions, setSessions] = useState<TesterSessionSummary[]>([]);
   const [sessionDetails, setSessionDetails] = useState<Record<string, TesterSessionSummary>>({});
@@ -85,50 +94,100 @@ export function useAdminTestingData({
   const activeRef = useRef(false);
   const scopeRef = useRef(0);
   const scopeSequenceRef = useRef(0);
+  const renderedScopeKeyRef = useRef(scopeKey);
+  const activeScopeKeyRef = useRef(scopeKey);
+  const committedScopeKeyRef = useRef(scopeKey);
   const refreshRequestRef = useRef(0);
+  const roleRequestRef = useRef(0);
+  const evidenceGenerationRef = useRef(0);
+  const replacementRequiredRef = useRef<number | null>(null);
+  const replacementRefreshRef = useRef<ReplacementRefresh | null>(null);
   const loadingMoreRef = useRef(false);
   const hasLoadedDataRef = useRef(false);
+  const syncFailureSourceRef = useRef<SyncFailureSource | null>(null);
+  const expiredScopeRef = useRef<number | null>(null);
   const sessionsRef = useRef<TesterSessionSummary[]>([]);
   const sessionDetailsRef = useRef<Record<string, TesterSessionSummary>>({});
   const nextCursorRef = useRef<string | undefined>(undefined);
   const authenticationExpiredRef = useRef(onAuthenticationExpired);
+  renderedScopeKeyRef.current = scopeKey;
   authenticationExpiredRef.current = onAuthenticationExpired;
 
-  const isCurrent = useCallback((scope: number) => activeRef.current && scopeRef.current === scope, []);
+  const isCurrent = useCallback(
+    (scope: number) =>
+      activeRef.current && scopeRef.current === scope && activeScopeKeyRef.current === renderedScopeKeyRef.current,
+    []
+  );
 
-  const handleFailure = useCallback(
+  const expireAuthentication = useCallback(
     (nextError: ApiError, scope: number) => {
-      if (!isCurrent(scope)) return;
-      setStatus(adminStatusAfterFailure(hasLoadedDataRef.current));
-      setError(nextError);
-      if (nextError.kind === "unauthorized") authenticationExpiredRef.current();
+      if (nextError.kind !== "unauthorized" || !isCurrent(scope)) return false;
+      if (expiredScopeRef.current !== scope) {
+        expiredScopeRef.current = scope;
+        authenticationExpiredRef.current();
+      }
+      return true;
     },
     [isCurrent]
   );
 
-  const refreshRoleData = useCallback(
-    async (scope: number) => {
+  const setSyncFailure = useCallback(
+    (nextError: ApiError, scope: number, source: SyncFailureSource) => {
       if (!isCurrent(scope)) return;
-      const result = await fetchRoleData(user.role);
-      if (!isCurrent(scope)) return;
-      if (!result.ok) {
-        handleFailure(result.error, scope);
-        return;
-      }
-      if (result.data.kind === "operations") {
-        setOperations(result.data.operations);
-        setPolicies(result.data.policies);
-      } else {
-        setRuns(result.data.runs);
-      }
+      syncFailureSourceRef.current = source;
+      setStatus(adminStatusAfterFailure(hasLoadedDataRef.current));
+      setError(nextError);
     },
-    [handleFailure, isCurrent, user.role]
+    [isCurrent]
   );
 
-  const refreshForScope = useCallback(
-    async (replace = false, scope: number) => {
-      if (!isCurrent(scope)) return;
+  const clearRoleSyncFailure = useCallback(
+    (scope: number) => {
+      if (!isCurrent(scope) || syncFailureSourceRef.current !== "role") return;
+      syncFailureSourceRef.current = null;
+      setStatus(hasLoadedDataRef.current ? "ready" : "loading");
+      setError(null);
+    },
+    [isCurrent]
+  );
+
+  const writeRoleData = useCallback((data: RoleData) => {
+    if (data.kind === "operations") {
+      setOperations(data.operations);
+      setPolicies(data.policies);
+      setRuns([]);
+    } else {
+      setRuns(data.runs);
+      setOperations(null);
+      setPolicies([]);
+    }
+  }, []);
+
+  const refreshRoleData = useCallback(
+    async (scope: number) => {
+      if (!isCurrent(scope)) return false;
+      const requestId = ++roleRequestRef.current;
+      const result = await fetchRoleData(user.role);
+      if (!isCurrent(scope)) return false;
+      const unauthorized = !result.ok && expireAuthentication(result.error, scope);
+      if (requestId !== roleRequestRef.current) return false;
+      if (!result.ok) {
+        setSyncFailure(result.error, scope, "role");
+        return false;
+      }
+
+      writeRoleData(result.data);
+      clearRoleSyncFailure(scope);
+      return !unauthorized;
+    },
+    [clearRoleSyncFailure, expireAuthentication, isCurrent, setSyncFailure, user.role, writeRoleData]
+  );
+
+  const executeRefresh = useCallback(
+    async (replace: boolean, scope: number, evidenceGeneration: number) => {
+      if (!isCurrent(scope) || evidenceGeneration !== evidenceGenerationRef.current) return false;
       const requestId = ++refreshRequestRef.current;
+      const roleRequestId = ++roleRequestRef.current;
       if (!hasLoadedDataRef.current) setStatus("loading");
 
       const [summaryResult, sessionsResult, roleResult] = await Promise.all([
@@ -136,14 +195,26 @@ export function useAdminTestingData({
         testingApi.fetchSessions({ limit: 100 }),
         fetchRoleData(user.role)
       ]);
-      if (!isCurrent(scope) || requestId !== refreshRequestRef.current) return;
+      if (!isCurrent(scope)) return false;
 
-      const failure = readFailure(summaryResult, sessionsResult, roleResult);
-      if (failure) {
-        handleFailure(failure, scope);
-        return;
+      const authenticationFailure = readFailure(summaryResult, sessionsResult, roleResult);
+      if (authenticationFailure?.kind === "unauthorized") {
+        expireAuthentication(authenticationFailure, scope);
       }
-      if (!summaryResult.ok || !sessionsResult.ok || !roleResult.ok) return;
+
+      const refreshIsCurrent =
+        requestId === refreshRequestRef.current && evidenceGeneration === evidenceGenerationRef.current;
+      if (!refreshIsCurrent) return false;
+      const evidenceFailure = readFailure(summaryResult, sessionsResult);
+      if (evidenceFailure) {
+        setSyncFailure(evidenceFailure, scope, "full");
+        return false;
+      }
+      if (!roleResult.ok) {
+        if (roleRequestId === roleRequestRef.current) setSyncFailure(roleResult.error, scope, "full");
+        return false;
+      }
+      if (!summaryResult.ok || !sessionsResult.ok) return false;
 
       setTesting(summaryResult.data);
       const preservePagination = !replace && sessionsRef.current.length > sessionsResult.data.items.length;
@@ -160,22 +231,55 @@ export function useAdminTestingData({
         sessionDetailsRef.current = {};
         setSessionDetails({});
       }
-      if (roleResult.data.kind === "operations") {
-        setOperations(roleResult.data.operations);
-        setPolicies(roleResult.data.policies);
-        setRuns([]);
-      } else {
-        setRuns(roleResult.data.runs);
-        setOperations(null);
-        setPolicies([]);
-      }
+      const roleWriteIsCurrent = roleRequestId === roleRequestRef.current;
+      if (roleWriteIsCurrent) writeRoleData(roleResult.data);
 
       hasLoadedDataRef.current = true;
-      setStatus("ready");
-      setError(null);
+      if (replace && replacementRequiredRef.current === evidenceGeneration) {
+        replacementRequiredRef.current = null;
+      }
+      if (roleWriteIsCurrent || syncFailureSourceRef.current !== "role") {
+        syncFailureSourceRef.current = null;
+        setStatus("ready");
+        setError(null);
+      }
       setLastSyncedAt(Date.now());
+      return true;
     },
-    [handleFailure, isCurrent, user.role]
+    [expireAuthentication, isCurrent, setSyncFailure, user.role, writeRoleData]
+  );
+
+  const refreshForScope = useCallback(
+    (replace = false, scope: number): Promise<boolean> => {
+      if (!isCurrent(scope)) return Promise.resolve(false);
+      const evidenceGeneration = evidenceGenerationRef.current;
+      const replacementRequired = replacementRequiredRef.current === evidenceGeneration;
+      const effectiveReplace = replace || replacementRequired;
+      const existingReplacement = replacementRefreshRef.current;
+      if (
+        replacementRequired &&
+        existingReplacement?.scope === scope &&
+        existingReplacement.evidenceGeneration === evidenceGeneration
+      ) {
+        return existingReplacement.promise;
+      }
+
+      const promise = executeRefresh(effectiveReplace, scope, evidenceGeneration);
+      if (replacementRequired) {
+        const entry = { scope, evidenceGeneration, promise };
+        replacementRefreshRef.current = entry;
+        void promise.then(
+          () => {
+            if (replacementRefreshRef.current === entry) replacementRefreshRef.current = null;
+          },
+          () => {
+            if (replacementRefreshRef.current === entry) replacementRefreshRef.current = null;
+          }
+        );
+      }
+      return promise;
+    },
+    [executeRefresh, isCurrent]
   );
 
   const refresh = useCallback(
@@ -187,14 +291,24 @@ export function useAdminTestingData({
 
   const loadMore = useCallback(async () => {
     const scope = scopeRef.current;
+    const evidenceGeneration = evidenceGenerationRef.current;
     const cursor = nextCursorRef.current;
-    if (!isCurrent(scope) || !cursor || loadingMoreRef.current) return;
+    if (
+      !isCurrent(scope) ||
+      !cursor ||
+      replacementRequiredRef.current === evidenceGeneration ||
+      loadingMoreRef.current
+    ) {
+      return;
+    }
     loadingMoreRef.current = true;
     const result = await testingApi.fetchSessions({ cursor, limit: 100 });
     if (!isCurrent(scope)) return;
+    if (!result.ok && result.error.kind === "unauthorized") expireAuthentication(result.error, scope);
+    if (evidenceGeneration !== evidenceGenerationRef.current) return;
     loadingMoreRef.current = false;
     if (!result.ok) {
-      handleFailure(result.error, scope);
+      setSyncFailure(result.error, scope, "full");
       return;
     }
 
@@ -204,17 +318,20 @@ export function useAdminTestingData({
     nextCursorRef.current = result.data.nextCursor;
     setNextCursor(result.data.nextCursor);
     setSessionTotal(result.data.total);
-  }, [handleFailure, isCurrent]);
+  }, [expireAuthentication, isCurrent, setSyncFailure]);
 
   const loadSession = useCallback(
     async (sessionId: string) => {
       const cached = sessionDetailsRef.current[sessionId];
       if (cached) return cached;
       const scope = scopeRef.current;
+      const evidenceGeneration = evidenceGenerationRef.current;
       const result = await testingApi.fetchSession(sessionId);
       if (!isCurrent(scope)) return null;
+      if (!result.ok && result.error.kind === "unauthorized") expireAuthentication(result.error, scope);
+      if (evidenceGeneration !== evidenceGenerationRef.current) return null;
       if (!result.ok) {
-        handleFailure(result.error, scope);
+        setSyncFailure(result.error, scope, "full");
         return null;
       }
 
@@ -226,18 +343,18 @@ export function useAdminTestingData({
       setSessions(merged);
       return result.data;
     },
-    [handleFailure, isCurrent]
+    [expireAuthentication, isCurrent, setSyncFailure]
   );
 
   const saveNotes = useCallback(
     async (sessionId: string, notes: string) => {
       const scope = scopeRef.current;
+      const evidenceGeneration = evidenceGenerationRef.current;
       const result = await testingApi.updateSessionNotes(sessionId, notes);
       if (!isCurrent(scope)) return false;
-      if (!result.ok) {
-        handleFailure(result.error, scope);
-        return false;
-      }
+      if (!result.ok && result.error.kind === "unauthorized") expireAuthentication(result.error, scope);
+      if (evidenceGeneration !== evidenceGenerationRef.current) return false;
+      if (!result.ok) return false;
 
       const nextDetails = { ...sessionDetailsRef.current, [sessionId]: result.data };
       sessionDetailsRef.current = nextDetails;
@@ -247,7 +364,7 @@ export function useAdminTestingData({
       setSessions(merged);
       return true;
     },
-    [handleFailure, isCurrent]
+    [expireAuthentication, isCurrent]
   );
 
   const clearEvidence = useCallback(
@@ -256,13 +373,24 @@ export function useAdminTestingData({
       const result = await testingApi.clear(scopeInput);
       if (!isCurrent(scope)) return false;
       if (!result.ok) {
-        handleFailure(result.error, scope);
+        expireAuthentication(result.error, scope);
         return false;
       }
-      await refreshForScope(true, scope);
-      return true;
+
+      const evidenceGeneration = ++evidenceGenerationRef.current;
+      replacementRequiredRef.current = evidenceGeneration;
+      refreshRequestRef.current += 1;
+      loadingMoreRef.current = false;
+      sessionsRef.current = [];
+      sessionDetailsRef.current = {};
+      nextCursorRef.current = undefined;
+      setSessions([]);
+      setSessionDetails({});
+      setNextCursor(undefined);
+      setSessionTotal(0);
+      return refreshForScope(true, scope);
     },
-    [handleFailure, isCurrent, refreshForScope]
+    [expireAuthentication, isCurrent, refreshForScope]
   );
 
   const createRun = useCallback(
@@ -270,13 +398,13 @@ export function useAdminTestingData({
       const scope = scopeRef.current;
       const result = await testingApi.createRun(input);
       if (!result.ok) {
-        handleFailure(result.error, scope);
+        expireAuthentication(result.error, scope);
         return result;
       }
       await refreshRoleData(scope);
       return result;
     },
-    [handleFailure, refreshRoleData]
+    [expireAuthentication, refreshRoleData]
   );
 
   const updateRun = useCallback(
@@ -284,13 +412,13 @@ export function useAdminTestingData({
       const scope = scopeRef.current;
       const result = await testingApi.updateRun(runId, patch);
       if (!result.ok) {
-        handleFailure(result.error, scope);
+        expireAuthentication(result.error, scope);
         return result;
       }
       await refreshRoleData(scope);
       return result;
     },
-    [handleFailure, refreshRoleData]
+    [expireAuthentication, refreshRoleData]
   );
 
   const createAssignment = useCallback(
@@ -298,13 +426,13 @@ export function useAdminTestingData({
       const scope = scopeRef.current;
       const result = await testingApi.createAssignment(runId, requirementId, assignee);
       if (!result.ok) {
-        handleFailure(result.error, scope);
+        expireAuthentication(result.error, scope);
         return result;
       }
       await refreshRoleData(scope);
       return result;
     },
-    [handleFailure, refreshRoleData]
+    [expireAuthentication, refreshRoleData]
   );
 
   const saveReview = useCallback(
@@ -312,13 +440,13 @@ export function useAdminTestingData({
       const scope = scopeRef.current;
       const result = await testingApi.saveReview(input);
       if (!result.ok) {
-        handleFailure(result.error, scope);
+        expireAuthentication(result.error, scope);
         return result;
       }
       await refreshRoleData(scope);
       return result;
     },
-    [handleFailure, refreshRoleData]
+    [expireAuthentication, refreshRoleData]
   );
 
   const createPolicy = useCallback(
@@ -326,22 +454,30 @@ export function useAdminTestingData({
       const scope = scopeRef.current;
       const result = await testingApi.createPolicy(input);
       if (!result.ok) {
-        handleFailure(result.error, scope);
+        expireAuthentication(result.error, scope);
         return result;
       }
       await refreshRoleData(scope);
       return result;
     },
-    [handleFailure, refreshRoleData]
+    [expireAuthentication, refreshRoleData]
   );
 
   useEffect(() => {
     const scope = ++scopeSequenceRef.current;
     scopeRef.current = scope;
     activeRef.current = true;
+    activeScopeKeyRef.current = scopeKey;
+    committedScopeKeyRef.current = scopeKey;
     refreshRequestRef.current += 1;
+    roleRequestRef.current += 1;
+    evidenceGenerationRef.current += 1;
+    replacementRequiredRef.current = null;
+    replacementRefreshRef.current = null;
     loadingMoreRef.current = false;
     hasLoadedDataRef.current = false;
+    syncFailureSourceRef.current = null;
+    expiredScopeRef.current = null;
     sessionsRef.current = [];
     sessionDetailsRef.current = {};
     nextCursorRef.current = undefined;
@@ -365,22 +501,29 @@ export function useAdminTestingData({
         activeRef.current = false;
         loadingMoreRef.current = false;
         refreshRequestRef.current += 1;
+        roleRequestRef.current += 1;
+        evidenceGenerationRef.current += 1;
+        replacementRequiredRef.current = null;
+        replacementRefreshRef.current = null;
       }
     };
-  }, [refreshForScope, user.id]);
+  }, [refreshForScope, scopeKey]);
+
+  const stateMatchesScope =
+    committedScopeKeyRef.current === scopeKey && activeScopeKeyRef.current === renderedScopeKeyRef.current;
 
   return {
-    testing,
-    sessions,
-    sessionDetails,
-    operations,
-    policies,
-    runs,
-    nextCursor,
-    sessionTotal,
-    status,
-    error,
-    lastSyncedAt,
+    testing: stateMatchesScope ? testing : null,
+    sessions: stateMatchesScope ? sessions : [],
+    sessionDetails: stateMatchesScope ? sessionDetails : {},
+    operations: stateMatchesScope ? operations : null,
+    policies: stateMatchesScope ? policies : [],
+    runs: stateMatchesScope ? runs : [],
+    nextCursor: stateMatchesScope ? nextCursor : undefined,
+    sessionTotal: stateMatchesScope ? sessionTotal : 0,
+    status: stateMatchesScope ? status : "loading",
+    error: stateMatchesScope ? error : null,
+    lastSyncedAt: stateMatchesScope ? lastSyncedAt : null,
     refresh,
     loadMore,
     loadSession,

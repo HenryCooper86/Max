@@ -137,10 +137,64 @@ describe("AccountManagement", () => {
     vi.mocked(adminAccountApi.revokeInvite).mockResolvedValueOnce(success({ removed: false }));
     await mount();
 
-    await act(async () => button(renderer!, "撤销").props.onClick());
+    act(() => button(renderer!, "撤销").props.onClick());
+    await act(async () => button(renderer!, "确认撤销 invite_123456789？").props.onClick());
     await flush();
 
     expect(text(renderer!.root)).toContain("邀请已不存在，无需再次撤销。");
+  });
+
+  it("requires target-specific confirmation before revoking an invite and expires the armed state", async () => {
+    await mount();
+
+    act(() => button(renderer!, "撤销").props.onClick());
+
+    expect(adminAccountApi.revokeInvite).not.toHaveBeenCalled();
+    expect(button(renderer!, "确认撤销 invite_123456789？")).toBeDefined();
+    act(() => vi.advanceTimersByTime(3_999));
+    expect(button(renderer!, "确认撤销 invite_123456789？")).toBeDefined();
+    act(() => vi.advanceTimersByTime(1));
+    expect(button(renderer!, "撤销")).toBeDefined();
+    expect(adminAccountApi.revokeInvite).not.toHaveBeenCalled();
+  });
+
+  it("moves invite confirmation ownership to a newly selected target", async () => {
+    const firstCode = "invite_first_123456";
+    const secondCode = "invite_second_654321";
+    vi.mocked(adminAccountApi.fetchOverview).mockResolvedValueOnce(
+      success(overview(undefined, [invite(firstCode), invite(secondCode)]))
+    );
+    await mount();
+    const inviteRow = (code: string) =>
+      renderer!.root.find(
+        (node) => node.props.className === "accountAdminRow invite" && text(node).includes(code.slice(4, 12))
+      );
+    const revokeButton = (code: string, label: string) =>
+      inviteRow(code).find((node) => node.type === "button" && text(node) === label);
+
+    act(() => revokeButton(firstCode, "撤销").props.onClick());
+    expect(revokeButton(firstCode, `确认撤销 ${firstCode}？`)).toBeDefined();
+
+    act(() => revokeButton(secondCode, "撤销").props.onClick());
+    expect(revokeButton(firstCode, "撤销")).toBeDefined();
+    expect(revokeButton(secondCode, `确认撤销 ${secondCode}？`)).toBeDefined();
+    expect(adminAccountApi.revokeInvite).not.toHaveBeenCalled();
+
+    await act(async () => revokeButton(secondCode, `确认撤销 ${secondCode}？`).props.onClick());
+    expect(adminAccountApi.revokeInvite).toHaveBeenCalledTimes(1);
+    expect(adminAccountApi.revokeInvite).toHaveBeenCalledWith(secondCode);
+  });
+
+  it("cleans the armed invite expiry timer on unmount", async () => {
+    await mount();
+    act(() => button(renderer!, "撤销").props.onClick());
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+    await act(async () => renderer?.unmount());
+    renderer = null;
+
+    expect(vi.getTimerCount()).toBe(0);
+    expect(adminAccountApi.revokeInvite).not.toHaveBeenCalled();
   });
 
   it("reports clipboard failure after authoritative invite creation without claiming it copied", async () => {

@@ -1498,4 +1498,45 @@ describe("Admin evidence presentation guards", () => {
     expect(validEvidence.props.className).toBe("opsCard warn");
     expect(p95.props.className).toBe("opsCard warn");
   });
+
+  it("keeps the tablet section bar clear of an auto-height header and constrains long context", () => {
+    const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+    const tabletStyles = [
+      ...styles.matchAll(/@media \(max-width: 900px\) \{([\s\S]*?)(?=\n\}\n\n@media|\n\}\n\n\/\*)/g)
+    ].find((match) => match[1].includes(".adminWorkspaceLayout"))?.[1];
+
+    expect(tabletStyles).toMatch(/\.adminWorkspaceHeader\s*\{[^}]*position:\s*relative;/s);
+    expect(tabletStyles).toMatch(/\.adminWorkspaceNav\s*\{[^}]*top:\s*0;/s);
+    expect(styles).toMatch(
+      /\.adminWorkspaceContext\s*>\s*span,\s*\.adminWorkspaceContext\s*>\s*small\s*\{[^}]*max-width:[^;]+;[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;/s
+    );
+  });
+
+  it("collapses every operational form grid through the 640px breakpoint", () => {
+    const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+    const mobileStyles = [
+      ...styles.matchAll(/@media \(max-width: 640px\) \{([\s\S]*?)(?=\n\}\n\n@media|\n\}\n\n\/\*)/g)
+    ].find((match) => match[1].includes(".adminWorkspaceHeader"))?.[1];
+    const singleColumnSelectors = [...(mobileStyles?.matchAll(/([^{}]+)\{[^{}]*grid-template-columns:\s*1fr;/g) ?? [])]
+      .map((match) => match[1])
+      .join("\n");
+
+    for (const selector of [".runCreateBar", ".coverageMatrix", ".reviewFields", ".policyFields", ".evidenceNotes"]) {
+      expect(singleColumnSelectors).toContain(selector);
+    }
+  });
+
+  it("preserves each semantic metric edge color on hover", () => {
+    const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+
+    expect(styles).toMatch(
+      /\.adminMetricGrid\s+button\.opsCard\.good:hover\s*\{[^}]*border-left-color:\s*var\(--admin-good\);/s
+    );
+    expect(styles).toMatch(
+      /\.adminMetricGrid\s+button\.opsCard\.warn:hover\s*\{[^}]*border-left-color:\s*var\(--admin-warn\);/s
+    );
+    expect(styles).toMatch(
+      /\.adminMetricGrid\s+button\.opsCard\.alert:hover\s*\{[^}]*border-left-color:\s*var\(--admin-alert\);/s
+    );
+  });
 });

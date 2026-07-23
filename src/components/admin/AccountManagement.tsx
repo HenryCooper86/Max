@@ -43,6 +43,7 @@ export function AccountManagement({
   const [manualInviteUrl, setManualInviteUrl] = useState<string | null>(null);
   const [accountFilter, setAccountFilter] = useState("");
   const [armedDelete, setArmedDelete] = useState<string | null>(null);
+  const [armedInvite, setArmedInvite] = useState<string | null>(null);
   const mountedRef = useRef(true);
   const accountOwnerRef = useRef(user.id);
   const loadSequenceRef = useRef(0);
@@ -100,6 +101,7 @@ export function AccountManagement({
     setCreatedCopied(false);
     setManualInviteUrl(null);
     setArmedDelete(null);
+    setArmedInvite(null);
     void refresh(ownerId);
     const timer = window.setInterval(() => void refresh(ownerId), 30_000);
     return () => {
@@ -115,6 +117,12 @@ export function AccountManagement({
     const timer = window.setTimeout(() => setArmedDelete(null), 4000);
     return () => window.clearTimeout(timer);
   }, [armedDelete]);
+
+  useEffect(() => {
+    if (!armedInvite) return;
+    const timer = window.setTimeout(() => setArmedInvite(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [armedInvite]);
 
   useEffect(() => {
     if (!copiedCode) return;
@@ -202,6 +210,12 @@ export function AccountManagement({
   };
 
   const removeInvite = async (code: string) => {
+    if (armedInvite !== code) {
+      setArmedDelete(null);
+      setArmedInvite(code);
+      return;
+    }
+    setArmedInvite(null);
     const operation = beginMutation(`invite:${code}`);
     const result = await adminAccountApi.revokeInvite(code);
     if (!operation.owns()) return;
@@ -222,6 +236,7 @@ export function AccountManagement({
 
   const removeUser = async (username: string) => {
     if (armedDelete !== username) {
+      setArmedInvite(null);
       setArmedDelete(username);
       return;
     }
@@ -420,11 +435,15 @@ export function AccountManagement({
               </button>
               <button
                 type="button"
-                className="danger adminDanger"
+                className={`danger adminDanger ${armedInvite === item.code ? "armed" : ""}`}
                 disabled={busyTarget !== null}
                 onClick={() => void removeInvite(item.code)}
               >
-                {busyTarget === `invite:${item.code}` ? "正在撤销…" : "撤销"}
+                {busyTarget === `invite:${item.code}`
+                  ? "正在撤销…"
+                  : armedInvite === item.code
+                    ? confirmationCopy("invite", item.code)
+                    : "撤销"}
               </button>
             </div>
           </div>

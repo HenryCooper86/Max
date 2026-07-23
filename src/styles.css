@@ -4696,15 +4696,18 @@ button.opsCard:disabled {
 .adminWorkspaceContext > span,
 .adminWorkspaceContext > small {
   display: inline-flex;
+  max-width: min(100%, 24rem);
   min-height: 30px;
   align-items: center;
   gap: 6px;
   padding: 0 9px;
+  overflow: hidden;
   border: 1px solid rgba(180, 198, 190, 0.1);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.025);
   color: var(--admin-muted);
   font-size: 0.7rem;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -4877,6 +4880,18 @@ button.opsCard:disabled {
   transform: translateY(-1px);
 }
 
+.adminMetricGrid button.opsCard.good:hover {
+  border-left-color: var(--admin-good);
+}
+
+.adminMetricGrid button.opsCard.warn:hover {
+  border-left-color: var(--admin-warn);
+}
+
+.adminMetricGrid button.opsCard.alert:hover {
+  border-left-color: var(--admin-alert);
+}
+
 .adminMetricGrid .opsCard strong {
   margin-top: 10px;
   font: 700 clamp(1.25rem, 2.4vw, 1.7rem)/1 var(--font-mono);
@@ -5011,6 +5026,7 @@ button.opsCard:disabled {
 }
 
 .adminDanger {
+  overflow-wrap: anywhere;
   border-color: rgba(255, 128, 108, 0.42) !important;
   background: rgba(255, 128, 108, 0.09) !important;
   color: #ffd9d2 !important;
@@ -5089,13 +5105,17 @@ button.opsCard:disabled {
 }
 
 @media (max-width: 900px) {
+  .adminWorkspaceHeader {
+    position: relative;
+  }
+
   .adminWorkspaceLayout {
     grid-template-columns: 1fr;
   }
 
   .adminWorkspaceNav {
     position: sticky;
-    top: 78px;
+    top: 0;
     z-index: 4;
     overflow-x: auto;
     padding: 10px 14px;
@@ -5171,8 +5191,10 @@ button.opsCard:disabled {
     grid-column: 1 / -1;
   }
 
-  .adminWorkspaceNav {
-    top: 0;
+  .adminWorkspaceContext > span,
+  .adminWorkspaceContext > small {
+    overflow-wrap: anywhere;
+    text-overflow: clip;
   }
 
   .adminWorkspaceNav > .accountBar {
@@ -5194,7 +5216,12 @@ button.opsCard:disabled {
   .testerBar,
   .testingWorkflowBar,
   .chartGrid,
-  .issueWorkbench {
+  .issueWorkbench,
+  .runCreateBar,
+  .coverageMatrix,
+  .reviewFields,
+  .policyFields,
+  .evidenceNotes {
     align-items: stretch;
     grid-template-columns: 1fr;
   }

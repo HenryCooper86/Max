@@ -11,7 +11,7 @@ type RoleData =
   | { kind: "operations"; operations: TestingOperationsSnapshot; policies: TestingPolicy[] }
   | { kind: "runs"; runs: TestingRun[] };
 
-type SyncFailureSource = "full" | "role";
+type SyncFailureSource = "full" | "role" | "note";
 
 type ReplacementRefresh = {
   scope: number;
@@ -99,6 +99,8 @@ export function useAdminTestingData({
   const committedScopeKeyRef = useRef(scopeKey);
   const refreshRequestRef = useRef(0);
   const roleRequestRef = useRef(0);
+  const noteRequestRef = useRef(0);
+  const noteFailureRequestRef = useRef(0);
   const evidenceGenerationRef = useRef(0);
   const replacementRequiredRef = useRef<number | null>(null);
   const replacementRefreshRef = useRef<ReplacementRefresh | null>(null);
@@ -144,6 +146,23 @@ export function useAdminTestingData({
   const clearRoleSyncFailure = useCallback(
     (scope: number) => {
       if (!isCurrent(scope) || syncFailureSourceRef.current !== "role") return;
+      syncFailureSourceRef.current = null;
+      setStatus(hasLoadedDataRef.current ? "ready" : "loading");
+      setError(null);
+    },
+    [isCurrent]
+  );
+
+  const clearNoteSyncFailure = useCallback(
+    (scope: number, requestId: number) => {
+      if (
+        !isCurrent(scope) ||
+        requestId !== noteRequestRef.current ||
+        syncFailureSourceRef.current !== "note" ||
+        noteFailureRequestRef.current >= requestId
+      ) {
+        return;
+      }
       syncFailureSourceRef.current = null;
       setStatus(hasLoadedDataRef.current ? "ready" : "loading");
       setError(null);
@@ -353,12 +372,17 @@ export function useAdminTestingData({
     async (sessionId: string, notes: string) => {
       const scope = scopeRef.current;
       if (!isCurrent(scope)) return false;
+      const requestId = ++noteRequestRef.current;
       const evidenceGeneration = evidenceGenerationRef.current;
       const result = await testingApi.updateSessionNotes(sessionId, notes);
       if (!isCurrent(scope)) return false;
-      if (evidenceGeneration !== evidenceGenerationRef.current) return false;
+      if (!result.ok && expireAuthentication(result.error, scope)) return false;
+      if (evidenceGeneration !== evidenceGenerationRef.current || requestId !== noteRequestRef.current) {
+        return false;
+      }
       if (!result.ok) {
-        if (!expireAuthentication(result.error, scope)) setSyncFailure(result.error, scope, "full");
+        noteFailureRequestRef.current = requestId;
+        setSyncFailure(result.error, scope, "note");
         return false;
       }
 
@@ -368,9 +392,10 @@ export function useAdminTestingData({
       const merged = mergeAdminSessions(sessionsRef.current, [result.data]);
       sessionsRef.current = merged;
       setSessions(merged);
+      clearNoteSyncFailure(scope, requestId);
       return true;
     },
-    [expireAuthentication, isCurrent, setSyncFailure]
+    [clearNoteSyncFailure, expireAuthentication, isCurrent, setSyncFailure]
   );
 
   const clearEvidence = useCallback(
@@ -478,6 +503,8 @@ export function useAdminTestingData({
     committedScopeKeyRef.current = scopeKey;
     refreshRequestRef.current += 1;
     roleRequestRef.current += 1;
+    noteRequestRef.current += 1;
+    noteFailureRequestRef.current = 0;
     evidenceGenerationRef.current += 1;
     replacementRequiredRef.current = null;
     replacementRefreshRef.current = null;
@@ -509,6 +536,8 @@ export function useAdminTestingData({
         loadingMoreRef.current = false;
         refreshRequestRef.current += 1;
         roleRequestRef.current += 1;
+        noteRequestRef.current += 1;
+        noteFailureRequestRef.current = 0;
         evidenceGenerationRef.current += 1;
         replacementRequiredRef.current = null;
         replacementRefreshRef.current = null;

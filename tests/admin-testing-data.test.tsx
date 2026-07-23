@@ -433,6 +433,79 @@ describe("useAdminTestingData concurrency", () => {
     expect(hook.current.sessions.map((item) => item.sessionId)).toEqual(["initial"]);
   });
 
+  it("expires same-scope authentication when an older note write returns unauthorized", async () => {
+    const onAuthenticationExpired = vi.fn();
+    const hook = await trackedHook(user("admin"), onAuthenticationExpired);
+    const noteResult = deferred<Awaited<ReturnType<typeof testingApi.updateSessionNotes>>>();
+    vi.mocked(testingApi.updateSessionNotes).mockReturnValue(noteResult.promise);
+
+    let notePromise!: Promise<boolean>;
+    act(() => {
+      notePromise = hook.current.saveNotes("initial", "待确认");
+    });
+    await act(async () => {
+      await hook.current.refresh(true);
+    });
+
+    noteResult.resolve(failure("unauthorized", "会话已过期"));
+    let saved!: boolean;
+    await act(async () => {
+      saved = await notePromise;
+    });
+
+    expect(saved).toBe(false);
+    expect(onAuthenticationExpired).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears only the stale error owned by an earlier note-write failure", async () => {
+    const hook = await trackedHook(user("admin"));
+    vi.mocked(testingApi.updateSessionNotes)
+      .mockResolvedValueOnce(failure("unavailable", "首次备注保存失败"))
+      .mockResolvedValueOnce(success(session("initial", 30)));
+
+    await act(async () => {
+      await hook.current.saveNotes("initial", "第一次");
+    });
+    expect(hook.current.status).toBe("stale");
+    expect(hook.current.error?.message).toBe("首次备注保存失败");
+
+    let saved!: boolean;
+    await act(async () => {
+      saved = await hook.current.saveNotes("initial", "第二次");
+    });
+    expect(saved).toBe(true);
+    expect(hook.current.status).toBe("ready");
+    expect(hook.current.error).toBeNull();
+  });
+
+  it("does not let a successful note retry erase a newer full-read error", async () => {
+    const hook = await trackedHook(user("admin"));
+    vi.mocked(testingApi.updateSessionNotes).mockResolvedValueOnce(failure("unavailable", "首次备注保存失败"));
+    await act(async () => {
+      await hook.current.saveNotes("initial", "第一次");
+    });
+
+    const retryResult = deferred<Awaited<ReturnType<typeof testingApi.updateSessionNotes>>>();
+    vi.mocked(testingApi.updateSessionNotes).mockReturnValueOnce(retryResult.promise);
+    let retryPromise!: Promise<boolean>;
+    act(() => {
+      retryPromise = hook.current.saveNotes("initial", "重试");
+    });
+
+    vi.mocked(testingApi.fetchSummary).mockResolvedValue(failure("unavailable", "最新全量读取失败"));
+    await act(async () => {
+      await hook.current.refresh();
+    });
+    expect(hook.current.error?.message).toBe("最新全量读取失败");
+
+    retryResult.resolve(success(session("initial", 40)));
+    await act(async () => {
+      await retryPromise;
+    });
+    expect(hook.current.status).toBe("stale");
+    expect(hook.current.error?.message).toBe("最新全量读取失败");
+  });
+
   it("surfaces clear uncertainty as stale typed state without dropping evidence", async () => {
     const hook = await trackedHook(user("admin"));
     vi.mocked(testingApi.clear).mockResolvedValue(failure("unavailable", "无法确认清除结果"));

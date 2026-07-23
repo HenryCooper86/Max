@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { TESTING_TEST_CASES, type TestingRun, type TestingRunStatus } from "../../../shared/testing";
 import type { HelmetAgent } from "../../hooks/useHelmetAgent";
 import { useLanguage } from "../LanguageToggle";
+import { localized } from "../../lib/i18n";
 import type { AuthUser } from "../../lib/auth";
 import { testingAssignmentStatusLabel, testingRunStatusLabel } from "./admin-model";
 import type { AdminTestingData } from "./useAdminTestingData";
@@ -152,11 +153,18 @@ export function ReleaseValidation({ agent, user, data }: Props) {
   };
 
   return (
-    <section className="testingControlPlane adminSectionCard" aria-label="发布验证">
+    <section
+      className="testingControlPlane adminSectionCard"
+      aria-label={localized(language, "发布验证", "Release validation")}
+    >
       <div className="controlPlaneHead adminSectionHeader">
         <div>
-          <span>MAX QA · 发布</span>
-          <strong>{isReviewer ? "发布运行与覆盖矩阵" : "我的覆盖任务"}</strong>
+          <span>MAX QA · {localized(language, "发布", "Release")}</span>
+          <strong>
+            {isReviewer
+              ? localized(language, "发布运行与覆盖矩阵", "Release runs & coverage")
+              : localized(language, "我的覆盖任务", "My coverage tasks")}
+          </strong>
         </div>
       </div>
 
@@ -170,23 +178,29 @@ export function ReleaseValidation({ agent, user, data }: Props) {
         {isReviewer ? (
           <div className="runCreateBar">
             <label>
-              <span>运行名称</span>
-              <input value={runName} onChange={(event) => setRunName(event.target.value)} placeholder="七月候选发布" />
+              <span>{localized(language, "运行名称", "Run name")}</span>
+              <input
+                value={runName}
+                onChange={(event) => setRunName(event.target.value)}
+                placeholder={localized(language, "七月候选发布", "July candidate release")}
+              />
             </label>
             <label>
-              <span>构建</span>
+              <span>{localized(language, "构建", "Build")}</span>
               <input value={runBuild} onChange={(event) => setRunBuild(event.target.value)} />
             </label>
             <label>
-              <span>负责人</span>
+              <span>{localized(language, "负责人", "Owner")}</span>
               <input value={runOwner} onChange={(event) => setRunOwner(event.target.value)} />
             </label>
             <label>
-              <span>截止日期</span>
+              <span>{localized(language, "截止日期", "Due date")}</span>
               <input type="date" value={runDueDate} onChange={(event) => setRunDueDate(event.target.value)} />
             </label>
             <button type="button" disabled={busyTargets.has("create-run")} onClick={() => void createRun()}>
-              {busyTargets.has("create-run") ? "正在创建…" : "创建发布运行"}
+              {busyTargets.has("create-run")
+                ? localized(language, "正在创建…", "Creating…")
+                : localized(language, "创建发布运行", "Create release run")}
             </button>
           </div>
         ) : null}
@@ -213,7 +227,11 @@ export function ReleaseValidation({ agent, user, data }: Props) {
                 </button>
               );
             })}
-            {!runs.length ? <p className="testerConversationEmpty">暂无发布运行或已分配任务。</p> : null}
+            {!runs.length ? (
+              <p className="testerConversationEmpty">
+                {localized(language, "暂无发布运行或已分配任务。", "No release runs or assigned tasks.")}
+              </p>
+            ) : null}
           </div>
 
           <div className="releaseRunDetail">
@@ -224,12 +242,13 @@ export function ReleaseValidation({ agent, user, data }: Props) {
                     <span>{selectedRun.build}</span>
                     <strong>{selectedRun.name}</strong>
                     <p>
-                      负责人 {selectedRun.owner} · 策略 {selectedRun.policyVersion}
+                      {localized(language, "负责人", "Owner")} {selectedRun.owner} ·{" "}
+                      {localized(language, "策略", "Policy")} {selectedRun.policyVersion}
                     </p>
                   </div>
                   {isReviewer ? (
                     <select
-                      aria-label="发布运行状态"
+                      aria-label={localized(language, "发布运行状态", "Release run status")}
                       value={selectedRun.status}
                       disabled={busyTargets.has(`run-status:${selectedRun.id}`)}
                       onChange={(event) => void changeRunStatus(selectedRun, event.target.value as TestingRunStatus)}
@@ -250,11 +269,11 @@ export function ReleaseValidation({ agent, user, data }: Props) {
                 </div>
                 {isReviewer ? (
                   <label className="assignmentOwner">
-                    <span>新任务分配给</span>
+                    <span>{localized(language, "新任务分配给", "Assign new task to")}</span>
                     <input
                       value={assignee}
                       onChange={(event) => setAssignee(event.target.value)}
-                      placeholder="测试员用户名"
+                      placeholder={localized(language, "测试员用户名", "Tester username")}
                     />
                   </label>
                 ) : null}
@@ -278,7 +297,8 @@ export function ReleaseValidation({ agent, user, data }: Props) {
                           </span>
                         </div>
                         <p>
-                          {completed}/{requirement.requiredValidSessions} 个证据样本
+                          {completed}/{requirement.requiredValidSessions}{" "}
+                          {localized(language, "个证据样本", "evidence samples")}
                         </p>
                         <div className="coverageAssignments">
                           {assignments.map((item) => (
@@ -293,17 +313,22 @@ export function ReleaseValidation({ agent, user, data }: Props) {
                             disabled={assigning}
                             onClick={() => void assignRequirement(selectedRun, requirement.id)}
                           >
-                            {assigning ? "正在分配…" : "分配任务"}
+                            {assigning
+                              ? localized(language, "正在分配…", "Assigning…")
+                              : localized(language, "分配任务", "Assign task")}
                           </button>
                         ) : mine && (mine.platform === "web" || mine.platform === "unknown") ? (
                           <button
                             type="button"
                             onClick={() => linkAssignment(selectedRun.id, mine.id, mine.testCaseId)}
                           >
-                            用于下一次会话
+                            {localized(language, "用于下一次会话", "Use for next session")}
                           </button>
                         ) : mine ? (
-                          <small>请打开 {mine.platform} 客户端采集此任务。</small>
+                          <small>
+                            {localized(language, "请打开", "Open")} {mine.platform}{" "}
+                            {localized(language, "客户端采集此任务。", "client to collect this task.")}
+                          </small>
                         ) : null}
                       </article>
                     );
@@ -311,7 +336,9 @@ export function ReleaseValidation({ agent, user, data }: Props) {
                 </div>
               </>
             ) : (
-              <p className="testerConversationEmpty">请选择或创建发布运行。</p>
+              <p className="testerConversationEmpty">
+                {localized(language, "请选择或创建发布运行。", "Select or create a release run.")}
+              </p>
             )}
           </div>
         </div>

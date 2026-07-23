@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { adminAccountApi, inviteUrl, type AdminOverview, type AuthUser } from "../../lib/auth";
 import { useLanguage } from "../LanguageToggle";
+import { localized } from "../../lib/i18n";
 import { adminRoleLabel, confirmationCopy, formatAdminRelativeTime } from "./admin-model";
 
 const INVITE_EXPIRING_SOON_MS = 2 * 24 * 60 * 60 * 1000;
@@ -311,48 +312,57 @@ export function AccountManagement({
   }).length;
 
   return (
-    <div className="adminAccount adminSectionCard" aria-label="账号管理" data-load-status={status}>
+    <div
+      className="adminAccount adminSectionCard"
+      aria-label={localized(language, "账号管理", "Account management")}
+      data-load-status={status}
+    >
       <div className="adminAccountHead adminSectionHeader">
         <div>
-          <span>账号管理</span>
+          <span>{localized(language, "账号管理", "Account management")}</span>
           <strong>
-            {users.length} 个账号 · {invites.length} 个未使用邀请
+            {users.length} {localized(language, "个账号", "accounts")} · {invites.length}{" "}
+            {localized(language, "个未使用邀请", "unused invites")}
           </strong>
         </div>
         <button type="button" disabled={busyTarget !== null} onClick={() => void makeInvite()}>
-          {busyTarget === "create-invite" ? "正在生成…" : createdCopied ? "邀请链接已复制 ✓" : "生成邀请链接"}
+          {busyTarget === "create-invite"
+            ? localized(language, "正在生成…", "Generating…")
+            : createdCopied
+              ? localized(language, "邀请链接已复制 ✓", "Invite link copied ✓")
+              : localized(language, "生成邀请链接", "Generate invite link")}
         </button>
       </div>
 
       <div className="adminAccountSummary" aria-label="账号概览">
         <span>
           <b>{users.filter((account) => account.role === "admin").length}</b>
-          管理员
+          {localized(language, "管理员", "Administrators")}
         </span>
         <span>
           <b>{users.filter((account) => account.role === "reviewer").length}</b>
-          审核员
+          {localized(language, "审核员", "Reviewers")}
         </span>
         <span>
           <b>{users.filter((account) => account.role === "tester").length}</b>
-          测试员
+          {localized(language, "测试员", "Testers")}
         </span>
         <span>
           <b>{invites.length}</b>
-          未使用邀请
+          {localized(language, "未使用邀请", "Unused invites")}
         </span>
         <span className={expiringInviteCount ? "warn" : ""}>
           <b>{expiringInviteCount}</b>
-          即将过期
+          {localized(language, "即将过期", "Expiring soon")}
         </span>
       </div>
 
       <label className="adminAccountFilter">
-        <span>查找账号或邀请</span>
+        <span>{localized(language, "查找账号或邀请", "Find account or invite")}</span>
         <input
           value={accountFilter}
           onChange={(event) => setAccountFilter(event.target.value)}
-          placeholder="姓名、角色或邀请码"
+          placeholder={localized(language, "姓名、角色或邀请码", "Name, role, or invite code")}
           autoComplete="off"
           spellCheck={false}
         />
@@ -375,7 +385,7 @@ export function AccountManagement({
       ) : null}
       {manualInviteUrl ? (
         <label className="adminAccountFilter accountInviteRecovery">
-          <span>手动复制邀请链接</span>
+          <span>{localized(language, "手动复制邀请链接", "Copy invite link manually")}</span>
           <input
             aria-label="手动复制邀请链接"
             value={manualInviteUrl}
@@ -408,9 +418,9 @@ export function AccountManagement({
                     disabled={busyTarget !== null}
                     onChange={(event) => void changeRole(account.username, event.target.value as AuthUser["role"])}
                   >
-                    <option value="tester">测试员</option>
-                    <option value="reviewer">审核员</option>
-                    <option value="admin">管理员</option>
+                    <option value="tester">{localized(language, "测试员", "Tester")}</option>
+                    <option value="reviewer">{localized(language, "审核员", "Reviewer")}</option>
+                    <option value="admin">{localized(language, "管理员", "Administrator")}</option>
                   </select>
                   {account.role !== "admin" ? (
                     <button

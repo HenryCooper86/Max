@@ -13,6 +13,7 @@ import {
 } from "../../../shared/testing";
 import type { HelmetAgent } from "../../hooks/useHelmetAgent";
 import { useLanguage } from "../LanguageToggle";
+import { localized } from "../../lib/i18n";
 import type { AuthUser } from "../../lib/auth";
 import type { TestingClearScope } from "../../lib/testing-api";
 import {
@@ -775,7 +776,9 @@ export function EvidenceWorkspace({
         tabIndex={-1}
       >
         <p className="adminWorkspaceLoading">
-          {data.status === "loading" ? "正在加载证据与问题…" : "暂无可用证据数据。"}
+          {data.status === "loading"
+            ? localized(language, "正在加载证据与问题…", "Loading evidence and issues…")
+            : localized(language, "暂无可用证据数据。", "No evidence data available.")}
         </p>
       </section>
     );
@@ -792,10 +795,12 @@ export function EvidenceWorkspace({
     >
       <div className="panelHeader">
         <div>
-          <h2>证据与问题</h2>
+          <h2>{localized(language, "证据与问题", "Evidence & issues")}</h2>
           <span>
-            {testing ? `${testing.windowMinutes} 分钟 · ${testing.users.length} 位测试员` : "等待证据"}
-            {agent.health?.build ? ` · 构建 ${agent.health.build.gitCommit}` : ""}
+            {testing
+              ? `${testing.windowMinutes} ${localized(language, "分钟", "min")} · ${testing.users.length} ${localized(language, "位测试员", "testers")}`
+              : localized(language, "等待证据", "Waiting for evidence")}
+            {agent.health?.build ? ` · ${localized(language, "构建", "Build")} ${agent.health.build.gitCommit}` : ""}
           </span>
         </div>
         <div className="panelActions">
@@ -804,7 +809,7 @@ export function EvidenceWorkspace({
             type="button"
             onClick={() => exportTestingReport(agent.health, agent.testerId, agent.testerRegion, testing)}
           >
-            导出统计
+            {localized(language, "导出统计", "Export stats")}
           </button>
           <button
             type="button"
@@ -813,7 +818,9 @@ export function EvidenceWorkspace({
             title={canClear ? undefined : "需要管理员权限"}
             onClick={() => arm("clear-all", () => void runClear("clear-all", { scope: "all" }, "全部测试证据"))}
           >
-            {armedAction === "clear-all" ? confirmationCopy("all-evidence", "全部测试证据") : "清除全部证据"}
+            {armedAction === "clear-all"
+              ? confirmationCopy("all-evidence", localized(language, "全部测试证据", "all testing evidence"))
+              : localized(language, "清除全部证据", "Clear all evidence")}
           </button>
         </div>
       </div>
@@ -826,7 +833,7 @@ export function EvidenceWorkspace({
 
       <div className="testerBar">
         <label>
-          <span>测试员 ID</span>
+          <span>{localized(language, "测试员 ID", "Tester ID")}</span>
           <input
             value={agent.testerId}
             onChange={(event) => agent.setTesterId(event.target.value)}
@@ -836,12 +843,16 @@ export function EvidenceWorkspace({
           />
         </label>
         <div className={`testQuality ${qualityTone}`}>
-          <span>质量</span>
+          <span>{localized(language, "质量", "Quality")}</span>
           <strong>{qualityTone === "good" ? "PASS" : qualityTone === "warn" ? "WATCH" : "FAIL"}</strong>
         </div>
         <div>
-          <span>当前测试员</span>
-          <strong>{currentTester ? `${currentTester.totalSessions} 次会话` : "新测试员"}</strong>
+          <span>{localized(language, "当前测试员", "Current tester")}</span>
+          <strong>
+            {currentTester
+              ? `${currentTester.totalSessions} ${localized(language, "次会话", "sessions")}`
+              : localized(language, "新测试员", "New tester")}
+          </strong>
         </div>
         <div>
           <span>IP / 区域</span>
@@ -853,7 +864,7 @@ export function EvidenceWorkspace({
 
       <div className="testingWorkflowBar">
         <label>
-          <span>测试活动</span>
+          <span>{localized(language, "测试活动", "Test campaign")}</span>
           <select
             value={selectedCampaign.id}
             onChange={(event) => {
@@ -869,7 +880,7 @@ export function EvidenceWorkspace({
           </select>
         </label>
         <label>
-          <span>测试用例</span>
+          <span>{localized(language, "测试用例", "Test case")}</span>
           <select
             value={selectedTestCase.id}
             onChange={(event) => {
@@ -901,20 +912,20 @@ export function EvidenceWorkspace({
 
       <div className="testingFilterBar">
         <label>
-          <span>查找测试员</span>
+          <span>{localized(language, "查找测试员", "Find tester")}</span>
           <input
             value={testerFilter}
             onChange={(event) => {
               setArmedAction(null);
               setTesterFilter(event.target.value);
             }}
-            placeholder="ID、IP 或区域"
+            placeholder={localized(language, "ID、IP 或区域", "ID, IP, or region")}
             autoComplete="off"
             spellCheck={false}
           />
         </label>
         <label>
-          <span>查找会话</span>
+          <span>{localized(language, "查找会话", "Find session")}</span>
           <input
             value={sessionFilter}
             onChange={(event) => {
@@ -928,12 +939,16 @@ export function EvidenceWorkspace({
               clearReviewDraftBinding();
               setSelectedSessionId(null);
             }}
-            placeholder="用例、设备、标记或构建"
+            placeholder={localized(language, "用例、设备、标记或构建", "Case, device, tag, or build")}
             autoComplete="off"
             spellCheck={false}
           />
         </label>
-        <div className="qualityFilter" role="group" aria-label="会话质量筛选">
+        <div
+          className="qualityFilter"
+          role="group"
+          aria-label={localized(language, "会话质量筛选", "Session quality filter")}
+        >
           {TEST_QUALITY_FILTERS.map((quality) => (
             <button
               key={quality}

@@ -6,6 +6,7 @@ import { HelmetVisual, VoiceStateReadout } from "./components/HelmetVisual";
 import { LoginGate } from "./components/LoginGate";
 import { VoiceTranscript } from "./components/VoiceTranscript";
 import { WebSettingsSheet } from "./components/WebSettingsSheet";
+import { LanguageProvider } from "./components/LanguageToggle";
 import { surfaceAfterAuthentication, type AppSurface } from "./components/admin/admin-model";
 import { useHelmetAgent } from "./hooks/useHelmetAgent";
 import { fetchCurrentUser, type AuthUser } from "./lib/auth";
@@ -14,7 +15,7 @@ const AdminWorkspace = lazy(() =>
   import("./components/admin/AdminWorkspace").then((module) => ({ default: module.AdminWorkspace }))
 );
 
-export function App() {
+function AppContent() {
   const agent = useHelmetAgent();
   const { listening, starting, startMic, stopMic } = agent;
   const [surface, setSurface] = useState<AppSurface>("voice");
@@ -246,5 +247,13 @@ export function App() {
         <WebSettingsSheet agent={agent} onOpenAdmin={openAdmin} onClose={closeSettings} />
       ) : null}
     </main>
+  );
+}
+
+export function App() {
+  return (
+    <LanguageProvider>
+      <AppContent />
+    </LanguageProvider>
   );
 }

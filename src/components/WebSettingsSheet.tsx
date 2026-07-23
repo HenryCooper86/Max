@@ -11,6 +11,7 @@ import {
 } from "@phosphor-icons/react";
 import { useEffect, useRef } from "react";
 import { combineHazardLevels, scenarioLabel } from "../../shared/ride";
+import { LanguageToggle, useLanguage } from "./LanguageToggle";
 import type { HelmetAgent } from "../hooks/useHelmetAgent";
 import {
   CONNECTION_LABELS,
@@ -36,6 +37,7 @@ type Props = {
 };
 
 export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
+  const { t } = useLanguage();
   const fusedHazard = combineHazardLevels(agent.rideContext.hazardLevel, agent.weather?.riskLevel ?? "normal");
   const latencyTone = agent.latencyMs < 140 ? "good" : agent.latencyMs < 280 ? "warn" : "alert";
   const dialogRef = useRef<HTMLElement>(null);
@@ -92,12 +94,15 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
         <header className="settingsHeader">
           <div>
             <span>Max</span>
-            <h1 id="settings-title">设置</h1>
+            <h1 id="settings-title">{t("settings.title")}</h1>
           </div>
-          <button ref={closeButtonRef} type="button" onClick={onClose} aria-label="完成并关闭设置">
+          <div className="settingsHeaderActions">
+            <LanguageToggle />
+            <button ref={closeButtonRef} type="button" onClick={onClose} aria-label="完成并关闭设置">
             <X size={24} weight="bold" aria-hidden="true" />
             完成
-          </button>
+            </button>
+          </div>
         </header>
 
         <div className="settingsContent">

@@ -1,13 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { TESTING_TEST_CASES, type TestingRun, type TestingRunStatus } from "../../../shared/testing";
 import type { HelmetAgent } from "../../hooks/useHelmetAgent";
 import type { AuthUser } from "../../lib/auth";
 import type { AdminTestingData } from "./useAdminTestingData";
 
 type BusyTarget =
-  { kind: "create-run" } | { kind: "run-status"; id: string } | { kind: "assignment"; id: string } | null;
+  | { kind: "create-run" }
+  | { kind: "run-status"; id: string }
+  | { kind: "assignment"; runId: string; requirementId: string }
+  | null;
 
 type Notice = { tone: "success" | "error"; message: string };
+type MutationRequest = { key: string; requestId: number };
 
 type Props = {
   agent: HelmetAgent;
@@ -27,73 +31,116 @@ function runProgress(run: TestingRun) {
   return { required, completed, percent: required ? Math.min(100, Math.round((completed / required) * 100)) : 0 };
 }
 
+function busyTargetKey(target: Exclude<BusyTarget, null>) {
+  if (target.kind === "create-run") return "create-run";
+  if (target.kind === "run-status") return `run-status:${target.id}`;
+  return `assignment:${target.runId}:${target.requirementId}`;
+}
+
 export function ReleaseValidation({ agent, user, data }: Props) {
   const isReviewer = user.role === "admin" || user.role === "reviewer";
   const currentBuild = agent.health?.build?.gitCommit ?? "local";
   const runs = isReviewer ? (data.operations?.runs ?? []) : data.runs;
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const [busyTarget, setBusyTarget] = useState<BusyTarget>(null);
+  const [busyTargets, setBusyTargets] = useState<ReadonlySet<string>>(() => new Set());
   const [notice, setNotice] = useState<Notice | null>(null);
   const [runName, setRunName] = useState("");
   const [runBuild, setRunBuild] = useState(currentBuild);
   const [runOwner, setRunOwner] = useState(user.username);
   const [runDueDate, setRunDueDate] = useState("");
   const [assignee, setAssignee] = useState(user.username);
+  const mutationSequenceRef = useRef(0);
+  const targetRequestRef = useRef(new Map<string, number>());
+  const noticeRequestRef = useRef(0);
   const selectedRun = runs.find((run) => run.id === selectedRunId) ?? runs[0];
 
   useEffect(() => setRunBuild(currentBuild), [currentBuild]);
 
-  const createRun = async () => {
-    setBusyTarget({ kind: "create-run" });
+  const beginMutation = (target: Exclude<BusyTarget, null>): MutationRequest => {
+    const key = busyTargetKey(target);
+    const requestId = ++mutationSequenceRef.current;
+    targetRequestRef.current.set(key, requestId);
+    noticeRequestRef.current = requestId;
+    setBusyTargets((current) => new Set(current).add(key));
     setNotice(null);
-    const result = await data.createRun({
-      name: runName.trim() || `发布 ${runBuild}`,
-      build: runBuild.trim() || currentBuild,
-      owner: runOwner.trim() || user.username,
-      dueAt: runDueDate ? new Date(`${runDueDate}T23:59:59`).getTime() : undefined
+    return { key, requestId };
+  };
+
+  const ownsMutation = ({ key, requestId }: MutationRequest) => targetRequestRef.current.get(key) === requestId;
+
+  const setOwnedNotice = (request: MutationRequest, nextNotice: Notice) => {
+    if (noticeRequestRef.current === request.requestId) setNotice(nextNotice);
+  };
+
+  const finishMutation = (request: MutationRequest) => {
+    if (!ownsMutation(request)) return;
+    targetRequestRef.current.delete(request.key);
+    setBusyTargets((current) => {
+      if (!current.has(request.key)) return current;
+      const next = new Set(current);
+      next.delete(request.key);
+      return next;
     });
-    if (result.ok) {
-      setRunName("");
-      setSelectedRunId(result.data.id);
-      setNotice({
-        tone: "success",
-        message: `发布运行“${result.data.name}”已创建，包含 ${result.data.requirements.length} 项覆盖要求。`
+  };
+
+  const createRun = async () => {
+    const request = beginMutation({ kind: "create-run" });
+    try {
+      const result = await data.createRun({
+        name: runName.trim() || `发布 ${runBuild}`,
+        build: runBuild.trim() || currentBuild,
+        owner: runOwner.trim() || user.username,
+        dueAt: runDueDate ? new Date(`${runDueDate}T23:59:59`).getTime() : undefined
       });
-      await data.refresh();
-    } else {
-      setNotice({ tone: "error", message: result.error.message });
+      if (result.ok) {
+        setRunName("");
+        setSelectedRunId(result.data.id);
+        setOwnedNotice(request, {
+          tone: "success",
+          message: `发布运行“${result.data.name}”已创建，包含 ${result.data.requirements.length} 项覆盖要求。`
+        });
+        await data.refresh();
+      } else {
+        setOwnedNotice(request, { tone: "error", message: result.error.message });
+      }
+    } finally {
+      finishMutation(request);
     }
-    setBusyTarget(null);
   };
 
   const changeRunStatus = async (run: TestingRun, status: TestingRunStatus) => {
-    setBusyTarget({ kind: "run-status", id: run.id });
-    setNotice(null);
-    const result = await data.updateRun(run.id, { status });
-    if (result.ok) {
-      setNotice({ tone: "success", message: `发布运行状态已更新为 ${result.data.status}。` });
-      await data.refresh();
-    } else {
-      setNotice({ tone: "error", message: result.error.message });
+    const request = beginMutation({ kind: "run-status", id: run.id });
+    try {
+      const result = await data.updateRun(run.id, { status });
+      if (result.ok) {
+        setOwnedNotice(request, { tone: "success", message: `发布运行状态已更新为 ${result.data.status}。` });
+        await data.refresh();
+      } else {
+        setOwnedNotice(request, { tone: "error", message: result.error.message });
+      }
+    } finally {
+      finishMutation(request);
     }
-    setBusyTarget(null);
   };
 
   const assignRequirement = async (run: TestingRun, requirementId: string) => {
-    setBusyTarget({ kind: "assignment", id: requirementId });
-    setNotice(null);
+    const request = beginMutation({ kind: "assignment", runId: run.id, requirementId });
     const owner = assignee.trim() || user.username;
-    const result = await data.createAssignment(run.id, requirementId, owner);
-    if (result.ok) {
-      setNotice({ tone: "success", message: `覆盖任务已分配给 ${owner}。` });
-      await data.refresh();
-    } else {
-      setNotice({ tone: "error", message: result.error.message });
+    try {
+      const result = await data.createAssignment(run.id, requirementId, owner);
+      if (result.ok) {
+        setOwnedNotice(request, { tone: "success", message: `覆盖任务已分配给 ${owner}。` });
+        await data.refresh();
+      } else {
+        setOwnedNotice(request, { tone: "error", message: result.error.message });
+      }
+    } finally {
+      finishMutation(request);
     }
-    setBusyTarget(null);
   };
 
   const linkAssignment = (runId: string, assignmentId: string, testCaseId: string) => {
+    noticeRequestRef.current = ++mutationSequenceRef.current;
     agent.setTestingAssignmentContext(runId, assignmentId, testCaseId);
     setNotice({ tone: "success", message: "任务已关联；下一次语音会话将计入此发布任务。" });
   };
@@ -132,8 +179,8 @@ export function ReleaseValidation({ agent, user, data }: Props) {
               <span>截止日期</span>
               <input type="date" value={runDueDate} onChange={(event) => setRunDueDate(event.target.value)} />
             </label>
-            <button type="button" disabled={busyTarget?.kind === "create-run"} onClick={() => void createRun()}>
-              {busyTarget?.kind === "create-run" ? "正在创建…" : "创建发布运行"}
+            <button type="button" disabled={busyTargets.has("create-run")} onClick={() => void createRun()}>
+              {busyTargets.has("create-run") ? "正在创建…" : "创建发布运行"}
             </button>
           </div>
         ) : null}
@@ -178,7 +225,7 @@ export function ReleaseValidation({ agent, user, data }: Props) {
                     <select
                       aria-label="发布运行状态"
                       value={selectedRun.status}
-                      disabled={busyTarget?.kind === "run-status" && busyTarget.id === selectedRun.id}
+                      disabled={busyTargets.has(`run-status:${selectedRun.id}`)}
                       onChange={(event) => void changeRunStatus(selectedRun, event.target.value as TestingRunStatus)}
                     >
                       {RUN_STATUSES.filter(
@@ -210,7 +257,7 @@ export function ReleaseValidation({ agent, user, data }: Props) {
                     const mine = assignments.find(
                       (item) => item.assignee === user.username && item.status !== "complete"
                     );
-                    const assigning = busyTarget?.kind === "assignment" && busyTarget.id === requirement.id;
+                    const assigning = busyTargets.has(`assignment:${selectedRun.id}:${requirement.id}`);
                     return (
                       <article
                         key={requirement.id}

@@ -196,6 +196,57 @@ describe("ReleaseValidation", () => {
     expect(text(renderer.root)).toContain("覆盖任务已分配");
   });
 
+  it("owns concurrent assignment busy state and notices by run plus requirement", async () => {
+    const pendingA = deferred<ApiResult<TestingRun>>();
+    const pendingB = deferred<ApiResult<TestingRun>>();
+    const runA = { ...run(), id: "run-a", name: "发布 A", requirements: [requirement("shared-requirement")] };
+    const runB = { ...run(), id: "run-b", name: "发布 B", requirements: [requirement("shared-requirement")] };
+    const sharedData = adminData(operations(policy("v1"), [runA]));
+    vi.mocked(sharedData.createAssignment).mockReturnValueOnce(pendingA.promise).mockReturnValueOnce(pendingB.promise);
+    const renderRun = async (selectedRun: TestingRun) => {
+      await act(async () => {
+        renderer?.update(
+          <ReleaseValidation
+            agent={agent()}
+            user={authUser("reviewer")}
+            data={{ ...sharedData, operations: operations(policy("v1"), [selectedRun]) }}
+          />
+        );
+      });
+    };
+
+    await act(async () => {
+      renderer = create(<ReleaseValidation agent={agent()} user={authUser("reviewer")} data={sharedData} />);
+    });
+    act(() => button(renderer, "分配任务").props.onClick());
+    expect(button(renderer, "正在分配…").props.disabled).toBe(true);
+
+    await renderRun(runB);
+    expect(button(renderer, "分配任务").props.disabled).toBe(false);
+    act(() => button(renderer, "分配任务").props.onClick());
+    expect(button(renderer, "正在分配…").props.disabled).toBe(true);
+
+    await renderRun(runA);
+    expect(button(renderer, "正在分配…").props.disabled).toBe(true);
+    await act(async () => {
+      pendingB.resolve({ ok: true, data: runB });
+      await pendingB.promise;
+    });
+    await renderRun(runB);
+    expect(button(renderer, "分配任务").props.disabled).toBe(false);
+    expect(text(renderer.root)).toContain("覆盖任务已分配");
+
+    await renderRun(runA);
+    expect(button(renderer, "正在分配…").props.disabled).toBe(true);
+    await act(async () => {
+      pendingA.resolve({ ok: false, error: { kind: "conflict", message: "A 的旧失败不应覆盖 B。" } });
+      await pendingA.promise;
+    });
+    expect(button(renderer, "分配任务").props.disabled).toBe(false);
+    expect(text(renderer.root)).toContain("覆盖任务已分配");
+    expect(text(renderer.root)).not.toContain("A 的旧失败不应覆盖 B。");
+  });
+
   it("keeps approval admin-only while preserving tester assignment guidance", async () => {
     const reviewerData = adminData();
     await act(async () => {

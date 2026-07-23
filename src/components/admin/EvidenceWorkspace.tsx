@@ -34,11 +34,45 @@ type PendingNoteSave = {
   notes: string;
 };
 type Notice = { tone: "success" | "error"; message: string };
-type ReviewBusyTarget = { kind: "composer" } | { kind: "status"; id: string } | null;
+type ReviewBusyTarget = { kind: "composer"; sessionId: string } | { kind: "status"; reviewId: string } | null;
+type ReviewDraftFields = {
+  title: string;
+  comment: string;
+  severity: TestingReviewSeverity;
+  owner: string;
+};
+type ReviewDraftBinding = {
+  generation: number;
+  sessionId: string;
+  reviewId?: string;
+  serverRevision: number;
+};
+type ReviewMutationRequest = {
+  key: string;
+  requestId: number;
+  noticeRequestId: number;
+};
 
 const QUALITY_PRIORITY: Record<TestingQuality, number> = { fail: 3, watch: 2, pass: 1 };
 const REVIEW_STATUSES: TestingReviewStatus[] = ["open", "triaged", "resolved", "waived"];
 const REVIEW_SEVERITIES: TestingReviewSeverity[] = ["low", "medium", "high", "critical"];
+
+function reviewBusyTargetKey(target: Exclude<ReviewBusyTarget, null>) {
+  return target.kind === "composer" ? `review-composer:${target.sessionId}` : `review-status:${target.reviewId}`;
+}
+
+function editableReview(review: TestingReview | undefined) {
+  return review && (review.status === "open" || review.status === "triaged") ? review : undefined;
+}
+
+function sameReviewDraft(left: ReviewDraftFields, right: ReviewDraftFields) {
+  return (
+    left.title === right.title &&
+    left.comment === right.comment &&
+    left.severity === right.severity &&
+    left.owner === right.owner
+  );
+}
 
 function testQualityLabel(quality: TestQualityFilter) {
   if (quality === "all") return "全部";
@@ -135,7 +169,7 @@ export function EvidenceWorkspace({
   const [loadingMore, setLoadingMore] = useState(false);
   const [pendingNoteSave, setPendingNoteSave] = useState<PendingNoteSave | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [reviewBusyTarget, setReviewBusyTarget] = useState<ReviewBusyTarget>(null);
+  const [reviewBusyTargets, setReviewBusyTargets] = useState<ReadonlySet<string>>(() => new Set());
   const [reviewTitle, setReviewTitle] = useState("会话需要复核");
   const [reviewComment, setReviewComment] = useState("");
   const [reviewSeverity, setReviewSeverity] = useState<TestingReviewSeverity>("medium");
@@ -148,10 +182,57 @@ export function EvidenceWorkspace({
   const noteSaveRequestRef = useRef(0);
   const workspaceRef = useRef<HTMLElement>(null);
   const handledFocusRequestRef = useRef(0);
-  const reviewDraftKeyRef = useRef("");
+  const noticeRequestRef = useRef(0);
+  const reviewMutationSequenceRef = useRef(0);
+  const reviewTargetRequestRef = useRef(new Map<string, number>());
+  const reviewEvidenceRequestRef = useRef(0);
+  const reviewDraftGenerationRef = useRef(0);
+  const reviewDraftBindingRef = useRef<ReviewDraftBinding | null>(null);
+  const reviewDraftDirtyRef = useRef(false);
+  const reviewDraftRef = useRef<ReviewDraftFields>({
+    title: "会话需要复核",
+    comment: "",
+    severity: "medium",
+    owner: user.username
+  });
   const writeSessionNotes = useCallback((notes: string) => {
     sessionNotesRef.current = notes;
     setSessionNotes(notes);
+  }, []);
+  const claimNoticeRequest = useCallback(() => {
+    const requestId = ++noticeRequestRef.current;
+    setNotice(null);
+    return requestId;
+  }, []);
+  const setOwnedNotice = useCallback((requestId: number, nextNotice: Notice | null) => {
+    if (noticeRequestRef.current === requestId) setNotice(nextNotice);
+  }, []);
+  const resetReviewDraft = useCallback(
+    (sessionId: string, review?: TestingReview) => {
+      const nextDraft: ReviewDraftFields = {
+        title: review?.title ?? "会话需要复核",
+        comment: review?.comment ?? "",
+        severity: review?.severity ?? "medium",
+        owner: review?.owner ?? user.username
+      };
+      reviewDraftBindingRef.current = {
+        generation: ++reviewDraftGenerationRef.current,
+        sessionId,
+        reviewId: review?.id,
+        serverRevision: review?.updatedAt ?? 0
+      };
+      reviewDraftDirtyRef.current = false;
+      reviewDraftRef.current = nextDraft;
+      setReviewTitle(nextDraft.title);
+      setReviewComment(nextDraft.comment);
+      setReviewSeverity(nextDraft.severity);
+      setReviewOwner(nextDraft.owner);
+    },
+    [user.username]
+  );
+  const clearReviewDraftBinding = useCallback(() => {
+    reviewDraftBindingRef.current = null;
+    reviewDraftDirtyRef.current = false;
   }, []);
 
   const { loadSession } = data;
@@ -231,14 +312,15 @@ export function EvidenceWorkspace({
     ? testingSessions.find((session) => session.sessionId === selectedSessionId)
     : undefined;
   const selectedSession = selectedSessionId ? (sessionDetails[selectedSessionId] ?? selectedSessionSummary) : undefined;
+  const operationReviews = data.operations?.reviews ?? [];
   const selectedReview = selectedSession
-    ? (data.operations?.reviews ?? []).find(
-        (review) =>
-          review.sessionId === selectedSession.sessionId && (review.status === "open" || review.status === "triaged")
-      )
+    ? editableReview(operationReviews.find((review) => review.sessionId === selectedSession.sessionId))
     : undefined;
   const requestedSessionSummary = requestedSessionId
     ? testingSessions.find((session) => session.sessionId === requestedSessionId)
+    : undefined;
+  const requestedReview = requestedSessionId
+    ? editableReview(operationReviews.find((review) => review.sessionId === requestedSessionId))
     : undefined;
   const selectedSessionTurns = selectedSession?.turns ?? [];
   const selectedTesterCounts = selectedTester?.qualityCounts ?? emptyQualityCounts();
@@ -302,24 +384,28 @@ export function EvidenceWorkspace({
   useEffect(() => {
     const sessionId = selectedSession?.sessionId;
     if (!sessionId) return;
-    const key = `${sessionId}:${selectedReview?.id ?? "new"}`;
-    if (reviewDraftKeyRef.current === key) return;
-    reviewDraftKeyRef.current = key;
-    setReviewTitle(selectedReview?.title ?? "会话需要复核");
-    setReviewComment(selectedReview?.comment ?? "");
-    setReviewSeverity(selectedReview?.severity ?? "medium");
-    setReviewOwner(selectedReview?.owner ?? user.username);
-  }, [selectedReview, selectedSession?.sessionId, user.username]);
+    const binding = reviewDraftBindingRef.current;
+    if (!binding || binding.sessionId !== sessionId) {
+      resetReviewDraft(sessionId, selectedReview);
+      return;
+    }
+    if (reviewDraftDirtyRef.current) return;
+    if (binding.reviewId !== selectedReview?.id || binding.serverRevision !== (selectedReview?.updatedAt ?? 0)) {
+      resetReviewDraft(sessionId, selectedReview);
+    }
+  }, [resetReviewDraft, selectedReview, selectedSession?.sessionId]);
 
   useEffect(() => {
     if (!active || !requestedSessionId) return;
     let current = true;
+    const noticeRequestId = claimNoticeRequest();
     setArmedAction(null);
     setTesterFilter("");
     setSessionFilter("");
     setQualityFilter(requestedSessionSummary?.quality ?? "all");
     setSelectedTesterKey(requestedSessionSummary?.testerKey ?? null);
     setSelectedSessionId(requestedSessionId);
+    resetReviewDraft(requestedSessionId, requestedReview);
     noteSessionIdRef.current = requestedSessionId;
     notesDirtyRef.current = false;
     setNotesDirty(false);
@@ -334,9 +420,11 @@ export function EvidenceWorkspace({
         notesDirtyRef.current = false;
         setNotesDirty(false);
         writeSessionNotes(detail.notes);
-        setNotice(null);
       } else {
-        setNotice({ tone: "error", message: "所选证据不可用，或已超出当前账号的访问范围。" });
+        setOwnedNotice(noticeRequestId, {
+          tone: "error",
+          message: "所选证据不可用，或已超出当前账号的访问范围。"
+        });
       }
       handledFocusRequestRef.current = focusRequestKey;
       workspaceRef.current?.focus();
@@ -347,13 +435,17 @@ export function EvidenceWorkspace({
     };
   }, [
     active,
+    claimNoticeRequest,
     focusRequestKey,
     loadSession,
     onRequestedSessionHandled,
+    requestedReview,
     requestedSessionId,
     requestedSessionSummary?.notes,
     requestedSessionSummary?.quality,
     requestedSessionSummary?.testerKey,
+    resetReviewDraft,
+    setOwnedNotice,
     writeSessionNotes
   ]);
 
@@ -376,6 +468,7 @@ export function EvidenceWorkspace({
 
   const selectTester = (testerKey: string) => {
     setArmedAction(null);
+    clearReviewDraftBinding();
     noteSessionIdRef.current = null;
     notesDirtyRef.current = false;
     setNotesDirty(false);
@@ -387,6 +480,7 @@ export function EvidenceWorkspace({
   const selectSession = (sessionId: string) => {
     const session = sessionDetails[sessionId] ?? testingSessions.find((item) => item.sessionId === sessionId);
     setArmedAction(null);
+    resetReviewDraft(sessionId, editableReview(operationReviews.find((review) => review.sessionId === sessionId)));
     noteSessionIdRef.current = sessionId;
     notesDirtyRef.current = false;
     setNotesDirty(false);
@@ -394,17 +488,25 @@ export function EvidenceWorkspace({
     setSelectedSessionId(sessionId);
   };
 
-  const selectReviewEvidence = async (sessionId: string) => {
+  const selectReviewEvidence = async (review: TestingReview) => {
+    const requestId = ++reviewEvidenceRequestRef.current;
+    const noticeRequestId = claimNoticeRequest();
+    const sessionId = review.sessionId;
     const session = sessionDetails[sessionId] ?? testingSessions.find((item) => item.sessionId === sessionId);
     setTesterFilter("");
     setSessionFilter("");
     setQualityFilter(session?.quality ?? "all");
     setSelectedTesterKey(session?.testerKey ?? null);
     selectSession(sessionId);
+    resetReviewDraft(sessionId, editableReview(review));
     if (session) return;
     const detail = await data.loadSession(sessionId);
+    if (reviewEvidenceRequestRef.current !== requestId) return;
     if (!detail) {
-      setNotice({ tone: "error", message: "复核记录关联的证据不可用，或已超出当前账号的访问范围。" });
+      setOwnedNotice(noticeRequestId, {
+        tone: "error",
+        message: "复核记录关联的证据不可用，或已超出当前账号的访问范围。"
+      });
       return;
     }
     setQualityFilter(detail.quality);
@@ -414,10 +516,11 @@ export function EvidenceWorkspace({
   };
 
   const runClear = async (key: string, payload: TestingClearScope, targetLabel: string) => {
+    const noticeRequestId = claimNoticeRequest();
     setBusyAction(key);
-    setNotice(null);
     const ok = await data.clearEvidence(payload);
     if (ok) {
+      clearReviewDraftBinding();
       noteSessionIdRef.current = null;
       notesDirtyRef.current = false;
       setNotesDirty(false);
@@ -425,9 +528,12 @@ export function EvidenceWorkspace({
       writeSessionNotes("");
       if (payload.scope !== "session") setSelectedTesterKey(null);
       await agent.refreshHealth();
-      setNotice({ tone: "success", message: `已清除 ${targetLabel}。` });
+      setOwnedNotice(noticeRequestId, { tone: "success", message: `已清除 ${targetLabel}。` });
     } else {
-      setNotice({ tone: "error", message: `清除 ${targetLabel} 失败。需要管理员权限，并请确认中继在线。` });
+      setOwnedNotice(noticeRequestId, {
+        tone: "error",
+        message: `清除 ${targetLabel} 失败。需要管理员权限，并请确认中继在线。`
+      });
     }
     setBusyAction(null);
   };
@@ -443,8 +549,8 @@ export function EvidenceWorkspace({
     const submittedSessionId = selectedSession.sessionId;
     const submittedNotes = sessionNotesRef.current;
     const requestId = ++noteSaveRequestRef.current;
+    const noticeRequestId = claimNoticeRequest();
     setPendingNoteSave({ requestId, sessionId: submittedSessionId, notes: submittedNotes });
-    setNotice(null);
     const ok = await data.saveNotes(submittedSessionId, submittedNotes);
     const ownsCurrentDraft =
       noteSessionIdRef.current === submittedSessionId && sessionNotesRef.current === submittedNotes;
@@ -453,7 +559,7 @@ export function EvidenceWorkspace({
       setNotesDirty(false);
     }
     if (requestId === noteSaveRequestRef.current && noteSessionIdRef.current === submittedSessionId) {
-      setNotice({
+      setOwnedNotice(noticeRequestId, {
         tone: ok ? "success" : "error",
         message: ok ? "证据备注已保存并写入审计记录。" : "证据备注保存失败；请确认审核员权限和中继状态。"
       });
@@ -461,33 +567,82 @@ export function EvidenceWorkspace({
     setPendingNoteSave((current) => (current?.requestId === requestId ? null : current));
   };
 
-  const saveReview = async (input: Partial<TestingReview> & { sessionId: string }, target: ReviewBusyTarget) => {
-    setReviewBusyTarget(target);
-    setNotice(null);
-    const result = await data.saveReview(input);
-    if (result.ok) {
-      setNotice({ tone: "success", message: "复核记录已保存并写入审计日志。" });
-      await data.refresh();
-    } else {
-      setNotice({ tone: "error", message: result.error.message });
+  const beginReviewMutation = (target: Exclude<ReviewBusyTarget, null>): ReviewMutationRequest => {
+    const key = reviewBusyTargetKey(target);
+    const requestId = ++reviewMutationSequenceRef.current;
+    const noticeRequestId = claimNoticeRequest();
+    reviewTargetRequestRef.current.set(key, requestId);
+    setReviewBusyTargets((current) => new Set(current).add(key));
+    return { key, requestId, noticeRequestId };
+  };
+
+  const ownsReviewMutation = ({ key, requestId }: ReviewMutationRequest) =>
+    reviewTargetRequestRef.current.get(key) === requestId;
+
+  const finishReviewMutation = (request: ReviewMutationRequest) => {
+    if (!ownsReviewMutation(request)) return;
+    reviewTargetRequestRef.current.delete(request.key);
+    setReviewBusyTargets((current) => {
+      if (!current.has(request.key)) return current;
+      const next = new Set(current);
+      next.delete(request.key);
+      return next;
+    });
+  };
+
+  const saveReview = async (
+    input: Partial<TestingReview> & { sessionId: string },
+    target: Exclude<ReviewBusyTarget, null>,
+    submittedDraft?: { binding: ReviewDraftBinding; fields: ReviewDraftFields }
+  ) => {
+    const request = beginReviewMutation(target);
+    try {
+      const result = await data.saveReview(input);
+      if (result.ok) {
+        const currentBinding = reviewDraftBindingRef.current;
+        if (
+          submittedDraft &&
+          ownsReviewMutation(request) &&
+          currentBinding?.generation === submittedDraft.binding.generation &&
+          currentBinding.sessionId === submittedDraft.binding.sessionId &&
+          currentBinding.reviewId === submittedDraft.binding.reviewId &&
+          sameReviewDraft(reviewDraftRef.current, submittedDraft.fields)
+        ) {
+          resetReviewDraft(submittedDraft.binding.sessionId, result.data);
+        }
+        setOwnedNotice(request.noticeRequestId, {
+          tone: "success",
+          message: "复核记录已保存并写入审计日志。"
+        });
+        await data.refresh();
+      } else {
+        setOwnedNotice(request.noticeRequestId, { tone: "error", message: result.error.message });
+      }
+    } finally {
+      finishReviewMutation(request);
     }
-    setReviewBusyTarget(null);
   };
 
   const submitReview = async () => {
     if (!selectedSession) return;
+    if (!reviewDraftBindingRef.current || reviewDraftBindingRef.current.sessionId !== selectedSession.sessionId) {
+      resetReviewDraft(selectedSession.sessionId, selectedReview);
+    }
+    const submittedBinding = { ...reviewDraftBindingRef.current } as ReviewDraftBinding;
+    const submittedFields = { ...reviewDraftRef.current };
     await saveReview(
       {
         id: selectedReview?.id,
         sessionId: selectedSession.sessionId,
         runId: selectedSession.runId,
         status: selectedReview?.status ?? "open",
-        severity: reviewSeverity,
-        owner: reviewOwner.trim() || user.username,
-        title: reviewTitle.trim() || "会话需要复核",
-        comment: reviewComment.trim()
+        severity: submittedFields.severity,
+        owner: submittedFields.owner.trim() || user.username,
+        title: submittedFields.title.trim() || "会话需要复核",
+        comment: submittedFields.comment.trim()
       },
-      { kind: "composer" }
+      { kind: "composer", sessionId: selectedSession.sessionId },
+      { binding: submittedBinding, fields: submittedFields }
     );
   };
 
@@ -498,9 +653,22 @@ export function EvidenceWorkspace({
         status,
         resolution: status === "resolved" ? "已复核" : review.resolution
       },
-      { kind: "status", id: review.id }
+      { kind: "status", reviewId: review.id }
     );
   };
+
+  const changeReviewDraft = <Key extends keyof ReviewDraftFields>(key: Key, value: ReviewDraftFields[Key]) => {
+    reviewDraftDirtyRef.current = true;
+    reviewDraftRef.current = { ...reviewDraftRef.current, [key]: value };
+    if (key === "title") setReviewTitle(value as string);
+    if (key === "comment") setReviewComment(value as string);
+    if (key === "severity") setReviewSeverity(value as TestingReviewSeverity);
+    if (key === "owner") setReviewOwner(value as string);
+  };
+
+  const reviewComposerBusy = selectedSession
+    ? reviewBusyTargets.has(`review-composer:${selectedSession.sessionId}`)
+    : false;
 
   if (!testing) {
     return (
@@ -663,6 +831,7 @@ export function EvidenceWorkspace({
               setNotesDirty(false);
               writeSessionNotes("");
               setSessionFilter(event.target.value);
+              clearReviewDraftBinding();
               setSelectedSessionId(null);
             }}
             placeholder="用例、设备、标记或构建"
@@ -684,6 +853,7 @@ export function EvidenceWorkspace({
                 setNotesDirty(false);
                 writeSessionNotes("");
                 setQualityFilter(quality);
+                clearReviewDraftBinding();
                 setSelectedSessionId(null);
               }}
             >
@@ -862,6 +1032,7 @@ export function EvidenceWorkspace({
                 setNotesDirty(false);
                 writeSessionNotes("");
                 setSelectedTesterKey(currentTester?.testerKey ?? null);
+                clearReviewDraftBinding();
                 setSelectedSessionId(null);
               }}
               disabled={!currentTester}
@@ -1184,7 +1355,7 @@ export function EvidenceWorkspace({
                 <span>严重程度</span>
                 <select
                   value={reviewSeverity}
-                  onChange={(event) => setReviewSeverity(event.target.value as TestingReviewSeverity)}
+                  onChange={(event) => changeReviewDraft("severity", event.target.value as TestingReviewSeverity)}
                 >
                   {REVIEW_SEVERITIES.map((severity) => (
                     <option key={severity} value={severity}>
@@ -1195,37 +1366,29 @@ export function EvidenceWorkspace({
               </label>
               <label>
                 <span>负责人</span>
-                <input value={reviewOwner} onChange={(event) => setReviewOwner(event.target.value)} />
+                <input value={reviewOwner} onChange={(event) => changeReviewDraft("owner", event.target.value)} />
               </label>
               <label className="wide">
                 <span>标题</span>
-                <input value={reviewTitle} onChange={(event) => setReviewTitle(event.target.value)} />
+                <input value={reviewTitle} onChange={(event) => changeReviewDraft("title", event.target.value)} />
               </label>
               <label className="wide">
                 <span>审核意见</span>
                 <textarea
                   value={reviewComment}
-                  onChange={(event) => setReviewComment(event.target.value)}
+                  onChange={(event) => changeReviewDraft("comment", event.target.value)}
                   placeholder="记录复现步骤、预期行为与处置结论…"
                 />
               </label>
             </div>
-            <button
-              type="button"
-              disabled={reviewBusyTarget?.kind === "composer" || !selectedSession}
-              onClick={() => void submitReview()}
-            >
-              {reviewBusyTarget?.kind === "composer" ? "正在保存…" : selectedReview ? "更新复核" : "新建复核"}
+            <button type="button" disabled={reviewComposerBusy || !selectedSession} onClick={() => void submitReview()}>
+              {reviewComposerBusy ? "正在保存…" : selectedReview ? "更新复核" : "新建复核"}
             </button>
           </div>
           <div className="reviewQueue">
             {(data.operations?.reviews ?? []).map((review) => (
               <article key={review.id} className={`reviewRow ${review.severity}`}>
-                <button
-                  type="button"
-                  className="reviewEvidenceLink"
-                  onClick={() => void selectReviewEvidence(review.sessionId)}
-                >
+                <button type="button" className="reviewEvidenceLink" onClick={() => void selectReviewEvidence(review)}>
                   <span>
                     {review.severity} · {review.status}
                   </span>
@@ -1238,7 +1401,7 @@ export function EvidenceWorkspace({
                 <select
                   aria-label={`复核状态 ${review.title}`}
                   value={review.status}
-                  disabled={reviewBusyTarget?.kind === "status" && reviewBusyTarget.id === review.id}
+                  disabled={reviewBusyTargets.has(`review-status:${review.id}`)}
                   onChange={(event) => void changeReviewStatus(review, event.target.value as TestingReviewStatus)}
                 >
                   {REVIEW_STATUSES.map((status) => (

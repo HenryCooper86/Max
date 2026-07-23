@@ -3,6 +3,7 @@ import type { TesterSessionSummary, TesterStats } from "../shared/agent";
 import {
   allowedAdminSections,
   adminRoleLabel,
+  adminStatusAfterFailure,
   confirmationCopy,
   corpusIssueCount,
   mergeAdminSessions,
@@ -102,6 +103,11 @@ describe("Admin navigation permissions", () => {
 });
 
 describe("Admin derived data", () => {
+  it("distinguishes an empty load failure from stale previously loaded data", () => {
+    expect(adminStatusAfterFailure(false)).toBe("error");
+    expect(adminStatusAfterFailure(true)).toBe("stale");
+  });
+
   it("counts issues across the full server aggregate instead of the loaded page", () => {
     expect(
       corpusIssueCount([

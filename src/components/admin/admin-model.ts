@@ -3,6 +3,11 @@ import type { AuthUser } from "../../lib/auth";
 
 export type AppSurface = "voice" | "settings" | "admin";
 export type AdminSection = "overview" | "releases" | "evidence" | "accounts" | "governance";
+export type AdminDataStatus = "loading" | "ready" | "stale" | "error";
+
+export function adminStatusAfterFailure(hasLoadedData: boolean): AdminDataStatus {
+  return hasLoadedData ? "stale" : "error";
+}
 
 export const ADMIN_SECTION_LABELS: Record<AdminSection, string> = {
   overview: "概览",

@@ -458,12 +458,12 @@ app.patch("/testing/runs/:runId", (req, res) => {
     ((candidate.status === "approved" && body.status !== "approved" && body.status !== "archived") ||
       (candidate.status === "archived" && body.status !== "archived"))
   ) {
-    res.status(409).json({ ok: false, error: "Approved or archived release records cannot be reopened." });
+    res.status(409).json({ ok: false, error: "已批准或已归档的发布记录不能重新打开。" });
     return;
   }
   if (body.status === "approved") {
     if (access.role !== "admin" && access.role !== "operator") {
-      res.status(403).json({ ok: false, error: "Release approval requires an administrator." });
+      res.status(403).json({ ok: false, error: "发布批准需要管理员权限。" });
       return;
     }
     const decision = testingSnapshot();
@@ -484,7 +484,7 @@ app.patch("/testing/runs/:runId", (req, res) => {
     ) {
       res.status(409).json({
         ok: false,
-        error: "Release approval is blocked by gate, coverage, review, or regression evidence.",
+        error: "发布批准受 gate、覆盖、复核或回归证据阻止。",
         blockers: {
           gate: decision.releaseGate.status,
           buildMatches: testingBuildsMatch(candidate.build, decision.releaseGate.build),
@@ -510,7 +510,7 @@ app.post("/testing/runs/:runId/assignments", (req, res) => {
   const body = (req.body ?? {}) as Record<string, unknown>;
   const assignee = typeof body.assignee === "string" ? body.assignee.trim() : "";
   if (access.role !== "operator" && listUsers().length && !listUsers().some((user) => user.username === assignee)) {
-    res.status(400).json({ ok: false, error: "Assignment assignee must be a registered username." });
+    res.status(400).json({ ok: false, error: "任务受让人必须是已注册的 username。" });
     return;
   }
   const run = createTestingAssignment(req.params.runId, body, accessActor(req));
@@ -532,7 +532,7 @@ app.patch("/testing/runs/:runId/assignments/:assignmentId", (req, res) => {
     listUsers().length &&
     !listUsers().some((user) => user.username === assignee)
   ) {
-    res.status(400).json({ ok: false, error: "Assignment assignee must be a registered username." });
+    res.status(400).json({ ok: false, error: "任务受让人必须是已注册的 username。" });
     return;
   }
   const run = updateTestingAssignment(req.params.runId, req.params.assignmentId, body, accessActor(req));
@@ -556,7 +556,7 @@ app.post("/testing/reviews", (req, res) => {
   const sessionId = existing?.sessionId ?? (typeof body.sessionId === "string" ? body.sessionId : "");
   const session = testingSessionDetail(sessionId);
   if (!existing && !session) {
-    res.status(404).json({ ok: false, error: "Review evidence session does not exist." });
+    res.status(404).json({ ok: false, error: "复核证据会话不存在。" });
     return;
   }
   const review = upsertTestingReview(
@@ -570,7 +570,7 @@ app.post("/testing/reviews", (req, res) => {
     accessActor(req)
   );
   if (!review) {
-    res.status(400).json({ ok: false, error: "sessionId is required" });
+    res.status(400).json({ ok: false, error: "需要提供 sessionId。" });
     return;
   }
   res.json({ ok: true, review });
@@ -608,7 +608,7 @@ app.post("/testing/clear", (req, res) => {
   } else if (body.scope === "session" && typeof body.sessionId === "string" && body.sessionId) {
     result = clearTestingSession(body.sessionId);
   } else {
-    res.status(400).json({ ok: false, error: "scope must be all, tester (testerKey), or session (sessionId)" });
+    res.status(400).json({ ok: false, error: "scope 必须为 all、tester（testerKey）或 session（sessionId）。" });
     return;
   }
   log.info("testing data cleared", {

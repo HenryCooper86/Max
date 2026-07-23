@@ -384,6 +384,30 @@ export function EvidenceWorkspace({
   }, [selectedSession?.sessionId, selectedTester?.testerKey]);
 
   useEffect(() => {
+    // Evidence, notes, and review drafts are scoped to the authenticated identity
+    // and authority. Never carry them across a live account or role refresh.
+    clearReviewDraftBinding();
+    reviewDraftRef.current = {
+      title: "会话需要复核",
+      comment: "",
+      severity: "medium",
+      owner: user.username
+    };
+    setReviewTitle("会话需要复核");
+    setReviewComment("");
+    setReviewSeverity("medium");
+    setReviewOwner(user.username);
+    noteSaveRequestRef.current += 1;
+    setPendingNoteSave(null);
+    noteSessionIdRef.current = null;
+    notesDirtyRef.current = false;
+    setNotesDirty(false);
+    writeSessionNotes("");
+    setSelectedTesterKey(null);
+    setSelectedSessionId(null);
+  }, [clearReviewDraftBinding, user.id, user.role, user.username, writeSessionNotes]);
+
+  useEffect(() => {
     if (!active || requestedSessionId || selectedSessionId || !initialFilteredSessionId || !initialFilteredTesterKey) {
       return;
     }

@@ -211,6 +211,21 @@ describe("relay process integration", () => {
     expect(revokeInviteAgain.status).toBe(200);
     await expect(revokeInviteAgain.json()).resolves.toEqual({ ok: true, removed: false });
 
+    const invalidClearScope = await fetch(`${baseUrl}/testing/clear`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${registered.token}`,
+        Connection: "close"
+      },
+      body: JSON.stringify({ scope: "unknown" })
+    });
+    expect(invalidClearScope.status).toBe(400);
+    await expect(invalidClearScope.json()).resolves.toEqual({
+      ok: false,
+      error: "scope 必须为 all、tester（testerKey）或 session（sessionId）。"
+    });
+
     const ready = await fetch(`${baseUrl}/ready`, { headers: { Connection: "close" } });
     expect(ready.status).toBe(200);
 

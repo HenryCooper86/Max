@@ -22,14 +22,15 @@ vi.stubGlobal("window", globalThis);
 const campaign = TESTING_CAMPAIGNS[0];
 const testCase = TESTING_TEST_CASES.find((item) => item.campaignId === campaign.id) ?? TESTING_TEST_CASES[0];
 
-function user(): AuthUser {
+function user(overrides: Partial<AuthUser> = {}): AuthUser {
   return {
     id: "admin",
     username: "admin",
     displayName: "管理员",
     role: "admin",
     createdAt: 1,
-    lastLoginAt: 1
+    lastLoginAt: 1,
+    ...overrides
   };
 }
 
@@ -344,6 +345,55 @@ afterEach(async () => {
 });
 
 describe("EvidenceWorkspace navigation state", () => {
+  it("clears scoped evidence drafts and auto-selects allowed evidence after a reviewer becomes a tester", async () => {
+    const reviewerSession = session("reviewer-session", "reviewer-key", "reviewer", "fail", "审核员备注");
+    const testerSession = session("tester-session", "tester-key", "tester", "pass", "测试员备注");
+    const reviewerData = data([reviewerSession], [tester("reviewer-key", "reviewer", { pass: 0, watch: 0, fail: 1 })]);
+    reviewerData.operations = operations([review(reviewerSession.sessionId, { title: "审核员复核" })]);
+    const testerData = data([testerSession], [tester("tester-key", "tester", { pass: 1, watch: 0, fail: 0 })]);
+    const sharedAgent = agent();
+
+    await act(async () => {
+      renderer = create(
+        <EvidenceWorkspace
+          active
+          requestedSessionId={null}
+          onRequestedSessionHandled={vi.fn()}
+          agent={sharedAgent}
+          user={user({ id: "reviewer-user", username: "reviewer", role: "reviewer" })}
+          data={reviewerData}
+        />
+      );
+    });
+    await flush();
+
+    await act(async () => {
+      textarea(renderer!, "复现上下文、设备条件和调查记录…").props.onChange({ target: { value: "审核员未保存备注" } });
+      reviewTitleInput(renderer!).props.onChange({ target: { value: "审核员未保存复核" } });
+    });
+
+    await act(async () => {
+      renderer!.update(
+        <EvidenceWorkspace
+          active
+          requestedSessionId={null}
+          onRequestedSessionHandled={vi.fn()}
+          agent={sharedAgent}
+          user={user({ id: "tester-user", username: "tester", role: "tester" })}
+          data={testerData}
+        />
+      );
+    });
+    await flush();
+
+    expect(
+      text(renderer!.root.find((node) => node.type === "button" && node.props.className === "sessionButton active"))
+    ).toContain("tester目标用例");
+    expect(text(renderer!.root)).not.toContain("审核员未保存备注");
+    expect(text(renderer!.root)).not.toContain("审核员未保存复核");
+    expect(text(renderer!.root)).not.toContain("reviewer目标用例");
+  });
+
   it("opens a requested evidence session by resetting obstructing filters and selecting its tester", async () => {
     const current = session("current-session", "current-key", "current", "pass", "当前备注");
     const target = session("target-session", "target-key", "target", "fail", "目标备注");

@@ -1,20 +1,32 @@
 import { ChatCircleText, GearSix, Microphone, X } from "@phosphor-icons/react";
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { adasDirectionLabel } from "../shared/adas";
 import { combineHazardLevels } from "../shared/ride";
 import { HelmetVisual, VoiceStateReadout } from "./components/HelmetVisual";
 import { LoginGate } from "./components/LoginGate";
 import { VoiceTranscript } from "./components/VoiceTranscript";
 import { WebSettingsSheet } from "./components/WebSettingsSheet";
+import { surfaceAfterAuthentication, type AppSurface } from "./components/admin/admin-model";
 import { useHelmetAgent } from "./hooks/useHelmetAgent";
 import { fetchCurrentUser, type AuthUser } from "./lib/auth";
+
+const AdminWorkspace = lazy(() =>
+  import("./components/admin/AdminWorkspace").then((module) => ({ default: module.AdminWorkspace }))
+);
 
 export function App() {
   const agent = useHelmetAgent();
   const { listening, starting, startMic, stopMic } = agent;
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [surface, setSurface] = useState<AppSurface>("voice");
   const [captionsOpen, setCaptionsOpen] = useState(false);
-  const closeSettings = useCallback(() => setSettingsOpen(false), []);
+  const settingsButtonRef = useRef<HTMLButtonElement>(null);
+  const closeSettings = useCallback(() => setSurface("voice"), []);
+  const openSettings = useCallback(() => setSurface("settings"), []);
+  const openAdmin = useCallback(() => setSurface("admin"), []);
+  const closeAdmin = useCallback(() => {
+    setSurface("voice");
+    window.requestAnimationFrame(() => settingsButtonRef.current?.focus());
+  }, []);
 
   // Site-wide access gate: once any account exists on the relay, the voice
   // face stays hidden behind authentication. The relay enforces this too.
@@ -65,6 +77,7 @@ export function App() {
           return;
         }
         if (result.status === "unavailable") return;
+        setSurface((current) => surfaceAfterAuthentication(current, false));
         setAuthUser(null);
         selectTranscriptOwner(null);
         disconnect();
@@ -92,7 +105,7 @@ export function App() {
   );
 
   const handleSignedOut = useCallback(() => {
-    setSettingsOpen(false);
+    setSurface((current) => surfaceAfterAuthentication(current, false));
     setAuthUser(null);
     agent.selectTranscriptOwner(null);
     agent.disconnect();
@@ -110,7 +123,7 @@ export function App() {
   }, [listening, starting, startMic, stopMic]);
 
   useEffect(() => {
-    if (!authUser || settingsOpen) return;
+    if (!authUser || surface !== "voice") return;
     const toggleHandsFree = (event: KeyboardEvent) => {
       if (event.code !== "Space" || event.repeat) return;
       const target = event.target;
@@ -126,7 +139,7 @@ export function App() {
 
     window.addEventListener("keydown", toggleHandsFree);
     return () => window.removeEventListener("keydown", toggleHandsFree);
-  }, [authUser, settingsOpen, toggleHandsFreeSession]);
+  }, [authUser, surface, toggleHandsFreeSession]);
 
   const fusedHazard = combineHazardLevels(agent.rideContext.hazardLevel, agent.weather?.riskLevel ?? "normal");
   const authKnown = agent.health !== null;
@@ -144,6 +157,14 @@ export function App() {
         registrationOpen={registrationOpen}
         onSignedIn={handleSignedIn}
       />
+    );
+  }
+
+  if (surface === "admin") {
+    return (
+      <Suspense fallback={<main className="adminWorkspace adminWorkspaceLoading">正在加载测试与管理…</main>}>
+        <AdminWorkspace agent={agent} user={authUser} onAuthenticationExpired={handleSignedOut} onClose={closeAdmin} />
+      </Suspense>
     );
   }
 
@@ -198,7 +219,7 @@ export function App() {
             <ChatCircleText size={20} weight="regular" aria-hidden="true" />
             字幕
           </button>
-          <button type="button" onClick={() => setSettingsOpen(true)} aria-haspopup="dialog">
+          <button ref={settingsButtonRef} type="button" onClick={openSettings} aria-haspopup="dialog">
             <GearSix size={20} weight="regular" aria-hidden="true" />
             设置
           </button>
@@ -221,14 +242,8 @@ export function App() {
         </div>
       </section>
 
-      {settingsOpen ? (
-        <WebSettingsSheet
-          agent={agent}
-          authUser={authUser}
-          onSignedIn={handleSignedIn}
-          onSignedOut={handleSignedOut}
-          onClose={closeSettings}
-        />
+      {surface === "settings" ? (
+        <WebSettingsSheet agent={agent} onOpenAdmin={openAdmin} onClose={closeSettings} />
       ) : null}
     </main>
   );

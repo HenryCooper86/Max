@@ -497,8 +497,8 @@ stop self-registration; `AUTH_SESSION_DAYS` controls session lifetime
 (default 30). With zero accounts and no relay token, everything stays open —
 the plug-and-play local demo mode.
 
-Admins onboard testers without reopening registration: the 账号管理 block on
-the testing panel lists every account, generates **single-use 7-day invite
+Admins onboard testers without reopening registration: the 账号管理 section in
+the full-width Admin workspace lists every account, generates **single-use 7-day invite
 links** (`/?invite=inv_…`, auto-copied; `POST /auth/admin/invites`, revoke via
 `/auth/admin/invites/revoke`), and deletes tester accounts (their sessions die
 with them; admin accounts cannot be deleted — `POST /auth/admin/users/delete`,
@@ -520,7 +520,7 @@ Admin action. Open only while no relay token is set **and** no user accounts
 exist; afterwards it requires an admin login session or the operator relay
 token. Clears tester QA data both in memory and in the durable history file
 (rewritten atomically). The web HUD exposes these as two-step-confirm buttons
-on the testing panel.
+in the Admin workspace.
 
 ```json
 { "scope": "all" }

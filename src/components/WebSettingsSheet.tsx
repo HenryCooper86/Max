@@ -9,10 +9,9 @@ import {
   Waveform,
   X
 } from "@phosphor-icons/react";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { combineHazardLevels, scenarioLabel } from "../../shared/ride";
 import type { HelmetAgent } from "../hooks/useHelmetAgent";
-import type { AuthUser } from "../lib/auth";
 import {
   CONNECTION_LABELS,
   CREDENTIAL_LABELS,
@@ -30,24 +29,17 @@ import {
 } from "../lib/constants";
 import { audioProcessingLabel, exportTranscriptLog } from "../lib/utils";
 
-const TestingAdminPanel = lazy(() =>
-  import("./TestingAdminPanel").then((module) => ({ default: module.TestingAdminPanel }))
-);
-
 type Props = {
   agent: HelmetAgent;
-  authUser: AuthUser;
-  onSignedIn: (user: AuthUser) => void;
-  onSignedOut: () => void;
+  onOpenAdmin: () => void;
   onClose: () => void;
 };
 
-export function WebSettingsSheet({ agent, authUser, onSignedIn, onSignedOut, onClose }: Props) {
+export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
   const fusedHazard = combineHazardLevels(agent.rideContext.hazardLevel, agent.weather?.riskLevel ?? "normal");
   const latencyTone = agent.latencyMs < 140 ? "good" : agent.latencyMs < 280 ? "warn" : "alert";
   const dialogRef = useRef<HTMLElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
@@ -335,30 +327,19 @@ export function WebSettingsSheet({ agent, authUser, onSignedIn, onSignedOut, onC
             </div>
           </section>
 
-          <details className="advancedSettings" onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
-            <summary>
-              <span>
-                <Flask size={22} aria-hidden="true" />
-                <span>
-                  <strong>测试与管理</strong>
-                  <small>账号、发布验证、会话证据和运营工具</small>
-                </span>
-              </span>
-              <span aria-hidden="true">{advancedOpen ? "收起" : "展开"}</span>
-            </summary>
-            <div className="advancedSettingsBody">
-              {advancedOpen ? (
-                <Suspense fallback={<p className="settingsAdminLoading">正在加载测试工具…</p>}>
-                  <TestingAdminPanel
-                    agent={agent}
-                    authUser={authUser}
-                    onSignedIn={onSignedIn}
-                    onSignedOut={onSignedOut}
-                  />
-                </Suspense>
-              ) : null}
+          <section className="settingsCard adminEntryCard">
+            <div className="settingsCardTitle">
+              <Flask size={22} aria-hidden="true" />
+              <div>
+                <h2>测试与管理</h2>
+                <p>账号、发布验证、会话证据和运营工具</p>
+              </div>
             </div>
-          </details>
+            <button type="button" className="adminEntryAction" onClick={onOpenAdmin}>
+              <span>进入 Admin 工作区</span>
+              <small>独立全宽视图</small>
+            </button>
+          </section>
         </div>
       </section>
     </div>

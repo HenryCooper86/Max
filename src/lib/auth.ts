@@ -31,6 +31,7 @@ export type UserMemorySummary = {
 };
 
 import { relayAuthToken } from "./persistence";
+import { requestJson, type ApiResult } from "./api-client";
 
 const AUTH_TOKEN_KEY = "max.authToken";
 
@@ -127,71 +128,61 @@ function adminHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-/** Users + outstanding invites; admin only (null on any failure). */
-export async function fetchAdminOverview(): Promise<AdminOverview | null> {
-  try {
-    const response = await fetch("/auth/admin/overview", { headers: adminHeaders() });
-    if (!response.ok) return null;
-    const payload = (await response.json()) as { ok: boolean } & AdminOverview;
-    return payload.ok ? { users: payload.users, invites: payload.invites } : null;
-  } catch {
-    return null;
-  }
+export type AdminAccountApi = {
+  fetchOverview: () => Promise<ApiResult<AdminOverview>>;
+  createInvite: () => Promise<ApiResult<InviteInfo>>;
+  revokeInvite: (code: string) => Promise<ApiResult<{ removed: boolean }>>;
+  deleteUser: (username: string) => Promise<ApiResult<AuthUser>>;
+  updateRole: (username: string, role: AuthUser["role"]) => Promise<ApiResult<AuthUser>>;
+};
+
+async function fetchOverview(): Promise<ApiResult<AdminOverview>> {
+  const result = await requestJson<{ ok: true } & AdminOverview>("/auth/admin/overview", { headers: adminHeaders() });
+  return result.ok ? { ok: true, data: { users: result.data.users, invites: result.data.invites } } : result;
 }
 
-/** Creates a single-use registration invite; admin only. */
-export async function createInviteLink(): Promise<InviteInfo | null> {
-  try {
-    const response = await fetch("/auth/admin/invites", { method: "POST", headers: adminHeaders() });
-    if (!response.ok) return null;
-    const payload = (await response.json()) as { ok: boolean; invite?: InviteInfo };
-    return payload.ok && payload.invite ? payload.invite : null;
-  } catch {
-    return null;
-  }
+async function createInvite(): Promise<ApiResult<InviteInfo>> {
+  const result = await requestJson<{ ok: true; invite: InviteInfo }>("/auth/admin/invites", {
+    method: "POST",
+    headers: adminHeaders()
+  });
+  return result.ok ? { ok: true, data: result.data.invite } : result;
 }
 
-export async function revokeInviteLink(code: string): Promise<boolean> {
-  try {
-    const response = await fetch("/auth/admin/invites/revoke", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...adminHeaders() },
-      body: JSON.stringify({ code })
-    });
-    return response.ok;
-  } catch {
-    return false;
-  }
+async function revokeInvite(code: string): Promise<ApiResult<{ removed: boolean }>> {
+  const result = await requestJson<{ ok: true; removed: boolean }>("/auth/admin/invites/revoke", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...adminHeaders() },
+    body: JSON.stringify({ code })
+  });
+  return result.ok ? { ok: true, data: { removed: result.data.removed } } : result;
 }
 
-export async function deleteUserAccount(username: string): Promise<{ ok: boolean; error?: string }> {
-  try {
-    const response = await fetch("/auth/admin/users/delete", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...adminHeaders() },
-      body: JSON.stringify({ username })
-    });
-    return (await response.json()) as { ok: boolean; error?: string };
-  } catch {
-    return { ok: false, error: "无法连接服务器。" };
-  }
+async function deleteUser(username: string): Promise<ApiResult<AuthUser>> {
+  const result = await requestJson<{ ok: true; user: AuthUser }>("/auth/admin/users/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...adminHeaders() },
+    body: JSON.stringify({ username })
+  });
+  return result.ok ? { ok: true, data: result.data.user } : result;
 }
 
-export async function updateUserRole(
-  username: string,
-  role: AuthUser["role"]
-): Promise<{ ok: boolean; error?: string; user?: AuthUser }> {
-  try {
-    const response = await fetch("/auth/admin/users/role", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...adminHeaders() },
-      body: JSON.stringify({ username, role })
-    });
-    return (await response.json()) as { ok: boolean; error?: string; user?: AuthUser };
-  } catch {
-    return { ok: false, error: "无法连接服务器。" };
-  }
+async function updateRole(username: string, role: AuthUser["role"]): Promise<ApiResult<AuthUser>> {
+  const result = await requestJson<{ ok: true; user: AuthUser }>("/auth/admin/users/role", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...adminHeaders() },
+    body: JSON.stringify({ username, role })
+  });
+  return result.ok ? { ok: true, data: result.data.user } : result;
 }
+
+export const adminAccountApi: AdminAccountApi = {
+  fetchOverview,
+  createInvite,
+  revokeInvite,
+  deleteUser,
+  updateRole
+};
 
 /** The full invite URL a new tester opens to register. */
 export function inviteUrl(code: string): string {

@@ -40,33 +40,6 @@ export async function fetchAgentHealth(): Promise<AgentHealth | null> {
   }
 }
 
-export type TestingClearScope =
-  { scope: "all" } | { scope: "tester"; testerKey: string } | { scope: "session"; sessionId: string };
-
-/**
- * Asks the relay to clear tester QA data (POST /testing/clear). Same access
- * rule as viewing the stats: open on token-less internal relays, otherwise the
- * stored relay token must come along. Resolves false on any failure.
- */
-export async function requestTestingClear(payload: TestingClearScope): Promise<boolean> {
-  try {
-    // Clears need an admin login once accounts exist; the operator relay
-    // token remains the master key.
-    const token = credentialToken();
-    const response = await fetch("/testing/clear", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {})
-      },
-      body: JSON.stringify(payload)
-    });
-    return response.ok;
-  } catch {
-    return false;
-  }
-}
-
 // Best-effort rider geolocation for live weather. Resolves null when the rider
 // declines, the API is missing, or the lookup times out — weather is optional.
 export function getRiderLocation(): Promise<RiderLocation | null> {

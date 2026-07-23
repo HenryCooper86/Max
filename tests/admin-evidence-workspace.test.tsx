@@ -3,7 +3,13 @@ import { act } from "react";
 import { create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TesterSessionSummary, TesterStats, TestingStats } from "../shared/agent";
-import { TESTING_CAMPAIGNS, TESTING_TEST_CASES } from "../shared/testing";
+import {
+  TESTING_CAMPAIGNS,
+  TESTING_TEST_CASES,
+  type TestingOperationsSnapshot,
+  type TestingPolicy,
+  type TestingReview
+} from "../shared/testing";
 import { AdminOverview } from "../src/components/admin/AdminOverview";
 import { EvidenceWorkspace } from "../src/components/admin/EvidenceWorkspace";
 import type { HelmetAgent } from "../src/hooks/useHelmetAgent";
@@ -232,12 +238,61 @@ function data(sessions: TesterSessionSummary[], users: TesterStats[]): AdminTest
   };
 }
 
+function policy(): TestingPolicy {
+  return {
+    version: "policy-v1",
+    createdAt: 1,
+    createdBy: "admin",
+    description: "当前策略",
+    active: true,
+    release: {
+      maxFailSessions: 0,
+      maxWatchSessions: 1,
+      maxInvalidSessions: 0,
+      maxP95LatencyMs: 800,
+      minStandardSessions: 1,
+      minSafetyCriticalSessions: 1,
+      requiredPlatforms: ["web"]
+    },
+    regression: {
+      minimumMatchedCohortSessions: 1,
+      latencyWatchDeltaMs: 50,
+      latencyFailDeltaMs: 100,
+      scoreWatchDelta: -5,
+      scoreFailDelta: -10
+    }
+  };
+}
+
+function review(sessionId: string): TestingReview {
+  return {
+    id: `review-${sessionId}`,
+    sessionId,
+    status: "open",
+    severity: "high",
+    owner: "reviewer",
+    title: `${sessionId} 需要复核`,
+    comment: "复核内容",
+    createdAt: 1,
+    updatedAt: 1,
+    createdBy: "reviewer"
+  };
+}
+
+function operations(reviews: TestingReview[]): TestingOperationsSnapshot {
+  return { activePolicy: policy(), runs: [], reviews, audit: [] };
+}
+
 function text(node: ReactTestInstance): string {
   return node.children.map((child) => (typeof child === "string" ? child : text(child))).join("");
 }
 
 function input(renderer: ReactTestRenderer, placeholder: string) {
   return renderer.root.find((node) => node.type === "input" && node.props.placeholder === placeholder);
+}
+
+function textarea(renderer: ReactTestRenderer, placeholder: string) {
+  return renderer.root.find((node) => node.type === "textarea" && node.props.placeholder === placeholder);
 }
 
 async function flush() {
@@ -375,7 +430,7 @@ describe("EvidenceWorkspace navigation state", () => {
     });
     await flush();
     await act(async () => {
-      renderer!.root.findByType("textarea").props.onChange({ target: { value: "未保存草稿" } });
+      textarea(renderer!, "复现上下文、设备条件和调查记录…").props.onChange({ target: { value: "未保存草稿" } });
     });
 
     const background = session("background-session", "current-key", "current", "fail", "后台新会话");
@@ -417,7 +472,7 @@ describe("EvidenceWorkspace navigation state", () => {
 
     expect(input(renderer!, "ID、IP 或区域").props.value).toBe("华东");
     expect(input(renderer!, "用例、设备、标记或构建").props.value).toBe("目标用例");
-    expect(renderer!.root.findByType("textarea").props.value).toBe("未保存草稿");
+    expect(textarea(renderer!, "复现上下文、设备条件和调查记录…").props.value).toBe("未保存草稿");
     const activeSession = renderer!.root.find(
       (node) => node.type === "button" && node.props.className === "sessionButton active"
     );
@@ -448,7 +503,7 @@ describe("EvidenceWorkspace navigation state", () => {
         />
       );
     });
-    expect(renderer!.root.findByType("textarea").props.value).toBe("服务端确认备注");
+    expect(textarea(renderer!, "复现上下文、设备条件和调查记录…").props.value).toBe("服务端确认备注");
   });
 
   it("repins explicit session filters while passive polling keeps the current selection", async () => {
@@ -473,7 +528,7 @@ describe("EvidenceWorkspace navigation state", () => {
       renderer!.root.find((node) => node.type === "button" && text(node) === "PASS").props.onClick();
     });
     await flush();
-    expect(renderer!.root.findByType("textarea").props.value).toBe("PASS 备注");
+    expect(textarea(renderer!, "复现上下文、设备条件和调查记录…").props.value).toBe("PASS 备注");
 
     await act(async () => {
       renderer!.root.find((node) => node.type === "button" && text(node) === "FAIL").props.onClick();
@@ -484,7 +539,7 @@ describe("EvidenceWorkspace navigation state", () => {
       (node) => node.type === "button" && node.props.className === "sessionButton active"
     );
     expect(text(failSelection)).toContain("FAIL");
-    expect(renderer!.root.findByType("textarea").props.value).toBe("FAIL 备注");
+    expect(textarea(renderer!, "复现上下文、设备条件和调查记录…").props.value).toBe("FAIL 备注");
 
     await act(async () => {
       renderer!.root.find((node) => node.type === "button" && text(node) === "删除会话").props.onClick();
@@ -503,7 +558,11 @@ describe("EvidenceWorkspace navigation state", () => {
       input(renderer!, "用例、设备、标记或构建").props.onChange({ target: { value: "不存在" } });
     });
     await flush();
-    expect(renderer!.root.findAllByType("textarea")).toHaveLength(0);
+    expect(
+      renderer!.root.findAll(
+        (node) => node.type === "textarea" && node.props.placeholder === "复现上下文、设备条件和调查记录…"
+      )
+    ).toHaveLength(0);
     expect(renderer!.root.find((node) => node.type === "button" && text(node) === "导出会话").props.disabled).toBe(
       true
     );
@@ -515,7 +574,7 @@ describe("EvidenceWorkspace navigation state", () => {
       input(renderer!, "用例、设备、标记或构建").props.onChange({ target: { value: "pass-session" } });
     });
     await flush();
-    expect(renderer!.root.findByType("textarea").props.value).toBe("PASS 备注");
+    expect(textarea(renderer!, "复现上下文、设备条件和调查记录…").props.value).toBe("PASS 备注");
   });
 
   it("keeps edits made during a deferred note save dirty and save-enabled", async () => {
@@ -540,25 +599,25 @@ describe("EvidenceWorkspace navigation state", () => {
     await flush();
 
     await act(async () => {
-      renderer!.root.findByType("textarea").props.onChange({ target: { value: "B" } });
+      textarea(renderer!, "复现上下文、设备条件和调查记录…").props.onChange({ target: { value: "B" } });
     });
     await act(async () => {
       renderer!.root.find((node) => node.type === "button" && text(node) === "保存备注").props.onClick();
       await Promise.resolve();
     });
     await act(async () => {
-      renderer!.root.findByType("textarea").props.onChange({ target: { value: "C" } });
+      textarea(renderer!, "复现上下文、设备条件和调查记录…").props.onChange({ target: { value: "C" } });
     });
 
     const saveEditedDraft = renderer!.root.find((node) => node.type === "button" && text(node) === "保存备注");
-    expect(renderer!.root.findByType("textarea").props.value).toBe("C");
+    expect(textarea(renderer!, "复现上下文、设备条件和调查记录…").props.value).toBe("C");
     expect(saveEditedDraft.props.disabled).toBe(false);
 
     await act(async () => {
       save.resolve(true);
       await save.promise;
     });
-    expect(renderer!.root.findByType("textarea").props.value).toBe("C");
+    expect(textarea(renderer!, "复现上下文、设备条件和调查记录…").props.value).toBe("C");
     expect(renderer!.root.find((node) => node.type === "button" && text(node) === "保存备注").props.disabled).toBe(
       false
     );
@@ -579,7 +638,7 @@ describe("EvidenceWorkspace navigation state", () => {
         />
       );
     });
-    expect(renderer!.root.findByType("textarea").props.value).toBe("C");
+    expect(textarea(renderer!, "复现上下文、设备条件和调查记录…").props.value).toBe("C");
   });
 
   it("focuses an untargeted overview handoff once without focusing ordinary navigation", async () => {
@@ -687,6 +746,92 @@ describe("EvidenceWorkspace navigation state", () => {
     expect(renderer!.root.find((node) => node.type === "button" && text(node) === "PASS").props["aria-pressed"]).toBe(
       true
     );
+  });
+});
+
+describe("EvidenceWorkspace review workflow", () => {
+  it("binds the composer and queue navigation to selected evidence and refreshes after saving", async () => {
+    const first = session("session-first", "first-key", "first", "fail", "");
+    const second = session("session-second", "second-key", "second", "pass", "");
+    const sharedData = data(
+      [first, second],
+      [
+        tester("first-key", "first", { pass: 0, watch: 0, fail: 1 }),
+        tester("second-key", "second", { pass: 1, watch: 0, fail: 0 })
+      ]
+    );
+    sharedData.operations = operations([review(second.sessionId)]);
+    vi.mocked(sharedData.saveReview).mockResolvedValue({ ok: true, data: review(first.sessionId) });
+    await act(async () => {
+      renderer = create(
+        <EvidenceWorkspace
+          active
+          requestedSessionId={null}
+          onRequestedSessionHandled={vi.fn()}
+          agent={agent()}
+          user={user()}
+          data={sharedData}
+        />
+      );
+    });
+
+    expect(text(renderer.root)).toContain("first目标用例 · first");
+    const queueLink = renderer.root.find(
+      (node) => node.type === "button" && node.props.className === "reviewEvidenceLink"
+    );
+    act(() => queueLink.props.onClick());
+    expect(text(renderer.root)).toContain("second目标用例 · second");
+
+    const openReview = renderer.root.find(
+      (node) => node.type === "button" && (text(node) === "新建复核" || text(node) === "更新复核")
+    );
+    await act(async () => openReview.props.onClick());
+    expect(sharedData.saveReview).toHaveBeenCalledWith(expect.objectContaining({ sessionId: second.sessionId }));
+    expect(sharedData.refresh).toHaveBeenCalled();
+    expect(text(renderer.root)).toContain("复核记录已保存并写入审计日志。");
+  });
+
+  it("shows typed review failures and uses target-specific queue busy state", async () => {
+    const first = session("session-first", "first-key", "first", "fail", "");
+    const sharedData = data([first], [tester("first-key", "first", { pass: 0, watch: 0, fail: 1 })]);
+    const firstReview = review(first.sessionId);
+    const secondReview = { ...review("session-other"), id: "review-other", title: "其他复核" };
+    sharedData.operations = operations([firstReview, secondReview]);
+    const pending = deferred<Awaited<ReturnType<AdminTestingData["saveReview"]>>>();
+    vi.mocked(sharedData.saveReview)
+      .mockResolvedValueOnce({ ok: false, error: { kind: "conflict", message: "复核状态已被其他审核员更新。" } })
+      .mockReturnValueOnce(pending.promise);
+    await act(async () => {
+      renderer = create(
+        <EvidenceWorkspace
+          active
+          requestedSessionId={null}
+          onRequestedSessionHandled={vi.fn()}
+          agent={agent()}
+          user={user()}
+          data={sharedData}
+        />
+      );
+    });
+
+    const composerButton = renderer.root.find(
+      (node) => node.type === "button" && (text(node) === "新建复核" || text(node) === "更新复核")
+    );
+    await act(async () => composerButton.props.onClick());
+    expect(text(renderer.root)).toContain("复核状态已被其他审核员更新。");
+
+    const queueSelects = renderer.root.findAll(
+      (node) => node.type === "select" && node.props["aria-label"]?.startsWith("复核状态")
+    );
+    act(() => queueSelects[0].props.onChange({ target: { value: "triaged" } }));
+    expect(queueSelects[0].props.disabled).toBe(true);
+    expect(queueSelects[1].props.disabled).toBe(false);
+    await act(async () => {
+      pending.resolve({ ok: true, data: { ...firstReview, status: "triaged" } });
+      await pending.promise;
+    });
+    expect(text(renderer.root)).not.toContain("复核状态已被其他审核员更新。");
+    expect(text(renderer.root)).toContain("复核记录已保存并写入审计日志。");
   });
 });
 

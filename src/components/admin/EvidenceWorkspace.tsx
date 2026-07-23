@@ -6,6 +6,9 @@ import {
   defaultTestCaseForCampaign,
   findTestingCampaign,
   type TestingQuality,
+  type TestingReview,
+  type TestingReviewSeverity,
+  type TestingReviewStatus,
   type TestingTestCase
 } from "../../../shared/testing";
 import type { HelmetAgent } from "../../hooks/useHelmetAgent";
@@ -30,8 +33,12 @@ type PendingNoteSave = {
   sessionId: string;
   notes: string;
 };
+type Notice = { tone: "success" | "error"; message: string };
+type ReviewBusyTarget = { kind: "composer" } | { kind: "status"; id: string } | null;
 
 const QUALITY_PRIORITY: Record<TestingQuality, number> = { fail: 3, watch: 2, pass: 1 };
+const REVIEW_STATUSES: TestingReviewStatus[] = ["open", "triaged", "resolved", "waived"];
+const REVIEW_SEVERITIES: TestingReviewSeverity[] = ["low", "medium", "high", "critical"];
 
 function testQualityLabel(quality: TestQualityFilter) {
   if (quality === "all") return "全部";
@@ -127,7 +134,12 @@ export function EvidenceWorkspace({
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [pendingNoteSave, setPendingNoteSave] = useState<PendingNoteSave | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [reviewBusyTarget, setReviewBusyTarget] = useState<ReviewBusyTarget>(null);
+  const [reviewTitle, setReviewTitle] = useState("会话需要复核");
+  const [reviewComment, setReviewComment] = useState("");
+  const [reviewSeverity, setReviewSeverity] = useState<TestingReviewSeverity>("medium");
+  const [reviewOwner, setReviewOwner] = useState(user.username);
   const [sessionNotes, setSessionNotes] = useState("");
   const [notesDirty, setNotesDirty] = useState(false);
   const notesDirtyRef = useRef(false);
@@ -136,6 +148,7 @@ export function EvidenceWorkspace({
   const noteSaveRequestRef = useRef(0);
   const workspaceRef = useRef<HTMLElement>(null);
   const handledFocusRequestRef = useRef(0);
+  const reviewDraftKeyRef = useRef("");
   const writeSessionNotes = useCallback((notes: string) => {
     sessionNotesRef.current = notes;
     setSessionNotes(notes);
@@ -218,6 +231,12 @@ export function EvidenceWorkspace({
     ? testingSessions.find((session) => session.sessionId === selectedSessionId)
     : undefined;
   const selectedSession = selectedSessionId ? (sessionDetails[selectedSessionId] ?? selectedSessionSummary) : undefined;
+  const selectedReview = selectedSession
+    ? (data.operations?.reviews ?? []).find(
+        (review) =>
+          review.sessionId === selectedSession.sessionId && (review.status === "open" || review.status === "triaged")
+      )
+    : undefined;
   const requestedSessionSummary = requestedSessionId
     ? testingSessions.find((session) => session.sessionId === requestedSessionId)
     : undefined;
@@ -281,6 +300,18 @@ export function EvidenceWorkspace({
   }, [selectedSession?.notes, selectedSession?.sessionId, writeSessionNotes]);
 
   useEffect(() => {
+    const sessionId = selectedSession?.sessionId;
+    if (!sessionId) return;
+    const key = `${sessionId}:${selectedReview?.id ?? "new"}`;
+    if (reviewDraftKeyRef.current === key) return;
+    reviewDraftKeyRef.current = key;
+    setReviewTitle(selectedReview?.title ?? "会话需要复核");
+    setReviewComment(selectedReview?.comment ?? "");
+    setReviewSeverity(selectedReview?.severity ?? "medium");
+    setReviewOwner(selectedReview?.owner ?? user.username);
+  }, [selectedReview, selectedSession?.sessionId, user.username]);
+
+  useEffect(() => {
     if (!active || !requestedSessionId) return;
     let current = true;
     setArmedAction(null);
@@ -305,7 +336,7 @@ export function EvidenceWorkspace({
         writeSessionNotes(detail.notes);
         setNotice(null);
       } else {
-        setNotice("所选证据不可用，或已超出当前账号的访问范围。");
+        setNotice({ tone: "error", message: "所选证据不可用，或已超出当前账号的访问范围。" });
       }
       handledFocusRequestRef.current = focusRequestKey;
       workspaceRef.current?.focus();
@@ -363,6 +394,25 @@ export function EvidenceWorkspace({
     setSelectedSessionId(sessionId);
   };
 
+  const selectReviewEvidence = async (sessionId: string) => {
+    const session = sessionDetails[sessionId] ?? testingSessions.find((item) => item.sessionId === sessionId);
+    setTesterFilter("");
+    setSessionFilter("");
+    setQualityFilter(session?.quality ?? "all");
+    setSelectedTesterKey(session?.testerKey ?? null);
+    selectSession(sessionId);
+    if (session) return;
+    const detail = await data.loadSession(sessionId);
+    if (!detail) {
+      setNotice({ tone: "error", message: "复核记录关联的证据不可用，或已超出当前账号的访问范围。" });
+      return;
+    }
+    setQualityFilter(detail.quality);
+    setSelectedTesterKey(detail.testerKey);
+    noteSessionIdRef.current = detail.sessionId;
+    writeSessionNotes(detail.notes);
+  };
+
   const runClear = async (key: string, payload: TestingClearScope, targetLabel: string) => {
     setBusyAction(key);
     setNotice(null);
@@ -375,9 +425,9 @@ export function EvidenceWorkspace({
       writeSessionNotes("");
       if (payload.scope !== "session") setSelectedTesterKey(null);
       await agent.refreshHealth();
-      setNotice(`已清除 ${targetLabel}。`);
+      setNotice({ tone: "success", message: `已清除 ${targetLabel}。` });
     } else {
-      setNotice(`清除 ${targetLabel} 失败。需要管理员权限，并请确认中继在线。`);
+      setNotice({ tone: "error", message: `清除 ${targetLabel} 失败。需要管理员权限，并请确认中继在线。` });
     }
     setBusyAction(null);
   };
@@ -403,9 +453,53 @@ export function EvidenceWorkspace({
       setNotesDirty(false);
     }
     if (requestId === noteSaveRequestRef.current && noteSessionIdRef.current === submittedSessionId) {
-      setNotice(ok ? "证据备注已保存并写入审计记录。" : "证据备注保存失败；请确认审核员权限和中继状态。");
+      setNotice({
+        tone: ok ? "success" : "error",
+        message: ok ? "证据备注已保存并写入审计记录。" : "证据备注保存失败；请确认审核员权限和中继状态。"
+      });
     }
     setPendingNoteSave((current) => (current?.requestId === requestId ? null : current));
+  };
+
+  const saveReview = async (input: Partial<TestingReview> & { sessionId: string }, target: ReviewBusyTarget) => {
+    setReviewBusyTarget(target);
+    setNotice(null);
+    const result = await data.saveReview(input);
+    if (result.ok) {
+      setNotice({ tone: "success", message: "复核记录已保存并写入审计日志。" });
+      await data.refresh();
+    } else {
+      setNotice({ tone: "error", message: result.error.message });
+    }
+    setReviewBusyTarget(null);
+  };
+
+  const submitReview = async () => {
+    if (!selectedSession) return;
+    await saveReview(
+      {
+        id: selectedReview?.id,
+        sessionId: selectedSession.sessionId,
+        runId: selectedSession.runId,
+        status: selectedReview?.status ?? "open",
+        severity: reviewSeverity,
+        owner: reviewOwner.trim() || user.username,
+        title: reviewTitle.trim() || "会话需要复核",
+        comment: reviewComment.trim()
+      },
+      { kind: "composer" }
+    );
+  };
+
+  const changeReviewStatus = async (review: TestingReview, status: TestingReviewStatus) => {
+    await saveReview(
+      {
+        ...review,
+        status,
+        resolution: status === "resolved" ? "已复核" : review.resolution
+      },
+      { kind: "status", id: review.id }
+    );
   };
 
   if (!testing) {
@@ -464,8 +558,8 @@ export function EvidenceWorkspace({
       </div>
 
       {notice ? (
-        <p className="adminNotice" role="status">
-          {notice}
+        <p className={`adminNotice ${notice.tone}`} role="status">
+          {notice.message}
         </p>
       ) : null}
 
@@ -1077,6 +1171,88 @@ export function EvidenceWorkspace({
           </div>
         </div>
       </div>
+
+      {user.role === "admin" || user.role === "reviewer" ? (
+        <div className="issueWorkbench">
+          <div className="reviewComposer">
+            <span>所选证据</span>
+            <strong>
+              {selectedSession ? `${selectedSession.testCaseName} · ${selectedSession.testerId}` : "请先选择会话"}
+            </strong>
+            <div className="reviewFields">
+              <label>
+                <span>严重程度</span>
+                <select
+                  value={reviewSeverity}
+                  onChange={(event) => setReviewSeverity(event.target.value as TestingReviewSeverity)}
+                >
+                  {REVIEW_SEVERITIES.map((severity) => (
+                    <option key={severity} value={severity}>
+                      {severity}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>负责人</span>
+                <input value={reviewOwner} onChange={(event) => setReviewOwner(event.target.value)} />
+              </label>
+              <label className="wide">
+                <span>标题</span>
+                <input value={reviewTitle} onChange={(event) => setReviewTitle(event.target.value)} />
+              </label>
+              <label className="wide">
+                <span>审核意见</span>
+                <textarea
+                  value={reviewComment}
+                  onChange={(event) => setReviewComment(event.target.value)}
+                  placeholder="记录复现步骤、预期行为与处置结论…"
+                />
+              </label>
+            </div>
+            <button
+              type="button"
+              disabled={reviewBusyTarget?.kind === "composer" || !selectedSession}
+              onClick={() => void submitReview()}
+            >
+              {reviewBusyTarget?.kind === "composer" ? "正在保存…" : selectedReview ? "更新复核" : "新建复核"}
+            </button>
+          </div>
+          <div className="reviewQueue">
+            {(data.operations?.reviews ?? []).map((review) => (
+              <article key={review.id} className={`reviewRow ${review.severity}`}>
+                <button
+                  type="button"
+                  className="reviewEvidenceLink"
+                  onClick={() => void selectReviewEvidence(review.sessionId)}
+                >
+                  <span>
+                    {review.severity} · {review.status}
+                  </span>
+                  <strong>{review.title}</strong>
+                  <small>
+                    {review.owner} · {formatRelativeTime(review.updatedAt)}
+                  </small>
+                </button>
+                <p>{review.comment || "暂无审核意见。"}</p>
+                <select
+                  aria-label={`复核状态 ${review.title}`}
+                  value={review.status}
+                  disabled={reviewBusyTarget?.kind === "status" && reviewBusyTarget.id === review.id}
+                  onChange={(event) => void changeReviewStatus(review, event.target.value as TestingReviewStatus)}
+                >
+                  {REVIEW_STATUSES.map((status) => (
+                    <option key={status} value={status}>
+                      {status}
+                    </option>
+                  ))}
+                </select>
+              </article>
+            ))}
+            {!data.operations?.reviews.length ? <p className="testerConversationEmpty">复核队列当前为空。</p> : null}
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

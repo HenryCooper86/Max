@@ -13,6 +13,8 @@ import {
 } from "./admin-model";
 import { AdminOverview } from "./AdminOverview";
 import { EvidenceWorkspace } from "./EvidenceWorkspace";
+import { GovernanceWorkspace } from "./GovernanceWorkspace";
+import { ReleaseValidation } from "./ReleaseValidation";
 import { useAdminTestingData } from "./useAdminTestingData";
 
 function ignoreSignedIn() {}
@@ -134,7 +136,9 @@ export function AdminWorkspace({ agent, user, onAuthenticationExpired, onClose }
             user={user}
             data={data}
           />
-          {active !== "overview" && active !== "evidence" ? (
+          {active === "releases" ? <ReleaseValidation agent={agent} user={user} data={data} /> : null}
+          {active === "governance" ? <GovernanceWorkspace user={user} data={data} /> : null}
+          {active === "accounts" ? (
             <p className="adminWorkspaceLoading">正在加载 {ADMIN_SECTION_LABELS[active]}…</p>
           ) : null}
         </section>

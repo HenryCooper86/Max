@@ -131,7 +131,7 @@ function PasswordChangeForm({ onDone }: { onDone: (changed: boolean) => void }) 
         if (result.ok) {
           onDone(true);
         } else {
-          setError(result.error ?? "Password change failed. Please try again.");
+          setError(result.error ?? t("account.passwordChangeFailed"));
         }
       })
       .finally(() => {
@@ -164,7 +164,7 @@ function PasswordChangeForm({ onDone }: { onDone: (changed: boolean) => void }) 
           {busy ? t("account.changingPassword") : t("account.confirmPassword")}
         </button>
         <button type="button" className="accountSwitch" onClick={() => onDone(false)}>
-          Cancel
+          {t("account.cancel")}
         </button>
       </div>
       {error ? (
@@ -290,7 +290,7 @@ function AccountSessionControlsForUser({ user, onSignedOut }: SessionControlsPro
                 return;
               }
               setCopied(ok);
-              if (!ok) setClipboardNotice("Unable to copy the session token.");
+              if (!ok) setClipboardNotice(t("account.copyFailed"));
             });
           }}
         >
@@ -304,7 +304,7 @@ function AccountSessionControlsForUser({ user, onSignedOut }: SessionControlsPro
             setPasswordChanged(false);
           }}
         >
-          {passwordChanged ? "Password changed ✓" : t("account.changePassword")}
+          {passwordChanged ? t("account.passwordChanged") : t("account.changePassword")}
         </button>
         <button
           type="button"
@@ -330,7 +330,7 @@ function AccountSessionControlsForUser({ user, onSignedOut }: SessionControlsPro
                 ) {
                   return;
                 }
-                setMemoryNotice(ok ? "Memory cleared ✓" : "Memory clear failed");
+                setMemoryNotice(ok ? t("account.memoryCleared") : t("account.memoryClearFailed"));
                 if (ok) {
                   setMemorySummary((summary) => (summary ? { ...summary, turnCount: 0, factCount: 0 } : summary));
                 }
@@ -347,10 +347,10 @@ function AccountSessionControlsForUser({ user, onSignedOut }: SessionControlsPro
           }}
         >
           {memoryClearArmed
-            ? "Confirm clearing memory?"
+            ? t("account.confirmMemoryClear")
             : memorySummary
               ? `记忆 ${memorySummary.turnCount} 段${memorySummary.factCount ? ` · ${memorySummary.factCount} 条重点` : ""}`
-              : "Memory…"}
+              : t("account.memory")}
         </button>
         <button
           type="button"

@@ -1,11 +1,13 @@
+import { readFileSync } from "node:fs";
 import { act } from "react";
 import { create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TesterSessionSummary, TesterStats, TestingStats } from "../shared/agent";
 import { TESTING_CAMPAIGNS, TESTING_TEST_CASES } from "../shared/testing";
+import { AdminOverview } from "../src/components/admin/AdminOverview";
+import { EvidenceWorkspace } from "../src/components/admin/EvidenceWorkspace";
 import type { HelmetAgent } from "../src/hooks/useHelmetAgent";
 import type { AuthUser } from "../src/lib/auth";
-import { EvidenceWorkspace } from "../src/components/admin/EvidenceWorkspace";
 import type { AdminTestingData } from "../src/components/admin/useAdminTestingData";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -277,6 +279,7 @@ describe("EvidenceWorkspace navigation state", () => {
       ]
     );
     const onRequestedSessionHandled = vi.fn();
+    const focusEvidence = vi.fn();
     await act(async () => {
       renderer = create(
         <EvidenceWorkspace
@@ -286,7 +289,11 @@ describe("EvidenceWorkspace navigation state", () => {
           agent={agent()}
           user={user()}
           data={sharedData}
-        />
+        />,
+        {
+          createNodeMock: (element) =>
+            element.type === "section" && element.props["aria-label"] === "证据与问题" ? { focus: focusEvidence } : null
+        }
       );
     });
     await flush();
@@ -295,6 +302,7 @@ describe("EvidenceWorkspace navigation state", () => {
       input(renderer!, "用例、设备、标记或构建").props.onChange({ target: { value: "不存在" } });
       renderer!.root.find((node) => node.type === "button" && text(node) === "PASS").props.onClick();
     });
+    expect(focusEvidence).not.toHaveBeenCalled();
 
     await act(async () => {
       renderer!.update(
@@ -312,6 +320,10 @@ describe("EvidenceWorkspace navigation state", () => {
 
     expect(sharedData.loadSession).toHaveBeenCalledWith("target-session");
     expect(onRequestedSessionHandled).toHaveBeenCalledWith("target-session");
+    expect(focusEvidence).toHaveBeenCalledTimes(1);
+    expect(
+      renderer!.root.find((node) => node.type === "section" && node.props["aria-label"] === "证据与问题").props.tabIndex
+    ).toBe(-1);
     expect(input(renderer!, "用例、设备、标记或构建").props.value).toBe("");
     expect(renderer!.root.find((node) => node.type === "button" && text(node) === "FAIL").props["aria-pressed"]).toBe(
       true
@@ -327,7 +339,7 @@ describe("EvidenceWorkspace navigation state", () => {
     expect(text(selectedTester)).toContain("target");
   });
 
-  it("preserves filters, selection, and note draft while hidden and removes background focus exposure", async () => {
+  it("pins selection and a dirty note draft across hidden polling/detail updates", async () => {
     const selected = session("selected-session", "current-key", "current", "pass", "服务端备注");
     const sharedData = data([selected], [tester("current-key", "current", { pass: 1, watch: 0, fail: 0 })]);
     const sharedAgent = agent();
@@ -353,6 +365,12 @@ describe("EvidenceWorkspace navigation state", () => {
       renderer!.root.findByType("textarea").props.onChange({ target: { value: "未保存草稿" } });
     });
 
+    const background = session("background-session", "current-key", "current", "fail", "后台新会话");
+    const selectedFromPoll = { ...selected, notes: "服务端刷新备注" };
+    const changedData = data(
+      [background, selectedFromPoll],
+      [tester("current-key", "current", { pass: 1, watch: 0, fail: 1 })]
+    );
     await act(async () => {
       renderer!.update(
         <EvidenceWorkspace
@@ -361,7 +379,7 @@ describe("EvidenceWorkspace navigation state", () => {
           onRequestedSessionHandled={onRequestedSessionHandled}
           agent={sharedAgent}
           user={sharedUser}
-          data={sharedData}
+          data={changedData}
         />
       );
     });
@@ -379,7 +397,7 @@ describe("EvidenceWorkspace navigation state", () => {
           onRequestedSessionHandled={onRequestedSessionHandled}
           agent={sharedAgent}
           user={sharedUser}
-          data={sharedData}
+          data={changedData}
         />
       );
     });
@@ -387,8 +405,37 @@ describe("EvidenceWorkspace navigation state", () => {
     expect(input(renderer!, "ID、IP 或区域").props.value).toBe("华东");
     expect(input(renderer!, "用例、设备、标记或构建").props.value).toBe("目标用例");
     expect(renderer!.root.findByType("textarea").props.value).toBe("未保存草稿");
+    const activeSession = renderer!.root.find(
+      (node) => node.type === "button" && node.props.className === "sessionButton active"
+    );
+    expect(text(activeSession)).toContain("PASS");
+    expect(text(activeSession)).not.toContain("FAIL");
     expect(hiddenWorkspace.props.hidden).toBe(false);
     expect(hiddenWorkspace.props.inert).toBeUndefined();
+
+    await act(async () => {
+      renderer!.root.find((node) => node.type === "button" && text(node) === "保存备注").props.onClick();
+      await Promise.resolve();
+    });
+    expect(changedData.saveNotes).toHaveBeenCalledWith("selected-session", "未保存草稿");
+
+    const cleanRefresh = data(
+      [background, { ...selected, notes: "服务端确认备注" }],
+      [tester("current-key", "current", { pass: 1, watch: 0, fail: 1 })]
+    );
+    await act(async () => {
+      renderer!.update(
+        <EvidenceWorkspace
+          active
+          requestedSessionId={null}
+          onRequestedSessionHandled={onRequestedSessionHandled}
+          agent={sharedAgent}
+          user={sharedUser}
+          data={cleanRefresh}
+        />
+      );
+    });
+    expect(renderer!.root.findByType("textarea").props.value).toBe("服务端确认备注");
   });
 
   it("preserves evidence filters after a confirmed all-evidence clear", async () => {
@@ -428,5 +475,42 @@ describe("EvidenceWorkspace navigation state", () => {
     expect(renderer!.root.find((node) => node.type === "button" && text(node) === "PASS").props["aria-pressed"]).toBe(
       true
     );
+  });
+});
+
+describe("Admin evidence presentation guards", () => {
+  it("ships an author-level hidden rule that overrides the testing panel display", () => {
+    const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+
+    expect(styles).toMatch(
+      /\.adminWorkspaceContent\s*>\s*\.testingPanel\[hidden\]\s*\{[^}]*display:\s*none\s*!important;?[^}]*\}/s
+    );
+  });
+
+  it("keeps valid evidence and P95 cautionary while the gate has no decision-grade evidence", async () => {
+    const waiting = testing([], []);
+    waiting.totals.p95LatencyMs = 0;
+    waiting.releaseGate.status = "waiting";
+    waiting.releaseGate.validSessions = 0;
+    waiting.releaseGate.invalidSessions = 0;
+    waiting.releaseGate.p95LatencyMs = 0;
+
+    await act(async () => {
+      renderer = create(
+        <AdminOverview
+          agent={agent()}
+          testing={waiting}
+          sessions={[]}
+          operations={null}
+          onOpenEvidence={vi.fn()}
+          onOpenReleases={vi.fn()}
+        />
+      );
+    });
+
+    const validEvidence = renderer!.root.find((node) => node.type === "button" && text(node).includes("有效证据"));
+    const p95 = renderer!.root.find((node) => node.type === "button" && text(node).includes("门禁 P95 首音"));
+    expect(validEvidence.props.className).toBe("opsCard warn");
+    expect(p95.props.className).toBe("opsCard warn");
   });
 });

@@ -1112,6 +1112,10 @@ h2 {
   padding: 18px;
 }
 
+.adminWorkspaceContent > .testingPanel[hidden] {
+  display: none !important;
+}
+
 .testingOpsStrip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

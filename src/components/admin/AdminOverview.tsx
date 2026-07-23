@@ -54,7 +54,16 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
   const invalidCount = testing?.totals.invalidTestSessions ?? 0;
   const p95LatencyMs = releaseGate?.p95LatencyMs ?? testing?.totals.p95LatencyMs ?? 0;
   const p95ThresholdMs = releaseGate?.criteria.maxP95LatencyMs;
-  const p95Tone = p95ThresholdMs === undefined ? "warn" : p95LatencyMs > p95ThresholdMs ? "alert" : "good";
+  const hasDecisionGradeEvidence = releaseGate
+    ? releaseGate.status !== "waiting" && releaseGate.validSessions + releaseGate.invalidSessions > 0
+    : (testing?.totals.totalTestSessions ?? 0) > 0;
+  const validEvidenceTone = !hasDecisionGradeEvidence || invalidCount > 0 ? "warn" : "good";
+  const p95Tone =
+    !hasDecisionGradeEvidence || p95ThresholdMs === undefined || p95LatencyMs <= 0
+      ? "warn"
+      : p95LatencyMs > p95ThresholdMs
+        ? "alert"
+        : "good";
   const missingCases = releaseGate?.cases.filter((testCase) => testCase.status === "missing") ?? [];
   const latestIssue = [...sessions]
     .filter(
@@ -153,18 +162,20 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
         </button>
         <button
           type="button"
-          className={`opsCard ${invalidCount ? "warn" : "good"}`}
+          className={`opsCard ${validEvidenceTone}`}
           onClick={() => onOpenEvidence(latestInvalid?.sessionId)}
         >
           <span>有效证据</span>
           <strong>{testing?.totals.validTestSessions ?? 0}</strong>
           <p>
-            {invalidCount} 无效 · {testing?.history.persistent ? "持久化历史" : "仅内存历史"}
+            {hasDecisionGradeEvidence
+              ? `${invalidCount} 无效 · ${testing?.history.persistent ? "持久化历史" : "仅内存历史"}`
+              : "等待门禁证据"}
           </p>
         </button>
         <button type="button" className={`opsCard ${p95Tone}`} onClick={onOpenReleases}>
           <span>{releaseGate ? "门禁 P95 首音" : "语料 P95 首音"}</span>
-          <strong>{p95LatencyMs}ms</strong>
+          <strong>{p95LatencyMs > 0 ? `${p95LatencyMs}ms` : "等待"}</strong>
           <p>门禁阈值 {p95ThresholdMs ?? "—"}ms</p>
         </button>
       </div>

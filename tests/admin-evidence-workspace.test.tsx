@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { act } from "react";
+import { act, useState } from "react";
 import { create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TesterSessionSummary, TesterStats, TestingStats } from "../shared/agent";
@@ -415,6 +415,79 @@ describe("EvidenceWorkspace navigation state", () => {
     expect(text(activeSession)).toContain("target目标用例");
     const selectedTester = renderer!.root.find((node) => node.type === "tr" && node.props.className === "selected");
     expect(text(selectedTester)).toContain("target");
+  });
+
+  it("acknowledges a pending requested session when ordinary navigation supersedes it", async () => {
+    const requestedA = session("session-a", "shared-key", "tester-a", "fail", "A 备注");
+    const selectedB = session("session-b", "shared-key", "tester-b", "fail", "B 备注");
+    const sharedData = data(
+      [requestedA, selectedB],
+      [tester("shared-key", "shared-tester", { pass: 0, watch: 0, fail: 2 })]
+    );
+    const loadA = deferred<TesterSessionSummary | null>();
+    vi.mocked(sharedData.loadSession).mockImplementation((sessionId: string) =>
+      sessionId === requestedA.sessionId ? loadA.promise : Promise.resolve(selectedB)
+    );
+    const onRequestedSessionHandled = vi.fn();
+    const sharedAgent = agent();
+    const sharedUser = user();
+
+    function RequestedEvidenceParent({ snapshot }: { snapshot: AdminTestingData }) {
+      const [requestedSessionId, setRequestedSessionId] = useState<string | null>(requestedA.sessionId);
+      return (
+        <EvidenceWorkspace
+          active
+          focusRequestKey={1}
+          requestedSessionId={requestedSessionId}
+          onRequestedSessionHandled={(sessionId) => {
+            onRequestedSessionHandled(sessionId);
+            setRequestedSessionId((current) => (current === sessionId ? null : current));
+          }}
+          agent={sharedAgent}
+          user={sharedUser}
+          data={snapshot}
+        />
+      );
+    }
+
+    await act(async () => {
+      renderer = create(<RequestedEvidenceParent snapshot={sharedData} />);
+    });
+    expect(sharedData.loadSession).toHaveBeenCalledTimes(1);
+    expect(sharedData.loadSession).toHaveBeenCalledWith(requestedA.sessionId);
+
+    const sessionBButton = renderer.root.find(
+      (node) =>
+        node.type === "button" &&
+        String(node.props.className).startsWith("sessionButton") &&
+        text(node).includes("tester-b目标用例")
+    );
+    await act(async () => sessionBButton.props.onClick());
+    await flush();
+
+    expect(onRequestedSessionHandled).toHaveBeenCalledTimes(1);
+    expect(onRequestedSessionHandled).toHaveBeenCalledWith(requestedA.sessionId);
+    expect(sharedData.loadSession).toHaveBeenCalledWith(selectedB.sessionId);
+    expect(
+      text(renderer.root.find((node) => node.type === "button" && node.props.className === "sessionButton active"))
+    ).toContain("tester-b目标用例");
+
+    await act(async () => {
+      loadA.resolve(requestedA);
+      await loadA.promise;
+    });
+    expect(
+      text(renderer.root.find((node) => node.type === "button" && node.props.className === "sessionButton active"))
+    ).toContain("tester-b目标用例");
+
+    await act(async () => {
+      renderer?.update(<RequestedEvidenceParent snapshot={{ ...sharedData, operations: operations([]) }} />);
+    });
+    await flush();
+    expect(sharedData.loadSession).toHaveBeenCalledTimes(2);
+    expect(
+      text(renderer.root.find((node) => node.type === "button" && node.props.className === "sessionButton active"))
+    ).toContain("tester-b目标用例");
   });
 
   it("pins selection and a dirty note draft across hidden polling/detail updates", async () => {

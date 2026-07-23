@@ -240,7 +240,16 @@ export function EvidenceWorkspace({
     reviewDraftBindingRef.current = null;
     reviewDraftDirtyRef.current = false;
   }, []);
-  const claimEvidenceNavigationIntent = useCallback(() => ++evidenceNavigationRequestRef.current, []);
+  const claimEvidenceNavigationIntent = useCallback(
+    ({ retainRequestedSession = false }: { retainRequestedSession?: boolean } = {}) => {
+      const requestId = ++evidenceNavigationRequestRef.current;
+      if (!retainRequestedSession && requestedSessionId) {
+        onRequestedSessionHandled(requestedSessionId);
+      }
+      return requestId;
+    },
+    [onRequestedSessionHandled, requestedSessionId]
+  );
   const ownsEvidenceNavigationIntent = useCallback(
     (requestId: number) => evidenceNavigationRequestRef.current === requestId,
     []
@@ -420,7 +429,7 @@ export function EvidenceWorkspace({
   useEffect(() => {
     if (!active || !requestedSessionId) return;
     let current = true;
-    const navigationRequestId = claimEvidenceNavigationIntent();
+    const navigationRequestId = claimEvidenceNavigationIntent({ retainRequestedSession: true });
     const noticeRequestId = claimNoticeRequest();
     setArmedAction(null);
     setTesterFilter("");

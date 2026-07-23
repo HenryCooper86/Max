@@ -336,7 +336,8 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
               </div>
             </div>
             <button type="button" className="adminEntryAction" onClick={onOpenAdmin}>
-              打开 Admin 工作区
+              <span>进入 Admin 工作区</span>
+              <small>独立全宽视图</small>
             </button>
           </section>
         </div>

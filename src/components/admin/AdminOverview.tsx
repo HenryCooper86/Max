@@ -1,8 +1,7 @@
 import type { TesterSessionSummary, TestingStats } from "../../../shared/agent";
-import type { TestingOperationsSnapshot, TestingQuality, TestingRun } from "../../../shared/testing";
+import type { TestingOperationsSnapshot, TestingQuality } from "../../../shared/testing";
 import type { HelmetAgent } from "../../hooks/useHelmetAgent";
-import { formatRelativeTime } from "../../lib/utils";
-import { corpusIssueCount } from "./admin-model";
+import { corpusIssueCount, formatAdminRelativeTime, testingRunStatusLabel } from "./admin-model";
 
 const QUALITY_PRIORITY: Record<TestingQuality, number> = { fail: 3, watch: 2, pass: 1 };
 
@@ -10,22 +9,13 @@ function releaseStatusLabel(status: TestingStats["releaseGate"]["status"] | unde
   if (status === "pass") return "PASS";
   if (status === "watch") return "WATCH";
   if (status === "fail") return "FAIL";
-  return "WAITING";
+  return "等待";
 }
 
 function statusTone(status: string | undefined) {
   if (status === "pass" || status === "approved" || status === "ready") return "good";
   if (status === "fail" || status === "blocked") return "alert";
   return "warn";
-}
-
-function runStatusLabel(status: TestingRun["status"]) {
-  if (status === "approved") return "已批准";
-  if (status === "ready") return "待批准";
-  if (status === "blocked") return "受阻";
-  if (status === "active") return "进行中";
-  if (status === "archived") return "已归档";
-  return "草稿";
 }
 
 type QueueItem = {
@@ -95,7 +85,7 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
         label: "FAIL 证据",
         count: failCount,
         detail: latestFail
-          ? `${latestFail.testerId} · ${latestFail.testCaseName} · ${formatRelativeTime(latestFail.endedAt)}`
+          ? `${latestFail.testerId} · ${latestFail.testCaseName} · ${formatAdminRelativeTime(latestFail.endedAt)}`
           : "当前已加载页面没有 FAIL 证据",
         onOpen: () => onOpenEvidence(latestFail?.sessionId)
       },
@@ -105,7 +95,7 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
         label: "WATCH 证据",
         count: watchCount,
         detail: latestWatch
-          ? `${latestWatch.testerId} · ${latestWatch.testCaseName} · ${formatRelativeTime(latestWatch.endedAt)}`
+          ? `${latestWatch.testerId} · ${latestWatch.testCaseName} · ${formatAdminRelativeTime(latestWatch.endedAt)}`
           : "当前已加载页面没有 WATCH 证据",
         onOpen: () => onOpenEvidence(latestWatch?.sessionId)
       },
@@ -132,8 +122,8 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
   const recentRuns = [...(operations?.runs ?? [])].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 5);
 
   return (
-    <section className="hudPanel testingPanel" aria-label="管理概览">
-      <div className="panelHeader">
+    <section className="adminSectionCard adminOverview" aria-label="管理概览">
+      <div className="panelHeader adminSectionHeader">
         <div>
           <h2>质量与发布概览</h2>
           <span>
@@ -143,10 +133,12 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
         </div>
       </div>
 
-      <div className="testingOpsStrip" aria-label="关键质量指标">
+      <div className="testingOpsStrip adminMetricGrid" aria-label="关键质量指标">
         <button type="button" className={`opsCard ${statusTone(releaseGate?.status)}`} onClick={onOpenReleases}>
           <span>发布门禁</span>
-          <strong>{releaseStatusLabel(releaseGate?.status)}</strong>
+          <strong className={`adminStatus ${statusTone(releaseGate?.status)}`}>
+            {releaseStatusLabel(releaseGate?.status)}
+          </strong>
           <p>{releaseGate ? `${releaseGate.validSessions} 有效 · ${releaseGate.invalidSessions} 无效` : "等待证据"}</p>
         </button>
         <button
@@ -155,7 +147,7 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
           onClick={() => onOpenEvidence(latestIssue?.sessionId)}
         >
           <span>待复核证据</span>
-          <strong>{issueCount}</strong>
+          <strong className={`adminStatus ${issueCount ? "alert" : "good"}`}>{issueCount}</strong>
           <p>
             {failCount} FAIL · {watchCount} WATCH · 全量服务端统计
           </p>
@@ -166,7 +158,7 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
           onClick={() => onOpenEvidence(latestInvalid?.sessionId)}
         >
           <span>有效证据</span>
-          <strong>{testing?.totals.validTestSessions ?? 0}</strong>
+          <strong className={`adminStatus ${validEvidenceTone}`}>{testing?.totals.validTestSessions ?? 0}</strong>
           <p>
             {hasDecisionGradeEvidence
               ? `${invalidCount} 无效 · ${testing?.history.persistent ? "持久化历史" : "仅内存历史"}`
@@ -175,13 +167,13 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
         </button>
         <button type="button" className={`opsCard ${p95Tone}`} onClick={onOpenReleases}>
           <span>{releaseGate ? "门禁 P95 首音" : "语料 P95 首音"}</span>
-          <strong>{p95LatencyMs > 0 ? `${p95LatencyMs}ms` : "等待"}</strong>
+          <strong className={`adminStatus ${p95Tone}`}>{p95LatencyMs > 0 ? `${p95LatencyMs}ms` : "等待"}</strong>
           <p>门禁阈值 {p95ThresholdMs ?? "—"}ms</p>
         </button>
       </div>
 
-      <div className="testingDecisionGrid">
-        <section className="decisionPanel" aria-label="优先工作队列">
+      <div className="testingDecisionGrid adminWorkGrid">
+        <section className="decisionPanel adminSectionCard adminSectionInset" aria-label="优先工作队列">
           <div className="decisionPanelHead">
             <span>优先工作队列</span>
             <strong className={queue.some((item) => item.tone === "alert") ? "alert" : "warn"}>
@@ -203,7 +195,7 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
           </div>
         </section>
 
-        <section className="decisionPanel" aria-label="近期发布进度">
+        <section className="decisionPanel adminSectionCard adminSectionInset" aria-label="近期发布进度">
           <div className="decisionPanelHead">
             <span>近期发布进度</span>
             <button type="button" onClick={onOpenReleases}>
@@ -216,12 +208,14 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
                 const completed = run.assignments.filter((assignment) => assignment.status === "complete").length;
                 return (
                   <button type="button" className="sessionButton" key={run.id} onClick={onOpenReleases}>
-                    <span className={`sessionQuality ${statusTone(run.status)}`}>{runStatusLabel(run.status)}</span>
+                    <span className={`sessionQuality adminStatus ${statusTone(run.status)}`}>
+                      {testingRunStatusLabel(run.status)}
+                    </span>
                     <strong>{run.name}</strong>
                     <span>
                       构建 {run.build} · {completed}/{run.assignments.length} 项任务完成
                     </span>
-                    <span>更新于 {formatRelativeTime(run.updatedAt)}</span>
+                    <span>更新于 {formatAdminRelativeTime(run.updatedAt)}</span>
                   </button>
                 );
               })

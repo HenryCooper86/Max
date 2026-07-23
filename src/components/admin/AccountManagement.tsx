@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { adminAccountApi, inviteUrl, type AdminOverview, type AuthUser } from "../../lib/auth";
-import { formatRelativeTime } from "../../lib/utils";
-import { adminRoleLabel, confirmationCopy } from "./admin-model";
+import { adminRoleLabel, confirmationCopy, formatAdminRelativeTime } from "./admin-model";
 
 const INVITE_EXPIRING_SOON_MS = 2 * 24 * 60 * 60 * 1000;
 
@@ -292,8 +291,8 @@ export function AccountManagement({
   }).length;
 
   return (
-    <div className="accountAdmin" aria-label="账号管理" data-load-status={status}>
-      <div className="accountAdminHead">
+    <div className="adminAccount adminSectionCard" aria-label="账号管理" data-load-status={status}>
+      <div className="adminAccountHead adminSectionHeader">
         <div>
           <span>账号管理</span>
           <strong>
@@ -305,7 +304,7 @@ export function AccountManagement({
         </button>
       </div>
 
-      <div className="accountAdminSummary" aria-label="账号概览">
+      <div className="adminAccountSummary" aria-label="账号概览">
         <span>
           <b>{users.filter((account) => account.role === "admin").length}</b>
           管理员
@@ -328,7 +327,7 @@ export function AccountManagement({
         </span>
       </div>
 
-      <label className="accountAdminFilter">
+      <label className="adminAccountFilter">
         <span>查找账号或邀请</span>
         <input
           value={accountFilter}
@@ -355,7 +354,7 @@ export function AccountManagement({
         </p>
       ) : null}
       {manualInviteUrl ? (
-        <label className="accountAdminFilter accountInviteRecovery">
+        <label className="adminAccountFilter accountInviteRecovery">
           <span>手动复制邀请链接</span>
           <input
             aria-label="手动复制邀请链接"
@@ -366,19 +365,19 @@ export function AccountManagement({
         </label>
       ) : null}
 
-      <div className="accountAdminList">
+      <div className="adminAccountList">
         {filteredUsers.map((account) => (
           <div className="accountAdminRow" key={account.id}>
-            <div className="accountAdminUser">
+            <div className="adminAccountUser">
               <strong>{account.displayName}</strong>
               <span>
                 @{account.username} · {adminRoleLabel(account.role)} · 最近登录{" "}
-                {formatRelativeTime(account.lastLoginAt)}
+                {formatAdminRelativeTime(account.lastLoginAt)}
               </span>
             </div>
-            <div className="accountAdminRoleActions">
+            <div className="adminAccountRoleActions">
               {account.username === user.username ? (
-                <span className="accountAdminSelf">当前账号 · {adminRoleLabel(account.role)}</span>
+                <span className="adminAccountSelf">当前账号 · {adminRoleLabel(account.role)}</span>
               ) : (
                 <>
                   <select
@@ -394,7 +393,7 @@ export function AccountManagement({
                   {account.role !== "admin" ? (
                     <button
                       type="button"
-                      className={`danger ${armedDelete === account.username ? "armed" : ""}`}
+                      className={`danger adminDanger ${armedDelete === account.username ? "armed" : ""}`}
                       disabled={busyTarget !== null}
                       onClick={() => void removeUser(account.username)}
                     >
@@ -408,20 +407,20 @@ export function AccountManagement({
         ))}
         {filteredInvites.map((item) => (
           <div className="accountAdminRow invite" key={item.code}>
-            <div className="accountAdminUser">
+            <div className="adminAccountUser">
               <strong>邀请 · {item.code.slice(4, 12)}…</strong>
               <span>
-                由 {item.createdBy} 创建 · {formatRelativeTime(item.createdAt)} · 过期{" "}
+                由 {item.createdBy} 创建 · {formatAdminRelativeTime(item.createdAt)} · 过期{" "}
                 {formatInviteExpiry(item.expiresAt)}
               </span>
             </div>
-            <div className="accountAdminInviteActions">
+            <div className="adminAccountInviteActions">
               <button type="button" disabled={busyTarget !== null} onClick={() => void copyInvite(item.code)}>
                 {copiedCode === item.code ? "已复制 ✓" : "复制链接"}
               </button>
               <button
                 type="button"
-                className="danger"
+                className="danger adminDanger"
                 disabled={busyTarget !== null}
                 onClick={() => void removeInvite(item.code)}
               >

@@ -19,10 +19,15 @@ import {
   exportTestingSession,
   formatBytes,
   formatClockTime,
-  formatDuration,
-  formatRelativeTime
+  formatDuration
 } from "../../lib/utils";
-import { confirmationCopy, corpusIssueCount } from "./admin-model";
+import {
+  confirmationCopy,
+  corpusIssueCount,
+  formatAdminRelativeTime,
+  testingReviewSeverityLabel,
+  testingReviewStatusLabel
+} from "./admin-model";
 import type { AdminTestingData } from "./useAdminTestingData";
 
 const TEST_QUALITY_FILTERS = ["all", "pass", "watch", "fail"] as const;
@@ -728,7 +733,7 @@ export function EvidenceWorkspace({
     return (
       <section
         ref={workspaceRef}
-        className="hudPanel testingPanel"
+        className="adminSectionCard testingPanel"
         aria-label="证据与问题"
         aria-busy={data.status === "loading"}
         hidden={!active}
@@ -745,7 +750,7 @@ export function EvidenceWorkspace({
   return (
     <section
       ref={workspaceRef}
-      className="hudPanel testingPanel"
+      className="adminSectionCard testingPanel"
       aria-label="证据与问题"
       hidden={!active}
       inert={!active ? true : undefined}
@@ -769,7 +774,7 @@ export function EvidenceWorkspace({
           </button>
           <button
             type="button"
-            className={`danger ${armedAction === "clear-all" ? "armed" : ""}`}
+            className={`danger adminDanger ${armedAction === "clear-all" ? "armed" : ""}`}
             disabled={busyAction !== null || !testerUsers.length || !canClear}
             title={canClear ? undefined : "需要管理员权限"}
             onClick={() => arm("clear-all", () => void runClear("clear-all", { scope: "all" }, "全部测试证据"))}
@@ -1053,7 +1058,7 @@ export function EvidenceWorkspace({
                     <td>
                       {tester.avgLatencyMs}/{tester.p95LatencyMs}ms
                     </td>
-                    <td>{formatRelativeTime(tester.lastSeenAt)}</td>
+                    <td>{formatAdminRelativeTime(tester.lastSeenAt)}</td>
                   </tr>
                 );
               })
@@ -1074,7 +1079,7 @@ export function EvidenceWorkspace({
             {selectedTester ? (
               <p>
                 {selectedTester.ipAddress} · {selectedTester.region} · {selectedTester.totalSessions} 次会话 ·{" "}
-                {qualityBreakdownLabel(selectedTesterCounts)} · {formatRelativeTime(selectedTester.lastSeenAt)}
+                {qualityBreakdownLabel(selectedTesterCounts)} · {formatAdminRelativeTime(selectedTester.lastSeenAt)}
               </p>
             ) : null}
           </div>
@@ -1098,7 +1103,7 @@ export function EvidenceWorkspace({
             </button>
             <button
               type="button"
-              className={`danger ${armedAction === `clear-tester:${selectedTester?.testerKey}` ? "armed" : ""}`}
+              className={`danger adminDanger ${armedAction === `clear-tester:${selectedTester?.testerKey}` ? "armed" : ""}`}
               disabled={busyAction !== null || !selectedTester || !canClear}
               title={canClear ? undefined : "需要管理员权限"}
               onClick={() => {
@@ -1166,7 +1171,7 @@ export function EvidenceWorkspace({
             </button>
             <button
               type="button"
-              className={`danger ${armedAction === `clear-session:${selectedSession?.sessionId}` ? "armed" : ""}`}
+              className={`danger adminDanger ${armedAction === `clear-session:${selectedSession?.sessionId}` ? "armed" : ""}`}
               disabled={busyAction !== null || !selectedSession || !canClear}
               title={canClear ? undefined : "需要管理员权限"}
               onClick={() => {
@@ -1189,7 +1194,7 @@ export function EvidenceWorkspace({
             </button>
           </div>
         </div>
-        <div className="sessionReplayGrid">
+        <div className="sessionReplayGrid adminDataSplit">
           <div className="sessionList" aria-label="已完成测试会话">
             {filteredTestingSessions.length ? (
               filteredTestingSessions.map((session) => {
@@ -1416,7 +1421,7 @@ export function EvidenceWorkspace({
                 >
                   {REVIEW_SEVERITIES.map((severity) => (
                     <option key={severity} value={severity}>
-                      {severity}
+                      {testingReviewSeverityLabel(severity)}
                     </option>
                   ))}
                 </select>
@@ -1455,11 +1460,11 @@ export function EvidenceWorkspace({
               <article key={review.id} className={`reviewRow ${review.severity}`}>
                 <button type="button" className="reviewEvidenceLink" onClick={() => void selectReviewEvidence(review)}>
                   <span>
-                    {review.severity} · {review.status}
+                    {testingReviewSeverityLabel(review.severity)} · {testingReviewStatusLabel(review.status)}
                   </span>
                   <strong>{review.title}</strong>
                   <small>
-                    {review.owner} · {formatRelativeTime(review.updatedAt)}
+                    {review.owner} · {formatAdminRelativeTime(review.updatedAt)}
                   </small>
                 </button>
                 <p>{review.comment || "暂无审核意见。"}</p>
@@ -1471,7 +1476,7 @@ export function EvidenceWorkspace({
                 >
                   {REVIEW_STATUSES.map((status) => (
                     <option key={status} value={status}>
-                      {status}
+                      {testingReviewStatusLabel(status)}
                     </option>
                   ))}
                 </select>

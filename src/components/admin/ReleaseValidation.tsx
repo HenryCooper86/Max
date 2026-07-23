@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { TESTING_TEST_CASES, type TestingRun, type TestingRunStatus } from "../../../shared/testing";
 import type { HelmetAgent } from "../../hooks/useHelmetAgent";
 import type { AuthUser } from "../../lib/auth";
+import { testingAssignmentStatusLabel, testingRunStatusLabel } from "./admin-model";
 import type { AdminTestingData } from "./useAdminTestingData";
 
 type BusyTarget =
@@ -113,7 +114,10 @@ export function ReleaseValidation({ agent, user, data }: Props) {
     try {
       const result = await data.updateRun(run.id, { status });
       if (result.ok) {
-        setOwnedNotice(request, { tone: "success", message: `发布运行状态已更新为 ${result.data.status}。` });
+        setOwnedNotice(request, {
+          tone: "success",
+          message: `发布运行状态已更新为${testingRunStatusLabel(result.data.status)}。`
+        });
         await data.refresh();
       } else {
         setOwnedNotice(request, { tone: "error", message: result.error.message });
@@ -146,10 +150,10 @@ export function ReleaseValidation({ agent, user, data }: Props) {
   };
 
   return (
-    <section className="testingControlPlane" aria-label="发布验证">
-      <div className="controlPlaneHead">
+    <section className="testingControlPlane adminSectionCard" aria-label="发布验证">
+      <div className="controlPlaneHead adminSectionHeader">
         <div>
-          <span>MAX QA · RELEASE</span>
+          <span>MAX QA · 发布</span>
           <strong>{isReviewer ? "发布运行与覆盖矩阵" : "我的覆盖任务"}</strong>
         </div>
       </div>
@@ -185,7 +189,7 @@ export function ReleaseValidation({ agent, user, data }: Props) {
           </div>
         ) : null}
 
-        <div className="releaseRunGrid">
+        <div className="releaseRunGrid adminDataSplit">
           <div className="releaseRunList">
             {runs.map((run) => {
               const progress = runProgress(run);
@@ -196,7 +200,7 @@ export function ReleaseValidation({ agent, user, data }: Props) {
                   className={selectedRun?.id === run.id ? "active" : ""}
                   onClick={() => setSelectedRunId(run.id)}
                 >
-                  <span>{run.status}</span>
+                  <span className={`adminStatus ${run.status}`}>{testingRunStatusLabel(run.status)}</span>
                   <strong>{run.name}</strong>
                   <small>
                     {run.build} · {progress.completed}/{progress.required} 个样本
@@ -232,12 +236,14 @@ export function ReleaseValidation({ agent, user, data }: Props) {
                         (status) => status === selectedRun.status || status !== "approved" || user.role === "admin"
                       ).map((status) => (
                         <option key={status} value={status} disabled={status === "approved" && user.role !== "admin"}>
-                          {status}
+                          {testingRunStatusLabel(status)}
                         </option>
                       ))}
                     </select>
                   ) : (
-                    <span className={`runStatus ${selectedRun.status}`}>{selectedRun.status}</span>
+                    <span className={`runStatus adminStatus ${selectedRun.status}`}>
+                      {testingRunStatusLabel(selectedRun.status)}
+                    </span>
                   )}
                 </div>
                 {isReviewer ? (
@@ -275,7 +281,7 @@ export function ReleaseValidation({ agent, user, data }: Props) {
                         <div className="coverageAssignments">
                           {assignments.map((item) => (
                             <span key={item.id}>
-                              {item.assignee} · {item.status}
+                              {item.assignee} · {testingAssignmentStatusLabel(item.status)}
                             </span>
                           ))}
                         </div>

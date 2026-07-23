@@ -1429,7 +1429,7 @@ button.opsCard:disabled {
 }
 
 .testingFilterBar input,
-.accountAdminFilter input {
+.adminAccountFilter input {
   width: 100%;
   min-width: 0;
   min-height: 30px;
@@ -1731,7 +1731,7 @@ button.opsCard:disabled {
 /* Destructive admin actions: armed = first click landed, next click executes. */
 .panelActions button.danger,
 .testerConversationActions button.danger,
-.accountAdmin button.danger,
+.adminAccount button.danger,
 .accountBar button.danger {
   border-color: rgba(255, 118, 118, 0.42);
   background: rgba(255, 118, 118, 0.1);
@@ -1740,7 +1740,7 @@ button.opsCard:disabled {
 
 .panelActions button.danger.armed,
 .testerConversationActions button.danger.armed,
-.accountAdmin button.danger.armed,
+.adminAccount button.danger.armed,
 .accountBar button.danger.armed {
   border-color: rgba(255, 118, 118, 0.85);
   background: rgba(255, 118, 118, 0.32);
@@ -1800,7 +1800,7 @@ button.opsCard:disabled {
    specificity — add new action buttons to this list, don't re-declare it. */
 .accountBar button,
 .accountForm button,
-.accountAdmin button,
+.adminAccount button,
 .panelActions button,
 .testerConversationHeader button {
   min-height: 32px;
@@ -1817,7 +1817,7 @@ button.opsCard:disabled {
 
 .accountBar button:disabled,
 .accountForm button:disabled,
-.accountAdmin button:disabled,
+.adminAccount button:disabled,
 .panelActions button:disabled,
 .testerConversationHeader button:disabled {
   cursor: not-allowed;
@@ -2521,7 +2521,7 @@ button.opsCard:disabled {
   .pulseGrid,
   .testingOpsStrip,
   .statGrid,
-  .accountAdminSummary,
+  .adminAccountSummary,
   .rideHistory {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2544,12 +2544,12 @@ button.opsCard:disabled {
   }
 
   .testerConversationActions,
-  .accountAdminInviteActions {
+  .adminAccountInviteActions {
     width: 100%;
     flex-wrap: wrap;
   }
 
-  .accountAdminInviteActions button {
+  .adminAccountInviteActions button {
     flex: 1 1 130px;
   }
 
@@ -2607,7 +2607,7 @@ button.opsCard:disabled {
   .preflightGrid,
   .pulseGrid,
   .rideHistory,
-  .accountAdminSummary,
+  .adminAccountSummary,
   .sessionMetricGrid {
     grid-template-columns: 1fr;
   }
@@ -2773,7 +2773,7 @@ button.opsCard:disabled {
 
 /* --- admin account management ------------------------------------------- */
 
-.accountAdmin {
+.adminAccount {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -2783,7 +2783,7 @@ button.opsCard:disabled {
   background: rgba(255, 255, 255, 0.03);
 }
 
-.accountAdminHead {
+.adminAccountHead {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
@@ -2791,30 +2791,30 @@ button.opsCard:disabled {
   justify-content: space-between;
 }
 
-.accountAdminHead > div {
+.adminAccountHead > div {
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
-.accountAdminHead span {
+.adminAccountHead span {
   color: rgba(216, 224, 221, 0.6);
   font-size: 0.72rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
-.accountAdminHead strong {
+.adminAccountHead strong {
   font-size: 0.86rem;
 }
 
-.accountAdminSummary {
+.adminAccountSummary {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
 }
 
-.accountAdminSummary span {
+.adminAccountSummary span {
   min-width: 0;
   padding: 8px 10px;
   border-radius: 8px;
@@ -2825,7 +2825,7 @@ button.opsCard:disabled {
   text-transform: uppercase;
 }
 
-.accountAdminSummary b {
+.adminAccountSummary b {
   display: block;
   margin-bottom: 3px;
   color: #f5fbfa;
@@ -2835,11 +2835,11 @@ button.opsCard:disabled {
   text-transform: none;
 }
 
-.accountAdminSummary span.warn b {
+.adminAccountSummary span.warn b {
   color: var(--warn);
 }
 
-.accountAdminFilter {
+.adminAccountFilter {
   display: block;
   min-width: 0;
   padding: 8px 10px;
@@ -2847,7 +2847,7 @@ button.opsCard:disabled {
   background: rgba(255, 255, 255, 0.035);
 }
 
-.accountAdminFilter span {
+.adminAccountFilter span {
   display: block;
   color: var(--muted);
   font-size: 0.68rem;
@@ -2855,7 +2855,7 @@ button.opsCard:disabled {
   text-transform: uppercase;
 }
 
-.accountAdminList {
+.adminAccountList {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -2877,43 +2877,43 @@ button.opsCard:disabled {
   border-color: rgba(107, 238, 174, 0.25);
 }
 
-.accountAdminUser {
+.adminAccountUser {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
 }
 
-.accountAdminUser strong {
+.adminAccountUser strong {
   font-size: 0.84rem;
 }
 
-.accountAdminUser span {
+.adminAccountUser span {
   color: rgba(216, 224, 221, 0.62);
   font-size: 0.74rem;
 }
 
-.accountAdminSelf {
+.adminAccountSelf {
   flex: 0 0 auto;
   color: rgba(107, 238, 174, 0.8);
   font-size: 0.74rem;
   font-weight: 700;
 }
 
-.accountAdminInviteActions {
+.adminAccountInviteActions {
   display: flex;
   flex: 0 0 auto;
   gap: 8px;
 }
 
-.accountAdminRoleActions {
+.adminAccountRoleActions {
   display: flex;
   flex: 0 0 auto;
   gap: 8px;
   align-items: center;
 }
 
-.accountAdminRoleActions select {
+.adminAccountRoleActions select {
   min-width: 104px;
   padding: 6px 8px;
   border: 1px solid rgba(196, 218, 216, 0.18);
@@ -3656,7 +3656,7 @@ button.opsCard:disabled {
     grid-template-columns: 1fr;
   }
 
-  .accountAdminSummary {
+  .adminAccountSummary {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
@@ -3686,12 +3686,12 @@ button.opsCard:disabled {
 
   .controlPlaneTabs,
   .controlPlaneTabs button,
-  .accountAdminRoleActions,
-  .accountAdminRoleActions select {
+  .adminAccountRoleActions,
+  .adminAccountRoleActions select {
     width: 100%;
   }
 
-  .accountAdminSummary {
+  .adminAccountSummary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -4281,8 +4281,7 @@ button.opsCard:disabled {
   height: 0;
 }
 
-.settingsCard,
-.advancedSettings {
+.settingsCard {
   padding: clamp(16px, 3vw, 22px);
   border: 1px solid rgba(180, 198, 190, 0.12);
   border-radius: 22px;
@@ -4570,97 +4569,683 @@ button.opsCard:disabled {
   font-size: 0.76rem;
 }
 
-.advancedSettings {
-  padding: 0;
+/* --- Admin workspace ----------------------------------------------------- */
+
+.adminEntryCard {
+  position: relative;
+  overflow: hidden;
+  border-color: rgba(62, 232, 159, 0.2);
+  background: radial-gradient(circle at 100% 0%, rgba(62, 232, 159, 0.09), transparent 48%), #121816;
 }
 
-/* Once expanded, let the admin tools join the settings flow instead of
-   stretching the collapsed card's side borders across several screens. */
-.advancedSettings[open] {
-  border: 0;
-  background: transparent;
+.adminEntryCard::after {
+  position: absolute;
+  top: 0;
+  right: 22px;
+  width: 52px;
+  height: 2px;
+  background: var(--accent);
+  content: "";
 }
 
-.advancedSettings > summary {
+.adminEntryAction {
   display: flex;
-  min-height: 76px;
+  width: 100%;
+  min-height: 52px;
   align-items: center;
   justify-content: space-between;
-  padding: 15px 20px;
+  gap: 12px;
+  padding: 0 15px;
+  border: 1px solid rgba(62, 232, 159, 0.24);
+  border-radius: 13px;
+  background: rgba(62, 232, 159, 0.075);
+  color: #eaf2ee;
   cursor: pointer;
-  list-style: none;
+  text-align: left;
 }
 
-.advancedSettings > summary::-webkit-details-marker {
-  display: none;
+.adminEntryAction span {
+  font-weight: 720;
 }
 
-.advancedSettings > summary > span:first-child {
+.adminEntryAction small {
+  color: #89a198;
+  font-size: 0.7rem;
+}
+
+.adminWorkspace {
+  --admin-bg: #0b100e;
+  --admin-panel: #111815;
+  --admin-panel-raised: #141d19;
+  --admin-border: rgba(180, 198, 190, 0.13);
+  --admin-muted: #8fa099;
+  --admin-good: #5ff0b0;
+  --admin-warn: #f2c765;
+  --admin-alert: #ff806c;
+
+  min-height: 100dvh;
+  background: radial-gradient(circle at 72% 0%, rgba(62, 232, 159, 0.055), transparent 32%), var(--admin-bg);
+  color: #eaf2ee;
+  font-family: var(--font-cjk);
+}
+
+.adminWorkspaceHeader {
+  position: sticky;
+  top: 0;
+  z-index: 5;
   display: flex;
+  min-height: 78px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 14px clamp(16px, 3vw, 30px);
+  border-bottom: 1px solid var(--admin-border);
+  background: rgba(16, 23, 20, 0.96);
+  backdrop-filter: blur(16px);
+}
+
+.adminWorkspaceBrand {
+  display: flex;
+  min-width: 0;
   align-items: center;
   gap: 12px;
 }
 
-.advancedSettings > summary svg {
-  color: var(--accent);
-}
-
-.advancedSettings > summary span span {
-  display: flex;
-  flex-direction: column;
-}
-
-.advancedSettings > summary strong {
-  color: #eaf1ee;
-  font-size: 0.9rem;
-}
-
-.advancedSettings > summary small,
-.advancedSettings > summary > span:last-child {
-  color: #75827d;
-  font-size: 0.7rem;
-}
-
-.advancedSettings[open] > summary > span:last-child {
-  color: var(--accent);
-}
-
-.advancedSettings[open] > summary {
-  border: 1px solid rgba(180, 198, 190, 0.12);
-  border-radius: 22px;
-  background: #131917;
-}
-
-.advancedSettingsBody {
-  width: 100%;
-  min-width: 0;
-  padding: 0;
-}
-
-.settingsAdminLoading {
-  margin: 12px 0 0;
-  padding: 24px;
-  color: #7d8a85;
-  text-align: center;
-  font-size: 0.78rem;
-}
-
-.settingsSheet .testingPanel {
+.adminWorkspaceLogo {
   display: grid;
-  width: 100%;
-  max-width: 100%;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid rgba(62, 232, 159, 0.34);
+  border-radius: 12px;
+  background: rgba(62, 232, 159, 0.1);
+  color: var(--admin-good);
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  font-weight: 700;
+  box-shadow: 0 0 24px rgba(62, 232, 159, 0.08);
+}
+
+.adminWorkspaceBrand > div {
   min-width: 0;
-  margin-top: 14px;
-  padding: 0;
-  grid-template-columns: minmax(0, 1fr);
-  grid-area: auto;
+}
+
+.adminWorkspaceBrand small {
+  display: block;
+  color: var(--admin-good);
+  font: 700 0.64rem/1.2 var(--font-mono);
+  letter-spacing: 0.16em;
+}
+
+.adminWorkspaceBrand h1 {
+  margin-top: 3px;
+  font-size: clamp(1.05rem, 2vw, 1.35rem);
+  letter-spacing: 0.01em;
+}
+
+.adminWorkspaceContext {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.adminWorkspaceContext > span,
+.adminWorkspaceContext > small {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid rgba(180, 198, 190, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--admin-muted);
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+.adminWorkspaceContext > span.online {
+  border-color: rgba(62, 232, 159, 0.2);
+  color: var(--admin-good);
+}
+
+.adminWorkspaceContext > span svg {
+  flex: 0 0 auto;
+}
+
+.adminWorkspaceContext > button {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 14px;
+  border: 1px solid rgba(180, 198, 190, 0.17);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #eaf2ee;
+  cursor: pointer;
+  font-weight: 680;
+}
+
+.adminWorkspaceLayout {
+  display: grid;
+  min-height: calc(100dvh - 78px);
+  grid-template-columns: 210px minmax(0, 1fr);
+}
+
+.adminWorkspaceNav {
+  display: flex;
+  min-width: 0;
+  padding: 20px 13px;
+  flex-direction: column;
+  gap: 5px;
+  border-right: 1px solid rgba(180, 198, 190, 0.11);
+  background: #0e1512;
+}
+
+.adminWorkspaceNav > button {
+  min-height: 44px;
+  padding: 0 13px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--admin-muted);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    border-color 0.16s ease,
+    background 0.16s ease,
+    color 0.16s ease;
+}
+
+.adminWorkspaceNav > button:hover {
+  background: rgba(255, 255, 255, 0.035);
+  color: #eaf2ee;
+}
+
+.adminWorkspaceNav > button.active {
+  border-color: rgba(62, 232, 159, 0.2);
+  background: rgba(62, 232, 159, 0.1);
+  color: var(--admin-good);
+}
+
+.adminWorkspaceNav > .accountBar {
+  display: grid;
+  margin-top: auto;
+  padding: 12px 0 0;
   border: 0;
+  border-top: 1px solid rgba(180, 198, 190, 0.1);
+  border-radius: 0;
   background: transparent;
 }
 
-.settingsSheet .testingPanel > * {
-  max-width: 100%;
+.adminWorkspaceNav .accountActions,
+.adminWorkspaceNav .accountForm,
+.adminWorkspaceNav .accountFields {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 1fr;
+}
+
+.adminWorkspaceNav .accountActions button,
+.adminWorkspaceNav .accountFields input {
+  width: 100%;
+  min-height: 40px;
+}
+
+.adminWorkspaceContent {
+  width: min(100%, 1480px);
   min-width: 0;
+  margin: 0 auto;
+  padding: clamp(18px, 3vw, 34px);
+}
+
+.adminWorkspaceContent > * {
+  min-width: 0;
+}
+
+.adminSectionCard {
+  min-width: 0;
+  border: 1px solid var(--admin-border);
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(62, 232, 159, 0.025), transparent 34%), var(--admin-panel);
+  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.15);
+}
+
+.adminOverview {
+  display: grid;
+  gap: 16px;
+  padding: clamp(16px, 2vw, 24px);
+}
+
+.adminSectionCard.adminSectionInset {
+  padding: 14px;
+  border-radius: 11px;
+  background: var(--admin-panel-raised);
+  box-shadow: none;
+}
+
+.adminSectionHeader {
+  min-width: 0;
+}
+
+.adminSectionHeader h2,
+.adminSectionHeader strong {
+  color: #f2f7f5;
+}
+
+.adminSectionHeader span {
+  color: var(--admin-muted);
+}
+
+.decisionPanelHead button {
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid rgba(95, 240, 176, 0.25);
+  border-radius: 9px;
+  background: rgba(95, 240, 176, 0.08);
+  color: #d9fae9;
+  cursor: pointer;
+  font-weight: 680;
+}
+
+.adminMetricGrid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.adminMetricGrid .opsCard {
+  min-height: 112px;
+  padding: 15px;
+  border-color: var(--admin-border);
+  border-left-width: 1px;
+  border-radius: 11px;
+  background: var(--admin-panel-raised);
+  transition:
+    border-color 0.16s ease,
+    background 0.16s ease,
+    transform 0.16s ease;
+}
+
+.adminMetricGrid button.opsCard:hover {
+  border-color: rgba(180, 198, 190, 0.25);
+  background: #17211d;
+  transform: translateY(-1px);
+}
+
+.adminMetricGrid .opsCard strong {
+  margin-top: 10px;
+  font: 700 clamp(1.25rem, 2.4vw, 1.7rem)/1 var(--font-mono);
+}
+
+.adminWorkGrid {
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  gap: 12px;
+}
+
+.adminStatus {
+  border-color: rgba(180, 198, 190, 0.16);
+  color: var(--admin-muted);
+}
+
+.adminStatus.good,
+.adminStatus.ready,
+.adminStatus.approved {
+  border-color: rgba(95, 240, 176, 0.34);
+  color: var(--admin-good);
+}
+
+.adminStatus.warn,
+.adminStatus.draft,
+.adminStatus.active {
+  border-color: rgba(242, 199, 101, 0.34);
+  color: var(--admin-warn);
+}
+
+.adminStatus.alert,
+.adminStatus.blocked {
+  border-color: rgba(255, 128, 108, 0.38);
+  color: var(--admin-alert);
+}
+
+.adminMetricGrid .opsCard {
+  border-left-width: 3px;
+}
+
+.adminMetricGrid .opsCard.good {
+  border-left-color: var(--admin-good);
+}
+
+.adminMetricGrid .opsCard.warn {
+  border-left-color: var(--admin-warn);
+}
+
+.adminMetricGrid .opsCard.alert {
+  border-left-color: var(--admin-alert);
+}
+
+.adminMetricGrid .opsCard strong.adminStatus.good {
+  color: var(--admin-good);
+}
+
+.adminMetricGrid .opsCard strong.adminStatus.warn {
+  color: var(--admin-warn);
+}
+
+.adminMetricGrid .opsCard strong.adminStatus.alert {
+  color: var(--admin-alert);
+}
+
+.adminDataSplit {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(210px, 0.42fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.adminSyncNotice {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 12px;
+  align-items: center;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 128, 108, 0.32);
+  border-radius: 11px;
+  background: rgba(255, 128, 108, 0.08);
+  color: #ffd9d2;
+}
+
+.adminSyncNotice strong,
+.adminSyncNotice span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.adminSyncNotice span {
+  color: #cdb8b3;
+  font-size: 0.78rem;
+}
+
+.adminSyncNotice button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  min-height: 40px;
+  padding: 0 13px;
+  border: 1px solid currentColor;
+  border-radius: 9px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.adminSyncNotice.unavailable,
+.adminSyncNotice.conflict {
+  border-color: rgba(242, 199, 101, 0.32);
+  background: rgba(242, 199, 101, 0.08);
+  color: #f8dfa0;
+}
+
+.adminSyncNotice.unavailable span,
+.adminSyncNotice.conflict span {
+  color: #c7b787;
+}
+
+.adminWorkspaceLoading {
+  margin: 0;
+  padding: 28px;
+  border: 1px dashed rgba(180, 198, 190, 0.18);
+  border-radius: 12px;
+  color: var(--admin-muted);
+  text-align: center;
+}
+
+.adminNotice.success {
+  border-color: rgba(95, 240, 176, 0.3);
+  background: rgba(95, 240, 176, 0.08);
+  color: #c9f9e2;
+}
+
+.adminDanger {
+  border-color: rgba(255, 128, 108, 0.42) !important;
+  background: rgba(255, 128, 108, 0.09) !important;
+  color: #ffd9d2 !important;
+}
+
+.adminDanger.armed {
+  border-color: rgba(255, 128, 108, 0.9) !important;
+  background: rgba(255, 128, 108, 0.28) !important;
+  color: #fff !important;
+}
+
+.adminAccount {
+  gap: 14px;
+  padding: clamp(15px, 2vw, 22px);
+}
+
+.adminAccountSummary span,
+.statGrid span {
+  border: 1px solid rgba(180, 198, 190, 0.1);
+  background: var(--admin-panel-raised);
+}
+
+.accountAdminRow,
+.releaseRunDetail,
+.reviewComposer,
+.activePolicyCard,
+.policyFields {
+  background: rgba(8, 13, 11, 0.5);
+}
+
+.adminAccountFilter input,
+.testingControlPlane input,
+.testingControlPlane select,
+.testingControlPlane textarea,
+.evidenceNotes textarea {
+  min-height: 42px;
+  border-color: rgba(180, 198, 190, 0.18);
+  background: #0b110e;
+}
+
+.testingControlPlane.adminSectionCard {
+  border-color: var(--admin-border);
+  background: var(--admin-panel);
+}
+
+.testingControlPlane button,
+.evidenceNotes button,
+.loadMoreEvidence {
+  min-height: 40px;
+}
+
+.adminWorkspace button:focus-visible,
+.adminWorkspace input:focus-visible,
+.adminWorkspace select:focus-visible,
+.adminWorkspace textarea:focus-visible,
+.adminWorkspace a:focus-visible {
+  outline: 3px solid #77f5c0;
+  outline-offset: 3px;
+  box-shadow: 0 0 0 1px #07110d;
+}
+
+@media (max-width: 1100px) {
+  .adminMetricGrid,
+  .testingFilterBar,
+  .testerBar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .testingWorkflowBar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .testingWorkflowBar .testCaseBrief {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 900px) {
+  .adminWorkspaceLayout {
+    grid-template-columns: 1fr;
+  }
+
+  .adminWorkspaceNav {
+    position: sticky;
+    top: 78px;
+    z-index: 4;
+    overflow-x: auto;
+    padding: 10px 14px;
+    flex-direction: row;
+    border-right: 0;
+    border-bottom: 1px solid rgba(180, 198, 190, 0.11);
+  }
+
+  .adminWorkspaceNav > button {
+    flex: 0 0 auto;
+  }
+
+  .adminWorkspaceNav > .accountBar {
+    display: flex;
+    min-width: max-content;
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    margin: 0;
+    padding: 0 0 0 8px;
+    border: 0;
+    border-left: 1px solid rgba(180, 198, 190, 0.1);
+  }
+
+  .adminWorkspaceNav .accountIdentity {
+    min-width: max-content;
+  }
+
+  .adminWorkspaceNav .accountActions,
+  .adminWorkspaceNav .accountForm,
+  .adminWorkspaceNav .accountFields {
+    display: flex;
+    width: auto;
+    flex-wrap: nowrap;
+  }
+
+  .adminWorkspaceNav .accountActions button,
+  .adminWorkspaceNav .accountFields input {
+    width: auto;
+    min-width: max-content;
+  }
+
+  .adminWorkspaceNav .accountMemoryNotice {
+    min-width: 180px;
+  }
+
+  .adminWorkspaceContent {
+    max-width: 100vw;
+  }
+}
+
+@media (max-width: 640px) {
+  .adminWorkspaceHeader {
+    position: relative;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .adminWorkspaceContext {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    justify-content: stretch;
+  }
+
+  .adminWorkspaceContext > span,
+  .adminWorkspaceContext > small,
+  .adminWorkspaceContext > button {
+    min-width: 0;
+    justify-content: center;
+    white-space: normal;
+  }
+
+  .adminWorkspaceContext > button {
+    grid-column: 1 / -1;
+  }
+
+  .adminWorkspaceNav {
+    top: 0;
+  }
+
+  .adminWorkspaceNav > .accountBar {
+    min-width: max-content;
+    flex-basis: auto;
+  }
+
+  .adminWorkspaceContent {
+    padding: 14px;
+  }
+
+  .adminMetricGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .adminDataSplit,
+  .adminWorkGrid,
+  .testingFilterBar,
+  .testerBar,
+  .testingWorkflowBar,
+  .chartGrid,
+  .issueWorkbench {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .testingWorkflowBar .testCaseBrief {
+    grid-column: auto;
+  }
+
+  .adminSyncNotice {
+    grid-template-columns: 1fr;
+  }
+
+  .adminSyncNotice button {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .adminAccountHead,
+  .accountAdminRow,
+  .testerConversationHeader,
+  .releaseRunTitle {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .adminAccountRoleActions,
+  .adminAccountInviteActions,
+  .testerConversationActions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .adminAccountRoleActions > *,
+  .adminAccountInviteActions > *,
+  .testerConversationActions > * {
+    flex: 1 1 140px;
+  }
+
+  .testerTableWrap {
+    max-width: calc(100vw - 28px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .adminWorkspace *,
+  .adminEntryAction {
+    scroll-behavior: auto !important;
+    transition-duration: 0s !important;
+    animation-duration: 0s !important;
+    animation-iteration-count: 1 !important;
+  }
 }
 
 @media (max-width: 700px) {

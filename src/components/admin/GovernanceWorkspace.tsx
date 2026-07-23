@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { TestingAuditEvent } from "../../../shared/testing";
 import type { AuthUser } from "../../lib/auth";
-import { formatRelativeTime } from "../../lib/utils";
+import { formatAdminRelativeTime } from "./admin-model";
 import type { AdminTestingData } from "./useAdminTestingData";
 
 type GovernanceTab = "policy" | "audit";
@@ -87,10 +87,10 @@ export function GovernanceWorkspace({ user, data }: Props) {
   };
 
   return (
-    <section className="testingControlPlane" aria-label="策略与审计">
-      <div className="controlPlaneHead">
+    <section className="testingControlPlane adminSectionCard" aria-label="策略与审计">
+      <div className="controlPlaneHead adminSectionHeader">
         <div>
-          <span>MAX QA · GOVERNANCE</span>
+          <span>MAX QA · 治理</span>
           <strong>策略与审计</strong>
         </div>
         <nav className="controlPlaneTabs" aria-label="治理视图">
@@ -179,7 +179,7 @@ export function GovernanceWorkspace({ user, data }: Props) {
             {data.policies.map((policy) => (
               <span key={policy.version} className={policy.active ? "active" : ""}>
                 <b>{policy.version}</b>
-                {policy.createdBy} · {formatRelativeTime(policy.createdAt)}
+                {policy.createdBy} · {formatAdminRelativeTime(policy.createdAt)}
               </span>
             ))}
           </div>
@@ -190,7 +190,7 @@ export function GovernanceWorkspace({ user, data }: Props) {
         <div className="auditTimeline">
           {(data.operations?.audit ?? []).map((event) => (
             <article key={event.id}>
-              <time>{formatRelativeTime(event.at)}</time>
+              <time>{formatAdminRelativeTime(event.at)}</time>
               <div>
                 <strong>{event.action}</strong>
                 <span>

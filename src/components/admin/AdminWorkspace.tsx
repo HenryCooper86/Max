@@ -3,11 +3,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AccountSessionControls } from "../AccountBar";
 import type { HelmetAgent } from "../../hooks/useHelmetAgent";
 import type { AuthUser } from "../../lib/auth";
-import { formatRelativeTime } from "../../lib/utils";
 import {
   ADMIN_SECTION_LABELS,
   adminRoleLabel,
   allowedAdminSections,
+  formatAdminRelativeTime,
   normalizeAdminSection,
   type AdminSection
 } from "./admin-model";
@@ -64,10 +64,11 @@ export function AdminWorkspace({ agent, user, onAuthenticationExpired, onClose }
           <span className={agent.connected ? "online" : ""}>
             <Broadcast aria-hidden="true" /> {agent.connected ? "中继在线" : "中继离线"}
           </span>
+          <span>构建 {agent.health?.build?.gitCommit ?? "本地"}</span>
           <span>
             <ShieldCheck aria-hidden="true" /> @{user.username} · {adminRoleLabel(user.role)}
           </span>
-          <small>{data.lastSyncedAt ? `最近同步 ${formatRelativeTime(data.lastSyncedAt)}` : "等待首次同步"}</small>
+          <small>{data.lastSyncedAt ? `最近同步 ${formatAdminRelativeTime(data.lastSyncedAt)}` : "等待首次同步"}</small>
           <button ref={closeRef} type="button" onClick={onClose}>
             <ArrowLeft aria-hidden="true" /> 返回 Max
           </button>

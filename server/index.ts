@@ -286,8 +286,12 @@ app.post("/auth/admin/invites/revoke", (req, res) => {
   const admin = requireAdmin(req, res);
   if (!admin) return;
   const body = (req.body ?? {}) as Record<string, unknown>;
-  revokeInvite(body.code);
-  res.json({ ok: true });
+  if (typeof body.code !== "string" || !body.code.trim()) {
+    res.status(400).json({ ok: false, error: "邀请代码不能为空。" });
+    return;
+  }
+  const removed = revokeInvite(body.code);
+  res.json({ ok: true, removed });
 });
 
 app.post("/auth/admin/users/delete", (req, res) => {

@@ -118,6 +118,35 @@ describe("relay process integration", () => {
     const registered = (await registration.json()) as { ok: boolean; token: string };
     expect(registered.ok).toBe(true);
 
+    const missingInviteCode = await fetch(`${baseUrl}/auth/admin/invites/revoke`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${registered.token}`,
+        Connection: "close"
+      },
+      body: JSON.stringify({})
+    });
+    expect(missingInviteCode.status).toBe(400);
+    await expect(missingInviteCode.json()).resolves.toMatchObject({ ok: false });
+
+    const createdInvite = await fetch(`${baseUrl}/auth/admin/invites`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${registered.token}`, Connection: "close" }
+    });
+    const invitePayload = (await createdInvite.json()) as { invite: { code: string } };
+    const revokeInvite = await fetch(`${baseUrl}/auth/admin/invites/revoke`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${registered.token}`,
+        Connection: "close"
+      },
+      body: JSON.stringify({ code: invitePayload.invite.code })
+    });
+    expect(revokeInvite.status).toBe(200);
+    await expect(revokeInvite.json()).resolves.toEqual({ ok: true, removed: true });
+
     const ready = await fetch(`${baseUrl}/ready`, { headers: { Connection: "close" } });
     expect(ready.status).toBe(200);
 

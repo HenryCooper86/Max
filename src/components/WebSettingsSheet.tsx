@@ -11,6 +11,7 @@ import {
 } from "@phosphor-icons/react";
 import { useEffect, useRef } from "react";
 import { combineHazardLevels, scenarioLabel } from "../../shared/ride";
+import { LanguageToggle, useLanguage } from "./LanguageToggle";
 import type { HelmetAgent } from "../hooks/useHelmetAgent";
 import {
   CONNECTION_LABELS,
@@ -36,6 +37,7 @@ type Props = {
 };
 
 export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
+  const { t } = useLanguage();
   const fusedHazard = combineHazardLevels(agent.rideContext.hazardLevel, agent.weather?.riskLevel ?? "normal");
   const latencyTone = agent.latencyMs < 140 ? "good" : agent.latencyMs < 280 ? "warn" : "alert";
   const dialogRef = useRef<HTMLElement>(null);
@@ -92,12 +94,15 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
         <header className="settingsHeader">
           <div>
             <span>Max</span>
-            <h1 id="settings-title">设置</h1>
+            <h1 id="settings-title">{t("settings.title")}</h1>
           </div>
-          <button ref={closeButtonRef} type="button" onClick={onClose} aria-label="完成并关闭设置">
-            <X size={24} weight="bold" aria-hidden="true" />
-            完成
-          </button>
+          <div className="settingsHeaderActions">
+            <LanguageToggle />
+            <button ref={closeButtonRef} type="button" onClick={onClose} aria-label={t("settings.doneAria")}>
+              <X size={24} weight="bold" aria-hidden="true" />
+              {t("settings.done")}
+            </button>
+          </div>
         </header>
 
         <div className="settingsContent">
@@ -105,8 +110,8 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
             <div className="settingsCardTitle">
               <Waveform size={22} aria-hidden="true" />
               <div>
-                <h2>语音</h2>
-                <p>选择 Max 的声音和回答风格</p>
+                <h2>{t("settings.voice")}</h2>
+                <p>{t("settings.voiceHelp")}</p>
               </div>
             </div>
             <div className="settingsGroup">
@@ -147,8 +152,8 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
             <div className="settingsCardTitle">
               <Gauge size={22} aria-hidden="true" />
               <div>
-                <h2>骑行</h2>
-                <p>模式、模拟场景和当前态势</p>
+                <h2>{t("settings.ride")}</h2>
+                <p>{t("settings.rideHelp")}</p>
               </div>
             </div>
             <div className="settingsGroup">
@@ -219,8 +224,8 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
             <div className="settingsCardTitle">
               <CloudSun size={22} aria-hidden="true" />
               <div>
-                <h2>天气</h2>
-                <p>根据骑手位置实时更新</p>
+                <h2>{t("settings.weather")}</h2>
+                <p>{t("settings.weatherHelp")}</p>
               </div>
             </div>
             {agent.weather ? (
@@ -241,7 +246,7 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
             <div className="settingsCardTitle">
               <SlidersHorizontal size={22} aria-hidden="true" />
               <div>
-                <h2>连接</h2>
+                <h2>{t("settings.connection")}</h2>
                 <p>{agent.status}</p>
               </div>
               <span className={`settingsStatus ${agent.connected ? "online" : ""}`}>
@@ -318,11 +323,11 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
                 onClick={() => exportTranscriptLog(agent.transcript, agent.health, agent.testerId, agent.testerRegion)}
               >
                 <DownloadSimple size={18} aria-hidden="true" />
-                导出对话
+                {t("settings.export")}
               </button>
               <button type="button" disabled={!agent.transcript.length} onClick={agent.clearTranscript}>
                 <Trash size={18} aria-hidden="true" />
-                清空对话
+                {t("settings.clear")}
               </button>
             </div>
           </section>
@@ -331,10 +336,10 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
           <button type="button" className="settingsAdminAction" onClick={onOpenAdmin}>
             <Flask size={22} aria-hidden="true" />
             <span>
-              <strong>测试与管理</strong>
-              <small>账号、发布验证、会话证据和运营工具</small>
+              <strong>{t("settings.admin")}</strong>
+              <small>{t("settings.adminHelp")}</small>
             </span>
-            <span className="settingsAdminActionLabel">进入工作区</span>
+            <span className="settingsAdminActionLabel">{t("settings.openWorkspace")}</span>
           </button>
         </footer>
       </section>

@@ -7,6 +7,7 @@
 import { useMemo } from "react";
 import type { AuthUser } from "../lib/auth";
 import { AccountForm } from "./AccountBar";
+import { useLanguage } from "./LanguageToggle";
 
 type Props = {
   /** False until the first account exists — the gate then offers first-run
@@ -35,15 +36,16 @@ function clearInviteFromUrl() {
 }
 
 export function LoginGate({ authEnabled, registrationOpen, onSignedIn }: Props) {
+  const { t } = useLanguage();
   const inviteCode = useMemo(readInviteCode, []);
 
   const hint = !authEnabled
-    ? "首次使用：注册第一个账号，该账号将成为管理员。"
+    ? t("login.firstUse")
     : inviteCode
-      ? "你收到了一个邀请 — 注册你的测试账号即可进入。"
+      ? t("login.invite")
       : registrationOpen
-        ? "登录后进入语音测试座舱；没有账号可以注册（需管理员知晓）。"
-        : "登录后进入语音测试座舱。注册已关闭 — 需要账号请联系管理员。";
+        ? t("login.openRegistration")
+        : t("login.closedRegistration");
 
   return (
     <main className="shell loginShell">
@@ -53,7 +55,7 @@ export function LoginGate({ authEnabled, registrationOpen, onSignedIn }: Props) 
         <span className="loginGrid" />
         <span className="loginHorizon" />
       </div>
-      <section className="loginGate" aria-label="登录">
+      <section className="loginGate" aria-label={t("login.aria")}>
         <div className="brand loginBrand">
           <svg className="logoMark loginLogo" viewBox="0 0 44 44" aria-hidden="true">
             <path className="logoShell" d="M8 24a14 14 0 0 1 28 0v4a4 4 0 0 1-4 4H12a4 4 0 0 1-4-4Z" />
@@ -61,13 +63,13 @@ export function LoginGate({ authEnabled, registrationOpen, onSignedIn }: Props) 
           </svg>
           <div>
             <p className="eyebrow loginEyebrow">HCT HELMET OS</p>
-            <h1>Max 摩托车头盔 AI</h1>
+            <h1>{t("login.brand")}</h1>
           </div>
         </div>
         <div className="loginCard">
           <span className="loginScanline" aria-hidden="true" />
           <div className="loginCardHead">
-            <h2>内部测试平台</h2>
+            <h2>{t("login.platform")}</h2>
             <span className="loginStatusDot" aria-hidden="true" />
           </div>
           <p className="loginHint">{hint}</p>
@@ -81,7 +83,7 @@ export function LoginGate({ authEnabled, registrationOpen, onSignedIn }: Props) 
               onSignedIn(user);
             }}
           />
-          <p className="loginFootnote">HORIZON CONTINENTAL TECHNOLOGY · SECURE ACCESS</p>
+          <p className="loginFootnote">{t("login.accessFootnote")}</p>
         </div>
       </section>
     </main>

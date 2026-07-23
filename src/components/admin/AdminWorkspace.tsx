@@ -1,15 +1,16 @@
 import { ArrowLeft, Broadcast, ShieldCheck } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AccountSessionControls } from "../AccountBar";
+import { useLanguage } from "../LanguageToggle";
 import type { HelmetAgent } from "../../hooks/useHelmetAgent";
 import type { AuthUser } from "../../lib/auth";
 import {
-  ADMIN_SECTION_LABELS,
   adminRoleLabel,
   allowedAdminSections,
   formatAdminRelativeTime,
   normalizeAdminSection,
-  type AdminSection
+  type AdminSection,
+  adminSectionLabel
 } from "./admin-model";
 import { AccountManagement } from "./AccountManagement";
 import { AdminOverview } from "./AdminOverview";
@@ -26,6 +27,7 @@ type Props = {
 };
 
 export function AdminWorkspace({ agent, user, onAuthenticationExpired, onClose }: Props) {
+  const { language } = useLanguage();
   const [section, setSection] = useState<AdminSection>("overview");
   const [requestedEvidenceSessionId, setRequestedEvidenceSessionId] = useState<string | null>(null);
   const [evidenceFocusRequestKey, setEvidenceFocusRequestKey] = useState(0);
@@ -57,25 +59,32 @@ export function AdminWorkspace({ agent, user, onAuthenticationExpired, onClose }
           <span className="adminWorkspaceLogo">M</span>
           <div>
             <small>MAX QA</small>
-            <h1>测试与管理</h1>
+            <h1>{language === "en-US" ? "Testing & Admin" : "测试与管理"}</h1>
           </div>
         </div>
         <div className="adminWorkspaceContext">
           <span className={agent.connected ? "online" : ""}>
-            <Broadcast aria-hidden="true" /> {agent.connected ? "中继在线" : "中继离线"}
+            <Broadcast aria-hidden="true" />{" "}
+            {agent.connected
+              ? language === "en-US"
+                ? "Relay online"
+                : "中继在线"
+              : language === "en-US"
+                ? "Relay offline"
+                : "中继离线"}
           </span>
           <span>构建 {agent.health?.build?.gitCommit ?? "本地"}</span>
           <span>
-            <ShieldCheck aria-hidden="true" /> @{user.username} · {adminRoleLabel(user.role)}
+            <ShieldCheck aria-hidden="true" /> @{user.username} · {adminRoleLabel(user.role, language)}
           </span>
           <small>{data.lastSyncedAt ? `最近同步 ${formatAdminRelativeTime(data.lastSyncedAt)}` : "等待首次同步"}</small>
           <button ref={closeRef} type="button" onClick={onClose}>
-            <ArrowLeft aria-hidden="true" /> 返回 Max
+            <ArrowLeft aria-hidden="true" /> {language === "en-US" ? "Back to Max" : "返回 Max"}
           </button>
         </div>
       </header>
       <div className="adminWorkspaceLayout">
-        <nav className="adminWorkspaceNav" aria-label="Admin 工作区">
+        <nav className="adminWorkspaceNav" aria-label={language === "en-US" ? "Admin workspace" : "Admin 工作区"}>
           {allowed.map((item) => (
             <button
               type="button"
@@ -84,7 +93,7 @@ export function AdminWorkspace({ agent, user, onAuthenticationExpired, onClose }
               aria-current={active === item ? "page" : undefined}
               onClick={() => setSection(item)}
             >
-              {ADMIN_SECTION_LABELS[item]}
+              {adminSectionLabel(item, language)}
             </button>
           ))}
           <AccountSessionControls user={user} onSignedOut={onAuthenticationExpired} />

@@ -4252,7 +4252,7 @@ button.opsCard:disabled {
   font-size: clamp(1.6rem, 4vw, 2.1rem);
 }
 
-.settingsHeader > button {
+.settingsHeaderActions > button {
   display: inline-flex;
   min-height: 42px;
   align-items: center;
@@ -4265,6 +4265,44 @@ button.opsCard:disabled {
   cursor: pointer;
   font-size: 0.82rem;
   font-weight: 750;
+}
+
+.settingsHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.languageToggle {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid rgba(180, 198, 190, 0.13);
+  border-radius: 999px;
+  background: #0a0f0d;
+}
+
+.languageToggle button {
+  min-width: 38px;
+  min-height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #7f8d87;
+  cursor: pointer;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.languageToggle button[aria-pressed="true"] {
+  background: rgba(62, 232, 159, 0.14);
+  color: var(--accent);
+}
+
+.languageToggle button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .settingsContent {

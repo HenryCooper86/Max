@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { adminAccountApi, inviteUrl, type AdminOverview, type AuthUser } from "../../lib/auth";
+import { useLanguage } from "../LanguageToggle";
 import { adminRoleLabel, confirmationCopy, formatAdminRelativeTime } from "./admin-model";
 
 const INVITE_EXPIRING_SOON_MS = 2 * 24 * 60 * 60 * 1000;
@@ -33,6 +34,7 @@ export function AccountManagement({
   user: AuthUser;
   onAuthenticationExpired: () => void;
 }) {
+  const { language } = useLanguage();
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [status, setStatus] = useState<LoadStatus>("loading");
   const [loadNotice, setLoadNotice] = useState<Notice | null>(null);
@@ -276,7 +278,10 @@ export function AccountManagement({
     }
     setActionNotice({
       tone: "success",
-      message: `@${username} 现在是${adminRoleLabel(role)}。`
+      message:
+        language === "en-US"
+          ? `@${username} is now ${adminRoleLabel(role, language)}.`
+          : `@${username} 现在是${adminRoleLabel(role, language)}。`
     });
     await refreshAfterMutation(operation);
     if (!operation.owns()) return;
@@ -386,13 +391,15 @@ export function AccountManagement({
             <div className="adminAccountUser">
               <strong>{account.displayName}</strong>
               <span>
-                @{account.username} · {adminRoleLabel(account.role)} · 最近登录{" "}
-                {formatAdminRelativeTime(account.lastLoginAt)}
+                @{account.username} · {adminRoleLabel(account.role, language)} ·{" "}
+                {language === "en-US" ? "Last login " : "最近登录 "} {formatAdminRelativeTime(account.lastLoginAt)}
               </span>
             </div>
             <div className="adminAccountRoleActions">
               {account.username === user.username ? (
-                <span className="adminAccountSelf">当前账号 · {adminRoleLabel(account.role)}</span>
+                <span className="adminAccountSelf">
+                  {language === "en-US" ? "Current account" : "当前账号"} · {adminRoleLabel(account.role, language)}
+                </span>
               ) : (
                 <>
                   <select

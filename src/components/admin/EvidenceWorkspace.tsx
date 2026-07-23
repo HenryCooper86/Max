@@ -12,6 +12,7 @@ import {
   type TestingTestCase
 } from "../../../shared/testing";
 import type { HelmetAgent } from "../../hooks/useHelmetAgent";
+import { useLanguage } from "../LanguageToggle";
 import type { AuthUser } from "../../lib/auth";
 import type { TestingClearScope } from "../../lib/testing-api";
 import {
@@ -170,6 +171,7 @@ export function EvidenceWorkspace({
   user,
   data
 }: Props) {
+  const { language } = useLanguage();
   const [selectedTesterKey, setSelectedTesterKey] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [testerFilter, setTesterFilter] = useState("");
@@ -1453,7 +1455,7 @@ export function EvidenceWorkspace({
                 >
                   {REVIEW_SEVERITIES.map((severity) => (
                     <option key={severity} value={severity}>
-                      {testingReviewSeverityLabel(severity)}
+                      {testingReviewSeverityLabel(severity, language)}
                     </option>
                   ))}
                 </select>
@@ -1492,7 +1494,8 @@ export function EvidenceWorkspace({
               <article key={review.id} className={`reviewRow ${review.severity}`}>
                 <button type="button" className="reviewEvidenceLink" onClick={() => void selectReviewEvidence(review)}>
                   <span>
-                    {testingReviewSeverityLabel(review.severity)} · {testingReviewStatusLabel(review.status)}
+                    {testingReviewSeverityLabel(review.severity, language)} ·{" "}
+                    {testingReviewStatusLabel(review.status, language)}
                   </span>
                   <strong>{review.title}</strong>
                   <small>
@@ -1508,7 +1511,7 @@ export function EvidenceWorkspace({
                 >
                   {REVIEW_STATUSES.map((status) => (
                     <option key={status} value={status}>
-                      {testingReviewStatusLabel(status)}
+                      {testingReviewStatusLabel(status, language)}
                     </option>
                   ))}
                 </select>

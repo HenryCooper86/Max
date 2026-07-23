@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { TESTING_TEST_CASES, type TestingRun, type TestingRunStatus } from "../../../shared/testing";
 import type { HelmetAgent } from "../../hooks/useHelmetAgent";
+import { useLanguage } from "../LanguageToggle";
 import type { AuthUser } from "../../lib/auth";
 import { testingAssignmentStatusLabel, testingRunStatusLabel } from "./admin-model";
 import type { AdminTestingData } from "./useAdminTestingData";
@@ -39,6 +40,7 @@ function busyTargetKey(target: Exclude<BusyTarget, null>) {
 }
 
 export function ReleaseValidation({ agent, user, data }: Props) {
+  const { language } = useLanguage();
   const isReviewer = user.role === "admin" || user.role === "reviewer";
   const currentBuild = agent.health?.build?.gitCommit ?? "local";
   const runs = isReviewer ? (data.operations?.runs ?? []) : data.runs;
@@ -116,7 +118,7 @@ export function ReleaseValidation({ agent, user, data }: Props) {
       if (result.ok) {
         setOwnedNotice(request, {
           tone: "success",
-          message: `发布运行状态已更新为${testingRunStatusLabel(result.data.status)}。`
+          message: `发布运行状态已更新为${testingRunStatusLabel(result.data.status, language)}。`
         });
         await data.refresh();
       } else {
@@ -200,7 +202,7 @@ export function ReleaseValidation({ agent, user, data }: Props) {
                   className={selectedRun?.id === run.id ? "active" : ""}
                   onClick={() => setSelectedRunId(run.id)}
                 >
-                  <span className={`adminStatus ${run.status}`}>{testingRunStatusLabel(run.status)}</span>
+                  <span className={`adminStatus ${run.status}`}>{testingRunStatusLabel(run.status, language)}</span>
                   <strong>{run.name}</strong>
                   <small>
                     {run.build} · {progress.completed}/{progress.required} 个样本
@@ -236,13 +238,13 @@ export function ReleaseValidation({ agent, user, data }: Props) {
                         (status) => status === selectedRun.status || status !== "approved" || user.role === "admin"
                       ).map((status) => (
                         <option key={status} value={status} disabled={status === "approved" && user.role !== "admin"}>
-                          {testingRunStatusLabel(status)}
+                          {testingRunStatusLabel(status, language)}
                         </option>
                       ))}
                     </select>
                   ) : (
                     <span className={`runStatus adminStatus ${selectedRun.status}`}>
-                      {testingRunStatusLabel(selectedRun.status)}
+                      {testingRunStatusLabel(selectedRun.status, language)}
                     </span>
                   )}
                 </div>
@@ -281,7 +283,7 @@ export function ReleaseValidation({ agent, user, data }: Props) {
                         <div className="coverageAssignments">
                           {assignments.map((item) => (
                             <span key={item.id}>
-                              {item.assignee} · {testingAssignmentStatusLabel(item.status)}
+                              {item.assignee} · {testingAssignmentStatusLabel(item.status, language)}
                             </span>
                           ))}
                         </div>

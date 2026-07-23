@@ -2,6 +2,7 @@ import type { TesterSessionSummary, TesterStats } from "../../../shared/agent";
 import type { TestingReviewSeverity, TestingReviewStatus, TestingRunStatus } from "../../../shared/testing";
 import type { AuthUser } from "../../lib/auth";
 import { formatRelativeTime } from "../../lib/utils";
+import type { Language } from "../../lib/i18n";
 
 export type AppSurface = "voice" | "settings" | "admin";
 export type AdminSection = "overview" | "releases" | "evidence" | "accounts" | "governance";
@@ -11,12 +12,20 @@ export function adminStatusAfterFailure(hasLoadedData: boolean): AdminDataStatus
   return hasLoadedData ? "stale" : "error";
 }
 
-export const ADMIN_SECTION_LABELS: Record<AdminSection, string> = {
+const ADMIN_SECTION_LABELS: Record<AdminSection, string> = {
   overview: "概览",
   releases: "发布验证",
   evidence: "证据与问题",
   accounts: "账号管理",
   governance: "策略与审计"
+};
+
+const ADMIN_SECTION_LABELS_EN: Record<AdminSection, string> = {
+  overview: "Overview",
+  releases: "Release validation",
+  evidence: "Evidence & issues",
+  accounts: "Accounts",
+  governance: "Policy & audit"
 };
 
 const BASE_SECTIONS: AdminSection[] = ["overview", "releases", "evidence"];
@@ -48,11 +57,24 @@ export function mergeAdminSessions(
   return [...byId.values()].sort((a, b) => b.endedAt - a.endedAt || b.sessionId.localeCompare(a.sessionId));
 }
 
-export function adminRoleLabel(role: AuthUser["role"]): string {
+export function adminRoleLabel(role: AuthUser["role"], language: Language = "zh-CN"): string {
+  if (language === "en-US") return role === "admin" ? "Administrator" : role === "reviewer" ? "Reviewer" : "Tester";
   return role === "admin" ? "管理员" : role === "reviewer" ? "审核员" : "测试员";
 }
 
-export function testingRunStatusLabel(status: TestingRunStatus): string {
+export function adminSectionLabel(section: AdminSection, language: Language = "zh-CN"): string {
+  return language === "en-US" ? ADMIN_SECTION_LABELS_EN[section] : ADMIN_SECTION_LABELS[section];
+}
+
+export function testingRunStatusLabel(status: TestingRunStatus, language: Language = "zh-CN"): string {
+  if (language === "en-US") {
+    if (status === "draft") return "Draft";
+    if (status === "active") return "Active";
+    if (status === "blocked") return "Blocked";
+    if (status === "ready") return "Ready for approval";
+    if (status === "approved") return "Approved";
+    return "Archived";
+  }
   if (status === "draft") return "草稿";
   if (status === "active") return "进行中";
   if (status === "blocked") return "受阻";
@@ -61,7 +83,14 @@ export function testingRunStatusLabel(status: TestingRunStatus): string {
   return "已归档";
 }
 
-export function testingAssignmentStatusLabel(status: string): string {
+export function testingAssignmentStatusLabel(status: string, language: Language = "zh-CN"): string {
+  if (language === "en-US") {
+    if (status === "pending") return "Not started";
+    if (status === "in-progress") return "In progress";
+    if (status === "complete") return "Complete";
+    if (status === "blocked") return "Blocked";
+    return status;
+  }
   if (status === "pending") return "待开始";
   if (status === "in-progress") return "进行中";
   if (status === "complete") return "已完成";
@@ -69,14 +98,24 @@ export function testingAssignmentStatusLabel(status: string): string {
   return status;
 }
 
-export function testingReviewStatusLabel(status: TestingReviewStatus): string {
+export function testingReviewStatusLabel(status: TestingReviewStatus, language: Language = "zh-CN"): string {
+  if (language === "en-US")
+    return status === "open"
+      ? "Open"
+      : status === "triaged"
+        ? "Triaged"
+        : status === "resolved"
+          ? "Resolved"
+          : "Waived";
   if (status === "open") return "待处理";
   if (status === "triaged") return "已分诊";
   if (status === "resolved") return "已解决";
   return "已豁免";
 }
 
-export function testingReviewSeverityLabel(severity: TestingReviewSeverity): string {
+export function testingReviewSeverityLabel(severity: TestingReviewSeverity, language: Language = "zh-CN"): string {
+  if (language === "en-US")
+    return severity === "low" ? "Low" : severity === "medium" ? "Medium" : severity === "high" ? "High" : "Critical";
   if (severity === "low") return "低";
   if (severity === "medium") return "中";
   if (severity === "high") return "高";

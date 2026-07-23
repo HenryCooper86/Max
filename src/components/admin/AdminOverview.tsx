@@ -1,6 +1,7 @@
 import type { TesterSessionSummary, TestingStats } from "../../../shared/agent";
 import type { TestingOperationsSnapshot, TestingQuality } from "../../../shared/testing";
 import type { HelmetAgent } from "../../hooks/useHelmetAgent";
+import { useLanguage } from "../LanguageToggle";
 import { corpusIssueCount, formatAdminRelativeTime, testingRunStatusLabel } from "./admin-model";
 
 const QUALITY_PRIORITY: Record<TestingQuality, number> = { fail: 3, watch: 2, pass: 1 };
@@ -37,6 +38,7 @@ type Props = {
 };
 
 export function AdminOverview({ agent, testing, sessions, operations, onOpenEvidence, onOpenReleases }: Props) {
+  const { language } = useLanguage();
   const releaseGate = testing?.releaseGate;
   const issueCount = corpusIssueCount(testing?.users ?? []);
   const failCount = (testing?.users ?? []).reduce((sum, tester) => sum + tester.qualityCounts.fail, 0);
@@ -122,13 +124,22 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
   const recentRuns = [...(operations?.runs ?? [])].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 5);
 
   return (
-    <section className="adminSectionCard adminOverview" aria-label="管理概览">
+    <section
+      className="adminSectionCard adminOverview"
+      aria-label={language === "en-US" ? "Admin overview" : "管理概览"}
+    >
       <div className="panelHeader adminSectionHeader">
         <div>
-          <h2>质量与发布概览</h2>
+          <h2>{language === "en-US" ? "Quality & release overview" : "质量与发布概览"}</h2>
           <span>
             当前构建 {agent.health?.build?.gitCommit ?? releaseGate?.build ?? "local"} ·{" "}
-            {testing ? `${testing.windowMinutes} 分钟窗口` : "等待测试数据"}
+            {testing
+              ? language === "en-US"
+                ? `${testing.windowMinutes}-minute window`
+                : `${testing.windowMinutes} 分钟窗口`
+              : language === "en-US"
+                ? "Waiting for test data"
+                : "等待测试数据"}
           </span>
         </div>
       </div>
@@ -209,7 +220,7 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
                 return (
                   <button type="button" className="sessionButton" key={run.id} onClick={onOpenReleases}>
                     <span className={`sessionQuality adminStatus ${statusTone(run.status)}`}>
-                      {testingRunStatusLabel(run.status)}
+                      {testingRunStatusLabel(run.status, language)}
                     </span>
                     <strong>{run.name}</strong>
                     <span>

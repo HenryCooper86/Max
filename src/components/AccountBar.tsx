@@ -14,6 +14,7 @@ import {
   type AuthUser,
   type UserMemorySummary
 } from "../lib/auth";
+import { useLanguage } from "./LanguageToggle";
 
 type FormProps = {
   authEnabled: boolean;
@@ -25,6 +26,7 @@ type FormProps = {
 };
 
 export function AccountForm({ authEnabled, registrationOpen, inviteCode, onSignedIn }: FormProps) {
+  const { t } = useLanguage();
   const canRegister = registrationOpen || Boolean(inviteCode);
   const [mode, setMode] = useState<"login" | "register">(authEnabled && !inviteCode ? "login" : "register");
   const [username, setUsername] = useState("");
@@ -56,12 +58,12 @@ export function AccountForm({ authEnabled, registrationOpen, inviteCode, onSigne
   };
 
   return (
-    <form className="accountForm" aria-label="登录或注册" onSubmit={submit}>
+    <form className="accountForm" aria-label={t("account.loginOrRegister")} onSubmit={submit}>
       <div className="accountFields">
         <input
           value={username}
           onChange={(event) => setUsername(event.target.value)}
-          placeholder="用户名"
+          placeholder={t("account.username")}
           autoComplete="username"
           spellCheck={false}
           required
@@ -70,7 +72,7 @@ export function AccountForm({ authEnabled, registrationOpen, inviteCode, onSigne
           type="password"
           value={password}
           onChange={(event) => setPassword(event.target.value)}
-          placeholder={registering ? "密码（至少 8 位）" : "密码"}
+          placeholder={registering ? t("account.passwordMin") : t("account.password")}
           autoComplete={registering ? "new-password" : "current-password"}
           required
         />
@@ -78,7 +80,7 @@ export function AccountForm({ authEnabled, registrationOpen, inviteCode, onSigne
           <input
             value={displayName}
             onChange={(event) => setDisplayName(event.target.value)}
-            placeholder="显示名（可选）"
+            placeholder={t("account.displayName")}
             autoComplete="nickname"
             spellCheck={false}
           />
@@ -86,11 +88,15 @@ export function AccountForm({ authEnabled, registrationOpen, inviteCode, onSigne
       </div>
       <div className="accountActions">
         <button type="submit" disabled={busy}>
-          {registering ? "注册" : "登录"}
+          {registering ? t("account.register") : t("account.login")}
         </button>
         {canRegister ? (
           <button type="button" className="accountSwitch" onClick={() => setMode(registering ? "login" : "register")}>
-            {registering ? "已有账号？登录" : authEnabled ? "注册新账号" : "注册第一个账号（管理员）"}
+            {registering
+              ? t("account.haveAccount")
+              : authEnabled
+                ? t("account.registerNew")
+                : t("account.registerAdmin")}
           </button>
         ) : null}
       </div>
@@ -104,6 +110,7 @@ export function AccountForm({ authEnabled, registrationOpen, inviteCode, onSigne
 }
 
 function PasswordChangeForm({ onDone }: { onDone: (changed: boolean) => void }) {
+  const { t } = useLanguage();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -128,7 +135,7 @@ function PasswordChangeForm({ onDone }: { onDone: (changed: boolean) => void }) 
         if (result.ok) {
           onDone(true);
         } else {
-          setError(result.error ?? "修改失败，请重试。");
+          setError(result.error ?? t("account.passwordChangeFailed"));
         }
       })
       .finally(() => {
@@ -137,13 +144,13 @@ function PasswordChangeForm({ onDone }: { onDone: (changed: boolean) => void }) 
   };
 
   return (
-    <form className="accountForm passwordForm" aria-label="修改密码" onSubmit={submit}>
+    <form className="accountForm passwordForm" aria-label={t("account.changePasswordAria")} onSubmit={submit}>
       <div className="accountFields">
         <input
           type="password"
           value={currentPassword}
           onChange={(event) => setCurrentPassword(event.target.value)}
-          placeholder="当前密码"
+          placeholder={t("account.currentPassword")}
           autoComplete="current-password"
           required
         />
@@ -151,17 +158,17 @@ function PasswordChangeForm({ onDone }: { onDone: (changed: boolean) => void }) 
           type="password"
           value={newPassword}
           onChange={(event) => setNewPassword(event.target.value)}
-          placeholder="新密码（至少 8 位）"
+          placeholder={t("account.newPassword")}
           autoComplete="new-password"
           required
         />
       </div>
       <div className="accountActions">
         <button type="submit" disabled={busy}>
-          {busy ? "修改中…" : "确认修改"}
+          {busy ? t("account.changingPassword") : t("account.confirmPassword")}
         </button>
         <button type="button" className="accountSwitch" onClick={() => onDone(false)}>
-          取消
+          {t("account.cancel")}
         </button>
       </div>
       {error ? (
@@ -190,6 +197,7 @@ export function AccountSessionControls(props: SessionControlsProps) {
 }
 
 function AccountSessionControlsForUser({ user, onSignedOut }: SessionControlsProps) {
+  const { t } = useLanguage();
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
@@ -265,18 +273,23 @@ function AccountSessionControlsForUser({ user, onSignedOut }: SessionControlsPro
   }, [passwordChanged]);
 
   return (
-    <div className="accountBar" aria-label="账号">
+    <div className="accountBar" aria-label={t("account.loginOrRegister")}>
       <div className="accountIdentity">
         <strong>{user.displayName}</strong>
         <span>
-          @{user.username} · {user.role === "admin" ? "管理员" : user.role === "reviewer" ? "审核员" : "测试员"}
+          @{user.username} ·{" "}
+          {user.role === "admin"
+            ? t("account.roleAdmin")
+            : user.role === "reviewer"
+              ? t("account.roleReviewer")
+              : t("account.roleTester")}
         </span>
       </div>
       <div className="accountActions">
         <button
           type="button"
           className="accountSwitch"
-          title="复制会话令牌，粘贴到 iOS/Android App 的认证令牌栏即可连接"
+          title="Copy the session token and paste it into the iOS/Android app to connect"
           onClick={() => {
             const ownerId = user.id;
             const sequence = ++copySequenceRef.current;
@@ -286,11 +299,11 @@ function AccountSessionControlsForUser({ user, onSignedOut }: SessionControlsPro
                 return;
               }
               setCopied(ok);
-              if (!ok) setClipboardNotice("无法复制会话令牌。");
+              if (!ok) setClipboardNotice(t("account.copyFailed"));
             });
           }}
         >
-          {copied ? "已复制 ✓" : "复制令牌（App 用）"}
+          {copied ? t("account.copied") : t("account.copyToken")}
         </button>
         <button
           type="button"
@@ -300,13 +313,13 @@ function AccountSessionControlsForUser({ user, onSignedOut }: SessionControlsPro
             setPasswordChanged(false);
           }}
         >
-          {passwordChanged ? "密码已修改 ✓" : "修改密码"}
+          {passwordChanged ? t("account.passwordChanged") : t("account.changePassword")}
         </button>
         <button
           type="button"
           className={`danger ${memoryClearArmed ? "armed" : ""}`}
           disabled={memoryBusy || !memorySummary?.turnCount}
-          title="清除 Max 为当前登录用户保存的跨会话记忆"
+          title="Clear Max's saved cross-session memory for this account"
           onClick={() => {
             if (!memoryClearArmed) {
               setMemoryClearArmed(true);
@@ -326,7 +339,7 @@ function AccountSessionControlsForUser({ user, onSignedOut }: SessionControlsPro
                 ) {
                   return;
                 }
-                setMemoryNotice(ok ? "记忆已清除 ✓" : "清除记忆失败");
+                setMemoryNotice(ok ? t("account.memoryCleared") : t("account.memoryClearFailed"));
                 if (ok) {
                   setMemorySummary((summary) => (summary ? { ...summary, turnCount: 0, factCount: 0 } : summary));
                 }
@@ -343,10 +356,10 @@ function AccountSessionControlsForUser({ user, onSignedOut }: SessionControlsPro
           }}
         >
           {memoryClearArmed
-            ? "确认清除记忆?"
+            ? t("account.confirmMemoryClear")
             : memorySummary
               ? `记忆 ${memorySummary.turnCount} 段${memorySummary.factCount ? ` · ${memorySummary.factCount} 条重点` : ""}`
-              : "记忆…"}
+              : t("account.memory")}
         </button>
         <button
           type="button"
@@ -364,7 +377,7 @@ function AccountSessionControlsForUser({ user, onSignedOut }: SessionControlsPro
             });
           }}
         >
-          退出登录
+          {t("account.logout")}
         </button>
       </div>
       {changingPassword ? (

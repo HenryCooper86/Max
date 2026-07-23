@@ -1034,6 +1034,20 @@ export function listTestingReviews(limit = 200): TestingReview[] {
     .filter((item): item is TestingReview => Boolean(item));
 }
 
+/** Counts only the unresolved evidence reviews attached to one release run.
+ * This intentionally does not reuse the bounded reviewer-feed query: an older
+ * open review must keep its own candidate from being approved even when newer
+ * unrelated reviews have filled that feed. */
+export function countUnresolvedTestingReviewsForRun(runId: string): number {
+  const row = database()
+    .prepare(
+      "SELECT COUNT(*) AS count FROM testing_reviews " +
+        "WHERE status IN ('open', 'triaged') AND json_extract(payload_json, '$.runId') = ?"
+    )
+    .get(runId) as { count?: number } | undefined;
+  return Number(row?.count ?? 0);
+}
+
 export function appendTestingAudit(
   actor: string,
   action: string,

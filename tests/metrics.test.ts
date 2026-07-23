@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildInfo } from "../server/build-info";
 import { buildHealth } from "../server/config";
 import {
@@ -24,8 +24,12 @@ import {
 } from "../server/metrics";
 import { DEFAULT_TESTING_POLICY, TESTING_TEST_CASES, type TestingPlatform } from "../shared/testing";
 import { createTestingPolicy, getActiveTestingPolicy } from "../server/testing-store";
+import * as testingStore from "../server/testing-store";
 
-afterEach(() => metrics.reset());
+afterEach(() => {
+  vi.restoreAllMocks();
+  metrics.reset();
+});
 
 function seedValidCompletedSession(
   sessionId: string,
@@ -361,6 +365,18 @@ describe("relay metrics", () => {
     expect(updated?.evidenceHash).toBe(originalHash);
   });
 
+  it("does not report a cached note update when the durable write fails", () => {
+    seedValidCompletedSession("note-write-failure", "baseline-live-session");
+    vi.spyOn(testingStore, "saveTestingSession").mockImplementation(() => {
+      throw new Error("SQLite unavailable");
+    });
+
+    expect(() => updateTestingSessionNotes("note-write-failure", "This must not be reported as saved.")).toThrow(
+      "SQLite unavailable"
+    );
+    expect(testingSessionDetail("note-write-failure")?.notes).toBe("");
+  });
+
   it("classifies invalid sessions and excludes them from release-gate evidence", () => {
     beginTesterSession(
       "invalid-no-reply",
@@ -674,6 +690,46 @@ describe("admin clear actions", () => {
     expect(snapshot.sessions.length).toBe(0);
     expect(snapshot.totals.totalTestSessions).toBe(0);
     expect(snapshot.timeline.every((bucket) => bucket.sessionsStarted === 0)).toBe(true);
+  });
+
+  it("keeps one tester's in-memory evidence when its durable deletion fails", () => {
+    seedTwoTesters();
+    vi.spyOn(testingStore, "deleteStoredTesterSessions").mockImplementation(() => {
+      throw new Error("SQLite unavailable");
+    });
+
+    expect(() => clearTesterData("alice@203.0.113.1")).toThrow("SQLite unavailable");
+    expect(
+      testingSnapshot(10_000)
+        .users.map((user) => user.testerId)
+        .sort()
+    ).toEqual(["alice", "bob"]);
+    expect(
+      testingSnapshot(10_000)
+        .sessions.map((session) => session.sessionId)
+        .sort()
+    ).toEqual(["clear-a-1", "clear-a-2", "clear-b-1"]);
+  });
+
+  it("keeps a completed session in memory when its durable deletion fails", () => {
+    seedTwoTesters();
+    vi.spyOn(testingStore, "deleteStoredTestingSession").mockImplementation(() => {
+      throw new Error("SQLite unavailable");
+    });
+
+    expect(() => clearTestingSession("clear-a-1")).toThrow("SQLite unavailable");
+    expect(testingSnapshot(10_000).sessions.map((session) => session.sessionId)).toContain("clear-a-1");
+  });
+
+  it("keeps all in-memory evidence when the durable clear fails", () => {
+    seedTwoTesters();
+    vi.spyOn(testingStore, "deleteAllStoredTestingSessions").mockImplementation(() => {
+      throw new Error("SQLite unavailable");
+    });
+
+    expect(() => clearAllTesterData()).toThrow("SQLite unavailable");
+    expect(testingSnapshot(10_000).users).toHaveLength(2);
+    expect(testingSnapshot(10_000).sessions).toHaveLength(3);
   });
 });
 

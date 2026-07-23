@@ -51,6 +51,7 @@ import {
   createTestingAssignment,
   createTestingPolicy,
   createTestingRun,
+  countUnresolvedTestingReviewsForRun,
   getActiveTestingPolicy,
   getTestingRun,
   listTestingAudit,
@@ -472,15 +473,13 @@ app.patch("/testing/runs/:runId", (req, res) => {
         .reduce((sum, assignment) => sum + assignment.completedSessionIds.length, 0);
       return captured >= requirement.requiredValidSessions;
     });
-    const unresolvedReviews = listTestingReviews(500).filter(
-      (review) => review.runId === candidate.id && (review.status === "open" || review.status === "triaged")
-    );
+    const unresolvedReviews = countUnresolvedTestingReviewsForRun(candidate.id);
     const regressionBlocked = decision.regression.baselineSource !== "none" && decision.regression.status !== "pass";
     if (
       !testingBuildsMatch(candidate.build, decision.releaseGate.build) ||
       decision.releaseGate.status !== "pass" ||
       !coverageComplete ||
-      unresolvedReviews.length ||
+      unresolvedReviews ||
       regressionBlocked
     ) {
       res.status(409).json({
@@ -490,7 +489,7 @@ app.patch("/testing/runs/:runId", (req, res) => {
           gate: decision.releaseGate.status,
           buildMatches: testingBuildsMatch(candidate.build, decision.releaseGate.build),
           coverageComplete,
-          unresolvedReviews: unresolvedReviews.length,
+          unresolvedReviews,
           regression: decision.regression.status
         }
       });

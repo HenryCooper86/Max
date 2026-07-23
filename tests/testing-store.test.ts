@@ -4,6 +4,7 @@ import { normalizeTestingBuildIdentity, testingBuildsMatch } from "../shared/tes
 import {
   createTestingAssignment,
   createTestingPolicy,
+  countUnresolvedTestingReviewsForRun,
   createTestingRun,
   deleteStoredTestingSession,
   evidenceHash,
@@ -380,5 +381,20 @@ describe("testing operations store", () => {
     expect(updated?.status).toBe("resolved");
     const forSession = listTestingReviews(1_000).filter((review) => review.sessionId === "buried-session");
     expect(forSession).toHaveLength(1);
+  });
+
+  it("counts unresolved reviews for a run even when newer unrelated reviews exceed the recent list cap", () => {
+    const run = createTestingRun({ build: "candidate-build" }, "admin", "current", 1_000);
+    upsertTestingReview({ sessionId: "target-session", runId: run.id, title: "Must resolve" }, "reviewer", 1_001);
+    for (let index = 0; index < 600; index += 1) {
+      upsertTestingReview(
+        { sessionId: `other-${index}`, runId: `other-run-${index}`, title: "Unrelated" },
+        "reviewer",
+        2_000 + index
+      );
+    }
+
+    // Release approval must not decide from the capped recent-review feed.
+    expect(countUnresolvedTestingReviewsForRun(run.id)).toBe(1);
   });
 });

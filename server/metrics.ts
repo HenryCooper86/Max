@@ -1357,6 +1357,10 @@ export type TestingClearResult = { removedTesters: number; removedSessions: numb
 /** Removes one tester: their aggregates, transcripts, and session history. */
 export function clearTesterData(testerKey: string): TestingClearResult {
   ensureTestingHistoryLoaded();
+  // The evidence index is authoritative: if its transaction fails, preserve
+  // the live cache so callers receive an honest failure instead of a clear
+  // that reappears on the next process start.
+  const removedStoredSessions = deleteStoredTesterSessions(testerKey);
   const removedTesters = testers.delete(testerKey) ? 1 : 0;
   let removedActiveSessions = 0;
   for (const [sessionId, session] of testingSessions) {
@@ -1370,12 +1374,6 @@ export function clearTesterData(testerKey: string): TestingClearResult {
     if (completedSessions[index]?.testerKey === testerKey) completedSessions.splice(index, 1);
   }
   const removedCachedSessions = before - completedSessions.length;
-  let removedStoredSessions = removedCachedSessions;
-  try {
-    removedStoredSessions = deleteStoredTesterSessions(testerKey);
-  } catch {
-    // The in-memory/archive clear still succeeds if SQLite is unavailable.
-  }
   const removedSessions = removedActiveSessions + Math.max(removedCachedSessions, removedStoredSessions);
   if (removedTesters || removedSessions) {
     filterTestingHistory((value) => {
@@ -1394,14 +1392,11 @@ export function clearTesterData(testerKey: string): TestingClearResult {
  */
 export function clearTestingSession(sessionId: string): TestingClearResult {
   ensureTestingHistoryLoaded();
+  // Commit durable deletion before changing the cache for the same reason as
+  // clearTesterData: an unavailable store must remain visible to the caller.
+  const removedStored = deleteStoredTestingSession(sessionId);
   const index = completedSessions.findIndex((session) => session.sessionId === sessionId);
   if (index >= 0) completedSessions.splice(index, 1);
-  let removedStored = 0;
-  try {
-    removedStored = deleteStoredTestingSession(sessionId);
-  } catch {
-    // The in-memory/archive clear still succeeds if SQLite is unavailable.
-  }
   if (index < 0 && !removedStored) return { removedTesters: 0, removedSessions: 0 };
   filterTestingHistory((value) => !value || value.sessionId !== sessionId);
   return { removedTesters: 0, removedSessions: 1 };
@@ -1410,15 +1405,11 @@ export function clearTestingSession(sessionId: string): TestingClearResult {
 /** Removes every tester, session, transcript, and the timeline buckets. */
 export function clearAllTesterData(): TestingClearResult {
   ensureTestingHistoryLoaded();
+  // Do not clear recovery-visible memory unless durable deletion committed.
+  const storedSessions = deleteAllStoredTestingSessions();
   const removedTesters = testers.size;
   const cachedSessions = completedSessions.length;
   const activeSessions = testingSessions.size;
-  let storedSessions = cachedSessions;
-  try {
-    storedSessions = deleteAllStoredTestingSessions();
-  } catch {
-    // The in-memory/archive clear still succeeds if SQLite is unavailable.
-  }
   const removedSessions = activeSessions + Math.max(cachedSessions, storedSessions);
   testers.clear();
   testingSessions.clear();
@@ -1843,7 +1834,8 @@ export function testingSessionDetail(sessionId: string, requesterTesterId?: stri
 
 export function updateTestingSessionNotes(sessionId: string, notes: unknown): TesterSessionSummary | null {
   ensureTestingHistoryLoaded();
-  let session = completedSessions.find((item) => item.sessionId === sessionId);
+  const cachedSession = completedSessions.find((item) => item.sessionId === sessionId);
+  let session = cachedSession;
   if (!session) {
     try {
       const stored = loadStoredTestingSession(sessionId);
@@ -1853,11 +1845,10 @@ export function updateTestingSessionNotes(sessionId: string, notes: unknown): Te
     }
   }
   if (!session) return null;
-  session.notes = typeof notes === "string" ? cleanText(notes).slice(0, 1_000) : "";
-  try {
-    saveTestingSession(session);
-  } catch {
-    if (!completedSessions.some((item) => item.sessionId === sessionId)) return null;
-  }
-  return clonedSession(session, true);
+  const updated = { ...session, notes: typeof notes === "string" ? cleanText(notes).slice(0, 1_000) : "" };
+  // A failed durable write is distinct from an unknown session. Let it reach
+  // the typed endpoint as a 500 rather than claiming the cached note saved.
+  saveTestingSession(updated);
+  if (cachedSession) cachedSession.notes = updated.notes;
+  return clonedSession(updated, true);
 }

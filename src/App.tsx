@@ -6,7 +6,7 @@ import { HelmetVisual, VoiceStateReadout } from "./components/HelmetVisual";
 import { LoginGate } from "./components/LoginGate";
 import { VoiceTranscript } from "./components/VoiceTranscript";
 import { WebSettingsSheet } from "./components/WebSettingsSheet";
-import { LanguageProvider } from "./components/LanguageToggle";
+import { LanguageProvider, useLanguage } from "./components/LanguageToggle";
 import { surfaceAfterAuthentication, type AppSurface } from "./components/admin/admin-model";
 import { useHelmetAgent } from "./hooks/useHelmetAgent";
 import { fetchCurrentUser, type AuthUser } from "./lib/auth";
@@ -16,6 +16,7 @@ const AdminWorkspace = lazy(() =>
 );
 
 function AppContent() {
+  const { t } = useLanguage();
   const agent = useHelmetAgent();
   const { listening, starting, startMic, stopMic } = agent;
   const [surface, setSurface] = useState<AppSurface>("voice");
@@ -163,7 +164,7 @@ function AppContent() {
 
   if (surface === "admin") {
     return (
-      <Suspense fallback={<main className="adminWorkspace adminWorkspaceLoading">正在加载测试与管理…</main>}>
+      <Suspense fallback={<main className="adminWorkspace adminWorkspaceLoading">{t("app.loadingAdmin")}</main>}>
         <AdminWorkspace agent={agent} user={authUser} onAuthenticationExpired={handleSignedOut} onClose={closeAdmin} />
       </Suspense>
     );
@@ -210,7 +211,7 @@ function AppContent() {
 
         {captionsOpen ? <VoiceTranscript agent={agent} /> : null}
 
-        <nav className="voiceUtilities" aria-label="语音助手视图">
+        <nav className="voiceUtilities" aria-label={t("voice.viewLabel")}>
           <button
             type="button"
             className={captionsOpen ? "active" : ""}
@@ -218,11 +219,11 @@ function AppContent() {
             onClick={() => setCaptionsOpen((open) => !open)}
           >
             <ChatCircleText size={20} weight="regular" aria-hidden="true" />
-            字幕
+            {t("voice.captions")}
           </button>
           <button ref={settingsButtonRef} type="button" onClick={openSettings} aria-haspopup="dialog">
             <GearSix size={20} weight="regular" aria-hidden="true" />
-            设置
+            {t("voice.settings")}
           </button>
         </nav>
 
@@ -231,14 +232,14 @@ function AppContent() {
             type="button"
             className={`voiceMicButton ${listening || starting ? "active" : ""}`}
             aria-pressed={listening || starting}
-            aria-label={starting ? "正在连接免提" : listening ? "结束免提" : "开始免提"}
+            aria-label={starting ? t("voice.connecting") : listening ? t("voice.stopHandsFree") : t("voice.startHandsFree")}
             onClick={toggleHandsFreeSession}
           >
             <span className="voiceMicKey" aria-hidden="true">
               {listening || starting ? <X size={24} weight="bold" /> : <Microphone size={25} weight="regular" />}
             </span>
-            <span className="voiceMicLabel">{starting ? "连接中" : listening ? "结束免提" : "开始免提"}</span>
-            <kbd aria-hidden="true">空格键</kbd>
+            <span className="voiceMicLabel">{starting ? t("voice.connectingShort") : listening ? t("voice.stopHandsFree") : t("voice.startHandsFree")}</span>
+            <kbd aria-hidden="true">{t("voice.spaceKey")}</kbd>
           </button>
         </div>
       </section>

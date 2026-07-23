@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 import type { HazardLevel } from "../../shared/agent";
+import { useLanguage } from "./LanguageToggle";
 
 /** Conversational state of the hands-free session, driven by server events. */
 export type TurnState = "idle" | "listening" | "hearing" | "thinking" | "speaking";
@@ -52,14 +53,6 @@ function gaugeLitCount(mode: GaugeMode, voiceLevel: number): number {
   }
 }
 
-const CAPTIONS: Record<TurnState, string> = {
-  idle: "待机",
-  listening: "免提待命 · 请讲话",
-  hearing: "正在聆听…",
-  thinking: "Max 思考中…",
-  speaking: "Max 回答中"
-};
-
 // Latin telltale shown under the Chinese state word — Space Mono, instrument
 // register. Deliberately English: it reads as a gauge label, not primary copy.
 const TELLTALE: Record<TurnState, string> = {
@@ -79,11 +72,6 @@ const RING_CLASS: Record<TurnState, string> = {
   speaking: "speaking"
 };
 
-const HAZARD_CAPTIONS: Record<Exclude<HazardLevel, "normal">, string> = {
-  caution: "注意路况",
-  critical: "高风险 · 优先安全"
-};
-
 const HAZARD_TELLTALE: Record<Exclude<HazardLevel, "normal">, string> = {
   caution: "CAUTION",
   critical: "HAZARD"
@@ -97,12 +85,14 @@ export function VoiceStateReadout({
   turnState,
   hazardLevel = "normal"
 }: Pick<Props, "connected" | "turnState" | "hazardLevel">) {
+  const { t } = useLanguage();
   const hazard = connected && hazardLevel !== "normal" ? hazardLevel : null;
+  const stateCaption = t(`voice.state.${turnState}` as "voice.state.idle" | "voice.state.listening" | "voice.state.hearing" | "voice.state.thinking" | "voice.state.speaking");
   const caption = !connected
-    ? "离线"
+    ? t("voice.offline")
     : hazard
-      ? `${HAZARD_CAPTIONS[hazard]} · ${CAPTIONS[turnState]}`
-      : CAPTIONS[turnState];
+      ? `${t(`voice.hazard.${hazard}` as "voice.hazard.caution" | "voice.hazard.critical")} · ${stateCaption}`
+      : stateCaption;
   const telltale = !connected ? "OFFLINE" : hazard ? HAZARD_TELLTALE[hazard] : TELLTALE[turnState];
   const stateClass = !connected ? "offline" : hazard ? `hazard-${hazard}` : RING_CLASS[turnState];
 

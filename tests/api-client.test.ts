@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { requestJson } from "../src/lib/api-client";
+import { adminAccountApi } from "../src/lib/auth";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -49,6 +50,29 @@ describe("requestJson", () => {
     await expect(requestJson("/testing/example")).resolves.toEqual({
       ok: false,
       error: { kind: "unavailable", message: "无法连接中继，请稍后重试。" }
+    });
+  });
+});
+
+describe("admin account API", () => {
+  it("preserves the server's invite revocation result", async () => {
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) => (key === "max.authToken" ? "sess_admin" : null)
+      }
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, removed: false })
+      })
+    );
+
+    await expect(adminAccountApi.revokeInvite("already-revoked")).resolves.toEqual({
+      ok: true,
+      data: { removed: false }
     });
   });
 });

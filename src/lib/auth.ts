@@ -216,12 +216,12 @@ async function createInvite(): Promise<ApiResult<InviteInfo>> {
 }
 
 async function revokeInvite(code: string): Promise<ApiResult<{ removed: boolean }>> {
-  const result = await requestJson<{ ok: true }>("/auth/admin/invites/revoke", {
+  const result = await requestJson<{ ok: true; removed: boolean }>("/auth/admin/invites/revoke", {
     method: "POST",
     headers: { "Content-Type": "application/json", ...adminHeaders() },
     body: JSON.stringify({ code })
   });
-  return result.ok ? { ok: true, data: { removed: result.data.ok } } : result;
+  return result.ok ? { ok: true, data: { removed: result.data.removed } } : result;
 }
 
 async function deleteUser(username: string): Promise<ApiResult<AuthUser>> {

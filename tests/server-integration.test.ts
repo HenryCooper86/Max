@@ -147,6 +147,18 @@ describe("relay process integration", () => {
     expect(revokeInvite.status).toBe(200);
     await expect(revokeInvite.json()).resolves.toEqual({ ok: true, removed: true });
 
+    const revokeInviteAgain = await fetch(`${baseUrl}/auth/admin/invites/revoke`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${registered.token}`,
+        Connection: "close"
+      },
+      body: JSON.stringify({ code: invitePayload.invite.code })
+    });
+    expect(revokeInviteAgain.status).toBe(200);
+    await expect(revokeInviteAgain.json()).resolves.toEqual({ ok: true, removed: false });
+
     const ready = await fetch(`${baseUrl}/ready`, { headers: { Connection: "close" } });
     expect(ready.status).toBe(200);
 

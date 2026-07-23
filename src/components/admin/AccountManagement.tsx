@@ -41,6 +41,7 @@ export function AccountManagement({
   const [busyTarget, setBusyTarget] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [createdCopied, setCreatedCopied] = useState(false);
+  const [manualInviteUrl, setManualInviteUrl] = useState<string | null>(null);
   const [accountFilter, setAccountFilter] = useState("");
   const [armedDelete, setArmedDelete] = useState<string | null>(null);
   const mountedRef = useRef(true);
@@ -98,6 +99,7 @@ export function AccountManagement({
     setBusyTarget(null);
     setCopiedCode(null);
     setCreatedCopied(false);
+    setManualInviteUrl(null);
     setArmedDelete(null);
     void refresh(ownerId);
     const timer = window.setInterval(() => void refresh(ownerId), 30_000);
@@ -133,6 +135,7 @@ export function AccountManagement({
     clipboardSequenceRef.current += 1;
     setBusyTarget(target);
     setActionNotice(null);
+    setManualInviteUrl(null);
     return {
       ownerId,
       sequence,
@@ -164,9 +167,11 @@ export function AccountManagement({
       finishMutation(operation);
       return;
     }
-    const copied = await writeClipboard(inviteUrl(result.data.code));
+    const createdUrl = inviteUrl(result.data.code);
+    const copied = await writeClipboard(createdUrl);
     if (!operation.owns()) return;
     setCreatedCopied(copied);
+    setManualInviteUrl(copied ? null : createdUrl);
     setActionNotice(
       copied
         ? { tone: "success", message: "邀请链接已生成并复制。" }
@@ -181,15 +186,18 @@ export function AccountManagement({
     if (busyTarget !== null) return;
     const ownerId = accountOwnerRef.current;
     const sequence = ++clipboardSequenceRef.current;
-    const copied = await writeClipboard(inviteUrl(code));
+    const url = inviteUrl(code);
+    const copied = await writeClipboard(url);
     if (!ownsAccount(ownerId) || clipboardSequenceRef.current !== sequence) {
       return;
     }
     if (copied) {
       setCopiedCode(code);
+      setManualInviteUrl(null);
       setActionNotice(null);
     } else {
       setCopiedCode(null);
+      setManualInviteUrl(url);
       setActionNotice({ tone: "error", message: "无法写入剪贴板，请手动复制邀请链接。" });
     }
   };
@@ -346,6 +354,17 @@ export function AccountManagement({
           {actionNotice.message}
         </p>
       ) : null}
+      {manualInviteUrl ? (
+        <label className="accountAdminFilter accountInviteRecovery">
+          <span>手动复制邀请链接</span>
+          <input
+            aria-label="手动复制邀请链接"
+            value={manualInviteUrl}
+            readOnly
+            onFocus={(event) => event.currentTarget.select()}
+          />
+        </label>
+      ) : null}
 
       <div className="accountAdminList">
         {filteredUsers.map((account) => (
@@ -358,28 +377,32 @@ export function AccountManagement({
               </span>
             </div>
             <div className="accountAdminRoleActions">
-              <select
-                value={account.role}
-                aria-label={`${account.username} 的角色`}
-                disabled={busyTarget !== null}
-                onChange={(event) => void changeRole(account.username, event.target.value as AuthUser["role"])}
-              >
-                <option value="tester">测试员</option>
-                <option value="reviewer">审核员</option>
-                <option value="admin">管理员</option>
-              </select>
               {account.username === user.username ? (
-                <span className="accountAdminSelf">当前账号</span>
-              ) : account.role !== "admin" ? (
-                <button
-                  type="button"
-                  className={`danger ${armedDelete === account.username ? "armed" : ""}`}
-                  disabled={busyTarget !== null}
-                  onClick={() => void removeUser(account.username)}
-                >
-                  {armedDelete === account.username ? confirmationCopy("user", `@${account.username}`) : "删除"}
-                </button>
-              ) : null}
+                <span className="accountAdminSelf">当前账号 · {adminRoleLabel(account.role)}</span>
+              ) : (
+                <>
+                  <select
+                    value={account.role}
+                    aria-label={`${account.username} 的角色`}
+                    disabled={busyTarget !== null}
+                    onChange={(event) => void changeRole(account.username, event.target.value as AuthUser["role"])}
+                  >
+                    <option value="tester">测试员</option>
+                    <option value="reviewer">审核员</option>
+                    <option value="admin">管理员</option>
+                  </select>
+                  {account.role !== "admin" ? (
+                    <button
+                      type="button"
+                      className={`danger ${armedDelete === account.username ? "armed" : ""}`}
+                      disabled={busyTarget !== null}
+                      onClick={() => void removeUser(account.username)}
+                    >
+                      {armedDelete === account.username ? confirmationCopy("user", `@${account.username}`) : "删除"}
+                    </button>
+                  ) : null}
+                </>
+              )}
             </div>
           </div>
         ))}

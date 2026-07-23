@@ -154,6 +154,9 @@ describe("AccountManagement", () => {
 
     expect(text(renderer!.root)).toContain("链接已生成，但无法写入剪贴板。");
     expect(text(renderer!.root)).not.toContain("邀请链接已复制 ✓");
+    const recoveryLink = renderer!.root.findByProps({ "aria-label": "手动复制邀请链接" });
+    expect(recoveryLink.props.readOnly).toBe(true);
+    expect(recoveryLink.props.value).toBe("https://max.example/?invite=invite_created");
     expect(adminAccountApi.fetchOverview).toHaveBeenCalledTimes(2);
   });
 
@@ -191,6 +194,19 @@ describe("AccountManagement", () => {
     expect(button(renderer!, "确认删除 @alice？")).toBeDefined();
     act(() => vi.advanceTimersByTime(1));
     expect(button(renderer!, "删除")).toBeDefined();
+  });
+
+  it("omits self-role mutation and self-delete controls for the current administrator", async () => {
+    await mount();
+
+    const selfRow = renderer!.root.find(
+      (node) => node.props.className === "accountAdminRow" && text(node).includes("@admin")
+    );
+    expect(selfRow.findAllByType("select")).toHaveLength(0);
+    expect(selfRow.findAllByType("button")).toHaveLength(0);
+    expect(text(selfRow)).toContain("当前账号 · 管理员");
+    expect(adminAccountApi.updateRole).not.toHaveBeenCalled();
+    expect(adminAccountApi.deleteUser).not.toHaveBeenCalled();
   });
 
   it("clears an earlier mutation error after an authoritative success and refresh", async () => {

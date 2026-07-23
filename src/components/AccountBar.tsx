@@ -183,7 +183,13 @@ async function copyToClipboard(value: string): Promise<boolean> {
   }
 }
 
-export function AccountSessionControls({ user, onSignedOut }: { user: AuthUser; onSignedOut: () => void }) {
+type SessionControlsProps = { user: AuthUser; onSignedOut: () => void };
+
+export function AccountSessionControls(props: SessionControlsProps) {
+  return <AccountSessionControlsForUser key={props.user.id} {...props} />;
+}
+
+function AccountSessionControlsForUser({ user, onSignedOut }: SessionControlsProps) {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
@@ -369,8 +375,16 @@ export function AccountSessionControls({ user, onSignedOut }: { user: AuthUser; 
           }}
         />
       ) : null}
-      {clipboardNotice ? <p className="accountMemoryNotice">{clipboardNotice}</p> : null}
-      {memoryNotice ? <p className="accountMemoryNotice">{memoryNotice}</p> : null}
+      {clipboardNotice ? (
+        <p className="accountMemoryNotice" role="alert">
+          {clipboardNotice}
+        </p>
+      ) : null}
+      {memoryNotice ? (
+        <p className="accountMemoryNotice" role={memoryNotice.includes("失败") ? "alert" : "status"}>
+          {memoryNotice}
+        </p>
+      ) : null}
     </div>
   );
 }

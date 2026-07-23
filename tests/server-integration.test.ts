@@ -118,6 +118,58 @@ describe("relay process integration", () => {
     const registered = (await registration.json()) as { ok: boolean; token: string };
     expect(registered.ok).toBe(true);
 
+    const backupRegistration = await fetch(`${baseUrl}/auth/register`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer integration-operator-token",
+        Connection: "close"
+      },
+      body: JSON.stringify({ username: "backup-admin", password: "password123" })
+    });
+    expect(backupRegistration.status).toBe(200);
+
+    const promoteBackup = await fetch(`${baseUrl}/auth/admin/users/role`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${registered.token}`,
+        Connection: "close"
+      },
+      body: JSON.stringify({ username: "backup-admin", role: "admin" })
+    });
+    expect(promoteBackup.status).toBe(200);
+
+    const selfRoleChange = await fetch(`${baseUrl}/auth/admin/users/role`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${registered.token}`,
+        Connection: "close"
+      },
+      body: JSON.stringify({ username: "INTEGRATION-ADMIN", role: "reviewer" })
+    });
+    expect(selfRoleChange.status).toBe(400);
+    await expect(selfRoleChange.json()).resolves.toEqual({
+      ok: false,
+      error: "不能修改当前登录账号的角色。"
+    });
+
+    const selfDelete = await fetch(`${baseUrl}/auth/admin/users/delete`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${registered.token}`,
+        Connection: "close"
+      },
+      body: JSON.stringify({ username: "integration-admin" })
+    });
+    expect(selfDelete.status).toBe(400);
+    await expect(selfDelete.json()).resolves.toEqual({
+      ok: false,
+      error: "不能删除管理员账号。"
+    });
+
     const missingInviteCode = await fetch(`${baseUrl}/auth/admin/invites/revoke`, {
       method: "POST",
       headers: {

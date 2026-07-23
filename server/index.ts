@@ -315,6 +315,11 @@ app.post("/auth/admin/users/role", (req, res) => {
   const admin = requireAdmin(req, res);
   if (!admin) return;
   const body = (req.body ?? {}) as Record<string, unknown>;
+  const targetUsername = typeof body.username === "string" ? body.username.normalize("NFKC").trim().toLowerCase() : "";
+  if (targetUsername === admin.username) {
+    res.status(400).json({ ok: false, error: "不能修改当前登录账号的角色。" });
+    return;
+  }
   const result = setUserRole(body.username, body.role);
   if (!result.ok) {
     res.status(400).json(result);

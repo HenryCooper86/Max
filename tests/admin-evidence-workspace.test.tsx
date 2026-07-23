@@ -394,6 +394,66 @@ describe("EvidenceWorkspace navigation state", () => {
     expect(text(renderer!.root)).not.toContain("reviewer目标用例");
   });
 
+  it("invalidates a prior review save when the reviewer identity changes", async () => {
+    const selected = session("shared-session", "shared-key", "shared", "fail", "旧作用域备注");
+    const oldReview = review(selected.sessionId, { title: "旧作用域复核", updatedAt: 1 });
+    const newScopeReview = review(selected.sessionId, { title: "新作用域复核", updatedAt: 2 });
+    const oldScopeData = data([selected], [tester("shared-key", "shared", { pass: 0, watch: 0, fail: 1 })]);
+    oldScopeData.operations = operations([oldReview]);
+    const newScopeData = data([selected], [tester("shared-key", "shared", { pass: 0, watch: 0, fail: 1 })]);
+    newScopeData.operations = operations([newScopeReview]);
+    const pending = deferred<Awaited<ReturnType<AdminTestingData["saveReview"]>>>();
+    oldScopeData.saveReview = vi.fn(() => pending.promise);
+    newScopeData.saveReview = oldScopeData.saveReview;
+    const sharedAgent = agent();
+
+    await act(async () => {
+      renderer = create(
+        <EvidenceWorkspace
+          active
+          requestedSessionId={null}
+          onRequestedSessionHandled={vi.fn()}
+          agent={sharedAgent}
+          user={user({ id: "reviewer-one", username: "reviewer-one", role: "reviewer" })}
+          data={oldScopeData}
+        />
+      );
+    });
+    await flush();
+
+    act(() => reviewTitleInput(renderer!).props.onChange({ target: { value: "旧作用域未保存复核" } }));
+    act(() => reviewSubmitButton(renderer!).props.onClick());
+    expect(reviewSubmitButton(renderer!).props.disabled).toBe(true);
+
+    await act(async () => {
+      renderer!.update(
+        <EvidenceWorkspace
+          active
+          requestedSessionId={null}
+          onRequestedSessionHandled={vi.fn()}
+          agent={sharedAgent}
+          user={user({ id: "reviewer-two", username: "reviewer-two", role: "reviewer" })}
+          data={newScopeData}
+        />
+      );
+    });
+    await flush();
+
+    expect(reviewTitleInput(renderer!).props.value).toBe("新作用域复核");
+    expect(reviewSubmitButton(renderer!).props.disabled).toBe(false);
+
+    await act(async () => {
+      pending.resolve({ ok: true, data: { ...oldReview, title: "旧作用域已保存", updatedAt: 3 } });
+      await pending.promise;
+    });
+    await flush();
+
+    expect(reviewTitleInput(renderer!).props.value).toBe("新作用域复核");
+    expect(reviewSubmitButton(renderer!).props.disabled).toBe(false);
+    expect(text(renderer!.root)).not.toContain("复核记录已保存并写入审计日志。");
+    expect(newScopeData.refresh).not.toHaveBeenCalled();
+  });
+
   it("opens a requested evidence session by resetting obstructing filters and selecting its tester", async () => {
     const current = session("current-session", "current-key", "current", "pass", "当前备注");
     const target = session("target-session", "target-key", "target", "fail", "目标备注");

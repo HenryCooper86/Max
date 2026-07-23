@@ -386,6 +386,10 @@ export function EvidenceWorkspace({
   useEffect(() => {
     // Evidence, notes, and review drafts are scoped to the authenticated identity
     // and authority. Never carry them across a live account or role refresh.
+    reviewMutationSequenceRef.current += 1;
+    reviewTargetRequestRef.current.clear();
+    setReviewBusyTargets(new Set());
+    claimNoticeRequest();
     clearReviewDraftBinding();
     reviewDraftRef.current = {
       title: "会话需要复核",
@@ -405,7 +409,7 @@ export function EvidenceWorkspace({
     writeSessionNotes("");
     setSelectedTesterKey(null);
     setSelectedSessionId(null);
-  }, [clearReviewDraftBinding, user.id, user.role, user.username, writeSessionNotes]);
+  }, [claimNoticeRequest, clearReviewDraftBinding, user.id, user.role, user.username, writeSessionNotes]);
 
   useEffect(() => {
     if (!active || requestedSessionId || selectedSessionId || !initialFilteredSessionId || !initialFilteredTesterKey) {
@@ -677,13 +681,17 @@ export function EvidenceWorkspace({
         ) {
           resetReviewDraft(submittedDraft.binding.sessionId, result.data);
         }
-        setOwnedNotice(request.noticeRequestId, {
-          tone: "success",
-          message: "复核记录已保存并写入审计日志。"
-        });
-        await data.refresh();
+        if (ownsReviewMutation(request)) {
+          setOwnedNotice(request.noticeRequestId, {
+            tone: "success",
+            message: "复核记录已保存并写入审计日志。"
+          });
+          await data.refresh();
+        }
       } else {
-        setOwnedNotice(request.noticeRequestId, { tone: "error", message: result.error.message });
+        if (ownsReviewMutation(request)) {
+          setOwnedNotice(request.noticeRequestId, { tone: "error", message: result.error.message });
+        }
       }
     } finally {
       finishReviewMutation(request);

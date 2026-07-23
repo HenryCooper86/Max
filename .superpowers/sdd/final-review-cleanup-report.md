@@ -41,3 +41,19 @@ npm run build                                                                   
 npm test                                                                           pass (37 files, 375 tests)
 git diff --check                                                                   pass
 ```
+
+## Scope-transition review mutation follow-up
+
+- Invalidated the in-flight review mutation sequence, target ownership map, busy
+  targets, and notice ownership during a user ID/role scope transition.
+- A late review result now publishes its notice and refreshes authoritative data
+  only while it still owns its mutation target.
+- Added a deferred reviewer-save to reviewer-identity-transition regression. It
+  proves the new-scope composer is enabled, receives no stale success notice, and
+  is not affected by the old mutation response.
+
+Focused verification for this follow-up:
+
+```text
+npm test -- tests/admin-evidence-workspace.test.tsx  pass (1 file, 28 tests)
+```

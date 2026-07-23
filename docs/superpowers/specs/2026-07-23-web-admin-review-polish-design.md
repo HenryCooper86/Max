@@ -70,6 +70,7 @@ The workspace must be useful at reviewer and tester permission levels rather tha
 The current Admin monolith will be separated by responsibility under `src/components/admin/`:
 
 - `AdminWorkspace.tsx` — shell, responsive navigation, role-aware section availability, sync status, and return action.
+- `AccountSessionControls` in the existing account component module — authenticated token copy, password change, memory clearing, and sign-out actions available to every role without retaining the unreachable embedded login branch.
 - `AdminOverview.tsx` — release-gate state, regression state, evidence health, current build, prioritized work queue, and recent release progress.
 - `ReleaseValidation.tsx` — release runs, assignments, coverage, approval state, and baseline comparison.
 - `EvidenceWorkspace.tsx` — tester/session filtering, pagination, evidence detail, deterministic evaluation, reviewer notes, and issue triage.
@@ -121,7 +122,7 @@ The approved concept uses a calm, high-density operational hierarchy:
 - Chinese-first labels and messages with stable technical abbreviations retained where operators already recognize them.
 - Destructive actions appear only in their relevant detail sections, not in the overview's primary hierarchy.
 
-All interactive controls need visible keyboard focus. Section changes, notices, and mutation results use appropriate accessible names and live-region semantics without creating excessive announcements. Reduced-motion preferences disable nonessential animation. Focus returns to the Admin entry control after leaving the workspace.
+All interactive controls need visible keyboard focus. Section changes, notices, and mutation results use appropriate accessible names and live-region semantics without creating excessive announcements. Reduced-motion preferences disable nonessential animation. Returning to Max restores focus to the persistent Settings trigger that led into the Admin flow.
 
 ## Code Review and Remediation Method
 

@@ -189,6 +189,10 @@ const DICTIONARIES = {
 type TranslationKey = keyof (typeof DICTIONARIES)["zh-CN"];
 export type Translator = (key: TranslationKey, params?: Record<string, string | number>) => string;
 
+export function localized(language: Language, chinese: string, english: string): string {
+  return language === "en-US" ? english : chinese;
+}
+
 export function readStoredLanguage(
   storage: Storage | undefined = typeof window === "undefined" ? undefined : window.localStorage
 ): Language {

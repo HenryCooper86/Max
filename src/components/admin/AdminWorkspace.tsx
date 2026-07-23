@@ -2,6 +2,7 @@ import { ArrowLeft, Broadcast, ShieldCheck } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AccountSessionControls } from "../AccountBar";
 import { useLanguage } from "../LanguageToggle";
+import { localized } from "../../lib/i18n";
 import type { HelmetAgent } from "../../hooks/useHelmetAgent";
 import type { AuthUser } from "../../lib/auth";
 import {
@@ -77,7 +78,11 @@ export function AdminWorkspace({ agent, user, onAuthenticationExpired, onClose }
           <span>
             <ShieldCheck aria-hidden="true" /> @{user.username} · {adminRoleLabel(user.role, language)}
           </span>
-          <small>{data.lastSyncedAt ? `最近同步 ${formatAdminRelativeTime(data.lastSyncedAt)}` : "等待首次同步"}</small>
+          <small>
+            {data.lastSyncedAt
+              ? `${localized(language, "最近同步", "Last synced")} ${formatAdminRelativeTime(data.lastSyncedAt)}`
+              : localized(language, "等待首次同步", "Waiting for first sync")}
+          </small>
           <button ref={closeRef} type="button" onClick={onClose}>
             <ArrowLeft aria-hidden="true" /> {language === "en-US" ? "Back to Max" : "返回 Max"}
           </button>

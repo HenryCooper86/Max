@@ -2,6 +2,7 @@ import type { TesterSessionSummary, TestingStats } from "../../../shared/agent";
 import type { TestingOperationsSnapshot, TestingQuality } from "../../../shared/testing";
 import type { HelmetAgent } from "../../hooks/useHelmetAgent";
 import { useLanguage } from "../LanguageToggle";
+import { localized } from "../../lib/i18n";
 import { corpusIssueCount, formatAdminRelativeTime, testingRunStatusLabel } from "./admin-model";
 
 const QUALITY_PRIORITY: Record<TestingQuality, number> = { fail: 3, watch: 2, pass: 1 };
@@ -76,47 +77,47 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
       {
         key: "release-blockers",
         tone: "alert",
-        label: "发布阻断项",
+        label: localized(language, "发布阻断项", "Release blockers"),
         count: releaseGate?.blockers.length ?? 0,
-        detail: releaseGate?.blockers[0] ?? "没有发布阻断项",
+        detail: releaseGate?.blockers[0] ?? localized(language, "没有发布阻断项", "No release blockers"),
         onOpen: onOpenReleases
       },
       {
         key: "fail-evidence",
         tone: "alert",
-        label: "FAIL 证据",
+        label: localized(language, "FAIL 证据", "FAIL evidence"),
         count: failCount,
         detail: latestFail
           ? `${latestFail.testerId} · ${latestFail.testCaseName} · ${formatAdminRelativeTime(latestFail.endedAt)}`
-          : "当前已加载页面没有 FAIL 证据",
+          : localized(language, "当前已加载页面没有 FAIL 证据", "No FAIL evidence in the loaded page"),
         onOpen: () => onOpenEvidence(latestFail?.sessionId)
       },
       {
         key: "watch-evidence",
         tone: "warn",
-        label: "WATCH 证据",
+        label: localized(language, "WATCH 证据", "WATCH evidence"),
         count: watchCount,
         detail: latestWatch
           ? `${latestWatch.testerId} · ${latestWatch.testCaseName} · ${formatAdminRelativeTime(latestWatch.endedAt)}`
-          : "当前已加载页面没有 WATCH 证据",
+          : localized(language, "当前已加载页面没有 WATCH 证据", "No WATCH evidence in the loaded page"),
         onOpen: () => onOpenEvidence(latestWatch?.sessionId)
       },
       {
         key: "invalid-evidence",
         tone: "warn",
-        label: "无效证据",
+        label: localized(language, "无效证据", "Invalid evidence"),
         count: invalidCount,
         detail: latestInvalid
           ? `${latestInvalid.testerId} · ${latestInvalid.validity.detail}`
-          : "当前已加载页面没有无效证据",
+          : localized(language, "当前已加载页面没有无效证据", "No invalid evidence in the loaded page"),
         onOpen: () => onOpenEvidence(latestInvalid?.sessionId)
       },
       {
         key: "missing-coverage",
         tone: "warn",
-        label: "发布覆盖缺口",
+        label: localized(language, "发布覆盖缺口", "Release coverage gaps"),
         count: missingCases.length,
-        detail: missingCases[0]?.testCaseName ?? "必需用例覆盖完整",
+        detail: missingCases[0]?.testCaseName ?? localized(language, "必需用例覆盖完整", "Required cases are covered"),
         onOpen: onOpenReleases
       }
     ] satisfies QueueItem[]
@@ -132,7 +133,8 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
         <div>
           <h2>{language === "en-US" ? "Quality & release overview" : "质量与发布概览"}</h2>
           <span>
-            当前构建 {agent.health?.build?.gitCommit ?? releaseGate?.build ?? "local"} ·{" "}
+            {localized(language, "当前构建", "Current build")}{" "}
+            {agent.health?.build?.gitCommit ?? releaseGate?.build ?? "local"} ·{" "}
             {testing
               ? language === "en-US"
                 ? `${testing.windowMinutes}-minute window`
@@ -144,23 +146,30 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
         </div>
       </div>
 
-      <div className="testingOpsStrip adminMetricGrid" aria-label="关键质量指标">
+      <div
+        className="testingOpsStrip adminMetricGrid"
+        aria-label={localized(language, "关键质量指标", "Key quality metrics")}
+      >
         <button type="button" className={`opsCard ${statusTone(releaseGate?.status)}`} onClick={onOpenReleases}>
-          <span>发布门禁</span>
+          <span>{localized(language, "发布门禁", "Release gate")}</span>
           <strong className={`adminStatus ${statusTone(releaseGate?.status)}`}>
             {releaseStatusLabel(releaseGate?.status)}
           </strong>
-          <p>{releaseGate ? `${releaseGate.validSessions} 有效 · ${releaseGate.invalidSessions} 无效` : "等待证据"}</p>
+          <p>
+            {releaseGate
+              ? `${releaseGate.validSessions} ${localized(language, "有效", "valid")} · ${releaseGate.invalidSessions} ${localized(language, "无效", "invalid")}`
+              : localized(language, "等待证据", "Waiting for evidence")}
+          </p>
         </button>
         <button
           type="button"
           className={`opsCard ${issueCount ? "alert" : "good"}`}
           onClick={() => onOpenEvidence(latestIssue?.sessionId)}
         >
-          <span>待复核证据</span>
+          <span>{localized(language, "待复核证据", "Evidence to review")}</span>
           <strong className={`adminStatus ${issueCount ? "alert" : "good"}`}>{issueCount}</strong>
           <p>
-            {failCount} FAIL · {watchCount} WATCH · 全量服务端统计
+            {failCount} FAIL · {watchCount} WATCH · {localized(language, "全量服务端统计", "Full server aggregate")}
           </p>
         </button>
         <button
@@ -168,27 +177,38 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
           className={`opsCard ${validEvidenceTone}`}
           onClick={() => onOpenEvidence(latestInvalid?.sessionId)}
         >
-          <span>有效证据</span>
+          <span>{localized(language, "有效证据", "Valid evidence")}</span>
           <strong className={`adminStatus ${validEvidenceTone}`}>{testing?.totals.validTestSessions ?? 0}</strong>
           <p>
             {hasDecisionGradeEvidence
-              ? `${invalidCount} 无效 · ${testing?.history.persistent ? "持久化历史" : "仅内存历史"}`
-              : "等待门禁证据"}
+              ? `${invalidCount} ${localized(language, "无效", "invalid")} · ${testing?.history.persistent ? localized(language, "持久化历史", "Persistent history") : localized(language, "仅内存历史", "Memory-only history")}`
+              : localized(language, "等待门禁证据", "Waiting for gate evidence")}
           </p>
         </button>
         <button type="button" className={`opsCard ${p95Tone}`} onClick={onOpenReleases}>
-          <span>{releaseGate ? "门禁 P95 首音" : "语料 P95 首音"}</span>
-          <strong className={`adminStatus ${p95Tone}`}>{p95LatencyMs > 0 ? `${p95LatencyMs}ms` : "等待"}</strong>
-          <p>门禁阈值 {p95ThresholdMs ?? "—"}ms</p>
+          <span>
+            {releaseGate
+              ? localized(language, "门禁 P95 首音", "Gate P95 first audio")
+              : localized(language, "语料 P95 首音", "Corpus P95 first audio")}
+          </span>
+          <strong className={`adminStatus ${p95Tone}`}>
+            {p95LatencyMs > 0 ? `${p95LatencyMs}ms` : localized(language, "等待", "Waiting")}
+          </strong>
+          <p>
+            {localized(language, "门禁阈值", "Gate threshold")} {p95ThresholdMs ?? "—"}ms
+          </p>
         </button>
       </div>
 
       <div className="testingDecisionGrid adminWorkGrid">
-        <section className="decisionPanel adminSectionCard adminSectionInset" aria-label="优先工作队列">
+        <section
+          className="decisionPanel adminSectionCard adminSectionInset"
+          aria-label={localized(language, "优先工作队列", "Priority work queue")}
+        >
           <div className="decisionPanelHead">
-            <span>优先工作队列</span>
+            <span>{localized(language, "优先工作队列", "Priority work queue")}</span>
             <strong className={queue.some((item) => item.tone === "alert") ? "alert" : "warn"}>
-              {queue.length ? `${queue.length} 类待处理` : "PASS"}
+              {queue.length ? `${queue.length} ${localized(language, "类待处理", "categories pending")}` : "PASS"}
             </strong>
           </div>
           <div className="sessionList">
@@ -196,21 +216,28 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
               queue.map((item) => (
                 <button type="button" className={`sessionButton ${item.tone}`} key={item.key} onClick={item.onOpen}>
                   <span>{item.label}</span>
-                  <strong>{item.count} 项</strong>
+                  <strong>
+                    {item.count} {localized(language, "项", "items")}
+                  </strong>
                   <span>{item.detail}</span>
                 </button>
               ))
             ) : (
-              <p className="testerConversationEmpty">当前没有阻断项或待复核证据。</p>
+              <p className="testerConversationEmpty">
+                {localized(language, "当前没有阻断项或待复核证据。", "No blockers or evidence awaiting review.")}
+              </p>
             )}
           </div>
         </section>
 
-        <section className="decisionPanel adminSectionCard adminSectionInset" aria-label="近期发布进度">
+        <section
+          className="decisionPanel adminSectionCard adminSectionInset"
+          aria-label={localized(language, "近期发布进度", "Recent release progress")}
+        >
           <div className="decisionPanelHead">
-            <span>近期发布进度</span>
+            <span>{localized(language, "近期发布进度", "Recent release progress")}</span>
             <button type="button" onClick={onOpenReleases}>
-              查看发布验证
+              {localized(language, "查看发布验证", "View release validation")}
             </button>
           </div>
           <div className="sessionList">
@@ -224,14 +251,19 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
                     </span>
                     <strong>{run.name}</strong>
                     <span>
-                      构建 {run.build} · {completed}/{run.assignments.length} 项任务完成
+                      {localized(language, "构建", "Build")} {run.build} · {completed}/{run.assignments.length}{" "}
+                      {localized(language, "项任务完成", "tasks complete")}
                     </span>
-                    <span>更新于 {formatAdminRelativeTime(run.updatedAt)}</span>
+                    <span>
+                      {localized(language, "更新于", "Updated")} {formatAdminRelativeTime(run.updatedAt)}
+                    </span>
                   </button>
                 );
               })
             ) : (
-              <p className="testerConversationEmpty">暂无可见的发布运行记录。</p>
+              <p className="testerConversationEmpty">
+                {localized(language, "暂无可见的发布运行记录。", "No visible release runs.")}
+              </p>
             )}
           </div>
         </section>

@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import type { TestingAuditEvent } from "../../../shared/testing";
 import type { AuthUser } from "../../lib/auth";
+import { useLanguage } from "../LanguageToggle";
+import { localized } from "../../lib/i18n";
 import { formatAdminRelativeTime } from "./admin-model";
 import type { AdminTestingData } from "./useAdminTestingData";
 
@@ -25,6 +27,7 @@ function auditDetail(event: TestingAuditEvent) {
 }
 
 export function GovernanceWorkspace({ user, data }: Props) {
+  const { language } = useLanguage();
   const [tab, setTab] = useState<GovernanceTab>("policy");
   const [notice, setNotice] = useState<Notice | null>(null);
   const [publishing, setPublishing] = useState(false);
@@ -87,18 +90,21 @@ export function GovernanceWorkspace({ user, data }: Props) {
   };
 
   return (
-    <section className="testingControlPlane adminSectionCard" aria-label="策略与审计">
+    <section
+      className="testingControlPlane adminSectionCard"
+      aria-label={localized(language, "策略与审计", "Policy & audit")}
+    >
       <div className="controlPlaneHead adminSectionHeader">
         <div>
           <span>MAX QA · 治理</span>
-          <strong>策略与审计</strong>
+          <strong>{localized(language, "策略与审计", "Policy & audit")}</strong>
         </div>
         <nav className="controlPlaneTabs" aria-label="治理视图">
           <button type="button" className={tab === "policy" ? "active" : ""} onClick={() => setTab("policy")}>
-            发布策略
+            {localized(language, "发布策略", "Publish policy")}
           </button>
           <button type="button" className={tab === "audit" ? "active" : ""} onClick={() => setTab("audit")}>
-            审计日志
+            {localized(language, "审计日志", "Audit log")}
           </button>
         </nav>
       </div>
@@ -125,7 +131,7 @@ export function GovernanceWorkspace({ user, data }: Props) {
           </div>
           <div className="policyFields">
             <label>
-              <span>发布 P95 上限（ms）</span>
+              <span>{localized(language, "发布 P95 上限（ms）", "Release P95 limit (ms)")}</span>
               <input
                 type="number"
                 min={100}
@@ -135,7 +141,7 @@ export function GovernanceWorkspace({ user, data }: Props) {
               />
             </label>
             <label>
-              <span>允许的无效证据数</span>
+              <span>{localized(language, "允许的无效证据数", "Allowed invalid evidence")}</span>
               <input
                 type="number"
                 min={0}
@@ -145,7 +151,7 @@ export function GovernanceWorkspace({ user, data }: Props) {
               />
             </label>
             <label>
-              <span>每个安全用例最少样本</span>
+              <span>{localized(language, "每个安全用例最少样本", "Minimum samples per safety case")}</span>
               <input
                 type="number"
                 min={1}
@@ -155,12 +161,16 @@ export function GovernanceWorkspace({ user, data }: Props) {
               />
             </label>
             <label className="wide">
-              <span>变更理由</span>
+              <span>{localized(language, "变更理由", "Change reason")}</span>
               <textarea
                 value={policyDescription}
                 onChange={(event) => setPolicyDescription(event.target.value)}
                 disabled={!isAdmin}
-                placeholder="说明门槛调整及发布依据…"
+                placeholder={localized(
+                  language,
+                  "说明门槛调整及发布依据…",
+                  "Explain threshold changes and release basis…"
+                )}
               />
             </label>
             {isAdmin ? (
@@ -169,10 +179,18 @@ export function GovernanceWorkspace({ user, data }: Props) {
                 disabled={publishing || !policyDescription.trim() || !policyFieldsValid}
                 onClick={() => void publishPolicy()}
               >
-                {publishing ? "正在发布…" : "发布版本化策略"}
+                {publishing
+                  ? localized(language, "正在发布…", "Publishing…")
+                  : localized(language, "发布版本化策略", "Publish versioned policy")}
               </button>
             ) : (
-              <p>审核员拥有只读权限；策略变更与发布仅限管理员。</p>
+              <p>
+                {localized(
+                  language,
+                  "审核员拥有只读权限；策略变更与发布仅限管理员。",
+                  "Reviewers are read-only; policy changes and publishing are limited to administrators."
+                )}
+              </p>
             )}
           </div>
           <div className="policyHistory">

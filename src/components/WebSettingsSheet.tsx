@@ -12,6 +12,7 @@ import {
 import { useEffect, useRef } from "react";
 import { combineHazardLevels, scenarioLabel } from "../../shared/ride";
 import { LanguageToggle, useLanguage } from "./LanguageToggle";
+import { localized } from "../lib/i18n";
 import type { HelmetAgent } from "../hooks/useHelmetAgent";
 import {
   CONNECTION_LABELS,
@@ -37,7 +38,7 @@ type Props = {
 };
 
 export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
-  const { t } = useLanguage();
+  const { language, t } = useLanguage();
   const fusedHazard = combineHazardLevels(agent.rideContext.hazardLevel, agent.weather?.riskLevel ?? "normal");
   const latencyTone = agent.latencyMs < 140 ? "good" : agent.latencyMs < 280 ? "warn" : "alert";
   const dialogRef = useRef<HTMLElement>(null);
@@ -115,8 +116,12 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
               </div>
             </div>
             <div className="settingsGroup">
-              <span>声音</span>
-              <div className="settingsSegment" role="group" aria-label="语音性别">
+              <span>{localized(language, "声音", "Voice")}</span>
+              <div
+                className="settingsSegment"
+                role="group"
+                aria-label={localized(language, "语音性别", "Voice gender")}
+              >
                 {(["female", "male"] as const).map((gender) => (
                   <button
                     type="button"
@@ -125,14 +130,18 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
                     aria-pressed={agent.voiceGender === gender}
                     onClick={() => agent.setVoiceGender(gender)}
                   >
-                    {gender === "female" ? "女声" : "男声"}
+                    {gender === "female" ? localized(language, "女声", "Female") : localized(language, "男声", "Male")}
                   </button>
                 ))}
               </div>
             </div>
             <div className="settingsGroup">
-              <span>语气</span>
-              <div className="settingsSegment wrap" role="group" aria-label="语气风格">
+              <span>{localized(language, "语气", "Tone")}</span>
+              <div
+                className="settingsSegment wrap"
+                role="group"
+                aria-label={localized(language, "语气风格", "Voice style")}
+              >
                 {VOICE_PERSONALITIES.map((personality) => (
                   <button
                     type="button"
@@ -157,8 +166,12 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
               </div>
             </div>
             <div className="settingsGroup">
-              <span>模式</span>
-              <div className="settingsSegment wrap" role="group" aria-label="骑行模式">
+              <span>{localized(language, "模式", "Mode")}</span>
+              <div
+                className="settingsSegment wrap"
+                role="group"
+                aria-label={localized(language, "骑行模式", "Ride mode")}
+              >
                 {RIDE_MODES.map((mode) => (
                   <button
                     type="button"
@@ -173,8 +186,12 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
               </div>
             </div>
             <div className="settingsGroup settingsScenarioGroup">
-              <span>演示场景</span>
-              <div className="settingsScenarioGrid" role="group" aria-label="演示场景">
+              <span>{localized(language, "演示场景", "Demo scenario")}</span>
+              <div
+                className="settingsScenarioGrid"
+                role="group"
+                aria-label={localized(language, "演示场景", "Demo scenario")}
+              >
                 {SCENARIOS.map((scenario) => (
                   <button
                     type="button"
@@ -193,7 +210,9 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
                     aria-pressed={agent.guidedDemo}
                     onClick={() => agent.setGuidedDemo(!agent.guidedDemo)}
                   >
-                    {agent.guidedDemo ? "停止巡游" : "自动巡游"}
+                    {agent.guidedDemo
+                      ? localized(language, "停止巡游", "Stop patrol")
+                      : localized(language, "自动巡游", "Auto patrol")}
                   </button>
                 ) : null}
               </div>
@@ -209,11 +228,11 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
               </p>
               <dl>
                 <div>
-                  <dt>网络</dt>
+                  <dt>{localized(language, "网络", "Network")}</dt>
                   <dd>{NETWORK_LABELS[agent.rideContext.network]}</dd>
                 </div>
                 <div>
-                  <dt>电量</dt>
+                  <dt>{localized(language, "电量", "Battery")}</dt>
                   <dd>{agent.rideContext.batteryPct}%</dd>
                 </div>
               </dl>
@@ -233,12 +252,16 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
                 <strong>{agent.weather.temperatureC}°</strong>
                 <div>
                   <b>{agent.weather.description}</b>
-                  <span>风速 {agent.weather.windSpeedKmh} km/h</span>
+                  <span>
+                    {localized(language, "风速", "Wind")} {agent.weather.windSpeedKmh} km/h
+                  </span>
                 </div>
                 <p>{agent.weather.riderAdvice}</p>
               </div>
             ) : (
-              <p className="settingsEmpty">开启免提后接入定位天气。</p>
+              <p className="settingsEmpty">
+                {localized(language, "开启免提后接入定位天气。", "Turn on hands-free to load location weather.")}
+              </p>
             )}
           </section>
 
@@ -255,19 +278,19 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
             </div>
             <dl className="settingsMetrics">
               <div>
-                <dt>服务</dt>
+                <dt>{localized(language, "服务", "Service")}</dt>
                 <dd>{agent.provider.toUpperCase()}</dd>
               </div>
               <div>
-                <dt>凭证</dt>
+                <dt>{localized(language, "凭证", "Credentials")}</dt>
                 <dd>{agent.health ? CREDENTIAL_LABELS[agent.health.credentials] : "unknown"}</dd>
               </div>
               <div>
-                <dt>麦克风</dt>
+                <dt>{localized(language, "麦克风", "Microphone")}</dt>
                 <dd>{PERMISSION_LABELS[agent.micPermission]}</dd>
               </div>
               <div>
-                <dt>定位</dt>
+                <dt>{localized(language, "定位", "Location")}</dt>
                 <dd>{PERMISSION_LABELS[agent.locationPermission]}</dd>
               </div>
             </dl>
@@ -277,8 +300,8 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
             <div className="settingsCardTitle">
               <Pulse size={22} aria-hidden="true" />
               <div>
-                <h2>诊断</h2>
-                <p>语音链路和实时性能</p>
+                <h2>{localized(language, "诊断", "Diagnostics")}</h2>
+                <p>{localized(language, "语音链路和实时性能", "Voice path and real-time performance")}</p>
               </div>
               <strong className={`settingsLatency ${latencyTone}`}>{agent.latencyMs} ms</strong>
             </div>
@@ -288,31 +311,31 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
                 <dd>{agent.telemetry.asrMs} ms</dd>
               </div>
               <div>
-                <dt>思考</dt>
+                <dt>{localized(language, "思考", "Thinking")}</dt>
                 <dd>{agent.telemetry.thinkMs} ms</dd>
               </div>
               <div>
-                <dt>首音</dt>
+                <dt>{localized(language, "首音", "First audio")}</dt>
                 <dd>{agent.telemetry.firstAudioMs} ms</dd>
               </div>
               <div>
-                <dt>总计</dt>
+                <dt>{localized(language, "总计", "Total")}</dt>
                 <dd>{agent.telemetry.totalMs} ms</dd>
               </div>
               <div>
-                <dt>降噪</dt>
+                <dt>{localized(language, "降噪", "Noise reduction")}</dt>
                 <dd>{audioProcessingLabel(agent.audioProcessing.noiseSuppression)}</dd>
               </div>
               <div>
-                <dt>回声消除</dt>
+                <dt>{localized(language, "回声消除", "Echo cancellation")}</dt>
                 <dd>{audioProcessingLabel(agent.audioProcessing.echoCancellation)}</dd>
               </div>
               <div>
-                <dt>采样</dt>
+                <dt>{localized(language, "采样", "Sample rate")}</dt>
                 <dd>{agent.audioProcessing.sampleRate ?? SAMPLE_RATE} Hz</dd>
               </div>
               <div>
-                <dt>响应</dt>
+                <dt>{localized(language, "响应", "Response")}</dt>
                 <dd>{RESPONSE_MODE_LABELS[agent.sessionMemory.responseMode]}</dd>
               </div>
             </dl>

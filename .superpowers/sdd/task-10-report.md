@@ -73,3 +73,36 @@ git diff --cached --check                                     pass
 
 The complete Task 10 diff was committed without amend or push as
 `chore: restore full repository quality gate`.
+
+#### Browser acceptance follow-up (isolated mock run)
+
+An additional browser pass used a fresh temporary storage directory for
+`ACCOUNTS_FILE`, `USER_MEMORY_FILE`, `TESTING_HISTORY_DIR`, and
+`TESTING_DATABASE`, with `VOICE_PROVIDER=mock AUTH_REGISTRATION=on npm run dev`.
+No user storage was read or modified.
+
+- Initial bootstrap, Settings, and Admin all rendered with non-empty content,
+  no framework error overlay, and no captured console errors. The desktop
+  Admin workspace showed its persistent header, five sections (Overview,
+  Release Validation, Evidence & Issues, Account Management, Governance),
+  the four overview metrics, the risk queue, and release-progress region.
+- Accounts created through the UI/invite path established the role matrix:
+  admin saw all five sections; reviewer saw Overview, Release Validation,
+  Evidence & Issues, and Governance but not Account Management; tester saw
+  only Overview, Release Validation, and Evidence & Issues.
+- At 900px and 390px, `document.documentElement.scrollWidth > innerWidth` was
+  false and the Admin navigation had contained horizontal overflow
+  (`scrollWidth > clientWidth`).
+- `agent-browser click` reported success but did not dispatch the Settings
+  Admin-entry button's React handler. The enabled DOM button has
+  `onClick={onOpenAdmin}`; a DOM `.click()` immediately opened the workspace.
+  This is an agent-browser pointer-action limitation, not a reproducible UI
+  defect; subsequent navigation used that documented fallback.
+
+Not exercised in this fresh, empty corpus: evidence pagination/corpus invariant,
+selection surviving the 10-second poll, mutation failure and every destructive
+confirmation/expiry target, local table scrolling, full keyboard/focus and
+reduced-motion checks, relay restart stale/retry, and server-side session
+revocation handoff. The mock server had no seeded evidence, and completing
+those scenarios safely would require generating representative QA sessions and
+admin mutations beyond this verification run. No code change was made.

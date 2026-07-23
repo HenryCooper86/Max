@@ -99,8 +99,8 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
           <div className="settingsHeaderActions">
             <LanguageToggle />
             <button ref={closeButtonRef} type="button" onClick={onClose} aria-label={t("settings.doneAria")}>
-            <X size={24} weight="bold" aria-hidden="true" />
-            {t("settings.done")}
+              <X size={24} weight="bold" aria-hidden="true" />
+              {t("settings.done")}
             </button>
           </div>
         </header>

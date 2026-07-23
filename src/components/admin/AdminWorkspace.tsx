@@ -63,8 +63,15 @@ export function AdminWorkspace({ agent, user, onAuthenticationExpired, onClose }
           </div>
         </div>
         <div className="adminWorkspaceContext">
-            <span className={agent.connected ? "online" : ""}>
-            <Broadcast aria-hidden="true" /> {agent.connected ? (language === "en-US" ? "Relay online" : "中继在线") : language === "en-US" ? "Relay offline" : "中继离线"}
+          <span className={agent.connected ? "online" : ""}>
+            <Broadcast aria-hidden="true" />{" "}
+            {agent.connected
+              ? language === "en-US"
+                ? "Relay online"
+                : "中继在线"
+              : language === "en-US"
+                ? "Relay offline"
+                : "中继离线"}
           </span>
           <span>构建 {agent.health?.build?.gitCommit ?? "本地"}</span>
           <span>

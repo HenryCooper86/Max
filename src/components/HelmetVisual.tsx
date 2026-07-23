@@ -87,7 +87,14 @@ export function VoiceStateReadout({
 }: Pick<Props, "connected" | "turnState" | "hazardLevel">) {
   const { t } = useLanguage();
   const hazard = connected && hazardLevel !== "normal" ? hazardLevel : null;
-  const stateCaption = t(`voice.state.${turnState}` as "voice.state.idle" | "voice.state.listening" | "voice.state.hearing" | "voice.state.thinking" | "voice.state.speaking");
+  const stateCaption = t(
+    `voice.state.${turnState}` as
+      | "voice.state.idle"
+      | "voice.state.listening"
+      | "voice.state.hearing"
+      | "voice.state.thinking"
+      | "voice.state.speaking"
+  );
   const caption = !connected
     ? t("voice.offline")
     : hazard

@@ -22,8 +22,8 @@ export function LanguageProvider({ children }: PropsWithChildren) {
 
 export function useLanguage(): LanguageContextValue {
   const value = useContext(LanguageContext);
-  if (!value) throw new Error("useLanguage must be used inside LanguageProvider");
-  return value;
+  if (value) return value;
+  return { language: "zh-CN", setLanguage: () => undefined, t: createTranslator("zh-CN") };
 }
 
 export function LanguageToggle() {

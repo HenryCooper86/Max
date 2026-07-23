@@ -32,10 +32,10 @@ describe("LanguageToggle", () => {
       );
     });
 
-    expect(renderer!.root.findByType("p").children.join("")) .toBe("设置");
+    expect(renderer!.root.findByType("p").children.join("")).toBe("设置");
     const english = renderer!.root.find((node) => node.type === "button" && node.props["aria-pressed"] === false);
     act(() => english.props.onClick());
-    expect(renderer!.root.findByType("p").children.join("")) .toBe("Settings");
+    expect(renderer!.root.findByType("p").children.join("")).toBe("Settings");
     expect(setItem).toHaveBeenCalledWith("max.ui.language.v1", "en-US");
   });
 });

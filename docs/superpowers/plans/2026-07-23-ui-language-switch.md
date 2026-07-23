@@ -22,10 +22,12 @@
 ### Task 1: Build the typed language core
 
 **Files:**
+
 - Create: `src/lib/i18n.ts`
 - Test: `tests/i18n.test.ts`
 
 **Interfaces:**
+
 - Produces `type Language = "zh-CN" | "en-US"`, `DEFAULT_LANGUAGE`, `LANGUAGE_STORAGE_KEY`, `readStoredLanguage(storage?: Storage): Language`, `createTranslator(language): (key: TranslationKey, params?: Record<string, string | number>) => string`, and typed domain-label maps.
 
 - [ ] **Step 1: Write failing tests** for default/fallback persistence, English restoration, interpolation, and complete domain-label coverage.
@@ -37,6 +39,7 @@
 ### Task 2: Add app-wide language state and Settings toggle
 
 **Files:**
+
 - Create: `src/components/LanguageToggle.tsx`
 - Modify: `src/App.tsx`
 - Modify: `src/components/WebSettingsSheet.tsx`
@@ -44,6 +47,7 @@
 - Test: `tests/language-toggle.test.tsx`
 
 **Interfaces:**
+
 - Consumes `Language`, `createTranslator`, and `readStoredLanguage` from `src/lib/i18n.ts`.
 - Produces `LanguageProvider`, `useLanguage()`, and an accessible `LanguageToggle` with `中文` and `EN` buttons.
 
@@ -57,6 +61,7 @@
 ### Task 3: Translate login and voice HUD
 
 **Files:**
+
 - Modify: `src/components/LoginGate.tsx`
 - Modify: `src/components/AccountBar.tsx`
 - Modify: `src/App.tsx`
@@ -65,6 +70,7 @@
 - Test: `tests/ui-language-surfaces.test.tsx`
 
 **Interfaces:**
+
 - Consumes `useLanguage()` and shared translation/domain-label keys; keeps user-entered text and transcript contents untouched.
 
 - [ ] **Step 1: Add failing assertions** for English login heading/hints/buttons, voice navigation labels, mic states, connection labels, captions controls, and accessible names.
@@ -76,6 +82,7 @@
 ### Task 4: Translate Settings and Admin workspaces
 
 **Files:**
+
 - Modify: `src/components/WebSettingsSheet.tsx`
 - Modify: `src/components/admin/AdminWorkspace.tsx`
 - Modify: `src/components/admin/admin-model.ts`
@@ -89,6 +96,7 @@
 - Test: `tests/ui-language-surfaces.test.tsx`
 
 **Interfaces:**
+
 - Consumes `useLanguage()` and typed translation/domain-label maps from `src/lib/i18n.ts`.
 - Preserves existing role authorization, navigation, mutation semantics, error ownership, responsive layout, and server data.
 
@@ -102,6 +110,7 @@
 ### Task 5: Full verification and documentation
 
 **Files:**
+
 - Modify: `README.md` (language behavior and persistence note)
 - Modify: `.superpowers/sdd/progress.md` if present
 

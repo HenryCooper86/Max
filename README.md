@@ -181,6 +181,12 @@ Node server :8787  (Express + ws, server/index.ts)
 
 The browser only ever talks to the Vite origin. Vite proxies `/health` (HTTP) and `/agent` (WebSocket) through to `:8787` — see `vite.config.ts` — which keeps development same-origin and CORS-free. In production there is a single Node process: the Express server serves the pre-built `dist/` client itself and still exposes `/health` and `/agent`.
 
+The web UI supports Chinese (default) and English. Use the `中文 / EN` switch
+in Settings; the choice is saved in the browser and applies to the voice HUD,
+login, Settings, and Admin surfaces. This changes interface copy only—Max's
+spoken response language remains controlled by the existing voice/provider
+configuration.
+
 ### The provider pattern
 
 Every `/agent` WebSocket connection gets its own `AgentProvider`, chosen by `selectProvider` from the `VOICE_PROVIDER` env var:

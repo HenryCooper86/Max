@@ -1494,7 +1494,8 @@ export function EvidenceWorkspace({
               <article key={review.id} className={`reviewRow ${review.severity}`}>
                 <button type="button" className="reviewEvidenceLink" onClick={() => void selectReviewEvidence(review)}>
                   <span>
-                    {testingReviewSeverityLabel(review.severity, language)} · {testingReviewStatusLabel(review.status, language)}
+                    {testingReviewSeverityLabel(review.severity, language)} ·{" "}
+                    {testingReviewStatusLabel(review.status, language)}
                   </span>
                   <strong>{review.title}</strong>
                   <small>
@@ -1510,7 +1511,7 @@ export function EvidenceWorkspace({
                 >
                   {REVIEW_STATUSES.map((status) => (
                     <option key={status} value={status}>
-                    {testingReviewStatusLabel(status, language)}
+                      {testingReviewStatusLabel(status, language)}
                     </option>
                   ))}
                 </select>

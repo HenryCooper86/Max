@@ -92,7 +92,11 @@ export function AccountForm({ authEnabled, registrationOpen, inviteCode, onSigne
         </button>
         {canRegister ? (
           <button type="button" className="accountSwitch" onClick={() => setMode(registering ? "login" : "register")}>
-            {registering ? t("account.haveAccount") : authEnabled ? t("account.registerNew") : t("account.registerAdmin")}
+            {registering
+              ? t("account.haveAccount")
+              : authEnabled
+                ? t("account.registerNew")
+                : t("account.registerAdmin")}
           </button>
         ) : null}
       </div>
@@ -273,7 +277,12 @@ function AccountSessionControlsForUser({ user, onSignedOut }: SessionControlsPro
       <div className="accountIdentity">
         <strong>{user.displayName}</strong>
         <span>
-          @{user.username} · {user.role === "admin" ? t("account.roleAdmin") : user.role === "reviewer" ? t("account.roleReviewer") : t("account.roleTester")}
+          @{user.username} ·{" "}
+          {user.role === "admin"
+            ? t("account.roleAdmin")
+            : user.role === "reviewer"
+              ? t("account.roleReviewer")
+              : t("account.roleTester")}
         </span>
       </div>
       <div className="accountActions">

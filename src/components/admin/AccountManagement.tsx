@@ -391,13 +391,15 @@ export function AccountManagement({
             <div className="adminAccountUser">
               <strong>{account.displayName}</strong>
               <span>
-                @{account.username} · {adminRoleLabel(account.role, language)} · {language === "en-US" ? "Last login " : "最近登录 "}{" "}
-                {formatAdminRelativeTime(account.lastLoginAt)}
+                @{account.username} · {adminRoleLabel(account.role, language)} ·{" "}
+                {language === "en-US" ? "Last login " : "最近登录 "} {formatAdminRelativeTime(account.lastLoginAt)}
               </span>
             </div>
             <div className="adminAccountRoleActions">
               {account.username === user.username ? (
-                <span className="adminAccountSelf">{language === "en-US" ? "Current account" : "当前账号"} · {adminRoleLabel(account.role, language)}</span>
+                <span className="adminAccountSelf">
+                  {language === "en-US" ? "Current account" : "当前账号"} · {adminRoleLabel(account.role, language)}
+                </span>
               ) : (
                 <>
                   <select

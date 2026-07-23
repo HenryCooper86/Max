@@ -138,8 +138,10 @@ const DICTIONARIES = {
     "login.platform": "Internal testing platform",
     "login.firstUse": "First use: register the first account; it becomes the administrator.",
     "login.invite": "You received an invitation — register your tester account to continue.",
-    "login.openRegistration": "Sign in to enter the voice testing cockpit; registration is available with administrator approval.",
-    "login.closedRegistration": "Sign in to enter the voice testing cockpit. Registration is closed — contact an administrator.",
+    "login.openRegistration":
+      "Sign in to enter the voice testing cockpit; registration is available with administrator approval.",
+    "login.closedRegistration":
+      "Sign in to enter the voice testing cockpit. Registration is closed — contact an administrator.",
     "login.accessFootnote": "HORIZON CONTINENTAL TECHNOLOGY · SECURE ACCESS",
     "account.loginOrRegister": "Sign in or register",
     "account.username": "Username",
@@ -184,10 +186,12 @@ const DICTIONARIES = {
   }
 } as const;
 
-export type TranslationKey = keyof (typeof DICTIONARIES)["zh-CN"];
+type TranslationKey = keyof (typeof DICTIONARIES)["zh-CN"];
 export type Translator = (key: TranslationKey, params?: Record<string, string | number>) => string;
 
-export function readStoredLanguage(storage: Storage | undefined = typeof window === "undefined" ? undefined : window.localStorage): Language {
+export function readStoredLanguage(
+  storage: Storage | undefined = typeof window === "undefined" ? undefined : window.localStorage
+): Language {
   try {
     const value = storage?.getItem(LANGUAGE_STORAGE_KEY);
     return value === "en-US" || value === "zh-CN" ? value : DEFAULT_LANGUAGE;
@@ -203,7 +207,10 @@ export function createTranslator(language: Language): Translator {
   };
 }
 
-export function persistLanguage(language: Language, storage: Storage | undefined = typeof window === "undefined" ? undefined : window.localStorage) {
+export function persistLanguage(
+  language: Language,
+  storage: Storage | undefined = typeof window === "undefined" ? undefined : window.localStorage
+) {
   try {
     storage?.setItem(LANGUAGE_STORAGE_KEY, language);
   } catch {

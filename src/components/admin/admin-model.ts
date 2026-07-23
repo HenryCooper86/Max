@@ -12,7 +12,7 @@ export function adminStatusAfterFailure(hasLoadedData: boolean): AdminDataStatus
   return hasLoadedData ? "stale" : "error";
 }
 
-export const ADMIN_SECTION_LABELS: Record<AdminSection, string> = {
+const ADMIN_SECTION_LABELS: Record<AdminSection, string> = {
   overview: "概览",
   releases: "发布验证",
   evidence: "证据与问题",
@@ -99,7 +99,14 @@ export function testingAssignmentStatusLabel(status: string, language: Language 
 }
 
 export function testingReviewStatusLabel(status: TestingReviewStatus, language: Language = "zh-CN"): string {
-  if (language === "en-US") return status === "open" ? "Open" : status === "triaged" ? "Triaged" : status === "resolved" ? "Resolved" : "Waived";
+  if (language === "en-US")
+    return status === "open"
+      ? "Open"
+      : status === "triaged"
+        ? "Triaged"
+        : status === "resolved"
+          ? "Resolved"
+          : "Waived";
   if (status === "open") return "待处理";
   if (status === "triaged") return "已分诊";
   if (status === "resolved") return "已解决";
@@ -107,7 +114,8 @@ export function testingReviewStatusLabel(status: TestingReviewStatus, language: 
 }
 
 export function testingReviewSeverityLabel(severity: TestingReviewSeverity, language: Language = "zh-CN"): string {
-  if (language === "en-US") return severity === "low" ? "Low" : severity === "medium" ? "Medium" : severity === "high" ? "High" : "Critical";
+  if (language === "en-US")
+    return severity === "low" ? "Low" : severity === "medium" ? "Medium" : severity === "high" ? "High" : "Critical";
   if (severity === "low") return "低";
   if (severity === "medium") return "中";
   if (severity === "high") return "高";

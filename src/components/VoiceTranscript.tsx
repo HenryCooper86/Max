@@ -28,7 +28,9 @@ export function VoiceTranscript({ agent }: { agent: HelmetAgent }) {
           <span aria-hidden="true" />
           <strong>{t("transcript.title")}</strong>
         </div>
-        <small>{visibleItems.length ? t("transcript.items", { count: visibleItems.length }) : t("transcript.waiting")}</small>
+        <small>
+          {visibleItems.length ? t("transcript.items", { count: visibleItems.length }) : t("transcript.waiting")}
+        </small>
       </div>
       <div className="voiceTranscriptList" ref={listRef} aria-live="polite">
         {visibleItems.length ? (

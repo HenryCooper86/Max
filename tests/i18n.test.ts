@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  DEFAULT_LANGUAGE,
-  LANGUAGE_STORAGE_KEY,
-  createTranslator,
-  readStoredLanguage
-} from "../src/lib/i18n";
+import { DEFAULT_LANGUAGE, LANGUAGE_STORAGE_KEY, createTranslator, readStoredLanguage } from "../src/lib/i18n";
 
 function storage(values: Record<string, string> = {}): Storage {
   const data = new Map(Object.entries(values));

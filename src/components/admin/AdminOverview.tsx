@@ -124,13 +124,22 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
   const recentRuns = [...(operations?.runs ?? [])].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 5);
 
   return (
-    <section className="adminSectionCard adminOverview" aria-label={language === "en-US" ? "Admin overview" : "管理概览"}>
+    <section
+      className="adminSectionCard adminOverview"
+      aria-label={language === "en-US" ? "Admin overview" : "管理概览"}
+    >
       <div className="panelHeader adminSectionHeader">
         <div>
           <h2>{language === "en-US" ? "Quality & release overview" : "质量与发布概览"}</h2>
           <span>
             当前构建 {agent.health?.build?.gitCommit ?? releaseGate?.build ?? "local"} ·{" "}
-            {testing ? (language === "en-US" ? `${testing.windowMinutes}-minute window` : `${testing.windowMinutes} 分钟窗口`) : language === "en-US" ? "Waiting for test data" : "等待测试数据"}
+            {testing
+              ? language === "en-US"
+                ? `${testing.windowMinutes}-minute window`
+                : `${testing.windowMinutes} 分钟窗口`
+              : language === "en-US"
+                ? "Waiting for test data"
+                : "等待测试数据"}
           </span>
         </div>
       </div>
@@ -211,7 +220,7 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
                 return (
                   <button type="button" className="sessionButton" key={run.id} onClick={onOpenReleases}>
                     <span className={`sessionQuality adminStatus ${statusTone(run.status)}`}>
-            {testingRunStatusLabel(run.status, language)}
+                      {testingRunStatusLabel(run.status, language)}
                     </span>
                     <strong>{run.name}</strong>
                     <span>

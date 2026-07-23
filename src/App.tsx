@@ -232,13 +232,17 @@ function AppContent() {
             type="button"
             className={`voiceMicButton ${listening || starting ? "active" : ""}`}
             aria-pressed={listening || starting}
-            aria-label={starting ? t("voice.connecting") : listening ? t("voice.stopHandsFree") : t("voice.startHandsFree")}
+            aria-label={
+              starting ? t("voice.connecting") : listening ? t("voice.stopHandsFree") : t("voice.startHandsFree")
+            }
             onClick={toggleHandsFreeSession}
           >
             <span className="voiceMicKey" aria-hidden="true">
               {listening || starting ? <X size={24} weight="bold" /> : <Microphone size={25} weight="regular" />}
             </span>
-            <span className="voiceMicLabel">{starting ? t("voice.connectingShort") : listening ? t("voice.stopHandsFree") : t("voice.startHandsFree")}</span>
+            <span className="voiceMicLabel">
+              {starting ? t("voice.connectingShort") : listening ? t("voice.stopHandsFree") : t("voice.startHandsFree")}
+            </span>
             <kbd aria-hidden="true">{t("voice.spaceKey")}</kbd>
           </button>
         </div>

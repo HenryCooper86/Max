@@ -1035,6 +1035,93 @@ describe("EvidenceWorkspace review workflow", () => {
     expect(reviewTitleInput(renderer).props.value).toBe("未加载复核 B");
   });
 
+  it.each(["ordinary session row", "overview requested session"] as const)(
+    "invalidates a pending queue handoff after a newer %s intent",
+    async (navigationKind) => {
+      const unloadedA = session("session-a", "a-key", "tester-a", "fail", "A 备注");
+      const selectedB = session("session-b", "b-key", "tester-b", "pass", "B 备注");
+      const sharedData = data(
+        [selectedB],
+        [
+          tester("b-key", "tester-b", { pass: 1, watch: 0, fail: 0 }),
+          tester("a-key", "tester-a", { pass: 0, watch: 0, fail: 1 })
+        ]
+      );
+      const reviewA = review(unloadedA.sessionId, { title: "未加载复核 A" });
+      const reviewB = review(selectedB.sessionId, { title: "已选择复核 B" });
+      sharedData.operations = operations([reviewA, reviewB]);
+      const loadA = deferred<TesterSessionSummary | null>();
+      vi.mocked(sharedData.loadSession).mockImplementation((sessionId: string) =>
+        sessionId === unloadedA.sessionId ? loadA.promise : Promise.resolve(selectedB)
+      );
+      const sharedAgent = agent();
+      const sharedUser = user();
+      const onRequestedSessionHandled = vi.fn();
+      const renderEvidence = async (requestedSessionId: string | null, focusRequestKey: number) => {
+        await act(async () => {
+          renderer?.update(
+            <EvidenceWorkspace
+              active
+              focusRequestKey={focusRequestKey}
+              requestedSessionId={requestedSessionId}
+              onRequestedSessionHandled={onRequestedSessionHandled}
+              agent={sharedAgent}
+              user={sharedUser}
+              data={sharedData}
+            />
+          );
+        });
+      };
+      await act(async () => {
+        renderer = create(
+          <EvidenceWorkspace
+            active
+            focusRequestKey={0}
+            requestedSessionId={null}
+            onRequestedSessionHandled={onRequestedSessionHandled}
+            agent={sharedAgent}
+            user={sharedUser}
+            data={sharedData}
+          />
+        );
+      });
+      await flush();
+
+      const queueA = renderer.root.find(
+        (node) => node.type === "button" && node.props.className === "reviewEvidenceLink" && text(node).includes("A")
+      );
+      act(() => queueA.props.onClick());
+      if (navigationKind === "ordinary session row") {
+        const sessionBButton = renderer.root.find(
+          (node) => node.type === "button" && String(node.props.className).startsWith("sessionButton")
+        );
+        expect(text(sessionBButton)).toContain("tester-b");
+        act(() => sessionBButton.props.onClick());
+      } else {
+        await renderEvidence(selectedB.sessionId, 1);
+        await flush();
+      }
+      expect(reviewTitleInput(renderer).props.value).toBe("已选择复核 B");
+
+      await act(async () => {
+        loadA.resolve(unloadedA);
+        await loadA.promise;
+      });
+      const selectedTester = renderer.root.find((node) => node.type === "tr" && node.props.className === "selected");
+      const selectedSessionButton = renderer.root.find(
+        (node) => node.type === "button" && node.props.className === "sessionButton active"
+      );
+      expect(text(selectedTester)).toContain("tester-b");
+      expect(text(selectedSessionButton)).toContain("tester-b目标用例");
+      const expectedQuality = navigationKind === "ordinary session row" ? "全部" : "PASS";
+      expect(
+        renderer.root.find((node) => node.type === "button" && text(node) === expectedQuality).props["aria-pressed"]
+      ).toBe(true);
+      expect(textarea(renderer, "复现上下文、设备条件和调查记录…").props.value).toBe("B 备注");
+      expect(reviewTitleInput(renderer).props.value).toBe("已选择复核 B");
+    }
+  );
+
   it("reconciles a clean review draft when the same review revision changes", async () => {
     const selected = session("selected-session", "selected-key", "selected", "fail", "");
     const firstReview = review(selected.sessionId, { title: "服务端版本 1", updatedAt: 1 });
@@ -1210,6 +1297,96 @@ describe("EvidenceWorkspace review workflow", () => {
       );
     });
     expect(reviewTitleInput(renderer).props.value).toBe("服务器后续版本");
+  });
+
+  it("blocks a dirty replaced review from mutating the replacement until the operator adopts it", async () => {
+    const selected = session("selected-session", "selected-key", "selected", "fail", "");
+    const reviewA = review(selected.sessionId, { id: "review-a", title: "复核 A", updatedAt: 1 });
+    const reviewB = review(selected.sessionId, { id: "review-b", title: "复核 B", updatedAt: 2 });
+    const sharedData = data([selected], [tester("selected-key", "selected", { pass: 0, watch: 0, fail: 1 })]);
+    sharedData.operations = operations([reviewA]);
+    vi.mocked(sharedData.saveReview).mockResolvedValue({ ok: true, data: reviewB });
+    const sharedAgent = agent();
+    const sharedUser = user();
+    await act(async () => {
+      renderer = create(
+        <EvidenceWorkspace
+          active
+          requestedSessionId={null}
+          onRequestedSessionHandled={vi.fn()}
+          agent={sharedAgent}
+          user={sharedUser}
+          data={sharedData}
+        />
+      );
+    });
+    act(() => reviewTitleInput(renderer).props.onChange({ target: { value: "A 的未保存草稿" } }));
+    await act(async () => {
+      renderer?.update(
+        <EvidenceWorkspace
+          active
+          requestedSessionId={null}
+          onRequestedSessionHandled={vi.fn()}
+          agent={sharedAgent}
+          user={sharedUser}
+          data={{ ...sharedData, operations: operations([reviewB]) }}
+        />
+      );
+    });
+    expect(reviewTitleInput(renderer).props.value).toBe("A 的未保存草稿");
+
+    await act(async () => reviewSubmitButton(renderer).props.onClick());
+    expect(sharedData.saveReview).not.toHaveBeenCalled();
+    expect(text(renderer.root)).toContain("复核记录已变化");
+    const adoptLatest = renderer.root.find((node) => node.type === "button" && text(node) === "采用最新复核");
+    act(() => adoptLatest.props.onClick());
+    expect(reviewTitleInput(renderer).props.value).toBe("复核 B");
+
+    act(() => reviewTitleInput(renderer).props.onChange({ target: { value: "基于 B 的新草稿" } }));
+    await act(async () => reviewSubmitButton(renderer).props.onClick());
+    expect(sharedData.saveReview).toHaveBeenCalledTimes(1);
+    expect(sharedData.saveReview).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "review-b", status: "open", title: "基于 B 的新草稿" })
+    );
+  });
+
+  it("selects a later active review when an earlier same-session review is resolved", async () => {
+    const selected = session("selected-session", "selected-key", "selected", "fail", "");
+    const resolved = review(selected.sessionId, {
+      id: "review-resolved",
+      status: "resolved",
+      title: "已解决复核",
+      updatedAt: 1
+    });
+    const activeReview = review(selected.sessionId, {
+      id: "review-active",
+      status: "triaged",
+      title: "仍在处理的复核",
+      updatedAt: 2
+    });
+    const sharedData = data([selected], [tester("selected-key", "selected", { pass: 0, watch: 0, fail: 1 })]);
+    sharedData.operations = operations([resolved, activeReview]);
+    await act(async () => {
+      renderer = create(
+        <EvidenceWorkspace
+          active
+          requestedSessionId={null}
+          onRequestedSessionHandled={vi.fn()}
+          agent={agent()}
+          user={user()}
+          data={sharedData}
+        />
+      );
+    });
+
+    expect(reviewTitleInput(renderer).props.value).toBe("仍在处理的复核");
+    expect(text(reviewSubmitButton(renderer))).toBe("更新复核");
+    const resolvedQueueLink = renderer.root.find(
+      (node) =>
+        node.type === "button" && node.props.className === "reviewEvidenceLink" && text(node).includes("已解决复核")
+    );
+    act(() => resolvedQueueLink.props.onClick());
+    expect(reviewTitleInput(renderer).props.value).toBe("仍在处理的复核");
   });
 });
 

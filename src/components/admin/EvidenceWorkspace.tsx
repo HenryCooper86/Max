@@ -65,6 +65,12 @@ function editableReview(review: TestingReview | undefined) {
   return review && (review.status === "open" || review.status === "triaged") ? review : undefined;
 }
 
+function findEditableReview(reviews: TestingReview[], sessionId: string) {
+  return reviews.find(
+    (review) => review.sessionId === sessionId && (review.status === "open" || review.status === "triaged")
+  );
+}
+
 function sameReviewDraft(left: ReviewDraftFields, right: ReviewDraftFields) {
   return (
     left.title === right.title &&
@@ -185,7 +191,7 @@ export function EvidenceWorkspace({
   const noticeRequestRef = useRef(0);
   const reviewMutationSequenceRef = useRef(0);
   const reviewTargetRequestRef = useRef(new Map<string, number>());
-  const reviewEvidenceRequestRef = useRef(0);
+  const evidenceNavigationRequestRef = useRef(0);
   const reviewDraftGenerationRef = useRef(0);
   const reviewDraftBindingRef = useRef<ReviewDraftBinding | null>(null);
   const reviewDraftDirtyRef = useRef(false);
@@ -234,6 +240,11 @@ export function EvidenceWorkspace({
     reviewDraftBindingRef.current = null;
     reviewDraftDirtyRef.current = false;
   }, []);
+  const claimEvidenceNavigationIntent = useCallback(() => ++evidenceNavigationRequestRef.current, []);
+  const ownsEvidenceNavigationIntent = useCallback(
+    (requestId: number) => evidenceNavigationRequestRef.current === requestId,
+    []
+  );
 
   const { loadSession } = data;
   const testing = data.testing;
@@ -313,15 +324,11 @@ export function EvidenceWorkspace({
     : undefined;
   const selectedSession = selectedSessionId ? (sessionDetails[selectedSessionId] ?? selectedSessionSummary) : undefined;
   const operationReviews = data.operations?.reviews ?? [];
-  const selectedReview = selectedSession
-    ? editableReview(operationReviews.find((review) => review.sessionId === selectedSession.sessionId))
-    : undefined;
+  const selectedReview = selectedSession ? findEditableReview(operationReviews, selectedSession.sessionId) : undefined;
   const requestedSessionSummary = requestedSessionId
     ? testingSessions.find((session) => session.sessionId === requestedSessionId)
     : undefined;
-  const requestedReview = requestedSessionId
-    ? editableReview(operationReviews.find((review) => review.sessionId === requestedSessionId))
-    : undefined;
+  const requestedReview = requestedSessionId ? findEditableReview(operationReviews, requestedSessionId) : undefined;
   const selectedSessionTurns = selectedSession?.turns ?? [];
   const selectedTesterCounts = selectedTester?.qualityCounts ?? emptyQualityCounts();
   const selectedSessionIssues = selectedSession ? sessionIssueCount(selectedSession) : 0;
@@ -344,6 +351,13 @@ export function EvidenceWorkspace({
     pendingNoteSave !== null &&
     pendingNoteSave.sessionId === selectedSession?.sessionId &&
     pendingNoteSave.notes === sessionNotes;
+  const renderedReviewBinding = reviewDraftBindingRef.current;
+  const reviewBindingConflict =
+    Boolean(selectedSession) &&
+    reviewDraftDirtyRef.current &&
+    renderedReviewBinding !== null &&
+    renderedReviewBinding?.sessionId === selectedSession?.sessionId &&
+    renderedReviewBinding.reviewId !== selectedReview?.id;
 
   useEffect(() => {
     if (!armedAction) return;
@@ -362,9 +376,17 @@ export function EvidenceWorkspace({
     notesDirtyRef.current = false;
     noteSessionIdRef.current = null;
     setNotesDirty(false);
+    claimEvidenceNavigationIntent();
     setSelectedTesterKey(initialFilteredTesterKey);
     setSelectedSessionId(initialFilteredSessionId);
-  }, [active, initialFilteredSessionId, initialFilteredTesterKey, requestedSessionId, selectedSessionId]);
+  }, [
+    active,
+    claimEvidenceNavigationIntent,
+    initialFilteredSessionId,
+    initialFilteredTesterKey,
+    requestedSessionId,
+    selectedSessionId
+  ]);
 
   useEffect(() => {
     const sessionId = selectedSession?.sessionId;
@@ -398,6 +420,7 @@ export function EvidenceWorkspace({
   useEffect(() => {
     if (!active || !requestedSessionId) return;
     let current = true;
+    const navigationRequestId = claimEvidenceNavigationIntent();
     const noticeRequestId = claimNoticeRequest();
     setArmedAction(null);
     setTesterFilter("");
@@ -411,7 +434,7 @@ export function EvidenceWorkspace({
     setNotesDirty(false);
     writeSessionNotes(requestedSessionSummary?.notes ?? "");
     void loadSession(requestedSessionId).then((detail) => {
-      if (!current) return;
+      if (!current || !ownsEvidenceNavigationIntent(navigationRequestId)) return;
       if (detail) {
         setQualityFilter(detail.quality);
         setSelectedTesterKey(detail.testerKey);
@@ -435,10 +458,12 @@ export function EvidenceWorkspace({
     };
   }, [
     active,
+    claimEvidenceNavigationIntent,
     claimNoticeRequest,
     focusRequestKey,
     loadSession,
     onRequestedSessionHandled,
+    ownsEvidenceNavigationIntent,
     requestedReview,
     requestedSessionId,
     requestedSessionSummary?.notes,
@@ -453,9 +478,10 @@ export function EvidenceWorkspace({
     if (!active || requestedSessionId || focusRequestKey === 0 || handledFocusRequestRef.current === focusRequestKey) {
       return;
     }
+    claimEvidenceNavigationIntent();
     handledFocusRequestRef.current = focusRequestKey;
     workspaceRef.current?.focus();
-  }, [active, focusRequestKey, requestedSessionId]);
+  }, [active, claimEvidenceNavigationIntent, focusRequestKey, requestedSessionId]);
 
   const arm = (key: string, action: () => void) => {
     if (armedAction === key) {
@@ -467,6 +493,7 @@ export function EvidenceWorkspace({
   };
 
   const selectTester = (testerKey: string) => {
+    claimEvidenceNavigationIntent();
     setArmedAction(null);
     clearReviewDraftBinding();
     noteSessionIdRef.current = null;
@@ -477,10 +504,11 @@ export function EvidenceWorkspace({
     setSelectedSessionId(null);
   };
 
-  const selectSession = (sessionId: string) => {
+  const selectSession = (sessionId: string, claimIntent = true) => {
+    if (claimIntent) claimEvidenceNavigationIntent();
     const session = sessionDetails[sessionId] ?? testingSessions.find((item) => item.sessionId === sessionId);
     setArmedAction(null);
-    resetReviewDraft(sessionId, editableReview(operationReviews.find((review) => review.sessionId === sessionId)));
+    resetReviewDraft(sessionId, findEditableReview(operationReviews, sessionId));
     noteSessionIdRef.current = sessionId;
     notesDirtyRef.current = false;
     setNotesDirty(false);
@@ -489,7 +517,7 @@ export function EvidenceWorkspace({
   };
 
   const selectReviewEvidence = async (review: TestingReview) => {
-    const requestId = ++reviewEvidenceRequestRef.current;
+    const requestId = claimEvidenceNavigationIntent();
     const noticeRequestId = claimNoticeRequest();
     const sessionId = review.sessionId;
     const session = sessionDetails[sessionId] ?? testingSessions.find((item) => item.sessionId === sessionId);
@@ -497,11 +525,11 @@ export function EvidenceWorkspace({
     setSessionFilter("");
     setQualityFilter(session?.quality ?? "all");
     setSelectedTesterKey(session?.testerKey ?? null);
-    selectSession(sessionId);
-    resetReviewDraft(sessionId, editableReview(review));
+    selectSession(sessionId, false);
+    resetReviewDraft(sessionId, editableReview(review) ?? findEditableReview(operationReviews, sessionId));
     if (session) return;
     const detail = await data.loadSession(sessionId);
-    if (reviewEvidenceRequestRef.current !== requestId) return;
+    if (!ownsEvidenceNavigationIntent(requestId)) return;
     if (!detail) {
       setOwnedNotice(noticeRequestId, {
         tone: "error",
@@ -516,6 +544,7 @@ export function EvidenceWorkspace({
   };
 
   const runClear = async (key: string, payload: TestingClearScope, targetLabel: string) => {
+    claimEvidenceNavigationIntent();
     const noticeRequestId = claimNoticeRequest();
     setBusyAction(key);
     const ok = await data.clearEvidence(payload);
@@ -628,14 +657,24 @@ export function EvidenceWorkspace({
     if (!reviewDraftBindingRef.current || reviewDraftBindingRef.current.sessionId !== selectedSession.sessionId) {
       resetReviewDraft(selectedSession.sessionId, selectedReview);
     }
-    const submittedBinding = { ...reviewDraftBindingRef.current } as ReviewDraftBinding;
+    const currentBinding = reviewDraftBindingRef.current;
+    if (!currentBinding) return;
+    if (currentBinding.reviewId !== selectedReview?.id) {
+      const noticeRequestId = claimNoticeRequest();
+      setOwnedNotice(noticeRequestId, {
+        tone: "error",
+        message: "复核记录已变化，请先采用最新复核，再继续编辑。"
+      });
+      return;
+    }
+    const submittedBinding = { ...currentBinding };
     const submittedFields = { ...reviewDraftRef.current };
     await saveReview(
       {
-        id: selectedReview?.id,
+        id: submittedBinding.reviewId,
         sessionId: selectedSession.sessionId,
         runId: selectedSession.runId,
-        status: selectedReview?.status ?? "open",
+        status: submittedBinding.reviewId ? (selectedReview?.status ?? "open") : "open",
         severity: submittedFields.severity,
         owner: submittedFields.owner.trim() || user.username,
         title: submittedFields.title.trim() || "会话需要复核",
@@ -664,6 +703,12 @@ export function EvidenceWorkspace({
     if (key === "comment") setReviewComment(value as string);
     if (key === "severity") setReviewSeverity(value as TestingReviewSeverity);
     if (key === "owner") setReviewOwner(value as string);
+  };
+
+  const adoptLatestReview = () => {
+    if (!selectedSession) return;
+    claimNoticeRequest();
+    resetReviewDraft(selectedSession.sessionId, selectedReview);
   };
 
   const reviewComposerBusy = selectedSession
@@ -825,6 +870,7 @@ export function EvidenceWorkspace({
           <input
             value={sessionFilter}
             onChange={(event) => {
+              claimEvidenceNavigationIntent();
               setArmedAction(null);
               noteSessionIdRef.current = null;
               notesDirtyRef.current = false;
@@ -847,6 +893,7 @@ export function EvidenceWorkspace({
               className={qualityFilter === quality ? "active" : ""}
               aria-pressed={qualityFilter === quality}
               onClick={() => {
+                claimEvidenceNavigationIntent();
                 setArmedAction(null);
                 noteSessionIdRef.current = null;
                 notesDirtyRef.current = false;
@@ -1026,6 +1073,7 @@ export function EvidenceWorkspace({
             <button
               type="button"
               onClick={() => {
+                claimEvidenceNavigationIntent();
                 setArmedAction(null);
                 noteSessionIdRef.current = null;
                 notesDirtyRef.current = false;
@@ -1381,6 +1429,14 @@ export function EvidenceWorkspace({
                 />
               </label>
             </div>
+            {reviewBindingConflict ? (
+              <div className="reviewDraftConflict" role="status">
+                <span>复核记录已变化；当前草稿尚未应用到最新记录。</span>
+                <button type="button" onClick={adoptLatestReview}>
+                  采用最新复核
+                </button>
+              </div>
+            ) : null}
             <button type="button" disabled={reviewComposerBusy || !selectedSession} onClick={() => void submitReview()}>
               {reviewComposerBusy ? "正在保存…" : selectedReview ? "更新复核" : "新建复核"}
             </button>

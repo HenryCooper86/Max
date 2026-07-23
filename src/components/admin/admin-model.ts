@@ -122,17 +122,29 @@ export function testingReviewSeverityLabel(severity: TestingReviewSeverity, lang
   return "严重";
 }
 
-export function formatAdminRelativeTime(timestamp: number): string {
+export function formatAdminRelativeTime(timestamp: number, language: Language = "zh-CN"): string {
   const relative = formatRelativeTime(timestamp);
   if (relative === "—") return relative;
-  if (relative === "just now") return "刚刚";
+  if (relative === "just now") return language === "en-US" ? "just now" : "刚刚";
   const match = relative.match(/^(\d+)([mhd]) ago$/);
   if (!match) return relative;
+  if (language === "en-US") {
+    const unit = match[2] === "m" ? "min" : match[2] === "h" ? "hr" : "day";
+    return `${match[1]} ${unit} ago`;
+  }
   const unit = match[2] === "m" ? "分钟" : match[2] === "h" ? "小时" : "天";
   return `${match[1]} ${unit}前`;
 }
 
-export function confirmationCopy(kind: "user" | "invite" | "session" | "tester" | "all-evidence", target: string) {
+export function confirmationCopy(
+  kind: "user" | "invite" | "session" | "tester" | "all-evidence",
+  target: string,
+  language: Language = "zh-CN"
+) {
+  if (language === "en-US") {
+    const action = kind === "user" ? "Delete" : kind === "invite" ? "Revoke" : "Clear";
+    return `Confirm ${action.toLowerCase()} ${target}?`;
+  }
   const action = kind === "user" ? "删除" : kind === "invite" ? "撤销" : "清除";
   return `确认${action} ${target}？`;
 }

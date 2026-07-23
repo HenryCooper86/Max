@@ -972,9 +972,12 @@ export function EvidenceWorkspace({
           ))}
         </div>
         <div className="historyRetention">
-          <span>证据历史</span>
+          <span>{localized(language, "证据历史", "Evidence history")}</span>
           <strong>
-            {testing?.history.persistent ? "持久化" : "内存"} · 已加载 {testingSessions.length}/{data.sessionTotal}
+            {testing?.history.persistent
+              ? localized(language, "持久化", "Persistent")
+              : localized(language, "内存", "Memory")}{" "}
+            · {localized(language, "已加载", "Loaded")} {testingSessions.length}/{data.sessionTotal}
           </strong>
         </div>
       </div>
@@ -982,42 +985,42 @@ export function EvidenceWorkspace({
       <div className="statGrid">
         <span>
           <b>{testingTotals?.activeTestSessions ?? agent.health?.metrics?.activeSessions ?? 0}</b>
-          活跃会话
+          {localized(language, "活跃会话", "Active sessions")}
         </span>
         <span>
           <b>{testingTotals?.totalTestSessions ?? 0}</b>
-          会话总数
+          {localized(language, "会话总数", "Total sessions")}
         </span>
         <span>
           <b>{formatBytes(testingTotals?.audioUpBytes ?? 0)}</b>
-          麦克风上行
+          {localized(language, "麦克风上行", "Mic uplink")}
         </span>
         <span>
           <b>{formatBytes(totalDownBytes)}</b>
-          下行
+          {localized(language, "下行", "Downlink")}
         </span>
         <span>
           <b>{testingTotals?.avgLatencyMs ?? 0}ms</b>
-          平均首音
+          {localized(language, "平均首音", "Average first audio")}
         </span>
         <span>
           <b>{testingTotals?.p95LatencyMs ?? 0}ms</b>
-          P95 首音
+          P95 {localized(language, "首音", "first audio")}
         </span>
         <span>
           <b>{testingTotals?.errorEvents ?? 0}</b>
-          错误
+          {localized(language, "错误", "Errors")}
         </span>
         <span>
           <b>{testingTotals?.ttsFallbacks ?? 0}</b>
-          TTS 回退
+          {localized(language, "TTS 回退", "TTS fallback")}
         </span>
       </div>
 
       <div className="chartGrid">
         <div className="chartBlock">
           <div className="instrumentHead">
-            <span>带宽</span>
+            <span>{localized(language, "带宽", "Bandwidth")}</span>
             <b>{formatBytes(totalBandwidthBytes)}</b>
           </div>
           <div className="miniChart" aria-label="最近带宽趋势">
@@ -1039,7 +1042,7 @@ export function EvidenceWorkspace({
         </div>
         <div className="chartBlock">
           <div className="instrumentHead">
-            <span>首音延迟</span>
+            <span>{localized(language, "首音延迟", "First audio latency")}</span>
             <b>{testingTotals?.p95LatencyMs ?? 0}ms P95</b>
           </div>
           <div className="miniChart latencyChart" aria-label="最近首音延迟趋势">
@@ -1052,8 +1055,13 @@ export function EvidenceWorkspace({
             ))}
           </div>
           <div className="chartLegend">
-            <span>{testingTimeline.reduce((sum, bucket) => sum + bucket.latencySamples, 0)} 个样本</span>
-            <span>{testingTotals?.errorEvents ?? 0} 个错误</span>
+            <span>
+              {testingTimeline.reduce((sum, bucket) => sum + bucket.latencySamples, 0)}{" "}
+              {localized(language, "个样本", "samples")}
+            </span>
+            <span>
+              {testingTotals?.errorEvents ?? 0} {localized(language, "个错误", "errors")}
+            </span>
           </div>
         </div>
       </div>
@@ -1062,15 +1070,15 @@ export function EvidenceWorkspace({
         <table className="testerTable">
           <thead>
             <tr>
-              <th>测试员</th>
-              <th>IP / 区域</th>
-              <th>会话</th>
-              <th>质量</th>
-              <th>问题</th>
-              <th>时长</th>
-              <th>数据量</th>
-              <th>延迟</th>
-              <th>最近活动</th>
+              <th>{localized(language, "测试员", "Tester")}</th>
+              <th>IP / {localized(language, "区域", "Region")}</th>
+              <th>{localized(language, "会话", "Sessions")}</th>
+              <th>{localized(language, "质量", "Quality")}</th>
+              <th>{localized(language, "问题", "Issues")}</th>
+              <th>{localized(language, "时长", "Duration")}</th>
+              <th>{localized(language, "数据量", "Data")}</th>
+              <th>{localized(language, "延迟", "Latency")}</th>
+              <th>{localized(language, "最近活动", "Last activity")}</th>
             </tr>
           </thead>
           <tbody>
@@ -1086,7 +1094,11 @@ export function EvidenceWorkspace({
                     <td>
                       <button className="testerLink" type="button" onClick={() => selectTester(tester.testerKey)}>
                         <strong>{tester.testerId}</strong>
-                        <span>{tester.activeSessions ? "活跃" : `${tester.errorEvents} 个错误`}</span>
+                        <span>
+                          {tester.activeSessions
+                            ? localized(language, "活跃", "Active")
+                            : `${tester.errorEvents} ${localized(language, "个错误", "errors")}`}
+                        </span>
                       </button>
                     </td>
                     <td>
@@ -1113,7 +1125,11 @@ export function EvidenceWorkspace({
               })
             ) : (
               <tr>
-                <td colSpan={9}>{testerUsers.length ? "没有匹配筛选条件的测试员" : "暂无测试会话"}</td>
+                <td colSpan={9}>
+                  {testerUsers.length
+                    ? localized(language, "没有匹配筛选条件的测试员", "No testers match the current filters")
+                    : localized(language, "暂无测试会话", "No test sessions")}
+                </td>
               </tr>
             )}
           </tbody>
@@ -1123,8 +1139,8 @@ export function EvidenceWorkspace({
       <div className="testerConversationPanel">
         <div className="testerConversationHeader">
           <div>
-            <span>对话历史</span>
-            <strong>{selectedTester?.testerId ?? "未选择测试员"}</strong>
+            <span>{localized(language, "对话历史", "Conversation history")}</span>
+            <strong>{selectedTester?.testerId ?? localized(language, "未选择测试员", "No tester selected")}</strong>
             {selectedTester ? (
               <p>
                 {selectedTester.ipAddress} · {selectedTester.region} · {selectedTester.totalSessions} 次会话 ·{" "}
@@ -1148,7 +1164,7 @@ export function EvidenceWorkspace({
               }}
               disabled={!currentTester}
             >
-              当前测试员
+              {localized(language, "当前测试员", "Current tester")}
             </button>
             <button
               type="button"
@@ -1171,7 +1187,7 @@ export function EvidenceWorkspace({
             >
               {armedAction === `clear-tester:${selectedTester?.testerKey}` && selectedTester
                 ? confirmationCopy("tester", selectedTester.testerId)
-                : "清除此测试员证据"}
+                : localized(language, "清除此测试员证据", "Clear this tester's evidence")}
             </button>
           </div>
         </div>
@@ -1193,7 +1209,9 @@ export function EvidenceWorkspace({
               </article>
             ))
           ) : (
-            <p className="testerConversationEmpty">尚未捕获对话转写。</p>
+            <p className="testerConversationEmpty">
+              {localized(language, "尚未捕获对话转写。", "No conversation transcript captured yet.")}
+            </p>
           )}
         </div>
       </div>
@@ -1201,8 +1219,12 @@ export function EvidenceWorkspace({
       <div className="testerSessionPanel">
         <div className="testerConversationHeader">
           <div>
-            <span>会话回放</span>
-            <strong>{selectedSession ? formatSessionDate(selectedSession.startedAt) : "暂无已完成会话"}</strong>
+            <span>{localized(language, "会话回放", "Session replay")}</span>
+            <strong>
+              {selectedSession
+                ? formatSessionDate(selectedSession.startedAt)
+                : localized(language, "暂无已完成会话", "No completed sessions")}
+            </strong>
             {selectedSession ? (
               <p>
                 {selectedSession.campaignName} · {selectedSession.testCaseName} ·{" "}
@@ -1216,7 +1238,7 @@ export function EvidenceWorkspace({
               onClick={() => selectedSession && exportTestingSession(selectedSession)}
               disabled={!selectedSession}
             >
-              导出会话
+              {localized(language, "导出会话", "Export session")}
             </button>
             <button
               type="button"
@@ -1239,7 +1261,7 @@ export function EvidenceWorkspace({
             >
               {armedAction === `clear-session:${selectedSession?.sessionId}` && selectedSession
                 ? confirmationCopy("session", selectedSession.sessionId)
-                : "删除会话"}
+                : localized(language, "删除会话", "Delete session")}
             </button>
           </div>
         </div>
@@ -1271,7 +1293,9 @@ export function EvidenceWorkspace({
                 );
               })
             ) : (
-              <p className="testerConversationEmpty">当前视图没有匹配的已完成会话。</p>
+              <p className="testerConversationEmpty">
+                {localized(language, "当前视图没有匹配的已完成会话。", "No completed sessions match this view.")}
+              </p>
             )}
             {data.nextCursor ? (
               <button

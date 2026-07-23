@@ -74,6 +74,12 @@ export const RIDE_MODE_LABELS: Record<RideMode, string> = {
   navigation: "导航",
   emergency: "紧急"
 };
+export const RIDE_MODE_LABELS_EN: Record<RideMode, string> = {
+  ride: "Ride",
+  stop: "Parked",
+  navigation: "Navigation",
+  emergency: "Emergency"
+};
 
 export const SCENARIOS: DemoScenario[] = ["commute", "wind", "fuel", "group", "emergency", "adas"];
 export const RIDE_MODES: RideMode[] = ["ride", "navigation", "stop", "emergency"];
@@ -94,11 +100,24 @@ export const CONNECTION_LABELS: Record<ConnectionState, string> = {
   ready: "已就绪",
   degraded: "降级"
 };
+export const CONNECTION_LABELS_EN: Record<ConnectionState, string> = {
+  offline: "Offline",
+  connecting: "Connecting",
+  relay: "Relay online",
+  provider: "Provider handshake",
+  ready: "Ready",
+  degraded: "Degraded"
+};
 
 export const RESPONSE_MODE_LABELS: Record<SessionMemoryState["responseMode"], string> = {
   concise: "极简",
   normal: "正常",
   emergency: "紧急"
+};
+export const RESPONSE_MODE_LABELS_EN: Record<SessionMemoryState["responseMode"], string> = {
+  concise: "Concise",
+  normal: "Normal",
+  emergency: "Emergency"
 };
 
 export const HAZARD_LABELS: Record<HazardLevel, string> = {
@@ -106,11 +125,21 @@ export const HAZARD_LABELS: Record<HazardLevel, string> = {
   caution: "注意",
   critical: "高风险"
 };
+export const HAZARD_LABELS_EN: Record<HazardLevel, string> = {
+  normal: "Steady",
+  caution: "Caution",
+  critical: "High risk"
+};
 
 export const HAZARD_ACTIONS: Record<HazardLevel, string> = {
   normal: "保持节奏，专注下一步提示",
   caution: "放缓一点，扩大车距",
   critical: "优先靠边，确认安全"
+};
+export const HAZARD_ACTIONS_EN: Record<HazardLevel, string> = {
+  normal: "Keep your pace and focus on the next prompt",
+  caution: "Slow down and increase following distance",
+  critical: "Pull over when safe and confirm your surroundings"
 };
 
 export const NETWORK_LABELS: Record<RideHudContext["network"], string> = {
@@ -124,6 +153,12 @@ export const PERMISSION_LABELS: Record<PermissionStateLabel, string> = {
   prompt: "待授权",
   denied: "已拒绝",
   unknown: "未确认"
+};
+export const PERMISSION_LABELS_EN: Record<PermissionStateLabel, string> = {
+  granted: "Granted",
+  prompt: "Permission needed",
+  denied: "Denied",
+  unknown: "Unknown"
 };
 
 export const AUDIO_PROCESSING_LABELS: Record<"true" | "false" | "unknown", string> = {
@@ -144,4 +179,10 @@ export const PERSONALITY_LABELS: Record<VoicePersonality, string> = {
   friendly: "友好",
   technical: "技术",
   rally: "领航"
+};
+export const PERSONALITY_LABELS_EN: Record<VoicePersonality, string> = {
+  concise: "Concise",
+  friendly: "Friendly",
+  technical: "Technical",
+  rally: "Rally"
 };

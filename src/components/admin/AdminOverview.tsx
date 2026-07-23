@@ -88,7 +88,7 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
         label: localized(language, "FAIL 证据", "FAIL evidence"),
         count: failCount,
         detail: latestFail
-          ? `${latestFail.testerId} · ${latestFail.testCaseName} · ${formatAdminRelativeTime(latestFail.endedAt)}`
+          ? `${latestFail.testerId} · ${latestFail.testCaseName} · ${formatAdminRelativeTime(latestFail.endedAt, language)}`
           : localized(language, "当前已加载页面没有 FAIL 证据", "No FAIL evidence in the loaded page"),
         onOpen: () => onOpenEvidence(latestFail?.sessionId)
       },
@@ -98,7 +98,7 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
         label: localized(language, "WATCH 证据", "WATCH evidence"),
         count: watchCount,
         detail: latestWatch
-          ? `${latestWatch.testerId} · ${latestWatch.testCaseName} · ${formatAdminRelativeTime(latestWatch.endedAt)}`
+          ? `${latestWatch.testerId} · ${latestWatch.testCaseName} · ${formatAdminRelativeTime(latestWatch.endedAt, language)}`
           : localized(language, "当前已加载页面没有 WATCH 证据", "No WATCH evidence in the loaded page"),
         onOpen: () => onOpenEvidence(latestWatch?.sessionId)
       },
@@ -255,7 +255,7 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
                       {localized(language, "项任务完成", "tasks complete")}
                     </span>
                     <span>
-                      {localized(language, "更新于", "Updated")} {formatAdminRelativeTime(run.updatedAt)}
+                      {localized(language, "更新于", "Updated")} {formatAdminRelativeTime(run.updatedAt, language)}
                     </span>
                   </button>
                 );

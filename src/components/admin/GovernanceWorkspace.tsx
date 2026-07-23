@@ -96,10 +96,10 @@ export function GovernanceWorkspace({ user, data }: Props) {
     >
       <div className="controlPlaneHead adminSectionHeader">
         <div>
-          <span>MAX QA · 治理</span>
+          <span>MAX QA · {localized(language, "治理", "Governance")}</span>
           <strong>{localized(language, "策略与审计", "Policy & audit")}</strong>
         </div>
-        <nav className="controlPlaneTabs" aria-label="治理视图">
+        <nav className="controlPlaneTabs" aria-label={localized(language, "治理视图", "Governance views")}>
           <button type="button" className={tab === "policy" ? "active" : ""} onClick={() => setTab("policy")}>
             {localized(language, "发布策略", "Publish policy")}
           </button>
@@ -117,17 +117,22 @@ export function GovernanceWorkspace({ user, data }: Props) {
 
       {!activePolicy ? (
         <p className="adminWorkspaceLoading">
-          {data.status === "loading" ? "正在加载治理数据…" : "暂无可用策略数据。"}
+          {data.status === "loading"
+            ? localized(language, "正在加载治理数据…", "Loading governance data…")
+            : localized(language, "暂无可用策略数据。", "No policy data available.")}
         </p>
       ) : null}
 
       {tab === "policy" && activePolicy ? (
         <div className="policyWorkbench">
           <div className="activePolicyCard">
-            <span>当前生效策略</span>
+            <span>{localized(language, "当前生效策略", "Active policy")}</span>
             <strong>{activePolicy.version}</strong>
             <p>{activePolicy.description}</p>
-            <small>已批准基线：{data.operations?.approvedBaselineBuild ?? "尚未选择"}</small>
+            <small>
+              {localized(language, "已批准基线：", "Approved baseline: ")}
+              {data.operations?.approvedBaselineBuild ?? localized(language, "尚未选择", "Not selected")}
+            </small>
           </div>
           <div className="policyFields">
             <label>
@@ -197,7 +202,7 @@ export function GovernanceWorkspace({ user, data }: Props) {
             {data.policies.map((policy) => (
               <span key={policy.version} className={policy.active ? "active" : ""}>
                 <b>{policy.version}</b>
-                {policy.createdBy} · {formatAdminRelativeTime(policy.createdAt)}
+                {policy.createdBy} · {formatAdminRelativeTime(policy.createdAt, language)}
               </span>
             ))}
           </div>
@@ -208,7 +213,7 @@ export function GovernanceWorkspace({ user, data }: Props) {
         <div className="auditTimeline">
           {(data.operations?.audit ?? []).map((event) => (
             <article key={event.id}>
-              <time>{formatAdminRelativeTime(event.at)}</time>
+              <time>{formatAdminRelativeTime(event.at, language)}</time>
               <div>
                 <strong>{event.action}</strong>
                 <span>
@@ -218,7 +223,11 @@ export function GovernanceWorkspace({ user, data }: Props) {
               </div>
             </article>
           ))}
-          {!data.operations?.audit.length ? <p className="testerConversationEmpty">尚未记录治理或发布变更。</p> : null}
+          {!data.operations?.audit.length ? (
+            <p className="testerConversationEmpty">
+              {localized(language, "尚未记录治理或发布变更。", "No governance or release changes recorded.")}
+            </p>
+          ) : null}
         </div>
       ) : null}
     </section>

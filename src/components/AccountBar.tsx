@@ -358,7 +358,10 @@ function AccountSessionControlsForUser({ user, onSignedOut }: SessionControlsPro
           {memoryClearArmed
             ? t("account.confirmMemoryClear")
             : memorySummary
-              ? `记忆 ${memorySummary.turnCount} 段${memorySummary.factCount ? ` · ${memorySummary.factCount} 条重点` : ""}`
+              ? t("account.memorySummary", {
+                  turns: memorySummary.turnCount,
+                  facts: memorySummary.factCount ? ` · ${memorySummary.factCount} ${t("account.memoryFactSuffix")}` : ""
+                })
               : t("account.memory")}
         </button>
         <button

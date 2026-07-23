@@ -93,6 +93,12 @@ describe("Admin navigation permissions", () => {
     expect(surfaceAfterAuthentication("admin", false)).toBe("voice");
     expect(surfaceAfterAuthentication("admin", true)).toBe("admin");
   });
+
+  it("keeps authenticated workspace surfaces explicit", () => {
+    expect(surfaceAfterAuthentication("settings", true)).toBe("settings");
+    expect(surfaceAfterAuthentication("admin", true)).toBe("admin");
+    expect(surfaceAfterAuthentication("settings", false)).toBe("voice");
+  });
 });
 
 describe("Admin derived data", () => {

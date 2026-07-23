@@ -172,6 +172,73 @@ async function trackedHook(currentUser: AuthUser, onAuthenticationExpired = vi.f
 }
 
 describe("useAdminTestingData concurrency", () => {
+  it("does not expose or return a cached detail during a scope transition render", async () => {
+    const hook = await trackedHook(user("admin"));
+    let cached!: TesterSessionSummary | null;
+    await act(async () => {
+      cached = await hook.current.loadSession("detail");
+    });
+    expect(cached?.sessionId).toBe("detail");
+    vi.mocked(testingApi.fetchSession).mockClear();
+    const nextSummary = deferred<ApiResult<TestingStats>>();
+    const nextSessions = deferred<Awaited<ReturnType<typeof testingApi.fetchSessions>>>();
+    const nextRuns = deferred<Awaited<ReturnType<typeof testingApi.fetchRuns>>>();
+    vi.mocked(testingApi.fetchSummary).mockReturnValue(nextSummary.promise);
+    vi.mocked(testingApi.fetchSessions).mockReturnValue(nextSessions.promise);
+    vi.mocked(testingApi.fetchRuns).mockReturnValue(nextRuns.promise);
+
+    let transitionLoad!: Promise<TesterSessionSummary | null>;
+    act(() => {
+      hook.renderer.update(
+        <Probe
+          user={user("tester", "tester")}
+          onAuthenticationExpired={vi.fn()}
+          onRender={(record) => {
+            hook.records.push(record);
+            if (!transitionLoad) transitionLoad = record.data.loadSession("detail");
+          }}
+        />
+      );
+    });
+
+    await expect(transitionLoad).resolves.toBeNull();
+    expect(testingApi.fetchSession).not.toHaveBeenCalled();
+    expect(hook.current.sessionDetails).toEqual({});
+    expect(hook.current.sessions).toEqual([]);
+  });
+
+  it("gives an explicit replacement refresh ownership over a competing ordinary refresh", async () => {
+    const hook = await trackedHook(user("admin"));
+    const replacementSummary = deferred<ApiResult<TestingStats>>();
+    const replacementPage = deferred<Awaited<ReturnType<typeof testingApi.fetchSessions>>>();
+    const replacementOperations = deferred<Awaited<ReturnType<typeof testingApi.fetchOperations>>>();
+    vi.mocked(testingApi.fetchSummary).mockReset().mockReturnValue(replacementSummary.promise);
+    vi.mocked(testingApi.fetchSessions).mockReset().mockReturnValue(replacementPage.promise);
+    vi.mocked(testingApi.fetchOperations).mockReset().mockReturnValue(replacementOperations.promise);
+
+    let replacementPromise!: Promise<void>;
+    let ordinaryPromise!: Promise<void>;
+    act(() => {
+      replacementPromise = hook.current.refresh(true);
+      ordinaryPromise = hook.current.refresh();
+    });
+
+    replacementSummary.resolve(success(stats("replacement")));
+    replacementPage.resolve(success(page([session("replacement-only", 100)], "replacement-next")));
+    replacementOperations.resolve(
+      success({ operations: operations("replacement"), policies: [policy("replacement")] })
+    );
+    await act(async () => {
+      await Promise.all([replacementPromise, ordinaryPromise]);
+    });
+
+    expect(testingApi.fetchSummary).toHaveBeenCalledTimes(1);
+    expect(testingApi.fetchSessions).toHaveBeenCalledTimes(1);
+    expect(testingApi.fetchOperations).toHaveBeenCalledTimes(1);
+    expect(hook.current.sessions.map((item) => item.sessionId)).toEqual(["replacement-only"]);
+    expect(hook.current.nextCursor).toBe("replacement-next");
+  });
+
   it("makes clear invalidate older refresh and pagination writes and coalesces replacement refreshes", async () => {
     const hook = await trackedHook(user("admin"));
     const olderSummary = deferred<ApiResult<TestingStats>>();
@@ -348,6 +415,42 @@ describe("useAdminTestingData concurrency", () => {
     expect(hook.current.error).toBeNull();
   });
 
+  it("surfaces a typed sync error when saving notes fails without dropping evidence", async () => {
+    const hook = await trackedHook(user("admin"));
+    vi.mocked(testingApi.updateSessionNotes).mockResolvedValue(failure("unavailable", "备注保存失败"));
+
+    let saved!: boolean;
+    await act(async () => {
+      saved = await hook.current.saveNotes("initial", "保留证据");
+    });
+
+    expect(saved).toBe(false);
+    expect(hook.current.status).toBe("stale");
+    expect(hook.current.error).toEqual({
+      kind: "unavailable",
+      message: "备注保存失败"
+    });
+    expect(hook.current.sessions.map((item) => item.sessionId)).toEqual(["initial"]);
+  });
+
+  it("surfaces clear uncertainty as stale typed state without dropping evidence", async () => {
+    const hook = await trackedHook(user("admin"));
+    vi.mocked(testingApi.clear).mockResolvedValue(failure("unavailable", "无法确认清除结果"));
+
+    let cleared!: boolean;
+    await act(async () => {
+      cleared = await hook.current.clearEvidence({ scope: "all" });
+    });
+
+    expect(cleared).toBe(false);
+    expect(hook.current.status).toBe("stale");
+    expect(hook.current.error).toEqual({
+      kind: "unavailable",
+      message: "无法确认清除结果"
+    });
+    expect(hook.current.sessions.map((item) => item.sessionId)).toEqual(["initial"]);
+  });
+
   it("lets the last-started role read win across mutation refreshes and full polling", async () => {
     const hook = await trackedHook(user("admin"));
     const mutationOperations = deferred<Awaited<ReturnType<typeof testingApi.fetchOperations>>>();
@@ -404,5 +507,30 @@ describe("useAdminTestingData concurrency", () => {
     expect(hook.current.operations?.runs[0]?.id).toBe("recovered");
     expect(hook.current.status).toBe("ready");
     expect(hook.current.error).toBeNull();
+  });
+
+  it("polls once at 10 seconds and clears the old scope timer on unmount", async () => {
+    const hook = await trackedHook(user("admin"));
+    vi.mocked(testingApi.fetchSummary).mockClear();
+    vi.mocked(testingApi.fetchSessions).mockClear();
+    vi.mocked(testingApi.fetchOperations).mockClear();
+
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(testingApi.fetchSummary).toHaveBeenCalledTimes(1);
+    expect(testingApi.fetchSessions).toHaveBeenCalledTimes(1);
+    expect(testingApi.fetchOperations).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      hook.renderer.unmount();
+    });
+    vi.advanceTimersByTime(20_000);
+    await flush();
+    expect(testingApi.fetchSummary).toHaveBeenCalledTimes(1);
+    expect(testingApi.fetchSessions).toHaveBeenCalledTimes(1);
+    expect(testingApi.fetchOperations).toHaveBeenCalledTimes(1);
   });
 });

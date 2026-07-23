@@ -252,7 +252,13 @@ export function useAdminTestingData({
   const refreshForScope = useCallback(
     (replace = false, scope: number): Promise<boolean> => {
       if (!isCurrent(scope)) return Promise.resolve(false);
-      const evidenceGeneration = evidenceGenerationRef.current;
+      let evidenceGeneration = evidenceGenerationRef.current;
+      if (replace && replacementRequiredRef.current !== evidenceGeneration) {
+        evidenceGeneration = ++evidenceGenerationRef.current;
+        replacementRequiredRef.current = evidenceGeneration;
+        refreshRequestRef.current += 1;
+        loadingMoreRef.current = false;
+      }
       const replacementRequired = replacementRequiredRef.current === evidenceGeneration;
       const effectiveReplace = replace || replacementRequired;
       const existingReplacement = replacementRefreshRef.current;
@@ -291,14 +297,10 @@ export function useAdminTestingData({
 
   const loadMore = useCallback(async () => {
     const scope = scopeRef.current;
+    if (!isCurrent(scope)) return;
     const evidenceGeneration = evidenceGenerationRef.current;
     const cursor = nextCursorRef.current;
-    if (
-      !isCurrent(scope) ||
-      !cursor ||
-      replacementRequiredRef.current === evidenceGeneration ||
-      loadingMoreRef.current
-    ) {
+    if (!cursor || replacementRequiredRef.current === evidenceGeneration || loadingMoreRef.current) {
       return;
     }
     loadingMoreRef.current = true;
@@ -322,9 +324,10 @@ export function useAdminTestingData({
 
   const loadSession = useCallback(
     async (sessionId: string) => {
+      const scope = scopeRef.current;
+      if (!isCurrent(scope)) return null;
       const cached = sessionDetailsRef.current[sessionId];
       if (cached) return cached;
-      const scope = scopeRef.current;
       const evidenceGeneration = evidenceGenerationRef.current;
       const result = await testingApi.fetchSession(sessionId);
       if (!isCurrent(scope)) return null;
@@ -349,12 +352,15 @@ export function useAdminTestingData({
   const saveNotes = useCallback(
     async (sessionId: string, notes: string) => {
       const scope = scopeRef.current;
+      if (!isCurrent(scope)) return false;
       const evidenceGeneration = evidenceGenerationRef.current;
       const result = await testingApi.updateSessionNotes(sessionId, notes);
       if (!isCurrent(scope)) return false;
-      if (!result.ok && result.error.kind === "unauthorized") expireAuthentication(result.error, scope);
       if (evidenceGeneration !== evidenceGenerationRef.current) return false;
-      if (!result.ok) return false;
+      if (!result.ok) {
+        if (!expireAuthentication(result.error, scope)) setSyncFailure(result.error, scope, "full");
+        return false;
+      }
 
       const nextDetails = { ...sessionDetailsRef.current, [sessionId]: result.data };
       sessionDetailsRef.current = nextDetails;
@@ -364,16 +370,17 @@ export function useAdminTestingData({
       setSessions(merged);
       return true;
     },
-    [expireAuthentication, isCurrent]
+    [expireAuthentication, isCurrent, setSyncFailure]
   );
 
   const clearEvidence = useCallback(
     async (scopeInput: TestingClearScope) => {
       const scope = scopeRef.current;
+      if (!isCurrent(scope)) return false;
       const result = await testingApi.clear(scopeInput);
       if (!isCurrent(scope)) return false;
       if (!result.ok) {
-        expireAuthentication(result.error, scope);
+        if (!expireAuthentication(result.error, scope)) setSyncFailure(result.error, scope, "full");
         return false;
       }
 
@@ -390,7 +397,7 @@ export function useAdminTestingData({
       setSessionTotal(0);
       return refreshForScope(true, scope);
     },
-    [expireAuthentication, isCurrent, refreshForScope]
+    [expireAuthentication, isCurrent, refreshForScope, setSyncFailure]
   );
 
   const createRun = useCallback(

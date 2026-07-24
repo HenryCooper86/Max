@@ -11,18 +11,15 @@
 import { randomUUID } from "node:crypto";
 
 export type DeviceActionName =
-  | "torch.set"
-  | "volume.set"
-  | "music.control"
-  | "sms.compose"
-  | "call.dial"
-  | "destination.show";
+  "torch.set" | "volume.set" | "music.control" | "sms.compose" | "call.dial" | "destination.show";
 
 export type DeviceActionTier = "low" | "high";
 
 export type DeviceActionStatus = "ok" | "failed" | "denied" | "unsupported";
 
-export type DeviceCommand =
+/** Not exported: no consumer names this type today — they go through
+ *  `IntentExtractor`. Export it when a second extractor needs it. */
+type DeviceCommand =
   | { action: "torch.set"; args: { on: boolean } }
   | { action: "volume.set"; args: { direction: "up" | "down" } }
   | { action: "music.control"; args: { control: "play" | "pause" | "next" | "previous"; app?: string } }
@@ -131,7 +128,8 @@ function matchMusic(raw: string): DeviceCommand | null {
 }
 
 function matchSms(raw: string): DeviceCommand | null {
-  const zh = /给\s*(?<name>[^\s，,。]{1,12})\s*发(?:条|个)?\s*(?:短信|信息|消息)\s*(?:说|内容是|:|：)?\s*(?<body>.+)/.exec(raw);
+  const zh =
+    /给\s*(?<name>[^\s，,。]{1,12})\s*发(?:条|个)?\s*(?:短信|信息|消息)\s*(?:说|内容是|:|：)?\s*(?<body>.+)/.exec(raw);
   if (zh?.groups?.name && zh.groups.body) {
     return { action: "sms.compose", args: { name: clean(zh.groups.name), body: clean(zh.groups.body) } };
   }
@@ -172,6 +170,17 @@ const FAILURE_SPEECH: Record<string, string> = {
   "torch.unavailable": "这台设备没有可用的手电筒。"
 };
 
+/** Spoken names for the fallback line, so a failure with no known reason still
+ *  tells the rider *what* failed rather than "something". */
+const ACTION_LABELS: Record<DeviceActionName, string> = {
+  "torch.set": "手电筒",
+  "volume.set": "音量",
+  "music.control": "音乐",
+  "sms.compose": "短信",
+  "call.dial": "电话",
+  "destination.show": "目的地"
+};
+
 /** The line Max speaks when a command did not succeed. Never claims success and
  *  never invents a cause it was not given. */
 export function deviceFailureSpeech(
@@ -181,7 +190,24 @@ export function deviceFailureSpeech(
 ): string {
   if (status === "ok") throw new Error("deviceFailureSpeech called for a successful command");
   if (reason && FAILURE_SPEECH[reason]) return FAILURE_SPEECH[reason];
-  return "刚才那个操作没成功。";
+  return `${ACTION_LABELS[action]}操作没成功。`;
+}
+
+const CONTACT_PLACEHOLDER = "[联系人]";
+
+/** Strips spoken contact names before a rider turn is persisted for QA. Phone
+ *  numbers never reach the relay at all; names would otherwise land in stored
+ *  transcripts via metrics.recordTranscriptTurn. */
+export function redactContactNames(text: string): string {
+  const command = extractDeviceCommand(text);
+  if (!command) return text;
+  if (command.action === "call.dial" && command.args.name) {
+    return text.replace(command.args.name, CONTACT_PLACEHOLDER);
+  }
+  if (command.action === "sms.compose") {
+    return text.replace(command.args.name, CONTACT_PLACEHOLDER);
+  }
+  return text;
 }
 
 export type DeviceReconciliation = { truncate: boolean; speech: string | undefined };

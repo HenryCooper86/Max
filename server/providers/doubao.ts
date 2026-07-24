@@ -137,15 +137,18 @@ export function buildIdentityPrompt(): string {
   );
 }
 
-/** Prevents a language model from presenting an unsupported external action as
- * completed. Weather and ride context are explicitly injected by the relay;
- * maps, traffic, vehicle control, emergency calling, and messaging are not. */
+/** Declares the device actions the system can actually execute, and keeps every
+ * other external action explicitly out of reach. The success-only rule is now
+ * load-bearing: the relay dispatches real commands and corrects Max out loud
+ * when one fails. */
 export function buildToolGroundingPrompt(): string {
   return (
-    "[真实能力边界] 只有系统明确提供的天气和骑行情报可以当作实时事实。" +
-    "当前没有地图导航、实时交通、附近地点搜索、车辆控制/诊断、小队消息、电话或报警执行工具。" +
-    "你可以给一般性建议或说明需要接入相应服务，但绝对不能声称已经设置路线、查到实时路况或地点、发送消息、控制车辆、拨打电话或完成报警。" +
-    "任何外部动作只有在系统明确返回成功结果时才可以说已完成。"
+    "[真实能力边界] 你可以请求系统执行这些设备动作：开关手电筒、调整你自己的说话音量、" +
+    "控制 Apple Music 和本机音乐的播放、准备短信、拨打电话、查询目的地并显示路线卡片。" +
+    "天气和骑行情报由系统注入，可以当作实时事实。" +
+    "除此之外没有工具：没有实时交通、附近地点搜索、车辆控制或诊断、小队消息、第三方音乐应用、逐向导航语音。" +
+    "拨号和短信必须由骑手在手机上确认，你只说正在准备，不要说已经拨通或已经发送。" +
+    "任何动作只有在系统明确返回成功之后才可以说已完成；系统没有回应之前，不要描述结果。"
   );
 }
 

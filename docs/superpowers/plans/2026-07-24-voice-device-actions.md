@@ -41,14 +41,16 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 ### Task 1: Command grammar and action types
 
 **Files:**
+
 - Create: `server/device-actions.ts`
 - Create: `tests/device-actions.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces: `DeviceCommand` (discriminated union on `action`), `DeviceActionName`, `DeviceActionTier`, `DeviceActionStatus`, `DEVICE_ACTION_TIERS: Record<DeviceActionName, DeviceActionTier>`, `IntentExtractor`, `extractDeviceCommand(text: string): DeviceCommand | null`.
 
-> **Import direction, load-bearing:** all device-action types originate here and flow *outward*. `shared/agent.ts` imports them from this file (type-only, so Vite erases it); this file must never import from `shared/agent.ts`, or the two become circular.
+> **Import direction, load-bearing:** all device-action types originate here and flow _outward_. `shared/agent.ts` imports them from this file (type-only, so Vite erases it); this file must never import from `shared/agent.ts`, or the two become circular.
 
 > **Deviation from the spec, intentional:** the spec sketched `extractDeviceCommand(text, locale)`. The grammar matches Chinese and English patterns in a single pass, which also handles code-switching ("Max, navigate 到公司"). An unused `locale` parameter is YAGNI, so the signature drops it. The spec has been updated to match.
 
@@ -87,7 +89,10 @@ describe("extractDeviceCommand — music", () => {
     expect(extractDeviceCommand("Max 放歌")).toEqual({ action: "music.control", args: { control: "play" } });
     expect(extractDeviceCommand("Max 下一首")).toEqual({ action: "music.control", args: { control: "next" } });
     expect(extractDeviceCommand("Max 上一首")).toEqual({ action: "music.control", args: { control: "previous" } });
-    expect(extractDeviceCommand("Max pause the music")).toEqual({ action: "music.control", args: { control: "pause" } });
+    expect(extractDeviceCommand("Max pause the music")).toEqual({
+      action: "music.control",
+      args: { control: "pause" }
+    });
   });
 
   it("tags a named third-party player so the handler can refuse it", () => {
@@ -188,12 +193,7 @@ Create `server/device-actions.ts`:
  */
 
 export type DeviceActionName =
-  | "torch.set"
-  | "volume.set"
-  | "music.control"
-  | "sms.compose"
-  | "call.dial"
-  | "destination.show";
+  "torch.set" | "volume.set" | "music.control" | "sms.compose" | "call.dial" | "destination.show";
 
 export type DeviceActionTier = "low" | "high";
 
@@ -299,7 +299,8 @@ function matchMusic(raw: string): DeviceCommand | null {
 }
 
 function matchSms(raw: string): DeviceCommand | null {
-  const zh = /给\s*(?<name>[^\s，,。]{1,12})\s*发(?:条|个)?\s*(?:短信|信息|消息)\s*(?:说|内容是|:|：)?\s*(?<body>.+)/.exec(raw);
+  const zh =
+    /给\s*(?<name>[^\s，,。]{1,12})\s*发(?:条|个)?\s*(?:短信|信息|消息)\s*(?:说|内容是|:|：)?\s*(?<body>.+)/.exec(raw);
   if (zh?.groups?.name && zh.groups.body) {
     return { action: "sms.compose", args: { name: clean(zh.groups.name), body: clean(zh.groups.body) } };
   }
@@ -356,6 +357,7 @@ git commit -m "feat(actions): add rider command grammar"
 ### Task 2: Protocol events and client-event validation
 
 **Files:**
+
 - Modify: `protocol/agent-events.schema.json`
 - Modify: `server/session-controller.ts:105-175` (`parseClientEvent`)
 - Modify: `shared/agent.ts:215-238` (`ClientEvent`), `shared/agent.ts:240-308` (`AgentEvent`)
@@ -363,6 +365,7 @@ git commit -m "feat(actions): add rider command grammar"
 - Regenerated (do not hand-edit): `shared/generated/agent-protocol.ts`, `android/app/src/main/java/com/horizon/maxhelmet/agent/GeneratedAgentProtocol.kt`, `ios/MaxHelmet/Agent/GeneratedAgentProtocol.swift`
 
 **Interfaces:**
+
 - Consumes: `DeviceActionName`, `DeviceActionTier`, `DeviceCommand` from Task 1.
 - Produces: wire events `device.command` (server→client) and `device.result` (client→server); `parseClientEvent` accepting `device.result`; TypeScript types `DeviceCommandEvent` and `DeviceResultEvent`.
 
@@ -419,9 +422,9 @@ describe("parseClientEvent — device.result", () => {
     expect(() => parseClientEvent(encode({ type: "device.result", status: "ok" }))).toThrow(
       "Invalid device.result commandId"
     );
-    expect(() =>
-      parseClientEvent(encode({ type: "device.result", commandId: "x".repeat(121), status: "ok" }))
-    ).toThrow("Invalid device.result commandId");
+    expect(() => parseClientEvent(encode({ type: "device.result", commandId: "x".repeat(121), status: "ok" }))).toThrow(
+      "Invalid device.result commandId"
+    );
   });
 
   it("rejects an oversized detail", () => {
@@ -515,27 +518,32 @@ Add `| DeviceResultEvent` to the `ClientEvent` union and `| DeviceCommandEvent` 
 In `server/session-controller.ts`, insert immediately before the `if (value.type === "testing.metric")` block at line 152:
 
 ```ts
-  if (value.type === "device.result") {
-    if (typeof value.commandId !== "string" || !value.commandId.trim() || value.commandId.length > 120) {
-      throw new Error("Invalid device.result commandId");
-    }
-    if (value.status !== "ok" && value.status !== "failed" && value.status !== "denied" && value.status !== "unsupported") {
-      throw new Error("Invalid device.result status");
-    }
-    if (value.reason !== undefined && (typeof value.reason !== "string" || value.reason.length > 120)) {
-      throw new Error("Invalid device.result reason");
-    }
-    if (value.detail !== undefined && (typeof value.detail !== "string" || value.detail.length > 500)) {
-      throw new Error("Invalid device.result detail");
-    }
-    return {
-      type: "device.result",
-      commandId: value.commandId,
-      status: value.status,
-      reason: value.reason as string | undefined,
-      detail: value.detail as string | undefined
-    };
+if (value.type === "device.result") {
+  if (typeof value.commandId !== "string" || !value.commandId.trim() || value.commandId.length > 120) {
+    throw new Error("Invalid device.result commandId");
   }
+  if (
+    value.status !== "ok" &&
+    value.status !== "failed" &&
+    value.status !== "denied" &&
+    value.status !== "unsupported"
+  ) {
+    throw new Error("Invalid device.result status");
+  }
+  if (value.reason !== undefined && (typeof value.reason !== "string" || value.reason.length > 120)) {
+    throw new Error("Invalid device.result reason");
+  }
+  if (value.detail !== undefined && (typeof value.detail !== "string" || value.detail.length > 500)) {
+    throw new Error("Invalid device.result detail");
+  }
+  return {
+    type: "device.result",
+    commandId: value.commandId,
+    status: value.status,
+    reason: value.reason as string | undefined,
+    detail: value.detail as string | undefined
+  };
+}
 ```
 
 - [ ] **Step 7: Run the test to verify it passes**
@@ -563,10 +571,12 @@ git commit -m "feat(protocol): add device.command and device.result events"
 ### Task 3: Failure speech and the pending-command ledger
 
 **Files:**
+
 - Modify: `server/device-actions.ts`
 - Modify: `tests/device-actions.test.ts`
 
 **Interfaces:**
+
 - Consumes: `DeviceActionName`, `DeviceCommand` from Task 1; `DeviceActionStatus` from Task 2.
 - Produces: `deviceFailureSpeech(action, status, reason)`, `DEVICE_RESULT_TIMEOUT_MS`, and class `PendingDeviceCommands` with `issue(action)`, `resolve(commandId)`, `expire(now)`.
 
@@ -712,6 +722,7 @@ git commit -m "feat(actions): add failure speech and pending-command ledger"
 ### Task 4: Relay dispatch and reconciliation
 
 **Files:**
+
 - Modify: `server/providers/doubao.ts:1266-1272` (dispatch), `server/providers/doubao.ts:547-548` (session state)
 - Modify: `server/providers/types.ts:21-31` (`AgentProvider`)
 - Modify: `server/session-controller.ts:341-352` (event routing)
@@ -719,6 +730,7 @@ git commit -m "feat(actions): add failure speech and pending-command ledger"
 - Create: `tests/device-reconciliation.test.ts`
 
 **Interfaces:**
+
 - Consumes: `extractDeviceCommand`, `DEVICE_ACTION_TIERS`, `PendingDeviceCommands`, `deviceFailureSpeech` from Tasks 1 and 3; `DeviceResultEvent` from Task 2.
 - Produces: `AgentProvider.deviceResult?(event: DeviceResultEvent): Promise<void>`; `device.command` emitted on the wire.
 
@@ -808,7 +820,7 @@ import type { DeviceResultEvent } from "../../shared/agent";
 In `server/session-controller.ts`, add after the `testing.metric` line at 352:
 
 ```ts
-      if (event.type === "device.result") await this.provider.deviceResult?.(event);
+if (event.type === "device.result") await this.provider.deviceResult?.(event);
 ```
 
 - [ ] **Step 7: Dispatch commands from the Doubao provider**
@@ -829,57 +841,57 @@ import type { DeviceActionName, DeviceActionStatus } from "../device-actions";
 Add beside the delivery state at line 547:
 
 ```ts
-  const pendingDeviceCommands = new PendingDeviceCommands();
-  let deviceExpiryTimer: NodeJS.Timeout | undefined;
+const pendingDeviceCommands = new PendingDeviceCommands();
+let deviceExpiryTimer: NodeJS.Timeout | undefined;
 ```
 
 Add these two functions next to `truncateInterruptedReply` (line 692):
 
 ```ts
-  function dispatchDeviceCommand(text: string): void {
-    const command = extractDeviceCommand(text);
-    if (!command) return;
-    const issued = pendingDeviceCommands.issue(command.action);
-    sendClient({
-      type: "device.command",
-      commandId: issued.commandId,
-      action: command.action,
-      args: command.args,
-      tier: DEVICE_ACTION_TIERS[command.action]
-    });
-    scheduleDeviceExpiry();
-  }
+function dispatchDeviceCommand(text: string): void {
+  const command = extractDeviceCommand(text);
+  if (!command) return;
+  const issued = pendingDeviceCommands.issue(command.action);
+  sendClient({
+    type: "device.command",
+    commandId: issued.commandId,
+    action: command.action,
+    args: command.args,
+    tier: DEVICE_ACTION_TIERS[command.action]
+  });
+  scheduleDeviceExpiry();
+}
 
-  function scheduleDeviceExpiry(): void {
-    if (deviceExpiryTimer) return;
-    deviceExpiryTimer = setTimeout(() => {
-      deviceExpiryTimer = undefined;
-      for (const expired of pendingDeviceCommands.expire()) {
-        applyDeviceReconciliation(expired.action, { status: "failed", reason: "timeout" });
-      }
-    }, DEVICE_RESULT_TIMEOUT_MS);
-    deviceExpiryTimer.unref?.();
-  }
-
-  function applyDeviceReconciliation(
-    action: DeviceActionName,
-    result: { status: DeviceActionStatus; reason?: string; detail?: string }
-  ): void {
-    const decision = reconcileDeviceResult(action, result);
-    if (!decision.truncate) return;
-    truncateInterruptedReply();
-    if (decision.speech) {
-      sendClient(transcriptEvent(agentDelivery, "agent", decision.speech, { final: true, useBrowserSpeech: true }));
+function scheduleDeviceExpiry(): void {
+  if (deviceExpiryTimer) return;
+  deviceExpiryTimer = setTimeout(() => {
+    deviceExpiryTimer = undefined;
+    for (const expired of pendingDeviceCommands.expire()) {
+      applyDeviceReconciliation(expired.action, { status: "failed", reason: "timeout" });
     }
+  }, DEVICE_RESULT_TIMEOUT_MS);
+  deviceExpiryTimer.unref?.();
+}
+
+function applyDeviceReconciliation(
+  action: DeviceActionName,
+  result: { status: DeviceActionStatus; reason?: string; detail?: string }
+): void {
+  const decision = reconcileDeviceResult(action, result);
+  if (!decision.truncate) return;
+  truncateInterruptedReply();
+  if (decision.speech) {
+    sendClient(transcriptEvent(agentDelivery, "agent", decision.speech, { final: true, useBrowserSpeech: true }));
   }
+}
 ```
 
 Call the dispatcher at line 1270, immediately after the rider transcript is sent:
 
 ```ts
-              sendClient(transcriptEvent(riderDelivery, "rider", text, { final: true }));
-              dispatchDeviceCommand(text);
-              emitMemory();
+sendClient(transcriptEvent(riderDelivery, "rider", text, { final: true }));
+dispatchDeviceCommand(text);
+emitMemory();
 ```
 
 Expose the result handler on the returned provider object:
@@ -896,10 +908,10 @@ In the provider's `close()`, clear the timer alongside the existing teardown so 
 closed session cannot fire a reconciliation into a dead socket:
 
 ```ts
-      if (deviceExpiryTimer) {
-        clearTimeout(deviceExpiryTimer);
-        deviceExpiryTimer = undefined;
-      }
+if (deviceExpiryTimer) {
+  clearTimeout(deviceExpiryTimer);
+  deviceExpiryTimer = undefined;
+}
 ```
 
 - [ ] **Step 8: Mirror the dispatch in the mock provider**
@@ -911,50 +923,55 @@ demonstrated and QA'd with no Doubao credentials.
 In `server/providers/mock.ts`, add the imports:
 
 ```ts
-import { DEVICE_ACTION_TIERS, PendingDeviceCommands, extractDeviceCommand, reconcileDeviceResult } from "../device-actions";
+import {
+  DEVICE_ACTION_TIERS,
+  PendingDeviceCommands,
+  extractDeviceCommand,
+  reconcileDeviceResult
+} from "../device-actions";
 import type { DeviceActionName, DeviceActionStatus } from "../device-actions";
 ```
 
 Add beside the other session state:
 
 ```ts
-  const pendingDeviceCommands = new PendingDeviceCommands();
+const pendingDeviceCommands = new PendingDeviceCommands();
 ```
 
 Add these functions next to `emitConversation`:
 
 ```ts
-  function dispatchDeviceCommand(text: string): void {
-    const command = extractDeviceCommand(text);
-    if (!command) return;
-    const issued = pendingDeviceCommands.issue(command.action);
-    send({
-      type: "device.command",
-      commandId: issued.commandId,
-      action: command.action,
-      args: command.args,
-      tier: DEVICE_ACTION_TIERS[command.action]
-    });
-  }
+function dispatchDeviceCommand(text: string): void {
+  const command = extractDeviceCommand(text);
+  if (!command) return;
+  const issued = pendingDeviceCommands.issue(command.action);
+  send({
+    type: "device.command",
+    commandId: issued.commandId,
+    action: command.action,
+    args: command.args,
+    tier: DEVICE_ACTION_TIERS[command.action]
+  });
+}
 
-  // The mock has no upstream conversation, so there is nothing to truncate —
-  // only the corrective line is sent.
-  function applyDeviceReconciliation(
-    action: DeviceActionName,
-    result: { status: DeviceActionStatus; reason?: string; detail?: string }
-  ): void {
-    const decision = reconcileDeviceResult(action, result);
-    if (!decision.truncate || !decision.speech) return;
-    send(transcriptEvent(createTranscriptDelivery(), "agent", decision.speech, { final: true, useBrowserSpeech: true }));
-  }
+// The mock has no upstream conversation, so there is nothing to truncate —
+// only the corrective line is sent.
+function applyDeviceReconciliation(
+  action: DeviceActionName,
+  result: { status: DeviceActionStatus; reason?: string; detail?: string }
+): void {
+  const decision = reconcileDeviceResult(action, result);
+  if (!decision.truncate || !decision.speech) return;
+  send(transcriptEvent(createTranscriptDelivery(), "agent", decision.speech, { final: true, useBrowserSpeech: true }));
+}
 ```
 
 Call the dispatcher at `server/providers/mock.ts:257`, right after the scripted
 rider line is emitted:
 
 ```ts
-    send(transcriptEvent(riderDelivery, "rider", turn.rider, { final: true }));
-    dispatchDeviceCommand(turn.rider);
+send(transcriptEvent(riderDelivery, "rider", turn.rider, { final: true }));
+dispatchDeviceCommand(turn.rider);
 ```
 
 Expose the result handler on the returned provider object:
@@ -992,11 +1009,13 @@ git commit -m "feat(relay): dispatch device commands and reconcile results"
 ### Task 5: Grounding prompt rewrite and QA redaction
 
 **Files:**
+
 - Modify: `server/providers/doubao.ts:131-141` (`buildToolGroundingPrompt`)
 - Modify: `server/metrics.ts:439-462` (`recordTranscriptTurn`)
 - Create: `tests/device-grounding.test.ts`
 
 **Interfaces:**
+
 - Consumes: `DeviceActionName` from Task 1.
 - Produces: `redactContactNames(text: string): string` exported from `server/device-actions.ts`.
 
@@ -1115,16 +1134,16 @@ import { redactContactNames } from "./device-actions";
 Replace line 448:
 
 ```ts
-  const text = cleanText(payload.text).slice(0, 2_000);
+const text = cleanText(payload.text).slice(0, 2_000);
 ```
 
 with:
 
 ```ts
-  // Rider commands can name a person ("打给老王"). The number never reaches the
-  // relay; the name must not reach stored evidence either.
-  const rawText = speaker === "rider" ? redactContactNames(payload.text) : payload.text;
-  const text = cleanText(rawText).slice(0, 2_000);
+// Rider commands can name a person ("打给老王"). The number never reaches the
+// relay; the name must not reach stored evidence either.
+const rawText = speaker === "rider" ? redactContactNames(payload.text) : payload.text;
+const text = cleanText(rawText).slice(0, 2_000);
 ```
 
 - [ ] **Step 6: Run the test to verify it passes**
@@ -1149,10 +1168,12 @@ git commit -m "feat(relay): declare real device tools and redact contact names"
 ### Task 6: iOS protocol decoding
 
 **Files:**
+
 - Modify: `ios/MaxHelmet/Agent/AgentProtocol.swift:276-292` (`AgentEvent`), `:311-415` (`parseAgentEvent`), `:478-498` (builders)
 - Modify: `ios/MaxHelmetTests/AgentProtocolTests.swift`
 
 **Interfaces:**
+
 - Consumes: `ServerEventTypes.deviceCommand` and `ClientEventTypes.deviceResult` from the Task 2 regeneration.
 - Produces: `DeviceAction` (Equatable enum), `DeviceCommand` struct, `DeviceActionTier`, `DeviceActionStatus`, `DeviceActionResult`, `AgentEvent.deviceCommand(DeviceCommand)`, `buildDeviceResult(commandId:result:) -> String`.
 
@@ -1370,11 +1391,13 @@ git commit -m "feat(ios): decode device.command and encode device.result"
 ### Task 7: Device action router
 
 **Files:**
+
 - Create: `ios/MaxHelmet/Actions/DeviceActionHandler.swift`
 - Create: `ios/MaxHelmet/Actions/DeviceActionRouter.swift`
 - Create: `ios/MaxHelmetTests/DeviceActionRouterTests.swift`
 
 **Interfaces:**
+
 - Consumes: `DeviceAction`, `DeviceCommand`, `DeviceActionResult` from Task 6.
 - Produces: `protocol DeviceActionHandler { func perform(_ action: DeviceAction) async -> DeviceActionResult }`, `DeviceActionRouter(handlers:isDeviceUnlocked:)` with `func handle(_ command: DeviceCommand) async -> DeviceActionResult`, and `DeviceActionRoute` (the routing key).
 
@@ -1535,12 +1558,14 @@ git commit -m "feat(ios): add device action router"
 ### Task 8: Torch and volume handlers
 
 **Files:**
+
 - Create: `ios/MaxHelmet/Actions/TorchController.swift`
 - Create: `ios/MaxHelmet/Actions/PlaybackVolumeController.swift`
 - Create: `ios/MaxHelmetTests/TorchVolumeHandlerTests.swift`
 - Modify: `ios/MaxHelmet/Agent/PcmPlayer.swift`
 
 **Interfaces:**
+
 - Consumes: `DeviceActionHandler`, `DeviceAction`, `DeviceActionResult` from Tasks 6 and 7.
 - Produces: `TorchController(device:)` where `device: TorchCapableDevice`; `protocol TorchCapableDevice { var hasTorch: Bool { get }; func setTorch(on: Bool) throws }`; `PlaybackVolumeController(gain:)` where `gain: PlaybackGain`; `protocol PlaybackGain { var level: Float { get }; func setLevel(_ level: Float) }`; `PcmPlayer` conforms to `PlaybackGain`.
 
@@ -1771,11 +1796,13 @@ git commit -m "feat(ios): add torch and playback volume handlers"
 ### Task 9: Music and SMS handlers
 
 **Files:**
+
 - Create: `ios/MaxHelmet/Actions/MusicController.swift`
 - Create: `ios/MaxHelmet/Actions/MessageComposer.swift`
 - Create: `ios/MaxHelmetTests/MusicMessageHandlerTests.swift`
 
 **Interfaces:**
+
 - Consumes: `DeviceActionHandler`, `DeviceAction`, `DeviceActionResult`, `ContactResolving` (declared here, implemented in Task 10).
 - Produces: `MusicController(player:)` where `player: SystemMusicPlaying`; `protocol SystemMusicPlaying { func play(); func pause(); func next(); func previous() }`; `MessageComposer(presenter:speedProvider:resolver:)`; `protocol MessagePresenting { func present(number: String, body: String) async -> Bool }`; `SystemMessagePresenter` (the real `MFMessageComposeViewController`-backed implementation, used by Task 12); `MessageComposer.maximumSpeedKmh: Double = 5`.
 
@@ -2042,11 +2069,13 @@ git commit -m "feat(ios): add music and message handlers"
 ### Task 10: Contact resolution and dialing
 
 **Files:**
+
 - Modify: `ios/MaxHelmet/Actions/ContactResolver.swift`
 - Create: `ios/MaxHelmet/Actions/CallDialer.swift`
 - Create: `ios/MaxHelmetTests/CallDialerTests.swift`
 
 **Interfaces:**
+
 - Consumes: `ContactResolving` from Task 9.
 - Produces: `SystemContactResolver` implementing `ContactResolving`; `normalizeContactName(_:) -> String`; `CallDialer(opener:resolver:)`; `protocol URLOpening { func open(_ url: URL) async -> Bool }`.
 
@@ -2276,11 +2305,13 @@ git commit -m "feat(ios): add contact resolution and dialing"
 ### Task 11: Destination card
 
 **Files:**
+
 - Create: `ios/MaxHelmet/Actions/DestinationResolver.swift`
 - Create: `ios/MaxHelmet/Actions/DestinationCard.swift`
 - Create: `ios/MaxHelmetTests/DestinationResolverTests.swift`
 
 **Interfaces:**
+
 - Consumes: `DeviceActionHandler`, `DeviceAction`, `DeviceActionResult`.
 - Produces: `Destination` (Equatable: `name`, `coordinate`, `distanceMeters`, `etaSeconds`); `protocol RouteSearching { func search(_ query: String) async -> Destination? }`; `DestinationResolver(search:onResolved:)`; `destinationSummary(_ destination: Destination) -> String`; `DestinationCard` SwiftUI view.
 
@@ -2504,6 +2535,7 @@ git commit -m "feat(ios): add destination resolution and route card"
 ### Task 12: Wire the router into the session
 
 **Files:**
+
 - Modify: `ios/MaxHelmet/Agent/AgentSession.swift:692-772` (`handleEvent`)
 - Modify: `ios/MaxHelmet/UI/MainViewModel.swift`
 - Modify: `ios/MaxHelmet/UI/AgentScreen.swift`
@@ -2512,6 +2544,7 @@ git commit -m "feat(ios): add destination resolution and route card"
 - Create: `ios/MaxHelmetTests/DeviceCommandSessionTests.swift`
 
 **Interfaces:**
+
 - Consumes: everything from Tasks 6–11.
 - Produces: `AgentSession` forwarding `device.command` to the router and sending `buildDeviceResult`; `MainViewModel.destination: Destination?` driving the card.
 

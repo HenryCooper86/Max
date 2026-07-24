@@ -215,16 +215,6 @@ export type SessionStartEvent = {
   memory?: SessionMemorySnapshot;
 };
 
-/** Server → client: execute one device action. `commandId` is relay-issued and
- *  must be echoed back in the matching `device.result`. */
-export type DeviceCommandEvent = {
-  type: "device.command";
-  commandId: string;
-  action: DeviceActionName;
-  args: Record<string, unknown>;
-  tier: DeviceActionTier;
-};
-
 /** Client → server: the outcome of one device command. Exactly one of these
  *  follows every command; the relay treats silence past its timeout as failure. */
 export type DeviceResultEvent = {
@@ -329,7 +319,15 @@ export type AgentEvent =
       ttcSeconds: number;
       interrupt: boolean;
     }
-  | DeviceCommandEvent
+  | {
+      // Server → client: execute one device action. `commandId` is relay-issued
+      // and must be echoed back in the matching `device.result`.
+      type: "device.command";
+      commandId: string;
+      action: DeviceActionName;
+      args: Record<string, unknown>;
+      tier: DeviceActionTier;
+    }
   | { type: "error"; message: string };
 
 export type AgentHealth = {

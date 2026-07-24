@@ -34,7 +34,10 @@ describe("extractDeviceCommand — music", () => {
     expect(extractDeviceCommand("Max 放歌")).toEqual({ action: "music.control", args: { control: "play" } });
     expect(extractDeviceCommand("Max 下一首")).toEqual({ action: "music.control", args: { control: "next" } });
     expect(extractDeviceCommand("Max 上一首")).toEqual({ action: "music.control", args: { control: "previous" } });
-    expect(extractDeviceCommand("Max pause the music")).toEqual({ action: "music.control", args: { control: "pause" } });
+    expect(extractDeviceCommand("Max pause the music")).toEqual({
+      action: "music.control",
+      args: { control: "pause" }
+    });
   });
 
   it("tags a named third-party player so the handler can refuse it", () => {
@@ -124,8 +127,9 @@ describe("deviceFailureSpeech", () => {
     expect(deviceFailureSpeech("destination.show", "unsupported", "route.unavailable")).toContain("路线");
   });
 
-  it("falls back to a generic honest line", () => {
-    expect(deviceFailureSpeech("torch.set", "failed", undefined)).toContain("没成功");
+  it("names the failed action when no known reason is supplied", () => {
+    expect(deviceFailureSpeech("torch.set", "failed", undefined)).toBe("手电筒操作没成功。");
+    expect(deviceFailureSpeech("call.dial", "failed", "unrecognized-key")).toBe("电话操作没成功。");
   });
 });
 

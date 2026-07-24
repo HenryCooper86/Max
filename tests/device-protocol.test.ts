@@ -46,9 +46,9 @@ describe("parseClientEvent — device.result", () => {
     expect(() => parseClientEvent(encode({ type: "device.result", status: "ok" }))).toThrow(
       "Invalid device.result commandId"
     );
-    expect(() =>
-      parseClientEvent(encode({ type: "device.result", commandId: "x".repeat(121), status: "ok" }))
-    ).toThrow("Invalid device.result commandId");
+    expect(() => parseClientEvent(encode({ type: "device.result", commandId: "x".repeat(121), status: "ok" }))).toThrow(
+      "Invalid device.result commandId"
+    );
   });
 
   it("rejects an oversized detail", () => {

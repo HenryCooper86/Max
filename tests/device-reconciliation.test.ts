@@ -20,10 +20,10 @@ describe("reconcileDeviceResult", () => {
     });
   });
 
-  it("corrects an expired command with the generic line", () => {
+  it("corrects an expired command by naming the action", () => {
     expect(reconcileDeviceResult("torch.set", { status: "failed", reason: "timeout" })).toEqual({
       truncate: true,
-      speech: "刚才那个操作没成功。"
+      speech: "手电筒操作没成功。"
     });
   });
 });

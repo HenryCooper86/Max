@@ -234,7 +234,9 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
   ): void {
     const decision = reconcileDeviceResult(action, result);
     if (!decision.truncate || !decision.speech) return;
-    send(transcriptEvent(createTranscriptDelivery(), "agent", decision.speech, { final: true, useBrowserSpeech: true }));
+    send(
+      transcriptEvent(createTranscriptDelivery(), "agent", decision.speech, { final: true, useBrowserSpeech: true })
+    );
   }
 
   function emitRideContext(hazardOverride?: AdasSeverity) {

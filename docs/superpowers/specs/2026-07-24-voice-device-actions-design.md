@@ -8,7 +8,7 @@ claiming otherwise. This design adds a device-action spine — a relay-issued
 command event, an on-device router, and a result event — plus five thin handlers:
 torch, Max playback volume, music, SMS composition, and calling. Navigation lands
 as an in-app destination card, not a hand-off. The grounding prompt is then
-rewritten from "you have no tools" to "you have *these* tools, and you claim
+rewritten from "you have no tools" to "you have _these_ tools, and you claim
 success only when the system returns it."
 
 ## Scope
@@ -102,34 +102,34 @@ Added to `protocol/agent-events.schema.json` and regenerated into
 
 `AgentEvent` gains `device.command`:
 
-| Field       | Type                            | Notes                                     |
-| ----------- | ------------------------------- | ----------------------------------------- |
-| `type`      | `"device.command"`              |                                           |
-| `commandId` | string                          | Relay-issued, like `turnId`               |
-| `action`    | enum                            | See "Action catalog"                      |
-| `args`      | object                          | Per-action, schema-validated              |
-| `tier`      | `"low" \| "high"`               | Declared risk; see "Confirmation tiers"   |
+| Field       | Type               | Notes                                   |
+| ----------- | ------------------ | --------------------------------------- |
+| `type`      | `"device.command"` |                                         |
+| `commandId` | string             | Relay-issued, like `turnId`             |
+| `action`    | enum               | See "Action catalog"                    |
+| `args`      | object             | Per-action, schema-validated            |
+| `tier`      | `"low" \| "high"`  | Declared risk; see "Confirmation tiers" |
 
 `ClientEvent` gains `device.result`:
 
-| Field       | Type                                                     | Notes                        |
-| ----------- | -------------------------------------------------------- | ---------------------------- |
-| `type`      | `"device.result"`                                        |                              |
-| `commandId` | string                                                   | Echoes the command           |
-| `status`    | `"ok" \| "failed" \| "denied" \| "unsupported"`          | Never absent                 |
-| `reason`    | string (optional)                                        | Machine-readable failure key |
-| `detail`    | string (optional)                                        | Human-readable, spoken       |
+| Field       | Type                                            | Notes                        |
+| ----------- | ----------------------------------------------- | ---------------------------- |
+| `type`      | `"device.result"`                               |                              |
+| `commandId` | string                                          | Echoes the command           |
+| `status`    | `"ok" \| "failed" \| "denied" \| "unsupported"` | Never absent                 |
+| `reason`    | string (optional)                               | Machine-readable failure key |
+| `detail`    | string (optional)                               | Human-readable, spoken       |
 
 ### Action catalog
 
-| Action              | Tier | iOS mechanism                                    | Notes                                                |
-| ------------------- | ---- | ------------------------------------------------ | ---------------------------------------------------- |
-| `torch.set`         | low  | `AVCaptureDevice.torchMode`                      | No permission required                               |
-| `volume.set`        | low  | Existing `PcmPlayer` gain                        | Max's own voice, **not** system volume               |
-| `music.control`     | low  | `MPMusicPlayerController.systemMusicPlayer`      | Apple Music and local library only                   |
-| `sms.compose`       | high | `MFMessageComposeViewController`                 | Rider must tap Send; speed-gated                     |
-| `call.dial`         | high | `tel:` via `UIApplication.open`                  | iOS always shows its own confirmation alert          |
-| `destination.show`  | low  | `MKLocalSearch` + `MKDirections` ETA             | In-app card; no hand-off, no guidance                |
+| Action             | Tier | iOS mechanism                               | Notes                                       |
+| ------------------ | ---- | ------------------------------------------- | ------------------------------------------- |
+| `torch.set`        | low  | `AVCaptureDevice.torchMode`                 | No permission required                      |
+| `volume.set`       | low  | Existing `PcmPlayer` gain                   | Max's own voice, **not** system volume      |
+| `music.control`    | low  | `MPMusicPlayerController.systemMusicPlayer` | Apple Music and local library only          |
+| `sms.compose`      | high | `MFMessageComposeViewController`            | Rider must tap Send; speed-gated            |
+| `call.dial`        | high | `tel:` via `UIApplication.open`             | iOS always shows its own confirmation alert |
+| `destination.show` | low  | `MKLocalSearch` + `MKDirections` ETA        | In-app card; no hand-off, no guidance       |
 
 ### Confirmation tiers
 
@@ -145,7 +145,7 @@ bypassed:
 - `MFMessageComposeViewController` requires a physical tap on Send by design.
 
 Adding a spoken "对吗？" turn on top of a system alert is double confirmation and
-costs a full conversational turn. Instead, Max announces *who and what number* it
+costs a full conversational turn. Instead, Max announces _who and what number_ it
 is about to dial so the rider knows what they are approving, and the system alert
 does the confirming. No pending-command table, no expiry timer, no confirm
 grammar is built in Spec 1.

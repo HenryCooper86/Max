@@ -150,6 +150,11 @@ struct AgentScreen: View {
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
 
+                if state.recording {
+                    RecordingIndicator(startedAt: state.recordingStartedAt)
+                        .padding(.horizontal, 4)
+                }
+
                 Spacer(minLength: 8)
 
                 HelmetVisual(
@@ -207,6 +212,13 @@ struct AgentScreen: View {
             .sheet(item: $viewModel.exportFile) { file in
                 ActivityView(items: [file.url])
             }
+        }
+        .sheet(isPresented: $viewModel.showGallery) {
+            GalleryView(model: viewModel.galleryModel, onClose: { viewModel.showGallery = false })
+        }
+        .onChange(of: state.galleryRequestToken) { _, _ in
+            viewModel.galleryModel.refresh()
+            viewModel.showGallery = true
         }
     }
 }
@@ -267,6 +279,29 @@ private struct TopBar: View {
 }
 
 // MARK: - ADAS hazard banner (safety-critical: kept on every screen)
+
+private struct RecordingIndicator: View {
+    let startedAt: Double?
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { _ in
+            HStack(spacing: 8) {
+                Circle().fill(HudColors.danger2).frame(width: 10, height: 10)
+                Text("录像中 \(elapsed)")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(HudColors.hudInk)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            .background(Capsule().fill(HudColors.panelElevated))
+        }
+    }
+
+    private var elapsed: String {
+        guard let startedAt else { return "00:00" }
+        let s = max(0, Int(Date().timeIntervalSince1970 - startedAt))
+        return String(format: "%02d:%02d", s / 60, s % 60)
+    }
+}
 
 private struct HazardBanner: View {
     let alert: HazardAlert
@@ -716,6 +751,11 @@ private struct SecondaryControls: View {
             if state.handsFree {
                 MuteUtilityPill(muted: state.micMuted, action: viewModel.toggleMute)
                 Spacer(minLength: 8)
+            }
+
+            PillToggle(icon: "photo.stack", label: "相册", on: false) {
+                viewModel.galleryModel.refresh()
+                viewModel.showGallery = true
             }
 
             PillToggle(icon: "gearshape.fill", label: "设置", on: false) {

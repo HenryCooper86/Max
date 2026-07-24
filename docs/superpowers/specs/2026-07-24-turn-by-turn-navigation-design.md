@@ -40,7 +40,7 @@ guidance.
 - A dedicated map screen the rider stares at. The card is glanceable.
 - Motorcycle routing. MapKit is automobile-only; the spoken summary must not
   imply a motorcycle-validated route.
-- Background/screen-off navigation as a *new* capability. Guidance runs during
+- Background/screen-off navigation as a _new_ capability. Guidance runs during
   the foreground hands-free session, which already keeps the screen awake; see
   "Why foreground-only works".
 - Handing off to 高德/百度. Ruled out to keep the device-action layer alive.
@@ -113,6 +113,7 @@ the protocol schema for back-compat, but the grammar no longer emits it and the
 and reroute-debounce bookkeeping.
 
 **Each fix computes:**
+
 - **Snap-to-route** — nearest point on the polyline → cross-track distance (how
   far off the line) and along-route position.
 - **Distance to the next maneuver** — measured along the route.
@@ -141,6 +142,7 @@ are pure helpers with their own tests.
 through a `LocationStreaming` protocol so tests feed synthetic coordinates.
 
 **Lifecycle:**
+
 - **`navigation.start {query}`** — resolve the `NavigationRoute`, start the
   stream, speak the opening summary ("全程 12 公里，预计 25 分钟，前方右转"), show
   the card, return `ok`. Unresolvable → `unsupported("route.unavailable")`.
@@ -170,6 +172,7 @@ Advance prompts (far/near) tolerate rare overlap with Max. The safety-critical
 barge-in stop) so "现在右转" is never buried under Max mid-sentence.
 
 **Grammar.** Two actions in the one relay grammar:
+
 - `导航去X / 带我去X / navigate to X` → `navigation.start {query}`
 - `停止导航 / 结束导航 / 取消导航 / stop navigation` → `navigation.stop`
 

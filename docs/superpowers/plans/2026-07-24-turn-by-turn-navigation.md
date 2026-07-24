@@ -44,11 +44,13 @@ If the run aborts with a spurious `xcrun: error: unable to find utility "simctl"
 ### Task 1: Server — navigation grammar
 
 **Files:**
+
 - Modify: `server/device-actions.ts`
 - Modify: `server/providers/mock.ts`
 - Modify: `tests/device-actions.test.ts`
 
 **Interfaces:**
+
 - Consumes: the existing `DeviceCommand` union, `DeviceActionName`, `DEVICE_ACTION_TIERS`, `ACTION_LABELS`, `FAILURE_SPEECH`, `extractDeviceCommand`, and `matchDestination` in `server/device-actions.ts`.
 - Produces: `navigation.start` (`{ query: string }`) and `navigation.stop` recognized by `extractDeviceCommand`, tiered `low`, labelled, with `navigation.notActive` and `permission.location` failure-speech keys. `matchDestination` is replaced by `matchNavigation`.
 
@@ -134,15 +136,15 @@ Add to `FAILURE_SPEECH`:
 In `server/device-actions.ts`, replace the call site — change:
 
 ```ts
-  const destination = matchDestination(raw);
-  if (destination) return destination;
+const destination = matchDestination(raw);
+if (destination) return destination;
 ```
 
 to:
 
 ```ts
-  const navigation = matchNavigation(raw);
-  if (navigation) return navigation;
+const navigation = matchNavigation(raw);
+if (navigation) return navigation;
 ```
 
 Replace the whole `matchDestination` function with:
@@ -200,12 +202,14 @@ git commit -m "feat(actions): add navigation grammar"
 ### Task 2: Server — protocol schema and grounding prompt
 
 **Files:**
+
 - Modify: `protocol/agent-events.schema.json`
 - Modify: `server/providers/doubao.ts` (`buildToolGroundingPrompt`)
 - Modify: `tests/device-grounding.test.ts`
 - Regenerated (do not hand-edit): `shared/generated/agent-protocol.ts`, `android/app/src/main/java/com/horizon/maxhelmet/agent/GeneratedAgentProtocol.kt`, `ios/MaxHelmet/Agent/GeneratedAgentProtocol.swift`
 
 **Interfaces:**
+
 - Consumes: the `device.command` `action` enum in the schema; `buildToolGroundingPrompt` in `doubao.ts`.
 - Produces: `navigation.start`, `navigation.stop` as valid wire actions; a grounding prompt naming 导航.
 
@@ -214,9 +218,9 @@ git commit -m "feat(actions): add navigation grammar"
 Append to `tests/device-grounding.test.ts`, inside the `buildToolGroundingPrompt` describe block:
 
 ```ts
-  it("declares live navigation", () => {
-    expect(prompt).toContain("导航");
-  });
+it("declares live navigation", () => {
+  expect(prompt).toContain("导航");
+});
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -275,11 +279,13 @@ git commit -m "feat(protocol): add navigation actions and declare them to Max"
 ### Task 3: iOS — decode navigation actions
 
 **Files:**
+
 - Modify: `ios/MaxHelmet/Agent/AgentProtocol.swift` (`DeviceAction`, `parseDeviceAction`)
 - Modify: `ios/MaxHelmet/Actions/DeviceActionHandler.swift` (`DeviceActionRoute`)
 - Modify: `ios/MaxHelmetTests/AgentProtocolTests.swift`
 
 **Interfaces:**
+
 - Consumes: `DeviceAction`, `parseDeviceAction`, `DeviceActionRoute` from Spec 1.
 - Produces: `DeviceAction.navigationStart(query: String)`, `.navigationStop`; a `.navigation` route to which `navigationStart` and `navigationStop` map. `destinationShow` keeps its existing `.destination` route for now (consolidated in Task 10).
 
@@ -355,10 +361,12 @@ git commit -m "feat(ios): decode navigation actions"
 ### Task 4: iOS — route and guidance-state models
 
 **Files:**
+
 - Create: `ios/MaxHelmet/Navigation/NavigationRoute.swift`
 - Create: `ios/MaxHelmetTests/NavigationRouteTests.swift`
 
 **Interfaces:**
+
 - Consumes: nothing from earlier tasks.
 - Produces: `ManeuverStep`, `NavigationRoute`, `GuidanceState` (all `Equatable`), and `coordinatesEqual(_:_:)`.
 
@@ -499,10 +507,12 @@ git commit -m "feat(ios): add navigation route and guidance-state models"
 ### Task 5: iOS — geometry helpers
 
 **Files:**
+
 - Create: `ios/MaxHelmet/Navigation/Geo.swift`
 - Create: `ios/MaxHelmetTests/GeoTests.swift`
 
 **Interfaces:**
+
 - Consumes: `CLLocationCoordinate2D`.
 - Produces: `enum Geo` with `haversineMeters(_:_:)`, `crossTrackMeters(point:segStart:segEnd:)`, `nearestSegmentDistance(_:_:)`.
 
@@ -637,10 +647,12 @@ git commit -m "feat(ios): add navigation geometry helpers"
 ### Task 6: iOS — the guidance engine
 
 **Files:**
+
 - Create: `ios/MaxHelmet/Navigation/GuidanceEngine.swift`
 - Create: `ios/MaxHelmetTests/GuidanceEngineTests.swift`
 
 **Interfaces:**
+
 - Consumes: `NavigationRoute`, `ManeuverStep` (Task 4); `Geo` (Task 5).
 - Produces: `enum PromptThreshold`, `struct GuidanceProgress`, `struct GuidanceUpdate`, `enum GuidanceEngine` with `static func step(location:route:progress:) -> GuidanceUpdate` and the threshold/arrival/off-route constants.
 
@@ -887,10 +899,12 @@ git commit -m "feat(ios): add pure guidance engine"
 ### Task 7: iOS — route search
 
 **Files:**
+
 - Create: `ios/MaxHelmet/Navigation/RouteSearch.swift`
 - Create: `ios/MaxHelmetTests/RouteSearchTests.swift`
 
 **Interfaces:**
+
 - Consumes: `NavigationRoute`, `ManeuverStep` (Task 4).
 - Produces: `protocol NavigationRouteSearching { func route(to query: String) async -> NavigationRoute?; func reroute(to destination: CLLocationCoordinate2D, from origin: CLLocationCoordinate2D) async -> NavigationRoute? }` and `struct MapKitNavigationSearch` (device implementation), plus `navigationRoute(from:name:destination:)` that maps an `MKRoute` to a `NavigationRoute` (pure, tested).
 
@@ -1022,10 +1036,12 @@ git commit -m "feat(ios): add navigation route search"
 ### Task 8: iOS — the navigation controller
 
 **Files:**
+
 - Create: `ios/MaxHelmet/Navigation/NavigationController.swift`
 - Create: `ios/MaxHelmetTests/NavigationControllerTests.swift`
 
 **Interfaces:**
+
 - Consumes: `DeviceActionHandler`, `DeviceAction`, `DeviceActionResult` (Spec 1); `GuidanceEngine`, `GuidanceProgress` (Task 6); `NavigationRoute`, `GuidanceState` (Task 4); `NavigationRouteSearching` (Task 7).
 - Produces: `enum LocationAuthorization { case authorized, denied, notDetermined }`; `protocol LocationStreaming` with `var onUpdate: ((CLLocationCoordinate2D) -> Void)?`, `authorization() -> LocationAuthorization`, `requestAccess()`, `start()`, `stop()`; `final class NavigationController: DeviceActionHandler` with `init(search:stream:onGuidance:speak:interruptPlayback:now:)`; `SystemLocationStream` (device implementation). `now` is an injected clock (`() -> TimeInterval`) for deterministic reroute-debounce tests.
 
@@ -1434,9 +1450,11 @@ git commit -m "feat(ios): add navigation controller"
 ### Task 9: iOS — the guidance card
 
 **Files:**
+
 - Create: `ios/MaxHelmet/Navigation/GuidanceCard.swift`
 
 **Interfaces:**
+
 - Consumes: `GuidanceState` (Task 4); `HudColors` (`ios/MaxHelmet/UI/HudTheme.swift`).
 - Produces: `GuidanceCard(guidance:)` SwiftUI view.
 
@@ -1537,6 +1555,7 @@ git commit -m "feat(ios): add live guidance card"
 ### Task 10: iOS — wire into the session, replace destination pieces
 
 **Files:**
+
 - Modify: `ios/MaxHelmet/Agent/AgentSession.swift`
 - Modify: `ios/MaxHelmet/UI/AgentScreen.swift`
 - Modify: `ios/MaxHelmet/Actions/DeviceActionHandler.swift`
@@ -1544,6 +1563,7 @@ git commit -m "feat(ios): add live guidance card"
 - Modify: `ios/README.md`, `README.md`
 
 **Interfaces:**
+
 - Consumes: everything from Tasks 3–9.
 - Produces: `NavigationController` on the `.navigation` route (also serving legacy `destinationShow`); `AgentSession.State.guidance: GuidanceState?` replacing `destination`.
 
@@ -1647,4 +1667,7 @@ Run after Task 10, on a physical iPhone (the simulator has no real GPS motion).
 - [ ] "Max，停止导航" with nothing active → Max says "现在没有在导航" (benign).
 - [ ] Deny location permission, then start navigation → Max says the permission is missing and does not pretend to guide.
 - [ ] Confirm an Android client receiving a `navigation.*` command ignores it without erroring.
+
+```
+
 ```

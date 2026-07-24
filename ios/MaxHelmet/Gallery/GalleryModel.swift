@@ -1,0 +1,42 @@
+import Foundation
+
+/// Observable bridge from `CaptureStore` to the gallery views. Keeps the views
+/// thin: they read `captures` and call `export`/`delete`.
+@MainActor
+final class GalleryModel: ObservableObject {
+    @Published private(set) var captures: [Capture] = []
+    @Published private(set) var exporting: Set<String> = []
+    @Published var exportError: String?
+
+    private let store: CaptureStoring
+    private let exporter: PhotoLibraryAdding
+
+    init(store: CaptureStoring, exporter: PhotoLibraryAdding) {
+        self.store = store
+        self.exporter = exporter
+    }
+
+    func refresh() {
+        captures = store.captures()
+    }
+
+    func export(_ capture: Capture) async {
+        exporting.insert(capture.id)
+        defer { exporting.remove(capture.id) }
+        let ok = await exporter.add(fileURL: store.fileURL(for: capture), isVideo: capture.type == .video)
+        if ok {
+            store.markExported(capture.id)
+            refresh()
+        } else {
+            exportError = "导出到相册失败，检查相册权限后重试。"
+        }
+    }
+
+    func delete(_ capture: Capture) {
+        store.delete(capture.id)
+        refresh()
+    }
+
+    func fileURL(for capture: Capture) -> URL { store.fileURL(for: capture) }
+    func thumbnailURL(for capture: Capture) -> URL { store.thumbnailURL(for: capture) }
+}

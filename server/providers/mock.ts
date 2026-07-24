@@ -68,6 +68,7 @@ const SCENARIOS: Record<DemoScenario, ScenarioProfile> = {
       { rider: "帮我找最快回家路线。", agent: "已设置最快回家路线。3.2 公里后靠右下出口。", latencyBase: 96 },
       // Exercises the device-action path end to end without Doubao credentials.
       { rider: "Max，打开手电筒", agent: "好的，手电筒已经打开。", latencyBase: 94 },
+      { rider: "Max，拍照", agent: "好的，拍好了。", latencyBase: 92 },
       {
         rider: "你是谁开发的？",
         agent: "我是 Max，由 Horizon Continental Technology（neueHCT）开发。",

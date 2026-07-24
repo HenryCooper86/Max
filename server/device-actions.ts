@@ -11,7 +11,15 @@
 import { randomUUID } from "node:crypto";
 
 export type DeviceActionName =
-  "torch.set" | "volume.set" | "music.control" | "sms.compose" | "call.dial" | "destination.show";
+  | "torch.set"
+  | "volume.set"
+  | "music.control"
+  | "sms.compose"
+  | "call.dial"
+  | "destination.show"
+  | "camera.photo"
+  | "camera.record"
+  | "gallery.open";
 
 export type DeviceActionTier = "low" | "high";
 
@@ -25,7 +33,10 @@ type DeviceCommand =
   | { action: "music.control"; args: { control: "play" | "pause" | "next" | "previous"; app?: string } }
   | { action: "sms.compose"; args: { name: string; body: string } }
   | { action: "call.dial"; args: { name?: string; number?: string } }
-  | { action: "destination.show"; args: { query: string } };
+  | { action: "destination.show"; args: { query: string } }
+  | { action: "camera.photo"; args: Record<string, never> }
+  | { action: "camera.record"; args: { start: boolean } }
+  | { action: "gallery.open"; args: Record<string, never> };
 
 /** Declared risk. iOS satisfies the high tier with the native system
  *  confirmation that `tel:` and MFMessageComposeViewController already force;
@@ -36,7 +47,10 @@ export const DEVICE_ACTION_TIERS: Record<DeviceActionName, DeviceActionTier> = {
   "music.control": "low",
   "sms.compose": "high",
   "call.dial": "high",
-  "destination.show": "low"
+  "destination.show": "low",
+  "camera.photo": "low",
+  "camera.record": "low",
+  "gallery.open": "low"
 };
 
 export type IntentExtractor = (text: string) => DeviceCommand | null;
@@ -98,6 +112,9 @@ export const extractDeviceCommand: IntentExtractor = (text) => {
     return { action: "volume.set", args: { direction: "down" } };
   }
 
+  const camera = matchCamera(raw);
+  if (camera) return camera;
+
   const music = matchMusic(raw);
   if (music) return music;
 
@@ -112,6 +129,26 @@ export const extractDeviceCommand: IntentExtractor = (text) => {
 
   return null;
 };
+
+function matchCamera(raw: string): DeviceCommand | null {
+  // Stop is checked before start so "停止录像" is never read as "录像".
+  if (/(停止|结束|停下?).{0,2}(录像|录制|录影|视频)/.test(raw) || /stop\s+recording/i.test(raw)) {
+    return { action: "camera.record", args: { start: false } };
+  }
+  if (
+    /(开始)?(录像|录制|录影|录个?视频|录一段)/.test(raw) ||
+    /(start\s+recording|record\s+(a\s+)?video)/i.test(raw)
+  ) {
+    return { action: "camera.record", args: { start: true } };
+  }
+  if (/(拍照|拍个?照|拍张?照片?|照相)/.test(raw) || /take\s+a\s+(photo|picture|pic)/i.test(raw)) {
+    return { action: "camera.photo", args: {} };
+  }
+  if (/(打开|查看|看看).{0,3}(相册|图库|照片墙)/.test(raw) || /(open|show)\s+(the\s+)?(gallery|album)/i.test(raw)) {
+    return { action: "gallery.open", args: {} };
+  }
+  return null;
+}
 
 function matchMusic(raw: string): DeviceCommand | null {
   let control: "play" | "pause" | "next" | "previous" | undefined;
@@ -167,7 +204,12 @@ const FAILURE_SPEECH: Record<string, string> = {
   "player.unsupported": "我只能控制 Apple Music 和本机音乐。",
   "route.unavailable": "这个目的地我查不到路线。",
   "contact.notFound": "通讯录里没找到这个人。",
-  "torch.unavailable": "这台设备没有可用的手电筒。"
+  "torch.unavailable": "这台设备没有可用的手电筒。",
+  "permission.camera": "我没有相机权限，去设置里开启后我再帮你拍。",
+  "storage.full": "存储快满了，导出或删除一些内容后我再帮你拍。",
+  "camera.recording": "已经在录了。",
+  "camera.notRecording": "现在没有在录像。",
+  "capture.failed": "拍摄没成功。"
 };
 
 /** Spoken names for the fallback line, so a failure with no known reason still
@@ -178,7 +220,10 @@ const ACTION_LABELS: Record<DeviceActionName, string> = {
   "music.control": "音乐",
   "sms.compose": "短信",
   "call.dial": "电话",
-  "destination.show": "目的地"
+  "destination.show": "目的地",
+  "camera.photo": "拍照",
+  "camera.record": "录像",
+  "gallery.open": "相册"
 };
 
 /** The line Max speaks when a command did not succeed. Never claims success and

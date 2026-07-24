@@ -175,6 +175,15 @@ hide the toggle, use the hardened `Info.plist`, and require a trusted certificat
 - Barge-in: rider speech stops queued provider audio and fallback TTS.
 - ADAS hazard alerts: reacts to the server `hazard.alert` event by interrupting playback, speaking
   the warning, and showing a pulsing directional banner; an `ADAS` demo scenario showcases them.
+- Voice-triggered device actions: spoken commands drive the phone through the `device.command` /
+  `device.result` protocol — torch on/off, Max's own playback volume, Apple Music / local-library
+  playback, SMS composition, dialing (including 110/120/122), and an in-app destination card with
+  distance and ETA. Max's spoken confirmation always matches the real outcome, and every failure is
+  spoken. Limits are deliberate and honest: dialing and SMS require the native iOS confirmation tap
+  (truly hands-free dialing is impossible on iOS); music reaches only Apple Music and the local
+  library, never 网易云/QQ音乐; SMS is refused above 5 km/h; the destination card issues no
+  turn-by-turn guidance and uses car routing, so it does not respect 摩托车禁行 roads. Contact
+  numbers never leave the device, and spoken contact names are redacted from stored QA transcripts.
 - Reconnect with exponential backoff and user-visible connection status.
 - Live weather card and fused `态势摘要` ride-pulse card.
 - Transcript with in-place updates, deduplication, timestamps, and JSON export via share sheet.

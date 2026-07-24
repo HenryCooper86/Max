@@ -36,6 +36,12 @@ final class AgentSession: NSObject, ObservableObject {
         var bluetoothRouted = false
         /// The active ADAS hazard alert, shown as a banner until it auto-clears.
         var hazardAlert: HazardAlert? = nil
+        /// Latest resolved destination, or nil when there is nothing to show.
+        /// Cleared on session start so a stale route never outlives its ride.
+        var destination: Destination? = nil
+        /// False until the first ride.context event. Without this, the default
+        /// speedKmh of 0 reads as "stopped" and defeats the SMS speed gate.
+        var hasRideContext = false
         /// Guided demo ride: the mock provider auto-tours the scenario catalog.
         var guidedDemo = false
         /// The relay refused the connection with HTTP 401 — a login (or token)
@@ -148,6 +154,31 @@ final class AgentSession: NSObject, ObservableObject {
     private let synthesizer = AVSpeechSynthesizer()
     private let locationProvider = LocationProvider()
 
+    /// Routes relay-issued device commands to one handler each. Built lazily so
+    /// `player` (the volume handler's gain target) is available. The message
+    /// presenter is main-actor isolated, so it is created on demand inside its
+    /// own handler rather than here.
+    private lazy var deviceRouter = DeviceActionRouter(
+        handlers: [
+            .torch: TorchController(),
+            .volume: PlaybackVolumeController(gain: player),
+            .music: MusicController(),
+            .sms: MessageComposer(
+                presenter: MainActorMessagePresenter(),
+                speedProvider: { [weak self] in
+                    guard let self, self.state.value.hasRideContext else { return nil }
+                    return Double(self.state.value.rideContext.speedKmh)
+                },
+                resolver: SystemContactResolver()
+            ),
+            .call: CallDialer(),
+            .destination: DestinationResolver(onResolved: { [weak self] destination in
+                self?.update { $0.destination = destination }
+            })
+        ],
+        isDeviceUnlocked: { UIApplication.shared.isProtectedDataAvailable }
+    )
+
     override init() {
         super.init()
         urlSession = makeSession()
@@ -209,6 +240,9 @@ final class AgentSession: NSObject, ObservableObject {
             $0.micMuted = false
             $0.bluetoothRouted = bluetoothRouted
             $0.authRequired = false
+            // A stale route or ride context must not outlive its ride.
+            $0.destination = nil
+            $0.hasRideContext = false
         }
 
         locationProvider.resolve { [weak self] coordinate in
@@ -755,7 +789,10 @@ final class AgentSession: NSObject, ObservableObject {
             update { $0.weather = weather }
 
         case let .rideContextUpdate(rideContext):
-            update { $0.rideContext = rideContext }
+            update {
+                $0.rideContext = rideContext
+                $0.hasRideContext = true
+            }
 
         case let .sessionMemoryUpdate(memory):
             update { $0.sessionMemory = memory }
@@ -766,11 +803,12 @@ final class AgentSession: NSObject, ObservableObject {
         case let .hazardAlert(alert):
             handleHazardAlert(alert)
 
-        case .deviceCommand:
-            // Dispatched to the device-action handlers once the router is wired
-            // in. Until then the relay's 8 s timeout reconciles, so Max still
-            // tells the rider the action did not happen rather than claiming it.
-            break
+        case let .deviceCommand(command):
+            Task { [weak self] in
+                guard let self else { return }
+                let result = await self.deviceRouter.handle(command)
+                self.webSocket?.send(.string(buildDeviceResult(commandId: command.commandId, result: result))) { _ in }
+            }
 
         case let .error(message):
             update { $0.statusText = message }

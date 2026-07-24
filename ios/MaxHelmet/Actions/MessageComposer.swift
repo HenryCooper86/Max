@@ -9,28 +9,43 @@ protocol MessagePresenting {
     func present(number: String, body: String) async -> Bool
 }
 
-/// Real presenter, backed by MFMessageComposeViewController. It pre-fills the
-/// recipient and body; only the rider can send it.
-@MainActor
-final class SystemMessagePresenter: NSObject, MessagePresenting, MFMessageComposeViewControllerDelegate {
-    private var continuation: CheckedContinuation<Bool, Never>?
-
+/// Non-isolated entry point so `AgentSession` (which is not main-actor) can hold
+/// it. Every call hops to the main actor and drives a fresh isolated presenter.
+struct MainActorMessagePresenter: MessagePresenting {
     func present(number: String, body: String) async -> Bool {
+        await SystemMessagePresenter.present(number: number, body: body)
+    }
+}
+
+/// Real presenter, backed by MFMessageComposeViewController. It pre-fills the
+/// recipient and body; only the rider can send it. Instances retain themselves
+/// until the sheet is dismissed, because MFMessageComposeViewController has no
+/// built-in dismiss — its delegate must do it, so the delegate must outlive the
+/// `present` call that returned once the sheet was shown.
+@MainActor
+final class SystemMessagePresenter: NSObject, MFMessageComposeViewControllerDelegate {
+    private static var live = Set<SystemMessagePresenter>()
+
+    static func present(number: String, body: String) async -> Bool {
+        let presenter = SystemMessagePresenter()
+        return await presenter.show(number: number, body: body)
+    }
+
+    private func show(number: String, body: String) async -> Bool {
         guard MFMessageComposeViewController.canSendText() else { return false }
         guard let root = UIApplication.shared.connectedScenes
             .compactMap({ ($0 as? UIWindowScene)?.keyWindow })
             .first?.rootViewController else { return false }
 
+        Self.live.insert(self)   // stay alive until didFinish dismisses the sheet
         let composer = MFMessageComposeViewController()
         composer.recipients = [number]
         composer.body = body
         composer.messageComposeDelegate = self
 
         return await withCheckedContinuation { continuation in
-            self.continuation = continuation
             root.present(composer, animated: true) {
                 continuation.resume(returning: true)
-                self.continuation = nil
             }
         }
     }
@@ -40,6 +55,7 @@ final class SystemMessagePresenter: NSObject, MessagePresenting, MFMessageCompos
         didFinishWith result: MessageComposeResult
     ) {
         controller.dismiss(animated: true)
+        Self.live.remove(self)
     }
 }
 

@@ -8,6 +8,8 @@
  * flows outward. `shared/agent.ts` imports from this file, never the reverse.
  */
 
+import { randomUUID } from "node:crypto";
+
 export type DeviceActionName =
   | "torch.set"
   | "volume.set"
@@ -152,6 +154,63 @@ function matchDestination(raw: string): DeviceCommand | null {
     if (query) return { action: "destination.show", args: { query } };
   }
   return null;
+}
+
+/** How long the relay waits for a device.result before treating the command as
+ *  failed. Long enough for the rider to read a permission prompt, short enough
+ *  that Max does not go quiet mid-ride. */
+export const DEVICE_RESULT_TIMEOUT_MS = 8_000;
+
+const FAILURE_SPEECH: Record<string, string> = {
+  "permission.contacts": "我没有通讯录权限，去设置里开启后我再帮你拨号。",
+  "permission.music": "我没有音乐库权限，去设置里开启后我再帮你播放。",
+  "device.locked": "手机锁屏了，解锁后我再执行。",
+  "unsafe.speed": "骑行中我不发短信，停车以后我再帮你发。",
+  "player.unsupported": "我只能控制 Apple Music 和本机音乐。",
+  "route.unavailable": "这个目的地我查不到路线。",
+  "contact.notFound": "通讯录里没找到这个人。",
+  "torch.unavailable": "这台设备没有可用的手电筒。"
+};
+
+/** The line Max speaks when a command did not succeed. Never claims success and
+ *  never invents a cause it was not given. */
+export function deviceFailureSpeech(
+  action: DeviceActionName,
+  status: DeviceActionStatus,
+  reason: string | undefined
+): string {
+  if (status === "ok") throw new Error("deviceFailureSpeech called for a successful command");
+  if (reason && FAILURE_SPEECH[reason]) return FAILURE_SPEECH[reason];
+  return "刚才那个操作没成功。";
+}
+
+export type IssuedDeviceCommand = { commandId: string; action: DeviceActionName; issuedAt: number };
+
+/** Tracks dispatched commands so no command can be left pending forever. */
+export class PendingDeviceCommands {
+  private readonly pending = new Map<string, IssuedDeviceCommand>();
+
+  issue(action: DeviceActionName, now: number = Date.now()): IssuedDeviceCommand {
+    const issued: IssuedDeviceCommand = { commandId: randomUUID(), action, issuedAt: now };
+    this.pending.set(issued.commandId, issued);
+    return issued;
+  }
+
+  resolve(commandId: string): IssuedDeviceCommand | undefined {
+    const issued = this.pending.get(commandId);
+    if (issued) this.pending.delete(commandId);
+    return issued;
+  }
+
+  /** Removes and returns every command that has outlived the timeout. */
+  expire(now: number = Date.now()): IssuedDeviceCommand[] {
+    const expired: IssuedDeviceCommand[] = [];
+    for (const issued of this.pending.values()) {
+      if (now - issued.issuedAt >= DEVICE_RESULT_TIMEOUT_MS) expired.push(issued);
+    }
+    for (const issued of expired) this.pending.delete(issued.commandId);
+    return expired;
+  }
 }
 
 function matchCall(raw: string): DeviceCommand | null {

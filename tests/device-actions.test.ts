@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { DEVICE_ACTION_TIERS, extractDeviceCommand } from "../server/device-actions";
+import {
+  DEVICE_ACTION_TIERS,
+  DEVICE_RESULT_TIMEOUT_MS,
+  PendingDeviceCommands,
+  deviceFailureSpeech,
+  extractDeviceCommand
+} from "../server/device-actions";
 
 describe("extractDeviceCommand — torch", () => {
   it("turns the torch on in Chinese and English", () => {
@@ -94,6 +100,53 @@ describe("extractDeviceCommand — negatives", () => {
     expect(extractDeviceCommand("Max 别开手电筒")).toBeNull();
     expect(extractDeviceCommand("Max 不用放歌了")).toBeNull();
     expect(extractDeviceCommand("Max don't call Wang")).toBeNull();
+  });
+});
+
+describe("deviceFailureSpeech", () => {
+  it("explains a denied permission", () => {
+    expect(deviceFailureSpeech("call.dial", "denied", "permission.contacts")).toContain("通讯录");
+  });
+
+  it("explains a locked phone", () => {
+    expect(deviceFailureSpeech("torch.set", "failed", "device.locked")).toContain("锁屏");
+  });
+
+  it("explains the speed refusal", () => {
+    expect(deviceFailureSpeech("sms.compose", "denied", "unsafe.speed")).toContain("停车");
+  });
+
+  it("explains an unreachable third-party player", () => {
+    expect(deviceFailureSpeech("music.control", "unsupported", "player.unsupported")).toContain("本机音乐");
+  });
+
+  it("explains an unresolvable destination", () => {
+    expect(deviceFailureSpeech("destination.show", "unsupported", "route.unavailable")).toContain("路线");
+  });
+
+  it("falls back to a generic honest line", () => {
+    expect(deviceFailureSpeech("torch.set", "failed", undefined)).toContain("没成功");
+  });
+});
+
+describe("PendingDeviceCommands", () => {
+  it("issues unique ids and resolves them once", () => {
+    const pending = new PendingDeviceCommands();
+    const a = pending.issue("torch.set");
+    const b = pending.issue("torch.set");
+    expect(a.commandId).not.toEqual(b.commandId);
+    expect(pending.resolve(a.commandId)?.action).toBe("torch.set");
+    expect(pending.resolve(a.commandId)).toBeUndefined();
+  });
+
+  it("expires commands past the timeout and only those", () => {
+    const pending = new PendingDeviceCommands();
+    const issued = pending.issue("call.dial");
+    expect(pending.expire(issued.issuedAt + DEVICE_RESULT_TIMEOUT_MS - 1)).toEqual([]);
+    expect(pending.expire(issued.issuedAt + DEVICE_RESULT_TIMEOUT_MS)).toEqual([
+      { commandId: issued.commandId, action: "call.dial", issuedAt: issued.issuedAt }
+    ]);
+    expect(pending.expire(issued.issuedAt + DEVICE_RESULT_TIMEOUT_MS)).toEqual([]);
   });
 });
 

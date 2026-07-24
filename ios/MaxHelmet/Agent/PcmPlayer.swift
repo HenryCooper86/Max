@@ -16,6 +16,12 @@ final class PcmPlayer {
     /// smoothly toward full scale instead of hard-clipping.
     static let limitThreshold: Float = 0.7
 
+    /// Current output gain, adjustable by voice ("Max，大声一点"). Read on the
+    /// audio render thread and written on the main thread; a naturally-aligned
+    /// 32-bit scalar is read and written atomically on every architecture this
+    /// app supports, so the render thread takes no lock.
+    private var currentGain: Float = PcmPlayer.playbackGain
+
     /// Shared with MicStreamer so the agent voice renders through the same engine
     /// that performs echo cancellation — see prepare() and MicStreamer.start().
     private let engine: AVAudioEngine
@@ -173,7 +179,7 @@ final class PcmPlayer {
         // Apply the playback boost, then soft-limit so loud peaks compress
         // smoothly toward ±1 instead of hard-clipping (matches Android / web).
         if let samples = outBuffer.floatChannelData {
-            let gain = PcmPlayer.playbackGain
+            let gain = currentGain
             for i in 0..<Int(outBuffer.frameLength) {
                 samples[0][i] = softLimit(samples[0][i] * gain)
             }
@@ -189,5 +195,13 @@ final class PcmPlayer {
         let headroom = 1 - PcmPlayer.limitThreshold
         let compressed = PcmPlayer.limitThreshold + headroom * (1 - exp(-(magnitude - PcmPlayer.limitThreshold) / headroom))
         return x < 0 ? -compressed : compressed
+    }
+}
+
+extension PcmPlayer: PlaybackGain {
+    var level: Float { currentGain }
+
+    func setLevel(_ newLevel: Float) {
+        currentGain = newLevel
     }
 }

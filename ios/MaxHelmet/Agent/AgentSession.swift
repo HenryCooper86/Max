@@ -766,6 +766,12 @@ final class AgentSession: NSObject, ObservableObject {
         case let .hazardAlert(alert):
             handleHazardAlert(alert)
 
+        case .deviceCommand:
+            // Dispatched to the device-action handlers once the router is wired
+            // in. Until then the relay's 8 s timeout reconciles, so Max still
+            // tells the rider the action did not happen rather than claiming it.
+            break
+
         case let .error(message):
             update { $0.statusText = message }
 

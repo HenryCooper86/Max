@@ -63,6 +63,16 @@ describe("doubaoSpeaker", () => {
     expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("Horizon Continental Technology");
   });
 
+  it("treats voice-triggered device actions as safe hands-free ops, not distractions to defer", () => {
+    // Max is a helmet assistant: voice-triggered capture/navigation is the safe,
+    // eyes-on-road way to do these while riding — it must not refuse them or tell
+    // the rider to stop first.
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("拍照");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("录像");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("不要当作分心请求");
+    expect(DEFAULT_AGENT_SYSTEM_PROMPT).not.toContain("必要时建议停车后继续");
+  });
+
   it("sets Chinese first, English second, and rejects other languages", () => {
     const prompt = `${DEFAULT_AGENT_SYSTEM_PROMPT}\n${buildLanguageInteractionPrompt()}`;
 

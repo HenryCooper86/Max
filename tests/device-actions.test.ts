@@ -154,6 +154,32 @@ describe("PendingDeviceCommands", () => {
   });
 });
 
+describe("extractDeviceCommand — camera", () => {
+  it("takes a photo in Chinese and English", () => {
+    expect(extractDeviceCommand("Max 拍照")).toEqual({ action: "camera.photo", args: {} });
+    expect(extractDeviceCommand("Max 拍张照片")).toEqual({ action: "camera.photo", args: {} });
+    expect(extractDeviceCommand("Max take a photo")).toEqual({ action: "camera.photo", args: {} });
+  });
+
+  it("starts and stops recording, checking stop before start", () => {
+    expect(extractDeviceCommand("Max 开始录像")).toEqual({ action: "camera.record", args: { start: true } });
+    expect(extractDeviceCommand("Max 录个视频")).toEqual({ action: "camera.record", args: { start: true } });
+    expect(extractDeviceCommand("Max start recording")).toEqual({ action: "camera.record", args: { start: true } });
+    expect(extractDeviceCommand("Max 停止录像")).toEqual({ action: "camera.record", args: { start: false } });
+    expect(extractDeviceCommand("Max stop recording")).toEqual({ action: "camera.record", args: { start: false } });
+  });
+
+  it("opens the gallery", () => {
+    expect(extractDeviceCommand("Max 打开相册")).toEqual({ action: "gallery.open", args: {} });
+    expect(extractDeviceCommand("Max open the gallery")).toEqual({ action: "gallery.open", args: {} });
+  });
+
+  it("respects negation and non-commands", () => {
+    expect(extractDeviceCommand("Max 别拍照")).toBeNull();
+    expect(extractDeviceCommand("Max 我们刚才拍的照片在哪")).toBeNull();
+  });
+});
+
 describe("DEVICE_ACTION_TIERS", () => {
   it("marks only messaging and calling as high risk", () => {
     expect(DEVICE_ACTION_TIERS).toEqual({
@@ -162,7 +188,10 @@ describe("DEVICE_ACTION_TIERS", () => {
       "music.control": "low",
       "sms.compose": "high",
       "call.dial": "high",
-      "destination.show": "low"
+      "destination.show": "low",
+      "camera.photo": "low",
+      "camera.record": "low",
+      "gallery.open": "low"
     });
   });
 });

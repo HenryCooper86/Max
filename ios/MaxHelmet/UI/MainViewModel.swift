@@ -47,6 +47,15 @@ final class MainViewModel: ObservableObject {
     private let defaults = UserDefaults.standard
     private let authClient = AuthClient()
 
+    /// Presents the Max gallery sheet.
+    @Published var showGallery = false
+
+    /// Reads the same capture store the camera handler writes to.
+    lazy var galleryModel = GalleryModel(
+        store: session.captureStore,
+        exporter: SystemPhotoLibraryExporter()
+    )
+
     @Published var relayURL: String {
         didSet { defaults.set(relayURL, forKey: Keys.relayURL) }
     }

@@ -175,6 +175,12 @@ hide the toggle, use the hardened `Info.plist`, and require a trusted certificat
 - Barge-in: rider speech stops queued provider audio and fallback TTS.
 - ADAS hazard alerts: reacts to the server `hazard.alert` event by interrupting playback, speaking
   the warning, and showing a pulsing directional banner; an `ADAS` demo scenario showcases them.
+- Voice-triggered camera: "拍照" captures a photo and "开始录像 / 停止录像" records **silent** video —
+  silent by design so the capture session never takes the mic and Max keeps listening (stop-by-voice
+  works mid-clip). Captures land in an in-app **Max gallery** (grid, full-screen viewer, video player)
+  with per-item **export to Photos** (add-only permission, copy + `已导出` badge) and delete. Storage is
+  keep-until-deleted with a low-space refusal; recording auto-stops at 10 minutes. Reachable by the
+  相册 button or "打开相册".
 - Voice-triggered device actions: spoken commands drive the phone through the `device.command` /
   `device.result` protocol — torch on/off, Max's own playback volume, Apple Music / local-library
   playback, SMS composition, dialing (including 110/120/122), and an in-app destination card with

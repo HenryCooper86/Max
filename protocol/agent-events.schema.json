@@ -206,7 +206,17 @@
             "type": { "const": "device.command" },
             "commandId": { "type": "string", "minLength": 1 },
             "action": {
-              "enum": ["torch.set", "volume.set", "music.control", "sms.compose", "call.dial", "destination.show"]
+              "enum": [
+                "torch.set",
+                "volume.set",
+                "music.control",
+                "sms.compose",
+                "call.dial",
+                "destination.show",
+                "camera.photo",
+                "camera.record",
+                "gallery.open"
+              ]
             },
             "args": { "type": "object" },
             "tier": { "enum": ["low", "high"] }

@@ -39,6 +39,12 @@ final class AgentSession: NSObject, ObservableObject {
         /// Latest resolved destination, or nil when there is nothing to show.
         /// Cleared on session start so a stale route never outlives its ride.
         var destination: Destination? = nil
+        /// True while a video is recording; drives the HUD indicator.
+        var recording = false
+        /// When the current recording began, for the elapsed timer.
+        var recordingStartedAt: Double? = nil
+        /// Bumped by a `gallery.open` command so the UI presents the gallery.
+        var galleryRequestToken = 0
         /// False until the first ride.context event. Without this, the default
         /// speedKmh of 0 reads as "stopped" and defeats the SMS speed gate.
         var hasRideContext = false
@@ -137,6 +143,9 @@ final class AgentSession: NSObject, ObservableObject {
     /// into the mic. Mirrors the web's single shared AudioContext.
     private let voiceEngine = AVAudioEngine()
     private lazy var player = PcmPlayer(engine: voiceEngine)
+    /// The one capture store shared by the camera handler (writes) and the
+    /// gallery UI (reads).
+    let captureStore = CaptureStore()
     private let audioRouter = AudioRouter()
     private lazy var mic = MicStreamer(
         engine: voiceEngine,
@@ -174,7 +183,24 @@ final class AgentSession: NSObject, ObservableObject {
             .call: CallDialer(),
             .destination: DestinationResolver(onResolved: { [weak self] destination in
                 self?.update { $0.destination = destination }
-            })
+            }),
+            .camera: CameraController(
+                session: AVFoundationCaptureSession(),
+                store: captureStore,
+                onRecordingChange: { [weak self] recording in
+                    self?.update {
+                        $0.recording = recording
+                        $0.recordingStartedAt = recording ? Date().timeIntervalSince1970 : nil
+                    }
+                },
+                onOpenGallery: { [weak self] in
+                    self?.update { $0.galleryRequestToken += 1 }
+                },
+                onAutoStopped: { [weak self] in
+                    // Reuse the existing local-speech path; no relay turn to reconcile.
+                    self?.speak("录像已达十分钟上限，已保存。")
+                }
+            )
         ],
         isDeviceUnlocked: { UIApplication.shared.isProtectedDataAvailable }
     )

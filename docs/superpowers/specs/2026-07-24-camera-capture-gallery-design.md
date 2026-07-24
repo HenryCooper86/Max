@@ -40,7 +40,7 @@ single relay command grammar are all reused unchanged.
 The voice agent owns the microphone through a shared `AVAudioEngine` with the
 voice-processing I/O unit (that is what performs echo cancellation and lets Max
 hear the wake word). iOS does not cleanly share the microphone between an
-`AVCaptureSession` audio input and that engine. Recording video *with* sound
+`AVCaptureSession` audio input and that engine. Recording video _with_ sound
 would seize the mic, cutting Max's ears mid-recording — the rider could not then
 say "停止录像". A video-only capture session
 (`automaticallyConfiguresApplicationAudioSession = false`, no audio input) never
@@ -68,7 +68,7 @@ touches the mic, so the voice session and hands-free stop both survive. The cost
 - **`CameraController`** (`DeviceActionHandler`) — configures and runs a
   rear-camera, video-only `AVCaptureSession`; takes photos, starts/stops silent
   video, owns recording state and the state guards. Talks to `CaptureStore` to
-  persist. Talks to the capture *session* behind a `CaptureSessioning` protocol
+  persist. Talks to the capture _session_ behind a `CaptureSessioning` protocol
   so the state machine is testable without a real camera.
 - **`CaptureStore`** — writes captures to a dedicated sandbox folder, maintains
   the JSON metadata index, generates thumbnails, and enforces the low-space
@@ -127,15 +127,15 @@ deliberate capture.
 - **Index** — `captures.json`, an array of records loaded at launch and written
   atomically on every change. Each record:
 
-  | Field           | Type                    | Notes                              |
-  | --------------- | ----------------------- | ---------------------------------- |
-  | `id`            | string (UUID)           |                                    |
-  | `type`          | `"photo" \| "video"`    |                                    |
-  | `filename`      | string                  | Relative to the Captures folder    |
-  | `createdAt`     | epoch seconds           |                                    |
-  | `durationSec`   | number, optional        | Video only                         |
-  | `exported`      | bool                    | True once copied to Photos         |
-  | `thumbnailName` | string                  | Relative to the Captures folder    |
+  | Field           | Type                 | Notes                           |
+  | --------------- | -------------------- | ------------------------------- |
+  | `id`            | string (UUID)        |                                 |
+  | `type`          | `"photo" \| "video"` |                                 |
+  | `filename`      | string               | Relative to the Captures folder |
+  | `createdAt`     | epoch seconds        |                                 |
+  | `durationSec`   | number, optional     | Video only                      |
+  | `exported`      | bool                 | True once copied to Photos      |
+  | `thumbnailName` | string               | Relative to the Captures folder |
 
 - **Thumbnails** — one small JPEG per capture for the grid: a downscaled image
   for photos, the first frame via `AVAssetImageGenerator` for video.
@@ -188,7 +188,7 @@ deliberate capture.
   still correct Max, which is mid-sentence saying "开始录像了". Because Spec 1's
   relay stays silent on `ok` (letting Doubao's own confirmation stand) and speaks
   only on a non-`ok` result, these return `failed` with reason `camera.recording`
-  / `camera.notRecording`. The wire status is `failed`, but the *spoken* line is
+  / `camera.notRecording`. The wire status is `failed`, but the _spoken_ line is
   benign ("已经在录了" / "现在没有在录像") and no file is created or lost. This
   reuses the reconciliation path exactly rather than adding a new status.
 - Capture pipeline failure (session config, write) → `failed` / `capture.failed`.
@@ -239,4 +239,7 @@ deliberate capture.
   badges it; delete reclaims space.
 - Nothing auto-deletes; a full disk blocks new captures with a spoken warning.
 - The feature demos end to end on the mock provider with no Doubao credentials.
+
+```
+
 ```

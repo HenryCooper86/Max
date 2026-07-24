@@ -294,6 +294,9 @@ enum DeviceAction: Equatable {
     case smsCompose(name: String, body: String)
     case callDial(name: String?, number: String?)
     case destinationShow(query: String)
+    case cameraPhoto
+    case cameraRecord(start: Bool)
+    case galleryOpen
 }
 
 struct DeviceCommand: Equatable {
@@ -563,6 +566,12 @@ func parseDeviceAction(_ name: String, _ args: [String: Any]) -> DeviceAction? {
     case "destination.show":
         guard let query = args["query"] as? String, !query.isEmpty else { return nil }
         return .destinationShow(query: query)
+    case "camera.photo":
+        return .cameraPhoto
+    case "camera.record":
+        return .cameraRecord(start: args["start"] as? Bool ?? false)
+    case "gallery.open":
+        return .galleryOpen
     default:
         return nil
     }

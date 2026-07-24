@@ -1,4 +1,7 @@
 import type { AdasDirection, AdasSeverity, AdasThreat } from "./adas";
+// Type-only: device-action types originate in server/device-actions.ts and flow
+// outward. The import is erased at build time, so this adds no runtime coupling.
+import type { DeviceActionName, DeviceActionStatus, DeviceActionTier } from "../server/device-actions";
 import type { DemoScenario, RideIntelligence, RideMode } from "./ride";
 import type {
   TestingAudioQuality,
@@ -212,8 +215,29 @@ export type SessionStartEvent = {
   memory?: SessionMemorySnapshot;
 };
 
+/** Server → client: execute one device action. `commandId` is relay-issued and
+ *  must be echoed back in the matching `device.result`. */
+export type DeviceCommandEvent = {
+  type: "device.command";
+  commandId: string;
+  action: DeviceActionName;
+  args: Record<string, unknown>;
+  tier: DeviceActionTier;
+};
+
+/** Client → server: the outcome of one device command. Exactly one of these
+ *  follows every command; the relay treats silence past its timeout as failure. */
+export type DeviceResultEvent = {
+  type: "device.result";
+  commandId: string;
+  status: DeviceActionStatus;
+  reason?: string;
+  detail?: string;
+};
+
 export type ClientEvent =
   | SessionStartEvent
+  | DeviceResultEvent
   | { type: "audio.start" }
   | { type: "audio.stop" }
   // Guided demo ride: the mock provider auto-advances through the scenario
@@ -305,6 +329,7 @@ export type AgentEvent =
       ttcSeconds: number;
       interrupt: boolean;
     }
+  | DeviceCommandEvent
   | { type: "error"; message: string };
 
 export type AgentHealth = {

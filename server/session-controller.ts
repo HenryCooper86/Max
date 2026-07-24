@@ -149,6 +149,33 @@ export function parseClientEvent(data: RawData): ClientEvent {
     };
   }
 
+  if (value.type === "device.result") {
+    if (typeof value.commandId !== "string" || !value.commandId.trim() || value.commandId.length > 120) {
+      throw new Error("Invalid device.result commandId");
+    }
+    if (
+      value.status !== "ok" &&
+      value.status !== "failed" &&
+      value.status !== "denied" &&
+      value.status !== "unsupported"
+    ) {
+      throw new Error("Invalid device.result status");
+    }
+    if (value.reason !== undefined && (typeof value.reason !== "string" || value.reason.length > 120)) {
+      throw new Error("Invalid device.result reason");
+    }
+    if (value.detail !== undefined && (typeof value.detail !== "string" || value.detail.length > 500)) {
+      throw new Error("Invalid device.result detail");
+    }
+    return {
+      type: "device.result",
+      commandId: value.commandId,
+      status: value.status,
+      reason: value.reason as string | undefined,
+      detail: value.detail as string | undefined
+    };
+  }
+
   if (value.type === "testing.metric") {
     const metric = (field: string, max: number) => {
       const candidate = value[field];

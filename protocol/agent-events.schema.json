@@ -64,6 +64,18 @@
             "reason": { "type": "string" }
           },
           "required": ["type", "turnId", "speaker", "text", "reason"]
+        },
+        {
+          "title": "DeviceResult",
+          "type": "object",
+          "properties": {
+            "type": { "const": "device.result" },
+            "commandId": { "type": "string", "minLength": 1 },
+            "status": { "enum": ["ok", "failed", "denied", "unsupported"] },
+            "reason": { "type": "string" },
+            "detail": { "type": "string" }
+          },
+          "required": ["type", "commandId", "status"]
         }
       ]
     },
@@ -186,6 +198,20 @@
             "interrupt": { "type": "boolean" }
           },
           "required": ["type", "threat", "direction", "severity", "label", "message", "advice"]
+        },
+        {
+          "title": "DeviceCommand",
+          "type": "object",
+          "properties": {
+            "type": { "const": "device.command" },
+            "commandId": { "type": "string", "minLength": 1 },
+            "action": {
+              "enum": ["torch.set", "volume.set", "music.control", "sms.compose", "call.dial", "destination.show"]
+            },
+            "args": { "type": "object" },
+            "tier": { "enum": ["low", "high"] }
+          },
+          "required": ["type", "commandId", "action", "args", "tier"]
         },
         {
           "title": "Error",

@@ -9,7 +9,8 @@ object ClientEventTypes {
     const val LOCATION_UPDATE = "location.update"
     const val TESTING_METRIC = "testing.metric"
     const val TURN_FEEDBACK = "turn.feedback"
-    val all: Set<String> = setOf(SESSION_START, AUDIO_START, AUDIO_STOP, DEMO_GUIDED, LOCATION_UPDATE, TESTING_METRIC, TURN_FEEDBACK)
+    const val DEVICE_RESULT = "device.result"
+    val all: Set<String> = setOf(SESSION_START, AUDIO_START, AUDIO_STOP, DEMO_GUIDED, LOCATION_UPDATE, TESTING_METRIC, TURN_FEEDBACK, DEVICE_RESULT)
 }
 
 object ServerEventTypes {
@@ -23,8 +24,9 @@ object ServerEventTypes {
     const val SESSION_MEMORY = "session.memory"
     const val TELEMETRY = "telemetry"
     const val HAZARD_ALERT = "hazard.alert"
+    const val DEVICE_COMMAND = "device.command"
     const val ERROR = "error"
-    val all: Set<String> = setOf(SESSION_STARTED, CONNECTION, STATUS, TRANSCRIPT, METRIC, WEATHER, RIDE_CONTEXT, SESSION_MEMORY, TELEMETRY, HAZARD_ALERT, ERROR)
+    val all: Set<String> = setOf(SESSION_STARTED, CONNECTION, STATUS, TRANSCRIPT, METRIC, WEATHER, RIDE_CONTEXT, SESSION_MEMORY, TELEMETRY, HAZARD_ALERT, DEVICE_COMMAND, ERROR)
 }
 
 val SERVER_EVENT_REQUIRED_FIELDS: Map<String, Set<String>> = mapOf(
@@ -38,5 +40,6 @@ val SERVER_EVENT_REQUIRED_FIELDS: Map<String, Set<String>> = mapOf(
         "session.memory" to setOf("type", "language", "responseMode"),
         "telemetry" to setOf("type"),
         "hazard.alert" to setOf("type", "threat", "direction", "severity", "label", "message", "advice"),
+        "device.command" to setOf("type", "commandId", "action", "args", "tier"),
         "error" to setOf("type", "message")
 )

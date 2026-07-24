@@ -9,7 +9,8 @@ enum ClientEventTypes {
     static let locationUpdate = "location.update"
     static let testingMetric = "testing.metric"
     static let turnFeedback = "turn.feedback"
-    static let all: Set<String> = [sessionStart, audioStart, audioStop, demoGuided, locationUpdate, testingMetric, turnFeedback]
+    static let deviceResult = "device.result"
+    static let all: Set<String> = [sessionStart, audioStart, audioStop, demoGuided, locationUpdate, testingMetric, turnFeedback, deviceResult]
 }
 
 enum ServerEventTypes {
@@ -23,8 +24,9 @@ enum ServerEventTypes {
     static let sessionMemory = "session.memory"
     static let telemetry = "telemetry"
     static let hazardAlert = "hazard.alert"
+    static let deviceCommand = "device.command"
     static let error = "error"
-    static let all: Set<String> = [sessionStarted, connection, status, transcript, metric, weather, rideContext, sessionMemory, telemetry, hazardAlert, error]
+    static let all: Set<String> = [sessionStarted, connection, status, transcript, metric, weather, rideContext, sessionMemory, telemetry, hazardAlert, deviceCommand, error]
 }
 
 let serverEventRequiredFields: [String: Set<String>] = [
@@ -38,5 +40,6 @@ let serverEventRequiredFields: [String: Set<String>] = [
     "session.memory": ["type", "language", "responseMode"],
     "telemetry": ["type"],
     "hazard.alert": ["type", "threat", "direction", "severity", "label", "message", "advice"],
+    "device.command": ["type", "commandId", "action", "args", "tier"],
     "error": ["type", "message"]
 ]

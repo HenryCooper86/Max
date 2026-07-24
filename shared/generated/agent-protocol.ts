@@ -7,7 +7,8 @@ export const CLIENT_EVENT_TYPES = [
   "demo.guided",
   "location.update",
   "testing.metric",
-  "turn.feedback"
+  "turn.feedback",
+  "device.result"
 ] as const;
 
 export const SERVER_EVENT_TYPES = [
@@ -21,6 +22,7 @@ export const SERVER_EVENT_TYPES = [
   "session.memory",
   "telemetry",
   "hazard.alert",
+  "device.command",
   "error"
 ] as const;
 
@@ -80,6 +82,13 @@ export const SERVER_EVENT_REQUIRED_FIELDS = {
     "label",
     "message",
     "advice"
+  ],
+  "device.command": [
+    "type",
+    "commandId",
+    "action",
+    "args",
+    "tier"
   ],
   "error": [
     "type",

@@ -148,7 +148,7 @@ final class AgentProtocolTests: XCTestCase {
 
     func testIgnoresUnknownActionRatherThanCrashing() {
         let event = parseAgentEvent("""
-        {"type":"device.command","commandId":"c4","action":"camera.record","args":{},"tier":"high"}
+        {"type":"device.command","commandId":"c4","action":"vehicle.unlock","args":{},"tier":"high"}
         """)
         guard case .unhandled = event else { return XCTFail("Expected unhandled for an unknown action") }
     }
@@ -173,5 +173,29 @@ final class AgentProtocolTests: XCTestCase {
         XCTAssertEqual(parsed["status"] as? String, "ok")
         XCTAssertNil(parsed["reason"])
         XCTAssertNil(parsed["detail"])
+    }
+
+    func testParsesCameraPhotoCommand() {
+        let event = parseAgentEvent("""
+        {"type":"device.command","commandId":"p1","action":"camera.photo","args":{},"tier":"low"}
+        """)
+        guard case let .deviceCommand(command) = event else { return XCTFail("Expected device.command") }
+        XCTAssertEqual(command.action, .cameraPhoto)
+    }
+
+    func testParsesCameraRecordCommand() {
+        let event = parseAgentEvent("""
+        {"type":"device.command","commandId":"r1","action":"camera.record","args":{"start":true},"tier":"low"}
+        """)
+        guard case let .deviceCommand(command) = event else { return XCTFail("Expected device.command") }
+        XCTAssertEqual(command.action, .cameraRecord(start: true))
+    }
+
+    func testParsesGalleryOpenCommand() {
+        let event = parseAgentEvent("""
+        {"type":"device.command","commandId":"g1","action":"gallery.open","args":{},"tier":"low"}
+        """)
+        guard case let .deviceCommand(command) = event else { return XCTFail("Expected device.command") }
+        XCTAssertEqual(command.action, .galleryOpen)
     }
 }

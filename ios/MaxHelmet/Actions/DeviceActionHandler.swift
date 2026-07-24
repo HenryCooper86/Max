@@ -14,6 +14,7 @@ enum DeviceActionRoute: Hashable {
     case sms
     case call
     case destination
+    case camera
 
     init(_ action: DeviceAction) {
         switch action {
@@ -23,6 +24,7 @@ enum DeviceActionRoute: Hashable {
         case .smsCompose: self = .sms
         case .callDial: self = .call
         case .destinationShow: self = .destination
+        case .cameraPhoto, .cameraRecord, .galleryOpen: self = .camera
         }
     }
 }

@@ -37,7 +37,10 @@ final class NavigationController: DeviceActionHandler {
     private var rerouting = false
     private var lastRerouteAt: TimeInterval = -.greatestFiniteMagnitude
 
-    init(
+    /// Nonisolated so a non-`@MainActor` owner (AgentSession's router) can build
+    /// it in a stored/lazy property. It only wires collaborators; all navigation
+    /// state is mutated on the main actor.
+    nonisolated init(
         search: NavigationRouteSearching,
         stream: LocationStreaming,
         onGuidance: @escaping (GuidanceState?) -> Void,

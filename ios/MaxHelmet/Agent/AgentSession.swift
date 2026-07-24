@@ -36,9 +36,8 @@ final class AgentSession: NSObject, ObservableObject {
         var bluetoothRouted = false
         /// The active ADAS hazard alert, shown as a banner until it auto-clears.
         var hazardAlert: HazardAlert? = nil
-        /// Latest resolved destination, or nil when there is nothing to show.
-        /// Cleared on session start so a stale route never outlives its ride.
-        var destination: Destination? = nil
+        /// Live guidance, or nil when not navigating. Cleared on session start.
+        var guidance: GuidanceState? = nil
         /// True while a video is recording; drives the HUD indicator.
         var recording = false
         /// When the current recording began, for the elapsed timer.
@@ -181,9 +180,16 @@ final class AgentSession: NSObject, ObservableObject {
                 resolver: SystemContactResolver()
             ),
             .call: CallDialer(),
-            .destination: DestinationResolver(onResolved: { [weak self] destination in
-                self?.update { $0.destination = destination }
-            }),
+            .navigation: NavigationController(
+                search: MapKitNavigationSearch(),
+                stream: SystemLocationStream(),
+                onGuidance: { [weak self] guidance in
+                    self?.update { $0.guidance = guidance }
+                },
+                speak: { [weak self] line in self?.speak(line) },
+                interruptPlayback: { [weak self] in self?.player.stopPlayback() },
+                now: { ProcessInfo.processInfo.systemUptime }
+            ),
             .camera: CameraController(
                 session: AVFoundationCaptureSession(),
                 store: captureStore,
@@ -267,7 +273,7 @@ final class AgentSession: NSObject, ObservableObject {
             $0.bluetoothRouted = bluetoothRouted
             $0.authRequired = false
             // A stale route or ride context must not outlive its ride.
-            $0.destination = nil
+            $0.guidance = nil
             $0.hasRideContext = false
         }
 

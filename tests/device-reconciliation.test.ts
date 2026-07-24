@@ -2,8 +2,19 @@ import { describe, expect, it } from "vitest";
 import { reconcileDeviceResult } from "../server/device-actions";
 
 describe("reconcileDeviceResult", () => {
-  it("stays silent on success so Doubao's own confirmation stands", () => {
-    expect(reconcileDeviceResult("torch.set", { status: "ok" })).toEqual({ truncate: false, speech: undefined });
+  it("stays silent on success when the action has no deterministic confirmation", () => {
+    // Navigation and dialing speak their own confirmation (client card / system
+    // dialer), so the relay stays silent for them.
+    expect(reconcileDeviceResult("navigation.start", { status: "ok" })).toEqual({ truncate: false, speech: undefined });
+  });
+
+  it("speaks a deterministic confirmation and cuts the model on success", () => {
+    // The rider must hear the truth about the action, not the model's chatter or
+    // a mistaken safety refusal.
+    expect(reconcileDeviceResult("camera.photo", { status: "ok" }, "拍好了。")).toEqual({
+      truncate: true,
+      speech: "拍好了。"
+    });
   });
 
   it("truncates and corrects on failure", () => {

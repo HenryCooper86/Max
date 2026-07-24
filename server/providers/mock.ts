@@ -20,6 +20,7 @@ import { type AdasSeverity } from "../../shared/adas";
 import {
   DEVICE_ACTION_TIERS,
   PendingDeviceCommands,
+  deviceSuccessSpeech,
   extractDeviceCommand,
   reconcileDeviceResult,
   type DeviceActionName,
@@ -217,7 +218,7 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
   function dispatchDeviceCommand(text: string): void {
     const command = extractDeviceCommand(text);
     if (!command) return;
-    const issued = pendingDeviceCommands.issue(command.action);
+    const issued = pendingDeviceCommands.issue(command.action, deviceSuccessSpeech(command));
     send({
       type: "device.command",
       commandId: issued.commandId,
@@ -231,9 +232,10 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
   // only the corrective line is sent.
   function applyDeviceReconciliation(
     action: DeviceActionName,
-    result: { status: DeviceActionStatus; reason?: string; detail?: string }
+    result: { status: DeviceActionStatus; reason?: string; detail?: string },
+    okSpeech?: string
   ): void {
-    const decision = reconcileDeviceResult(action, result);
+    const decision = reconcileDeviceResult(action, result, okSpeech);
     if (!decision.truncate || !decision.speech) return;
     send(
       transcriptEvent(createTranscriptDelivery(), "agent", decision.speech, { final: true, useBrowserSpeech: true })
@@ -422,7 +424,7 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
     async deviceResult(event) {
       const issued = pendingDeviceCommands.resolve(event.commandId);
       if (!issued) return;
-      applyDeviceReconciliation(issued.action, event);
+      applyDeviceReconciliation(issued.action, event, issued.okSpeech);
     },
     async stopAudio() {
       if (timer) clearInterval(timer);

@@ -14,6 +14,7 @@ import {
   DEVICE_ACTION_TIERS,
   DEVICE_RESULT_TIMEOUT_MS,
   PendingDeviceCommands,
+  deviceSuccessSpeech,
   extractDeviceCommand,
   reconcileDeviceResult,
   type DeviceActionName,
@@ -728,7 +729,7 @@ export function createDoubaoProvider(
   function dispatchDeviceCommand(text: string): void {
     const command = extractDeviceCommand(text);
     if (!command) return;
-    const issued = pendingDeviceCommands.issue(command.action);
+    const issued = pendingDeviceCommands.issue(command.action, deviceSuccessSpeech(command));
     sendClient({
       type: "device.command",
       commandId: issued.commandId,
@@ -752,9 +753,10 @@ export function createDoubaoProvider(
 
   function applyDeviceReconciliation(
     action: DeviceActionName,
-    result: { status: DeviceActionStatus; reason?: string; detail?: string }
+    result: { status: DeviceActionStatus; reason?: string; detail?: string },
+    okSpeech?: string
   ): void {
-    const decision = reconcileDeviceResult(action, result);
+    const decision = reconcileDeviceResult(action, result, okSpeech);
     if (!decision.truncate) return;
     truncateInterruptedReply();
     if (decision.speech) {
@@ -1630,7 +1632,7 @@ export function createDoubaoProvider(
     async deviceResult(event) {
       const issued = pendingDeviceCommands.resolve(event.commandId);
       if (!issued) return;
-      applyDeviceReconciliation(issued.action, event);
+      applyDeviceReconciliation(issued.action, event, issued.okSpeech);
     },
     async stopAudio() {
       audioActive = false;

@@ -297,6 +297,8 @@ enum DeviceAction: Equatable {
     case cameraPhoto
     case cameraRecord(start: Bool)
     case galleryOpen
+    case navigationStart(query: String)
+    case navigationStop
 }
 
 struct DeviceCommand: Equatable {
@@ -572,6 +574,11 @@ func parseDeviceAction(_ name: String, _ args: [String: Any]) -> DeviceAction? {
         return .cameraRecord(start: args["start"] as? Bool ?? false)
     case "gallery.open":
         return .galleryOpen
+    case "navigation.start":
+        guard let query = args["query"] as? String, !query.isEmpty else { return nil }
+        return .navigationStart(query: query)
+    case "navigation.stop":
+        return .navigationStop
     default:
         return nil
     }

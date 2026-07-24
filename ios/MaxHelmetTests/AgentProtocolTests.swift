@@ -198,4 +198,20 @@ final class AgentProtocolTests: XCTestCase {
         guard case let .deviceCommand(command) = event else { return XCTFail("Expected device.command") }
         XCTAssertEqual(command.action, .galleryOpen)
     }
+
+    func testParsesNavigationStartCommand() {
+        let event = parseAgentEvent("""
+        {"type":"device.command","commandId":"n1","action":"navigation.start","args":{"query":"天安门"},"tier":"low"}
+        """)
+        guard case let .deviceCommand(command) = event else { return XCTFail("Expected device.command") }
+        XCTAssertEqual(command.action, .navigationStart(query: "天安门"))
+    }
+
+    func testParsesNavigationStopCommand() {
+        let event = parseAgentEvent("""
+        {"type":"device.command","commandId":"n2","action":"navigation.stop","args":{},"tier":"low"}
+        """)
+        guard case let .deviceCommand(command) = event else { return XCTFail("Expected device.command") }
+        XCTAssertEqual(command.action, .navigationStop)
+    }
 }

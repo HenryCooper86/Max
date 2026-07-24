@@ -78,19 +78,6 @@ describe("extractDeviceCommand — calling", () => {
   });
 });
 
-describe("extractDeviceCommand — destination", () => {
-  it("extracts the destination query", () => {
-    expect(extractDeviceCommand("Max 导航去天安门")).toEqual({
-      action: "destination.show",
-      args: { query: "天安门" }
-    });
-    expect(extractDeviceCommand("Max navigate to the airport")).toEqual({
-      action: "destination.show",
-      args: { query: "the airport" }
-    });
-  });
-});
-
 describe("extractDeviceCommand — negatives", () => {
   it("ignores utterances that are not commands", () => {
     expect(extractDeviceCommand("Max 今天天气怎么样")).toBeNull();
@@ -180,6 +167,27 @@ describe("extractDeviceCommand — camera", () => {
   });
 });
 
+describe("extractDeviceCommand — navigation", () => {
+  it("starts guidance in Chinese and English", () => {
+    expect(extractDeviceCommand("Max 导航去天安门")).toEqual({ action: "navigation.start", args: { query: "天安门" } });
+    expect(extractDeviceCommand("Max 带我去公司")).toEqual({ action: "navigation.start", args: { query: "公司" } });
+    expect(extractDeviceCommand("Max navigate to the airport")).toEqual({
+      action: "navigation.start",
+      args: { query: "the airport" }
+    });
+  });
+
+  it("stops guidance, checked before start so 停止导航 is not a destination", () => {
+    expect(extractDeviceCommand("Max 停止导航")).toEqual({ action: "navigation.stop", args: {} });
+    expect(extractDeviceCommand("Max 取消导航")).toEqual({ action: "navigation.stop", args: {} });
+    expect(extractDeviceCommand("Max stop navigation")).toEqual({ action: "navigation.stop", args: {} });
+  });
+
+  it("no longer emits destination.show for navigation phrasing", () => {
+    expect(extractDeviceCommand("Max 导航去天安门")?.action).not.toBe("destination.show");
+  });
+});
+
 describe("DEVICE_ACTION_TIERS", () => {
   it("marks only messaging and calling as high risk", () => {
     expect(DEVICE_ACTION_TIERS).toEqual({
@@ -191,7 +199,9 @@ describe("DEVICE_ACTION_TIERS", () => {
       "destination.show": "low",
       "camera.photo": "low",
       "camera.record": "low",
-      "gallery.open": "low"
+      "gallery.open": "low",
+      "navigation.start": "low",
+      "navigation.stop": "low"
     });
   });
 });

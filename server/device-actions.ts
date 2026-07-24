@@ -19,7 +19,9 @@ export type DeviceActionName =
   | "destination.show"
   | "camera.photo"
   | "camera.record"
-  | "gallery.open";
+  | "gallery.open"
+  | "navigation.start"
+  | "navigation.stop";
 
 export type DeviceActionTier = "low" | "high";
 
@@ -36,7 +38,9 @@ type DeviceCommand =
   | { action: "destination.show"; args: { query: string } }
   | { action: "camera.photo"; args: Record<string, never> }
   | { action: "camera.record"; args: { start: boolean } }
-  | { action: "gallery.open"; args: Record<string, never> };
+  | { action: "gallery.open"; args: Record<string, never> }
+  | { action: "navigation.start"; args: { query: string } }
+  | { action: "navigation.stop"; args: Record<string, never> };
 
 /** Declared risk. iOS satisfies the high tier with the native system
  *  confirmation that `tel:` and MFMessageComposeViewController already force;
@@ -50,7 +54,9 @@ export const DEVICE_ACTION_TIERS: Record<DeviceActionName, DeviceActionTier> = {
   "destination.show": "low",
   "camera.photo": "low",
   "camera.record": "low",
-  "gallery.open": "low"
+  "gallery.open": "low",
+  "navigation.start": "low",
+  "navigation.stop": "low"
 };
 
 export type IntentExtractor = (text: string) => DeviceCommand | null;
@@ -121,8 +127,8 @@ export const extractDeviceCommand: IntentExtractor = (text) => {
   const sms = matchSms(raw);
   if (sms) return sms;
 
-  const destination = matchDestination(raw);
-  if (destination) return destination;
+  const navigation = matchNavigation(raw);
+  if (navigation) return navigation;
 
   const call = matchCall(raw);
   if (call) return call;
@@ -174,16 +180,20 @@ function matchSms(raw: string): DeviceCommand | null {
   return null;
 }
 
-function matchDestination(raw: string): DeviceCommand | null {
+function matchNavigation(raw: string): DeviceCommand | null {
+  // Stop is checked before start so "停止导航" is never read as a destination.
+  if (/(停止|结束|取消|退出)\s*导航/.test(raw) || /stop\s+(the\s+)?navigation/i.test(raw)) {
+    return { action: "navigation.stop", args: {} };
+  }
   const zh = /(?:导航|带我|我要)\s*(?:去|到|回)\s*(?<query>.+)/.exec(raw);
   if (zh?.groups?.query) {
     const query = clean(zh.groups.query);
-    if (query) return { action: "destination.show", args: { query } };
+    if (query) return { action: "navigation.start", args: { query } };
   }
   const en = /(?:navigate|directions|take me|route)\s+to\s+(?<query>.+)/i.exec(raw);
   if (en?.groups?.query) {
     const query = clean(en.groups.query);
-    if (query) return { action: "destination.show", args: { query } };
+    if (query) return { action: "navigation.start", args: { query } };
   }
   return null;
 }
@@ -206,7 +216,9 @@ const FAILURE_SPEECH: Record<string, string> = {
   "storage.full": "存储快满了，导出或删除一些内容后我再帮你拍。",
   "camera.recording": "已经在录了。",
   "camera.notRecording": "现在没有在录像。",
-  "capture.failed": "拍摄没成功。"
+  "capture.failed": "拍摄没成功。",
+  "navigation.notActive": "现在没有在导航。",
+  "permission.location": "我没有定位权限，去设置里开启后我再帮你导航。"
 };
 
 /** Spoken names for the fallback line, so a failure with no known reason still
@@ -220,7 +232,9 @@ const ACTION_LABELS: Record<DeviceActionName, string> = {
   "destination.show": "目的地",
   "camera.photo": "拍照",
   "camera.record": "录像",
-  "gallery.open": "相册"
+  "gallery.open": "相册",
+  "navigation.start": "导航",
+  "navigation.stop": "导航"
 };
 
 /** The line Max speaks when a command did not succeed. Never claims success and

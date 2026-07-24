@@ -42,11 +42,13 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 ### Task 1: Server — camera command grammar
 
 **Files:**
+
 - Modify: `server/device-actions.ts`
 - Modify: `server/providers/mock.ts` (add one demo line)
 - Modify: `tests/device-actions.test.ts`
 
 **Interfaces:**
+
 - Consumes: the existing `DeviceCommand` union, `DeviceActionName`, `DEVICE_ACTION_TIERS`, `ACTION_LABELS`, `FAILURE_SPEECH`, `extractDeviceCommand` in `server/device-actions.ts`.
 - Produces: `camera.photo`, `camera.record` (`{ start: boolean }`), and `gallery.open` recognized by `extractDeviceCommand`, tiered `low`, labelled, with the five new failure-speech keys.
 
@@ -145,8 +147,8 @@ Add to `FAILURE_SPEECH`:
 In `server/device-actions.ts`, inside `extractDeviceCommand`, add this call immediately after the two volume `if` blocks and before `const music = matchMusic(raw);`:
 
 ```ts
-  const camera = matchCamera(raw);
-  if (camera) return camera;
+const camera = matchCamera(raw);
+if (camera) return camera;
 ```
 
 Add the matcher next to `matchMusic`:
@@ -157,10 +159,7 @@ function matchCamera(raw: string): DeviceCommand | null {
   if (/(停止|结束|停下?).{0,2}(录像|录制|录影|视频)/.test(raw) || /stop\s+recording/i.test(raw)) {
     return { action: "camera.record", args: { start: false } };
   }
-  if (
-    /(开始)?(录像|录制|录影|录个?视频|录一段)/.test(raw) ||
-    /(start\s+recording|record\s+(a\s+)?video)/i.test(raw)
-  ) {
+  if (/(开始)?(录像|录制|录影|录个?视频|录一段)/.test(raw) || /(start\s+recording|record\s+(a\s+)?video)/i.test(raw)) {
     return { action: "camera.record", args: { start: true } };
   }
   if (/(拍照|拍个?照|拍张?照片?|照相)/.test(raw) || /take\s+a\s+(photo|picture|pic)/i.test(raw)) {
@@ -198,12 +197,14 @@ git commit -m "feat(actions): add camera command grammar"
 ### Task 2: Server — protocol schema and grounding prompt
 
 **Files:**
+
 - Modify: `protocol/agent-events.schema.json`
 - Modify: `server/providers/doubao.ts` (`buildToolGroundingPrompt`)
 - Modify: `tests/device-grounding.test.ts`
 - Regenerated (do not hand-edit): `shared/generated/agent-protocol.ts`, `android/app/src/main/java/com/horizon/maxhelmet/agent/GeneratedAgentProtocol.kt`, `ios/MaxHelmet/Agent/GeneratedAgentProtocol.swift`
 
 **Interfaces:**
+
 - Consumes: the `device.command` `action` enum in the schema; `buildToolGroundingPrompt` in `doubao.ts`.
 - Produces: `camera.photo`, `camera.record`, `gallery.open` as valid wire actions; a grounding prompt that names 拍照 and 录像.
 
@@ -212,11 +213,11 @@ git commit -m "feat(actions): add camera command grammar"
 Append to `tests/device-grounding.test.ts`, inside the `buildToolGroundingPrompt` describe block:
 
 ```ts
-  it("declares the camera actions", () => {
-    for (const capability of ["拍照", "录像"]) {
-      expect(prompt).toContain(capability);
-    }
-  });
+it("declares the camera actions", () => {
+  for (const capability of ["拍照", "录像"]) {
+    expect(prompt).toContain(capability);
+  }
+});
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -275,11 +276,13 @@ git commit -m "feat(protocol): add camera actions and declare them to Max"
 ### Task 3: iOS — decode camera actions
 
 **Files:**
+
 - Modify: `ios/MaxHelmet/Agent/AgentProtocol.swift` (`DeviceAction`, `parseDeviceAction`)
 - Modify: `ios/MaxHelmet/Actions/DeviceActionHandler.swift` (`DeviceActionRoute`)
 - Modify: `ios/MaxHelmetTests/AgentProtocolTests.swift`
 
 **Interfaces:**
+
 - Consumes: `DeviceAction`, `parseDeviceAction`, `DeviceActionRoute` from Spec 1.
 - Produces: `DeviceAction.cameraPhoto`, `.cameraRecord(start: Bool)`, `.galleryOpen`; the `.camera` route.
 
@@ -365,11 +368,13 @@ git commit -m "feat(ios): decode camera and gallery-open actions"
 ### Task 4: iOS — Capture model and CaptureStore
 
 **Files:**
+
 - Create: `ios/MaxHelmet/Capture/Capture.swift`
 - Create: `ios/MaxHelmet/Capture/CaptureStore.swift`
 - Create: `ios/MaxHelmetTests/CaptureStoreTests.swift`
 
 **Interfaces:**
+
 - Consumes: nothing from earlier tasks.
 - Produces: `Capture` (Codable model), `protocol CaptureStoring`, and `CaptureStore(root:availableBytes:)` conforming to it, with: `hasSpace() -> Bool`, `captures() -> [Capture]` (newest first), `newVideoURL() -> URL`, `addPhoto(_ data: Data) throws -> Capture`, `indexVideo(at: URL) throws -> Capture`, `markExported(_ id: String)`, `delete(_ id: String)`, `fileURL(for: Capture) -> URL`, `thumbnailURL(for: Capture) -> URL`.
 
@@ -691,10 +696,12 @@ git commit -m "feat(ios): add capture model and store"
 ### Task 5: iOS — CameraController handler
 
 **Files:**
+
 - Create: `ios/MaxHelmet/Actions/CameraController.swift`
 - Create: `ios/MaxHelmetTests/CameraControllerTests.swift`
 
 **Interfaces:**
+
 - Consumes: `DeviceActionHandler`, `DeviceAction`, `DeviceActionResult` (Spec 1); `CaptureStoring`, `Capture` (Task 4).
 - Produces: `enum CameraAuthorization { case authorized, denied, notDetermined }`; `protocol CaptureSessioning`; `final class CameraController: DeviceActionHandler` with `init(session:store:onRecordingChange:onOpenGallery:onAutoStopped:)`; `AVFoundationCaptureSession` (device implementation).
 
@@ -1116,11 +1123,13 @@ git commit -m "feat(ios): add camera controller handler"
 ### Task 6: iOS — Photos export and GalleryModel
 
 **Files:**
+
 - Create: `ios/MaxHelmet/Gallery/PhotoLibraryExporter.swift`
 - Create: `ios/MaxHelmet/Gallery/GalleryModel.swift`
 - Create: `ios/MaxHelmetTests/GalleryModelTests.swift`
 
 **Interfaces:**
+
 - Consumes: `CaptureStoring`, `Capture` (Task 4).
 - Produces: `protocol PhotoLibraryAdding { func add(fileURL: URL, isVideo: Bool) async -> Bool }`; `SystemPhotoLibraryExporter`; `@MainActor final class GalleryModel: ObservableObject` with `@Published var captures`, `@Published var exporting: Set<String>`, `@Published var exportError: String?`, `refresh()`, `export(_:) async`, `delete(_:)`.
 
@@ -1314,10 +1323,12 @@ git commit -m "feat(ios): add Photos exporter and gallery model"
 ### Task 7: iOS — Gallery views
 
 **Files:**
+
 - Create: `ios/MaxHelmet/Gallery/GalleryView.swift`
 - Create: `ios/MaxHelmet/Gallery/CaptureViewer.swift`
 
 **Interfaces:**
+
 - Consumes: `GalleryModel`, `Capture` (Task 6); `HudColors` (`ios/MaxHelmet/UI/HudTheme.swift`).
 - Produces: `GalleryView(model:onClose:)` and `CaptureViewer(capture:model:)` SwiftUI views.
 
@@ -1517,6 +1528,7 @@ git commit -m "feat(ios): add gallery grid and viewer"
 ### Task 8: iOS — wire into the session and HUD
 
 **Files:**
+
 - Modify: `ios/MaxHelmet/Agent/AgentSession.swift`
 - Modify: `ios/MaxHelmet/UI/MainViewModel.swift`
 - Modify: `ios/MaxHelmet/UI/AgentScreen.swift`
@@ -1525,6 +1537,7 @@ git commit -m "feat(ios): add gallery grid and viewer"
 - Create: `ios/MaxHelmetTests/CameraSessionWiringTests.swift`
 
 **Interfaces:**
+
 - Consumes: everything from Tasks 3–7.
 - Produces: `CameraController` on the `.camera` route; `AgentSession.State.recording`, `.recordingStartedAt`, `.galleryRequestToken`; `AgentSession.captureStore`; `MainViewModel.galleryModel`, `.showGallery`.
 

@@ -11,6 +11,12 @@ describe("buildToolGroundingPrompt", () => {
     }
   });
 
+  it("declares the camera actions", () => {
+    for (const capability of ["拍照", "录像"]) {
+      expect(prompt).toContain(capability);
+    }
+  });
+
   it("still forbids the capabilities we do not have", () => {
     for (const missing of ["实时交通", "车辆", "小队"]) {
       expect(prompt).toContain(missing);

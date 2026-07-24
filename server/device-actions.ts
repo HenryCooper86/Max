@@ -135,10 +135,7 @@ function matchCamera(raw: string): DeviceCommand | null {
   if (/(停止|结束|停下?).{0,2}(录像|录制|录影|视频)/.test(raw) || /stop\s+recording/i.test(raw)) {
     return { action: "camera.record", args: { start: false } };
   }
-  if (
-    /(开始)?(录像|录制|录影|录个?视频|录一段)/.test(raw) ||
-    /(start\s+recording|record\s+(a\s+)?video)/i.test(raw)
-  ) {
+  if (/(开始)?(录像|录制|录影|录个?视频|录一段)/.test(raw) || /(start\s+recording|record\s+(a\s+)?video)/i.test(raw)) {
     return { action: "camera.record", args: { start: true } };
   }
   if (/(拍照|拍个?照|拍张?照片?|照相)/.test(raw) || /take\s+a\s+(photo|picture|pic)/i.test(raw)) {

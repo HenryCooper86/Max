@@ -22,6 +22,15 @@ describe("buildToolGroundingPrompt", () => {
     expect(prompt).not.toContain("逐向导航语音");
   });
 
+  it("authorizes hands-free actions while riding, overriding any stop-first framing", () => {
+    // The server's protected .env may still carry the old "distraction → stop
+    // first" system role; this always-appended prompt must countermand it so Max
+    // never refuses voice-triggered capture/navigation while riding.
+    expect(prompt).toContain("直接执行");
+    expect(prompt).toContain("不要当作分心请求");
+    expect(prompt).toContain("这一条优先");
+  });
+
   it("still forbids the capabilities we do not have", () => {
     for (const missing of ["实时交通", "车辆", "小队"]) {
       expect(prompt).toContain(missing);

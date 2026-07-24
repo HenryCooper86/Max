@@ -78,14 +78,16 @@ the core of this design, not an afterthought — see "Reconciliation".
 ### Intent extraction
 
 `server/device-actions.ts` (new) owns the `DeviceCommand` union and a pure
-`extractDeviceCommand(text, locale): DeviceCommand | null` implementing a curated
-Chinese and English command grammar. It is a pure function with no I/O, matching
-the Vitest style already used across `tests/`.
+`extractDeviceCommand(text): DeviceCommand | null` implementing a curated Chinese
+and English command grammar. It is a pure function with no I/O, matching the
+Vitest style already used across `tests/`. The grammar matches both languages in
+a single pass, which also handles code-switching ("Max, navigate 到公司"), so it
+takes no locale argument.
 
 The extractor is reached through an interface:
 
 ```ts
-type IntentExtractor = (text: string, locale: "zh" | "en") => DeviceCommand | null;
+type IntentExtractor = (text: string) => DeviceCommand | null;
 ```
 
 If Doubao function-calling is later confirmed to exist, a second extractor
@@ -196,10 +198,12 @@ Requesting Contacts read access, matching happens entirely on-device with pinyin
 and fuzzy matching for Chinese names. The relay sends only the spoken name; the
 resolved phone number never leaves the phone.
 
-Rider transcripts are persisted for QA by `server/testing-store.ts`, so a spoken
-name would otherwise land in stored transcripts. Names carried by a `call.dial`
-or `sms.compose` command are redacted before persistence. Emergency shortcuts
-(110 / 120 / 122) are built in and need no contact lookup.
+Rider transcripts are persisted for QA by `recordTranscriptTurn` in
+`server/metrics.ts`, so a spoken name would otherwise land in stored transcripts.
+Names carried by a `call.dial` or `sms.compose` command are redacted there — at
+the persistence boundary, so live captions and Max's own context keep the real
+name while stored evidence does not. Emergency shortcuts (110 / 120 / 122) are
+built in and need no contact lookup.
 
 ## Components
 
@@ -213,7 +217,7 @@ or `sms.compose` command are redacted before persistence. Emergency shortcuts
 - `server/providers/mock.ts` — same hook so scenarios exercise actions without
   credentials.
 - `server/session-controller.ts` — validate and route `device.result`.
-- `server/testing-store.ts` — apply redaction before persistence.
+- `server/metrics.ts` — apply redaction in `recordTranscriptTurn`.
 
 **Protocol**
 

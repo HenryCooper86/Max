@@ -1,4 +1,4 @@
-import type { SessionStartEvent } from "../../shared/agent";
+import type { DeviceResultEvent, SessionStartEvent } from "../../shared/agent";
 import type { UserMemoryFact, UserMemoryTurn } from "../user-memory";
 
 export type { ClientEvent, SessionStartEvent, VoiceGender } from "../../shared/agent";
@@ -28,4 +28,7 @@ export type AgentProvider = {
   setGuidedDemo?(enabled: boolean): Promise<void>;
   /** Mid-ride rider position update. Providers without location context omit this. */
   updateLocation?(lat: number, lon: number): Promise<void>;
+  /** Result of a dispatched device command. Providers without a device-action
+   *  path omit this. */
+  deviceResult?(event: DeviceResultEvent): Promise<void>;
 };

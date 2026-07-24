@@ -377,6 +377,7 @@ export class AgentSessionController {
       if (event.type === "location.update") await this.provider.updateLocation?.(event.lat, event.lon);
       if (event.type === "turn.feedback") recordTesterTurnFeedback(this.relaySessionId, event);
       if (event.type === "testing.metric") recordTesterAudioQuality(this.relaySessionId, event);
+      if (event.type === "device.result") await this.provider.deviceResult?.(event);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Voice relay failed";
       this.log?.warn("client message failed", { message });

@@ -184,6 +184,19 @@ export function deviceFailureSpeech(
   return "刚才那个操作没成功。";
 }
 
+export type DeviceReconciliation = { truncate: boolean; speech: string | undefined };
+
+/** Decides what the relay does about a result. Pure so every branch is testable
+ *  without a provider or a socket. */
+export function reconcileDeviceResult(
+  action: DeviceActionName,
+  result: { status: DeviceActionStatus; reason?: string; detail?: string }
+): DeviceReconciliation {
+  if (result.status === "ok") return { truncate: false, speech: undefined };
+  const speech = result.detail?.trim() || deviceFailureSpeech(action, result.status, result.reason);
+  return { truncate: true, speech };
+}
+
 export type IssuedDeviceCommand = { commandId: string; action: DeviceActionName; issuedAt: number };
 
 /** Tracks dispatched commands so no command can be left pending forever. */

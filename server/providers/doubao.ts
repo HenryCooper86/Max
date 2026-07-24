@@ -10,6 +10,15 @@ import {
   WAKE_PHRASE_LABEL
 } from "../../shared/wake";
 import { config as appConfig } from "../config";
+import {
+  DEVICE_ACTION_TIERS,
+  DEVICE_RESULT_TIMEOUT_MS,
+  PendingDeviceCommands,
+  extractDeviceCommand,
+  reconcileDeviceResult,
+  type DeviceActionName,
+  type DeviceActionStatus
+} from "../device-actions";
 import { createHazardInjector } from "../hazard-injector";
 import { createLogger, type Logger } from "../logger";
 import { metrics } from "../metrics";
@@ -547,6 +556,8 @@ export function createDoubaoProvider(
   let riderDelivery = createTranscriptDelivery();
   let agentDelivery = createTranscriptDelivery();
   let agentFinalDelivered = false;
+  const pendingDeviceCommands = new PendingDeviceCommands();
+  let deviceExpiryTimer: NodeJS.Timeout | undefined;
   let rideContext: RideContext = { mode: "ride", scenario: "commute" };
   let memory: SessionMemory = createSessionMemory("ride");
   // Per-turn latency anchors. Reset at each rider turn (AsrInfo) so telemetry
@@ -705,6 +716,46 @@ export function createDoubaoProvider(
       })
     ) {
       log.info("doubao conversation truncated", { replyId: currentReplyId.slice(0, 12), audioEndMs });
+    }
+  }
+
+  /** Extracts a device command from the rider's final utterance and dispatches
+   *  it. Doubao is speaking its own confirmation concurrently; the two are
+   *  reconciled when the result arrives (or when it times out). */
+  function dispatchDeviceCommand(text: string): void {
+    const command = extractDeviceCommand(text);
+    if (!command) return;
+    const issued = pendingDeviceCommands.issue(command.action);
+    sendClient({
+      type: "device.command",
+      commandId: issued.commandId,
+      action: command.action,
+      args: command.args,
+      tier: DEVICE_ACTION_TIERS[command.action]
+    });
+    scheduleDeviceExpiry();
+  }
+
+  function scheduleDeviceExpiry(): void {
+    if (deviceExpiryTimer) return;
+    deviceExpiryTimer = setTimeout(() => {
+      deviceExpiryTimer = undefined;
+      for (const expired of pendingDeviceCommands.expire()) {
+        applyDeviceReconciliation(expired.action, { status: "failed", reason: "timeout" });
+      }
+    }, DEVICE_RESULT_TIMEOUT_MS);
+    deviceExpiryTimer.unref?.();
+  }
+
+  function applyDeviceReconciliation(
+    action: DeviceActionName,
+    result: { status: DeviceActionStatus; reason?: string; detail?: string }
+  ): void {
+    const decision = reconcileDeviceResult(action, result);
+    if (!decision.truncate) return;
+    truncateInterruptedReply();
+    if (decision.speech) {
+      sendClient(transcriptEvent(agentDelivery, "agent", decision.speech, { final: true, useBrowserSpeech: true }));
     }
   }
 
@@ -1268,6 +1319,7 @@ export function createDoubaoProvider(
             if (text) {
               memory = updateSessionMemory(memory, text, rideContext.mode);
               sendClient(transcriptEvent(riderDelivery, "rider", text, { final: true }));
+              dispatchDeviceCommand(text);
               emitMemory();
             }
             flushUndecidedTtsAudio();
@@ -1572,6 +1624,11 @@ export function createDoubaoProvider(
         await refreshWeather("location");
       }
     },
+    async deviceResult(event) {
+      const issued = pendingDeviceCommands.resolve(event.commandId);
+      if (!issued) return;
+      applyDeviceReconciliation(issued.action, event);
+    },
     async stopAudio() {
       audioActive = false;
       hazardInjector.stop();
@@ -1591,6 +1648,11 @@ export function createDoubaoProvider(
       hazardInjector.stop();
       clearTtsFallbackTimer();
       clearPendingAudioFlush();
+      // A closed session must not fire a reconciliation into a dead socket.
+      if (deviceExpiryTimer) {
+        clearTimeout(deviceExpiryTimer);
+        deviceExpiryTimer = undefined;
+      }
       pendingAudio.length = 0;
       clearUndecidedTtsAudio();
       if (upstreamReconnectTimer) {

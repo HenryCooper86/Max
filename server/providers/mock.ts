@@ -17,6 +17,14 @@ import {
   type SessionMemory
 } from "../../shared/session";
 import { type AdasSeverity } from "../../shared/adas";
+import {
+  DEVICE_ACTION_TIERS,
+  PendingDeviceCommands,
+  extractDeviceCommand,
+  reconcileDeviceResult,
+  type DeviceActionName,
+  type DeviceActionStatus
+} from "../device-actions";
 import { createHazardInjector } from "../hazard-injector";
 import { createTranscriptDelivery, transcriptEvent } from "../transcript-events";
 
@@ -58,6 +66,8 @@ const SCENARIOS: Record<DemoScenario, ScenarioProfile> = {
     },
     turns: [
       { rider: "帮我找最快回家路线。", agent: "已设置最快回家路线。3.2 公里后靠右下出口。", latencyBase: 96 },
+      // Exercises the device-action path end to end without Doubao credentials.
+      { rider: "Max，打开手电筒", agent: "好的，手电筒已经打开。", latencyBase: 94 },
       {
         rider: "你是谁开发的？",
         agent: "我是 Max，由 Horizon Continental Technology（neueHCT）开发。",
@@ -190,6 +200,7 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
     batteryPct: SCENARIOS.commute.batteryPct
   };
   let memory: SessionMemory = createSessionMemory("navigation");
+  const pendingDeviceCommands = new PendingDeviceCommands();
 
   function send(payload: unknown) {
     if (client.readyState === client.OPEN) {
@@ -197,6 +208,35 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
       telemetry?.serverEvent(payload, Buffer.byteLength(encoded));
       client.send(encoded);
     }
+  }
+
+  /** The mock replays scripted rider lines rather than doing ASR, so the same
+   *  extractor runs over the script. This is what lets the whole device-action
+   *  feature be demonstrated and QA'd with no Doubao credentials. */
+  function dispatchDeviceCommand(text: string): void {
+    const command = extractDeviceCommand(text);
+    if (!command) return;
+    const issued = pendingDeviceCommands.issue(command.action);
+    send({
+      type: "device.command",
+      commandId: issued.commandId,
+      action: command.action,
+      args: command.args,
+      tier: DEVICE_ACTION_TIERS[command.action]
+    });
+  }
+
+  // The mock has no upstream conversation, so there is nothing to truncate —
+  // only the corrective line is sent.
+  function applyDeviceReconciliation(
+    action: DeviceActionName,
+    result: { status: DeviceActionStatus; reason?: string; detail?: string }
+  ): void {
+    const decision = reconcileDeviceResult(action, result);
+    if (!decision.truncate || !decision.speech) return;
+    send(
+      transcriptEvent(createTranscriptDelivery(), "agent", decision.speech, { final: true, useBrowserSpeech: true })
+    );
   }
 
   function emitRideContext(hazardOverride?: AdasSeverity) {
@@ -255,6 +295,7 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
 
     send({ type: "status", state: "hearing", detail: "正在聆听骑手讲话" });
     send(transcriptEvent(riderDelivery, "rider", turn.rider, { final: true }));
+    dispatchDeviceCommand(turn.rider);
     memory = updateSessionMemory(memory, turn.rider, rideContext.mode);
     emitMemory();
     send({ type: "status", state: "thinking", detail: "Max 正在思考" });
@@ -376,6 +417,11 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
         send({ type: "metric", latencyMs: 88 + Math.round(Math.random() * 85) });
       }
       void chunk;
+    },
+    async deviceResult(event) {
+      const issued = pendingDeviceCommands.resolve(event.commandId);
+      if (!issued) return;
+      applyDeviceReconciliation(issued.action, event);
     },
     async stopAudio() {
       if (timer) clearInterval(timer);

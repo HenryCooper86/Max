@@ -30,6 +30,7 @@ import {
   type TestingValiditySummary
 } from "../shared/testing";
 import { buildInfo } from "./build-info";
+import { redactContactNames } from "./device-actions";
 import { classifySessionEvidence, evaluateTestingSession } from "./testing-evaluator";
 import { createLogger } from "./logger";
 import {
@@ -445,7 +446,10 @@ function recordTranscriptTurn(
   if (payload.type !== "transcript") return;
   const speaker = normalizeTranscriptSpeaker(payload.speaker);
   if (!speaker || typeof payload.text !== "string") return;
-  const text = cleanText(payload.text).slice(0, 2_000);
+  // Rider commands can name a person ("打给老王"). The number never reaches the
+  // relay; the name must not reach stored evidence either.
+  const rawText = speaker === "rider" ? redactContactNames(payload.text) : payload.text;
+  const text = cleanText(rawText).slice(0, 2_000);
   if (!text) return;
   const final = payload.final !== false;
   const turn = {

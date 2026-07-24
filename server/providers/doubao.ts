@@ -10,6 +10,15 @@ import {
   WAKE_PHRASE_LABEL
 } from "../../shared/wake";
 import { config as appConfig } from "../config";
+import {
+  DEVICE_ACTION_TIERS,
+  DEVICE_RESULT_TIMEOUT_MS,
+  PendingDeviceCommands,
+  extractDeviceCommand,
+  reconcileDeviceResult,
+  type DeviceActionName,
+  type DeviceActionStatus
+} from "../device-actions";
 import { createHazardInjector } from "../hazard-injector";
 import { createLogger, type Logger } from "../logger";
 import { metrics } from "../metrics";
@@ -128,15 +137,18 @@ export function buildIdentityPrompt(): string {
   );
 }
 
-/** Prevents a language model from presenting an unsupported external action as
- * completed. Weather and ride context are explicitly injected by the relay;
- * maps, traffic, vehicle control, emergency calling, and messaging are not. */
+/** Declares the device actions the system can actually execute, and keeps every
+ * other external action explicitly out of reach. The success-only rule is now
+ * load-bearing: the relay dispatches real commands and corrects Max out loud
+ * when one fails. */
 export function buildToolGroundingPrompt(): string {
   return (
-    "[真实能力边界] 只有系统明确提供的天气和骑行情报可以当作实时事实。" +
-    "当前没有地图导航、实时交通、附近地点搜索、车辆控制/诊断、小队消息、电话或报警执行工具。" +
-    "你可以给一般性建议或说明需要接入相应服务，但绝对不能声称已经设置路线、查到实时路况或地点、发送消息、控制车辆、拨打电话或完成报警。" +
-    "任何外部动作只有在系统明确返回成功结果时才可以说已完成。"
+    "[真实能力边界] 你可以请求系统执行这些设备动作：开关手电筒、调整你自己的说话音量、" +
+    "控制 Apple Music 和本机音乐的播放、准备短信、拨打电话、查询目的地并显示路线卡片。" +
+    "天气和骑行情报由系统注入，可以当作实时事实。" +
+    "除此之外没有工具：没有实时交通、附近地点搜索、车辆控制或诊断、小队消息、第三方音乐应用、逐向导航语音。" +
+    "拨号和短信必须由骑手在手机上确认，你只说正在准备，不要说已经拨通或已经发送。" +
+    "任何动作只有在系统明确返回成功之后才可以说已完成；系统没有回应之前，不要描述结果。"
   );
 }
 
@@ -547,6 +559,8 @@ export function createDoubaoProvider(
   let riderDelivery = createTranscriptDelivery();
   let agentDelivery = createTranscriptDelivery();
   let agentFinalDelivered = false;
+  const pendingDeviceCommands = new PendingDeviceCommands();
+  let deviceExpiryTimer: NodeJS.Timeout | undefined;
   let rideContext: RideContext = { mode: "ride", scenario: "commute" };
   let memory: SessionMemory = createSessionMemory("ride");
   // Per-turn latency anchors. Reset at each rider turn (AsrInfo) so telemetry
@@ -705,6 +719,46 @@ export function createDoubaoProvider(
       })
     ) {
       log.info("doubao conversation truncated", { replyId: currentReplyId.slice(0, 12), audioEndMs });
+    }
+  }
+
+  /** Extracts a device command from the rider's final utterance and dispatches
+   *  it. Doubao is speaking its own confirmation concurrently; the two are
+   *  reconciled when the result arrives (or when it times out). */
+  function dispatchDeviceCommand(text: string): void {
+    const command = extractDeviceCommand(text);
+    if (!command) return;
+    const issued = pendingDeviceCommands.issue(command.action);
+    sendClient({
+      type: "device.command",
+      commandId: issued.commandId,
+      action: command.action,
+      args: command.args,
+      tier: DEVICE_ACTION_TIERS[command.action]
+    });
+    scheduleDeviceExpiry();
+  }
+
+  function scheduleDeviceExpiry(): void {
+    if (deviceExpiryTimer) return;
+    deviceExpiryTimer = setTimeout(() => {
+      deviceExpiryTimer = undefined;
+      for (const expired of pendingDeviceCommands.expire()) {
+        applyDeviceReconciliation(expired.action, { status: "failed", reason: "timeout" });
+      }
+    }, DEVICE_RESULT_TIMEOUT_MS);
+    deviceExpiryTimer.unref?.();
+  }
+
+  function applyDeviceReconciliation(
+    action: DeviceActionName,
+    result: { status: DeviceActionStatus; reason?: string; detail?: string }
+  ): void {
+    const decision = reconcileDeviceResult(action, result);
+    if (!decision.truncate) return;
+    truncateInterruptedReply();
+    if (decision.speech) {
+      sendClient(transcriptEvent(agentDelivery, "agent", decision.speech, { final: true, useBrowserSpeech: true }));
     }
   }
 
@@ -1268,6 +1322,7 @@ export function createDoubaoProvider(
             if (text) {
               memory = updateSessionMemory(memory, text, rideContext.mode);
               sendClient(transcriptEvent(riderDelivery, "rider", text, { final: true }));
+              dispatchDeviceCommand(text);
               emitMemory();
             }
             flushUndecidedTtsAudio();
@@ -1572,6 +1627,11 @@ export function createDoubaoProvider(
         await refreshWeather("location");
       }
     },
+    async deviceResult(event) {
+      const issued = pendingDeviceCommands.resolve(event.commandId);
+      if (!issued) return;
+      applyDeviceReconciliation(issued.action, event);
+    },
     async stopAudio() {
       audioActive = false;
       hazardInjector.stop();
@@ -1591,6 +1651,11 @@ export function createDoubaoProvider(
       hazardInjector.stop();
       clearTtsFallbackTimer();
       clearPendingAudioFlush();
+      // A closed session must not fire a reconciliation into a dead socket.
+      if (deviceExpiryTimer) {
+        clearTimeout(deviceExpiryTimer);
+        deviceExpiryTimer = undefined;
+      }
       pendingAudio.length = 0;
       clearUndecidedTtsAudio();
       if (upstreamReconnectTimer) {

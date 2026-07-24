@@ -74,9 +74,17 @@ describe("doubaoSpeaker", () => {
 
   it("states unsupported external actions honestly", () => {
     const prompt = buildToolGroundingPrompt();
-    expect(prompt).toContain("当前没有地图导航");
-    expect(prompt).toContain("绝对不能声称");
+    // The relay now dispatches real device commands, so the prompt declares the
+    // executable set and keeps everything else explicitly out of reach.
+    expect(prompt).toContain("除此之外没有工具");
+    expect(prompt).toContain("实时交通");
+    expect(prompt).toContain("车辆控制或诊断");
     expect(prompt).toContain("系统明确返回成功");
+  });
+
+  it("refuses to claim a dial or send the rider has not confirmed", () => {
+    const prompt = buildToolGroundingPrompt();
+    expect(prompt).toContain("不要说已经拨通或已经发送");
   });
 });
 

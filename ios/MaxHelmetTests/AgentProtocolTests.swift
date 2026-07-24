@@ -118,4 +118,60 @@ final class AgentProtocolTests: XCTestCase {
         XCTAssertEqual(turns[0]["text"] as? String, "天气怎么样？")
         XCTAssertNotNil(payload["exportedAt"] as? String)
     }
+
+    func testParsesTorchCommand() {
+        let event = parseAgentEvent("""
+        {"type":"device.command","commandId":"c1","action":"torch.set","args":{"on":true},"tier":"low"}
+        """)
+        guard case let .deviceCommand(command) = event else { return XCTFail("Expected device.command") }
+        XCTAssertEqual(command.commandId, "c1")
+        XCTAssertEqual(command.tier, .low)
+        XCTAssertEqual(command.action, .torchSet(on: true))
+    }
+
+    func testParsesCallCommandWithName() {
+        let event = parseAgentEvent("""
+        {"type":"device.command","commandId":"c2","action":"call.dial","args":{"name":"老王"},"tier":"high"}
+        """)
+        guard case let .deviceCommand(command) = event else { return XCTFail("Expected device.command") }
+        XCTAssertEqual(command.tier, .high)
+        XCTAssertEqual(command.action, .callDial(name: "老王", number: nil))
+    }
+
+    func testParsesMusicCommandWithNamedApp() {
+        let event = parseAgentEvent("""
+        {"type":"device.command","commandId":"c3","action":"music.control","args":{"control":"play","app":"网易云音乐"},"tier":"low"}
+        """)
+        guard case let .deviceCommand(command) = event else { return XCTFail("Expected device.command") }
+        XCTAssertEqual(command.action, .musicControl(control: .play, app: "网易云音乐"))
+    }
+
+    func testIgnoresUnknownActionRatherThanCrashing() {
+        let event = parseAgentEvent("""
+        {"type":"device.command","commandId":"c4","action":"camera.record","args":{},"tier":"high"}
+        """)
+        guard case .unhandled = event else { return XCTFail("Expected unhandled for an unknown action") }
+    }
+
+    func testBuildsDeviceResult() throws {
+        let json = buildDeviceResult(commandId: "c5", result: .denied("unsafe.speed", "骑行中"))
+        let parsed = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any]
+        )
+        XCTAssertEqual(parsed["type"] as? String, "device.result")
+        XCTAssertEqual(parsed["commandId"] as? String, "c5")
+        XCTAssertEqual(parsed["status"] as? String, "denied")
+        XCTAssertEqual(parsed["reason"] as? String, "unsafe.speed")
+        XCTAssertEqual(parsed["detail"] as? String, "骑行中")
+    }
+
+    func testBuildsMinimalOkResultWithoutOptionalKeys() throws {
+        let json = buildDeviceResult(commandId: "c6", result: .ok)
+        let parsed = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any]
+        )
+        XCTAssertEqual(parsed["status"] as? String, "ok")
+        XCTAssertNil(parsed["reason"])
+        XCTAssertNil(parsed["detail"])
+    }
 }

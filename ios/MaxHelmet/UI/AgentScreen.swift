@@ -144,6 +144,12 @@ struct AgentScreen: View {
                     HazardBanner(alert: alert).padding(.horizontal, 4)
                 }
 
+                if let destination = state.destination {
+                    DestinationCard(destination: destination)
+                        .padding(.horizontal, 4)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+
                 Spacer(minLength: 8)
 
                 HelmetVisual(

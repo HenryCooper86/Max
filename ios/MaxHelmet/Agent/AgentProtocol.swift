@@ -273,6 +273,58 @@ struct HazardAlert: Equatable {
     }
 }
 
+enum DeviceActionTier: String, Equatable {
+    case low, high
+}
+
+enum MusicControl: String, Equatable {
+    case play, pause, next, previous
+}
+
+enum VolumeDirection: String, Equatable {
+    case up, down
+}
+
+/// One executable device action. Typed rather than a raw dictionary so the
+/// router's dispatch is exhaustive and every case is Equatable in tests.
+enum DeviceAction: Equatable {
+    case torchSet(on: Bool)
+    case volumeSet(direction: VolumeDirection)
+    case musicControl(control: MusicControl, app: String?)
+    case smsCompose(name: String, body: String)
+    case callDial(name: String?, number: String?)
+    case destinationShow(query: String)
+}
+
+struct DeviceCommand: Equatable {
+    let commandId: String
+    let action: DeviceAction
+    let tier: DeviceActionTier
+}
+
+enum DeviceActionStatus: String, Equatable {
+    case ok, failed, denied, unsupported
+}
+
+/// Every handler returns exactly one of these. There is no "no result" case —
+/// the relay treats silence as a failure after 8 s.
+struct DeviceActionResult: Equatable {
+    let status: DeviceActionStatus
+    let reason: String?
+    let detail: String?
+
+    static let ok = DeviceActionResult(status: .ok, reason: nil, detail: nil)
+    static func failed(_ reason: String, _ detail: String? = nil) -> DeviceActionResult {
+        DeviceActionResult(status: .failed, reason: reason, detail: detail)
+    }
+    static func denied(_ reason: String, _ detail: String? = nil) -> DeviceActionResult {
+        DeviceActionResult(status: .denied, reason: reason, detail: detail)
+    }
+    static func unsupported(_ reason: String, _ detail: String? = nil) -> DeviceActionResult {
+        DeviceActionResult(status: .unsupported, reason: reason, detail: detail)
+    }
+}
+
 enum AgentEvent {
     case sessionStarted(provider: String, mode: String, capabilities: ProviderCapabilities)
     case connection(state: String, detail: String)
@@ -284,6 +336,7 @@ enum AgentEvent {
     case sessionMemoryUpdate(SessionMemory)
     case telemetryUpdate(Telemetry)
     case hazardAlert(HazardAlert)
+    case deviceCommand(DeviceCommand)
     case error(message: String)
     /// Event types this client does not consume.
     case unhandled
@@ -405,6 +458,15 @@ func parseAgentEvent(_ text: String) -> AgentEvent {
             interrupt: bool("interrupt", true)
         ))
 
+    case ServerEventTypes.deviceCommand:
+        let args = json["args"] as? [String: Any] ?? [:]
+        guard let action = parseDeviceAction(str("action"), args) else { return .unhandled }
+        return .deviceCommand(DeviceCommand(
+            commandId: str("commandId"),
+            action: action,
+            tier: DeviceActionTier(rawValue: str("tier", "low")) ?? .low
+        ))
+
     case ServerEventTypes.error:
         return .error(message: str("message", "Voice relay failed"))
 
@@ -475,6 +537,51 @@ func buildSessionStart(
 }
 
 /// Guided-demo toggle (mock provider tours the scenario catalog hands-off).
+/// Maps the wire action name plus its args onto a typed DeviceAction. An
+/// unknown action or malformed args yields nil, which the caller turns into
+/// `.unhandled` — a newer relay must never crash an older client.
+func parseDeviceAction(_ name: String, _ args: [String: Any]) -> DeviceAction? {
+    switch name {
+    case "torch.set":
+        return .torchSet(on: args["on"] as? Bool ?? false)
+    case "volume.set":
+        guard let raw = args["direction"] as? String,
+              let direction = VolumeDirection(rawValue: raw) else { return nil }
+        return .volumeSet(direction: direction)
+    case "music.control":
+        guard let raw = args["control"] as? String,
+              let control = MusicControl(rawValue: raw) else { return nil }
+        return .musicControl(control: control, app: args["app"] as? String)
+    case "sms.compose":
+        guard let recipient = args["name"] as? String, let body = args["body"] as? String else { return nil }
+        return .smsCompose(name: recipient, body: body)
+    case "call.dial":
+        let name = args["name"] as? String
+        let number = args["number"] as? String
+        if name == nil && number == nil { return nil }
+        return .callDial(name: name, number: number)
+    case "destination.show":
+        guard let query = args["query"] as? String, !query.isEmpty else { return nil }
+        return .destinationShow(query: query)
+    default:
+        return nil
+    }
+}
+
+/// Client → server device.result (validated by server/session-controller.ts).
+/// Optional keys are omitted entirely rather than sent as null.
+func buildDeviceResult(commandId: String, result: DeviceActionResult) -> String {
+    var payload: [String: Any] = [
+        "type": ClientEventTypes.deviceResult,
+        "commandId": commandId,
+        "status": result.status.rawValue
+    ]
+    if let reason = result.reason { payload["reason"] = reason }
+    if let detail = result.detail { payload["detail"] = detail }
+    let data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
+    return String(data: data, encoding: .utf8) ?? "{}"
+}
+
 func buildGuidedDemo(enabled: Bool) -> String {
     #"{"type":"demo.guided","enabled":\#(enabled)}"#
 }

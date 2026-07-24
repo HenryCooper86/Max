@@ -144,8 +144,8 @@ struct AgentScreen: View {
                     HazardBanner(alert: alert).padding(.horizontal, 4)
                 }
 
-                if let destination = state.destination {
-                    DestinationCard(destination: destination)
+                if let guidance = state.guidance {
+                    GuidanceCard(guidance: guidance)
                         .padding(.horizontal, 4)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }

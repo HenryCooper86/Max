@@ -183,13 +183,19 @@ hide the toggle, use the hardened `Info.plist`, and require a trusted certificat
   相册 button or "打开相册".
 - Voice-triggered device actions: spoken commands drive the phone through the `device.command` /
   `device.result` protocol — torch on/off, Max's own playback volume, Apple Music / local-library
-  playback, SMS composition, dialing (including 110/120/122), and an in-app destination card with
-  distance and ETA. Max's spoken confirmation always matches the real outcome, and every failure is
-  spoken. Limits are deliberate and honest: dialing and SMS require the native iOS confirmation tap
-  (truly hands-free dialing is impossible on iOS); music reaches only Apple Music and the local
-  library, never 网易云/QQ音乐; SMS is refused above 5 km/h; the destination card issues no
-  turn-by-turn guidance and uses car routing, so it does not respect 摩托车禁行 roads. Contact
-  numbers never leave the device, and spoken contact names are redacted from stored QA transcripts.
+  playback, SMS composition, and dialing (including 110/120/122). Max's spoken confirmation always
+  matches the real outcome, and every failure is spoken. Limits are deliberate and honest: dialing
+  and SMS require the native iOS confirmation tap (truly hands-free dialing is impossible on iOS);
+  music reaches only Apple Music and the local library, never 网易云/QQ音乐; SMS is refused above
+  5 km/h. Contact numbers never leave the device, and spoken contact names are redacted from stored
+  QA transcripts.
+- Voice-triggered live navigation: "导航去X" starts in-app turn-by-turn guidance — a pure guidance
+  engine matches the rider to an MKDirections route and speaks maneuver prompts at ~400 m, ~150 m,
+  and the turn, with one debounced reroute per wrong turn and an arrival announcement. "停止导航"
+  ends it. The live card shows the next maneuver, distance, and ETA over a route map. Guidance runs
+  during the foreground hands-free session (the screen stays awake), so it needs no background-location
+  permission. Car routing only — MapKit has no motorcycle profile, so it does not respect 摩托车禁行
+  roads, and the spoken summary says so.
 - Reconnect with exponential backoff and user-visible connection status.
 - Live weather card and fused `态势摘要` ride-pulse card.
 - Transcript with in-place updates, deduplication, timestamps, and JSON export via share sheet.

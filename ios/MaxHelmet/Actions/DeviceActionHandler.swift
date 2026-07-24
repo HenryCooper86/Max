@@ -13,8 +13,8 @@ enum DeviceActionRoute: Hashable {
     case music
     case sms
     case call
-    case destination
     case camera
+    case navigation
 
     init(_ action: DeviceAction) {
         switch action {
@@ -23,7 +23,9 @@ enum DeviceActionRoute: Hashable {
         case .musicControl: self = .music
         case .smsCompose: self = .sms
         case .callDial: self = .call
-        case .destinationShow: self = .destination
+        // Legacy destination.show and the new navigation actions all route to
+        // the guidance handler, so a still-Spec-1 relay's "导航去X" also guides.
+        case .destinationShow, .navigationStart, .navigationStop: self = .navigation
         case .cameraPhoto, .cameraRecord, .galleryOpen: self = .camera
         }
     }

@@ -6,7 +6,7 @@ describe("buildToolGroundingPrompt", () => {
   const prompt = buildToolGroundingPrompt();
 
   it("declares the six real actions", () => {
-    for (const capability of ["手电筒", "音量", "音乐", "短信", "电话", "目的地"]) {
+    for (const capability of ["手电筒", "音量", "音乐", "短信", "电话", "语音导航"]) {
       expect(prompt).toContain(capability);
     }
   });
@@ -15,6 +15,11 @@ describe("buildToolGroundingPrompt", () => {
     for (const capability of ["拍照", "录像"]) {
       expect(prompt).toContain(capability);
     }
+  });
+
+  it("declares live navigation and no longer excludes it", () => {
+    expect(prompt).toContain("语音导航");
+    expect(prompt).not.toContain("逐向导航语音");
   });
 
   it("still forbids the capabilities we do not have", () => {

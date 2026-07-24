@@ -215,7 +215,9 @@
                 "destination.show",
                 "camera.photo",
                 "camera.record",
-                "gallery.open"
+                "gallery.open",
+                "navigation.start",
+                "navigation.stop"
               ]
             },
             "args": { "type": "object" },

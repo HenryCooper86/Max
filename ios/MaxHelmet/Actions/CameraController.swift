@@ -126,6 +126,11 @@ final class CameraController: DeviceActionHandler {
     }
 }
 
+enum CaptureError: Error {
+    /// stopRecording was called while the movie output was not recording.
+    case notRecording
+}
+
 /// The production `CaptureSessioning`, backed by AVFoundation. Rear camera,
 /// video-only: it never adds an audio input and disables automatic audio-session
 /// configuration, so the voice engine keeps the microphone. All AVCaptureSession
@@ -205,6 +210,14 @@ final class AVFoundationCaptureSession: NSObject, CaptureSessioning {
     func stopRecording() async throws -> URL {
         try await withCheckedThrowingContinuation { continuation in
             queue.async {
+                // If the output is not actually recording, the didFinishRecording
+                // delegate will never fire — resuming here avoids hanging forever
+                // and leaving the HUD's recording indicator stuck on.
+                guard self.movieOutput.isRecording else {
+                    self.session.stopRunning()
+                    continuation.resume(throwing: CaptureError.notRecording)
+                    return
+                }
                 self.recordContinuation = continuation
                 self.movieOutput.stopRecording()
             }

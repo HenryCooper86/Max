@@ -268,25 +268,70 @@ export function redactContactNames(text: string): string {
 
 export type DeviceReconciliation = { truncate: boolean; speech: string | undefined };
 
+/** The short line Max speaks when an action succeeds. Deterministic and tied to
+ *  the real device result, so the rider hears the truth ("拍好了", "开始录像")
+ *  instead of the model's chatter or a mistaken safety refusal. Actions that
+ *  speak their own confirmation elsewhere — navigation (client card + summary),
+ *  dialing and SMS (system UI) — return undefined and keep that path. */
+export function deviceSuccessSpeech(command: DeviceCommand): string | undefined {
+  switch (command.action) {
+    case "camera.photo":
+      return "拍好了。";
+    case "camera.record":
+      return command.args.start ? "开始录像。" : "已停止录像。";
+    case "torch.set":
+      return command.args.on ? "手电筒开了。" : "手电筒关了。";
+    case "volume.set":
+      return command.args.direction === "up" ? "音量调大了。" : "音量调小了。";
+    case "gallery.open":
+      return "相册打开了。";
+    case "music.control":
+      switch (command.args.control) {
+        case "play":
+          return "开始播放。";
+        case "pause":
+          return "已暂停。";
+        case "next":
+          return "下一首。";
+        case "previous":
+          return "上一首。";
+      }
+      return undefined;
+    default:
+      return undefined;
+  }
+}
+
 /** Decides what the relay does about a result. Pure so every branch is testable
- *  without a provider or a socket. */
+ *  without a provider or a socket. On success, speaks the deterministic
+ *  confirmation (cutting the model) when the action has one; otherwise stays
+ *  silent so the action's own confirmation path stands. */
 export function reconcileDeviceResult(
   action: DeviceActionName,
-  result: { status: DeviceActionStatus; reason?: string; detail?: string }
+  result: { status: DeviceActionStatus; reason?: string; detail?: string },
+  okSpeech?: string
 ): DeviceReconciliation {
-  if (result.status === "ok") return { truncate: false, speech: undefined };
+  if (result.status === "ok") {
+    return okSpeech ? { truncate: true, speech: okSpeech } : { truncate: false, speech: undefined };
+  }
   const speech = result.detail?.trim() || deviceFailureSpeech(action, result.status, result.reason);
   return { truncate: true, speech };
 }
 
-export type IssuedDeviceCommand = { commandId: string; action: DeviceActionName; issuedAt: number };
+export type IssuedDeviceCommand = {
+  commandId: string;
+  action: DeviceActionName;
+  issuedAt: number;
+  /** Deterministic confirmation to speak on success; see deviceSuccessSpeech. */
+  okSpeech?: string;
+};
 
 /** Tracks dispatched commands so no command can be left pending forever. */
 export class PendingDeviceCommands {
   private readonly pending = new Map<string, IssuedDeviceCommand>();
 
-  issue(action: DeviceActionName, now: number = Date.now()): IssuedDeviceCommand {
-    const issued: IssuedDeviceCommand = { commandId: randomUUID(), action, issuedAt: now };
+  issue(action: DeviceActionName, okSpeech?: string, now: number = Date.now()): IssuedDeviceCommand {
+    const issued: IssuedDeviceCommand = { commandId: randomUUID(), action, issuedAt: now, okSpeech };
     this.pending.set(issued.commandId, issued);
     return issued;
   }

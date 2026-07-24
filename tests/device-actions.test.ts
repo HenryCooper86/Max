@@ -4,6 +4,7 @@ import {
   DEVICE_RESULT_TIMEOUT_MS,
   PendingDeviceCommands,
   deviceFailureSpeech,
+  deviceSuccessSpeech,
   extractDeviceCommand
 } from "../server/device-actions";
 
@@ -117,6 +118,21 @@ describe("deviceFailureSpeech", () => {
   it("names the failed action when no known reason is supplied", () => {
     expect(deviceFailureSpeech("torch.set", "failed", undefined)).toBe("手电筒操作没成功。");
     expect(deviceFailureSpeech("call.dial", "failed", "unrecognized-key")).toBe("电话操作没成功。");
+  });
+});
+
+describe("deviceSuccessSpeech", () => {
+  it("gives a short deterministic confirmation per action", () => {
+    expect(deviceSuccessSpeech({ action: "camera.photo", args: {} })).toBe("拍好了。");
+    expect(deviceSuccessSpeech({ action: "camera.record", args: { start: true } })).toBe("开始录像。");
+    expect(deviceSuccessSpeech({ action: "camera.record", args: { start: false } })).toBe("已停止录像。");
+    expect(deviceSuccessSpeech({ action: "torch.set", args: { on: true } })).toBe("手电筒开了。");
+    expect(deviceSuccessSpeech({ action: "torch.set", args: { on: false } })).toBe("手电筒关了。");
+  });
+
+  it("leaves navigation and dialing to their own confirmation path", () => {
+    expect(deviceSuccessSpeech({ action: "navigation.start", args: { query: "x" } })).toBeUndefined();
+    expect(deviceSuccessSpeech({ action: "call.dial", args: { number: "110" } })).toBeUndefined();
   });
 });
 

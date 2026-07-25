@@ -38,11 +38,18 @@ class CameraPair:
     def open(self) -> None:
         from hobot_vio import libsrcampy  # noqa: PLC0415 - board-only import
 
-        self.front = libsrcampy.Camera()
-        self.front.open_cam(int(self.front_port), -1, 30, WIDTH, HEIGHT)
-        self.rear = libsrcampy.Camera()
-        self.rear.open_cam(int(self.rear_port), -1, 30, WIDTH, HEIGHT)
-        self.opened = True
+        from camera_binding import IMX219, build_config, open_camera  # noqa: PLC0415
+
+        # Never use open_cam auto-detect: it searches vcon@0 (i2c bus 6, no
+        # connector), reports a phantom ov5647, and NULL-derefs cam-service,
+        # taking the whole pipeline down. Pin each VCON explicitly instead.
+        for attr, vcon in (("front", int(self.front_port)), ("rear", int(self.rear_port))):
+            try:
+                open_camera(build_config(IMX219, vcon=vcon, width=WIDTH, height=HEIGHT, fps=30))
+                setattr(self, attr, libsrcampy.Camera())
+            except Exception as error:  # noqa: BLE001 - one camera is enough
+                print(f"[vision] {attr} camera unavailable on vcon {vcon}: {error}")
+        self.opened = self.front is not None or self.rear is not None
 
     def _grab(self, sensor) -> bytes | None:
         try:

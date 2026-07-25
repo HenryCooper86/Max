@@ -1,11 +1,14 @@
 import { spawn } from "node:child_process";
+import { Socket } from "node:net";
 import { createCapture } from "./audio/capture";
 import { createPlayback } from "./audio/playback";
 import { createVoiceGate } from "./audio/voice-gate";
 import { loadConfig } from "./config";
 import { createDeviceDispatcher } from "./device/dispatch";
 import { createRelayClient, nextBackoffMs } from "./relay";
-import { createVisionClient } from "./vision-client";
+import { createVisionClient, type VisionClient } from "./vision-client";
+
+const VISION_RECONNECT_MS = 2_000;
 
 export type CloseReason = "idle" | "dropped" | "intentional";
 
@@ -35,6 +38,27 @@ function setAlsaVolume(device: string, level: number): Promise<boolean> {
   });
 }
 
+/**
+ * Connects to the vision sidecar's control socket. A dead sidecar must never
+ * leave the relay waiting: every in-flight request is failed immediately so each
+ * device.command still gets exactly one device.result.
+ */
+function connectVision(socketPath: string): VisionClient {
+  const socket = new Socket();
+  const client = createVisionClient({
+    send: (line) => socket.write(line),
+    onEvent: (event) => console.log("[vision]", JSON.stringify(event))
+  });
+  socket.on("data", (chunk: Buffer) => client.handleChunk(chunk.toString("utf8")));
+  socket.on("error", () => client.failAllPending("capture.failed"));
+  socket.on("close", () => {
+    client.failAllPending("capture.failed");
+    setTimeout(() => socket.connect(socketPath), VISION_RECONNECT_MS);
+  });
+  socket.connect(socketPath);
+  return client;
+}
+
 function start(): void {
   const config = loadConfig();
   let attempt = 0;
@@ -44,13 +68,7 @@ function start(): void {
   const gate = createVoiceGate({ rmsThreshold: config.voiceGateRms, sustainMs: config.voiceGateMs });
   const playback = createPlayback({ device: config.alsaPlayback });
 
-  const vision = createVisionClient({
-    send: () => {
-      // Connected to the unix socket in Task 11; until then camera actions fail
-      // truthfully rather than pretending to succeed.
-    },
-    onEvent: (event) => console.log("[vision]", JSON.stringify(event))
-  });
+  const vision = connectVision(config.visionSocket);
 
   const dispatch = createDeviceDispatcher({
     vision,

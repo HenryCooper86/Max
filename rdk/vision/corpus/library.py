@@ -15,6 +15,11 @@ from recorder.metadata import read_metadata
 MANIFEST_NAME = "ride.json"
 LABELS_NAME = "labels.json"
 
+#: Segment container formats. `.h264` comes from the hardware encoder; `.mjpeg`
+#: (concatenated JPEG) comes from the mipi_cam source, which delivers decoded
+#: frames rather than an encoded stream.
+VIDEO_SUFFIXES = (".h264", ".mjpeg")
+
 
 @dataclass(frozen=True)
 class SegmentInfo:
@@ -57,7 +62,8 @@ def scan_ride(ride_dir: Path | str) -> RideInfo:
         cam_dir = directory / camera
         if not cam_dir.is_dir():
             continue
-        for video in sorted(cam_dir.glob("seg-*.h264")):
+        videos = [p for p in cam_dir.glob("seg-*") if p.suffix in VIDEO_SUFFIXES]
+        for video in sorted(videos, key=lambda p: p.stem):
             meta_path = video.with_suffix(".jsonl")
             segments.append(
                 SegmentInfo(

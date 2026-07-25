@@ -218,7 +218,14 @@ const FAILURE_SPEECH: Record<string, string> = {
   "camera.notRecording": "现在没有在录像。",
   "capture.failed": "拍摄没成功。",
   "navigation.notActive": "现在没有在导航。",
-  "permission.location": "我没有定位权限，去设置里开启后我再帮你导航。"
+  "permission.location": "我没有定位权限，去设置里开启后我再帮你导航。",
+  // Embedded (helmet) refusals. Worded generically because "device.noScreen"
+  // serves both gallery.open and destination.show. Navigation gets its own code
+  // rather than borrowing device.noPhone: audio-only turn-by-turn needs neither
+  // a phone nor a screen, so either would be a false explanation.
+  "device.noScreen": "头盔上没有屏幕，看不了。",
+  "device.noPhone": "头盔上没有手机功能，这个我做不了。",
+  "device.notYet": "这个功能头盔上还没上线。"
 };
 
 /** Spoken names for the fallback line, so a failure with no known reason still

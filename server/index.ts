@@ -382,7 +382,11 @@ app.get("/testing/sessions", (req, res) => {
       quality:
         quality === "pass" || quality === "watch" || quality === "fail" ? (quality as TestingQuality) : undefined,
       platform:
-        platform === "web" || platform === "ios" || platform === "android" || platform === "unknown"
+        platform === "web" ||
+        platform === "ios" ||
+        platform === "android" ||
+        platform === "embedded" ||
+        platform === "unknown"
           ? (platform as TestingPlatform)
           : undefined,
       runId: typeof req.query.runId === "string" ? req.query.runId : undefined,

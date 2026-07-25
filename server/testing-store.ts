@@ -618,7 +618,7 @@ export function createTestingPolicy(
   const requestedPlatforms = Array.isArray(releaseInput["requiredPlatforms"])
     ? releaseInput["requiredPlatforms"].filter(
         (platform: unknown): platform is TestingPlatform =>
-          platform === "web" || platform === "ios" || platform === "android"
+          platform === "web" || platform === "ios" || platform === "android" || platform === "embedded"
       )
     : previous.release.requiredPlatforms;
   const latencyWatchDeltaMs = bounded(
@@ -1134,10 +1134,12 @@ export function testingOperationsSnapshot(): TestingOperationsSnapshot {
 }
 
 export function inferTestingPlatform(value: unknown, deviceLabel?: string, networkType?: string): TestingPlatform {
-  if (value === "web" || value === "ios" || value === "android") return value;
+  if (value === "web" || value === "ios" || value === "android" || value === "embedded") return value;
   const haystack = `${String(deviceLabel ?? "")} ${String(networkType ?? "")}`.toLowerCase();
   if (haystack.includes("ios") || haystack.includes("iphone") || haystack.includes("ipad")) return "ios";
   if (haystack.includes("android")) return "android";
+  // Checked before "web": a board label may legitimately mention both.
+  if (haystack.includes("rdk")) return "embedded";
   if (haystack.includes("browser") || haystack.includes("web")) return "web";
   return "unknown";
 }

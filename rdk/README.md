@@ -42,26 +42,86 @@ Record the result of every step in "Bench findings" below.
    pactl load-module module-echo-cancel aec_method=webrtc source_name=maxmic sink_name=maxspk
    ```
    Repeat the measurement against `-D pulse:maxmic`.
-5. **Cameras** — confirm both IMX219 sensors enumerate and note their VIN port
-   indices for `RDK_CAMERA_FRONT` / `RDK_CAMERA_REAR`.
+5. **Cameras** — see "Camera findings" below before touching this. Do **not**
+   rely on `open_cam` auto-detect; use the known-good `mipi_cam` command to
+   confirm a module streams, and note its VCON index.
 
 ## Bench findings
 
-| Item                               | Value | Date |
-| ---------------------------------- | ----- | ---- |
-| ALSA capture device                |       |      |
-| ALSA playback device               |       |      |
-| Headset wiring (CTIA/OMTP)         |       |      |
-| Raw echo coupling                  |       |      |
-| Coupling with `module-echo-cancel` |       |      |
-| AEC path chosen                    |       |      |
-| Camera front / rear port index     |       |      |
+Verified over SSH against the real board on 2026-07-25.
+
+| Item                               | Value                                                          | Date       |
+| ---------------------------------- | -------------------------------------------------------------- | ---------- |
+| Board                              | `D-Robotics X5 MD V0.2`, Ubuntu 22.04.5, kernel 6.1.83         | 2026-07-25 |
+| ALSA capture device                | `plughw:0,0` — card 0 `duplexaudio`, codec **ES8326**          | 2026-07-25 |
+| ALSA playback device               | `plughw:0,0` — same duplex card, one device for both           | 2026-07-25 |
+| Headset wiring (CTIA/OMTP)         | not yet measured — needs the headset on the bench              |            |
+| Raw echo coupling                  | not yet measured                                               |            |
+| Coupling with `module-echo-cancel` | not yet measured — **PipeWire is already running**, no install |            |
+| AEC path chosen                    | pending the measurement above                                  |            |
+| Camera front port index            | **MIPI host 2** (`vcon@2`, i2c bus 4) — see "Camera findings"  | 2026-07-25 |
+| Camera rear port index             | unresolved — only one camera reachable so far                  |            |
+| BPU                                | present, idle, 500–1000 MHz; `pyeasy_dnn` + `libsrcampy` OK    | 2026-07-25 |
+| Node.js                            | **not installed** — provisioning step above is still required  | 2026-07-25 |
 
 > **Step 4 is a decision gate, not a formality.** If `module-echo-cancel` does
 > not suppress the coupling adequately, stop before implementing the audio path.
 > The fallback — half-duplex ducking — costs barge-in, which is a shipped
 > feature on the web, iOS, and Android clients. That is a product decision, not
 > an implementation detail.
+
+Also on the board already: a prebuilt BPU detector at
+`/app/multimedia_samples/sunrise_camera/Platform/x5/model_zoom/yolov5s_672x672_nv12.bin`
+and a MIPI-camera-into-YOLOv5s sample at
+`/app/pydev_demo/08_mipi_camera_sample/01_mipi_camera_yolov5s.py`.
+
+## Camera findings
+
+**The stock auto-detect path is broken on this board.** `libsrcampy.open_cam(port, -1, …)`
+always searches `vcon@0` (i2c bus 6), which is physically empty. The vendor stack
+reports a phantom `ov5647` there — the log line is `vp_sensor_detect_2 Support
+sensor index:0`, i.e. it lists _supported_ sensors, not detected ones — then
+`/usr/hobot/bin/cam-service` NULL-dereferences initialising a sensor that does
+not exist. Every camera open fails as a result, and the first failure wedges the
+ISP so later attempts fail earlier and differently.
+
+Consequences:
+
+- **`rdk/vision/camera.py` cannot use `open_cam` auto-detect.** It must pin the
+  port explicitly via `hbn_camera_create(camera_config_t*, …)` from
+  `/usr/hobot/lib/libcam.so`, setting `bus_select` (the VCON index) plus `name`
+  and `addr`. Headers are installed: `/usr/include/hb_camera_data_config.h`,
+  `hb_camera_interface.h`, `hbn_api.h`.
+- `systemctl restart cam-service` resets a wedged pipeline — no reboot needed
+  between experiments.
+- Vendor bug worth reporting: `cam-service.service` has
+  `ExecStart=… -V6 &`, and systemd passes that trailing `&` as a literal argv.
+
+**Sensor support is not equal.** Measured A/B on the same port:
+
+| Module     | i2c addr | Result on MIPI host 2                        |
+| ---------- | -------- | -------------------------------------------- |
+| **IMX219** | `0x10`   | **streams 1920×1080 @ 30 fps** ✅            |
+| **OV5647** | `0x36`   | `create_and_run_vflow ret -10`, no frames ❌ |
+
+Use **IMX219** modules. The OV5647 fails at video-flow start at both 1920×1080
+and 1280×960 (the driver ignores the requested mode and reports 1080 either way),
+and the image ships one ISP tuning file for it versus many FOV variants for
+IMX219.
+
+Known-good reference command, for confirming the camera outside our stack:
+
+```bash
+source /opt/tros/humble/setup.bash
+ros2 run mipi_cam mipi_cam --ros-args \
+  -p video_device:=IMX219 -p channel:=2 -p image_width:=1920 -p image_height:=1080
+```
+
+**Open question blocking front+rear:** both camera connectors map to i2c bus 4
+(`vcon@2` and `vcon@3`), so two modules collide at the same address. Selecting
+between them likely needs `gpio_enable_bit` / `gpio_level_bit` in
+`camera_config_t` ("索引自 VCON"), and `vcon@3` has no `gpio_oth` property while
+`vcon@2` does. Untested — needs two IMX219 modules on the bench.
 
 ## Running
 

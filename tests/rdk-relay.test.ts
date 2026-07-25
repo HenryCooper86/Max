@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { IDLE_CLOSE_CODE } from "../shared/agent";
-import { buildSessionStart, loadConfig, nextBackoffMs } from "../rdk/agent/src/relay";
+import { authorizedRelayUrl, buildSessionStart, loadConfig, nextBackoffMs } from "../rdk/agent/src/relay";
 
 const BASE_ENV = { MAX_RELAY_URL: "ws://localhost:8787/agent" } as NodeJS.ProcessEnv;
 
@@ -50,6 +50,48 @@ describe("buildSessionStart", () => {
 
   it("omits memory entirely on a cold start", () => {
     expect(buildSessionStart(loadConfig(BASE_ENV)).memory).toBeUndefined();
+  });
+});
+
+describe("authorizedRelayUrl", () => {
+  it("returns the url unchanged when no token is configured", () => {
+    expect(authorizedRelayUrl("ws://host:8787/agent", "")).toBe("ws://host:8787/agent");
+  });
+
+  it("appends the token the relay expects", () => {
+    expect(authorizedRelayUrl("ws://host:8787/agent", "s3cret")).toBe("ws://host:8787/agent?token=s3cret");
+  });
+
+  it("preserves existing query parameters", () => {
+    expect(authorizedRelayUrl("ws://host:8787/agent?x=1", "s3cret")).toBe("ws://host:8787/agent?x=1&token=s3cret");
+  });
+
+  it("replaces an existing token rather than duplicating it", () => {
+    expect(authorizedRelayUrl("ws://host:8787/agent?token=old", "new")).toBe("ws://host:8787/agent?token=new");
+  });
+
+  it("percent-encodes a token with url-unsafe characters", () => {
+    expect(authorizedRelayUrl("ws://host/agent", "a b&c=d")).toBe("ws://host/agent?token=a+b%26c%3Dd");
+  });
+
+  it("works over wss", () => {
+    expect(authorizedRelayUrl("wss://host/agent", "t")).toBe("wss://host/agent?token=t");
+  });
+
+  it("leaves a malformed url alone rather than throwing", () => {
+    // A bad MAX_RELAY_URL should surface as a connection error, not a crash
+    // inside URL parsing before we ever try.
+    expect(authorizedRelayUrl("not a url", "t")).toBe("not a url");
+  });
+});
+
+describe("relay token config", () => {
+  it("defaults to no token", () => {
+    expect(loadConfig(BASE_ENV).relayToken).toBe("");
+  });
+
+  it("reads MAX_RELAY_TOKEN", () => {
+    expect(loadConfig({ ...BASE_ENV, MAX_RELAY_TOKEN: "abc123" }).relayToken).toBe("abc123");
   });
 });
 

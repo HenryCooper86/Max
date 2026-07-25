@@ -339,6 +339,11 @@ export type TestingGoldenReplay = {
 export const DEFAULT_TESTING_CAMPAIGN_ID = "release-readiness";
 export const DEFAULT_TESTING_TEST_CASE_ID = "baseline-live-session";
 const TESTING_POLICY_VERSION = "2026-07-15.1";
+/** Every platform the relay accepts. Single source of truth — the relay's
+ *  session.start validator once kept its own copy and rejected the embedded
+ *  client with "Invalid platform" the first time real hardware connected. */
+export const TESTING_PLATFORMS: readonly TestingPlatform[] = ["web", "ios", "android", "embedded", "unknown"];
+
 /** Platforms a release run must cover. Deliberately excludes "embedded": adding
  *  a fourth required platform would fail every existing release run the moment
  *  the enum changed. Embedded opts in when it is genuinely a release target. */

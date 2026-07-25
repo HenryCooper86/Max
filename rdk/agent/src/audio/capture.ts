@@ -41,6 +41,10 @@ export function createCapture(options: CaptureOptions): { start(): void; stop():
       leftover = Buffer.alloc(0);
 
       child = spawn("arecord", captureArgs(options.device));
+      // Unplugging the headset kills arecord mid-stream; an unhandled 'error'
+      // on this stream would take the whole agent down. Losing the mic must
+      // degrade the session, not end the process.
+      child.stdout?.on("error", () => {});
       child.stdout?.on("data", (chunk: Buffer) => {
         // ALSA hands us bytes, not samples: a chunk can split a sample in half.
         const merged = leftover.length > 0 ? Buffer.concat([leftover, chunk]) : chunk;

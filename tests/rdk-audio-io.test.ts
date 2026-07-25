@@ -64,6 +64,16 @@ describe("createCapture", () => {
     expect(() => fake.stdout.write(Buffer.from([1, 2, 3]))).not.toThrow();
   });
 
+  it("survives an error on the capture stream", () => {
+    // Unplugging the headset kills arecord mid-stream. Same class of crash as
+    // the playback EPIPE: an unhandled 'error' event takes the agent down.
+    const fake = fakeChild();
+    const capture = createCapture({ device: "plughw:0,0", spawn: () => fake.child, onFrame: () => {} });
+    capture.start();
+    expect(fake.stdout.listenerCount("error")).toBeGreaterThan(0);
+    expect(() => fake.stdout.emit("error", new Error("input/output error"))).not.toThrow();
+  });
+
   it("kills the child on stop", () => {
     const fake = fakeChild();
     const capture = createCapture({ device: "plughw:0,0", spawn: () => fake.child, onFrame: () => {} });
@@ -82,6 +92,37 @@ describe("createPlayback", () => {
     playback.write(new Int16Array(240));
     const total = written.reduce((sum, chunk) => sum + chunk.length, 0);
     expect(total).toBe(240 * 2 * 2); // doubled samples, 2 bytes each
+  });
+
+  it("survives EPIPE on the killed child's stdin", () => {
+    // Barge-in SIGKILLs aplay; any write already in flight then lands on a dead
+    // pipe and Node emits 'error' on the stdin socket. With no handler that is
+    // an unhandled 'error' event, which killed the agent on the board the first
+    // time a real rider talked over Max.
+    const fake = fakeChild();
+    const playback = createPlayback({ device: "plughw:0,0", spawn: () => fake.child });
+    playback.write(new Int16Array(240));
+    expect(fake.stdin.listenerCount("error")).toBeGreaterThan(0);
+    expect(() => fake.stdin.emit("error", Object.assign(new Error("write EPIPE"), { code: "EPIPE" }))).not.toThrow();
+  });
+
+  it("keeps working after a stdin error", () => {
+    let spawns = 0;
+    const children: ReturnType<typeof fakeChild>[] = [];
+    const playback = createPlayback({
+      device: "plughw:0,0",
+      spawn: () => {
+        spawns += 1;
+        const f = fakeChild();
+        children.push(f);
+        return f.child;
+      }
+    });
+    playback.write(new Int16Array(240));
+    children[0]!.stdin.emit("error", Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+    playback.flush();
+    playback.write(new Int16Array(240));
+    expect(spawns).toBe(2);
   });
 
   it("respawns aplay on flush so barge-in drops the queued tail", () => {

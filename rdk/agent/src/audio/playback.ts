@@ -47,6 +47,12 @@ export function createPlayback(options: PlaybackOptions): {
   function ensure(): ChildProcessLike {
     if (!child) {
       child = spawn("aplay", playbackArgs(options.device));
+      // Barge-in SIGKILLs this child, so a write already in flight lands on a
+      // dead pipe. Node raises 'error' on the stdin socket, and with no listener
+      // that is an unhandled 'error' event — which crashed the agent the first
+      // time a rider actually talked over Max. EPIPE here is expected and
+      // discardable: the next write respawns aplay.
+      child.stdin?.on("error", () => {});
       upsample = createUpsampler2x();
     }
     return child;

@@ -62,3 +62,44 @@ Record the result of every step in "Bench findings" below.
 > The fallback — half-duplex ducking — costs barge-in, which is a shipped
 > feature on the web, iOS, and Android clients. That is a product decision, not
 > an implementation detail.
+
+## Running
+
+```bash
+sudo mkdir -p /etc/max
+sudo tee /etc/max/agent.env >/dev/null <<'ENV'
+MAX_RELAY_URL=ws://<lan-ip>:8787/agent
+MAX_RELAY_INSECURE_TLS=0
+RDK_ALSA_CAPTURE=plughw:0,0
+RDK_ALSA_PLAYBACK=plughw:0,0
+MAX_GALLERY_DIR=/var/lib/max/gallery
+MAX_GALLERY_MIN_FREE_MB=1024
+MAX_HUD_PORT=8080
+MAX_VISION_PREVIEW_PORT=8081
+MAX_VISION_SOCKET=/run/max/vision.sock
+MAX_VOICE_GATE_RMS=900
+MAX_VOICE_GATE_MS=400
+ENV
+
+sudo cp rdk/systemd/*.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now max-agent
+journalctl -u max-agent -f
+```
+
+Only the exact string `1` enables `MAX_RELAY_INSECURE_TLS`; anything else leaves
+certificate validation on.
+
+`max-agent` names `max-vision` in `After=` but does not `Require=` it: if the
+vision sidecar is down, the agent still runs and camera actions fail truthfully
+rather than taking the voice path down with them.
+
+## On-hardware verification
+
+With `npm run dev:server` running on the LAN host:
+
+1. `systemctl start max-agent`, then `journalctl -u max-agent -f` — expect
+   `[relay] session ready`.
+2. Say "Max，现在天气怎么样" into the headset and hear a spoken reply.
+3. Interrupt a reply mid-sentence; speech must stop within ~120 ms.
+4. Unplug and replug the headset; the service recovers without a restart.

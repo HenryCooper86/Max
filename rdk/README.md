@@ -62,7 +62,8 @@ Verified over SSH against the real board on 2026-07-25.
 | Camera front port index            | **MIPI host 2** (`vcon@2`, i2c bus 4) — see "Camera findings"      | 2026-07-25 |
 | Camera rear port index             | **MIPI host 0** (`vcon@0`, i2c bus 6) — separate bus, no collision | 2026-07-25 |
 | BPU                                | present, idle, 500–1000 MHz; `pyeasy_dnn` + `libsrcampy` OK        | 2026-07-25 |
-| Node.js                            | **not installed** — provisioning step above is still required      | 2026-07-25 |
+| Node.js                            | **v22.23.1** installed from NodeSource; npm 10.9.8                 | 2026-07-25 |
+| pytest                             | 6.2.5 installed; board runs the vision suite 104 passed, 1 skipped | 2026-07-25 |
 
 > **Step 4 is a decision gate, not a formality.** If `module-echo-cancel` does
 > not suppress the coupling adequately, stop before implementing the audio path.

@@ -23,7 +23,13 @@ def test_threat_ids_match_the_typescript_catalog():
     # Anti-drift: shared/adas.ts is the single source of truth for threat ids.
     # If someone renames one there, this fails instead of silently producing a
     # corpus M1 cannot interpret.
-    source = (REPO_ROOT / "shared" / "adas.ts").read_text(encoding="utf-8")
+    catalog_path = REPO_ROOT / "shared" / "adas.ts"
+    if not catalog_path.exists():
+        # The board only carries the vision subtree, not the whole repo. This is
+        # a development-time consistency check, so absence means "not applicable"
+        # rather than "broken".
+        pytest.skip("shared/adas.ts not present (running outside a full checkout)")
+    source = catalog_path.read_text(encoding="utf-8")
     block = re.search(r"export const ADAS_THREATS[^=]*=\s*\[(.*?)\]", source, re.S)
     assert block, "could not find ADAS_THREATS in shared/adas.ts"
     catalog = set(re.findall(r'"([a-z_]+)"', block.group(1)))

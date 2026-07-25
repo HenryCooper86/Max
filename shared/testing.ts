@@ -3,7 +3,7 @@ import type { DemoScenario, RideMode } from "./ride";
 export type TestingQuality = "pass" | "watch" | "fail";
 export type TestingCheckStatus = "pass" | "warn" | "fail" | "skipped";
 type TestingValidityStatus = "valid" | "invalid";
-export type TestingPlatform = "web" | "ios" | "android" | "unknown";
+export type TestingPlatform = "web" | "ios" | "android" | "embedded" | "unknown";
 type TestingRisk = "standard" | "safety-critical";
 export type TestingRunStatus = "draft" | "active" | "blocked" | "ready" | "approved" | "archived";
 type TestingAssignmentStatus = "pending" | "in-progress" | "complete" | "blocked";
@@ -339,7 +339,10 @@ export type TestingGoldenReplay = {
 export const DEFAULT_TESTING_CAMPAIGN_ID = "release-readiness";
 export const DEFAULT_TESTING_TEST_CASE_ID = "baseline-live-session";
 const TESTING_POLICY_VERSION = "2026-07-15.1";
-const REQUIRED_TESTING_PLATFORMS: TestingPlatform[] = ["web", "ios", "android"];
+/** Platforms a release run must cover. Deliberately excludes "embedded": adding
+ *  a fourth required platform would fail every existing release run the moment
+ *  the enum changed. Embedded opts in when it is genuinely a release target. */
+export const REQUIRED_TESTING_PLATFORMS: TestingPlatform[] = ["web", "ios", "android"];
 
 export const DEFAULT_TESTING_POLICY: TestingPolicy = {
   version: TESTING_POLICY_VERSION,

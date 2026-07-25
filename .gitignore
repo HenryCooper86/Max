@@ -20,5 +20,9 @@ ios/build/
 **/xcuserdata/
 *.xcuserstate
 
+# Python tooling state (rdk/vision test suite)
+__pycache__/
+.pytest_cache/
+
 # macOS folder metadata
 .DS_Store

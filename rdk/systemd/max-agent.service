@@ -1,0 +1,17 @@
+[Unit]
+Description=Max helmet agent (RDK X5)
+After=network-online.target max-vision.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/max/agent.env
+WorkingDirectory=/opt/max
+ExecStart=/usr/bin/npx tsx rdk/agent/src/main.ts
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -5,6 +5,8 @@ import { createPlayback } from "./audio/playback";
 import { createVoiceGate } from "./audio/voice-gate";
 import { loadConfig } from "./config";
 import { createDeviceDispatcher } from "./device/dispatch";
+import { createHudServer } from "./hud/server";
+import { initialHudState, reduceHud } from "./hud/state";
 import { createRelayClient, nextBackoffMs } from "./relay";
 import { createVisionClient, type VisionClient } from "./vision-client";
 
@@ -68,6 +70,9 @@ function start(): void {
   const gate = createVoiceGate({ rmsThreshold: config.voiceGateRms, sustainMs: config.voiceGateMs });
   const playback = createPlayback({ device: config.alsaPlayback });
 
+  const hud = createHudServer(config.hudPort, config.visionPreviewPort);
+  let hudState = initialHudState();
+
   const vision = connectVision(config.visionSocket);
 
   const dispatch = createDeviceDispatcher({
@@ -83,6 +88,8 @@ function start(): void {
     },
     onVoice: (pcm) => playback.write(pcm),
     onEvent: (event) => {
+      hudState = reduceHud(hudState, event);
+      hud.publish(hudState);
       if (event.type === "status" && event.state === "hearing") {
         // Barge-in: the rider started talking, so drop the queued reply.
         playback.flush();
@@ -134,6 +141,7 @@ function start(): void {
     capture.stop();
     playback.stop();
     relay.disconnect();
+    hud.close();
     process.exit(0);
   };
   process.on("SIGTERM", shutdown);

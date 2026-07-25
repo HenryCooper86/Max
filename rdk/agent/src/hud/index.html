@@ -1,0 +1,86 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Max · RDK X5 bench</title>
+<style>
+  body {
+    margin: 0;
+    background: #0b0d10;
+    color: #e6edf3;
+    font:
+      14px/1.5 ui-monospace,
+      monospace;
+    padding: 16px;
+  }
+  h1 {
+    font-size: 15px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #7d8590;
+  }
+  .row {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .card {
+    background: #12161b;
+    border: 1px solid #21262d;
+    border-radius: 8px;
+    padding: 12px;
+    flex: 1 1 320px;
+  }
+  img {
+    width: 100%;
+    border-radius: 6px;
+    background: #000;
+  }
+  .rider {
+    color: #7ee787;
+  }
+  .agent {
+    color: #79c0ff;
+  }
+  .partial {
+    opacity: 0.6;
+  }
+  dt {
+    color: #7d8590;
+    float: left;
+    width: 96px;
+  }
+</style>
+<h1>Max · RDK X5 bench</h1>
+<div class="row">
+  <div class="card">
+    <dl>
+      <dt>connection</dt>
+      <dd id="connection">–</dd>
+      <dt>turn</dt>
+      <dd id="turn">–</dd>
+      <dt>latency</dt>
+      <dd id="latency">–</dd>
+      <dt>error</dt>
+      <dd id="error">–</dd>
+    </dl>
+  </div>
+  <div class="card"><img id="front" alt="front camera" /></div>
+  <div class="card"><img id="rear" alt="rear camera" /></div>
+</div>
+<div class="card" style="margin-top: 16px"><div id="transcript"></div></div>
+<script>
+  const host = location.hostname;
+  document.getElementById("front").src = `http://${host}:__PREVIEW_PORT__/preview/front`;
+  document.getElementById("rear").src = `http://${host}:__PREVIEW_PORT__/preview/rear`;
+
+  const socket = new WebSocket(`ws://${location.host}`);
+  socket.onmessage = (message) => {
+    const state = JSON.parse(message.data);
+    document.getElementById("connection").textContent = state.connection;
+    document.getElementById("turn").textContent = state.turnState;
+    document.getElementById("latency").textContent = state.latencyMs === null ? "–" : `${state.latencyMs} ms`;
+    document.getElementById("error").textContent = state.lastError ?? "–";
+    document.getElementById("transcript").innerHTML = state.transcript
+      .map((turn) => `<div class="${turn.speaker} ${turn.final ? "" : "partial"}">${turn.speaker}: ${turn.text}</div>`)
+      .join("");
+  };
+</script>

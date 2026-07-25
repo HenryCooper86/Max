@@ -98,8 +98,47 @@ rather than taking the voice path down with them.
 
 With `npm run dev:server` running on the LAN host:
 
+**Voice**
+
 1. `systemctl start max-agent`, then `journalctl -u max-agent -f` — expect
    `[relay] session ready`.
 2. Say "Max，现在天气怎么样" into the headset and hear a spoken reply.
 3. Interrupt a reply mid-sentence; speech must stop within ~120 ms.
 4. Unplug and replug the headset; the service recovers without a restart.
+
+**Cameras**
+
+1. `systemctl start max-vision`, then open `http://<board>:8081/preview/front`
+   and `/preview/rear` — both show live video.
+2. Say "拍照" — a `pair-*` directory appears under `/var/lib/max/gallery` with
+   two JPEGs and a manifest.
+3. Say "开始录像", wait, then "停止录像" — two `.h264` files and a manifest.
+4. Say "开始录像" twice — Max says "已经在录了。"
+5. `systemctl stop max-vision`, then say "拍照" — Max reports a truthful failure
+   and the voice session keeps working.
+
+**Dev HUD**
+
+Open `http://<board>:8080` from a laptop, or Chromium kiosk on the board's HDMI.
+Start a session and confirm turn state, transcript, latency, and both previews
+update live.
+
+## Known gap
+
+`camera.py` does not yet attach the `libsrcampy` H.264 encoder in
+`start_recording` / `stop_recording` — that is the one piece that cannot be
+written without the board. The surrounding policy (recording state machine,
+space guard, ten-minute cap, and which sides the manifest names) is implemented
+and covered by `tests/test_camera_policy.py`. Attach `libsrcampy.Encoder` to each
+live sensor on start and release it on stop, writing `front.h264` / `rear.h264`
+into the pair directory. Do not change the state machine while doing so.
+
+## Running the Python suite
+
+pytest is a dev-only dependency; the sidecar itself needs no third-party
+packages.
+
+```bash
+pip install pytest
+cd rdk/vision && python3 -m pytest tests/ -q
+```

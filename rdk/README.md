@@ -211,14 +211,33 @@ Record on the board (Ctrl-C or SIGTERM to stop):
 
 ```bash
 systemctl restart cam-service && sleep 3
+source /opt/tros/humble/setup.bash
 cd /opt/max/rdk/vision
-python3 -m tools.record_ride --root /var/lib/max/corpus --fps 10
+python3 -m tools.record_ride --root /var/lib/max/corpus --fps 10 \
+  --sensor IMX219 --front-vcon 2 --rear-vcon 3
 ```
 
-Segments are 60 s of H.264 plus a `.jsonl` metadata sidecar, so a power cut
-costs at most one minute. A camera that will not open is logged and skipped —
-front-only rides are expected on current hardware, and only a ride with no
-cameras at all is an error.
+**Two frame sources**, selected with `--source`:
+
+| `--source`           | Camera path                                    | Segment format |
+| -------------------- | ---------------------------------------------- | -------------- |
+| `mipi_cam` (default) | the vendor's ROS node — **the one that works** | `.mjpeg`       |
+| `binding`            | our ctypes `hbn_camera_create` + hw encoder    | `.h264`        |
+
+`mipi_cam` is the default because our binding cannot open a camera yet:
+`hbn_camera_create` returns -1 even with a matching sensor spec and the correct
+VCON. The binding path is kept so switching back is a flag flip once that is
+solved. Using `mipi_cam` costs a ROS dependency in the recording path only —
+nothing else in the sidecar imports it.
+
+Because `mipi_cam` publishes decoded frames on `/image_raw`, the recorder
+JPEG-encodes them, so a segment is concatenated JPEG rather than an H.264
+stream. `corpus/library.py` accepts both.
+
+Segments are 60 s plus a `.jsonl` metadata sidecar, so a power cut costs at most
+one minute. A camera that will not open is logged and skipped — front-only rides
+are expected on current hardware, and only a ride with no cameras at all is an
+error.
 
 Copy the corpus off the board, then label hazard windows on a laptop:
 
@@ -234,9 +253,19 @@ sidecars. Only the four M1 threats are accepted: `forward_collision`,
 `pedestrian_ahead`, `rear_approach`, `tailgating` — anything else is rejected
 rather than written, so the corpus stays interpretable.
 
-Storage: roughly 1.8 GB per hour per camera at 10 fps / 1080p.
+Storage: roughly **10 GB per hour per camera** for `.mjpeg` at 10 fps / 1080p
+(JPEG q85). The `binding` path would be ~1.8 GB/hour once it works, since H.264
+exploits inter-frame redundancy that per-frame JPEG cannot.
 
-**Not yet verified on hardware:** actual recording and the `libsrcampy.Encoder`
-call in `tools/record_ride.py`. No camera has been attached since this landed —
-`i2cdetect -y -r 4` currently shows an empty bus. Everything up to and including
-the "no camera" path is board-verified.
+**Not yet verified on hardware:** a recording that actually captures frames.
+The full `mipi_cam` path is exercised — subprocess launch, rclpy node,
+subscription, settle timeout, clean teardown — but no sensor that streams has
+been attached since it landed. Board-verified so far:
+
+- `cam-service` survives a failed camera open (previously any open crashed it)
+- both cameras report unavailable with a specific reason and the CLI exits cleanly
+- a per-node rclpy executor, without which two cameras raise
+  `ValueError: generator already executing`
+
+**Use IMX219.** The OV5647 produces zero frames even under the vendor's own
+`mipi_cam`, so no source can record from it.

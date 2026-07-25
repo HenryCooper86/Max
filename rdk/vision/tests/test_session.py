@@ -22,7 +22,7 @@ class FakeCamera:
         return b"\x00\x00\x00\x01frame"
 
 
-def make_recorder(tmp_path, front_ok=True, rear_ok=True):
+def make_recorder(tmp_path, front_ok=True, rear_ok=True, video_suffix=".h264"):
     cams = {"front": FakeCamera(front_ok), "rear": FakeCamera(rear_ok)}
 
     def open_fn(slot: CameraSlot):
@@ -41,7 +41,25 @@ def make_recorder(tmp_path, front_ok=True, rear_ok=True):
         slots=[CameraSlot("front", 2), CameraSlot("rear", 3)],
         open_fn=open_fn,
         encode_fn=encode_fn,
+        video_suffix=video_suffix,
     )
+
+
+def test_video_suffix_defaults_to_h264(tmp_path):
+    rec = make_recorder(tmp_path, rear_ok=False)
+    ride = rec.start(now_wall_ms=1700)
+    rec.tick(now_s=0.0, now_wall_ms=1700)
+    rec.stop()
+    assert (Path(tmp_path) / ride / "front" / "seg-000000.h264").exists()
+
+
+def test_video_suffix_can_be_mjpeg_for_the_mipi_cam_source(tmp_path):
+    rec = make_recorder(tmp_path, rear_ok=False, video_suffix=".mjpeg")
+    ride = rec.start(now_wall_ms=1700)
+    rec.tick(now_s=0.0, now_wall_ms=1700)
+    rec.stop()
+    assert (Path(tmp_path) / ride / "front" / "seg-000000.mjpeg").exists()
+    assert scan_ride(Path(tmp_path) / ride).segments[0].frame_count == 1
 
 
 def test_start_records_only_the_cameras_that_opened(tmp_path):

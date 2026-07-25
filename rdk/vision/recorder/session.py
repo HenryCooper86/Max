@@ -31,11 +31,15 @@ class RideRecorder:
         slots: list[CameraSlot],
         open_fn: Callable[[CameraSlot], object],
         encode_fn: Callable[[object, Path], None],
+        video_suffix: str = ".h264",
     ) -> None:
         self.root = Path(root)
         self.slots = slots
         self._open_fn = open_fn
         self._encode_fn = encode_fn
+        #: Container the encode_fn writes. ".h264" for the hardware encoder,
+        #: ".mjpeg" for the mipi_cam source, which delivers decoded frames.
+        self.video_suffix = video_suffix
         self._cameras: dict[str, object] = {}
         self._segmenters: dict[str, Segmenter] = {}
         self._writers: dict[str, MetadataWriter] = {}
@@ -88,7 +92,7 @@ class RideRecorder:
 
             base = self._ride_dir / camera / segment_name(segmenter.index)
             try:
-                self._encode_fn(handle, base.with_suffix(".h264"))
+                self._encode_fn(handle, base.with_suffix(self.video_suffix))
             except Exception as error:  # noqa: BLE001 - drop this camera, keep the ride
                 print(f"[recorder] {camera} stopped: {error}")
                 self._cameras.pop(camera, None)

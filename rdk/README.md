@@ -69,9 +69,17 @@ Verified over SSH against the real board on 2026-07-25.
 
 ### AEC spike result — gate passed, with one required mixer change
 
-Measured 2026-07-25 with `rdk/vision/../../scripts` style throwaway script: a
-200–8000 Hz log sweep at 0.3 FS played through the headset while recording, with
-a silent reference for the noise floor.
+Method: a 200–8000 Hz logarithmic sweep at 0.3 full scale played through the
+headset while simultaneously recording the mic, compared against a silent
+reference for the noise floor. `sox` is not installed on the board, so the sweep
+was generated in Python. Reproduce with:
+
+```bash
+arecord -D plughw:0,0 -f S16_LE -r 48000 -c 1 -d 5 /tmp/silence.wav   # floor
+aplay -D plughw:0,0 /tmp/sweep.wav & \
+  arecord -D plughw:0,0 -f S16_LE -r 48000 -c 1 -d 4 /tmp/echo.wav; wait
+# compare audioop.rms() of the two
+```
 
 **The ES8326's `CROSSTALK1`/`CROSSTALK2` controls default to 10 and act as a
 hardware duck, not an echo canceller.** Holding the DAC at 0 dB and changing only

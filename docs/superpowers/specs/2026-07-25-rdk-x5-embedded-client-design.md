@@ -144,6 +144,18 @@ Fallback ladder, in order of preference:
 3. Half-duplex ducking — mute the mic while Max speaks. This **kills barge-in**,
    which is a shipped feature on all three existing clients. Emergency only.
 
+> **Outcome, 2026-07-25 — the ladder resolved differently than expected.**
+> Step 1 was tried on hardware and **does not work**: PulseAudio's master sink
+> stays `SUSPENDED`, no audio passes either way, and it holds the ALSA card.
+> It is also a desktop-session service, which an appliance must not depend on.
+> A live Doubao conversation then proved the echo is severe enough that Doubao's
+> ASR transcribes Max's own replies as rider speech and he answers himself.
+> The board currently runs the ES8326 hardware duck (`CROSSTALK=10`), i.e.
+> **step 3, with barge-in lost**. **Step 2 is the real answer** and is cheaper
+> here than the ladder implies: the agent already holds the exact far-end
+> reference, since `playback.write()` receives every PCM frame from the relay.
+> Full detail and reproduction in `rdk/README.md` under "AEC".
+
 **Capture**
 
 ```

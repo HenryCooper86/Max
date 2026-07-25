@@ -1,6 +1,7 @@
 import type { RawData, WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
 import { CLIENT_EVENT_TYPES } from "../shared/generated/agent-protocol";
+import { TESTING_PLATFORMS as CANONICAL_TESTING_PLATFORMS } from "../shared/testing";
 import type { Logger } from "./logger";
 import type { AgentProvider, ClientEvent, ProviderSessionContext, ProviderTelemetry } from "./providers/types";
 import {
@@ -27,7 +28,9 @@ const DEMO_SCENARIOS = new Set(["commute", "wind", "fuel", "group", "emergency",
 const MEMORY_LANGUAGES = new Set(["zh", "en"]);
 const RESPONSE_MODES = new Set(["concise", "normal", "emergency"]);
 const RIDER_INTENTS = new Set(["navigation", "weather", "emergency", "diagnostics", "group", "casual"]);
-const TESTING_PLATFORMS = new Set(["web", "ios", "android", "unknown"]);
+// Derived, never re-listed: a local copy of this list silently rejected the
+// embedded client after the enum gained "embedded".
+const TESTING_PLATFORMS = new Set<string>(CANONICAL_TESTING_PLATFORMS);
 const MAX_MEMORY_DESTINATION_BYTES = 256;
 const MAX_TESTER_ID_BYTES = 80;
 const MAX_TESTER_REGION_BYTES = 96;

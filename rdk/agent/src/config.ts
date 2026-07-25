@@ -1,5 +1,9 @@
 export type RdkConfig = {
   relayUrl: string;
+  /** Operator relay token. The relay refuses the /agent upgrade with 401 once
+   *  accounts exist or RELAY_AUTH_TOKEN is set, so a production relay needs
+   *  this. Sent as `?token=…`, matching the web client. */
+  relayToken: string;
   insecureTls: boolean;
   alsaCapture: string;
   alsaPlayback: string;
@@ -47,6 +51,7 @@ function optionalFlag(env: NodeJS.ProcessEnv, key: string): boolean {
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): RdkConfig {
   return {
     relayUrl: requireString(env, "MAX_RELAY_URL"),
+    relayToken: optionalString(env, "MAX_RELAY_TOKEN", ""),
     insecureTls: optionalFlag(env, "MAX_RELAY_INSECURE_TLS"),
     alsaCapture: optionalString(env, "RDK_ALSA_CAPTURE", "plughw:0,0"),
     alsaPlayback: optionalString(env, "RDK_ALSA_PLAYBACK", "plughw:0,0"),

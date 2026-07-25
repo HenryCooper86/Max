@@ -18,6 +18,25 @@ export function nextBackoffMs(attempt: number): number {
   return Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** attempt);
 }
 
+/**
+ * Adds the operator relay token as `?token=…`, the form `server/auth.ts` reads
+ * and the web client already uses. Without it an authenticated relay rejects the
+ * upgrade with 401 before a session ever starts.
+ *
+ * A malformed URL is returned untouched: a bad MAX_RELAY_URL should surface as a
+ * connection failure, not a parse crash before the first attempt.
+ */
+export function authorizedRelayUrl(relayUrl: string, token: string): string {
+  if (!token) return relayUrl;
+  try {
+    const url = new URL(relayUrl);
+    url.searchParams.set("token", token);
+    return url.toString();
+  } catch {
+    return relayUrl;
+  }
+}
+
 export function buildSessionStart(config: RdkConfig, memory?: SessionMemorySnapshot): SessionStartEvent {
   const event: SessionStartEvent = {
     type: "session.start",
@@ -58,7 +77,9 @@ export function createRelayClient(config: RdkConfig, handlers: RelayHandlers): R
   function open(): void {
     ready = false;
     intentional = false;
-    socket = new WebSocket(config.relayUrl, { rejectUnauthorized: !config.insecureTls });
+    socket = new WebSocket(authorizedRelayUrl(config.relayUrl, config.relayToken), {
+      rejectUnauthorized: !config.insecureTls
+    });
     socket.binaryType = "nodebuffer";
 
     socket.on("open", () => {

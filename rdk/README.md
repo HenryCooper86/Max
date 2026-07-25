@@ -36,12 +36,11 @@ Record the result of every step in "Bench findings" below.
    sox -n /tmp/sweep.wav synth 5 sine 200-8000
    aplay -D plughw:0,0 /tmp/sweep.wav & arecord -D plughw:0,0 -f S16_LE -r 48000 -c 1 -d 5 /tmp/echo.wav; wait
    ```
-   Compare the RMS of `/tmp/echo.wav` against a silent reference recording. The
-   difference is the coupling. Then try the WebRTC canceller:
-   ```bash
-   pactl load-module module-echo-cancel aec_method=webrtc source_name=maxmic sink_name=maxspk
-   ```
-   Repeat the measurement against `-D pulse:maxmic`.
+   Compare the RMS of `/tmp/echo.wav` against a silent reference recording. **But
+   read "AEC" below before drawing any conclusion from it** — this measurement
+   was run, looked healthy, and was still wrong. The only real test is a live
+   conversation. Do not bother with `module-echo-cancel`; it was tried and does
+   not work on this board.
 5. **Cameras** — see "Camera findings" below before touching this. Do **not**
    rely on `open_cam` auto-detect; use the known-good `mipi_cam` command to
    confirm a module streams, and note its VCON index.
@@ -50,24 +49,83 @@ Record the result of every step in "Bench findings" below.
 
 Verified over SSH against the real board on 2026-07-25.
 
-| Item                               | Value                                                              | Date       |
-| ---------------------------------- | ------------------------------------------------------------------ | ---------- |
-| Board                              | `D-Robotics X5 MD V0.2`, Ubuntu 22.04.5, kernel 6.1.83             | 2026-07-25 |
-| ALSA capture device                | `plughw:0,0` — card 0 `duplexaudio`, codec **ES8326**              | 2026-07-25 |
-| ALSA playback device               | `plughw:0,0` — same duplex card, one device for both               | 2026-07-25 |
-| Headset wiring (CTIA/OMTP)         | **CTIA, mic works** — −43.6 dBFS ambient, not silence              | 2026-07-25 |
-| Raw echo coupling                  | **+5.5 dB** above the noise floor (`CROSSTALK=0`, DAC 0 dB)        | 2026-07-25 |
-| Coupling with `module-echo-cancel` | not measured — PipeWire runs in the `sunrise` user session         |            |
-| AEC path chosen                    | **software AEC**; coupling is mild enough that ladder step 1 fits  | 2026-07-25 |
-| Full duplex                        | **works** — simultaneous `arecord` + `aplay`, no device contention | 2026-07-25 |
-| Camera front port index            | **MIPI host 2** (`vcon@2`, i2c bus 4) — see "Camera findings"      | 2026-07-25 |
-| Camera rear port index             | **MIPI host 0** (`vcon@0`, i2c bus 6) — separate bus, no collision | 2026-07-25 |
-| BPU                                | present, idle, 500–1000 MHz; `pyeasy_dnn` + `libsrcampy` OK        | 2026-07-25 |
-| Node.js                            | **v22.23.1** installed from NodeSource; npm 10.9.8                 | 2026-07-25 |
-| First live session                 | **works** — 656 KB mic PCM up, 3 device.result round trips         | 2026-07-25 |
-| pytest                             | 6.2.5 installed; board runs the vision suite 104 passed, 1 skipped | 2026-07-25 |
+| Item                       | Value                                                              | Date       |
+| -------------------------- | ------------------------------------------------------------------ | ---------- |
+| Board                      | `D-Robotics X5 MD V0.2`, Ubuntu 22.04.5, kernel 6.1.83             | 2026-07-25 |
+| ALSA capture device        | `plughw:0,0` — card 0 `duplexaudio`, codec **ES8326**              | 2026-07-25 |
+| ALSA playback device       | `plughw:0,0` — same duplex card, one device for both               | 2026-07-25 |
+| Headset wiring (CTIA/OMTP) | **CTIA, mic works** — −43.6 dBFS ambient, not silence              | 2026-07-25 |
+| Raw echo coupling          | **+5.5 dB** above the noise floor (`CROSSTALK=0`, DAC 0 dB)        | 2026-07-25 |
+| `module-echo-cancel`       | **tried, does not work** — master sink stays SUSPENDED, no audio   | 2026-07-25 |
+| AEC path chosen            | **unresolved** — needs in-process AEC; see "AEC" below             | 2026-07-25 |
+| Barge-in                   | works acoustically, but **off** today (`CROSSTALK=10` half-duplex) | 2026-07-25 |
+| Live Doubao session        | **works** — Max speaks, 1.69 MB voice audio down                   | 2026-07-25 |
+| Full duplex                | **works** — simultaneous `arecord` + `aplay`, no device contention | 2026-07-25 |
+| Camera front port index    | **MIPI host 2** (`vcon@2`, i2c bus 4) — see "Camera findings"      | 2026-07-25 |
+| Camera rear port index     | **MIPI host 0** (`vcon@0`, i2c bus 6) — separate bus, no collision | 2026-07-25 |
+| BPU                        | present, idle, 500–1000 MHz; `pyeasy_dnn` + `libsrcampy` OK        | 2026-07-25 |
+| Node.js                    | **v22.23.1** installed from NodeSource; npm 10.9.8                 | 2026-07-25 |
+| First live session         | **works** — 656 KB mic PCM up, 3 device.result round trips         | 2026-07-25 |
+| pytest                     | 6.2.5 installed; board runs the vision suite 104 passed, 1 skipped | 2026-07-25 |
 
-### AEC spike result — gate passed, with one required mixer change
+### AEC — the sweep said "gate passed". A live conversation said otherwise.
+
+> **Read this before changing any audio mixer setting.** The measurement below
+> was reproduced faithfully, and its conclusion was still **wrong**. Keep
+> `CROSSTALK1`/`CROSSTALK2` at **10** (the vendor default) until in-process AEC
+> exists.
+
+**What actually happened (2026-07-25, live Doubao session, headset on).** With
+`CROSSTALK=0` as the sweep recommended, Max heard his own voice through the
+helmet speaker, Doubao's ASR transcribed it as rider speech, and he answered
+himself in a closed loop:
+
+```
+agent: 今天晴间多云，气温大概25度…
+rider: 今天晴间多云。            ← Max's own reply, transcribed as the rider
+agent: 对的，今天晴间多云…
+rider: 对的，今天晴间多。        ← and again
+```
+
+Every `rider:` turn is a truncated prefix of Max's previous reply. The 12 s
+follow-up window keeps the loop alive without anyone saying "Max" again, so it
+runs to the 60 s cap. Worse than cosmetic: those fake turns are written to QA
+transcripts and per-user memory as genuine rider speech.
+
+**Why the measurement misled.** An RMS ratio between a sweep and a noise floor
+does not predict whether an ASR will latch onto the echo. The caveat listed
+below — "speech at full playback volume will couple more" — turned out to be the
+entire story. **Only a live conversation tests this.** A sweep is not a proxy.
+
+**The three real states:**
+
+| Config                          | Echo loop | Barge-in   |
+| ------------------------------- | --------- | ---------- |
+| `CROSSTALK=10` (vendor default) | no        | no         |
+| `CROSSTALK=0`, no AEC           | **yes**   | yes        |
+| `CROSSTALK=0` + real AEC        | no        | yes ← goal |
+
+The board currently sits at `CROSSTALK=10`, saved with `alsactl store`: half
+duplex, no loop, **no barge-in**. That is spec ladder step 3, the "emergency
+only" fallback.
+
+**PulseAudio `module-echo-cancel` (ladder step 1) was tried and does not work
+here.** It loads and creates `maxmic`/`maxspk`, but the master sink stays
+`SUSPENDED` (unloading `module-suspend-on-idle` does not wake it) and a tone
+played through _either_ sink measured mic RMS **1** versus 216 on raw ALSA —
+nothing passing in either direction. PulseAudio then held the card
+(`Device or resource busy`) until `pactl set-card-profile 0 off`. It is also
+architecturally wrong here: it is a **desktop session** service owned by user
+`sunrise`, and a helmet appliance booting to a systemd unit must not depend on a
+desktop login.
+
+**The fix is ladder step 2, in-process AEC.** The agent already holds the exact
+far-end reference — `playback.write()` receives every PCM frame Doubao sends —
+so it needs no monitor source, no virtual sink and no user session, and it also
+brings noise suppression and AGC, which a helmet at speed wants regardless.
+Not yet built; needs its own spec.
+
+### The original sweep measurement, kept for the record
 
 Method: a 200–8000 Hz logarithmic sweep at 0.3 full scale played through the
 headset while simultaneously recording the mic, compared against a silent
@@ -90,27 +148,24 @@ that control:
 | 10 (default) | −35.5 dBFS  | −47.8 dBFS      | capture pushed **below** ambient |
 | 0            | −43.7 dBFS  | −38.1 dBFS      | echo audible at **+5.5 dB**      |
 
-At the default it attenuates _everything_ during playback, including room noise —
-so the rider's voice would be suppressed exactly while Max is speaking. **Leave
-`CROSSTALK1`/`CROSSTALK2` at 0**, or barge-in cannot work. The board has been set
-that way and the state saved with `alsactl store`.
+At the default it attenuates _everything_ during playback, including room noise.
+That reads like a defect, and the original conclusion here was "leave them at 0
+or barge-in cannot work" — **which is what caused the echo loop above.** The
+vendor default exists precisely to prevent it.
 
-With the duck disabled, coupling is only **+5.5 dB above the noise floor** —
-mild. WebRTC-class cancellers routinely handle far worse, so **ladder step 1
-(`module-echo-cancel`) should be sufficient and the half-duplex fallback is not
-needed.** That was the decision gate; barge-in survives.
+With the duck disabled, coupling measured **+5.5 dB above the noise floor**,
+which looked mild enough for ladder step 1. In practice it was more than enough
+to drive the ASR.
 
-Honest limits of this measurement:
+Honest limits of this measurement — the third one turned out to be decisive:
 
 - RMS over the whole capture, not a true ERL against a calibrated reference.
 - The ambient floor drifted between runs (−43.7 vs −35.5 dBFS), so treat the
   numbers as indicative rather than precise.
 - Sweep was 0.3 FS; speech at full playback volume will couple more.
-- **Not yet tested: a person talking while Max speaks** — the definitive barge-in
-  check. That needs someone at the bench, and it is the one result that could
-  still overturn this.
-- `module-echo-cancel` itself is unmeasured: PipeWire runs in the `sunrise` user
-  session and the spike ran as root.
+- **Not tested at the time: a person talking while Max speaks.** This was flagged
+  as "the one result that could still overturn this" — and it did, within the
+  hour.
 
 Also on the board already: a prebuilt BPU detector at
 `/app/multimedia_samples/sunrise_camera/Platform/x5/model_zoom/yolov5s_672x672_nv12.bin`
@@ -238,6 +293,28 @@ journalctl -u max-agent -f
 
 Only the exact string `1` enables `MAX_RELAY_INSECURE_TLS`; anything else leaves
 certificate validation on.
+
+**`MAX_RELAY_TOKEN` is required against any relay that has user accounts** — the
+relay refuses the `/agent` upgrade with 401 otherwise, and the client just
+reconnects in a loop with no explanation. Accepts the operator `RELAY_AUTH_TOKEN`
+or a `sess_…` login token. Keep `/etc/max/agent.env` at mode 600.
+
+Run it through systemd rather than by hand; `nohup`/`setsid` over SSH does not
+reliably survive the session:
+
+```bash
+systemctl restart max-agent && journalctl -u max-agent -f
+```
+
+Two footguns worth knowing when poking at the board over SSH:
+
+- `pkill -f rdk/agent/src/main.ts` matches **its own SSH command line** and kills
+  the shell before it prints anything. Use `pkill -f 'agent/src/mai[n].ts'`.
+- PulseAudio (user `sunrise`) can hold the ALSA card, so `arecord` fails with
+  `Device or resource busy`. Release it with
+  `sudo -u sunrise XDG_RUNTIME_DIR=/run/user/1000 pactl set-card-profile 0 off`.
+  This reverts when the desktop session restarts — making it permanent is
+  outstanding work.
 
 `max-agent` names `max-vision` in `After=` but does not `Require=` it: if the
 vision sidecar is down, the agent still runs and camera actions fail truthfully

@@ -1,0 +1,15 @@
+[Unit]
+Description=Max helmet vision sidecar (RDK X5)
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/max/agent.env
+WorkingDirectory=/opt/max/rdk/vision
+ExecStart=/usr/bin/python3 service.py
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

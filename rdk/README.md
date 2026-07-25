@@ -55,10 +55,11 @@ Verified over SSH against the real board on 2026-07-25.
 | Board                              | `D-Robotics X5 MD V0.2`, Ubuntu 22.04.5, kernel 6.1.83             | 2026-07-25 |
 | ALSA capture device                | `plughw:0,0` — card 0 `duplexaudio`, codec **ES8326**              | 2026-07-25 |
 | ALSA playback device               | `plughw:0,0` — same duplex card, one device for both               | 2026-07-25 |
-| Headset wiring (CTIA/OMTP)         | not yet measured — needs the headset on the bench                  |            |
-| Raw echo coupling                  | not yet measured                                                   |            |
-| Coupling with `module-echo-cancel` | not yet measured — **PipeWire is already running**, no install     |            |
-| AEC path chosen                    | pending the measurement above                                      |            |
+| Headset wiring (CTIA/OMTP)         | **CTIA, mic works** — −43.6 dBFS ambient, not silence              | 2026-07-25 |
+| Raw echo coupling                  | **+5.5 dB** above the noise floor (`CROSSTALK=0`, DAC 0 dB)        | 2026-07-25 |
+| Coupling with `module-echo-cancel` | not measured — PipeWire runs in the `sunrise` user session         |            |
+| AEC path chosen                    | **software AEC**; coupling is mild enough that ladder step 1 fits  | 2026-07-25 |
+| Full duplex                        | **works** — simultaneous `arecord` + `aplay`, no device contention | 2026-07-25 |
 | Camera front port index            | **MIPI host 2** (`vcon@2`, i2c bus 4) — see "Camera findings"      | 2026-07-25 |
 | Camera rear port index             | **MIPI host 0** (`vcon@0`, i2c bus 6) — separate bus, no collision | 2026-07-25 |
 | BPU                                | present, idle, 500–1000 MHz; `pyeasy_dnn` + `libsrcampy` OK        | 2026-07-25 |
@@ -66,11 +67,50 @@ Verified over SSH against the real board on 2026-07-25.
 | First live session                 | **works** — 656 KB mic PCM up, 3 device.result round trips         | 2026-07-25 |
 | pytest                             | 6.2.5 installed; board runs the vision suite 104 passed, 1 skipped | 2026-07-25 |
 
-> **Step 4 is a decision gate, not a formality.** If `module-echo-cancel` does
-> not suppress the coupling adequately, stop before implementing the audio path.
-> The fallback — half-duplex ducking — costs barge-in, which is a shipped
-> feature on the web, iOS, and Android clients. That is a product decision, not
-> an implementation detail.
+### AEC spike result — gate passed, with one required mixer change
+
+Method: a 200–8000 Hz logarithmic sweep at 0.3 full scale played through the
+headset while simultaneously recording the mic, compared against a silent
+reference for the noise floor. `sox` is not installed on the board, so the sweep
+was generated in Python. Reproduce with:
+
+```bash
+arecord -D plughw:0,0 -f S16_LE -r 48000 -c 1 -d 5 /tmp/silence.wav   # floor
+aplay -D plughw:0,0 /tmp/sweep.wav & \
+  arecord -D plughw:0,0 -f S16_LE -r 48000 -c 1 -d 4 /tmp/echo.wav; wait
+# compare audioop.rms() of the two
+```
+
+**The ES8326's `CROSSTALK1`/`CROSSTALK2` controls default to 10 and act as a
+hardware duck, not an echo canceller.** Holding the DAC at 0 dB and changing only
+that control:
+
+| `CROSSTALK`  | noise floor | during playback | outcome                          |
+| ------------ | ----------- | --------------- | -------------------------------- |
+| 10 (default) | −35.5 dBFS  | −47.8 dBFS      | capture pushed **below** ambient |
+| 0            | −43.7 dBFS  | −38.1 dBFS      | echo audible at **+5.5 dB**      |
+
+At the default it attenuates _everything_ during playback, including room noise —
+so the rider's voice would be suppressed exactly while Max is speaking. **Leave
+`CROSSTALK1`/`CROSSTALK2` at 0**, or barge-in cannot work. The board has been set
+that way and the state saved with `alsactl store`.
+
+With the duck disabled, coupling is only **+5.5 dB above the noise floor** —
+mild. WebRTC-class cancellers routinely handle far worse, so **ladder step 1
+(`module-echo-cancel`) should be sufficient and the half-duplex fallback is not
+needed.** That was the decision gate; barge-in survives.
+
+Honest limits of this measurement:
+
+- RMS over the whole capture, not a true ERL against a calibrated reference.
+- The ambient floor drifted between runs (−43.7 vs −35.5 dBFS), so treat the
+  numbers as indicative rather than precise.
+- Sweep was 0.3 FS; speech at full playback volume will couple more.
+- **Not yet tested: a person talking while Max speaks** — the definitive barge-in
+  check. That needs someone at the bench, and it is the one result that could
+  still overturn this.
+- `module-echo-cancel` itself is unmeasured: PipeWire runs in the `sunrise` user
+  session and the spike ran as root.
 
 Also on the board already: a prebuilt BPU detector at
 `/app/multimedia_samples/sunrise_camera/Platform/x5/model_zoom/yolov5s_672x672_nv12.bin`

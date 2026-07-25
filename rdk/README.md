@@ -50,19 +50,19 @@ Record the result of every step in "Bench findings" below.
 
 Verified over SSH against the real board on 2026-07-25.
 
-| Item                               | Value                                                          | Date       |
-| ---------------------------------- | -------------------------------------------------------------- | ---------- |
-| Board                              | `D-Robotics X5 MD V0.2`, Ubuntu 22.04.5, kernel 6.1.83         | 2026-07-25 |
-| ALSA capture device                | `plughw:0,0` — card 0 `duplexaudio`, codec **ES8326**          | 2026-07-25 |
-| ALSA playback device               | `plughw:0,0` — same duplex card, one device for both           | 2026-07-25 |
-| Headset wiring (CTIA/OMTP)         | not yet measured — needs the headset on the bench              |            |
-| Raw echo coupling                  | not yet measured                                               |            |
-| Coupling with `module-echo-cancel` | not yet measured — **PipeWire is already running**, no install |            |
-| AEC path chosen                    | pending the measurement above                                  |            |
-| Camera front port index            | **MIPI host 2** (`vcon@2`, i2c bus 4) — see "Camera findings"  | 2026-07-25 |
-| Camera rear port index             | unresolved — only one camera reachable so far                  |            |
-| BPU                                | present, idle, 500–1000 MHz; `pyeasy_dnn` + `libsrcampy` OK    | 2026-07-25 |
-| Node.js                            | **not installed** — provisioning step above is still required  | 2026-07-25 |
+| Item                               | Value                                                              | Date       |
+| ---------------------------------- | ------------------------------------------------------------------ | ---------- |
+| Board                              | `D-Robotics X5 MD V0.2`, Ubuntu 22.04.5, kernel 6.1.83             | 2026-07-25 |
+| ALSA capture device                | `plughw:0,0` — card 0 `duplexaudio`, codec **ES8326**              | 2026-07-25 |
+| ALSA playback device               | `plughw:0,0` — same duplex card, one device for both               | 2026-07-25 |
+| Headset wiring (CTIA/OMTP)         | not yet measured — needs the headset on the bench                  |            |
+| Raw echo coupling                  | not yet measured                                                   |            |
+| Coupling with `module-echo-cancel` | not yet measured — **PipeWire is already running**, no install     |            |
+| AEC path chosen                    | pending the measurement above                                      |            |
+| Camera front port index            | **MIPI host 2** (`vcon@2`, i2c bus 4) — see "Camera findings"      | 2026-07-25 |
+| Camera rear port index             | **MIPI host 0** (`vcon@0`, i2c bus 6) — separate bus, no collision | 2026-07-25 |
+| BPU                                | present, idle, 500–1000 MHz; `pyeasy_dnn` + `libsrcampy` OK        | 2026-07-25 |
+| Node.js                            | **not installed** — provisioning step above is still required      | 2026-07-25 |
 
 > **Step 4 is a decision gate, not a formality.** If `module-echo-cancel` does
 > not suppress the coupling adequately, stop before implementing the audio path.
@@ -117,11 +117,21 @@ ros2 run mipi_cam mipi_cam --ros-args \
   -p video_device:=IMX219 -p channel:=2 -p image_width:=1920 -p image_height:=1080
 ```
 
-**Open question blocking front+rear:** both camera connectors map to i2c bus 4
-(`vcon@2` and `vcon@3`), so two modules collide at the same address. Selecting
-between them likely needs `gpio_enable_bit` / `gpio_level_bit` in
-`camera_config_t` ("索引自 VCON"), and `vcon@3` has no `gpio_oth` property while
-`vcon@2` does. Untested — needs two IMX219 modules on the bench.
+**Front+rear is NOT blocked by an address collision** — an earlier note here
+claimed it was, based on only ever seeing one camera at a time. With two modules
+attached, both enumerate simultaneously on **different i2c buses**:
+
+| Connector | VCON                | i2c bus | mipi channel |
+| --------- | ------------------- | ------- | ------------ |
+| A         | `vcon@0` / `vcon@1` | 6       | 0 / 1        |
+| B         | `vcon@2` / `vcon@3` | 4       | 2 / 3        |
+
+So a front+rear pair uses **channel 0 and channel 2**, needing no
+`gpio_enable_bit` / `gpio_level_bit` multiplexing. (Those fields would only
+matter for two modules sharing one bus, which is not the arrangement here.)
+
+Still untested with modules that stream — both cameras on the bench are OV5647,
+which produce no frames.
 
 ## Running
 
@@ -269,3 +279,12 @@ been attached since it landed. Board-verified so far:
 
 **Use IMX219.** The OV5647 produces zero frames even under the vendor's own
 `mipi_cam`, so no source can record from it.
+
+The two modules are visually near-identical (they are Raspberry Pi Camera v1 vs
+v2). Identify one in seconds by plugging it in alone and scanning:
+
+```bash
+for b in 4 6; do echo "bus $b:"; i2cdetect -y -r $b | sed -n '3p'; done
+# 0x10 => IMX219  (works)
+# 0x36 => OV5647  (does not stream on this image)
+```

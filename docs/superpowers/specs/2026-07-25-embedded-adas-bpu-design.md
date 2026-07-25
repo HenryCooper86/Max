@@ -64,9 +64,14 @@ Verified against the board on 2026-07-25 (see `rdk/README.md`).
 
 Two hardware facts are unresolved and affect this spec:
 
-- **Only one camera streams today.** Both connectors share i2c bus 4
-  (`vcon@2`/`vcon@3`), so two modules collide at address `0x10`. Front+rear needs
-  this solved; the design therefore treats cameras as independently optional.
+- **No camera streams today.** Both modules on the bench are OV5647, which
+  produce zero frames even under the vendor's own `mipi_cam`. IMX219 is the
+  working module. The design treats cameras as independently optional regardless,
+  which is good practice and not merely a workaround.
+  (Corrected 2026-07-25: an earlier draft claimed front+rear was blocked by an
+  i2c address collision. It is not — the two connectors sit on **different**
+  buses, `vcon@0/@1` on bus 6 and `vcon@2/@3` on bus 4, so a front+rear pair uses
+  channels 0 and 2 with no GPIO multiplexing.)
 - **Thermal headroom is unmeasured.** 71 °C idle means sustained dual-camera
   inference could throttle. M1 measures it rather than assuming.
 
@@ -339,9 +344,10 @@ Audio is enabled only once shadow-mode numbers agree with the offline harness.
 
 ## Follow-on
 
-1. **Front+rear hardware.** Resolve two cameras on the shared i2c bus
-   (`gpio_enable_bit` / `gpio_level_bit`), without which `rear_approach` and
-   `tailgating` cannot ship.
+1. **Front+rear hardware.** Two IMX219 modules on channels 0 and 2 — the wiring
+   is not the obstacle it was thought to be, but `rear_approach` and `tailgating`
+   still cannot ship until modules that actually stream are fitted to both
+   connectors.
 2. **Rider-perspective model.** Fine-tune on the M0 corpus; the stock COCO
    detector is a baseline, not a destination.
 3. **The remaining five threats**, each with its own false-alarm study.

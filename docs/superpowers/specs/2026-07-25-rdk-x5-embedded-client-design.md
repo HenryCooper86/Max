@@ -318,8 +318,8 @@ MAX_RELAY_URL=ws://<lan-ip>:8787/agent     # or wss://3.35.135.136/agent
 MAX_RELAY_INSECURE_TLS=0                   # self-signed test server; debug-only, default off
 RDK_ALSA_CAPTURE=plughw:0,0                # set from step 1 of the manual checklist;
 RDK_ALSA_PLAYBACK=plughw:0,0               # capture points at the AEC source once chosen
-RDK_CAMERA_FRONT=0                         # VIN port index, confirmed on the bench
-RDK_CAMERA_REAR=1
+RDK_CAMERA_FRONT=2                         # VCON index, verified on hardware
+RDK_CAMERA_REAR=3
 MAX_GALLERY_DIR=/var/lib/max/gallery
 MAX_GALLERY_MIN_FREE_MB=1024
 MAX_HUD_PORT=8080
@@ -329,12 +329,18 @@ MAX_VOICE_GATE_RMS=900                     # int16 RMS, ≈ -31 dBFS
 MAX_VOICE_GATE_MS=400                      # sustained speech before re-arming
 ```
 
-Three of these are seeded with defaults that the bench replaces rather than
-values to trust blindly. The ALSA device names come from step 1 of the manual
-checklist, and `RDK_ALSA_CAPTURE` is repointed at the echo-cancelled source once
-the spike picks a path. The camera port indices are whatever D-Robotics'
-enumeration actually reports for the two CSI connectors in use. The voice-gate
-numbers are a starting point for a helmet at speed; wind noise will move them.
+The ALSA device names and camera port indices are no longer guesses — both were
+verified against the board on 2026-07-25 (`plughw:0,0` on the ES8326 duplex card;
+cameras on VCON 2/3, since VCON 0/1 sit on an i2c bus with no connector). See
+"Bench findings" and "Camera findings" in `rdk/README.md`. `RDK_ALSA_CAPTURE` is
+still repointed at the echo-cancelled source once the AEC spike picks a path, and
+the voice-gate numbers remain a starting point that wind noise will move.
+
+**Correction to the camera section below:** `libsrcampy.open_cam` auto-detect is
+unusable on this board — it searches an empty port, reports a phantom sensor, and
+crashes `cam-service`. `rdk/vision/camera.py` must pin the port through
+`hbn_camera_create` instead. IMX219 is the working module; OV5647 fails at
+video-flow start.
 
 `MAX_RELAY_INSECURE_TLS` mirrors the mobile posture: the shared test server is
 self-signed, so the escape hatch exists, defaults off, and is debug-only.

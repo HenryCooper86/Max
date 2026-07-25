@@ -50,8 +50,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RdkConfig {
     insecureTls: optionalFlag(env, "MAX_RELAY_INSECURE_TLS"),
     alsaCapture: optionalString(env, "RDK_ALSA_CAPTURE", "plughw:0,0"),
     alsaPlayback: optionalString(env, "RDK_ALSA_PLAYBACK", "plughw:0,0"),
-    cameraFront: optionalString(env, "RDK_CAMERA_FRONT", "0"),
-    cameraRear: optionalString(env, "RDK_CAMERA_REAR", "1"),
+    // VCON index, not a guess: on this board vcon@0/@1 sit on i2c bus 6, which
+    // has no connector, while both camera connectors map to vcon@2/@3 on bus 4.
+    // Verified on hardware — see "Camera findings" in rdk/README.md.
+    cameraFront: optionalString(env, "RDK_CAMERA_FRONT", "2"),
+    cameraRear: optionalString(env, "RDK_CAMERA_REAR", "3"),
     galleryDir: optionalString(env, "MAX_GALLERY_DIR", "/var/lib/max/gallery"),
     galleryMinFreeMb: optionalNumber(env, "MAX_GALLERY_MIN_FREE_MB", 1024),
     hudPort: optionalNumber(env, "MAX_HUD_PORT", 8080),

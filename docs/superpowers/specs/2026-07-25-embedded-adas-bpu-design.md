@@ -59,7 +59,7 @@ Verified against the board on 2026-07-25 (see `rdk/README.md`).
 | BPU      | present, idle 500–1000 MHz, `hobot_dnn.pyeasy_dnn` available                                                       |
 | Detector | **already on the board**: `/app/multimedia_samples/sunrise_camera/Platform/x5/model_zoom/yolov5s_672x672_nv12.bin` |
 | Scaler   | VSE hardware channels already configured by the camera pipeline                                                    |
-| Camera   | **IMX219** streams 1920×1080 @ 30 fps on VCON 2. **OV5647 does not work** — fails at video-flow start              |
+| Camera   | **IMX219** streams 1920×1080 @ 30 fps. **OV5647 unsupported** — vendor ISP bug, see `rdk/README.md`                |
 | Thermal  | idles at ~71 °C with the BPU at 0%                                                                                 |
 
 Two hardware facts are unresolved and affect this spec:

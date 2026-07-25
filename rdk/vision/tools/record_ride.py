@@ -74,6 +74,11 @@ def main() -> None:
     parser.add_argument("--front-vcon", type=int, default=2)
     parser.add_argument("--rear-vcon", type=int, default=3)
     parser.add_argument("--sensor", default="IMX219", help="mipi_cam video_device name, e.g. IMX219 or OV5647")
+    parser.add_argument(
+        "--skip-preflight",
+        action="store_true",
+        help="record even if no supported sensor is detected (for testing an unsupported module)",
+    )
     args = parser.parse_args()
 
     if args.source == "mipi_cam":
@@ -82,6 +87,16 @@ def main() -> None:
         open_fn, encode_fn, suffix = _make_mipi_opener(args.sensor), write_jpeg, ".mjpeg"
     else:
         open_fn, encode_fn, suffix = _open_binding, _encode_binding, ".h264"
+
+    if not args.skip_preflight:
+        from sensors import UnsupportedSensor, preflight  # noqa: PLC0415
+
+        try:
+            preflight()
+        except UnsupportedSensor as error:
+            # Fail in a second with a specific reason, rather than after a 5 s
+            # ISP timeout that points at the wrong layer.
+            raise SystemExit(f"[recorder] {error}") from None
 
     recorder = RideRecorder(
         root=args.root,

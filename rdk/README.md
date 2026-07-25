@@ -104,10 +104,46 @@ Consequences:
 | **IMX219** | `0x10`   | **streams 1920×1080 @ 30 fps** ✅            |
 | **OV5647** | `0x36`   | `create_and_run_vflow ret -10`, no frames ❌ |
 
-Use **IMX219** modules. The OV5647 fails at video-flow start at both 1920×1080
-and 1280×960 (the driver ignores the requested mode and reports 1080 either way),
-and the image ships one ISP tuning file for it versus many FOV variants for
-IMX219.
+### OV5647 is unsupported — decided, not pending
+
+**Use IMX219.** OV5647 is treated as unsupported on this platform. The cause is a
+vendor-side ISP bug we cannot fix, and the diagnosis is recorded here so nobody
+spends another afternoon on it:
+
+```
+isp_video_set_inter_attr ... sensor_cali_name = .../ov5647_1920x1080_tuning.json
+                    ↓ 5.05 s
+ctx_id 0, inst id 0, sensor .../ov5647_1920x1080_tuning.json   → teardown
+create_and_run_vflow failed, ret -10
+```
+
+Ruled out, each by measurement:
+
+- **Not the sensor driver.** `imx219` and `ov5647` in
+  [x5-libcam-sensor](https://github.com/D-Robotics/x5-libcam-sensor) are
+  structurally identical — same GPIO power-on, register init, and stream-on. A
+  BSP rebuild of `libov5647.so` would change nothing.
+- **Not signal integrity or lane config.** Every `mipi_host*/status/icnt`
+  counter reads 0 and the D-PHY never leaves reset, so the sensor is never asked
+  to stream.
+- **Not our code.** The vendor's own `mipi_cam` fails identically.
+- **Not a stale image.** `hobot-camera 3.1.1` is the newest available; `apt` has
+  no upgrade.
+- **Not a version gate.** `CAMERA_CALVER_NOCHECK=1` and `CAMERA_CONFIG_NOCHECK=1`
+  make no difference.
+
+The failure is in the shipped ISP tuning/camsys handling of
+`ov5647_1920x1080_tuning.json`. If you want to pursue it upstream, the relevant
+repo is [x5-drv-camsys](https://github.com/D-Robotics/x5-drv-camsys) — not the
+sensor tree — and the block above is the bug report. One cheap local test first:
+diff your BSP's `ov5647_1920x1080_tuning.json` against the board's copy
+(343293 bytes); if the BSP has a newer one, dropping it in is a one-file
+experiment.
+
+`tools/record_ride.py` runs an i2c preflight before opening anything, so an
+unsupported or unseated module fails in under a second with a specific message
+instead of a five-second ISP timeout that points at the wrong layer. Override
+with `--skip-preflight` if you are deliberately testing an unsupported module.
 
 Known-good reference command, for confirming the camera outside our stack:
 

@@ -202,3 +202,41 @@ packages.
 pip install pytest
 cd rdk/vision && python3 -m pytest tests/ -q
 ```
+
+## ADAS M0 — recording a corpus
+
+See `docs/superpowers/specs/2026-07-25-embedded-adas-bpu-design.md`.
+
+Record on the board (Ctrl-C or SIGTERM to stop):
+
+```bash
+systemctl restart cam-service && sleep 3
+cd /opt/max/rdk/vision
+python3 -m tools.record_ride --root /var/lib/max/corpus --fps 10
+```
+
+Segments are 60 s of H.264 plus a `.jsonl` metadata sidecar, so a power cut
+costs at most one minute. A camera that will not open is logged and skipped —
+front-only rides are expected on current hardware, and only a ride with no
+cameras at all is an error.
+
+Copy the corpus off the board, then label hazard windows on a laptop:
+
+```bash
+python3 -m tools.label list --root ./corpus
+python3 -m tools.label add --ride ./corpus/ride-20260725-141900 \
+  rear_approach:rear:12000:15000:"car closed fast"
+python3 -m tools.label show --ride ./corpus/ride-20260725-141900
+```
+
+Offsets are milliseconds from the ride start, matching `wall_ms` in the
+sidecars. Only the four M1 threats are accepted: `forward_collision`,
+`pedestrian_ahead`, `rear_approach`, `tailgating` — anything else is rejected
+rather than written, so the corpus stays interpretable.
+
+Storage: roughly 1.8 GB per hour per camera at 10 fps / 1080p.
+
+**Not yet verified on hardware:** actual recording and the `libsrcampy.Encoder`
+call in `tools/record_ride.py`. No camera has been attached since this landed —
+`i2cdetect -y -r 4` currently shows an empty bus. Everything up to and including
+the "no camera" path is board-verified.

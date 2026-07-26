@@ -60,7 +60,7 @@ Verified over SSH against the real board on 2026-07-25.
 | AEC path chosen            | **in-process** — `rdk/aec/max-aec`, WebRTC APM; built and deployed | 2026-07-26 |
 | Reference-to-mic lag       | **81 ms** measured (was 953 ms before playback pacing)             | 2026-07-26 |
 | Echo loop                  | **fixed** — confirmed live, headset on, Max replies once and stops | 2026-07-26 |
-| Barge-in                   | wired and gated on the local voice gate; talk-over test still owed | 2026-07-26 |
+| Barge-in                   | **works** — confirmed live, talking over Max cuts his reply        | 2026-07-26 |
 | Live Doubao session        | **works** — Max speaks, 1.69 MB voice audio down                   | 2026-07-25 |
 | Full duplex                | **works** — simultaneous `arecord` + `aplay`, no device contention | 2026-07-25 |
 | Camera front port index    | **MIPI host 2** (`vcon@2`, i2c bus 4) — see "Camera findings"      | 2026-07-25 |
@@ -131,9 +131,14 @@ brings noise suppression and AGC, which a helmet at speed wants regardless.
 
 ### In-process AEC — built and confirmed live, 2026-07-26
 
-**The echo loop is fixed.** Confirmed in a live Doubao session with the headset
-on: Max replies once and stops, and no `rider:` turn echoes his words. That is
-the failure of 2026-07-25 closed.
+**Both acceptance tests pass, in one session, headset on.** Max replies once and
+stops, with no `rider:` turn echoing his words; and talking over him mid-reply
+cuts him off. That is the 2026-07-25 failure closed, and full duplex with it —
+the third row of the table above, which had never been reached before.
+
+Passing both together is the bar. Either alone proves nothing: `CROSSTALK=10`
+passes the first and fails the second, `CROSSTALK=0` without AEC does the
+reverse, and the 2026-07-25 spike reached a wrong conclusion by checking one.
 
 **What actually caused it to come back once, after the canceller was working.**
 `playback.flush()` fires on Doubao's `status: hearing`, and `flush()` reset APM
@@ -171,6 +176,17 @@ max-aec: far-end 300 frames in=... out=... (N dB removed) | quiet ... | ref ... 
 `resets` climbing means something is wiping the filter again — that is this bug
 returning. A low `dB removed` with `resets 0` means the canceller itself is
 short. The distinction is the whole diagnosis; do not guess between them.
+
+**Two things nearly made barge-in fail for reasons unrelated to echo.** Both are
+worth knowing before touching this code:
+
+- The barge-in witness must be fast. The first version asked `createVoiceGate`,
+  which waits 400 ms for sustained speech. The relay's event arrives ~100-200 ms
+  after speech starts and is sent **once per turn**, so the witness was still
+  silent when asked and every interruption would have been dropped. The guard
+  now reads raw frame RMS over 3 frames (60 ms).
+- Either side may notice first. If the relay is ahead, the request waits 300 ms
+  for the mic rather than being discarded.
 
 ### How it is built
 

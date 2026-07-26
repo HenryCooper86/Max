@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
 import { Socket } from "node:net";
 import { createCapture } from "./audio/capture";
+import { applyCrosstalk } from "./audio/mixer";
 import { createPlayback } from "./audio/playback";
+import { createReferenceSink, type ReferenceSink } from "./audio/reference";
 import { createVoiceGate } from "./audio/voice-gate";
 import { loadConfig } from "./config";
 import { createDeviceDispatcher } from "./device/dispatch";
@@ -68,7 +70,26 @@ function start(): void {
   let shuttingDown = false;
 
   const gate = createVoiceGate({ rmsThreshold: config.voiceGateRms, sustainMs: config.voiceGateMs });
-  const playback = createPlayback({ device: config.alsaPlayback });
+
+  const aecActive = config.aecMode === "apm";
+  // With real cancellation the hardware duck comes off, which is what lets the
+  // rider be heard while Max is talking. With AEC off it goes back on, because
+  // an echo loop is worse than no barge-in.
+  void applyCrosstalk(aecActive).then((ok) => {
+    if (!ok) console.log("[audio] could not set CROSSTALK; check amixer");
+  });
+
+  // Reassigned once capture spawns max-aec and hands over fd 3. Until then it
+  // is a no-op sink, so playback works whether or not AEC is running.
+  let referenceSink: ReferenceSink = createReferenceSink({ stream: null });
+  const playback = createPlayback({
+    device: config.alsaPlayback,
+    reference: {
+      write: (pcm) => referenceSink.write(pcm),
+      flush: () => referenceSink.flush(),
+      close: () => referenceSink.close()
+    }
+  });
 
   const hud = createHudServer(config.hudPort, config.visionPreviewPort);
   let hudState = initialHudState();
@@ -122,6 +143,16 @@ function start(): void {
 
   const capture = createCapture({
     device: config.alsaCapture,
+    aec: aecActive
+      ? {
+          bin: config.aecBin,
+          delayMs: config.aecDelayMs,
+          suppression: config.aecSuppression
+        }
+      : undefined,
+    onReference: (stream) => {
+      referenceSink = createReferenceSink({ stream });
+    },
     onFrame: (frame) => {
       const speaking = gate(frame);
       if (waitingForVoice && speaking) {

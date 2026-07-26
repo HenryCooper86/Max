@@ -15,6 +15,8 @@ export type PlaybackOptions = {
   spawn?: SpawnLike;
   gain?: number;
   threshold?: number;
+  /** Far-end reference for AEC. Fed the post-limiter signal — see the spec. */
+  reference?: { write(pcm: Int16Array): void; flush(): void; close(): void };
 };
 
 export function playbackArgs(device: string): string[] {
@@ -63,6 +65,11 @@ export function createPlayback(options: PlaybackOptions): {
     write(pcm: Int16Array): void {
       const target = ensure();
       const limited = applySoftLimit(upsample(pcm), options.gain, options.threshold);
+      // Post-limiter, so the canceller models exactly what the DAC receives.
+      // Tapping before it would hide the limiter's non-linearity from a filter
+      // that assumes the echo path is linear, and cancellation would fall apart
+      // precisely when Max is loudest.
+      options.reference?.write(limited);
       target.stdin?.write(Buffer.from(limited.buffer, limited.byteOffset, limited.byteLength));
     },
 
@@ -71,6 +78,12 @@ export function createPlayback(options: PlaybackOptions): {
      * the next write respawns it.
      */
     flush(): void {
+      // Before the kill, not after: the reset marker must sit in the reference
+      // pipe behind the audio it invalidates. Everything already queued is
+      // about to be discarded unheard, and APM has to forget exactly that much
+      // or it spends the rider's interruption subtracting an echo that never
+      // reached the speaker.
+      options.reference?.flush();
       child?.kill("SIGKILL");
       child = null;
     },

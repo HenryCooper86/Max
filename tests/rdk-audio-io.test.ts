@@ -1,17 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 import { PassThrough } from "node:stream";
 import { FRAME_SAMPLES } from "../rdk/agent/src/audio/dsp";
-import { captureArgs, createCapture } from "../rdk/agent/src/audio/capture";
+import { aecArgs, captureArgs, createCapture } from "../rdk/agent/src/audio/capture";
 import { createPlayback, playbackArgs } from "../rdk/agent/src/audio/playback";
 
 function fakeChild() {
   const stdout = new PassThrough();
   const stdin = new PassThrough();
+  const reference = new PassThrough();
   const kill = vi.fn();
   return {
-    child: { stdout, stdin, kill, on: () => {} },
+    child: { stdout, stdin, stdio: [null, stdout, null, reference], kill, on: () => {} },
     stdout,
     stdin,
+    reference,
     kill
   };
 }
@@ -139,5 +141,133 @@ describe("createPlayback", () => {
     playback.flush();
     playback.write(new Int16Array(240));
     expect(spawns).toBe(2);
+  });
+});
+
+describe("aecArgs", () => {
+  it("passes the device, delay and suppression to max-aec", () => {
+    expect(aecArgs("plughw:0,0", 160, 0)).toEqual([
+      "--device",
+      "plughw:0,0",
+      "--delay-ms",
+      "160",
+      "--suppression",
+      "0"
+    ]);
+  });
+});
+
+describe("createCapture with AEC", () => {
+  it("spawns max-aec instead of arecord when configured", () => {
+    const fake = fakeChild();
+    let spawned = "";
+    const capture = createCapture({
+      device: "plughw:0,0",
+      spawn: (cmd) => {
+        spawned = cmd;
+        return fake.child;
+      },
+      onFrame: () => {},
+      aec: { bin: "/opt/max/rdk/aec/max-aec", delayMs: 160, suppression: 0 }
+    });
+    capture.start();
+    expect(spawned).toBe("/opt/max/rdk/aec/max-aec");
+  });
+
+  it("still spawns arecord when AEC is not configured", () => {
+    const fake = fakeChild();
+    let spawned = "";
+    const capture = createCapture({
+      device: "plughw:0,0",
+      spawn: (cmd) => {
+        spawned = cmd;
+        return fake.child;
+      },
+      onFrame: () => {}
+    });
+    capture.start();
+    expect(spawned).toBe("arecord");
+  });
+
+  it("does not decimate again — max-aec already emits 16 kHz", () => {
+    // Double-decimating would drop the uplink to 5.3 kHz and Doubao would hear
+    // a slowed-down rider, so this is the seam worth pinning down.
+    const fake = fakeChild();
+    const frames: Int16Array[] = [];
+    const capture = createCapture({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      onFrame: (f) => frames.push(f),
+      aec: { bin: "/opt/max/rdk/aec/max-aec", delayMs: 160, suppression: 0 }
+    });
+    capture.start();
+    fake.stdout.write(Buffer.from(new Int16Array(FRAME_SAMPLES * 3).buffer));
+    expect(frames.length).toBe(3);
+    expect(frames[0]!.length).toBe(FRAME_SAMPLES);
+  });
+
+  it("hands the reference pipe to the caller so playback can feed it", () => {
+    const fake = fakeChild();
+    let handed: NodeJS.WritableStream | null | undefined;
+    const capture = createCapture({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      onFrame: () => {},
+      aec: { bin: "/opt/max/rdk/aec/max-aec", delayMs: 160, suppression: 0 },
+      onReference: (stream) => (handed = stream)
+    });
+    capture.start();
+    expect(handed).toBe(fake.reference);
+  });
+
+  it("hands over null with AEC off, so the sink stays a no-op", () => {
+    const fake = fakeChild();
+    let handed: NodeJS.WritableStream | null | undefined = undefined;
+    const capture = createCapture({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      onFrame: () => {},
+      onReference: (stream) => (handed = stream)
+    });
+    capture.start();
+    expect(handed).toBeNull();
+  });
+});
+
+describe("playback reference", () => {
+  it("forwards post-limiter audio to the reference sink", () => {
+    const fake = fakeChild();
+    const written: number[] = [];
+    const playback = createPlayback({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      reference: {
+        write: (pcm: Int16Array) => written.push(pcm.length),
+        flush: () => {},
+        close: () => {}
+      }
+    });
+    playback.write(new Int16Array(240)); // 24 kHz in -> 480 at 48 kHz
+    expect(written).toEqual([480]);
+  });
+
+  it("flushes the reference before killing aplay, not after", () => {
+    // Order matters: the reset marker has to sit in the pipe behind the audio
+    // it invalidates and ahead of anything that follows.
+    const order: string[] = [];
+    const fake = fakeChild();
+    fake.kill.mockImplementation(() => order.push("kill"));
+    const playback = createPlayback({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      reference: {
+        write: () => {},
+        flush: () => order.push("flush"),
+        close: () => {}
+      }
+    });
+    playback.write(new Int16Array(240));
+    playback.flush();
+    expect(order).toEqual(["flush", "kill"]);
   });
 });

@@ -21,6 +21,13 @@ export type RdkConfig = {
   aecBin: string;
   /** Reference-to-mic delay hint for APM, measured on the bench. */
   aecDelayMs: number;
+  /**
+   * Residual echo suppressor: 0 low, 1 moderate, 2 high. Defaults to low
+   * because the bench sweep found ERLE identical at all three while double-talk
+   * loss climbed 12.5 -> 16.7 -> 22.1 dB, and double-talk is barge-in. Raise it
+   * only if a real ride leaks echo that the linear filter cannot model.
+   */
+  aecSuppression: number;
 };
 
 function requireString(env: NodeJS.ProcessEnv, key: string): string {
@@ -84,6 +91,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RdkConfig {
     voiceGateMs: optionalNumber(env, "MAX_VOICE_GATE_MS", 400),
     aecMode: optionalEnum(env, "MAX_AEC_MODE", ["apm", "off"] as const, "apm"),
     aecBin: optionalString(env, "MAX_AEC_BIN", "/opt/max/rdk/aec/max-aec"),
-    aecDelayMs: optionalNumber(env, "MAX_AEC_DELAY_MS", 160)
+    aecDelayMs: optionalNumber(env, "MAX_AEC_DELAY_MS", 160),
+    aecSuppression: optionalNumber(env, "MAX_AEC_SUPPRESSION", 0)
   };
 }

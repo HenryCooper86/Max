@@ -11,7 +11,7 @@
 namespace {
 
 int run_offline(const std::string& ref_path, const std::string& mic_path,
-                const std::string& out_path, int delay_ms) {
+                const std::string& out_path, int delay_ms, int suppression) {
   int ref_rate = 0, mic_rate = 0;
   std::vector<int16_t> ref, mic;
   if (!wav_read_mono16(ref_path, ref_rate, ref)) {
@@ -28,7 +28,7 @@ int run_offline(const std::string& ref_path, const std::string& mic_path,
   std::vector<int16_t> mic16 = mic_rate == 48000 ? mic_dec.process(mic.data(), mic.size()) : mic;
 
   ApmSession apm;
-  if (!apm.init(delay_ms)) {
+  if (!apm.init(delay_ms, suppression)) {
     std::fprintf(stderr, "max-aec: APM init failed\n");
     return 1;
   }
@@ -57,14 +57,18 @@ int run_offline(const std::string& ref_path, const std::string& mic_path,
 
 int main(int argc, char** argv) {
   int delay_ms = 160;
+  int suppression = 0;
   for (int i = 1; i < argc; ++i) {
     if (std::strcmp(argv[i], "--delay-ms") == 0 && i + 1 < argc) delay_ms = std::atoi(argv[++i]);
+    if (std::strcmp(argv[i], "--suppression") == 0 && i + 1 < argc)
+      suppression = std::atoi(argv[++i]);
   }
   if (argc >= 5 && std::strcmp(argv[1], "--offline") == 0) {
-    return run_offline(argv[2], argv[3], argv[4], delay_ms);
+    return run_offline(argv[2], argv[3], argv[4], delay_ms, suppression);
   }
   std::fprintf(stderr,
-               "usage: max-aec --offline <ref.wav> <mic.wav> <out.wav> [--delay-ms N]\n"
+               "usage: max-aec --offline <ref.wav> <mic.wav> <out.wav> [--delay-ms N] "
+               "[--suppression 0|1|2]\n"
                "       max-aec --device <alsa> [--delay-ms N]   (live: mic->stdout, ref on fd 3)\n");
   return 2;
 }

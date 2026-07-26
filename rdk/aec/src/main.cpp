@@ -3,6 +3,7 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -89,6 +90,37 @@ struct RefStats {
   long resets = 0;
   long samples = 0;
 };
+
+double frame_rms(const int16_t* pcm, size_t n) {
+  double sum = 0.0;
+  for (size_t i = 0; i < n; ++i) sum += static_cast<double>(pcm[i]) * pcm[i];
+  return n == 0 ? 0.0 : std::sqrt(sum / static_cast<double>(n));
+}
+
+// Running level either side of APM. Reported separately for frames where Max
+// was speaking and frames where he was not, because the echo loop is decided
+// entirely by what leaves on the uplink while he speaks.
+struct Levels {
+  double in_sum = 0.0;
+  double out_sum = 0.0;
+  long count = 0;
+
+  void add(double in, double out) {
+    in_sum += in;
+    out_sum += out;
+    ++count;
+  }
+  double mean_in() const { return count ? in_sum / static_cast<double>(count) : 0.0; }
+  double mean_out() const { return count ? out_sum / static_cast<double>(count) : 0.0; }
+  double reduction_db() const {
+    if (!count || mean_out() <= 0.0 || mean_in() <= 0.0) return 0.0;
+    return 20.0 * std::log10(mean_in() / mean_out());
+  }
+  void reset() { in_sum = out_sum = 0.0, count = 0; }
+};
+
+// 10 ms per frame, so this reports roughly every 3 s.
+constexpr long kReportFrames = 300;
 
 // Pulls whatever the agent has queued and turns it into 16 kHz reference,
 // applying resets in the order they were sent. Returns false when the agent has
@@ -183,6 +215,8 @@ int run_live(const std::string& device, int delay_ms, int suppression,
   std::vector<int16_t> mic_in(kPeriod);
   RefStats stats;
   long mic_frames = 0;
+  long last_report = 0;
+  Levels far, near;
 
   for (;;) {
     if (!drain_reference(rx, rx_read, ref_dec, pending, pending_read, apm, stats)) break;
@@ -196,12 +230,34 @@ int run_live(const std::string& device, int delay_ms, int suppression,
     std::vector<int16_t> mic16 = mic_dec.process(mic_in.data(), static_cast<size_t>(read_frames));
     const size_t frame = ApmSession::kFrameSamples;
     for (size_t i = 0; i + frame <= mic16.size(); i += frame) {
-      if (pending.size() - pending_read >= frame) {
+      const bool had_reference = pending.size() - pending_read >= frame;
+      if (had_reference) {
         apm.process_reverse(pending.data() + pending_read);
         pending_read += frame;
       }
+      const double before = frame_rms(&mic16[i], frame);
       apm.process(&mic16[i]);
+      const double after = frame_rms(&mic16[i], frame);
       ++mic_frames;
+      // Split by whether Max was speaking. Averaging across both hides the only
+      // interesting case: what the uplink carries while he talks.
+      if (had_reference) {
+        far.add(before, after);
+      } else {
+        near.add(before, after);
+      }
+    }
+
+    if (mic_frames - last_report >= kReportFrames) {
+      last_report = mic_frames;
+      std::fprintf(stderr,
+                   "max-aec: far-end %ld frames in=%.0f out=%.0f (%.1f dB removed) | "
+                   "quiet %ld frames in=%.0f out=%.0f | ref %ld resets %ld erle %.1f dB\n",
+                   far.count, far.mean_in(), far.mean_out(), far.reduction_db(), near.count,
+                   near.mean_in(), near.mean_out(), stats.audio_frames, stats.resets,
+                   static_cast<double>(apm.erle_db()));
+      far.reset();
+      near.reset();
     }
     if (pending_read > 0) {
       pending.erase(pending.begin(), pending.begin() + static_cast<long>(pending_read));

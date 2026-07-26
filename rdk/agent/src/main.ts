@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { Socket } from "node:net";
 import { createCapture } from "./audio/capture";
+import { createBargeInGuard } from "./audio/barge-in";
 import { applyCrosstalk } from "./audio/mixer";
 import { createPlayback } from "./audio/playback";
 import { createReferenceSink, type ReferenceSink } from "./audio/reference";
@@ -79,6 +80,10 @@ function start(): void {
     if (!ok) console.log("[audio] could not set CROSSTALK; check amixer");
   });
 
+  // With AEC off the local gate hears Max at full volume, so it cannot witness
+  // a barge-in and the relay is trusted as before.
+  const bargeIn = createBargeInGuard({ windowMs: 600, enabled: aecActive });
+
   // Reassigned once capture spawns max-aec and hands over fd 3. Until then it
   // is a no-op sink, so playback works whether or not AEC is running.
   let referenceSink: ReferenceSink = createReferenceSink({ stream: null });
@@ -112,8 +117,15 @@ function start(): void {
       hudState = reduceHud(hudState, event);
       hud.publish(hudState);
       if (event.type === "status" && event.state === "hearing") {
-        // Barge-in: the rider started talking, so drop the queued reply.
-        playback.flush();
+        // Barge-in: the rider started talking, so drop the queued reply — but
+        // only if our own echo-cancelled mic heard them too. Doubao's VAD runs
+        // on the uplink, so residual echo trips it while Max is speaking, and
+        // acting on that is what made the loop self-sustaining.
+        if (bargeIn.allow()) {
+          playback.flush();
+        } else {
+          console.log("[audio] ignoring barge-in the local gate did not hear");
+        }
       }
       if (event.type === "hazard.alert" && event.interrupt) {
         playback.flush();
@@ -155,6 +167,7 @@ function start(): void {
     },
     onFrame: (frame) => {
       const speaking = gate(frame);
+      bargeIn.observe(speaking);
       if (waitingForVoice && speaking) {
         waitingForVoice = false;
         console.log("[relay] rider spoke; reopening the session");

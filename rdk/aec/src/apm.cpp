@@ -83,9 +83,20 @@ void ApmSession::process(int16_t* mic) {
 }
 
 void ApmSession::reset() {
-  // Barge-in dropped reference audio that never played. Without this, APM keeps
-  // adapting against an echo that will not arrive and damages the rider's speech.
-  if (apm_) apm_->Initialize();
+  // Deliberately does NOT call apm_->Initialize().
+  //
+  // It used to, and that was the bug that put the echo loop back. Initialize()
+  // discards the adapted filter — the learned speaker-to-mic path — which takes
+  // seconds to converge. But barge-in arrives via Doubao's VAD, and while Max
+  // is talking the thing tripping that VAD is usually the echo itself. So every
+  // leak of echo reset the canceller, the canceller never converged, more echo
+  // leaked, and Max answered himself. Observed resetting four times on ambient
+  // room noise alone, with no audio playing.
+  //
+  // The acoustic path is a property of the helmet, not of the utterance, and it
+  // is still valid after a barge-in. What must be forgotten is the queued
+  // reference, and the caller drops that. Adapting briefly against reference
+  // whose echo never arrives is a far smaller error than starting from zero.
 }
 
 float ApmSession::erle_db() const {

@@ -16,7 +16,8 @@
 namespace {
 
 int run_offline(const std::string& ref_path, const std::string& mic_path,
-                const std::string& out_path, int delay_ms, int suppression) {
+                const std::string& out_path, int delay_ms, int suppression,
+                ApmStages stages) {
   int ref_rate = 0, mic_rate = 0;
   std::vector<int16_t> ref, mic;
   if (!wav_read_mono16(ref_path, ref_rate, ref)) {
@@ -33,7 +34,7 @@ int run_offline(const std::string& ref_path, const std::string& mic_path,
   std::vector<int16_t> mic16 = mic_rate == 48000 ? mic_dec.process(mic.data(), mic.size()) : mic;
 
   ApmSession apm;
-  if (!apm.init(delay_ms, suppression)) {
+  if (!apm.init(delay_ms, suppression, stages)) {
     std::fprintf(stderr, "max-aec: APM init failed\n");
     return 1;
   }
@@ -83,15 +84,15 @@ bool write_all(int fd, const void* data, size_t bytes) {
   return true;
 }
 
-// Pulls whatever the agent has queued and turns it into 16 kHz reference,
-// applying resets in the order they were sent. Returns false when the agent has
-// closed the pipe, which means it is gone and so should we.
 struct RefStats {
   long audio_frames = 0;
   long resets = 0;
   long samples = 0;
 };
 
+// Pulls whatever the agent has queued and turns it into 16 kHz reference,
+// applying resets in the order they were sent. Returns false when the agent has
+// closed the pipe, which means it is gone and so should we.
 bool drain_reference(std::vector<uint8_t>& rx, size_t& rx_read, Decimator3& ref_dec,
                      std::vector<int16_t>& pending, size_t& pending_read, ApmSession& apm,
                      RefStats& stats) {
@@ -147,7 +148,8 @@ bool drain_reference(std::vector<uint8_t>& rx, size_t& rx_read, Decimator3& ref_
   return true;
 }
 
-int run_live(const std::string& device, int delay_ms, int suppression) {
+int run_live(const std::string& device, int delay_ms, int suppression,
+             ApmStages stages) {
   int flags = fcntl(3, F_GETFL, 0);
   if (flags >= 0) fcntl(3, F_SETFL, flags | O_NONBLOCK);
 
@@ -164,7 +166,7 @@ int run_live(const std::string& device, int delay_ms, int suppression) {
   }
 
   ApmSession apm;
-  if (!apm.init(delay_ms, suppression)) {
+  if (!apm.init(delay_ms, suppression, stages)) {
     std::fprintf(stderr, "max-aec: APM init failed\n");
     snd_pcm_close(pcm);
     return 1;
@@ -230,21 +232,26 @@ int main(int argc, char** argv) {
   int delay_ms = 160;
   int suppression = 0;
   const char* device = nullptr;
+  ApmStages stages;
   for (int i = 1; i < argc; ++i) {
     if (std::strcmp(argv[i], "--delay-ms") == 0 && i + 1 < argc) delay_ms = std::atoi(argv[++i]);
     else if (std::strcmp(argv[i], "--suppression") == 0 && i + 1 < argc)
       suppression = std::atoi(argv[++i]);
     else if (std::strcmp(argv[i], "--device") == 0 && i + 1 < argc)
       device = argv[++i];
+    else if (std::strcmp(argv[i], "--no-aec") == 0) stages.aec = false;
+    else if (std::strcmp(argv[i], "--no-ns") == 0) stages.ns = false;
+    else if (std::strcmp(argv[i], "--no-agc") == 0) stages.agc = false;
   }
   if (argc >= 5 && std::strcmp(argv[1], "--offline") == 0) {
-    return run_offline(argv[2], argv[3], argv[4], delay_ms, suppression);
+    return run_offline(argv[2], argv[3], argv[4], delay_ms, suppression, stages);
   }
-  if (device) return run_live(device, delay_ms, suppression);
+  if (device) return run_live(device, delay_ms, suppression, stages);
   std::fprintf(stderr,
                "usage: max-aec --offline <ref.wav> <mic.wav> <out.wav> [--delay-ms N] "
                "[--suppression 0|1|2]\n"
                "       max-aec --device <alsa> [--delay-ms N] [--suppression 0|1|2]\n"
-               "         live: mic -> stdout as 16 kHz PCM16, reference frames on fd 3\n");
+               "         live: mic -> stdout as 16 kHz PCM16, reference frames on fd 3\n"
+               "  [--no-aec] [--no-ns] [--no-agc]  disable a stage, for bench measurement\n");
   return 2;
 }

@@ -19,7 +19,11 @@ export type RdkConfig = {
   /** "apm" runs max-aec; "off" falls back to arecord plus the hardware duck. */
   aecMode: "apm" | "off";
   aecBin: string;
-  /** Reference-to-mic delay hint for APM, measured on the bench. */
+  /**
+   * Reference-to-mic delay hint for APM. 80 ms is measured, not guessed:
+   * cross-correlating the recorded mic against the reference on the board gave
+   * 81 ms once playback was paced. DelayAgnostic tracks drift from here.
+   */
   aecDelayMs: number;
   /**
    * Residual echo suppressor: 0 low, 1 moderate, 2 high. Defaults to low
@@ -91,7 +95,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RdkConfig {
     voiceGateMs: optionalNumber(env, "MAX_VOICE_GATE_MS", 400),
     aecMode: optionalEnum(env, "MAX_AEC_MODE", ["apm", "off"] as const, "apm"),
     aecBin: optionalString(env, "MAX_AEC_BIN", "/opt/max/rdk/aec/max-aec"),
-    aecDelayMs: optionalNumber(env, "MAX_AEC_DELAY_MS", 160),
+    aecDelayMs: optionalNumber(env, "MAX_AEC_DELAY_MS", 80),
     aecSuppression: optionalNumber(env, "MAX_AEC_SUPPRESSION", 0)
   };
 }

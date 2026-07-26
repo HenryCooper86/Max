@@ -14,7 +14,7 @@ ApmSession::~ApmSession() {
   delete apm_;
 }
 
-bool ApmSession::init(int delay_ms, int suppression) {
+bool ApmSession::init(int delay_ms, int suppression, ApmStages stages) {
   delay_ms_ = delay_ms;
 
   webrtc::Config config;
@@ -41,13 +41,13 @@ bool ApmSession::init(int delay_ms, int suppression) {
   if (suppression > 2) suppression = 2;
   apm_->echo_cancellation()->set_suppression_level(levels[suppression]);
   apm_->echo_cancellation()->enable_metrics(true);
-  if (apm_->echo_cancellation()->Enable(true) != AudioProcessing::kNoError) return false;
+  if (apm_->echo_cancellation()->Enable(stages.aec) != AudioProcessing::kNoError) return false;
 
   // The helmet wants these regardless of echo: wind and engine noise at speed.
   apm_->noise_suppression()->set_level(webrtc::NoiseSuppression::kHigh);
-  apm_->noise_suppression()->Enable(true);
+  apm_->noise_suppression()->Enable(stages.ns);
   apm_->gain_control()->set_mode(webrtc::GainControl::kAdaptiveDigital);
-  apm_->gain_control()->Enable(true);
+  apm_->gain_control()->Enable(stages.agc);
 
   return true;
 }

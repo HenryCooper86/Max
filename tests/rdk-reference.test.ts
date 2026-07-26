@@ -92,6 +92,6 @@ describe("aec config", () => {
   it("defaults the helper path and delay", () => {
     const config = loadConfig(BASE_ENV);
     expect(config.aecBin).toBe("/opt/max/rdk/aec/max-aec");
-    expect(config.aecDelayMs).toBe(160);
+    expect(config.aecDelayMs).toBe(80); // measured on the board, not guessed
   });
 });

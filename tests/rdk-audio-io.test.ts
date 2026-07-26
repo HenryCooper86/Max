@@ -271,3 +271,76 @@ describe("playback reference", () => {
     expect(order).toEqual(["flush", "kill"]);
   });
 });
+
+describe("playback pacing", () => {
+  // The relay delivers TTS faster than realtime. Writing it straight into
+  // aplay's stdin parks it in a 64 KB pipe — 683 ms at 48 kHz — plus the 120 ms
+  // ALSA buffer. The reference was emitted at queue time, so the echo reached
+  // the mic ~950 ms after APM had been told about it (measured on the board).
+  // WebRTC's filter spans ~500 ms at best, so it saw no echo at all and
+  // reported ERLE -100 dB. Pacing keeps the gap inside the filter's reach.
+  function harness() {
+    const fake = fakeChild();
+    let now = 0;
+    const timers: Array<{ at: number; fn: () => void }> = [];
+    const reference: number[] = [];
+    const playback = createPlayback({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      now: () => now,
+      schedule: (fn, ms) => {
+        timers.push({ at: now + ms, fn });
+        return 0 as unknown as NodeJS.Timeout;
+      },
+      reference: {
+        write: (pcm: Int16Array) => reference.push(pcm.length),
+        flush: () => {},
+        close: () => {}
+      }
+    });
+    const advance = (ms: number) => {
+      now += ms;
+      const due = timers.filter((t) => t.at <= now);
+      due.forEach((t) => timers.splice(timers.indexOf(t), 1));
+      due.forEach((t) => t.fn());
+    };
+    return { fake, playback, advance, reference, written: () => fake.stdin.readableLength };
+  }
+
+  it("does not dump a whole utterance into the pipe at once", () => {
+    const { playback, written } = harness();
+    // 2 s of speech, delivered instantly the way the relay delivers it.
+    for (let i = 0; i < 100; i += 1) playback.write(new Int16Array(480));
+    // At 48 kHz stereo-free PCM16, 200 ms is 19200 bytes. Anything close to the
+    // full 2 s (384000 bytes) means it went straight through.
+    expect(written()).toBeLessThan(40000);
+  });
+
+  it("keeps feeding aplay as time passes", () => {
+    const { playback, advance, written } = harness();
+    for (let i = 0; i < 100; i += 1) playback.write(new Int16Array(480));
+    const early = written();
+    advance(1000);
+    expect(written()).toBeGreaterThan(early);
+  });
+
+  it("emits the reference as audio reaches the DAC, not when it is queued", () => {
+    const { playback, advance, reference } = harness();
+    for (let i = 0; i < 100; i += 1) playback.write(new Int16Array(480));
+    const queued = reference.reduce((a, b) => a + b, 0);
+    expect(queued).toBeLessThan(48000); // under 1 s of the 2 s written
+    advance(2000);
+    const after = reference.reduce((a, b) => a + b, 0);
+    expect(after).toBeGreaterThan(queued);
+  });
+
+  it("drops audio still queued when the rider barges in", () => {
+    const { playback, advance, reference } = harness();
+    for (let i = 0; i < 100; i += 1) playback.write(new Int16Array(480));
+    playback.flush();
+    const atFlush = reference.reduce((a, b) => a + b, 0);
+    advance(2000);
+    // Nothing more may play: the rider interrupted, so the tail is gone.
+    expect(reference.reduce((a, b) => a + b, 0)).toBe(atFlush);
+  });
+});

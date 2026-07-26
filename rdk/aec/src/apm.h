@@ -6,6 +6,16 @@ namespace webrtc {
 class AudioProcessing;
 }
 
+// Stages are individually switchable so the bench can attribute a result to one
+// of them. Measuring with everything on is how you end up crediting the
+// canceller for the gain control's work: AGC renormalises the output level, so
+// residual RMS barely moves however much echo was actually removed.
+struct ApmStages {
+  bool aec = true;
+  bool ns = true;
+  bool agc = true;
+};
+
 // WebRTC APM at 16 kHz mono: echo cancellation, noise suppression, gain control.
 // 16 kHz is the uplink rate, so nothing extra is converted on the path we send.
 class ApmSession {
@@ -25,7 +35,7 @@ class ApmSession {
   // Caveat: that fixture's echo is linear. A real speaker distorts, and
   // suppression is what catches the nonlinear residue, so raise this if a live
   // ride leaks echo. Exposed as MAX_AEC_SUPPRESSION.
-  bool init(int delay_ms, int suppression = 0);
+  bool init(int delay_ms, int suppression = 0, ApmStages stages = ApmStages{});
   void process_reverse(const int16_t* ref);
   void process(int16_t* mic);
   void reset();

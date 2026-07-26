@@ -57,8 +57,9 @@ Verified over SSH against the real board on 2026-07-25.
 | Headset wiring (CTIA/OMTP) | **CTIA, mic works** — −43.6 dBFS ambient, not silence              | 2026-07-25 |
 | Raw echo coupling          | **+5.5 dB** above the noise floor (`CROSSTALK=0`, DAC 0 dB)        | 2026-07-25 |
 | `module-echo-cancel`       | **tried, does not work** — master sink stays SUSPENDED, no audio   | 2026-07-25 |
-| AEC path chosen            | **unresolved** — needs in-process AEC; see "AEC" below             | 2026-07-25 |
-| Barge-in                   | works acoustically, but **off** today (`CROSSTALK=10` half-duplex) | 2026-07-25 |
+| AEC path chosen            | **in-process** — `rdk/aec/max-aec`, WebRTC APM; built and deployed | 2026-07-26 |
+| Reference-to-mic lag       | **81 ms** measured (was 953 ms before playback pacing)             | 2026-07-26 |
+| Barge-in                   | wired, `CROSSTALK` now agent-owned; **live test still owed**       | 2026-07-26 |
 | Live Doubao session        | **works** — Max speaks, 1.69 MB voice audio down                   | 2026-07-25 |
 | Full duplex                | **works** — simultaneous `arecord` + `aplay`, no device contention | 2026-07-25 |
 | Camera front port index    | **MIPI host 2** (`vcon@2`, i2c bus 4) — see "Camera findings"      | 2026-07-25 |
@@ -107,9 +108,10 @@ entire story. **Only a live conversation tests this.** A sweep is not a proxy.
 | `CROSSTALK=0`, no AEC           | **yes**   | yes        |
 | `CROSSTALK=0` + real AEC        | no        | yes ← goal |
 
-The board currently sits at `CROSSTALK=10`, saved with `alsactl store`: half
-duplex, no loop, **no barge-in**. That is spec ladder step 3, the "emergency
-only" fallback.
+That third row is the goal, and as of 2026-07-26 it is what the agent runs:
+`MAX_AEC_MODE=apm` drops `CROSSTALK` to 0 and puts max-aec in the capture path.
+Setting `MAX_AEC_MODE=off` returns the board to row one — half duplex, no loop,
+no barge-in — which is spec ladder step 3, the "emergency only" fallback.
 
 **PulseAudio `module-echo-cancel` (ladder step 1) was tried and does not work
 here.** It loads and creates `maxmic`/`maxspk`, but the master sink stays

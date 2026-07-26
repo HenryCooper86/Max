@@ -16,11 +16,29 @@ import numpy as np
 
 from perception.types import EgoState
 
-#: Mean absolute block displacement, in pixels, above which we call it moving.
+#: Block matching runs at this width, whatever the camera delivers.
+#:
+#: Two reasons, and the second is the important one. At 810x1080 the full-
+#: resolution search measured 251.7 ms per frame — 87% of the frame budget and
+#: seven times the 36 ms inference it accompanies, for a decision that is
+#: ultimately one bit. And a displacement threshold in raw pixels means the same
+#: physical motion reads 2.4x larger at 1920 wide than at 810, so the gate would
+#: silently change behaviour with camera resolution. Fixing the working width
+#: makes the threshold mean one thing everywhere.
+WORK_WIDTH = 160
+
+#: Mean absolute block displacement, in WORK_WIDTH pixels, above which we call
+#: it moving.
 MIN_FLOW_MAGNITUDE = 0.6
 
-#: How far the search looks, in pixels, either side of zero.
+#: How far the search looks, in WORK_WIDTH pixels, either side of zero.
 SEARCH_RADIUS = 12
+
+
+def _downsample(plane: np.ndarray, out_w: int, out_h: int) -> np.ndarray:
+    ys = np.minimum(np.arange(out_h) * plane.shape[0] // out_h, plane.shape[0] - 1)
+    xs = np.minimum(np.arange(out_w) * plane.shape[1] // out_w, plane.shape[1] - 1)
+    return plane[ys][:, xs]
 
 
 def estimate(prev_y: bytes, curr_y: bytes, width: int, height: int, grid: int = 8) -> EgoState:
@@ -28,26 +46,40 @@ def estimate(prev_y: bytes, curr_y: bytes, width: int, height: int, grid: int = 
     prev = np.frombuffer(prev_y, dtype=np.uint8)[: width * height].reshape(height, width)
     curr = np.frombuffer(curr_y, dtype=np.uint8)[: width * height].reshape(height, width)
 
+    # Only ever shrink. A frame narrower than WORK_WIDTH is already cheap, and
+    # upsampling it would invent detail the threshold would then measure.
+    if width > WORK_WIDTH:
+        scale = WORK_WIDTH / width
+        width, height = WORK_WIDTH, max(grid, int(height * scale))
+        prev = _downsample(prev, width, height)
+        curr = _downsample(curr, width, height)
+
     block_h = height // grid
     block_w = width // grid
-    displacements: list[int] = []
+    if block_h == 0 or block_w == 0:
+        return EgoState(moving=False, speed_scale=0.0)
 
-    for gy in range(grid):
-        y0 = gy * block_h
-        for gx in range(grid):
-            x0 = gx * block_w
-            block = curr[y0 : y0 + block_h, x0 : x0 + block_w].astype(np.int32)
-            best_shift, best_cost = 0, None
-            for shift in range(-SEARCH_RADIUS, SEARCH_RADIUS + 1):
-                sx = x0 + shift
-                if sx < 0 or sx + block_w > width:
-                    continue
-                reference = prev[y0 : y0 + block_h, sx : sx + block_w].astype(np.int32)
-                cost = int(np.abs(block - reference).sum())
-                if best_cost is None or cost < best_cost:
-                    best_shift, best_cost = shift, cost
-            displacements.append(abs(best_shift))
+    # Crop to a whole number of blocks so the per-block sums below are a reshape
+    # rather than a loop.
+    used_h, used_w = block_h * grid, block_w * grid
+    curr_i = curr[:used_h, :used_w].astype(np.int16)
 
-    magnitude = float(np.mean(displacements)) if displacements else 0.0
+    # One difference image per candidate shift, with all blocks summed at once.
+    # The obvious nested loop makes grid^2 * (2R+1) — 1600 — tiny numpy calls,
+    # and at that size the per-call overhead is the entire cost. This is 25
+    # iterations over the whole frame instead, which measured ~10x faster.
+    shifts = range(-SEARCH_RADIUS, SEARCH_RADIUS + 1)
+    padded = np.pad(prev[:used_h, :used_w], ((0, 0), (SEARCH_RADIUS, SEARCH_RADIUS)), mode="edge")
+    costs = np.empty((len(shifts), grid, grid), dtype=np.int64)
+    for i, shift in enumerate(shifts):
+        start = SEARCH_RADIUS + shift
+        aligned = padded[:, start : start + used_w].astype(np.int16)
+        diff = np.abs(curr_i - aligned)
+        costs[i] = diff.reshape(grid, block_h, grid, block_w).sum(axis=(1, 3), dtype=np.int64)
+
+    best = np.argmin(costs, axis=0)
+    displacements = np.abs(np.asarray(shifts)[best])
+
+    magnitude = float(displacements.mean()) if displacements.size else 0.0
     moving = magnitude >= MIN_FLOW_MAGNITUDE
     return EgoState(moving=moving, speed_scale=magnitude if moving else 0.0)

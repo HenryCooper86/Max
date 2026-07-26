@@ -228,6 +228,25 @@ export type DeviceResultEvent = {
 export type ClientEvent =
   | SessionStartEvent
   | DeviceResultEvent
+  // A hazard the embedded board detected and already announced. Upward only:
+  // the board plays the audio itself from a local clip, so the relay must never
+  // echo this back as `hazard.alert` — Max would speak the warning a second
+  // time, seconds late, over a rider who is already braking.
+  //
+  // `ttcSeconds` is measured rather than catalogued and `latencyMs` is
+  // frame-capture to sound-out. The simulated `hazard.alert` carries neither,
+  // because a simulation has neither.
+  | {
+      type: "hazard.report";
+      threat: string;
+      direction: string;
+      severity: AdasSeverity;
+      label: string;
+      message: string;
+      advice: string;
+      ttcSeconds?: number;
+      latencyMs?: number;
+    }
   | { type: "audio.start" }
   | { type: "audio.stop" }
   // Guided demo ride: the mock provider auto-advances through the scenario

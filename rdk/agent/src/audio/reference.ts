@@ -5,6 +5,19 @@
  * DAC. Tapping earlier would hide the limiter's non-linearity from a canceller
  * that models the echo path as linear, and cancellation would degrade exactly
  * when Max is loudest.
+ *
+ * Wire format, little-endian:
+ *
+ *     uint32 length | <length bytes of PCM16>     audio
+ *     uint32 0                                    reset
+ *
+ * The reset is a frame rather than a signal because ordering is the whole
+ * point. Barge-in kills aplay, so reference already queued will never be heard;
+ * APM has to forget precisely that audio and no more. A SIGUSR1 races the pipe —
+ * Node buffers writes once the pipe's 64 KB fills, so frames written before the
+ * barge-in can land after the signal. max-aec would treat them as about-to-play
+ * audio, find no echo to match, and gate the mic while the rider is speaking.
+ * In-band, the reset cannot overtake or be overtaken by the audio around it.
  */
 
 export type ReferenceSink = {
@@ -16,9 +29,13 @@ export type ReferenceSink = {
 export type ReferenceOptions = {
   /** fd 3 of the max-aec child, or null when AEC is off. */
   stream: NodeJS.WritableStream | null;
-  /** Tells max-aec to reset APM. Must happen in the same beat as the drop. */
-  onReset(): void;
 };
+
+function frameHeader(byteLength: number): Buffer {
+  const header = Buffer.allocUnsafe(4);
+  header.writeUInt32LE(byteLength, 0);
+  return header;
+}
 
 export function createReferenceSink(options: ReferenceOptions): ReferenceSink {
   const { stream } = options;
@@ -27,20 +44,25 @@ export function createReferenceSink(options: ReferenceOptions): ReferenceSink {
     stream.on("error", () => {});
   }
 
+  const send = (chunk: Buffer): void => {
+    if (!stream || stream.destroyed) return;
+    try {
+      stream.write(chunk);
+    } catch {
+      // Same reasoning as above.
+    }
+  };
+
   return {
     write(pcm48k: Int16Array): void {
-      if (!stream || stream.destroyed) return;
-      try {
-        stream.write(Buffer.from(pcm48k.buffer, pcm48k.byteOffset, pcm48k.byteLength));
-      } catch {
-        // Same reasoning as above.
-      }
+      // A zero-length audio frame is indistinguishable from a reset on the wire.
+      if (pcm48k.length === 0) return;
+      send(frameHeader(pcm48k.byteLength));
+      send(Buffer.from(pcm48k.buffer, pcm48k.byteOffset, pcm48k.byteLength));
     },
 
     flush(): void {
-      // Barge-in: whatever is queued will never reach the speaker, so APM must
-      // forget it or it will subtract an echo that never happened.
-      options.onReset();
+      send(frameHeader(0));
     },
 
     close(): void {

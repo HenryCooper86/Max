@@ -71,9 +71,11 @@ Verified over SSH against the real board on 2026-07-25.
 ### AEC — the sweep said "gate passed". A live conversation said otherwise.
 
 > **Read this before changing any audio mixer setting.** The measurement below
-> was reproduced faithfully, and its conclusion was still **wrong**. Keep
-> `CROSSTALK1`/`CROSSTALK2` at **10** (the vendor default) until in-process AEC
-> exists.
+> was reproduced faithfully, and its conclusion was still **wrong**.
+>
+> `CROSSTALK` is no longer set by hand: since 2026-07-26 the agent owns it and
+> drops it to 0 when AEC is active, restoring it to 10 when `MAX_AEC_MODE=off`.
+> See "In-process AEC" below.
 
 **What actually happened (2026-07-25, live Doubao session, headset on).** With
 `CROSSTALK=0` as the sweep recommended, Max heard his own voice through the
@@ -123,7 +125,67 @@ desktop login.
 far-end reference — `playback.write()` receives every PCM frame Doubao sends —
 so it needs no monitor source, no virtual sink and no user session, and it also
 brings noise suppression and AGC, which a helmet at speed wants regardless.
-Not yet built; needs its own spec.
+
+### In-process AEC — built 2026-07-26, live acceptance still owed
+
+`rdk/aec/max-aec` is a C++ helper wrapping WebRTC APM 0.3.1. It replaces
+`arecord`: it captures at 48 kHz, decimates to 16 kHz, runs echo cancellation
+plus noise suppression and gain control, and writes uplink frames to stdout.
+The far-end reference arrives on fd 3. The agent owns `CROSSTALK` and drops it
+to 0 when AEC is active — verified by forcing it to 10 and watching the agent
+zero it on restart.
+
+Deployed and running on the board:
+
+```
+max-aec --device plughw:0,0 --delay-ms 80 --suppression 0
+```
+
+**The defect that mattered was not in the canceller.** Cross-correlating the
+recorded mic against the reference measured the true reference-to-mic lag at
+**953 ms**. WebRTC's filter spans ~500 ms at best, so APM never saw the echo:
+it reported ERLE **-100 dB** (its no-data value) and removed 1–2 dB. The cause
+was in `playback.ts` — the relay delivers TTS faster than realtime and every
+frame went straight into aplay's stdin pipe (64 KB = 683 ms at 48 kHz) on top
+of the 120 ms ALSA buffer, while the reference was emitted at _queue_ time.
+Playback now paces itself, handing aplay at most 80 ms at a time and emitting
+the reference alongside each write. Re-measured: **953 ms → 81 ms**, with the
+correlation peak twice as sharp. `MAX_AEC_DELAY_MS` defaults to that measured
+80 ms.
+
+Note the delay sweep this plan originally called for stopped at 320 ms, so it
+could never have found this. If cancellation looks broken, **measure the lag
+first** — `rdk/aec/tools/acoustic.py` does it.
+
+**Offline figures** (`tools/erle.py`, synthetic linear echo):
+
+| Measurement | Result  | Meaning                               |
+| ----------- | ------- | ------------------------------------- |
+| ERLE        | 32.7 dB | echo-only mic, how much was removed   |
+| near-end    | +7.8 dB | rider-only mic, AGC boost — preserved |
+| duplex loss | 12.5 dB | echo + rider at once — **barge-in**   |
+
+The duplex row is the one that matters and the one a lone ERLE number hides. At
+`kHighSuppression` the fixture scored the _same_ 32.7 dB ERLE while destroying
+22.1 dB of the rider — broken barge-in with an excellent-looking score. ERLE was
+identical at all three suppression levels, so the residual suppressor bought no
+echo rejection and only cost double-talk. Hence `MAX_AEC_SUPPRESSION=0`. That
+fixture's echo is linear, though, and suppression is what catches nonlinear
+speaker residue — raise it if a real ride leaks echo.
+
+**What the desk bench cannot tell you.** With the board on a table the speaker
+reaches the mic at RMS ~90 against an ambient floor of ~275: there is no echo
+above the noise to cancel, and every acoustic ERLE figure measured that way is
+noise. The helmet puts the speaker centimetres from the mic. **Acceptance is a
+live conversation, still owed** — same lesson as 2026-07-25, one level up.
+
+Two traps are now guarded in `tools/acoustic.py` because both were hit: it
+refuses to run against a binary that does not know its flags (a failed build
+silently left the old one in place and produced plausible numbers), and it
+forces `CROSSTALK` to 0 (leaving the duck on credits APM for the codec's work).
+
+Board thermals with AEC running: CPU 75.8 °C, BPU 75.7 °C, DDR 76.4 °C, against
+a ~71 °C idle.
 
 ### The original sweep measurement, kept for the record
 

@@ -10,7 +10,8 @@ enum ClientEventTypes {
     static let testingMetric = "testing.metric"
     static let turnFeedback = "turn.feedback"
     static let deviceResult = "device.result"
-    static let all: Set<String> = [sessionStart, audioStart, audioStop, demoGuided, locationUpdate, testingMetric, turnFeedback, deviceResult]
+    static let hazardReport = "hazard.report"
+    static let all: Set<String> = [sessionStart, audioStart, audioStop, demoGuided, locationUpdate, testingMetric, turnFeedback, deviceResult, hazardReport]
 }
 
 enum ServerEventTypes {

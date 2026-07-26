@@ -179,6 +179,47 @@ export function parseClientEvent(data: RawData): ClientEvent {
     };
   }
 
+  if (value.type === "hazard.report") {
+    // Flows upward only. The board has already played the audio, so the relay
+    // must never echo this back as hazard.alert — Max would speak the warning a
+    // second time, seconds late, over a rider who is already braking.
+    if (typeof value.threat !== "string" || !value.threat.trim() || value.threat.length > 120) {
+      throw new Error("Invalid hazard.report threat");
+    }
+    if (typeof value.direction !== "string" || !value.direction.trim() || value.direction.length > 40) {
+      throw new Error("Invalid hazard.report direction");
+    }
+    if (value.severity !== "caution" && value.severity !== "critical") {
+      throw new Error("Invalid hazard.report severity");
+    }
+    for (const field of ["label", "message", "advice"] as const) {
+      const text = value[field];
+      if (typeof text !== "string" || !text.trim() || text.length > 500) {
+        throw new Error(`Invalid hazard.report ${field}`);
+      }
+    }
+    if (
+      value.ttcSeconds !== undefined &&
+      (typeof value.ttcSeconds !== "number" || !Number.isFinite(value.ttcSeconds))
+    ) {
+      throw new Error("Invalid hazard.report ttcSeconds");
+    }
+    if (value.latencyMs !== undefined && (typeof value.latencyMs !== "number" || !Number.isFinite(value.latencyMs))) {
+      throw new Error("Invalid hazard.report latencyMs");
+    }
+    return {
+      type: "hazard.report",
+      threat: value.threat,
+      direction: value.direction,
+      severity: value.severity,
+      label: value.label as string,
+      message: value.message as string,
+      advice: value.advice as string,
+      ttcSeconds: value.ttcSeconds as number | undefined,
+      latencyMs: value.latencyMs as number | undefined
+    };
+  }
+
   if (value.type === "testing.metric") {
     const metric = (field: string, max: number) => {
       const candidate = value[field];

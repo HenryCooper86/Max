@@ -192,6 +192,9 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
   let scenario: DemoScenario = "commute";
   let guided = false;
   let guidedTimer: NodeJS.Timeout | undefined;
+  // Captured at session.start so the hazard injector can suppress simulated
+  // alerts on the embedded board, which detects hazards for real.
+  let sessionPlatform: string | undefined;
   let guidedStep = 0;
   let rideContext: RideContext = {
     mode: "navigation",
@@ -327,7 +330,7 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
   // Simulates an ADAS sensor event: the agent interrupts whatever it is saying
   // and announces the directional warning. Cycles through the hazard catalog so
   // a single demo session exercises rear / front / side alerts.
-  const hazardInjector = createHazardInjector({ send, emitRideContext });
+  const hazardInjector = createHazardInjector({ send, emitRideContext, platform: () => sessionPlatform });
 
   /** Applies a scenario's profile to the ride context and refreshes the HUD. */
   function enterScenario(next: DemoScenario, announce: boolean) {
@@ -375,6 +378,7 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
 
   return {
     async start(event: SessionStartEvent) {
+      sessionPlatform = event.platform;
       scenario = event.scenario ?? "commute";
       const profile = SCENARIOS[scenario];
       rideContext = {

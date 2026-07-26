@@ -14,9 +14,23 @@ type HazardInjectorOptions = {
   send: (payload: unknown) => void;
   /** Re-emits ride.context, optionally raising the pulse hazard for the alert. */
   emitRideContext: (hazardOverride?: AdasSeverity) => void;
+  /**
+   * Reads the session platform. A thunk rather than a value because both
+   * providers construct the injector before session.start arrives, so the
+   * platform is not known yet at construction.
+   *
+   * Simulation is suppressed for "embedded", which runs a real detector on the
+   * BPU.
+   *
+   * The gate lives here rather than at the five `start()` call sites across the
+   * two providers, because a rule spread across call sites is a rule that gets
+   * missed: this project already shipped a platform allowlist duplicated across
+   * files, and the fifth copy silently rejected the board.
+   */
+  platform?: () => string | undefined;
 };
 
-export function createHazardInjector({ send, emitRideContext }: HazardInjectorOptions) {
+export function createHazardInjector({ send, emitRideContext, platform }: HazardInjectorOptions) {
   let index = 0;
   let timer: NodeJS.Timeout | undefined;
   let initialTimer: NodeJS.Timeout | undefined;
@@ -60,6 +74,10 @@ export function createHazardInjector({ send, emitRideContext }: HazardInjectorOp
   return {
     /** Begins firing the first alert after `initialDelayMs`, then every `intervalMs`. */
     start(intervalMs: number, initialDelayMs: number) {
+      // The embedded board detects hazards for real. Interleaving simulated
+      // ones would make a rider unable to tell them apart, and would poison the
+      // QA record M2 exists to build.
+      if (platform?.() === "embedded") return;
       if (timer || initialTimer) return;
       // Anchor the repeat to the first alert so the gap between alerts is exactly
       // intervalMs. Arming setInterval at t=0 (alongside this timeout) instead

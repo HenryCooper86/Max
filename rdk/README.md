@@ -59,7 +59,8 @@ Verified over SSH against the real board on 2026-07-25.
 | `module-echo-cancel`       | **tried, does not work** — master sink stays SUSPENDED, no audio   | 2026-07-25 |
 | AEC path chosen            | **in-process** — `rdk/aec/max-aec`, WebRTC APM; built and deployed | 2026-07-26 |
 | Reference-to-mic lag       | **81 ms** measured (was 953 ms before playback pacing)             | 2026-07-26 |
-| Barge-in                   | wired, `CROSSTALK` now agent-owned; **live test still owed**       | 2026-07-26 |
+| Echo loop                  | **fixed** — confirmed live, headset on, Max replies once and stops | 2026-07-26 |
+| Barge-in                   | wired and gated on the local voice gate; talk-over test still owed | 2026-07-26 |
 | Live Doubao session        | **works** — Max speaks, 1.69 MB voice audio down                   | 2026-07-25 |
 | Full duplex                | **works** — simultaneous `arecord` + `aplay`, no device contention | 2026-07-25 |
 | Camera front port index    | **MIPI host 2** (`vcon@2`, i2c bus 4) — see "Camera findings"      | 2026-07-25 |
@@ -128,7 +129,50 @@ far-end reference — `playback.write()` receives every PCM frame Doubao sends �
 so it needs no monitor source, no virtual sink and no user session, and it also
 brings noise suppression and AGC, which a helmet at speed wants regardless.
 
-### In-process AEC — built 2026-07-26, live acceptance still owed
+### In-process AEC — built and confirmed live, 2026-07-26
+
+**The echo loop is fixed.** Confirmed in a live Doubao session with the headset
+on: Max replies once and stops, and no `rider:` turn echoes his words. That is
+the failure of 2026-07-25 closed.
+
+**What actually caused it to come back once, after the canceller was working.**
+`playback.flush()` fires on Doubao's `status: hearing`, and `flush()` reset APM
+via `Initialize()` — which discards the adapted filter, the learned
+speaker-to-mic path that takes seconds to converge. Doubao's VAD runs on the
+uplink, so while Max speaks the thing tripping it is usually his own residual
+echo. That closed a positive feedback loop:
+
+> echo leaks → VAD fires → filter wiped → canceller starts from zero → more echo
+
+APM was held permanently non-converged by the very echo it existed to cancel.
+The helper was seen resetting **four times in 45 s on ambient room noise alone**,
+with nothing playing. The same bug is why an earlier session reported "speech
+cut off immediately" — one fault, two symptoms.
+
+The fix is two-part, and both halves matter:
+
+- `ApmSession::reset()` does **not** call `Initialize()`. The acoustic path
+  belongs to the helmet, not the utterance, and survives a barge-in. Only the
+  queued reference is dropped.
+- A relay barge-in is honoured only if the local voice gate — reading the
+  already-cancelled mic — heard the rider within 600 ms
+  (`rdk/agent/src/audio/barge-in.ts`). Doubao's VAD gets a second opinion from
+  a signal the canceller has cleaned.
+
+**If echo ever returns, read the helper's log first.** It prints levels either
+side of APM, split by whether Max was speaking, and only when there is something
+to say (an utterance or a reset), so an idle helmet logs nothing:
+
+```
+journalctl -u max-agent | grep max-aec
+max-aec: far-end 300 frames in=... out=... (N dB removed) | quiet ... | ref ... resets ... erle ...
+```
+
+`resets` climbing means something is wiping the filter again — that is this bug
+returning. A low `dB removed` with `resets 0` means the canceller itself is
+short. The distinction is the whole diagnosis; do not guess between them.
+
+### How it is built
 
 `rdk/aec/max-aec` is a C++ helper wrapping WebRTC APM 0.3.1. It replaces
 `arecord`: it captures at 48 kHz, decimates to 16 kHz, runs echo cancellation
@@ -178,8 +222,9 @@ speaker residue — raise it if a real ride leaks echo.
 **What the desk bench cannot tell you.** With the board on a table the speaker
 reaches the mic at RMS ~90 against an ambient floor of ~275: there is no echo
 above the noise to cancel, and every acoustic ERLE figure measured that way is
-noise. The helmet puts the speaker centimetres from the mic. **Acceptance is a
-live conversation, still owed** — same lesson as 2026-07-25, one level up.
+noise. The helmet puts the speaker centimetres from the mic. The bench never
+reproduced the loop and never could have — **acceptance was, and remains, a
+live conversation.** Same lesson as 2026-07-25, one level up.
 
 Two traps are now guarded in `tools/acoustic.py` because both were hit: it
 refuses to run against a binary that does not know its flags (a failed build

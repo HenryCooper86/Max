@@ -216,6 +216,7 @@ int run_live(const std::string& device, int delay_ms, int suppression,
   RefStats stats;
   long mic_frames = 0;
   long last_report = 0;
+  long reported_resets = 0;
   Levels far, near;
 
   for (;;) {
@@ -248,14 +249,24 @@ int run_live(const std::string& device, int delay_ms, int suppression,
       }
     }
 
-    if (mic_frames - last_report >= kReportFrames) {
+    // Only speak up when there is something to report: an utterance that was
+    // cancelled, or a reset. A helmet runs for hours and a line every 3 s of
+    // silence would bury the one line that matters. The figures below are how
+    // the 2026-07-26 echo loop was diagnosed — keep them.
+    const bool worth_reporting = far.count > 0 || stats.resets != reported_resets;
+    if (mic_frames - last_report >= kReportFrames && worth_reporting) {
       last_report = mic_frames;
+      reported_resets = stats.resets;
       std::fprintf(stderr,
                    "max-aec: far-end %ld frames in=%.0f out=%.0f (%.1f dB removed) | "
                    "quiet %ld frames in=%.0f out=%.0f | ref %ld resets %ld erle %.1f dB\n",
                    far.count, far.mean_in(), far.mean_out(), far.reduction_db(), near.count,
                    near.mean_in(), near.mean_out(), stats.audio_frames, stats.resets,
                    static_cast<double>(apm.erle_db()));
+      far.reset();
+      near.reset();
+    } else if (mic_frames - last_report >= kReportFrames) {
+      last_report = mic_frames;
       far.reset();
       near.reset();
     }

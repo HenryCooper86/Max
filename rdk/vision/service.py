@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import socketserver
 import threading
+from pathlib import Path
 
 from camera import CameraPair
 from gallery import Gallery
@@ -64,3 +65,30 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def start_adas(config: "RuntimeConfig", shadow_path, emit, source_factory) -> threading.Thread:
+    """Run one camera's ADAS loop on a daemon thread.
+
+    Exceptions are caught and logged rather than raised. ADAS failing must cost
+    hazard detection and nothing else: the sidecar keeps serving preview and
+    gallery, and voice is a different process that this cannot reach.
+
+    RecordingRequired arrives here too. It is a deliberate stop rather than a
+    bug — shadow mode without a recorder produces a false-alarm rate nobody can
+    review — and it is contained the same way.
+    """
+    from adas.runtime import run_camera
+    from adas.shadow import ShadowLog
+
+    def body() -> None:
+        try:
+            with ShadowLog(Path(shadow_path)) as shadow:
+                fired = run_camera(source_factory(), config, shadow, emit)
+                print(f"[adas] {config.camera}: {fired} alerts", flush=True)
+        except Exception as error:  # noqa: BLE001 — see the docstring
+            print(f"[adas] {config.camera} stopped: {error}", flush=True)
+
+    thread = threading.Thread(target=body, name=f"adas-{config.camera}", daemon=True)
+    thread.start()
+    return thread

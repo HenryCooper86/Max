@@ -49,26 +49,30 @@ Record the result of every step in "Bench findings" below.
 
 Verified over SSH against the real board on 2026-07-25.
 
-| Item                       | Value                                                              | Date       |
-| -------------------------- | ------------------------------------------------------------------ | ---------- |
-| Board                      | `D-Robotics X5 MD V0.2`, Ubuntu 22.04.5, kernel 6.1.83             | 2026-07-25 |
-| ALSA capture device        | `plughw:0,0` — card 0 `duplexaudio`, codec **ES8326**              | 2026-07-25 |
-| ALSA playback device       | `plughw:0,0` — same duplex card, one device for both               | 2026-07-25 |
-| Headset wiring (CTIA/OMTP) | **CTIA, mic works** — −43.6 dBFS ambient, not silence              | 2026-07-25 |
-| Raw echo coupling          | **+5.5 dB** above the noise floor (`CROSSTALK=0`, DAC 0 dB)        | 2026-07-25 |
-| `module-echo-cancel`       | **tried, does not work** — master sink stays SUSPENDED, no audio   | 2026-07-25 |
-| AEC path chosen            | **in-process** — `rdk/aec/max-aec`, WebRTC APM; built and deployed | 2026-07-26 |
-| Reference-to-mic lag       | **81 ms** measured (was 953 ms before playback pacing)             | 2026-07-26 |
-| Echo loop                  | **fixed** — confirmed live, headset on, Max replies once and stops | 2026-07-26 |
-| Barge-in                   | **works** — confirmed live, talking over Max cuts his reply        | 2026-07-26 |
-| Live Doubao session        | **works** — Max speaks, 1.69 MB voice audio down                   | 2026-07-25 |
-| Full duplex                | **works** — simultaneous `arecord` + `aplay`, no device contention | 2026-07-25 |
-| Camera front port index    | **MIPI host 2** (`vcon@2`, i2c bus 4) — see "Camera findings"      | 2026-07-25 |
-| Camera rear port index     | **MIPI host 0** (`vcon@0`, i2c bus 6) — separate bus, no collision | 2026-07-25 |
-| BPU                        | present, idle, 500–1000 MHz; `pyeasy_dnn` + `libsrcampy` OK        | 2026-07-25 |
-| Node.js                    | **v22.23.1** installed from NodeSource; npm 10.9.8                 | 2026-07-25 |
-| First live session         | **works** — 656 KB mic PCM up, 3 device.result round trips         | 2026-07-25 |
-| pytest                     | 6.2.5 installed; board runs the vision suite 104 passed, 1 skipped | 2026-07-25 |
+| Item                       | Value                                                               | Date       |
+| -------------------------- | ------------------------------------------------------------------- | ---------- |
+| Board                      | `D-Robotics X5 MD V0.2`, Ubuntu 22.04.5, kernel 6.1.83              | 2026-07-25 |
+| ALSA capture device        | `plughw:0,0` — card 0 `duplexaudio`, codec **ES8326**               | 2026-07-25 |
+| ALSA playback device       | `plughw:0,0` — same duplex card, one device for both                | 2026-07-25 |
+| Headset wiring (CTIA/OMTP) | **CTIA, mic works** — −43.6 dBFS ambient, not silence               | 2026-07-25 |
+| Raw echo coupling          | **+5.5 dB** above the noise floor (`CROSSTALK=0`, DAC 0 dB)         | 2026-07-25 |
+| `module-echo-cancel`       | **tried, does not work** — master sink stays SUSPENDED, no audio    | 2026-07-25 |
+| AEC path chosen            | **in-process** — `rdk/aec/max-aec`, WebRTC APM; built and deployed  | 2026-07-26 |
+| Reference-to-mic lag       | **81 ms** measured (was 953 ms before playback pacing)              | 2026-07-26 |
+| Echo loop                  | **fixed** — confirmed live, headset on, Max replies once and stops  | 2026-07-26 |
+| Barge-in                   | **works** — confirmed live, talking over Max cuts his reply         | 2026-07-26 |
+| Live Doubao session        | **works** — Max speaks, 1.69 MB voice audio down                    | 2026-07-25 |
+| Full duplex                | **works** — simultaneous `arecord` + `aplay`, no device contention  | 2026-07-25 |
+| Camera front port index    | **MIPI host 2** (`vcon@2`, i2c bus 4) — see "Camera findings"       | 2026-07-25 |
+| Camera rear port index     | **MIPI host 0** (`vcon@0`, i2c bus 6) — separate bus, no collision  | 2026-07-25 |
+| BPU                        | present, idle, 500–1000 MHz; `pyeasy_dnn` + `libsrcampy` OK         | 2026-07-25 |
+| Node.js                    | **v22.23.1** installed from NodeSource; npm 10.9.8                  | 2026-07-25 |
+| First live session         | **works** — 656 KB mic PCM up, 3 device.result round trips          | 2026-07-25 |
+| pytest                     | 6.2.5 on the board; the suite runs there — no local pytest or numpy | 2026-07-25 |
+| BPU detector               | **yolov5s validated** — anchors checked against `bus.jpg`           | 2026-07-26 |
+| ADAS latency               | **52.4 ms** per frame p50 (19.1 fps single stream)                  | 2026-07-26 |
+| ADAS sustained             | **11.4 fps per camera**, 2 streams, voice live, no throttling       | 2026-07-26 |
+| Thermal under ADAS load    | 78.6 °C → **plateau ~90 °C** over 10 min; bench ambient only        | 2026-07-26 |
 
 ### AEC — the sweep said "gate passed". A live conversation said otherwise.
 
@@ -486,13 +490,114 @@ into the pair directory. Do not change the state machine while doing so.
 
 ## Running the Python suite
 
-pytest is a dev-only dependency; the sidecar itself needs no third-party
-packages.
+pytest is a dev-only dependency. The recorder needs no third-party packages;
+the ADAS pipeline added in M1 needs numpy, which is already present on the
+board (1.26.4).
+
+**The suite runs on the board.** There is no pytest or numpy on the usual dev
+machine, so tests are deployed and run over SSH:
 
 ```bash
-pip install pytest
-cd rdk/vision && python3 -m pytest tests/ -q
+scp -r rdk/vision root@192.168.50.9:/opt/max/rdk/
+ssh root@192.168.50.9 'cd /opt/max/rdk/vision && python3 -m pytest tests/ -q'
 ```
+
+## ADAS M1 — the measurement pipeline
+
+Spec: `docs/superpowers/specs/2026-07-26-adas-m1-measure-design.md`.
+Built 2026-07-26. **The constants are untuned starting values** — see the bottom
+of this section before reading any alert as meaningful.
+
+```bash
+ssh root@192.168.50.9 'cd /opt/max/rdk/vision && \
+  python3 tools/check_anchors.py && \
+  python3 tools/replay.py CLIP.mp4 --camera front --out /tmp/replay'
+```
+
+### Anchors are validated, and that gates everything else
+
+`tools/check_anchors.py` runs the real BPU over the board's own `bus.jpg`. If
+the anchor table were wrong, detections would still appear and every TTC number
+downstream would be quietly garbage, so this runs before anything else is
+believed.
+
+```
+bus     0.68  x[0.068,0.954] y[0.215,0.689]
+person  0.88  x[0.070,0.262] y[0.364,0.824]
+```
+
+The check that actually discriminates is **person aspect ratio**: 1:2.4 to
+1:3.2, i.e. human-shaped. Anchor priors set box dimensions, so a wrong table
+distorts aspect even when box centres look plausible. An earlier version of
+this check asserted the bus filled half the frame vertically and failed — that
+was the assertion being wrong, not the anchors: `bus.jpg` is portrait
+(810x1080) and its lower third is road.
+
+### Measured on the board
+
+| Measurement                      | Result                                                                 |
+| -------------------------------- | ---------------------------------------------------------------------- |
+| End-to-end latency               | **52.4 ms** p50, 54.2 ms p95 — 19.1 fps single stream                  |
+| — BPU forward                    | 19.1 ms                                                                |
+| — ego motion                     | 17.3 ms                                                                |
+| — postprocess (decode + NMS)     | 6.4 ms                                                                 |
+| — letterbox                      | 6.2 ms                                                                 |
+| Sustained, 2 streams, voice live | **22.7 inferences/s = 11.4 fps per camera**                            |
+| Throttling over 10 min           | **none** — throughput flat at 22.7–22.8 throughout                     |
+| Temperature                      | 78.6 °C start → **plateau ~90 °C** (peak CPU 90.6, BPU 90.0, DDR 90.9) |
+| Determinism                      | identical detections across two independent live BPU runs              |
+| Cache vs live                    | identical alerts                                                       |
+
+11.4 fps per camera clears the spec's 10 fps target, and the pipeline reached
+thermal steady state rather than climbing — it plateaued at 363 s and held.
+
+**The thermal headroom is the real risk.** 90 °C was measured on an open bench
+at room temperature. A helmet in a Chinese summer adds ambient that this bench
+does not have, and the gap to a throttle point is perhaps 5–15 °C. Sustained
+dual-camera inference is comfortable here and may not be on the bike. Ego
+motion is the cheapest place to buy headroom back if needed — dropping it to
+5 fps would cost little and save ~9 ms per frame.
+
+### The alert path works end to end on hardware
+
+Driving a synthetic approach (a `zoompan` into `bus.jpg`) through the real BPU
+produced a real alert from real detections:
+
+```json
+{ "threat_id": "pedestrian_ahead", "severity": "critical", "ttc_s": 1.195, "t_ms": 300 }
+```
+
+The chain is proven: BPU detections → tracker → TTC → threat rules →
+suppression → alert. It fired `pedestrian_ahead` rather than the bus because
+the person crossed its more permissive 2.5 s threshold first, after which the
+4 s global gap correctly suppressed everything else in a 2.5 s clip.
+
+**Watch the fixture, not just the result.** The first two synthetic clips
+produced no alerts, and the pipeline was right: `ffmpeg`'s `zoompan` resets
+`zoom` per input frame when fed `-loop 1 -i image` with `d=1`, so the clips
+never actually zoomed and the box height sat at a constant 0.226. Use `pzoom`
+for an incremental zoom. The diagnostic that caught it prints per-frame height,
+rate and TTC — worth reaching for before suspecting the rules.
+
+### What M1 does not establish
+
+- **Detection quality and range.** Needs real traffic footage from the helmet's
+  viewpoint. Nothing here says whether stock yolov5s finds a car at 40 m from a
+  moving bike, which is the question M2 rests on.
+- **File-vs-camera parity.** Blocked by the same missing hardware as the corpus.
+  What is verified instead is run-to-run determinism and cache/live
+  equivalence; the `FrameSource` seam means the deferred test is a few lines
+  rather than a refactor.
+- **Whether any threshold is correct.** All constants are the parent spec's
+  conservative starting values. `summary.json` carries a `tuning_status` field
+  saying so, so a clean run cannot be mistaken for a validated one. The three
+  exit criteria — under 1 false alert/hour, zero false criticals, no regression
+  in caught hazards — all need a labelled corpus and therefore an IMX219.
+
+One vendor caveat seen in every BPU run: the runtime warns that the hbrt
+library (3.15.55.0) and the model build (3.15.45.0) differ, and recommends
+matching toolchains. Detections validate correctly regardless, but if boxes
+ever look subtly wrong, start here.
 
 ## ADAS M0 — recording a corpus
 

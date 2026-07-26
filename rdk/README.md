@@ -49,26 +49,30 @@ Record the result of every step in "Bench findings" below.
 
 Verified over SSH against the real board on 2026-07-25.
 
-| Item                       | Value                                                              | Date       |
-| -------------------------- | ------------------------------------------------------------------ | ---------- |
-| Board                      | `D-Robotics X5 MD V0.2`, Ubuntu 22.04.5, kernel 6.1.83             | 2026-07-25 |
-| ALSA capture device        | `plughw:0,0` — card 0 `duplexaudio`, codec **ES8326**              | 2026-07-25 |
-| ALSA playback device       | `plughw:0,0` — same duplex card, one device for both               | 2026-07-25 |
-| Headset wiring (CTIA/OMTP) | **CTIA, mic works** — −43.6 dBFS ambient, not silence              | 2026-07-25 |
-| Raw echo coupling          | **+5.5 dB** above the noise floor (`CROSSTALK=0`, DAC 0 dB)        | 2026-07-25 |
-| `module-echo-cancel`       | **tried, does not work** — master sink stays SUSPENDED, no audio   | 2026-07-25 |
-| AEC path chosen            | **in-process** — `rdk/aec/max-aec`, WebRTC APM; built and deployed | 2026-07-26 |
-| Reference-to-mic lag       | **81 ms** measured (was 953 ms before playback pacing)             | 2026-07-26 |
-| Echo loop                  | **fixed** — confirmed live, headset on, Max replies once and stops | 2026-07-26 |
-| Barge-in                   | **works** — confirmed live, talking over Max cuts his reply        | 2026-07-26 |
-| Live Doubao session        | **works** — Max speaks, 1.69 MB voice audio down                   | 2026-07-25 |
-| Full duplex                | **works** — simultaneous `arecord` + `aplay`, no device contention | 2026-07-25 |
-| Camera front port index    | **MIPI host 2** (`vcon@2`, i2c bus 4) — see "Camera findings"      | 2026-07-25 |
-| Camera rear port index     | **MIPI host 0** (`vcon@0`, i2c bus 6) — separate bus, no collision | 2026-07-25 |
-| BPU                        | present, idle, 500–1000 MHz; `pyeasy_dnn` + `libsrcampy` OK        | 2026-07-25 |
-| Node.js                    | **v22.23.1** installed from NodeSource; npm 10.9.8                 | 2026-07-25 |
-| First live session         | **works** — 656 KB mic PCM up, 3 device.result round trips         | 2026-07-25 |
-| pytest                     | 6.2.5 installed; board runs the vision suite 104 passed, 1 skipped | 2026-07-25 |
+| Item                       | Value                                                               | Date       |
+| -------------------------- | ------------------------------------------------------------------- | ---------- |
+| Board                      | `D-Robotics X5 MD V0.2`, Ubuntu 22.04.5, kernel 6.1.83              | 2026-07-25 |
+| ALSA capture device        | `plughw:0,0` — card 0 `duplexaudio`, codec **ES8326**               | 2026-07-25 |
+| ALSA playback device       | `plughw:0,0` — same duplex card, one device for both                | 2026-07-25 |
+| Headset wiring (CTIA/OMTP) | **CTIA, mic works** — −43.6 dBFS ambient, not silence               | 2026-07-25 |
+| Raw echo coupling          | **+5.5 dB** above the noise floor (`CROSSTALK=0`, DAC 0 dB)         | 2026-07-25 |
+| `module-echo-cancel`       | **tried, does not work** — master sink stays SUSPENDED, no audio    | 2026-07-25 |
+| AEC path chosen            | **in-process** — `rdk/aec/max-aec`, WebRTC APM; built and deployed  | 2026-07-26 |
+| Reference-to-mic lag       | **81 ms** measured (was 953 ms before playback pacing)              | 2026-07-26 |
+| Echo loop                  | **fixed** — confirmed live, headset on, Max replies once and stops  | 2026-07-26 |
+| Barge-in                   | **works** — confirmed live, talking over Max cuts his reply         | 2026-07-26 |
+| Live Doubao session        | **works** — Max speaks, 1.69 MB voice audio down                    | 2026-07-25 |
+| Full duplex                | **works** — simultaneous `arecord` + `aplay`, no device contention  | 2026-07-25 |
+| Camera front port index    | **MIPI host 2** (`vcon@2`, i2c bus 4) — see "Camera findings"       | 2026-07-25 |
+| Camera rear port index     | **MIPI host 0** (`vcon@0`, i2c bus 6) — separate bus, no collision  | 2026-07-25 |
+| BPU                        | present, idle, 500–1000 MHz; `pyeasy_dnn` + `libsrcampy` OK         | 2026-07-25 |
+| Node.js                    | **v22.23.1** installed from NodeSource; npm 10.9.8                  | 2026-07-25 |
+| First live session         | **works** — 656 KB mic PCM up, 3 device.result round trips          | 2026-07-25 |
+| pytest                     | 6.2.5 on the board; the suite runs there — no local pytest or numpy | 2026-07-25 |
+| BPU detector               | **yolov5s validated** — anchors checked against `bus.jpg`           | 2026-07-26 |
+| ADAS latency               | **52.4 ms** per frame p50 (19.1 fps single stream)                  | 2026-07-26 |
+| ADAS sustained             | **11.4 fps per camera**, 2 streams, voice live, no throttling       | 2026-07-26 |
+| Thermal under ADAS load    | 78.6 °C → **plateau ~90 °C** over 10 min; bench ambient only        | 2026-07-26 |
 
 ### AEC — the sweep said "gate passed". A live conversation said otherwise.
 

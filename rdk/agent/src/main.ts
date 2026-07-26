@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { Socket } from "node:net";
+import { createAlertPlayer } from "./audio/alert-player";
 import { createCapture } from "./audio/capture";
 import { createBargeInGuard } from "./audio/barge-in";
 import { rms } from "./audio/dsp";
@@ -11,8 +12,9 @@ import { loadConfig } from "./config";
 import { createDeviceDispatcher } from "./device/dispatch";
 import { createHudServer } from "./hud/server";
 import { initialHudState, reduceHud } from "./hud/state";
+import { createHazardHandler } from "./hazard";
 import { createRelayClient, nextBackoffMs } from "./relay";
-import { createVisionClient, type VisionClient } from "./vision-client";
+import { createVisionClient, type VisionClient, type VisionEvent } from "./vision-client";
 
 const VISION_RECONNECT_MS = 2_000;
 
@@ -49,11 +51,11 @@ function setAlsaVolume(device: string, level: number): Promise<boolean> {
  * leave the relay waiting: every in-flight request is failed immediately so each
  * device.command still gets exactly one device.result.
  */
-function connectVision(socketPath: string): VisionClient {
+function connectVision(socketPath: string, onEvent: (event: VisionEvent) => void): VisionClient {
   const socket = new Socket();
   const client = createVisionClient({
     send: (line) => socket.write(line),
-    onEvent: (event) => console.log("[vision]", JSON.stringify(event))
+    onEvent
   });
   socket.on("data", (chunk: Buffer) => client.handleChunk(chunk.toString("utf8")));
   socket.on("error", () => client.failAllPending("capture.failed"));
@@ -104,7 +106,27 @@ function start(): void {
   const hud = createHudServer(config.hudPort, config.visionPreviewPort);
   let hudState = initialHudState();
 
-  const vision = connectVision(config.visionSocket);
+  // Hazards arrive on the sidecar's event channel. In shadow mode this only
+  // logs; MAX_ADAS_AUDIO=1 is what makes it speak, and that requires the M1
+  // gate to have been met against recorded evidence.
+  const hazards = createHazardHandler({
+    armed: config.adasAudio,
+    player: createAlertPlayer({ dir: config.adasAudioDir, playback }),
+    report: (event) => relay.sendEvent(event as never)
+  });
+  if (config.adasAudio) {
+    console.log("[adas] ALERT AUDIO ARMED — shadow numbers must have met the M1 gate");
+  } else {
+    console.log("[adas] shadow mode: hazards are logged, never spoken");
+  }
+
+  const vision = connectVision(config.visionSocket, (event) => {
+    if (event.event === "hazard") {
+      void hazards.handle(event as never);
+      return;
+    }
+    console.log("[vision]", JSON.stringify(event));
+  });
 
   const dispatch = createDeviceDispatcher({
     vision,

@@ -40,6 +40,12 @@ export type RdkConfig = {
    */
   aecSuppression: number;
   /**
+   * When set, max-aec writes <prefix>.mic.raw and <prefix>.ref.raw, sample
+   * aligned. Diagnostic only — it writes 64 KB/s and never rotates, so it is
+   * off unless someone is actively debugging the echo path.
+   */
+  aecDump: string;
+  /**
    * Arms ADAS alert audio. Defaults false and must stay false until shadow-mode
    * false-alarm numbers meet the M1 gate — under 1 false alert/hour and zero
    * false criticals. M1's thresholds are untuned starting values, and untuned
@@ -112,6 +118,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RdkConfig {
     aecBin: optionalString(env, "MAX_AEC_BIN", "/opt/max/rdk/aec/max-aec"),
     aecDelayMs: optionalNumber(env, "MAX_AEC_DELAY_MS", 80),
     aecSuppression: optionalNumber(env, "MAX_AEC_SUPPRESSION", 2),
+    aecDump: optionalString(env, "MAX_AEC_DUMP", ""),
     adasAudio: optionalFlag(env, "MAX_ADAS_AUDIO"),
     adasAudioDir: optionalString(env, "MAX_ADAS_AUDIO_DIR", "/opt/max/rdk/audio/alerts")
   };

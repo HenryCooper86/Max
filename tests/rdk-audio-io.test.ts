@@ -394,3 +394,22 @@ describe("playback priority lock", () => {
     expect(fake.kill).toHaveBeenCalled();
   });
 });
+
+describe("aecArgs dump", () => {
+  it("omits the dump flag when no prefix is configured", () => {
+    expect(aecArgs("plughw:0,0", 80, 2)).not.toContain("--dump-prefix");
+  });
+
+  it("passes the prefix through when debugging the echo path", () => {
+    expect(aecArgs("plughw:0,0", 80, 2, "/tmp/aecdump")).toEqual([
+      "--device",
+      "plughw:0,0",
+      "--delay-ms",
+      "80",
+      "--suppression",
+      "2",
+      "--dump-prefix",
+      "/tmp/aecdump"
+    ]);
+  });
+});

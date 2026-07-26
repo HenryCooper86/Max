@@ -17,6 +17,8 @@ export type AecOptions = {
   delayMs: number;
   /** 0 low, 1 moderate, 2 high. See the sweep in rdk/aec/src/apm.h. */
   suppression: number;
+  /** Diagnostic dump prefix; empty disables it. */
+  dump?: string;
 };
 
 export type CaptureOptions = {
@@ -33,8 +35,10 @@ export function captureArgs(device: string): string[] {
   return ["-D", device, "-f", "S16_LE", "-r", String(CAPTURE_RATE), "-c", "1", "-t", "raw", "-q"];
 }
 
-export function aecArgs(device: string, delayMs: number, suppression: number): string[] {
-  return ["--device", device, "--delay-ms", String(delayMs), "--suppression", String(suppression)];
+export function aecArgs(device: string, delayMs: number, suppression: number, dump = ""): string[] {
+  const args = ["--device", device, "--delay-ms", String(delayMs), "--suppression", String(suppression)];
+  if (dump) args.push("--dump-prefix", dump);
+  return args;
 }
 
 /**
@@ -67,7 +71,10 @@ export function createCapture(options: CaptureOptions): { start(): void; stop():
       leftover = Buffer.alloc(0);
 
       child = options.aec
-        ? spawn(options.aec.bin, aecArgs(options.device, options.aec.delayMs, options.aec.suppression))
+        ? spawn(
+            options.aec.bin,
+            aecArgs(options.device, options.aec.delayMs, options.aec.suppression, options.aec.dump)
+          )
         : spawn("arecord", captureArgs(options.device));
       // Unplugging the headset kills the child mid-stream; an unhandled 'error'
       // on this stream would take the whole agent down. Losing the mic must

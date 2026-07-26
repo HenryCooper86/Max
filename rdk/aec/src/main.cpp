@@ -180,8 +180,35 @@ bool drain_reference(std::vector<uint8_t>& rx, size_t& rx_read, Decimator3& ref_
   return true;
 }
 
-int run_live(const std::string& device, int delay_ms, int suppression,
-             ApmStages stages) {
+// Writes the mic and the reference exactly as APM consumed them, sample for
+// sample: when a mic frame had no reference, zeros go to the reference file so
+// the two stay aligned. The lag between these files IS the misalignment APM had
+// to model, which is the one thing three rounds of bench measurement never
+// established on the real agent path.
+struct Dump {
+  std::FILE* mic = nullptr;
+  std::FILE* ref = nullptr;
+
+  void open(const std::string& prefix) {
+    mic = std::fopen((prefix + ".mic.raw").c_str(), "wb");
+    ref = std::fopen((prefix + ".ref.raw").c_str(), "wb");
+  }
+  bool active() const { return mic && ref; }
+  void write(const int16_t* mic_frame, const int16_t* ref_frame, size_t n) {
+    if (!active()) return;
+    std::fwrite(mic_frame, sizeof(int16_t), n, mic);
+    static const std::vector<int16_t> silence(512, 0);
+    std::fwrite(ref_frame ? ref_frame : silence.data(), sizeof(int16_t), n, ref);
+  }
+  void close() {
+    if (mic) std::fclose(mic);
+    if (ref) std::fclose(ref);
+    mic = ref = nullptr;
+  }
+};
+
+int run_live(const std::string& device, int delay_ms, int suppression, ApmStages stages,
+             const std::string& dump_prefix) {
   int flags = fcntl(3, F_GETFL, 0);
   if (flags >= 0) fcntl(3, F_SETFL, flags | O_NONBLOCK);
 
@@ -214,6 +241,12 @@ int run_live(const std::string& device, int delay_ms, int suppression,
   size_t pending_read = 0;
   std::vector<int16_t> mic_in(kPeriod);
   RefStats stats;
+  Dump dump;
+  if (!dump_prefix.empty()) {
+    dump.open(dump_prefix);
+    std::fprintf(stderr, "max-aec: dumping mic+reference to %s.{mic,ref}.raw\n",
+                 dump_prefix.c_str());
+  }
   long mic_frames = 0;
   long last_report = 0;
   long reported_resets = 0;
@@ -237,6 +270,7 @@ int run_live(const std::string& device, int delay_ms, int suppression,
         pending_read += frame;
       }
       const double before = frame_rms(&mic16[i], frame);
+      dump.write(&mic16[i], had_reference ? pending.data() + pending_read - frame : nullptr, frame);
       apm.process(&mic16[i]);
       const double after = frame_rms(&mic16[i], frame);
       ++mic_frames;
@@ -289,6 +323,7 @@ int run_live(const std::string& device, int delay_ms, int suppression,
                mic_frames, stats.audio_frames, stats.samples, stats.resets,
                static_cast<double>(apm.erle_db()));
 
+  dump.close();
   snd_pcm_close(pcm);
   return 0;
 }
@@ -299,6 +334,7 @@ int main(int argc, char** argv) {
   int delay_ms = 160;
   int suppression = 2;  // see apm.h: hardware overruled the offline fixture
   const char* device = nullptr;
+  const char* dump_prefix = "";
   ApmStages stages;
   for (int i = 1; i < argc; ++i) {
     if (std::strcmp(argv[i], "--delay-ms") == 0 && i + 1 < argc) delay_ms = std::atoi(argv[++i]);
@@ -309,16 +345,19 @@ int main(int argc, char** argv) {
     else if (std::strcmp(argv[i], "--no-aec") == 0) stages.aec = false;
     else if (std::strcmp(argv[i], "--no-ns") == 0) stages.ns = false;
     else if (std::strcmp(argv[i], "--no-agc") == 0) stages.agc = false;
+    else if (std::strcmp(argv[i], "--dump-prefix") == 0 && i + 1 < argc)
+      dump_prefix = argv[++i];
   }
   if (argc >= 5 && std::strcmp(argv[1], "--offline") == 0) {
     return run_offline(argv[2], argv[3], argv[4], delay_ms, suppression, stages);
   }
-  if (device) return run_live(device, delay_ms, suppression, stages);
+  if (device) return run_live(device, delay_ms, suppression, stages, dump_prefix);
   std::fprintf(stderr,
                "usage: max-aec --offline <ref.wav> <mic.wav> <out.wav> [--delay-ms N] "
                "[--suppression 0|1|2]\n"
                "       max-aec --device <alsa> [--delay-ms N] [--suppression 0|1|2]\n"
                "         live: mic -> stdout as 16 kHz PCM16, reference frames on fd 3\n"
-               "  [--no-aec] [--no-ns] [--no-agc]  disable a stage, for bench measurement\n");
+               "  [--no-aec] [--no-ns] [--no-agc]  disable a stage, for bench measurement\n"
+               "  [--dump-prefix P]                write P.mic.raw and P.ref.raw, sample-aligned\n");
   return 2;
 }

@@ -185,7 +185,8 @@ function start(): void {
       ? {
           bin: config.aecBin,
           delayMs: config.aecDelayMs,
-          suppression: config.aecSuppression
+          suppression: config.aecSuppression,
+          dump: config.aecDump
         }
       : undefined,
     onReference: (stream) => {

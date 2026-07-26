@@ -297,7 +297,7 @@ int run_live(const std::string& device, int delay_ms, int suppression,
 
 int main(int argc, char** argv) {
   int delay_ms = 160;
-  int suppression = 0;
+  int suppression = 2;  // see apm.h: hardware overruled the offline fixture
   const char* device = nullptr;
   ApmStages stages;
   for (int i = 1; i < argc; ++i) {

@@ -28,14 +28,17 @@ class ApmSession {
   ApmSession();
   ~ApmSession();
 
-  // suppression: 0 low, 1 moderate, 2 high. Defaults to low because the bench
-  // sweep found ERLE identical at all three (32.7 dB — the linear filter does
-  // the work) while double-talk loss climbed 12.5 -> 16.7 -> 22.1 dB. The
-  // residual suppressor bought no echo rejection and only cost the rider.
-  // Caveat: that fixture's echo is linear. A real speaker distorts, and
-  // suppression is what catches the nonlinear residue, so raise this if a live
-  // ride leaks echo. Exposed as MAX_AEC_SUPPRESSION.
-  bool init(int delay_ms, int suppression = 0, ApmStages stages = ApmStages{});
+  // suppression: 0 low, 1 moderate, 2 high. Defaults to HIGH.
+  //
+  // The offline fixture recommended 0: ERLE was identical at all three levels
+  // (32.7 dB — the linear filter did the work) while double-talk loss climbed
+  // 12.5 -> 16.7 -> 22.1 dB. That recommendation was wrong on real hardware,
+  // and the caveat written beside it turned out to be the whole story: the
+  // fixture's echo path is linear, a real speaker is not, and the nonlinear
+  // residue is exactly what the residual suppressor exists to catch. On the
+  // board the linear filter alone managed erle 0.0-2.0 dB and the echo loop
+  // came back; suppression 2 stopped it. Confirmed live 2026-07-26.
+  bool init(int delay_ms, int suppression = 2, ApmStages stages = ApmStages{});
   void process_reverse(const int16_t* ref);
   void process(int16_t* mic);
   void reset();

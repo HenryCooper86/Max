@@ -95,3 +95,17 @@ describe("aec config", () => {
     expect(config.aecDelayMs).toBe(80); // measured on the board, not guessed
   });
 });
+
+describe("aec suppression default", () => {
+  it("defaults to high, because the linear fixture's recommendation failed on hardware", () => {
+    // The offline sweep said 0 — ERLE was identical at all three levels and
+    // double-talk loss only grew. On the board the linear filter alone managed
+    // erle 0.0-2.0 dB and the echo loop returned; only the residual suppressor
+    // stopped it. A real speaker is nonlinear and the fixture's is not.
+    expect(loadConfig(BASE_ENV).aecSuppression).toBe(2);
+  });
+
+  it("can be dropped back if barge-in becomes unreliable", () => {
+    expect(loadConfig({ ...BASE_ENV, MAX_AEC_SUPPRESSION: "1" }).aecSuppression).toBe(1);
+  });
+});

@@ -26,10 +26,17 @@ export type RdkConfig = {
    */
   aecDelayMs: number;
   /**
-   * Residual echo suppressor: 0 low, 1 moderate, 2 high. Defaults to low
-   * because the bench sweep found ERLE identical at all three while double-talk
-   * loss climbed 12.5 -> 16.7 -> 22.1 dB, and double-talk is barge-in. Raise it
-   * only if a real ride leaks echo that the linear filter cannot model.
+   * Residual echo suppressor: 0 low, 1 moderate, 2 high.
+   *
+   * Defaults to HIGH, on hardware evidence that overruled the bench. The
+   * offline fixture found ERLE identical at all three levels while double-talk
+   * loss climbed 12.5 -> 16.7 -> 22.1 dB, and recommended 0. That fixture's
+   * echo path is linear; a real speaker is not. On the board the linear filter
+   * alone managed erle 0.0-2.0 dB and the echo loop returned, and only the
+   * residual suppressor stopped it — confirmed live, headset on, 2026-07-26.
+   *
+   * The cost is real: high suppression attenuates the rider during double-talk,
+   * so barge-in is harder. Drop to 1 if interrupting Max becomes unreliable.
    */
   aecSuppression: number;
   /**
@@ -104,7 +111,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RdkConfig {
     aecMode: optionalEnum(env, "MAX_AEC_MODE", ["apm", "off"] as const, "apm"),
     aecBin: optionalString(env, "MAX_AEC_BIN", "/opt/max/rdk/aec/max-aec"),
     aecDelayMs: optionalNumber(env, "MAX_AEC_DELAY_MS", 80),
-    aecSuppression: optionalNumber(env, "MAX_AEC_SUPPRESSION", 0),
+    aecSuppression: optionalNumber(env, "MAX_AEC_SUPPRESSION", 2),
     adasAudio: optionalFlag(env, "MAX_ADAS_AUDIO"),
     adasAudioDir: optionalString(env, "MAX_ADAS_AUDIO_DIR", "/opt/max/rdk/audio/alerts")
   };

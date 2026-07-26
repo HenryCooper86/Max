@@ -223,7 +223,27 @@ Note the delay sweep this plan originally called for stopped at 320 ms, so it
 could never have found this. If cancellation looks broken, **measure the lag
 first** — `rdk/aec/tools/acoustic.py` does it.
 
-**Offline figures** (`tools/erle.py`, synthetic linear echo):
+**The offline suppression sweep was wrong, and hardware overruled it.** Read
+this before trusting any figure in the table below.
+
+The sweep recommended `kLowSuppression`: ERLE was identical at all three levels,
+so the residual suppressor appeared to buy nothing while costing up to 10 dB of
+double-talk. That held until 2026-07-26, when the echo loop returned with APM
+reporting **erle 0.0-2.0 dB** on a live session and `resets` climbing. Raising
+`MAX_AEC_SUPPRESSION` to **2** stopped it, confirmed live with the headset on.
+
+The caveat written next to the original sweep turned out to be the entire story:
+that fixture's echo path is linear, a real speaker is not, and the nonlinear
+residue is exactly what the residual suppressor exists to catch. The linear
+filter handles a synthetic echo so completely that suppression looks redundant —
+and handles a real one so poorly that suppression is the only thing working.
+
+**Default is now 2.** Drop to 1 if interrupting Max becomes unreliable; high
+suppression attenuates the rider during double-talk, which is the documented
+cost.
+
+**Offline figures** (`tools/erle.py`, synthetic linear echo — see the warning
+above before drawing conclusions from these):
 
 | Measurement | Result  | Meaning                               |
 | ----------- | ------- | ------------------------------------- |
@@ -239,10 +259,15 @@ echo rejection and only cost double-talk. Hence `MAX_AEC_SUPPRESSION=0`. That
 fixture's echo is linear, though, and suppression is what catches nonlinear
 speaker residue — raise it if a real ride leaks echo.
 
-**What the desk bench cannot tell you.** With the board on a table the speaker
-reaches the mic at RMS ~90 against an ambient floor of ~275: there is no echo
-above the noise to cancel, and every acoustic ERLE figure measured that way is
-noise. The helmet puts the speaker centimetres from the mic. The bench never
+**What the desk bench cannot tell you — and this has now cost three separate
+attempts.** With the board on a table the speaker reaches the mic at RMS ~90
+against an ambient floor of ~275: there is no echo above the noise to cancel,
+and every acoustic ERLE figure measured that way is noise. On 2026-07-26 a
+bench run reported ~1 dB ERLE and a follow-up measured **ambient at 795 with the
+speaker silent against 167 with it playing** — physically impossible, and proof
+only that two readings minutes apart are not comparable. Do not diagnose echo
+from this desk. Use APM's own `erle` from a live session log instead; it is
+computed on real data. The helmet puts the speaker centimetres from the mic. The bench never
 reproduced the loop and never could have — **acceptance was, and remains, a
 live conversation.** Same lesson as 2026-07-25, one level up.
 

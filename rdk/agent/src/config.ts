@@ -16,6 +16,22 @@ export type RdkConfig = {
   visionSocket: string;
   voiceGateRms: number;
   voiceGateMs: number;
+  /** "apm" runs max-aec; "off" falls back to arecord plus the hardware duck. */
+  aecMode: "apm" | "off";
+  aecBin: string;
+  /**
+   * Reference-to-mic delay hint for APM. 80 ms is measured, not guessed:
+   * cross-correlating the recorded mic against the reference on the board gave
+   * 81 ms once playback was paced. DelayAgnostic tracks drift from here.
+   */
+  aecDelayMs: number;
+  /**
+   * Residual echo suppressor: 0 low, 1 moderate, 2 high. Defaults to low
+   * because the bench sweep found ERLE identical at all three while double-talk
+   * loss climbed 12.5 -> 16.7 -> 22.1 dB, and double-talk is barge-in. Raise it
+   * only if a real ride leaks echo that the linear filter cannot model.
+   */
+  aecSuppression: number;
 };
 
 function requireString(env: NodeJS.ProcessEnv, key: string): string {
@@ -37,6 +53,16 @@ function optionalNumber(env: NodeJS.ProcessEnv, key: string, fallback: number): 
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) throw new Error(`${key} must be a number, got ${value}`);
   return parsed;
+}
+
+function optionalEnum<T extends string>(env: NodeJS.ProcessEnv, key: string, allowed: readonly T[], fallback: T): T {
+  const value = env[key];
+  if (typeof value !== "string" || value.trim() === "") return fallback;
+  const trimmed = value.trim() as T;
+  if (!allowed.includes(trimmed)) {
+    throw new Error(`${key} must be one of ${allowed.join(", ")}, got ${value}`);
+  }
+  return trimmed;
 }
 
 /**
@@ -66,6 +92,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RdkConfig {
     visionPreviewPort: optionalNumber(env, "MAX_VISION_PREVIEW_PORT", 8081),
     visionSocket: optionalString(env, "MAX_VISION_SOCKET", "/run/max/vision.sock"),
     voiceGateRms: optionalNumber(env, "MAX_VOICE_GATE_RMS", 900),
-    voiceGateMs: optionalNumber(env, "MAX_VOICE_GATE_MS", 400)
+    voiceGateMs: optionalNumber(env, "MAX_VOICE_GATE_MS", 400),
+    aecMode: optionalEnum(env, "MAX_AEC_MODE", ["apm", "off"] as const, "apm"),
+    aecBin: optionalString(env, "MAX_AEC_BIN", "/opt/max/rdk/aec/max-aec"),
+    aecDelayMs: optionalNumber(env, "MAX_AEC_DELAY_MS", 80),
+    aecSuppression: optionalNumber(env, "MAX_AEC_SUPPRESSION", 0)
   };
 }

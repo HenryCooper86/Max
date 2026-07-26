@@ -1,17 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 import { PassThrough } from "node:stream";
 import { FRAME_SAMPLES } from "../rdk/agent/src/audio/dsp";
-import { captureArgs, createCapture } from "../rdk/agent/src/audio/capture";
+import { aecArgs, captureArgs, createCapture } from "../rdk/agent/src/audio/capture";
 import { createPlayback, playbackArgs } from "../rdk/agent/src/audio/playback";
 
 function fakeChild() {
   const stdout = new PassThrough();
   const stdin = new PassThrough();
+  const reference = new PassThrough();
   const kill = vi.fn();
   return {
-    child: { stdout, stdin, kill, on: () => {} },
+    child: { stdout, stdin, stdio: [null, stdout, null, reference], kill, on: () => {} },
     stdout,
     stdin,
+    reference,
     kill
   };
 }
@@ -139,5 +141,206 @@ describe("createPlayback", () => {
     playback.flush();
     playback.write(new Int16Array(240));
     expect(spawns).toBe(2);
+  });
+});
+
+describe("aecArgs", () => {
+  it("passes the device, delay and suppression to max-aec", () => {
+    expect(aecArgs("plughw:0,0", 160, 0)).toEqual([
+      "--device",
+      "plughw:0,0",
+      "--delay-ms",
+      "160",
+      "--suppression",
+      "0"
+    ]);
+  });
+});
+
+describe("createCapture with AEC", () => {
+  it("spawns max-aec instead of arecord when configured", () => {
+    const fake = fakeChild();
+    let spawned = "";
+    const capture = createCapture({
+      device: "plughw:0,0",
+      spawn: (cmd) => {
+        spawned = cmd;
+        return fake.child;
+      },
+      onFrame: () => {},
+      aec: { bin: "/opt/max/rdk/aec/max-aec", delayMs: 160, suppression: 0 }
+    });
+    capture.start();
+    expect(spawned).toBe("/opt/max/rdk/aec/max-aec");
+  });
+
+  it("still spawns arecord when AEC is not configured", () => {
+    const fake = fakeChild();
+    let spawned = "";
+    const capture = createCapture({
+      device: "plughw:0,0",
+      spawn: (cmd) => {
+        spawned = cmd;
+        return fake.child;
+      },
+      onFrame: () => {}
+    });
+    capture.start();
+    expect(spawned).toBe("arecord");
+  });
+
+  it("does not decimate again — max-aec already emits 16 kHz", () => {
+    // Double-decimating would drop the uplink to 5.3 kHz and Doubao would hear
+    // a slowed-down rider, so this is the seam worth pinning down.
+    const fake = fakeChild();
+    const frames: Int16Array[] = [];
+    const capture = createCapture({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      onFrame: (f) => frames.push(f),
+      aec: { bin: "/opt/max/rdk/aec/max-aec", delayMs: 160, suppression: 0 }
+    });
+    capture.start();
+    fake.stdout.write(Buffer.from(new Int16Array(FRAME_SAMPLES * 3).buffer));
+    expect(frames.length).toBe(3);
+    expect(frames[0]!.length).toBe(FRAME_SAMPLES);
+  });
+
+  it("hands the reference pipe to the caller so playback can feed it", () => {
+    const fake = fakeChild();
+    let handed: NodeJS.WritableStream | null | undefined;
+    const capture = createCapture({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      onFrame: () => {},
+      aec: { bin: "/opt/max/rdk/aec/max-aec", delayMs: 160, suppression: 0 },
+      onReference: (stream) => (handed = stream)
+    });
+    capture.start();
+    expect(handed).toBe(fake.reference);
+  });
+
+  it("hands over null with AEC off, so the sink stays a no-op", () => {
+    const fake = fakeChild();
+    let handed: NodeJS.WritableStream | null | undefined = undefined;
+    const capture = createCapture({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      onFrame: () => {},
+      onReference: (stream) => (handed = stream)
+    });
+    capture.start();
+    expect(handed).toBeNull();
+  });
+});
+
+describe("playback reference", () => {
+  it("forwards post-limiter audio to the reference sink", () => {
+    const fake = fakeChild();
+    const written: number[] = [];
+    const playback = createPlayback({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      reference: {
+        write: (pcm: Int16Array) => written.push(pcm.length),
+        flush: () => {},
+        close: () => {}
+      }
+    });
+    playback.write(new Int16Array(240)); // 24 kHz in -> 480 at 48 kHz
+    expect(written).toEqual([480]);
+  });
+
+  it("flushes the reference before killing aplay, not after", () => {
+    // Order matters: the reset marker has to sit in the pipe behind the audio
+    // it invalidates and ahead of anything that follows.
+    const order: string[] = [];
+    const fake = fakeChild();
+    fake.kill.mockImplementation(() => order.push("kill"));
+    const playback = createPlayback({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      reference: {
+        write: () => {},
+        flush: () => order.push("flush"),
+        close: () => {}
+      }
+    });
+    playback.write(new Int16Array(240));
+    playback.flush();
+    expect(order).toEqual(["flush", "kill"]);
+  });
+});
+
+describe("playback pacing", () => {
+  // The relay delivers TTS faster than realtime. Writing it straight into
+  // aplay's stdin parks it in a 64 KB pipe — 683 ms at 48 kHz — plus the 120 ms
+  // ALSA buffer. The reference was emitted at queue time, so the echo reached
+  // the mic ~950 ms after APM had been told about it (measured on the board).
+  // WebRTC's filter spans ~500 ms at best, so it saw no echo at all and
+  // reported ERLE -100 dB. Pacing keeps the gap inside the filter's reach.
+  function harness() {
+    const fake = fakeChild();
+    let now = 0;
+    const timers: Array<{ at: number; fn: () => void }> = [];
+    const reference: number[] = [];
+    const playback = createPlayback({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      now: () => now,
+      schedule: (fn, ms) => {
+        timers.push({ at: now + ms, fn });
+        return 0 as unknown as NodeJS.Timeout;
+      },
+      reference: {
+        write: (pcm: Int16Array) => reference.push(pcm.length),
+        flush: () => {},
+        close: () => {}
+      }
+    });
+    const advance = (ms: number) => {
+      now += ms;
+      const due = timers.filter((t) => t.at <= now);
+      due.forEach((t) => timers.splice(timers.indexOf(t), 1));
+      due.forEach((t) => t.fn());
+    };
+    return { fake, playback, advance, reference, written: () => fake.stdin.readableLength };
+  }
+
+  it("does not dump a whole utterance into the pipe at once", () => {
+    const { playback, written } = harness();
+    // 2 s of speech, delivered instantly the way the relay delivers it.
+    for (let i = 0; i < 100; i += 1) playback.write(new Int16Array(480));
+    // At 48 kHz stereo-free PCM16, 200 ms is 19200 bytes. Anything close to the
+    // full 2 s (384000 bytes) means it went straight through.
+    expect(written()).toBeLessThan(40000);
+  });
+
+  it("keeps feeding aplay as time passes", () => {
+    const { playback, advance, written } = harness();
+    for (let i = 0; i < 100; i += 1) playback.write(new Int16Array(480));
+    const early = written();
+    advance(1000);
+    expect(written()).toBeGreaterThan(early);
+  });
+
+  it("emits the reference as audio reaches the DAC, not when it is queued", () => {
+    const { playback, advance, reference } = harness();
+    for (let i = 0; i < 100; i += 1) playback.write(new Int16Array(480));
+    const queued = reference.reduce((a, b) => a + b, 0);
+    expect(queued).toBeLessThan(48000); // under 1 s of the 2 s written
+    advance(2000);
+    const after = reference.reduce((a, b) => a + b, 0);
+    expect(after).toBeGreaterThan(queued);
+  });
+
+  it("drops audio still queued when the rider barges in", () => {
+    const { playback, advance, reference } = harness();
+    for (let i = 0; i < 100; i += 1) playback.write(new Int16Array(480));
+    playback.flush();
+    const atFlush = reference.reduce((a, b) => a + b, 0);
+    advance(2000);
+    // Nothing more may play: the rider interrupted, so the tail is gone.
+    expect(reference.reduce((a, b) => a + b, 0)).toBe(atFlush);
   });
 });

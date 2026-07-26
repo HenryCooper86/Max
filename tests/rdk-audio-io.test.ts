@@ -344,3 +344,53 @@ describe("playback pacing", () => {
     expect(reference.reduce((a, b) => a + b, 0)).toBe(atFlush);
   });
 });
+
+describe("playback priority lock", () => {
+  it("ignores a flush while an alert holds priority", () => {
+    // A rider saying "什么?" mid-warning trips Doubao's VAD. Without this lock
+    // that barge-in cuts the collision alert in half, and a warning a startled
+    // rider can cancel by flinching is worse than no warning at all.
+    const fake = fakeChild();
+    const playback = createPlayback({ device: "plughw:0,0", spawn: () => fake.child });
+    playback.write(new Int16Array(240));
+    playback.holdPriority();
+    playback.flush();
+    expect(fake.kill).not.toHaveBeenCalled();
+  });
+
+  it("resumes honouring flush once the alert finishes", () => {
+    const fake = fakeChild();
+    const playback = createPlayback({ device: "plughw:0,0", spawn: () => fake.child });
+    playback.write(new Int16Array(240));
+    playback.holdPriority();
+    playback.releasePriority();
+    playback.flush();
+    expect(fake.kill).toHaveBeenCalled();
+  });
+
+  it("does not send a reference reset for audio it did not discard", () => {
+    // The reset marker tells max-aec to forget queued far-end audio. Sending it
+    // when nothing was dropped makes APM forget an echo that is still coming.
+    const fake = fakeChild();
+    let flushes = 0;
+    const playback = createPlayback({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      reference: { write: () => {}, flush: () => (flushes += 1), close: () => {} }
+    });
+    playback.holdPriority();
+    playback.flush();
+    expect(flushes).toBe(0);
+  });
+
+  it("still stops on shutdown even while an alert holds priority", () => {
+    // stop() is process teardown, not barge-in. Refusing it would keep aplay
+    // alive after the agent exits.
+    const fake = fakeChild();
+    const playback = createPlayback({ device: "plughw:0,0", spawn: () => fake.child });
+    playback.write(new Int16Array(240));
+    playback.holdPriority();
+    playback.stop();
+    expect(fake.kill).toHaveBeenCalled();
+  });
+});

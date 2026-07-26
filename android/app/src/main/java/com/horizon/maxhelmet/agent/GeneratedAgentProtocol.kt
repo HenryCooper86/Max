@@ -10,7 +10,8 @@ object ClientEventTypes {
     const val TESTING_METRIC = "testing.metric"
     const val TURN_FEEDBACK = "turn.feedback"
     const val DEVICE_RESULT = "device.result"
-    val all: Set<String> = setOf(SESSION_START, AUDIO_START, AUDIO_STOP, DEMO_GUIDED, LOCATION_UPDATE, TESTING_METRIC, TURN_FEEDBACK, DEVICE_RESULT)
+    const val HAZARD_REPORT = "hazard.report"
+    val all: Set<String> = setOf(SESSION_START, AUDIO_START, AUDIO_STOP, DEMO_GUIDED, LOCATION_UPDATE, TESTING_METRIC, TURN_FEEDBACK, DEVICE_RESULT, HAZARD_REPORT)
 }
 
 object ServerEventTypes {

@@ -920,9 +920,17 @@ export function createDoubaoProvider(
     });
   }
 
+  // Captured at session.start so the hazard injector can suppress simulated
+  // alerts on the embedded board, which detects hazards for real.
+  let sessionPlatform: string | undefined;
+
   // Simulated ADAS hazards on the live path — only for the dedicated ADAS scenario
   // so normal voice sessions aren't interrupted. See server/hazard-injector.ts.
-  const hazardInjector = createHazardInjector({ send: sendClient, emitRideContext });
+  const hazardInjector = createHazardInjector({
+    send: sendClient,
+    emitRideContext,
+    platform: () => sessionPlatform
+  });
 
   /** Refetches weather for the current location and pushes the HUD update. */
   async function refreshWeather(trigger: "interval" | "location") {
@@ -1480,6 +1488,7 @@ export function createDoubaoProvider(
   return {
     async start(event: SessionStartEvent, context?: ProviderSessionContext) {
       if (started) return;
+      sessionPlatform = event.platform;
       started = true;
 
       let systemRole = process.env.DOUBAO_SYSTEM_ROLE ?? DEFAULT_AGENT_SYSTEM_PROMPT;

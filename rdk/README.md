@@ -599,6 +599,109 @@ library (3.15.55.0) and the model build (3.15.45.0) differ, and recommends
 matching toolchains. Detections validate correctly regardless, but if boxes
 ever look subtly wrong, start here.
 
+## ADAS M2 — the on-bike runtime, in shadow mode
+
+Spec: `docs/superpowers/specs/2026-07-26-adas-m2-ride-design.md`. Built
+2026-07-26.
+
+### Alert audio is LOCKED, and this is the part to read before changing anything
+
+`MAX_ADAS_AUDIO` defaults to `0`. The runtime detects, logs and tells the agent;
+the agent says nothing. The agent prints which mode it is in at startup:
+
+```
+[adas] shadow mode: hazards are logged, never spoken
+[adas] ALERT AUDIO ARMED — shadow numbers must have met the M1 gate
+```
+
+**Arming requires evidence, not a decision to ship.** The condition is the M1
+gate, measured against real shadow data: **under 1 false alert per hour** and
+**zero false `critical` alerts**. None of M1's suppression constants have been
+tuned — they are the parent spec's conservative starting values — and untuned
+thresholds must not reach a rider's ears at 100 km/h. A false alert at that
+speed can cause the crash it was meant to prevent.
+
+Only the exact string `1` arms it. `true`, `yes` and `on` all leave it locked,
+so a plausible-looking typo cannot arm audio by accident.
+
+### Reading a shadow log
+
+One JSONL per ride. Each record answers "why did it fire" without re-running
+anything, because the ride is over by the time anyone reads it:
+
+```
+pedestrian_ahead sev=critical ttc=1.20s seg=front_000000.h264+300ms
+  h=0.272 rate=0.197 frames=4 moving=True
+```
+
+Pull the clip for any alert straight out of the ride recording:
+
+```bash
+python3 tools/clip.py /var/lib/max/corpus/ride-001/shadow.jsonl \
+  --index 0 --segments /var/lib/max/corpus/ride-001 --out /tmp/alert.mp4
+```
+
+Clips come from the recorder's own segments rather than a rolling buffer —
+~310 MB per camera saved — which also means **shadow clips are corpus
+material**, feeding the tuning that eventually unlocks the audio.
+
+**Shadow mode refuses to start without the recorder.** That is deliberate: a
+false-alarm rate whose evidence was never written is exactly the number that
+misleads, and this board has already produced two measurements that looked
+healthy and meant nothing (the 2026-07-25 AEC sweep, and an acoustic bench that
+measured a room instead of an echo).
+
+### Alert audio must stay on the playback path
+
+`alert-player.ts` plays through `playback.write()`, never a separate `aplay`.
+That path carries the soft limiter, the pacing **and the AEC reference tap**.
+
+An alert leaves the same speaker and enters the same microphone as Max's voice.
+Route it around `playback` and APM is never told about it, the mic hears an
+uncancelled warning, Doubao's VAD fires on it, and the echo loop returns —
+triggered by our own safety alert. See the AEC section above for what that cost.
+
+An alert also cannot be preempted: `playback.flush()` is a no-op while one
+plays. Without that, a rider saying "什么?" mid-warning trips the VAD and cuts
+the collision alert in half.
+
+### Rendering the clips
+
+```bash
+DOUBAO_TTS_APPID=... DOUBAO_TTS_TOKEN=... \
+  python3 tools/render_alerts.py --out /opt/max/rdk/audio/alerts
+```
+
+These credentials are **separate from the relay's** — the relay only uses TTS
+inside a realtime session and has no standalone synthesis path. The network call
+is the one piece of M2 no test covers.
+
+### Bench result, 2026-07-26
+
+Shadow mode end to end through the real BPU, file-fed:
+
+```
+alerts: 1
+  pedestrian_ahead sev=critical ttc=1.20s seg=front_000000.h264+300ms
+  emitted: pedestrian_ahead | 前方有行人，请减速。
+```
+
+Board suite: 200 pytest passing. Repo gate: `npm run check` green, 611 vitest.
+
+### What M2 does not establish
+
+- **Whether the alerts are right.** Shadow measures the false-alarm rate; it
+  cannot measure _missed_ hazards without labels, which needs the corpus.
+- **Anything on a real road.** No cameras (OV5647 unsupported, IMX219 absent),
+  so every runtime test drives a `FileSource` and shadow mode has collected
+  nothing from an actual ride.
+- **That the TTS call works.** Unverified — see above.
+
+Note `rdk/vision/adas/catalog.py` duplicates the spoken strings across the
+Python/TypeScript boundary, and `pedestrian_ahead` and `tailgating` are not in
+`shared/adas.ts` yet. No test can catch drift from either side; keep them in
+step by hand.
+
 ## ADAS M0 — recording a corpus
 
 See `docs/superpowers/specs/2026-07-25-embedded-adas-bpu-design.md`.

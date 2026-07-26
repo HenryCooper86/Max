@@ -10,30 +10,48 @@
           "title": "SessionStart",
           "type": "object",
           "properties": {
-            "type": { "const": "session.start" },
-            "sampleRate": { "type": "number" },
-            "channels": { "type": "number" }
+            "type": {
+              "const": "session.start"
+            },
+            "sampleRate": {
+              "type": "number"
+            },
+            "channels": {
+              "type": "number"
+            }
           },
           "required": ["type", "sampleRate", "channels"]
         },
         {
           "title": "AudioStart",
           "type": "object",
-          "properties": { "type": { "const": "audio.start" } },
+          "properties": {
+            "type": {
+              "const": "audio.start"
+            }
+          },
           "required": ["type"]
         },
         {
           "title": "AudioStop",
           "type": "object",
-          "properties": { "type": { "const": "audio.stop" } },
+          "properties": {
+            "type": {
+              "const": "audio.stop"
+            }
+          },
           "required": ["type"]
         },
         {
           "title": "GuidedDemo",
           "type": "object",
           "properties": {
-            "type": { "const": "demo.guided" },
-            "enabled": { "type": "boolean" }
+            "type": {
+              "const": "demo.guided"
+            },
+            "enabled": {
+              "type": "boolean"
+            }
           },
           "required": ["type", "enabled"]
         },
@@ -41,27 +59,48 @@
           "title": "LocationUpdate",
           "type": "object",
           "properties": {
-            "type": { "const": "location.update" },
-            "lat": { "type": "number" },
-            "lon": { "type": "number" }
+            "type": {
+              "const": "location.update"
+            },
+            "lat": {
+              "type": "number"
+            },
+            "lon": {
+              "type": "number"
+            }
           },
           "required": ["type", "lat", "lon"]
         },
         {
           "title": "TestingMetric",
           "type": "object",
-          "properties": { "type": { "const": "testing.metric" } },
+          "properties": {
+            "type": {
+              "const": "testing.metric"
+            }
+          },
           "required": ["type"]
         },
         {
           "title": "TurnFeedback",
           "type": "object",
           "properties": {
-            "type": { "const": "turn.feedback" },
-            "turnId": { "type": "string", "minLength": 1 },
-            "speaker": { "enum": ["rider", "agent"] },
-            "text": { "type": "string" },
-            "reason": { "type": "string" }
+            "type": {
+              "const": "turn.feedback"
+            },
+            "turnId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "speaker": {
+              "enum": ["rider", "agent"]
+            },
+            "text": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
           },
           "required": ["type", "turnId", "speaker", "text", "reason"]
         },
@@ -69,13 +108,58 @@
           "title": "DeviceResult",
           "type": "object",
           "properties": {
-            "type": { "const": "device.result" },
-            "commandId": { "type": "string", "minLength": 1 },
-            "status": { "enum": ["ok", "failed", "denied", "unsupported"] },
-            "reason": { "type": "string" },
-            "detail": { "type": "string" }
+            "type": {
+              "const": "device.result"
+            },
+            "commandId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "status": {
+              "enum": ["ok", "failed", "denied", "unsupported"]
+            },
+            "reason": {
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            }
           },
           "required": ["type", "commandId", "status"]
+        },
+        {
+          "title": "HazardReport",
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "hazard.report"
+            },
+            "threat": {
+              "type": "string"
+            },
+            "direction": {
+              "type": "string"
+            },
+            "severity": {
+              "enum": ["caution", "critical"]
+            },
+            "label": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "advice": {
+              "type": "string"
+            },
+            "ttcSeconds": {
+              "type": "number"
+            },
+            "latencyMs": {
+              "type": "number"
+            }
+          },
+          "required": ["type", "threat", "direction", "severity", "label", "message", "advice"]
         }
       ]
     },
@@ -85,10 +169,18 @@
           "title": "SessionStarted",
           "type": "object",
           "properties": {
-            "type": { "const": "session.started" },
-            "provider": { "type": "string" },
-            "mode": { "enum": ["mock", "live"] },
-            "capabilities": { "type": "object" }
+            "type": {
+              "const": "session.started"
+            },
+            "provider": {
+              "type": "string"
+            },
+            "mode": {
+              "enum": ["mock", "live"]
+            },
+            "capabilities": {
+              "type": "object"
+            }
           },
           "required": ["type", "provider", "mode", "capabilities"]
         },
@@ -96,9 +188,15 @@
           "title": "Connection",
           "type": "object",
           "properties": {
-            "type": { "const": "connection" },
-            "state": { "type": "string" },
-            "detail": { "type": "string" }
+            "type": {
+              "const": "connection"
+            },
+            "state": {
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            }
           },
           "required": ["type", "state", "detail"]
         },
@@ -106,9 +204,15 @@
           "title": "Status",
           "type": "object",
           "properties": {
-            "type": { "const": "status" },
-            "state": { "type": "string" },
-            "detail": { "type": "string" }
+            "type": {
+              "const": "status"
+            },
+            "state": {
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            }
           },
           "required": ["type", "state", "detail"]
         },
@@ -116,13 +220,29 @@
           "title": "Transcript",
           "type": "object",
           "properties": {
-            "type": { "const": "transcript" },
-            "turnId": { "type": "string", "minLength": 1 },
-            "deliveryId": { "type": "string", "minLength": 1 },
-            "speaker": { "enum": ["rider", "agent"] },
-            "text": { "type": "string" },
-            "final": { "type": "boolean" },
-            "useBrowserSpeech": { "type": "boolean" }
+            "type": {
+              "const": "transcript"
+            },
+            "turnId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "deliveryId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "speaker": {
+              "enum": ["rider", "agent"]
+            },
+            "text": {
+              "type": "string"
+            },
+            "final": {
+              "type": "boolean"
+            },
+            "useBrowserSpeech": {
+              "type": "boolean"
+            }
           },
           "required": ["type", "turnId", "deliveryId", "speaker", "text"]
         },
@@ -130,8 +250,12 @@
           "title": "Metric",
           "type": "object",
           "properties": {
-            "type": { "const": "metric" },
-            "latencyMs": { "type": "number" }
+            "type": {
+              "const": "metric"
+            },
+            "latencyMs": {
+              "type": "number"
+            }
           },
           "required": ["type"]
         },
@@ -139,11 +263,21 @@
           "title": "Weather",
           "type": "object",
           "properties": {
-            "type": { "const": "weather" },
-            "description": { "type": "string" },
-            "temperatureC": { "type": "number" },
-            "windSpeedKmh": { "type": "number" },
-            "isDay": { "type": ["boolean", "number"] }
+            "type": {
+              "const": "weather"
+            },
+            "description": {
+              "type": "string"
+            },
+            "temperatureC": {
+              "type": "number"
+            },
+            "windSpeedKmh": {
+              "type": "number"
+            },
+            "isDay": {
+              "type": ["boolean", "number"]
+            }
           },
           "required": ["type", "description"]
         },
@@ -151,13 +285,27 @@
           "title": "RideContext",
           "type": "object",
           "properties": {
-            "type": { "const": "ride.context" },
-            "mode": { "type": "string" },
-            "modeLabel": { "type": "string" },
-            "scenario": { "type": "string" },
-            "scenarioLabel": { "type": "string" },
-            "hazardLevel": { "type": "string" },
-            "glanceableFocus": { "type": "string" }
+            "type": {
+              "const": "ride.context"
+            },
+            "mode": {
+              "type": "string"
+            },
+            "modeLabel": {
+              "type": "string"
+            },
+            "scenario": {
+              "type": "string"
+            },
+            "scenarioLabel": {
+              "type": "string"
+            },
+            "hazardLevel": {
+              "type": "string"
+            },
+            "glanceableFocus": {
+              "type": "string"
+            }
           },
           "required": ["type", "mode", "modeLabel", "scenario", "scenarioLabel", "hazardLevel", "glanceableFocus"]
         },
@@ -165,9 +313,15 @@
           "title": "SessionMemory",
           "type": "object",
           "properties": {
-            "type": { "const": "session.memory" },
-            "language": { "enum": ["zh", "en"] },
-            "responseMode": { "enum": ["concise", "normal", "emergency"] }
+            "type": {
+              "const": "session.memory"
+            },
+            "language": {
+              "enum": ["zh", "en"]
+            },
+            "responseMode": {
+              "enum": ["concise", "normal", "emergency"]
+            }
           },
           "required": ["type", "language", "responseMode"]
         },
@@ -175,11 +329,21 @@
           "title": "Telemetry",
           "type": "object",
           "properties": {
-            "type": { "const": "telemetry" },
-            "asrMs": { "type": "number" },
-            "thinkMs": { "type": "number" },
-            "firstAudioMs": { "type": "number" },
-            "totalMs": { "type": "number" }
+            "type": {
+              "const": "telemetry"
+            },
+            "asrMs": {
+              "type": "number"
+            },
+            "thinkMs": {
+              "type": "number"
+            },
+            "firstAudioMs": {
+              "type": "number"
+            },
+            "totalMs": {
+              "type": "number"
+            }
           },
           "required": ["type"]
         },
@@ -187,15 +351,33 @@
           "title": "HazardAlert",
           "type": "object",
           "properties": {
-            "type": { "const": "hazard.alert" },
-            "threat": { "type": "string" },
-            "direction": { "type": "string" },
-            "severity": { "type": "string" },
-            "label": { "type": "string" },
-            "message": { "type": "string" },
-            "advice": { "type": "string" },
-            "ttcSeconds": { "type": "number" },
-            "interrupt": { "type": "boolean" }
+            "type": {
+              "const": "hazard.alert"
+            },
+            "threat": {
+              "type": "string"
+            },
+            "direction": {
+              "type": "string"
+            },
+            "severity": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "advice": {
+              "type": "string"
+            },
+            "ttcSeconds": {
+              "type": "number"
+            },
+            "interrupt": {
+              "type": "boolean"
+            }
           },
           "required": ["type", "threat", "direction", "severity", "label", "message", "advice"]
         },
@@ -203,8 +385,13 @@
           "title": "DeviceCommand",
           "type": "object",
           "properties": {
-            "type": { "const": "device.command" },
-            "commandId": { "type": "string", "minLength": 1 },
+            "type": {
+              "const": "device.command"
+            },
+            "commandId": {
+              "type": "string",
+              "minLength": 1
+            },
             "action": {
               "enum": [
                 "torch.set",
@@ -220,8 +407,12 @@
                 "navigation.stop"
               ]
             },
-            "args": { "type": "object" },
-            "tier": { "enum": ["low", "high"] }
+            "args": {
+              "type": "object"
+            },
+            "tier": {
+              "enum": ["low", "high"]
+            }
           },
           "required": ["type", "commandId", "action", "args", "tier"]
         },
@@ -229,13 +420,24 @@
           "title": "Error",
           "type": "object",
           "properties": {
-            "type": { "const": "error" },
-            "message": { "type": "string" }
+            "type": {
+              "const": "error"
+            },
+            "message": {
+              "type": "string"
+            }
           },
           "required": ["type", "message"]
         }
       ]
     }
   },
-  "oneOf": [{ "$ref": "#/$defs/ClientEvent" }, { "$ref": "#/$defs/AgentEvent" }]
+  "oneOf": [
+    {
+      "$ref": "#/$defs/ClientEvent"
+    },
+    {
+      "$ref": "#/$defs/AgentEvent"
+    }
+  ]
 }

@@ -32,6 +32,14 @@ export type RdkConfig = {
    * only if a real ride leaks echo that the linear filter cannot model.
    */
   aecSuppression: number;
+  /**
+   * Arms ADAS alert audio. Defaults false and must stay false until shadow-mode
+   * false-alarm numbers meet the M1 gate — under 1 false alert/hour and zero
+   * false criticals. M1's thresholds are untuned starting values, and untuned
+   * thresholds must not reach a rider's ears at 100 km/h. See the M2 spec.
+   */
+  adasAudio: boolean;
+  adasAudioDir: string;
 };
 
 function requireString(env: NodeJS.ProcessEnv, key: string): string {
@@ -96,6 +104,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RdkConfig {
     aecMode: optionalEnum(env, "MAX_AEC_MODE", ["apm", "off"] as const, "apm"),
     aecBin: optionalString(env, "MAX_AEC_BIN", "/opt/max/rdk/aec/max-aec"),
     aecDelayMs: optionalNumber(env, "MAX_AEC_DELAY_MS", 80),
-    aecSuppression: optionalNumber(env, "MAX_AEC_SUPPRESSION", 0)
+    aecSuppression: optionalNumber(env, "MAX_AEC_SUPPRESSION", 0),
+    adasAudio: optionalFlag(env, "MAX_ADAS_AUDIO"),
+    adasAudioDir: optionalString(env, "MAX_ADAS_AUDIO_DIR", "/opt/max/rdk/audio/alerts")
   };
 }

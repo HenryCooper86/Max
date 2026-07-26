@@ -58,6 +58,8 @@ export function playbackArgs(device: string): string[] {
 export function createPlayback(options: PlaybackOptions): {
   write(pcm: Int16Array): void;
   flush(): void;
+  holdPriority(): void;
+  releasePriority(): void;
   stop(): void;
 } {
   const spawn = options.spawn ?? ((command, args) => nodeSpawn(command, args) as unknown as ChildProcessLike);
@@ -71,6 +73,9 @@ export function createPlayback(options: PlaybackOptions): {
   let queue: Int16Array[] = [];
   let drainedUntil = 0;
   let pumping = false;
+  // While a hazard alert is playing, nothing may cut it off. The spec makes
+  // this absolute: an alert preempts Max and is never itself preempted.
+  let priorityHeld = false;
 
   function pump(): void {
     pumping = false;
@@ -124,6 +129,10 @@ export function createPlayback(options: PlaybackOptions): {
      * the next write respawns it.
      */
     flush(): void {
+      // A hazard alert is playing. Doubao's VAD fires on the rider reacting to
+      // it — "什么?" mid-warning — and honouring that would cut the collision
+      // alert in half.
+      if (priorityHeld) return;
       // Before the kill, not after: the reset marker must sit in the reference
       // pipe behind the audio it invalidates. Everything already queued is
       // about to be discarded unheard, and APM has to forget exactly that much
@@ -138,7 +147,17 @@ export function createPlayback(options: PlaybackOptions): {
       child = null;
     },
 
+    holdPriority(): void {
+      priorityHeld = true;
+    },
+
+    releasePriority(): void {
+      priorityHeld = false;
+    },
+
+    /** Process teardown, not barge-in: this ignores the priority lock. */
     stop(): void {
+      priorityHeld = false;
       queue = [];
       drainedUntil = 0;
       child?.kill("SIGTERM");

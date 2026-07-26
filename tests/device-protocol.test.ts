@@ -57,3 +57,80 @@ describe("parseClientEvent — device.result", () => {
     ).toThrow("Invalid device.result detail");
   });
 });
+
+describe("parseClientEvent — hazard.report", () => {
+  it("is a client event, so real alerts can reach the transcript", () => {
+    expect(CLIENT_EVENT_TYPES).toContain("hazard.report");
+  });
+
+  it("accepts a report from the board", () => {
+    const event = parseClientEvent(
+      encode({
+        type: "hazard.report",
+        threat: "forward_collision",
+        direction: "front",
+        severity: "critical",
+        label: "前车急刹",
+        message: "前车急刹，注意保持车距！",
+        advice: "立即收油，平稳减速。",
+        ttcSeconds: 1.4,
+        latencyMs: 180
+      })
+    );
+    expect(event).toMatchObject({
+      type: "hazard.report",
+      threat: "forward_collision",
+      severity: "critical",
+      ttcSeconds: 1.4,
+      latencyMs: 180
+    });
+  });
+
+  it("accepts a shadow-era report with no measured latency", () => {
+    const event = parseClientEvent(
+      encode({
+        type: "hazard.report",
+        threat: "tailgating",
+        direction: "rear",
+        severity: "caution",
+        label: "后车跟车过近",
+        message: "后车跟车过近，注意保持车距。",
+        advice: "保持匀速，不要急刹。"
+      })
+    );
+    expect(event).toMatchObject({ type: "hazard.report", threat: "tailgating" });
+  });
+
+  it("rejects a report with no threat", () => {
+    expect(() =>
+      parseClientEvent(
+        encode({
+          type: "hazard.report",
+          direction: "front",
+          severity: "critical",
+          label: "x",
+          message: "y",
+          advice: "z"
+        })
+      )
+    ).toThrow(/threat/);
+  });
+
+  it("rejects an unknown severity rather than passing it through", () => {
+    // The transcript and QA record key off severity; an unrecognised value
+    // would render as neither caution nor critical.
+    expect(() =>
+      parseClientEvent(
+        encode({
+          type: "hazard.report",
+          threat: "forward_collision",
+          direction: "front",
+          severity: "catastrophic",
+          label: "x",
+          message: "y",
+          advice: "z"
+        })
+      )
+    ).toThrow(/severity/);
+  });
+});

@@ -48,6 +48,36 @@
     float: left;
     width: 96px;
   }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 12px;
+  }
+  .tile {
+    border: 1px solid #21262d;
+    border-radius: 6px;
+    overflow: hidden;
+    background: #0b0d10;
+  }
+  .tile img {
+    display: block;
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
+  }
+  .tile .meta {
+    padding: 6px 8px;
+    font-size: 12px;
+    color: #7d8590;
+  }
+  .muted {
+    color: #7d8590;
+  }
+  .missing {
+    padding: 24px 8px;
+    text-align: center;
+    color: #f85149;
+    font-size: 12px;
+  }
 </style>
 <h1>Max · RDK X5 bench</h1>
 <div class="row">
@@ -67,6 +97,11 @@
   <div class="card"><img id="rear" alt="rear camera" /></div>
 </div>
 <div class="card" style="margin-top: 16px"><div id="transcript"></div></div>
+<div class="card" style="margin-top: 16px">
+  <h1 style="margin-top: 0">captures</h1>
+  <div id="captures-status" class="muted">loading…</div>
+  <div id="captures" class="grid"></div>
+</div>
 <script>
   const host = location.hostname;
   document.getElementById("front").src = `http://${host}:__PREVIEW_PORT__/preview/front`;
@@ -83,4 +118,52 @@
       .map((turn) => `<div class="${turn.speaker} ${turn.final ? "" : "partial"}">${turn.speaker}: ${turn.text}</div>`)
       .join("");
   };
+
+  const galleryBase = `http://${host}:__PREVIEW_PORT__`;
+  const capturesEl = document.getElementById("captures");
+  const statusEl = document.getElementById("captures-status");
+  let lastSerialised = null;
+
+  function tile(pair) {
+    const side = pair.front ? "front" : "rear";
+    const name = pair[side];
+    const bytes = pair.sizes ? pair.sizes[side] : null;
+    const href = `${galleryBase}/gallery/${pair.id}/${name}`;
+    // A recording is concatenated JPEG: show frame one, link the file.
+    const isVideo = pair.kind === "video";
+    const src = isVideo ? `${href}/thumb` : href;
+    const label = isVideo ? "video" : "photo";
+    const size = bytes === null ? "missing" : `${Math.round(bytes / 1024)} KB`;
+
+    if (bytes === null) {
+      return `<div class="tile"><div class="missing">file missing</div>
+        <div class="meta">${pair.id}<br />${label} · ${size}</div></div>`;
+    }
+    return `<div class="tile"><a href="${href}" target="_blank">
+      <img src="${src}" alt="${pair.id}" /></a>
+      <div class="meta">${pair.id}<br />${label} · ${size}${pair.degraded ? " · degraded" : ""}</div></div>`;
+  }
+
+  async function refreshCaptures() {
+    let payload;
+    try {
+      const response = await fetch(`${galleryBase}/gallery`, { cache: "no-store" });
+      payload = await response.json();
+    } catch {
+      // "Cannot reach the sidecar" and "nothing captured yet" must never look
+      // the same. A blank panel that meant both cost an afternoon once.
+      statusEl.textContent = "sidecar unreachable";
+      return;
+    }
+
+    const serialised = JSON.stringify(payload.pairs);
+    if (serialised === lastSerialised) return;
+    lastSerialised = serialised;
+
+    statusEl.textContent = payload.pairs.length ? "" : "no captures yet";
+    capturesEl.innerHTML = payload.pairs.map(tile).join("");
+  }
+
+  refreshCaptures();
+  setInterval(refreshCaptures, 3000);
 </script>

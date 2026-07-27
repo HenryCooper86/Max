@@ -487,6 +487,34 @@ No `gpio_enable_bit` / `gpio_level_bit` multiplexing is needed. (Those fields
 would only matter for two modules sharing one bus, which is not the arrangement
 here.)
 
+### Exactly one process may hold the camera
+
+A second opener does not queue or fail clearly. It fails with:
+
+```
+[INFO] [mipi_cam]: The detected sensors are 1 less than expected.
+[ERROR] [mipi_cam]: [init]->cap capture init failture.
+```
+
+which names *sensor detection* when the real cause is that `/dev/vs-isp0_*` is
+busy. i2c still answers, the chip ID still reads back, and `dmesg` shows nothing
+new — so every instinct sends you to the wrong layer. Check holders first:
+
+```bash
+fuser /dev/vs-isp0_cap; ps -eo pid,ppid,args | grep "[m]ipi_cam/mipi_cam"
+```
+
+**`ros2 run` is a wrapper.** It execs the real `mipi_cam` binary as a child, so
+`Popen.terminate()` on it kills the wrapper and leaves the node running,
+reparented to init (PPID 1), still holding the ISP — while `wait()` returns
+cleanly and nothing looks wrong. Start it with `start_new_session=True` and
+signal the whole process group. `rdk/vision/mipi_camera.py` does this, and also
+reaps any surviving holder before it opens, so a max-vision crash cannot leave
+the camera permanently unopenable.
+
+`systemctl restart cam-service` does **not** clear an orphan; only killing the
+holder does.
+
 ## Running
 
 ```bash
@@ -807,8 +835,16 @@ systemctl restart cam-service && sleep 3
 source /opt/tros/humble/setup.bash
 cd /opt/max/rdk/vision
 python3 -m tools.record_ride --root /var/lib/max/corpus --fps 10 \
-  --sensor IMX219 --front-vcon 2 --rear-vcon 3
+  --front-channel 0 --rear-channel 2
 ```
+
+Those are the defaults, so plain `python3 -m tools.record_ride` does the same.
+The sensor on each channel is discovered over i2c — there is no `--sensor` flag,
+because a configured sensor name is what stopped the OV5647 in CAM1 from opening.
+
+**Stop the sidecar first:** `systemctl stop max-vision`. The board allows exactly
+one holder of the ISP, so a recorder and a running max-vision cannot both have
+the camera.
 
 **Two frame sources**, selected with `--source`:
 
@@ -819,9 +855,12 @@ python3 -m tools.record_ride --root /var/lib/max/corpus --fps 10 \
 
 `mipi_cam` is the default because our binding cannot open a camera yet:
 `hbn_camera_create` returns -1 even with a matching sensor spec and the correct
-VCON. The binding path is kept so switching back is a flag flip once that is
-solved. Using `mipi_cam` costs a ROS dependency in the recording path only —
-nothing else in the sidecar imports it.
+VCON — re-confirmed 2026-07-27 for OV5647 and IMX219 on vcon 0 and 1 alike. The
+binding path is kept so switching back is a flag flip once that is solved.
+
+Both the recorder and the sidecar now go through `rdk/vision/mipi_camera.py`, so
+the ROS dependency is no longer confined to recording — and neither is the fix
+for the orphan it used to leave behind. See "Camera findings".
 
 Because `mipi_cam` publishes decoded frames on `/image_raw`, the recorder
 JPEG-encodes them, so a segment is concatenated JPEG rather than an H.264

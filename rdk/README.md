@@ -79,7 +79,11 @@ Verified over SSH against the real board on 2026-07-25.
 | CAM1 live capture          | **works** — OV5647 ch 0: photo, preview and `.mjpeg` via max-vision | 2026-07-27 |
 | Gallery recording rate     | **9.9 fps** measured (60 frames / 6.05 s), 1920×1080 mjpeg          | 2026-07-27 |
 | max-vision restart         | **reacquires** — two consecutive restarts, no orphan, no traceback  | 2026-07-27 |
-| ADAS in the sidecar        | **not wired** — `start_adas` has no caller in `main()`; tests only  | 2026-07-27 |
+| ADAS shadow ride           | **works** — segments + shadow log + one ADAS thread, `MAX_ADAS_SHADOW=1` | 2026-07-27 |
+| Shadow ride frame rate     | **9.7 fps** (583 frames in a 60 s segment), 1080p mjpeg             | 2026-07-27 |
+| ADAS latency under a ride  | **47.2 ms** p50, 61.7 ms p95 — replay of the ride's own footage     | 2026-07-27 |
+| Thermal under a shadow ride | **~94 °C plateau** (93.8–94.7), **one** camera, bench ambient      | 2026-07-27 |
+| Shadow ride disk rate      | **~3 MB/s** — 821 MB for 4.5 min; ~11 GB/hour                       | 2026-07-27 |
 | BPU                        | present, idle, 500–1000 MHz; `pyeasy_dnn` + `libsrcampy` OK         | 2026-07-25 |
 | Node.js                    | **v22.23.1** installed from NodeSource; npm 10.9.8                  | 2026-07-25 |
 | First live session         | **works** — 656 KB mic PCM up, 3 device.result round trips          | 2026-07-25 |
@@ -536,6 +540,8 @@ MAX_VISION_PREVIEW_PORT=8081
 MAX_VISION_SOCKET=/run/max/vision.sock
 RDK_CAMERA_FRONT=0                         # MIPI channel; CAM1 connector
 RDK_CAMERA_REAR=2                          # MIPI channel; the other connector
+MAX_ADAS_SHADOW=0                          # 1 starts a ride: segments + shadow ADAS
+MAX_CORPUS_DIR=/var/lib/max/corpus         # where ride segments are written
 MAX_VOICE_GATE_RMS=900
 MAX_VOICE_GATE_MS=400
 ENV
@@ -865,6 +871,38 @@ binding path is kept so switching back is a flag flip once that is solved.
 Both the recorder and the sidecar now go through `rdk/vision/mipi_camera.py`, so
 the ROS dependency is no longer confined to recording — and neither is the fix
 for the orphan it used to leave behind. See "Camera findings".
+
+### Shadow mode in the sidecar
+
+`MAX_ADAS_SHADOW=1` makes max-vision start a **ride** at service start: it writes
+continuous `.mjpeg` segments under `MAX_CORPUS_DIR` and runs one shadow-mode ADAS
+thread per open camera. Alerts go to `<ride>/shadow-<camera>.jsonl` and are pushed
+to any connected control-socket client as `event: hazard`.
+
+Recording and ADAS start together on purpose. Shadow mode without evidence is the
+measurement that misleads, so the runtime refuses to run without a recorder — and
+since the board allows exactly one holder of the ISP, `tools/record_ride.py`
+cannot supply that while the sidecar has the camera. The sidecar records instead.
+
+**This makes no sound.** `MAX_ADAS_AUDIO` is untouched and still defaults to `0`;
+arming remains a human decision against shadow numbers meeting the M1 gate.
+
+Segments are large — measured at ~3 MB/s (821 MB for 4.5 minutes), so roughly
+11 GB an hour. The ride refuses to start, and stops itself, below
+`MAX_GALLERY_MIN_FREE_MB` free.
+
+**Thermal: read this before arming or running a long ride.** A shadow ride on
+**one** camera plateaus at **~94 °C** at bench ambient — measured 93.8–94.7 °C
+over a minute, dropping to 87.7 °C within 20 s of the ride stopping. M1's
+two-camera ADAS figure was ~90 °C *without* a concurrent segment stream, so
+recording is what costs the extra headroom. Nobody has measured this in a
+fairing, in sun, on a moving bike; the remaining margin to throttling is thin
+enough that a second camera or a warm day should be measured, not assumed.
+
+A ride that logs no alerts is not evidence of a broken pipeline. Replay the
+ride's own segment (`python3 -m tools.replay <segment> --camera front`) — if it
+also reports 0 alerts, the scene simply had no hazards. That is how the first
+live ride was verified: 237 frames, 0 alerts, both live and on replay.
 
 Because `mipi_cam` publishes decoded frames on `/image_raw`, the recorder
 JPEG-encodes them, so a segment is concatenated JPEG rather than an H.264

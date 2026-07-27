@@ -182,9 +182,24 @@ journalctl -u max-agent | grep max-aec
 max-aec: far-end 300 frames in=... out=... (N dB removed) | quiet ... | ref ... resets ... erle ...
 ```
 
-`resets` climbing means something is wiping the filter again — that is this bug
-returning. A low `dB removed` with `resets 0` means the canceller itself is
-short. The distinction is the whole diagnosis; do not guess between them.
+**`resets` climbing is not evidence of that bug.** It was, before `e8c95f0`,
+when `reset()` still called `Initialize()`. It no longer does — see the comment
+at `rdk/aec/src/apm.cpp:86` — so a reset drops the queued reference and the
+decimator history and leaves the adapted filter alone. The counter now measures
+reference churn, not filter damage.
+
+What makes it climb is anything calling `playback.flush()`: a confirmed
+barge-in, an interrupting hazard alert, and — the one that surprises people — a
+relay disconnect, via `onClosed` in `rdk/agent/src/main.ts`. A board that has
+lost the relay reconnects on a backoff that pins at 30 s, so an **idle** helmet
+logging one reset every 30 s with `far-end 0 frames` is a network symptom with
+no acoustic meaning at all. Confirm with `journalctl -u max-agent | grep
+reconnecting` before reading anything into it. On 2026-07-27 this cost a
+debugging session: 207 reconnects over a phone hotspot were read as the echo bug
+returning.
+
+So: a low `dB removed` means the canceller is short regardless of what `resets`
+is doing. Diagnose from `dB removed` and `erle`, and treat `resets` as context.
 
 **Two things nearly made barge-in fail for reasons unrelated to echo.** Both are
 worth knowing before touching this code:
@@ -227,6 +242,29 @@ correlation peak twice as sharp. `MAX_AEC_DELAY_MS` defaults to that measured
 Note the delay sweep this plan originally called for stopped at 320 ms, so it
 could never have found this. If cancellation looks broken, **measure the lag
 first** — `rdk/aec/tools/acoustic.py` does it.
+
+**Re-measured 24.9 ms from a live session, 2026-07-27 — not yet confirmed as a
+fix.** Cross-correlating the `--dump-prefix` capture (see below) over five
+consecutive windows of a real conversation gave 24.9 ms every time, peaks to
+0.80, no drift. Against that, the configured 80 ms is roughly 3× the truth. The
+board now runs `MAX_AEC_DELAY_MS=25`, and on the one run since, cancellation
+appeared in the *first* far-end interval (18.6 dB) instead of ramping for ~15 s
+(3.2 → 5.2 → 22.1 dB at 80 ms), and held a much tighter 13.9–21.6 dB.
+
+That is one run against an intermittent fault, so it is a promising measurement
+and nothing more. Do not promote 25 ms to a documented default, or change the
+figure in the findings table above, until a second clean live conversation
+reproduces it. Why the path shortened from the 2026-07-26 measurement of 81 ms
+is also unexplained and worth knowing before trusting either number.
+
+**The dump cannot be replayed through `--offline` to reproduce cancellation.**
+Live, `process_reverse` is called only when a reference frame is pending; the
+dump writes silence into `ref.raw` for every frame that had none. Replaying it
+therefore hands APM a render stream full of silent frames the live path never
+saw, and the render/capture lockstep differs. A delay sweep run that way scored
+a flat 1.0 dB at every setting on audio where live APM had reported up to 31 dB.
+Use the dump for the lag correlation, which involves no APM at all, and use the
+live log for anything about cancellation.
 
 **The offline suppression sweep was wrong, and hardware overruled it.** Read
 this before trusting any figure in the table below.

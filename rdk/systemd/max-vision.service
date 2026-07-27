@@ -8,7 +8,16 @@ WorkingDirectory=/opt/max/rdk/vision
 # /run is tmpfs, so MAX_VISION_SOCKET's parent does not survive a reboot. Let
 # systemd own the directory rather than relying on the provisioning mkdir.
 RuntimeDirectory=max
-ExecStart=/usr/bin/python3 service.py
+# ROS resolves its log directory through ~, and systemd starts us with no HOME,
+# so rclpy.init() dies with "rcutils_expand_user failed". Point it somewhere
+# absolute instead. /run is tmpfs, so mipi_cam's log volume cannot fill the disk
+# and cannot outlive a restart.
+Environment=HOME=/root
+Environment=ROS_LOG_DIR=/run/max/roslog
+# The sidecar drives the cameras through the vendor's mipi_cam ROS node, so it
+# needs the TROS environment: without it `import rclpy` fails, open() swallows
+# the error, and the service runs happily with no cameras at all.
+ExecStart=/bin/bash -c 'source /opt/tros/humble/setup.bash && exec /usr/bin/python3 service.py'
 Restart=always
 RestartSec=2
 StandardOutput=journal

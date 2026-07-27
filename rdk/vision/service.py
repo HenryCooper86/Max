@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import signal
 import socketserver
+import sys
 import threading
 from pathlib import Path
 
@@ -17,9 +19,13 @@ MIN_FREE_MB = int(os.environ.get("MAX_GALLERY_MIN_FREE_MB", "1024"))
 PREVIEW_PORT = int(os.environ.get("MAX_VISION_PREVIEW_PORT", "8081"))
 
 gallery = Gallery(GALLERY_DIR, MIN_FREE_MB)
+# MIPI channels, not VCON indices. CAM1 is channel 0 (i2c bus 6, vcon@0/@1) and
+# the other connector is channel 2 (bus 4, vcon@2/@3). Channels 1 and 3 are not
+# offered because this board does not have hosts 1 and 3 — the previous default
+# of front=0 rear=1 named the same connector twice, one of them nonexistent.
 cameras = CameraPair(
-    front_port=os.environ.get("RDK_CAMERA_FRONT", "0"),
-    rear_port=os.environ.get("RDK_CAMERA_REAR", "1"),
+    front_channel=int(os.environ.get("RDK_CAMERA_FRONT", "0")),
+    rear_channel=int(os.environ.get("RDK_CAMERA_REAR", "2")),
 )
 
 HANDLERS = {
@@ -58,9 +64,22 @@ def main() -> None:
     cameras.open()
     threading.Thread(target=cameras.serve_preview, args=(PREVIEW_PORT,), daemon=True).start()
 
+    # systemd stops us with SIGTERM. Without a handler the interpreter tears
+    # down while the ROS executor thread is mid-spin, so an ordinary stop prints
+    # a traceback and the cameras never get stop()ped.
+    signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(0))
+
     with ControlServer(SOCKET_PATH, ControlHandler) as server:
         os.chmod(SOCKET_PATH, 0o660)
-        server.serve_forever()
+        try:
+            server.serve_forever()
+        finally:
+            # An orphaned mipi_cam holds the ISP, and the next start cannot open
+            # the camera at all. Reaping at startup covers a crash; this covers
+            # every ordinary stop.
+            for camera in (cameras.front, cameras.rear):
+                if camera is not None:
+                    camera.stop()
 
 
 if __name__ == "__main__":

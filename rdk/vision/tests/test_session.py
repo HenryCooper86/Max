@@ -38,7 +38,7 @@ def make_recorder(tmp_path, front_ok=True, rear_ok=True, video_suffix=".h264"):
 
     return RideRecorder(
         root=tmp_path,
-        slots=[CameraSlot("front", 2), CameraSlot("rear", 3)],
+        slots=[CameraSlot("front", 0), CameraSlot("rear", 2)],
         open_fn=open_fn,
         encode_fn=encode_fn,
         video_suffix=video_suffix,

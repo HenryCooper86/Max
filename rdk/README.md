@@ -54,6 +54,11 @@ Record the result of every step in "Bench findings" below.
 
 Verified over SSH against the real board on 2026-07-25.
 
+> The board's IP is network-dependent. It was `10.42.0.11` on 2026-07-27; the
+> `192.168.50.9` used in commands throughout this file is a stale example. Find
+> the current one with `arp -a`, narrow with `nc -G 2 -z <ip> 22`, and confirm
+> with `ssh root@<ip> 'ls /usr/hobot'`.
+
 | Item                       | Value                                                               | Date       |
 | -------------------------- | ------------------------------------------------------------------- | ---------- |
 | Board                      | `D-Robotics X5 MD V0.2`, Ubuntu 22.04.5, kernel 6.1.83              | 2026-07-25 |
@@ -68,8 +73,13 @@ Verified over SSH against the real board on 2026-07-25.
 | Barge-in                   | **works** — confirmed live, talking over Max cuts his reply         | 2026-07-26 |
 | Live Doubao session        | **works** — Max speaks, 1.69 MB voice audio down                    | 2026-07-25 |
 | Full duplex                | **works** — simultaneous `arecord` + `aplay`, no device contention  | 2026-07-25 |
-| Camera front port index    | **MIPI host 2** (`vcon@2`, i2c bus 4) — see "Camera findings"       | 2026-07-25 |
-| Camera rear port index     | **MIPI host 0** (`vcon@0`, i2c bus 6) — separate bus, no collision  | 2026-07-25 |
+| Camera front port index    | **MIPI channel 0** (`vcon@0`/`@1`, i2c bus 6) — the CAM1 connector   | 2026-07-27 |
+| Camera rear port index     | **MIPI channel 2** (`vcon@2`/`@3`, i2c bus 4) — the other connector  | 2026-07-27 |
+| `mipi_cam` nv12 output     | **works** — `out_format:=nv12`, 3110400 B/frame at 1920×1080        | 2026-07-27 |
+| CAM1 live capture          | **works** — OV5647 ch 0: photo, preview and `.mjpeg` via max-vision | 2026-07-27 |
+| Gallery recording rate     | **9.9 fps** measured (60 frames / 6.05 s), 1920×1080 mjpeg          | 2026-07-27 |
+| max-vision restart         | **reacquires** — two consecutive restarts, no orphan, no traceback  | 2026-07-27 |
+| ADAS in the sidecar        | **not wired** — `start_adas` has no caller in `main()`; tests only  | 2026-07-27 |
 | BPU                        | present, idle, 500–1000 MHz; `pyeasy_dnn` + `libsrcampy` OK         | 2026-07-25 |
 | Node.js                    | **v22.23.1** installed from NodeSource; npm 10.9.8                  | 2026-07-25 |
 | First live session         | **works** — 656 KB mic PCM up, 3 device.result round trips          | 2026-07-25 |
@@ -398,11 +408,25 @@ Consequences:
 | **IMX219** | `0x10`   | **streams 1920×1080 @ 30 fps** ✅            |
 | **OV5647** | `0x36`   | `create_and_run_vflow ret -10`, no frames ❌ |
 
-### OV5647 is unsupported — decided, not pending
+### OV5647 works on host 0, and fails on host 2
 
-**Use IMX219.** OV5647 is treated as unsupported on this platform. The cause is a
-vendor-side ISP bug we cannot fix, and the diagnosis is recorded here so nobody
-spends another afternoon on it:
+**The port is the variable, not the sensor.** An earlier version of this section
+declared OV5647 unsupported "decided, not pending". That verdict rested on the
+A/B directly above, which this file itself scopes to **MIPI host 2**. Nobody had
+tried host 0. On host 0 the same sensor model streams 1920×1080 at ~24 fps with
+a correctly exposed, in-focus image, and the kernel logs the full bring-up
+(`sensor_start ov5647 flow0 start done`, `vin mipi0: entry hs reception`).
+
+| Sensor | host 0    | host 2                            |
+| ------ | --------- | --------------------------------- |
+| OV5647 | streams ✅ | `create_and_run_vflow ret -10` ❌ |
+| IMX219 | untested  | streams ✅                        |
+
+Two of four cells are measured — too few to encode a support matrix in code,
+which is why `sensors.preflight()` reports rather than vetoes. The ruled-out
+list below stays valid and stays useful; only the conclusion drawn from it
+changed. The host-2 diagnosis, recorded so nobody spends another afternoon on
+it:
 
 ```
 isp_video_set_inter_attr ... sensor_cali_name = .../ov5647_1920x1080_tuning.json
@@ -435,9 +459,11 @@ diff your BSP's `ov5647_1920x1080_tuning.json` against the board's copy
 experiment.
 
 `tools/record_ride.py` runs an i2c preflight before opening anything, so an
-unsupported or unseated module fails in under a second with a specific message
-instead of a five-second ISP timeout that points at the wrong layer. Override
-with `--skip-preflight` if you are deliberately testing an unsupported module.
+**unseated** module fails in under a second with a specific message instead of a
+five-second ISP timeout that points at the wrong layer. Preflight reports rather
+than vetoes: it no longer refuses a sensor for being the wrong model, because
+that is exactly what would reject the OV5647 now streaming on host 0. A
+combination that cannot stream fails at open, with the vendor's own error.
 
 Known-good reference command, for confirming the camera outside our stack:
 
@@ -453,15 +479,45 @@ attached, both enumerate simultaneously on **different i2c buses**:
 
 | Connector | VCON                | i2c bus | mipi channel |
 | --------- | ------------------- | ------- | ------------ |
-| A         | `vcon@0` / `vcon@1` | 6       | 0 / 1        |
-| B         | `vcon@2` / `vcon@3` | 4       | 2 / 3        |
+| CAM1      | `vcon@0` / `vcon@1` | 6       | **0**        |
+| the other | `vcon@2` / `vcon@3` | 4       | **2**        |
 
-So a front+rear pair uses **channel 0 and channel 2**, needing no
-`gpio_enable_bit` / `gpio_level_bit` multiplexing. (Those fields would only
-matter for two modules sharing one bus, which is not the arrangement here.)
+`mipi_cam` prints `this board support mipi: host 0, host 2` at startup — hosts 1
+and 3 do not exist. So each connector carries exactly **one** usable camera, and
+a front+rear pair is channel 0 plus channel 2. Verified from the device tree at
+`/sys/firmware/devicetree/base/soc/cam/vcon@N` (`bus` and `rx_phy` properties).
 
-Still untested with modules that stream — both cameras on the bench are OV5647,
-which produce no frames.
+No `gpio_enable_bit` / `gpio_level_bit` multiplexing is needed. (Those fields
+would only matter for two modules sharing one bus, which is not the arrangement
+here.)
+
+### Exactly one process may hold the camera
+
+A second opener does not queue or fail clearly. It fails with:
+
+```
+[INFO] [mipi_cam]: The detected sensors are 1 less than expected.
+[ERROR] [mipi_cam]: [init]->cap capture init failture.
+```
+
+which names *sensor detection* when the real cause is that `/dev/vs-isp0_*` is
+busy. i2c still answers, the chip ID still reads back, and `dmesg` shows nothing
+new — so every instinct sends you to the wrong layer. Check holders first:
+
+```bash
+fuser /dev/vs-isp0_cap; ps -eo pid,ppid,args | grep "[m]ipi_cam/mipi_cam"
+```
+
+**`ros2 run` is a wrapper.** It execs the real `mipi_cam` binary as a child, so
+`Popen.terminate()` on it kills the wrapper and leaves the node running,
+reparented to init (PPID 1), still holding the ISP — while `wait()` returns
+cleanly and nothing looks wrong. Start it with `start_new_session=True` and
+signal the whole process group. `rdk/vision/mipi_camera.py` does this, and also
+reaps any surviving holder before it opens, so a max-vision crash cannot leave
+the camera permanently unopenable.
+
+`systemctl restart cam-service` does **not** clear an orphan; only killing the
+holder does.
 
 ## Running
 
@@ -478,6 +534,8 @@ MAX_GALLERY_MIN_FREE_MB=1024
 MAX_HUD_PORT=8080
 MAX_VISION_PREVIEW_PORT=8081
 MAX_VISION_SOCKET=/run/max/vision.sock
+RDK_CAMERA_FRONT=0                         # MIPI channel; CAM1 connector
+RDK_CAMERA_REAR=2                          # MIPI channel; the other connector
 MAX_VOICE_GATE_RMS=900
 MAX_VOICE_GATE_MS=400
 ENV
@@ -781,8 +839,16 @@ systemctl restart cam-service && sleep 3
 source /opt/tros/humble/setup.bash
 cd /opt/max/rdk/vision
 python3 -m tools.record_ride --root /var/lib/max/corpus --fps 10 \
-  --sensor IMX219 --front-vcon 2 --rear-vcon 3
+  --front-channel 0 --rear-channel 2
 ```
+
+Those are the defaults, so plain `python3 -m tools.record_ride` does the same.
+The sensor on each channel is discovered over i2c — there is no `--sensor` flag,
+because a configured sensor name is what stopped the OV5647 in CAM1 from opening.
+
+**Stop the sidecar first:** `systemctl stop max-vision`. The board allows exactly
+one holder of the ISP, so a recorder and a running max-vision cannot both have
+the camera.
 
 **Two frame sources**, selected with `--source`:
 
@@ -793,9 +859,12 @@ python3 -m tools.record_ride --root /var/lib/max/corpus --fps 10 \
 
 `mipi_cam` is the default because our binding cannot open a camera yet:
 `hbn_camera_create` returns -1 even with a matching sensor spec and the correct
-VCON. The binding path is kept so switching back is a flag flip once that is
-solved. Using `mipi_cam` costs a ROS dependency in the recording path only —
-nothing else in the sidecar imports it.
+VCON — re-confirmed 2026-07-27 for OV5647 and IMX219 on vcon 0 and 1 alike. The
+binding path is kept so switching back is a flag flip once that is solved.
+
+Both the recorder and the sidecar now go through `rdk/vision/mipi_camera.py`, so
+the ROS dependency is no longer confined to recording — and neither is the fix
+for the orphan it used to leave behind. See "Camera findings".
 
 Because `mipi_cam` publishes decoded frames on `/image_raw`, the recorder
 JPEG-encodes them, so a segment is concatenated JPEG rather than an H.264

@@ -21,7 +21,8 @@ from recorder.segmenter import Segmenter, ride_id, segment_name
 @dataclass(frozen=True)
 class CameraSlot:
     name: str
-    vcon: int
+    #: MIPI channel, not a VCON index — 0 is the CAM1 connector, 2 is the other.
+    channel: int
 
 
 class RideRecorder:

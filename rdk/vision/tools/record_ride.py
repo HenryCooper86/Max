@@ -11,9 +11,10 @@ Two frame sources:
   returns -1 with a matching sensor and the correct VCON. Kept so the switch is
   a flag flip once that is solved.
 
-Front camera is VCON 2 and rear is VCON 3 (VCON 0/1 have no connector on this
-board). A camera that will not open is logged and skipped — front-only rides are
-expected on current hardware.
+Front is MIPI channel 0 (the CAM1 connector, i2c bus 6) and rear is channel 2
+(the other connector, bus 4). The sensor on each is discovered, not configured.
+A camera that will not open is logged and skipped — front-only rides are
+expected on current hardware, which has one module.
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ def _open_binding(slot: CameraSlot):
     from hobot_vio import libsrcampy  # noqa: PLC0415
 
     # Never open_cam(-1): that auto-detect crashes cam-service. Pin the VCON.
-    open_camera(build_config(IMX219, vcon=slot.vcon, width=WIDTH, height=HEIGHT, fps=30))
+    open_camera(build_config(IMX219, vcon=slot.channel, width=WIDTH, height=HEIGHT, fps=30))
     camera = libsrcampy.Camera()
     encoder = libsrcampy.Encoder()
     encoder.encode(0, H264, WIDTH, HEIGHT)
@@ -55,15 +56,18 @@ def _encode_binding(handle, out_path: Path) -> None:
             fh.write(chunk)
 
 
-def _make_mipi_opener(sensor: str):
-    def _open_mipi(slot: CameraSlot):
-        from recorder.mipi_source import MipiCamSource  # noqa: PLC0415
+def _open_mipi(slot: CameraSlot):
+    from mipi_camera import MipiCamera  # noqa: PLC0415
+    from sensors import discover  # noqa: PLC0415
 
-        source = MipiCamSource(channel=slot.vcon, sensor=sensor, width=WIDTH, height=HEIGHT)
-        source.start()
-        return source
-
-    return _open_mipi
+    sensor = discover().get(slot.channel)
+    if sensor is None:
+        raise RuntimeError(f"no camera on channel {slot.channel}")
+    camera = MipiCamera(
+        channel=slot.channel, sensor=sensor, camera=slot.name, width=WIDTH, height=HEIGHT
+    )
+    camera.start()
+    return camera
 
 
 def main() -> None:
@@ -71,20 +75,19 @@ def main() -> None:
     parser.add_argument("--root", default="/var/lib/max/corpus")
     parser.add_argument("--fps", type=float, default=10.0)
     parser.add_argument("--source", choices=("mipi_cam", "binding"), default="mipi_cam")
-    parser.add_argument("--front-vcon", type=int, default=2)
-    parser.add_argument("--rear-vcon", type=int, default=3)
-    parser.add_argument("--sensor", default="IMX219", help="mipi_cam video_device name, e.g. IMX219 or OV5647")
+    parser.add_argument("--front-channel", type=int, default=0)
+    parser.add_argument("--rear-channel", type=int, default=2)
     parser.add_argument(
         "--skip-preflight",
         action="store_true",
-        help="record even if no supported sensor is detected (for testing an unsupported module)",
+        help="record even when no camera answers on either bus",
     )
     args = parser.parse_args()
 
     if args.source == "mipi_cam":
         from recorder.mipi_source import write_jpeg  # noqa: PLC0415
 
-        open_fn, encode_fn, suffix = _make_mipi_opener(args.sensor), write_jpeg, ".mjpeg"
+        open_fn, encode_fn, suffix = _open_mipi, write_jpeg, ".mjpeg"
     else:
         open_fn, encode_fn, suffix = _open_binding, _encode_binding, ".h264"
 
@@ -100,7 +103,7 @@ def main() -> None:
 
     recorder = RideRecorder(
         root=args.root,
-        slots=[CameraSlot("front", args.front_vcon), CameraSlot("rear", args.rear_vcon)],
+        slots=[CameraSlot("front", args.front_channel), CameraSlot("rear", args.rear_channel)],
         open_fn=open_fn,
         encode_fn=encode_fn,
         video_suffix=suffix,

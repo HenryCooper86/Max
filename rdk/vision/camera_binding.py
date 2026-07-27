@@ -1,9 +1,13 @@
 """Explicit MIPI port selection for RDK X5 cameras.
 
 The stock ``libsrcampy.open_cam(port, -1, ...)`` auto-detect is unusable on this
-board: it always searches ``vcon@0`` (i2c bus 6), which has no connector, reports
-a phantom ov5647 there, and ``cam-service`` NULL-dereferences initialising a
-sensor that does not exist — taking the whole pipeline down.
+board: it always searches ``vcon@0`` (i2c bus 6) and reports a phantom ov5647
+there — the log line lists *supported* sensors, not detected ones — then
+``cam-service`` NULL-dereferences initialising a sensor it never confirmed,
+taking the whole pipeline down.
+
+``vcon@0`` is the CAM1 connector and can hold a real camera; an earlier version
+of this note claimed it had none, which was only true of the bench at the time.
 
 So we bypass it and call ``hbn_camera_create`` ourselves with ``bus_select`` set
 to the VCON index, mirroring what the vendor's own ``mipi_cam`` node does.
@@ -32,7 +36,8 @@ class SensorSpec:
     addr: int
 
 
-#: Measured on hardware: IMX219 streams, OV5647 fails at video-flow start.
+#: Measured on hardware: IMX219 streams on host 2; OV5647 streams on host 0 and
+#: fails at video-flow start on host 2. The port is the variable, not the sensor.
 IMX219 = SensorSpec(name="imx219", addr=0x10)
 OV5647 = SensorSpec(name="ov5647", addr=0x36)
 

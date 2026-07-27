@@ -11,9 +11,14 @@ curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt-get install -y nodejs alsa-utils python3-pip
 node --version   # expect v22.13+
 
-sudo mkdir -p /var/lib/max/gallery /run/max
-sudo chown -R "$USER" /var/lib/max /run/max
+sudo mkdir -p /var/lib/max/gallery
+sudo chown -R "$USER" /var/lib/max
 ```
+
+`/run/max` is deliberately absent here. `/run` is tmpfs, so anything created by
+hand vanishes on the next reboot and `max-vision` then fails to bind
+`MAX_VISION_SOCKET`. `max-vision.service` declares `RuntimeDirectory=max`, which
+makes systemd create and own the directory on every start.
 
 ## Hardware checklist
 
@@ -441,7 +446,7 @@ ENV
 
 sudo cp rdk/systemd/*.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now max-agent
+sudo systemctl enable --now max-agent max-vision
 journalctl -u max-agent -f
 ```
 

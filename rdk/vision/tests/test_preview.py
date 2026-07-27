@@ -17,7 +17,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
 
+from bench_server import serve
 from camera import CameraPair
+from gallery import Gallery
 
 
 class FakeCamera:
@@ -34,9 +36,10 @@ def free_port() -> int:
         return probe.getsockname()[1]
 
 
-def serve(pair) -> int:
+def start_server(pair, tmp_path) -> int:
     port = free_port()
-    threading.Thread(target=pair.serve_preview, args=(port,), daemon=True).start()
+    gallery = Gallery(str(tmp_path), min_free_mb=0)
+    threading.Thread(target=serve, args=(pair, gallery, port), daemon=True).start()
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         try:
@@ -83,15 +86,15 @@ def pair():
     return cameras
 
 
-def test_one_client_gets_frames(pair):
-    port = serve(pair)
+def test_one_client_gets_frames(pair, tmp_path):
+    port = start_server(pair, tmp_path)
     assert b"\xff\xd8" in read_some(port, "/preview/front")
 
 
-def test_a_second_client_is_served_while_the_first_still_streams(pair):
+def test_a_second_client_is_served_while_the_first_still_streams(pair, tmp_path):
     # The HUD's two <img> tags do exactly this. Single-threaded, the second
     # connection sits in the listen backlog forever and the panel stays blank.
-    port = serve(pair)
+    port = start_server(pair, tmp_path)
 
     first_got = []
     first = threading.Thread(
@@ -107,18 +110,18 @@ def test_a_second_client_is_served_while_the_first_still_streams(pair):
     assert first_got and b"\xff\xd8" in first_got[0]
 
 
-def test_a_camera_that_is_absent_answers_instead_of_hanging(pair):
+def test_a_camera_that_is_absent_answers_instead_of_hanging(pair, tmp_path):
     # A missing camera used to loop sleep(0.5) forever writing nothing, so the
     # connection never produced a byte and never ended.
     pair.rear = None
-    port = serve(pair)
+    port = start_server(pair, tmp_path)
     got = read_some(port, "/preview/rear", 4.0)
     assert got.startswith(b"HTTP/1.0 503") or got.startswith(b"HTTP/1.1 503"), got[:60]
 
 
-def test_an_absent_camera_does_not_block_the_working_one(pair):
+def test_an_absent_camera_does_not_block_the_working_one(pair, tmp_path):
     pair.rear = None
-    port = serve(pair)
+    port = start_server(pair, tmp_path)
 
     stuck = threading.Thread(target=lambda: read_some(port, "/preview/rear", 6.0, hold=True))
     stuck.start()

@@ -533,7 +533,9 @@ git commit -m "feat(vision): add FrameBuffer, one latest frame with a lazy JPEG"
 
 **Interfaces:**
 - Consumes: `FrameBuffer` (Task 3).
-- Produces: `reap_orphans(holders=_isp_holders, kill=os.kill, sleep=time.sleep) -> list[int]`; `MipiCamera(channel: int, sensor: str, camera: str, width: int = 1920, height: int = 1080)` with `start(settle_seconds: float = 8.0) -> None`, `stop() -> None`, `latest() -> Frame | None`, `jpeg() -> bytes | None`, `frames(fps: float = 10.0) -> Iterator[Frame]`. `MipiCamera.buffer` is the `FrameBuffer`.
+- Produces: `reap_orphans(holders=_isp_holders, kill=os.kill, sleep=time.sleep) -> list[int]`; `_signal_group(proc, sig, killpg=os.killpg, getpgid=os.getpgid) -> None`; `MipiCamera(channel: int, sensor: str, camera: str, width: int = 1920, height: int = 1080)` with `start(settle_seconds: float = 8.0) -> None`, `stop() -> None`, `latest() -> Frame | None`, `jpeg() -> bytes | None`, `frames(fps: float = 10.0) -> Iterator[Frame]`. `MipiCamera.buffer` is the `FrameBuffer`.
+
+**Measured 2026-07-27, and load-bearing:** `ros2 run` is a *wrapper* — it execs the real `mipi_cam` binary as a child. `proc.terminate()` kills the wrapper and leaves the node alive, reparented to init (PPID 1), still holding `/dev/vs-isp0_*`, and invisible to `proc.wait()`. So the child is started with `start_new_session=True` and the whole **process group** is signalled. The pre-existing `recorder/mipi_source.py` has this bug; Task 7 retires it.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -542,7 +544,7 @@ Append to `rdk/vision/tests/test_mipi_camera.py`:
 ```python
 import signal
 
-from mipi_camera import MipiCamera, reap_orphans
+from mipi_camera import MipiCamera, _signal_group, reap_orphans
 
 
 def test_reap_orphans_returns_empty_when_nothing_holds_the_isp():
@@ -578,6 +580,28 @@ def test_reap_orphans_tolerates_a_process_that_already_exited():
         raise ProcessLookupError
 
     assert reap_orphans(holders=lambda: [1], kill=kill, sleep=lambda s: None) == [1]
+
+
+class FakeProc:
+    def __init__(self, pid=4242):
+        self.pid = pid
+
+
+def test_signal_group_signals_the_group_not_the_process():
+    # ros2 run execs the real node as a child. Signalling only the wrapper
+    # leaves that node holding the ISP, reparented to init — measured.
+    sent = []
+    _signal_group(FakeProc(), signal.SIGTERM,
+                  killpg=lambda pgid, sig: sent.append((pgid, sig)),
+                  getpgid=lambda pid: 999)
+    assert sent == [(999, signal.SIGTERM)]
+
+
+def test_signal_group_tolerates_a_group_that_is_already_gone():
+    def killpg(pgid, sig):
+        raise ProcessLookupError
+
+    _signal_group(FakeProc(), signal.SIGTERM, killpg=killpg, getpgid=lambda pid: 1)
 
 
 def test_frames_yields_each_new_frame_once():
@@ -650,6 +674,18 @@ def reap_orphans(holders=_isp_holders, kill=os.kill, sleep=time.sleep) -> list[i
         with contextlib.suppress(ProcessLookupError, PermissionError):
             kill(pid, signal.SIGKILL)
     return pids
+
+
+def _signal_group(proc, sig, killpg=os.killpg, getpgid=os.getpgid) -> None:
+    """Signal the child's whole process group.
+
+    ``ros2 run`` is a wrapper that execs the real node as a child. Signalling
+    only the wrapper leaves that node alive, reparented to init and still
+    holding the ISP — and ``proc.wait()`` returns cleanly, so nothing looks
+    wrong until the next open fails. Measured on 2026-07-27.
+    """
+    with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+        killpg(getpgid(proc.pid), sig)
 ```
 
 - [ ] **Step 4: Implement `MipiCamera`**
@@ -691,6 +727,9 @@ class MipiCamera:
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            # Its own session, so stop() can signal the wrapper and the real
+            # node as one group. Without this the node outlives us.
+            start_new_session=True,
         )
 
         def on_image(msg) -> None:
@@ -760,13 +799,17 @@ class MipiCamera:
             self._node.destroy_node()
             self._node = None
         if self._proc is not None:
-            # terminate -> wait -> kill. Skipping the wait is how an orphan gets
-            # created, and an orphan makes the camera unopenable until reaped.
-            self._proc.terminate()
+            # Signal the GROUP, not the process: proc.terminate() reaps only the
+            # ros2 wrapper and leaves the real node holding the ISP, at which
+            # point wait() returns cleanly and nothing looks wrong until the
+            # next open fails with a message about sensor detection.
+            _signal_group(self._proc, signal.SIGTERM)
             try:
                 self._proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                self._proc.kill()
+                _signal_group(self._proc, signal.SIGKILL)
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    self._proc.wait(timeout=5)
             self._proc = None
 ```
 

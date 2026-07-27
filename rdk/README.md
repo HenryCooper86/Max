@@ -54,6 +54,11 @@ Record the result of every step in "Bench findings" below.
 
 Verified over SSH against the real board on 2026-07-25.
 
+> The board's IP is network-dependent. It was `10.42.0.11` on 2026-07-27; the
+> `192.168.50.9` used in commands throughout this file is a stale example. Find
+> the current one with `arp -a`, narrow with `nc -G 2 -z <ip> 22`, and confirm
+> with `ssh root@<ip> 'ls /usr/hobot'`.
+
 | Item                       | Value                                                               | Date       |
 | -------------------------- | ------------------------------------------------------------------- | ---------- |
 | Board                      | `D-Robotics X5 MD V0.2`, Ubuntu 22.04.5, kernel 6.1.83              | 2026-07-25 |
@@ -68,8 +73,9 @@ Verified over SSH against the real board on 2026-07-25.
 | Barge-in                   | **works** — confirmed live, talking over Max cuts his reply         | 2026-07-26 |
 | Live Doubao session        | **works** — Max speaks, 1.69 MB voice audio down                    | 2026-07-25 |
 | Full duplex                | **works** — simultaneous `arecord` + `aplay`, no device contention  | 2026-07-25 |
-| Camera front port index    | **MIPI host 2** (`vcon@2`, i2c bus 4) — see "Camera findings"       | 2026-07-25 |
-| Camera rear port index     | **MIPI host 0** (`vcon@0`, i2c bus 6) — separate bus, no collision  | 2026-07-25 |
+| Camera front port index    | **MIPI channel 0** (`vcon@0`/`@1`, i2c bus 6) — the CAM1 connector   | 2026-07-27 |
+| Camera rear port index     | **MIPI channel 2** (`vcon@2`/`@3`, i2c bus 4) — the other connector  | 2026-07-27 |
+| `mipi_cam` nv12 output     | **works** — `out_format:=nv12`, 3110400 B/frame at 1920×1080        | 2026-07-27 |
 | BPU                        | present, idle, 500–1000 MHz; `pyeasy_dnn` + `libsrcampy` OK         | 2026-07-25 |
 | Node.js                    | **v22.23.1** installed from NodeSource; npm 10.9.8                  | 2026-07-25 |
 | First live session         | **works** — 656 KB mic PCM up, 3 device.result round trips          | 2026-07-25 |
@@ -398,11 +404,25 @@ Consequences:
 | **IMX219** | `0x10`   | **streams 1920×1080 @ 30 fps** ✅            |
 | **OV5647** | `0x36`   | `create_and_run_vflow ret -10`, no frames ❌ |
 
-### OV5647 is unsupported — decided, not pending
+### OV5647 works on host 0, and fails on host 2
 
-**Use IMX219.** OV5647 is treated as unsupported on this platform. The cause is a
-vendor-side ISP bug we cannot fix, and the diagnosis is recorded here so nobody
-spends another afternoon on it:
+**The port is the variable, not the sensor.** An earlier version of this section
+declared OV5647 unsupported "decided, not pending". That verdict rested on the
+A/B directly above, which this file itself scopes to **MIPI host 2**. Nobody had
+tried host 0. On host 0 the same sensor model streams 1920×1080 at ~24 fps with
+a correctly exposed, in-focus image, and the kernel logs the full bring-up
+(`sensor_start ov5647 flow0 start done`, `vin mipi0: entry hs reception`).
+
+| Sensor | host 0    | host 2                            |
+| ------ | --------- | --------------------------------- |
+| OV5647 | streams ✅ | `create_and_run_vflow ret -10` ❌ |
+| IMX219 | untested  | streams ✅                        |
+
+Two of four cells are measured — too few to encode a support matrix in code,
+which is why `sensors.preflight()` reports rather than vetoes. The ruled-out
+list below stays valid and stays useful; only the conclusion drawn from it
+changed. The host-2 diagnosis, recorded so nobody spends another afternoon on
+it:
 
 ```
 isp_video_set_inter_attr ... sensor_cali_name = .../ov5647_1920x1080_tuning.json
@@ -453,15 +473,17 @@ attached, both enumerate simultaneously on **different i2c buses**:
 
 | Connector | VCON                | i2c bus | mipi channel |
 | --------- | ------------------- | ------- | ------------ |
-| A         | `vcon@0` / `vcon@1` | 6       | 0 / 1        |
-| B         | `vcon@2` / `vcon@3` | 4       | 2 / 3        |
+| CAM1      | `vcon@0` / `vcon@1` | 6       | **0**        |
+| the other | `vcon@2` / `vcon@3` | 4       | **2**        |
 
-So a front+rear pair uses **channel 0 and channel 2**, needing no
-`gpio_enable_bit` / `gpio_level_bit` multiplexing. (Those fields would only
-matter for two modules sharing one bus, which is not the arrangement here.)
+`mipi_cam` prints `this board support mipi: host 0, host 2` at startup — hosts 1
+and 3 do not exist. So each connector carries exactly **one** usable camera, and
+a front+rear pair is channel 0 plus channel 2. Verified from the device tree at
+`/sys/firmware/devicetree/base/soc/cam/vcon@N` (`bus` and `rx_phy` properties).
 
-Still untested with modules that stream — both cameras on the bench are OV5647,
-which produce no frames.
+No `gpio_enable_bit` / `gpio_level_bit` multiplexing is needed. (Those fields
+would only matter for two modules sharing one bus, which is not the arrangement
+here.)
 
 ## Running
 

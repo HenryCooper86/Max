@@ -17,6 +17,41 @@ from __future__ import annotations
 import json
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import unquote
+
+#: JPEG start-of-image. A .mjpeg segment is these, concatenated.
+SOI = b"\xff\xd8\xff"
+
+
+def first_frame(data: bytes) -> bytes | None:
+    """The first JPEG in a concatenated-JPEG segment.
+
+    This is what gives a recording a thumbnail without transcoding, on a board
+    that plateaus near 94 °C with a ride running.
+    """
+    if not data.startswith(SOI):
+        return None
+    nxt = data.find(SOI, len(SOI))
+    return data if nxt == -1 else data[:nxt]
+
+
+def safe_path(root, relative: str):
+    """Resolve ``relative`` inside ``root``, or return None.
+
+    Load-bearing: this server binds 0.0.0.0 and the sidecar runs as root, so a
+    path that escapes the gallery reads whatever root can read. The check is on
+    the *resolved* result, not the spelling, so "..", absolute paths and encoded
+    variants are all covered by one rule.
+    """
+    root = Path(root).resolve()
+    try:
+        candidate = (root / relative).resolve()
+    except (OSError, ValueError, RuntimeError):
+        return None
+    if candidate == root or root not in candidate.parents:
+        return None
+    return candidate
 
 
 def listing(gallery) -> dict:
@@ -46,8 +81,44 @@ def serve(pair, gallery, port: int) -> None:
                 self._preview()
             elif self.path == "/gallery":
                 self._listing()
+            elif self.path.startswith("/gallery/"):
+                self._capture()
             else:
                 self.send_error(404)
+
+        def _capture(self) -> None:
+            relative = unquote(self.path[len("/gallery/") :])
+            thumb = relative.endswith("/thumb")
+            if thumb:
+                relative = relative[: -len("/thumb")]
+
+            target = safe_path(gallery.root, relative)
+            # 404 rather than 403 for a refused path: a distinct code would
+            # confirm which files exist.
+            if target is None or not target.is_file():
+                self.send_error(404)
+                return
+
+            data = target.read_bytes()
+            if thumb:
+                data = first_frame(data)
+                if data is None:
+                    self.send_error(404)
+                    return
+
+            self.send_response(200)
+            if thumb or target.suffix == ".jpg":
+                self.send_header("Content-Type", "image/jpeg")
+            else:
+                # A .mjpeg is concatenated JPEG; no browser plays it inline, so
+                # offering it as a download beats rendering a broken tile.
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header(
+                    "Content-Disposition", f'attachment; filename="{target.name}"'
+                )
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
 
         def _listing(self) -> None:
             body = json.dumps(listing(gallery), ensure_ascii=False).encode("utf-8")

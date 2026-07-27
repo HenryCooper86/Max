@@ -3,6 +3,7 @@ import socket
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -10,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
 
-from bench_server import listing, serve
+from bench_server import first_frame, listing, safe_path, serve
 from camera import CameraPair
 from gallery import Gallery
 
@@ -83,3 +84,113 @@ def test_the_route_serves_the_listing_as_json(gallery):
         assert response.headers["Access-Control-Allow-Origin"] == "*"
         payload = json.loads(response.read())
     assert payload["pairs"][0]["id"] == "pair-20260727-100000"
+
+
+JPEG_A = b"\xff\xd8\xff first \xff\xd9"
+JPEG_B = b"\xff\xd8\xff second \xff\xd9"
+
+
+def get(port: int, path: str):
+    return urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=5)
+
+
+def status_of(port: int, path: str) -> int:
+    try:
+        with get(port, path) as response:
+            return response.status
+    except urllib.error.HTTPError as error:
+        return error.code
+
+
+def running(gallery) -> int:
+    port = free_port()
+    pair = CameraPair(front_channel=0, rear_channel=2)
+    threading.Thread(target=serve, args=(pair, gallery, port), daemon=True).start()
+    time.sleep(0.5)
+    return port
+
+
+def test_safe_path_accepts_a_file_inside_the_root(tmp_path):
+    (tmp_path / "pair").mkdir()
+    (tmp_path / "pair" / "front.jpg").write_bytes(b"x")
+    assert safe_path(tmp_path, "pair/front.jpg") is not None
+
+
+def test_safe_path_rejects_climbing_out():
+    # This server binds 0.0.0.0 and the sidecar runs as root, so a path that
+    # escapes the gallery reads whatever root can read.
+    assert safe_path(Path("/var/lib/max/gallery"), "../../../etc/shadow") is None
+
+
+def test_safe_path_rejects_an_absolute_path():
+    assert safe_path(Path("/var/lib/max/gallery"), "/etc/shadow") is None
+
+
+def test_safe_path_rejects_the_root_itself(tmp_path):
+    assert safe_path(tmp_path, "") is None
+
+
+def test_first_frame_slices_at_the_second_marker():
+    assert first_frame(JPEG_A + JPEG_B) == JPEG_A
+
+
+def test_first_frame_of_a_single_frame_file_is_the_whole_file():
+    assert first_frame(JPEG_A) == JPEG_A
+
+
+def test_first_frame_of_something_that_is_not_jpeg_is_none():
+    assert first_frame(b"not a jpeg at all") is None
+
+
+def test_the_route_serves_a_photo(gallery):
+    make_photo(gallery, "pair-1")
+    port = running(gallery)
+    with get(port, "/gallery/pair-1/front.jpg") as response:
+        assert response.status == 200
+        assert response.headers["Content-Type"] == "image/jpeg"
+        assert response.read() == PHOTO
+
+
+def test_the_route_refuses_to_climb_out(gallery):
+    # Weaker than it looks: urllib may normalise "../" away before sending, in
+    # which case the path never matches /gallery/ and 404s for a different
+    # reason. Kept because it costs nothing; the encoded test below is the one
+    # that actually reaches safe_path, and the curl check in Task 5 uses
+    # --path-as-is so the server really does see the dots.
+    port = running(gallery)
+    assert status_of(port, "/gallery/../../../etc/shadow") == 404
+
+
+def test_the_route_refuses_an_encoded_climb(gallery):
+    # %2e%2e survives client-side normalisation, so this exercises the guard.
+    port = running(gallery)
+    assert status_of(port, "/gallery/%2e%2e/%2e%2e/etc/shadow") == 404
+
+
+def test_an_unknown_pair_is_404(gallery):
+    port = running(gallery)
+    assert status_of(port, "/gallery/pair-nope/front.jpg") == 404
+
+
+def test_thumb_returns_only_the_first_frame(gallery):
+    directory = gallery.pair_dir("pair-v")
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "front.mjpeg").write_bytes(JPEG_A + JPEG_B)
+    gallery.write_manifest("pair-v", "front.mjpeg", None, "video")
+
+    port = running(gallery)
+    with get(port, "/gallery/pair-v/front.mjpeg/thumb") as response:
+        assert response.read() == JPEG_A
+        assert response.headers["Content-Type"] == "image/jpeg"
+
+
+def test_a_recording_downloads_as_an_attachment(gallery):
+    directory = gallery.pair_dir("pair-v")
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "front.mjpeg").write_bytes(JPEG_A + JPEG_B)
+    gallery.write_manifest("pair-v", "front.mjpeg", None, "video")
+
+    port = running(gallery)
+    with get(port, "/gallery/pair-v/front.mjpeg") as response:
+        assert "attachment" in response.headers["Content-Disposition"]
+        assert response.read() == JPEG_A + JPEG_B

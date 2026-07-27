@@ -18,6 +18,9 @@ SOCKET_PATH = os.environ.get("MAX_VISION_SOCKET", "/run/max/vision.sock")
 GALLERY_DIR = os.environ.get("MAX_GALLERY_DIR", "/var/lib/max/gallery")
 MIN_FREE_MB = int(os.environ.get("MAX_GALLERY_MIN_FREE_MB", "1024"))
 PREVIEW_PORT = int(os.environ.get("MAX_VISION_PREVIEW_PORT", "8081"))
+CORPUS_DIR = os.environ.get("MAX_CORPUS_DIR", "/var/lib/max/corpus")
+#: Only the exact string "1" enables shadow mode, matching MAX_RELAY_INSECURE_TLS.
+ADAS_SHADOW = os.environ.get("MAX_ADAS_SHADOW", "0") == "1"
 
 gallery = Gallery(GALLERY_DIR, MIN_FREE_MB)
 events = EventBus()
@@ -75,6 +78,28 @@ def main() -> None:
     cameras.open()
     threading.Thread(target=cameras.serve_preview, args=(PREVIEW_PORT,), daemon=True).start()
 
+    ride = None
+    if ADAS_SHADOW:
+        # Imported here, not at module scope: ride.py imports start_adas from
+        # this module, and a top-level import would be circular.
+        from ride import RideSession  # noqa: PLC0415
+
+        open_cameras = {
+            name: camera
+            for name, camera in (("front", cameras.front), ("rear", cameras.rear))
+            if camera is not None
+        }
+        ride = RideSession(
+            cameras=open_cameras,
+            corpus_dir=CORPUS_DIR,
+            min_free_mb=MIN_FREE_MB,
+            broadcast=events.broadcast,
+        )
+        if ride.start() is None:
+            ride = None
+    else:
+        print("[vision] MAX_ADAS_SHADOW is not 1; no ride, no ADAS", flush=True)
+
     # systemd stops us with SIGTERM. Without a handler the interpreter tears
     # down while the ROS executor thread is mid-spin, so an ordinary stop prints
     # a traceback and the cameras never get stop()ped.
@@ -85,6 +110,10 @@ def main() -> None:
         try:
             server.serve_forever()
         finally:
+            # Ride first: its threads read from the cameras, so stopping the
+            # cameras out from under them would raise on the way down.
+            if ride is not None:
+                ride.stop()
             # An orphaned mipi_cam holds the ISP, and the next start cannot open
             # the camera at all. Reaping at startup covers a crash; this covers
             # every ordinary stop.

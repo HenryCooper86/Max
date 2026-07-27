@@ -536,6 +536,8 @@ MAX_VISION_PREVIEW_PORT=8081
 MAX_VISION_SOCKET=/run/max/vision.sock
 RDK_CAMERA_FRONT=0                         # MIPI channel; CAM1 connector
 RDK_CAMERA_REAR=2                          # MIPI channel; the other connector
+MAX_ADAS_SHADOW=0                          # 1 starts a ride: segments + shadow ADAS
+MAX_CORPUS_DIR=/var/lib/max/corpus         # where ride segments are written
 MAX_VOICE_GATE_RMS=900
 MAX_VOICE_GATE_MS=400
 ENV
@@ -865,6 +867,24 @@ binding path is kept so switching back is a flag flip once that is solved.
 Both the recorder and the sidecar now go through `rdk/vision/mipi_camera.py`, so
 the ROS dependency is no longer confined to recording — and neither is the fix
 for the orphan it used to leave behind. See "Camera findings".
+
+### Shadow mode in the sidecar
+
+`MAX_ADAS_SHADOW=1` makes max-vision start a **ride** at service start: it writes
+continuous `.mjpeg` segments under `MAX_CORPUS_DIR` and runs one shadow-mode ADAS
+thread per open camera. Alerts go to `<ride>/shadow-<camera>.jsonl` and are pushed
+to any connected control-socket client as `event: hazard`.
+
+Recording and ADAS start together on purpose. Shadow mode without evidence is the
+measurement that misleads, so the runtime refuses to run without a recorder — and
+since the board allows exactly one holder of the ISP, `tools/record_ride.py`
+cannot supply that while the sidecar has the camera. The sidecar records instead.
+
+**This makes no sound.** `MAX_ADAS_AUDIO` is untouched and still defaults to `0`;
+arming remains a human decision against shadow numbers meeting the M1 gate.
+
+Segments are large — roughly 3 MB/s at 1080p, so about 5 GB for a half-hour ride.
+The ride refuses to start, and stops itself, below `MAX_GALLERY_MIN_FREE_MB` free.
 
 Because `mipi_cam` publishes decoded frames on `/image_raw`, the recorder
 JPEG-encodes them, so a segment is concatenated JPEG rather than an H.264

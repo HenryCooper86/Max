@@ -455,9 +455,11 @@ diff your BSP's `ov5647_1920x1080_tuning.json` against the board's copy
 experiment.
 
 `tools/record_ride.py` runs an i2c preflight before opening anything, so an
-unsupported or unseated module fails in under a second with a specific message
-instead of a five-second ISP timeout that points at the wrong layer. Override
-with `--skip-preflight` if you are deliberately testing an unsupported module.
+**unseated** module fails in under a second with a specific message instead of a
+five-second ISP timeout that points at the wrong layer. Preflight reports rather
+than vetoes: it no longer refuses a sensor for being the wrong model, because
+that is exactly what would reject the OV5647 now streaming on host 0. A
+combination that cannot stream fails at open, with the vendor's own error.
 
 Known-good reference command, for confirming the camera outside our stack:
 

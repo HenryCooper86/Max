@@ -5,8 +5,9 @@ Identifying the attached sensor before opening a pipeline turns a confusing
 debugging hours: an OV5647 gets all the way through sensor init and then stalls
 in the ISP, so every symptom points at the wrong layer.
 
-OV5647 is deliberately unsupported — see "Camera findings" in rdk/README.md for
-the trace. It is a vendor-side ISP tuning bug, not something we can fix here.
+OV5647 is supported on host 0 and fails on host 2 — the port is the variable,
+not the sensor. See "Camera findings" in rdk/README.md. This module reports what
+is attached; deciding whether a combination can stream is the opener's job.
 """
 
 from __future__ import annotations
@@ -30,8 +31,10 @@ _BY_ADDR = {
     0x36: Sensor(name="ov5647", addr=0x36),
 }
 
-#: Only IMX219 streams on this image.
-SUPPORTED_ADDRS = (0x10,)
+#: Each connector's one usable MIPI channel. mipi_cam prints "this board support
+#: mipi: host 0, host 2" — hosts 1 and 3 do not exist, so a connector carries one
+#: camera. Bus 6 is the CAM1 connector (vcon@0/@1); bus 4 is the other (vcon@2/@3).
+BUS_CHANNEL = {6: 0, 4: 2}
 
 
 class UnsupportedSensor(RuntimeError):
@@ -78,33 +81,43 @@ def describe_scan(scan: Callable[[int], list[int]] = scan_bus) -> str:
     return "\n".join(lines)
 
 
-def preflight(scan: Callable[[int], list[int]] = scan_bus) -> None:
-    """Raise unless at least one supported module is attached.
+def discover(scan: Callable[[int], list[int]] = scan_bus) -> dict[int, str]:
+    """MIPI channel -> the ``video_device`` name mipi_cam wants, per attached module.
 
-    A mixed pair passes: one usable camera is enough, because front-only is a
-    valid corpus and a second unusable module should not block the ride.
+    Discovering the sensor is what lets the sidecar stop hardcoding one. A
+    hardcoded IMX219 is why the working OV5647 in CAM1 could not be opened.
+    """
+    found: dict[int, str] = {}
+    for bus, channel in BUS_CHANNEL.items():
+        for addr in scan(bus):
+            sensor = identify(addr)
+            if sensor is not None:
+                found[channel] = sensor.name.upper()
+                break
+    return found
+
+
+def preflight(scan: Callable[[int], list[int]] = scan_bus) -> None:
+    """Raise only when no known camera module is attached at all.
+
+    This used to reject any sensor outside a supported list. That was wrong in
+    the most expensive way: the list held only IMX219, so it vetoed the OV5647
+    that streams fine on host 0. With two of four port x sensor combinations
+    measured, refusing to try is likelier to be wrong than the hardware is. An
+    open that cannot work now fails loudly, with the vendor's own error.
+
+    The fast-failure this function was written for is kept: an empty bus still
+    fails in under a second with the ribbon-seating message, rather than after a
+    five-second ISP timeout that points at the wrong layer.
     """
     addrs = [addr for bus in CAMERA_BUSES for addr in scan(bus)]
-    known = [identify(a) for a in addrs]
-    usable = [s for s in known if s is not None and s.addr in SUPPORTED_ADDRS]
-    if usable:
+    if any(identify(a) is not None for a in addrs):
         return
 
-    report = describe_scan(scan)
-    present = [s.name for s in known if s is not None]
-    if not present:
-        raise UnsupportedSensor(
-            "no camera answering on either connector bus:\n"
-            f"{report}\n"
-            "An entirely empty bus usually means the ribbon is not seated — the metal\n"
-            "contacts must face the PCB, and it must be pushed fully home before the\n"
-            "latch closes. See 'Camera findings' in rdk/README.md."
-        )
-
     raise UnsupportedSensor(
-        f"only unsupported modules attached ({', '.join(sorted(set(present)))}):\n"
-        f"{report}\n"
-        "OV5647 does not stream on this image — it stalls 5 s in the ISP tuning step\n"
-        "and never starts MIPI, under our recorder and the vendor's own mipi_cam alike.\n"
-        "Use an IMX219 (i2c 0x10). See 'Camera findings' in rdk/README.md."
+        "no camera answering on either connector bus:\n"
+        f"{describe_scan(scan)}\n"
+        "An entirely empty bus usually means the ribbon is not seated — the metal\n"
+        "contacts must face the PCB, and it must be pushed fully home before the\n"
+        "latch closes. See 'Camera findings' in rdk/README.md."
     )

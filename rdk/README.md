@@ -502,6 +502,8 @@ MAX_GALLERY_MIN_FREE_MB=1024
 MAX_HUD_PORT=8080
 MAX_VISION_PREVIEW_PORT=8081
 MAX_VISION_SOCKET=/run/max/vision.sock
+RDK_CAMERA_FRONT=0                         # MIPI channel; CAM1 connector
+RDK_CAMERA_REAR=2                          # MIPI channel; the other connector
 MAX_VOICE_GATE_RMS=900
 MAX_VOICE_GATE_MS=400
 ENV

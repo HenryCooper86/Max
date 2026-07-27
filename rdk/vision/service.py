@@ -10,6 +10,7 @@ import threading
 from pathlib import Path
 
 from camera import CameraPair
+from events import EventBus
 from gallery import Gallery
 from rpc import decode_lines, dispatch
 
@@ -19,6 +20,7 @@ MIN_FREE_MB = int(os.environ.get("MAX_GALLERY_MIN_FREE_MB", "1024"))
 PREVIEW_PORT = int(os.environ.get("MAX_VISION_PREVIEW_PORT", "8081"))
 
 gallery = Gallery(GALLERY_DIR, MIN_FREE_MB)
+events = EventBus()
 # MIPI channels, not VCON indices. CAM1 is channel 0 (i2c bus 6, vcon@0/@1) and
 # the other connector is channel 2 (bus 4, vcon@2/@3). Channels 1 and 3 are not
 # offered because this board does not have hosts 1 and 3 — the previous default
@@ -38,18 +40,27 @@ HANDLERS = {
 
 class ControlHandler(socketserver.StreamRequestHandler):
     def handle(self) -> None:
-        buffer = ""
-        while True:
-            chunk = self.rfile.readline()
-            if not chunk:
-                return
-            buffer += chunk.decode("utf-8", errors="replace")
-            messages, buffer = decode_lines(buffer)
-            for message in messages:
-                line = dispatch(message, HANDLERS)
-                if line:
-                    self.wfile.write(line.encode("utf-8"))
-                    self.wfile.flush()
+        def write(line: str) -> None:
+            self.wfile.write(line.encode("utf-8"))
+            self.wfile.flush()
+
+        events.register(write)
+        try:
+            buffer = ""
+            while True:
+                chunk = self.rfile.readline()
+                if not chunk:
+                    return
+                buffer += chunk.decode("utf-8", errors="replace")
+                messages, buffer = decode_lines(buffer)
+                for message in messages:
+                    line = dispatch(message, HANDLERS)
+                    if line:
+                        write(line)
+        finally:
+            # ThreadingUnixStreamServer gives each connection its own thread, so
+            # a client that goes away leaves a closure behind unless we say so.
+            events.unregister(write)
 
 
 class ControlServer(socketserver.ThreadingUnixStreamServer):

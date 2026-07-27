@@ -14,8 +14,27 @@ the listen backlog filled with clients nobody would accept.
 
 from __future__ import annotations
 
+import json
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+def listing(gallery) -> dict:
+    """Every capture, newest first, with the byte size of each side.
+
+    Sizes let the page label a recording and mark a manifest whose file is not
+    on disk, rather than rendering a broken image and leaving you to guess.
+    """
+    pairs = []
+    for manifest in gallery.list_pairs():
+        directory = gallery.pair_dir(manifest["id"])
+        sizes: dict[str, int | None] = {}
+        for side in ("front", "rear"):
+            name = manifest.get(side)
+            path = directory / name if name else None
+            sizes[side] = path.stat().st_size if path is not None and path.exists() else None
+        pairs.append({**manifest, "sizes": sizes})
+    return {"pairs": pairs}
 
 
 def serve(pair, gallery, port: int) -> None:
@@ -23,7 +42,23 @@ def serve(pair, gallery, port: int) -> None:
 
     class BenchHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-            self._preview()
+            if self.path.startswith("/preview/"):
+                self._preview()
+            elif self.path == "/gallery":
+                self._listing()
+            else:
+                self.send_error(404)
+
+        def _listing(self) -> None:
+            body = json.dumps(listing(gallery), ensure_ascii=False).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            # The page is served from the agent's port and fetches this one, so
+            # the JSON is a cross-origin read. Images in <img> are not.
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
         def _preview(self) -> None:
             camera = pair.front if self.path.endswith("front") else pair.rear

@@ -145,8 +145,19 @@ class CameraPair:
             self._recording_stop = threading.Event()
 
             def write_loop() -> None:
-                while not self._recording_stop.wait(1.0 / RECORDING_FPS):
+                # Pace on absolute deadlines. Sleeping a fixed interval *between*
+                # writes adds the encode time to every period — measured at 6.2 fps
+                # for a nominal 10, because a 1080p NV12->JPEG costs ~60 ms.
+                interval = 1.0 / RECORDING_FPS
+                next_at = time.monotonic() + interval
+                while not self._recording_stop.wait(max(0.0, next_at - time.monotonic())):
                     self.write_recording_frame()
+                    next_at += interval
+                    now = time.monotonic()
+                    if next_at < now:
+                        # Encoding fell behind the target rate. Resynchronise
+                        # rather than spinning to catch up on a stale frame.
+                        next_at = now + interval
 
             self._recording_thread = threading.Thread(
                 target=write_loop, name=f"record-{pair_id}", daemon=True

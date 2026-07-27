@@ -166,6 +166,10 @@ class MipiCamera:
                 "-p", f"image_width:={self.width}",
                 "-p", f"image_height:={self.height}",
                 "-p", "out_format:=nv12",
+                # The node logs one INFO line per captured frame — ~24 a second,
+                # forever. Its stdout is discarded, but ROS also writes them to
+                # disk, so quiet it at the source.
+                "--log-level", "WARN",
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -193,7 +197,18 @@ class MipiCamera:
 
         def spin() -> None:
             while not self._stop.is_set() and rclpy.ok():
-                self._executor.spin_once(timeout_sec=0.1)
+                try:
+                    self._executor.spin_once(timeout_sec=0.1)
+                except Exception as error:  # noqa: BLE001 - see below
+                    # The executor gets torn down under this thread whenever the
+                    # process exits. Silent when we asked for it; loud otherwise,
+                    # because a spin thread that dies on its own means no frames.
+                    if not self._stop.is_set():
+                        print(
+                            f"[vision] spin stopped on channel {self.channel}: {error}",
+                            flush=True,
+                        )
+                    return
 
         self._spin_thread = threading.Thread(target=spin, daemon=True)
         self._spin_thread.start()

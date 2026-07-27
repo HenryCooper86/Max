@@ -76,6 +76,10 @@ Verified over SSH against the real board on 2026-07-25.
 | Camera front port index    | **MIPI channel 0** (`vcon@0`/`@1`, i2c bus 6) — the CAM1 connector   | 2026-07-27 |
 | Camera rear port index     | **MIPI channel 2** (`vcon@2`/`@3`, i2c bus 4) — the other connector  | 2026-07-27 |
 | `mipi_cam` nv12 output     | **works** — `out_format:=nv12`, 3110400 B/frame at 1920×1080        | 2026-07-27 |
+| CAM1 live capture          | **works** — OV5647 ch 0: photo, preview and `.mjpeg` via max-vision | 2026-07-27 |
+| Gallery recording rate     | **9.9 fps** measured (60 frames / 6.05 s), 1920×1080 mjpeg          | 2026-07-27 |
+| max-vision restart         | **reacquires** — two consecutive restarts, no orphan, no traceback  | 2026-07-27 |
+| ADAS in the sidecar        | **not wired** — `start_adas` has no caller in `main()`; tests only  | 2026-07-27 |
 | BPU                        | present, idle, 500–1000 MHz; `pyeasy_dnn` + `libsrcampy` OK         | 2026-07-25 |
 | Node.js                    | **v22.23.1** installed from NodeSource; npm 10.9.8                  | 2026-07-25 |
 | First live session         | **works** — 656 KB mic PCM up, 3 device.result round trips          | 2026-07-25 |

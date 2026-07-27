@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import signal
 import socketserver
+import sys
 import threading
 from pathlib import Path
 
@@ -61,6 +63,11 @@ def main() -> None:
 
     cameras.open()
     threading.Thread(target=cameras.serve_preview, args=(PREVIEW_PORT,), daemon=True).start()
+
+    # systemd stops us with SIGTERM. Without a handler the interpreter tears
+    # down while the ROS executor thread is mid-spin, so an ordinary stop prints
+    # a traceback and the cameras never get stop()ped.
+    signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(0))
 
     with ControlServer(SOCKET_PATH, ControlHandler) as server:
         os.chmod(SOCKET_PATH, 0o660)

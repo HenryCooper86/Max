@@ -11,12 +11,12 @@ So the one device with no screen is the one device that never hears them. The
 rider gets whatever the model invented instead, which is precisely what
 `deviceSuccessSpeech` exists to prevent:
 
-> *"Deterministic and tied to the real device result, so the rider hears the
+> _"Deterministic and tied to the real device result, so the rider hears the
 > truth ("拍好了", "开始录像") instead of the model's chatter or a mistaken
-> safety refusal."*
+> safety refusal."_
 
-Observed 2026-07-27: asked for a photo, Max said *"好的，正在准备拍照。请保持设备
-稳定，我会在3秒后自动拍摄。3，2，1。照片已拍下…"* — an invented countdown, for a
+Observed 2026-07-27: asked for a photo, Max said _"好的，正在准备拍照。请保持设备
+稳定，我会在3秒后自动拍摄。3，2，1。照片已拍下…"_ — an invented countdown, for a
 capture that is a single frame grab. "拍好了" was never spoken.
 
 This makes generated text audible on the helmet. It is also the prerequisite for
@@ -66,7 +66,7 @@ is what the AEC filter is aligned against — so a burst of injected audio looke
 like a real hazard. The pacing mechanism itself lives on the **board**:
 `playback.ts`'s `pump()` caps how far ahead of the DAC audio may sit
 (`MAX_QUEUE_MS = 80`, topped up by a 10 ms pump). But that cap is checked
-*before* `pump()` shifts a chunk off its queue — it bounds when a pump cycle
+_before_ `pump()` shifts a chunk off its queue — it bounds when a pump cycle
 starts consuming, not how much of one already-dequeued chunk it may hand to
 `aplay`. It cannot subdivide a chunk. One `client.send` is one WebSocket
 message is one `onVoice` is one `playback.write` call (`relay.ts`) — one
@@ -127,12 +127,12 @@ default. The credentials are the switch.
 Every failure degrades to today's behaviour — transcript only, silence on the
 helmet.
 
-| Failure | Behaviour |
-| ------- | --------- |
-| No TTS credentials | Skipped; no synthesis attempted |
-| TTS request fails or times out (2 s budget) | Logged once, transcript only |
-| Response is not decodable PCM | Treated as failure, transcript only |
-| Client is not embedded | Transcript only, as today |
+| Failure                                     | Behaviour                           |
+| ------------------------------------------- | ----------------------------------- |
+| No TTS credentials                          | Skipped; no synthesis attempted     |
+| TTS request fails or times out (2 s budget) | Logged once, transcript only        |
+| Response is not decodable PCM               | Treated as failure, transcript only |
+| Client is not embedded                      | Transcript only, as today           |
 
 Synthesis never blocks the device result and never throws into the
 reconciliation path. A confirmation that arrives late is worse than one that

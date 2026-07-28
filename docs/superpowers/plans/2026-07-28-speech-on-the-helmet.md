@@ -14,7 +14,7 @@
 
 - **These tests run locally**, not on the board: `npm test` (vitest). The board is only needed for the final live check.
 - **No new dependencies.** Node's global `fetch` and `Buffer` are enough.
-- **The board's code must not be touched.** `rdk/README.md` is the sole exception, in Task 4. If a task starts editing any *code* under `rdk/`, the approach has gone wrong — the whole point is that the downlink already works.
+- **The board's code must not be touched.** `rdk/README.md` is the sole exception, in Task 4. If a task starts editing any _code_ under `rdk/`, the approach has gone wrong — the whole point is that the downlink already works.
 - **Embedded clients only.** Web and mobile speak the transcript themselves via `useBrowserSpeech`; sending them audio too would say every confirmation twice. The gate is `platform?.() === "embedded"`, matching `server/hazard-injector.ts:80`.
 - **The transcript event is still emitted in every case.** This change adds audio and removes nothing — the HUD, QA transcript and user memory must see exactly what they see today.
 - **Synthesis must never block or throw into the reconciliation path.** Every failure degrades to today's behaviour: transcript only, silence on the helmet.
@@ -26,10 +26,12 @@
 ### Task 1: `synthesize` — text to PCM, cached
 
 **Files:**
+
 - Create: `server/speech.ts`
 - Test: `tests/speech.test.ts`
 
 **Interfaces:**
+
 - Produces: `createSynthesizer(options): (text: string) => Promise<Buffer | null>`, where `options` is `{ appid?: string; token?: string; voice?: string; fetchImpl?: typeof fetch; timeoutMs?: number; maxEntries?: number }`. Returns `null` for any failure or missing credentials — never throws.
 - `TTS_ENDPOINT = "https://openspeech.bytedance.com/api/v1/tts"`, `TTS_RATE = 24_000`.
 
@@ -278,10 +280,12 @@ git commit -m "feat(speech): synthesise text to 24 kHz pcm, cached"
 Kept apart from the provider so it tests without a WebSocket, matching how `reconcileDeviceResult` and `createHazardInjector` are already structured.
 
 **Files:**
+
 - Modify: `server/speech.ts`
 - Test: `tests/speech.test.ts`
 
 **Interfaces:**
+
 - Produces: `createSpeaker(options): { speak(text: string): Promise<void> }`, where `options` is `{ synthesize: (text: string) => Promise<Buffer | null>; sendAudio: (pcm: Buffer) => void; platform: () => string | undefined; onError?: (error: unknown) => void }`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -440,9 +444,11 @@ git commit -m "feat(speech): speak generated text on embedded clients only"
 ### Task 3: Wire it into the reconciliation
 
 **Files:**
+
 - Modify: `server/providers/doubao.ts`
 
 **Interfaces:**
+
 - Consumes: `createSynthesizer`, `createSpeaker` (Tasks 1–2), the existing `sessionPlatform` and `client`.
 
 - [ ] **Step 1: Construct the speaker next to the hazard injector**
@@ -456,47 +462,47 @@ import { createSpeaker, createSynthesizer } from "../speech";
 Then, immediately after the `const hazardInjector = createHazardInjector({...})` block — it already has `sessionPlatform` in scope:
 
 ```ts
-  // The helmet has no way to speak generated text: it drops `useBrowserSpeech`
-  // transcripts, and pre-rendered alert WAVs cannot cover arbitrary wording. So
-  // the relay synthesises and sends the bytes down the same binary channel
-  // Doubao's own voice uses.
-  const speaker = createSpeaker({
-    synthesize: createSynthesizer({
-      appid: process.env.DOUBAO_TTS_APPID,
-      token: process.env.DOUBAO_TTS_TOKEN,
-      voice: process.env.DOUBAO_TTS_VOICE
-    }),
-    sendAudio: (pcm) => client.send(pcm, { binary: true }),
-    platform: () => sessionPlatform,
-    onError: (error) => log.warn("confirmation speech failed", { error: String(error) })
-  });
+// The helmet has no way to speak generated text: it drops `useBrowserSpeech`
+// transcripts, and pre-rendered alert WAVs cannot cover arbitrary wording. So
+// the relay synthesises and sends the bytes down the same binary channel
+// Doubao's own voice uses.
+const speaker = createSpeaker({
+  synthesize: createSynthesizer({
+    appid: process.env.DOUBAO_TTS_APPID,
+    token: process.env.DOUBAO_TTS_TOKEN,
+    voice: process.env.DOUBAO_TTS_VOICE
+  }),
+  sendAudio: (pcm) => client.send(pcm, { binary: true }),
+  platform: () => sessionPlatform,
+  onError: (error) => log.warn("confirmation speech failed", { error: String(error) })
+});
 ```
 
 If `log.warn` does not accept a second argument in this codebase, use
-`log.warn(\`confirmation speech failed: ${String(error)}\`)` — check the
-neighbouring `log.` calls and match them.
+`log.warn(\`confirmation speech failed: ${String(error)}\`)`— check the
+neighbouring`log.` calls and match them.
 
 - [ ] **Step 2: Speak from the reconciliation**
 
 In `applyDeviceReconciliation`, after the transcript is sent:
 
 ```ts
-  function applyDeviceReconciliation(
-    action: DeviceActionName,
-    result: { status: DeviceActionStatus; reason?: string; detail?: string },
-    okSpeech?: string
-  ): void {
-    const decision = reconcileDeviceResult(action, result, okSpeech);
-    if (!decision.truncate) return;
-    truncateInterruptedReply();
-    if (decision.speech) {
-      sendClient(transcriptEvent(agentDelivery, "agent", decision.speech, { final: true, useBrowserSpeech: true }));
-      // Deliberately not awaited: the reconciliation is synchronous and must
-      // stay that way. truncateInterruptedReply() has already cut the model's
-      // audio, so the line does not land on top of it.
-      void speaker.speak(decision.speech);
-    }
+function applyDeviceReconciliation(
+  action: DeviceActionName,
+  result: { status: DeviceActionStatus; reason?: string; detail?: string },
+  okSpeech?: string
+): void {
+  const decision = reconcileDeviceResult(action, result, okSpeech);
+  if (!decision.truncate) return;
+  truncateInterruptedReply();
+  if (decision.speech) {
+    sendClient(transcriptEvent(agentDelivery, "agent", decision.speech, { final: true, useBrowserSpeech: true }));
+    // Deliberately not awaited: the reconciliation is synchronous and must
+    // stay that way. truncateInterruptedReply() has already cut the model's
+    // audio, so the line does not land on top of it.
+    void speaker.speak(decision.speech);
   }
+}
 ```
 
 The transcript event is unchanged — the HUD, QA transcript and user memory see exactly what they saw before.
@@ -523,6 +529,7 @@ git commit -m "feat(speech): speak device confirmations to the helmet"
 ### Task 4: Hear it on the board
 
 **Files:**
+
 - Modify: `rdk/README.md`
 
 - [ ] **Step 1: Confirm the relay has TTS credentials**

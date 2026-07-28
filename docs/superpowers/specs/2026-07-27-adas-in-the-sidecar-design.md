@@ -8,7 +8,7 @@ ADAS loop "runs **inside the vision sidecar**, on its own thread per camera" —
 that thread is never started.
 
 This spec wires it up. The sidecar gains a **ride**: starting one begins
-continuous segment recording *and* the ADAS threads together, so shadow mode
+continuous segment recording _and_ the ADAS threads together, so shadow mode
 cannot run without the evidence it requires.
 
 Parent: `docs/superpowers/specs/2026-07-26-adas-m2-ride-design.md`.
@@ -23,8 +23,8 @@ working-looking code that lies.
 ### 1. Shadow mode requires a recorder, and the recorder cannot run
 
 `run_camera` raises `RecordingRequired` unless `config.recording`. That is
-deliberate — M2: *"If recording is off, the runtime refuses to start rather than
-degrading to alerts-without-evidence."*
+deliberate — M2: _"If recording is off, the runtime refuses to start rather than
+degrading to alerts-without-evidence."_
 
 Evidence comes from M0's continuous segments, written by `tools/record_ride.py`
 — **a separate process**. The board permits exactly one holder of the ISP, so
@@ -102,11 +102,11 @@ MipiCamera (shared FrameBuffer)
 
 ## Configuration
 
-| Variable            | Default                          | Meaning                          |
-| ------------------- | -------------------------------- | -------------------------------- |
-| `MAX_ADAS_SHADOW`   | `0`                              | Start a ride at service start    |
-| `MAX_CORPUS_DIR`    | `/var/lib/max/corpus`            | Segment root, matching M0        |
-| `MAX_ADAS_MODEL`    | `/app/multimedia_samples/sunrise_camera/Platform/x5/model_zoom/yolov5s_672x672_nv12.bin` | BPU model |
+| Variable          | Default                                                                                  | Meaning                       |
+| ----------------- | ---------------------------------------------------------------------------------------- | ----------------------------- |
+| `MAX_ADAS_SHADOW` | `0`                                                                                      | Start a ride at service start |
+| `MAX_CORPUS_DIR`  | `/var/lib/max/corpus`                                                                    | Segment root, matching M0     |
+| `MAX_ADAS_MODEL`  | `/app/multimedia_samples/sunrise_camera/Platform/x5/model_zoom/yolov5s_672x672_nv12.bin` | BPU model                     |
 
 Only the exact string `1` enables `MAX_ADAS_SHADOW`, matching how
 `MAX_RELAY_INSECURE_TLS` is read. Default off: nothing changes until opted in.

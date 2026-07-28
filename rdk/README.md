@@ -59,40 +59,40 @@ Verified over SSH against the real board on 2026-07-25.
 > the current one with `arp -a`, narrow with `nc -G 2 -z <ip> 22`, and confirm
 > with `ssh root@<ip> 'ls /usr/hobot'`.
 
-| Item                       | Value                                                               | Date       |
-| -------------------------- | ------------------------------------------------------------------- | ---------- |
-| Board                      | `D-Robotics X5 MD V0.2`, Ubuntu 22.04.5, kernel 6.1.83              | 2026-07-25 |
-| ALSA capture device        | `plughw:0,0` — card 0 `duplexaudio`, codec **ES8326**               | 2026-07-25 |
-| ALSA playback device       | `plughw:0,0` — same duplex card, one device for both                | 2026-07-25 |
-| Headset wiring (CTIA/OMTP) | **CTIA, mic works** — −43.6 dBFS ambient, not silence               | 2026-07-25 |
-| Raw echo coupling          | **+5.5 dB** above the noise floor (`CROSSTALK=0`, DAC 0 dB)         | 2026-07-25 |
-| `module-echo-cancel`       | **tried, does not work** — master sink stays SUSPENDED, no audio    | 2026-07-25 |
-| AEC path chosen            | **in-process** — `rdk/aec/max-aec`, WebRTC APM; built and deployed  | 2026-07-26 |
-| Reference-to-mic lag       | **81 ms** measured (was 953 ms before playback pacing)              | 2026-07-26 |
-| Echo loop                  | **fixed** — confirmed live, headset on, Max replies once and stops  | 2026-07-26 |
-| Barge-in                   | **works** — confirmed live, talking over Max cuts his reply         | 2026-07-26 |
-| Live Doubao session        | **works** — Max speaks, 1.69 MB voice audio down                    | 2026-07-25 |
-| Helmet speaks confirmations | **built, NOT yet heard** — relay has no `DOUBAO_TTS_*` credentials  | 2026-07-28 |
-| Full duplex                | **works** — simultaneous `arecord` + `aplay`, no device contention  | 2026-07-25 |
-| Camera front port index    | **MIPI channel 0** (`vcon@0`/`@1`, i2c bus 6) — the CAM1 connector   | 2026-07-27 |
-| Camera rear port index     | **MIPI channel 2** (`vcon@2`/`@3`, i2c bus 4) — the other connector  | 2026-07-27 |
-| `mipi_cam` nv12 output     | **works** — `out_format:=nv12`, 3110400 B/frame at 1920×1080        | 2026-07-27 |
-| CAM1 live capture          | **works** — OV5647 ch 0: photo, preview and `.mjpeg` via max-vision | 2026-07-27 |
-| Gallery recording rate     | **9.9 fps** measured (60 frames / 6.05 s), 1920×1080 mjpeg          | 2026-07-27 |
-| max-vision restart         | **reacquires** — two consecutive restarts, no orphan, no traceback  | 2026-07-27 |
-| ADAS shadow ride           | **works** — segments + shadow log + one ADAS thread, `MAX_ADAS_SHADOW=1` | 2026-07-27 |
-| Shadow ride frame rate     | **9.7 fps** (583 frames in a 60 s segment), 1080p mjpeg             | 2026-07-27 |
-| ADAS latency under a ride  | **47.2 ms** p50, 61.7 ms p95 — replay of the ride's own footage     | 2026-07-27 |
-| Thermal under a shadow ride | **~94 °C plateau** (93.8–94.7), **one** camera, bench ambient      | 2026-07-27 |
-| Shadow ride disk rate      | **~3 MB/s** — 821 MB for 4.5 min; ~11 GB/hour                       | 2026-07-27 |
-| BPU                        | present, idle, 500–1000 MHz; `pyeasy_dnn` + `libsrcampy` OK         | 2026-07-25 |
-| Node.js                    | **v22.23.1** installed from NodeSource; npm 10.9.8                  | 2026-07-25 |
-| First live session         | **works** — 656 KB mic PCM up, 3 device.result round trips          | 2026-07-25 |
-| pytest                     | 6.2.5 on the board; the suite runs there — no local pytest or numpy | 2026-07-25 |
-| BPU detector               | **yolov5s validated** — anchors checked against `bus.jpg`           | 2026-07-26 |
-| ADAS latency               | **52.4 ms** per frame p50 (19.1 fps single stream)                  | 2026-07-26 |
-| ADAS sustained             | **11.4 fps per camera**, 2 streams, voice live, no throttling       | 2026-07-26 |
-| Thermal under ADAS load    | 78.6 °C → **plateau ~90 °C** over 10 min; bench ambient only        | 2026-07-26 |
+| Item                        | Value                                                                    | Date       |
+| --------------------------- | ------------------------------------------------------------------------ | ---------- |
+| Board                       | `D-Robotics X5 MD V0.2`, Ubuntu 22.04.5, kernel 6.1.83                   | 2026-07-25 |
+| ALSA capture device         | `plughw:0,0` — card 0 `duplexaudio`, codec **ES8326**                    | 2026-07-25 |
+| ALSA playback device        | `plughw:0,0` — same duplex card, one device for both                     | 2026-07-25 |
+| Headset wiring (CTIA/OMTP)  | **CTIA, mic works** — −43.6 dBFS ambient, not silence                    | 2026-07-25 |
+| Raw echo coupling           | **+5.5 dB** above the noise floor (`CROSSTALK=0`, DAC 0 dB)              | 2026-07-25 |
+| `module-echo-cancel`        | **tried, does not work** — master sink stays SUSPENDED, no audio         | 2026-07-25 |
+| AEC path chosen             | **in-process** — `rdk/aec/max-aec`, WebRTC APM; built and deployed       | 2026-07-26 |
+| Reference-to-mic lag        | **81 ms** measured (was 953 ms before playback pacing)                   | 2026-07-26 |
+| Echo loop                   | **fixed** — confirmed live, headset on, Max replies once and stops       | 2026-07-26 |
+| Barge-in                    | **works** — confirmed live, talking over Max cuts his reply              | 2026-07-26 |
+| Live Doubao session         | **works** — Max speaks, 1.69 MB voice audio down                         | 2026-07-25 |
+| Helmet speaks confirmations | **built, NOT yet heard** — relay has no `DOUBAO_TTS_*` credentials       | 2026-07-28 |
+| Full duplex                 | **works** — simultaneous `arecord` + `aplay`, no device contention       | 2026-07-25 |
+| Camera front port index     | **MIPI channel 0** (`vcon@0`/`@1`, i2c bus 6) — the CAM1 connector       | 2026-07-27 |
+| Camera rear port index      | **MIPI channel 2** (`vcon@2`/`@3`, i2c bus 4) — the other connector      | 2026-07-27 |
+| `mipi_cam` nv12 output      | **works** — `out_format:=nv12`, 3110400 B/frame at 1920×1080             | 2026-07-27 |
+| CAM1 live capture           | **works** — OV5647 ch 0: photo, preview and `.mjpeg` via max-vision      | 2026-07-27 |
+| Gallery recording rate      | **9.9 fps** measured (60 frames / 6.05 s), 1920×1080 mjpeg               | 2026-07-27 |
+| max-vision restart          | **reacquires** — two consecutive restarts, no orphan, no traceback       | 2026-07-27 |
+| ADAS shadow ride            | **works** — segments + shadow log + one ADAS thread, `MAX_ADAS_SHADOW=1` | 2026-07-27 |
+| Shadow ride frame rate      | **9.7 fps** (583 frames in a 60 s segment), 1080p mjpeg                  | 2026-07-27 |
+| ADAS latency under a ride   | **47.2 ms** p50, 61.7 ms p95 — replay of the ride's own footage          | 2026-07-27 |
+| Thermal under a shadow ride | **~94 °C plateau** (93.8–94.7), **one** camera, bench ambient            | 2026-07-27 |
+| Shadow ride disk rate       | **~3 MB/s** — 821 MB for 4.5 min; ~11 GB/hour                            | 2026-07-27 |
+| BPU                         | present, idle, 500–1000 MHz; `pyeasy_dnn` + `libsrcampy` OK              | 2026-07-25 |
+| Node.js                     | **v22.23.1** installed from NodeSource; npm 10.9.8                       | 2026-07-25 |
+| First live session          | **works** — 656 KB mic PCM up, 3 device.result round trips               | 2026-07-25 |
+| pytest                      | 6.2.5 on the board; the suite runs there — no local pytest or numpy      | 2026-07-25 |
+| BPU detector                | **yolov5s validated** — anchors checked against `bus.jpg`                | 2026-07-26 |
+| ADAS latency                | **52.4 ms** per frame p50 (19.1 fps single stream)                       | 2026-07-26 |
+| ADAS sustained              | **11.4 fps per camera**, 2 streams, voice live, no throttling            | 2026-07-26 |
+| Thermal under ADAS load     | 78.6 °C → **plateau ~90 °C** over 10 min; bench ambient only             | 2026-07-26 |
 
 ### AEC — the sweep said "gate passed". A live conversation said otherwise.
 
@@ -159,8 +159,8 @@ brings noise suppression and AGC, which a helmet at speed wants regardless.
 "开始录像。" — and sends it as a transcript marked `useBrowserSpeech`. Web and
 mobile speak that themselves. **The board has no `transcript` case and drops
 it**, so until 2026-07-28 the one client with no screen was the only one that
-never heard the line whose stated purpose is that *"the rider hears the truth
-instead of the model's chatter"*.
+never heard the line whose stated purpose is that _"the rider hears the truth
+instead of the model's chatter"_.
 
 Observed 2026-07-27: asked for a photo, Max delivered an invented countdown
 ("3、2、1。照片已拍下") for what is a single frame grab, and never said 拍好了.
@@ -309,7 +309,7 @@ fix.** Cross-correlating the `--dump-prefix` capture (see below) over five
 consecutive windows of a real conversation gave 24.9 ms every time, peaks to
 0.80, no drift. Against that, the configured 80 ms is roughly 3× the truth. The
 board now runs `MAX_AEC_DELAY_MS=25`, and on the one run since, cancellation
-appeared in the *first* far-end interval (18.6 dB) instead of ramping for ~15 s
+appeared in the _first_ far-end interval (18.6 dB) instead of ramping for ~15 s
 (3.2 → 5.2 → 22.1 dB at 80 ms), and held a much tighter 13.9–21.6 dB.
 
 That is one run against an intermittent fault, so it is a promising measurement
@@ -468,10 +468,10 @@ tried host 0. On host 0 the same sensor model streams 1920×1080 at ~24 fps with
 a correctly exposed, in-focus image, and the kernel logs the full bring-up
 (`sensor_start ov5647 flow0 start done`, `vin mipi0: entry hs reception`).
 
-| Sensor | host 0    | host 2                            |
-| ------ | --------- | --------------------------------- |
+| Sensor | host 0     | host 2                            |
+| ------ | ---------- | --------------------------------- |
 | OV5647 | streams ✅ | `create_and_run_vflow ret -10` ❌ |
-| IMX219 | untested  | streams ✅                        |
+| IMX219 | untested   | streams ✅                        |
 
 Two of four cells are measured — too few to encode a support matrix in code,
 which is why `sensors.preflight()` reports rather than vetoes. The ruled-out
@@ -551,7 +551,7 @@ A second opener does not queue or fail clearly. It fails with:
 [ERROR] [mipi_cam]: [init]->cap capture init failture.
 ```
 
-which names *sensor detection* when the real cause is that `/dev/vs-isp0_*` is
+which names _sensor detection_ when the real cause is that `/dev/vs-isp0_*` is
 busy. i2c still answers, the chip ID still reads back, and `dmesg` shows nothing
 new — so every instinct sends you to the wrong layer. Check holders first:
 
@@ -925,11 +925,11 @@ The bench HUD at `http://<board>:8080/` shows a **captures** grid under the
 transcript, served by the sidecar on `MAX_VISION_PREVIEW_PORT` — the same reason
 preview lives there, that image bytes never pass through the agent.
 
-| Route | Returns |
-| ----- | ------- |
-| `GET /gallery` | every capture, newest first, with sizes |
-| `GET /gallery/<pair>/<file>` | the bytes; a `.mjpeg` downloads as an attachment |
-| `GET /gallery/<pair>/<file>/thumb` | the first frame of a recording |
+| Route                              | Returns                                          |
+| ---------------------------------- | ------------------------------------------------ |
+| `GET /gallery`                     | every capture, newest first, with sizes          |
+| `GET /gallery/<pair>/<file>`       | the bytes; a `.mjpeg` downloads as an attachment |
+| `GET /gallery/<pair>/<file>/thumb` | the first frame of a recording                   |
 
 It is **read-only**: nothing on that page deletes a capture, because it is
 unauthenticated and bound to `0.0.0.0`. Clear space with `rm` over SSH.
@@ -972,7 +972,7 @@ Segments are large — measured at ~3 MB/s (821 MB for 4.5 minutes), so roughly
 **Thermal: read this before arming or running a long ride.** A shadow ride on
 **one** camera plateaus at **~94 °C** at bench ambient — measured 93.8–94.7 °C
 over a minute, dropping to 87.7 °C within 20 s of the ride stopping. M1's
-two-camera ADAS figure was ~90 °C *without* a concurrent segment stream, so
+two-camera ADAS figure was ~90 °C _without_ a concurrent segment stream, so
 recording is what costs the extra headroom. Nobody has measured this in a
 fairing, in sun, on a moving bike; the remaining margin to throttling is thin
 enough that a second camera or a warm day should be measured, not assumed.

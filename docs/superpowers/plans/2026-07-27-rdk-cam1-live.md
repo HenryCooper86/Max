@@ -17,7 +17,7 @@
 - **Exactly one process may hold the camera.** A second opener fails with `The detected sensors are 1 less than expected`, which names sensor detection when the real cause is a busy device. Never open a camera outside max-vision while it is running.
 - **The sidecar takes no new third-party dependencies.** `cv2`, `numpy` and `rclpy` are already on the board. pytest is dev-only; nothing under `rdk/vision/` may import it at runtime.
 - **Board-only imports are lazy.** `cv2`, `numpy`, `rclpy` and `hobot_vio` are imported inside functions, never at module scope, so the unit suite runs without hardware. Existing code marks these `# noqa: PLC0415`.
-- **House style:** module docstrings explain *why* a thing exists, not what it does. Comments justify decisions that would otherwise look arbitrary. Tests use `sys.path.insert(0, str(Path(__file__).resolve().parents[1]))` and import modules directly.
+- **House style:** module docstrings explain _why_ a thing exists, not what it does. Comments justify decisions that would otherwise look arbitrary. Tests use `sys.path.insert(0, str(Path(__file__).resolve().parents[1]))` and import modules directly.
 - **Every task ends with a commit** on branch `docs/rdk-cam1-live` (already created; the spec is committed there).
 
 ---
@@ -27,9 +27,11 @@
 The spec flags one unverified assumption: `nv12` appears as an `out_format` string in `libmipi_cam_plugin.so`, but only `bgr8` has been run. Everything downstream assumes nv12 comes out of the node directly. Settle it before building on it.
 
 **Files:**
+
 - Modify: `rdk/README.md`
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces: a confirmed answer to "does `out_format:=nv12` work?", which decides whether `FrameBuffer` (Task 3) stores nv12 as delivered or converts from bgr8.
 
@@ -113,7 +115,7 @@ Expected: `(clear)`. This step is not optional — an orphan here silently break
 If `match=True`, add this row to the bench-findings table in `rdk/README.md` (the table starting `| Board  ` around line 57):
 
 ```markdown
-| `mipi_cam` nv12 output     | **works** — `out_format:=nv12`, 3110400 B/frame at 1920×1080         | 2026-07-27 |
+| `mipi_cam` nv12 output | **works** — `out_format:=nv12`, 3110400 B/frame at 1920×1080 | 2026-07-27 |
 ```
 
 If nv12 does **not** work, record that instead and note that `FrameBuffer` must convert from `bgr8` via `cv2.cvtColor(..., cv2.COLOR_BGR2YUV_I420)` per frame — then flag the CPU cost to the user before continuing, because the board already plateaus near 90 °C under ADAS load.
@@ -134,7 +136,7 @@ a correctly exposed, in-focus image, and the kernel logs the full bring-up
 
 | Sensor | host 0     | host 2                            |
 | ------ | ---------- | --------------------------------- |
-| OV5647 | streams ✅  | `create_and_run_vflow ret -10` ❌ |
+| OV5647 | streams ✅ | `create_and_run_vflow ret -10` ❌ |
 | IMX219 | untested   | streams ✅                        |
 
 Two of four cells are measured — too few to encode a support matrix in code,
@@ -150,8 +152,8 @@ Keep the existing "Ruled out, each by measurement" block that follows — it is 
 In the bench-findings table, replace the two camera port rows:
 
 ```markdown
-| Camera front port index    | **MIPI channel 0** (`vcon@0`/`vcon@1`, i2c bus 6) — the CAM1 connector | 2026-07-27 |
-| Camera rear port index     | **MIPI channel 2** (`vcon@2`/`vcon@3`, i2c bus 4) — separate bus       | 2026-07-27 |
+| Camera front port index | **MIPI channel 0** (`vcon@0`/`vcon@1`, i2c bus 6) — the CAM1 connector | 2026-07-27 |
+| Camera rear port index | **MIPI channel 2** (`vcon@2`/`vcon@3`, i2c bus 4) — separate bus | 2026-07-27 |
 ```
 
 And replace the connector table (the one with `| Connector | VCON | i2c bus | mipi channel |`) with:
@@ -195,10 +197,12 @@ git commit -m "docs(rdk): OV5647 works on host 0; correct the port map"
 `sensors.py` currently vetoes anything that is not an IMX219, which would reject the working camera in CAM1. Replace the veto with discovery.
 
 **Files:**
+
 - Modify: `rdk/vision/sensors.py`
 - Test: `rdk/vision/tests/test_sensors.py`
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces: `BUS_CHANNEL: dict[int, int]`; `discover(scan=scan_bus) -> dict[int, str]` mapping MIPI channel to the `video_device` name `mipi_cam` expects (`"OV5647"`, `"IMX219"`); `preflight(scan=scan_bus) -> None` raising `UnsupportedSensor` only when nothing is attached. `SUPPORTED_ADDRS` is **removed**.
 
@@ -342,10 +346,12 @@ git commit -m "feat(vision): discover camera sensors per bus; preflight reports"
 The unit-testable core of camera ownership, split from the ROS plumbing so it can be tested without hardware.
 
 **Files:**
+
 - Create: `rdk/vision/mipi_camera.py`
 - Test: `rdk/vision/tests/test_mipi_camera.py`
 
 **Interfaces:**
+
 - Consumes: `Frame` from `perception.frame_source`.
 - Produces: `FrameBuffer(camera: str, width: int, height: int, encode=None)` with `put(nv12: bytes, t_ms: int) -> None`, `latest() -> Frame | None`, `jpeg() -> bytes | None`. The `encode` argument is `Callable[[bytes, int, int], bytes | None]` taking `(nv12, width, height)`.
 
@@ -528,14 +534,16 @@ git commit -m "feat(vision): add FrameBuffer, one latest frame with a lazy JPEG"
 ### Task 4: `MipiCamera` — process ownership, orphan reaping, `frames()`
 
 **Files:**
+
 - Modify: `rdk/vision/mipi_camera.py`
 - Test: `rdk/vision/tests/test_mipi_camera.py`
 
 **Interfaces:**
+
 - Consumes: `FrameBuffer` (Task 3).
 - Produces: `reap_orphans(holders=_isp_holders, kill=os.kill, sleep=time.sleep) -> list[int]`; `_signal_group(proc, sig, killpg=os.killpg, getpgid=os.getpgid) -> None`; `MipiCamera(channel: int, sensor: str, camera: str, width: int = 1920, height: int = 1080)` with `start(settle_seconds: float = 8.0) -> None`, `stop() -> None`, `latest() -> Frame | None`, `jpeg() -> bytes | None`, `frames(fps: float = 10.0) -> Iterator[Frame]`. `MipiCamera.buffer` is the `FrameBuffer`.
 
-**Measured 2026-07-27, and load-bearing:** `ros2 run` is a *wrapper* — it execs the real `mipi_cam` binary as a child. `proc.terminate()` kills the wrapper and leaves the node alive, reparented to init (PPID 1), still holding `/dev/vs-isp0_*`, and invisible to `proc.wait()`. So the child is started with `start_new_session=True` and the whole **process group** is signalled. The pre-existing `recorder/mipi_source.py` has this bug; Task 7 retires it.
+**Measured 2026-07-27, and load-bearing:** `ros2 run` is a _wrapper_ — it execs the real `mipi_cam` binary as a child. `proc.terminate()` kills the wrapper and leaves the node alive, reparented to init (PPID 1), still holding `/dev/vs-isp0_*`, and invisible to `proc.wait()`. So the child is started with `start_new_session=True` and the whole **process group** is signalled. The pre-existing `recorder/mipi_source.py` has this bug; Task 7 retires it.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -835,10 +843,12 @@ git commit -m "feat(vision): MipiCamera owns the process, reaps orphans, yields 
 `camera.py` opens through the dead binding and hardcodes IMX219. Replace both, and make `camera.record` actually write a file — today it names `front.h264` in a manifest that nothing ever creates.
 
 **Files:**
+
 - Modify: `rdk/vision/camera.py`
 - Test: `rdk/vision/tests/test_camera_policy.py`
 
 **Interfaces:**
+
 - Consumes: `MipiCamera` (Task 4), `discover` (Task 2), `Gallery` (unchanged).
 - Produces: `CameraPair(front_channel: int, rear_channel: int)` with `open()`, `capture_photo(gallery)`, `start_recording(gallery)`, `stop_recording(gallery)`, `serve_preview(port)` — the RPC-facing contract is unchanged. `CameraPair.front` / `.rear` are `MipiCamera | None`.
 
@@ -1076,10 +1086,12 @@ git commit -m "feat(vision): open cameras via mipi_cam; record real .mjpeg segme
 ### Task 6: Wire the service to channels
 
 **Files:**
+
 - Modify: `rdk/vision/service.py`
 - Modify: `rdk/README.md`
 
 **Interfaces:**
+
 - Consumes: `CameraPair(front_channel=..., rear_channel=...)` (Task 5).
 - Produces: `RDK_CAMERA_FRONT` / `RDK_CAMERA_REAR` as MIPI channels defaulting to `0` and `2`.
 
@@ -1147,6 +1159,7 @@ git commit -m "feat(vision): configure cameras by MIPI channel, defaulting 0 and
 `recorder/mipi_source.py` is a second implementation of the same ownership. `CameraSlot.vcon` holds a channel — exactly the conflation this work exists to end.
 
 **Files:**
+
 - Modify: `rdk/vision/recorder/mipi_source.py`
 - Modify: `rdk/vision/recorder/session.py:22-24`
 - Modify: `rdk/vision/tools/record_ride.py`
@@ -1154,6 +1167,7 @@ git commit -m "feat(vision): configure cameras by MIPI channel, defaulting 0 and
 - Test: `rdk/vision/tests/test_session.py:41`
 
 **Interfaces:**
+
 - Consumes: `MipiCamera` (Task 4), `discover` (Task 2).
 - Produces: `CameraSlot(name: str, channel: int)`; `MipiCamSource` is removed and `write_jpeg(camera: MipiCamera, out_path: Path) -> None` stays, now taking a `MipiCamera`.
 
@@ -1304,9 +1318,11 @@ git commit -m "refactor(vision): one camera owner; slots carry channels, not VCO
 Unit tests cannot prove any of this. The deliverable is a camera that works.
 
 **Files:**
+
 - Modify: `rdk/README.md`
 
 **Interfaces:**
+
 - Consumes: everything above.
 - Produces: recorded evidence in the bench-findings table.
 
@@ -1374,8 +1390,8 @@ Expected: the shadow-mode runtime logging progress rather than a `RecordingRequi
 Add to the bench-findings table in `rdk/README.md`, with real measured values rather than the placeholders below:
 
 ```markdown
-| CAM1 live capture          | **works** — OV5647 ch 0, photo + preview + .mjpeg via max-vision      | 2026-07-27 |
-| max-vision restart         | **reacquires** — two consecutive restarts, orphan reaped each time    | 2026-07-27 |
+| CAM1 live capture | **works** — OV5647 ch 0, photo + preview + .mjpeg via max-vision | 2026-07-27 |
+| max-vision restart | **reacquires** — two consecutive restarts, orphan reaped each time | 2026-07-27 |
 ```
 
 - [ ] **Step 9: Run the full suite, and confirm offline parity**

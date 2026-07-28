@@ -18,7 +18,7 @@
 - **`MAX_ADAS_SHADOW` defaults to `0`.** Only the exact string `1` enables it, matching how `MAX_RELAY_INSECURE_TLS` is read. Nothing changes for an existing board until opted in.
 - **Exactly one process may hold the camera.** `RideSession` receives cameras that `CameraPair.open()` already opened; it must never open one itself.
 - **Board-only imports are lazy** — `hobot_dnn`, `cv2`, `numpy`, `rclpy` inside functions, marked `# noqa: PLC0415`, so the unit suite runs without hardware.
-- **House style:** module docstrings explain *why*. Tests use `sys.path.insert(0, str(Path(__file__).resolve().parents[1]))` and import modules directly.
+- **House style:** module docstrings explain _why_. Tests use `sys.path.insert(0, str(Path(__file__).resolve().parents[1]))` and import modules directly.
 - Work on branch `feat/adas-in-the-sidecar` (already created; the spec is committed there).
 
 ---
@@ -28,11 +28,13 @@
 Nothing can report a hazard today, ADAS or not: `ControlHandler` only answers the connection that asked. This task is independently useful and lands first.
 
 **Files:**
+
 - Create: `rdk/vision/events.py`
 - Modify: `rdk/vision/service.py`
 - Test: `rdk/vision/tests/test_events.py`
 
 **Interfaces:**
+
 - Consumes: `encode_event(name, **fields) -> str` from `rpc`.
 - Produces: `EventBus()` with `register(write: Callable[[str], None]) -> None`, `unregister(write) -> None`, `broadcast(payload: dict) -> int` returning the number of clients delivered to. `payload` must carry an `"event"` key.
 
@@ -252,10 +254,12 @@ git commit -m "feat(vision): add the event bus the control socket always promise
 ### Task 2: `RebasedSource` — ride-relative timestamps, bounded lifetime
 
 **Files:**
+
 - Create: `rdk/vision/adas/rebase.py`
 - Test: `rdk/vision/tests/test_rebase.py`
 
 **Interfaces:**
+
 - Consumes: `Frame` from `perception.frame_source`.
 - Produces: `RebasedSource(source, stop: threading.Event | None = None)` with `frames() -> Iterator[Frame]`, satisfying the `FrameSource` protocol.
 
@@ -399,10 +403,12 @@ git commit -m "feat(adas): rebase live frame stamps to ride start"
 ### Task 3: `RideSession` — recording and ADAS as one unit
 
 **Files:**
+
 - Create: `rdk/vision/ride.py`
 - Test: `rdk/vision/tests/test_ride.py`
 
 **Interfaces:**
+
 - Consumes: `RideRecorder`, `CameraSlot` from `recorder.session`; `write_jpeg` from `recorder.mipi_source`; `SEGMENT_SECONDS` from `recorder.segmenter`; `RuntimeConfig` from `adas.runtime`; `RebasedSource` from `adas.rebase` (Task 2); `start_adas` from `service`.
 - Produces: `SEGMENT_PATTERN = "{camera}/seg-{index:06d}.mjpeg"`; `RideSession(cameras: dict[str, object], corpus_dir, min_free_mb: int, broadcast, detect_factory=None, fps: float = 10.0, free_mb=None)` with `start() -> str | None` and `stop() -> None`. After a successful `start()`: `ride_id: str`, `shadow_paths: dict[str, Path]` keyed by camera name, and `adas_threads: list[Thread]`.
 
@@ -805,10 +811,12 @@ git commit -m "feat(adas): a ride starts recording and the shadow runtime togeth
 ### Task 4: Wire the ride into the service
 
 **Files:**
+
 - Modify: `rdk/vision/service.py`
 - Modify: `rdk/README.md`
 
 **Interfaces:**
+
 - Consumes: `RideSession` (Task 3), `EventBus` (Task 1).
 - Produces: `MAX_ADAS_SHADOW`, `MAX_CORPUS_DIR` environment variables.
 
@@ -918,6 +926,7 @@ git commit -m "feat(vision): start a shadow ride when MAX_ADAS_SHADOW=1"
 Unit tests prove the wiring; only the board proves the BPU, the frame rate and the thermals.
 
 **Files:**
+
 - Modify: `rdk/README.md`
 
 - [ ] **Step 1: Enable shadow mode and restart**
@@ -1016,9 +1025,9 @@ Leaving it on would fill the disk unattended. Delete the test rides once their n
 Add to the bench-findings table in `rdk/README.md`, with the real measured values:
 
 ```markdown
-| ADAS shadow ride           | **works** — segments + shadow log + hazard on the socket             | 2026-07-27 |
-| Thermal under shadow ride  | **NN.N °C** plateau over 60 s, one camera, shadow ADAS + segments    | 2026-07-27 |
-| Shadow ride frame rate     | **N.N fps** measured (frames in the first segment / segment seconds) | 2026-07-27 |
+| ADAS shadow ride | **works** — segments + shadow log + hazard on the socket | 2026-07-27 |
+| Thermal under shadow ride | **NN.N °C** plateau over 60 s, one camera, shadow ADAS + segments | 2026-07-27 |
+| Shadow ride frame rate | **N.N fps** measured (frames in the first segment / segment seconds) | 2026-07-27 |
 ```
 
 Put the numbers Step 5 actually printed in place of `NN.N` and `N.N`. A row

@@ -18,7 +18,7 @@
 - **No new Python dependencies.** `http.server`, `json`, `mimetypes`, `pathlib` are all stdlib and all already on the board.
 - **The server binds `0.0.0.0` and the sidecar runs as root.** Every path served must resolve inside the gallery root. This is the one requirement in this plan that is a security boundary rather than a nicety.
 - **Read-only.** No route may delete, move or write anything.
-- **House style:** module docstrings explain *why*. Tests use `sys.path.insert(0, str(Path(__file__).resolve().parents[1]))` and import modules directly.
+- **House style:** module docstrings explain _why_. Tests use `sys.path.insert(0, str(Path(__file__).resolve().parents[1]))` and import modules directly.
 - Work on branch `feat/hud-gallery` (already created; the spec is committed there).
 
 ### A correction to the spec
@@ -40,12 +40,14 @@ reworked rather than accommodated.
 Pure extraction. No behaviour changes, so the existing preview tests are the proof.
 
 **Files:**
+
 - Create: `rdk/vision/bench_server.py`
 - Modify: `rdk/vision/camera.py` (remove `serve_preview`)
 - Modify: `rdk/vision/service.py`
 - Test: `rdk/vision/tests/test_preview.py` (call site only)
 
 **Interfaces:**
+
 - Consumes: `CameraPair` (`.front`, `.rear`, `._grab`), `Gallery`.
 - Produces: `serve(pair, gallery, port) -> None`, which blocks forever.
 
@@ -203,10 +205,12 @@ git commit -m "refactor(vision): move the bench HTTP surface out of camera.py"
 ### Task 2: The capture listing
 
 **Files:**
+
 - Modify: `rdk/vision/bench_server.py`
 - Test: `rdk/vision/tests/test_bench_gallery.py`
 
 **Interfaces:**
+
 - Consumes: `Gallery.list_pairs()`, `Gallery.pair_dir(pair_id)`.
 - Produces: `listing(gallery) -> dict` returning `{"pairs": [...]}`, each entry being the manifest plus `"sizes": {"front": int | None, "rear": int | None}`. Route `GET /gallery` returns it as JSON with `Access-Control-Allow-Origin: *`.
 
@@ -383,10 +387,12 @@ git commit -m "feat(vision): serve the capture listing from the bench server"
 ### Task 3: Serving capture files, safely
 
 **Files:**
+
 - Modify: `rdk/vision/bench_server.py`
 - Test: `rdk/vision/tests/test_bench_gallery.py`
 
 **Interfaces:**
+
 - Produces: `safe_path(root: Path, relative: str) -> Path | None` — resolved and inside `root`, else `None`; `first_frame(data: bytes) -> bytes | None` — the first JPEG of a concatenated-JPEG segment. Routes `GET /gallery/<pair>/<file>` and `GET /gallery/<pair>/<file>/thumb`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -637,9 +643,11 @@ git commit -m "feat(vision): serve capture files, refusing any path outside the 
 ### Task 4: The captures grid in the HUD
 
 **Files:**
+
 - Modify: `rdk/agent/src/hud/index.html`
 
 **Interfaces:**
+
 - Consumes: `GET /gallery` and `GET /gallery/<pair>/<file>[/thumb]` on `__PREVIEW_PORT__`.
 
 - [ ] **Step 1: Add the section markup**
@@ -659,36 +667,36 @@ In `rdk/agent/src/hud/index.html`, after the transcript card:
 Inside the existing `<style>` block:
 
 ```css
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-    gap: 12px;
-  }
-  .tile {
-    border: 1px solid #21262d;
-    border-radius: 6px;
-    overflow: hidden;
-    background: #0b0d10;
-  }
-  .tile img {
-    display: block;
-    aspect-ratio: 16 / 9;
-    object-fit: cover;
-  }
-  .tile .meta {
-    padding: 6px 8px;
-    font-size: 12px;
-    color: #7d8590;
-  }
-  .muted {
-    color: #7d8590;
-  }
-  .missing {
-    padding: 24px 8px;
-    text-align: center;
-    color: #f85149;
-    font-size: 12px;
-  }
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+.tile {
+  border: 1px solid #21262d;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #0b0d10;
+}
+.tile img {
+  display: block;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+}
+.tile .meta {
+  padding: 6px 8px;
+  font-size: 12px;
+  color: #7d8590;
+}
+.muted {
+  color: #7d8590;
+}
+.missing {
+  padding: 24px 8px;
+  text-align: center;
+  color: #f85149;
+  font-size: 12px;
+}
 ```
 
 - [ ] **Step 3: Add the polling and rendering**
@@ -696,53 +704,53 @@ Inside the existing `<style>` block:
 Append inside the existing `<script>` block:
 
 ```js
-  const galleryBase = `http://${host}:__PREVIEW_PORT__`;
-  const capturesEl = document.getElementById("captures");
-  const statusEl = document.getElementById("captures-status");
-  let lastSerialised = null;
+const galleryBase = `http://${host}:__PREVIEW_PORT__`;
+const capturesEl = document.getElementById("captures");
+const statusEl = document.getElementById("captures-status");
+let lastSerialised = null;
 
-  function tile(pair) {
-    const side = pair.front ? "front" : "rear";
-    const name = pair[side];
-    const bytes = pair.sizes ? pair.sizes[side] : null;
-    const href = `${galleryBase}/gallery/${pair.id}/${name}`;
-    // A recording is concatenated JPEG: show frame one, link the file.
-    const isVideo = pair.kind === "video";
-    const src = isVideo ? `${href}/thumb` : href;
-    const label = isVideo ? "video" : "photo";
-    const size = bytes === null ? "missing" : `${Math.round(bytes / 1024)} KB`;
+function tile(pair) {
+  const side = pair.front ? "front" : "rear";
+  const name = pair[side];
+  const bytes = pair.sizes ? pair.sizes[side] : null;
+  const href = `${galleryBase}/gallery/${pair.id}/${name}`;
+  // A recording is concatenated JPEG: show frame one, link the file.
+  const isVideo = pair.kind === "video";
+  const src = isVideo ? `${href}/thumb` : href;
+  const label = isVideo ? "video" : "photo";
+  const size = bytes === null ? "missing" : `${Math.round(bytes / 1024)} KB`;
 
-    if (bytes === null) {
-      return `<div class="tile"><div class="missing">file missing</div>
+  if (bytes === null) {
+    return `<div class="tile"><div class="missing">file missing</div>
         <div class="meta">${pair.id}<br />${label} · ${size}</div></div>`;
-    }
-    return `<div class="tile"><a href="${href}" target="_blank">
+  }
+  return `<div class="tile"><a href="${href}" target="_blank">
       <img src="${src}" alt="${pair.id}" /></a>
       <div class="meta">${pair.id}<br />${label} · ${size}${pair.degraded ? " · degraded" : ""}</div></div>`;
+}
+
+async function refreshCaptures() {
+  let payload;
+  try {
+    const response = await fetch(`${galleryBase}/gallery`, { cache: "no-store" });
+    payload = await response.json();
+  } catch {
+    // "Cannot reach the sidecar" and "nothing captured yet" must never look
+    // the same. A blank panel that meant both cost an afternoon once.
+    statusEl.textContent = "sidecar unreachable";
+    return;
   }
 
-  async function refreshCaptures() {
-    let payload;
-    try {
-      const response = await fetch(`${galleryBase}/gallery`, { cache: "no-store" });
-      payload = await response.json();
-    } catch {
-      // "Cannot reach the sidecar" and "nothing captured yet" must never look
-      // the same. A blank panel that meant both cost an afternoon once.
-      statusEl.textContent = "sidecar unreachable";
-      return;
-    }
+  const serialised = JSON.stringify(payload.pairs);
+  if (serialised === lastSerialised) return;
+  lastSerialised = serialised;
 
-    const serialised = JSON.stringify(payload.pairs);
-    if (serialised === lastSerialised) return;
-    lastSerialised = serialised;
+  statusEl.textContent = payload.pairs.length ? "" : "no captures yet";
+  capturesEl.innerHTML = payload.pairs.map(tile).join("");
+}
 
-    statusEl.textContent = payload.pairs.length ? "" : "no captures yet";
-    capturesEl.innerHTML = payload.pairs.map(tile).join("");
-  }
-
-  refreshCaptures();
-  setInterval(refreshCaptures, 3000);
+refreshCaptures();
+setInterval(refreshCaptures, 3000);
 ```
 
 - [ ] **Step 4: Deploy the page and look at it**
@@ -765,6 +773,7 @@ git commit -m "feat(hud): show the captures grid"
 ### Task 5: Verify end to end on the board
 
 **Files:**
+
 - Modify: `rdk/README.md`
 
 - [ ] **Step 1: Confirm the listing over the network**
@@ -836,11 +845,11 @@ The bench HUD at `http://<board>:8080/` shows a **captures** grid under the
 transcript, served by the sidecar on `MAX_VISION_PREVIEW_PORT` — the same reason
 preview lives there, that image bytes never pass through the agent.
 
-| Route | Returns |
-| ----- | ------- |
-| `GET /gallery` | every capture, newest first, with sizes |
-| `GET /gallery/<pair>/<file>` | the bytes; a `.mjpeg` downloads as an attachment |
-| `GET /gallery/<pair>/<file>/thumb` | the first frame of a recording |
+| Route                              | Returns                                          |
+| ---------------------------------- | ------------------------------------------------ |
+| `GET /gallery`                     | every capture, newest first, with sizes          |
+| `GET /gallery/<pair>/<file>`       | the bytes; a `.mjpeg` downloads as an attachment |
+| `GET /gallery/<pair>/<file>/thumb` | the first frame of a recording                   |
 
 It is **read-only**: nothing on that page deletes a capture, because it is
 unauthenticated and bound to `0.0.0.0`. Clear space with `rm` over SSH.

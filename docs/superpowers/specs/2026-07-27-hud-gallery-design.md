@@ -18,9 +18,9 @@ made captures real.
 
 The sidecar, on the preview port — not the agent.
 
-That is not arbitrary. `camera.py` states the rule: the preview is *"deliberately
+That is not arbitrary. `camera.py` states the rule: the preview is _"deliberately
 served over HTTP rather than the control socket, so image bytes never pass
-through the agent."* A gallery is more image bytes. Routing them through the
+through the agent."_ A gallery is more image bytes. Routing them through the
 agent would put megabytes of JPEG through the process that must never be
 disturbed, because it owns the voice path.
 
@@ -31,7 +31,7 @@ The agent keeps serving exactly one thing: the page.
 
 ## Architecture
 
-`camera.py` has become a camera *and* an HTTP server, and this change would add
+`camera.py` has become a camera _and_ an HTTP server, and this change would add
 three more routes to it. The HTTP surface moves to its own module.
 
 ```text
@@ -57,12 +57,12 @@ see.
 
 ### Routes
 
-| Route | Returns |
-| ----- | ------- |
-| `GET /preview/front` \| `/preview/rear` | MJPEG stream; `503` when that camera is absent |
-| `GET /gallery` | JSON, newest first, from `list_pairs()`, with file sizes |
-| `GET /gallery/<pair>/<file>` | the bytes, with a correct content type |
-| `GET /gallery/<pair>/<file>/thumb` | for a `.mjpeg`, the first JPEG only |
+| Route                                   | Returns                                                  |
+| --------------------------------------- | -------------------------------------------------------- |
+| `GET /preview/front` \| `/preview/rear` | MJPEG stream; `503` when that camera is absent           |
+| `GET /gallery`                          | JSON, newest first, from `list_pairs()`, with file sizes |
+| `GET /gallery/<pair>/<file>`            | the bytes, with a correct content type                   |
+| `GET /gallery/<pair>/<file>/thumb`      | for a `.mjpeg`, the first JPEG only                      |
 
 Preview behaviour is carried over unchanged, including the threading and the
 `503`, both of which exist for reasons measured today.
@@ -106,12 +106,12 @@ on each poll and flicker the whole grid.
 
 ## Error handling
 
-| Case | Behaviour |
-| ---- | --------- |
-| Sidecar unreachable | The section says so |
-| No captures yet | The section says *that*, distinctly |
-| Manifest names a missing file | That tile is marked missing |
-| Unknown pair or escaped path | `404` |
+| Case                          | Behaviour                           |
+| ----------------------------- | ----------------------------------- |
+| Sidecar unreachable           | The section says so                 |
+| No captures yet               | The section says _that_, distinctly |
+| Manifest names a missing file | That tile is marked missing         |
+| Unknown pair or escaped path  | `404`                               |
 
 The first two rows are the point. Today a blank panel meant "the server is
 wedged" and looked exactly like "there is nothing to show" — that ambiguity cost

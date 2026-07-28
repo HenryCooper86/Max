@@ -26,12 +26,12 @@ hotspot address `172.20.10.6` is also dead. Neither responds.
 **CAM1 is i2c bus 6 — `vcon@0` / `vcon@1`.** Read from the device tree at
 `/sys/firmware/devicetree/base/soc/cam/vcon@N`:
 
-| vcon      | i2c bus | MIPI host (`rx_phy`) |
-| --------- | ------- | -------------------- |
-| `vcon@0`  | 6       | 0                    |
-| `vcon@1`  | 6       | 1                    |
-| `vcon@2`  | 4       | 2                    |
-| `vcon@3`  | 4       | 3                    |
+| vcon     | i2c bus | MIPI host (`rx_phy`) |
+| -------- | ------- | -------------------- |
+| `vcon@0` | 6       | 0                    |
+| `vcon@1` | 6       | 1                    |
+| `vcon@2` | 4       | 2                    |
+| `vcon@3` | 4       | 3                    |
 
 **Only hosts 0 and 2 exist.** `mipi_cam` prints `this board support mipi: host
 0, host 2` at startup. So each connector carries exactly one usable camera:
@@ -68,17 +68,17 @@ dictates the architecture below, and it will be the most likely field failure.
 ## What this overturns
 
 **`rdk/README.md` says "OV5647 is unsupported — decided, not pending". That is
-wrong.** The verdict rests on an A/B the README itself scopes as *"Measured on
-the same port"* — **MIPI host 2**. Nobody tried host 0. On host 0 the same
+wrong.** The verdict rests on an A/B the README itself scopes as _"Measured on
+the same port"_ — **MIPI host 2**. Nobody tried host 0. On host 0 the same
 sensor model streams cleanly. The variable is the port, not the sensor.
 
 The ruled-out list in that section stays valid and stays useful; what changes is
 the conclusion drawn from it. The honest statement is now:
 
-| Sensor | host 0    | host 2               |
-| ------ | --------- | -------------------- |
+| Sensor | host 0     | host 2                            |
+| ------ | ---------- | --------------------------------- |
 | OV5647 | streams ✅ | `create_and_run_vflow ret -10` ❌ |
-| IMX219 | untested  | streams ✅            |
+| IMX219 | untested   | streams ✅                        |
 
 Two of four cells are measured. That is not enough to encode a support matrix
 in code, which is why discovery below reports rather than vetoes.
@@ -97,7 +97,7 @@ it. Acting on that is separate work; this spec only clears the path.
 - `service.py` — defaults `RDK_CAMERA_FRONT=0`, `RDK_CAMERA_REAR=1`: the same
   connector twice, and host 1 does not exist.
 - `camera_binding.py` and `tools/record_ride.py` docstrings — "vcon@0 has no
-  connector", "VCON 0/1 have no connector on this board". `vcon@0` *is* CAM1.
+  connector", "VCON 0/1 have no connector on this board". `vcon@0` _is_ CAM1.
 - `README.md` bench table — front/rear port index rows, and the connector table
   offering channels 1 and 3.
 
@@ -130,7 +130,7 @@ rdk/vision/
   protocol; this is what ADAS consumes
 
 That third one matters more than it looks. ADAS reaches frames through the
-*same* seam as `FileSource`, so offline-replay parity stays a property of the
+_same_ seam as `FileSource`, so offline-replay parity stays a property of the
 structure rather than something maintained by discipline — which is exactly the
 argument `perception/frame_source.py` already makes for itself.
 

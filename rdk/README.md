@@ -72,6 +72,7 @@ Verified over SSH against the real board on 2026-07-25.
 | Echo loop                  | **fixed** — confirmed live, headset on, Max replies once and stops  | 2026-07-26 |
 | Barge-in                   | **works** — confirmed live, talking over Max cuts his reply         | 2026-07-26 |
 | Live Doubao session        | **works** — Max speaks, 1.69 MB voice audio down                    | 2026-07-25 |
+| Helmet speaks confirmations | **built, NOT yet heard** — relay has no `DOUBAO_TTS_*` credentials  | 2026-07-28 |
 | Full duplex                | **works** — simultaneous `arecord` + `aplay`, no device contention  | 2026-07-25 |
 | Camera front port index    | **MIPI channel 0** (`vcon@0`/`@1`, i2c bus 6) — the CAM1 connector   | 2026-07-27 |
 | Camera rear port index     | **MIPI channel 2** (`vcon@2`/`@3`, i2c bus 4) — the other connector  | 2026-07-27 |
@@ -151,6 +152,39 @@ desktop login.
 far-end reference — `playback.write()` receives every PCM frame Doubao sends —
 so it needs no monitor source, no virtual sink and no user session, and it also
 brings noise suppression and AGC, which a helmet at speed wants regardless.
+
+### Why the helmet could not speak generated text
+
+`deviceSuccessSpeech` produces the deterministic confirmation — "拍好了。",
+"开始录像。" — and sends it as a transcript marked `useBrowserSpeech`. Web and
+mobile speak that themselves. **The board has no `transcript` case and drops
+it**, so until 2026-07-28 the one client with no screen was the only one that
+never heard the line whose stated purpose is that *"the rider hears the truth
+instead of the model's chatter"*.
+
+Observed 2026-07-27: asked for a photo, Max delivered an invented countdown
+("3、2、1。照片已拍下") for what is a single frame grab, and never said 拍好了.
+
+The relay now synthesises those lines through Doubao's HTTP TTS
+(`DOUBAO_TTS_APPID` / `DOUBAO_TTS_TOKEN`, the same pair `render_alerts.py` uses)
+and sends 24 kHz mono PCM16 down the binary channel the board already plays.
+**The board was not changed** — `relay.ts` already treats any binary frame as
+voice. Audio goes only to `platform === "embedded"`; the other clients would
+otherwise say every confirmation twice.
+
+Pacing stays on the board: `playback.ts` caps the queue at 80 ms, the fix that
+took the reference-to-mic lag from 953 ms to 81 ms. The relay sends the buffer
+and that cap meters it, exactly as it meters Doubao's own voice.
+
+**Not yet verified live.** The Lightsail relay has no `DOUBAO_TTS_*` variables
+(`grep -c` over its `.env` returns 0), and without them `createSynthesizer`
+returns null on every call by design — so the helmet stays as silent as before
+and the feature is inert. Add both to `/home/ubuntu/app/.env` on the relay (the
+server `.env` is protected and never overwritten by a deploy), redeploy, then
+check two things: that "拍好了" is actually heard, and that several turns of
+normal conversation do **not** bring back the echo loop. That second one is the
+regression that matters — this injects audio into the playback path feeding the
+AEC reference.
 
 ### In-process AEC — built and confirmed live, 2026-07-26
 

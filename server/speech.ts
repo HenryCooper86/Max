@@ -91,3 +91,43 @@ export function createSynthesizer(options: SynthesizerOptions): (text: string) =
     }
   };
 }
+
+export type SpeakerOptions = {
+  synthesize: (text: string) => Promise<Buffer | null>;
+  sendAudio: (pcm: Buffer) => void;
+  /** The session's client platform. See server/hazard-injector.ts for the same gate. */
+  platform: () => string | undefined;
+  onError?: (error: unknown) => void;
+};
+
+/**
+ * Speaks generated text on clients that cannot speak it themselves.
+ *
+ * Only "embedded": web and mobile already say `useBrowserSpeech` transcripts
+ * with their own TTS, so audio as well would double every confirmation.
+ *
+ * No pacing here. The board's playback caps how far ahead of the DAC audio may
+ * sit (MAX_QUEUE_MS = 80, topped up by a 10 ms pump) — the fix that took the
+ * reference-to-mic lag from 953 ms to 81 ms. Whatever we hand over is metered
+ * by the same mechanism that meters Doubao's own voice.
+ */
+export function createSpeaker(options: SpeakerOptions): { speak(text: string): Promise<void> } {
+  const { synthesize, sendAudio, platform, onError } = options;
+
+  return {
+    async speak(text: string): Promise<void> {
+      if (!text.trim()) return;
+      if (platform() !== "embedded") return;
+
+      try {
+        const pcm = await synthesize(text);
+        if (!pcm) return;
+        sendAudio(pcm);
+      } catch (error) {
+        // Silence is the documented degradation. Throwing here would take out
+        // the reconciliation that tells the rider the truth.
+        onError?.(error);
+      }
+    }
+  };
+}

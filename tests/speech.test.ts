@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createSynthesizer } from "../server/speech";
+import { createSpeaker, createSynthesizer } from "../server/speech";
 
 function okResponse(pcm: string) {
   return {
@@ -108,5 +108,84 @@ describe("createSynthesizer", () => {
     });
     expect(await synthesize("拍好了。")).toBeNull();
     expect((await synthesize("拍好了。"))?.toString("utf8")).toBe("audio-bytes");
+  });
+});
+
+function speaker(overrides: Partial<Parameters<typeof createSpeaker>[0]> = {}) {
+  const sent: Buffer[] = [];
+  const made = createSpeaker({
+    synthesize: async () => Buffer.from("pcm"),
+    sendAudio: (pcm) => sent.push(pcm),
+    platform: () => "embedded",
+    ...overrides
+  });
+  return { speak: made.speak, sent };
+}
+
+describe("createSpeaker", () => {
+  it("sends audio to an embedded client", async () => {
+    const { speak, sent } = speaker();
+    await speak("拍好了。");
+    expect(sent.map((b) => b.toString("utf8"))).toEqual(["pcm"]);
+  });
+
+  it("sends nothing to a web client", async () => {
+    // Web and mobile speak the transcript themselves via useBrowserSpeech.
+    // Sending audio too would say every confirmation twice.
+    const { speak, sent } = speaker({ platform: () => "web" });
+    await speak("拍好了。");
+    expect(sent).toEqual([]);
+  });
+
+  it("sends nothing when the platform is not yet known", async () => {
+    const { speak, sent } = speaker({ platform: () => undefined });
+    await speak("拍好了。");
+    expect(sent).toEqual([]);
+  });
+
+  it("does not synthesise at all for a web client", async () => {
+    // No point paying for audio nobody will play.
+    const synthesize = vi.fn(async () => Buffer.from("pcm"));
+    const { speak } = speaker({ platform: () => "web", synthesize });
+    await speak("拍好了。");
+    expect(synthesize).not.toHaveBeenCalled();
+  });
+
+  it("stays silent when synthesis fails", async () => {
+    const { speak, sent } = speaker({ synthesize: async () => null });
+    await speak("拍好了。");
+    expect(sent).toEqual([]);
+  });
+
+  it("never throws when synthesis rejects", async () => {
+    // This sits on the device-confirmation path. An exception here would take
+    // out the reconciliation that tells the rider the truth.
+    const errors: unknown[] = [];
+    const { speak, sent } = speaker({
+      synthesize: async () => {
+        throw new Error("boom");
+      },
+      onError: (error) => errors.push(error)
+    });
+    await expect(speak("拍好了。")).resolves.toBeUndefined();
+    expect(sent).toEqual([]);
+    expect(errors).toHaveLength(1);
+  });
+
+  it("never throws when the send fails", async () => {
+    const { speak } = speaker({
+      sendAudio: () => {
+        throw new Error("socket closed");
+      }
+    });
+    await expect(speak("拍好了。")).resolves.toBeUndefined();
+  });
+
+  it("ignores empty text", async () => {
+    const synthesize = vi.fn(async () => Buffer.from("pcm"));
+    const { speak, sent } = speaker({ synthesize });
+    await speak("   ");
+    expect(synthesize).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
   });
 });

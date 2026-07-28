@@ -148,7 +148,7 @@ HTTP 401 {"error":{"code":"AuthenticationError","message":"The API key doesn't e
 ```
 
 Three control calls from the same host rule out a request-shape mistake on our
-side, because each produces a *different* message: no `Authorization` header
+side, because each produces a _different_ message: no `Authorization` header
 at all yields `"the API key or AK/SK in the request is missing or invalid"`; an
 obviously-malformed key yields `"The API key format is incorrect"`; the real
 key as `Bearer <key>` yields `"The API key doesn't exist"`. Three distinct

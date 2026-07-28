@@ -59,11 +59,17 @@ and writes the PCM with `client.send(chunk, { binary: true })` — the same call
 `forwardTtsAudio` already makes for Doubao's own voice. Everything else is
 unchanged.
 
-**Chunked at the existing cadence, not written as one blob.** Playback pacing is
-load-bearing here: pacing is what took the reference-to-mic lag from 953 ms to
-81 ms, and that lag is what the AEC filter is aligned against. A single large
-write would arrive as one burst and there is no reason to find out what that
-does to the filter. Match the frame size Doubao's own audio arrives in.
+**No relay-side pacing is needed, and this was worth checking.** Pacing is what
+took the reference-to-mic lag from 953 ms to 81 ms, and that lag is what the AEC
+filter is aligned against — so a burst of injected audio looked like a real
+hazard. It is not: the pacing lives on the **board**. `playback.ts` caps how far
+ahead of the DAC audio may sit (`MAX_QUEUE_MS = 80`, topped up by a 10 ms pump),
+and that cap is the fix for the 953 ms measurement. Whatever the relay hands
+over is metered out by the same mechanism that already meters Doubao's voice.
+
+So `speak` sends the synthesised buffer with one `client.send`. An earlier draft
+of this spec called for chunking at the relay; that would have been ceremony
+around a guarantee the board already provides.
 
 ### One hook point
 

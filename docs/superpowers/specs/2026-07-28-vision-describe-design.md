@@ -55,8 +55,19 @@ outside a reconciliation.
 `camera.look` joins the `DeviceActionName` union in `server/device-actions.ts`,
 gets `{ supported: true }` in the board's `EMBEDDED_CAPABILITIES`, and gets a
 denied-case line in `reconcileDeviceResult` so a refusal is spoken rather than
-swallowed. Every other client already reports unsupported actions correctly, so
-no other platform needs a change for it.
+swallowed.
+
+**Correction (Task 5):** the claim above — "every other client already reports
+unsupported actions correctly" — turned out not to hold for this specific
+action. iOS has no `camera.look` case at all, and an action it does not
+recognize falls through to `.unhandled`, which never sends a `device.result`.
+That is not "reports unsupported"; it is silence — the rider would wait out
+the full `DEVICE_RESULT_TIMEOUT_MS` and then hear a generic timeout line
+instead of an ordinary spoken answer. Detection itself is therefore gated to
+an `"embedded"` session in `server/device-actions.ts`
+(`extractDeviceCommandForPlatform`), so a non-embedded rider's phrase falls
+through to normal conversation and the model just answers it, rather than a
+device command being dispatched to a client that cannot act on it.
 
 ## The frame
 
@@ -165,6 +176,12 @@ latency:
   `choices[0].message.content` (the OpenAI-shaped assumption in this doc's
   earlier draft) is **not empirically verified**. A later task must not
   hardcode it as settled.
+
+  Task 5 implemented `server/vision.ts`'s parser against this assumed shape
+  anyway, because a describer has to parse something — but the parse site
+  carries the same "assumed, not measured" flag inline, and it is only
+  confirmed by an actual successful call once `ARK_API_KEY` authenticates.
+
 - **Latency:** unconfirmed for a real inference call. The rejected calls
   returned in ~0.2–0.5 s, which is 401 fast-fail latency, not model latency —
   it must not be used to set a timeout budget.

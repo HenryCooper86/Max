@@ -15,7 +15,7 @@ import {
   DEVICE_RESULT_TIMEOUT_MS,
   PendingDeviceCommands,
   deviceSuccessSpeech,
-  extractDeviceCommand,
+  extractDeviceCommandForPlatform,
   reconcileDeviceResult,
   type DeviceActionName,
   type DeviceActionStatus
@@ -25,6 +25,7 @@ import { createLogger, type Logger } from "../logger";
 import { metrics } from "../metrics";
 import { createSpeaker, createSynthesizer } from "../speech";
 import { createTranscriptDelivery, transcriptEvent } from "../transcript-events";
+import { createDescriber } from "../vision";
 import { fetchRiderWeather } from "../weather";
 import {
   approxDistanceKm,
@@ -511,6 +512,27 @@ const synthesizeConfirmation = createSynthesizer({
   onFailure: (reason) => speechLog.warn("confirmation speech synthesis failed", { reason })
 });
 
+// Same module-scope reasoning as synthesizeConfirmation above, minus the
+// cache: createDescriber never caches (a scene is never the same twice), so
+// there is nothing here that would go stale across sessions — this just
+// avoids reconstructing the closure on every WebSocket connection.
+//
+// Credentials are ARK_API_KEY / ARK_BASE_URL / ARK_MODEL (Volcano Ark), not
+// DOUBAO_API_KEY — that key authenticates the realtime speech socket, not
+// Ark's chat-completions endpoint, and it is deliberately not used as a
+// fallback here (see server/vision.ts). Per Task 1's report, ARK_BASE_URL is
+// the base URL and the chat-completions path must be appended; when
+// ARK_BASE_URL is unset, createDescriber falls back to its own hardcoded
+// VISION_ENDPOINT constant (the same value, measured in Task 1).
+const visionLog = createLogger("vision");
+const arkBaseUrl = process.env.ARK_BASE_URL?.trim();
+const describeFrame = createDescriber({
+  apiKey: process.env.ARK_API_KEY,
+  model: process.env.ARK_MODEL,
+  endpoint: arkBaseUrl ? `${arkBaseUrl}/chat/completions` : undefined,
+  onFailure: (reason) => visionLog.warn("scene description failed", { reason })
+});
+
 export function createDoubaoProvider(
   client: WebSocket,
   log: Logger = createLogger("doubao"),
@@ -744,9 +766,15 @@ export function createDoubaoProvider(
 
   /** Extracts a device command from the rider's final utterance and dispatches
    *  it. Doubao is speaking its own confirmation concurrently; the two are
-   *  reconciled when the result arrives (or when it times out). */
+   *  reconciled when the result arrives (or when it times out).
+   *
+   *  Gated by sessionPlatform (set in start(), read here at call time — see
+   *  hazardInjector below for the same "declared later in this closure, read
+   *  only after start() has run" shape): only the embedded board implements
+   *  camera.look, so extractDeviceCommandForPlatform suppresses it for every
+   *  other client rather than dispatching a command no one will answer. */
   function dispatchDeviceCommand(text: string): void {
-    const command = extractDeviceCommand(text);
+    const command = extractDeviceCommandForPlatform(text, sessionPlatform);
     if (!command) return;
     const issued = pendingDeviceCommands.issue(command.action, deviceSuccessSpeech(command));
     sendClient({
@@ -1682,6 +1710,12 @@ export function createDoubaoProvider(
       const issued = pendingDeviceCommands.resolve(event.commandId);
       if (!issued) return;
       applyDeviceReconciliation(issued.action, event, issued.okSpeech);
+    },
+    async cameraFrame(event) {
+      const description = await describeFrame(event.image);
+      const line = description ?? "我看不清。";
+      sendClient(transcriptEvent(agentDelivery, "agent", line, { final: true, useBrowserSpeech: true }));
+      void speaker.speak(line).catch(() => {});
     },
     async stopAudio() {
       audioActive = false;

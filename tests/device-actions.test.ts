@@ -5,7 +5,8 @@ import {
   PendingDeviceCommands,
   deviceFailureSpeech,
   deviceSuccessSpeech,
-  extractDeviceCommand
+  extractDeviceCommand,
+  extractDeviceCommandForPlatform
 } from "../server/device-actions";
 
 describe("extractDeviceCommand — torch", () => {
@@ -192,6 +193,41 @@ describe("extractDeviceCommand — camera", () => {
     // 拍照 must still win; the two are separate actions with separate speech.
     expect(extractDeviceCommand("帮我拍照")?.action).toBe("camera.photo");
     expect(extractDeviceCommand("打开相册")?.action).toBe("gallery.open");
+  });
+});
+
+describe("extractDeviceCommandForPlatform — camera.look is embedded-only", () => {
+  // Only the embedded board's dispatcher fetches a frame for camera.look
+  // (rdk/agent/src/device/dispatch.ts). On any other client, dispatching a
+  // device.command no one answers would sit the rider through the full
+  // DEVICE_RESULT_TIMEOUT_MS in silence before a generic timeout line — so
+  // detection itself is gated to an "embedded" session, and the phrase must
+  // fall through to ordinary conversation everywhere else.
+  it("detects camera.look for an embedded session", () => {
+    expect(extractDeviceCommandForPlatform("你能看到什么", "embedded")).toEqual({
+      action: "camera.look",
+      args: {}
+    });
+  });
+
+  it("does not detect camera.look for a web session — falls through to conversation", () => {
+    expect(extractDeviceCommandForPlatform("你能看到什么", "web")).toBeNull();
+  });
+
+  it("does not detect camera.look for an ios session", () => {
+    expect(extractDeviceCommandForPlatform("看看前面", "ios")).toBeNull();
+  });
+
+  it("does not detect camera.look when the platform is unknown", () => {
+    expect(extractDeviceCommandForPlatform("what do you see", undefined)).toBeNull();
+  });
+
+  it("leaves every other action ungated by platform", () => {
+    expect(extractDeviceCommandForPlatform("Max 拍照", "web")).toEqual({ action: "camera.photo", args: {} });
+    expect(extractDeviceCommandForPlatform("Max 打开手电筒", "web")).toEqual({
+      action: "torch.set",
+      args: { on: true }
+    });
   });
 });
 

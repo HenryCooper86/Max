@@ -64,6 +64,48 @@ export const DEVICE_ACTION_TIERS: Record<DeviceActionName, DeviceActionTier> = {
 
 export type IntentExtractor = (text: string) => DeviceCommand | null;
 
+/**
+ * Actions whose detection is restricted to a specific client platform, keyed
+ * by the platform string the session reports at `session.start`.
+ *
+ * `camera.look` is the first entry: it requires the relay to dispatch a
+ * `device.command` that fetches a live frame, and only the embedded board's
+ * dispatcher implements that action (`rdk/agent/src/device/dispatch.ts`). On
+ * iOS an action with no local handler falls through to `.unhandled`, which
+ * never sends a `device.result` back — the rider then sits through the full
+ * `DEVICE_RESULT_TIMEOUT_MS` in silence before a generic timeout line, instead
+ * of getting an ordinary spoken answer from the model. Every other
+ * `DeviceActionName` already has a real handler on every platform it is
+ * dispatched to, so it is absent from this map and detected everywhere, as
+ * before.
+ */
+const PLATFORM_RESTRICTED_ACTIONS: Partial<Record<DeviceActionName, string>> = {
+  "camera.look": "embedded"
+};
+
+/**
+ * extractDeviceCommand, plus the platform gate above. The extractor itself
+ * stays pure and platform-agnostic (session/platform state does not exist at
+ * that layer, and its existing tests assert detection with no platform in
+ * scope at all) — this wrapper is what a caller that actually dispatches a
+ * command to a live client (server/providers/doubao.ts,
+ * server/providers/mock.ts) should call instead, so the phrase falls through
+ * to ordinary conversation on any client that cannot act on it.
+ *
+ * The gate lives here, in one place keyed off the action, rather than as an
+ * ad hoc platform check duplicated at each dispatch call site — the same
+ * lesson server/hazard-injector.ts already draws from this codebase's history
+ * of a platform allowlist copied across files that silently rejected the
+ * embedded board once it existed.
+ */
+export function extractDeviceCommandForPlatform(text: string, platform: string | undefined): DeviceCommand | null {
+  const command = extractDeviceCommand(text);
+  if (!command) return null;
+  const requiredPlatform = PLATFORM_RESTRICTED_ACTIONS[command.action];
+  if (requiredPlatform && platform !== requiredPlatform) return null;
+  return command;
+}
+
 /** Players we cannot drive. MPMusicPlayerController reaches only Apple Music and
  *  the local library; naming any of these must produce an honest refusal rather
  *  than silently controlling the wrong player. */

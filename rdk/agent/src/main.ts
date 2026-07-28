@@ -131,7 +131,11 @@ function start(): void {
   const dispatch = createDeviceDispatcher({
     vision,
     setVolume: (level) => setAlsaVolume(config.alsaPlayback, level),
-    previewPort: config.visionPreviewPort
+    previewPort: config.visionPreviewPort,
+    // Same client-event path hazard.report already uses below (relay.sendEvent),
+    // not a new one: image bytes go up base64-encoded in a camera.frame JSON
+    // event, never over the raw binary uplink that carries mic audio.
+    onFrame: (commandId, jpeg) => relay.sendEvent({ type: "camera.frame", commandId, image: jpeg.toString("base64") })
   });
 
   const relay = createRelayClient(config, {

@@ -23,6 +23,7 @@ import {
 import { createHazardInjector } from "../hazard-injector";
 import { createLogger, type Logger } from "../logger";
 import { metrics } from "../metrics";
+import { createSpeaker, createSynthesizer } from "../speech";
 import { createTranscriptDelivery, transcriptEvent } from "../transcript-events";
 import { fetchRiderWeather } from "../weather";
 import {
@@ -762,6 +763,10 @@ export function createDoubaoProvider(
     truncateInterruptedReply();
     if (decision.speech) {
       sendClient(transcriptEvent(agentDelivery, "agent", decision.speech, { final: true, useBrowserSpeech: true }));
+      // Deliberately not awaited: the reconciliation is synchronous and must
+      // stay that way. truncateInterruptedReply() has already cut the model's
+      // audio, so the line does not land on top of it.
+      void speaker.speak(decision.speech);
     }
   }
 
@@ -930,6 +935,21 @@ export function createDoubaoProvider(
     send: sendClient,
     emitRideContext,
     platform: () => sessionPlatform
+  });
+
+  // The helmet has no way to speak generated text: it drops `useBrowserSpeech`
+  // transcripts, and pre-rendered alert WAVs cannot cover arbitrary wording. So
+  // the relay synthesises and sends the bytes down the same binary channel
+  // Doubao's own voice uses.
+  const speaker = createSpeaker({
+    synthesize: createSynthesizer({
+      appid: process.env.DOUBAO_TTS_APPID,
+      token: process.env.DOUBAO_TTS_TOKEN,
+      voice: process.env.DOUBAO_TTS_VOICE
+    }),
+    sendAudio: (pcm) => client.send(pcm, { binary: true }),
+    platform: () => sessionPlatform,
+    onError: (error) => log.warn("confirmation speech failed", { error: String(error) })
   });
 
   /** Refetches weather for the current location and pushes the HUD update. */

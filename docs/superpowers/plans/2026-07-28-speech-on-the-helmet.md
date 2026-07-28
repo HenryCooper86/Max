@@ -14,7 +14,7 @@
 
 - **These tests run locally**, not on the board: `npm test` (vitest). The board is only needed for the final live check.
 - **No new dependencies.** Node's global `fetch` and `Buffer` are enough.
-- **The board must not be touched.** If a task starts editing anything under `rdk/`, the approach has gone wrong — the whole point is that the downlink already works.
+- **The board's code must not be touched.** `rdk/README.md` is the sole exception, in Task 4. If a task starts editing any *code* under `rdk/`, the approach has gone wrong — the whole point is that the downlink already works.
 - **Embedded clients only.** Web and mobile speak the transcript themselves via `useBrowserSpeech`; sending them audio too would say every confirmation twice. The gate is `platform?.() === "embedded"`, matching `server/hazard-injector.ts:80`.
 - **The transcript event is still emitted in every case.** This change adds audio and removes nothing — the HUD, QA transcript and user memory must see exactly what they see today.
 - **Synthesis must never block or throw into the reconciliation path.** Every failure degrades to today's behaviour: transcript only, silence on the helmet.

@@ -118,17 +118,64 @@ The description path inherits the speech spec's rule that synthesis failures
 degrade to transcript-only, so a vision answer can be read at the bench even
 when the helmet stays silent.
 
-## Two unknowns, settled before anything depends on them
+## Vision endpoint — measured, and currently blocked on the credential
 
-Neither the vision model id, its endpoint, nor its response shape exists in this
-repo. **Task one probes them against the real API with a real frame** and records
-what works, exactly as the `nv12` question was settled before the camera work
-built on it.
+Task 1 probed the real endpoint with a real frame from the board's gallery
+(`/var/lib/max/gallery/pair-20260727-165743-2/front.jpg`, a 1920x1080 JPEG),
+run on the relay host itself so the key never left it. Full evidence is in
+`.superpowers/sdd/2026-07-28-vision-describe/task-1-report.md`.
 
-It also answers whether the existing `DOUBAO_API_KEY` authenticates against the
-vision endpoint or a separate credential is required. If a new credential is
-needed, that is a stop-and-ask, not a guess — the same shape as the TTS
-credentials that currently leave the speech feature inert.
+**Endpoint:** `https://ark.cn-beijing.volces.com/api/v3/chat/completions` —
+`ARK_BASE_URL` + `/chat/completions`. This is Volcano Ark's OpenAI-shaped
+chat-completions endpoint, confirmed reachable (it returns Ark's own JSON error
+envelope with a request id, not a network/DNS/TLS failure).
+
+**Model id:** `doubao-seed-1-6-250615`, from `ARK_MODEL`.
+
+**Credential:** `ARK_API_KEY`, sent as `Authorization: Bearer <key>`, sourced
+from the relay's own `.env`. This is the only plausible credential — no
+separate vision secret exists anywhere in the relay's `.env` or app source.
+(`ARK_KEY_ID` also exists in the same `.env`; it does not match the API key's
+shape and has no paired secret, so it reads as a reference id, not an auth
+credential, and was not used.)
+
+**Blocking finding: the configured `ARK_API_KEY` does not authenticate.**
+Every call against the real endpoint — text-only and with the test image alike
+— returns:
+
+```
+HTTP 401 {"error":{"code":"AuthenticationError","message":"The API key doesn't exist. ..."}}
+```
+
+Three control calls from the same host rule out a request-shape mistake on our
+side, because each produces a *different* message: no `Authorization` header
+at all yields `"the API key or AK/SK in the request is missing or invalid"`; an
+obviously-malformed key yields `"The API key format is incorrect"`; the real
+key as `Bearer <key>` yields `"The API key doesn't exist"`. Three distinct
+messages for three distinct problems means Ark parsed our header correctly and
+specifically rejected this key as unknown to its system — not a header/scheme
+bug in the client, but a bad credential.
+
+Because the failure happens at authentication, **before the model is ever
+consulted**, this task could not confirm whether the model accepts an image,
+could not confirm the response JSON path, and could not measure real inference
+latency:
+
+- **JSON path to the description text:** unconfirmed.
+  `choices[0].message.content` (the OpenAI-shaped assumption in this doc's
+  earlier draft) is **not empirically verified**. A later task must not
+  hardcode it as settled.
+- **Latency:** unconfirmed for a real inference call. The rejected calls
+  returned in ~0.2–0.5 s, which is 401 fast-fail latency, not model latency —
+  it must not be used to set a timeout budget.
+
+**What this blocks:** everything in this spec that depends on a working vision
+call. This is the same shape of problem as the `DOUBAO_TTS_*` credentials
+leaving the speech feature inert (see Summary) — a second feature now blocked
+on a credential that exists as a populated variable but does not work against
+the real API. Issuing or rotating a valid `ARK_API_KEY` in the relay's `.env`
+and re-running this task's probe is a prerequisite for any further work on
+this spec.
 
 ## Testing
 

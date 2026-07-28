@@ -19,7 +19,6 @@ from __future__ import annotations
 import threading
 import time
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from gallery import MAX_RECORDING_SECONDS, Gallery
@@ -210,56 +209,3 @@ class CameraPair:
         gallery.write_manifest(pair_id, sides["front"], sides["rear"], "video")
         degraded = sides["front"] is None or sides["rear"] is None
         return {"status": "ok", "detail": f"{pair_id}{' degraded' if degraded else ''}"}
-
-    def serve_preview(self, port: int) -> None:
-        """MJPEG preview for the dev HUD. Deliberately served over HTTP rather
-        than the control socket, so image bytes never pass through the agent.
-
-        **Threaded, and that is load-bearing.** An MJPEG handler never returns,
-        and the HUD renders two <img> tags at once. On a single-threaded
-        HTTPServer the first connection owned the server for its whole life: the
-        second panel stayed blank forever and the listen backlog filled with
-        clients nobody would ever accept (`LISTEN 6 5` on the board, both panels
-        dark). If the winning connection was the rear one on a board with no rear
-        camera, it wrote nothing at all and wedged the port for everybody.
-        """
-        pair = self
-
-        class PreviewHandler(BaseHTTPRequestHandler):
-            def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-                camera = pair.front if self.path.endswith("front") else pair.rear
-                if camera is None:
-                    # Answer, rather than holding the connection open forever
-                    # writing nothing — which is what a blank panel used to mean,
-                    # and is indistinguishable from a broken server.
-                    self.send_response(503)
-                    self.send_header("Content-Type", "text/plain; charset=utf-8")
-                    self.end_headers()
-                    self.wfile.write(b"camera not available\n")
-                    return
-
-                self.send_response(200)
-                self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
-                self.end_headers()
-                try:
-                    while True:
-                        data = pair._grab(camera)
-                        if data is None:
-                            time.sleep(0.5)
-                            continue
-                        self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\n\r\n")
-                        self.wfile.write(data)
-                        self.wfile.write(b"\r\n")
-                        time.sleep(1 / 10)
-                except (BrokenPipeError, ConnectionResetError):
-                    # The tab was closed. Ordinary, not worth a traceback in the
-                    # journal on every page reload.
-                    return
-
-            def log_message(self, *args) -> None:
-                return
-
-        server = ThreadingHTTPServer(("0.0.0.0", port), PreviewHandler)
-        # A stream that never ends would otherwise keep the process alive on exit.
-        server.daemon_threads = True
-        server.serve_forever()

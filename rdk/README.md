@@ -872,6 +872,37 @@ Both the recorder and the sidecar now go through `rdk/vision/mipi_camera.py`, so
 the ROS dependency is no longer confined to recording — and neither is the fix
 for the orphan it used to leave behind. See "Camera findings".
 
+### Seeing captures
+
+The bench HUD at `http://<board>:8080/` shows a **captures** grid under the
+transcript, served by the sidecar on `MAX_VISION_PREVIEW_PORT` — the same reason
+preview lives there, that image bytes never pass through the agent.
+
+| Route | Returns |
+| ----- | ------- |
+| `GET /gallery` | every capture, newest first, with sizes |
+| `GET /gallery/<pair>/<file>` | the bytes; a `.mjpeg` downloads as an attachment |
+| `GET /gallery/<pair>/<file>/thumb` | the first frame of a recording |
+
+It is **read-only**: nothing on that page deletes a capture, because it is
+unauthenticated and bound to `0.0.0.0`. Clear space with `rm` over SSH.
+
+Any path resolving outside the gallery root is a `404`. The sidecar runs as
+root, so that check is a security boundary, not tidiness — see
+`bench_server.safe_path`. Verify it with `--path-as-is`, or curl normalises the
+`..` away client-side and proves nothing:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" --path-as-is \
+  "http://<board>:8081/gallery/../../../etc/shadow"     # must be 404
+```
+
+**The page and the sidecar deploy separately.** The grid lives in
+`rdk/agent/src/hud/index.html` and ships with the agent, which runs from source
+and reads it at startup; the routes live in `rdk/vision/bench_server.py`.
+Changing a route needs `systemctl restart max-vision`, and a long-running
+sidecar will keep serving the old code until you do.
+
 ### Shadow mode in the sidecar
 
 `MAX_ADAS_SHADOW=1` makes max-vision start a **ride** at service start: it writes

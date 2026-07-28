@@ -76,7 +76,12 @@ def main() -> None:
     os.makedirs(os.path.dirname(SOCKET_PATH), exist_ok=True)
 
     cameras.open()
-    threading.Thread(target=cameras.serve_preview, args=(PREVIEW_PORT,), daemon=True).start()
+
+    from bench_server import serve as serve_bench  # noqa: PLC0415
+
+    threading.Thread(
+        target=serve_bench, args=(cameras, gallery, PREVIEW_PORT), daemon=True
+    ).start()
 
     ride = None
     if ADAS_SHADOW:

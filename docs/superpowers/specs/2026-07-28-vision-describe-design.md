@@ -44,7 +44,7 @@ the command has already succeeded.
 
 ### The filler costs nothing new
 
-`deviceSuccessSpeech("camera.look")` returns "我看看…" and the existing
+`deviceSuccessSpeech({ action: "camera.look", args: {} })` returns "我看看…" and the existing
 reconciliation speaks it, through the path the speech spec just built. Silence
 on a helmet reads as "he didn't hear me", and a repeated question would send a
 second frame.

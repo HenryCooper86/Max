@@ -93,6 +93,8 @@ Verified over SSH against the real board on 2026-07-25.
 | ADAS latency                | **52.4 ms** per frame p50 (19.1 fps single stream)                       | 2026-07-26 |
 | ADAS sustained              | **11.4 fps per camera**, 2 streams, voice live, no throttling            | 2026-07-26 |
 | Thermal under ADAS load     | 78.6 °C → **plateau ~90 °C** over 10 min; bench ambient only             | 2026-07-26 |
+| Vision consent gate + frame route | **works** — `MAX_VISION_SHARE=0` refuses `/frame/front` with 403; set to `1` it returns 200, a real 640×360 JPEG (26–27 KB, confirmed live over two fetches), gate re-confirmed refusing after restore | 2026-07-28 |
+| Vision describe (live)      | **NOT verified** — relay's `ARK_API_KEY` is invalid (401 "The API key doesn't exist" in two regions, two auth header styles); no working credential exists, so the round trip to the vision model was never attempted | 2026-07-28 |
 
 ### AEC — the sweep said "gate passed". A live conversation said otherwise.
 
@@ -569,6 +571,28 @@ the camera permanently unopenable.
 
 `systemctl restart cam-service` does **not** clear an orphan; only killing the
 holder does.
+
+### Frame sharing — `MAX_VISION_SHARE`
+
+Governs whether a frame from `/frame/<front|rear>` (`bench_server.py`) may be
+sent off-board to the vision model for a scene description. It defaults to
+`0`, and at `0` the route refuses every request with `403` — verified on the
+bench 2026-07-28: `403` with sharing off, `200` with a real 640×360 JPEG
+(26–27 KB, two independent fetches, both a plausible bench scene rather than
+black or garbage) with `MAX_VISION_SHARE=1`, then `403` again once it was set
+back to `0` and the sidecar restarted.
+
+This is **not** the only route that puts image bytes on the wire. The
+pre-existing `/preview/*` MJPEG route (used by the dev HUD) is unauthenticated
+and streams to anyone on the LAN regardless of this setting — it predates the
+gate and is not covered by it. `MAX_VISION_SHARE` only governs frames the
+sidecar hands to the relay's vision call, not every way a frame can leave the
+board.
+
+If the vision model call fails or times out for any reason — no credential,
+rejected auth, a bad response shape, a timeout — the relay does not guess.
+`server/vision.ts`'s `describe()` returns `null` on every failure path, and the
+caller speaks "我看不清。" rather than a fabricated description.
 
 ## Running
 

@@ -172,9 +172,22 @@ and sends 24 kHz mono PCM16 down the binary channel the board already plays.
 voice. Audio goes only to `platform === "embedded"`; the other clients would
 otherwise say every confirmation twice.
 
-Pacing stays on the board: `playback.ts` caps the queue at 80 ms, the fix that
-took the reference-to-mic lag from 953 ms to 81 ms. The relay sends the buffer
-and that cap meters it, exactly as it meters Doubao's own voice.
+The pacing mechanism stays on the board: `playback.ts`'s `pump()` caps the
+queue at 80 ms, the fix that took the reference-to-mic lag from 953 ms to
+81 ms. But an earlier version of this relay code sent a whole utterance in one
+`client.send`, on the reasoning that the board's cap would meter it regardless
+— that reasoning was wrong. `pump()` checks its cap BEFORE shifting a chunk off
+the queue, so the cap bounds when a pump cycle starts consuming, not how much
+of one already-dequeued chunk it hands to `aplay`; it cannot subdivide a
+chunk. One `client.send` is one WebSocket message is one `onVoice` is one
+`playback.write` call, i.e. one chunk — so a whole-utterance send arrives as
+one chunk the cap cannot meter at all (measured: 192,000 bytes / 2000 ms in
+one write, versus 7,680 bytes / 80 ms per 20 ms chunk), misaligning the AEC
+reference and, on barge-in, discarding already-played audio the reference
+still needed. The relay now chunks every confirmation into 20 ms (960-byte)
+pieces and sends one `client.send` per chunk, which is what actually makes the
+board's pacing guarantee hold here, the same as it already holds for Doubao's
+own voice.
 
 **Not yet verified live.** The Lightsail relay has no `DOUBAO_TTS_*` variables
 (`grep -c` over its `.env` returns 0), and without them `createSynthesizer`

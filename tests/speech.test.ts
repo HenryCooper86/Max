@@ -109,6 +109,46 @@ describe("createSynthesizer", () => {
     expect(await synthesize("拍好了。")).toBeNull();
     expect((await synthesize("拍好了。"))?.toString("utf8")).toBe("audio-bytes");
   });
+
+  it("calls onFailure when the service rejects the request", async () => {
+    // A wrong appid/token must be distinguishable in the logs from the
+    // missing-credentials (configured-off) state — both return null to the
+    // caller identically, so onFailure is the only signal.
+    const onFailure = vi.fn();
+    const { synthesize } = synth({
+      fetchImpl: (async () => ({ ok: false, status: 401, json: async () => ({}) })) as unknown as typeof fetch,
+      onFailure
+    });
+    expect(await synthesize("拍好了。")).toBeNull();
+    expect(onFailure).toHaveBeenCalledTimes(1);
+    expect(onFailure.mock.calls[0][0]).toEqual(expect.any(String));
+  });
+
+  it("calls onFailure when fetch throws", async () => {
+    const onFailure = vi.fn();
+    const { synthesize } = synth({
+      fetchImpl: (async () => {
+        throw new Error("network down");
+      }) as unknown as typeof fetch,
+      onFailure
+    });
+    expect(await synthesize("拍好了。")).toBeNull();
+    expect(onFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not call onFailure repeatedly when credentials are absent", async () => {
+    // Missing credentials is the documented configured-off state, not a
+    // failure. Every call would otherwise hit this branch, and logging it on
+    // every confirmation would drown out a real failure.
+    const onFailure = vi.fn();
+    const fetchImpl = vi.fn();
+    const synthesize = createSynthesizer({ fetchImpl: fetchImpl as unknown as typeof fetch, onFailure });
+    await synthesize("拍好了。");
+    await synthesize("拍好了。");
+    await synthesize("开始录像。");
+    expect(onFailure).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });
 
 function speaker(overrides: Partial<Parameters<typeof createSpeaker>[0]> = {}) {
@@ -187,5 +227,33 @@ describe("createSpeaker", () => {
     await speak("   ");
     expect(synthesize).not.toHaveBeenCalled();
     expect(sent).toEqual([]);
+  });
+
+  it("chunks audio larger than one chunk into 960-byte sendAudio calls", async () => {
+    // The board's pump() (rdk/agent/src/audio/playback.ts) tests MAX_QUEUE_MS
+    // before shifting a chunk off its queue, so it cannot subdivide a chunk —
+    // one client.send must already be at most 20 ms (960 bytes at 24 kHz
+    // mono PCM16), or the board's pacing cap cannot meter it.
+    const CHUNK_BYTES = 960;
+    const remainder = 400;
+    const bigPcm = Buffer.alloc(CHUNK_BYTES * 2 + remainder);
+    for (let i = 0; i < bigPcm.length; i += 1) bigPcm[i] = i % 256;
+    const { speak, sent } = speaker({ synthesize: async () => bigPcm });
+
+    await speak("拍好了。");
+
+    expect(sent).toHaveLength(3);
+    expect(sent[0]).toHaveLength(CHUNK_BYTES);
+    expect(sent[1]).toHaveLength(CHUNK_BYTES);
+    // The final partial chunk is still sent, not dropped.
+    expect(sent[2]).toHaveLength(remainder);
+    // Concatenating every sent chunk reproduces the original buffer exactly.
+    expect(Buffer.concat(sent)).toEqual(bigPcm);
+  });
+
+  it("sends one chunk, not many, when audio already fits in one", async () => {
+    const { speak, sent } = speaker();
+    await speak("拍好了。");
+    expect(sent).toHaveLength(1);
   });
 });

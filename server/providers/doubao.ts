@@ -494,6 +494,23 @@ function stringField(payload: Record<string, unknown>, key: string): string | un
 /** In-place upstream reconnect attempts before giving up and bouncing the client. */
 const MAX_UPSTREAM_RETRIES = 3;
 
+// Module scope, not per-session: createDoubaoProvider runs once per WebSocket
+// connection, and a synthesizer (with its cache) built inside it would be
+// rebuilt — and its cache emptied — on every new session, so every session's
+// first confirmation paid a fresh Doubao TTS round trip even for a phrase a
+// previous session had already cached. The confirmation vocabulary is a
+// handful of fixed phrases, so one synthesizer for the life of the process
+// gives "one synthesis per phrase, ever" instead of "one per phrase per
+// session". The speaker built from it is still per-session — see below —
+// because it closes over that session's client and platform.
+const speechLog = createLogger("doubao");
+const synthesizeConfirmation = createSynthesizer({
+  appid: process.env.DOUBAO_TTS_APPID,
+  token: process.env.DOUBAO_TTS_TOKEN,
+  voice: process.env.DOUBAO_TTS_VOICE,
+  onFailure: (reason) => speechLog.warn("confirmation speech synthesis failed", { reason })
+});
+
 export function createDoubaoProvider(
   client: WebSocket,
   log: Logger = createLogger("doubao"),
@@ -765,8 +782,12 @@ export function createDoubaoProvider(
       sendClient(transcriptEvent(agentDelivery, "agent", decision.speech, { final: true, useBrowserSpeech: true }));
       // Deliberately not awaited: the reconciliation is synchronous and must
       // stay that way. truncateInterruptedReply() has already cut the model's
-      // audio, so the line does not land on top of it.
-      void speaker.speak(decision.speech);
+      // audio, so the line does not land on top of it. speak() is documented
+      // to never reject, but nothing here registers an `unhandledRejection`
+      // handler, so a future regression in that contract would otherwise take
+      // the whole process down for every rider on the box — the `.catch` is
+      // the backstop for that, not evidence that speak() is expected to fail.
+      void speaker.speak(decision.speech).catch(() => {});
     }
   }
 
@@ -940,13 +961,11 @@ export function createDoubaoProvider(
   // The helmet has no way to speak generated text: it drops `useBrowserSpeech`
   // transcripts, and pre-rendered alert WAVs cannot cover arbitrary wording. So
   // the relay synthesises and sends the bytes down the same binary channel
-  // Doubao's own voice uses.
+  // Doubao's own voice uses. `synthesizeConfirmation` is the module-scope,
+  // process-lifetime synthesizer above; only this speaker wrapper — which
+  // closes over this session's client and platform — is per-session.
   const speaker = createSpeaker({
-    synthesize: createSynthesizer({
-      appid: process.env.DOUBAO_TTS_APPID,
-      token: process.env.DOUBAO_TTS_TOKEN,
-      voice: process.env.DOUBAO_TTS_VOICE
-    }),
+    synthesize: synthesizeConfirmation,
     sendAudio: (pcm) => client.send(pcm, { binary: true }),
     platform: () => sessionPlatform,
     onError: (error) => log.warn("confirmation speech failed", { error: String(error) })

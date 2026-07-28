@@ -55,21 +55,37 @@ server/
 raw PCM16 at 24 kHz, or `null` when synthesis fails or exceeds its budget.
 
 The provider gains a `speak(text)` that, for an **embedded** client, synthesises
-and writes the PCM with `client.send(chunk, { binary: true })` — the same call
-`forwardTtsAudio` already makes for Doubao's own voice. Everything else is
+and writes the PCM in 20 ms chunks with `client.send(chunk, { binary: true })`
+— the same call `forwardTtsAudio` already makes for Doubao's own voice, one
+call per chunk instead of one call for the whole utterance. Everything else is
 unchanged.
 
-**No relay-side pacing is needed, and this was worth checking.** Pacing is what
-took the reference-to-mic lag from 953 ms to 81 ms, and that lag is what the AEC
-filter is aligned against — so a burst of injected audio looked like a real
-hazard. It is not: the pacing lives on the **board**. `playback.ts` caps how far
-ahead of the DAC audio may sit (`MAX_QUEUE_MS = 80`, topped up by a 10 ms pump),
-and that cap is the fix for the 953 ms measurement. Whatever the relay hands
-over is metered out by the same mechanism that already meters Doubao's voice.
+**The relay must chunk at 20 ms, and this was worth checking carefully.**
+Pacing is what took the reference-to-mic lag from 953 ms to 81 ms, and that lag
+is what the AEC filter is aligned against — so a burst of injected audio looked
+like a real hazard. The pacing mechanism itself lives on the **board**:
+`playback.ts`'s `pump()` caps how far ahead of the DAC audio may sit
+(`MAX_QUEUE_MS = 80`, topped up by a 10 ms pump). But that cap is checked
+*before* `pump()` shifts a chunk off its queue — it bounds when a pump cycle
+starts consuming, not how much of one already-dequeued chunk it may hand to
+`aplay`. It cannot subdivide a chunk. One `client.send` is one WebSocket
+message is one `onVoice` is one `playback.write` call (`relay.ts`) — one
+chunk, whatever size it is. So the board's pacing guarantee only holds for a
+producer that itself sends in small pieces; it does not retroactively meter
+whatever arrives in one message. Sending a whole utterance in a single
+`client.send` handed the board one multi-second chunk the cap could not meter
+at all: measured, a single unchunked send delivered 192,000 bytes / 2000 ms
+into `aplay` in one write, against 7,680 bytes / 80 ms for the equivalent run
+of 20 ms chunks. That both misaligns the AEC far-end reference against the mic
+and means a barge-in `flush()` landing mid-chunk discards audio whose earlier
+part the speaker already played — the reference is told to forget sound that
+is still physically echoing.
 
-So `speak` sends the synthesised buffer with one `client.send`. An earlier draft
-of this spec called for chunking at the relay; that would have been ceremony
-around a guarantee the board already provides.
+So `speak` chunks the synthesised buffer into 480-sample (20 ms, 960-byte)
+pieces and calls `client.send` once per chunk, including a final partial
+chunk. An earlier draft of this spec skipped chunking, reasoning that the
+board's cap alone was sufficient; that reasoning was wrong for the reason
+above, and this draft corrects it.
 
 ### One hook point
 

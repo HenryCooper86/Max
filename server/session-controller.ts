@@ -19,10 +19,16 @@ import { recordUserMemoryEvent, userConversationMemory, userMemoryEnabled } from
 
 export type ProviderFactory = (client: WebSocket, telemetry: ProviderTelemetry) => AgentProvider;
 
-// 256 KB: every other client event fits comfortably under a few KB, but
+// 256 KiB: every other client event fits comfortably under a few KB, but
 // camera.frame carries a base64 JPEG capped at 200_000 chars below. Without
-// headroom here, the generic gate would reject every real frame before the
-// camera.frame-specific check ever ran.
+// headroom here, this gate would reject every real frame before the
+// camera.frame-specific check ever ran. This must also stay BELOW
+// config.maxPayloadBytes (server/config.ts) — ws enforces that ceiling before
+// the "message" event fires and terminates the connection outright on an
+// oversized frame, rather than producing a catchable error. If ws's ceiling
+// ever sat at or below this constant, ws — not this clean validation error —
+// would be what fails first, and it would take the rider's live session down
+// with it.
 const MAX_CLIENT_JSON_BYTES = 256 * 1024;
 const MAX_CLIENT_AUDIO_BYTES = 32 * 1024;
 const VOICE_GENDERS = new Set(["female", "male"]);

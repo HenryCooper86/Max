@@ -130,7 +130,8 @@ function start(): void {
 
   const dispatch = createDeviceDispatcher({
     vision,
-    setVolume: (level) => setAlsaVolume(config.alsaPlayback, level)
+    setVolume: (level) => setAlsaVolume(config.alsaPlayback, level),
+    previewPort: config.visionPreviewPort
   });
 
   const relay = createRelayClient(config, {

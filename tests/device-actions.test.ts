@@ -181,6 +181,18 @@ describe("extractDeviceCommand — camera", () => {
     expect(extractDeviceCommand("Max 别拍照")).toBeNull();
     expect(extractDeviceCommand("Max 我们刚才拍的照片在哪")).toBeNull();
   });
+
+  it("detects a request to look", () => {
+    for (const phrase of ["你能看到什么", "前面是什么", "看看前面", "what do you see"]) {
+      expect(extractDeviceCommand(phrase)?.action).toBe("camera.look");
+    }
+  });
+
+  it("does not mistake looking for taking a photo", () => {
+    // 拍照 must still win; the two are separate actions with separate speech.
+    expect(extractDeviceCommand("帮我拍照")?.action).toBe("camera.photo");
+    expect(extractDeviceCommand("打开相册")?.action).toBe("gallery.open");
+  });
 });
 
 describe("extractDeviceCommand — navigation", () => {
@@ -215,6 +227,7 @@ describe("DEVICE_ACTION_TIERS", () => {
       "destination.show": "low",
       "camera.photo": "low",
       "camera.record": "low",
+      "camera.look": "low",
       "gallery.open": "low",
       "navigation.start": "low",
       "navigation.stop": "low"

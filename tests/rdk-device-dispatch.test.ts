@@ -43,7 +43,7 @@ describe("EMBEDDED_CAPABILITIES", () => {
       .filter(([, capability]) => capability.supported)
       .map(([action]) => action)
       .sort();
-    expect(supported).toEqual(["camera.photo", "camera.record", "volume.set"]);
+    expect(supported).toEqual(["camera.look", "camera.photo", "camera.record", "volume.set"]);
   });
 
   it("gives every refusal a reason that maps to real speech", () => {

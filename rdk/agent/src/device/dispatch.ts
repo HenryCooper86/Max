@@ -14,6 +14,11 @@ export type DispatcherOptions = {
   /** Applies playback volume on the ES8326B mixer. Resolves false if the mixer
    *  did not move, so Max never claims a volume change that did not happen. */
   setVolume(level: number): Promise<boolean>;
+  /** Port the sidecar serves `GET /frame/front` on. Used by `camera.look`. */
+  previewPort: number;
+  /** Receives the fetched frame for `camera.look`. Task 5 supplies this; until
+   *  then the frame is fetched and dropped. */
+  onFrame?: (commandId: string, jpeg: Buffer) => void;
 };
 
 /**
@@ -43,6 +48,27 @@ export function createDeviceDispatcher(
         return applied
           ? { type: "device.result", commandId: command.commandId, status: "ok" }
           : { type: "device.result", commandId: command.commandId, status: "failed" };
+      }
+
+      if (command.action === "camera.look") {
+        // Fetched over HTTP, never the control socket: image bytes stay off
+        // that channel. The frame is a buffer read on the sidecar, so this
+        // returns long before the relay's 8 s device timeout.
+        const response = await fetch(`http://127.0.0.1:${options.previewPort}/frame/front`);
+        if (response.status === 403) {
+          return {
+            type: "device.result",
+            commandId: command.commandId,
+            status: "denied",
+            reason: "vision.sharingOff"
+          };
+        }
+        if (!response.ok) {
+          return { type: "device.result", commandId: command.commandId, status: "failed" };
+        }
+        const frame = Buffer.from(await response.arrayBuffer());
+        options.onFrame?.(command.commandId, frame);
+        return { type: "device.result", commandId: command.commandId, status: "ok" };
       }
 
       const response = await options.vision.request(command.action, command.args);

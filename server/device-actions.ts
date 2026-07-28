@@ -19,6 +19,7 @@ export type DeviceActionName =
   | "destination.show"
   | "camera.photo"
   | "camera.record"
+  | "camera.look"
   | "gallery.open"
   | "navigation.start"
   | "navigation.stop";
@@ -38,6 +39,7 @@ type DeviceCommand =
   | { action: "destination.show"; args: { query: string } }
   | { action: "camera.photo"; args: Record<string, never> }
   | { action: "camera.record"; args: { start: boolean } }
+  | { action: "camera.look"; args: Record<string, never> }
   | { action: "gallery.open"; args: Record<string, never> }
   | { action: "navigation.start"; args: { query: string } }
   | { action: "navigation.stop"; args: Record<string, never> };
@@ -54,6 +56,7 @@ export const DEVICE_ACTION_TIERS: Record<DeviceActionName, DeviceActionTier> = {
   "destination.show": "low",
   "camera.photo": "low",
   "camera.record": "low",
+  "camera.look": "low",
   "gallery.open": "low",
   "navigation.start": "low",
   "navigation.stop": "low"
@@ -144,6 +147,9 @@ function matchCamera(raw: string): DeviceCommand | null {
   if (/(开始)?(录像|录制|录影|录个?视频|录一段)/.test(raw) || /(start\s+recording|record\s+(a\s+)?video)/i.test(raw)) {
     return { action: "camera.record", args: { start: true } };
   }
+  if (/(你能?看到?什么|前面是什么|看看前面|看一下前面)/.test(raw) || /what\s+(do|can)\s+you\s+see/i.test(raw)) {
+    return { action: "camera.look", args: {} };
+  }
   if (/(拍照|拍个?照|拍张?照片?|照相)/.test(raw) || /take\s+a\s+(photo|picture|pic)/i.test(raw)) {
     return { action: "camera.photo", args: {} };
   }
@@ -217,6 +223,7 @@ const FAILURE_SPEECH: Record<string, string> = {
   "camera.recording": "已经在录了。",
   "camera.notRecording": "现在没有在录像。",
   "capture.failed": "拍摄没成功。",
+  "vision.sharingOff": "我现在不能看。",
   "navigation.notActive": "现在没有在导航。",
   "permission.location": "我没有定位权限，去设置里开启后我再帮你导航。",
   // Embedded (helmet) refusals. Worded generically because "device.noScreen"
@@ -239,6 +246,7 @@ const ACTION_LABELS: Record<DeviceActionName, string> = {
   "destination.show": "目的地",
   "camera.photo": "拍照",
   "camera.record": "录像",
+  "camera.look": "看看",
   "gallery.open": "相册",
   "navigation.start": "导航",
   "navigation.stop": "导航"
@@ -286,6 +294,11 @@ export function deviceSuccessSpeech(command: DeviceCommand): string | undefined 
       return "拍好了。";
     case "camera.record":
       return command.args.start ? "开始录像。" : "已停止录像。";
+    case "camera.look":
+      // A filler, not the answer. The description arrives seconds later and is
+      // spoken separately; silence here reads as "he didn't hear me" and gets
+      // the question repeated, which would send a second frame.
+      return "我看看…";
     case "torch.set":
       return command.args.on ? "手电筒开了。" : "手电筒关了。";
     case "volume.set":

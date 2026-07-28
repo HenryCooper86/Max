@@ -22,6 +22,7 @@ export type EmbeddedCapability = {
 export const EMBEDDED_CAPABILITIES: Record<DeviceActionName, EmbeddedCapability> = {
   "camera.photo": { supported: true },
   "camera.record": { supported: true },
+  "camera.look": { supported: true },
   "volume.set": { supported: true },
   "gallery.open": { supported: false, reason: "device.noScreen" },
   "destination.show": { supported: false, reason: "device.noScreen" },

@@ -19,7 +19,11 @@ import { recordUserMemoryEvent, userConversationMemory, userMemoryEnabled } from
 
 export type ProviderFactory = (client: WebSocket, telemetry: ProviderTelemetry) => AgentProvider;
 
-const MAX_CLIENT_JSON_BYTES = 8 * 1024;
+// 256 KB: every other client event fits comfortably under a few KB, but
+// camera.frame carries a base64 JPEG capped at 200_000 chars below. Without
+// headroom here, the generic gate would reject every real frame before the
+// camera.frame-specific check ever ran.
+const MAX_CLIENT_JSON_BYTES = 256 * 1024;
 const MAX_CLIENT_AUDIO_BYTES = 32 * 1024;
 const VOICE_GENDERS = new Set(["female", "male"]);
 const VOICE_PERSONALITIES = new Set(["concise", "friendly", "technical", "rally"]);
@@ -218,6 +222,18 @@ export function parseClientEvent(data: RawData): ClientEvent {
       ttcSeconds: value.ttcSeconds as number | undefined,
       latencyMs: value.latencyMs as number | undefined
     };
+  }
+
+  if (value.type === "camera.frame") {
+    if (typeof value.commandId !== "string" || !value.commandId.trim() || value.commandId.length > 120) {
+      throw new Error("Invalid camera.frame commandId");
+    }
+    // ~55 KB for a 640px frame. The cap is a control-plane guard, not a quality
+    // setting: without it a client can push megabytes through this path.
+    if (typeof value.image !== "string" || !value.image || value.image.length > 200_000) {
+      throw new Error("Invalid camera.frame image");
+    }
+    return { type: "camera.frame", commandId: value.commandId, image: value.image };
   }
 
   if (value.type === "testing.metric") {
@@ -422,6 +438,7 @@ export class AgentSessionController {
       if (event.type === "turn.feedback") recordTesterTurnFeedback(this.relaySessionId, event);
       if (event.type === "testing.metric") recordTesterAudioQuality(this.relaySessionId, event);
       if (event.type === "device.result") await this.provider.deviceResult?.(event);
+      if (event.type === "camera.frame") await this.provider.cameraFrame?.(event);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Voice relay failed";
       this.log?.warn("client message failed", { message });

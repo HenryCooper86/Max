@@ -31,4 +31,7 @@ export type AgentProvider = {
   /** Result of a dispatched device command. Providers without a device-action
    *  path omit this. */
   deviceResult?(event: DeviceResultEvent): Promise<void>;
+  /** One frame the rider asked Max to look at. Providers without a vision path
+   *  omit this. */
+  cameraFrame?(event: { commandId: string; image: string }): Promise<void>;
 };

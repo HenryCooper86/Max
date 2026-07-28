@@ -134,3 +134,27 @@ describe("parseClientEvent — hazard.report", () => {
     ).toThrow(/severity/);
   });
 });
+
+describe("parseClientEvent — camera.frame", () => {
+  it("is a client event, so a board-captured frame can reach the relay", () => {
+    expect(CLIENT_EVENT_TYPES).toContain("camera.frame");
+  });
+
+  it("accepts a camera frame", () => {
+    const event = parseClientEvent(encode({ type: "camera.frame", commandId: "c1", image: "AAAA" }));
+    expect(event).toMatchObject({ type: "camera.frame", commandId: "c1" });
+  });
+
+  it("rejects a frame with no commandId", () => {
+    expect(() => parseClientEvent(encode({ type: "camera.frame", image: "AAAA" }))).toThrow(
+      "Invalid camera.frame commandId"
+    );
+  });
+
+  it("rejects an oversized frame", () => {
+    // A 640px JPEG is ~40 KB, ~55 KB base64. The cap stops a client pushing
+    // megabytes through the control plane.
+    const huge = "A".repeat(400_000);
+    expect(() => parseClientEvent(encode({ type: "camera.frame", commandId: "c1", image: huge }))).toThrow();
+  });
+});

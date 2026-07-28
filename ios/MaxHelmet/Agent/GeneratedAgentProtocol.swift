@@ -11,7 +11,8 @@ enum ClientEventTypes {
     static let turnFeedback = "turn.feedback"
     static let deviceResult = "device.result"
     static let hazardReport = "hazard.report"
-    static let all: Set<String> = [sessionStart, audioStart, audioStop, demoGuided, locationUpdate, testingMetric, turnFeedback, deviceResult, hazardReport]
+    static let cameraFrame = "camera.frame"
+    static let all: Set<String> = [sessionStart, audioStart, audioStop, demoGuided, locationUpdate, testingMetric, turnFeedback, deviceResult, hazardReport, cameraFrame]
 }
 
 enum ServerEventTypes {

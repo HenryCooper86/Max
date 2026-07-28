@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createSpeaker, createSynthesizer } from "../server/speech";
+import { createSpeaker, createSynthesizer, TTS_ENDPOINT, TTS_RATE } from "../server/speech";
 
 function okResponse(pcm: string) {
   return {
@@ -29,10 +29,10 @@ describe("createSynthesizer", () => {
     const { synthesize, fetchImpl } = synth();
     await synthesize("拍好了。");
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe("https://openspeech.bytedance.com/api/v1/tts");
+    expect(url).toBe(TTS_ENDPOINT);
     const body = JSON.parse(String(init.body));
     expect(body.request.text).toBe("拍好了。");
-    expect(body.audio).toMatchObject({ encoding: "pcm", rate: 24_000 });
+    expect(body.audio).toMatchObject({ encoding: "pcm", rate: TTS_RATE });
     expect(body.app).toMatchObject({ appid: "app", token: "tok", cluster: "volcano_tts" });
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer;tok");
   });

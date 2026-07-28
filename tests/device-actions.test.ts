@@ -156,6 +156,23 @@ describe("PendingDeviceCommands", () => {
     ]);
     expect(pending.expire(issued.issuedAt + DEVICE_RESULT_TIMEOUT_MS)).toEqual([]);
   });
+
+  it("peek finds a pending command without consuming it", () => {
+    const pending = new PendingDeviceCommands();
+    const issued = pending.issue("camera.look");
+    expect(pending.peek(issued.commandId)?.action).toBe("camera.look");
+    // Still there — unlike resolve(), peek() must not remove the entry, since
+    // the device.result that actually resolves it (deviceResult() in
+    // server/providers/doubao.ts) arrives after the camera.frame that peeks it.
+    expect(pending.peek(issued.commandId)?.action).toBe("camera.look");
+    expect(pending.resolve(issued.commandId)?.action).toBe("camera.look");
+    expect(pending.peek(issued.commandId)).toBeUndefined();
+  });
+
+  it("peek returns undefined for a commandId nobody issued", () => {
+    const pending = new PendingDeviceCommands();
+    expect(pending.peek("no-such-id")).toBeUndefined();
+  });
 });
 
 describe("extractDeviceCommand — camera", () => {

@@ -8,8 +8,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import pytest
-
 from bench_server import downscale, serve
 from camera import CameraPair
 from gallery import Gallery

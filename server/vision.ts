@@ -21,6 +21,13 @@
  *  derive the endpoint from ARK_BASE_URL when it is set. */
 export const VISION_ENDPOINT = "https://ark.cn-beijing.volces.com/api/v3/chat/completions";
 
+/** Joins a configured ARK_BASE_URL with the chat-completions path, tolerating
+ *  a trailing slash on the base (e.g. ".../api/v3/") so the result can never
+ *  become a doubled "//chat/completions". */
+export function buildChatCompletionsEndpoint(baseUrl: string): string {
+  return `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
+}
+
 const DEFAULT_PROMPT = "用一句话描述这张照片里的场景，简洁自然，像对骑手说话。";
 const DEFAULT_TIMEOUT_MS = 10_000;
 

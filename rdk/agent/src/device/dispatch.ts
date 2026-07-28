@@ -9,6 +9,12 @@ export type DeviceCommand = {
   args: Record<string, unknown>;
 };
 
+/** Bound for the board->sidecar `GET /frame/front` fetch that backs
+ *  `camera.look`. Well under the relay's 8 s DEVICE_RESULT_TIMEOUT_MS so a
+ *  hung sidecar fails this hop fast rather than leaving the fetch pending for
+ *  minutes — see the comment at the call site. */
+const CAMERA_LOOK_FETCH_TIMEOUT_MS = 3_000;
+
 export type DispatcherOptions = {
   vision: VisionClient;
   /** Applies playback volume on the ES8326B mixer. Resolves false if the mixer
@@ -51,10 +57,25 @@ export function createDeviceDispatcher(
       }
 
       if (command.action === "camera.look") {
-        // Fetched over HTTP, never the control socket: image bytes stay off
-        // that channel. The frame is a buffer read on the sidecar, so this
-        // returns long before the relay's 8 s device timeout.
-        const response = await fetch(`http://127.0.0.1:${options.previewPort}/frame/front`);
+        // Fetched over HTTP, never the vision control socket (the unix socket
+        // vision-client.ts uses for camera.photo/record): this board->sidecar
+        // hop keeps image bytes off that channel. That is scoped to this hop
+        // only — the frame goes on to travel the relay's own control socket
+        // afterward, base64-encoded in a camera.frame event (see onFrame /
+        // relay.sendEvent in main.ts).
+        //
+        // Bounded well under the relay's 8 s device-command timeout
+        // (DEVICE_RESULT_TIMEOUT_MS in server/device-actions.ts): the frame is
+        // ordinarily just a buffer read on the sidecar and returns almost
+        // immediately, but without a signal here a hung sidecar would leave
+        // this fetch pending for minutes. If it later completed anyway,
+        // onFrame would hand the relay a scene that is no longer current —
+        // exactly the "fluent sentence about the wrong scene" failure mode —
+        // so a timeout here is what turns that into an honest, timely failure
+        // instead.
+        const response = await fetch(`http://127.0.0.1:${options.previewPort}/frame/front`, {
+          signal: AbortSignal.timeout(CAMERA_LOOK_FETCH_TIMEOUT_MS)
+        });
         if (response.status === 403) {
           return {
             type: "device.result",

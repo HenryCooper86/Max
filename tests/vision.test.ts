@@ -1,5 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
-import { createDescriber, VISION_ENDPOINT } from "../server/vision";
+import { buildChatCompletionsEndpoint, createDescriber, VISION_ENDPOINT } from "../server/vision";
+
+describe("buildChatCompletionsEndpoint", () => {
+  it("appends the chat-completions path to a bare base url", () => {
+    expect(buildChatCompletionsEndpoint("https://ark.example.com/api/v3")).toBe(
+      "https://ark.example.com/api/v3/chat/completions"
+    );
+  });
+
+  it("tolerates a trailing slash on ARK_BASE_URL instead of doubling it", () => {
+    expect(buildChatCompletionsEndpoint("https://ark.example.com/api/v3/")).toBe(
+      "https://ark.example.com/api/v3/chat/completions"
+    );
+    expect(buildChatCompletionsEndpoint("https://ark.example.com/api/v3///")).toBe(
+      "https://ark.example.com/api/v3/chat/completions"
+    );
+  });
+});
 
 function reply(text: string) {
   return {

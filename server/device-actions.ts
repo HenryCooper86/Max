@@ -404,6 +404,16 @@ export class PendingDeviceCommands {
     return issued;
   }
 
+  /** Looks up a still-pending command WITHOUT consuming it. Used to verify a
+   *  `camera.frame`'s commandId corresponds to a `camera.look` this relay
+   *  actually issued, before paying for a vision-model call on whatever image
+   *  arrived — the frame is not itself the command's result and must not
+   *  resolve (and thereby delete) the entry that the later `device.result`
+   *  for the same commandId still needs to resolve. */
+  peek(commandId: string): IssuedDeviceCommand | undefined {
+    return this.pending.get(commandId);
+  }
+
   /** Removes and returns every command that has outlived the timeout. */
   expire(now: number = Date.now()): IssuedDeviceCommand[] {
     const expired: IssuedDeviceCommand[] = [];

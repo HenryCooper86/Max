@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
 
-from bench_server import first_frame, listing, safe_path, serve
+from bench_server import first_frame, listing, read_first_frame, safe_path, serve
 from camera import CameraPair
 from gallery import Gallery
 
@@ -182,6 +182,56 @@ def test_thumb_returns_only_the_first_frame(gallery):
     with get(port, "/gallery/pair-v/front.mjpeg/thumb") as response:
         assert response.read() == JPEG_A
         assert response.headers["Content-Type"] == "image/jpeg"
+
+
+def test_read_first_frame_stops_at_the_second_marker(tmp_path):
+    path = tmp_path / "seg.mjpeg"
+    path.write_bytes(JPEG_A + JPEG_B)
+    assert read_first_frame(path) == JPEG_A
+
+
+def test_read_first_frame_of_a_single_frame_file_is_the_whole_file(tmp_path):
+    path = tmp_path / "seg.mjpeg"
+    path.write_bytes(JPEG_A)
+    assert read_first_frame(path) == JPEG_A
+
+
+def test_read_first_frame_of_something_that_is_not_jpeg_is_none(tmp_path):
+    path = tmp_path / "seg.mjpeg"
+    path.write_bytes(b"not a jpeg at all")
+    assert read_first_frame(path) is None
+
+
+def test_read_first_frame_does_not_read_a_huge_segment_whole(tmp_path):
+    """A clip on the board reached 835 MB. The thumbnail must cost one frame,
+    not the file — this is the difference between a thumbnail and an OOM."""
+    import bench_server
+
+    path = tmp_path / "big.mjpeg"
+    # Two frames, then far more than one chunk of trailing data.
+    path.write_bytes(JPEG_A + JPEG_B + b"\x00" * (4 * bench_server.SEGMENT_CHUNK))
+
+    reads = []
+    real_open = Path.open
+
+    def counting_open(self, *args, **kwargs):
+        handle = real_open(self, *args, **kwargs)
+        real_read = handle.read
+
+        def read(size=-1):
+            data = real_read(size)
+            reads.append(len(data))
+            return data
+
+        handle.read = read
+        return handle
+
+    Path.open = counting_open
+    try:
+        assert read_first_frame(path) == JPEG_A
+    finally:
+        Path.open = real_open
+    assert sum(reads) <= bench_server.SEGMENT_CHUNK, "read past the first chunk"
 
 
 def test_a_recording_downloads_as_an_attachment(gallery):

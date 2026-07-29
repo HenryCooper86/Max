@@ -78,6 +78,15 @@
     color: #f85149;
     font-size: 12px;
   }
+  .recording {
+    padding: 24px 8px;
+    text-align: center;
+    color: #d29922;
+    font-size: 12px;
+  }
+  .tile.live {
+    border-color: #d29922;
+  }
 </style>
 <h1>Max · RDK X5 bench</h1>
 <div class="row">
@@ -132,14 +141,18 @@
     // A recording is concatenated JPEG: show frame one, link the file.
     const isVideo = pair.kind === "video";
     const src = isVideo ? `${href}/thumb` : href;
-    const label = isVideo ? "video" : "photo";
-    const size = bytes === null ? "missing" : `${Math.round(bytes / 1024)} KB`;
+    // A clip is listed from the moment it starts, so say which ones are still
+    // growing — otherwise a live recording reads as a finished one whose size
+    // keeps changing between refreshes.
+    const label = pair.recording ? "video · recording" : isVideo ? "video" : "photo";
+    const size = bytes === null ? "waiting for the first frame" : `${Math.round(bytes / 1024)} KB`;
 
     if (bytes === null) {
-      return `<div class="tile"><div class="missing">file missing</div>
+      const missing = pair.recording ? "recording…" : "file missing";
+      return `<div class="tile"><div class="${pair.recording ? "recording" : "missing"}">${missing}</div>
         <div class="meta">${pair.id}<br />${label} · ${size}</div></div>`;
     }
-    return `<div class="tile"><a href="${href}" target="_blank">
+    return `<div class="tile ${pair.recording ? "live" : ""}"><a href="${href}" target="_blank">
       <img src="${src}" alt="${pair.id}" /></a>
       <div class="meta">${pair.id}<br />${label} · ${size}${pair.degraded ? " · degraded" : ""}</div></div>`;
   }

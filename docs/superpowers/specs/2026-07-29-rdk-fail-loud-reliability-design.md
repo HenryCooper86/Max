@@ -112,11 +112,12 @@ immediately instead of waiting 400 ms for the gate to re-arm.
 
 ### Alert priority covers the audible alert
 
-`playback` gains a deferred release: `releasePriority()` called while queued
-alert audio has not finished sets a pending flag instead of dropping the lock.
-The final `pump()` cycle — the one that empties the queue — schedules one last
-check at `drainedUntil`, and that check completes the release once the last
-handed-over chunk has finished playing. A `status: hearing` or
+`playback` gains a deferred release: `releasePriority()` called while alert
+audio is still queued or playing computes when that audio finishes — the drain
+point of everything already handed to `aplay` plus everything still queued at
+that moment — and schedules the actual release for then. Audio the relay
+queues *after* the release request does not extend the hold, so a barge-in
+against Max's ordinary speech right after an alert is not refused. A `status: hearing` or
 `hazard.alert.interrupt` flush arriving mid-alert is refused for the alert's
 whole audible duration, which is what `alert-player.ts`'s header already
 claims.
@@ -244,8 +245,9 @@ Debugging a stopped service is unaffected.
   `terminate` → reconnect path; close codes and error messages logged;
   `connect()` while open is a no-op.
 - Alert priority: with the fake clock, `releasePriority()` mid-drain defers
-  until the queue empties and `drainedUntil` passes; a `flush()` inside that
-  window is refused; release completes after.
+  until the alert's computed end; a `flush()` inside that window is refused;
+  release completes after; audio queued after the release request does not
+  extend the hold.
 - `decideReconnect` receives the live gate state (wiring test).
 
 ### Automated — pytest (on the board, as today)

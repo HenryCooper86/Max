@@ -86,6 +86,15 @@ def main() -> None:
 
     cameras.open()
 
+    from monitor import start_monitor  # noqa: PLC0415
+    from notify import sd_notify  # noqa: PLC0415
+
+    def exit_stale(stale: list[str]) -> None:
+        print(f"[vision] camera frames stale: {', '.join(stale)}; exiting for systemd to restart", flush=True)
+        os._exit(1)
+
+    start_monitor(cameras, notify=sd_notify, on_stale=exit_stale)
+
     from bench_server import serve as serve_bench  # noqa: PLC0415
 
     threading.Thread(

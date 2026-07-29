@@ -46,14 +46,16 @@ class FrameBuffer:
     directly, and preview pulls at 10 fps from a 24 fps stream.
     """
 
-    def __init__(self, camera: str, width: int, height: int, encode=None) -> None:
+    def __init__(self, camera: str, width: int, height: int, encode=None, clock=time.monotonic) -> None:
         self.camera = camera
         self.width = width
         self.height = height
         self._encode = encode or _encode_jpeg
+        self._clock = clock
         self._lock = threading.Lock()
         self._frame: Frame | None = None
         self._jpeg: bytes | None = None
+        self._received_at: float | None = None
 
     def put(self, nv12: bytes, t_ms: int) -> None:
         with self._lock:
@@ -65,6 +67,7 @@ class FrameBuffer:
                 height=self.height,
             )
             self._jpeg = None
+            self._received_at = self._clock()
 
     def latest(self) -> Frame | None:
         with self._lock:
@@ -85,6 +88,13 @@ class FrameBuffer:
             if self._frame is frame:
                 self._jpeg = data
         return data
+
+    def age_seconds(self) -> float | None:
+        """Seconds since the last frame arrived; None before the first one."""
+        with self._lock:
+            if self._received_at is None:
+                return None
+            return self._clock() - self._received_at
 
 
 def _isp_holders(run=subprocess.run) -> list[int]:
@@ -232,6 +242,9 @@ class MipiCamera:
 
     def jpeg(self) -> bytes | None:
         return self.buffer.jpeg()
+
+    def age_seconds(self) -> float | None:
+        return self.buffer.age_seconds()
 
     def frames(self, fps: float = 10.0) -> Iterator[Frame]:
         """Satisfies the FrameSource protocol, so ADAS reaches live frames through

@@ -32,6 +32,17 @@ export function decideReconnect(reason: CloseReason, gateOpen: boolean): "now" |
   return gateOpen ? "now" : "wait-for-voice";
 }
 
+/** The onClosed wiring, extracted so a test can prove the gate state is real —
+ *  it was hardcoded `false` for a while, which made the "now" branch dead. */
+export function reconnectDecision(
+  shuttingDown: boolean,
+  idle: boolean,
+  gateOpen: boolean
+): "now" | "wait-for-voice" | "never" {
+  const reason: CloseReason = shuttingDown ? "intentional" : idle ? "idle" : "dropped";
+  return decideReconnect(reason, gateOpen);
+}
+
 /**
  * Applies playback volume on the ES8326B mixer. Resolves false if amixer did not
  * exit cleanly, so Max never claims a volume change that did not happen.
@@ -71,6 +82,7 @@ function start(): void {
   const config = loadConfig();
   let attempt = 0;
   let waitingForVoice = false;
+  let gateOpen = false;
   let shuttingDown = false;
 
   const gate = createVoiceGate({ rmsThreshold: config.voiceGateRms, sustainMs: config.voiceGateMs });
@@ -169,8 +181,7 @@ function start(): void {
     },
     onClosed: (idle) => {
       playback.flush();
-      const reason: CloseReason = shuttingDown ? "intentional" : idle ? "idle" : "dropped";
-      const decision = decideReconnect(reason, false);
+      const decision = reconnectDecision(shuttingDown, idle, gateOpen);
       if (decision === "never") return;
       if (decision === "wait-for-voice") {
         waitingForVoice = true;
@@ -199,6 +210,7 @@ function start(): void {
     },
     onFrame: (frame) => {
       const speaking = gate(frame);
+      gateOpen = speaking;
       // Raw level, not the gate's verdict: the gate waits 400 ms for sustained
       // speech, which is far slower than the relay's barge-in event.
       bargeIn.observe(rms(frame));

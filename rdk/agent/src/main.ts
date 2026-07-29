@@ -15,6 +15,7 @@ import { initialHudState, reduceHud } from "./hud/state";
 import { createHazardHandler } from "./hazard";
 import { createRelayClient, nextBackoffMs } from "./relay";
 import { createVisionClient, type VisionClient, type VisionEvent } from "./vision-client";
+import { startHeartbeat } from "./watchdog";
 
 const VISION_RECONNECT_MS = 2_000;
 
@@ -84,6 +85,7 @@ function start(): void {
   let waitingForVoice = false;
   let gateOpen = false;
   let shuttingDown = false;
+  let lastFrameAt = Date.now();
 
   const gate = createVoiceGate({ rmsThreshold: config.voiceGateRms, sustainMs: config.voiceGateMs });
 
@@ -208,7 +210,12 @@ function start(): void {
     onReference: (stream) => {
       referenceSink = createReferenceSink({ stream });
     },
+    onFatal: (reason) => {
+      console.log(`[capture] ${reason}; exiting for systemd to restart`);
+      process.exit(1);
+    },
     onFrame: (frame) => {
+      lastFrameAt = Date.now();
       const speaking = gate(frame);
       gateOpen = speaking;
       // Raw level, not the gate's verdict: the gate waits 400 ms for sustained
@@ -225,6 +232,17 @@ function start(): void {
 
   capture.start();
   relay.connect();
+
+  startHeartbeat({ isHealthy: () => Date.now() - lastFrameAt < 10_000 });
+
+  process.on("uncaughtException", (error) => {
+    console.log(`[agent] uncaught exception: ${error.stack ?? error.message}`);
+    process.exit(1);
+  });
+  process.on("unhandledRejection", (reason) => {
+    console.log(`[agent] unhandled rejection: ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}`);
+    process.exit(1);
+  });
 
   const shutdown = (): void => {
     shuttingDown = true;

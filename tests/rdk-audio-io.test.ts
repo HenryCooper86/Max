@@ -472,11 +472,27 @@ describe("playback priority lock", () => {
   });
 
   it("resumes honouring flush once the alert finishes", () => {
+    // Task 3: releasePriority() now defers the unlock until the queued alert
+    // audio has audibly finished, rather than dropping the lock the instant
+    // it is called. Fire the scheduled release (simulating that time has
+    // passed) before flush() so this still exercises "once the alert finishes".
+    let clock = 0;
+    const scheduled: Array<{ fn: () => void; ms: number }> = [];
     const fake = fakeChild();
-    const playback = createPlayback({ device: "plughw:0,0", spawn: () => fake.child });
+    const playback = createPlayback({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      now: () => clock,
+      schedule: (fn, ms) => {
+        scheduled.push({ fn, ms });
+        return 0 as unknown as NodeJS.Timeout;
+      }
+    });
     playback.write(new Int16Array(240));
     playback.holdPriority();
     playback.releasePriority();
+    clock = 1000;
+    scheduled.forEach(({ fn }) => fn());
     playback.flush();
     expect(fake.kill).toHaveBeenCalled();
   });
@@ -505,6 +521,83 @@ describe("playback priority lock", () => {
     playback.holdPriority();
     playback.stop();
     expect(fake.kill).toHaveBeenCalled();
+  });
+
+  it("holds priority until the queued alert has audibly finished", () => {
+    let clock = 0;
+    const scheduled: Array<{ fn: () => void; ms: number }> = [];
+    const fake = fakeChild();
+    const playback = createPlayback({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      now: () => clock,
+      schedule: (fn, ms) => {
+        scheduled.push({ fn, ms });
+        return 0 as unknown as NodeJS.Timeout;
+      }
+    });
+    playback.holdPriority();
+    // 12_000 samples at 24 kHz = 500 ms of alert audio.
+    playback.write(new Int16Array(12_000));
+    playback.releasePriority();
+
+    playback.flush(); // mid-alert: must be refused
+    expect(fake.kill).not.toHaveBeenCalled();
+
+    const release = scheduled.find(({ ms }) => ms >= 400);
+    expect(release).toBeDefined();
+    clock = 600;
+    release!.fn();
+    playback.flush(); // after the alert: honoured
+    expect(fake.kill).toHaveBeenCalled();
+  });
+
+  it("audio queued after the release request does not extend the hold", () => {
+    let clock = 0;
+    const scheduled: Array<{ fn: () => void; ms: number }> = [];
+    const fake = fakeChild();
+    const playback = createPlayback({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      now: () => clock,
+      schedule: (fn, ms) => {
+        scheduled.push({ fn, ms });
+        return 0 as unknown as NodeJS.Timeout;
+      }
+    });
+    playback.holdPriority();
+    playback.write(new Int16Array(12_000)); // the 500 ms alert
+    playback.releasePriority();
+    const release = scheduled.find(({ ms }) => ms >= 400);
+    playback.write(new Int16Array(48_000)); // 2 s of relay speech behind it
+    clock = 600;
+    release!.fn();
+    playback.flush(); // Max's ordinary speech is interruptible again
+    expect(fake.kill).toHaveBeenCalled();
+  });
+
+  it("a new alert cancels a stale pending release", () => {
+    let clock = 0;
+    const scheduled: Array<{ fn: () => void; ms: number }> = [];
+    const fake = fakeChild();
+    const playback = createPlayback({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      now: () => clock,
+      schedule: (fn, ms) => {
+        scheduled.push({ fn, ms });
+        return 0 as unknown as NodeJS.Timeout;
+      }
+    });
+    playback.holdPriority();
+    playback.write(new Int16Array(12_000));
+    playback.releasePriority();
+    const stale = scheduled.find(({ ms }) => ms >= 400);
+    playback.holdPriority(); // second alert begins before the first release fires
+    clock = 600;
+    stale!.fn(); // the stale timer must not drop the new hold
+    playback.flush();
+    expect(fake.kill).not.toHaveBeenCalled();
   });
 });
 

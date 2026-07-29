@@ -77,6 +77,13 @@ def main() -> None:
         os.unlink(SOCKET_PATH)
     os.makedirs(os.path.dirname(SOCKET_PATH), exist_ok=True)
 
+    # Before anything can record, so a manifest still flagged `recording` can
+    # only belong to a process that is gone. This is what makes a clip the board
+    # died partway through show up in the gallery instead of vanishing.
+    repaired = gallery.reconcile()
+    if repaired:
+        print(f"[vision] recovered {len(repaired)} interrupted capture(s): {', '.join(repaired)}", flush=True)
+
     cameras.open()
 
     from bench_server import serve as serve_bench  # noqa: PLC0415

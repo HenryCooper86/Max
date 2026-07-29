@@ -210,8 +210,21 @@ class CameraPair:
             if data is None:
                 continue
             directory.mkdir(parents=True, exist_ok=True)
-            with (directory / filename).open("ab") as handle:
-                handle.write(data)
+            try:
+                self._append_frame(directory / filename, data)
+            except OSError as error:
+                # ENOSPC or a dying card. The thread dying here is what left
+                # manifests stuck at "recording": true; stop cleanly instead,
+                # keeping the frames already on disk. A truncated final JPEG is
+                # fine — every reader scans for SOI markers.
+                print(f"[vision] recording write failed ({error}); stopping with the frames on disk", flush=True)
+                if gallery is not None:
+                    self.stop_recording(gallery)
+                return
+
+    def _append_frame(self, path: Path, data: bytes) -> None:
+        with path.open("ab") as handle:
+            handle.write(data)
 
     def stop_recording(self, gallery: Gallery) -> dict:
         with self._lock:

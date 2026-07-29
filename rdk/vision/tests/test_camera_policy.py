@@ -138,6 +138,27 @@ def test_recording_writes_frames_to_the_segment(pair, gallery):
     assert written.count(b"\xff\xd8") == 2
 
 
+def test_a_disk_error_stops_the_recording_with_a_finished_manifest(pair, gallery):
+    result = pair.start_recording(gallery, drive=False)
+    assert result["status"] == "ok"
+    pair_id = pair.recording_id
+
+    pair.write_recording_frame()  # one healthy write first
+
+    def refuse(path, data):
+        raise OSError(28, "No space left on device")
+
+    pair._append_frame = refuse
+    pair.write_recording_frame()
+
+    # The writer stopped itself cleanly: no recording in flight, and the
+    # manifest describes a finished clip rather than staying "recording": true
+    # until the next restart's reconcile.
+    assert pair.recording_id is None
+    manifest = json.loads((gallery.pair_dir(pair_id) / "manifest.json").read_text())
+    assert manifest["recording"] is False
+
+
 def test_recording_only_writes_cameras_the_manifest_claims(pair, gallery):
     pair.rear = FakeCamera(works=False)
     result = pair.start_recording(gallery, drive=False)

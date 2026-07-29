@@ -637,6 +637,12 @@ of entering systemd's permanent `failed` state. Bench work is unaffected:
 stopping a service, or running the agent by hand outside systemd (no
 `NOTIFY_SOCKET`), trips nothing.
 
+**Unit files and heartbeat-emitting code must deploy together.** Install the new
+unit files and sync `/opt/max/rdk` in the same session, then `systemctl daemon-reload`
+and restart both services once both have landed. Unit files with `WatchdogSec=30`
+pointed at code that never sends `WATCHDOG=1` will restart healthy services every
+30 s.
+
 Only the exact string `1` enables `MAX_RELAY_INSECURE_TLS`; anything else leaves
 certificate validation on.
 

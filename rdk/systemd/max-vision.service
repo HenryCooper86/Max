@@ -26,7 +26,7 @@ Restart=always
 RestartSec=2
 # The sidecar's frame-age monitor sends WATCHDOG=1 while frames flow (monitor.py).
 WatchdogSec=30
-# Heartbeats arrive from short-lived systemd-notify children, not the main PID.
+# Heartbeats arrive from the service's own process via the notify socket (notify.py).
 NotifyAccess=all
 TimeoutStopSec=10
 StandardOutput=journal

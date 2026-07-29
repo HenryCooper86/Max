@@ -74,7 +74,7 @@ describe("parseClientEvent — hazard.report", () => {
         message: "前车急刹，注意保持车距！",
         advice: "立即收油，平稳减速。",
         ttcSeconds: 1.4,
-        latencyMs: 180
+        handoverMs: 180
       })
     );
     expect(event).toMatchObject({
@@ -82,7 +82,7 @@ describe("parseClientEvent — hazard.report", () => {
       threat: "forward_collision",
       severity: "critical",
       ttcSeconds: 1.4,
-      latencyMs: 180
+      handoverMs: 180
     });
   });
 

@@ -44,7 +44,7 @@ export function createHazardHandler(options: HazardHandlerOptions): {
         return;
       }
 
-      const latencyMs = await options.player.play(event.threat);
+      const handoverMs = await options.player.play(event.threat);
 
       try {
         options.report({
@@ -56,7 +56,7 @@ export function createHazardHandler(options: HazardHandlerOptions): {
           message: event.message,
           advice: event.advice,
           ttcSeconds: event.ttcSeconds,
-          latencyMs
+          handoverMs
         });
       } catch (error) {
         // Best-effort, and never at the cost of the warning the rider just heard.

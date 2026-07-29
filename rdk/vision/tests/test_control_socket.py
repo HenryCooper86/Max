@@ -21,12 +21,9 @@ def test_concurrent_writes_do_not_interleave(tmp_path):
         client.connect(sock_path)
         client.settimeout(5.0)
 
-        hammer_done = threading.Event()
-
         def hammer():
             for i in range(200):
                 service.events.broadcast({"event": "hazard", "threat": f"t{i}"})
-            hammer_done.set()
 
         threads = [threading.Thread(target=hammer) for _ in range(4)]
         for thread in threads:

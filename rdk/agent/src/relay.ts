@@ -13,6 +13,12 @@ export type { RdkConfig };
 
 const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_CAP_MS = 30_000;
+/** If the TCP connect succeeds but the WS upgrade never completes (coverage
+ *  drop mid-handshake, half-open NAT), `ws` waits forever with no `close` and
+ *  no backoff scheduled — the agent goes silently mute. Bounding the
+ *  handshake turns that hang into the ordinary error+close(1006) recovery
+ *  path below. */
+export const HANDSHAKE_TIMEOUT_MS = 15_000;
 
 export function nextBackoffMs(attempt: number): number {
   return Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** attempt);
@@ -80,7 +86,10 @@ export type SocketLike = {
 };
 
 export type RelayClientOptions = {
-  wsFactory?: (url: string, options: { rejectUnauthorized: boolean }) => SocketLike;
+  wsFactory?: (
+    url: string,
+    options: { rejectUnauthorized: boolean; handshakeTimeout?: number }
+  ) => SocketLike;
   pingIntervalMs?: number;
   setInterval?: typeof globalThis.setInterval;
   clearInterval?: typeof globalThis.clearInterval;
@@ -89,6 +98,18 @@ export type RelayClientOptions = {
 
 const SOCKET_CONNECTING = 0;
 const SOCKET_OPEN = 1;
+
+/** Options the default (non-injected) `wsFactory` gives the real `ws`
+ *  constructor. Exported so a unit test can pin the handshake timeout without
+ *  standing up a live socket. */
+export function defaultSocketOptions(
+  config: RdkConfig
+): { rejectUnauthorized: boolean; handshakeTimeout: number } {
+  return {
+    rejectUnauthorized: !config.insecureTls,
+    handshakeTimeout: HANDSHAKE_TIMEOUT_MS
+  };
+}
 
 export function createRelayClient(
   config: RdkConfig,
@@ -102,7 +123,7 @@ export function createRelayClient(
 
   const log = options.log ?? ((line: string) => console.log(line));
   const wsFactory =
-    options.wsFactory ?? ((url, socketOptions) => new WebSocket(url, socketOptions) as unknown as SocketLike);
+    options.wsFactory ?? ((url) => new WebSocket(url, defaultSocketOptions(config)) as unknown as SocketLike);
 
   function open(): void {
     if (socket && (socket.readyState === SOCKET_CONNECTING || socket.readyState === SOCKET_OPEN)) {
@@ -162,7 +183,7 @@ export function createRelayClient(
         return;
       }
       if (event.type === "session.started") {
-        ready = true;
+        if (socket === current) ready = true;
         current.send(JSON.stringify({ type: "audio.start" }));
         handlers.onReady();
       }
@@ -189,8 +210,8 @@ export function createRelayClient(
       if (socket === current) {
         ready = false;
         socket = null;
+        handlers.onClosed(code === IDLE_CLOSE_CODE || intentional);
       }
-      handlers.onClosed(code === IDLE_CLOSE_CODE || intentional);
     });
 
     current.on("error", (...args: unknown[]) => {

@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { createRelayClient, type SocketLike } from "../rdk/agent/src/relay";
+import {
+  createRelayClient,
+  defaultSocketOptions,
+  HANDSHAKE_TIMEOUT_MS,
+  type SocketLike
+} from "../rdk/agent/src/relay";
 import type { RdkConfig } from "../rdk/agent/src/config";
 
 const CONFIG = {
@@ -91,14 +96,19 @@ describe("createRelayClient lifecycle", () => {
 
   it("a stale socket's late close does not stomp the live socket's ready flag", () => {
     const sockets: ReturnType<typeof fakeSocket>[] = [];
-    const client = createRelayClient(CONFIG, HANDLERS, {
-      wsFactory: () => {
-        const socket = fakeSocket();
-        sockets.push(socket);
-        return socket;
-      },
-      log: () => {}
-    });
+    const closedCalls: boolean[] = [];
+    const client = createRelayClient(
+      CONFIG,
+      { ...HANDLERS, onClosed: (idle) => closedCalls.push(idle) },
+      {
+        wsFactory: () => {
+          const socket = fakeSocket();
+          sockets.push(socket);
+          return socket;
+        },
+        log: () => {}
+      }
+    );
     client.connect();
     sockets[0]!.readyState = 2; // CLOSING — guard lets a new connect through
     client.connect();
@@ -107,9 +117,53 @@ describe("createRelayClient lifecycle", () => {
     sockets[1]!.emit("open");
     sockets[1]!.emit("message", Buffer.from(JSON.stringify({ type: "session.started" })), false);
     sockets[0]!.emit("close", 1006, Buffer.alloc(0)); // stale close lands late
+    // the stale close must not touch live state: no onClosed, no flush upstream.
+    expect(closedCalls.length).toBe(0);
     client.sendFrame(new Int16Array(320));
     // ready must still be true on the live socket: the frame goes out.
     expect(sockets[1]!.sent.some((item) => Buffer.isBuffer(item))).toBe(true);
+    // the live socket's own close must still drive reconnection normally.
+    sockets[1]!.emit("close", 1000, Buffer.alloc(0));
+    expect(closedCalls).toEqual([false]);
+  });
+
+  it("a handshake that dies before open still reaches the close path and can reconnect", () => {
+    const sockets: ReturnType<typeof fakeSocket>[] = [];
+    const lines: string[] = [];
+    const closedCalls: boolean[] = [];
+    const client = createRelayClient(
+      CONFIG,
+      { ...HANDLERS, onClosed: (idle) => closedCalls.push(idle) },
+      {
+        wsFactory: () => {
+          const socket = fakeSocket();
+          sockets.push(socket);
+          return socket;
+        },
+        log: (line) => lines.push(line)
+      }
+    );
+    client.connect();
+    // This is what ws does on a handshake timeout: `error` then `close(1006)`,
+    // `open` never fires.
+    sockets[0]!.emit("error", new Error("Opening handshake has timed out"));
+    sockets[0]!.emit("close", 1006, Buffer.alloc(0));
+    expect(lines.some((line) => line.includes("Opening handshake has timed out"))).toBe(true);
+    expect(lines.some((line) => line.includes("closed code=1006"))).toBe(true);
+    expect(closedCalls).toEqual([false]);
+    // The already-open guard must not still be blocking: the wedged socket's
+    // close nulled it out, so a fresh connect() creates a new socket.
+    client.connect();
+    expect(sockets.length).toBe(2);
+  });
+});
+
+describe("defaultSocketOptions", () => {
+  it("gives the real WebSocket constructor a bounded handshake alongside TLS policy", () => {
+    const opts = defaultSocketOptions(CONFIG);
+    expect(opts.handshakeTimeout).toBe(HANDSHAKE_TIMEOUT_MS);
+    expect(opts.handshakeTimeout).toBe(15_000);
+    expect(opts.rejectUnauthorized).toBe(true);
   });
 });
 

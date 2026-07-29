@@ -90,17 +90,23 @@ export function AdminWorkspace({ agent, user, onAuthenticationExpired, onClose }
       </header>
       <div className="adminWorkspaceLayout">
         <nav className="adminWorkspaceNav" aria-label={language === "en-US" ? "Admin workspace" : "Admin 工作区"}>
-          {allowed.map((item) => (
-            <button
-              type="button"
-              key={item}
-              className={active === item ? "active" : ""}
-              aria-current={active === item ? "page" : undefined}
-              onClick={() => setSection(item)}
-            >
-              {adminSectionLabel(item, language)}
-            </button>
-          ))}
+          {/* `display: contents` on desktop, so the sidebar is laid out exactly
+              as before. On a phone this becomes the scrolling tab strip, which
+              lets the account controls sit on their own row instead of being
+              pushed off the right-hand end of it. */}
+          <div className="adminWorkspaceNavTabs">
+            {allowed.map((item) => (
+              <button
+                type="button"
+                key={item}
+                className={active === item ? "active" : ""}
+                aria-current={active === item ? "page" : undefined}
+                onClick={() => setSection(item)}
+              >
+                {adminSectionLabel(item, language)}
+              </button>
+            ))}
+          </div>
           <AccountSessionControls user={user} onSignedOut={onAuthenticationExpired} />
         </nav>
         <section className="adminWorkspaceContent">

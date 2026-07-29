@@ -3728,15 +3728,32 @@ button.opsCard:disabled {
     radial-gradient(100% 60% at 50% 116%, rgba(255, 138, 66, 0.1), transparent 66%), var(--void);
 }
 
+/* A definite height, not just a minimum. The start control is the one thing a
+   rider must be able to hit, and with `min-height` the column simply grew past
+   the fold instead of asking its flexible parts to give way: measured on an
+   iPhone SE with captions and a hazard banner up, the mic button sat 140px
+   below the fold. A definite height gives flexbox something to distribute, so
+   the helmet and the caption list shrink and the dock stays put. */
 .voiceFace {
   position: relative;
   display: flex;
   width: min(100%, 960px);
+  height: 100dvh;
   min-height: 100dvh;
   margin: 0 auto;
-  padding: clamp(22px, 4vh, 42px) clamp(18px, 4vw, 44px) clamp(24px, 4vh, 40px);
+  padding: clamp(22px, 4vh, 42px) clamp(18px, 4vw, 44px) max(clamp(24px, 4vh, 40px), env(safe-area-inset-bottom));
   flex-direction: column;
   align-items: center;
+}
+
+/* The fixed furniture: each is small, and each is the wrong thing to shrink.
+   Without this they are all `flex-shrink: 1` and squash before the helmet does. */
+.voiceTopbar,
+.voiceHazard,
+.voiceReadout,
+.voiceUtilities,
+.voicePrimaryControls {
+  flex: 0 0 auto;
 }
 
 /* Top bar: MAX wordmark + a mono relay telltale, split apart so brand and
@@ -3818,7 +3835,10 @@ button.opsCard:disabled {
 .voiceHero {
   display: grid;
   width: 100%;
-  min-height: 320px;
+  /* Viewport-relative, so a short screen is allowed to shrink the helmet
+     instead of pushing the dock off the bottom. `min-height: 0` is what lets
+     a flex item go below its content size at all. */
+  min-height: min(320px, 34dvh);
   max-height: 56dvh;
   flex: 1 1 460px;
   place-items: center;
@@ -4034,15 +4054,22 @@ button.opsCard:disabled {
 
 /* Live captions appear as the same quiet lower card used by the iOS app. */
 .voiceFace.captionsVisible .voiceHero {
-  min-height: 210px;
+  min-height: min(210px, 22dvh);
   max-height: 34dvh;
   flex-basis: 300px;
 }
 
 .voiceTranscript {
   z-index: 5;
+  display: flex;
   width: min(100%, 720px);
+  min-height: 0;
   margin-top: 8px;
+  flex-direction: column;
+  /* Shares the leftover space with the helmet rather than claiming a fixed
+     block of it. The list inside scrolls, so captions can never be the reason
+     the dock leaves the screen. */
+  flex: 1 1 auto;
   overflow: hidden;
   border: 1px solid rgba(166, 183, 177, 0.15);
   border-radius: 24px;
@@ -4085,8 +4112,11 @@ button.opsCard:disabled {
 .voiceTranscriptList {
   display: flex;
   max-height: min(260px, 30dvh);
-  min-height: 112px;
+  /* A floor in px would re-impose the height the panel is trying to give up on
+     a short screen; keep it proportional so the list can go small and scroll. */
+  min-height: min(112px, 14dvh);
   padding: 13px 16px 16px;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 9px;
   overflow-y: auto;
@@ -4810,7 +4840,14 @@ button.opsCard:disabled {
   background: #0e1512;
 }
 
-.adminWorkspaceNav > button {
+/* Transparent to layout: the sidebar stacks its buttons exactly as it did
+   before this wrapper existed. The phone breakpoint gives it a real box. */
+.adminWorkspaceNavTabs {
+  display: contents;
+}
+
+.adminWorkspaceNav > button,
+.adminWorkspaceNavTabs > button {
   min-height: 44px;
   padding: 0 13px;
   border: 1px solid transparent;
@@ -4825,12 +4862,14 @@ button.opsCard:disabled {
     color 0.16s ease;
 }
 
-.adminWorkspaceNav > button:hover {
+.adminWorkspaceNav > button:hover,
+.adminWorkspaceNavTabs > button:hover {
   background: rgba(255, 255, 255, 0.035);
   color: #eaf2ee;
 }
 
-.adminWorkspaceNav > button.active {
+.adminWorkspaceNav > button.active,
+.adminWorkspaceNavTabs > button.active {
   border-color: rgba(62, 232, 159, 0.2);
   background: rgba(62, 232, 159, 0.1);
   color: var(--admin-good);
@@ -5173,48 +5212,72 @@ button.opsCard:disabled {
     grid-template-columns: 1fr;
   }
 
+  /* Two rows, not one long sideways scroller. With the account bar inside the
+     same scrolling row it sat 500px off the right-hand edge: signing out meant
+     discovering you could drag a strip of tabs sideways. */
   .adminWorkspaceNav {
     position: sticky;
     top: 0;
     z-index: 4;
-    overflow-x: auto;
+    overflow-x: visible;
     padding: 10px 14px;
-    flex-direction: row;
+    flex-direction: column;
+    gap: 8px;
     border-right: 0;
     border-bottom: 1px solid rgba(180, 198, 190, 0.11);
   }
 
-  .adminWorkspaceNav > button {
+  /* The tabs keep the horizontal scroll — there are five of them and they are
+     genuinely wider than a phone. */
+  .adminWorkspaceNavTabs {
+    display: flex;
+    overflow-x: auto;
+    flex-direction: row;
+    gap: 5px;
+    scrollbar-width: none;
+  }
+
+  .adminWorkspaceNavTabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .adminWorkspaceNavTabs > button {
     flex: 0 0 auto;
   }
 
   .adminWorkspaceNav > .accountBar {
     display: flex;
-    min-width: max-content;
+    min-width: 0;
     flex: 0 0 auto;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
+    gap: 8px;
     margin: 0;
-    padding: 0 0 0 8px;
+    padding: 8px 0 0;
     border: 0;
-    border-left: 1px solid rgba(180, 198, 190, 0.1);
+    border-top: 1px solid rgba(180, 198, 190, 0.1);
   }
 
   .adminWorkspaceNav .accountIdentity {
-    min-width: max-content;
+    min-width: 0;
   }
 
+  /* `flex: 0 0 auto` (the desktop default) meant these rows could not shrink,
+     so `flex-wrap` never engaged and the action pills ran 51px off the side of
+     a 375px screen. Let them shrink, and they wrap instead. */
   .adminWorkspaceNav .accountActions,
   .adminWorkspaceNav .accountForm,
   .adminWorkspaceNav .accountFields {
     display: flex;
     width: auto;
-    flex-wrap: nowrap;
+    min-width: 0;
+    flex: 1 1 auto;
+    flex-wrap: wrap;
   }
 
   .adminWorkspaceNav .accountActions button,
   .adminWorkspaceNav .accountFields input {
     width: auto;
-    min-width: max-content;
+    min-width: 0;
   }
 
   .adminWorkspaceNav .accountMemoryNotice {
@@ -5262,8 +5325,10 @@ button.opsCard:disabled {
     text-overflow: clip;
   }
 
+  /* `max-content` here forced the bar as wide as its widest row, which is what
+     pushed it out of the viewport once it left the scrolling strip. */
   .adminWorkspaceNav > .accountBar {
-    min-width: max-content;
+    min-width: 0;
     flex-basis: auto;
   }
 
@@ -5347,7 +5412,7 @@ button.opsCard:disabled {
   }
 
   .voiceHero {
-    min-height: 260px;
+    min-height: min(260px, 30dvh);
     max-height: 52dvh;
   }
 
@@ -5357,7 +5422,7 @@ button.opsCard:disabled {
   }
 
   .voiceFace.captionsVisible .voiceHero {
-    min-height: 190px;
+    min-height: min(190px, 20dvh);
     max-height: 28dvh;
   }
 
@@ -5417,11 +5482,117 @@ button.opsCard:disabled {
   }
 
   .voiceHero {
-    min-height: 250px;
+    min-height: min(250px, 30dvh);
   }
 
   .voiceMicButton {
     min-height: 60px;
+  }
+}
+
+/* Phone held sideways. Stacked vertically there is simply not enough height —
+   a 844x390 screen ran 125px past the fold and took the dock with it — so the
+   helmet moves beside the readout instead of above it, and the column of text
+   and controls gets the other half. The helmet spans the right column's rows so
+   it stays the centrepiece rather than a thumbnail. */
+@media (orientation: landscape) and (max-height: 560px) {
+  .voiceFace {
+    display: grid;
+    padding-top: clamp(10px, 2.6vh, 18px);
+    padding-bottom: max(clamp(10px, 2.6vh, 18px), env(safe-area-inset-bottom));
+    column-gap: clamp(16px, 3.4vw, 40px);
+    grid-template-areas:
+      "topbar topbar"
+      "hazard hazard"
+      "hero   readout"
+      "hero   captions"
+      "hero   utilities"
+      "hero   dock";
+    grid-template-columns: minmax(0, 0.95fr) minmax(0, 1fr);
+    grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
+    /* Stretch, not center: a centred item taller than its row spills out of
+       both ends of it, which is how the caption panel ended up drawn over the
+       readout and the hazard banner. Stretched, it fills the row and scrolls. */
+    align-items: stretch;
+  }
+
+  /* With captions closed the flexible row is empty, which left the readout
+     stranded at the top of a 158px gap. Hand that space to the readout so the
+     right-hand column reads as one centred stack. */
+  .voiceFace:not(.captionsVisible) {
+    grid-template-rows: auto auto minmax(0, 1fr) 0 auto auto;
+  }
+
+  .voiceTopbar {
+    align-self: center;
+    grid-area: topbar;
+  }
+
+  .voiceHazard {
+    align-self: center;
+    grid-area: hazard;
+    margin-top: 8px;
+  }
+
+  /* Both selectors, because `.captionsVisible .voiceHero` outranks a bare
+     `.voiceHero` — leaving it in place pinned the helmet to 34dvh of a 390px
+     screen while its column had 345px to give. */
+  .voiceHero,
+  .voiceFace.captionsVisible .voiceHero {
+    min-height: 0;
+    max-height: none;
+    /* Spans the whole right-hand stack, so the helmet stays the centrepiece
+       rather than shrinking to the height of one row. */
+    grid-area: hero;
+  }
+
+  /* Width from the column, height from the aspect ratio, then clamped by the
+     row — the same shape the portrait stage uses. Deriving width from `height:
+     100%` instead let the square outgrow its column and lean into the readout,
+     because an aspect-ratio-derived width ignores `max-width`. The SVGs inside
+     letterbox, so the bezel stays a true circle either way. */
+  .voiceHero .helmetStage {
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    max-height: 100%;
+    aspect-ratio: 1;
+  }
+
+  .voiceReadout {
+    align-self: center;
+    grid-area: readout;
+    margin-top: 0;
+  }
+
+  .voiceTranscript {
+    min-height: 0;
+    margin-top: 8px;
+    grid-area: captions;
+  }
+
+  /* The list is the only thing that may grow; it scrolls inside the panel. */
+  .voiceTranscriptList {
+    max-height: none;
+    min-height: 0;
+  }
+
+  .voiceUtilities {
+    align-self: center;
+    margin-top: 8px;
+    grid-area: utilities;
+  }
+
+  .voicePrimaryControls {
+    align-self: center;
+    margin-top: 10px;
+    grid-area: dock;
+  }
+
+  /* One line, not three: the banner is safety-critical so it stays, but in
+     landscape it must not eat the height the controls need. */
+  .voiceHazard .hazardBody p {
+    display: none;
   }
 }
 

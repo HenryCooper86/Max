@@ -246,11 +246,13 @@ describe("createPlayback", () => {
         return 0 as unknown as NodeJS.Timeout;
       }
     });
-    // 24_000 samples at 24 kHz = 1 s — far over the 80 ms cap, so a pump gets scheduled.
-    playback.write(new Int16Array(24_000));
+    // Enqueue 50 × 480 samples (20 ms each at 24 kHz) = 1 s total — far over the 80 ms cap.
+    // pump() will consume ~80 ms of audio, reschedule itself, then leave the queue non-empty.
+    for (let i = 0; i < 50; i += 1) playback.write(new Int16Array(480));
     expect(children.length).toBe(1);
-    playback.flush();
+    playback.flush(); // nulls child, empties queue
     for (const fn of scheduled.splice(0)) fn();
+    // After flush(), queue is empty. The rescheduled pump must not spawn a second child.
     expect(children.length).toBe(1);
   });
 });

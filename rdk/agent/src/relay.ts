@@ -159,8 +159,10 @@ export function createRelayClient(
       const reason = args[1] as Buffer;
       const detail = reason && reason.length > 0 ? ` reason=${reason.toString("utf8")}` : "";
       log(`[relay] closed code=${code}${detail}`);
-      ready = false;
-      if (socket === current) socket = null;
+      if (socket === current) {
+        ready = false;
+        socket = null;
+      }
       handlers.onClosed(code === IDLE_CLOSE_CODE || intentional);
     });
 

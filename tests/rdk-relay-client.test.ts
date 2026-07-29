@@ -88,4 +88,27 @@ describe("createRelayClient lifecycle", () => {
     client.connect();
     expect(sockets.length).toBe(2);
   });
+
+  it("a stale socket's late close does not stomp the live socket's ready flag", () => {
+    const sockets: ReturnType<typeof fakeSocket>[] = [];
+    const client = createRelayClient(CONFIG, HANDLERS, {
+      wsFactory: () => {
+        const socket = fakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      log: () => {}
+    });
+    client.connect();
+    sockets[0]!.readyState = 2; // CLOSING — guard lets a new connect through
+    client.connect();
+    expect(sockets.length).toBe(2);
+    sockets[1]!.readyState = 1;
+    sockets[1]!.emit("open");
+    sockets[1]!.emit("message", Buffer.from(JSON.stringify({ type: "session.started" })), false);
+    sockets[0]!.emit("close", 1006, Buffer.alloc(0)); // stale close lands late
+    client.sendFrame(new Int16Array(320));
+    // ready must still be true on the live socket: the frame goes out.
+    expect(sockets[1]!.sent.some((item) => Buffer.isBuffer(item))).toBe(true);
+  });
 });

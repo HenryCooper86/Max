@@ -112,6 +112,9 @@ def reap_orphans(holders=_isp_holders, kill=os.kill, sleep=time.sleep) -> list[i
     Without this a max-vision restart can never reacquire the camera: the dead
     service's child keeps the ISP, and the next open fails with a message about
     sensor detection that sends you looking at i2c. Measured, not hypothesised.
+
+    Called once per acquisition cycle by the opener (CameraPair.open,
+    record_ride) — never per camera, or the second camera reaps the first.
     """
     pids = holders()
     if not pids:
@@ -165,8 +168,6 @@ class MipiCamera:
         import rclpy  # noqa: PLC0415 - board-only
         from rclpy.executors import SingleThreadedExecutor  # noqa: PLC0415
         from sensor_msgs.msg import Image  # noqa: PLC0415
-
-        reap_orphans()
 
         self._proc = subprocess.Popen(
             [

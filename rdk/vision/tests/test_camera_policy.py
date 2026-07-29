@@ -172,3 +172,31 @@ def test_stopping_a_recording_stops_the_writer_thread(pair, gallery):
     # A writer that outlives its recording would append to a finished segment,
     # and the manifest would describe a file that kept changing after the fact.
     assert (gallery.pair_dir(result["detail"]) / "front.mjpeg").read_bytes() == settled
+
+
+def test_open_reaps_exactly_once_before_the_first_camera(monkeypatch):
+    import mipi_camera
+    import sensors
+
+    calls = []
+    monkeypatch.setattr(mipi_camera, "reap_orphans", lambda: calls.append("reap"))
+
+    class FakeMipi:
+        def __init__(self, channel, sensor, camera, width, height):
+            self.camera = camera
+
+        def start(self):
+            calls.append(f"start-{self.camera}")
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(mipi_camera, "MipiCamera", FakeMipi)
+    monkeypatch.setattr(sensors, "discover", lambda: {0: "IMX219", 2: "IMX219"})
+
+    pair = CameraPair(front_channel=0, rear_channel=2)
+    pair.open()
+
+    # One reap, before any camera starts — the per-camera reap is what made
+    # the rear camera SIGKILL the front one's just-started mipi_cam.
+    assert calls == ["reap", "start-front", "start-rear"]

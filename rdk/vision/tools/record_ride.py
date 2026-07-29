@@ -85,8 +85,13 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.source == "mipi_cam":
+        from mipi_camera import reap_orphans  # noqa: PLC0415
         from recorder.mipi_source import write_jpeg  # noqa: PLC0415
 
+        # Once per acquisition, before RideRecorder.start() opens front then
+        # rear — a per-camera reap would SIGKILL the front camera's mipi_cam
+        # while starting the rear one.
+        reap_orphans()
         open_fn, encode_fn, suffix = _open_mipi, write_jpeg, ".mjpeg"
     else:
         open_fn, encode_fn, suffix = _open_binding, _encode_binding, ".h264"

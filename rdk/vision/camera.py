@@ -51,8 +51,12 @@ class CameraPair:
         self._stop_timer: threading.Timer | None = None
 
     def open(self) -> None:
-        from mipi_camera import MipiCamera  # noqa: PLC0415 - board-only
+        from mipi_camera import MipiCamera, reap_orphans  # noqa: PLC0415 - board-only
         from sensors import discover  # noqa: PLC0415
+
+        # Once for the pair, before the first open — a per-camera reap would
+        # SIGKILL the front camera's mipi_cam while starting the rear one.
+        reap_orphans()
 
         # Never hardcode a sensor: an assumed IMX219 is why the OV5647 in CAM1
         # could not be opened, and the binding path cannot open either one.

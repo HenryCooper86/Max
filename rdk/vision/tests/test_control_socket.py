@@ -33,7 +33,7 @@ def test_concurrent_writes_do_not_interleave(tmp_path):
             thread.start()
         for i in range(50):
             client.sendall(
-                (json.dumps({"id": i, "method": "camera.photo", "args": {}}) + "\n").encode()
+                (json.dumps({"id": str(i), "method": "camera.photo", "args": {}}) + "\n").encode()
             )
         for thread in threads:
             thread.join(timeout=5.0)
@@ -51,8 +51,11 @@ def test_concurrent_writes_do_not_interleave(tmp_path):
 
         lines = [line for line in received.decode("utf-8").split("\n") if line]
         assert len(lines) >= 50
-        for line in lines:
-            json.loads(line)  # raises if two writes interleaved mid-line
+        parsed = [json.loads(line) for line in lines]  # raises if two writes interleaved mid-line
+        rpc_responses = [message for message in parsed if "id" in message]
+        hazard_events = [message for message in parsed if message.get("event") == "hazard"]
+        assert len(rpc_responses) == 50
+        assert len(hazard_events) > 0
     finally:
         server.shutdown()
 

@@ -91,6 +91,9 @@ def finalize(cameras, gallery, ride) -> None:
     # stopping the cameras out from under them would raise on the way down.
     if ride is not None:
         ride.stop()
+    # An orphaned mipi_cam holds the ISP, and the next start cannot open
+    # the camera at all. Reaping at startup covers a crash; this covers
+    # every ordinary stop.
     for camera in (cameras.front, cameras.rear):
         if camera is not None:
             camera.stop()

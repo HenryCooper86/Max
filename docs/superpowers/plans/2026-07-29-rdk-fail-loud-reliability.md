@@ -25,10 +25,12 @@
 ### Task 1: Capture child death is fatal, loudly
 
 **Files:**
+
 - Modify: `rdk/agent/src/audio/capture.ts`
 - Test: `tests/rdk-audio-io.test.ts`
 
 **Interfaces:**
+
 - Produces: `ChildProcessLike.on(event: "exit" | "error", listener)` with real signatures (Task 2 reuses); `CaptureOptions.onFatal?(reason: string): void` (Task 8 wires it in `main.ts`).
 
 - [ ] **Step 1: Upgrade the fake child in `tests/rdk-audio-io.test.ts` to record and fire event listeners**
@@ -143,18 +145,18 @@ Add to `CaptureOptions`:
 In `start()`, after the `child = options.aec ? spawn(...) : spawn(...)` assignment, add (the `child === current` identity check is what distinguishes an uninvited death from `stop()`, which nulls `child` before the async event arrives):
 
 ```ts
-      const current = child;
-      const name = useAec ? "max-aec" : "arecord";
-      current.on("error", (error) => {
-        if (child !== current) return;
-        child = null;
-        options.onFatal?.(`${name} failed to start: ${error.message}`);
-      });
-      current.on("exit", (code, signal) => {
-        if (child !== current) return;
-        child = null;
-        options.onFatal?.(`${name} exited code=${code} signal=${signal}`);
-      });
+const current = child;
+const name = useAec ? "max-aec" : "arecord";
+current.on("error", (error) => {
+  if (child !== current) return;
+  child = null;
+  options.onFatal?.(`${name} failed to start: ${error.message}`);
+});
+current.on("exit", (code, signal) => {
+  if (child !== current) return;
+  child = null;
+  options.onFatal?.(`${name} exited code=${code} signal=${signal}`);
+});
 ```
 
 - [ ] **Step 5: Run the tests to verify they pass**
@@ -174,10 +176,12 @@ git commit -m "fix(rdk): a dead capture child now kills the agent loudly"
 ### Task 2: Playback self-heals and stops respawning aplay on an empty queue
 
 **Files:**
+
 - Modify: `rdk/agent/src/audio/playback.ts`
 - Test: `tests/rdk-audio-io.test.ts`
 
 **Interfaces:**
+
 - Consumes: `ChildProcessLike` event signatures from Task 1.
 - Produces: nothing new — behavior only.
 
@@ -267,30 +271,30 @@ In `pump()`, add an early return before `ensure()` (an empty queue has nothing t
 In `ensure()`, register identity-checked handlers on the spawned child (after the existing `child.stdin?.on("error", ...)` line):
 
 ```ts
-  function ensure(): ChildProcessLike {
-    if (!child) {
-      const spawned = spawn("aplay", playbackArgs(options.device));
-      child = spawned;
-      // Barge-in SIGKILLs this child, so a write already in flight lands on a
-      // dead pipe. ... (keep the existing comment)
-      spawned.stdin?.on("error", () => {});
-      // flush()/stop() null `child` before this event can arrive, so reaching
-      // the body means the death was uninvited — an ALSA hiccup, an OOM kill.
-      // Respawn-on-next-write is the already-designed path; take it.
-      spawned.on("exit", (code, signal) => {
-        if (child !== spawned) return;
-        console.log(`[playback] aplay exited code=${code} signal=${signal}; respawning on next write`);
-        child = null;
-      });
-      spawned.on("error", (error) => {
-        if (child !== spawned) return;
-        console.log(`[playback] aplay failed to start: ${error.message}`);
-        child = null;
-      });
-      upsample = createUpsampler2x();
-    }
-    return child;
+function ensure(): ChildProcessLike {
+  if (!child) {
+    const spawned = spawn("aplay", playbackArgs(options.device));
+    child = spawned;
+    // Barge-in SIGKILLs this child, so a write already in flight lands on a
+    // dead pipe. ... (keep the existing comment)
+    spawned.stdin?.on("error", () => {});
+    // flush()/stop() null `child` before this event can arrive, so reaching
+    // the body means the death was uninvited — an ALSA hiccup, an OOM kill.
+    // Respawn-on-next-write is the already-designed path; take it.
+    spawned.on("exit", (code, signal) => {
+      if (child !== spawned) return;
+      console.log(`[playback] aplay exited code=${code} signal=${signal}; respawning on next write`);
+      child = null;
+    });
+    spawned.on("error", (error) => {
+      if (child !== spawned) return;
+      console.log(`[playback] aplay failed to start: ${error.message}`);
+      child = null;
+    });
+    upsample = createUpsampler2x();
   }
+  return child;
+}
 ```
 
 - [ ] **Step 4: Run the tests to verify they pass**
@@ -310,10 +314,12 @@ git commit -m "fix(rdk): playback survives an uninvited aplay death and stray pu
 ### Task 3: Alert priority covers the audible alert
 
 **Files:**
+
 - Modify: `rdk/agent/src/audio/playback.ts`
 - Test: `tests/rdk-audio-io.test.ts`
 
 **Interfaces:**
+
 - Produces: `releasePriority()` becomes deferred — same signature, new timing contract. Task 4's alert-player keeps calling it in `finally` unchanged.
 
 - [ ] **Step 1: Write the failing tests**
@@ -407,10 +413,10 @@ Expected: FAIL — today `releasePriority()` drops the lock immediately, so the 
 Track queued duration and a release generation. Near the existing state declarations:
 
 ```ts
-  let queuedSamples = 0;
-  // Incremented by holdPriority/stop so a scheduled release from a previous
-  // alert can recognise itself as stale and do nothing.
-  let releaseGeneration = 0;
+let queuedSamples = 0;
+// Incremented by holdPriority/stop so a scheduled release from a previous
+// alert can recognise itself as stale and do nothing.
+let releaseGeneration = 0;
 ```
 
 Maintain `queuedSamples`: in `write()` after the push (`queuedSamples += processed.length` where `processed` is the value pushed — name the pushed array in a local first); in `pump()` after the shift (`queuedSamples -= chunk.length`); in `flush()` and `stop()` alongside `queue = []` (`queuedSamples = 0`).
@@ -449,7 +455,7 @@ In `stop()`, add `releaseGeneration += 1;` next to the existing `priorityHeld = 
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run tests/rdk-audio-io.test.ts`
-Expected: PASS. The pre-existing priority-lock tests (`tests/rdk-audio-io.test.ts:348-397`) must still pass — if one asserts that `releasePriority()` unlocks immediately *while audio is still queued*, update that assertion to fire the scheduled release first and note why in the test.
+Expected: PASS. The pre-existing priority-lock tests (`tests/rdk-audio-io.test.ts:348-397`) must still pass — if one asserts that `releasePriority()` unlocks immediately _while audio is still queued_, update that assertion to fire the scheduled release first and note why in the test.
 
 - [ ] **Step 5: Commit**
 
@@ -463,10 +469,12 @@ git commit -m "fix(rdk): the alert priority lock now covers the audible alert, n
 ### Task 4: Rename the hazard latency to what it measures
 
 **Files:**
+
 - Modify: `rdk/agent/src/audio/alert-player.ts`, `rdk/agent/src/hazard.ts`, `shared/agent.ts:236-248`, `server/session-controller.ts:217-231`
 - Test: `tests/rdk-hazard.test.ts`, `tests/rdk-alert-player.test.ts`, `tests/device-protocol.test.ts`
 
 **Interfaces:**
+
 - Produces: `hazard.report` wire field `handoverMs` (was `latencyMs`). `play()` still returns `Promise<number | null>` — only its meaning is documented.
 
 - [ ] **Step 1: Rename in the four source files**
@@ -502,10 +510,12 @@ git commit -m "fix(rdk): hazard.report carries handoverMs, named for what it mea
 ### Task 5: Relay closes become diagnosable, and connect() stops racing itself
 
 **Files:**
+
 - Modify: `rdk/agent/src/relay.ts`
 - Test: `tests/rdk-relay-client.test.ts` (create)
 
 **Interfaces:**
+
 - Produces: `createRelayClient(config, handlers, options?)` — new optional third param `{ wsFactory?, pingIntervalMs?, setInterval?, clearInterval?, log? }`; `SocketLike` type. Task 6 extends the same file and test file. `main.ts` keeps calling `createRelayClient(config, handlers)` — options are purely for tests.
 
 - [ ] **Step 1: Create `tests/rdk-relay-client.test.ts` with a fake socket and the failing tests**
@@ -640,50 +650,49 @@ const SOCKET_OPEN = 1;
 Change the signature to `createRelayClient(config: RdkConfig, handlers: RelayHandlers, options: RelayClientOptions = {})` and inside:
 
 ```ts
-  const log = options.log ?? ((line: string) => console.log(line));
-  const wsFactory =
-    options.wsFactory ??
-    ((url, socketOptions) => new WebSocket(url, socketOptions) as unknown as SocketLike);
+const log = options.log ?? ((line: string) => console.log(line));
+const wsFactory =
+  options.wsFactory ?? ((url, socketOptions) => new WebSocket(url, socketOptions) as unknown as SocketLike);
 ```
 
 Rewrite `open()` — guard first, factory instead of `new WebSocket`, close/error logging, and identity-checked teardown:
 
 ```ts
-  function open(): void {
-    if (socket && socket.readyState <= SOCKET_OPEN) {
-      log("[relay] connect ignored; socket already open");
-      return;
-    }
-    ready = false;
-    intentional = false;
-    const current = wsFactory(authorizedRelayUrl(config.relayUrl, config.relayToken), {
-      rejectUnauthorized: !config.insecureTls
-    });
-    socket = current;
-    current.binaryType = "nodebuffer";
-
-    current.on("open", () => {
-      current.send(JSON.stringify(buildSessionStart(config, memory)));
-    });
-
-    current.on("message", (data: Buffer, isBinary: boolean) => {
-      // ... body unchanged, but replace every `socket?.send` with `current.send`
-    });
-
-    current.on("close", (code: number, reason: Buffer) => {
-      const detail = reason && reason.length > 0 ? ` reason=${reason.toString("utf8")}` : "";
-      log(`[relay] closed code=${code}${detail}`);
-      ready = false;
-      if (socket === current) socket = null;
-      handlers.onClosed(code === IDLE_CLOSE_CODE || intentional);
-    });
-
-    current.on("error", (error: Error) => {
-      // `close` always follows; recovery is handled there. This line is the
-      // difference between a diagnosable 401 and "reconnects with no explanation".
-      log(`[relay] socket error: ${error.message}`);
-    });
+function open(): void {
+  if (socket && socket.readyState <= SOCKET_OPEN) {
+    log("[relay] connect ignored; socket already open");
+    return;
   }
+  ready = false;
+  intentional = false;
+  const current = wsFactory(authorizedRelayUrl(config.relayUrl, config.relayToken), {
+    rejectUnauthorized: !config.insecureTls
+  });
+  socket = current;
+  current.binaryType = "nodebuffer";
+
+  current.on("open", () => {
+    current.send(JSON.stringify(buildSessionStart(config, memory)));
+  });
+
+  current.on("message", (data: Buffer, isBinary: boolean) => {
+    // ... body unchanged, but replace every `socket?.send` with `current.send`
+  });
+
+  current.on("close", (code: number, reason: Buffer) => {
+    const detail = reason && reason.length > 0 ? ` reason=${reason.toString("utf8")}` : "";
+    log(`[relay] closed code=${code}${detail}`);
+    ready = false;
+    if (socket === current) socket = null;
+    handlers.onClosed(code === IDLE_CLOSE_CODE || intentional);
+  });
+
+  current.on("error", (error: Error) => {
+    // `close` always follows; recovery is handled there. This line is the
+    // difference between a diagnosable 401 and "reconnects with no explanation".
+    log(`[relay] socket error: ${error.message}`);
+  });
+}
 ```
 
 `sendFrame`/`sendEvent`: replace `WebSocket.OPEN` with `SOCKET_OPEN`. The message-handler args keep working because `SocketLike.on` is loosely typed — cast inside the handler where needed (`data as Buffer`).
@@ -705,10 +714,12 @@ git commit -m "fix(rdk): relay closes carry their code, errors their message, co
 ### Task 6: Relay liveness ping
 
 **Files:**
+
 - Modify: `rdk/agent/src/relay.ts`
 - Test: `tests/rdk-relay-client.test.ts`
 
 **Interfaces:**
+
 - Consumes: `RelayClientOptions.pingIntervalMs / setInterval / clearInterval` from Task 5.
 - Produces: a black-holed socket terminates within two ping intervals, funnelling into the existing `close` → `onClosed` → backoff path.
 
@@ -773,38 +784,38 @@ Expected: FAIL — no timer is started, `ticks` is empty (`ticks[0]` is undefine
 Inside `open()`, before the handlers:
 
 ```ts
-    const timers = {
-      set: options.setInterval ?? globalThis.setInterval,
-      clear: options.clearInterval ?? globalThis.clearInterval
-    };
-    const pingEvery = options.pingIntervalMs ?? 15_000;
-    let liveness: NodeJS.Timeout | null = null;
-    let awaitingPong = false;
+const timers = {
+  set: options.setInterval ?? globalThis.setInterval,
+  clear: options.clearInterval ?? globalThis.clearInterval
+};
+const pingEvery = options.pingIntervalMs ?? 15_000;
+let liveness: NodeJS.Timeout | null = null;
+let awaitingPong = false;
 ```
 
 In the `open` listener, after sending `session.start`:
 
 ```ts
-      awaitingPong = false;
-      liveness = timers.set(() => {
-        if (awaitingPong) {
-          // The relay pings from its side too, but neither close crosses a
-          // black-holed path. Terminating locally is the only exit.
-          log("[relay] no pong within the liveness window; terminating the socket");
-          current.terminate();
-          return;
-        }
-        awaitingPong = true;
-        current.ping();
-      }, pingEvery);
+awaitingPong = false;
+liveness = timers.set(() => {
+  if (awaitingPong) {
+    // The relay pings from its side too, but neither close crosses a
+    // black-holed path. Terminating locally is the only exit.
+    log("[relay] no pong within the liveness window; terminating the socket");
+    current.terminate();
+    return;
+  }
+  awaitingPong = true;
+  current.ping();
+}, pingEvery);
 ```
 
 Add a `pong` listener next to the others:
 
 ```ts
-    current.on("pong", () => {
-      awaitingPong = false;
-    });
+current.on("pong", () => {
+  awaitingPong = false;
+});
 ```
 
 In the `close` listener, first line: `if (liveness !== null) { timers.clear(liveness); liveness = null; }`
@@ -826,10 +837,12 @@ git commit -m "feat(rdk): the relay client notices a black-holed socket and term
 ### Task 7: Reconnect decisions see the live voice gate
 
 **Files:**
+
 - Modify: `rdk/agent/src/main.ts`
 - Test: `tests/rdk-session-policy.test.ts`
 
 **Interfaces:**
+
 - Produces: `export function reconnectDecision(shuttingDown: boolean, idle: boolean, gateOpen: boolean): "now" | "wait-for-voice" | "never"` in `main.ts`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -893,11 +906,13 @@ git commit -m "fix(rdk): reconnect decisions read the live voice gate, not a har
 ### Task 8: Agent heartbeat and process-level nets
 
 **Files:**
+
 - Create: `rdk/agent/src/watchdog.ts`
 - Modify: `rdk/agent/src/main.ts`
 - Test: `tests/rdk-watchdog.test.ts` (create)
 
 **Interfaces:**
+
 - Produces: `startHeartbeat(options: HeartbeatOptions): { stop(): void }` from `rdk/agent/src/watchdog.ts`.
 - Consumes: `CaptureOptions.onFatal` from Task 1 (wired here).
 
@@ -1041,20 +1056,22 @@ In `start()`:
 - After `capture.start(); relay.connect();`:
 
 ```ts
-  startHeartbeat({ isHealthy: () => Date.now() - lastFrameAt < 10_000 });
+startHeartbeat({ isHealthy: () => Date.now() - lastFrameAt < 10_000 });
 ```
 
 - Before the `shutdown` definition:
 
 ```ts
-  process.on("uncaughtException", (error) => {
-    console.log(`[agent] uncaught exception: ${error.stack ?? error.message}`);
-    process.exit(1);
-  });
-  process.on("unhandledRejection", (reason) => {
-    console.log(`[agent] unhandled rejection: ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}`);
-    process.exit(1);
-  });
+process.on("uncaughtException", (error) => {
+  console.log(`[agent] uncaught exception: ${error.stack ?? error.message}`);
+  process.exit(1);
+});
+process.on("unhandledRejection", (reason) => {
+  console.log(
+    `[agent] unhandled rejection: ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}`
+  );
+  process.exit(1);
+});
 ```
 
 Import `startHeartbeat` from `./watchdog`.
@@ -1076,10 +1093,12 @@ git commit -m "feat(rdk): agent heartbeats while mic frames flow, dies loudly wh
 ### Task 9: `sd_notify` helper for the vision sidecar
 
 **Files:**
+
 - Create: `rdk/vision/notify.py`
 - Test: `rdk/vision/tests/test_notify.py` (create)
 
 **Interfaces:**
+
 - Produces: `sd_notify(state: str, env=os.environ) -> bool`. Task 10's monitor calls it as `notify("WATCHDOG=1")`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1185,11 +1204,13 @@ git commit -m "feat(vision): stdlib sd_notify, inert outside systemd"
 ### Task 10: Frame-age monitor — freeze detector and heartbeat in one thread
 
 **Files:**
+
 - Create: `rdk/vision/monitor.py`
 - Modify: `rdk/vision/mipi_camera.py` (FrameBuffer + MipiCamera age), `rdk/vision/service.py` (wiring)
 - Test: `rdk/vision/tests/test_monitor.py` (create), `rdk/vision/tests/test_mipi_camera.py` (age tests)
 
 **Interfaces:**
+
 - Consumes: `sd_notify` from Task 9.
 - Produces: `FrameBuffer.age_seconds() -> float | None`, `MipiCamera.age_seconds()` (delegates), `monitor.stale_cameras(cameras) -> list[str]`, `monitor.start_monitor(cameras, notify, on_stale, interval=10.0, wait=None) -> threading.Thread`.
 
@@ -1405,10 +1426,12 @@ git commit -m "feat(vision): a frozen camera now exits loudly instead of serving
 ### Task 11: Reap once per acquisition, not once per camera
 
 **Files:**
+
 - Modify: `rdk/vision/mipi_camera.py` (remove the reap from `start()`), `rdk/vision/camera.py` (`CameraPair.open`), `rdk/vision/tools/record_ride.py`
 - Test: `rdk/vision/tests/test_camera_policy.py`
 
 **Interfaces:**
+
 - Consumes: `reap_orphans()` from `mipi_camera.py` (unchanged signature).
 - Produces: behavior only — dual-camera startup survives.
 
@@ -1468,7 +1491,8 @@ Expected: the new test FAILS (`calls` is `["start-front", "start-rear"]` — the
         attached = discover()
 ```
 
-  (Keep the existing `from sensors import discover` line and its comment.)
+(Keep the existing `from sensors import discover` line and its comment.)
+
 - `tools/record_ride.py`: at its camera-open site (the loop around line 60 that constructs `MipiCamera` and calls `camera.start()`), add `reap_orphans()` once before the loop, importing it alongside the existing `from mipi_camera import MipiCamera` import.
 
 - [ ] **Step 4: Run the full board suite to verify**
@@ -1492,10 +1516,12 @@ git commit -m "fix(vision): reap ISP orphans once per acquisition so the rear ca
 ### Task 12: The recording writer survives a disk error
 
 **Files:**
+
 - Modify: `rdk/vision/camera.py`
 - Test: `rdk/vision/tests/test_camera_policy.py`
 
 **Interfaces:**
+
 - Produces: `CameraPair._append_frame(path: Path, data: bytes)` — the seam the test overrides.
 
 - [ ] **Step 1: Write the failing test**
@@ -1584,10 +1610,12 @@ git commit -m "fix(vision): a disk error finalises the recording instead of kill
 ### Task 13: Serialized control-socket writes, and a clean stop that finishes the job
 
 **Files:**
+
 - Modify: `rdk/vision/service.py`
 - Test: `rdk/vision/tests/test_control_socket.py` (create)
 
 **Interfaces:**
+
 - Produces: `service.finalize(cameras, gallery, ride) -> None` (extracted shutdown path).
 
 - [ ] **Step 1: Write the failing tests**
@@ -1771,10 +1799,12 @@ git commit -m "fix(vision): serialized control-socket writes; a clean stop finis
 ### Task 14: systemd units, hardware watchdog, README
 
 **Files:**
+
 - Modify: `rdk/systemd/max-agent.service`, `rdk/systemd/max-vision.service`, `rdk/README.md`
 - Create: `rdk/systemd/10-max-watchdog.conf`
 
 **Interfaces:**
+
 - Consumes: heartbeats from Tasks 8 and 10 (`WatchdogSec` is only safe once both services send `WATCHDOG=1`).
 
 - [ ] **Step 1: Edit `rdk/systemd/max-agent.service`**

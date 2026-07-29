@@ -214,7 +214,10 @@ export function parseClientEvent(data: RawData): ClientEvent {
     ) {
       throw new Error("Invalid hazard.report ttcSeconds");
     }
-    if (value.handoverMs !== undefined && (typeof value.handoverMs !== "number" || !Number.isFinite(value.handoverMs))) {
+    if (
+      value.handoverMs !== undefined &&
+      (typeof value.handoverMs !== "number" || !Number.isFinite(value.handoverMs))
+    ) {
       throw new Error("Invalid hazard.report handoverMs");
     }
     return {

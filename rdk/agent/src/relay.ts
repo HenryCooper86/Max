@@ -102,8 +102,7 @@ export function createRelayClient(
 
   const log = options.log ?? ((line: string) => console.log(line));
   const wsFactory =
-    options.wsFactory ??
-    ((url, socketOptions) => new WebSocket(url, socketOptions) as unknown as SocketLike);
+    options.wsFactory ?? ((url, socketOptions) => new WebSocket(url, socketOptions) as unknown as SocketLike);
 
   function open(): void {
     if (socket && (socket.readyState === SOCKET_CONNECTING || socket.readyState === SOCKET_OPEN)) {

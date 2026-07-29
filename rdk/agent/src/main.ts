@@ -240,7 +240,9 @@ function start(): void {
     process.exit(1);
   });
   process.on("unhandledRejection", (reason) => {
-    console.log(`[agent] unhandled rejection: ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}`);
+    console.log(
+      `[agent] unhandled rejection: ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}`
+    );
     process.exit(1);
   });
 

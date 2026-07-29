@@ -19,7 +19,7 @@ supervision framework. `Gallery.reconcile()`, `reap_orphans()` and
 work is making failures actually reach them.
 
 The board's crash-loop (see `rdk/README.md`, "The board dies hard") is
-explicitly *not* fixed here — the evidence points at power, and only a bench
+explicitly _not_ fixed here — the evidence points at power, and only a bench
 test with a power meter can confirm that. This design makes the board survive
 and report such a death; it cannot prevent one.
 
@@ -69,7 +69,7 @@ shutdown does not trip the handler.
 ### Playback child death self-heals
 
 `aplay` dying is routine — every barge-in `flush()` SIGKILLs it and `ensure()`
-respawns on the next write. The failure mode is a child that dies *uninvited*
+respawns on the next write. The failure mode is a child that dies _uninvited_
 while still referenced: `child` stays non-null, every write lands on a dead
 pipe through the swallowing `error` handler, and playback is silent forever.
 
@@ -116,7 +116,7 @@ immediately instead of waiting 400 ms for the gate to re-arm.
 audio is still queued or playing computes when that audio finishes — the drain
 point of everything already handed to `aplay` plus everything still queued at
 that moment — and schedules the actual release for then. Audio the relay
-queues *after* the release request does not extend the hold, so a barge-in
+queues _after_ the release request does not extend the hold, so a barge-in
 against Max's ordinary speech right after an alert is not refused. A `status: hearing` or
 `hazard.alert.interrupt` flush arriving mid-alert is refused for the alert's
 whole audible duration, which is what `alert-player.ts`'s header already
@@ -152,8 +152,8 @@ every 10 s and checks each camera that is nominally open:
   prefix; no-op when `NOTIFY_SOCKET` is unset).
 - Any stale: log which camera froze and how old its newest frame is, then exit
   1. systemd restarts the service; `reap_orphans()` clears the dead
-  `mipi_cam`, `Gallery.reconcile()` finalises an interrupted recording — both
-  already verified on the board ("max-vision restart reacquires").
+     `mipi_cam`, `Gallery.reconcile()` finalises an interrupted recording — both
+     already verified on the board ("max-vision restart reacquires").
 
 A process wedged hard enough to stop the monitor thread stops heartbeating,
 and the systemd watchdog catches what the monitor cannot. A camera that never
@@ -177,7 +177,7 @@ torn final JSONL line.
 fixes dual-camera startup destroying itself (the rear camera's `start()`
 currently SIGKILLs the front camera's just-started `mipi_cam`, since both hold
 `/dev/vs-isp0_cap`) while preserving crash recovery, which only ever needed
-the reap to happen before the *first* open. `tools/record_ride.py`'s
+the reap to happen before the _first_ open. `tools/record_ride.py`'s
 independent path keeps the same once-before-open behavior.
 
 ### Control-socket writes are serialized
@@ -199,12 +199,12 @@ out.
 
 Both units (`rdk/systemd/*.service`) gain:
 
-| Directive                  | Why                                                                                                      |
-| -------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `StartLimitIntervalSec=0`  | Five fast failures currently put the unit in permanent `failed` — the helmet goes silent until an SSH. A broken unit should restart visibly forever instead. |
-| `WatchdogSec=30`           | A wedged-but-alive process is currently indistinguishable from a healthy one.                            |
-| `NotifyAccess=all`         | Heartbeats arrive from `systemd-notify` children (agent) and a thread (vision).                          |
-| `TimeoutStopSec=10`        | A hung stop must not block a restart indefinitely.                                                       |
+| Directive                 | Why                                                                                                                                                          |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `StartLimitIntervalSec=0` | Five fast failures currently put the unit in permanent `failed` — the helmet goes silent until an SSH. A broken unit should restart visibly forever instead. |
+| `WatchdogSec=30`          | A wedged-but-alive process is currently indistinguishable from a healthy one.                                                                                |
+| `NotifyAccess=all`        | Heartbeats arrive from `systemd-notify` children (agent) and a thread (vision).                                                                              |
+| `TimeoutStopSec=10`       | A hung stop must not block a restart indefinitely.                                                                                                           |
 
 A new `rdk/systemd/10-max-watchdog.conf`, installed to
 `/etc/systemd/system.conf.d/`, sets `RuntimeWatchdogSec=30`: PID 1 pets
@@ -214,24 +214,24 @@ installing it.
 
 Bench note for the README: stopping or restarting services normally never
 trips any watchdog; `RuntimeWatchdogSec` fires only when PID 1 itself stops
-running, and `WatchdogSec` only when a *running* service stops heartbeating.
+running, and `WatchdogSec` only when a _running_ service stops heartbeating.
 Debugging a stopped service is unaffected.
 
 ## Error handling summary
 
-| Failure                            | Detection                  | Outcome                                                        |
-| ---------------------------------- | -------------------------- | -------------------------------------------------------------- |
-| `max-aec`/`arecord` dies           | child `exit`/`error`       | one journal line; agent exits; systemd restarts; AEC re-converges |
-| `aplay` dies uninvited             | child `exit`               | one journal line; respawned on next write                      |
-| Uncaught exception/rejection       | process handlers           | stack in journal; exit 1; restart                              |
-| Relay socket black-holed           | ping unanswered 15–30 s    | terminate → existing backoff reconnect                         |
-| Relay refuses/drops connection     | `close`/`error` logging    | journal shows code/reason — 401 ≠ Wi-Fi drop                   |
-| Camera frames freeze               | frame-age monitor          | one journal line; sidecar exits; restart reacquires camera     |
-| Disk error mid-recording           | `OSError` in writer        | recording stops cleanly; manifest finalised with frames on disk |
-| Agent/vision wedged but alive      | missed `WATCHDOG=1`        | systemd restarts after 30 s                                    |
-| Kernel/PID 1 hang                  | `RuntimeWatchdogSec`       | hardware watchdog reboots the board                            |
+| Failure                              | Detection                 | Outcome                                                           |
+| ------------------------------------ | ------------------------- | ----------------------------------------------------------------- |
+| `max-aec`/`arecord` dies             | child `exit`/`error`      | one journal line; agent exits; systemd restarts; AEC re-converges |
+| `aplay` dies uninvited               | child `exit`              | one journal line; respawned on next write                         |
+| Uncaught exception/rejection         | process handlers          | stack in journal; exit 1; restart                                 |
+| Relay socket black-holed             | ping unanswered 15–30 s   | terminate → existing backoff reconnect                            |
+| Relay refuses/drops connection       | `close`/`error` logging   | journal shows code/reason — 401 ≠ Wi-Fi drop                      |
+| Camera frames freeze                 | frame-age monitor         | one journal line; sidecar exits; restart reacquires camera        |
+| Disk error mid-recording             | `OSError` in writer       | recording stops cleanly; manifest finalised with frames on disk   |
+| Agent/vision wedged but alive        | missed `WATCHDOG=1`       | systemd restarts after 30 s                                       |
+| Kernel/PID 1 hang                    | `RuntimeWatchdogSec`      | hardware watchdog reboots the board                               |
 | Bad config / missing binary at start | `StartLimitIntervalSec=0` | visible 2 s restart loop in the journal, never permanent `failed` |
-| Power loss                         | out of scope               | already survivable: `reconcile()` keeps the interrupted clip   |
+| Power loss                           | out of scope              | already survivable: `reconcile()` keeps the interrupted clip      |
 
 ## Verification
 

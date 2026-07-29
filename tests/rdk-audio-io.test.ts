@@ -9,13 +9,20 @@ function fakeChild() {
   const stdin = new PassThrough();
   const reference = new PassThrough();
   const kill = vi.fn();
-  return {
-    child: { stdout, stdin, stdio: [null, stdout, null, reference], kill, on: () => {} },
+  const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+  const child = {
     stdout,
     stdin,
-    reference,
-    kill
+    stdio: [null, stdout, null, reference],
+    kill,
+    on(event: string, listener: (...args: unknown[]) => void) {
+      listeners.set(event, [...(listeners.get(event) ?? []), listener]);
+    },
+    emit(event: string, ...args: unknown[]) {
+      for (const listener of listeners.get(event) ?? []) listener(...args);
+    }
   };
+  return { child, stdout, stdin, reference, kill };
 }
 
 describe("captureArgs", () => {
@@ -82,6 +89,50 @@ describe("createCapture", () => {
     capture.start();
     capture.stop();
     expect(fake.kill).toHaveBeenCalled();
+  });
+
+  it("reports a fatal when the capture child dies uninvited", () => {
+    const fake = fakeChild();
+    const fatals: string[] = [];
+    const capture = createCapture({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      onFrame: () => {},
+      onFatal: (reason) => fatals.push(reason)
+    });
+    capture.start();
+    fake.child.emit("exit", 1, null);
+    expect(fatals).toEqual(["arecord exited code=1 signal=null"]);
+  });
+
+  it("stays quiet when stop() killed the child itself", () => {
+    const fake = fakeChild();
+    const fatals: string[] = [];
+    const capture = createCapture({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      onFrame: () => {},
+      onFatal: (reason) => fatals.push(reason)
+    });
+    capture.start();
+    capture.stop();
+    fake.child.emit("exit", null, "SIGTERM");
+    expect(fatals).toEqual([]);
+  });
+
+  it("reports a fatal when the aec binary cannot be spawned", () => {
+    const fake = fakeChild();
+    const fatals: string[] = [];
+    const capture = createCapture({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      onFrame: () => {},
+      onFatal: (reason) => fatals.push(reason),
+      aec: { bin: "/opt/max/rdk/aec/max-aec", delayMs: 80, suppression: 2 }
+    });
+    capture.start();
+    fake.child.emit("error", new Error("spawn ENOENT"));
+    expect(fatals).toEqual(["max-aec failed to start: spawn ENOENT"]);
   });
 });
 

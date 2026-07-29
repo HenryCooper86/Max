@@ -79,6 +79,7 @@ export function createPlayback(options: PlaybackOptions): {
 
   function pump(): void {
     pumping = false;
+    if (queue.length === 0) return;
     const target = ensure();
     const at = now();
     if (drainedUntil < at) drainedUntil = at;
@@ -100,13 +101,27 @@ export function createPlayback(options: PlaybackOptions): {
 
   function ensure(): ChildProcessLike {
     if (!child) {
-      child = spawn("aplay", playbackArgs(options.device));
+      const spawned = spawn("aplay", playbackArgs(options.device));
+      child = spawned;
       // Barge-in SIGKILLs this child, so a write already in flight lands on a
       // dead pipe. Node raises 'error' on the stdin socket, and with no listener
       // that is an unhandled 'error' event — which crashed the agent the first
       // time a rider actually talked over Max. EPIPE here is expected and
       // discardable: the next write respawns aplay.
-      child.stdin?.on("error", () => {});
+      spawned.stdin?.on("error", () => {});
+      // flush()/stop() null `child` before this event can arrive, so reaching
+      // the body means the death was uninvited — an ALSA hiccup, an OOM kill.
+      // Respawn-on-next-write is the already-designed path; take it.
+      spawned.on("exit", (code, signal) => {
+        if (child !== spawned) return;
+        console.log(`[playback] aplay exited code=${code} signal=${signal}; respawning on next write`);
+        child = null;
+      });
+      spawned.on("error", (error) => {
+        if (child !== spawned) return;
+        console.log(`[playback] aplay failed to start: ${error.message}`);
+        child = null;
+      });
       upsample = createUpsampler2x();
     }
     return child;

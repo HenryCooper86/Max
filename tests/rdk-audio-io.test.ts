@@ -193,6 +193,66 @@ describe("createPlayback", () => {
     playback.write(new Int16Array(240));
     expect(spawns).toBe(2);
   });
+
+  it("respawns aplay on the write after an uninvited death", () => {
+    const children: ReturnType<typeof fakeChild>[] = [];
+    const playback = createPlayback({
+      device: "plughw:0,0",
+      spawn: () => {
+        const fake = fakeChild();
+        children.push(fake);
+        return fake.child;
+      }
+    });
+    playback.write(new Int16Array(480));
+    expect(children.length).toBe(1);
+    children[0]!.child.emit("exit", 1, null);
+    playback.write(new Int16Array(480));
+    expect(children.length).toBe(2);
+  });
+
+  it("does not double-handle an exit that flush() itself caused", () => {
+    const children: ReturnType<typeof fakeChild>[] = [];
+    const playback = createPlayback({
+      device: "plughw:0,0",
+      spawn: () => {
+        const fake = fakeChild();
+        children.push(fake);
+        return fake.child;
+      }
+    });
+    playback.write(new Int16Array(480));
+    playback.flush(); // kills child, nulls the reference
+    children[0]!.child.emit("exit", null, "SIGKILL");
+    playback.write(new Int16Array(480));
+    // flush + write already accounts for the respawn; the exit event must not
+    // have spawned a third.
+    expect(children.length).toBe(2);
+  });
+
+  it("a pump timer left over from flush does not respawn aplay", () => {
+    const scheduled: Array<() => void> = [];
+    const children: ReturnType<typeof fakeChild>[] = [];
+    const playback = createPlayback({
+      device: "plughw:0,0",
+      spawn: () => {
+        const fake = fakeChild();
+        children.push(fake);
+        return fake.child;
+      },
+      now: () => 0,
+      schedule: (fn) => {
+        scheduled.push(fn);
+        return 0 as unknown as NodeJS.Timeout;
+      }
+    });
+    // 24_000 samples at 24 kHz = 1 s — far over the 80 ms cap, so a pump gets scheduled.
+    playback.write(new Int16Array(24_000));
+    expect(children.length).toBe(1);
+    playback.flush();
+    for (const fn of scheduled.splice(0)) fn();
+    expect(children.length).toBe(1);
+  });
 });
 
 describe("aecArgs", () => {

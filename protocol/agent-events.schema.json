@@ -160,6 +160,22 @@
             }
           },
           "required": ["type", "threat", "direction", "severity", "label", "message", "advice"]
+        },
+        {
+          "title": "CameraFrame",
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "camera.frame"
+            },
+            "commandId": {
+              "type": "string"
+            },
+            "image": {
+              "type": "string"
+            }
+          },
+          "required": ["type", "commandId", "image"]
         }
       ]
     },

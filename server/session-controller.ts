@@ -19,7 +19,17 @@ import { recordUserMemoryEvent, userConversationMemory, userMemoryEnabled } from
 
 export type ProviderFactory = (client: WebSocket, telemetry: ProviderTelemetry) => AgentProvider;
 
-const MAX_CLIENT_JSON_BYTES = 8 * 1024;
+// 256 KiB: every other client event fits comfortably under a few KB, but
+// camera.frame carries a base64 JPEG capped at 200_000 chars below. Without
+// headroom here, this gate would reject every real frame before the
+// camera.frame-specific check ever ran. This must also stay BELOW
+// config.maxPayloadBytes (server/config.ts) — ws enforces that ceiling before
+// the "message" event fires and terminates the connection outright on an
+// oversized frame, rather than producing a catchable error. If ws's ceiling
+// ever sat at or below this constant, ws — not this clean validation error —
+// would be what fails first, and it would take the rider's live session down
+// with it.
+const MAX_CLIENT_JSON_BYTES = 256 * 1024;
 const MAX_CLIENT_AUDIO_BYTES = 32 * 1024;
 const VOICE_GENDERS = new Set(["female", "male"]);
 const VOICE_PERSONALITIES = new Set(["concise", "friendly", "technical", "rally"]);
@@ -218,6 +228,18 @@ export function parseClientEvent(data: RawData): ClientEvent {
       ttcSeconds: value.ttcSeconds as number | undefined,
       latencyMs: value.latencyMs as number | undefined
     };
+  }
+
+  if (value.type === "camera.frame") {
+    if (typeof value.commandId !== "string" || !value.commandId.trim() || value.commandId.length > 120) {
+      throw new Error("Invalid camera.frame commandId");
+    }
+    // ~55 KB for a 640px frame. The cap is a control-plane guard, not a quality
+    // setting: without it a client can push megabytes through this path.
+    if (typeof value.image !== "string" || !value.image || value.image.length > 200_000) {
+      throw new Error("Invalid camera.frame image");
+    }
+    return { type: "camera.frame", commandId: value.commandId, image: value.image };
   }
 
   if (value.type === "testing.metric") {
@@ -422,6 +444,7 @@ export class AgentSessionController {
       if (event.type === "turn.feedback") recordTesterTurnFeedback(this.relaySessionId, event);
       if (event.type === "testing.metric") recordTesterAudioQuality(this.relaySessionId, event);
       if (event.type === "device.result") await this.provider.deviceResult?.(event);
+      if (event.type === "camera.frame") await this.provider.cameraFrame?.(event);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Voice relay failed";
       this.log?.warn("client message failed", { message });

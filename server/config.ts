@@ -43,9 +43,19 @@ export const config = {
   // Upgrade attempts allowed per client IP per minute; 0 disables the limiter.
   connPerMinute: resolveBoundedInt(process.env.RELAY_CONN_PER_MINUTE, 30, 0, 10_000),
   // Hard ceiling for one reassembled WebSocket message. The ws package's
-  // default is 100 MiB, far beyond this relay's 8 KiB JSON / 32 KiB audio
-  // protocol and large enough to exhaust the small Lightsail host.
-  maxPayloadBytes: resolveBoundedInt(process.env.RELAY_MAX_PAYLOAD_BYTES, 64 * 1024, 32 * 1024, 1024 * 1024),
+  // default is 100 MiB — far larger than this relay needs and large enough to
+  // exhaust the small Lightsail host, so we cap it much lower. But ws enforces
+  // this ceiling before the "message" event fires, and rejects an oversized
+  // message by terminating the connection outright, not with a catchable
+  // error — for /agent that connection is the rider's live voice session.
+  // The floor (and default) must therefore clear MAX_CLIENT_JSON_BYTES
+  // (session-controller.ts, 256 KiB — sized for a camera.frame image up to
+  // 200_000 base64 chars, ~195 KiB). If this ceiling could sit at or below
+  // that JSON gate, ws would silently drop the session on a slightly
+  // oversized frame instead of the relay returning a clean
+  // "Invalid camera.frame image" error. 320 KiB / 384 KiB leave headroom
+  // above the 256 KiB gate; the 32 KiB audio protocol stays far under both.
+  maxPayloadBytes: resolveBoundedInt(process.env.RELAY_MAX_PAYLOAD_BYTES, 384 * 1024, 320 * 1024, 1024 * 1024),
   // Honor X-Forwarded-For for rate limiting only behind a trusted proxy.
   trustProxy: process.env.RELAY_TRUST_PROXY?.trim().toLowerCase() === "on",
   // Number of trusted reverse proxies in front of the relay (e.g. 1 for the

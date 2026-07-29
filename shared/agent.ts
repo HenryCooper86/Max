@@ -268,7 +268,11 @@ export type ClientEvent =
     }
   // Tester flags a transcript turn as problematic. The relay-issued turnId
   // selects the exact server-side turn; speaker/text remain useful evidence.
-  | { type: "turn.feedback"; turnId: string; speaker: "rider" | "agent"; text: string; reason: string };
+  | { type: "turn.feedback"; turnId: string; speaker: "rider" | "agent"; text: string; reason: string }
+  // One frame the rider asked Max to look at, in response to a `camera.look`
+  // device command. `image` is base64 JPEG, size-capped in validation — the
+  // control plane is not a bulk media channel.
+  | { type: "camera.frame"; commandId: string; image: string };
 
 export type AgentEvent =
   | {

@@ -237,7 +237,9 @@ describe("relay process integration", () => {
     const oversizedSocketClosed = new Promise<number>((resolve) => {
       oversizedSocket.once("close", (code) => resolve(code));
     });
-    oversizedSocket.send(Buffer.alloc(65_537));
+    // One byte over config.ts's maxPayloadBytes default (384 KiB) — must stay
+    // in sync with that default so ws actually terminates this send.
+    oversizedSocket.send(Buffer.alloc(384 * 1024 + 1));
     await expect(oversizedSocketClosed).resolves.toBe(1009);
 
     const socket = new WebSocket(`ws://127.0.0.1:${port}/agent?token=${encodeURIComponent(registered.token)}`);

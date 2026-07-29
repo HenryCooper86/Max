@@ -21,6 +21,8 @@ PREVIEW_PORT = int(os.environ.get("MAX_VISION_PREVIEW_PORT", "8081"))
 CORPUS_DIR = os.environ.get("MAX_CORPUS_DIR", "/var/lib/max/corpus")
 #: Only the exact string "1" enables shadow mode, matching MAX_RELAY_INSECURE_TLS.
 ADAS_SHADOW = os.environ.get("MAX_ADAS_SHADOW", "0") == "1"
+#: Consent gate. Only "1" lets a frame leave the board.
+SHARE_FRAMES = os.environ.get("MAX_VISION_SHARE", "0") == "1"
 
 gallery = Gallery(GALLERY_DIR, MIN_FREE_MB)
 events = EventBus()
@@ -80,7 +82,10 @@ def main() -> None:
     from bench_server import serve as serve_bench  # noqa: PLC0415
 
     threading.Thread(
-        target=serve_bench, args=(cameras, gallery, PREVIEW_PORT), daemon=True
+        target=serve_bench,
+        args=(cameras, gallery, PREVIEW_PORT),
+        kwargs={"share_frames": SHARE_FRAMES},
+        daemon=True,
     ).start()
 
     ride = None

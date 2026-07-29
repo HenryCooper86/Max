@@ -21,7 +21,7 @@ import {
   DEVICE_ACTION_TIERS,
   PendingDeviceCommands,
   deviceSuccessSpeech,
-  extractDeviceCommand,
+  extractDeviceCommandForPlatform,
   reconcileDeviceResult,
   type DeviceActionName,
   type DeviceActionStatus
@@ -217,9 +217,11 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
 
   /** The mock replays scripted rider lines rather than doing ASR, so the same
    *  extractor runs over the script. This is what lets the whole device-action
-   *  feature be demonstrated and QA'd with no Doubao credentials. */
+   *  feature be demonstrated and QA'd with no Doubao credentials. Gated by
+   *  sessionPlatform the same way server/providers/doubao.ts is — see
+   *  extractDeviceCommandForPlatform's doc comment. */
   function dispatchDeviceCommand(text: string): void {
-    const command = extractDeviceCommand(text);
+    const command = extractDeviceCommandForPlatform(text, sessionPlatform);
     if (!command) return;
     const issued = pendingDeviceCommands.issue(command.action, deviceSuccessSpeech(command));
     send({

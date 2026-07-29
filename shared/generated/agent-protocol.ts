@@ -9,7 +9,8 @@ export const CLIENT_EVENT_TYPES = [
   "testing.metric",
   "turn.feedback",
   "device.result",
-  "hazard.report"
+  "hazard.report",
+  "camera.frame"
 ] as const;
 
 export const SERVER_EVENT_TYPES = [

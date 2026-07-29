@@ -18,10 +18,15 @@ import json
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote, urlparse
 
 #: JPEG start-of-image. A .mjpeg segment is these, concatenated.
 SOI = b"\xff\xd8\xff"
+
+#: Longest edge of a shared frame. Enough for a model to describe a scene and
+#: cheap to upload from a board that usually lives on a phone tether.
+DEFAULT_FRAME_WIDTH = 640
+MAX_FRAME_WIDTH = 1920
 
 
 def first_frame(data: bytes) -> bytes | None:
@@ -72,7 +77,33 @@ def listing(gallery) -> dict:
     return {"pairs": pairs}
 
 
-def serve(pair, gallery, port: int) -> None:
+def downscale(jpeg: bytes, width: int) -> bytes | None:
+    """Re-encode a JPEG with its longest edge at ``width``. None if undecodable.
+
+    Never upscales: enlarging invents detail the sensor did not capture, and the
+    only thing that buys is a bigger upload.
+    """
+    import cv2  # noqa: PLC0415 - board-only
+    import numpy as np  # noqa: PLC0415
+
+    image = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if image is None:
+        return None
+
+    height, source_width = image.shape[:2]
+    longest = max(source_width, height)
+    if longest > width:
+        scale = width / longest
+        image = cv2.resize(
+            image,
+            (max(1, round(source_width * scale)), max(1, round(height * scale))),
+            interpolation=cv2.INTER_AREA,
+        )
+    ok, buf = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+    return buf.tobytes() if ok else None
+
+
+def serve(pair, gallery, port: int, share_frames: bool = False) -> None:
     """Serve preview and gallery on one port. Blocks forever."""
 
     class BenchHandler(BaseHTTPRequestHandler):
@@ -83,6 +114,8 @@ def serve(pair, gallery, port: int) -> None:
                 self._listing()
             elif self.path.startswith("/gallery/"):
                 self._capture()
+            elif self.path.startswith("/frame/"):
+                self._frame()
             else:
                 self.send_error(404)
 
@@ -160,6 +193,41 @@ def serve(pair, gallery, port: int) -> None:
                 # The tab was closed. Ordinary, not worth a traceback in the
                 # journal on every page reload.
                 return
+
+        def _frame(self) -> None:
+            # Consent, not capability: with sharing off no image leaves the
+            # board at all, whatever the relay is configured to do.
+            if not share_frames:
+                self.send_error(403, "frame sharing is off")
+                return
+
+            parsed = urlparse(self.path)
+            raw_width = parse_qs(parsed.query).get("w", [str(DEFAULT_FRAME_WIDTH)])[0]
+            try:
+                width = int(raw_width)
+            except ValueError:
+                self.send_error(400, "bad width")
+                return
+            if not 64 <= width <= MAX_FRAME_WIDTH:
+                self.send_error(400, "width out of range")
+                return
+
+            camera = pair.front if parsed.path.endswith("front") else pair.rear
+            data = pair._grab(camera)
+            if data is None:
+                self.send_error(503, "camera not available")
+                return
+
+            shrunk = downscale(data, width)
+            if shrunk is None:
+                self.send_error(503, "frame not decodable")
+                return
+
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(shrunk)))
+            self.end_headers()
+            self.wfile.write(shrunk)
 
         def log_message(self, *args) -> None:
             return

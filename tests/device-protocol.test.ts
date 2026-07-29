@@ -134,3 +134,41 @@ describe("parseClientEvent — hazard.report", () => {
     ).toThrow(/severity/);
   });
 });
+
+describe("parseClientEvent — camera.frame", () => {
+  it("is a client event, so a board-captured frame can reach the relay", () => {
+    expect(CLIENT_EVENT_TYPES).toContain("camera.frame");
+  });
+
+  it("accepts a camera frame", () => {
+    const event = parseClientEvent(encode({ type: "camera.frame", commandId: "c1", image: "AAAA" }));
+    expect(event).toMatchObject({ type: "camera.frame", commandId: "c1" });
+  });
+
+  it("rejects a frame with no commandId", () => {
+    expect(() => parseClientEvent(encode({ type: "camera.frame", image: "AAAA" }))).toThrow(
+      "Invalid camera.frame commandId"
+    );
+  });
+
+  it("rejects an oversized frame", () => {
+    // A 640px JPEG is ~40 KB, ~55 KB base64. The cap stops a client pushing
+    // megabytes through the control plane. This particular size (400,000
+    // chars) is big enough to also trip the generic client-event size gate
+    // (MAX_CLIENT_JSON_BYTES) before reaching the camera.frame-specific
+    // check below — see the next test for one that isolates that check.
+    const huge = "A".repeat(400_000);
+    expect(() => parseClientEvent(encode({ type: "camera.frame", commandId: "c1", image: huge }))).toThrow();
+  });
+
+  it("rejects an image over the camera.frame cap specifically, not via the generic size gate", () => {
+    // 210,000 chars clears the field-specific cap (200,000) but stays well
+    // under MAX_CLIENT_JSON_BYTES (256 KiB, ~262,144 bytes total for this
+    // payload), so this exercises the camera.frame image check itself rather
+    // than the generic "Client event is too large" gate above it.
+    const overCap = "A".repeat(210_000);
+    expect(() => parseClientEvent(encode({ type: "camera.frame", commandId: "c1", image: overCap }))).toThrow(
+      "Invalid camera.frame image"
+    );
+  });
+});

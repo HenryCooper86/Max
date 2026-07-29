@@ -59,40 +59,42 @@ Verified over SSH against the real board on 2026-07-25.
 > the current one with `arp -a`, narrow with `nc -G 2 -z <ip> 22`, and confirm
 > with `ssh root@<ip> 'ls /usr/hobot'`.
 
-| Item                        | Value                                                                    | Date       |
-| --------------------------- | ------------------------------------------------------------------------ | ---------- |
-| Board                       | `D-Robotics X5 MD V0.2`, Ubuntu 22.04.5, kernel 6.1.83                   | 2026-07-25 |
-| ALSA capture device         | `plughw:0,0` — card 0 `duplexaudio`, codec **ES8326**                    | 2026-07-25 |
-| ALSA playback device        | `plughw:0,0` — same duplex card, one device for both                     | 2026-07-25 |
-| Headset wiring (CTIA/OMTP)  | **CTIA, mic works** — −43.6 dBFS ambient, not silence                    | 2026-07-25 |
-| Raw echo coupling           | **+5.5 dB** above the noise floor (`CROSSTALK=0`, DAC 0 dB)              | 2026-07-25 |
-| `module-echo-cancel`        | **tried, does not work** — master sink stays SUSPENDED, no audio         | 2026-07-25 |
-| AEC path chosen             | **in-process** — `rdk/aec/max-aec`, WebRTC APM; built and deployed       | 2026-07-26 |
-| Reference-to-mic lag        | **81 ms** measured (was 953 ms before playback pacing)                   | 2026-07-26 |
-| Echo loop                   | **fixed** — confirmed live, headset on, Max replies once and stops       | 2026-07-26 |
-| Barge-in                    | **works** — confirmed live, talking over Max cuts his reply              | 2026-07-26 |
-| Live Doubao session         | **works** — Max speaks, 1.69 MB voice audio down                         | 2026-07-25 |
-| Helmet speaks confirmations | **built, NOT yet heard** — relay has no `DOUBAO_TTS_*` credentials       | 2026-07-28 |
-| Full duplex                 | **works** — simultaneous `arecord` + `aplay`, no device contention       | 2026-07-25 |
-| Camera front port index     | **MIPI channel 0** (`vcon@0`/`@1`, i2c bus 6) — the CAM1 connector       | 2026-07-27 |
-| Camera rear port index      | **MIPI channel 2** (`vcon@2`/`@3`, i2c bus 4) — the other connector      | 2026-07-27 |
-| `mipi_cam` nv12 output      | **works** — `out_format:=nv12`, 3110400 B/frame at 1920×1080             | 2026-07-27 |
-| CAM1 live capture           | **works** — OV5647 ch 0: photo, preview and `.mjpeg` via max-vision      | 2026-07-27 |
-| Gallery recording rate      | **9.9 fps** measured (60 frames / 6.05 s), 1920×1080 mjpeg               | 2026-07-27 |
-| max-vision restart          | **reacquires** — two consecutive restarts, no orphan, no traceback       | 2026-07-27 |
-| ADAS shadow ride            | **works** — segments + shadow log + one ADAS thread, `MAX_ADAS_SHADOW=1` | 2026-07-27 |
-| Shadow ride frame rate      | **9.7 fps** (583 frames in a 60 s segment), 1080p mjpeg                  | 2026-07-27 |
-| ADAS latency under a ride   | **47.2 ms** p50, 61.7 ms p95 — replay of the ride's own footage          | 2026-07-27 |
-| Thermal under a shadow ride | **~94 °C plateau** (93.8–94.7), **one** camera, bench ambient            | 2026-07-27 |
-| Shadow ride disk rate       | **~3 MB/s** — 821 MB for 4.5 min; ~11 GB/hour                            | 2026-07-27 |
-| BPU                         | present, idle, 500–1000 MHz; `pyeasy_dnn` + `libsrcampy` OK              | 2026-07-25 |
-| Node.js                     | **v22.23.1** installed from NodeSource; npm 10.9.8                       | 2026-07-25 |
-| First live session          | **works** — 656 KB mic PCM up, 3 device.result round trips               | 2026-07-25 |
-| pytest                      | 6.2.5 on the board; the suite runs there — no local pytest or numpy      | 2026-07-25 |
-| BPU detector                | **yolov5s validated** — anchors checked against `bus.jpg`                | 2026-07-26 |
-| ADAS latency                | **52.4 ms** per frame p50 (19.1 fps single stream)                       | 2026-07-26 |
-| ADAS sustained              | **11.4 fps per camera**, 2 streams, voice live, no throttling            | 2026-07-26 |
-| Thermal under ADAS load     | 78.6 °C → **plateau ~90 °C** over 10 min; bench ambient only             | 2026-07-26 |
+| Item                              | Value                                                                                                                                                                                                                 | Date       |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| Board                             | `D-Robotics X5 MD V0.2`, Ubuntu 22.04.5, kernel 6.1.83                                                                                                                                                                | 2026-07-25 |
+| ALSA capture device               | `plughw:0,0` — card 0 `duplexaudio`, codec **ES8326**                                                                                                                                                                 | 2026-07-25 |
+| ALSA playback device              | `plughw:0,0` — same duplex card, one device for both                                                                                                                                                                  | 2026-07-25 |
+| Headset wiring (CTIA/OMTP)        | **CTIA, mic works** — −43.6 dBFS ambient, not silence                                                                                                                                                                 | 2026-07-25 |
+| Raw echo coupling                 | **+5.5 dB** above the noise floor (`CROSSTALK=0`, DAC 0 dB)                                                                                                                                                           | 2026-07-25 |
+| `module-echo-cancel`              | **tried, does not work** — master sink stays SUSPENDED, no audio                                                                                                                                                      | 2026-07-25 |
+| AEC path chosen                   | **in-process** — `rdk/aec/max-aec`, WebRTC APM; built and deployed                                                                                                                                                    | 2026-07-26 |
+| Reference-to-mic lag              | **81 ms** measured (was 953 ms before playback pacing)                                                                                                                                                                | 2026-07-26 |
+| Echo loop                         | **fixed** — confirmed live, headset on, Max replies once and stops                                                                                                                                                    | 2026-07-26 |
+| Barge-in                          | **works** — confirmed live, talking over Max cuts his reply                                                                                                                                                           | 2026-07-26 |
+| Live Doubao session               | **works** — Max speaks, 1.69 MB voice audio down                                                                                                                                                                      | 2026-07-25 |
+| Helmet speaks confirmations       | **built, NOT yet heard** — relay has no `DOUBAO_TTS_*` credentials                                                                                                                                                    | 2026-07-28 |
+| Full duplex                       | **works** — simultaneous `arecord` + `aplay`, no device contention                                                                                                                                                    | 2026-07-25 |
+| Camera front port index           | **MIPI channel 0** (`vcon@0`/`@1`, i2c bus 6) — the CAM1 connector                                                                                                                                                    | 2026-07-27 |
+| Camera rear port index            | **MIPI channel 2** (`vcon@2`/`@3`, i2c bus 4) — the other connector                                                                                                                                                   | 2026-07-27 |
+| `mipi_cam` nv12 output            | **works** — `out_format:=nv12`, 3110400 B/frame at 1920×1080                                                                                                                                                          | 2026-07-27 |
+| CAM1 live capture                 | **works** — OV5647 ch 0: photo, preview and `.mjpeg` via max-vision                                                                                                                                                   | 2026-07-27 |
+| Gallery recording rate            | **9.9 fps** measured (60 frames / 6.05 s), 1920×1080 mjpeg                                                                                                                                                            | 2026-07-27 |
+| max-vision restart                | **reacquires** — two consecutive restarts, no orphan, no traceback                                                                                                                                                    | 2026-07-27 |
+| ADAS shadow ride                  | **works** — segments + shadow log + one ADAS thread, `MAX_ADAS_SHADOW=1`                                                                                                                                              | 2026-07-27 |
+| Shadow ride frame rate            | **9.7 fps** (583 frames in a 60 s segment), 1080p mjpeg                                                                                                                                                               | 2026-07-27 |
+| ADAS latency under a ride         | **47.2 ms** p50, 61.7 ms p95 — replay of the ride's own footage                                                                                                                                                       | 2026-07-27 |
+| Thermal under a shadow ride       | **~94 °C plateau** (93.8–94.7), **one** camera, bench ambient                                                                                                                                                         | 2026-07-27 |
+| Shadow ride disk rate             | **~3 MB/s** — 821 MB for 4.5 min; ~11 GB/hour                                                                                                                                                                         | 2026-07-27 |
+| BPU                               | present, idle, 500–1000 MHz; `pyeasy_dnn` + `libsrcampy` OK                                                                                                                                                           | 2026-07-25 |
+| Node.js                           | **v22.23.1** installed from NodeSource; npm 10.9.8                                                                                                                                                                    | 2026-07-25 |
+| First live session                | **works** — 656 KB mic PCM up, 3 device.result round trips                                                                                                                                                            | 2026-07-25 |
+| pytest                            | 6.2.5 on the board; the suite runs there — no local pytest or numpy                                                                                                                                                   | 2026-07-25 |
+| BPU detector                      | **yolov5s validated** — anchors checked against `bus.jpg`                                                                                                                                                             | 2026-07-26 |
+| ADAS latency                      | **52.4 ms** per frame p50 (19.1 fps single stream)                                                                                                                                                                    | 2026-07-26 |
+| ADAS sustained                    | **11.4 fps per camera**, 2 streams, voice live, no throttling                                                                                                                                                         | 2026-07-26 |
+| Thermal under ADAS load           | 78.6 °C → **plateau ~90 °C** over 10 min; bench ambient only                                                                                                                                                          | 2026-07-26 |
+| Vision consent gate + frame route | **works** — `MAX_VISION_SHARE=0` refuses `/frame/front` with 403; set to `1` it returns 200, a real 640×360 JPEG (26–27 KB, confirmed live over two fetches), gate re-confirmed refusing after restore                | 2026-07-28 |
+| Vision describe (live)            | **NOT verified** — relay's `ARK_API_KEY` is invalid (401 "The API key doesn't exist" in two regions, two auth header styles); no working credential exists, so the round trip to the vision model was never attempted | 2026-07-28 |
 
 ### AEC — the sweep said "gate passed". A live conversation said otherwise.
 
@@ -570,6 +572,28 @@ the camera permanently unopenable.
 `systemctl restart cam-service` does **not** clear an orphan; only killing the
 holder does.
 
+### Frame sharing — `MAX_VISION_SHARE`
+
+Governs whether a frame from `/frame/<front|rear>` (`bench_server.py`) may be
+sent off-board to the vision model for a scene description. It defaults to
+`0`, and at `0` the route refuses every request with `403` — verified on the
+bench 2026-07-28: `403` with sharing off, `200` with a real 640×360 JPEG
+(26–27 KB, two independent fetches, both a plausible bench scene rather than
+black or garbage) with `MAX_VISION_SHARE=1`, then `403` again once it was set
+back to `0` and the sidecar restarted.
+
+This is **not** the only route that puts image bytes on the wire. The
+pre-existing `/preview/*` MJPEG route (used by the dev HUD) is unauthenticated
+and streams to anyone on the LAN regardless of this setting — it predates the
+gate and is not covered by it. `MAX_VISION_SHARE` only governs frames the
+sidecar hands to the relay's vision call, not every way a frame can leave the
+board.
+
+If the vision model call fails or times out for any reason — no credential,
+rejected auth, a bad response shape, a timeout — the relay does not guess.
+`server/vision.ts`'s `describe()` returns `null` on every failure path, and the
+caller speaks "我看不清。" rather than a fabricated description.
+
 ## Running
 
 ```bash
@@ -588,6 +612,7 @@ MAX_VISION_SOCKET=/run/max/vision.sock
 RDK_CAMERA_FRONT=0                         # MIPI channel; CAM1 connector
 RDK_CAMERA_REAR=2                          # MIPI channel; the other connector
 MAX_ADAS_SHADOW=0                          # 1 starts a ride: segments + shadow ADAS
+MAX_VISION_SHARE=0                         # 1 lets camera.look frames leave the board for description
 MAX_CORPUS_DIR=/var/lib/max/corpus         # where ride segments are written
 MAX_VOICE_GATE_RMS=900
 MAX_VOICE_GATE_MS=400

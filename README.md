@@ -436,7 +436,7 @@ The `/agent` WebSocket holds the path to your Doubao quota, so the relay support
 RELAY_AUTH_TOKEN=          # shared secret; clients connect with ?token=…
 RELAY_ALLOWED_ORIGINS=     # comma-separated browser Origin allowlist
 RELAY_CONN_PER_MINUTE=30   # WebSocket upgrade attempts per client IP per minute (sliding 60s window)
-RELAY_MAX_PAYLOAD_BYTES=65536 # hard ceiling for one reassembled WS message
+RELAY_MAX_PAYLOAD_BYTES=393216 # hard ceiling for one reassembled WS message (default 384 KiB; must clear the 256 KiB camera.frame JSON gate)
 RELAY_TRUST_PROXY=off      # read client IP from X-Forwarded-For (behind a proxy only)
 RELAY_TRUSTED_PROXY_HOPS=1 # trusted proxy count; client IP is this many entries from the right of XFF
 ```

@@ -5,7 +5,8 @@ import {
   PendingDeviceCommands,
   deviceFailureSpeech,
   deviceSuccessSpeech,
-  extractDeviceCommand
+  extractDeviceCommand,
+  extractDeviceCommandForPlatform
 } from "../server/device-actions";
 
 describe("extractDeviceCommand — torch", () => {
@@ -155,6 +156,23 @@ describe("PendingDeviceCommands", () => {
     ]);
     expect(pending.expire(issued.issuedAt + DEVICE_RESULT_TIMEOUT_MS)).toEqual([]);
   });
+
+  it("peek finds a pending command without consuming it", () => {
+    const pending = new PendingDeviceCommands();
+    const issued = pending.issue("camera.look");
+    expect(pending.peek(issued.commandId)?.action).toBe("camera.look");
+    // Still there — unlike resolve(), peek() must not remove the entry, since
+    // the device.result that actually resolves it (deviceResult() in
+    // server/providers/doubao.ts) arrives after the camera.frame that peeks it.
+    expect(pending.peek(issued.commandId)?.action).toBe("camera.look");
+    expect(pending.resolve(issued.commandId)?.action).toBe("camera.look");
+    expect(pending.peek(issued.commandId)).toBeUndefined();
+  });
+
+  it("peek returns undefined for a commandId nobody issued", () => {
+    const pending = new PendingDeviceCommands();
+    expect(pending.peek("no-such-id")).toBeUndefined();
+  });
 });
 
 describe("extractDeviceCommand — camera", () => {
@@ -180,6 +198,53 @@ describe("extractDeviceCommand — camera", () => {
   it("respects negation and non-commands", () => {
     expect(extractDeviceCommand("Max 别拍照")).toBeNull();
     expect(extractDeviceCommand("Max 我们刚才拍的照片在哪")).toBeNull();
+  });
+
+  it("detects a request to look", () => {
+    for (const phrase of ["你能看到什么", "前面是什么", "看看前面", "what do you see"]) {
+      expect(extractDeviceCommand(phrase)?.action).toBe("camera.look");
+    }
+  });
+
+  it("does not mistake looking for taking a photo", () => {
+    // 拍照 must still win; the two are separate actions with separate speech.
+    expect(extractDeviceCommand("帮我拍照")?.action).toBe("camera.photo");
+    expect(extractDeviceCommand("打开相册")?.action).toBe("gallery.open");
+  });
+});
+
+describe("extractDeviceCommandForPlatform — camera.look is embedded-only", () => {
+  // Only the embedded board's dispatcher fetches a frame for camera.look
+  // (rdk/agent/src/device/dispatch.ts). On any other client, dispatching a
+  // device.command no one answers would sit the rider through the full
+  // DEVICE_RESULT_TIMEOUT_MS in silence before a generic timeout line — so
+  // detection itself is gated to an "embedded" session, and the phrase must
+  // fall through to ordinary conversation everywhere else.
+  it("detects camera.look for an embedded session", () => {
+    expect(extractDeviceCommandForPlatform("你能看到什么", "embedded")).toEqual({
+      action: "camera.look",
+      args: {}
+    });
+  });
+
+  it("does not detect camera.look for a web session — falls through to conversation", () => {
+    expect(extractDeviceCommandForPlatform("你能看到什么", "web")).toBeNull();
+  });
+
+  it("does not detect camera.look for an ios session", () => {
+    expect(extractDeviceCommandForPlatform("看看前面", "ios")).toBeNull();
+  });
+
+  it("does not detect camera.look when the platform is unknown", () => {
+    expect(extractDeviceCommandForPlatform("what do you see", undefined)).toBeNull();
+  });
+
+  it("leaves every other action ungated by platform", () => {
+    expect(extractDeviceCommandForPlatform("Max 拍照", "web")).toEqual({ action: "camera.photo", args: {} });
+    expect(extractDeviceCommandForPlatform("Max 打开手电筒", "web")).toEqual({
+      action: "torch.set",
+      args: { on: true }
+    });
   });
 });
 
@@ -215,6 +280,7 @@ describe("DEVICE_ACTION_TIERS", () => {
       "destination.show": "low",
       "camera.photo": "low",
       "camera.record": "low",
+      "camera.look": "low",
       "gallery.open": "low",
       "navigation.start": "low",
       "navigation.stop": "low"

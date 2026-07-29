@@ -37,4 +37,17 @@ describe("reconcileDeviceResult", () => {
       speech: "手电筒操作没成功。"
     });
   });
+
+  it("speaks a filler while it looks", () => {
+    expect(reconcileDeviceResult("camera.look", { status: "ok" }, "我看看…")).toEqual({
+      truncate: true,
+      speech: "我看看…"
+    });
+  });
+
+  it("says it cannot look when sharing is off", () => {
+    const decision = reconcileDeviceResult("camera.look", { status: "denied", reason: "vision.sharingOff" });
+    expect(decision.truncate).toBe(true);
+    expect(decision.speech).toBe("我现在不能看。");
+  });
 });

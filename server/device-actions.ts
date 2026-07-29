@@ -19,6 +19,7 @@ export type DeviceActionName =
   | "destination.show"
   | "camera.photo"
   | "camera.record"
+  | "camera.look"
   | "gallery.open"
   | "navigation.start"
   | "navigation.stop";
@@ -38,6 +39,7 @@ type DeviceCommand =
   | { action: "destination.show"; args: { query: string } }
   | { action: "camera.photo"; args: Record<string, never> }
   | { action: "camera.record"; args: { start: boolean } }
+  | { action: "camera.look"; args: Record<string, never> }
   | { action: "gallery.open"; args: Record<string, never> }
   | { action: "navigation.start"; args: { query: string } }
   | { action: "navigation.stop"; args: Record<string, never> };
@@ -54,12 +56,55 @@ export const DEVICE_ACTION_TIERS: Record<DeviceActionName, DeviceActionTier> = {
   "destination.show": "low",
   "camera.photo": "low",
   "camera.record": "low",
+  "camera.look": "low",
   "gallery.open": "low",
   "navigation.start": "low",
   "navigation.stop": "low"
 };
 
 export type IntentExtractor = (text: string) => DeviceCommand | null;
+
+/**
+ * Actions whose detection is restricted to a specific client platform, keyed
+ * by the platform string the session reports at `session.start`.
+ *
+ * `camera.look` is the first entry: it requires the relay to dispatch a
+ * `device.command` that fetches a live frame, and only the embedded board's
+ * dispatcher implements that action (`rdk/agent/src/device/dispatch.ts`). On
+ * iOS an action with no local handler falls through to `.unhandled`, which
+ * never sends a `device.result` back — the rider then sits through the full
+ * `DEVICE_RESULT_TIMEOUT_MS` in silence before a generic timeout line, instead
+ * of getting an ordinary spoken answer from the model. Every other
+ * `DeviceActionName` already has a real handler on every platform it is
+ * dispatched to, so it is absent from this map and detected everywhere, as
+ * before.
+ */
+const PLATFORM_RESTRICTED_ACTIONS: Partial<Record<DeviceActionName, string>> = {
+  "camera.look": "embedded"
+};
+
+/**
+ * extractDeviceCommand, plus the platform gate above. The extractor itself
+ * stays pure and platform-agnostic (session/platform state does not exist at
+ * that layer, and its existing tests assert detection with no platform in
+ * scope at all) — this wrapper is what a caller that actually dispatches a
+ * command to a live client (server/providers/doubao.ts,
+ * server/providers/mock.ts) should call instead, so the phrase falls through
+ * to ordinary conversation on any client that cannot act on it.
+ *
+ * The gate lives here, in one place keyed off the action, rather than as an
+ * ad hoc platform check duplicated at each dispatch call site — the same
+ * lesson server/hazard-injector.ts already draws from this codebase's history
+ * of a platform allowlist copied across files that silently rejected the
+ * embedded board once it existed.
+ */
+export function extractDeviceCommandForPlatform(text: string, platform: string | undefined): DeviceCommand | null {
+  const command = extractDeviceCommand(text);
+  if (!command) return null;
+  const requiredPlatform = PLATFORM_RESTRICTED_ACTIONS[command.action];
+  if (requiredPlatform && platform !== requiredPlatform) return null;
+  return command;
+}
 
 /** Players we cannot drive. MPMusicPlayerController reaches only Apple Music and
  *  the local library; naming any of these must produce an honest refusal rather
@@ -144,6 +189,9 @@ function matchCamera(raw: string): DeviceCommand | null {
   if (/(开始)?(录像|录制|录影|录个?视频|录一段)/.test(raw) || /(start\s+recording|record\s+(a\s+)?video)/i.test(raw)) {
     return { action: "camera.record", args: { start: true } };
   }
+  if (/(你能?看到?什么|前面是什么|看看前面|看一下前面)/.test(raw) || /what\s+(do|can)\s+you\s+see/i.test(raw)) {
+    return { action: "camera.look", args: {} };
+  }
   if (/(拍照|拍个?照|拍张?照片?|照相)/.test(raw) || /take\s+a\s+(photo|picture|pic)/i.test(raw)) {
     return { action: "camera.photo", args: {} };
   }
@@ -217,6 +265,7 @@ const FAILURE_SPEECH: Record<string, string> = {
   "camera.recording": "已经在录了。",
   "camera.notRecording": "现在没有在录像。",
   "capture.failed": "拍摄没成功。",
+  "vision.sharingOff": "我现在不能看。",
   "navigation.notActive": "现在没有在导航。",
   "permission.location": "我没有定位权限，去设置里开启后我再帮你导航。",
   // Embedded (helmet) refusals. Worded generically because "device.noScreen"
@@ -239,6 +288,7 @@ const ACTION_LABELS: Record<DeviceActionName, string> = {
   "destination.show": "目的地",
   "camera.photo": "拍照",
   "camera.record": "录像",
+  "camera.look": "看看",
   "gallery.open": "相册",
   "navigation.start": "导航",
   "navigation.stop": "导航"
@@ -286,6 +336,11 @@ export function deviceSuccessSpeech(command: DeviceCommand): string | undefined 
       return "拍好了。";
     case "camera.record":
       return command.args.start ? "开始录像。" : "已停止录像。";
+    case "camera.look":
+      // A filler, not the answer. The description arrives seconds later and is
+      // spoken separately; silence here reads as "he didn't hear me" and gets
+      // the question repeated, which would send a second frame.
+      return "我看看…";
     case "torch.set":
       return command.args.on ? "手电筒开了。" : "手电筒关了。";
     case "volume.set":
@@ -347,6 +402,16 @@ export class PendingDeviceCommands {
     const issued = this.pending.get(commandId);
     if (issued) this.pending.delete(commandId);
     return issued;
+  }
+
+  /** Looks up a still-pending command WITHOUT consuming it. Used to verify a
+   *  `camera.frame`'s commandId corresponds to a `camera.look` this relay
+   *  actually issued, before paying for a vision-model call on whatever image
+   *  arrived — the frame is not itself the command's result and must not
+   *  resolve (and thereby delete) the entry that the later `device.result`
+   *  for the same commandId still needs to resolve. */
+  peek(commandId: string): IssuedDeviceCommand | undefined {
+    return this.pending.get(commandId);
   }
 
   /** Removes and returns every command that has outlived the timeout. */

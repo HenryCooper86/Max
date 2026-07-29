@@ -118,8 +118,32 @@ export function createRelayClient(
     socket = current;
     current.binaryType = "nodebuffer";
 
+    const timers = {
+      set: options.setInterval ?? globalThis.setInterval,
+      clear: options.clearInterval ?? globalThis.clearInterval
+    };
+    const pingEvery = options.pingIntervalMs ?? 15_000;
+    let liveness: NodeJS.Timeout | null = null;
+    let awaitingPong = false;
+
     current.on("open", () => {
       current.send(JSON.stringify(buildSessionStart(config, memory)));
+      awaitingPong = false;
+      liveness = timers.set(() => {
+        if (awaitingPong) {
+          // The relay pings from its side too, but neither close crosses a
+          // black-holed path. Terminating locally is the only exit.
+          log("[relay] no pong within the liveness window; terminating the socket");
+          current.terminate();
+          return;
+        }
+        awaitingPong = true;
+        current.ping();
+      }, pingEvery);
+    });
+
+    current.on("pong", () => {
+      awaitingPong = false;
     });
 
     current.on("message", (rawData: unknown, rawIsBinary: unknown) => {
@@ -155,6 +179,10 @@ export function createRelayClient(
     });
 
     current.on("close", (...args: unknown[]) => {
+      if (liveness !== null) {
+        timers.clear(liveness);
+        liveness = null;
+      }
       const code = args[0] as number;
       const reason = args[1] as Buffer;
       const detail = reason && reason.length > 0 ? ` reason=${reason.toString("utf8")}` : "";

@@ -112,3 +112,50 @@ describe("createRelayClient lifecycle", () => {
     expect(sockets[1]!.sent.some((item) => Buffer.isBuffer(item))).toBe(true);
   });
 });
+
+describe("relay liveness", () => {
+  function liveClient() {
+    const socket = fakeSocket();
+    const ticks: Array<() => void> = [];
+    const cleared: unknown[] = [];
+    const client = createRelayClient(CONFIG, HANDLERS, {
+      wsFactory: () => socket,
+      pingIntervalMs: 15_000,
+      setInterval: ((fn: () => void) => {
+        ticks.push(fn);
+        return ticks.length as unknown as NodeJS.Timeout;
+      }) as typeof globalThis.setInterval,
+      clearInterval: ((id: unknown) => {
+        cleared.push(id);
+      }) as typeof globalThis.clearInterval,
+      log: () => {}
+    });
+    client.connect();
+    socket.readyState = 1;
+    socket.emit("open");
+    return { socket, ticks, cleared };
+  }
+
+  it("pings on each interval while the pong keeps coming", () => {
+    const { socket, ticks } = liveClient();
+    ticks[0]!(); // ping 1
+    socket.emit("pong");
+    ticks[0]!(); // ping 2
+    expect(socket.ping).toHaveBeenCalledTimes(2);
+    expect(socket.terminate).not.toHaveBeenCalled();
+  });
+
+  it("terminates a socket whose ping goes unanswered", () => {
+    const { socket, ticks } = liveClient();
+    ticks[0]!(); // ping, no pong
+    ticks[0]!(); // deadline passed
+    expect(socket.terminate).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops the liveness timer when the socket closes", () => {
+    const { socket, ticks, cleared } = liveClient();
+    ticks[0]!();
+    socket.emit("close", 1006, Buffer.alloc(0));
+    expect(cleared.length).toBe(1);
+  });
+});

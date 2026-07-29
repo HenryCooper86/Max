@@ -41,6 +41,10 @@ class CameraPair:
         self.recording_started_at: float | None = None
         self.recording_sides: dict[str, str | None] = {"front": None, "rear": None}
         self._recording_dir: Path | None = None
+        #: Held for the life of a recording so the writer can re-check free
+        #: space; the disk is the only thing that can end a clip early.
+        self._recording_gallery: Gallery | None = None
+        self._recording_frames = 0
         self._recording_stop = threading.Event()
         self._recording_thread: threading.Thread | None = None
         self._lock = threading.Lock()
@@ -128,10 +132,18 @@ class CameraPair:
 
             pair_id = gallery.new_pair_id(datetime.now())
             gallery.pair_dir(pair_id).mkdir(parents=True, exist_ok=True)
+            # Describe the clip before a single frame is written, not at the
+            # stop. A manifest that only appeared on a clean stop is why an
+            # 835 MB clip measured on the board was invisible in the gallery:
+            # the board lost power mid-ride, and list_pairs() skips a directory
+            # with no manifest. Now an interrupted clip is still a clip.
+            gallery.write_manifest(pair_id, sides["front"], sides["rear"], "video", recording=True)
             self.recording_id = pair_id
             self.recording_started_at = time.monotonic()
             self.recording_sides = sides
             self._recording_dir = gallery.pair_dir(pair_id)
+            self._recording_gallery = gallery
+            self._recording_frames = 0
 
         # Hard stop at the cap, so a forgotten recording cannot fill the disk.
         self._stop_timer = threading.Timer(MAX_RECORDING_SECONDS, lambda: self.stop_recording(gallery))
@@ -171,7 +183,20 @@ class CameraPair:
         with self._lock:
             directory = self._recording_dir
             sides = dict(self.recording_sides)
+            gallery = self._recording_gallery
+            frame = self._recording_frames
+            self._recording_frames = frame + 1
         if directory is None:
+            return
+
+        # Free space was checked when the clip started and never again, so a
+        # recording could write straight through the floor and fill the disk:
+        # measured at 2.84 MB/s, the ten-minute cap is ~1.7 GB against a 1 GB
+        # MAX_GALLERY_MIN_FREE_MB. Stop cleanly instead, so the clip keeps the
+        # frames it did get and the manifest describes a finished video.
+        if gallery is not None and frame % Gallery.SPACE_CHECK_FRAMES == 0 and not gallery.has_space():
+            print("[vision] stopping the recording: free space is below the floor", flush=True)
+            self.stop_recording(gallery)
             return
 
         for side, filename in sides.items():
@@ -194,6 +219,7 @@ class CameraPair:
             self.recording_started_at = None
             self.recording_sides = {"front": None, "rear": None}
             self._recording_dir = None
+            self._recording_gallery = None
 
         if self._stop_timer is not None:
             self._stop_timer.cancel()
@@ -203,9 +229,13 @@ class CameraPair:
         # manifest describes is not still growing after the fact.
         self._recording_stop.set()
         if self._recording_thread is not None:
-            self._recording_thread.join(timeout=2.0)
+            # The low-space stop runs *on* the writer thread. Joining a thread
+            # from itself raises, which would abandon the manifest mid-update
+            # and leave the clip flagged as still recording.
+            if self._recording_thread is not threading.current_thread():
+                self._recording_thread.join(timeout=2.0)
             self._recording_thread = None
 
-        gallery.write_manifest(pair_id, sides["front"], sides["rear"], "video")
+        gallery.write_manifest(pair_id, sides["front"], sides["rear"], "video", recording=False)
         degraded = sides["front"] is None or sides["rear"] is None
         return {"status": "ok", "detail": f"{pair_id}{' degraded' if degraded else ''}"}

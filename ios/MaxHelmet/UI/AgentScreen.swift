@@ -127,67 +127,60 @@ private func orbCaption(_ state: AgentSession.State) -> String {
 struct AgentScreen: View {
     @ObservedObject var viewModel: MainViewModel
     @ObservedObject var session: AgentSession
+    /// Compact vertical space means the phone is sideways. Info.plist has always
+    /// permitted that; the layout never accounted for it.
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     private var state: AgentSession.State { session.state }
 
     var body: some View {
         let color = orbColor(state)
         let presentedHazard = isHazardPresentationActive(state) ? state.fusedHazard : .normal
+        let layout = hudLayout(verticalSizeClassIsCompact: verticalSizeClass == .compact)
 
         ZStack {
             BackgroundGlow(color: color)
 
-            VStack(spacing: 14) {
-                TopBar(state: state)
-
-                if let alert = state.hazardAlert {
-                    HazardBanner(alert: alert).padding(.horizontal, 4)
-                }
-
-                if let guidance = state.guidance {
-                    GuidanceCard(guidance: guidance)
-                        .padding(.horizontal, 4)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                }
-
-                if state.recording {
-                    RecordingIndicator(startedAt: state.recordingStartedAt)
-                        .padding(.horizontal, 4)
-                }
-
-                Spacer(minLength: 8)
-
-                HelmetVisual(
-                    color: color,
-                    turnState: state.turnState,
-                    voiceLevel: state.voiceLevel,
-                    dimmed: state.micMuted,
-                    hazard: presentedHazard,
-                    gauge: gaugeMode(state),
-                    onTap: viewModel.toggleHandsFree
+            GeometryReader { proxy in
+                // Sizes come from the space actually on offer rather than from
+                // constants: a 300pt helmet and a 190pt caption card fit a
+                // portrait iPhone 15 and nothing else, which is how the mic dock
+                // ended up off-screen in landscape and with captions open.
+                let available = proxy.size
+                let hazardVisible = state.hazardAlert != nil
+                let guidanceVisible = state.guidance != nil
+                let captions =
+                    viewModel.showCaptions
+                    ? captionsHeight(
+                        layout: layout,
+                        available: available,
+                        hazardVisible: hazardVisible,
+                        recordingVisible: state.recording,
+                        guidanceVisible: guidanceVisible
+                    ) : nil
+                let helmet = helmetDiameter(
+                    layout: layout,
+                    available: available,
+                    captionsVisible: captions != nil,
+                    hazardVisible: hazardVisible,
+                    recordingVisible: state.recording,
+                    guidanceVisible: guidanceVisible
                 )
 
-                StateReadout(caption: orbCaption(state), telltale: stateTelltale(state), color: color)
-
-                Spacer(minLength: 8)
-
-                if viewModel.showCaptions {
-                    CaptionsOverlay(
-                        items: state.transcript,
-                        canFlag: { state.canFlagTurn($0) },
-                        onFlag: { item, reason in viewModel.flagTurn(item, reason: reason) }
-                    )
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                Group {
+                    switch layout {
+                    case .portrait:
+                        portraitStack(color: color, hazard: presentedHazard, helmet: helmet, captions: captions)
+                    case .landscape:
+                        landscapeStack(color: color, hazard: presentedHazard, helmet: helmet, captions: captions)
+                    }
                 }
-
-                SecondaryControls(state: state, viewModel: viewModel)
-
-                VoiceMicDock(state: state, action: viewModel.toggleHandsFree)
+                .frame(width: available.width, height: available.height)
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, layout == .landscape ? 16 : 20)
             .padding(.top, 10)
-            .padding(.bottom, 18)
-            .frame(maxWidth: 560)
+            .padding(.bottom, layout == .landscape ? 10 : 18)
+            .frame(maxWidth: layout == .landscape ? .infinity : 560)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -219,6 +212,95 @@ struct AgentScreen: View {
         .onChange(of: state.galleryRequestToken) { _, _ in
             viewModel.galleryModel.refresh()
             viewModel.showGallery = true
+        }
+    }
+
+    // MARK: - the two arrangements
+
+    /// Safety-critical banners and the navigation card, shared by both layouts.
+    @ViewBuilder private var alerts: some View {
+        if let alert = state.hazardAlert {
+            HazardBanner(alert: alert).padding(.horizontal, 4)
+        }
+        if let guidance = state.guidance {
+            GuidanceCard(guidance: guidance)
+                .padding(.horizontal, 4)
+                .transition(.move(edge: .top).combined(with: .opacity))
+        }
+        if state.recording {
+            RecordingIndicator(startedAt: state.recordingStartedAt)
+                .padding(.horizontal, 4)
+        }
+    }
+
+    @ViewBuilder private func helmet(color: Color, hazard: HazardLevel, size: CGFloat) -> some View {
+        HelmetVisual(
+            color: color,
+            turnState: state.turnState,
+            voiceLevel: state.voiceLevel,
+            dimmed: state.micMuted,
+            hazard: hazard,
+            gauge: gaugeMode(state),
+            diameter: size,
+            onTap: viewModel.toggleHandsFree
+        )
+    }
+
+    @ViewBuilder private func captionsCard(height: CGFloat) -> some View {
+        CaptionsOverlay(
+            items: state.transcript,
+            listHeight: height,
+            canFlag: { state.canFlagTurn($0) },
+            onFlag: { item, reason in viewModel.flagTurn(item, reason: reason) }
+        )
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    @ViewBuilder
+    private func portraitStack(color: Color, hazard: HazardLevel, helmet size: CGFloat, captions: CGFloat?)
+        -> some View
+    {
+        VStack(spacing: 14) {
+            TopBar(state: state)
+            alerts
+
+            Spacer(minLength: 4)
+
+            helmet(color: color, hazard: hazard, size: size)
+            StateReadout(caption: orbCaption(state), telltale: stateTelltale(state), color: color)
+
+            Spacer(minLength: 4)
+
+            if let captions { captionsCard(height: captions) }
+
+            SecondaryControls(state: state, viewModel: viewModel)
+            VoiceMicDock(state: state, action: viewModel.toggleHandsFree)
+        }
+    }
+
+    /// Helmet on one side, everything that is words or controls on the other.
+    /// Stacked vertically there is simply not enough height on a sideways phone.
+    @ViewBuilder
+    private func landscapeStack(color: Color, hazard: HazardLevel, helmet size: CGFloat, captions: CGFloat?)
+        -> some View
+    {
+        VStack(spacing: 8) {
+            TopBar(state: state)
+            alerts
+
+            HStack(spacing: 18) {
+                helmet(color: color, hazard: hazard, size: size)
+                    .frame(maxWidth: .infinity)
+
+                VStack(spacing: 8) {
+                    StateReadout(caption: orbCaption(state), telltale: stateTelltale(state), color: color)
+                    if let captions { captionsCard(height: captions) }
+                    Spacer(minLength: 0)
+                    SecondaryControls(state: state, viewModel: viewModel)
+                    VoiceMicDock(state: state, action: viewModel.toggleHandsFree)
+                }
+                .frame(maxWidth: .infinity)
+            }
         }
     }
 }
@@ -353,6 +435,8 @@ private struct HelmetVisual: View {
     let hazard: HazardLevel
     /// Which arc the instrument bezel lights (mirrors the web gauge).
     let gauge: GaugeMode
+    /// Sized by the screen, not by a constant — see AgentScreenLayout.
+    var diameter: CGFloat = HudMetrics.helmetMaxDiameter
     var onTap: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -401,7 +485,7 @@ private struct HelmetVisual: View {
             }
             .opacity(hazardPulse)
         }
-        .frame(width: 300, height: 300)
+        .frame(width: diameter, height: diameter)
         .opacity(dimmed ? 0.55 : 1)
         .contentShape(Rectangle())
         .onTapGesture { onTap() }
@@ -685,6 +769,9 @@ private struct StateReadout: View {
 
 private struct CaptionsOverlay: View {
     let items: [TranscriptItem]
+    /// The card's list height, chosen against the screen. Fixed at 190 it was
+    /// the difference between the mic dock being on screen and off it.
+    var listHeight: CGFloat = 190
     let canFlag: (TranscriptItem) -> Bool
     let onFlag: (TranscriptItem, String) -> Void
 
@@ -718,7 +805,7 @@ private struct CaptionsOverlay: View {
                         }
                         .frame(maxWidth: .infinity)
                     }
-                    .frame(height: 190)
+                    .frame(height: max(0, listHeight - 28))  // minus the card padding
                     .scrollIndicators(.hidden)
                     .onChange(of: items.count) { _, _ in
                         if let last = items.last {

@@ -1002,6 +1002,44 @@ recording is what costs the extra headroom. Nobody has measured this in a
 fairing, in sun, on a moving bike; the remaining margin to throttling is thin
 enough that a second camera or a warm day should be measured, not assumed.
 
+### The board dies hard, and it is not the software
+
+Reported as "the RDK crashes very often". Investigated 2026-07-29; what the
+board's own records say:
+
+- **Nothing is logged.** The journal for each short boot simply stops
+  mid-sentence. Across the last four boots there is not one shutdown marker
+  (`Reached target Shutdown`, `Powering off`, `systemd-shutdown`), and the next
+  boot reports `FAT-fs (mmcblk0p1): Volume was not properly unmounted`. That is
+  power loss or a hard hang, not a clean reboot.
+- **Not a panic.** `/sys/fs/pstore` is empty and no `Kernel panic` /
+  `Unable to handle` appears in any retained boot.
+- **Not the OOM killer.** No `oom-kill` or `Killed process` in any boot;
+  ~2.2 GB of 3 GB stays available with a recording running.
+- **Not thermal.** The CPU zone's critical trip is 110 °C. A 5-minute recording
+  peaked at **53.6 °C** with the throttle state at 0 the whole time — nowhere
+  near the 94 °C a shadow ride reaches, let alone the trip.
+- **Not the watchdog.** `dw_wdt` exists but nothing holds `/dev/watchdog`, and
+  systemd's `RuntimeWatchdogUSec` is 0.
+- **Not the storage.** eMMC `life_time` is `0x01 0x01`, `pre_eol_info` `0x01`,
+  and no I/O errors are logged.
+
+**Recording alone does not do it.** A 5 min 13 s / 890 MB clip ran past the
+~4.5-minute mark where earlier boots died, and the board stayed up and cool.
+
+What the dead boots had that this test did not is a **live voice session**: the
+last lines before boot −2 stopped are `max-aec` frames and
+`[audio] barge-in confirmed by the mic`, i.e. mic capture, speaker playback and
+AEC all running while the 835 MB clip was being written.
+
+So the evidence points at **power**, not code: the amplifier driving a speaker,
+plus sustained ~3 MB/s eMMC writes, plus the camera ISP and Wi-Fi, on a supply
+that cannot hold up. Confirm it on the bench before changing anything else —
+a USB power meter inline with the supply, or simply a known-good 5 V/4 A brick
+and a short, thick cable, will settle it in one ride. Nothing in this repo can
+fix a brown-out; what the software now guarantees is that a clip interrupted by
+one is still in the gallery afterwards.
+
 A ride that logs no alerts is not evidence of a broken pipeline. Replay the
 ride's own segment (`python3 -m tools.replay <segment> --camera front`) — if it
 also reports 0 alerts, the scene simply had no hazards. That is how the first
@@ -1034,18 +1072,60 @@ Storage: roughly **10 GB per hour per camera** for `.mjpeg` at 10 fps / 1080p
 (JPEG q85). The `binding` path would be ~1.8 GB/hour once it works, since H.264
 exploits inter-frame redundancy that per-frame JPEG cannot.
 
-**Not yet verified on hardware:** a recording that actually captures frames.
-The full `mipi_cam` path is exercised — subprocess launch, rclpy node,
-subscription, settle timeout, clean teardown — but no sensor that streams has
-been attached since it landed. Board-verified so far:
+Board-verified:
 
 - `cam-service` survives a failed camera open (previously any open crashed it)
 - both cameras report unavailable with a specific reason and the CLI exits cleanly
 - a per-node rclpy executor, without which two cameras raise
   `ValueError: generator already executing`
+- **a recording that actually captures frames** (2026-07-29): a 5 min 13 s clip
+  wrote 890 MB at a measured **2.84 MB/s**, front camera only, and stopped
+  cleanly into a listable gallery entry.
 
-**Use IMX219.** The OV5647 produces zero frames even under the vendor's own
-`mipi_cam`, so no source can record from it.
+**The OV5647 does stream.** An earlier note here said it produced zero frames
+under the vendor's own `mipi_cam` and that no source could record from it. That
+is no longer true of this board: on 2026-07-29 `max-vision` was running
+`video_device:=OV5647` on channel 0 and served both photos and a multi-minute
+recording from it. IMX219 remains the better-characterised part; OV5647 is not a
+blocker.
+
+### A recording is described from its first frame, not from its stop
+
+`stop_recording()` used to be the only place a `manifest.json` was written, and
+`Gallery.list_pairs()` skips a directory that has no manifest. So a clip the
+board died partway through was invisible in the gallery **forever** — the rider
+heard "开始录像。", the bytes were on disk, and nothing ever listed them.
+
+Measured on the board: `pair-20000101-080114/front.mjpeg` held **835 MB** with no
+manifest, last written at 21:11 on 2026-07-28, which is the minute the boot it
+belonged to ended. A second directory held nothing at all.
+
+The manifest is now written when recording starts, carrying `"recording": true`,
+and finalised on stop. `Gallery.reconcile()` runs once at service start — before
+anything can record, so a manifest still flagged `recording` can only belong to a
+dead process — and it:
+
+- finalises a clip whose writer never got to stop it,
+- adopts media left by an older build that wrote no manifest at all,
+- rebuilds a manifest that a power cut left unparseable,
+- drops a side the manifest claims but whose file never landed,
+- removes a directory holding no media, rather than listing a broken tile.
+
+It recovered both stragglers on first run:
+
+```
+[vision] recovered 2 interrupted capture(s): pair-20000101-080114, pair-20260727-114223
+```
+
+Free space is also re-checked **while** recording, not only at the start. At
+2.84 MB/s the ten-minute cap is ~1.7 GB, against a `MAX_GALLERY_MIN_FREE_MB`
+floor of 1 GB — a clip that started with just enough room would write straight
+through it and fill the disk. It now stops itself cleanly, keeping the frames it
+already has.
+
+Serving a clip no longer reads it whole, either: the thumbnail walks the file a
+chunk at a time and stops at frame two, and the download streams. Slicing a
+thumbnail out of that 835 MB clip previously cost 835 MB of RAM on a 3 GB board.
 
 The two modules are visually near-identical (they are Raspberry Pi Camera v1 vs
 v2). Identify one in seconds by plugging it in alone and scanning:

@@ -23,6 +23,14 @@ from urllib.parse import parse_qs, unquote, urlparse
 #: JPEG start-of-image. A .mjpeg segment is these, concatenated.
 SOI = b"\xff\xd8\xff"
 
+#: How much of a segment to pull in at a time. A 1080p q85 frame measured
+#: ~330 KB on the board, so one chunk almost always holds the first frame.
+SEGMENT_CHUNK = 1024 * 1024
+#: Hard ceiling on a thumbnail slice. Without one, a segment holding no second
+#: SOI would be read whole — and a real clip on the board reached 835 MB, more
+#: RAM than an X5 has to give a thumbnail.
+THUMB_MAX_BYTES = 16 * 1024 * 1024
+
 #: Longest edge of a shared frame. Enough for a model to describe a scene and
 #: cheap to upload from a board that usually lives on a phone tether.
 DEFAULT_FRAME_WIDTH = 640
@@ -39,6 +47,32 @@ def first_frame(data: bytes) -> bytes | None:
         return None
     nxt = data.find(SOI, len(SOI))
     return data if nxt == -1 else data[:nxt]
+
+
+def read_first_frame(path: Path) -> bytes | None:
+    """The first JPEG of a segment, without reading the segment whole.
+
+    ``first_frame`` needs bytes in hand; handing it a whole file is what made a
+    thumbnail cost the size of the clip. A ride segment measured 835 MB on the
+    board, so this walks the file a chunk at a time and stops at frame two.
+    """
+    try:
+        with path.open("rb") as handle:
+            buffer = handle.read(SEGMENT_CHUNK)
+            if not buffer.startswith(SOI):
+                return None
+            while True:
+                nxt = buffer.find(SOI, len(SOI))
+                if nxt != -1:
+                    return buffer[:nxt]
+                if len(buffer) >= THUMB_MAX_BYTES:
+                    return buffer[:THUMB_MAX_BYTES]
+                more = handle.read(SEGMENT_CHUNK)
+                if not more:
+                    return buffer  # a single-frame file is its own first frame
+                buffer += more
+    except OSError:
+        return None
 
 
 def safe_path(root, relative: str):
@@ -132,15 +166,20 @@ def serve(pair, gallery, port: int, share_frames: bool = False) -> None:
                 self.send_error(404)
                 return
 
-            data = target.read_bytes()
             if thumb:
-                data = first_frame(data)
+                data = read_first_frame(target)
                 if data is None:
                     self.send_error(404)
                     return
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
 
             self.send_response(200)
-            if thumb or target.suffix == ".jpg":
+            if target.suffix == ".jpg":
                 self.send_header("Content-Type", "image/jpeg")
             else:
                 # A .mjpeg is concatenated JPEG; no browser plays it inline, so
@@ -149,9 +188,20 @@ def serve(pair, gallery, port: int, share_frames: bool = False) -> None:
                 self.send_header(
                     "Content-Disposition", f'attachment; filename="{target.name}"'
                 )
-            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Content-Length", str(target.stat().st_size))
             self.end_headers()
-            self.wfile.write(data)
+            # Streamed, not read whole: a clip on the board reached 835 MB, and
+            # buffering that to serve one download would be most of the board's
+            # RAM for as long as the transfer lasts.
+            try:
+                with target.open("rb") as handle:
+                    while True:
+                        chunk = handle.read(SEGMENT_CHUNK)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                return  # the download was cancelled; ordinary
 
         def _listing(self) -> None:
             body = json.dumps(listing(gallery), ensure_ascii=False).encode("utf-8")

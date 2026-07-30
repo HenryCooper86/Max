@@ -57,7 +57,7 @@ def test_one_noisy_ttc_sample_does_not_fire():
 
 
 def test_the_ttc_run_resets_when_the_threat_stops_qualifying():
-    s = Suppressor(min_ttc_frames=3)
+    s = Suppressor(min_ttc_frames=3, run_grace_frames=0)
     s.admit([cand(t_ms=0)], mature(), t_ms=0)
     s.admit([cand(t_ms=100)], mature(), t_ms=100)
     s.admit([], mature(), t_ms=200)  # the candidate went away
@@ -122,3 +122,46 @@ def test_a_caution_never_preempts_a_critical():
             == []
         )
         t += 100
+
+
+def test_one_flicker_frame_does_not_rearm_the_run():
+    s = Suppressor()  # grace defaults to 1
+    # Two qualifying frames, one flicker (absent), then present again: the run
+    # resumes at 3 and fires — the flicker cost one frame, not a restart.
+    assert s.admit([cand(t_ms=0)], mature(), t_ms=0) == []
+    assert s.admit([cand(t_ms=100)], mature(), t_ms=100) == []
+    assert s.admit([], mature(), t_ms=200) == []          # flicker
+    assert s.admit([cand(t_ms=300)], mature(), t_ms=300) != []
+
+
+def test_two_absent_frames_still_rearm():
+    s = Suppressor()
+    assert s.admit([cand(t_ms=0)], mature(), t_ms=0) == []
+    assert s.admit([cand(t_ms=100)], mature(), t_ms=100) == []
+    assert s.admit([], mature(), t_ms=200) == []
+    assert s.admit([], mature(), t_ms=300) == []          # grace exhausted
+    # Run restarted: two more frames still are not enough...
+    assert s.admit([cand(t_ms=400)], mature(), t_ms=400) == []
+    assert s.admit([cand(t_ms=500)], mature(), t_ms=500) == []
+    # ...the third fires.
+    assert s.admit([cand(t_ms=600)], mature(), t_ms=600) != []
+
+
+def test_zero_grace_is_todays_exact_semantics():
+    s = Suppressor(run_grace_frames=0)
+    assert s.admit([cand(t_ms=0)], mature(), t_ms=0) == []
+    assert s.admit([cand(t_ms=100)], mature(), t_ms=100) == []
+    assert s.admit([], mature(), t_ms=200) == []
+    # Old behavior: the absence deleted the run; three fresh frames needed.
+    assert s.admit([cand(t_ms=300)], mature(), t_ms=300) == []
+    assert s.admit([cand(t_ms=400)], mature(), t_ms=400) == []
+    assert s.admit([cand(t_ms=500)], mature(), t_ms=500) != []
+
+
+def test_grace_cannot_outlive_the_track():
+    s = Suppressor()
+    assert s.admit([cand(t_ms=0)], mature(), t_ms=0) == []
+    assert s.admit([cand(t_ms=100)], mature(), t_ms=100) == []
+    assert s.admit([], mature(), t_ms=200) == []          # graced
+    # Track died: maturity gate (Stage 2) blocks regardless of the kept run.
+    assert s.admit([cand(t_ms=300)], {}, t_ms=300) == []

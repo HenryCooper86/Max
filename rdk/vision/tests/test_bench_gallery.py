@@ -42,7 +42,7 @@ def make_photo(gallery, pair_id: str, front=PHOTO, rear=None):
 
 
 def test_listing_is_empty_when_nothing_was_captured(gallery):
-    assert listing(gallery) == {"pairs": []}
+    assert listing(gallery)["pairs"] == []
 
 
 def test_listing_reports_a_capture_with_its_size(gallery):
@@ -244,3 +244,160 @@ def test_a_recording_downloads_as_an_attachment(gallery):
     with get(port, "/gallery/pair-v/front.mjpeg") as response:
         assert "attachment" in response.headers["Content-Disposition"]
         assert response.read() == JPEG_A + JPEG_B
+
+
+def make_video(gallery, pair_id: str, data=JPEG_A + JPEG_B, recording=False):
+    directory = gallery.pair_dir(pair_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "front.mjpeg").write_bytes(data)
+    gallery.write_manifest(pair_id, "front.mjpeg", None, "video", recording=recording)
+
+
+def post(port: int, path: str):
+    request = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=b"", method="POST")
+    return urllib.request.urlopen(request, timeout=5)
+
+
+def post_status(port: int, path: str) -> int:
+    try:
+        with post(port, path) as response:
+            return response.status
+    except urllib.error.HTTPError as error:
+        return error.code
+
+
+def test_iter_frames_yields_each_frame(tmp_path):
+    from bench_server import iter_frames
+
+    path = tmp_path / "seg.mjpeg"
+    path.write_bytes(JPEG_A + JPEG_B)
+    assert list(iter_frames(path)) == [JPEG_A, JPEG_B]
+
+
+def test_iter_frames_of_a_single_frame_file_yields_it(tmp_path):
+    from bench_server import iter_frames
+
+    path = tmp_path / "seg.mjpeg"
+    path.write_bytes(JPEG_A)
+    assert list(iter_frames(path)) == [JPEG_A]
+
+
+def test_iter_frames_of_something_that_is_not_jpeg_yields_nothing(tmp_path):
+    from bench_server import iter_frames
+
+    path = tmp_path / "seg.mjpeg"
+    path.write_bytes(b"not a jpeg at all")
+    assert list(iter_frames(path)) == []
+
+
+def test_play_streams_the_recording_as_multipart(gallery):
+    make_video(gallery, "pair-v")
+    port = running(gallery)
+    with get(port, "/gallery/pair-v/front.mjpeg/play") as response:
+        assert response.headers["Content-Type"].startswith("multipart/x-mixed-replace")
+        body = response.read()
+    assert body.count(b"--frame") == 2
+    assert JPEG_A in body
+    assert JPEG_B in body
+
+
+def test_play_of_a_photo_is_404(gallery):
+    # A photo is already viewable inline; only a segment has frames to pace.
+    make_photo(gallery, "pair-p")
+    port = running(gallery)
+    assert status_of(port, "/gallery/pair-p/front.jpg/play") == 404
+
+
+def test_play_of_an_unknown_file_is_404(gallery):
+    port = running(gallery)
+    assert status_of(port, "/gallery/pair-nope/front.mjpeg/play") == 404
+
+
+def test_play_refuses_an_encoded_climb(gallery):
+    port = running(gallery)
+    assert status_of(port, "/gallery/%2e%2e/%2e%2e/etc/shadow/play") == 404
+
+
+def test_play_accepts_an_fps_within_range(gallery):
+    make_video(gallery, "pair-v", data=JPEG_A)
+    port = running(gallery)
+    with get(port, "/gallery/pair-v/front.mjpeg/play?fps=30") as response:
+        assert response.status == 200
+        response.read()
+
+
+@pytest.mark.parametrize("fps", ["0", "31", "abc", "-5"])
+def test_play_refuses_a_bad_fps(gallery, fps):
+    make_video(gallery, "pair-v", data=JPEG_A)
+    port = running(gallery)
+    assert status_of(port, f"/gallery/pair-v/front.mjpeg/play?fps={fps}") == 400
+
+
+def test_delete_removes_the_pair(gallery):
+    make_photo(gallery, "pair-1")
+    port = running(gallery)
+    with post(port, "/gallery/pair-1/delete") as response:
+        assert response.status == 200
+        # The page reads the outcome cross-origin, so the header is part of
+        # the contract, not a nicety.
+        assert response.headers["Access-Control-Allow-Origin"] == "*"
+        assert json.loads(response.read()) == {"deleted": "pair-1"}
+    assert not gallery.pair_dir("pair-1").exists()
+    assert listing(gallery)["pairs"] == []
+
+
+def test_delete_of_an_unknown_pair_is_404(gallery):
+    port = running(gallery)
+    assert post_status(port, "/gallery/pair-nope/delete") == 404
+
+
+def test_delete_refuses_an_encoded_climb(gallery):
+    port = running(gallery)
+    assert post_status(port, "/gallery/%2e%2e/delete") == 404
+
+
+def test_delete_of_a_live_recording_is_409(gallery):
+    make_video(gallery, "pair-live", recording=True)
+    port = running(gallery)
+    try:
+        with post(port, "/gallery/pair-live/delete") as response:
+            code, headers = response.status, response.headers
+    except urllib.error.HTTPError as error:
+        code, headers = error.code, error.headers
+    assert code == 409
+    # Errors need the CORS header too, or the page cannot tell "still
+    # recording" apart from the sidecar being down.
+    assert headers["Access-Control-Allow-Origin"] == "*"
+    assert gallery.pair_dir("pair-live").exists()
+
+
+def test_post_anywhere_else_is_404(gallery):
+    port = running(gallery)
+    assert post_status(port, "/gallery") == 404
+    assert post_status(port, "/preview/front") == 404
+
+
+def test_listing_carries_the_capture_time(gallery):
+    make_photo(gallery, "pair-20260727-100000")
+    entry = listing(gallery)["pairs"][0]
+    assert entry["created"] == "2026-07-27T10:00:00"
+
+
+def test_listing_falls_back_to_mtime_for_an_unparseable_id(gallery):
+    make_photo(gallery, "pair-strange-name")
+    entry = listing(gallery)["pairs"][0]
+    assert entry["created"] is not None
+
+
+def test_listing_passes_a_duration_through(gallery):
+    directory = gallery.pair_dir("pair-v")
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "front.mjpeg").write_bytes(JPEG_A)
+    gallery.write_manifest("pair-v", "front.mjpeg", None, "video", duration_s=12.3)
+    assert listing(gallery)["pairs"][0]["duration_s"] == 12.3
+
+
+def test_listing_reports_disk_space_against_the_floor(gallery):
+    payload = listing(gallery)
+    assert payload["disk"]["free_mb"] > 0
+    assert payload["disk"]["min_free_mb"] == 0

@@ -1,11 +1,16 @@
+import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from adas.shadow import ShadowRecord
-from corpus.labels import HazardWindow
-from tools.evaluate import score_ride
+from adas.shadow import ShadowLog, ShadowRecord
+from adas.tuning import DEFAULT, fingerprint
+from corpus.labels import HazardWindow, write_labels
+from recorder.metadata import FrameMeta, MetadataWriter
+from tools.evaluate import load_ride, main, score_ride
 
 
 def record(**overrides):
@@ -82,3 +87,52 @@ def test_gate_passes_when_clean():
     hit = record(threat_id="rear_approach", camera="rear", severity="critical", wall_ms=1_012_000)
     score = score_ride([hit], windows, 1_000_000, 2.0, ["abc"])
     assert score.gate_false_rate_ok and score.gate_false_criticals_ok
+
+
+def _fixture_ride(tmp_path, with_labels=True, with_sidecars=True, records=()):
+    ride = tmp_path / "ride-test"
+    (ride / "front").mkdir(parents=True)
+    if with_sidecars:
+        with MetadataWriter(ride / "front" / "seg-000000.jsonl") as w:
+            w.append(FrameMeta(frame_index=0, mono_ns=0, wall_ms=1_000_000, camera="front"))
+            w.append(FrameMeta(frame_index=1, mono_ns=10**9, wall_ms=1_360_000, camera="front"))
+    with ShadowLog(ride / "shadow-front.jsonl", tuning=DEFAULT) as log:
+        for rec in records:
+            log.append(rec)
+    if with_labels:
+        write_labels(ride, [HazardWindow(threat="pedestrian_ahead", camera="front", start_ms=10_000, end_ms=14_000)])
+    return ride
+
+
+def test_load_ride_derives_start_and_duration_from_sidecars(tmp_path):
+    ride = _fixture_ride(tmp_path)
+    records, fingerprints, start, duration_h = load_ride(ride)
+    assert start == 1_000_000
+    assert abs(duration_h - 0.1) < 1e-9          # 360 s
+    assert fingerprints == [fingerprint(DEFAULT)]
+
+
+def test_missing_labels_exits_with_instructions(tmp_path, capsys):
+    ride = _fixture_ride(tmp_path, with_labels=False)
+    with pytest.raises(SystemExit):
+        main([str(ride)])
+    assert "tools.label" in capsys.readouterr().err
+
+
+def test_missing_sidecars_exit_naming_the_files(tmp_path, capsys):
+    ride = _fixture_ride(tmp_path, with_sidecars=False)
+    with pytest.raises(SystemExit):
+        main([str(ride)])
+    assert "jsonl" in capsys.readouterr().err
+
+
+def test_cli_scores_and_writes_json(tmp_path, capsys):
+    hit = record(threat_id="pedestrian_ahead", camera="front", severity="critical", wall_ms=1_012_000)
+    ride = _fixture_ride(tmp_path, records=[hit])
+    out = tmp_path / "score.json"
+    main([str(ride), "--json", str(out)])
+    printed = capsys.readouterr().out
+    assert "false alerts/hour" in printed and "fingerprint" in printed
+    payload = json.loads(out.read_text())
+    assert payload["false_alerts_total"] == 0
+    assert payload["gate_false_rate_ok"] is True

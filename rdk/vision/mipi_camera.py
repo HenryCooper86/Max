@@ -27,6 +27,12 @@ TOPIC = "/image_raw"
 #: acquired together — and it is the one whose holder blocks the next open.
 ISP_DEVICE = "/dev/vs-isp0_cap"
 
+#: How stale a served JPEG may be when the caller opts in. At 24 fps capture
+#: a 100 ms-old frame is within one 10 fps recording period; sharing one
+#: encode across recorder + preview cuts ~30 encodes/s to at most 10 — a
+#: measured slice of the 94 °C shadow-ride plateau.
+JPEG_MAX_AGE_MS = 100.0
+
 
 def _encode_jpeg(nv12: bytes, width: int, height: int) -> bytes | None:
     """NV12 -> JPEG. Board-only: cv2 and numpy are not on the dev machine."""
@@ -56,6 +62,8 @@ class FrameBuffer:
         self._frame: Frame | None = None
         self._jpeg: bytes | None = None
         self._received_at: float | None = None
+        self._last_jpeg: bytes | None = None
+        self._last_jpeg_at: float | None = None
 
     def put(self, nv12: bytes, t_ms: int) -> None:
         with self._lock:
@@ -73,10 +81,20 @@ class FrameBuffer:
         with self._lock:
             return self._frame
 
-    def jpeg(self) -> bytes | None:
+    def jpeg(self, max_age_ms: float | None = None) -> bytes | None:
         with self._lock:
             if self._jpeg is not None:
-                return self._jpeg
+                return self._jpeg  # current frame's encode — exact, as always
+            if (
+                max_age_ms is not None
+                and self._last_jpeg is not None
+                and self._last_jpeg_at is not None
+                and (self._clock() - self._last_jpeg_at) * 1000.0 <= max_age_ms
+            ):
+                # A newer frame exists but the last encode is younger than the
+                # caller's staleness budget. Serving it is what turns thirty
+                # encodes a second into ten.
+                return self._last_jpeg
             frame = self._frame
         if frame is None:
             return None
@@ -87,6 +105,9 @@ class FrameBuffer:
         with self._lock:
             if self._frame is frame:
                 self._jpeg = data
+            if data is not None:
+                self._last_jpeg = data
+                self._last_jpeg_at = self._clock()
         return data
 
     def age_seconds(self) -> float | None:
@@ -241,8 +262,8 @@ class MipiCamera:
     def latest(self) -> Frame | None:
         return self.buffer.latest()
 
-    def jpeg(self) -> bytes | None:
-        return self.buffer.jpeg()
+    def jpeg(self, max_age_ms: float | None = None) -> bytes | None:
+        return self.buffer.jpeg(max_age_ms)
 
     def age_seconds(self) -> float | None:
         return self.buffer.age_seconds()

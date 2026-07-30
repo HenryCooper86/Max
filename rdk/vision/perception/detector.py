@@ -111,7 +111,9 @@ class Detector:
     def infer(self, nv12: bytes, src_w: int, src_h: int) -> list[Detection]:
         padded, geom = letterbox_nv12(nv12, src_w, src_h)
         outputs = self._model.forward(np.frombuffer(padded, dtype=np.uint8))
-        tensors = [np.array(o.buffer) for o in outputs]
+        # Alias the vendor buffer instead of copying: arrays are read-only within
+        # the same infer call (decode and nms only read, letterbox allocates fresh).
+        tensors = [np.asarray(o.buffer) for o in outputs]
         dets = decode(tensors, self.conf_threshold)
         kept = nms(dets, self.iou_threshold)
         return [geom.to_source(d) for d in kept]

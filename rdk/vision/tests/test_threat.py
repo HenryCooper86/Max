@@ -6,7 +6,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from adas.threat import CLOSING_RATE_MIN, evaluate, in_corridor
 from adas.tuning import DEFAULT
-from perception.types import BoxSample, EgoState, Track
+from perception.tracker import Tracker
+from perception.types import BoxSample, Detection, EgoState, Track
 
 MOVING = EgoState(moving=True, speed_scale=1.0)
 STOPPED = EgoState(moving=False, speed_scale=0.0)
@@ -165,10 +166,46 @@ def test_tailgating_dwell_still_fires_inside_the_window():
     sample history to the last 6 s (the same cutoff Tracker.update applies)
     before calling evaluate. The 4.5 s of dwell-worthy samples all fall
     inside that window, so trimming to it must never starve the dwell rule.
+
+    Note: with only 4.5 s of history the cutoff here removes nothing (a
+    no-op trim) -- this narrowly checks that applying the cutoff arithmetic
+    to a short track is harmless. It cannot catch a boundary bug in the
+    trim (e.g. `>` vs `>=`, or a wrong cutoff) because nothing is ever
+    trimmed. See test_tailgating_dwell_survives_the_trackers_real_trim
+    below for that: it drives Tracker.update itself past the window so the
+    real trim fires.
     """
     track = steady_track(n=46)  # 4.5 s of samples, all at tailgate height
     cutoff = track.last.t_ms - DEFAULT.track_window_ms
     track.samples[:] = [s for s in track.samples if s.t_ms >= cutoff]
+    candidates = evaluate([track], MOVING, t_ms=track.last.t_ms, camera="rear")
+    assert any(c.threat_id == "tailgating" for c in candidates)
+
+
+def test_tailgating_dwell_survives_the_trackers_real_trim():
+    """Integration check: the tracker's actual window trim -- not a
+    reconstruction of it -- must leave the dwell rule enough history to fire.
+
+    Drives Tracker.update with one tailgate-height, centred, non-closing rear
+    vehicle detection per 100 ms for 8 s: longer than the 6 s window, so the
+    real trim inside update() genuinely removes samples (asserted below)
+    rather than being a no-op like the test above.
+    """
+    tracker = Tracker(window_ms=DEFAULT.track_window_ms)
+    # Same box geometry as steady_track(h=0.50): centred, height 0.50 > the
+    # 0.45 tailgate threshold. A constant height each frame gives height_rate
+    # ~= 0, i.e. not closing -- what routes evaluate into the tailgating
+    # branch rather than rear_approach.
+    det = Detection(cls="car", score=0.9, x1=0.4, y1=0.25, x2=0.6, y2=0.75)
+    tracks: list[Track] = []
+    for i in range(80):  # 8 s at 10 fps, more than the 6 s window
+        tracks = tracker.update([det], t_ms=i * 100)
+    (track,) = tracks
+
+    # The real trim actually fired -- this isn't a no-op like the test above.
+    assert len(track.samples) < 80
+    assert track.samples[0].t_ms >= track.last.t_ms - DEFAULT.track_window_ms
+
     candidates = evaluate([track], MOVING, t_ms=track.last.t_ms, camera="rear")
     assert any(c.threat_id == "tailgating" for c in candidates)
 

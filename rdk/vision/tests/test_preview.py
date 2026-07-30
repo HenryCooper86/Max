@@ -23,7 +23,7 @@ from gallery import Gallery
 
 
 class FakeCamera:
-    def jpeg(self):
+    def jpeg(self, max_age_ms=None):
         return b"\xff\xd8fake-jpeg\xff\xd9"
 
     def stop(self):

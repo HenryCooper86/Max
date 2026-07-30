@@ -18,7 +18,7 @@ class FakeCamera:
         self.works = works
         self.frames = 0
 
-    def jpeg(self):
+    def jpeg(self, max_age_ms=None):
         if not self.works:
             return None
         self.frames += 1

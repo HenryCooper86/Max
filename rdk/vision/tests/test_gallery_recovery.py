@@ -27,7 +27,7 @@ class FakeCamera:
     def __init__(self, works=True):
         self.works = works
 
-    def jpeg(self):
+    def jpeg(self, max_age_ms=None):
         return b"\xff\xd8fake-jpeg\xff\xd9" if self.works else None
 
     def stop(self):

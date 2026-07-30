@@ -92,14 +92,7 @@ class CameraPair:
         if camera is None:
             return None
         try:
-            if max_age_ms is None:
-                return camera.jpeg()
-            try:
-                return camera.jpeg(max_age_ms)
-            except TypeError:
-                # A camera double that only knows jpeg() bare (test doubles
-                # predate this budget) — fall back rather than fail the pair.
-                return camera.jpeg()
+            return camera.jpeg(max_age_ms)
         except Exception:  # noqa: BLE001 - one dead camera must not fail the pair
             return None
 

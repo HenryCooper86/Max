@@ -85,6 +85,7 @@ def run_camera(
         global_gap_s=config.tuning.global_gap_s,
     )
     previous_nv12: bytes | None = None
+    previous_t_ms: int | None = None
     fired = 0
 
     for index, frame in enumerate(source.frames()):
@@ -93,8 +94,19 @@ def run_camera(
         if previous_nv12 is None:
             ego = EgoState(moving=False, speed_scale=0.0)
         else:
-            ego = estimate(previous_nv12, frame.nv12, frame.width, frame.height)
+            # No dt clamp: a gap past max_gap_ms wipes the tracker anyway, and
+            # a big dt just reads as a small px/s — conservative toward
+            # "stopped", which is the safe direction for the ego gate.
+            ego = estimate(
+                previous_nv12,
+                frame.nv12,
+                frame.width,
+                frame.height,
+                dt_ms=(frame.t_ms - previous_t_ms) if previous_t_ms is not None else None,
+                min_flow_px_per_s=config.tuning.min_flow_px_per_s,
+            )
         previous_nv12 = frame.nv12
+        previous_t_ms = frame.t_ms
 
         tracks = tracker.update(dets, frame.t_ms)
         by_id = {t.track_id: t for t in tracks}

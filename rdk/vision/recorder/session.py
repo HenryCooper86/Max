@@ -8,6 +8,7 @@ it. Only a ride with no cameras at all is an error.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -15,7 +16,7 @@ from typing import Callable
 
 from corpus.library import write_ride_manifest
 from recorder.metadata import FrameMeta, MetadataWriter
-from recorder.segmenter import Segmenter, ride_id, segment_name
+from recorder.segmenter import Segmenter, SegmentClock, ride_id, segment_name
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,7 @@ class RideRecorder:
         open_fn: Callable[[CameraSlot], object],
         encode_fn: Callable[[object, Path], None],
         video_suffix: str = ".h264",
+        clocks: dict[str, SegmentClock] | None = None,
     ) -> None:
         self.root = Path(root)
         self.slots = slots
@@ -41,6 +43,11 @@ class RideRecorder:
         #: Container the encode_fn writes. ".h264" for the hardware encoder,
         #: ".mjpeg" for the mipi_cam source, which delivers decoded frames.
         self.video_suffix = video_suffix
+        #: Per-camera publication point for real segment boundaries — the ADAS
+        #: runtime's alert-to-segment mapping reads these instead of deriving
+        #: boundaries arithmetically, which drifts once Segmenter rebases on a
+        #: late roll. Optional so every existing caller keeps working.
+        self._clocks = clocks
         self._cameras: dict[str, object] = {}
         self._segmenters: dict[str, Segmenter] = {}
         self._writers: dict[str, MetadataWriter] = {}
@@ -80,6 +87,13 @@ class RideRecorder:
             old.close()
         self._writers[camera] = MetadataWriter(base.with_suffix(".jsonl"))
         self._frame_index[camera] = 0
+
+        # Same expression tick() uses to build the video writer's target path —
+        # the clock must name exactly the file the writer is about to create.
+        video_path = base.with_suffix(self.video_suffix)
+        if self._clocks is not None and camera in self._clocks:
+            relative = video_path.relative_to(self._ride_dir).as_posix()
+            self._clocks[camera].update(relative, int(time.time() * 1000))
 
     def tick(self, now_s: float, now_wall_ms: int) -> int:
         """Capture one frame per live camera. Returns how many were written, so a

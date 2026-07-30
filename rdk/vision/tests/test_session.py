@@ -7,6 +7,7 @@ import pytest
 
 from corpus.library import scan_ride
 from recorder.metadata import read_metadata
+from recorder.segmenter import SegmentClock
 from recorder.session import CameraSlot, RideRecorder
 
 
@@ -22,7 +23,7 @@ class FakeCamera:
         return b"\x00\x00\x00\x01frame"
 
 
-def make_recorder(tmp_path, front_ok=True, rear_ok=True, video_suffix=".h264"):
+def make_recorder(tmp_path, front_ok=True, rear_ok=True, video_suffix=".h264", clocks=None):
     cams = {"front": FakeCamera(front_ok), "rear": FakeCamera(rear_ok)}
 
     def open_fn(slot: CameraSlot):
@@ -42,6 +43,7 @@ def make_recorder(tmp_path, front_ok=True, rear_ok=True, video_suffix=".h264"):
         open_fn=open_fn,
         encode_fn=encode_fn,
         video_suffix=video_suffix,
+        clocks=clocks,
     )
 
 
@@ -145,3 +147,17 @@ def test_a_camera_failing_mid_ride_drops_only_that_camera(tmp_path):
     rear = [s for s in info.segments if s.camera == "rear"][0]
     assert front.frame_count == 2
     assert rear.frame_count == 1
+
+
+def test_recorder_publishes_each_roll_to_the_clock(tmp_path):
+    clock = SegmentClock()
+    rec = make_recorder(tmp_path, rear_ok=False, video_suffix=".mjpeg", clocks={"front": clock})
+    ride = rec.start(now_wall_ms=1700)
+    rec.tick(now_s=0.0, now_wall_ms=1700)
+    rec.stop()
+
+    ride_dir = Path(tmp_path) / ride
+    name, started_wall_ms = clock.current()
+    # The clock names a file the recorder actually created:
+    assert (ride_dir / name).exists()
+    assert started_wall_ms > 0

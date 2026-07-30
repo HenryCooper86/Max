@@ -6,6 +6,7 @@ segment, and so the corpus is made of files a human can actually review.
 
 from __future__ import annotations
 
+import threading
 from datetime import datetime
 
 #: Bounds power-loss damage to one minute of footage.
@@ -43,3 +44,23 @@ class Segmenter:
         self._index += 1
         self._started_at = now_s
         return self._index
+
+
+class SegmentClock:
+    """The recorder's live answer to "which segment is being written right now,
+    and when did it start?" — one writer (the recorder), many readers (the
+    ADAS runtime at alert time). The recorder is the only component that knows
+    real segment boundaries: Segmenter.roll rebases on late rolls, so anything
+    computing boundaries arithmetically drifts from the files on disk."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._current: tuple[str, int] | None = None
+
+    def update(self, segment_name: str, started_wall_ms: int) -> None:
+        with self._lock:
+            self._current = (segment_name, started_wall_ms)
+
+    def current(self) -> tuple[str, int] | None:
+        with self._lock:
+            return self._current

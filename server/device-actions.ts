@@ -183,10 +183,18 @@ export const extractDeviceCommand: IntentExtractor = (text) => {
 
 function matchCamera(raw: string): DeviceCommand | null {
   // Stop is checked before start so "停止录像" is never read as "录像".
-  if (/(停止|结束|停下?).{0,2}(录像|录制|录影|视频)/.test(raw) || /stop\s+recording/i.test(raw)) {
+  if (/(停止|结束|停下?).{0,2}(录像|录制|录影|视频|拍摄)/.test(raw) || /stop\s+recording/i.test(raw)) {
     return { action: "camera.record", args: { start: false } };
   }
-  if (/(开始)?(录像|录制|录影|录个?视频|录一段)/.test(raw) || /(start\s+recording|record\s+(a\s+)?video)/i.test(raw)) {
+  // 拍-phrasings need an explicit 视频 object (bare 拍摄 needs 开始): a rider
+  // said "帮我拍视频" on a live session, matched nothing here, and the model
+  // narrated a recording that never happened — countdown, "已保存到相册", all
+  // fiction. 拍 without 视频 must keep falling through to camera.photo.
+  if (
+    /(开始)?(录像|录制|录影|录个?视频|录一段|拍摄?一?(个|段|条)?视频)/.test(raw) ||
+    /开始.{0,2}拍摄/.test(raw) ||
+    /(start\s+recording|(record|shoot|film|take)\s+(a\s+)?video)/i.test(raw)
+  ) {
     return { action: "camera.record", args: { start: true } };
   }
   if (/(你能?看到?什么|前面是什么|看看前面|看一下前面)/.test(raw) || /what\s+(do|can)\s+you\s+see/i.test(raw)) {

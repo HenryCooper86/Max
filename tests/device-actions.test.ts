@@ -190,6 +190,26 @@ describe("extractDeviceCommand — camera", () => {
     expect(extractDeviceCommand("Max stop recording")).toEqual({ action: "camera.record", args: { start: false } });
   });
 
+  it("understands 拍-phrasings for video — a live session said 拍视频, matched nothing, and Max narrated a recording that never happened", () => {
+    expect(extractDeviceCommand("Max 帮我拍视频")).toEqual({ action: "camera.record", args: { start: true } });
+    expect(extractDeviceCommand("Max 拍个视频")).toEqual({ action: "camera.record", args: { start: true } });
+    expect(extractDeviceCommand("Max 拍一段视频")).toEqual({ action: "camera.record", args: { start: true } });
+    expect(extractDeviceCommand("Max 拍摄视频")).toEqual({ action: "camera.record", args: { start: true } });
+    expect(extractDeviceCommand("Max 开始拍摄")).toEqual({ action: "camera.record", args: { start: true } });
+    expect(extractDeviceCommand("Max shoot a video")).toEqual({ action: "camera.record", args: { start: true } });
+    expect(extractDeviceCommand("Max take a video")).toEqual({ action: "camera.record", args: { start: true } });
+    expect(extractDeviceCommand("Max 停止拍摄")).toEqual({ action: "camera.record", args: { start: false } });
+    expect(extractDeviceCommand("Max 停止拍视频")).toEqual({ action: "camera.record", args: { start: false } });
+  });
+
+  it("keeps 拍视频 clear of photo, negation, and garbled ASR", () => {
+    expect(extractDeviceCommand("Max 拍张照片")?.action).toBe("camera.photo");
+    expect(extractDeviceCommand("Max 别拍视频")).toBeNull();
+    // The 22:13 stop attempt arrived garbled as this; it must stay unmatched
+    // rather than start a recording.
+    expect(extractDeviceCommand("Max 帮我听一下开视频")).toBeNull();
+  });
+
   it("opens the gallery", () => {
     expect(extractDeviceCommand("Max 打开相册")).toEqual({ action: "gallery.open", args: {} });
     expect(extractDeviceCommand("Max open the gallery")).toEqual({ action: "gallery.open", args: {} });

@@ -15,6 +15,8 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from .tuning import Tuning, fingerprint as tuning_fingerprint
+
 
 @dataclass(frozen=True)
 class ShadowRecord:
@@ -42,14 +44,28 @@ class ShadowRecord:
     #: Populated only when armed.
     latency_ms: float | None = None
 
+    #: 12-hex fingerprint of the Tuning that produced this record. "" on
+    #: records written before fingerprints existed.
+    tuning: str = ""
+
 
 class ShadowLog:
-    def __init__(self, path: Path | str) -> None:
+    def __init__(self, path: Path | str, tuning: Tuning | None = None) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         # Append, never truncate: a restart mid-ride must not erase the alerts
         # that already fired.
         self._fh = self.path.open("a", encoding="utf-8")
+        if tuning is not None:
+            header = {
+                "shadow_header": 1,
+                "fingerprint": tuning_fingerprint(tuning),
+                "tuning": asdict(tuning),
+            }
+            # A restart mid-ride appends a second header. That is a feature:
+            # the log then records exactly which constants govern which records.
+            self._fh.write(json.dumps(header, ensure_ascii=False) + "\n")
+            self._fh.flush()
 
     def append(self, record: ShadowRecord) -> None:
         # ensure_ascii=False so the Chinese labels stay readable — a person
@@ -72,4 +88,18 @@ def read_shadow(path: Path | str) -> list[ShadowRecord]:
     text = Path(path).read_text(encoding="utf-8").strip()
     if not text:
         return []
-    return [ShadowRecord(**json.loads(line)) for line in text.split("\n")]
+    records = []
+    for line in text.split("\n"):
+        data = json.loads(line)
+        if "shadow_header" in data:
+            continue
+        records.append(ShadowRecord(**data))
+    return records
+
+
+def read_tuning(path: Path | str) -> list[dict]:
+    """The header lines, in order. Empty for pre-fingerprint logs."""
+    text = Path(path).read_text(encoding="utf-8").strip()
+    if not text:
+        return []
+    return [json.loads(line) for line in text.split("\n") if '"shadow_header"' in line]

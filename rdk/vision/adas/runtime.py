@@ -22,7 +22,7 @@ from .shadow import ShadowLog, ShadowRecord
 from .suppress import Suppressor
 from .threat import evaluate
 from .ttc import height_rate
-from .tuning import DEFAULT, Tuning
+from .tuning import DEFAULT, Tuning, fingerprint
 
 
 class RecordingRequired(RuntimeError):
@@ -55,6 +55,10 @@ def run_camera(
             "shadow mode needs the recorder running: an unreviewable "
             "false-alarm rate is worse than none"
         )
+
+    # Computed once per run rather than per record: the constants cannot
+    # change mid-run, and re-hashing per alert would be wasted work.
+    record_fingerprint = fingerprint(config.tuning)
 
     detect = config.detect
     if detect is None:
@@ -118,6 +122,7 @@ def run_camera(
                     closing_rate=height_rate(track) if track else None,
                     track_frames=track.frames if track else 0,
                     ego_moving=ego.moving,
+                    tuning=record_fingerprint,
                 )
             )
             entry = CATALOG.get(alert.threat_id, {})

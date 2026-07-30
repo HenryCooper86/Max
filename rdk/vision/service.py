@@ -188,7 +188,7 @@ def start_adas(config: "RuntimeConfig", shadow_path, emit, source_factory) -> th
 
     def body() -> None:
         try:
-            with ShadowLog(Path(shadow_path)) as shadow:
+            with ShadowLog(Path(shadow_path), tuning=config.tuning) as shadow:
                 fired = run_camera(source_factory(), config, shadow, emit)
                 print(f"[adas] {config.camera}: {fired} alerts", flush=True)
         except Exception as error:  # noqa: BLE001 — see the docstring

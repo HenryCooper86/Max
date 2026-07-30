@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from adas.ego_motion import estimate
 from adas.suppress import Suppressor
 from adas.threat import evaluate
+from adas.tuning import fingerprint
 from perception.frame_source import FileSource
 from perception.tracker import Tracker
 from perception.types import Candidate, Detection, EgoState
@@ -105,6 +106,7 @@ def write_outputs(result: ReplayResult, out_dir: Path, clip: str) -> None:
             threat: sum(1 for a in result.alerts if a.threat_id == threat)
             for threat in {a.threat_id for a in result.alerts}
         },
+        "tuning_fingerprint": fingerprint(),
         # Stated plainly so no reader mistakes a clean run for a validated one.
         "tuning_status": "constants are untuned starting values; see the M1 spec",
     }

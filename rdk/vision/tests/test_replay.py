@@ -4,6 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from adas.tuning import fingerprint
 from perception.frame_source import Frame
 from perception.types import Detection
 from tools.replay import ReplayResult, cache_key, run_clip, write_outputs
@@ -107,3 +108,10 @@ def test_the_summary_states_that_the_constants_are_untuned(tmp_path):
     write_outputs(ReplayResult(frames=1), tmp_path, clip="ride.mp4")
     summary = json.loads((tmp_path / "summary.json").read_text())
     assert "untuned" in summary["tuning_status"]
+
+
+def test_summary_carries_the_tuning_fingerprint(tmp_path):
+    """The summary names the constants it ran under."""
+    write_outputs(ReplayResult(frames=1), tmp_path, clip="ride.mp4")
+    summary = json.loads((tmp_path / "summary.json").read_text())
+    assert summary["tuning_fingerprint"] == fingerprint()

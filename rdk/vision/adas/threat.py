@@ -38,6 +38,12 @@ def in_corridor(track: Track, tuning: Tuning = DEFAULT) -> bool:
 
     Centre rather than any overlap: a wide truck in the next lane clips the
     corridor edge constantly, and alerting on that trains the rider to ignore us.
+
+    Known limitation, deferred pending real ride footage: the band has no
+    perspective or lean model. A distant next-lane vehicle can sit inside a
+    fixed centered band, and an in-lane vehicle can leave it mid-lean. A
+    perspective corridor designed without footage would be guesswork; the
+    width stays a Tuning field until rides exist to validate against.
     """
     half = tuning.corridor_width_frac / 2.0
     return abs(track.last.cx - 0.5) <= half

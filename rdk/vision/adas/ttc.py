@@ -1,7 +1,16 @@
 """Time to contact from box-height expansion.
 
-tau = h / (dh/dt). One lens, no calibration, no intrinsics: a box that is not
+tau = h / (dh/dt) is the standard visual time-to-contact estimate: under a
+pinhole camera, box height scales as 1/Z, so h/(dh/dt) equals Z/v — the
+physical seconds until the object reaches the camera plane, assuming constant
+closing velocity. No calibration or intrinsics needed; a box that is not
 growing is not closing, at any distance.
+
+The estimate degrades exactly where its assumptions do: ego rotation (a turn
+sweeps boxes sideways and pollutes dh/dt), cut-ins (the object changes lanes,
+violating constant closing), and acceleration. It also measures time to the
+camera plane, not bumper-to-bumper distance. The thresholds in tuning.py are
+calibrated against this estimator's behavior, not against a rangefinder.
 
 Height rather than area or width, per the parent spec: it degrades most
 gracefully under partial occlusion and lane-splitting, where vehicles routinely

@@ -158,6 +158,21 @@ def test_a_candidate_carries_its_track_and_measured_ttc():
     assert result[0].ttc_s is not None and result[0].ttc_s > 0
 
 
+def test_tailgating_dwell_still_fires_inside_the_window():
+    """A window of 6 s comfortably exceeds the 4 s tailgate dwell.
+
+    Build the track the way the tailgating test above does, but cap its
+    sample history to the last 6 s (the same cutoff Tracker.update applies)
+    before calling evaluate. The 4.5 s of dwell-worthy samples all fall
+    inside that window, so trimming to it must never starve the dwell rule.
+    """
+    track = steady_track(n=46)  # 4.5 s of samples, all at tailgate height
+    cutoff = track.last.t_ms - DEFAULT.track_window_ms
+    track.samples[:] = [s for s in track.samples if s.t_ms >= cutoff]
+    candidates = evaluate([track], MOVING, t_ms=track.last.t_ms, camera="rear")
+    assert any(c.threat_id == "tailgating" for c in candidates)
+
+
 def test_evaluate_accepts_an_injected_tuning():
     # Off-centre but still within the default corridor (half-width 0.25); a
     # narrower corridor excludes it. Same tracks, zero candidates once the

@@ -32,10 +32,12 @@ class Tracker:
         iou_threshold: float = 0.3,
         max_misses: int = 3,
         max_gap_ms: int = 500,
+        window_ms: int = 6_000,
     ) -> None:
         self.iou_threshold = iou_threshold
         self.max_misses = max_misses
         self.max_gap_ms = max_gap_ms
+        self.window_ms = window_ms
         self._tracks: list[Track] = []
         self._next_id = 1
         self._last_t_ms: int | None = None
@@ -77,4 +79,14 @@ class Tracker:
             self._next_id += 1
 
         self._tracks = [t for t in self._tracks if t.misses <= self.max_misses]
+
+        cutoff = t_ms - self.window_ms
+        for track in self._tracks:
+            if track.samples and track.samples[0].t_ms < cutoff:
+                # Trim from the front: the window caps both per-track memory
+                # and the O(history) walks smoothed_heights makes three times
+                # per track per frame. tuning.track_window_ms guarantees the
+                # window exceeds the tailgate dwell, the longest look-back.
+                track.samples[:] = [s for s in track.samples if s.t_ms >= cutoff]
+
         return [t for t in self._tracks if t.misses == 0]

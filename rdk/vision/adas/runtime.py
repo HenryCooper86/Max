@@ -76,6 +76,7 @@ def run_camera(
         iou_threshold=config.tuning.iou_threshold,
         max_misses=config.tuning.max_misses,
         max_gap_ms=config.tuning.max_gap_ms,
+        window_ms=config.tuning.track_window_ms,
     )
     suppressor = Suppressor(
         min_track_frames=config.tuning.min_track_frames,

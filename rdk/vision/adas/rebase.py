@@ -1,16 +1,24 @@
 """Ride-relative frame timestamps, and an end to the stream.
 
-``run_camera`` picks a segment with ``frame.t_ms / 1000 / segment_seconds``,
-which assumes t_ms starts near zero at ride start. ``FileSource`` satisfies that.
-A live camera does not: frames carry the ROS header stamp, which is board uptime
-— 2,992,848 ms measured on 2026-07-27. Unrebased, every shadow record would cite
-a segment index in the tens of thousands and ``tools/clip.py`` would find nothing.
+Segment citation no longer comes from frame-time arithmetic: ``run_camera``
+now asks the recorder's ``SegmentClock`` (see ``recorder/segmenter.py``) which
+segment is live and when it started, because the recorder is the only
+component that knows real segment boundaries. ``RebasedSource`` still earns
+its place for two other reasons:
+
+(a) It gives ADAS ride-relative frame times whose ``t_ms`` starts near zero. A
+live camera's frames carry the ROS header stamp, which is board uptime —
+2,992,848 ms measured on 2026-07-27, not seconds since the ride began. Left
+unrebased, that raw stamp would reach the tracker's gap logic (`max_gap_ms`
+compares `t_ms` deltas) and every shadow record's `t_ms` field, both of which
+assume a ride-relative clock. Rebasing here keeps both sane.
+
+(b) The stop event ends the stream: ``MipiCamera.frames()`` runs until the
+camera itself stops, so without it an ADAS thread would outlive the ride that
+started it.
 
 Rebasing here rather than in ``MipiCamera`` keeps the camera reporting absolute
 capture time, which is what every other consumer wants.
-
-The stop event is the other half: ``MipiCamera.frames()`` runs until the camera
-itself stops, so without it an ADAS thread would outlive the ride that started it.
 """
 
 from __future__ import annotations

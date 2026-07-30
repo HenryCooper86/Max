@@ -6,6 +6,11 @@ the Tracker defaults, and a ride recorded before a threshold change was
 indistinguishable from one recorded after — the exact comparison the M1 gate
 needs. The dataclass is also the injection seam threat.py's docstring always
 promised: a sweep passes a Tuning, it does not edit source.
+
+The fingerprint is not a complete provenance record: it does not cover the
+ego-motion flow gate (`ego_motion.MIN_FLOW_MAGNITUDE`), the detector's
+confidence/NMS thresholds, or the model binary's identity, so two rides that
+differ only in one of those are not distinguished by fingerprint.
 """
 
 from __future__ import annotations

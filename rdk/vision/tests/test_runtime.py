@@ -216,3 +216,34 @@ def test_runtime_builds_suppressor_from_tuning(tmp_path):
             emitted_default.append,
         )
     assert fired_default == 1
+
+
+def test_closing_rate_uses_the_injected_tuning(tmp_path):
+    # closing_rate is computed from the same track each time, so if it were
+    # computed under the module DEFAULT instead of config.tuning, this would
+    # not catch it -- unless the tuning actually changes the number. A tau
+    # small enough to make smoothing nearly track raw height moves the slope
+    # measurably away from DEFAULT's 200 ms smoothing on the identical scene.
+    path_default = tmp_path / "shadow_default.jsonl"
+    with ShadowLog(path_default) as log:
+        run_camera(
+            FakeSource(12),
+            RuntimeConfig(ride_id="r1", camera="front", detect=approaching),
+            log,
+            lambda _: None,
+        )
+    default_rate = read_shadow(path_default)[0].closing_rate
+
+    tight_tau = replace(DEFAULT, smoothing_tau_ms=5.0)
+    path_tight = tmp_path / "shadow_tight.jsonl"
+    with ShadowLog(path_tight) as log:
+        run_camera(
+            FakeSource(12),
+            RuntimeConfig(ride_id="r1", camera="front", detect=approaching, tuning=tight_tau),
+            log,
+            lambda _: None,
+        )
+    tight_rate = read_shadow(path_tight)[0].closing_rate
+
+    assert default_rate is not None and tight_rate is not None
+    assert default_rate != tight_rate

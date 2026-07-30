@@ -12,10 +12,12 @@ from __future__ import annotations
 
 from perception.types import Candidate
 
-MIN_TRACK_FRAMES = 3
-MIN_TTC_FRAMES = 3
-THREAT_COOLDOWN_S = 8.0
-GLOBAL_ALERT_GAP_S = 4.0
+from .tuning import DEFAULT
+
+MIN_TRACK_FRAMES = DEFAULT.min_track_frames
+MIN_TTC_FRAMES = DEFAULT.min_ttc_frames
+THREAT_COOLDOWN_S = DEFAULT.threat_cooldown_s
+GLOBAL_ALERT_GAP_S = DEFAULT.global_gap_s
 
 _SEVERITY_RANK = {"caution": 0, "critical": 1}
 

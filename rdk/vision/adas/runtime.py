@@ -129,7 +129,15 @@ def run_camera(
                     segment_offset_ms=segment_offset_ms,
                     track_id=alert.track_id,
                     box_height=track.last.height if track else 0.0,
-                    closing_rate=height_rate(track) if track else None,
+                    closing_rate=(
+                        height_rate(
+                            track,
+                            window_ms=config.tuning.ttc_window_ms,
+                            tau_ms=config.tuning.smoothing_tau_ms,
+                        )
+                        if track
+                        else None
+                    ),
                     track_frames=track.frames if track else 0,
                     ego_moving=ego.moving,
                     tuning=record_fingerprint,

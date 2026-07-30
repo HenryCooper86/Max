@@ -1020,7 +1020,11 @@ over a minute, dropping to 87.7 °C within 20 s of the ride stopping. M1's
 two-camera ADAS figure was ~90 °C _without_ a concurrent segment stream, so
 recording is what costs the extra headroom. Nobody has measured this in a
 fairing, in sun, on a moving bike; the remaining margin to throttling is thin
-enough that a second camera or a warm day should be measured, not assumed.
+enough that a second camera or a warm day should be measured, not assumed. The
+encode-sharing fix measured this same single-camera shadow-ride plateau at
+~87.6 °C on 2026-07-30 (see the findings table); the pre-fix ~94 °C figure
+above still stands as the conservative planning number until it too is
+re-measured with two cameras.
 
 ### The board dies hard, and it is not the software
 

@@ -12,6 +12,8 @@ dh/dt sample and a fabricated time-to-contact.
 
 from __future__ import annotations
 
+from adas.tuning import DEFAULT
+
 from .types import BoxSample, Detection, Track
 
 
@@ -29,10 +31,10 @@ def _iou(a: BoxSample, d: Detection) -> float:
 class Tracker:
     def __init__(
         self,
-        iou_threshold: float = 0.3,
-        max_misses: int = 3,
-        max_gap_ms: int = 500,
-        window_ms: int = 6_000,
+        iou_threshold: float = DEFAULT.iou_threshold,
+        max_misses: int = DEFAULT.max_misses,
+        max_gap_ms: int = DEFAULT.max_gap_ms,
+        window_ms: int = DEFAULT.track_window_ms,
     ) -> None:
         self.iou_threshold = iou_threshold
         self.max_misses = max_misses

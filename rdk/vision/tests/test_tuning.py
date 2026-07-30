@@ -44,3 +44,25 @@ def test_window_must_exceed_tailgate_dwell():
         Tuning(track_window_ms=4_000)  # equal to dwell*1000 → invalid
     with pytest.raises(ValueError):
         Tuning(tailgate_dwell_s=7.0)  # dwell pushed past the default window
+
+
+def test_tracker_and_suppressor_defaults_are_structurally_tied_to_default():
+    """Bare Tracker()/Suppressor() must be governed by DEFAULT, not a copied
+    literal -- otherwise a retune here silently stops matching what replay.py
+    and run_camera's uninjected callers actually run. This is the test a
+    future retune cannot pass without touching, which is the point."""
+    from perception.tracker import Tracker
+
+    from adas.suppress import Suppressor
+
+    tracker = Tracker()
+    assert tracker.iou_threshold == DEFAULT.iou_threshold
+    assert tracker.max_misses == DEFAULT.max_misses
+    assert tracker.max_gap_ms == DEFAULT.max_gap_ms
+    assert tracker.window_ms == DEFAULT.track_window_ms
+
+    suppressor = Suppressor()
+    assert suppressor.min_track_frames == DEFAULT.min_track_frames
+    assert suppressor.min_ttc_frames == DEFAULT.min_ttc_frames
+    assert suppressor.threat_cooldown_s == DEFAULT.threat_cooldown_s
+    assert suppressor.global_gap_s == DEFAULT.global_gap_s

@@ -7,7 +7,7 @@ pipeline fragilities that would pollute them, and builds the tool that turns
 the first real ride into tuning-grade data.
 
 Three fragilities are provable and fixable without road footage. Ego motion
-measures displacement per frame *pair* with no time base, so one dropped frame
+measures displacement per frame _pair_ with no time base, so one dropped frame
 doubles apparent motion through the single most load-bearing suppression gate.
 One detector flicker deletes a suppression run counter and re-arms the
 three-frame stability gate, blinding the pipeline for ~600 ms at 10 fps.
@@ -50,7 +50,7 @@ rides recorded before and after this track are distinguishable evidence.
 - Radial/vertical ego flow, perspective or lean-compensated corridor,
   detection-quality/range claims — all data-dependent; deferred until the
   corpus exists, each with a written note at its site.
-- Threshold retuning. The two new `Tuning` fields change *semantics*
+- Threshold retuning. The two new `Tuning` fields change _semantics_
   (time-basing, flicker grace); every numeric behavior at nominal frame rate
   is otherwise preserved.
 - Re-running the pipeline over ride segments under a different `Tuning` (the
@@ -66,7 +66,7 @@ rides recorded before and after this track are distinguishable evidence.
 `rdk/vision/adas/ego_motion.py`:
 
 - `estimate(prev_y, curr_y, width, height, grid=8, dt_ms: int | None = None,
-  min_flow_px_per_s: float = DEFAULT.min_flow_px_per_s)`.
+min_flow_px_per_s: float = DEFAULT.min_flow_px_per_s)`.
 - With a positive `dt_ms`: `magnitude_px_per_s = displacement_px * 1000 / dt_ms`
   (displacement in WORK_WIDTH pixels, as today) and
   `moving = magnitude_px_per_s >= min_flow_px_per_s`. `speed_scale` reports
@@ -127,7 +127,7 @@ trim, track creation all unchanged):
 - `rdk/vision/adas/ttc.py` module docstring: `h/(dh/dt)` **is** `tau = Z/v` —
   physical time-to-contact under a pinhole camera and constant closing
   velocity; it degrades when those assumptions do (ego rotation, cut-ins,
-  acceleration) and measures time to the *camera plane*, not bumper-to-bumper
+  acceleration) and measures time to the _camera plane_, not bumper-to-bumper
   distance. The "fills the frame" phrasing goes.
 - `rdk/vision/adas/threat.py` corridor comment: the fixed centered band has no
   perspective or lean model; a distant next-lane vehicle can sit inside it and
@@ -169,17 +169,17 @@ looks like (≥30 min total, several stops, at least one of each scenario).
 
 ## Error and edge handling
 
-| Condition | Behaviour |
-| --- | --- |
-| `dt_ms` None or ≤ 0 | Legacy per-frame ego path, bit-identical to today |
-| Frame gap > `max_gap_ms` | Tracker wipe as today; ego just sees a large dt (small px/s — conservative toward "stopped") |
-| `run_grace_frames=0` | Today's exact suppression semantics |
-| Track dies during a grace window | Stage 2 (track maturity) ends the candidacy; grace cannot outlive the track |
-| `evaluate` on a ride with no labels | Exit code 1 with the labelling commands, no scores invented |
-| Empty shadow log | Valid result: 0 alerts over measured hours, gate verdict computed |
-| Multiple tuning headers (mid-ride restart) | Reported per fingerprint; records grouped by the header preceding them |
-| Alert with `segment=""` (pre-roll sentinel) | Scored normally — matching is time-based, segment not needed |
-| Missing metadata sidecars | Exit with a message naming the expected files; duration cannot be guessed |
+| Condition                                   | Behaviour                                                                                    |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `dt_ms` None or ≤ 0                         | Legacy per-frame ego path, bit-identical to today                                            |
+| Frame gap > `max_gap_ms`                    | Tracker wipe as today; ego just sees a large dt (small px/s — conservative toward "stopped") |
+| `run_grace_frames=0`                        | Today's exact suppression semantics                                                          |
+| Track dies during a grace window            | Stage 2 (track maturity) ends the candidacy; grace cannot outlive the track                  |
+| `evaluate` on a ride with no labels         | Exit code 1 with the labelling commands, no scores invented                                  |
+| Empty shadow log                            | Valid result: 0 alerts over measured hours, gate verdict computed                            |
+| Multiple tuning headers (mid-ride restart)  | Reported per fingerprint; records grouped by the header preceding them                       |
+| Alert with `segment=""` (pre-roll sentinel) | Scored normally — matching is time-based, segment not needed                                 |
+| Missing metadata sidecars                   | Exit with a message naming the expected files; duration cannot be guessed                    |
 
 ## Verification
 

@@ -4,7 +4,7 @@
 
 **Goal:** Fix the three synthetically-provable ADAS pipeline fragilities (time-blind ego gating, flicker-triggered suppression re-arming, order-dependent association), correct the TTC/corridor documentation, and ship `tools/evaluate.py` + a ride protocol so the first labelled ride produces M1-gate numbers.
 
-**Architecture:** Each fix is a bounded change to one module with its semantics disclosed through the `Tuning` fingerprint (two new fields — the fingerprint *changing* is by design and test-pinned). `evaluate.py` scores the live shadow log against `corpus/labels.py` windows using wall-clock alignment from the recorder's metadata sidecars — no pipeline re-run, no invented numbers on missing inputs.
+**Architecture:** Each fix is a bounded change to one module with its semantics disclosed through the `Tuning` fingerprint (two new fields — the fingerprint _changing_ is by design and test-pinned). `evaluate.py` scores the live shadow log against `corpus/labels.py` windows using wall-clock alignment from the recorder's metadata sidecars — no pipeline re-run, no invented numbers on missing inputs.
 
 **Tech Stack:** Python 3.10 stdlib + numpy (already on board). Tests run **on the board** via pytest over SSH. No TS changes (README/docs only elsewhere).
 
@@ -24,10 +24,12 @@
 ### Task 1: The two new Tuning fields, and the fingerprint-change pin
 
 **Files:**
+
 - Modify: `rdk/vision/adas/tuning.py`
 - Test: `rdk/vision/tests/test_tuning.py` (extend)
 
 **Interfaces:**
+
 - Produces: `Tuning.min_flow_px_per_s: float = 6.0` (grouped under a new `# adas/ego_motion.py` comment) and `Tuning.run_grace_frames: int = 1` (in the `# suppress.py` group). Tasks 2 and 3 consume them.
 
 - [ ] **Step 1: Write the failing tests**
@@ -58,6 +60,7 @@ def test_fingerprint_changed_from_the_evidence_track():
 scp -r rdk/vision root@10.42.0.11:/opt/max/rdk/
 ssh root@10.42.0.11 'cd /opt/max/rdk/vision && python3 -m pytest tests/test_tuning.py -q'
 ```
+
 Expected: FAIL — `Tuning` has no `min_flow_px_per_s` (AttributeError); the fingerprint test passes only once the fields exist, so it FAILS via the first assert's error too.
 
 - [ ] **Step 3: Implement**
@@ -103,10 +106,12 @@ git commit -m "feat(adas): the ego gate and flicker grace enter the fingerprint"
 ### Task 2: Time-based ego motion
 
 **Files:**
+
 - Modify: `rdk/vision/adas/ego_motion.py`, `rdk/vision/adas/runtime.py`
 - Test: `rdk/vision/tests/test_ego_motion.py` (extend)
 
 **Interfaces:**
+
 - Consumes: `DEFAULT.min_flow_px_per_s` (Task 1).
 - Produces: `estimate(prev_y, curr_y, width, height, grid=8, dt_ms: int | None = None, min_flow_px_per_s: float = DEFAULT.min_flow_px_per_s) -> EgoState`. `MIN_FLOW_MAGNITUDE = DEFAULT.min_flow_px_per_s / 10.0` (legacy per-frame alias). Runtime passes `dt_ms` and the tuning threshold.
 
@@ -156,6 +161,7 @@ def test_legacy_alias_is_the_nominal_rate_equivalence():
 scp -r rdk/vision root@10.42.0.11:/opt/max/rdk/
 ssh root@10.42.0.11 'cd /opt/max/rdk/vision && python3 -m pytest tests/test_ego_motion.py -q'
 ```
+
 Expected: FAIL — `estimate()` has no `dt_ms` parameter.
 
 - [ ] **Step 3: Implement `ego_motion.py`**
@@ -229,6 +235,7 @@ In `run_camera`'s loop, alongside `previous_nv12`:
 scp -r rdk/vision root@10.42.0.11:/opt/max/rdk/
 ssh root@10.42.0.11 'cd /opt/max/rdk/vision && python3 -m pytest tests/test_ego_motion.py tests/test_runtime.py -q && cd /opt/max/rdk/vision && python3 -m pytest tests/ -q'
 ```
+
 Expected: all green, full suite ≥ 338 + the new tests. Pre-existing ego tests pass unchanged (they call without `dt_ms` → legacy path).
 
 - [ ] **Step 6: Commit**
@@ -243,10 +250,12 @@ git commit -m "feat(adas): the moving gate is a rate, so a dropped frame cannot 
 ### Task 3: Flicker-tolerant suppression
 
 **Files:**
+
 - Modify: `rdk/vision/adas/suppress.py`
 - Test: `rdk/vision/tests/test_suppress.py` (extend)
 
 **Interfaces:**
+
 - Consumes: `DEFAULT.run_grace_frames` (Task 1).
 - Produces: `RUN_GRACE_FRAMES = DEFAULT.run_grace_frames` module alias; `Suppressor.__init__(..., run_grace_frames: int = RUN_GRACE_FRAMES)`.
 
@@ -304,6 +313,7 @@ def test_grace_cannot_outlive_the_track():
 scp -r rdk/vision root@10.42.0.11:/opt/max/rdk/
 ssh root@10.42.0.11 'cd /opt/max/rdk/vision && python3 -m pytest tests/test_suppress.py -q'
 ```
+
 Expected: the flicker test FAILS (run deleted at t=200, so t=300 is run 1 of 3); the zero-grace test passes already (it IS today's behavior — keep it as the golden pin).
 
 - [ ] **Step 3: Implement**
@@ -345,7 +355,7 @@ Update the class docstring's Stage 3 sentence to state the bounded grace.
 
 - [ ] **Step 4: Verify green on the board + full suite**
 
-Same commands + `python3 -m pytest tests/ -q`. Expected: all green, every pre-existing suppress test unchanged and passing (grace only ever *keeps* runs the old code deleted; strictly-consecutive sequences behave identically).
+Same commands + `python3 -m pytest tests/ -q`. Expected: all green, every pre-existing suppress test unchanged and passing (grace only ever _keeps_ runs the old code deleted; strictly-consecutive sequences behave identically).
 
 - [ ] **Step 5: Commit**
 
@@ -359,10 +369,12 @@ git commit -m "feat(adas): one detector flicker no longer re-arms the stability 
 ### Task 4: Swap-resistant association
 
 **Files:**
+
 - Modify: `rdk/vision/perception/tracker.py`
 - Test: `rdk/vision/tests/test_tracker.py` (extend)
 
 **Interfaces:**
+
 - Produces: behavior only — `Tracker.update()`'s matching becomes globally IoU-ordered; signature, aging, wipe, trim, and creation unchanged.
 
 - [ ] **Step 1: Write the failing tests**
@@ -416,6 +428,7 @@ def test_detection_order_cannot_change_the_assignment():
 scp -r rdk/vision root@10.42.0.11:/opt/max/rdk/
 ssh root@10.42.0.11 'cd /opt/max/rdk/vision && python3 -m pytest tests/test_tracker.py -q'
 ```
+
 Expected: the stealing test FAILS against the current greedy (that is the point — if it passes, the fixture geometry isn't discriminating; fix the boxes before proceeding).
 
 - [ ] **Step 3: Implement**
@@ -472,6 +485,7 @@ git commit -m "fix(adas): association is globally best-first, so tracks cannot s
 ### Task 5: Documentation truth (TTC + corridor)
 
 **Files:**
+
 - Modify: `rdk/vision/adas/ttc.py` (docstring), `rdk/vision/adas/threat.py` (corridor comment)
 
 - [ ] **Step 1: Rewrite `ttc.py`'s module docstring**
@@ -523,12 +537,14 @@ git commit -m "docs(adas): say what tau already is, and what the corridor is not
 ### Task 6: `tools/evaluate.py` — pure scoring
 
 **Files:**
+
 - Create: `rdk/vision/tools/evaluate.py` (scoring half)
 - Test: `rdk/vision/tests/test_evaluate.py` (create)
 
 **Interfaces:**
+
 - Consumes: `ShadowRecord` (`adas/shadow.py`), `HazardWindow` (`corpus/labels.py`).
-- Produces (Task 7 consumes): 
+- Produces (Task 7 consumes):
 
 ```python
 @dataclass(frozen=True)
@@ -627,6 +643,7 @@ def test_gate_passes_when_clean():
 scp -r rdk/vision root@10.42.0.11:/opt/max/rdk/
 ssh root@10.42.0.11 'cd /opt/max/rdk/vision && python3 -m pytest tests/test_evaluate.py -q'
 ```
+
 Expected: FAIL — no module `tools.evaluate` / no `score_ride`.
 
 - [ ] **Step 3: Implement the scoring half of `rdk/vision/tools/evaluate.py`**
@@ -689,10 +706,12 @@ git commit -m "feat(adas): score a shadow log into M1-gate numbers"
 ### Task 7: `tools/evaluate.py` — ride loading and CLI
 
 **Files:**
+
 - Modify: `rdk/vision/tools/evaluate.py`
 - Test: `rdk/vision/tests/test_evaluate.py` (extend)
 
 **Interfaces:**
+
 - Consumes: `score_ride` (Task 6), `read_shadow`/`read_tuning` (`adas/shadow.py`), `read_labels`/`LABELS_NAME` (`corpus/labels.py`), `read_metadata` (`recorder/metadata.py`).
 - Produces: `load_ride(ride_dir: Path) -> tuple[list[ShadowRecord], list[str], int, float]` (records, fingerprints, ride_start_wall_ms, duration_h — raising `SystemExit` with actionable messages per the spec's error table), and `main()` with `python3 -m tools.evaluate <ride-dir> [--tolerance-ms 1000] [--json PATH]`.
 
@@ -774,6 +793,7 @@ git commit -m "feat(adas): evaluate a labelled ride from the command line"
 ### Task 8: The ride protocol in the README
 
 **Files:**
+
 - Modify: `rdk/README.md` (new subsection beside "ADAS M0 — recording a corpus")
 
 - [ ] **Step 1: Write the section**
@@ -799,11 +819,11 @@ A good first corpus is at least 30 minutes of riding with several stops and
 one of each scenario. Afterwards, copy the ride off the board and label the
 genuine hazards:
 
-​```bash
+​`bash
 python3 -m tools.label add --ride ./corpus/ride-... \
   rear_approach:rear:12000:15000:"car closed fast at the light"
 python3 -m tools.evaluate ./corpus/ride-...
-​```
+​`
 
 `evaluate` prints the ride's false-alerts-per-hour, false criticals, and
 missed hazards per threat — the measured half of the M1 gate — stamped with
@@ -848,6 +868,7 @@ ssh root@10.42.0.11 'sed -i "s/^MAX_ADAS_SHADOW=.*/MAX_ADAS_SHADOW=1/" /etc/max/
 ssh root@10.42.0.11 'sleep 180; RIDE=$(ls -td /var/lib/max/corpus/ride-* | head -1); \
   cd /opt/max/rdk/vision && python3 -m tools.evaluate "$RIDE"; echo "exit=$?"'
 ```
+
 Expected: exit=1 with the labelling instructions on stderr — the honest path working end-to-end on real ride data. Also confirm the ride's shadow log header carries the NEW fingerprint (not `9b33ddc9a92d`): `head -1 "$RIDE"/shadow-front.jsonl`.
 
 - [ ] **Step 3: Restore and verify**:
@@ -855,6 +876,7 @@ Expected: exit=1 with the labelling instructions on stderr — the honest path w
 ```bash
 ssh root@10.42.0.11 'sed -i "s/^MAX_ADAS_SHADOW=.*/MAX_ADAS_SHADOW=0/" /etc/max/agent.env && systemctl restart max-vision && sleep 8 && systemctl is-active max-vision && curl -s -m 5 -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8081/preview/front'
 ```
+
 Expected: `active`, `200`.
 
 - [ ] **Step 4: Report** — per-step evidence; note explicitly that the labelled-ride acceptance is the user's first real ride (the track's exit into tuning, not a merge gate).

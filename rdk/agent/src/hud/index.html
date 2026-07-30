@@ -63,11 +63,16 @@
     display: block;
     aspect-ratio: 16 / 9;
     object-fit: cover;
+    cursor: pointer;
   }
   .tile .meta {
     padding: 6px 8px;
     font-size: 12px;
     color: #7d8590;
+    display: flex;
+    justify-content: space-between;
+    align-items: start;
+    gap: 6px;
   }
   .muted {
     color: #7d8590;
@@ -86,6 +91,94 @@
   }
   .tile.live {
     border-color: #d29922;
+  }
+  button {
+    background: #21262d;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    color: #e6edf3;
+    font: inherit;
+    font-size: 12px;
+    padding: 2px 8px;
+    cursor: pointer;
+  }
+  button:hover {
+    border-color: #7d8590;
+  }
+  button.danger:hover {
+    border-color: #f85149;
+    color: #f85149;
+  }
+  button.on {
+    border-color: #79c0ff;
+    color: #79c0ff;
+  }
+  button:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+  .del {
+    padding: 0 6px;
+    line-height: 18px;
+  }
+  #viewer {
+    position: fixed;
+    inset: 0;
+    background: rgba(4, 6, 8, 0.92);
+    display: flex;
+    flex-direction: column;
+    padding: 16px;
+    gap: 12px;
+    z-index: 10;
+  }
+  #viewer[hidden] {
+    display: none;
+  }
+  #viewer-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  #viewer-title {
+    color: #7d8590;
+    font-size: 13px;
+  }
+  #viewer-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  #viewer-panels {
+    flex: 1;
+    display: flex;
+    gap: 16px;
+    justify-content: center;
+    align-items: center;
+    flex-wrap: wrap;
+    min-height: 0;
+    overflow: auto;
+  }
+  #viewer-panels figure {
+    margin: 0;
+    max-width: min(860px, 96vw);
+    flex: 1 1 380px;
+  }
+  #viewer-panels img {
+    width: 100%;
+    max-height: 74vh;
+    object-fit: contain;
+  }
+  #viewer-panels figcaption {
+    font-size: 12px;
+    color: #7d8590;
+    padding-top: 4px;
+    text-align: center;
+  }
+  #viewer-panels a {
+    color: #79c0ff;
   }
 </style>
 <h1>Max · RDK X5 bench</h1>
@@ -111,6 +204,13 @@
   <div id="captures-status" class="muted">loading…</div>
   <div id="captures" class="grid"></div>
 </div>
+<div id="viewer" hidden>
+  <div id="viewer-bar">
+    <span id="viewer-title"></span>
+    <span id="viewer-actions"></span>
+  </div>
+  <div id="viewer-panels"></div>
+</div>
 <script>
   const host = location.hostname;
   document.getElementById("front").src = `http://${host}:__PREVIEW_PORT__/preview/front`;
@@ -131,31 +231,153 @@
   const galleryBase = `http://${host}:__PREVIEW_PORT__`;
   const capturesEl = document.getElementById("captures");
   const statusEl = document.getElementById("captures-status");
+  const viewerEl = document.getElementById("viewer");
+  const panelsEl = document.getElementById("viewer-panels");
+  const titleEl = document.getElementById("viewer-title");
+  const actionsEl = document.getElementById("viewer-actions");
+  let pairs = [];
   let lastSerialised = null;
+  let viewerIndex = -1;
+  // Playback pacing for the viewer, in fps. 10 is the recorded rate.
+  let viewerFps = 10;
+  // Bumped on every stream URL so reopening a clip replays it instead of
+  // showing the browser's cached last frame.
+  let streamNonce = 0;
 
-  function tile(pair) {
-    const side = pair.front ? "front" : "rear";
-    const name = pair[side];
-    const bytes = pair.sizes ? pair.sizes[side] : null;
-    const href = `${galleryBase}/gallery/${pair.id}/${name}`;
-    // A recording is concatenated JPEG: show frame one, link the file.
+  const sidesOf = (pair) => ["front", "rear"].filter((s) => pair[s] && pair.sizes && pair.sizes[s] !== null);
+  const fmtSize = (bytes) =>
+    bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.round(bytes / 1024)} KB`;
+  const fmtDur = (seconds) => {
+    // Round before splitting, or 119.7 s reads "1 m 60 s".
+    const whole = Math.round(seconds);
+    return whole >= 60 ? `${Math.floor(whole / 60)} m ${String(whole % 60).padStart(2, "0")} s` : `${whole} s`;
+  };
+  const fmtWhen = (pair) => (pair.created ? pair.created.slice(5, 16).replace("T", " ") : pair.id);
+  const gb = (mb) => `${(mb / 1024).toFixed(1)} GB`;
+
+  function tile(pair, index) {
+    const side = sidesOf(pair)[0];
     const isVideo = pair.kind === "video";
-    const src = isVideo ? `${href}/thumb` : href;
-    // A clip is listed from the moment it starts, so say which ones are still
-    // growing — otherwise a live recording reads as a finished one whose size
-    // keeps changing between refreshes.
     const label = pair.recording ? "video · recording" : isVideo ? "video" : "photo";
-    const size = bytes === null ? "waiting for the first frame" : `${Math.round(bytes / 1024)} KB`;
+    const dur = pair.duration_s ? ` · ${fmtDur(pair.duration_s)}` : "";
+    // A live recording cannot be deleted (the sidecar refuses with 409), so
+    // its tile does not offer to.
+    const del = pair.recording ? "" : `<button class="del danger" data-del="${index}" title="delete">✕</button>`;
 
-    if (bytes === null) {
+    if (!side) {
       const missing = pair.recording ? "recording…" : "file missing";
-      return `<div class="tile"><div class="${pair.recording ? "recording" : "missing"}">${missing}</div>
-        <div class="meta">${pair.id}<br />${label} · ${size}</div></div>`;
+      const size = "waiting for the first frame";
+      return `<div class="tile ${pair.recording ? "live" : ""}"><div class="${pair.recording ? "recording" : "missing"}">${missing}</div>
+        <div class="meta"><span>${fmtWhen(pair)} · ${label} · ${size}</span>${del}</div></div>`;
     }
-    return `<div class="tile ${pair.recording ? "live" : ""}"><a href="${href}" target="_blank">
-      <img src="${src}" alt="${pair.id}" /></a>
-      <div class="meta">${pair.id}<br />${label} · ${size}${pair.degraded ? " · degraded" : ""}</div></div>`;
+    const href = `${galleryBase}/gallery/${pair.id}/${pair[side]}`;
+    const src = isVideo ? `${href}/thumb` : href;
+    const size = fmtSize(pair.sizes[side]);
+    return `<div class="tile ${pair.recording ? "live" : ""}">
+      <img src="${src}" alt="${pair.id}" data-view="${index}" loading="lazy" />
+      <div class="meta"><span>${fmtWhen(pair)} · ${label}${dur} · ${size}${pair.degraded ? " · degraded" : ""}</span>${del}</div></div>`;
   }
+
+  function renderViewer() {
+    const pair = pairs[viewerIndex];
+    if (!pair) {
+      closeViewer();
+      return;
+    }
+    const isVideo = pair.kind === "video";
+    const dur = pair.duration_s ? ` · ${fmtDur(pair.duration_s)}` : "";
+    titleEl.textContent = `${pair.id} · ${pair.kind}${dur}${pair.recording ? " · still recording" : ""}`;
+
+    panelsEl.innerHTML = sidesOf(pair)
+      .map((side) => {
+        const href = `${galleryBase}/gallery/${pair.id}/${pair[side]}`;
+        const src = isVideo ? `${href}/play?fps=${viewerFps}&t=${++streamNonce}` : href;
+        return `<figure><img src="${src}" alt="${pair.id} ${side}" />
+          <figcaption>${side} · ${fmtSize(pair.sizes[side])} · <a href="${href}" download>download</a></figcaption></figure>`;
+      })
+      .join("");
+
+    const speeds = isVideo
+      ? [5, 10, 20]
+          .map((fps) => `<button data-fps="${fps}" class="${fps === viewerFps ? "on" : ""}">${fps / 10}×</button>`)
+          .join("")
+      : "";
+    const del = pair.recording ? "" : `<button id="viewer-delete" class="danger">delete</button>`;
+    actionsEl.innerHTML = `${speeds}
+      <button id="viewer-prev" ${viewerIndex >= pairs.length - 1 ? "disabled" : ""}>‹ older</button>
+      <button id="viewer-next" ${viewerIndex <= 0 ? "disabled" : ""}>newer ›</button>
+      ${del}<button id="viewer-close">✕</button>`;
+  }
+
+  function openViewer(index) {
+    viewerIndex = index;
+    viewerFps = 10;
+    renderViewer();
+    viewerEl.hidden = false;
+  }
+
+  function closeViewer() {
+    viewerEl.hidden = true;
+    // Dropping the <img> is what ends its /play stream on the sidecar.
+    panelsEl.innerHTML = "";
+    viewerIndex = -1;
+  }
+
+  async function deletePair(pair) {
+    if (!confirm(`Delete ${pair.id} from the board? There is no undo.`)) return;
+    let response;
+    try {
+      response = await fetch(`${galleryBase}/gallery/${pair.id}/delete`, { method: "POST" });
+    } catch {
+      alert("sidecar unreachable");
+      return;
+    }
+    if (!response.ok) {
+      let detail = "";
+      try {
+        detail = (await response.json()).error ?? "";
+      } catch {}
+      alert(`delete failed (${response.status})${detail ? `: ${detail}` : ""}`);
+      return;
+    }
+    if (viewerIndex !== -1) closeViewer();
+    lastSerialised = null;
+    refreshCaptures();
+  }
+
+  capturesEl.addEventListener("click", (event) => {
+    const view = event.target.closest("[data-view]");
+    if (view) {
+      openViewer(Number(view.dataset.view));
+      return;
+    }
+    const del = event.target.closest("[data-del]");
+    if (del && pairs[Number(del.dataset.del)]) deletePair(pairs[Number(del.dataset.del)]);
+  });
+
+  actionsEl.addEventListener("click", (event) => {
+    const speed = event.target.closest("[data-fps]");
+    if (speed) {
+      viewerFps = Number(speed.dataset.fps);
+      renderViewer();
+      return;
+    }
+    if (event.target.id === "viewer-close") closeViewer();
+    if (event.target.id === "viewer-prev" && viewerIndex < pairs.length - 1) openViewer(viewerIndex + 1);
+    if (event.target.id === "viewer-next" && viewerIndex > 0) openViewer(viewerIndex - 1);
+    if (event.target.id === "viewer-delete" && pairs[viewerIndex]) deletePair(pairs[viewerIndex]);
+  });
+
+  viewerEl.addEventListener("click", (event) => {
+    if (event.target === viewerEl || event.target === panelsEl) closeViewer();
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (viewerEl.hidden) return;
+    if (event.key === "Escape") closeViewer();
+    if (event.key === "ArrowLeft" && viewerIndex < pairs.length - 1) openViewer(viewerIndex + 1);
+    if (event.key === "ArrowRight" && viewerIndex > 0) openViewer(viewerIndex - 1);
+  });
 
   async function refreshCaptures() {
     let payload;
@@ -169,12 +391,18 @@
       return;
     }
 
+    pairs = payload.pairs;
+    // The disk line updates every poll; the grid only re-renders on change,
+    // so the tiles (and any open /play stream) are not churned by a byte
+    // count ticking over.
+    const disk = payload.disk ? ` · ${gb(payload.disk.free_mb)} free (floor ${gb(payload.disk.min_free_mb)})` : "";
+    const count = pairs.length ? `${pairs.length} capture${pairs.length === 1 ? "" : "s"}` : "no captures yet";
+    statusEl.textContent = count + disk;
+
     const serialised = JSON.stringify(payload.pairs);
     if (serialised === lastSerialised) return;
     lastSerialised = serialised;
-
-    statusEl.textContent = payload.pairs.length ? "" : "no captures yet";
-    capturesEl.innerHTML = payload.pairs.map(tile).join("");
+    capturesEl.innerHTML = pairs.map(tile).join("");
   }
 
   refreshCaptures();

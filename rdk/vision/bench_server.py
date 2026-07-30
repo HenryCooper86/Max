@@ -15,11 +15,14 @@ the listen backlog filled with clients nobody would accept.
 from __future__ import annotations
 
 import json
+import shutil
 import time
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+from camera import RECORDING_FPS
 from mipi_camera import JPEG_MAX_AGE_MS
 
 #: JPEG start-of-image. A .mjpeg segment is these, concatenated.
@@ -37,6 +40,10 @@ THUMB_MAX_BYTES = 16 * 1024 * 1024
 #: cheap to upload from a board that usually lives on a phone tether.
 DEFAULT_FRAME_WIDTH = 640
 MAX_FRAME_WIDTH = 1920
+
+#: Playback pacing ceiling. 3× the recorded rate is the fastest skim the
+#: viewer offers; beyond that every frame is on the wire for a blink.
+MAX_PLAY_FPS = 30
 
 
 def first_frame(data: bytes) -> bytes | None:
@@ -77,6 +84,59 @@ def read_first_frame(path: Path) -> bytes | None:
         return None
 
 
+def iter_frames(path: Path):
+    """Each JPEG in a concatenated-JPEG segment, one frame in RAM at a time.
+
+    The playback twin of ``read_first_frame``: same chunked walk, same
+    ceiling, for the same reason — a clip on the board reached 835 MB.
+    """
+    buffer = b""
+    try:
+        with path.open("rb") as handle:
+            while True:
+                chunk = handle.read(SEGMENT_CHUNK)
+                if not chunk:
+                    break
+                buffer += chunk
+                if not buffer.startswith(SOI):
+                    return  # not a JPEG segment
+                while True:
+                    nxt = buffer.find(SOI, len(SOI))
+                    if nxt == -1:
+                        break
+                    yield buffer[:nxt]
+                    buffer = buffer[nxt:]
+                if len(buffer) > THUMB_MAX_BYTES:
+                    # No frame boundary within the ceiling means corrupt
+                    # trailing data. Emit what there is and stop, rather than
+                    # buffering the rest of the file hunting for one.
+                    yield buffer[:THUMB_MAX_BYTES]
+                    return
+    except OSError:
+        return
+    if buffer.startswith(SOI):
+        yield buffer  # the last frame has no marker after it
+
+
+def created_at(pair_id: str, directory: Path) -> str | None:
+    """When the capture happened, read from the pair id's own timestamp.
+
+    The id is the primary source because it survives copies; the directory
+    mtime is the fallback for ids that do not parse.
+    """
+    parts = pair_id.split("-")
+    try:
+        return datetime.strptime("-".join(parts[1:3]), "%Y%m%d-%H%M%S").isoformat(
+            timespec="seconds"
+        )
+    except ValueError:
+        pass
+    try:
+        return datetime.fromtimestamp(directory.stat().st_mtime).isoformat(timespec="seconds")
+    except OSError:
+        return None
+
+
 def safe_path(root, relative: str):
     """Resolve ``relative`` inside ``root``, or return None.
 
@@ -109,8 +169,13 @@ def listing(gallery) -> dict:
             name = manifest.get(side)
             path = directory / name if name else None
             sizes[side] = path.stat().st_size if path is not None and path.exists() else None
-        pairs.append({**manifest, "sizes": sizes})
-    return {"pairs": pairs}
+        pairs.append(
+            {**manifest, "sizes": sizes, "created": created_at(manifest["id"], directory)}
+        )
+    free_mb = shutil.disk_usage(gallery.root).free // (1024 * 1024)
+    # The floor rides along so the page can say how close the disk is to
+    # refusing the next capture, not just quote a number.
+    return {"pairs": pairs, "disk": {"free_mb": free_mb, "min_free_mb": gallery.min_free_mb}}
 
 
 def downscale(jpeg: bytes, width: int) -> bytes | None:
@@ -155,17 +220,94 @@ def serve(pair, gallery, port: int, share_frames: bool = False) -> None:
             else:
                 self.send_error(404)
 
+        def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+            parsed = urlparse(self.path)
+            if parsed.path.startswith("/gallery/") and parsed.path.endswith("/delete"):
+                self._delete(unquote(parsed.path[len("/gallery/") : -len("/delete")]))
+            else:
+                self.send_error(404)
+
+        def _json(self, status: int, payload: dict) -> None:
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            # The page lives on the agent's port, so every outcome here is a
+            # cross-origin read — errors included, or the page could not tell
+            # "still recording" apart from the sidecar being down.
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _delete(self, pair_id: str) -> None:
+            try:
+                outcome = gallery.delete_pair(pair_id)
+            except OSError as error:
+                # Reporting a delete that did not happen would be the same
+                # class of lie as a false capture success.
+                self._json(500, {"error": f"delete failed: {error}"})
+                return
+            if outcome == "deleted":
+                self._json(200, {"deleted": pair_id})
+            elif outcome == "recording":
+                self._json(409, {"error": "still recording; stop the recording first"})
+            else:
+                self._json(404, {"error": "no such capture"})
+
+        def _play(self, target: Path, query: str) -> None:
+            """Replay a segment as the multipart stream the live preview uses.
+
+            No transcoding on a board that plateaus near 90 °C with a ride
+            running; the HUD's <img> plays this the way it already plays
+            /preview/*. The stream simply ends with the file — a clip still
+            being written plays what is on disk and stops.
+            """
+            raw_fps = parse_qs(query).get("fps", [str(int(RECORDING_FPS))])[0]
+            try:
+                fps = int(raw_fps)
+            except ValueError:
+                self.send_error(400, "bad fps")
+                return
+            if not 1 <= fps <= MAX_PLAY_FPS:
+                self.send_error(400, "fps out of range")
+                return
+
+            self.send_response(200)
+            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+            self.end_headers()
+            try:
+                for frame in iter_frames(target):
+                    self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\n\r\n")
+                    self.wfile.write(frame)
+                    self.wfile.write(b"\r\n")
+                    time.sleep(1.0 / fps)
+            except (BrokenPipeError, ConnectionResetError):
+                return  # the viewer was closed mid-clip; ordinary
+
         def _capture(self) -> None:
-            relative = unquote(self.path[len("/gallery/") :])
+            parsed = urlparse(self.path)
+            relative = unquote(parsed.path[len("/gallery/") :])
             thumb = relative.endswith("/thumb")
+            play = relative.endswith("/play")
             if thumb:
                 relative = relative[: -len("/thumb")]
+            elif play:
+                relative = relative[: -len("/play")]
 
             target = safe_path(gallery.root, relative)
             # 404 rather than 403 for a refused path: a distinct code would
             # confirm which files exist.
             if target is None or not target.is_file():
                 self.send_error(404)
+                return
+
+            if play:
+                # Only a segment has frames to pace; a photo is already
+                # viewable inline.
+                if target.suffix != ".mjpeg":
+                    self.send_error(404)
+                    return
+                self._play(target, parsed.query)
                 return
 
             if thumb:
@@ -206,15 +348,7 @@ def serve(pair, gallery, port: int, share_frames: bool = False) -> None:
                 return  # the download was cancelled; ordinary
 
         def _listing(self) -> None:
-            body = json.dumps(listing(gallery), ensure_ascii=False).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            # The page is served from the agent's port and fetches this one, so
-            # the JSON is a cross-origin read. Images in <img> are not.
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self._json(200, listing(gallery))
 
         def _preview(self) -> None:
             camera = pair.front if self.path.endswith("front") else pair.rear

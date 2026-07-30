@@ -49,6 +49,7 @@ class Gallery:
         rear: str | None,
         kind: str,
         recording: bool = False,
+        duration_s: float | None = None,
     ) -> Path:
         """Write the pair manifest atomically, so a reader never sees a partial
         record if power is cut mid-write.
@@ -69,6 +70,10 @@ class Gallery:
             "degraded": front is None or rear is None,
             "recording": recording,
         }
+        # Absent, not 0, when unknown: reconciled clips have no trustworthy
+        # clock, and "unknown" and "instant" must not read the same.
+        if duration_s is not None:
+            payload["duration_s"] = duration_s
         final = directory / "manifest.json"
         temporary = directory / "manifest.json.tmp"
         temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -135,6 +140,37 @@ class Gallery:
                     found[side] = candidate.name
                     break
         return found
+
+    def delete_pair(self, pair_id: str) -> str:
+        """Remove one capture. Returns "deleted", "unknown", or "recording".
+
+        The unit is the pair directory — deleting one file inside it would
+        leave a manifest claiming media that is gone, the broken-tile state
+        ``reconcile`` exists to repair. The id comes straight off a URL, so it
+        is trusted for nothing: it must resolve to a directory directly under
+        the root holding a manifest. "recording" refuses the clip the writer
+        is still appending to; ``reconcile`` runs before anything can record,
+        so a live flag at runtime can only be the live recording.
+
+        An unreadable manifest still deletes — a crash-damaged capture must be
+        removable without SSH.
+        """
+        root = Path(self.root).resolve()
+        try:
+            candidate = (root / pair_id).resolve()
+        except (OSError, ValueError, RuntimeError):
+            return "unknown"
+        manifest_path = candidate / "manifest.json"
+        if candidate.parent != root or not candidate.is_dir() or not manifest_path.is_file():
+            return "unknown"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            manifest = {}
+        if manifest.get("recording"):
+            return "recording"
+        shutil.rmtree(candidate)
+        return "deleted"
 
     def list_pairs(self) -> list[dict]:
         pairs: list[dict] = []

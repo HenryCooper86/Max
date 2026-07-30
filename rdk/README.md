@@ -696,6 +696,9 @@ With `npm run dev:server` running on the LAN host:
 4. Say "开始录像" twice — Max says "已经在录了。"
 5. `systemctl stop max-vision`, then say "拍照" — Max reports a truthful failure
    and the voice session keeps working.
+6. In the HUD's captures grid, click the clip — it replays in the page, at
+   ½×/1×/2×. Delete a scratch capture and watch the free-space readout move;
+   deleting the clip _while_ it records must be refused.
 
 **Dev HUD**
 
@@ -969,16 +972,44 @@ for the orphan it used to leave behind. See "Camera findings".
 
 The bench HUD at `http://<board>:8080/` shows a **captures** grid under the
 transcript, served by the sidecar on `MAX_VISION_PREVIEW_PORT` — the same reason
-preview lives there, that image bytes never pass through the agent.
+preview lives there, that image bytes never pass through the agent. Clicking a
+tile opens a viewer: photos full-size, recordings replayed in the page, both
+sides when both recorded, with download links, ½×/1×/2× playback speed,
+older/newer navigation, and delete. The captures header shows free space
+against the `MAX_GALLERY_MIN_FREE_MB` floor, because deletion is how space
+comes back.
 
-| Route                              | Returns                                          |
-| ---------------------------------- | ------------------------------------------------ |
-| `GET /gallery`                     | every capture, newest first, with sizes          |
-| `GET /gallery/<pair>/<file>`       | the bytes; a `.mjpeg` downloads as an attachment |
-| `GET /gallery/<pair>/<file>/thumb` | the first frame of a recording                   |
+| Route                              | Returns                                                                                                                                                                     |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /gallery`                     | every capture, newest first, with sizes, capture time, video duration, and disk space against the floor                                                                     |
+| `GET /gallery/<pair>/<file>`       | the bytes; a `.mjpeg` downloads as an attachment                                                                                                                            |
+| `GET /gallery/<pair>/<file>/thumb` | the first frame of a recording                                                                                                                                              |
+| `GET /gallery/<pair>/<file>/play`  | the recording replayed as `multipart/x-mixed-replace` — the stream preview already uses, so a plain `<img>` plays it; `?fps=` (1–30, default the recorded 10) sets the pace |
+| `POST /gallery/<pair>/delete`      | removes the whole pair; `409` while it is still being written, `404` for anything that is not a capture                                                                     |
 
-It is **read-only**: nothing on that page deletes a capture, because it is
-unauthenticated and bound to `0.0.0.0`. Clear space with `rm` over SSH.
+Playback re-streams the file rather than transcoding it: an ffmpeg pass per
+view is heat and RAM this board does not have (a shadow ride plateaus near
+90 °C), and the multipart walk holds one frame in memory at a time however
+large the clip — the same rule that keeps a thumbnail from costing 835 MB.
+The stream simply ends with the file; a clip still being written plays what is
+on disk so far and stops.
+
+**Delete trusts the LAN, and that is a decision, not an oversight.** An
+earlier version of this section kept the page read-only because the surface is
+unauthenticated on `0.0.0.0`, and clearing space meant `rm` over SSH. That
+traded the wrong way: a ten-minute clip is ~1.7 GB against a 1 GB floor, so
+deletion is routine, and the one client with the gallery in front of it could
+not do it. A token would be theater rather than auth — the page embedding it
+is served unauthenticated on the same LAN, to anyone who asks. What the route
+does guarantee: the unit is the whole pair directory (deleting one side would
+leave a manifest claiming media that is gone — the broken-tile state
+`reconcile()` exists to repair), only a directory holding a manifest directly
+under the gallery root can be named (the same resolved-path rule as reads), a
+live recording is refused with `409` until it is stopped, and a capture is the
+_only_ thing the route can remove. Preview has always streamed frames to
+anyone on the LAN; delete extends that same trust from reading captures to
+removing them. If the board ever leaves trusted LANs, authentication has to
+arrive for the whole bench surface at once, not for this route alone.
 
 Any path resolving outside the gallery root is a `404`. The sidecar runs as
 root, so that check is a security boundary, not tidiness — see
@@ -1126,7 +1157,10 @@ manifest, last written at 21:11 on 2026-07-28, which is the minute the boot it
 belonged to ended. A second directory held nothing at all.
 
 The manifest is now written when recording starts, carrying `"recording": true`,
-and finalised on stop. `Gallery.reconcile()` runs once at service start — before
+and finalised on stop — stamped with a wall-clock `duration_s`, because the
+writer measurably falls behind the nominal 10 fps and frames ÷ fps would
+understate how long the rider actually recorded. A reconciled clip has no
+trustworthy clock, so it carries no duration rather than a guessed one. `Gallery.reconcile()` runs once at service start — before
 anything can record, so a manifest still flagged `recording` can only belong to a
 dead process — and it:
 

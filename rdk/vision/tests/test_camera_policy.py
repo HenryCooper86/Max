@@ -159,6 +159,23 @@ def test_a_disk_error_stops_the_recording_with_a_finished_manifest(pair, gallery
     assert manifest["recording"] is False
 
 
+def test_stop_stamps_a_wall_clock_duration(pair, gallery):
+    # Wall clock, not frames ÷ fps: the writer measurably falls behind nominal
+    # fps, and the truth about a clip is how long the rider recorded.
+    started = pair.start_recording(gallery, drive=False)
+    time.sleep(0.05)
+    pair.stop_recording(gallery)
+    manifest = json.loads((gallery.pair_dir(started["detail"]) / "manifest.json").read_text())
+    assert manifest["duration_s"] >= 0.0
+
+
+def test_a_photo_manifest_has_no_duration(pair, gallery):
+    pair.capture_photo(gallery)
+    directory = next(p for p in Path(gallery.root).iterdir() if p.is_dir())
+    manifest = json.loads((directory / "manifest.json").read_text())
+    assert "duration_s" not in manifest
+
+
 def test_recording_only_writes_cameras_the_manifest_claims(pair, gallery):
     pair.rear = FakeCamera(works=False)
     result = pair.start_recording(gallery, drive=False)

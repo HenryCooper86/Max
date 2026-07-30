@@ -240,6 +240,7 @@ class CameraPair:
             if pair_id is None:
                 return {"status": "failed", "reason": "camera.notRecording"}
             sides = self.recording_sides
+            started_at = self.recording_started_at
             self.recording_id = None
             self.recording_started_at = None
             self.recording_sides = {"front": None, "rear": None}
@@ -261,6 +262,11 @@ class CameraPair:
                 self._recording_thread.join(timeout=2.0)
             self._recording_thread = None
 
-        gallery.write_manifest(pair_id, sides["front"], sides["rear"], "video", recording=False)
+        # Wall clock, not frames ÷ fps: the writer measurably falls behind the
+        # nominal rate, and the truth about a clip is how long it recorded.
+        duration = round(time.monotonic() - started_at, 1) if started_at is not None else None
+        gallery.write_manifest(
+            pair_id, sides["front"], sides["rear"], "video", recording=False, duration_s=duration
+        )
         degraded = sides["front"] is None or sides["rear"] is None
         return {"status": "ok", "detail": f"{pair_id}{' degraded' if degraded else ''}"}

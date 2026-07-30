@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from adas.shadow import read_shadow
 from perception.frame_source import Frame
 from perception.types import Detection
-from ride import SEGMENT_PATTERN, RideSession
+from ride import RideSession
 
 
 class FakeCamera:
@@ -80,16 +80,16 @@ def test_the_recorder_writes_segments(tmp_path):
     assert written, "the ride wrote no segment"
 
 
-def test_the_segment_pattern_resolves_to_a_file_that_exists(tmp_path):
-    # The defect this catches: RuntimeConfig's default pattern is
-    # "{camera}_{index:06d}.h264" while the recorder writes seg-000000.mjpeg, so
-    # every shadow record would cite a path that was never written.
+def test_the_first_segment_file_exists_where_the_recorder_writes_it(tmp_path):
+    # Task 6: there is no RuntimeConfig segment_pattern/segment_seconds (nor a
+    # ride.py SEGMENT_PATTERN) to drift from the recorder's real layout anymore
+    # — the runtime cites whatever SegmentClock says, which the recorder itself
+    # updates at every roll.
     session = make_session(tmp_path)
     ride = session.start()
     time.sleep(0.4)
     session.stop()
-    named = SEGMENT_PATTERN.format(camera="front", index=0)
-    assert (Path(tmp_path) / ride / named).exists()
+    assert (Path(tmp_path) / ride / "front" / "seg-000000.mjpeg").exists()
 
 
 def test_alerts_land_in_the_shadow_log_citing_a_real_segment(tmp_path):

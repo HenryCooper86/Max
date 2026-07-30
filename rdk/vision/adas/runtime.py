@@ -15,6 +15,7 @@ from typing import Callable
 
 from perception.tracker import Tracker
 from perception.types import Detection, EgoState
+from recorder.segmenter import SegmentClock
 
 from .catalog import CATALOG
 from .ego_motion import estimate
@@ -37,8 +38,10 @@ class RuntimeConfig:
     recording: bool = True
     #: Injected in tests; None means use the detector passed to run_camera.
     detect: Callable[[object, int], list[Detection]] | None = None
-    segment_pattern: str = "{camera}_{index:06d}.h264"
-    segment_seconds: float = 60.0
+    #: The recorder's live view of which segment is being written and when it
+    #: started. None (e.g. before the first roll) is a real, expected state —
+    #: not a wiring error — so callers are not forced to supply one.
+    segment_clock: SegmentClock | None = None
     tuning: Tuning = DEFAULT
 
 
@@ -101,22 +104,28 @@ def run_camera(
 
         for alert in admitted:
             track = by_id.get(alert.track_id)
-            segment_index = int(frame.t_ms / 1000.0 / config.segment_seconds)
+            wall_ms = int(time.time() * 1000)
+            current = config.segment_clock.current() if config.segment_clock else None
+            if current is None:
+                print(
+                    f"[adas] {config.camera}: alert before any segment roll; segment unknown",
+                    flush=True,
+                )
+                segment, segment_offset_ms = "", -1
+            else:
+                segment, started_wall_ms = current
+                segment_offset_ms = wall_ms - started_wall_ms
             shadow.append(
                 ShadowRecord(
                     threat_id=alert.threat_id,
                     severity=alert.severity,
                     camera=alert.camera,
                     t_ms=alert.t_ms,
-                    wall_ms=int(time.time() * 1000),
+                    wall_ms=wall_ms,
                     ttc_s=alert.ttc_s,
                     ride_id=config.ride_id,
-                    segment=config.segment_pattern.format(
-                        camera=config.camera, index=segment_index
-                    ),
-                    segment_offset_ms=int(
-                        frame.t_ms - segment_index * config.segment_seconds * 1000
-                    ),
+                    segment=segment,
+                    segment_offset_ms=segment_offset_ms,
                     track_id=alert.track_id,
                     box_height=track.last.height if track else 0.0,
                     closing_rate=height_rate(track) if track else None,

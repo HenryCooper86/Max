@@ -25,12 +25,8 @@ from adas.rebase import RebasedSource
 from adas.runtime import RuntimeConfig
 from adas.tuning import DEFAULT
 from recorder.mipi_source import write_jpeg
-from recorder.segmenter import SEGMENT_SECONDS
+from recorder.segmenter import SegmentClock
 from recorder.session import CameraSlot, RideRecorder
-
-#: Matches what RideRecorder writes: <ride>/<camera>/seg-NNNNNN.mjpeg. The
-#: RuntimeConfig default ("{camera}_{index:06d}.h264") matches nothing.
-SEGMENT_PATTERN = "{camera}/seg-{index:06d}.mjpeg"
 
 #: Disk is checked every this many ticks rather than every frame — statvfs at
 #: 10 Hz for the whole ride buys nothing.
@@ -98,6 +94,9 @@ class RideSession:
         self.shadow_paths: dict[str, Path] = {}
         self.adas_threads: list[threading.Thread] = []
         self._recorder: RideRecorder | None = None
+        #: One clock per open camera, shared with the recorder: it is the
+        #: writer, the ADAS thread below is the reader at alert time.
+        self._clocks: dict[str, SegmentClock] = {}
         self._stop = threading.Event()
         self._tick_thread: threading.Thread | None = None
 
@@ -116,6 +115,7 @@ class RideSession:
             return None
 
         self._stop = threading.Event()
+        self._clocks = {name: SegmentClock() for name in self.cameras}
         self._recorder = RideRecorder(
             root=self.corpus_dir,
             slots=[CameraSlot(name, camera.channel) for name, camera in self.cameras.items()],
@@ -124,6 +124,7 @@ class RideSession:
             open_fn=lambda slot: self.cameras[slot.name],
             encode_fn=write_jpeg,
             video_suffix=".mjpeg",
+            clocks=self._clocks,
         )
         self.ride_id = self._recorder.start(now_wall_ms=int(time.time() * 1000))
         print(f"[ride] {self.ride_id}: {', '.join(self.cameras)}", flush=True)
@@ -151,10 +152,9 @@ class RideSession:
                 camera=name,
                 recording=True,
                 detect=self._detect_factory(),
-                segment_pattern=SEGMENT_PATTERN,
-                # Must match the Segmenter the recorder uses, or the shadow
-                # record's segment index drifts away from the files on disk.
-                segment_seconds=SEGMENT_SECONDS,
+                # The same clock RideRecorder writes through, so the shadow
+                # record cites the real file instead of a name computed twice.
+                segment_clock=self._clocks[name],
                 tuning=DEFAULT,
             )
 

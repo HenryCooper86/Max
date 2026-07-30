@@ -1,4 +1,5 @@
 import sys
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from adas.shadow import ShadowLog, read_shadow
 from adas.tuning import DEFAULT
 from perception.frame_source import Frame
 from perception.types import Detection
+from recorder.segmenter import SegmentClock
 
 
 class FakeSource:
@@ -134,17 +136,59 @@ def test_the_rear_camera_produces_rear_threats(tmp_path):
 
 
 def test_provenance_points_at_a_segment_that_could_be_clipped(tmp_path):
+    # Task 6: the runtime no longer builds this path itself — it cites
+    # whatever the recorder's clock says is live, so the fixture publishes it.
     path = tmp_path / "shadow.jsonl"
+    clock = SegmentClock()
+    clock.update("front/seg-000000.mjpeg", int(time.time() * 1000))
     with ShadowLog(path) as log:
         run_camera(
             FakeSource(12),
-            RuntimeConfig(ride_id="r1", camera="front", detect=approaching),
+            RuntimeConfig(ride_id="r1", camera="front", detect=approaching, segment_clock=clock),
             log,
             lambda _: None,
         )
     r = read_shadow(path)[0]
-    assert r.segment.startswith("front_")
+    assert r.segment == "front/seg-000000.mjpeg"
     assert 0 <= r.segment_offset_ms < 60_000
+
+
+def test_alert_cites_the_recorders_segment_not_arithmetic(tmp_path):
+    clock = SegmentClock()
+    # Simulate a LATE second roll: ideal boundary at 60s, real roll at 61.5s.
+    # An alert at wall-time "62s" must land in segment 1 at ~500ms offset —
+    # the old frame-time arithmetic would have said offset 2000ms. The runtime
+    # stamps real wall time, so the fixture updates the clock relative to now
+    # rather than the literal 61_500 the scenario describes.
+    clock.update("front/seg-000001.mjpeg", int(time.time() * 1000) - 500)
+    path = tmp_path / "shadow.jsonl"
+    with ShadowLog(path) as log:
+        run_camera(
+            FakeSource(12),
+            RuntimeConfig(ride_id="r1", camera="front", detect=approaching, segment_clock=clock),
+            log,
+            lambda _: None,
+        )
+    record = read_shadow(path)[0]
+    assert record.segment == "front/seg-000001.mjpeg"
+    assert 0 <= record.segment_offset_ms < 5_000
+
+
+def test_alert_before_first_roll_still_logs(tmp_path, capsys):
+    path = tmp_path / "shadow.jsonl"
+    with ShadowLog(path) as log:
+        run_camera(
+            FakeSource(12),
+            RuntimeConfig(
+                ride_id="r1", camera="front", detect=approaching, segment_clock=SegmentClock()
+            ),
+            log,
+            lambda _: None,
+        )
+    record = read_shadow(path)[0]
+    assert record.segment == ""
+    assert record.segment_offset_ms == -1
+    assert "segment unknown" in capsys.readouterr().out
 
 
 def test_runtime_builds_suppressor_from_tuning(tmp_path):

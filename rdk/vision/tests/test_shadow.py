@@ -132,3 +132,17 @@ def test_old_headerless_logs_still_read(tmp_path):
     assert len(read_shadow(path)) == 1
     assert read_tuning(path) == []
     assert read_shadow(path)[0].tuning == ""  # default for the new field
+
+
+def test_read_tuning_and_read_shadow_classify_lines_the_same_way(tmp_path):
+    # Both functions parse one format. A record whose free-text field happens
+    # to contain the literal string "shadow_header" must not be misclassified
+    # by one function and not the other — a substring check on raw text and a
+    # key check on the parsed dict are not guaranteed to agree.
+    path = tmp_path / "shadow.jsonl"
+    with ShadowLog(path, tuning=DEFAULT) as log:
+        log.append(record(ride_id="shadow_header"))
+    records = read_shadow(path)
+    assert len(records) == 1
+    assert records[0].ride_id == "shadow_header"
+    assert len(read_tuning(path)) == 1

@@ -102,4 +102,9 @@ def read_tuning(path: Path | str) -> list[dict]:
     text = Path(path).read_text(encoding="utf-8").strip()
     if not text:
         return []
-    return [json.loads(line) for line in text.split("\n") if '"shadow_header"' in line]
+    headers = []
+    for line in text.split("\n"):
+        data = json.loads(line)
+        if "shadow_header" in data:
+            headers.append(data)
+    return headers

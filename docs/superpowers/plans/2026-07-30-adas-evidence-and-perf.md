@@ -25,10 +25,12 @@
 ### Task 1: The Tuning dataclass and fingerprint
 
 **Files:**
+
 - Create: `rdk/vision/adas/tuning.py`
 - Test: `rdk/vision/tests/test_tuning.py` (create)
 
 **Interfaces:**
+
 - Produces: `Tuning` (frozen dataclass, 17 fields below), `DEFAULT: Tuning`, `fingerprint(tuning: Tuning = DEFAULT) -> str` (12 hex chars). Every later task imports from `adas.tuning`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -90,6 +92,7 @@ def test_window_must_exceed_tailgate_dwell():
 scp -r rdk/vision root@10.42.0.11:/opt/max/rdk/
 ssh root@10.42.0.11 'cd /opt/max/rdk/vision && python3 -m pytest tests/test_tuning.py -q'
 ```
+
 Expected: FAIL, `ModuleNotFoundError: No module named 'adas.tuning'`.
 
 - [ ] **Step 3: Create `rdk/vision/adas/tuning.py`**
@@ -176,10 +179,12 @@ git commit -m "feat(adas): one frozen dataclass for every alert-affecting consta
 ### Task 2: Thread Tuning through the pure modules (threat, ttc)
 
 **Files:**
+
 - Modify: `rdk/vision/adas/threat.py`, `rdk/vision/adas/ttc.py`
 - Test: `rdk/vision/tests/test_threat.py`, `rdk/vision/tests/test_ttc.py` (extend)
 
 **Interfaces:**
+
 - Consumes: `Tuning`, `DEFAULT` from Task 1.
 - Produces: `evaluate(tracks, ego, t_ms, camera, tuning: Tuning = DEFAULT)`; `in_corridor(track, tuning: Tuning = DEFAULT)`; `smoothed_heights(track, tau_ms: float = DEFAULT.smoothing_tau_ms)`; `height_rate(track, window_ms: int = DEFAULT.ttc_window_ms, tau_ms: float = DEFAULT.smoothing_tau_ms)`; `time_to_contact(track, window_ms: int = DEFAULT.ttc_window_ms, tau_ms: float = DEFAULT.smoothing_tau_ms)`. Module-level constant names in `threat.py`/`ttc.py` remain as aliases of the `DEFAULT` fields so existing imports keep working.
 
@@ -228,6 +233,7 @@ def test_defaults_come_from_tuning():
 scp -r rdk/vision root@10.42.0.11:/opt/max/rdk/
 ssh root@10.42.0.11 'cd /opt/max/rdk/vision && python3 -m pytest tests/test_threat.py tests/test_ttc.py -q'
 ```
+
 Expected: the new tests FAIL (`evaluate` has no `tuning` parameter; ttc defaults are literals — the signature test may pass by numeric equality for `SMOOTHING_TAU_MS`; if a signature test passes trivially, note it and keep it as a pin).
 
 - [ ] **Step 3: Implement**
@@ -264,6 +270,7 @@ CORRIDOR_WIDTH_FRAC = DEFAULT.corridor_width_frac
 scp -r rdk/vision root@10.42.0.11:/opt/max/rdk/
 ssh root@10.42.0.11 'cd /opt/max/rdk/vision && python3 -m pytest tests/test_threat.py tests/test_ttc.py tests/test_suppress.py -q'
 ```
+
 Expected: all pass, including every pre-existing test (defaults are bit-identical).
 
 - [ ] **Step 5: Commit**
@@ -278,10 +285,12 @@ git commit -m "feat(adas): threat and ttc read their thresholds from an injectab
 ### Task 3: Runtime constructs everything from Tuning
 
 **Files:**
+
 - Modify: `rdk/vision/adas/runtime.py`, `rdk/vision/ride.py`
 - Test: `rdk/vision/tests/test_runtime.py` (extend)
 
 **Interfaces:**
+
 - Consumes: `Tuning`, `DEFAULT`, `fingerprint` (Task 1); `evaluate(..., tuning=...)` (Task 2).
 - Produces: `RuntimeConfig` gains `tuning: Tuning = DEFAULT` (Task 6 adds `segment_clock`; Task 9's tracker window also flows from here). `run_camera` builds `Tracker(iou_threshold=config.tuning.iou_threshold, max_misses=config.tuning.max_misses, max_gap_ms=config.tuning.max_gap_ms)` and `Suppressor(min_track_frames=config.tuning.min_track_frames, min_ttc_frames=config.tuning.min_ttc_frames, threat_cooldown_s=config.tuning.threat_cooldown_s, global_gap_s=config.tuning.global_gap_s)`, and calls `evaluate(tracks, ego, frame.t_ms, config.camera, tuning=config.tuning)`.
 
@@ -312,6 +321,7 @@ def test_runtime_builds_suppressor_from_tuning(tmp_path):
 scp -r rdk/vision root@10.42.0.11:/opt/max/rdk/
 ssh root@10.42.0.11 'cd /opt/max/rdk/vision && python3 -m pytest tests/test_runtime.py -q'
 ```
+
 Expected: FAIL — `RuntimeConfig` has no `tuning` field.
 
 - [ ] **Step 3: Implement**
@@ -334,10 +344,12 @@ git commit -m "feat(adas): the runtime assembles tracker, suppressor and rules f
 ### Task 4: Version-stamped shadow logs
 
 **Files:**
+
 - Modify: `rdk/vision/adas/shadow.py`, `rdk/vision/adas/runtime.py`, `rdk/vision/service.py` (the `start_adas` ShadowLog construction)
 - Test: `rdk/vision/tests/test_shadow.py` (extend)
 
 **Interfaces:**
+
 - Consumes: `Tuning`, `DEFAULT`, `fingerprint` (Task 1).
 - Produces: `ShadowLog(path, tuning: Tuning | None = None)` — writes one header line on open when `tuning` is given; `ShadowRecord.tuning: str = ""` (new last field); `read_shadow(path)` skips headers; `read_tuning(path) -> list[dict]` returns them. `run_camera` stamps `tuning=fingerprint(config.tuning)` on every record; `service.start_adas` passes the config's tuning into `ShadowLog`.
 
@@ -387,6 +399,7 @@ def test_old_headerless_logs_still_read(tmp_path):
 scp -r rdk/vision root@10.42.0.11:/opt/max/rdk/
 ssh root@10.42.0.11 'cd /opt/max/rdk/vision && python3 -m pytest tests/test_shadow.py -q'
 ```
+
 Expected: FAIL — `ShadowLog` takes no `tuning`; `read_tuning` undefined.
 
 - [ ] **Step 3: Implement in `shadow.py`**
@@ -451,6 +464,7 @@ def read_tuning(path: Path | str) -> list[dict]:
 scp -r rdk/vision root@10.42.0.11:/opt/max/rdk/
 ssh root@10.42.0.11 'cd /opt/max/rdk/vision && python3 -m pytest tests/test_shadow.py tests/test_runtime.py tests/test_service_hazard.py -q'
 ```
+
 Expected: all pass.
 
 - [ ] **Step 5: Commit**
@@ -465,10 +479,12 @@ git commit -m "feat(adas): shadow logs carry their tuning, whole and fingerprint
 ### Task 5: SegmentClock, published by the recorder
 
 **Files:**
+
 - Modify: `rdk/vision/recorder/segmenter.py`, `rdk/vision/recorder/session.py`
 - Test: `rdk/vision/tests/test_segmenter.py`, `rdk/vision/tests/test_session.py` (extend)
 
 **Interfaces:**
+
 - Consumes: nothing new.
 - Produces: `SegmentClock` in `recorder/segmenter.py` — `update(segment_name: str, started_wall_ms: int) -> None`, `current() -> tuple[str, int] | None` (None before the first roll), thread-safe. `RideRecorder.__init__` gains `clocks: dict[str, SegmentClock] | None = None`; `_open_segment` calls `clocks[camera].update(<relative segment path>, int(time.time() * 1000))` after every roll. The segment name passed to the clock is the path **relative to the ride directory** of the file the writer actually creates (e.g. `front/seg-000001.mjpeg`) — exactly what `tools/clip.py` joins against `--segments`.
 
@@ -537,6 +553,7 @@ def test_recorder_publishes_each_roll_to_the_clock(tmp_path):
 scp -r rdk/vision root@10.42.0.11:/opt/max/rdk/
 ssh root@10.42.0.11 'cd /opt/max/rdk/vision && python3 -m pytest tests/test_segmenter.py tests/test_session.py -q'
 ```
+
 Expected: FAIL — `SegmentClock` does not exist.
 
 - [ ] **Step 3: Implement**
@@ -589,10 +606,12 @@ git commit -m "feat(vision): the recorder publishes real segment starts on a Seg
 ### Task 6: The runtime maps alerts through the clock
 
 **Files:**
+
 - Modify: `rdk/vision/adas/runtime.py`, `rdk/vision/ride.py`
 - Test: `rdk/vision/tests/test_runtime.py` (extend), `rdk/vision/tests/test_ride.py` (extend if it asserts config wiring)
 
 **Interfaces:**
+
 - Consumes: `SegmentClock` (Task 5), `RuntimeConfig.tuning` (Task 3).
 - Produces: `RuntimeConfig` gains `segment_clock: SegmentClock | None = None` and **loses** `segment_pattern` and `segment_seconds`. The alert block stamps `wall_ms = int(time.time() * 1000)` once and derives `segment`/`segment_offset_ms` from `config.segment_clock.current()`; `None` → `segment=""`, `segment_offset_ms=-1`, one warning line `[adas] <camera>: alert before any segment roll; segment unknown`.
 
@@ -635,6 +654,7 @@ def test_alert_before_first_roll_still_logs(tmp_path, capsys):
 scp -r rdk/vision root@10.42.0.11:/opt/max/rdk/
 ssh root@10.42.0.11 'cd /opt/max/rdk/vision && python3 -m pytest tests/test_runtime.py -q'
 ```
+
 Expected: FAIL — `RuntimeConfig` has no `segment_clock`.
 
 - [ ] **Step 3: Implement**
@@ -676,6 +696,7 @@ Expected: FAIL — `RuntimeConfig` has no `segment_clock`.
 scp -r rdk/vision root@10.42.0.11:/opt/max/rdk/
 ssh root@10.42.0.11 'cd /opt/max/rdk/vision && python3 -m pytest tests/test_runtime.py tests/test_ride.py tests/test_service_hazard.py -q'
 ```
+
 Expected: all pass.
 
 - [ ] **Step 5: Commit**
@@ -690,10 +711,12 @@ git commit -m "fix(adas): alerts cite the recorder's real segments, not parallel
 ### Task 7: Replay summaries carry the fingerprint
 
 **Files:**
+
 - Modify: `rdk/vision/tools/replay.py`
 - Test: `rdk/vision/tests/test_replay.py` (extend)
 
 **Interfaces:**
+
 - Consumes: `fingerprint` (Task 1).
 - Produces: `summary.json` gains `"tuning_fingerprint": "<12hex>"` next to the existing `tuning_status` prose.
 
@@ -718,6 +741,7 @@ def test_summary_carries_the_tuning_fingerprint(...):  # same fixture args as th
 scp -r rdk/vision root@10.42.0.11:/opt/max/rdk/
 ssh root@10.42.0.11 'cd /opt/max/rdk/vision && python3 -m pytest tests/test_replay.py -q'
 ```
+
 Expected: FAIL — `KeyError: 'tuning_fingerprint'`.
 
 - [ ] **Step 3: Implement**
@@ -742,10 +766,12 @@ git commit -m "feat(adas): replay summaries name the constants they ran under"
 ### Task 8: Rate-limited JPEG cache
 
 **Files:**
+
 - Modify: `rdk/vision/mipi_camera.py` (FrameBuffer + `MipiCamera.jpeg`), `rdk/vision/camera.py` (`_grab`, recording loop, photo), `rdk/vision/bench_server.py` (preview + `/frame`)
 - Test: `rdk/vision/tests/test_mipi_camera.py` (extend)
 
 **Interfaces:**
+
 - Consumes: `FrameBuffer`'s existing injectable `clock` (added by the reliability track).
 - Produces: `FrameBuffer.jpeg(max_age_ms: float | None = None)`; `MipiCamera.jpeg(max_age_ms: float | None = None)` passthrough; `CameraPair._grab(camera, max_age_ms: float | None = None)` passthrough. New module constant `JPEG_MAX_AGE_MS = 100.0` in `mipi_camera.py`. Callers: recording loop and bench preview/`/frame` pass `JPEG_MAX_AGE_MS`; `capture_photo` passes nothing (exact semantics).
 
@@ -808,6 +834,7 @@ def test_default_keeps_exact_frame_semantics():
 scp -r rdk/vision root@10.42.0.11:/opt/max/rdk/
 ssh root@10.42.0.11 'cd /opt/max/rdk/vision && python3 -m pytest tests/test_mipi_camera.py -q'
 ```
+
 Expected: FAIL — `jpeg()` takes no `max_age_ms`.
 
 - [ ] **Step 3: Implement in `mipi_camera.py`**
@@ -857,7 +884,7 @@ JPEG_MAX_AGE_MS = 100.0
 
 `MipiCamera.jpeg(self, max_age_ms: float | None = None)` → `return self.buffer.jpeg(max_age_ms)`.
 
-`camera.py`: `_grab(self, camera, max_age_ms: float | None = None)` passes through to `camera.jpeg(max_age_ms)`; the recording write loop's `_grab(...)` calls pass `max_age_ms=JPEG_MAX_AGE_MS` (import the constant from `mipi_camera`); `capture_photo` and `start_recording`'s probe `_grab` calls stay bare (a probe wants the truth about *now*).
+`camera.py`: `_grab(self, camera, max_age_ms: float | None = None)` passes through to `camera.jpeg(max_age_ms)`; the recording write loop's `_grab(...)` calls pass `max_age_ms=JPEG_MAX_AGE_MS` (import the constant from `mipi_camera`); `capture_photo` and `start_recording`'s probe `_grab` calls stay bare (a probe wants the truth about _now_).
 
 `bench_server.py`: the `_preview` loop's and `/frame` handler's `jpeg()`/`_grab()` calls pass `max_age_ms=JPEG_MAX_AGE_MS` (import from `mipi_camera`).
 
@@ -867,6 +894,7 @@ JPEG_MAX_AGE_MS = 100.0
 scp -r rdk/vision root@10.42.0.11:/opt/max/rdk/
 ssh root@10.42.0.11 'cd /opt/max/rdk/vision && python3 -m pytest tests/test_mipi_camera.py tests/test_camera_policy.py tests/test_preview.py tests/test_bench_frame.py -q'
 ```
+
 Expected: all pass (pre-existing cache tests keep passing — the `None` path is unchanged).
 
 - [ ] **Step 5: Commit**
@@ -881,10 +909,12 @@ git commit -m "perf(vision): share one JPEG encode across consumers within a 100
 ### Task 9: Bounded track history
 
 **Files:**
+
 - Modify: `rdk/vision/perception/tracker.py`, `rdk/vision/adas/runtime.py` (one constructor argument)
 - Test: `rdk/vision/tests/test_tracker.py`, `rdk/vision/tests/test_threat.py` (extend)
 
 **Interfaces:**
+
 - Consumes: `Tuning.track_window_ms` (Task 1), the runtime's tuning-driven `Tracker(...)` construction (Task 3).
 - Produces: `Tracker.__init__` gains `window_ms: int = 6_000`; `update()` trims every track's `samples` to `[s for s in samples if t_ms - s.t_ms <= window_ms]` after appending. Runtime passes `window_ms=config.tuning.track_window_ms`.
 
@@ -922,6 +952,7 @@ def test_tailgating_dwell_still_fires_inside_the_window():
 scp -r rdk/vision root@10.42.0.11:/opt/max/rdk/
 ssh root@10.42.0.11 'cd /opt/max/rdk/vision && python3 -m pytest tests/test_tracker.py tests/test_threat.py -q'
 ```
+
 Expected: the bound test FAILS (`Tracker` has no `window_ms`; samples grow to 200).
 
 - [ ] **Step 3: Implement**
@@ -957,6 +988,7 @@ git commit -m "perf(adas): a sliding window bounds track history and the walks o
 ### Task 10: BPU output aliasing
 
 **Files:**
+
 - Modify: `rdk/vision/perception/detector.py:114`
 - Test: existing `rdk/vision/tests/test_detector.py` + `tests/test_postprocess.py` (no new tests — the change is observationally identical)
 
@@ -974,6 +1006,7 @@ git commit -m "perf(adas): a sliding window bounds track history and the walks o
 scp -r rdk/vision root@10.42.0.11:/opt/max/rdk/
 ssh root@10.42.0.11 'cd /opt/max/rdk/vision && python3 -m pytest tests/test_detector.py tests/test_postprocess.py -q'
 ```
+
 Expected: all pass unchanged.
 
 - [ ] **Step 3: Commit**
@@ -988,10 +1021,12 @@ git commit -m "perf(vision): alias the BPU output heads instead of copying 9.4 M
 ### Task 11: Catalog alignment and the drift test
 
 **Files:**
+
 - Modify: `rdk/vision/adas/catalog.py`
 - Test: `rdk/vision/tests/test_catalog_drift.py` (create)
 
 **Interfaces:**
+
 - Consumes: nothing from earlier tasks. `shared/adas.ts` is the canonical string source (read-only — do not edit the TS file; `forward_collision` and `rear_approach` already match, only the two M2 entries drifted).
 
 - [ ] **Step 1: Write the failing test**
@@ -1049,6 +1084,7 @@ scp shared/adas.ts root@10.42.0.11:/opt/max/shared/adas.ts
 scp -r rdk/vision root@10.42.0.11:/opt/max/rdk/
 ssh root@10.42.0.11 'cd /opt/max/rdk/vision && python3 -m pytest tests/test_catalog_drift.py -q'
 ```
+
 Expected: FAIL on `pedestrian_ahead.message` (and `advice`), then `tailgating` — the drift this task closes. (Note `parents[3]` from `/opt/max/rdk/vision/tests/...` is `/opt/max`, mirroring how `test_labels.py` resolves the repo root on the dev machine; the `scp` above puts the file exactly there.)
 
 - [ ] **Step 3: Align `catalog.py`**
@@ -1094,6 +1130,7 @@ ssh root@10.42.0.11 'cd /opt/max/rdk/vision && python3 -m pytest tests/test_cata
 ssh root@10.42.0.11 'rm -rf /opt/max/shared'   # restore the board's normal shape; the test skips again
 ssh root@10.42.0.11 'cd /opt/max/rdk/vision && python3 -m pytest tests/test_catalog_drift.py -q'
 ```
+
 Expected: pass un-skipped, then `1 skipped` after cleanup.
 
 - [ ] **Step 5: Commit**
@@ -1115,6 +1152,7 @@ git commit -m "fix(adas): catalog strings conform to shared/adas.ts, with a drif
 scp -r rdk/vision root@10.42.0.11:/opt/max/rdk/
 ssh root@10.42.0.11 'cd /opt/max/rdk/vision && python3 -m pytest tests/ -q'
 ```
+
 Expected: ≥ 312 + all new tests, 0 failures (one skip: the drift test without the TS file).
 
 - [ ] **Step 2: Repo gate**
@@ -1127,6 +1165,7 @@ Expected: green (this track touches no TS behavior; prettier on the spec/plan ma
 ```bash
 git add -A && git commit -m "chore(adas): satisfy the repo gate"
 ```
+
 (Skip if clean.)
 
 ---
@@ -1143,6 +1182,7 @@ Deploy-ordering note: this track changes only vision-side code; sync `/opt/max/r
 scp -r rdk/vision root@10.42.0.11:/opt/max/rdk/
 ssh root@10.42.0.11 'grep -q "^MAX_ADAS_SHADOW=1" /etc/max/agent.env || sed -i "s/^MAX_ADAS_SHADOW=.*/MAX_ADAS_SHADOW=1/" /etc/max/agent.env; systemctl restart max-vision; sleep 10; systemctl is-active max-vision'
 ```
+
 Expected: `active`; journal shows a ride starting.
 
 - [ ] **Step 2: Produce at least one alert and verify the evidence chain**
@@ -1153,6 +1193,7 @@ Wave a hand or an object toward the camera slowly (person-class approach), or ho
 ssh root@10.42.0.11 'RIDE=$(ls -td /var/lib/max/corpus/ride-* | head -1); \
   cat "$RIDE"/shadow-front.jsonl | head -3; ls "$RIDE"/front | head -3'
 ```
+
 Expected: a header line with `"shadow_header": 1` and a fingerprint; records carrying `"tuning": "<12hex>"` and `"segment": "front/seg-....mjpeg"` matching a real file in the ride directory.
 
 - [ ] **Step 3: Extract the clip and verify it shows the triggering scene**
@@ -1162,6 +1203,7 @@ ssh root@10.42.0.11 'RIDE=$(ls -td /var/lib/max/corpus/ride-* | head -1); \
   cd /opt/max/rdk/vision && python3 tools/clip.py "$RIDE"/shadow-front.jsonl --index 0 --segments "$RIDE" --out /tmp/alert.mp4 && ls -la /tmp/alert.mp4'
 scp root@10.42.0.11:/tmp/alert.mp4 /tmp/alert.mp4
 ```
+
 Open `/tmp/alert.mp4` and confirm the approach that triggered the alert is visible in the clip window. This is the acceptance test the whole mapping change exists for.
 
 - [ ] **Step 4: Thermal/encode measurement**
@@ -1171,6 +1213,7 @@ With the ride still running and ONE preview client open (`curl -s -m 60 http://1
 ```bash
 ssh root@10.42.0.11 'for i in $(seq 1 20); do cat /sys/class/thermal/thermal_zone*/temp | tr "\n" " "; date "+%H:%M:%S"; sleep 30; done'
 ```
+
 Record the plateau. Baseline from `rdk/README.md`: ~94 °C single-camera shadow ride at bench ambient. Add a row to the README findings table with the measured value and date, whatever it is (target ≥5 °C drop; the number is the deliverable). Stop the ride afterwards if the user's bench setup expects shadow off: restore `MAX_ADAS_SHADOW=0` and restart, reporting what was left running.
 
 - [ ] **Step 5: Commit the README row**

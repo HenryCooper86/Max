@@ -212,13 +212,13 @@ The board's pre-rendered WAVs are stale after this; see Non-goals.
 
 ## Error handling
 
-| Condition | Behaviour |
-| --- | --- |
-| Alert before the first segment roll | Record written with `segment=""`, `offset=-1`, one warning line |
-| Old headerless shadow log read | `read_shadow` returns records as today; `read_tuning` returns `[]` |
-| Restart mid-ride | Second header line appended; records after it carry the (possibly new) fingerprint |
-| `track_window_ms <= tailgate_dwell_s * 1000` | `Tuning.__post_init__` raises `ValueError` at construction |
-| Encoder fails under `max_age_ms` | Same as today: `jpeg()` returns None, no stale value served past its window |
+| Condition                                    | Behaviour                                                                          |
+| -------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Alert before the first segment roll          | Record written with `segment=""`, `offset=-1`, one warning line                    |
+| Old headerless shadow log read               | `read_shadow` returns records as today; `read_tuning` returns `[]`                 |
+| Restart mid-ride                             | Second header line appended; records after it carry the (possibly new) fingerprint |
+| `track_window_ms <= tailgate_dwell_s * 1000` | `Tuning.__post_init__` raises `ValueError` at construction                         |
+| Encoder fails under `max_age_ms`             | Same as today: `jpeg()` returns None, no stale value served past its window        |
 
 ## Verification
 

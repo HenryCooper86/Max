@@ -4,6 +4,13 @@ reconstruction. Numbers are only ever computed from inputs that exist.
 
     python3 -m tools.evaluate ./corpus/ride-20260725-141900
     python3 -m tools.evaluate ./corpus/ride-20260725-141900 --tolerance-ms 1500 --json score.json
+
+A ride restarted mid-recording writes a second tuning header into its shadow
+log, and the two halves are governed by different constants — blending their
+false-alert counts into one score would average away exactly the change that
+matters. When a ride carries more than one tuning fingerprint, this tool
+scores each fingerprint separately (same windows and ride duration, disjoint
+records) and says so loudly. See main()'s docstring for the --json shape.
 """
 
 from __future__ import annotations
@@ -55,6 +62,8 @@ def score_ride(
     for rec in records:
         rel = rec.wall_ms - ride_start_wall_ms
         matched = False
+        # windows are disjoint per key beyond tolerance (merge_windows' contract);
+        # adjacent windows inside the tolerance pad resolve first-in-list.
         for i, w in enumerate(windows):
             if (
                 rec.threat_id == w.threat
@@ -161,7 +170,35 @@ def _print_report(score: RideScore) -> None:
     )
 
 
+def _group_by_fingerprint(
+    records: list[ShadowRecord], fingerprints: list[str]
+) -> dict[str, list[ShadowRecord]]:
+    """Bucket records by the tuning fingerprint that produced them.
+
+    Records written before fingerprints existed carry `tuning == ""`; they are
+    attributed to the ride's first known header (if any), the closest
+    provenance a legacy record can be given without inventing one.
+    """
+    fallback = fingerprints[0] if fingerprints else ""
+    groups: dict[str, list[ShadowRecord]] = {fp: [] for fp in fingerprints}
+    for rec in records:
+        key = rec.tuning if rec.tuning else fallback
+        groups.setdefault(key, []).append(rec)
+    return groups
+
+
 def main(argv: list[str] | None = None) -> None:
+    """Score a ride, printing a report and optionally writing JSON.
+
+    A ride with a single tuning fingerprint (the common case) prints one
+    report and, with `--json`, writes the plain `RideScore` dict — unchanged
+    from before per-fingerprint scoring existed.
+
+    A ride carrying more than one tuning fingerprint (a mid-ride restart)
+    instead prints one report per fingerprint, each scored against the same
+    hazard windows and the ride's full duration but only its own records, and
+    `--json` writes a dict keyed by fingerprint, one `RideScore` dict per key.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("ride", help="ride directory to score")
     parser.add_argument("--tolerance-ms", type=int, default=1000, help="match window slack in milliseconds")
@@ -172,12 +209,30 @@ def main(argv: list[str] | None = None) -> None:
     records, fingerprints, start, duration_h = load_ride(ride)
     windows = read_labels(ride)
 
-    score = score_ride(records, windows, start, duration_h, fingerprints, tolerance_ms=args.tolerance_ms)
+    if len(fingerprints) <= 1:
+        score = score_ride(records, windows, start, duration_h, fingerprints, tolerance_ms=args.tolerance_ms)
+        _print_report(score)
+        if args.json_path:
+            Path(args.json_path).write_text(json.dumps(asdict(score), indent=2), encoding="utf-8")
+        return
 
-    _print_report(score)
+    print(
+        f"WARNING: {len(fingerprints)} tuning fingerprints in this ride — "
+        "scoring each separately; cross-tuning totals would mislead"
+    )
+    groups = _group_by_fingerprint(records, fingerprints)
+    scores: dict[str, RideScore] = {}
+    for fp in fingerprints:
+        score = score_ride(groups[fp], windows, start, duration_h, [fp], tolerance_ms=args.tolerance_ms)
+        print()
+        print(f"=== fingerprint {fp} ===")
+        _print_report(score)
+        scores[fp] = score
 
     if args.json_path:
-        Path(args.json_path).write_text(json.dumps(asdict(score), indent=2), encoding="utf-8")
+        Path(args.json_path).write_text(
+            json.dumps({fp: asdict(s) for fp, s in scores.items()}, indent=2), encoding="utf-8"
+        )
 
 
 if __name__ == "__main__":

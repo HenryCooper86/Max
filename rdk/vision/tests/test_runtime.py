@@ -218,6 +218,42 @@ def test_runtime_builds_suppressor_from_tuning(tmp_path):
     assert fired_default == 1
 
 
+def test_run_grace_frames_flows_from_tuning(tmp_path):
+    # present, present, absent, present, present: the detector drops the
+    # third ADAS frame (index 2). Under DEFAULT (grace=1) the flicker keeps
+    # the run's credit and the alert still fires; with the grace disabled
+    # the flicker resets the run, and five frames is not enough to rebuild it
+    # to min_ttc_frames -- unless the config actually reaches the Suppressor.
+    def flickering(frame, i):
+        if i == 2:
+            return []
+        h = 0.10 + 0.03 * i
+        return [Detection(cls="car", score=0.9, x1=0.4, y1=0.5 - h / 2, x2=0.6, y2=0.5 + h / 2)]
+
+    path = tmp_path / "shadow.jsonl"
+    emitted = []
+    with ShadowLog(path) as log:
+        fired = run_camera(
+            FakeSource(5),
+            RuntimeConfig(ride_id="r1", camera="front", detect=flickering),
+            log,
+            emitted.append,
+        )
+    assert fired == 1
+
+    no_grace = replace(DEFAULT, run_grace_frames=0)
+    path_strict = tmp_path / "shadow_strict.jsonl"
+    emitted_strict = []
+    with ShadowLog(path_strict) as log:
+        fired_strict = run_camera(
+            FakeSource(5),
+            RuntimeConfig(ride_id="r1", camera="front", detect=flickering, tuning=no_grace),
+            log,
+            emitted_strict.append,
+        )
+    assert fired_strict == 0
+
+
 def test_closing_rate_uses_the_injected_tuning(tmp_path):
     # closing_rate is computed from the same track each time, so if it were
     # computed under the module DEFAULT instead of config.tuning, this would

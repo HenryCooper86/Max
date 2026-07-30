@@ -83,6 +83,7 @@ def run_camera(
         min_ttc_frames=config.tuning.min_ttc_frames,
         threat_cooldown_s=config.tuning.threat_cooldown_s,
         global_gap_s=config.tuning.global_gap_s,
+        run_grace_frames=config.tuning.run_grace_frames,
     )
     previous_nv12: bytes | None = None
     previous_t_ms: int | None = None

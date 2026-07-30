@@ -66,6 +66,7 @@ def test_tracker_and_suppressor_defaults_are_structurally_tied_to_default():
     assert suppressor.min_ttc_frames == DEFAULT.min_ttc_frames
     assert suppressor.threat_cooldown_s == DEFAULT.threat_cooldown_s
     assert suppressor.global_gap_s == DEFAULT.global_gap_s
+    assert Suppressor().run_grace_frames == DEFAULT.run_grace_frames
 
 
 def test_new_fields_freeze_their_defaults():

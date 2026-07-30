@@ -86,7 +86,7 @@ def height_rate(
 def time_to_contact(
     track: Track, window_ms: int = DEFAULT.ttc_window_ms, tau_ms: float = DEFAULT.smoothing_tau_ms
 ) -> float | None:
-    """Seconds until the box fills the frame, or None when not closing.
+    """Seconds until the object reaches the camera plane (tau = Z/v), or None when not closing.
 
     None rather than a large number: a receding or steady vehicle is a
     different category from a distant approaching one, and collapsing the two

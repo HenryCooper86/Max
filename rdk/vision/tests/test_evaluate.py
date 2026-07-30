@@ -1,5 +1,6 @@
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -136,3 +137,58 @@ def test_cli_scores_and_writes_json(tmp_path, capsys):
     payload = json.loads(out.read_text())
     assert payload["false_alerts_total"] == 0
     assert payload["gate_false_rate_ok"] is True
+
+
+def test_a_mid_ride_restart_scores_each_fingerprint_separately(tmp_path, capsys):
+    # Two tuning headers in one shadow log — a restart mid-ride. The spec's
+    # error table calls for records grouped by the header preceding them and
+    # scored per fingerprint, never blended into one misleading total.
+    ride = tmp_path / "ride-restart"
+    (ride / "front").mkdir(parents=True)
+    with MetadataWriter(ride / "front" / "seg-000000.jsonl") as w:
+        w.append(FrameMeta(frame_index=0, mono_ns=0, wall_ms=1_000_000, camera="front"))
+        w.append(FrameMeta(frame_index=1, mono_ns=10**9, wall_ms=1_360_000, camera="front"))
+    write_labels(
+        ride,
+        [HazardWindow(threat="pedestrian_ahead", camera="front", start_ms=10_000, end_ms=14_000)],
+    )
+
+    alt_tuning = replace(DEFAULT, ttc_forward_collision_s=2.1)
+    fp_default = fingerprint(DEFAULT)
+    fp_alt = fingerprint(alt_tuning)
+
+    shadow_path = ride / "shadow-front.jsonl"
+    with ShadowLog(shadow_path, tuning=DEFAULT) as log:
+        log.append(
+            record(
+                threat_id="pedestrian_ahead",
+                camera="front",
+                severity="critical",
+                wall_ms=1_012_000,
+                tuning=fp_default,
+            )
+        )
+    with ShadowLog(shadow_path, tuning=alt_tuning) as log:
+        log.append(
+            record(
+                threat_id="forward_collision",
+                camera="front",
+                severity="critical",
+                wall_ms=1_050_000,
+                tuning=fp_alt,
+            )
+        )
+
+    out = tmp_path / "score.json"
+    main([str(ride), "--json", str(out)])
+    printed = capsys.readouterr().out
+    assert "WARNING" in printed and "2 tuning fingerprints" in printed
+    assert fp_default in printed
+    assert fp_alt in printed
+
+    payload = json.loads(out.read_text())
+    assert set(payload.keys()) == {fp_default, fp_alt}
+    # The pedestrian record falls inside its own header's labelled window.
+    assert payload[fp_default]["false_alerts_total"] == 0
+    # The forward_collision record under the second header matches no window.
+    assert payload[fp_alt]["false_alerts_total"] == 1

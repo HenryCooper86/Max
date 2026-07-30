@@ -100,6 +100,7 @@ Verified over SSH against the real board on 2026-07-25.
 | Thermal under ADAS load           | 78.6 °C → **plateau ~90 °C** over 10 min; bench ambient only                                                                                                                                                          | 2026-07-26 |
 | Vision consent gate + frame route | **works** — `MAX_VISION_SHARE=0` refuses `/frame/front` with 403; set to `1` it returns 200, a real 640×360 JPEG (26–27 KB, confirmed live over two fetches), gate re-confirmed refusing after restore                | 2026-07-28 |
 | Vision describe (live)            | **NOT verified** — relay's `ARK_API_KEY` is invalid (401 "The API key doesn't exist" in two regions, two auth header styles); no working credential exists, so the round trip to the vision model was never attempted | 2026-07-28 |
+| Thermal after encode-sharing fix  | **~87.6 °C plateau** (87.5–87.8), one camera, bench ambient — down ~6.4 °C from the 2026-07-27 ~94 °C baseline                                                                                                        | 2026-07-30 |
 
 ### AEC — the sweep said "gate passed". A live conversation said otherwise.
 
@@ -1019,7 +1020,11 @@ over a minute, dropping to 87.7 °C within 20 s of the ride stopping. M1's
 two-camera ADAS figure was ~90 °C _without_ a concurrent segment stream, so
 recording is what costs the extra headroom. Nobody has measured this in a
 fairing, in sun, on a moving bike; the remaining margin to throttling is thin
-enough that a second camera or a warm day should be measured, not assumed.
+enough that a second camera or a warm day should be measured, not assumed. The
+encode-sharing fix measured this same single-camera shadow-ride plateau at
+~87.6 °C on 2026-07-30 (see the findings table); the pre-fix ~94 °C figure
+above still stands as the conservative planning number until it too is
+re-measured with two cameras.
 
 ### The board dies hard, and it is not the software
 

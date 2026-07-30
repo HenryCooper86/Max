@@ -1,10 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  createRelayClient,
-  defaultSocketOptions,
-  HANDSHAKE_TIMEOUT_MS,
-  type SocketLike
-} from "../rdk/agent/src/relay";
+import { createRelayClient, defaultSocketOptions, HANDSHAKE_TIMEOUT_MS, type SocketLike } from "../rdk/agent/src/relay";
 import type { RdkConfig } from "../rdk/agent/src/config";
 
 const CONFIG = {

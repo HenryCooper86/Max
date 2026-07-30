@@ -15,6 +15,7 @@ from typing import Callable
 
 from perception.tracker import Tracker
 from perception.types import Detection, EgoState
+from recorder.segmenter import SegmentClock
 
 from .catalog import CATALOG
 from .ego_motion import estimate
@@ -22,6 +23,7 @@ from .shadow import ShadowLog, ShadowRecord
 from .suppress import Suppressor
 from .threat import evaluate
 from .ttc import height_rate
+from .tuning import DEFAULT, Tuning, fingerprint
 
 
 class RecordingRequired(RuntimeError):
@@ -36,8 +38,11 @@ class RuntimeConfig:
     recording: bool = True
     #: Injected in tests; None means use the detector passed to run_camera.
     detect: Callable[[object, int], list[Detection]] | None = None
-    segment_pattern: str = "{camera}_{index:06d}.h264"
-    segment_seconds: float = 60.0
+    #: The recorder's live view of which segment is being written and when it
+    #: started. None (e.g. before the first roll) is a real, expected state —
+    #: not a wiring error — so callers are not forced to supply one.
+    segment_clock: SegmentClock | None = None
+    tuning: Tuning = DEFAULT
 
 
 def run_camera(
@@ -54,6 +59,10 @@ def run_camera(
             "false-alarm rate is worse than none"
         )
 
+    # Computed once per run rather than per record: the constants cannot
+    # change mid-run, and re-hashing per alert would be wasted work.
+    record_fingerprint = fingerprint(config.tuning)
+
     detect = config.detect
     if detect is None:
         if detector is None:
@@ -63,8 +72,18 @@ def run_camera(
         def detect(frame, _index):
             return captured.infer(frame.nv12, frame.width, frame.height)
 
-    tracker = Tracker()
-    suppressor = Suppressor()
+    tracker = Tracker(
+        iou_threshold=config.tuning.iou_threshold,
+        max_misses=config.tuning.max_misses,
+        max_gap_ms=config.tuning.max_gap_ms,
+        window_ms=config.tuning.track_window_ms,
+    )
+    suppressor = Suppressor(
+        min_track_frames=config.tuning.min_track_frames,
+        min_ttc_frames=config.tuning.min_ttc_frames,
+        threat_cooldown_s=config.tuning.threat_cooldown_s,
+        global_gap_s=config.tuning.global_gap_s,
+    )
     previous_nv12: bytes | None = None
     fired = 0
 
@@ -79,34 +98,49 @@ def run_camera(
 
         tracks = tracker.update(dets, frame.t_ms)
         by_id = {t.track_id: t for t in tracks}
-        candidates = evaluate(tracks, ego, frame.t_ms, config.camera)
+        candidates = evaluate(tracks, ego, frame.t_ms, config.camera, tuning=config.tuning)
         admitted = suppressor.admit(
             candidates, {t.track_id: t.frames for t in tracks}, frame.t_ms
         )
 
         for alert in admitted:
             track = by_id.get(alert.track_id)
-            segment_index = int(frame.t_ms / 1000.0 / config.segment_seconds)
+            wall_ms = int(time.time() * 1000)
+            current = config.segment_clock.current() if config.segment_clock else None
+            if current is None:
+                print(
+                    f"[adas] {config.camera}: alert before any segment roll; segment unknown",
+                    flush=True,
+                )
+                segment, segment_offset_ms = "", -1
+            else:
+                segment, started_wall_ms = current
+                segment_offset_ms = wall_ms - started_wall_ms
             shadow.append(
                 ShadowRecord(
                     threat_id=alert.threat_id,
                     severity=alert.severity,
                     camera=alert.camera,
                     t_ms=alert.t_ms,
-                    wall_ms=int(time.time() * 1000),
+                    wall_ms=wall_ms,
                     ttc_s=alert.ttc_s,
                     ride_id=config.ride_id,
-                    segment=config.segment_pattern.format(
-                        camera=config.camera, index=segment_index
-                    ),
-                    segment_offset_ms=int(
-                        frame.t_ms - segment_index * config.segment_seconds * 1000
-                    ),
+                    segment=segment,
+                    segment_offset_ms=segment_offset_ms,
                     track_id=alert.track_id,
                     box_height=track.last.height if track else 0.0,
-                    closing_rate=height_rate(track) if track else None,
+                    closing_rate=(
+                        height_rate(
+                            track,
+                            window_ms=config.tuning.ttc_window_ms,
+                            tau_ms=config.tuning.smoothing_tau_ms,
+                        )
+                        if track
+                        else None
+                    ),
                     track_frames=track.frames if track else 0,
                     ego_moving=ego.moving,
+                    tuning=record_fingerprint,
                 )
             )
             entry = CATALOG.get(alert.threat_id, {})

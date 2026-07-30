@@ -6,6 +6,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from adas.ttc import height_rate, smoothed_heights, time_to_contact
+from adas.tuning import DEFAULT
 from perception.types import BoxSample, Track
 
 
@@ -84,3 +85,11 @@ def test_smoothing_damps_a_single_jittery_frame():
     noisy = track_with([0.20, 0.20, 0.35, 0.20, 0.20])
     values = [h for _, h in smoothed_heights(noisy)]
     assert max(values) < 0.30
+
+
+def test_defaults_come_from_tuning():
+    import inspect
+
+    assert inspect.signature(smoothed_heights).parameters["tau_ms"].default == DEFAULT.smoothing_tau_ms
+    assert inspect.signature(height_rate).parameters["window_ms"].default == DEFAULT.ttc_window_ms
+    assert inspect.signature(time_to_contact).parameters["window_ms"].default == DEFAULT.ttc_window_ms

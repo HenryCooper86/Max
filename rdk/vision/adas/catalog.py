@@ -1,13 +1,10 @@
 """Spoken strings for the four v1 threats.
 
-Mirrors the matching entries in shared/adas.ts. Duplicated rather than imported
-because the sidecar is Python and the catalog is TypeScript, so no test can
-catch drift from either side — keep the two in step by hand when either
-changes.
-
-Two of these are not in shared/adas.ts yet: `pedestrian_ahead` and `tailgating`
-are M2 additions, and their strings should be added there when that catalog
-next changes. The WAV filenames key off these ids.
+Mirrors — exactly — the matching entries in shared/adas.ts, which is the
+canonical catalog (it is what clients display and the relay validates).
+tests/test_catalog_drift.py enforces the match wherever the full checkout is
+present. The WAV filenames key off these ids; changing a string here means
+re-rendering the board's alert clips with tools/render_alerts.py.
 """
 
 from __future__ import annotations
@@ -22,8 +19,8 @@ CATALOG: dict[str, dict[str, str]] = {
     "pedestrian_ahead": {
         "direction": "front",
         "label": "前方行人",
-        "message": "前方有行人，请减速。",
-        "advice": "缓慢通过，注意避让。",
+        "message": "前方有行人横穿，立即减速！",
+        "advice": "收油轻刹，准备停车。",
     },
     "rear_approach": {
         "direction": "rear",
@@ -34,7 +31,7 @@ CATALOG: dict[str, dict[str, str]] = {
     "tailgating": {
         "direction": "rear",
         "label": "后车跟车过近",
-        "message": "后车跟车过近，注意保持车距。",
-        "advice": "保持匀速，不要急刹。",
+        "message": "后车跟车过近，注意不要急刹。",
+        "advice": "平稳行驶，适当让出车距。",
     },
 }

@@ -20,6 +20,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+from mipi_camera import JPEG_MAX_AGE_MS
+
 #: JPEG start-of-image. A .mjpeg segment is these, concatenated.
 SOI = b"\xff\xd8\xff"
 
@@ -231,7 +233,7 @@ def serve(pair, gallery, port: int, share_frames: bool = False) -> None:
             self.end_headers()
             try:
                 while True:
-                    data = pair._grab(camera)
+                    data = pair._grab(camera, max_age_ms=JPEG_MAX_AGE_MS)
                     if data is None:
                         time.sleep(0.5)
                         continue
@@ -263,7 +265,7 @@ def serve(pair, gallery, port: int, share_frames: bool = False) -> None:
                 return
 
             camera = pair.front if parsed.path.endswith("front") else pair.rear
-            data = pair._grab(camera)
+            data = pair._grab(camera, max_age_ms=JPEG_MAX_AGE_MS)
             if data is None:
                 self.send_error(503, "camera not available")
                 return

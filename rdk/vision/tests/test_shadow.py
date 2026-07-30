@@ -4,7 +4,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from adas.shadow import ShadowLog, ShadowRecord, read_shadow
+from adas.shadow import ShadowLog, ShadowRecord, read_shadow, read_tuning
+from adas.tuning import DEFAULT, fingerprint
 
 
 def record(**overrides):
@@ -100,3 +101,48 @@ def test_keeps_chinese_labels_readable_rather_than_escaped(tmp_path):
     with ShadowLog(path) as log:
         log.append(record(threat_id="前车急刹"))
     assert "前车急刹" in path.read_text(encoding="utf-8")
+
+
+def test_header_written_once_per_open_and_skipped_by_read(tmp_path):
+    path = tmp_path / "shadow.jsonl"
+    with ShadowLog(path, tuning=DEFAULT) as log:
+        log.append(record())  # the file's existing record helper
+    lines = path.read_text(encoding="utf-8").strip().split("\n")
+    assert len(lines) == 2
+    assert '"shadow_header"' in lines[0]
+    assert read_shadow(path)[0].threat_id == record().threat_id
+    headers = read_tuning(path)
+    assert headers[0]["fingerprint"] == fingerprint(DEFAULT)
+    assert headers[0]["tuning"]["ttc_forward_collision_s"] == 2.0
+
+
+def test_restart_appends_a_second_header(tmp_path):
+    path = tmp_path / "shadow.jsonl"
+    with ShadowLog(path, tuning=DEFAULT):
+        pass
+    with ShadowLog(path, tuning=DEFAULT):
+        pass
+    assert len(read_tuning(path)) == 2
+
+
+def test_old_headerless_logs_still_read(tmp_path):
+    path = tmp_path / "old.jsonl"
+    with ShadowLog(path) as log:  # no tuning → no header, like every old log
+        log.append(record())
+    assert len(read_shadow(path)) == 1
+    assert read_tuning(path) == []
+    assert read_shadow(path)[0].tuning == ""  # default for the new field
+
+
+def test_read_tuning_and_read_shadow_classify_lines_the_same_way(tmp_path):
+    # Both functions parse one format. A record whose free-text field happens
+    # to contain the literal string "shadow_header" must not be misclassified
+    # by one function and not the other — a substring check on raw text and a
+    # key check on the parsed dict are not guaranteed to agree.
+    path = tmp_path / "shadow.jsonl"
+    with ShadowLog(path, tuning=DEFAULT) as log:
+        log.append(record(ride_id="shadow_header"))
+    records = read_shadow(path)
+    assert len(records) == 1
+    assert records[0].ride_id == "shadow_header"
+    assert len(read_tuning(path)) == 1

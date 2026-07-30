@@ -1,4 +1,6 @@
 import sys
+import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -8,8 +10,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from adas.catalog import CATALOG
 from adas.runtime import RecordingRequired, RuntimeConfig, run_camera
 from adas.shadow import ShadowLog, read_shadow
+from adas.tuning import DEFAULT
 from perception.frame_source import Frame
 from perception.types import Detection
+from recorder.segmenter import SegmentClock
 
 
 class FakeSource:
@@ -132,14 +136,114 @@ def test_the_rear_camera_produces_rear_threats(tmp_path):
 
 
 def test_provenance_points_at_a_segment_that_could_be_clipped(tmp_path):
+    # Task 6: the runtime no longer builds this path itself — it cites
+    # whatever the recorder's clock says is live, so the fixture publishes it.
+    path = tmp_path / "shadow.jsonl"
+    clock = SegmentClock()
+    clock.update("front/seg-000000.mjpeg", int(time.time() * 1000))
+    with ShadowLog(path) as log:
+        run_camera(
+            FakeSource(12),
+            RuntimeConfig(ride_id="r1", camera="front", detect=approaching, segment_clock=clock),
+            log,
+            lambda _: None,
+        )
+    r = read_shadow(path)[0]
+    assert r.segment == "front/seg-000000.mjpeg"
+    assert 0 <= r.segment_offset_ms < 60_000
+
+
+def test_alert_cites_the_recorders_segment_not_arithmetic(tmp_path):
+    clock = SegmentClock()
+    # Simulate a LATE second roll: ideal boundary at 60s, real roll at 61.5s.
+    # An alert at wall-time "62s" must land in segment 1 at ~500ms offset —
+    # the old frame-time arithmetic would have said offset 2000ms. The runtime
+    # stamps real wall time, so the fixture updates the clock relative to now
+    # rather than the literal 61_500 the scenario describes.
+    clock.update("front/seg-000001.mjpeg", int(time.time() * 1000) - 500)
     path = tmp_path / "shadow.jsonl"
     with ShadowLog(path) as log:
+        run_camera(
+            FakeSource(12),
+            RuntimeConfig(ride_id="r1", camera="front", detect=approaching, segment_clock=clock),
+            log,
+            lambda _: None,
+        )
+    record = read_shadow(path)[0]
+    assert record.segment == "front/seg-000001.mjpeg"
+    assert 0 <= record.segment_offset_ms < 5_000
+
+
+def test_alert_before_first_roll_still_logs(tmp_path, capsys):
+    path = tmp_path / "shadow.jsonl"
+    with ShadowLog(path) as log:
+        run_camera(
+            FakeSource(12),
+            RuntimeConfig(
+                ride_id="r1", camera="front", detect=approaching, segment_clock=SegmentClock()
+            ),
+            log,
+            lambda _: None,
+        )
+    record = read_shadow(path)[0]
+    assert record.segment == ""
+    assert record.segment_offset_ms == -1
+    assert "segment unknown" in capsys.readouterr().out
+
+
+def test_runtime_builds_suppressor_from_tuning(tmp_path):
+    # min_ttc_frames raised to an unreachable 99: the same scene that fires
+    # an alert under DEFAULT must fire none.
+    strict = replace(DEFAULT, min_ttc_frames=99)
+    path = tmp_path / "shadow.jsonl"
+    emitted = []
+    with ShadowLog(path) as log:
+        fired = run_camera(
+            FakeSource(12),
+            RuntimeConfig(ride_id="r1", camera="front", detect=approaching, tuning=strict),
+            log,
+            emitted.append,
+        )
+    assert fired == 0
+
+    path_default = tmp_path / "shadow_default.jsonl"
+    emitted_default = []
+    with ShadowLog(path_default) as log:
+        fired_default = run_camera(
+            FakeSource(12),
+            RuntimeConfig(ride_id="r1", camera="front", detect=approaching),
+            log,
+            emitted_default.append,
+        )
+    assert fired_default == 1
+
+
+def test_closing_rate_uses_the_injected_tuning(tmp_path):
+    # closing_rate is computed from the same track each time, so if it were
+    # computed under the module DEFAULT instead of config.tuning, this would
+    # not catch it -- unless the tuning actually changes the number. A tau
+    # small enough to make smoothing nearly track raw height moves the slope
+    # measurably away from DEFAULT's 200 ms smoothing on the identical scene.
+    path_default = tmp_path / "shadow_default.jsonl"
+    with ShadowLog(path_default) as log:
         run_camera(
             FakeSource(12),
             RuntimeConfig(ride_id="r1", camera="front", detect=approaching),
             log,
             lambda _: None,
         )
-    r = read_shadow(path)[0]
-    assert r.segment.startswith("front_")
-    assert 0 <= r.segment_offset_ms < 60_000
+    default_rate = read_shadow(path_default)[0].closing_rate
+
+    tight_tau = replace(DEFAULT, smoothing_tau_ms=5.0)
+    path_tight = tmp_path / "shadow_tight.jsonl"
+    with ShadowLog(path_tight) as log:
+        run_camera(
+            FakeSource(12),
+            RuntimeConfig(ride_id="r1", camera="front", detect=approaching, tuning=tight_tau),
+            log,
+            lambda _: None,
+        )
+    tight_rate = read_shadow(path_tight)[0].closing_rate
+
+    assert default_rate is not None and tight_rate is not None
+    assert default_rate != tight_rate

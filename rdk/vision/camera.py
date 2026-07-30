@@ -22,6 +22,7 @@ from datetime import datetime
 from pathlib import Path
 
 from gallery import MAX_RECORDING_SECONDS, Gallery
+from mipi_camera import JPEG_MAX_AGE_MS
 
 WIDTH = 1920
 HEIGHT = 1080
@@ -81,12 +82,17 @@ class CameraPair:
                 )
         self.opened = self.front is not None or self.rear is not None
 
-    def _grab(self, camera) -> bytes | None:
-        """Latest frame as JPEG, or None if this camera is absent or has no frame."""
+    def _grab(self, camera, max_age_ms: float | None = None) -> bytes | None:
+        """Latest frame as JPEG, or None if this camera is absent or has no frame.
+
+        ``max_age_ms`` is a pass-through to the camera's own staleness budget
+        (see ``FrameBuffer.jpeg``); bare calls (photo, the recording probe)
+        keep the exact-frame semantics unchanged.
+        """
         if camera is None:
             return None
         try:
-            return camera.jpeg()
+            return camera.jpeg(max_age_ms)
         except Exception:  # noqa: BLE001 - one dead camera must not fail the pair
             return None
 
@@ -206,7 +212,9 @@ class CameraPair:
         for side, filename in sides.items():
             if filename is None:
                 continue
-            data = self._grab(self.front if side == "front" else self.rear)
+            data = self._grab(
+                self.front if side == "front" else self.rear, max_age_ms=JPEG_MAX_AGE_MS
+            )
             if data is None:
                 continue
             directory.mkdir(parents=True, exist_ok=True)

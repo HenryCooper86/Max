@@ -1,10 +1,11 @@
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from recorder.segmenter import SEGMENT_SECONDS, Segmenter, ride_id, segment_name
+from recorder.segmenter import SEGMENT_SECONDS, Segmenter, SegmentClock, ride_id, segment_name
 
 
 def test_segment_length_bounds_power_loss_damage():
@@ -52,3 +53,33 @@ def test_roll_rebases_the_clock_so_segments_are_evenly_spaced():
 
 def test_should_roll_is_false_before_the_first_roll():
     assert Segmenter().should_roll(now_s=99999.0) is False
+
+
+def test_clock_is_none_before_any_roll():
+    assert SegmentClock().current() is None
+
+
+def test_clock_returns_the_latest_update():
+    clock = SegmentClock()
+    clock.update("front/seg-000000.mjpeg", 1_000)
+    clock.update("front/seg-000001.mjpeg", 61_500)
+    assert clock.current() == ("front/seg-000001.mjpeg", 61_500)
+
+
+def test_clock_survives_concurrent_readers():
+    clock = SegmentClock()
+    stop = threading.Event()
+
+    def hammer():
+        i = 0
+        while not stop.is_set():
+            clock.update(f"front/seg-{i:06d}.mjpeg", i)
+            i += 1
+
+    writer = threading.Thread(target=hammer, daemon=True)
+    writer.start()
+    for _ in range(10_000):
+        current = clock.current()
+        assert current is None or current[0].endswith(".mjpeg")
+    stop.set()
+    writer.join(timeout=2.0)

@@ -34,7 +34,7 @@ def dims(jpeg: bytes) -> tuple[int, int]:
 
 
 class FakeCamera:
-    def jpeg(self):
+    def jpeg(self, max_age_ms=None):
         return jpeg_of(1920, 1080)
 
     def stop(self):

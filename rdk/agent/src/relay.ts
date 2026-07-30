@@ -86,10 +86,7 @@ export type SocketLike = {
 };
 
 export type RelayClientOptions = {
-  wsFactory?: (
-    url: string,
-    options: { rejectUnauthorized: boolean; handshakeTimeout?: number }
-  ) => SocketLike;
+  wsFactory?: (url: string, options: { rejectUnauthorized: boolean; handshakeTimeout?: number }) => SocketLike;
   pingIntervalMs?: number;
   setInterval?: typeof globalThis.setInterval;
   clearInterval?: typeof globalThis.clearInterval;
@@ -102,9 +99,7 @@ const SOCKET_OPEN = 1;
 /** Options the default (non-injected) `wsFactory` gives the real `ws`
  *  constructor. Exported so a unit test can pin the handshake timeout without
  *  standing up a live socket. */
-export function defaultSocketOptions(
-  config: RdkConfig
-): { rejectUnauthorized: boolean; handshakeTimeout: number } {
+export function defaultSocketOptions(config: RdkConfig): { rejectUnauthorized: boolean; handshakeTimeout: number } {
   return {
     rejectUnauthorized: !config.insecureTls,
     handshakeTimeout: HANDSHAKE_TIMEOUT_MS

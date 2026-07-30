@@ -76,6 +76,15 @@ def test_classes_do_not_swap_identity():
     assert tracks[0].frames == 1  # fresh history, not the car's
 
 
+def test_samples_are_bounded_by_the_window():
+    tracker = Tracker(window_ms=6_000)
+    for i in range(200):  # 20 s of frames at 10 fps
+        tracker.update([box(0.4, 0.4, 0.6, 0.6)], t_ms=i * 100)
+    (track,) = tracker.update([box(0.4, 0.4, 0.6, 0.6)], t_ms=20_000)
+    assert all(20_000 - s.t_ms <= 6_000 for s in track.samples)
+    assert len(track.samples) <= 62  # 6 s at 10 fps, plus the two boundary frames
+
+
 def test_only_currently_visible_tracks_are_returned():
     """A track that missed this frame stays alive but is not handed downstream.
 

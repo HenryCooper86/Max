@@ -160,3 +160,49 @@ def test_age_measures_from_the_last_put():
     buffer = FrameBuffer("front", 4, 4, encode=lambda n, w, h: b"jpeg", clock=clock)
     buffer.put(b"\x00" * 24, t_ms=0)
     assert buffer.age_seconds() == 3.5
+
+
+def test_stale_jpeg_served_within_max_age():
+    encodes = []
+    times = iter([0.0, 0.0, 0.05, 0.05])  # put, encode-stamp, put, read
+    buffer = FrameBuffer(
+        "front", 4, 4,
+        encode=lambda n, w, h: encodes.append(1) or b"jpeg",
+        clock=lambda: next(times),
+    )
+    buffer.put(b"\x00" * 24, t_ms=0)
+    assert buffer.jpeg(max_age_ms=100) == b"jpeg"
+    buffer.put(b"\x01" * 24, t_ms=42)  # invalidates the exact cache
+    # 50 ms later, still inside the window: the stale encode is served.
+    assert buffer.jpeg(max_age_ms=100) == b"jpeg"
+    assert len(encodes) == 1
+
+
+def test_stale_jpeg_expires_past_max_age():
+    encodes = []
+    times = iter([0.0, 0.0, 0.5, 0.5, 0.5])
+    buffer = FrameBuffer(
+        "front", 4, 4,
+        encode=lambda n, w, h: encodes.append(1) or b"jpeg",
+        clock=lambda: next(times),
+    )
+    buffer.put(b"\x00" * 24, t_ms=0)
+    assert buffer.jpeg(max_age_ms=100) == b"jpeg"
+    buffer.put(b"\x01" * 24, t_ms=42)
+    # 500 ms later: past the window, a fresh encode happens.
+    assert buffer.jpeg(max_age_ms=100) == b"jpeg"
+    assert len(encodes) == 2
+
+
+def test_default_keeps_exact_frame_semantics():
+    encodes = []
+    buffer = FrameBuffer(
+        "front", 4, 4,
+        encode=lambda n, w, h: encodes.append(1) or b"jpeg",
+        clock=lambda: 0.0,
+    )
+    buffer.put(b"\x00" * 24, t_ms=0)
+    buffer.jpeg()
+    buffer.put(b"\x01" * 24, t_ms=42)
+    buffer.jpeg()  # no max_age_ms: must re-encode despite zero elapsed time
+    assert len(encodes) == 2

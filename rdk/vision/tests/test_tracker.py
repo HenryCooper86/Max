@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from perception.tracker import Tracker
+from perception.tracker import Tracker, _iou
 from perception.types import Detection
 
 
@@ -98,3 +98,58 @@ def test_only_currently_visible_tracks_are_returned():
     rejoined = tracker.update([box(0.4, 0.4, 0.5, 0.5)], t_ms=200)
     assert rejoined[0].track_id == first
     assert rejoined[0].frames == 2  # history preserved across the miss
+
+
+def test_global_matching_beats_track_order_stealing():
+    """Per-track greedy let an early track steal a later track's better match.
+
+    Track 1 is processed first. det_x scores higher against track 1 (0.36)
+    than det_y does (0.333), so old per-track greedy hands det_x to track 1 —
+    even though det_x is really track 2's stronger match (0.417) and det_y is
+    track 1's only real candidate. Track 2 then ages out unmatched and det_y
+    spawns a spurious third track: an identity swap that fabricates the
+    dh/dt spike max_gap_ms exists to prevent, arriving by a different route.
+    Global IoU ordering assigns det_x to track 2 and det_y to track 1
+    instead.
+    """
+    tracker = Tracker()
+    (t1,) = tracker.update([box(0.10, 0.4, 0.30, 0.6)], t_ms=0)
+    tracks = tracker.update(
+        [box(0.10, 0.4, 0.30, 0.6), box(0.40, 0.4, 0.60, 0.6)], t_ms=100
+    )
+    assert len(tracks) == 2
+    t2 = next(t for t in tracks if t.track_id != t1.track_id)
+
+    # det_x straddles the gap between the two tracks, weighted toward track
+    # 2; det_y sits only against track 1's inner edge.
+    det_x = box(0.12, 0.4, 0.60, 0.6)
+    det_y = box(0.20, 0.4, 0.40, 0.6)
+
+    iou_t1_x = _iou(t1.last, det_x)
+    iou_t2_x = _iou(t2.last, det_x)
+    iou_t1_y = _iou(t1.last, det_y)
+    iou_t2_y = _iou(t2.last, det_y)
+    assert iou_t2_x > iou_t1_x > tracker.iou_threshold
+    assert iou_t1_y > tracker.iou_threshold > iou_t2_y
+
+    result = tracker.update([det_x, det_y], t_ms=200)
+    by_id = {t.track_id: t for t in result}
+    assert len(result) == 2  # no spurious third track
+    assert by_id[t2.track_id].last.x1 == det_x.x1  # X went to its best owner
+    assert by_id[t2.track_id].last.x2 == det_x.x2
+    assert by_id[t1.track_id].last.x1 == det_y.x1
+    assert by_id[t1.track_id].last.x2 == det_y.x2
+
+
+def test_detection_order_cannot_change_the_assignment():
+    def run(order):
+        tracker = Tracker()
+        tracker.update(
+            [box(0.10, 0.4, 0.30, 0.6), box(0.50, 0.4, 0.70, 0.6)], t_ms=0
+        )
+        tracks = tracker.update(order, t_ms=100)
+        return sorted((t.track_id, round(t.last.x1, 3)) for t in tracks)
+
+    a = box(0.12, 0.4, 0.32, 0.6)
+    b = box(0.52, 0.4, 0.72, 0.6)
+    assert run([a, b]) == run([b, a])

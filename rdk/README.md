@@ -1159,3 +1159,32 @@ for b in 4 6; do echo "bus $b:"; i2cdetect -y -r $b | sed -n '3p'; done
 # 0x10 => IMX219  (works)
 # 0x36 => OV5647  (does not stream on this image)
 ```
+
+### Recording a tuning corpus — the ride protocol
+
+Shadow mode on (`MAX_ADAS_SHADOW=1` in `/etc/max/agent.env`, restart
+`max-vision`), then ride normally — but deliberately include, front camera
+unless noted:
+
+1. **A pull-up-behind at a stop.** The ego gate's defining case: a car
+   arriving behind you at a light must produce **zero** rear alerts while you
+   are stationary. This single scenario validates the moving/stopped gate.
+2. **A steady follow** above tailgate height for more than ten seconds
+   (rear camera) — the tailgating dwell case.
+3. **Being overtaken, and overtaking** — closing-rate discrimination.
+4. **A pedestrian crossing ahead at low speed** — the pedestrian TTC case.
+
+A good first corpus is at least 30 minutes of riding with several stops and
+one of each scenario. Afterwards, copy the ride off the board and label the
+genuine hazards:
+
+```bash
+python3 -m tools.label add --ride ./corpus/ride-... \
+  rear_approach:rear:12000:15000:"car closed fast at the light"
+python3 -m tools.evaluate ./corpus/ride-...
+```
+
+`evaluate` prints the ride's false-alerts-per-hour, false criticals, and
+missed hazards per threat — the measured half of the M1 gate — stamped with
+the tuning fingerprint from the ride's own shadow log. Alert audio stays
+locked until those numbers meet the gate; see "ADAS M2".

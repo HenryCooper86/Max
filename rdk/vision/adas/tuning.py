@@ -8,9 +8,8 @@ needs. The dataclass is also the injection seam threat.py's docstring always
 promised: a sweep passes a Tuning, it does not edit source.
 
 The fingerprint is not a complete provenance record: it does not cover the
-ego-motion flow gate (`ego_motion.MIN_FLOW_MAGNITUDE`), the detector's
-confidence/NMS thresholds, or the model binary's identity, so two rides that
-differ only in one of those are not distinguished by fingerprint.
+detector's confidence/NMS thresholds, or the model binary's identity, so two
+rides that differ only in one of those are not distinguished by fingerprint.
 """
 
 from __future__ import annotations
@@ -33,11 +32,23 @@ class Tuning:
     # ttc.py
     smoothing_tau_ms: float = 200.0
     ttc_window_ms: int = 300
+    # adas/ego_motion.py
+    #: Moving/stopped gate, in WORK_WIDTH pixels per second. 6.0 px/s equals
+    #: the pre-time-basing 0.6 px per frame at the nominal 10 fps, so behavior
+    #: at nominal rate is unchanged; a dropped frame no longer doubles
+    #: apparent motion. This is the single most load-bearing suppression
+    #: constant, previously outside the fingerprint.
+    min_flow_px_per_s: float = 6.0
     # suppress.py
     min_track_frames: int = 3
     min_ttc_frames: int = 3
     threat_cooldown_s: float = 8.0
     global_gap_s: float = 4.0
+    #: Consecutive-run grace: a candidate absent for up to this many frames
+    #: keeps its stability-run credit. One detector flicker at 10 fps used to
+    #: re-arm the 3-frame gate and blind the pipeline ~600 ms. 0 restores the
+    #: strict consecutive rule.
+    run_grace_frames: int = 1
     # perception/tracker.py
     iou_threshold: float = 0.3
     max_misses: int = 3

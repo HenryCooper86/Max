@@ -50,23 +50,35 @@ class Tracker:
             self._tracks = []
         self._last_t_ms = t_ms
 
-        unmatched = list(dets)
-        for track in self._tracks:
-            best, best_iou = None, self.iou_threshold
-            for det in unmatched:
+        pairs: list[tuple[float, int, int]] = []
+        for t_index, track in enumerate(self._tracks):
+            for d_index, det in enumerate(dets):
                 if det.cls != track.cls:
                     continue
                 score = _iou(track.last, det)
-                if score > best_iou:
-                    best, best_iou = det, score
-            if best is None:
-                track.misses += 1
+                if score > self.iou_threshold:
+                    pairs.append((score, t_index, d_index))
+        # Globally best-first, with deterministic tie-breaks. Per-track greedy
+        # let an early track steal a later track's better match, and an
+        # identity swap fabricates the dh/dt spike max_gap_ms exists to
+        # prevent — arriving by a different route.
+        pairs.sort(key=lambda p: (-p[0], self._tracks[p[1]].track_id, p[2]))
+        used_tracks: set[int] = set()
+        used_dets: set[int] = set()
+        for score, t_index, d_index in pairs:
+            if t_index in used_tracks or d_index in used_dets:
                 continue
-            unmatched.remove(best)
+            used_tracks.add(t_index)
+            used_dets.add(d_index)
+            track, det = self._tracks[t_index], dets[d_index]
             track.misses = 0
             track.samples.append(
-                BoxSample(t_ms=t_ms, x1=best.x1, y1=best.y1, x2=best.x2, y2=best.y2)
+                BoxSample(t_ms=t_ms, x1=det.x1, y1=det.y1, x2=det.x2, y2=det.y2)
             )
+        for t_index, track in enumerate(self._tracks):
+            if t_index not in used_tracks:
+                track.misses += 1
+        unmatched = [det for d_index, det in enumerate(dets) if d_index not in used_dets]
 
         for det in unmatched:
             self._tracks.append(

@@ -66,3 +66,21 @@ def test_tracker_and_suppressor_defaults_are_structurally_tied_to_default():
     assert suppressor.min_ttc_frames == DEFAULT.min_ttc_frames
     assert suppressor.threat_cooldown_s == DEFAULT.threat_cooldown_s
     assert suppressor.global_gap_s == DEFAULT.global_gap_s
+    assert Suppressor().run_grace_frames == DEFAULT.run_grace_frames
+
+
+def test_new_fields_freeze_their_defaults():
+    # min_flow_px_per_s: 6.0 px/s == the old 0.6 px/frame at the nominal
+    # 10 fps — same gate at nominal rate, now time-based.
+    assert DEFAULT.min_flow_px_per_s == 6.0
+    # One flicker frame of grace; 0 restores the old consecutive-only rule.
+    assert DEFAULT.run_grace_frames == 1
+
+
+def test_fingerprint_changed_from_the_evidence_track():
+    """The two new fields deliberately change pipeline semantics, and the
+    fingerprint exists to disclose exactly that. 9b33ddc9a92d is the
+    evidence-track fingerprint captured in the 2026-07-30 bench ride's shadow
+    header. If this ever fails because they match again, the disclosure
+    mechanism itself is broken."""
+    assert fingerprint() != "9b33ddc9a92d"

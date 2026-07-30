@@ -1,13 +1,20 @@
-"""Is the bike moving? Coarse global flow on the front camera's luma plane.
+"""Is the bike moving? Coarse global flow on each ADAS thread's own camera.
 
 Only the moving/stopped decision is load-bearing. It is the single
 highest-value suppression stage: a car pulling up behind you at a light is
 visually indistinguishable from a rear approach, and ego motion is the only
 thing that separates them.
 
+Each camera thread calls this on its own luma plane pair — there is no
+cross-camera state here, so per-camera semantics fall out for free.
+
 The speed scale is unitless and deliberately crude — block-matched horizontal
 displacement, not a calibrated velocity. Nothing in M1 needs a real speed, and
 pretending otherwise would invite someone to build on it.
+
+This is horizontal-only block matching, which under-measures radial expansion
+— the dominant flow for straight-line motion on a forward-facing camera. A
+radial/vertical upgrade is deferred until real ride footage can validate one.
 """
 
 from __future__ import annotations
@@ -15,6 +22,8 @@ from __future__ import annotations
 import numpy as np
 
 from perception.types import EgoState
+
+from .tuning import DEFAULT
 
 #: Block matching runs at this width, whatever the camera delivers.
 #:
@@ -27,9 +36,10 @@ from perception.types import EgoState
 #: makes the threshold mean one thing everywhere.
 WORK_WIDTH = 160
 
-#: Mean absolute block displacement, in WORK_WIDTH pixels, above which we call
-#: it moving.
-MIN_FLOW_MAGNITUDE = 0.6
+#: Legacy per-frame-pair gate, kept for the dt_ms=None path and old callers.
+#: Defined as the exact nominal-rate equivalence of the time-based gate:
+#: 6.0 px/s ÷ 10 fps = 0.6 px/frame — today's value, derived not duplicated.
+MIN_FLOW_MAGNITUDE = DEFAULT.min_flow_px_per_s / 10.0
 
 #: How far the search looks, in WORK_WIDTH pixels, either side of zero.
 SEARCH_RADIUS = 12
@@ -41,7 +51,15 @@ def _downsample(plane: np.ndarray, out_w: int, out_h: int) -> np.ndarray:
     return plane[ys][:, xs]
 
 
-def estimate(prev_y: bytes, curr_y: bytes, width: int, height: int, grid: int = 8) -> EgoState:
+def estimate(
+    prev_y: bytes,
+    curr_y: bytes,
+    width: int,
+    height: int,
+    grid: int = 8,
+    dt_ms: int | None = None,
+    min_flow_px_per_s: float = DEFAULT.min_flow_px_per_s,
+) -> EgoState:
     """Compare two luma planes and report whether the scene is translating."""
     prev = np.frombuffer(prev_y, dtype=np.uint8)[: width * height].reshape(height, width)
     curr = np.frombuffer(curr_y, dtype=np.uint8)[: width * height].reshape(height, width)
@@ -81,5 +99,12 @@ def estimate(prev_y: bytes, curr_y: bytes, width: int, height: int, grid: int = 
     displacements = np.abs(np.asarray(shifts)[best])
 
     magnitude = float(displacements.mean()) if displacements.size else 0.0
+    if dt_ms is not None and dt_ms > 0:
+        # The gate is a rate: the same physical motion reads the same whether
+        # a frame was dropped or not. A nonpositive dt (duplicate or garbled
+        # timestamps) falls through to the legacy per-frame path below.
+        px_per_s = magnitude * 1000.0 / dt_ms
+        moving = px_per_s >= min_flow_px_per_s
+        return EgoState(moving=moving, speed_scale=px_per_s if moving else 0.0)
     moving = magnitude >= MIN_FLOW_MAGNITUDE
     return EgoState(moving=moving, speed_scale=magnitude if moving else 0.0)

@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from adas.ego_motion import estimate
 from adas.suppress import Suppressor
 from adas.threat import evaluate
-from adas.tuning import fingerprint
+from adas.tuning import DEFAULT, fingerprint
 from perception.frame_source import FileSource
 from perception.tracker import Tracker
 from perception.types import Candidate, Detection, EgoState
@@ -61,6 +61,7 @@ def run_clip(source, detect, camera: str, ego_moving: bool | None = None) -> Rep
     suppressor = Suppressor()
     result = ReplayResult()
     prev_y: bytes | None = None
+    prev_t_ms: int | None = None
 
     for index, frame in enumerate(source.frames()):
         started = time.monotonic()
@@ -71,8 +72,16 @@ def run_clip(source, detect, camera: str, ego_moving: bool | None = None) -> Rep
             if prev_y is None:
                 ego = EgoState(moving=False, speed_scale=0.0)
             else:
-                ego = estimate(prev_y, frame.nv12, frame.width, frame.height)
+                ego = estimate(
+                    prev_y,
+                    frame.nv12,
+                    frame.width,
+                    frame.height,
+                    dt_ms=(frame.t_ms - prev_t_ms) if prev_t_ms is not None else None,
+                    min_flow_px_per_s=DEFAULT.min_flow_px_per_s,
+                )
             prev_y = frame.nv12
+            prev_t_ms = frame.t_ms
         else:
             ego = EgoState(moving=ego_moving, speed_scale=1.0 if ego_moving else 0.0)
 

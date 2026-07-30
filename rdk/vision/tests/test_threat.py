@@ -1,9 +1,11 @@
 import sys
+from dataclasses import replace as _replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from adas.threat import CLOSING_RATE_MIN, evaluate, in_corridor
+from adas.tuning import DEFAULT
 from perception.types import BoxSample, EgoState, Track
 
 MOVING = EgoState(moving=True, speed_scale=1.0)
@@ -154,3 +156,13 @@ def test_a_candidate_carries_its_track_and_measured_ttc():
     result = evaluate([closing_track(growth=0.03)], MOVING, t_ms=700, camera="front")
     assert result[0].track_id == 1
     assert result[0].ttc_s is not None and result[0].ttc_s > 0
+
+
+def test_evaluate_accepts_an_injected_tuning():
+    # Off-centre but still within the default corridor (half-width 0.25); a
+    # narrower corridor excludes it. Same tracks, zero candidates once the
+    # tuning shrinks the corridor out from under it.
+    track = closing_track(growth=0.03, cx=0.6)
+    assert evaluate([track], MOVING, t_ms=700, camera="front") != []
+    narrow = _replace(DEFAULT, corridor_width_frac=0.1)
+    assert evaluate([track], MOVING, t_ms=700, camera="front", tuning=narrow) == []

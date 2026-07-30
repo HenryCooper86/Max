@@ -22,6 +22,7 @@ from .shadow import ShadowLog, ShadowRecord
 from .suppress import Suppressor
 from .threat import evaluate
 from .ttc import height_rate
+from .tuning import DEFAULT, Tuning
 
 
 class RecordingRequired(RuntimeError):
@@ -38,6 +39,7 @@ class RuntimeConfig:
     detect: Callable[[object, int], list[Detection]] | None = None
     segment_pattern: str = "{camera}_{index:06d}.h264"
     segment_seconds: float = 60.0
+    tuning: Tuning = DEFAULT
 
 
 def run_camera(
@@ -63,8 +65,17 @@ def run_camera(
         def detect(frame, _index):
             return captured.infer(frame.nv12, frame.width, frame.height)
 
-    tracker = Tracker()
-    suppressor = Suppressor()
+    tracker = Tracker(
+        iou_threshold=config.tuning.iou_threshold,
+        max_misses=config.tuning.max_misses,
+        max_gap_ms=config.tuning.max_gap_ms,
+    )
+    suppressor = Suppressor(
+        min_track_frames=config.tuning.min_track_frames,
+        min_ttc_frames=config.tuning.min_ttc_frames,
+        threat_cooldown_s=config.tuning.threat_cooldown_s,
+        global_gap_s=config.tuning.global_gap_s,
+    )
     previous_nv12: bytes | None = None
     fired = 0
 
@@ -79,7 +90,7 @@ def run_camera(
 
         tracks = tracker.update(dets, frame.t_ms)
         by_id = {t.track_id: t for t in tracks}
-        candidates = evaluate(tracks, ego, frame.t_ms, config.camera)
+        candidates = evaluate(tracks, ego, frame.t_ms, config.camera, tuning=config.tuning)
         admitted = suppressor.admit(
             candidates, {t.track_id: t.frames for t in tracks}, frame.t_ms
         )

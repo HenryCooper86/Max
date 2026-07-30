@@ -1,4 +1,5 @@
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from adas.catalog import CATALOG
 from adas.runtime import RecordingRequired, RuntimeConfig, run_camera
 from adas.shadow import ShadowLog, read_shadow
+from adas.tuning import DEFAULT
 from perception.frame_source import Frame
 from perception.types import Detection
 
@@ -143,3 +145,30 @@ def test_provenance_points_at_a_segment_that_could_be_clipped(tmp_path):
     r = read_shadow(path)[0]
     assert r.segment.startswith("front_")
     assert 0 <= r.segment_offset_ms < 60_000
+
+
+def test_runtime_builds_suppressor_from_tuning(tmp_path):
+    # min_ttc_frames raised to an unreachable 99: the same scene that fires
+    # an alert under DEFAULT must fire none.
+    strict = replace(DEFAULT, min_ttc_frames=99)
+    path = tmp_path / "shadow.jsonl"
+    emitted = []
+    with ShadowLog(path) as log:
+        fired = run_camera(
+            FakeSource(12),
+            RuntimeConfig(ride_id="r1", camera="front", detect=approaching, tuning=strict),
+            log,
+            emitted.append,
+        )
+    assert fired == 0
+
+    path_default = tmp_path / "shadow_default.jsonl"
+    emitted_default = []
+    with ShadowLog(path_default) as log:
+        fired_default = run_camera(
+            FakeSource(12),
+            RuntimeConfig(ride_id="r1", camera="front", detect=approaching),
+            log,
+            emitted_default.append,
+        )
+    assert fired_default == 1

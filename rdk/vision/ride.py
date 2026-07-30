@@ -23,6 +23,7 @@ from typing import Callable
 
 from adas.rebase import RebasedSource
 from adas.runtime import RuntimeConfig
+from adas.tuning import DEFAULT
 from recorder.mipi_source import write_jpeg
 from recorder.segmenter import SEGMENT_SECONDS
 from recorder.session import CameraSlot, RideRecorder
@@ -154,6 +155,7 @@ class RideSession:
                 # Must match the Segmenter the recorder uses, or the shadow
                 # record's segment index drifts away from the files on disk.
                 segment_seconds=SEGMENT_SECONDS,
+                tuning=DEFAULT,
             )
 
             def source_factory(cam=camera):

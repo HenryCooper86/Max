@@ -148,3 +148,15 @@ def test_frames_stops_when_the_camera_stops():
     camera.buffer.put(b"aaaaaaaaaaaa", t_ms=1)
     camera.stop()
     assert list(camera.frames(fps=1000.0)) == []
+
+
+def test_age_is_none_before_any_frame():
+    buffer = FrameBuffer("front", 4, 4, encode=lambda n, w, h: b"jpeg")
+    assert buffer.age_seconds() is None
+
+
+def test_age_measures_from_the_last_put():
+    clock = iter([100.0, 103.5]).__next__
+    buffer = FrameBuffer("front", 4, 4, encode=lambda n, w, h: b"jpeg", clock=clock)
+    buffer.put(b"\x00" * 24, t_ms=0)
+    assert buffer.age_seconds() == 3.5

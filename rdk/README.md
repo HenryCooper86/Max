@@ -13,6 +13,11 @@ node --version   # expect v22.13+
 
 sudo mkdir -p /var/lib/max/gallery
 sudo chown -R "$USER" /var/lib/max
+
+# Hardware watchdog: a kernel-level hang reboots the board instead of hanging.
+sudo mkdir -p /etc/systemd/system.conf.d
+sudo cp rdk/systemd/10-max-watchdog.conf /etc/systemd/system.conf.d/
+sudo systemctl daemon-reexec
 ```
 
 `/run/max` is deliberately absent here. `/run` is tmpfs, so anything created by
@@ -623,6 +628,20 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now max-agent max-vision
 journalctl -u max-agent -f
 ```
+
+Both units run under `WatchdogSec=30`: the agent heartbeats while mic frames
+flow, the sidecar while camera frames do, so a wedged-but-alive process is
+restarted instead of impersonating a healthy one. `StartLimitIntervalSec=0`
+means a service that cannot start keeps retrying every 2 s, visibly, instead
+of entering systemd's permanent `failed` state. Bench work is unaffected:
+stopping a service, or running the agent by hand outside systemd (no
+`NOTIFY_SOCKET`), trips nothing.
+
+**Unit files and heartbeat-emitting code must deploy together.** Install the new
+unit files and sync `/opt/max/rdk` in the same session, then `systemctl daemon-reload`
+and restart both services once both have landed. Unit files with `WatchdogSec=30`
+pointed at code that never sends `WATCHDOG=1` will restart healthy services every
+30 s.
 
 Only the exact string `1` enables `MAX_RELAY_INSECURE_TLS`; anything else leaves
 certificate validation on.

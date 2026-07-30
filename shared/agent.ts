@@ -233,8 +233,10 @@ export type ClientEvent =
   // echo this back as `hazard.alert` — Max would speak the warning a second
   // time, seconds late, over a rider who is already braking.
   //
-  // `ttcSeconds` is measured rather than catalogued and `latencyMs` is
-  // frame-capture to sound-out. The simulated `hazard.alert` carries neither,
+  // `ttcSeconds` is measured rather than catalogued and `handoverMs` is
+  // hazard-event to playback-handover; the audible alert finishes later
+  // (pacing meters it out at 80 ms a cycle), so this is a plumbing metric,
+  // not time-to-audible. The simulated `hazard.alert` carries neither,
   // because a simulation has neither.
   | {
       type: "hazard.report";
@@ -245,7 +247,7 @@ export type ClientEvent =
       message: string;
       advice: string;
       ttcSeconds?: number;
-      latencyMs?: number;
+      handoverMs?: number;
     }
   | { type: "audio.start" }
   | { type: "audio.stop" }

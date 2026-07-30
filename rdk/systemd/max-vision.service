@@ -1,5 +1,9 @@
 [Unit]
 Description=Max helmet vision sidecar (RDK X5)
+# Five fast failures inside systemd's default 10 s window would otherwise put
+# the unit in permanent `failed` — a silent helmet until someone SSHes in. A
+# broken unit should restart visibly forever instead.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -20,6 +24,11 @@ Environment=ROS_LOG_DIR=/run/max/roslog
 ExecStart=/bin/bash -c 'source /opt/tros/humble/setup.bash && exec /usr/bin/python3 service.py'
 Restart=always
 RestartSec=2
+# The sidecar's frame-age monitor sends WATCHDOG=1 while frames flow (monitor.py).
+WatchdogSec=30
+# Heartbeats arrive from the service's own process via the notify socket (notify.py).
+NotifyAccess=all
+TimeoutStopSec=10
 StandardOutput=journal
 StandardError=journal
 

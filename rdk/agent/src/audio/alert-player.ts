@@ -53,6 +53,7 @@ export function readWavMono24k(path: string): Int16Array {
 }
 
 export function createAlertPlayer(options: AlertPlayerOptions): {
+  /** Resolves the milliseconds it took to HAND the clip to playback. Not time-to-audible: pacing drains the queue at 80 ms per cycle after this returns. */
   play(threat: string): Promise<number | null>;
 } {
   const now = options.now ?? (() => Date.now());

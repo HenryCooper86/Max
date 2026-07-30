@@ -13,6 +13,12 @@ export type { RdkConfig };
 
 const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_CAP_MS = 30_000;
+/** If the TCP connect succeeds but the WS upgrade never completes (coverage
+ *  drop mid-handshake, half-open NAT), `ws` waits forever with no `close` and
+ *  no backoff scheduled — the agent goes silently mute. Bounding the
+ *  handshake turns that hang into the ordinary error+close(1006) recovery
+ *  path below. */
+export const HANDSHAKE_TIMEOUT_MS = 15_000;
 
 export function nextBackoffMs(attempt: number): number {
   return Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** attempt);
@@ -68,25 +74,101 @@ export type RelayClient = {
   isReady(): boolean;
 };
 
-export function createRelayClient(config: RdkConfig, handlers: RelayHandlers): RelayClient {
-  let socket: WebSocket | null = null;
+/** The slice of `ws` the client uses — injectable so the lifecycle is testable. */
+export type SocketLike = {
+  binaryType: string;
+  readyState: number;
+  send(data: unknown, options?: { binary?: boolean }): void;
+  close(): void;
+  terminate(): void;
+  ping(): void;
+  on(event: string, listener: (...args: unknown[]) => void): void;
+};
+
+export type RelayClientOptions = {
+  wsFactory?: (
+    url: string,
+    options: { rejectUnauthorized: boolean; handshakeTimeout?: number }
+  ) => SocketLike;
+  pingIntervalMs?: number;
+  setInterval?: typeof globalThis.setInterval;
+  clearInterval?: typeof globalThis.clearInterval;
+  log?: (line: string) => void;
+};
+
+const SOCKET_CONNECTING = 0;
+const SOCKET_OPEN = 1;
+
+/** Options the default (non-injected) `wsFactory` gives the real `ws`
+ *  constructor. Exported so a unit test can pin the handshake timeout without
+ *  standing up a live socket. */
+export function defaultSocketOptions(
+  config: RdkConfig
+): { rejectUnauthorized: boolean; handshakeTimeout: number } {
+  return {
+    rejectUnauthorized: !config.insecureTls,
+    handshakeTimeout: HANDSHAKE_TIMEOUT_MS
+  };
+}
+
+export function createRelayClient(
+  config: RdkConfig,
+  handlers: RelayHandlers,
+  options: RelayClientOptions = {}
+): RelayClient {
+  let socket: SocketLike | null = null;
   let ready = false;
   let memory: SessionMemorySnapshot | undefined;
   let intentional = false;
 
+  const log = options.log ?? ((line: string) => console.log(line));
+  const wsFactory =
+    options.wsFactory ?? ((url) => new WebSocket(url, defaultSocketOptions(config)) as unknown as SocketLike);
+
   function open(): void {
+    if (socket && (socket.readyState === SOCKET_CONNECTING || socket.readyState === SOCKET_OPEN)) {
+      log("[relay] connect ignored; socket already open");
+      return;
+    }
     ready = false;
     intentional = false;
-    socket = new WebSocket(authorizedRelayUrl(config.relayUrl, config.relayToken), {
+    const current = wsFactory(authorizedRelayUrl(config.relayUrl, config.relayToken), {
       rejectUnauthorized: !config.insecureTls
     });
-    socket.binaryType = "nodebuffer";
+    socket = current;
+    current.binaryType = "nodebuffer";
 
-    socket.on("open", () => {
-      socket?.send(JSON.stringify(buildSessionStart(config, memory)));
+    const timers = {
+      set: options.setInterval ?? globalThis.setInterval,
+      clear: options.clearInterval ?? globalThis.clearInterval
+    };
+    const pingEvery = options.pingIntervalMs ?? 15_000;
+    let liveness: NodeJS.Timeout | null = null;
+    let awaitingPong = false;
+
+    current.on("open", () => {
+      current.send(JSON.stringify(buildSessionStart(config, memory)));
+      awaitingPong = false;
+      liveness = timers.set(() => {
+        if (awaitingPong) {
+          // The relay pings from its side too, but neither close crosses a
+          // black-holed path. Terminating locally is the only exit.
+          log("[relay] no pong within the liveness window; terminating the socket");
+          current.terminate();
+          return;
+        }
+        awaitingPong = true;
+        current.ping();
+      }, pingEvery);
     });
 
-    socket.on("message", (data: Buffer, isBinary: boolean) => {
+    current.on("pong", () => {
+      awaitingPong = false;
+    });
+
+    current.on("message", (rawData: unknown, rawIsBinary: unknown) => {
+      const data = rawData as Buffer;
+      const isBinary = rawIsBinary as boolean;
       if (isBinary) {
         // Downlink voice is 24 kHz PCM16. A Buffer may not be 2-byte aligned
         // inside its parent ArrayBuffer, so copy rather than view.
@@ -101,8 +183,8 @@ export function createRelayClient(config: RdkConfig, handlers: RelayHandlers): R
         return;
       }
       if (event.type === "session.started") {
-        ready = true;
-        socket?.send(JSON.stringify({ type: "audio.start" }));
+        if (socket === current) ready = true;
+        current.send(JSON.stringify({ type: "audio.start" }));
         handlers.onReady();
       }
       if (event.type === "session.memory") {
@@ -116,14 +198,27 @@ export function createRelayClient(config: RdkConfig, handlers: RelayHandlers): R
       handlers.onEvent(event);
     });
 
-    socket.on("close", (code: number) => {
-      ready = false;
-      socket = null;
-      handlers.onClosed(code === IDLE_CLOSE_CODE || intentional);
+    current.on("close", (...args: unknown[]) => {
+      if (liveness !== null) {
+        timers.clear(liveness);
+        liveness = null;
+      }
+      const code = args[0] as number;
+      const reason = args[1] as Buffer;
+      const detail = reason && reason.length > 0 ? ` reason=${reason.toString("utf8")}` : "";
+      log(`[relay] closed code=${code}${detail}`);
+      if (socket === current) {
+        ready = false;
+        socket = null;
+        handlers.onClosed(code === IDLE_CLOSE_CODE || intentional);
+      }
     });
 
-    socket.on("error", () => {
-      // `close` always follows; recovery is handled there.
+    current.on("error", (...args: unknown[]) => {
+      const error = args[0] as Error;
+      // `close` always follows; recovery is handled there. This line is the
+      // difference between a diagnosable 401 and "reconnects with no explanation".
+      log(`[relay] socket error: ${error.message}`);
     });
   }
 
@@ -138,11 +233,11 @@ export function createRelayClient(config: RdkConfig, handlers: RelayHandlers): R
     sendFrame(frame: Int16Array): void {
       // Gate on session.started: transmitting earlier produces the startup
       // burst the other clients were changed to avoid.
-      if (!ready || socket?.readyState !== WebSocket.OPEN) return;
+      if (!ready || socket?.readyState !== SOCKET_OPEN) return;
       socket.send(Buffer.from(frame.buffer, frame.byteOffset, frame.byteLength), { binary: true });
     },
     sendEvent(event: unknown): void {
-      if (socket?.readyState !== WebSocket.OPEN) return;
+      if (socket?.readyState !== SOCKET_OPEN) return;
       socket.send(JSON.stringify(event));
     },
     isReady(): boolean {

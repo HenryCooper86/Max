@@ -76,15 +76,23 @@ export function createPlayback(options: PlaybackOptions): {
   // While a hazard alert is playing, nothing may cut it off. The spec makes
   // this absolute: an alert preempts Max and is never itself preempted.
   let priorityHeld = false;
+  // Samples sitting in `queue`, not yet handed to aplay. Counted at 48 kHz
+  // post-upsample, same as drainedUntil, so the two combine into one duration.
+  let queuedSamples = 0;
+  // Incremented by holdPriority/stop so a scheduled release from a previous
+  // alert can recognise itself as stale and do nothing.
+  let releaseGeneration = 0;
 
   function pump(): void {
     pumping = false;
+    if (queue.length === 0) return;
     const target = ensure();
     const at = now();
     if (drainedUntil < at) drainedUntil = at;
 
     while (queue.length > 0 && drainedUntil - at < MAX_QUEUE_MS) {
       const chunk = queue.shift() as Int16Array;
+      queuedSamples -= chunk.length;
       // The reference goes out here, alongside the write to the DAC, so APM is
       // told about audio when it plays rather than when it was received.
       options.reference?.write(chunk);
@@ -100,13 +108,27 @@ export function createPlayback(options: PlaybackOptions): {
 
   function ensure(): ChildProcessLike {
     if (!child) {
-      child = spawn("aplay", playbackArgs(options.device));
+      const spawned = spawn("aplay", playbackArgs(options.device));
+      child = spawned;
       // Barge-in SIGKILLs this child, so a write already in flight lands on a
       // dead pipe. Node raises 'error' on the stdin socket, and with no listener
       // that is an unhandled 'error' event — which crashed the agent the first
       // time a rider actually talked over Max. EPIPE here is expected and
       // discardable: the next write respawns aplay.
-      child.stdin?.on("error", () => {});
+      spawned.stdin?.on("error", () => {});
+      // flush()/stop() null `child` before this event can arrive, so reaching
+      // the body means the death was uninvited — an ALSA hiccup, an OOM kill.
+      // Respawn-on-next-write is the already-designed path; take it.
+      spawned.on("exit", (code, signal) => {
+        if (child !== spawned) return;
+        console.log(`[playback] aplay exited code=${code} signal=${signal}; respawning on next write`);
+        child = null;
+      });
+      spawned.on("error", (error) => {
+        if (child !== spawned) return;
+        console.log(`[playback] aplay failed to start: ${error.message}`);
+        child = null;
+      });
       upsample = createUpsampler2x();
     }
     return child;
@@ -120,7 +142,9 @@ export function createPlayback(options: PlaybackOptions): {
       // Tapping before it would hide the limiter's non-linearity from a filter
       // that assumes the echo path is linear, and cancellation would fall apart
       // precisely when Max is loudest.
-      queue.push(applySoftLimit(upsample(pcm), options.gain, options.threshold));
+      const processed = applySoftLimit(upsample(pcm), options.gain, options.threshold);
+      queue.push(processed);
+      queuedSamples += processed.length;
       pump();
     },
 
@@ -141,6 +165,7 @@ export function createPlayback(options: PlaybackOptions): {
       // Audio still queued here was never handed to aplay, so it will never be
       // heard and APM must not be told about it.
       queue = [];
+      queuedSamples = 0;
       drainedUntil = 0;
       options.reference?.flush();
       child?.kill("SIGKILL");
@@ -148,17 +173,36 @@ export function createPlayback(options: PlaybackOptions): {
     },
 
     holdPriority(): void {
+      releaseGeneration += 1;
       priorityHeld = true;
     },
 
+    /**
+     * Deferred: the lock lifts when the audio queued *at this moment* — the
+     * alert — has audibly finished, not when it was merely enqueued. Audio
+     * queued after this call (Max resuming) does not extend the hold.
+     */
     releasePriority(): void {
-      priorityHeld = false;
+      if (!priorityHeld) return;
+      const at = now();
+      const remainingMs = Math.max(0, drainedUntil - at) + (queuedSamples / CAPTURE_RATE) * 1000;
+      if (remainingMs <= 0) {
+        priorityHeld = false;
+        return;
+      }
+      releaseGeneration += 1;
+      const generation = releaseGeneration;
+      schedule(() => {
+        if (releaseGeneration === generation) priorityHeld = false;
+      }, remainingMs);
     },
 
     /** Process teardown, not barge-in: this ignores the priority lock. */
     stop(): void {
       priorityHeld = false;
+      releaseGeneration += 1;
       queue = [];
+      queuedSamples = 0;
       drainedUntil = 0;
       child?.kill("SIGTERM");
       child = null;

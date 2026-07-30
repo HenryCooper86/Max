@@ -84,7 +84,7 @@ describe("createHazardHandler", () => {
         threat: "forward_collision",
         severity: "critical",
         ttcSeconds: 1.4,
-        latencyMs: 42
+        handoverMs: 42
       })
     );
   });

@@ -51,8 +51,12 @@ class CameraPair:
         self._stop_timer: threading.Timer | None = None
 
     def open(self) -> None:
-        from mipi_camera import MipiCamera  # noqa: PLC0415 - board-only
+        from mipi_camera import MipiCamera, reap_orphans  # noqa: PLC0415 - board-only
         from sensors import discover  # noqa: PLC0415
+
+        # Once for the pair, before the first open — a per-camera reap would
+        # SIGKILL the front camera's mipi_cam while starting the rear one.
+        reap_orphans()
 
         # Never hardcode a sensor: an assumed IMX219 is why the OV5647 in CAM1
         # could not be opened, and the binding path cannot open either one.
@@ -206,8 +210,21 @@ class CameraPair:
             if data is None:
                 continue
             directory.mkdir(parents=True, exist_ok=True)
-            with (directory / filename).open("ab") as handle:
-                handle.write(data)
+            try:
+                self._append_frame(directory / filename, data)
+            except OSError as error:
+                # ENOSPC or a dying card. The thread dying here is what left
+                # manifests stuck at "recording": true; stop cleanly instead,
+                # keeping the frames already on disk. A truncated final JPEG is
+                # fine — every reader scans for SOI markers.
+                print(f"[vision] recording write failed ({error}); stopping with the frames on disk", flush=True)
+                if gallery is not None:
+                    self.stop_recording(gallery)
+                return
+
+    def _append_frame(self, path: Path, data: bytes) -> None:
+        with path.open("ab") as handle:
+            handle.write(data)
 
     def stop_recording(self, gallery: Gallery) -> dict:
         with self._lock:

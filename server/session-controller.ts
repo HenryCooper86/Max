@@ -214,8 +214,11 @@ export function parseClientEvent(data: RawData): ClientEvent {
     ) {
       throw new Error("Invalid hazard.report ttcSeconds");
     }
-    if (value.latencyMs !== undefined && (typeof value.latencyMs !== "number" || !Number.isFinite(value.latencyMs))) {
-      throw new Error("Invalid hazard.report latencyMs");
+    if (
+      value.handoverMs !== undefined &&
+      (typeof value.handoverMs !== "number" || !Number.isFinite(value.handoverMs))
+    ) {
+      throw new Error("Invalid hazard.report handoverMs");
     }
     return {
       type: "hazard.report",
@@ -226,7 +229,7 @@ export function parseClientEvent(data: RawData): ClientEvent {
       message: value.message as string,
       advice: value.advice as string,
       ttcSeconds: value.ttcSeconds as number | undefined,
-      latencyMs: value.latencyMs as number | undefined
+      handoverMs: value.handoverMs as number | undefined
     };
   }
 

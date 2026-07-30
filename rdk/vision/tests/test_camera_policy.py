@@ -138,6 +138,27 @@ def test_recording_writes_frames_to_the_segment(pair, gallery):
     assert written.count(b"\xff\xd8") == 2
 
 
+def test_a_disk_error_stops_the_recording_with_a_finished_manifest(pair, gallery):
+    result = pair.start_recording(gallery, drive=False)
+    assert result["status"] == "ok"
+    pair_id = pair.recording_id
+
+    pair.write_recording_frame()  # one healthy write first
+
+    def refuse(path, data):
+        raise OSError(28, "No space left on device")
+
+    pair._append_frame = refuse
+    pair.write_recording_frame()
+
+    # The writer stopped itself cleanly: no recording in flight, and the
+    # manifest describes a finished clip rather than staying "recording": true
+    # until the next restart's reconcile.
+    assert pair.recording_id is None
+    manifest = json.loads((gallery.pair_dir(pair_id) / "manifest.json").read_text())
+    assert manifest["recording"] is False
+
+
 def test_recording_only_writes_cameras_the_manifest_claims(pair, gallery):
     pair.rear = FakeCamera(works=False)
     result = pair.start_recording(gallery, drive=False)
@@ -172,3 +193,31 @@ def test_stopping_a_recording_stops_the_writer_thread(pair, gallery):
     # A writer that outlives its recording would append to a finished segment,
     # and the manifest would describe a file that kept changing after the fact.
     assert (gallery.pair_dir(result["detail"]) / "front.mjpeg").read_bytes() == settled
+
+
+def test_open_reaps_exactly_once_before_the_first_camera(monkeypatch):
+    import mipi_camera
+    import sensors
+
+    calls = []
+    monkeypatch.setattr(mipi_camera, "reap_orphans", lambda: calls.append("reap"))
+
+    class FakeMipi:
+        def __init__(self, channel, sensor, camera, width, height):
+            self.camera = camera
+
+        def start(self):
+            calls.append(f"start-{self.camera}")
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(mipi_camera, "MipiCamera", FakeMipi)
+    monkeypatch.setattr(sensors, "discover", lambda: {0: "IMX219", 2: "IMX219"})
+
+    pair = CameraPair(front_channel=0, rear_channel=2)
+    pair.open()
+
+    # One reap, before any camera starts — the per-camera reap is what made
+    # the rear camera SIGKILL the front one's just-started mipi_cam.
+    assert calls == ["reap", "start-front", "start-rear"]

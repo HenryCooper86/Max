@@ -9,13 +9,20 @@ function fakeChild() {
   const stdin = new PassThrough();
   const reference = new PassThrough();
   const kill = vi.fn();
-  return {
-    child: { stdout, stdin, stdio: [null, stdout, null, reference], kill, on: () => {} },
+  const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+  const child = {
     stdout,
     stdin,
-    reference,
-    kill
+    stdio: [null, stdout, null, reference],
+    kill,
+    on(event: string, listener: (...args: unknown[]) => void) {
+      listeners.set(event, [...(listeners.get(event) ?? []), listener]);
+    },
+    emit(event: string, ...args: unknown[]) {
+      for (const listener of listeners.get(event) ?? []) listener(...args);
+    }
   };
+  return { child, stdout, stdin, reference, kill };
 }
 
 describe("captureArgs", () => {
@@ -83,6 +90,50 @@ describe("createCapture", () => {
     capture.stop();
     expect(fake.kill).toHaveBeenCalled();
   });
+
+  it("reports a fatal when the capture child dies uninvited", () => {
+    const fake = fakeChild();
+    const fatals: string[] = [];
+    const capture = createCapture({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      onFrame: () => {},
+      onFatal: (reason) => fatals.push(reason)
+    });
+    capture.start();
+    fake.child.emit("exit", 1, null);
+    expect(fatals).toEqual(["arecord exited code=1 signal=null"]);
+  });
+
+  it("stays quiet when stop() killed the child itself", () => {
+    const fake = fakeChild();
+    const fatals: string[] = [];
+    const capture = createCapture({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      onFrame: () => {},
+      onFatal: (reason) => fatals.push(reason)
+    });
+    capture.start();
+    capture.stop();
+    fake.child.emit("exit", null, "SIGTERM");
+    expect(fatals).toEqual([]);
+  });
+
+  it("reports a fatal when the aec binary cannot be spawned", () => {
+    const fake = fakeChild();
+    const fatals: string[] = [];
+    const capture = createCapture({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      onFrame: () => {},
+      onFatal: (reason) => fatals.push(reason),
+      aec: { bin: "/opt/max/rdk/aec/max-aec", delayMs: 80, suppression: 2 }
+    });
+    capture.start();
+    fake.child.emit("error", new Error("spawn ENOENT"));
+    expect(fatals).toEqual(["max-aec failed to start: spawn ENOENT"]);
+  });
 });
 
 describe("createPlayback", () => {
@@ -141,6 +192,68 @@ describe("createPlayback", () => {
     playback.flush();
     playback.write(new Int16Array(240));
     expect(spawns).toBe(2);
+  });
+
+  it("respawns aplay on the write after an uninvited death", () => {
+    const children: ReturnType<typeof fakeChild>[] = [];
+    const playback = createPlayback({
+      device: "plughw:0,0",
+      spawn: () => {
+        const fake = fakeChild();
+        children.push(fake);
+        return fake.child;
+      }
+    });
+    playback.write(new Int16Array(480));
+    expect(children.length).toBe(1);
+    children[0]!.child.emit("exit", 1, null);
+    playback.write(new Int16Array(480));
+    expect(children.length).toBe(2);
+  });
+
+  it("does not double-handle an exit that flush() itself caused", () => {
+    const children: ReturnType<typeof fakeChild>[] = [];
+    const playback = createPlayback({
+      device: "plughw:0,0",
+      spawn: () => {
+        const fake = fakeChild();
+        children.push(fake);
+        return fake.child;
+      }
+    });
+    playback.write(new Int16Array(480));
+    playback.flush(); // kills child, nulls the reference
+    children[0]!.child.emit("exit", null, "SIGKILL");
+    playback.write(new Int16Array(480));
+    // flush + write already accounts for the respawn; the exit event must not
+    // have spawned a third.
+    expect(children.length).toBe(2);
+  });
+
+  it("a pump timer left over from flush does not respawn aplay", () => {
+    const scheduled: Array<() => void> = [];
+    const children: ReturnType<typeof fakeChild>[] = [];
+    const playback = createPlayback({
+      device: "plughw:0,0",
+      spawn: () => {
+        const fake = fakeChild();
+        children.push(fake);
+        return fake.child;
+      },
+      now: () => 0,
+      schedule: (fn) => {
+        scheduled.push(fn);
+        return 0 as unknown as NodeJS.Timeout;
+      }
+    });
+    // Enqueue 50 × 480 samples (20 ms each at 24 kHz) = 1 s total — far over the 80 ms cap.
+    // pump() will consume ~80 ms of audio, reschedule itself, then leave the queue non-empty.
+    for (let i = 0; i < 50; i += 1) playback.write(new Int16Array(480));
+    expect(children.length).toBe(1);
+    playback.flush(); // nulls child, empties queue
+    for (const fn of scheduled.splice(0)) fn();
+    // After flush(), queue is empty. The rescheduled pump must not spawn a second child.
+    expect(children.length).toBe(1);
   });
 });
 
@@ -359,11 +472,27 @@ describe("playback priority lock", () => {
   });
 
   it("resumes honouring flush once the alert finishes", () => {
+    // Task 3: releasePriority() now defers the unlock until the queued alert
+    // audio has audibly finished, rather than dropping the lock the instant
+    // it is called. Fire the scheduled release (simulating that time has
+    // passed) before flush() so this still exercises "once the alert finishes".
+    let clock = 0;
+    const scheduled: Array<{ fn: () => void; ms: number }> = [];
     const fake = fakeChild();
-    const playback = createPlayback({ device: "plughw:0,0", spawn: () => fake.child });
+    const playback = createPlayback({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      now: () => clock,
+      schedule: (fn, ms) => {
+        scheduled.push({ fn, ms });
+        return 0 as unknown as NodeJS.Timeout;
+      }
+    });
     playback.write(new Int16Array(240));
     playback.holdPriority();
     playback.releasePriority();
+    clock = 1000;
+    scheduled.forEach(({ fn }) => fn());
     playback.flush();
     expect(fake.kill).toHaveBeenCalled();
   });
@@ -392,6 +521,83 @@ describe("playback priority lock", () => {
     playback.holdPriority();
     playback.stop();
     expect(fake.kill).toHaveBeenCalled();
+  });
+
+  it("holds priority until the queued alert has audibly finished", () => {
+    let clock = 0;
+    const scheduled: Array<{ fn: () => void; ms: number }> = [];
+    const fake = fakeChild();
+    const playback = createPlayback({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      now: () => clock,
+      schedule: (fn, ms) => {
+        scheduled.push({ fn, ms });
+        return 0 as unknown as NodeJS.Timeout;
+      }
+    });
+    playback.holdPriority();
+    // 12_000 samples at 24 kHz = 500 ms of alert audio.
+    playback.write(new Int16Array(12_000));
+    playback.releasePriority();
+
+    playback.flush(); // mid-alert: must be refused
+    expect(fake.kill).not.toHaveBeenCalled();
+
+    const release = scheduled.find(({ ms }) => ms >= 400);
+    expect(release).toBeDefined();
+    clock = 600;
+    release!.fn();
+    playback.flush(); // after the alert: honoured
+    expect(fake.kill).toHaveBeenCalled();
+  });
+
+  it("audio queued after the release request does not extend the hold", () => {
+    let clock = 0;
+    const scheduled: Array<{ fn: () => void; ms: number }> = [];
+    const fake = fakeChild();
+    const playback = createPlayback({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      now: () => clock,
+      schedule: (fn, ms) => {
+        scheduled.push({ fn, ms });
+        return 0 as unknown as NodeJS.Timeout;
+      }
+    });
+    playback.holdPriority();
+    playback.write(new Int16Array(12_000)); // the 500 ms alert
+    playback.releasePriority();
+    const release = scheduled.find(({ ms }) => ms >= 400);
+    playback.write(new Int16Array(48_000)); // 2 s of relay speech behind it
+    clock = 600;
+    release!.fn();
+    playback.flush(); // Max's ordinary speech is interruptible again
+    expect(fake.kill).toHaveBeenCalled();
+  });
+
+  it("a new alert cancels a stale pending release", () => {
+    let clock = 0;
+    const scheduled: Array<{ fn: () => void; ms: number }> = [];
+    const fake = fakeChild();
+    const playback = createPlayback({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      now: () => clock,
+      schedule: (fn, ms) => {
+        scheduled.push({ fn, ms });
+        return 0 as unknown as NodeJS.Timeout;
+      }
+    });
+    playback.holdPriority();
+    playback.write(new Int16Array(12_000));
+    playback.releasePriority();
+    const stale = scheduled.find(({ ms }) => ms >= 400);
+    playback.holdPriority(); // second alert begins before the first release fires
+    clock = 600;
+    stale!.fn(); // the stale timer must not drop the new hold
+    playback.flush();
+    expect(fake.kill).not.toHaveBeenCalled();
   });
 });
 

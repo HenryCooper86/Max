@@ -46,14 +46,16 @@ class FrameBuffer:
     directly, and preview pulls at 10 fps from a 24 fps stream.
     """
 
-    def __init__(self, camera: str, width: int, height: int, encode=None) -> None:
+    def __init__(self, camera: str, width: int, height: int, encode=None, clock=time.monotonic) -> None:
         self.camera = camera
         self.width = width
         self.height = height
         self._encode = encode or _encode_jpeg
+        self._clock = clock
         self._lock = threading.Lock()
         self._frame: Frame | None = None
         self._jpeg: bytes | None = None
+        self._received_at: float | None = None
 
     def put(self, nv12: bytes, t_ms: int) -> None:
         with self._lock:
@@ -65,6 +67,7 @@ class FrameBuffer:
                 height=self.height,
             )
             self._jpeg = None
+            self._received_at = self._clock()
 
     def latest(self) -> Frame | None:
         with self._lock:
@@ -86,6 +89,13 @@ class FrameBuffer:
                 self._jpeg = data
         return data
 
+    def age_seconds(self) -> float | None:
+        """Seconds since the last frame arrived; None before the first one."""
+        with self._lock:
+            if self._received_at is None:
+                return None
+            return self._clock() - self._received_at
+
 
 def _isp_holders(run=subprocess.run) -> list[int]:
     """PIDs holding the ISP capture node, via fuser. Empty if fuser is absent."""
@@ -102,6 +112,9 @@ def reap_orphans(holders=_isp_holders, kill=os.kill, sleep=time.sleep) -> list[i
     Without this a max-vision restart can never reacquire the camera: the dead
     service's child keeps the ISP, and the next open fails with a message about
     sensor detection that sends you looking at i2c. Measured, not hypothesised.
+
+    Called once per acquisition cycle by the opener (CameraPair.open,
+    record_ride) — never per camera, or the second camera reaps the first.
     """
     pids = holders()
     if not pids:
@@ -155,8 +168,6 @@ class MipiCamera:
         import rclpy  # noqa: PLC0415 - board-only
         from rclpy.executors import SingleThreadedExecutor  # noqa: PLC0415
         from sensor_msgs.msg import Image  # noqa: PLC0415
-
-        reap_orphans()
 
         self._proc = subprocess.Popen(
             [
@@ -232,6 +243,9 @@ class MipiCamera:
 
     def jpeg(self) -> bytes | None:
         return self.buffer.jpeg()
+
+    def age_seconds(self) -> float | None:
+        return self.buffer.age_seconds()
 
     def frames(self, fps: float = 10.0) -> Iterator[Frame]:
         """Satisfies the FrameSource protocol, so ADAS reaches live frames through

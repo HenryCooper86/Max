@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import signal
 import socketserver
@@ -45,9 +46,15 @@ HANDLERS = {
 
 class ControlHandler(socketserver.StreamRequestHandler):
     def handle(self) -> None:
+        # RPC responses (this thread) and hazard broadcasts (ADAS threads)
+        # share one wfile; unsynchronised, they interleave bytes mid-line on a
+        # channel whose whole contract is one JSON message per line.
+        write_lock = threading.Lock()
+
         def write(line: str) -> None:
-            self.wfile.write(line.encode("utf-8"))
-            self.wfile.flush()
+            with write_lock:
+                self.wfile.write(line.encode("utf-8"))
+                self.wfile.flush()
 
         events.register(write)
         try:
@@ -72,6 +79,26 @@ class ControlServer(socketserver.ThreadingUnixStreamServer):
     allow_reuse_address = True
 
 
+def finalize(cameras, gallery, ride) -> None:
+    """Shutdown: finish a live recording, stop the ride, release the cameras.
+
+    An ordinary `systemctl stop` should produce a finished manifest itself
+    rather than leaning on the next boot's reconcile.
+    """
+    if cameras.recording_id is not None:
+        cameras.stop_recording(gallery)
+    # Ride first among the readers: its threads read from the cameras, so
+    # stopping the cameras out from under them would raise on the way down.
+    if ride is not None:
+        ride.stop()
+    # An orphaned mipi_cam holds the ISP, and the next start cannot open
+    # the camera at all. Reaping at startup covers a crash; this covers
+    # every ordinary stop.
+    for camera in (cameras.front, cameras.rear):
+        if camera is not None:
+            camera.stop()
+
+
 def main() -> None:
     if os.path.exists(SOCKET_PATH):
         os.unlink(SOCKET_PATH)
@@ -85,6 +112,15 @@ def main() -> None:
         print(f"[vision] recovered {len(repaired)} interrupted capture(s): {', '.join(repaired)}", flush=True)
 
     cameras.open()
+
+    from monitor import start_monitor  # noqa: PLC0415
+    from notify import sd_notify  # noqa: PLC0415
+
+    def exit_stale(stale: list[str]) -> None:
+        print(f"[vision] camera frames stale: {', '.join(stale)}; exiting for systemd to restart", flush=True)
+        os._exit(1)
+
+    start_monitor(cameras, notify=sd_notify, on_stale=exit_stale)
 
     from bench_server import serve as serve_bench  # noqa: PLC0415
 
@@ -127,16 +163,9 @@ def main() -> None:
         try:
             server.serve_forever()
         finally:
-            # Ride first: its threads read from the cameras, so stopping the
-            # cameras out from under them would raise on the way down.
-            if ride is not None:
-                ride.stop()
-            # An orphaned mipi_cam holds the ISP, and the next start cannot open
-            # the camera at all. Reaping at startup covers a crash; this covers
-            # every ordinary stop.
-            for camera in (cameras.front, cameras.rear):
-                if camera is not None:
-                    camera.stop()
+            finalize(cameras, gallery, ride)
+            with contextlib.suppress(OSError):
+                os.unlink(SOCKET_PATH)
 
 
 if __name__ == "__main__":

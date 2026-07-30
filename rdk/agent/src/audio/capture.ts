@@ -7,7 +7,8 @@ export type ChildProcessLike = {
   /** fd 3 is the far-end reference pipe when the child is max-aec. */
   stdio?: Array<NodeJS.ReadableStream | NodeJS.WritableStream | null>;
   kill(signal?: string): void;
-  on(event: "exit", listener: () => void): void;
+  on(event: "exit", listener: (code: number | null, signal: string | null) => void): void;
+  on(event: "error", listener: (error: Error) => void): void;
 };
 
 export type SpawnLike = (command: string, args: string[]) => ChildProcessLike;
@@ -29,6 +30,10 @@ export type CaptureOptions = {
   aec?: AecOptions;
   /** Receives fd 3 of max-aec, or null when AEC is off. */
   onReference?(stream: NodeJS.WritableStream | null): void;
+  /** A capture child that dies uninvited is unrecoverable in-process: the
+   *  agent exits and systemd restarts it. Identity-checked, so stop() never
+   *  trips it. */
+  onFatal?(reason: string): void;
 };
 
 export function captureArgs(device: string): string[] {
@@ -76,6 +81,18 @@ export function createCapture(options: CaptureOptions): { start(): void; stop():
             aecArgs(options.device, options.aec.delayMs, options.aec.suppression, options.aec.dump)
           )
         : spawn("arecord", captureArgs(options.device));
+      const current = child;
+      const name = options.aec ? "max-aec" : "arecord";
+      current.on("error", (error) => {
+        if (child !== current) return;
+        child = null;
+        options.onFatal?.(`${name} failed to start: ${error.message}`);
+      });
+      current.on("exit", (code, signal) => {
+        if (child !== current) return;
+        child = null;
+        options.onFatal?.(`${name} exited code=${code} signal=${signal}`);
+      });
       // Unplugging the headset kills the child mid-stream; an unhandled 'error'
       // on this stream would take the whole agent down. Losing the mic must
       // degrade the session, not end the process.

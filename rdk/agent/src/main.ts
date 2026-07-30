@@ -15,6 +15,7 @@ import { initialHudState, reduceHud } from "./hud/state";
 import { createHazardHandler } from "./hazard";
 import { createRelayClient, nextBackoffMs } from "./relay";
 import { createVisionClient, type VisionClient, type VisionEvent } from "./vision-client";
+import { startHeartbeat } from "./watchdog";
 
 const VISION_RECONNECT_MS = 2_000;
 
@@ -30,6 +31,17 @@ export function decideReconnect(reason: CloseReason, gateOpen: boolean): "now" |
   if (reason === "intentional") return "never";
   if (reason === "dropped") return "now";
   return gateOpen ? "now" : "wait-for-voice";
+}
+
+/** The onClosed wiring, extracted so a test can prove the gate state is real —
+ *  it was hardcoded `false` for a while, which made the "now" branch dead. */
+export function reconnectDecision(
+  shuttingDown: boolean,
+  idle: boolean,
+  gateOpen: boolean
+): "now" | "wait-for-voice" | "never" {
+  const reason: CloseReason = shuttingDown ? "intentional" : idle ? "idle" : "dropped";
+  return decideReconnect(reason, gateOpen);
 }
 
 /**
@@ -71,7 +83,9 @@ function start(): void {
   const config = loadConfig();
   let attempt = 0;
   let waitingForVoice = false;
+  let gateOpen = false;
   let shuttingDown = false;
+  let lastFrameAt = Date.now();
 
   const gate = createVoiceGate({ rmsThreshold: config.voiceGateRms, sustainMs: config.voiceGateMs });
 
@@ -169,8 +183,7 @@ function start(): void {
     },
     onClosed: (idle) => {
       playback.flush();
-      const reason: CloseReason = shuttingDown ? "intentional" : idle ? "idle" : "dropped";
-      const decision = decideReconnect(reason, false);
+      const decision = reconnectDecision(shuttingDown, idle, gateOpen);
       if (decision === "never") return;
       if (decision === "wait-for-voice") {
         waitingForVoice = true;
@@ -197,8 +210,14 @@ function start(): void {
     onReference: (stream) => {
       referenceSink = createReferenceSink({ stream });
     },
+    onFatal: (reason) => {
+      console.log(`[capture] ${reason}; exiting for systemd to restart`);
+      process.exit(1);
+    },
     onFrame: (frame) => {
+      lastFrameAt = Date.now();
       const speaking = gate(frame);
+      gateOpen = speaking;
       // Raw level, not the gate's verdict: the gate waits 400 ms for sustained
       // speech, which is far slower than the relay's barge-in event.
       bargeIn.observe(rms(frame));
@@ -213,6 +232,19 @@ function start(): void {
 
   capture.start();
   relay.connect();
+
+  startHeartbeat({ isHealthy: () => Date.now() - lastFrameAt < 10_000 });
+
+  process.on("uncaughtException", (error) => {
+    console.log(`[agent] uncaught exception: ${error.stack ?? error.message}`);
+    process.exit(1);
+  });
+  process.on("unhandledRejection", (reason) => {
+    console.log(
+      `[agent] unhandled rejection: ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}`
+    );
+    process.exit(1);
+  });
 
   const shutdown = (): void => {
     shuttingDown = true;

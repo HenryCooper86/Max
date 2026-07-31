@@ -152,6 +152,14 @@ export const extractDeviceCommand: IntentExtractor = (text) => {
     return { action: "system.shutdown", args: { cancel: true } };
   }
 
+  // The same exception for a negated 录: "别录了" is the rider ending a
+  // recording, not noise. Restricted to 录-forms — "别拍视频" stays discarded
+  // because 拍 belongs to the photo grammar. 录 must be followed by an object
+  // or a particle so prose like "不录音质" cannot match on the bare verb.
+  if (/(别|不要|不用|不想|不)(再|继续)?录(像|制|影|个?视频|了|啦)/.test(raw)) {
+    return { action: "camera.record", args: { start: false } };
+  }
+
   if (NEGATION.test(raw)) return null;
 
   // Emergency first: "报警" must never be read as a contact named 警.
@@ -213,8 +221,17 @@ export const extractDeviceCommand: IntentExtractor = (text) => {
 };
 
 function matchCamera(raw: string): DeviceCommand | null {
-  // Stop is checked before start so "停止录像" is never read as "录像".
-  if (/(停止|结束|停下?).{0,2}(录像|录制|录影|视频|拍摄)/.test(raw) || /stop\s+recording/i.test(raw)) {
+  // Stop is checked before start so "停止录像" is never read as "录像", and its
+  // grammar is deliberately more generous than start's: an over-matched stop
+  // fails honestly as "现在没有在录像", while an under-matched one leaves the
+  // camera rolling behind a narrated save that never happened — a live session
+  // said "帮我停一下录视频", fell through to the start grammar's bare 录视频,
+  // and got "已经在录了" plus that fiction. (?!车) keeps 停车 (parking) from
+  // reading as a stop verb; the gap covers filler like 一下 / 刚才的.
+  if (
+    /(停止|结束|暂停|关闭|关掉|停一下|停下|停)(?!车).{0,3}(录像|录制|录影|摄像|视频|拍摄)/.test(raw) ||
+    /(stop|end|finish|pause)\s+(the\s+|this\s+)?(video|recording|filming|record)/i.test(raw)
+  ) {
     return { action: "camera.record", args: { start: false } };
   }
   // 拍-phrasings need an explicit 视频 object (bare 拍摄 needs 开始): a rider

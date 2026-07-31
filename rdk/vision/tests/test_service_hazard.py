@@ -3,11 +3,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import pytest
+
 from adas.runtime import RuntimeConfig
 from adas.shadow import read_shadow
+from camera import CameraPair
 from perception.frame_source import Frame
 from perception.types import Detection
-from service import start_adas
+from service import require_cameras, start_adas
 
 
 class FakeSource:
@@ -85,3 +88,20 @@ def test_the_thread_is_a_daemon_so_it_cannot_hold_the_sidecar_open(tmp_path):
     )
     assert thread.daemon
     thread.join(timeout=10)
+
+
+def test_a_pair_that_opened_no_cameras_exits_for_systemd_to_retry():
+    # A boot can race the camera stack: discover() sees an empty bus, the
+    # sidecar runs blind, and the staleness monitor never fires because it
+    # only watches cameras that opened. Exiting hands the retry to systemd,
+    # which keeps trying every 2 s until the stack is ready.
+    pair = CameraPair(front_channel=0, rear_channel=2)  # nothing opened
+    with pytest.raises(SystemExit):
+        require_cameras(pair)
+
+
+def test_one_open_camera_is_enough():
+    # Front-only is normal on this hardware; self-heal must not demand both.
+    pair = CameraPair(front_channel=0, rear_channel=2)
+    pair.opened = True
+    require_cameras(pair)

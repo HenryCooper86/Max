@@ -99,6 +99,27 @@ def finalize(cameras, gallery, ride) -> None:
             camera.stop()
 
 
+def require_cameras(cameras) -> None:
+    """Exit when the pair opened with no cameras at all.
+
+    A boot can race the camera stack: on 2026-07-31 the sidecar came up
+    seconds after power-on, ``discover()`` saw an empty bus, and the service
+    ran camera-less until a human restarted it — the staleness monitor never
+    fired because it only watches cameras that opened. Exiting hands the
+    retry to systemd (``StartLimitIntervalSec=0``, every 2 s), which keeps
+    trying until the stack is ready. Voice is unaffected; max-agent does not
+    ``Require=`` this service and reports camera failures truthfully.
+
+    One camera is enough — front-only is normal on this hardware. A
+    deliberately camera-less bench will crash-loop visibly, which is the
+    fail-loud trade: stop the service instead of running it blind.
+    """
+    if cameras.opened:
+        return
+    print("[vision] no cameras opened; exiting for systemd to retry the open", flush=True)
+    raise SystemExit(1)
+
+
 def main() -> None:
     if os.path.exists(SOCKET_PATH):
         os.unlink(SOCKET_PATH)
@@ -112,6 +133,7 @@ def main() -> None:
         print(f"[vision] recovered {len(repaired)} interrupted capture(s): {', '.join(repaired)}", flush=True)
 
     cameras.open()
+    require_cameras(cameras)
 
     from monitor import start_monitor  # noqa: PLC0415
     from notify import sd_notify  # noqa: PLC0415

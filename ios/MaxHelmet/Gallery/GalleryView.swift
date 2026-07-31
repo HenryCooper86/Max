@@ -52,10 +52,13 @@ struct GalleryView: View {
 
     private func cell(_ capture: Capture) -> some View {
         ZStack(alignment: .bottomLeading) {
-            AsyncThumbnail(url: model.thumbnailURL(for: capture))
-                .aspectRatio(1, contentMode: .fill)
-                .frame(minWidth: 0, maxWidth: .infinity)
-                .clipped()
+            // The square must derive from the grid column width, never from the
+            // image: sizing the thumbnail directly let a full-resolution photo's
+            // intrinsic size blow the tiles up past the screen. Color.clear has
+            // no intrinsic size, so the overlaid image fills exactly one cell.
+            Color.clear
+                .aspectRatio(1, contentMode: .fit)
+                .overlay(AsyncThumbnail(url: model.thumbnailURL(for: capture)))
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
             HStack(spacing: 4) {
@@ -75,6 +78,9 @@ struct GalleryView: View {
             .foregroundStyle(HudColors.hudInk)
             .padding(6)
         }
+        // clipShape bounds only the pixels, not hit-testing — without this, an
+        // overlaid image reaching past its tile steals the neighbor's tap.
+        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private var emptyState: some View {

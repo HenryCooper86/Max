@@ -683,6 +683,19 @@ only watches cameras that opened. One camera is enough (front-only is normal
 here). A deliberately camera-less bench will crash-loop visibly — stop the
 service instead of running it blind.
 
+**Voice shutdown — "Max，关机".** Arms a 10 s countdown on the board: a
+triple beep when armed, a short tick every 2 s, one long low tone, then
+`shutdown -h now` — the clean stop, so max-vision finalizes a live recording
+and the filesystems unmount instead of another dirty FAT mount. "取消关机"
+(also 别关机 / 不要关机) cancels it with a rising tone pair. The tones are
+synthesized on the board and go through `playback.write` (limiter, pacing,
+AEC reference — never a separate aplay), so they need no TTS credentials and
+cannot be faked by model chatter; until `DOUBAO_TTS_*` lands on the relay
+they are the only honest channel, since the deterministic "好的，10秒后关机"
+line is as inert as every other one. The relay dispatches `system.shutdown`
+to the embedded platform only — a phone never receives it. After the final
+tone, give the board ~15 s before cutting power.
+
 ## On-hardware verification
 
 With `npm run dev:server` running on the LAN host:

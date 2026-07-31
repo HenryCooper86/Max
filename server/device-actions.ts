@@ -22,7 +22,8 @@ export type DeviceActionName =
   | "camera.look"
   | "gallery.open"
   | "navigation.start"
-  | "navigation.stop";
+  | "navigation.stop"
+  | "system.shutdown";
 
 export type DeviceActionTier = "low" | "high";
 
@@ -42,7 +43,8 @@ type DeviceCommand =
   | { action: "camera.look"; args: Record<string, never> }
   | { action: "gallery.open"; args: Record<string, never> }
   | { action: "navigation.start"; args: { query: string } }
-  | { action: "navigation.stop"; args: Record<string, never> };
+  | { action: "navigation.stop"; args: Record<string, never> }
+  | { action: "system.shutdown"; args: { cancel?: boolean } };
 
 /** Declared risk. iOS satisfies the high tier with the native system
  *  confirmation that `tel:` and MFMessageComposeViewController already force;
@@ -59,7 +61,10 @@ export const DEVICE_ACTION_TIERS: Record<DeviceActionName, DeviceActionTier> = {
   "camera.look": "low",
   "gallery.open": "low",
   "navigation.start": "low",
-  "navigation.stop": "low"
+  "navigation.stop": "low",
+  // High like dialing: consequential, and satisfied on the board by the 10 s
+  // cancellable countdown the way iOS satisfies it with native confirms.
+  "system.shutdown": "high"
 };
 
 export type IntentExtractor = (text: string) => DeviceCommand | null;
@@ -80,7 +85,10 @@ export type IntentExtractor = (text: string) => DeviceCommand | null;
  * before.
  */
 const PLATFORM_RESTRICTED_ACTIONS: Partial<Record<DeviceActionName, string>> = {
-  "camera.look": "embedded"
+  "camera.look": "embedded",
+  // Phones cannot poweroff, and an older app build receiving an unknown
+  // action would sit out the result timeout in silence.
+  "system.shutdown": "embedded"
 };
 
 /**
@@ -133,6 +141,17 @@ function clean(value: string): string {
 export const extractDeviceCommand: IntentExtractor = (text) => {
   const raw = text.trim();
   if (!raw) return null;
+
+  // Checked before the negation discard, as a documented exception: a negated
+  // 关机 ("别关机", "不要关机") is the rider cancelling a countdown — a
+  // command, not noise. Everything else negated stays discarded below.
+  if (
+    /(取消|别|不要|不用).{0,3}关机/.test(raw) ||
+    /(cancel|don'?t|do not|stop)\s*(the\s+)?(shut\s?down|shutdown|power\s?off)/i.test(raw)
+  ) {
+    return { action: "system.shutdown", args: { cancel: true } };
+  }
+
   if (NEGATION.test(raw)) return null;
 
   // Emergency first: "报警" must never be read as a contact named 警.
@@ -151,7 +170,7 @@ export const extractDeviceCommand: IntentExtractor = (text) => {
   }
   if (
     /(关闭|关掉|关|熄灭).{0,4}(手电筒|手电|照明|灯光|灯)/.test(raw) ||
-    /(turn|switch|put)\s+off\s+(the\s+)?(flash\s?light|torch)/i.test(raw)
+    /(turn|switch|put|power)\s+off\s+(the\s+)?(flash\s?light|torch)/i.test(raw)
   ) {
     return { action: "torch.set", args: { on: false } };
   }
@@ -161,6 +180,18 @@ export const extractDeviceCommand: IntentExtractor = (text) => {
   }
   if (/(小声|轻一点|声音.{0,2}小|调小|quieter|softer|volume down)/i.test(raw)) {
     return { action: "volume.set", args: { direction: "down" } };
+  }
+
+  // 关机 must not be preceded by 手/机 — "我手机关机了" is about the rider's
+  // phone. English must not capture a device noun the torch/music grammars
+  // own ("power off the flashlight").
+  if (
+    /(?<![手机])关机/.test(raw) ||
+    /(shut\s?down|power\s?off)(?!\s*(the\s+)?(flash\s?light|torch|light|lights|lamp|music|song|camera|screen|phone))/i.test(
+      raw
+    )
+  ) {
+    return { action: "system.shutdown", args: {} };
   }
 
   const camera = matchCamera(raw);
@@ -272,6 +303,7 @@ const FAILURE_SPEECH: Record<string, string> = {
   "storage.full": "存储快满了，导出或删除一些内容后我再帮你拍。",
   "camera.recording": "已经在录了。",
   "camera.notRecording": "现在没有在录像。",
+  "shutdown.notPending": "现在没有要关机。",
   "capture.failed": "拍摄没成功。",
   "vision.sharingOff": "我现在不能看。",
   "navigation.notActive": "现在没有在导航。",
@@ -299,7 +331,8 @@ const ACTION_LABELS: Record<DeviceActionName, string> = {
   "camera.look": "看看",
   "gallery.open": "相册",
   "navigation.start": "导航",
-  "navigation.stop": "导航"
+  "navigation.stop": "导航",
+  "system.shutdown": "关机"
 };
 
 /** The line Max speaks when a command did not succeed. Never claims success and
@@ -344,6 +377,10 @@ export function deviceSuccessSpeech(command: DeviceCommand): string | undefined 
       return "拍好了。";
     case "camera.record":
       return command.args.start ? "开始录像。" : "已停止录像。";
+    case "system.shutdown":
+      // The board's countdown tones are the ground truth; this line matches
+      // them rather than promising an instant poweroff.
+      return command.args.cancel ? "已取消关机。" : "好的，10秒后关机；说取消关机可以撤销。";
     case "camera.look":
       // A filler, not the answer. The description arrives seconds later and is
       // spoken separately; silence here reads as "he didn't hear me" and gets

@@ -202,6 +202,42 @@ describe("extractDeviceCommand — camera", () => {
     expect(extractDeviceCommand("Max 停止拍视频")).toEqual({ action: "camera.record", args: { start: false } });
   });
 
+  it("stops for 停一下/暂停/关掉 phrasings — a live session said 帮我停一下录视频, was read as start, and Max narrated a save that never happened", () => {
+    expect(extractDeviceCommand("Max 帮我停一下录视频")).toEqual({ action: "camera.record", args: { start: false } });
+    expect(extractDeviceCommand("Max 停一下视频")).toEqual({ action: "camera.record", args: { start: false } });
+    expect(extractDeviceCommand("Max 暂停录像")).toEqual({ action: "camera.record", args: { start: false } });
+    expect(extractDeviceCommand("Max 关掉录像")).toEqual({ action: "camera.record", args: { start: false } });
+    expect(extractDeviceCommand("Max 关闭录像")).toEqual({ action: "camera.record", args: { start: false } });
+    expect(extractDeviceCommand("Max 停止摄像")).toEqual({ action: "camera.record", args: { start: false } });
+    expect(extractDeviceCommand("Max 停止刚才的录像")).toEqual({ action: "camera.record", args: { start: false } });
+  });
+
+  it("treats a negated 录 as a stop command, like the negated 关机 — not noise", () => {
+    expect(extractDeviceCommand("Max 别录了")).toEqual({ action: "camera.record", args: { start: false } });
+    expect(extractDeviceCommand("Max 不要录了")).toEqual({ action: "camera.record", args: { start: false } });
+    expect(extractDeviceCommand("Max 别再录视频了")).toEqual({ action: "camera.record", args: { start: false } });
+    expect(extractDeviceCommand("Max 不录了")).toEqual({ action: "camera.record", args: { start: false } });
+  });
+
+  it("stops for wider English phrasings than the bare 'stop recording'", () => {
+    expect(extractDeviceCommand("Max stop the recording")).toEqual({ action: "camera.record", args: { start: false } });
+    expect(extractDeviceCommand("Max stop the video")).toEqual({ action: "camera.record", args: { start: false } });
+    expect(extractDeviceCommand("Max end the recording")).toEqual({ action: "camera.record", args: { start: false } });
+    expect(extractDeviceCommand("Max finish recording")).toEqual({ action: "camera.record", args: { start: false } });
+    expect(extractDeviceCommand("Max stop filming")).toEqual({ action: "camera.record", args: { start: false } });
+    expect(extractDeviceCommand("Max pause the video")).toEqual({ action: "camera.record", args: { start: false } });
+  });
+
+  it("keeps parking (停车) and music playback out of the stop grammar", () => {
+    expect(extractDeviceCommand("Max 停车后帮我录个视频")).toEqual({ action: "camera.record", args: { start: true } });
+    expect(extractDeviceCommand("Max 停车再录制")).toEqual({ action: "camera.record", args: { start: true } });
+    expect(extractDeviceCommand("Max 暂停音乐")).toEqual({ action: "music.control", args: { control: "pause" } });
+    expect(extractDeviceCommand("Max pause the music")).toEqual({
+      action: "music.control",
+      args: { control: "pause" }
+    });
+  });
+
   it("keeps 拍视频 clear of photo, negation, and garbled ASR", () => {
     expect(extractDeviceCommand("Max 拍张照片")?.action).toBe("camera.photo");
     expect(extractDeviceCommand("Max 别拍视频")).toBeNull();

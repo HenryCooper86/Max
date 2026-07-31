@@ -10,6 +10,8 @@ import { createReferenceSink, type ReferenceSink } from "./audio/reference";
 import { createVoiceGate } from "./audio/voice-gate";
 import { loadConfig } from "./config";
 import { createDeviceDispatcher } from "./device/dispatch";
+import { createPoweroffController } from "./device/poweroff";
+import { writeCue } from "./audio/cues";
 import { createHudServer } from "./hud/server";
 import { initialHudState, reduceHud } from "./hud/state";
 import { createHazardHandler } from "./hazard";
@@ -142,10 +144,22 @@ function start(): void {
     console.log("[vision]", JSON.stringify(event));
   });
 
+  const poweroff = createPoweroffController({
+    exec: () => {
+      // Clean by construction: systemd stops both services, max-vision
+      // finalizes a live recording, filesystems unmount. This exists because
+      // every hard power cut this week cost something on the next boot.
+      console.log("[device] voice shutdown: running shutdown -h now");
+      spawn("/usr/sbin/shutdown", ["-h", "now"], { stdio: "ignore" }).unref();
+    },
+    cue: (kind) => writeCue(playback, kind)
+  });
+
   const dispatch = createDeviceDispatcher({
     vision,
     setVolume: (level) => setAlsaVolume(config.alsaPlayback, level),
     previewPort: config.visionPreviewPort,
+    poweroff,
     // Same client-event path hazard.report already uses below (relay.sendEvent),
     // not a new one: image bytes go up base64-encoded in a camera.frame JSON
     // event, never over the raw binary uplink that carries mic audio.

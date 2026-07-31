@@ -20,6 +20,9 @@ export type DispatcherOptions = {
   /** Applies playback volume on the ES8326B mixer. Resolves false if the mixer
    *  did not move, so Max never claims a volume change that did not happen. */
   setVolume(level: number): Promise<boolean>;
+  /** The poweroff countdown (device/poweroff.ts). Optional so tests without
+   *  one still compile; absent, the action fails honestly. */
+  poweroff?: { schedule(): "scheduled" | "already"; cancel(): boolean };
   /** Port the sidecar serves `GET /frame/front` on. Used by `camera.look`. */
   previewPort: number;
   /** Receives the fetched frame for `camera.look`. Task 5 supplies this; until
@@ -48,6 +51,26 @@ export function createDeviceDispatcher(
     }
 
     try {
+      if (command.action === "system.shutdown") {
+        if (options.poweroff === undefined) {
+          return { type: "device.result", commandId: command.commandId, status: "failed" };
+        }
+        if (command.args["cancel"] === true) {
+          return options.poweroff.cancel()
+            ? { type: "device.result", commandId: command.commandId, status: "ok" }
+            : {
+                type: "device.result",
+                commandId: command.commandId,
+                status: "failed",
+                reason: "shutdown.notPending"
+              };
+        }
+        // Answer now, not in 10 s: the relay's device-result window is 8 s,
+        // and the countdown is the confirmation, not a pending outcome.
+        options.poweroff.schedule();
+        return { type: "device.result", commandId: command.commandId, status: "ok" };
+      }
+
       if (command.action === "volume.set") {
         const level = typeof command.args["level"] === "number" ? (command.args["level"] as number) : NaN;
         const applied = Number.isFinite(level) ? await options.setVolume(level) : false;

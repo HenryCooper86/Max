@@ -210,6 +210,41 @@ describe("extractDeviceCommand — camera", () => {
     expect(extractDeviceCommand("Max 帮我听一下开视频")).toBeNull();
   });
 
+  it("arms a shutdown, in Chinese and English", () => {
+    expect(extractDeviceCommand("Max 关机")).toEqual({ action: "system.shutdown", args: {} });
+    expect(extractDeviceCommand("Max 帮我关机")).toEqual({ action: "system.shutdown", args: {} });
+    expect(extractDeviceCommand("Max shut down")).toEqual({ action: "system.shutdown", args: {} });
+    expect(extractDeviceCommand("Max power off")).toEqual({ action: "system.shutdown", args: {} });
+  });
+
+  it("cancels a shutdown — including negated phrasings, which are commands here, not noise", () => {
+    expect(extractDeviceCommand("Max 取消关机")).toEqual({ action: "system.shutdown", args: { cancel: true } });
+    expect(extractDeviceCommand("Max 别关机")).toEqual({ action: "system.shutdown", args: { cancel: true } });
+    expect(extractDeviceCommand("Max 不要关机")).toEqual({ action: "system.shutdown", args: { cancel: true } });
+    expect(extractDeviceCommand("Max cancel the shutdown")).toEqual({
+      action: "system.shutdown",
+      args: { cancel: true }
+    });
+  });
+
+  it("does not read the rider's dead phone, the torch, or music as a shutdown", () => {
+    expect(extractDeviceCommand("Max 我手机关机了")).toBeNull();
+    expect(extractDeviceCommand("Max power off the flashlight")?.action).toBe("torch.set");
+    expect(extractDeviceCommand("Max shut down the music")).toBeNull();
+  });
+
+  it("only the embedded platform may receive a shutdown", () => {
+    expect(extractDeviceCommandForPlatform("Max 关机", "embedded")?.action).toBe("system.shutdown");
+    expect(extractDeviceCommandForPlatform("Max 关机", "ios")).toBeNull();
+    expect(extractDeviceCommandForPlatform("Max 关机", undefined)).toBeNull();
+  });
+
+  it("speaks the countdown truthfully", () => {
+    expect(deviceSuccessSpeech({ action: "system.shutdown", args: {} })).toBe("好的，10秒后关机；说取消关机可以撤销。");
+    expect(deviceSuccessSpeech({ action: "system.shutdown", args: { cancel: true } })).toBe("已取消关机。");
+    expect(deviceFailureSpeech("system.shutdown", "failed", "shutdown.notPending")).toBe("现在没有要关机。");
+  });
+
   it("opens the gallery", () => {
     expect(extractDeviceCommand("Max 打开相册")).toEqual({ action: "gallery.open", args: {} });
     expect(extractDeviceCommand("Max open the gallery")).toEqual({ action: "gallery.open", args: {} });
@@ -290,7 +325,7 @@ describe("extractDeviceCommand — navigation", () => {
 });
 
 describe("DEVICE_ACTION_TIERS", () => {
-  it("marks only messaging and calling as high risk", () => {
+  it("marks messaging, calling, and shutdown as high risk", () => {
     expect(DEVICE_ACTION_TIERS).toEqual({
       "torch.set": "low",
       "volume.set": "low",
@@ -303,7 +338,8 @@ describe("DEVICE_ACTION_TIERS", () => {
       "camera.look": "low",
       "gallery.open": "low",
       "navigation.start": "low",
-      "navigation.stop": "low"
+      "navigation.stop": "low",
+      "system.shutdown": "high"
     });
   });
 });

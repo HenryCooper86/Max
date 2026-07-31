@@ -40,7 +40,7 @@ describe("EMBEDDED_CAPABILITIES", () => {
       .filter(([, capability]) => capability.supported)
       .map(([action]) => action)
       .sort();
-    expect(supported).toEqual(["camera.look", "camera.photo", "camera.record", "volume.set"]);
+    expect(supported).toEqual(["camera.look", "camera.photo", "camera.record", "system.shutdown", "volume.set"]);
   });
 
   it("gives every refusal a reason that maps to real speech", () => {
@@ -215,5 +215,61 @@ describe("createDeviceDispatcher — camera.look", () => {
       reason: "capture.failed"
     });
     expect(onFrame).not.toHaveBeenCalled();
+  });
+});
+
+describe("system.shutdown dispatch", () => {
+  function poweroffStub(outcome: "scheduled" | "already", pending: boolean) {
+    const calls: string[] = [];
+    return {
+      calls,
+      controller: {
+        schedule: (): "scheduled" | "already" => {
+          calls.push("schedule");
+          return outcome;
+        },
+        cancel: (): boolean => {
+          calls.push("cancel");
+          return pending;
+        }
+      }
+    };
+  }
+
+  it("schedules the countdown and answers the relay immediately", async () => {
+    const stub = poweroffStub("scheduled", false);
+    const vision = fakeVision({ id: "v1", status: "ok" });
+    const dispatch = createDeviceDispatcher({ vision, setVolume: async () => true, poweroff: stub.controller });
+
+    const result = await dispatch({ commandId: "c10", action: "system.shutdown", args: {} });
+
+    expect(result).toEqual({ type: "device.result", commandId: "c10", status: "ok" });
+    expect(stub.calls).toEqual(["schedule"]);
+    expect(vision.calls).toEqual([]);
+  });
+
+  it("cancel of a pending countdown is ok; of nothing, a truthful failure", async () => {
+    const pending = poweroffStub("scheduled", true);
+    const vision = fakeVision({ id: "v1", status: "ok" });
+    let dispatch = createDeviceDispatcher({ vision, setVolume: async () => true, poweroff: pending.controller });
+    let result = await dispatch({ commandId: "c11", action: "system.shutdown", args: { cancel: true } });
+    expect(result).toEqual({ type: "device.result", commandId: "c11", status: "ok" });
+
+    const idle = poweroffStub("scheduled", false);
+    dispatch = createDeviceDispatcher({ vision, setVolume: async () => true, poweroff: idle.controller });
+    result = await dispatch({ commandId: "c12", action: "system.shutdown", args: { cancel: true } });
+    expect(result).toEqual({
+      type: "device.result",
+      commandId: "c12",
+      status: "failed",
+      reason: "shutdown.notPending"
+    });
+  });
+
+  it("without a controller the action fails honestly instead of pretending", async () => {
+    const vision = fakeVision({ id: "v1", status: "ok" });
+    const dispatch = createDeviceDispatcher({ vision, setVolume: async () => true });
+    const result = await dispatch({ commandId: "c13", action: "system.shutdown", args: {} });
+    expect(result.status).toBe("failed");
   });
 });

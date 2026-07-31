@@ -674,6 +674,15 @@ Two footguns worth knowing when poking at the board over SSH:
 vision sidecar is down, the agent still runs and camera actions fail truthfully
 rather than taking the voice path down with them.
 
+**`max-vision` refuses to run camera-less.** If `open()` ends with zero
+cameras, the service exits and systemd retries every 2 s until one appears. A
+boot can race the camera stack — seen 2026-07-31, when the sidecar came up
+seconds after power-on, `discover()` saw an empty bus, and the service ran
+blind until a human restarted it; the staleness monitor never fired because it
+only watches cameras that opened. One camera is enough (front-only is normal
+here). A deliberately camera-less bench will crash-loop visibly — stop the
+service instead of running it blind.
+
 ## On-hardware verification
 
 With `npm run dev:server` running on the LAN host:

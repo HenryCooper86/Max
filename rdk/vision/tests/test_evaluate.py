@@ -192,3 +192,50 @@ def test_a_mid_ride_restart_scores_each_fingerprint_separately(tmp_path, capsys)
     assert payload[fp_default]["false_alerts_total"] == 0
     # The forward_collision record under the second header matches no window.
     assert payload[fp_alt]["false_alerts_total"] == 1
+
+
+def test_orphan_fingerprint_records_are_reported_not_silently_dropped(tmp_path, capsys):
+    # A corrupted multi-header log can leave records whose tuning fingerprint
+    # matches no surviving header. They cannot be honestly scored under any
+    # group — but vanishing without a word makes the report claim coverage it
+    # does not have. The tool must say what it dropped.
+    ride = tmp_path / "ride-corrupt"
+    (ride / "front").mkdir(parents=True)
+    with MetadataWriter(ride / "front" / "seg-000000.jsonl") as w:
+        w.append(FrameMeta(frame_index=0, mono_ns=0, wall_ms=1_000_000, camera="front"))
+        w.append(FrameMeta(frame_index=1, mono_ns=10**9, wall_ms=1_360_000, camera="front"))
+    write_labels(
+        ride,
+        [HazardWindow(threat="pedestrian_ahead", camera="front", start_ms=10_000, end_ms=14_000)],
+    )
+
+    alt_tuning = replace(DEFAULT, ttc_forward_collision_s=2.1)
+    fp_default = fingerprint(DEFAULT)
+    fp_alt = fingerprint(alt_tuning)
+
+    shadow_path = ride / "shadow-front.jsonl"
+    with ShadowLog(shadow_path, tuning=DEFAULT) as log:
+        log.append(
+            record(
+                threat_id="pedestrian_ahead",
+                camera="front",
+                severity="critical",
+                wall_ms=1_012_000,
+                tuning=fp_default,
+            )
+        )
+    with ShadowLog(shadow_path, tuning=alt_tuning) as log:
+        log.append(
+            record(
+                threat_id="forward_collision",
+                camera="front",
+                severity="critical",
+                wall_ms=1_050_000,
+                tuning="feedfacedead",  # its header line did not survive
+            )
+        )
+
+    main([str(ride)])
+    err = capsys.readouterr().err
+    assert "feedfacedead" in err
+    assert "unscored" in err

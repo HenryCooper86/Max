@@ -23,6 +23,11 @@ rdk/README.md's bench findings):
 - Fixed the relay client's intentional-disconnect path (the close event was
   swallowed by its own stale-socket guard) and made ride scoring name records
   a corrupted shadow log leaves unscored instead of dropping them silently.
+- The gallery no longer trusts the boot clock: the board has no RTC, so a
+  capture started seconds after power-on carries a pre-NTP `pair-20000101-…`
+  id and used to file itself at the bottom of the grid dated 01-01. Listing
+  order and the capture-time label now follow the manifest's mtime whenever
+  the id's stamp predates the project.
 
 ## 2026-07-19 — Reliable per-user recall
 

@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-08-01 — Helmet board: dual cameras that tell the truth
+
+RDK X5 embedded client (`rdk/` — the day-by-day record lives in
+rdk/README.md's bench findings):
+
+- Gave each camera its own ROS topic and node name. The vendor `mipi_cam`
+  hardcodes `/image_raw`, so two cameras interleaved both sensors into every
+  subscriber — visible as preview/recording flicker, and it blinded the
+  frame-staleness watchdog. Verified live: one publisher per topic, ~30 fps
+  each, and killing a camera node now self-heals in ~20 s.
+- The vision sidecar exits for systemd retry when a camera that i2c detected
+  fails to open (the OV5647's documented boot-time ISP stall) — a half-blind
+  boot no longer needs a human restart.
+- Recordings are honest about time: the manifest stamps the achieved write
+  rate alongside the wall-clock duration, playback paces from it (1× is real
+  time; ½×/2× multiply the clip's own rate), and the parallel per-side encode
+  lifts dual-camera recording from 4–7 fps to a measured 9.8.
+- Hazard alerts preempt by severity: a critical clip cuts a caution clip's
+  tail instead of queueing behind it; equal severity still queues and rider
+  speech still never cancels an alert. Inert until alert audio is armed.
+- Fixed the relay client's intentional-disconnect path (the close event was
+  swallowed by its own stale-socket guard) and made ride scoring name records
+  a corrupted shadow log leaves unscored instead of dropping them silently.
+
 ## 2026-07-19 — Reliable per-user recall
 
 - Expanded authenticated recall from the last 8 turns to the full bounded

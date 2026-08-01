@@ -102,6 +102,9 @@ Verified over SSH against the real board on 2026-07-25.
 | Vision consent gate + frame route         | **works** — `MAX_VISION_SHARE=0` refuses `/frame/front` with 403; set to `1` it returns 200, a real 640×360 JPEG (26–27 KB, confirmed live over two fetches), gate re-confirmed refusing after restore                                                                                                   | 2026-07-28 |
 | Vision describe (live)                    | **NOT verified** — relay's `ARK_API_KEY` is invalid (401 "The API key doesn't exist" in two regions, two auth header styles); no working credential exists, so the round trip to the vision model was never attempted                                                                                    | 2026-07-28 |
 | Thermal after encode-sharing fix          | **~87.6 °C plateau** (87.5–87.8), one camera, bench ambient — down ~6.4 °C from the 2026-07-27 ~94 °C baseline                                                                                                                                                                                           | 2026-07-30 |
+| Dual cameras simultaneously               | **works** — front OV5647 (ch 0) + rear IMX219 (ch 2), ~30 fps each on per-camera topics; see "Two cameras need two topics"                                                                                                                                                                               | 2026-08-01 |
+| Dual-camera recording rate                | **9.8 fps** with parallel per-side encodes (sequential measured 4.4–7.25; front-only ceiling 9.98)                                                                                                                                                                                                       | 2026-08-01 |
+| Recording playback pacing                 | **truthful** — manifest stamps the achieved fps; `/play` paces from it, so a clip spans its real duration at 1×                                                                                                                                                                                          | 2026-08-01 |
 
 ### AEC — the sweep said "gate passed". A live conversation said otherwise.
 
@@ -551,9 +554,43 @@ No `gpio_enable_bit` / `gpio_level_bit` multiplexing is needed. (Those fields
 would only matter for two modules sharing one bus, which is not the arrangement
 here.)
 
-### Exactly one process may hold the camera
+### Two cameras need two topics — the vendor node shares one by default
 
-A second opener does not queue or fail clearly. It fails with:
+`mipi_cam` hardcodes its ROS topic (`/image_raw`) and its node name
+(`mipi_cam`). Run two instances and you get two publishers on **one** topic —
+measured 2026-08-01: `ros2 topic info /image_raw` showed publisher count 2 and
+~50 Hz combined. Every subscriber then drinks both sensors' frames interleaved,
+which presents as:
+
+- **Preview and recordings "flicker"** — each view alternates front/rear
+  images at frame rate.
+- **The staleness monitor goes blind** — a dead camera's buffer stays fresh on
+  the _other_ camera's frames, so the self-heal restart never fires and a
+  stalled camera stays dead until a human restarts the service.
+
+The fix is standard ROS remapping on the launch command
+(`mipi_camera.launch_command`):
+
+```bash
+ros2 run mipi_cam mipi_cam --ros-args \
+  -r __node:=mipi_cam_front -r /image_raw:=/front/image_raw \
+  -p video_device:=OV5647 -p channel:=0 ...
+```
+
+Each `MipiCamera` publishes on `/<camera>/image_raw` under its own node name
+and subscribes to its own topic. Verified live: `/front/image_raw` and
+`/rear/image_raw`, one publisher each, ~30 fps each — and killing a camera's
+node now trips `camera frames stale: <name>` within ~10 s, with systemd
+bringing both cameras back in about 20 s. That self-heal has since fired
+unattended on the bench (2026-08-01, rear stale after an OOM event) and
+recovered without intervention.
+
+### Exactly one process may hold _a given_ camera
+
+Two processes driving two **different** sensors coexist fine — both hold the
+same `/dev/vs-isp0*`/`vse0*` nodes and stream ~30 fps each (measured
+2026-08-01), so the rule below is per camera, not per board. A second opener of
+the **same** camera does not queue or fail clearly. It fails with:
 
 ```
 [INFO] [mipi_cam]: The detected sensors are 1 less than expected.
@@ -674,13 +711,17 @@ Two footguns worth knowing when poking at the board over SSH:
 vision sidecar is down, the agent still runs and camera actions fail truthfully
 rather than taking the voice path down with them.
 
-**`max-vision` refuses to run camera-less.** If `open()` ends with zero
-cameras, the service exits and systemd retries every 2 s until one appears. A
-boot can race the camera stack — seen 2026-07-31, when the sidecar came up
-seconds after power-on, `discover()` saw an empty bus, and the service ran
-blind until a human restarted it; the staleness monitor never fired because it
-only watches cameras that opened. One camera is enough (front-only is normal
-here). A deliberately camera-less bench will crash-loop visibly — stop the
+**`max-vision` refuses to run camera-less — or short of a detected camera.**
+If `open()` ends with zero cameras, or with fewer cameras than i2c detected,
+the service exits and systemd retries every 2 s until every attached sensor
+streams. Both halves were bought with a real boot each. 2026-07-31: the sidecar
+came up seconds after power-on, `discover()` saw an empty bus, and the service
+ran blind until a human restarted it. 2026-08-01: i2c saw the front OV5647 but
+its open stalled in the ISP (the documented OV5647 flake), and the sidecar
+served rear-only for a whole boot — the staleness monitor stayed quiet because
+the topic collision (see "Two cameras need two topics") kept the front buffer
+fresh on rear frames. An empty connector is still fine — front-only is normal
+here. A deliberately camera-less bench will crash-loop visibly — stop the
 service instead of running it blind.
 
 **Voice shutdown — "Max，关机".** Arms a 10 s countdown on the board: a
@@ -714,7 +755,8 @@ With `npm run dev:server` running on the LAN host:
    and `/preview/rear` — both show live video.
 2. Say "拍照" — a `pair-*` directory appears under `/var/lib/max/gallery` with
    two JPEGs and a manifest.
-3. Say "开始录像", wait, then "停止录像" — two `.h264` files and a manifest.
+3. Say "开始录像", wait, then "停止录像" — two `.mjpeg` segments and a manifest
+   stamped with the clip's duration and achieved fps.
 4. Say "开始录像" twice — Max says "已经在录了。"
 5. `systemctl stop max-vision`, then say "拍照" — Max reports a truthful failure
    and the voice session keeps working.
@@ -730,13 +772,17 @@ update live.
 
 ## Known gap
 
-`camera.py` does not yet attach the `libsrcampy` H.264 encoder in
-`start_recording` / `stop_recording` — that is the one piece that cannot be
-written without the board. The surrounding policy (recording state machine,
-space guard, ten-minute cap, and which sides the manifest names) is implemented
-and covered by `tests/test_camera_policy.py`. Attach `libsrcampy.Encoder` to each
-live sensor on start and release it on stop, writing `front.h264` / `rear.h264`
-into the pair directory. Do not change the state machine while doing so.
+Recordings are concatenated-JPEG `.mjpeg`, not H.264. The recording itself
+works — dual 1080p at a measured 9.8 fps (per-side encodes run in parallel;
+cv2 releases the GIL, so two ~60–100 ms encodes cost max() rather than sum()) —
+but per-frame JPEG cannot exploit inter-frame redundancy, so it costs roughly
+10 GB per hour per camera where H.264 would cost ~1.8 GB. The H.264 path needs
+the ctypes binding (`camera_binding.py`), and `hbn_camera_create` still returns
+-1 for every sensor and VCON tried — that is the actual gap. The recording
+state machine, space guard, ten-minute cap, manifest truth (duration + achieved
+fps), and per-side accounting are implemented and covered by
+`tests/test_camera_policy.py`; if the binding ever opens, switch the segment
+writer without changing the state machine.
 
 ## Running the Python suite
 
@@ -911,9 +957,15 @@ Route it around `playback` and APM is never told about it, the mic hears an
 uncancelled warning, Doubao's VAD fires on it, and the echo loop returns —
 triggered by our own safety alert. See the AEC section above for what that cost.
 
-An alert also cannot be preempted: `playback.flush()` is a no-op while one
-plays. Without that, a rider saying "什么?" mid-warning trips the VAD and cuts
-the collision alert in half.
+Preemption is by severity, and voice never preempts (decided 2026-08-01). The
+priority hold carries a rank (`caution` = 1 < `critical` = 2): a strictly
+higher-severity alert cuts the playing clip's tail — a forward-collision
+warning must not queue behind a caution clip, because that tail spends exactly
+the seconds the critical alert exists to buy. Equal severity queues, so
+back-to-back criticals cannot cut each other's first syllable. A rider saying
+"什么?" mid-warning still cannot cancel anything: voice flushes carry no rank,
+and an unrecognised severity string sinks to `caution` so it can never outrank
+a real critical.
 
 ### Rendering the clips
 
@@ -942,15 +994,18 @@ Board suite: 200 pytest passing. Repo gate: `npm run check` green, 611 vitest.
 
 - **Whether the alerts are right.** Shadow measures the false-alarm rate; it
   cannot measure _missed_ hazards without labels, which needs the corpus.
-- **Anything on a real road.** No cameras (OV5647 unsupported, IMX219 absent),
-  so every runtime test drives a `FileSource` and shadow mode has collected
-  nothing from an actual ride.
+- **Anything on a real road.** (As built, 2026-07-26 — since overtaken: both
+  cameras now stream, shadow rides have run live, and the first labelled ride
+  scored by `tools.evaluate` is the exit into tuning. See the findings table
+  and "Recording a tuning corpus".)
 - **That the TTS call works.** Unverified — see above.
 
-Note `rdk/vision/adas/catalog.py` duplicates the spoken strings across the
-Python/TypeScript boundary, and `pedestrian_ahead` and `tailgating` are not in
-`shared/adas.ts` yet. No test can catch drift from either side; keep them in
-step by hand.
+`rdk/vision/adas/catalog.py` duplicates the spoken strings across the
+Python/TypeScript boundary by design (the board must not parse TypeScript at
+runtime). Since 2026-07-30 the catalog is aligned with `shared/adas.ts` —
+`pedestrian_ahead` and `tailgating` included — and
+`tests/test_catalog_drift.py` fails the board suite if either side drifts, so
+this is no longer kept in step by hand.
 
 ## ADAS M0 — recording a corpus
 
@@ -970,9 +1025,9 @@ Those are the defaults, so plain `python3 -m tools.record_ride` does the same.
 The sensor on each channel is discovered over i2c — there is no `--sensor` flag,
 because a configured sensor name is what stopped the OV5647 in CAM1 from opening.
 
-**Stop the sidecar first:** `systemctl stop max-vision`. The board allows exactly
-one holder of the ISP, so a recorder and a running max-vision cannot both have
-the camera.
+**Stop the sidecar first:** `systemctl stop max-vision`. Exactly one process
+may hold a given camera, so a recorder and a running max-vision cannot both
+have the same sensors.
 
 **Two frame sources**, selected with `--source`:
 
@@ -1001,13 +1056,13 @@ older/newer navigation, and delete. The captures header shows free space
 against the `MAX_GALLERY_MIN_FREE_MB` floor, because deletion is how space
 comes back.
 
-| Route                              | Returns                                                                                                                                                                     |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /gallery`                     | every capture, newest first, with sizes, capture time, video duration, and disk space against the floor                                                                     |
-| `GET /gallery/<pair>/<file>`       | the bytes; a `.mjpeg` downloads as an attachment                                                                                                                            |
-| `GET /gallery/<pair>/<file>/thumb` | the first frame of a recording                                                                                                                                              |
-| `GET /gallery/<pair>/<file>/play`  | the recording replayed as `multipart/x-mixed-replace` — the stream preview already uses, so a plain `<img>` plays it; `?fps=` (1–30, default the recorded 10) sets the pace |
-| `POST /gallery/<pair>/delete`      | removes the whole pair; `409` while it is still being written, `404` for anything that is not a capture                                                                     |
+| Route                              | Returns                                                                                                                                                                                                                                                                                                               |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /gallery`                     | every capture, newest first, with sizes, capture time, video duration, and disk space against the floor                                                                                                                                                                                                               |
+| `GET /gallery/<pair>/<file>`       | the bytes; a `.mjpeg` downloads as an attachment                                                                                                                                                                                                                                                                      |
+| `GET /gallery/<pair>/<file>/thumb` | the first frame of a recording                                                                                                                                                                                                                                                                                        |
+| `GET /gallery/<pair>/<file>/play`  | the recording replayed as `multipart/x-mixed-replace` — the stream preview already uses, so a plain `<img>` plays it. Default pace is the clip's own recorded rate (the manifest's `fps` stamp); `?speed=` (0–4, default 1) multiplies it, capped at 30 fps; `?fps=` (1–30, float) remains an exact absolute override |
+| `POST /gallery/<pair>/delete`      | removes the whole pair; `409` while it is still being written, `404` for anything that is not a capture                                                                                                                                                                                                               |
 
 Playback re-streams the file rather than transcoding it: an ffmpeg pass per
 view is heat and RAM this board does not have (a shadow ride plateaus near
@@ -1058,8 +1113,8 @@ to any connected control-socket client as `event: hazard`.
 
 Recording and ADAS start together on purpose. Shadow mode without evidence is the
 measurement that misleads, so the runtime refuses to run without a recorder — and
-since the board allows exactly one holder of the ISP, `tools/record_ride.py`
-cannot supply that while the sidecar has the camera. The sidecar records instead.
+since exactly one process may hold a given camera, `tools/record_ride.py`
+cannot supply that while the sidecar has the cameras. The sidecar records instead.
 
 **This makes no sound.** `MAX_ADAS_AUDIO` is untouched and still defaults to `0`;
 arming remains a human decision against shadow numbers meeting the M1 gate.
@@ -1118,14 +1173,33 @@ and a short, thick cable, will settle it in one ride. Nothing in this repo can
 fix a brown-out; what the software now guarantees is that a clip interrupted by
 one is still in the gallery afterwards.
 
+**The deaths are current, and they track load.** After a quiet stretch that
+briefly implicated the old power path, the board hard-died during a live voice
+session on 2026-07-30, three more times in ~13 minutes on 2026-07-31, and again
+on 2026-08-01 under full board pytest + both cameras + agent — every one the
+same signature (journal stops mid-sentence, dirty FAT mount on the next boot).
+The meter A/B stays the definitive step and a beefier supply is overdue. Until
+then, "Max，关机" (see "Voice shutdown") makes clean power-off the easy path.
+One unrelated find from the 2026-08-01 post-mortem: the board's desktop session
+had a Firefox content process holding ~900 MB — on a 4 GB board, close the
+desktop browser before benching anything heavy.
+
+**Reading the journal on this board is its own trap.** There is no RTC: every
+boot starts with the clock months wrong and NTP steps it later, so early-boot
+entries are stamped with a bogus date, `journalctl --since` windows silently
+miss them, `-u <unit> -b` can return nothing for a running service, and
+`systemctl status` shows nonsense start times. Query by boot id
+(`journalctl --list-boots`), stream live with `journalctl -f`, or grep the
+whole journal for `\[vision\]` / `max-aec` instead of trusting timestamps.
+
 A ride that logs no alerts is not evidence of a broken pipeline. Replay the
 ride's own segment (`python3 -m tools.replay <segment> --camera front`) — if it
 also reports 0 alerts, the scene simply had no hazards. That is how the first
 live ride was verified: 237 frames, 0 alerts, both live and on replay.
 
-Because `mipi_cam` publishes decoded frames on `/image_raw`, the recorder
-JPEG-encodes them, so a segment is concatenated JPEG rather than an H.264
-stream. `corpus/library.py` accepts both.
+Because `mipi_cam` publishes decoded frames (on `/<camera>/image_raw` — see
+"Two cameras need two topics"), the recorder JPEG-encodes them, so a segment is
+concatenated JPEG rather than an H.264 stream. `corpus/library.py` accepts both.
 
 Segments are 60 s plus a `.jsonl` metadata sidecar, so a power cut costs at most
 one minute. A camera that will not open is logged and skipped — front-only rides
@@ -1181,8 +1255,18 @@ belonged to ended. A second directory held nothing at all.
 The manifest is now written when recording starts, carrying `"recording": true`,
 and finalised on stop — stamped with a wall-clock `duration_s`, because the
 writer measurably falls behind the nominal 10 fps and frames ÷ fps would
-understate how long the rider actually recorded. A reconciled clip has no
-trustworthy clock, so it carries no duration rather than a guessed one. `Gallery.reconcile()` runs once at service start — before
+understate how long the rider actually recorded.
+
+The stop also stamps **`fps`, the rate the writer actually achieved** (frames
+written ÷ duration), and playback paces from it. This closed a real
+discrepancy: an 8 m 19 s ride (498.5 s, 1820 frames — 3.65 fps under the
+flicker-era CPU load) played back in ~3 minutes at the assumed nominal 10 fps,
+so the rider saw "8 minutes" in the gallery label and ~3 minutes of timelapse
+on screen — both describing the same file. With the stamp, 1× is real time for
+every clip, the viewer's ½×/2× multiply the clip's own rate, and clips from
+before the stamp (or reconciled ones, which have no trustworthy clock) fall
+back to the nominal rate. A reconciled clip likewise carries no duration
+rather than a guessed one. `Gallery.reconcile()` runs once at service start — before
 anything can record, so a manifest still flagged `recording` can only belong to a
 dead process — and it:
 

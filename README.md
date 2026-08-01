@@ -122,6 +122,11 @@ single status caption and minimal controls.
 ├── tests/                    # Vitest unit tests for the pure functions
 ├── android/                  # Native Kotlin + Jetpack Compose client
 ├── ios/                      # Native Swift + SwiftUI client
+├── rdk/                      # Embedded helmet client for the RDK X5 board — see rdk/README.md
+│   ├── agent/                #   voice agent (Node/tsx): relay client, AEC-fed audio, dev HUD
+│   ├── vision/               #   camera sidecar (Python): photos, recordings, gallery, ADAS shadow mode
+│   ├── aec/                  #   in-process echo canceller (C++, WebRTC APM)
+│   └── systemd/              #   max-agent / max-vision units + hardware watchdog
 ├── .env.example              # Environment variable template
 ├── eslint.config.js
 ├── package.json
@@ -138,12 +143,13 @@ All clients use the same `/agent` relay and session contract. The web HUD is the
 implementation; Android and iOS port the same protocol helpers, transcript rules, ride-context
 mapping, audio frame sizes, reconnect behavior, barge-in, and TTS fallback.
 
-| Client  | Location   | UI/audio stack                                                                | Local relay URL                                                            | Notes                                                                                                                     |
-| ------- | ---------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Web     | `src/`     | React + Web Audio + `AudioWorklet`                                            | same-origin `/agent` through Vite proxy                                    | Best for fast iteration, screenshots, and browser mic/TTS behavior.                                                       |
-| Android | `android/` | Jetpack Compose + `AudioRecord` + `AudioTrack`                                | emulator: `ws://10.0.2.2:8787/agent`                                       | Foreground service keeps the mic session alive with screen off.                                                           |
-| iOS     | `ios/`     | SwiftUI + shared `AVAudioEngine` (voice-processing AEC) + `AVAudioPlayerNode` | simulator: `ws://localhost:8787/agent`; device: `wss://3.35.135.136/agent` | Environment-aware default relay; background audio keeps the hands-free session alive; built-in-speaker echo cancellation. |
-| Test    | any client | Browser/mobile client pointed at shared deployment                            | `wss://3.35.135.136/agent` with self-signed TLS                            | Uses `VOICE_PROVIDER=doubao` and the server's private `.env` values.                                                      |
+| Client  | Location   | UI/audio stack                                                                | Local relay URL                                                            | Notes                                                                                                                       |
+| ------- | ---------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Web     | `src/`     | React + Web Audio + `AudioWorklet`                                            | same-origin `/agent` through Vite proxy                                    | Best for fast iteration, screenshots, and browser mic/TTS behavior.                                                         |
+| Android | `android/` | Jetpack Compose + `AudioRecord` + `AudioTrack`                                | emulator: `ws://10.0.2.2:8787/agent`                                       | Foreground service keeps the mic session alive with screen off.                                                             |
+| iOS     | `ios/`     | SwiftUI + shared `AVAudioEngine` (voice-processing AEC) + `AVAudioPlayerNode` | simulator: `ws://localhost:8787/agent`; device: `wss://3.35.135.136/agent` | Environment-aware default relay; background audio keeps the hands-free session alive; built-in-speaker echo cancellation.   |
+| Helmet  | `rdk/`     | RDK X5 board: Node agent + ALSA + WebRTC-APM AEC; Python camera/ADAS sidecar  | `MAX_RELAY_URL` in `/etc/max/agent.env`                                    | The real hardware: screenless voice client with cameras, gallery, and ADAS shadow mode. See [rdk/README.md](rdk/README.md). |
+| Test    | any client | Browser/mobile client pointed at shared deployment                            | `wss://3.35.135.136/agent` with self-signed TLS                            | Uses `VOICE_PROVIDER=doubao` and the server's private `.env` values.                                                        |
 
 ### Runtime topology
 

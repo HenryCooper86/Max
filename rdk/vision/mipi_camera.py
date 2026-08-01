@@ -1,10 +1,13 @@
 """One camera, one ``mipi_cam`` process, one holder.
 
-Exactly one process on this board may hold the ISP. A second opener fails with
-``The detected sensors are 1 less than expected``, which names sensor detection
-when the real cause is a busy device — an hour of debugging pointed at the wrong
-layer before that was understood. So the sidecar owns the camera, and every
-consumer (photo, preview, recording, ADAS) reads the same latest frame from here.
+Exactly one process on this board may hold a given camera's pipeline. A second
+opener of the same camera fails with ``The detected sensors are 1 less than
+expected``, which names sensor detection when the real cause is a busy device —
+an hour of debugging pointed at the wrong layer before that was understood.
+(Two processes driving two *different* sensors coexist fine: both hold the same
+vs-isp0/vse0 nodes and stream ~30 fps each, measured 2026-08-01.) So the
+sidecar owns the cameras, and every consumer (photo, preview, recording, ADAS)
+reads the same latest frame from here.
 
 The ctypes binding in ``camera_binding.py`` remains the alternative, and remains
 non-functional: ``hbn_camera_create`` returns -1 for every sensor and VCON tried.
@@ -22,9 +25,9 @@ from typing import Iterator
 
 from perception.frame_source import Frame
 
-TOPIC = "/image_raw"
 #: One of the nodes a live mipi_cam holds. Checking one is enough — they are
-#: acquired together — and it is the one whose holder blocks the next open.
+#: acquired together (both cameras hold the same vs-isp0/vse0 set, measured
+#: 2026-08-01) — and it is the one whose holder blocks the next open.
 ISP_DEVICE = "/dev/vs-isp0_cap"
 
 #: How stale a served JPEG may be when the caller opts in. At 24 fps capture
@@ -151,6 +154,35 @@ def reap_orphans(holders=_isp_holders, kill=os.kill, sleep=time.sleep) -> list[i
     return pids
 
 
+def launch_command(
+    sensor: str, channel: int, width: int, height: int, topic: str, node_name: str
+) -> list[str]:
+    """The ros2 invocation for one camera, remapped onto its own topic.
+
+    The vendor node publishes a hardcoded ``/image_raw`` under a hardcoded node
+    name. With two cameras that is the measured flicker: two publishers on one
+    topic (confirmed 2026-08-01, ~50 Hz combined on ``/image_raw``), so every
+    subscriber drinks both sensors' frames interleaved — and the staleness
+    monitor goes blind, because a dead camera's buffer stays fresh on the other
+    camera's frames. ``-r`` moves each node onto ``/<camera>/image_raw``;
+    verified against the real node before this was written.
+    """
+    return [
+        "ros2", "run", "mipi_cam", "mipi_cam", "--ros-args",
+        "-r", f"__node:={node_name}",
+        "-r", f"/image_raw:={topic}",
+        "-p", f"video_device:={sensor}",
+        "-p", f"channel:={channel}",
+        "-p", f"image_width:={width}",
+        "-p", f"image_height:={height}",
+        "-p", "out_format:=nv12",
+        # The node logs one INFO line per captured frame — ~24 a second,
+        # forever. Its stdout is discarded, but ROS also writes them to
+        # disk, so quiet it at the source.
+        "--log-level", "WARN",
+    ]
+
+
 def _signal_group(proc, sig, killpg=os.killpg, getpgid=os.getpgid) -> None:
     """Signal the child's whole process group.
 
@@ -178,6 +210,10 @@ class MipiCamera:
         self.sensor = sensor
         self.width = width
         self.height = height
+        #: Per-camera topic and node name. Sharing the vendor defaults across
+        #: two cameras is the flicker: see ``launch_command``.
+        self.topic = f"/{camera}/image_raw"
+        self.node_name = f"mipi_cam_{camera}"
         self.buffer = FrameBuffer(camera, width, height)
         self._proc: subprocess.Popen | None = None
         self._node = None
@@ -191,18 +227,10 @@ class MipiCamera:
         from sensor_msgs.msg import Image  # noqa: PLC0415
 
         self._proc = subprocess.Popen(
-            [
-                "ros2", "run", "mipi_cam", "mipi_cam", "--ros-args",
-                "-p", f"video_device:={self.sensor}",
-                "-p", f"channel:={self.channel}",
-                "-p", f"image_width:={self.width}",
-                "-p", f"image_height:={self.height}",
-                "-p", "out_format:=nv12",
-                # The node logs one INFO line per captured frame — ~24 a second,
-                # forever. Its stdout is discarded, but ROS also writes them to
-                # disk, so quiet it at the source.
-                "--log-level", "WARN",
-            ],
+            launch_command(
+                self.sensor, self.channel, self.width, self.height,
+                self.topic, self.node_name,
+            ),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             # Its own session, so stop() can signal the wrapper and the real
@@ -219,7 +247,7 @@ class MipiCamera:
         if not rclpy.ok():
             rclpy.init()
         self._node = rclpy.create_node(f"max_vision_ch{self.channel}")
-        self._node.create_subscription(Image, TOPIC, on_image, 10)
+        self._node.create_subscription(Image, self.topic, on_image, 10)
 
         # Each camera gets its own executor. rclpy.spin_once() drives a global
         # one, so two cameras spinning concurrently raise "generator already
@@ -256,7 +284,7 @@ class MipiCamera:
                 raise RuntimeError(f"mipi_cam exited early on channel {self.channel}")
             time.sleep(0.2)
         raise RuntimeError(
-            f"no frame on {TOPIC} within {settle_seconds:.0f}s (channel {self.channel})"
+            f"no frame on {self.topic} within {settle_seconds:.0f}s (channel {self.channel})"
         )
 
     def latest(self) -> Frame | None:

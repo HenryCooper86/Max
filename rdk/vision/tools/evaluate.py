@@ -221,6 +221,17 @@ def main(argv: list[str] | None = None) -> None:
         "scoring each separately; cross-tuning totals would mislead"
     )
     groups = _group_by_fingerprint(records, fingerprints)
+    # A record whose fingerprint matches no header (a corrupted log) lands in
+    # its own group, which the loop below never visits. Dropping it silently
+    # would make the report claim coverage it does not have — say so instead.
+    orphans = {fp: recs for fp, recs in groups.items() if fp not in fingerprints}
+    if orphans:
+        detail = ", ".join(f"{fp} ({len(recs)} record(s))" for fp, recs in orphans.items())
+        print(
+            f"WARNING: unscored records under fingerprint(s) with no header — {detail}; "
+            "the shadow log may be corrupted",
+            file=sys.stderr,
+        )
     scores: dict[str, RideScore] = {}
     for fp in fingerprints:
         score = score_ride(groups[fp], windows, start, duration_h, [fp], tolerance_ms=args.tolerance_ms)

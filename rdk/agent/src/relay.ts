@@ -223,7 +223,11 @@ export function createRelayClient(
       intentional = true;
       ready = false;
       socket?.close();
-      socket = null;
+      // The socket stays set: ws delivers `close` asynchronously, and nulling
+      // here made that event fail the `socket === current` guard — so an
+      // intentional close never reached onClosed(true). The close handler
+      // nulls it; sendFrame/sendEvent are already gated on readyState, which
+      // close() moves off OPEN synchronously.
     },
     sendFrame(frame: Int16Array): void {
       // Gate on session.started: transmitting earlier produces the startup

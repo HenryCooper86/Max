@@ -122,6 +122,63 @@ describe("createRelayClient lifecycle", () => {
     expect(closedCalls).toEqual([false]);
   });
 
+  it("an intentional disconnect still delivers onClosed(true) when the close lands", () => {
+    // disconnect() used to null the socket synchronously, so its own close —
+    // which ws delivers asynchronously — failed the stale-socket guard and
+    // onClosed(true) never fired. Unobservable while shutdown() exits the
+    // process immediately, and a trap for any later graceful-shutdown work.
+    const socket = fakeSocket();
+    const closedCalls: boolean[] = [];
+    const client = createRelayClient(
+      CONFIG,
+      { ...HANDLERS, onClosed: (idle) => closedCalls.push(idle) },
+      { wsFactory: () => socket, log: () => {} }
+    );
+    client.connect();
+    socket.readyState = 1;
+    socket.emit("open");
+    client.disconnect();
+    expect(socket.close).toHaveBeenCalled();
+    // The close event arrives after disconnect() has already returned.
+    socket.readyState = 3;
+    socket.emit("close", 1000, Buffer.alloc(0));
+    expect(closedCalls).toEqual([true]);
+  });
+
+  it("a reconnect between disconnect and its late close keeps the old close stale", () => {
+    // The guard disconnect() was wrongly tripping still has a job: once a
+    // fresh socket replaces the closing one, the old close must not fire
+    // onClosed or clobber the live socket's ready state.
+    const sockets: ReturnType<typeof fakeSocket>[] = [];
+    const closedCalls: boolean[] = [];
+    const client = createRelayClient(
+      CONFIG,
+      { ...HANDLERS, onClosed: (idle) => closedCalls.push(idle) },
+      {
+        wsFactory: () => {
+          const socket = fakeSocket();
+          sockets.push(socket);
+          return socket;
+        },
+        log: () => {}
+      }
+    );
+    client.connect();
+    sockets[0]!.readyState = 1;
+    sockets[0]!.emit("open");
+    client.disconnect();
+    sockets[0]!.readyState = 2; // CLOSING — the already-open guard lets connect through
+    client.connect();
+    expect(sockets.length).toBe(2);
+    sockets[1]!.readyState = 1;
+    sockets[1]!.emit("open");
+    sockets[1]!.emit("message", Buffer.from(JSON.stringify({ type: "session.started" })), false);
+    sockets[0]!.emit("close", 1000, Buffer.alloc(0)); // the old close lands late
+    expect(closedCalls).toEqual([]);
+    client.sendFrame(new Int16Array(320));
+    expect(sockets[1]!.sent.some((item) => Buffer.isBuffer(item))).toBe(true);
+  });
+
   it("a handshake that dies before open still reaches the close path and can reconnect", () => {
     const sockets: ReturnType<typeof fakeSocket>[] = [];
     const lines: string[] = [];

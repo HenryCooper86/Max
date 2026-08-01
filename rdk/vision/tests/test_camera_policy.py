@@ -212,6 +212,64 @@ def test_stopping_a_recording_stops_the_writer_thread(pair, gallery):
     assert (gallery.pair_dir(result["detail"]) / "front.mjpeg").read_bytes() == settled
 
 
+def test_open_records_a_detected_camera_that_failed_to_start(monkeypatch):
+    # The measured 2026-08-01 boot: i2c saw the OV5647, its open failed (the
+    # documented ISP stall), and the sidecar ran rear-only until a human
+    # restarted it. A camera the bus can see but the ISP cannot stream is a
+    # boot race, and the pair must say so rather than degrade in silence.
+    import mipi_camera
+    import sensors
+
+    monkeypatch.setattr(mipi_camera, "reap_orphans", lambda: None)
+
+    class FakeMipi:
+        def __init__(self, channel, sensor, camera, width, height):
+            self.camera = camera
+
+        def start(self):
+            if self.camera == "front":
+                raise RuntimeError("no frame on /front/image_raw within 8s")
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(mipi_camera, "MipiCamera", FakeMipi)
+    monkeypatch.setattr(sensors, "discover", lambda: {0: "OV5647", 2: "IMX219"})
+
+    pair = CameraPair(front_channel=0, rear_channel=2)
+    pair.open()
+    assert pair.failed == ["front"]
+    assert pair.front is None
+    assert pair.opened is True  # the rear still serves
+
+
+def test_an_absent_channel_is_not_a_failed_camera(monkeypatch):
+    # Front-only is normal on this hardware: an empty connector must not put
+    # the sidecar in a retry loop chasing a camera that was never attached.
+    import mipi_camera
+    import sensors
+
+    monkeypatch.setattr(mipi_camera, "reap_orphans", lambda: None)
+
+    class FakeMipi:
+        def __init__(self, channel, sensor, camera, width, height):
+            pass
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(mipi_camera, "MipiCamera", FakeMipi)
+    monkeypatch.setattr(sensors, "discover", lambda: {0: "OV5647"})
+
+    pair = CameraPair(front_channel=0, rear_channel=2)
+    pair.open()
+    assert pair.failed == []
+    assert pair.opened is True
+
+
 def test_open_reaps_exactly_once_before_the_first_camera(monkeypatch):
     import mipi_camera
     import sensors

@@ -105,3 +105,15 @@ def test_one_open_camera_is_enough():
     pair = CameraPair(front_channel=0, rear_channel=2)
     pair.opened = True
     require_cameras(pair)
+
+
+def test_a_detected_camera_that_failed_to_open_exits_for_systemd_to_retry():
+    # The 2026-08-01 boot: i2c saw the front OV5647, its open failed, and the
+    # sidecar served rear-only for a whole boot — no retry, no monitor line,
+    # because the monitor only watches cameras that opened. A sensor the bus
+    # can see is a promise; exit and let systemd retry until it streams.
+    pair = CameraPair(front_channel=0, rear_channel=2)
+    pair.opened = True
+    pair.failed = ["front"]
+    with pytest.raises(SystemExit):
+        require_cameras(pair)

@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from mipi_camera import FrameBuffer, MipiCamera, _signal_group, reap_orphans
+from mipi_camera import FrameBuffer, MipiCamera, _signal_group, launch_command, reap_orphans
 
 
 def counting_encoder():
@@ -125,6 +125,34 @@ def test_signal_group_tolerates_a_group_that_is_already_gone():
         raise ProcessLookupError
 
     _signal_group(FakeProc(), signal.SIGTERM, killpg=killpg, getpgid=lambda pid: 1)
+
+
+def test_each_camera_gets_its_own_topic():
+    # Two mipi_cam nodes sharing one /image_raw is the measured dual-camera
+    # flicker: with two publishers on the topic (confirmed 2026-08-01, ~50 Hz
+    # combined), every subscriber drinks both sensors' frames interleaved.
+    front = MipiCamera(channel=0, sensor="OV5647", camera="front", width=4, height=2)
+    rear = MipiCamera(channel=2, sensor="IMX219", camera="rear", width=4, height=2)
+    assert front.topic == "/front/image_raw"
+    assert rear.topic == "/rear/image_raw"
+    assert front.topic != rear.topic
+
+
+def test_launch_command_remaps_topic_and_node_per_camera():
+    # The remap must ride the ros2 command line: the vendor node publishes a
+    # hardcoded /image_raw, and two nodes also share the name "mipi_cam".
+    # Verified against the real node: -r moves the topic and renames the node.
+    cmd = launch_command(
+        sensor="OV5647", channel=0, width=1920, height=1080,
+        topic="/front/image_raw", node_name="mipi_cam_front",
+    )
+    text = " ".join(cmd)
+    assert "-r /image_raw:=/front/image_raw" in text
+    assert "-r __node:=mipi_cam_front" in text
+    # The existing capture parameters must survive the change.
+    assert "video_device:=OV5647" in text
+    assert "channel:=0" in text
+    assert "out_format:=nv12" in text
 
 
 def test_frames_yields_each_new_frame_once():

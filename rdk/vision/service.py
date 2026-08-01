@@ -100,7 +100,7 @@ def finalize(cameras, gallery, ride) -> None:
 
 
 def require_cameras(cameras) -> None:
-    """Exit when the pair opened with no cameras at all.
+    """Exit when the pair opened with no cameras, or short of a detected one.
 
     A boot can race the camera stack: on 2026-07-31 the sidecar came up
     seconds after power-on, ``discover()`` saw an empty bus, and the service
@@ -110,13 +110,27 @@ def require_cameras(cameras) -> None:
     trying until the stack is ready. Voice is unaffected; max-agent does not
     ``Require=`` this service and reports camera failures truthfully.
 
-    One camera is enough — front-only is normal on this hardware. A
-    deliberately camera-less bench will crash-loop visibly, which is the
-    fail-loud trade: stop the service instead of running it blind.
+    ``failed`` is the same race one layer deeper, measured at the 2026-08-01
+    boot: i2c saw the front OV5647 but its open stalled in the ISP, and the
+    sidecar served rear-only for a whole boot with nothing in the journal
+    after the open. A sensor the bus can see is a promise that it streams;
+    falling short of it restarts the service just as a stale camera does.
+
+    One camera is enough — front-only is normal on this hardware — so long as
+    every *attached* camera opened. A deliberately camera-less bench will
+    crash-loop visibly, which is the fail-loud trade: stop the service instead
+    of running it blind.
     """
-    if cameras.opened:
+    if cameras.opened and not cameras.failed:
         return
-    print("[vision] no cameras opened; exiting for systemd to retry the open", flush=True)
+    if not cameras.opened:
+        print("[vision] no cameras opened; exiting for systemd to retry the open", flush=True)
+    else:
+        print(
+            f"[vision] detected camera(s) failed to open: {', '.join(cameras.failed)}; "
+            "exiting for systemd to retry the open",
+            flush=True,
+        )
     raise SystemExit(1)
 
 

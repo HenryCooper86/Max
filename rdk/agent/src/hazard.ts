@@ -25,7 +25,7 @@ export type HazardEvent = {
 export type HazardHandlerOptions = {
   /** config.adasAudio. False until the M1 gate is met. */
   armed: boolean;
-  player: { play(threat: string): Promise<number | null> };
+  player: { play(threat: string, severity?: string): Promise<number | null> };
   report(event: Record<string, unknown>): void;
   log?: (line: string) => void;
 };
@@ -44,7 +44,7 @@ export function createHazardHandler(options: HazardHandlerOptions): {
         return;
       }
 
-      const handoverMs = await options.player.play(event.threat);
+      const handoverMs = await options.player.play(event.threat, event.severity);
 
       try {
         options.report({

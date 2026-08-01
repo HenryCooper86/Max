@@ -576,6 +576,40 @@ describe("playback priority lock", () => {
     expect(fake.kill).toHaveBeenCalled();
   });
 
+  it("a strictly-higher-rank flush cuts through a held alert", () => {
+    // Decision 2026-08-01: a critical forward-collision must not queue behind
+    // a caution clip's audible tail — the seconds in that tail are exactly
+    // the seconds the critical alert exists to buy.
+    const fake = fakeChild();
+    const playback = createPlayback({ device: "plughw:0,0", spawn: () => fake.child });
+    playback.write(new Int16Array(240));
+    playback.holdPriority(1); // a caution clip is playing
+    playback.flush(2); // a critical alert arrives
+    expect(fake.kill).toHaveBeenCalled();
+  });
+
+  it("an equal-rank flush still queues behind the held alert", () => {
+    // Two criticals: the second waits. Preemption is for outranking only, or
+    // back-to-back alerts would endlessly cut each other's first syllable.
+    const fake = fakeChild();
+    const playback = createPlayback({ device: "plughw:0,0", spawn: () => fake.child });
+    playback.write(new Int16Array(240));
+    playback.holdPriority(2);
+    playback.flush(2);
+    expect(fake.kill).not.toHaveBeenCalled();
+  });
+
+  it("a rankless voice flush never cuts a ranked hold", () => {
+    // Barge-in carries no rank: the rider flinching at a warning must still
+    // not cancel it, whatever its severity.
+    const fake = fakeChild();
+    const playback = createPlayback({ device: "plughw:0,0", spawn: () => fake.child });
+    playback.write(new Int16Array(240));
+    playback.holdPriority(1);
+    playback.flush();
+    expect(fake.kill).not.toHaveBeenCalled();
+  });
+
   it("a new alert cancels a stale pending release", () => {
     let clock = 0;
     const scheduled: Array<{ fn: () => void; ms: number }> = [];

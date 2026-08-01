@@ -238,8 +238,9 @@
   let pairs = [];
   let lastSerialised = null;
   let viewerIndex = -1;
-  // Playback pacing for the viewer, in fps. 10 is the recorded rate.
-  let viewerFps = 10;
+  // Playback speed multiplier. The sidecar paces each clip at the rate its
+  // writer actually achieved (the manifest's fps); 1× means real time.
+  let viewerSpeed = 1;
   // Bumped on every stream URL so reopening a clip replays it instead of
   // showing the browser's cached last frame.
   let streamNonce = 0;
@@ -291,15 +292,15 @@
     panelsEl.innerHTML = sidesOf(pair)
       .map((side) => {
         const href = `${galleryBase}/gallery/${pair.id}/${pair[side]}`;
-        const src = isVideo ? `${href}/play?fps=${viewerFps}&t=${++streamNonce}` : href;
+        const src = isVideo ? `${href}/play?speed=${viewerSpeed}&t=${++streamNonce}` : href;
         return `<figure><img src="${src}" alt="${pair.id} ${side}" />
           <figcaption>${side} · ${fmtSize(pair.sizes[side])} · <a href="${href}" download>download</a></figcaption></figure>`;
       })
       .join("");
 
     const speeds = isVideo
-      ? [5, 10, 20]
-          .map((fps) => `<button data-fps="${fps}" class="${fps === viewerFps ? "on" : ""}">${fps / 10}×</button>`)
+      ? [0.5, 1, 2]
+          .map((speed) => `<button data-speed="${speed}" class="${speed === viewerSpeed ? "on" : ""}">${speed}×</button>`)
           .join("")
       : "";
     const del = pair.recording ? "" : `<button id="viewer-delete" class="danger">delete</button>`;
@@ -311,7 +312,7 @@
 
   function openViewer(index) {
     viewerIndex = index;
-    viewerFps = 10;
+    viewerSpeed = 1;
     renderViewer();
     viewerEl.hidden = false;
   }
@@ -356,9 +357,9 @@
   });
 
   actionsEl.addEventListener("click", (event) => {
-    const speed = event.target.closest("[data-fps]");
+    const speed = event.target.closest("[data-speed]");
     if (speed) {
-      viewerFps = Number(speed.dataset.fps);
+      viewerSpeed = Number(speed.dataset.speed);
       renderViewer();
       return;
     }

@@ -49,6 +49,9 @@ class CameraPair:
         #: space; the disk is the only thing that can end a clip early.
         self._recording_gallery: Gallery | None = None
         self._recording_frames = 0
+        #: Frames actually written per side, for the manifest's achieved fps.
+        #: The nominal RECORDING_FPS is a target the encoder measurably misses.
+        self._recording_written = {"front": 0, "rear": 0}
         self._recording_stop = threading.Event()
         self._recording_thread: threading.Thread | None = None
         self._lock = threading.Lock()
@@ -163,6 +166,7 @@ class CameraPair:
             self._recording_dir = gallery.pair_dir(pair_id)
             self._recording_gallery = gallery
             self._recording_frames = 0
+            self._recording_written = {"front": 0, "rear": 0}
 
         # Hard stop at the cap, so a forgotten recording cannot fill the disk.
         self._stop_timer = threading.Timer(MAX_RECORDING_SECONDS, lambda: self.stop_recording(gallery))
@@ -229,6 +233,8 @@ class CameraPair:
             directory.mkdir(parents=True, exist_ok=True)
             try:
                 self._append_frame(directory / filename, data)
+                with self._lock:
+                    self._recording_written[side] += 1
             except OSError as error:
                 # ENOSPC or a dying card. The thread dying here is what left
                 # manifests stuck at "recording": true; stop cleanly instead,
@@ -274,8 +280,16 @@ class CameraPair:
         # Wall clock, not frames ÷ fps: the writer measurably falls behind the
         # nominal rate, and the truth about a clip is how long it recorded.
         duration = round(time.monotonic() - started_at, 1) if started_at is not None else None
+        # Stamp the rate the writer achieved (3.65 fps measured against 10
+        # nominal on 2026-08-01), so playback can pace the clip truthfully.
+        # Read after the join, so a write that was in flight at the stop is
+        # counted iff it reached the file; from the stored duration, not the
+        # raw delta, so frames ÷ fps round-trips to the length named here.
+        frames = max(self._recording_written.values())
+        fps = round(frames / duration, 2) if duration and frames else None
         gallery.write_manifest(
-            pair_id, sides["front"], sides["rear"], "video", recording=False, duration_s=duration
+            pair_id, sides["front"], sides["rear"], "video",
+            recording=False, duration_s=duration, fps=fps,
         )
         degraded = sides["front"] is None or sides["rear"] is None
         return {"status": "ok", "detail": f"{pair_id}{' degraded' if degraded else ''}"}

@@ -50,6 +50,7 @@ class Gallery:
         kind: str,
         recording: bool = False,
         duration_s: float | None = None,
+        fps: float | None = None,
     ) -> Path:
         """Write the pair manifest atomically, so a reader never sees a partial
         record if power is cut mid-write.
@@ -74,6 +75,12 @@ class Gallery:
         # clock, and "unknown" and "instant" must not read the same.
         if duration_s is not None:
             payload["duration_s"] = duration_s
+        # The rate the writer *achieved*, not the nominal RECORDING_FPS: the
+        # measured pair-20260801-000444-2 wrote at 3.65 fps against 10 nominal,
+        # and playing it at the nominal rate compressed an 8.3-minute ride
+        # into a 3-minute timelapse. Absent when unknown, same as duration.
+        if fps is not None:
+            payload["fps"] = fps
         final = directory / "manifest.json"
         temporary = directory / "manifest.json.tmp"
         temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")

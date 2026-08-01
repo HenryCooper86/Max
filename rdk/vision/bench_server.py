@@ -41,9 +41,29 @@ THUMB_MAX_BYTES = 16 * 1024 * 1024
 DEFAULT_FRAME_WIDTH = 640
 MAX_FRAME_WIDTH = 1920
 
-#: Playback pacing ceiling. 3× the recorded rate is the fastest skim the
-#: viewer offers; beyond that every frame is on the wire for a blink.
+#: Playback pacing ceiling. Beyond this every frame is on the wire for a
+#: blink, and the board streams work nobody can see.
 MAX_PLAY_FPS = 30
+#: Fastest speed multiplier the viewer may ask for.
+MAX_PLAY_SPEED = 4.0
+
+
+def stamped_fps(target: Path) -> float:
+    """The rate the clip's writer actually achieved, from its manifest.
+
+    Pacing playback at the nominal RECORDING_FPS lied about time: the measured
+    pair-20260801-000444-2 wrote 1820 frames over 498.5 s — 3.65 fps — and the
+    nominal 10 compressed that 8.3-minute ride into a 3-minute timelapse the
+    rider read as "I recorded 3 minutes, it says 8". Clips from before the
+    stamp existed (and reconciled ones) fall back to the nominal rate — the
+    only honest guess left.
+    """
+    try:
+        manifest = json.loads((target.parent / "manifest.json").read_text(encoding="utf-8"))
+        fps = float(manifest.get("fps"))
+    except (OSError, TypeError, ValueError):
+        return float(RECORDING_FPS)
+    return fps if fps > 0 else float(RECORDING_FPS)
 
 
 def first_frame(data: bytes) -> bytes | None:
@@ -262,15 +282,31 @@ def serve(pair, gallery, port: int, share_frames: bool = False) -> None:
             /preview/*. The stream simply ends with the file — a clip still
             being written plays what is on disk and stops.
             """
-            raw_fps = parse_qs(query).get("fps", [str(int(RECORDING_FPS))])[0]
-            try:
-                fps = int(raw_fps)
-            except ValueError:
-                self.send_error(400, "bad fps")
-                return
-            if not 1 <= fps <= MAX_PLAY_FPS:
-                self.send_error(400, "fps out of range")
-                return
+            params = parse_qs(query)
+            raw_fps = params.get("fps", [None])[0]
+            if raw_fps is not None:
+                # An absolute override, for tools that want exact pacing.
+                try:
+                    fps = float(raw_fps)
+                except ValueError:
+                    self.send_error(400, "bad fps")
+                    return
+                if not 1 <= fps <= MAX_PLAY_FPS:
+                    self.send_error(400, "fps out of range")
+                    return
+            else:
+                # Default: the rate the writer achieved, times the viewer's
+                # speed. Half/double relative to the clip's own rate — scaling
+                # the nominal rate is exactly the lie the stamp exists to end.
+                try:
+                    speed = float(params.get("speed", ["1"])[0])
+                except ValueError:
+                    self.send_error(400, "bad speed")
+                    return
+                if not 0 < speed <= MAX_PLAY_SPEED:
+                    self.send_error(400, "speed out of range")
+                    return
+                fps = min(stamped_fps(target) * speed, MAX_PLAY_FPS)
 
             self.send_response(200)
             self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")

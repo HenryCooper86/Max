@@ -57,6 +57,20 @@ def test_write_manifest_records_a_degraded_pair(gallery):
     assert payload["degraded"] is True
 
 
+def test_write_manifest_records_the_achieved_fps(gallery):
+    pair_id = gallery.new_pair_id(datetime(2026, 8, 1, 0, 4, 44))
+    path = gallery.write_manifest(pair_id, "front.mjpeg", "rear.mjpeg", "video", duration_s=498.5, fps=3.65)
+    payload = json.loads(path.read_text())
+    assert payload["fps"] == 3.65
+
+
+def test_write_manifest_omits_fps_when_unknown(gallery):
+    # Reconciled clips have no trustworthy clock; absent must not read as 0.
+    pair_id = gallery.new_pair_id(datetime(2026, 8, 1, 0, 4, 44))
+    path = gallery.write_manifest(pair_id, "front.mjpeg", None, "video")
+    assert "fps" not in json.loads(path.read_text())
+
+
 def test_manifest_write_is_atomic(gallery):
     pair_id = gallery.new_pair_id(datetime(2026, 7, 25, 14, 22, 33))
     gallery.write_manifest(pair_id, "front.jpg", "rear.jpg", "photo")

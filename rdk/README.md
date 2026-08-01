@@ -1058,7 +1058,7 @@ comes back.
 
 | Route                              | Returns                                                                                                                                                                                                                                                                                                               |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /gallery`                     | every capture, newest first, with sizes, capture time, video duration, and disk space against the floor                                                                                                                                                                                                               |
+| `GET /gallery`                     | every capture, newest first by capture time (the manifest's mtime, not the pair id), with sizes, capture time, video duration, and disk space against the floor                                                                                                                                                        |
 | `GET /gallery/<pair>/<file>`       | the bytes; a `.mjpeg` downloads as an attachment                                                                                                                                                                                                                                                                      |
 | `GET /gallery/<pair>/<file>/thumb` | the first frame of a recording                                                                                                                                                                                                                                                                                        |
 | `GET /gallery/<pair>/<file>/play`  | the recording replayed as `multipart/x-mixed-replace` — the stream preview already uses, so a plain `<img>` plays it. Default pace is the clip's own recorded rate (the manifest's `fps` stamp); `?speed=` (0–4, default 1) multiplies it, capped at 30 fps; `?fps=` (1–30, float) remains an exact absolute override |
@@ -1070,6 +1070,20 @@ view is heat and RAM this board does not have (a shadow ride plateaus near
 large the clip — the same rule that keeps a thumbnail from costing 835 MB.
 The stream simply ends with the file; a clip still being written plays what is
 on disk so far and stops.
+
+**The gallery does not trust the boot clock** (fixed 2026-08-01, after a clip
+recorded one minute after power-on filed itself at the bottom of the grid
+dated 01-01 08:01). This board has no RTC, so a capture started before NTP
+lands gets a `pair-20000101-…` id; NTP steps the clock before the manifest is
+finalised, so the file's mtime carries the truth the id lost. Two rules
+follow: the listing orders by the **manifest's mtime** (`Gallery.list_pairs`),
+and the tile's capture-time label falls back to that mtime whenever the id's
+stamp predates `ID_CLOCK_FLOOR` (2026 — nothing in this gallery is older).
+The floor is deliberate where an id-vs-mtime comparison would be wrong:
+copying a gallery resets mtimes, and a sane id must keep naming the copied
+capture's true start rather than its copy date. The directory name keeps its
+fake-epoch spelling — `reconcile()` and copies tolerate it, and renaming a
+capture under a live gallery is risk with no payoff.
 
 **Delete trusts the LAN, and that is a decision, not an oversight.** An
 earlier version of this section kept the page read-only because the surface is

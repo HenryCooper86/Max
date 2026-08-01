@@ -44,10 +44,12 @@ def extract(
     after_s: float = AFTER_S,
 ) -> Path:
     segment = Path(segment_path)
-    if not segment.exists():
+    if not segment.is_file():
         # Raise rather than write nothing: a zero-byte clip looks like an alert
         # with nothing to see, which is indistinguishable from a false alarm
-        # nobody can explain.
+        # nobody can explain. is_file, not exists — the segment="" sentinel
+        # joined onto the segments root IS the root, a directory that exists,
+        # and ffmpeg fails on it in its own confusing words.
         raise FileNotFoundError(segment)
     start, duration = clip_window(offset_ms, before_s, after_s)
     out = Path(out_path)
@@ -63,18 +65,26 @@ def extract(
     return out
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("shadow")
     parser.add_argument("--index", type=int, required=True)
     parser.add_argument("--segments", required=True)
     parser.add_argument("--out", default="/tmp/alert.mp4")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     records = read_shadow(args.shadow)
     if not 0 <= args.index < len(records):
         raise SystemExit(f"index {args.index} out of range; the log holds {len(records)}")
     record = records[args.index]
+    if not record.segment:
+        # SegmentClock's sentinel: the recorder had no segment open for that
+        # camera at alert time, so there is no video to cut from.
+        raise SystemExit(
+            f"alert #{args.index} ({record.threat_id}) carries no segment — the "
+            "recorder had nothing open for that camera at alert time, so there "
+            "is no video to cut. Pick another alert."
+        )
     out = extract(Path(args.segments) / record.segment, record.segment_offset_ms, args.out)
     print(f"{record.threat_id} @ {record.t_ms} ms -> {out}")
 

@@ -2,6 +2,8 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from adas.tuning import fingerprint
@@ -35,6 +37,51 @@ def approaching(i):
     """A car centred in the corridor, growing steadily."""
     h = 0.10 + 0.03 * i
     return [Detection(cls="car", score=0.9, x1=0.4, y1=0.5 - h / 2, x2=0.6, y2=0.5 + h / 2)]
+
+
+class TexturedSource(FakeSource):
+    """Frames whose luma actually translates, so estimate() has flow to read."""
+
+    def __init__(self, count, dx_per_frame, **kwargs):
+        super().__init__(count, **kwargs)
+        self.dx = dx_per_frame
+
+    def frames(self):
+        base = np.random.default_rng(3).integers(0, 255, size=(self.height, self.width), dtype=np.uint8)
+        chroma = bytes(self.width * self.height // 2)
+        for i in range(self.count):
+            luma = np.roll(base, self.dx * i, axis=1)
+            yield Frame(
+                nv12=luma.tobytes() + chroma,
+                t_ms=round(i * 1000 / self.fps),
+                camera=self.camera,
+                width=self.width,
+                height=self.height,
+            )
+
+
+def test_replay_estimates_ego_from_the_frames_themselves():
+    # Every other test forces ego_moving, so nothing proved the replay path
+    # actually wires frames into estimate() — the parked review note from the
+    # algorithm-hardening merge. Moving luma must reproduce the forced
+    # ego_moving=True alerts, and static luma the forced-False ones; then the
+    # wiring, not just the estimator, holds the parity.
+    moving = run_clip(
+        TexturedSource(12, dx_per_frame=8), detect=lambda frame, i: approaching(i), camera="front"
+    )
+    forced = run_clip(
+        FakeSource(12), detect=lambda frame, i: approaching(i), camera="front", ego_moving=True
+    )
+    assert [a.threat_id for a in moving.alerts] == [a.threat_id for a in forced.alerts]
+    assert moving.alerts  # the comparison must not pass vacuously
+
+    static = run_clip(
+        TexturedSource(12, dx_per_frame=0), detect=lambda frame, i: approaching(i), camera="front"
+    )
+    stopped = run_clip(
+        FakeSource(12), detect=lambda frame, i: approaching(i), camera="front", ego_moving=False
+    )
+    assert [a.threat_id for a in static.alerts] == [a.threat_id for a in stopped.alerts]
 
 
 def test_a_closing_car_produces_an_alert():

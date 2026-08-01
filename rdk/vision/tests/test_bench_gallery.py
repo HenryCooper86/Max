@@ -6,6 +6,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -80,6 +81,28 @@ def test_listing_orders_by_manifest_mtime_not_id(gallery):
         "pair-20000101-080108",
         "pair-20260801-120000",
     ]
+
+
+def test_created_falls_back_to_mtime_when_the_id_clock_was_wrong(gallery):
+    # A pre-NTP id parses happily — to 2000-01-01 — so the parse-failure
+    # fallback never fired and the tile said 01-01 08:01 (measured
+    # 2026-08-01). Nothing in this gallery predates 2026: an earlier stamp is
+    # the boot clock, not a capture time, and the manifest's mtime is the
+    # closest truth on hand.
+    make_photo(gallery, "pair-20000101-080108")
+    stamp = datetime(2026, 8, 1, 20, 19, 22).timestamp()
+    os.utime(gallery.pair_dir("pair-20000101-080108") / "manifest.json", (stamp, stamp))
+    entry = listing(gallery)["pairs"][0]
+    assert entry["created"] == "2026-08-01T20:19:22"
+
+
+def test_a_sane_id_keeps_naming_the_capture_start(gallery):
+    # The id stays primary when its clock was sane — it survives copies,
+    # which reset mtimes, and for a video it names the start rather than the
+    # stop.
+    make_photo(gallery, "pair-20260727-100000")
+    entry = listing(gallery)["pairs"][0]
+    assert entry["created"] == "2026-07-27T10:00:00"
 
 
 def test_a_manifest_naming_a_missing_file_reports_no_size(gallery):

@@ -138,23 +138,37 @@ def iter_frames(path: Path):
         yield buffer  # the last frame has no marker after it
 
 
+#: Ids minted before NTP steps the clock parse happily — to 2000-01-01, or to
+#: a systemd build epoch in mid-2025 (this board has no RTC). Nothing in this
+#: gallery predates 2026, so an earlier stamp is the boot clock, not a capture
+#: time. A floor rather than an id-vs-mtime comparison, because copies reset
+#: mtimes and the id must keep naming a copied capture truthfully.
+ID_CLOCK_FLOOR = datetime(2026, 1, 1)
+
+
 def created_at(pair_id: str, directory: Path) -> str | None:
     """When the capture happened, read from the pair id's own timestamp.
 
-    The id is the primary source because it survives copies; the directory
-    mtime is the fallback for ids that do not parse.
+    The id is the primary source because it survives copies, and for a video
+    it names the start rather than the stop. The manifest's mtime (the sort
+    key, stamped after NTP has landed) stands in for ids that do not parse or
+    that the boot clock stamped before ``ID_CLOCK_FLOOR`` — measured
+    2026-08-01, when a clip recorded one minute after power-on was labelled
+    01-01 08:01.
     """
     parts = pair_id.split("-")
     try:
-        return datetime.strptime("-".join(parts[1:3]), "%Y%m%d-%H%M%S").isoformat(
-            timespec="seconds"
-        )
+        started = datetime.strptime("-".join(parts[1:3]), "%Y%m%d-%H%M%S")
     except ValueError:
-        pass
-    try:
-        return datetime.fromtimestamp(directory.stat().st_mtime).isoformat(timespec="seconds")
-    except OSError:
-        return None
+        started = None
+    if started is not None and started >= ID_CLOCK_FLOOR:
+        return started.isoformat(timespec="seconds")
+    for candidate in (directory / "manifest.json", directory):
+        try:
+            return datetime.fromtimestamp(candidate.stat().st_mtime).isoformat(timespec="seconds")
+        except OSError:
+            continue
+    return None
 
 
 def safe_path(root, relative: str):

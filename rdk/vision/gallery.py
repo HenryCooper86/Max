@@ -180,8 +180,16 @@ class Gallery:
         return "deleted"
 
     def list_pairs(self) -> list[dict]:
-        pairs: list[dict] = []
-        for directory in sorted(Path(self.root).iterdir(), reverse=True):
+        # Newest first by the manifest's mtime, name as the tiebreak — NOT by
+        # pair id. The id embeds the clock at capture start, and this board
+        # has no RTC: the first seconds after boot run months wrong until NTP
+        # steps the clock, so a capture from that window gets a
+        # pair-20000101-… id and filed itself at the bottom of the gallery
+        # (measured 2026-08-01, on a clip recorded one minute after
+        # power-on). NTP lands before the manifest is finalised, so the
+        # file's mtime carries the truth the id lost.
+        entries: list[tuple[float, str, dict]] = []
+        for directory in Path(self.root).iterdir():
             manifest = directory / "manifest.json"
             if not directory.is_dir() or not manifest.exists():
                 continue
@@ -192,5 +200,12 @@ class Gallery:
             # Manifests written before the in-progress flag existed describe
             # finished captures; say so rather than leaving the key absent.
             payload.setdefault("recording", False)
-            pairs.append(payload)
-        return pairs
+            try:
+                stamp = manifest.stat().st_mtime
+            except OSError:  # deleted between exists() and here
+                continue
+            entries.append((stamp, directory.name, payload))
+        # Unique directory names break any mtime tie, so the payload dicts
+        # are never compared.
+        entries.sort(reverse=True)
+        return [payload for _, _, payload in entries]

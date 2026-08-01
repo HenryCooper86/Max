@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -79,13 +80,17 @@ def test_manifest_write_is_atomic(gallery):
 
 
 def test_list_pairs_is_newest_first(gallery):
+    # Ordered by capture time (the manifest's mtime), not by id — a pre-NTP
+    # boot mints pair-20000101-… ids that would sort a fresh clip to the
+    # bottom. With a synced clock the two agree, which is what this pins.
     for stamp in [
         datetime(2026, 7, 25, 10, 0, 0),
         datetime(2026, 7, 25, 12, 0, 0),
         datetime(2026, 7, 25, 11, 0, 0),
     ]:
         pair_id = gallery.new_pair_id(stamp)
-        gallery.write_manifest(pair_id, "front.jpg", "rear.jpg", "photo")
+        path = gallery.write_manifest(pair_id, "front.jpg", "rear.jpg", "photo")
+        os.utime(path, (stamp.timestamp(), stamp.timestamp()))
     ids = [pair["id"] for pair in gallery.list_pairs()]
     assert ids == sorted(ids, reverse=True)
 

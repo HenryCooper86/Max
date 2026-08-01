@@ -1,4 +1,5 @@
 import json
+import os
 import socket
 import sys
 import threading
@@ -62,6 +63,22 @@ def test_listing_is_newest_first(gallery):
     assert [p["id"] for p in listing(gallery)["pairs"]] == [
         "pair-20260727-110000",
         "pair-20260727-100000",
+    ]
+
+
+def test_listing_orders_by_manifest_mtime_not_id(gallery):
+    # A capture made in the first seconds after boot gets a pre-NTP pair id
+    # (this board has no RTC), so name ordering filed it at the BOTTOM of the
+    # gallery dated 01-01 08:01 — measured 2026-08-01 on a clip recorded one
+    # minute after power-on. NTP steps the clock before the manifest is
+    # finalised, so the file's mtime carries the truth the id lost.
+    make_photo(gallery, "pair-20260801-120000")
+    make_photo(gallery, "pair-20000101-080108")  # fake-epoch id, newest capture
+    os.utime(gallery.pair_dir("pair-20260801-120000") / "manifest.json", (1000, 1000))
+    os.utime(gallery.pair_dir("pair-20000101-080108") / "manifest.json", (2000, 2000))
+    assert [p["id"] for p in listing(gallery)["pairs"]] == [
+        "pair-20000101-080108",
+        "pair-20260801-120000",
     ]
 
 

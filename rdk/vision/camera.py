@@ -222,28 +222,54 @@ class CameraPair:
             self.stop_recording(gallery)
             return
 
-        for side, filename in sides.items():
-            if filename is None:
-                continue
+        entries = [(side, filename) for side, filename in sides.items() if filename is not None]
+        if not entries:
+            return
+        directory.mkdir(parents=True, exist_ok=True)
+        errors: list[OSError] = []
+
+        def write_side(side: str, filename: str) -> None:
             data = self._grab(
                 self.front if side == "front" else self.rear, max_age_ms=JPEG_MAX_AGE_MS
             )
             if data is None:
-                continue
-            directory.mkdir(parents=True, exist_ok=True)
+                return
             try:
                 self._append_frame(directory / filename, data)
-                with self._lock:
-                    self._recording_written[side] += 1
             except OSError as error:
                 # ENOSPC or a dying card. The thread dying here is what left
-                # manifests stuck at "recording": true; stop cleanly instead,
-                # keeping the frames already on disk. A truncated final JPEG is
-                # fine — every reader scans for SOI markers.
-                print(f"[vision] recording write failed ({error}); stopping with the frames on disk", flush=True)
-                if gallery is not None:
-                    self.stop_recording(gallery)
+                # manifests stuck at "recording": true; collect it so the tick
+                # stops the recording cleanly, keeping the frames already on
+                # disk. A truncated final JPEG is fine — every reader scans
+                # for SOI markers.
+                errors.append(error)
                 return
+            with self._lock:
+                self._recording_written[side] += 1
+
+        if len(entries) == 1:
+            write_side(*entries[0])
+        else:
+            # One thread per side. Sequentially, two ~60-100 ms 1080p encodes
+            # blew the 100 ms budget every tick — dual recording measured
+            # 4-7 fps against a front-only 9.98. cv2 releases the GIL, so
+            # parallel sides cost max() rather than sum().
+            threads = [
+                threading.Thread(target=write_side, args=entry, name=f"encode-{entry[0]}")
+                for entry in entries
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+        if errors:
+            print(
+                f"[vision] recording write failed ({errors[0]}); stopping with the frames on disk",
+                flush=True,
+            )
+            if gallery is not None:
+                self.stop_recording(gallery)
 
     def _append_frame(self, path: Path, data: bytes) -> None:
         with path.open("ab") as handle:

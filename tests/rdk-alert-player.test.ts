@@ -27,17 +27,23 @@ function wav(samples: number, rate = 24000, channels = 1, bits = 16): Buffer {
 function fakePlayback() {
   const order: string[] = [];
   const written: number[] = [];
+  const flushRanks: Array<number | undefined> = [];
+  const holdRanks: Array<number | undefined> = [];
   return {
     order,
     written,
+    flushRanks,
+    holdRanks,
     write(pcm: Int16Array) {
       written.push(pcm.length);
       order.push("write");
     },
-    flush() {
+    flush(rank?: number) {
+      flushRanks.push(rank);
       order.push("flush");
     },
-    holdPriority() {
+    holdPriority(rank?: number) {
+      holdRanks.push(rank);
       order.push("hold");
     },
     releasePriority() {
@@ -130,6 +136,31 @@ describe("createAlertPlayer", () => {
     let clock = 1000;
     const player = createAlertPlayer({ dir, playback: fakePlayback(), now: () => (clock += 5) });
     expect(await player.play("tailgating")).toBeGreaterThan(0);
+  });
+
+  it("a critical alert carries its rank into the preempt and the hold", async () => {
+    // Decision 2026-08-01: strictly-higher severity cuts a playing alert's
+    // tail. The rank must ride both calls — the flush that does the cutting
+    // and the hold that defends the new clip at its own level.
+    const dir = mkdtempSync(join(tmpdir(), "alerts-"));
+    writeFileSync(join(dir, "forward_collision.wav"), wav(960));
+    const playback = fakePlayback();
+    await createAlertPlayer({ dir, playback }).play("forward_collision", "critical");
+    expect(playback.flushRanks).toEqual([2]);
+    expect(playback.holdRanks).toEqual([2]);
+  });
+
+  it("a caution alert carries the caution rank and an unknown severity sinks to it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "alerts-"));
+    writeFileSync(join(dir, "tailgating.wav"), wav(960));
+    const playback = fakePlayback();
+    const player = createAlertPlayer({ dir, playback });
+    await player.play("tailgating", "caution");
+    await player.play("tailgating", "somehow-new");
+    await player.play("tailgating");
+    // Never let an unrecognised severity outrank a real critical.
+    expect(playback.flushRanks).toEqual([1, 1, 1]);
+    expect(playback.holdRanks).toEqual([1, 1, 1]);
   });
 
   it("hands the whole clip over in chunks", async () => {

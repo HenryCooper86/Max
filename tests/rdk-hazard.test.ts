@@ -77,7 +77,8 @@ describe("createHazardHandler", () => {
     const report = vi.fn();
     const handler = createHazardHandler({ armed: true, player: { play }, report, log: () => {} });
     await handler.handle(EVENT);
-    expect(play).toHaveBeenCalledWith("forward_collision");
+    // Severity travels with the threat so the player can rank its preemption.
+    expect(play).toHaveBeenCalledWith("forward_collision", "critical");
     expect(report).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "hazard.report",

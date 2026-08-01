@@ -21,10 +21,16 @@ const CHUNK_SAMPLES = 480;
 
 export type AlertPlayback = {
   write(pcm: Int16Array): void;
-  flush(): void;
-  holdPriority(): void;
+  flush(rank?: number): void;
+  holdPriority(rank?: number): void;
   releasePriority(): void;
 };
+
+/** Severity → preemption rank. A strictly higher rank cuts a playing alert's
+ *  audible tail (decision 2026-08-01); equal severity queues behind it, and a
+ *  severity this map does not know sinks to caution — an unrecognised string
+ *  must never outrank a real critical. */
+const SEVERITY_RANK: Record<string, number> = { caution: 1, critical: 2 };
 
 export type AlertPlayerOptions = {
   dir: string;
@@ -54,12 +60,12 @@ export function readWavMono24k(path: string): Int16Array {
 
 export function createAlertPlayer(options: AlertPlayerOptions): {
   /** Resolves the milliseconds it took to HAND the clip to playback. Not time-to-audible: pacing drains the queue at 80 ms per cycle after this returns. */
-  play(threat: string): Promise<number | null>;
+  play(threat: string, severity?: string): Promise<number | null>;
 } {
   const now = options.now ?? (() => Date.now());
 
   return {
-    async play(threat: string): Promise<number | null> {
+    async play(threat: string, severity?: string): Promise<number | null> {
       const path = join(options.dir, `${threat}.wav`);
       if (!existsSync(path)) {
         console.log(`[adas] no clip for ${threat}; staying silent`);
@@ -77,10 +83,14 @@ export function createAlertPlayer(options: AlertPlayerOptions): {
       }
 
       const started = now();
+      const rank = SEVERITY_RANK[severity ?? ""] ?? SEVERITY_RANK.caution;
       // Preempt first, then take the lock. Holding first would make our own
-      // flush a no-op against our own lock, and Max would talk over the warning.
-      options.playback.flush();
-      options.playback.holdPriority();
+      // flush a no-op against our own lock, and Max would talk over the
+      // warning. The rank rides both calls: the flush cuts only a playing
+      // alert it strictly outranks, and the hold defends this clip at its
+      // own level.
+      options.playback.flush(rank);
+      options.playback.holdPriority(rank);
       try {
         for (let offset = 0; offset < pcm.length; offset += CHUNK_SAMPLES) {
           options.playback.write(pcm.subarray(offset, offset + CHUNK_SAMPLES));

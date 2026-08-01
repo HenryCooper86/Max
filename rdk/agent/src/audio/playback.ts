@@ -57,8 +57,8 @@ export function playbackArgs(device: string): string[] {
 
 export function createPlayback(options: PlaybackOptions): {
   write(pcm: Int16Array): void;
-  flush(): void;
-  holdPriority(): void;
+  flush(rank?: number): void;
+  holdPriority(rank?: number): void;
   releasePriority(): void;
   stop(): void;
 } {
@@ -73,9 +73,12 @@ export function createPlayback(options: PlaybackOptions): {
   let queue: Int16Array[] = [];
   let drainedUntil = 0;
   let pumping = false;
-  // While a hazard alert is playing, nothing may cut it off. The spec makes
-  // this absolute: an alert preempts Max and is never itself preempted.
+  // While a hazard alert is playing, voice may never cut it off — but a
+  // strictly-higher-severity alert may (decision 2026-08-01: a critical
+  // forward-collision must not queue behind a caution clip's audible tail).
+  // The rank is meaningful only while the hold is set.
   let priorityHeld = false;
+  let heldRank = 0;
   // Samples sitting in `queue`, not yet handed to aplay. Counted at 48 kHz
   // post-upsample, same as drainedUntil, so the two combine into one duration.
   let queuedSamples = 0;
@@ -152,11 +155,12 @@ export function createPlayback(options: PlaybackOptions): {
      * Barge-in. Killing the child is what actually discards the queued tail;
      * the next write respawns it.
      */
-    flush(): void {
+    flush(rank = 0): void {
       // A hazard alert is playing. Doubao's VAD fires on the rider reacting to
       // it — "什么?" mid-warning — and honouring that would cut the collision
-      // alert in half.
-      if (priorityHeld) return;
+      // alert in half. Voice flushes carry no rank and never pass; only an
+      // alert that strictly outranks the playing one cuts its tail.
+      if (priorityHeld && rank <= heldRank) return;
       // Before the kill, not after: the reset marker must sit in the reference
       // pipe behind the audio it invalidates. Everything already queued is
       // about to be discarded unheard, and APM has to forget exactly that much
@@ -172,9 +176,10 @@ export function createPlayback(options: PlaybackOptions): {
       child = null;
     },
 
-    holdPriority(): void {
+    holdPriority(rank = 1): void {
       releaseGeneration += 1;
       priorityHeld = true;
+      heldRank = rank;
     },
 
     /**

@@ -246,11 +246,27 @@ def test_a_recording_downloads_as_an_attachment(gallery):
         assert response.read() == JPEG_A + JPEG_B
 
 
-def make_video(gallery, pair_id: str, data=JPEG_A + JPEG_B, recording=False):
+def make_video(gallery, pair_id: str, data=JPEG_A + JPEG_B, recording=False, fps=None):
     directory = gallery.pair_dir(pair_id)
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "front.mjpeg").write_bytes(data)
-    gallery.write_manifest(pair_id, "front.mjpeg", None, "video", recording=recording)
+    gallery.write_manifest(pair_id, "front.mjpeg", None, "video", recording=recording, fps=fps)
+
+
+def play_sleeps(gallery, monkeypatch, path: str) -> list[float]:
+    """The pacing sleeps one /play request performs.
+
+    The server must be running before the patch: running() itself sleeps to
+    wait for startup, and that wait must stay real.
+    """
+    import bench_server
+
+    port = running(gallery)
+    sleeps: list[float] = []
+    monkeypatch.setattr(bench_server.time, "sleep", lambda s: sleeps.append(round(s, 4)))
+    with get(port, path) as response:
+        response.read()
+    return sleeps
 
 
 def post(port: int, path: str):
@@ -331,6 +347,51 @@ def test_play_refuses_a_bad_fps(gallery, fps):
     make_video(gallery, "pair-v", data=JPEG_A)
     port = running(gallery)
     assert status_of(port, f"/gallery/pair-v/front.mjpeg/play?fps={fps}") == 400
+
+
+def test_play_paces_at_the_manifests_achieved_fps(gallery, monkeypatch):
+    # Playing every clip at the nominal RECORDING_FPS lied about time: the
+    # measured pair-20260801-000444-2 wrote 1820 frames over 498.5 s
+    # (3.65 fps), and the nominal 10 compressed that 8.3-minute ride into a
+    # 3-minute timelapse. The default pace is the rate the writer achieved.
+    make_video(gallery, "pair-v", fps=2.0)
+    assert play_sleeps(gallery, monkeypatch, "/gallery/pair-v/front.mjpeg/play") == [0.5, 0.5]
+
+
+def test_play_speed_multiplies_the_achieved_rate(gallery, monkeypatch):
+    # 2× of the truth, not 2× of an assumption: half/double must be relative
+    # to the clip's own rate or the labels lie exactly like the default did.
+    make_video(gallery, "pair-v", fps=2.0)
+    sleeps = play_sleeps(gallery, monkeypatch, "/gallery/pair-v/front.mjpeg/play?speed=2")
+    assert sleeps == [0.25, 0.25]
+
+
+def test_play_without_a_stamped_fps_falls_back_to_nominal(gallery, monkeypatch):
+    # Clips from before the stamp existed (and reconciled ones) have no fps;
+    # the nominal rate is the only honest guess left.
+    make_video(gallery, "pair-v")
+    assert play_sleeps(gallery, monkeypatch, "/gallery/pair-v/front.mjpeg/play") == [0.1, 0.1]
+
+
+def test_play_clamps_the_scaled_rate_to_the_cap(gallery, monkeypatch):
+    # speed × fps can exceed what the board should stream; the cap holds.
+    make_video(gallery, "pair-v", fps=20.0)
+    sleeps = play_sleeps(gallery, monkeypatch, "/gallery/pair-v/front.mjpeg/play?speed=2")
+    assert sleeps == [round(1 / 30, 4), round(1 / 30, 4)]
+
+
+def test_play_an_explicit_fps_overrides_the_stamp(gallery, monkeypatch):
+    # ?fps= stays an absolute override for tools that want exact pacing.
+    make_video(gallery, "pair-v", fps=2.0)
+    sleeps = play_sleeps(gallery, monkeypatch, "/gallery/pair-v/front.mjpeg/play?fps=10")
+    assert sleeps == [0.1, 0.1]
+
+
+@pytest.mark.parametrize("speed", ["0", "abc", "-1", "9"])
+def test_play_refuses_a_bad_speed(gallery, speed):
+    make_video(gallery, "pair-v", data=JPEG_A)
+    port = running(gallery)
+    assert status_of(port, f"/gallery/pair-v/front.mjpeg/play?speed={speed}") == 400
 
 
 def test_delete_removes_the_pair(gallery):

@@ -169,6 +169,42 @@ def test_stop_stamps_a_wall_clock_duration(pair, gallery):
     assert manifest["duration_s"] >= 0.0
 
 
+def test_stop_stamps_the_achieved_fps(pair, gallery):
+    # The measured 2026-08-01 clip: 1820 frames over 498.5 s — 3.65 fps
+    # achieved against 10 nominal — so playback at the nominal rate compressed
+    # an 8.3-minute ride into a 3-minute timelapse. The manifest must carry
+    # the rate the writer actually achieved, or the viewer cannot tell time.
+    started = pair.start_recording(gallery, drive=False)
+    pair.write_recording_frame()
+    pair.write_recording_frame()
+    pair.write_recording_frame()
+    time.sleep(0.15)
+    pair.stop_recording(gallery)
+    manifest = json.loads((gallery.pair_dir(started["detail"]) / "manifest.json").read_text())
+    assert manifest["fps"] == round(3 / manifest["duration_s"], 2)
+
+
+def test_an_instant_stop_stamps_no_fps(pair, gallery):
+    # A zero-length clip has no rate; a made-up one would divide by zero or
+    # claim precision the clock cannot back.
+    started = pair.start_recording(gallery, drive=False)
+    pair.stop_recording(gallery)
+    manifest = json.loads((gallery.pair_dir(started["detail"]) / "manifest.json").read_text())
+    assert "fps" not in manifest
+
+
+def test_achieved_fps_counts_the_side_that_recorded(pair, gallery):
+    # A degraded clip still has a true rate: the side that wrote.
+    pair.rear = FakeCamera(works=False)
+    started = pair.start_recording(gallery, drive=False)
+    pair.write_recording_frame()
+    pair.write_recording_frame()
+    time.sleep(0.15)
+    pair.stop_recording(gallery)
+    manifest = json.loads((gallery.pair_dir(started["detail"]) / "manifest.json").read_text())
+    assert manifest["fps"] == round(2 / manifest["duration_s"], 2)
+
+
 def test_a_photo_manifest_has_no_duration(pair, gallery):
     pair.capture_photo(gallery)
     directory = next(p for p in Path(gallery.root).iterdir() if p.is_dir())

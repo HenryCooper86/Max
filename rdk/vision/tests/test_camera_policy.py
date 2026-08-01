@@ -1,5 +1,6 @@
 import json
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -167,6 +168,37 @@ def test_stop_stamps_a_wall_clock_duration(pair, gallery):
     pair.stop_recording(gallery)
     manifest = json.loads((gallery.pair_dir(started["detail"]) / "manifest.json").read_text())
     assert manifest["duration_s"] >= 0.0
+
+
+def test_recording_encodes_both_sides_concurrently(pair, gallery):
+    # Sequential encodes are why dual recording measured 4-7 fps against a
+    # front-only 9.98: two ~60-100 ms 1080p encodes per 100 ms tick. cv2
+    # releases the GIL, so running the sides in parallel costs max() rather
+    # than sum(). The barrier proves it: both sides must be inside jpeg() at
+    # the same moment, or it times out and neither frame is written.
+    barrier = threading.Barrier(2, timeout=2.0)
+
+    class MeetingCamera:
+        def jpeg(self, max_age_ms=None):
+            if max_age_ms is None:
+                # The start-recording probe grabs each side sequentially and
+                # bare; only the paced write passes a staleness budget.
+                return b"\xff\xd8probe\xff\xd9"
+            barrier.wait()
+            return b"\xff\xd8met\xff\xd9"
+
+        def stop(self):
+            pass
+
+    pair.front = MeetingCamera()
+    pair.rear = MeetingCamera()
+    result = pair.start_recording(gallery, drive=False)
+    assert result["status"] == "ok"
+    pair.write_recording_frame()
+    pair.stop_recording(gallery)
+    directory = gallery.pair_dir(result["detail"])
+    assert (directory / "front.mjpeg").read_bytes() == b"\xff\xd8met\xff\xd9"
+    assert (directory / "rear.mjpeg").read_bytes() == b"\xff\xd8met\xff\xd9"
 
 
 def test_stop_stamps_the_achieved_fps(pair, gallery):

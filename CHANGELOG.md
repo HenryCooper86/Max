@@ -28,6 +28,11 @@ rdk/README.md's bench findings):
   id and used to file itself at the bottom of the grid dated 01-01. Listing
   order and the capture-time label now follow the manifest's mtime whenever
   the id's stamp predates the project.
+- Closed the review-parked ADAS micro-issues: `clip.py` refuses an alert's
+  empty-segment sentinel with its meaning instead of handing ffmpeg a
+  directory, and two previously untested claims — legacy no-fingerprint
+  records scoring under the ride's first header, and replay driving the ego
+  estimator with the same verdicts as a forced gate — are pinned by tests.
 
 ## 2026-07-19 — Reliable per-user recall
 

@@ -941,6 +941,12 @@ Clips come from the recorder's own segments rather than a rolling buffer —
 ~310 MB per camera saved — which also means **shadow clips are corpus
 material**, feeding the tuning that eventually unlocks the audio.
 
+An alert can carry `segment=""` — SegmentClock's sentinel for "the recorder
+had nothing open for that camera at alert time", so there is no video to cut.
+`clip.py` says exactly that (fixed 2026-08-01; the bare path join used to
+resolve the sentinel to the segments _directory_, and ffmpeg failed on it in
+its own words).
+
 **Shadow mode refuses to start without the recorder.** That is deliberate: a
 false-alarm rate whose evidence was never written is exactly the number that
 misleads, and this board has already produced two measurements that looked

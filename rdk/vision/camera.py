@@ -38,6 +38,9 @@ class CameraPair:
         self.front = None
         self.rear = None
         self.opened = False
+        #: Cameras i2c saw but whose open failed — a boot race, not an empty
+        #: connector. The service exits on these so systemd retries the open.
+        self.failed: list[str] = []
         self.recording_id: str | None = None
         self.recording_started_at: float | None = None
         self.recording_sides: dict[str, str | None] = {"front": None, "rear": None}
@@ -62,6 +65,7 @@ class CameraPair:
         # Never hardcode a sensor: an assumed IMX219 is why the OV5647 in CAM1
         # could not be opened, and the binding path cannot open either one.
         attached = discover()
+        self.failed = []
         for attr, channel in (("front", self.front_channel), ("rear", self.rear_channel)):
             sensor = attached.get(channel)
             if sensor is None:
@@ -74,8 +78,13 @@ class CameraPair:
                 camera.start()
                 setattr(self, attr, camera)
                 print(f"[vision] {attr}: {sensor} on channel {channel}", flush=True)
-            except Exception as error:  # noqa: BLE001 - one camera is enough
+            except Exception as error:  # noqa: BLE001 - the caller decides what a miss means
                 camera.stop()
+                # i2c answered but the stream never came — the documented
+                # OV5647 ISP stall, seen again at the 2026-08-01 boot. Record
+                # it: "detected but failed" is a retryable race, where an empty
+                # connector is a configuration.
+                self.failed.append(attr)
                 print(
                     f"[vision] {attr} camera unavailable on channel {channel}: {error}",
                     flush=True,

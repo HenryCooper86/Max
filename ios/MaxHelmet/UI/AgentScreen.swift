@@ -87,6 +87,15 @@ func isAlarmPhase(_ phase: CrashUIPhase) -> Bool {
     }
 }
 
+/// Whole seconds left in a crash countdown window (check-in or alarm),
+/// clamped to zero once the window has fully elapsed. `now` and `sinceT`
+/// must both be `ProcessInfo.processInfo.systemUptime` readings — never
+/// `Date()` — so the countdown is immune to wall-clock adjustments.
+func crashCountdownSeconds(windowS: Double, sinceT: TimeInterval, now: TimeInterval) -> Int {
+    let remaining = windowS - (now - sinceT)
+    return max(0, Int(remaining.rounded()))
+}
+
 /// Drive mode for the instrument bezel — mirrors the web HelmetVisual gauge, so
 /// the tick ring and the caption always agree on what Max is doing.
 enum GaugeMode { case offline, idle, connecting, mic, thinking, speaking, hazard }
@@ -247,8 +256,8 @@ struct AgentScreen: View {
         if let alert = state.hazardAlert {
             HazardBanner(alert: alert).padding(.horizontal, 4)
         }
-        if case .checkIn = state.crashPhase {
-            CrashCheckInBanner(onCancel: { session.crashController.riderTapCancelled() })
+        if case let .checkIn(sinceT) = state.crashPhase {
+            CrashCheckInBanner(sinceT: sinceT, onCancel: { session.crashController.riderTapCancelled() })
                 .padding(.horizontal, 4)
         }
         if let guidance = state.guidance {

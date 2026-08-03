@@ -81,7 +81,7 @@ export const RIDE_MODE_LABELS_EN: Record<RideMode, string> = {
   emergency: "Emergency"
 };
 
-export const SCENARIOS: DemoScenario[] = ["commute", "wind", "fuel", "group", "emergency", "adas"];
+export const SCENARIOS: DemoScenario[] = ["commute", "wind", "fuel", "group", "emergency", "adas", "crash"];
 export const RIDE_MODES: RideMode[] = ["ride", "navigation", "stop", "emergency"];
 export const SCENARIO_HAZARDS: Record<DemoScenario, HazardLevel> = {
   commute: "normal",
@@ -89,7 +89,8 @@ export const SCENARIO_HAZARDS: Record<DemoScenario, HazardLevel> = {
   fuel: "normal",
   group: "normal",
   emergency: "critical",
-  adas: "caution"
+  adas: "caution",
+  crash: "critical"
 };
 
 export const CONNECTION_LABELS: Record<ConnectionState, string> = {

@@ -155,3 +155,45 @@ describe("crash escalation over the relay", () => {
     socket.terminate();
   });
 });
+
+import { createCrashSimulator } from "../server/hazard-injector";
+import { scenarioDefaultMode, scenarioLabel } from "../shared/ride";
+
+describe("crash demo scenario", () => {
+  it("is registered with label and emergency mode", () => {
+    expect(scenarioLabel("crash")).toBe("事故");
+    expect(scenarioDefaultMode("crash")).toBe("emergency");
+  });
+
+  it("emits crash.simulate after the delay, but never to the embedded board", () => {
+    vi.useFakeTimers();
+    const send = vi.fn();
+    const sim = createCrashSimulator({ send });
+    sim.start(6000);
+    vi.advanceTimersByTime(5999);
+    expect(send).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(send).toHaveBeenCalledWith({ type: "crash.simulate" });
+
+    send.mockClear();
+    const embedded = createCrashSimulator({ send, platform: () => "embedded" });
+    embedded.start(1000);
+    vi.advanceTimersByTime(2000);
+    expect(send).not.toHaveBeenCalled();
+
+    sim.stop();
+    embedded.stop();
+    vi.useRealTimers();
+  });
+
+  it("stop() cancels a scheduled simulate", () => {
+    vi.useFakeTimers();
+    const send = vi.fn();
+    const sim = createCrashSimulator({ send });
+    sim.start(1000);
+    sim.stop();
+    vi.advanceTimersByTime(5000);
+    expect(send).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+});

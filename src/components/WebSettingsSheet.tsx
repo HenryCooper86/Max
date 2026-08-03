@@ -214,7 +214,8 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
                           fuel: "Fuel",
                           group: "Group",
                           emergency: "Emergency",
-                          adas: "ADAS"
+                          adas: "ADAS",
+                          crash: "Crash"
                         }[scenario]
                       : scenarioLabel(scenario)}
                   </button>

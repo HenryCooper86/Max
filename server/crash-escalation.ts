@@ -4,7 +4,7 @@ import { appendTestingAudit } from "./testing-store";
 export type CrashAlertEvent = Extract<ClientEvent, { type: "crash.alert" }>;
 export type CrashCancelEvent = Extract<ClientEvent, { type: "crash.cancel" }>;
 
-export type CrashNotifyOutcome = { status: CrashAckStatus; detail?: string };
+type CrashNotifyOutcome = { status: CrashAckStatus; detail?: string };
 
 /** A delivery channel for crash escalation. The log notifier is the honest
  *  default: it records the incident but texts nobody, so its outcome is

@@ -94,3 +94,64 @@ describe("handleCrashCancel", () => {
     expect(audit).toHaveBeenCalledWith("relay", "crash.cancel", "session", "i1", expect.any(Object));
   });
 });
+
+import http from "node:http";
+import { afterEach } from "vitest";
+import { WebSocket, WebSocketServer } from "ws";
+import { AgentSessionController } from "../server/session-controller";
+import { createMockProvider } from "../server/providers/mock";
+import { metrics } from "../server/metrics";
+
+let server: http.Server | undefined;
+let wss: WebSocketServer | undefined;
+
+afterEach(async () => {
+  for (const client of wss?.clients ?? []) client.terminate();
+  await new Promise<void>((resolve) => wss?.close(() => resolve()) ?? resolve());
+  await new Promise<void>((resolve) => server?.close(() => resolve()) ?? resolve());
+  wss = undefined;
+  server = undefined;
+  metrics.reset();
+});
+
+describe("crash escalation over the relay", () => {
+  it("answers crash.alert with a truthful crash.ack", async () => {
+    server = http.createServer();
+    wss = new WebSocketServer({ server, path: "/agent" });
+    wss.on("connection", (client) => {
+      const session = new AgentSessionController(client, createMockProvider);
+      client.on("message", (data, isBinary) => void session.handleMessage(data, isBinary));
+      client.on("close", () => void session.close());
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("No test server port");
+
+    const socket = new WebSocket(`ws://127.0.0.1:${address.port}/agent`);
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", () => resolve());
+      socket.once("error", reject);
+    });
+
+    const ack = new Promise<Record<string, unknown>>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("no crash.ack")), 5000);
+      socket.on("message", (data, isBinary) => {
+        if (isBinary) return;
+        const event = JSON.parse(data.toString()) as Record<string, unknown>;
+        if (event.type === "session.started") {
+          socket.send(JSON.stringify({ type: "crash.alert", incidentId: "e2e-1", contactOptIn: false }));
+        }
+        if (event.type === "crash.ack") {
+          clearTimeout(timeout);
+          resolve(event);
+        }
+      });
+    });
+
+    socket.send(JSON.stringify({ type: "session.start", sampleRate: 16000, channels: 1 }));
+
+    const event = await ack;
+    expect(event).toMatchObject({ type: "crash.ack", incidentId: "e2e-1", status: "unconfigured" });
+    socket.terminate();
+  });
+});

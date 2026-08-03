@@ -4,6 +4,8 @@ import { CLIENT_EVENT_TYPES } from "../shared/generated/agent-protocol";
 import { TESTING_PLATFORMS as CANONICAL_TESTING_PLATFORMS } from "../shared/testing";
 import type { Logger } from "./logger";
 import type { AgentProvider, ClientEvent, ProviderSessionContext, ProviderTelemetry } from "./providers/types";
+import { handleCrashAlert, handleCrashCancel, selectCrashNotifier } from "./crash-escalation";
+import { config } from "./config";
 import {
   beginTesterSession,
   endTesterSession,
@@ -327,6 +329,7 @@ export function parseClientEvent(data: RawData): ClientEvent {
 export class AgentSessionController {
   private readonly relaySessionId = randomUUID();
   private readonly provider: AgentProvider;
+  private readonly crashNotifier = selectCrashNotifier(config.crashNotifier);
   private sessionStartReceived = false;
   private providerStarted = false;
   private audioActive = false;
@@ -481,6 +484,9 @@ export class AgentSessionController {
       if (event.type === "testing.metric") recordTesterAudioQuality(this.relaySessionId, event);
       if (event.type === "device.result") await this.provider.deviceResult?.(event);
       if (event.type === "camera.frame") await this.provider.cameraFrame?.(event);
+      if (event.type === "crash.alert")
+        await handleCrashAlert(event, this.crashNotifier, (payload) => this.send(payload));
+      if (event.type === "crash.cancel") await handleCrashCancel(event, this.crashNotifier);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Voice relay failed";
       this.log?.warn("client message failed", { message });

@@ -443,6 +443,11 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
       // scenarios sprinkle them in occasionally to interrupt mid-conversation.
       const adasDemo = scenario === "adas";
       hazardInjector.start(adasDemo ? 5000 : 11000, adasDemo ? 2000 : 4000);
+      // Mirrors the hazard-injector cadence switch above so picking "crash"
+      // directly (not just via the guided tour's enterScenario) still fires
+      // crash.simulate.
+      crashSimulator.stop();
+      if (scenario === "crash") crashSimulator.start(6000);
     },
     async sendAudio(chunk: Buffer) {
       frameCount += 1;
@@ -462,6 +467,7 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
       clearTurnTimers();
       stopGuidedTour();
       hazardInjector.stop();
+      crashSimulator.stop();
       send({ type: "status", state: "ready", detail: "免提已暂停" });
     },
     async setGuidedDemo(enabled: boolean) {
@@ -476,6 +482,9 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
           const adasDemo = scenario === "adas";
           hazardInjector.start(adasDemo ? 5000 : 11000, adasDemo ? 2000 : 4000);
         }
+        // Mirrors the hazard-injector fallback above for the crash simulator.
+        crashSimulator.stop();
+        if (timer && scenario === "crash") crashSimulator.start(6000);
         send({ type: "status", state: "ready", detail: "巡游演示已关闭" });
         return;
       }

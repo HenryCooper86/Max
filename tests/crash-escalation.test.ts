@@ -197,3 +197,51 @@ describe("crash demo scenario", () => {
     vi.useRealTimers();
   });
 });
+
+describe("mock provider crash injection", () => {
+  afterEach(() => vi.useRealTimers());
+
+  function makeClient() {
+    const messages: Array<Record<string, unknown>> = [];
+    const client = {
+      OPEN: 1,
+      readyState: 1,
+      send: (raw: string) => messages.push(JSON.parse(raw))
+    } as unknown as Parameters<typeof createMockProvider>[0];
+    return { client, messages };
+  }
+
+  it("fires crash.simulate after startAudio when the rider picks the scenario directly", async () => {
+    vi.useFakeTimers();
+    const { client, messages } = makeClient();
+    const provider = createMockProvider(client);
+
+    await provider.start({ type: "session.start", sampleRate: 16000, channels: 1, scenario: "crash" });
+    await provider.startAudio();
+    vi.advanceTimersByTime(6000);
+
+    expect(messages).toContainEqual({ type: "crash.simulate" });
+
+    await provider.close();
+  });
+
+  it("never fires crash.simulate on the embedded platform", async () => {
+    vi.useFakeTimers();
+    const { client, messages } = makeClient();
+    const provider = createMockProvider(client);
+
+    await provider.start({
+      type: "session.start",
+      sampleRate: 16000,
+      channels: 1,
+      scenario: "crash",
+      platform: "embedded"
+    });
+    await provider.startAudio();
+    vi.advanceTimersByTime(6000);
+
+    expect(messages).not.toContainEqual({ type: "crash.simulate" });
+
+    await provider.close();
+  });
+});

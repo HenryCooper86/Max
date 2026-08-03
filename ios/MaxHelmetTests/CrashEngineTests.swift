@@ -112,3 +112,77 @@ final class CrashEngineDetectionTests: XCTestCase {
         XCTAssertEqual(effects, [.speakCheckIn])
     }
 }
+
+final class CrashEngineEscalationTests: XCTestCase {
+
+    private func checkInState(at t: TimeInterval = 10) -> CrashState {
+        var s = CrashState.armed
+        s.phase = .checkIn(since: t)
+        return s
+    }
+
+    func testCheckInTimesOutIntoAlarm() {
+        let update = CrashEngine.tick(now: 10 + 15, state: checkInState(at: 10))
+        guard case .alarm = update.state.phase else { return XCTFail("expected alarm, got \(update.state.phase)") }
+        XCTAssertEqual(update.effects, [.showAlarm])
+
+        let early = CrashEngine.tick(now: 10 + 14.9, state: checkInState(at: 10))
+        guard case .checkIn = early.state.phase else { return XCTFail("must not fire early") }
+        XCTAssertTrue(early.effects.isEmpty)
+    }
+
+    func testAlarmTimesOutIntoExactlyOneEscalation() {
+        var s = checkInState(at: 10)
+        s.phase = .alarm(since: 25)
+        let update = CrashEngine.tick(now: 25 + 30, state: s)
+        guard case .escalated = update.state.phase else { return XCTFail("expected escalated") }
+        XCTAssertEqual(update.effects, [.escalate])
+
+        let again = CrashEngine.tick(now: 25 + 60, state: update.state)
+        XCTAssertTrue(again.effects.isEmpty, "escalation must be latched, never repeated")
+    }
+
+    func testCancelFromCheckInAndAlarmLogsNearMiss() {
+        for phase in [CrashPhase.checkIn(since: 10), CrashPhase.alarm(since: 10)] {
+            var s = CrashState.armed
+            s.phase = phase
+            let update = CrashEngine.riderCancelled(state: s)
+            XCTAssertEqual(update.state.phase, .armed)
+            XCTAssertEqual(update.effects, [.dismiss, .logNearMiss])
+        }
+    }
+
+    func testCancelAfterEscalationSendsTheFollowUp() {
+        var s = CrashState.armed
+        s.phase = .escalated(at: 55)
+        let update = CrashEngine.riderCancelled(state: s)
+        XCTAssertEqual(update.state.phase, .armed)
+        XCTAssertEqual(update.effects, [.dismiss, .sendCancel])
+    }
+
+    func testCancelWhileArmedIsANoOp() {
+        let update = CrashEngine.riderCancelled(state: .armed)
+        XCTAssertEqual(update.state.phase, .armed)
+        XCTAssertTrue(update.effects.isEmpty)
+    }
+
+    func testSimulatePromotesOnlyFromArmed() {
+        let update = CrashEngine.simulate(now: 5, state: .armed)
+        guard case .checkIn = update.state.phase else { return XCTFail("expected checkIn") }
+        XCTAssertEqual(update.effects, [.speakCheckIn])
+
+        let latched = CrashEngine.simulate(now: 6, state: update.state)
+        XCTAssertTrue(latched.effects.isEmpty, "simulate must not restack an active incident")
+    }
+
+    func testSensorInputDuringIncidentIsIgnored() {
+        var s = checkInState(at: 10)
+        let spike = CrashSample(t: 11, accelG: 9.0, rotationRadS: 9.0, speedKmh: 0)
+        let update = CrashEngine.step(sample: spike, state: s)
+        guard case .checkIn = update.state.phase else { return XCTFail("second spike must not spawn a second incident") }
+        XCTAssertTrue(update.effects.isEmpty)
+        s.phase = .escalated(at: 12)
+        let latched = CrashEngine.step(sample: spike, state: s)
+        guard case .escalated = latched.state.phase else { return XCTFail("escalated must stay latched") }
+    }
+}

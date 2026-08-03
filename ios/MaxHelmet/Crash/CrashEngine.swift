@@ -105,6 +105,44 @@ enum CrashEngine {
         }
     }
 
+    static func tick(now: TimeInterval, state: CrashState, tuning: CrashTuning = .standard) -> CrashUpdate {
+        var s = state
+        switch s.phase {
+        case .impactCandidate(let since) where now - since >= tuning.confirmWindowS:
+            s.phase = .armed
+            return CrashUpdate(state: s)
+        case .checkIn(let since) where now - since >= tuning.checkInWindowS:
+            s.phase = .alarm(since: now)
+            return CrashUpdate(state: s, effects: [.showAlarm])
+        case .alarm(let since) where now - since >= tuning.alarmWindowS:
+            s.phase = .escalated(at: now)
+            return CrashUpdate(state: s, effects: [.escalate])
+        default:
+            return CrashUpdate(state: s)
+        }
+    }
+
+    static func riderCancelled(state: CrashState) -> CrashUpdate {
+        var s = state
+        switch s.phase {
+        case .checkIn, .alarm:
+            s.phase = .armed
+            return CrashUpdate(state: s, effects: [.dismiss, .logNearMiss])
+        case .escalated:
+            s.phase = .armed
+            return CrashUpdate(state: s, effects: [.dismiss, .sendCancel])
+        case .armed, .impactCandidate:
+            return CrashUpdate(state: s)
+        }
+    }
+
+    static func simulate(now: TimeInterval, state: CrashState) -> CrashUpdate {
+        guard case .armed = state.phase else { return CrashUpdate(state: state) }
+        var s = state
+        s.phase = .checkIn(since: now)
+        return CrashUpdate(state: s, effects: [.speakCheckIn])
+    }
+
     /// What a real crash leaves behind: the rider and phone stop moving.
     private static func stillness(_ recent: [CrashSample], at t: TimeInterval, tuning: CrashTuning) -> Bool {
         let window = recent.filter { $0.t >= t - tuning.stillWindowS }

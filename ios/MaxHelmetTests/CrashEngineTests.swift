@@ -84,4 +84,31 @@ final class CrashEngineDetectionTests: XCTestCase {
         XCTAssertEqual(state.phase, .armed)
         XCTAssertTrue(effects.isEmpty)
     }
+
+    func testLatchedPhasesIgnoreSensorInput() {
+        for phase in [CrashPhase.checkIn(since: 10), CrashPhase.alarm(since: 10), CrashPhase.escalated(at: 10)] {
+            var state = CrashState.armed
+            state.phase = phase
+            let spike = CrashSample(t: 11, accelG: 9.0, rotationRadS: 9.0, speedKmh: 60)
+            let update = CrashEngine.step(sample: spike, state: state)
+            XCTAssertEqual(update.state.phase, phase, "sensor input must never advance or reset an active incident")
+            XCTAssertTrue(update.effects.isEmpty)
+        }
+    }
+
+    func testRenewedSingleSignalConfirmsAStandstillCandidate() {
+        // Promote via standstill both-signals path, then ≥0.5 s later send a single-signal sample.
+        // The renewed signal should confirm despite lacking tumble.
+        var samples = trace(from: 0, seconds: 1.0, accelG: 0.05, speedKmh: 0)
+        samples += trace(from: 1.0, seconds: 0.15, accelG: 6.0, rotation: 8.0, speedKmh: 0)
+        // Verify we reached impactCandidate
+        let (candidate, _) = MaxHelmetTests.run(samples)
+        guard case .impactCandidate = candidate.phase else { return XCTFail("expected impactCandidate after standstill") }
+
+        // Now continue from impactCandidate state with a single-signal sample at t=1.65 (0.65s after promote at 1.15).
+        let renewingSample = CrashSample(t: 1.65, accelG: 5.0, rotationRadS: 0.3, speedKmh: 0)
+        let (state, effects) = MaxHelmetTests.run([renewingSample], from: candidate)
+        guard case .checkIn = state.phase else { return XCTFail("expected checkIn after renewed signal, got \(state.phase)") }
+        XCTAssertEqual(effects, [.speakCheckIn])
+    }
 }

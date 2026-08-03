@@ -83,6 +83,9 @@ enum CrashEngine {
             return CrashUpdate(state: s)
 
         case .impactCandidate(let since):
+            // Speed gate applies to PROMOTION from armed only. During confirm window, a qualifying
+            // event has already passed the gate, so renewed signals corroborate regardless of speed.
+            // A check-in is cheap to cancel; a missed low-speed crash is not.
             let renewed = sample.t - since >= tuning.confirmMinDelayS &&
                 (sample.accelG >= tuning.impactThresholdG || sample.rotationRadS >= tuning.tumbleThresholdRadS)
             let still = sample.t - since >= tuning.confirmMinDelayS && stillness(s.recent, at: sample.t, tuning: tuning)

@@ -34,12 +34,14 @@ Spec: `docs/superpowers/specs/2026-08-03-crash-detection-design.md`.
 ### Task 1: Protocol events + generated contracts
 
 **Files:**
+
 - Modify: `protocol/agent-events.schema.json`
 - Modify: `shared/agent.ts` (ClientEvent union ~line 228, AgentEvent union ~line 279)
 - Regenerate (never hand-edit): `shared/generated/agent-protocol.ts`, `ios/MaxHelmet/Agent/GeneratedAgentProtocol.swift`, `android/app/src/main/java/com/horizon/maxhelmet/agent/GeneratedAgentProtocol.kt`
 - Test: `tests/crash-protocol.test.ts`
 
 **Interfaces:**
+
 - Produces: wire names `crash.alert`, `crash.cancel` (client→server), `crash.ack`, `crash.simulate` (server→client); TS types `CrashAckStatus`, and the four union members in `ClientEvent`/`AgentEvent`. Later tasks import `CrashAckStatus` and `Extract<ClientEvent, { type: "crash.alert" }>` from `../shared/agent`.
 
 - [ ] **Step 1: Write the failing test**
@@ -200,10 +202,12 @@ git commit -m "feat(protocol): crash.alert / crash.cancel / crash.ack / crash.si
 ### Task 2: parseClientEvent validation for the crash events
 
 **Files:**
+
 - Modify: `server/session-controller.ts` (`parseClientEvent`, add blocks after the `hazard.report` block ~line 234, before the `session.start` fallthrough ~line 267)
 - Test: `tests/crash-protocol.test.ts`
 
 **Interfaces:**
+
 - Consumes: `parseClientEvent(data: RawData): ClientEvent` (existing export).
 - Produces: `parseClientEvent` accepts well-formed `crash.alert`/`crash.cancel` and throws `Invalid crash.alert <field>` otherwise. Task 4 relies on parsed events reaching the dispatch run.
 
@@ -240,16 +244,22 @@ describe("parseClientEvent crash events", () => {
 
   it("rejects crash.alert without an incidentId", () => {
     expect(() => parseClientEvent(encode({ type: "crash.alert", contactOptIn: true }))).toThrow(/incidentId/);
-    expect(() => parseClientEvent(encode({ type: "crash.alert", incidentId: "", contactOptIn: true }))).toThrow(/incidentId/);
+    expect(() => parseClientEvent(encode({ type: "crash.alert", incidentId: "", contactOptIn: true }))).toThrow(
+      /incidentId/
+    );
   });
 
   it("rejects crash.alert without contactOptIn or with bad field types", () => {
     expect(() => parseClientEvent(encode({ type: "crash.alert", incidentId: "i3" }))).toThrow(/contactOptIn/);
-    expect(() => parseClientEvent(encode({ type: "crash.alert", incidentId: "i3", contactOptIn: true, lat: "north" }))).toThrow(/lat/);
+    expect(() =>
+      parseClientEvent(encode({ type: "crash.alert", incidentId: "i3", contactOptIn: true, lat: "north" }))
+    ).toThrow(/lat/);
   });
 
   it("accepts crash.cancel and rejects one without an incidentId", () => {
-    expect(parseClientEvent(encode({ type: "crash.cancel", incidentId: "i4" }))).toMatchObject({ type: "crash.cancel" });
+    expect(parseClientEvent(encode({ type: "crash.cancel", incidentId: "i4" }))).toMatchObject({
+      type: "crash.cancel"
+    });
     expect(() => parseClientEvent(encode({ type: "crash.cancel" }))).toThrow(/incidentId/);
   });
 });
@@ -265,21 +275,26 @@ Expected: FAIL — `parseClientEvent` currently falls through without crash bloc
 In `parseClientEvent`, mirroring the `device.result` block's exact idiom (throw `Invalid <type> <field>`, then the same `return` shape the neighboring blocks use):
 
 ```ts
-  if (value.type === "crash.alert") {
-    if (typeof value.incidentId !== "string" || value.incidentId.length === 0) throw new Error("Invalid crash.alert incidentId");
-    if (typeof value.contactOptIn !== "boolean") throw new Error("Invalid crash.alert contactOptIn");
-    if (value.lat !== undefined && typeof value.lat !== "number") throw new Error("Invalid crash.alert lat");
-    if (value.lon !== undefined && typeof value.lon !== "number") throw new Error("Invalid crash.alert lon");
-    if (value.speedKmhRecent !== undefined && typeof value.speedKmhRecent !== "number") throw new Error("Invalid crash.alert speedKmhRecent");
-    if (value.contactNumber !== undefined && typeof value.contactNumber !== "string") throw new Error("Invalid crash.alert contactNumber");
-    if (value.detectedAt !== undefined && typeof value.detectedAt !== "number") throw new Error("Invalid crash.alert detectedAt");
-    return value as ClientEvent;
-  }
+if (value.type === "crash.alert") {
+  if (typeof value.incidentId !== "string" || value.incidentId.length === 0)
+    throw new Error("Invalid crash.alert incidentId");
+  if (typeof value.contactOptIn !== "boolean") throw new Error("Invalid crash.alert contactOptIn");
+  if (value.lat !== undefined && typeof value.lat !== "number") throw new Error("Invalid crash.alert lat");
+  if (value.lon !== undefined && typeof value.lon !== "number") throw new Error("Invalid crash.alert lon");
+  if (value.speedKmhRecent !== undefined && typeof value.speedKmhRecent !== "number")
+    throw new Error("Invalid crash.alert speedKmhRecent");
+  if (value.contactNumber !== undefined && typeof value.contactNumber !== "string")
+    throw new Error("Invalid crash.alert contactNumber");
+  if (value.detectedAt !== undefined && typeof value.detectedAt !== "number")
+    throw new Error("Invalid crash.alert detectedAt");
+  return value as ClientEvent;
+}
 
-  if (value.type === "crash.cancel") {
-    if (typeof value.incidentId !== "string" || value.incidentId.length === 0) throw new Error("Invalid crash.cancel incidentId");
-    return value as ClientEvent;
-  }
+if (value.type === "crash.cancel") {
+  if (typeof value.incidentId !== "string" || value.incidentId.length === 0)
+    throw new Error("Invalid crash.cancel incidentId");
+  return value as ClientEvent;
+}
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -298,12 +313,14 @@ git commit -m "feat(relay): validate crash.alert and crash.cancel client events"
 ### Task 3: Crash escalation module + config
 
 **Files:**
+
 - Create: `server/crash-escalation.ts`
 - Modify: `server/config.ts` (config object ~line 26, `describeConfig` ~line 127, `validateConfig` ~line 151)
 - Modify: `.env.example`
 - Test: `tests/crash-escalation.test.ts`
 
 **Interfaces:**
+
 - Consumes: `CrashAckStatus`, `ClientEvent` from `shared/agent.ts` (Task 1); `appendTestingAudit(actor, action, targetType, targetId, detail?, now?)` from `server/testing-store.ts:1066`.
 - Produces (Task 4 imports these):
   - `type CrashAlertEvent = Extract<ClientEvent, { type: "crash.alert" }>`
@@ -409,7 +426,11 @@ describe("handleCrashCancel", () => {
   it("audits and forwards the follow-up", async () => {
     const followUp = vi.fn().mockResolvedValue(undefined);
     const audit = vi.fn();
-    await handleCrashCancel({ type: "crash.cancel", incidentId: "i1" }, { name: "spy", notify: vi.fn(), followUp }, audit as never);
+    await handleCrashCancel(
+      { type: "crash.cancel", incidentId: "i1" },
+      { name: "spy", notify: vi.fn(), followUp },
+      audit as never
+    );
     expect(followUp).toHaveBeenCalled();
     expect(audit).toHaveBeenCalledWith("relay", "crash.cancel", "session", "i1", expect.any(Object));
   });
@@ -446,7 +467,9 @@ export function crashSmsBody(alert: CrashAlertEvent): string {
     typeof alert.lat === "number" && typeof alert.lon === "number"
       ? `位置：${alert.lat.toFixed(5)},${alert.lon.toFixed(5)} https://uri.amap.com/marker?position=${alert.lon.toFixed(5)},${alert.lat.toFixed(5)}`
       : "位置未知";
-  const when = alert.detectedAt ? new Date(alert.detectedAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" }) : "";
+  const when = alert.detectedAt
+    ? new Date(alert.detectedAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })
+    : "";
   return `【Max头盔】检测到骑手疑似摔车，且未响应确认。${location}。${when ? `时间：${when}。` : ""}请尽快联系骑手或报警。`;
 }
 
@@ -498,7 +521,12 @@ export async function handleCrashAlert(
     }
   }
 
-  send({ type: "crash.ack", incidentId: alert.incidentId, status: outcome.status, ...(outcome.detail ? { detail: outcome.detail } : {}) });
+  send({
+    type: "crash.ack",
+    incidentId: alert.incidentId,
+    status: outcome.status,
+    ...(outcome.detail ? { detail: outcome.detail } : {})
+  });
 }
 
 export async function handleCrashCancel(
@@ -531,9 +559,9 @@ In `describeConfig()` add: `` `事故通知通道: ${config.crashNotifier}` ``.
 In `validateConfig()` add:
 
 ```ts
-  if (config.crashNotifier !== "log") {
-    warnings.push(`CRASH_NOTIFIER=${config.crashNotifier} 不是已实现的通道，事故升级将只记录、不发送短信。`);
-  }
+if (config.crashNotifier !== "log") {
+  warnings.push(`CRASH_NOTIFIER=${config.crashNotifier} 不是已实现的通道，事故升级将只记录、不发送短信。`);
+}
 ```
 
 (The accumulator in `validateConfig` is `const warnings: string[]` — `server/config.ts:152`.)
@@ -562,10 +590,12 @@ git commit -m "feat(relay): crash escalation module with pluggable, honest notif
 ### Task 4: Session-controller dispatch + end-to-end relay test
 
 **Files:**
+
 - Modify: `server/session-controller.ts` (dispatch run ~lines 445-450; constructor area for the notifier field)
 - Test: `tests/crash-escalation.test.ts` (append an integration describe)
 
 **Interfaces:**
+
 - Consumes: `selectCrashNotifier`, `handleCrashAlert`, `handleCrashCancel` (Task 3); `config.crashNotifier` (Task 3); the controller's private `send(payload)` (session-controller.ts:472).
 - Produces: a live relay session answers `crash.alert` with `crash.ack` on both mock and doubao providers (dispatch is provider-agnostic).
 
@@ -654,8 +684,8 @@ On the class: `private readonly crashNotifier = selectCrashNotifier(config.crash
 In the dispatch run (after the `camera.frame` line ~450):
 
 ```ts
-      if (event.type === "crash.alert") await handleCrashAlert(event, this.crashNotifier, (payload) => this.send(payload));
-      if (event.type === "crash.cancel") await handleCrashCancel(event, this.crashNotifier);
+if (event.type === "crash.alert") await handleCrashAlert(event, this.crashNotifier, (payload) => this.send(payload));
+if (event.type === "crash.cancel") await handleCrashCancel(event, this.crashNotifier);
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -674,6 +704,7 @@ git commit -m "feat(relay): dispatch crash events through the session controller
 ### Task 5: Mock 事故 scenario + crash.simulate injector
 
 **Files:**
+
 - Modify: `shared/ride.ts` (`DemoScenario` line 3, `SCENARIO_LABELS` ~line 53, `scenarioDefaultMode` ~line 70)
 - Modify: `shared/events.ts` (~line 20, the hand-listed `DEMO_SCENARIOS` set)
 - Modify: `server/session-controller.ts` (~line 37, the other hand-listed scenario set)
@@ -683,6 +714,7 @@ git commit -m "feat(relay): dispatch crash events through the session controller
 - Test: `tests/crash-escalation.test.ts` (append)
 
 **Interfaces:**
+
 - Consumes: the `send` / `platform` wiring pattern of `createHazardInjector` (`server/hazard-injector.ts:12-33`).
 - Produces: `createCrashSimulator(options: { send: (payload: unknown) => void; platform?: () => string | undefined }): { start(delayMs: number): void; stop(): void }`; `DemoScenario` gains `"crash"`, label `事故`, default mode `emergency`.
 
@@ -743,6 +775,7 @@ Run: `npx vitest run tests/crash-escalation.test.ts` — FAIL (`"crash"` not a `
 - [ ] **Step 3: Register the scenario**
 
 `shared/ride.ts`:
+
 - Line 3: `export type DemoScenario = "commute" | "wind" | "fuel" | "group" | "emergency" | "adas" | "crash";`
 - `SCENARIO_LABELS`: add `crash: "事故"`.
 - `scenarioDefaultMode`: change the first line to `if (scenario === "emergency" || scenario === "crash") return "emergency";`
@@ -813,8 +846,8 @@ const crashSimulator = createCrashSimulator({ send, platform: () => sessionPlatf
 (import `createCrashSimulator` alongside `createHazardInjector`). In `enterScenario` (~line 357-358), mirror the hazard-injector cadence switch:
 
 ```ts
-    crashSimulator.stop();
-    if (scenario === "crash") crashSimulator.start(6000);
+crashSimulator.stop();
+if (scenario === "crash") crashSimulator.start(6000);
 ```
 
 In the provider's `close()` add `crashSimulator.stop();`.
@@ -835,10 +868,12 @@ git commit -m "feat(mock): 事故 demo scenario injects crash.simulate for full-
 ### Task 6: iOS Swift protocol surface
 
 **Files:**
+
 - Modify: `ios/MaxHelmet/Agent/AgentProtocol.swift` (`AgentEvent` enum ~line 333, `parseAgentEvent` switch ~line 352, builders ~line 589)
 - Test: `ios/MaxHelmetTests/CrashProtocolTests.swift`
 
 **Interfaces:**
+
 - Consumes: generated `ServerEventTypes.crashAck` / `.crashSimulate`, `ClientEventTypes.crashAlert` / `.crashCancel` (Task 1); the parser's `str/int/bool` local helpers and required-field gate (AgentProtocol.swift:358-367).
 - Produces (Task 10 consumes):
   - `enum CrashAckStatus: String { case notified, failed, unconfigured }` with `static func fromWire(_ raw: String) -> CrashAckStatus` (unknown → `.failed`, the conservative reading)
@@ -986,10 +1021,12 @@ git commit -m "feat(ios): crash event parsing and builders"
 ### Task 7: CrashEngine — detection core
 
 **Files:**
+
 - Create: `ios/MaxHelmet/Crash/CrashEngine.swift`
 - Test: `ios/MaxHelmetTests/CrashEngineTests.swift`
 
 **Interfaces:**
+
 - Produces (Tasks 8-10 consume; exact declarations below):
   - `struct CrashTuning` (all thresholds; `static let standard`)
   - `struct CrashSample: Equatable { var t: TimeInterval; var accelG: Double; var rotationRadS: Double; var speedKmh: Double? }`
@@ -1233,10 +1270,12 @@ git commit -m "feat(ios): pure CrashEngine detection core with trace tests"
 ### Task 8: CrashEngine — escalation timing, cancel, latching
 
 **Files:**
+
 - Modify: `ios/MaxHelmet/Crash/CrashEngine.swift`
 - Test: `ios/MaxHelmetTests/CrashEngineTests.swift` (append)
 
 **Interfaces:**
+
 - Produces (Task 10 consumes):
   - `static func tick(now: TimeInterval, state: CrashState, tuning: CrashTuning = .standard) -> CrashUpdate`
   - `static func riderCancelled(state: CrashState) -> CrashUpdate`
@@ -1384,12 +1423,14 @@ git commit -m "feat(ios): CrashEngine escalation timing, cancel paths, and latch
 ### Task 9: MotionFeed, SirenSource, SirenPlayer
 
 **Files:**
+
 - Create: `ios/MaxHelmet/Crash/MotionFeed.swift`
 - Create: `ios/MaxHelmet/Crash/Siren.swift`
 - Modify: `ios/MaxHelmet/Info.plist`
 - Test: `ios/MaxHelmetTests/SirenSourceTests.swift`
 
 **Interfaces:**
+
 - Consumes: `CrashSample` (Task 7); `PcmPlayer.play(_ pcm: Data)` / `stopPlayback()` semantics (PcmPlayer.swift:78/127 — 24 kHz PCM16 mono, the shared `voiceEngine` so AEC keeps working).
 - Produces (Task 10 consumes):
   - `protocol MotionStreaming: AnyObject { var onSample: ((CrashSample) -> Void)? { get set }; func start(); func stop() }`
@@ -1572,11 +1613,13 @@ git commit -m "feat(ios): CoreMotion feed and loopable siren for the crash path"
 ### Task 10: CrashController + AgentSession wiring
 
 **Files:**
+
 - Create: `ios/MaxHelmet/Crash/CrashController.swift`
 - Modify: `ios/MaxHelmet/Agent/AgentSession.swift` (lazy controller near `deviceRouter` ~line 169; `handleEvent` cases ~line 758; transcript case ~line 793; `start()` update block ~line 269; `stop()` teardown ~line 350; `sessionStarted` case ~line 760; `State` struct)
 - Test: `ios/MaxHelmetTests/CrashControllerTests.swift`
 
 **Interfaces:**
+
 - Consumes: `CrashEngine` + types (Tasks 7-8), `MotionStreaming`/`SirenPlayer` (Task 9), `buildCrashAlert`/`buildCrashCancel`/`CrashAckStatus`/`.crashAck`/`.crashSimulate` (Task 6).
 - Produces:
   - `struct CrashSettings { var contactNumber: String?; var relayOptIn: Bool; var callTarget: String; var logOnly: Bool }` (Task 12 supplies real values; default `CrashSettings(contactNumber: nil, relayOptIn: false, callTarget: "120", logOnly: false)`)
@@ -2105,12 +2148,14 @@ git commit -m "feat(ios): CrashController glue — engine effects to speech, sir
 ### Task 11: Check-in banner + CrashAlarmView
 
 **Files:**
+
 - Create: `ios/MaxHelmet/Crash/CrashAlarmView.swift`
 - Modify: `ios/MaxHelmet/UI/AgentScreen.swift` (`alerts` builder ~line 221; top-level ZStack for the full-screen cover)
 - Modify: `ios/MaxHelmet/UI/AgentScreenLayout.swift` (visibility flags feeding `captionsHeight`/`helmetDiameter`)
 - Test: `ios/MaxHelmetTests/AgentScreenLayoutTests.swift` (append)
 
 **Interfaces:**
+
 - Consumes: `AgentSession.State.crashPhase` / `.crashLocationText` (Task 10); `session.crashController.riderTapCancelled()`; `SystemURLOpener` (`CallDialer.swift:8`) for the call button; `HudColors` / `HudTheme` styling; the existing `hazardVisible` layout-flag pattern (`AgentScreen.swift:150-168`, `AgentScreenLayout.swift`).
 - Produces: `CrashCheckInBanner` (tappable banner in the `alerts` stack) and `CrashAlarmView` (full-screen overlay for `.alarm`/`.escalated`); `AgentScreenLayout` functions gain a `crashVisible: Bool` parameter.
 
@@ -2284,12 +2329,14 @@ git commit -m "feat(ios): crash check-in banner and full-screen alarm view"
 ### Task 12: Settings — contact, opt-in, call target, log-only
 
 **Files:**
+
 - Modify: `ios/MaxHelmet/UI/MainViewModel.swift` (`Keys` enum ~line 30, published vars, `init` seeding ~line 227)
 - Modify: `ios/MaxHelmet/UI/AgentSettingsPanel.swift` (new `SectionCard` in `SettingsPanel`)
 - Modify: `ios/MaxHelmet/UI/AgentScreen.swift` (finish the Task 11 `callNumber` wiring)
 - Modify: wherever `MainViewModel` first touches the session (`toggleHandsFree` ~line 255 or init) — set `session.crashSettingsProvider`
 
 **Interfaces:**
+
 - Consumes: `CrashSettings` and `AgentSession.crashSettingsProvider` (Task 10); `SecureTokenStore.read(account:) -> String?` and `SecureTokenStore.write(_ value: String, account: String)` (`SecureTokenStore.swift:9,20` — `write("")` removes the entry); `SystemContactResolver` (`ContactResolver.swift:20` — `isAuthorized()`, `number(matching:)`, both async); the `Keys`/`didSet` persistence idiom (`MainViewModel.swift:30-72`); `SectionCard`/`Toggle`/`HudChip` idioms (`AgentSettingsPanel.swift:150-197, 319-360`).
 - Produces: `MainViewModel` gains `crashContactNumber: String`, `crashRelayOptIn: Bool`, `crashCallTarget: String` (`"contact"`/`"120"`), `crashLogOnly: Bool`, all persisted; the session's `crashSettingsProvider` returns them live.
 
@@ -2415,6 +2462,7 @@ git commit -m "feat(ios): crash settings — emergency contact, relay opt-in, ca
 ### Task 13: Docs + full verification
 
 **Files:**
+
 - Modify: `README.md` ("Current Capabilities" list)
 - Modify: `CHANGELOG.md`
 

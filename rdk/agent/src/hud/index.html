@@ -300,7 +300,9 @@
 
     const speeds = isVideo
       ? [0.5, 1, 2]
-          .map((speed) => `<button data-speed="${speed}" class="${speed === viewerSpeed ? "on" : ""}">${speed}×</button>`)
+          .map(
+            (speed) => `<button data-speed="${speed}" class="${speed === viewerSpeed ? "on" : ""}">${speed}×</button>`
+          )
           .join("")
       : "";
     const del = pair.recording ? "" : `<button id="viewer-delete" class="danger">delete</button>`;

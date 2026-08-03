@@ -37,16 +37,22 @@ describe("parseClientEvent crash events", () => {
 
   it("rejects crash.alert without an incidentId", () => {
     expect(() => parseClientEvent(encode({ type: "crash.alert", contactOptIn: true }))).toThrow(/incidentId/);
-    expect(() => parseClientEvent(encode({ type: "crash.alert", incidentId: "", contactOptIn: true }))).toThrow(/incidentId/);
+    expect(() => parseClientEvent(encode({ type: "crash.alert", incidentId: "", contactOptIn: true }))).toThrow(
+      /incidentId/
+    );
   });
 
   it("rejects crash.alert without contactOptIn or with bad field types", () => {
     expect(() => parseClientEvent(encode({ type: "crash.alert", incidentId: "i3" }))).toThrow(/contactOptIn/);
-    expect(() => parseClientEvent(encode({ type: "crash.alert", incidentId: "i3", contactOptIn: true, lat: "north" }))).toThrow(/lat/);
+    expect(() =>
+      parseClientEvent(encode({ type: "crash.alert", incidentId: "i3", contactOptIn: true, lat: "north" }))
+    ).toThrow(/lat/);
   });
 
   it("accepts crash.cancel and rejects one without an incidentId", () => {
-    expect(parseClientEvent(encode({ type: "crash.cancel", incidentId: "i4" }))).toMatchObject({ type: "crash.cancel" });
+    expect(parseClientEvent(encode({ type: "crash.cancel", incidentId: "i4" }))).toMatchObject({
+      type: "crash.cancel"
+    });
     expect(() => parseClientEvent(encode({ type: "crash.cancel" }))).toThrow(/incidentId/);
   });
 });

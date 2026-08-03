@@ -57,6 +57,10 @@ final class AgentSession: NSObject, ObservableObject {
         /// live session transcript, so a restored/previous-session turn could
         /// tag the wrong turn). Int.max = nothing flaggable (offline).
         var feedbackFloorId = Int.max
+        /// Crash-detection UI phase, owned entirely by CrashController.onUIChange.
+        var crashPhase: CrashUIPhase = .hidden
+        /// Human-readable coordinates for the active incident, or nil.
+        var crashLocationText: String?
 
         /// Whether the flag control should show for a transcript item at all
         /// (mirrors canFlagTurn in useHelmetAgent.ts). The connection check
@@ -145,6 +149,10 @@ final class AgentSession: NSObject, ObservableObject {
     /// The one capture store shared by the camera handler (writes) and the
     /// gallery UI (reads).
     let captureStore = CaptureStore()
+    /// Supplied by MainViewModel (Task 12); safe defaults until then.
+    var crashSettingsProvider: () -> CrashSettings = {
+        CrashSettings(contactNumber: nil, relayOptIn: false, callTarget: "120", logOnly: false)
+    }
     private let audioRouter = AudioRouter()
     private lazy var mic = MicStreamer(
         engine: voiceEngine,
@@ -161,6 +169,44 @@ final class AgentSession: NSObject, ObservableObject {
 
     private let synthesizer = AVSpeechSynthesizer()
     private let locationProvider = LocationProvider()
+
+    /// One-shot location resolver for crash escalation, separate from the
+    /// session-start `locationProvider` so a stale ride-start fix never
+    /// substitutes for the rider's actual position at the moment of impact.
+    private lazy var crashLocationProvider = LocationProvider()
+    /// `CrashController` is `@MainActor` (Task 10 spec); `AgentSession` predates
+    /// Swift concurrency isolation and is not itself an actor, so constructing
+    /// and driving it from here is a synchronous call into main-actor-isolated
+    /// code from a nonisolated type. Every touch point below (`init()`,
+    /// `start()`, `stop()`, and `handleEvent()`'s cases) already runs on the
+    /// main thread in practice — `handleEvent` is always invoked from inside a
+    /// `DispatchQueue.main.async` — so `onCrash` asserts that isolation rather
+    /// than restructuring the class. This is the one deviation Step 5 forced;
+    /// see the task report.
+    private(set) lazy var crashController: CrashController = MainActor.assumeIsolated {
+        CrashController(
+            motion: SystemMotionFeed(speedProvider: { [weak self] in
+                guard let self, self.state.value.hasRideContext else { return nil }
+                return Double(self.state.value.rideContext.speedKmh)
+            }),
+            locate: { [weak self] completion in self?.crashLocationProvider.resolve(completion) ?? completion(nil) },
+            speak: { [weak self] line in self?.speak(line) },
+            interruptPlayback: { [weak self] in self?.stopAgentSpeech() },
+            siren: SirenPlayer(
+                play: { [weak self] pcm in self?.player.play(pcm) },
+                stop: { [weak self] in self?.player.stopPlayback() }
+            ),
+            send: { [weak self] json in self?.webSocket?.send(.string(json)) { _ in } },
+            settings: { [weak self] in self?.crashSettingsProvider() ?? CrashSettings(contactNumber: nil, relayOptIn: false, callTarget: "120", logOnly: false) }
+        )
+    }
+
+    /// Runs `body` against `crashController` while asserting the main-actor
+    /// isolation its every call site already guarantees at runtime (see the
+    /// comment on `crashController` above).
+    private func onCrash<T>(_ body: @MainActor (CrashController) -> T) -> T {
+        MainActor.assumeIsolated { body(crashController) }
+    }
 
     /// Routes relay-issued device commands to one handler each. Built lazily so
     /// `player` (the volume handler's gain target) is available. The message
@@ -217,6 +263,10 @@ final class AgentSession: NSObject, ObservableObject {
         // The legacy cache was device-global and cannot be assigned safely to
         // whichever account logs in first after an upgrade.
         UserDefaults.standard.removeObject(forKey: Self.legacyTranscriptStoreKey)
+        onCrash { controller in
+            controller.onUIChange = { [weak self] phase in self?.update { $0.crashPhase = phase } }
+            controller.onLocationText = { [weak self] text in self?.update { $0.crashLocationText = text } }
+        }
     }
 
     // MARK: - public API
@@ -276,6 +326,7 @@ final class AgentSession: NSObject, ObservableObject {
             $0.guidance = nil
             $0.hasRideContext = false
         }
+        onCrash { $0.arm() }
 
         locationProvider.resolve { [weak self] coordinate in
             guard let self else { return }
@@ -347,6 +398,10 @@ final class AgentSession: NSObject, ObservableObject {
         synthesizer.stopSpeaking(at: .immediate)
         player.release()
         audioRouter.stopVoiceRouting()
+        // Not disarm(): an incident past check-in outlives the session — its
+        // countdowns, siren, and UI keep running. onUIChange is the only
+        // writer of crashPhase, so the teardown update below leaves it alone.
+        onCrash { $0.sessionEnded() }
         update {
             $0.handsFree = false
             $0.connection = .offline
@@ -766,6 +821,7 @@ final class AgentSession: NSObject, ObservableObject {
                 $0.connection = .ready
                 $0.statusText = mode == "mock" ? "模拟路线已启用" : "豆包实时语音在线"
             }
+            onCrash { $0.socketBecameReady() }
 
         case let .connection(connState, detail):
             update {
@@ -794,6 +850,7 @@ final class AgentSession: NSObject, ObservableObject {
             // Barge-in: the rider talking always silences the agent.
             if speaker == .rider {
                 stopAgentSpeech()
+                onCrash { $0.riderTranscript(text) }
             }
             pushTranscript(
                 speaker: speaker, text: text, final: final,
@@ -845,13 +902,11 @@ final class AgentSession: NSObject, ObservableObject {
         case let .error(message):
             update { $0.statusText = message }
 
-        case let .crashAck(_, _, _):
-            // Crash acknowledgment handled by crash detection controller
-            break
+        case let .crashAck(incidentId, status, detail):
+            onCrash { $0.handleAck(incidentId: incidentId, status: status, detail: detail) }
 
         case .crashSimulate:
-            // Crash simulation handled by crash detection controller
-            break
+            onCrash { $0.handleSimulate() }
 
         case .unhandled:
             break

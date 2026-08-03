@@ -83,7 +83,10 @@ export const config = {
   // Login session lifetime, in days.
   authSessionDays: resolveBoundedInt(process.env.AUTH_SESSION_DAYS, 30, 1, 365),
   // Login/registration attempts allowed per client IP per minute.
-  authAttemptsPerMinute: resolveBoundedInt(process.env.AUTH_ATTEMPTS_PER_MINUTE, 10, 3, 1000)
+  authAttemptsPerMinute: resolveBoundedInt(process.env.AUTH_ATTEMPTS_PER_MINUTE, 10, 3, 1000),
+  // Crash escalation delivery channel. Only "log" exists today: incidents are
+  // audited but nobody is texted, and the ack says so honestly.
+  crashNotifier: process.env.CRASH_NOTIFIER?.trim().toLowerCase() || "log"
 };
 
 function resolveBoundedInt(raw: string | undefined, fallback: number, min: number, max: number): number {
@@ -139,7 +142,8 @@ export function describeConfig(): string[] {
     `Relay message ceiling: ${Math.round(config.maxPayloadBytes / 1024)} KiB`,
     `Relay heartbeat: ${config.heartbeatMs ? `ping every ${Math.round(config.heartbeatMs / 1000)} s` : "off"}`,
     `Relay idle timeout: ${config.idleTimeoutMs ? describeDuration(config.idleTimeoutMs) : "off"}`,
-    `Relay proxy trust: ${config.trustProxy ? `on (${config.trustedProxyHops} hop${config.trustedProxyHops === 1 ? "" : "s"} via X-Forwarded-For)` : "off (client IP = socket address)"}`
+    `Relay proxy trust: ${config.trustProxy ? `on (${config.trustedProxyHops} hop${config.trustedProxyHops === 1 ? "" : "s"} via X-Forwarded-For)` : "off (client IP = socket address)"}`,
+    `事故通知通道: ${config.crashNotifier}`
   ];
 }
 
@@ -186,6 +190,10 @@ export function validateConfig(): string[] {
     warnings.push(
       "AUTH_REGISTRATION 在生产环境仍为开放状态：完成首批账号引导后请设置 AUTH_REGISTRATION=off，并使用单次邀请链接添加测试员。"
     );
+  }
+
+  if (config.crashNotifier !== "log") {
+    warnings.push(`CRASH_NOTIFIER=${config.crashNotifier} 不是已实现的通道，事故升级将只记录、不发送短信。`);
   }
 
   return warnings;

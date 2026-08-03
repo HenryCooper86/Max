@@ -97,7 +97,7 @@ enum RideMode: String, CaseIterable {
 
 /// Mirror of DemoScenario in shared/ride.ts, with SCENARIO_HAZARDS from src/main.tsx.
 enum DemoScenario: String, CaseIterable {
-    case commute, wind, fuel, group, emergency, adas
+    case commute, wind, fuel, group, emergency, adas, crash
 
     var wire: String { rawValue }
     var label: String {
@@ -108,6 +108,7 @@ enum DemoScenario: String, CaseIterable {
         case .group: return "小队"
         case .emergency: return "紧急"
         case .adas: return "ADAS"
+        case .crash: return "事故"
         }
     }
 
@@ -115,7 +116,7 @@ enum DemoScenario: String, CaseIterable {
         switch self {
         case .commute, .fuel, .group: return .normal
         case .wind, .adas: return .caution
-        case .emergency: return .critical
+        case .emergency, .crash: return .critical
         }
     }
 
@@ -132,7 +133,7 @@ func combineHazardLevels(_ first: HazardLevel, _ second: HazardLevel) -> HazardL
 /// Port of scenarioDefaultMode in shared/ride.ts.
 func scenarioDefaultMode(_ scenario: DemoScenario) -> RideMode {
     switch scenario {
-    case .emergency: return .emergency
+    case .emergency, .crash: return .emergency
     case .commute, .fuel: return .navigation
     default: return .ride
     }
@@ -273,6 +274,12 @@ struct HazardAlert: Equatable {
     }
 }
 
+enum CrashAckStatus: String {
+    case notified, failed, unconfigured
+    /// Unknown outcomes read as failure — Max must never claim success it wasn't told about.
+    static func fromWire(_ raw: String) -> CrashAckStatus { CrashAckStatus(rawValue: raw) ?? .failed }
+}
+
 enum DeviceActionTier: String, Equatable {
     case low, high
 }
@@ -342,6 +349,8 @@ enum AgentEvent {
     case telemetryUpdate(Telemetry)
     case hazardAlert(HazardAlert)
     case deviceCommand(DeviceCommand)
+    case crashAck(incidentId: String, status: CrashAckStatus, detail: String?)
+    case crashSimulate
     case error(message: String)
     /// Event types this client does not consume.
     case unhandled
@@ -475,6 +484,15 @@ func parseAgentEvent(_ text: String) -> AgentEvent {
     case ServerEventTypes.error:
         return .error(message: str("message", "Voice relay failed"))
 
+    case ServerEventTypes.crashAck:
+        let detail = str("detail")
+        return .crashAck(incidentId: str("incidentId") ?? "",
+                         status: CrashAckStatus.fromWire(str("status") ?? ""),
+                         detail: detail.isEmpty ? nil : detail)
+
+    case ServerEventTypes.crashSimulate:
+        return .crashSimulate
+
     default:
         return .unhandled
     }
@@ -595,6 +613,28 @@ func buildDeviceResult(commandId: String, result: DeviceActionResult) -> String 
     if let reason = result.reason { payload["reason"] = reason }
     if let detail = result.detail { payload["detail"] = detail }
     let data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
+    return String(data: data, encoding: .utf8) ?? "{}"
+}
+
+func buildCrashAlert(incidentId: String, lat: Double?, lon: Double?, speedKmhRecent: Double?,
+                     contactNumber: String?, contactOptIn: Bool, detectedAt: Double) -> String {
+    var payload: [String: Any] = [
+        "type": ClientEventTypes.crashAlert,
+        "incidentId": incidentId,
+        "contactOptIn": contactOptIn,
+        "detectedAt": detectedAt
+    ]
+    if let lat { payload["lat"] = lat }
+    if let lon { payload["lon"] = lon }
+    if let speedKmhRecent { payload["speedKmhRecent"] = speedKmhRecent }
+    if let contactNumber, contactOptIn { payload["contactNumber"] = contactNumber }
+    guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return "{}" }
+    return String(data: data, encoding: .utf8) ?? "{}"
+}
+
+func buildCrashCancel(incidentId: String) -> String {
+    let payload: [String: Any] = ["type": ClientEventTypes.crashCancel, "incidentId": incidentId]
+    guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return "{}" }
     return String(data: data, encoding: .utf8) ?? "{}"
 }
 

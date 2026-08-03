@@ -845,6 +845,14 @@ final class AgentSession: NSObject, ObservableObject {
         case let .error(message):
             update { $0.statusText = message }
 
+        case let .crashAck(_, _, _):
+            // Crash acknowledgment handled by crash detection controller
+            break
+
+        case .crashSimulate:
+            // Crash simulation handled by crash detection controller
+            break
+
         case .unhandled:
             break
         }

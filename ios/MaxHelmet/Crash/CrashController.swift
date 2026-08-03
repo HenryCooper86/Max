@@ -53,6 +53,17 @@ final class CrashController {
     var onLocationText: ((String?) -> Void)?
     var activeIncidentIdForTesting: String? { activeIncidentId }
 
+    /// True once an incident has passed check-in and is still running
+    /// (check-in, alarm, or escalated) — the point past which the incident
+    /// outlives the session (see `sessionEnded()`) and the caller must keep
+    /// the audio path (siren) alive even while tearing everything else down.
+    var hasActiveIncident: Bool {
+        switch state.phase {
+        case .checkIn, .alarm, .escalated: return true
+        case .armed, .impactCandidate: return false
+        }
+    }
+
     init(motion: MotionStreaming,
          locate: @escaping (@escaping (CLLocationCoordinate2D?) -> Void) -> Void,
          speak: @escaping (String) -> Void,
@@ -189,12 +200,26 @@ final class CrashController {
             escalate()
         case .dismiss:
             siren.stop()
+            // A cancelled incident (checkIn/alarm path) never escalated, so
+            // these are normally already nil — cleared here too for symmetry
+            // with the escalated-cancel path below, and so nothing resends on
+            // a later socketBecameReady() no matter which path cleared it.
+            pendingAlertJson = nil
+            alertSentAt = nil
             onUIChange?(.hidden)
             onLocationText?(nil)
         case .logNearMiss:
             print("[crash] near-miss cancelled at \(now())")
         case .sendCancel:
+            // Send the follow-up before clearing anything — it needs
+            // activeIncidentId. Once sent, this incident is fully closed:
+            // nothing must resend the original crash.alert on a later
+            // socketBecameReady() (the rider already told the relay it was a
+            // false alarm).
             if let activeIncidentId { send(buildCrashCancel(incidentId: activeIncidentId)) }
+            pendingAlertJson = nil
+            alertSentAt = nil
+            acked = false
         }
     }
 
@@ -204,7 +229,11 @@ final class CrashController {
         acked = false
         noAckNoticeShown = false
         let current = settings()
-        let speedRecent = state.recent.compactMap(\.speedKmh).max()
+        // The impact-window speed, captured by the engine at the moment of
+        // promotion — by escalation time the rolling buffer holds only
+        // stationary post-crash samples, so recomputing from `state.recent`
+        // here would report ~0 km/h regardless of how fast the rider was going.
+        let speedRecent = state.peakSpeedKmh
         onUIChange?(.escalated(ackText: nil))
         locate { [weak self] coordinate in
             guard let self else { return }

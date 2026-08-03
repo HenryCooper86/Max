@@ -46,6 +46,15 @@ final class CrashEngineDetectionTests: XCTestCase {
         XCTAssertEqual(effects, [.speakCheckIn])
     }
 
+    func testPromotionCapturesTheImpactWindowSpeedNotThePostCrashStillness() {
+        var samples = riding(1.0)
+        samples += trace(from: 1.0, seconds: 0.05, accelG: 6.0, speedKmh: 60)       // 50 ms crash pulse
+        samples += trace(from: 1.05, seconds: 2.0, accelG: 0.02, speedKmh: 0)       // still on the ground
+        let (state, _) = MaxHelmetTests.run(samples)
+        guard case .checkIn = state.phase else { return XCTFail("expected checkIn, got \(state.phase)") }
+        XCTAssertEqual(state.peakSpeedKmh, 60, "escalation must report the impact-window speed, not the post-crash stillness")
+    }
+
     func testTumbleAtSpeedPromotes() {
         var samples = riding(1.0)
         samples += trace(from: 1.0, seconds: 0.15, accelG: 1.0, rotation: 8.0, speedKmh: 60)

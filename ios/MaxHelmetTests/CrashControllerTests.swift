@@ -134,6 +134,38 @@ final class CrashControllerTests: XCTestCase {
         XCTAssertEqual(sent.count, 2, "acked alert must not resend")
     }
 
+    func testCancelledIncidentNeverResendsItsAlert() throws {
+        let controller = makeController()
+        controller.arm()
+        controller.handleSimulate()
+        escalate(controller)
+        controller.riderTapCancelled()
+        XCTAssertEqual(sent.count, 2, "one alert, one cancel")
+        controller.socketBecameReady()
+        XCTAssertEqual(sent.count, 2, "a cancelled incident must never resend its crash.alert")
+        let alert = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(sent[0].utf8)) as? [String: Any])
+        XCTAssertEqual(alert["type"] as? String, ClientEventTypes.crashAlert)
+        let cancel = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(sent[1].utf8)) as? [String: Any])
+        XCTAssertEqual(cancel["type"] as? String, ClientEventTypes.crashCancel)
+    }
+
+    func testHasActiveIncidentAcrossPhases() {
+        let controller = makeController()
+        XCTAssertFalse(controller.hasActiveIncident, "no incident before arming")
+        controller.arm()
+        XCTAssertFalse(controller.hasActiveIncident, "armed alone carries no incident")
+        controller.handleSimulate()
+        XCTAssertTrue(controller.hasActiveIncident, "check-in is an active incident")
+        now += 15
+        controller.handleTick()
+        XCTAssertTrue(controller.hasActiveIncident, "alarm is an active incident")
+        now += 30
+        controller.handleTick()
+        XCTAssertTrue(controller.hasActiveIncident, "escalated is an active incident")
+        controller.riderTapCancelled()
+        XCTAssertFalse(controller.hasActiveIncident, "cancelling returns to armed")
+    }
+
     func testLogOnlyModeDetectsButStaysSilent() {
         settings.logOnly = true
         let controller = makeController()

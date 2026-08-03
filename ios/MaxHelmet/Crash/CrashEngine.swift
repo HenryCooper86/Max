@@ -39,6 +39,12 @@ struct CrashState: Equatable {
     var recent: [CrashSample] = []
     var impactStart: TimeInterval?
     var tumbleStart: TimeInterval?
+    /// Speed at the moment of promotion to `.impactCandidate` — captured once,
+    /// there, so escalation reports the impact-window speed rather than the
+    /// stationary speed the 5 s rolling buffer holds by the time it fires.
+    /// `simulate()` promotes straight from `.armed` without passing through
+    /// here, so a simulated incident leaves this nil.
+    var peakSpeedKmh: Double?
     static let armed = CrashState()
 }
 
@@ -79,6 +85,7 @@ enum CrashEngine {
                 s.phase = .impactCandidate(since: sample.t)
                 s.impactStart = nil
                 s.tumbleStart = nil
+                s.peakSpeedKmh = recentSpeed
             }
             return CrashUpdate(state: s)
 

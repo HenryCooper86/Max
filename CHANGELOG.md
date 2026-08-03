@@ -1,5 +1,28 @@
 # Changelog
 
+### Added
+
+- **Crash detection & emergency escalation (iOS)** — during a hands-free session
+  the phone's IMU watches for a crash signature (≥4.5 g sustained pulse or ≥6 rad/s
+  tumble, then stillness; speed-gated below 10 km/h). A pure, trace-tested
+  `CrashEngine` (`ios/MaxHelmet/Crash/`) drives the flow: 15 s spoken check-in
+  ("你还好吗？", cancel by tap or "我没事") → 30 s full-screen alarm with siren and
+  GPS coordinates → one `crash.alert` to the relay. New protocol events
+  `crash.alert` / `crash.cancel` / `crash.ack` / `crash.simulate`
+  (`protocol/agent-events.schema.json`); relay module `server/crash-escalation.ts`
+  with a pluggable notifier — log-only by default (`CRASH_NOTIFIER=log`), so the
+  ack honestly reports `unconfigured` and Max tells the rider to dial by hand.
+  Post-escalation cancel sends a 误报 follow-up. Alarm survives session death;
+  un-acked alerts resend on reconnect; 10 s without an ack shows
+  "服务器未确认 — 请手动拨打". Settings add an emergency contact (Keychain,
+  name-or-number via the contacts resolver), a relay opt-in (default **off** — the
+  one carve-out to "contact numbers never leave the device"), the alarm call
+  target (120 / contact), and a 仅记录 mode to harvest real-ride traces before
+  arming. New 事故 mock scenario rehearses the whole flow without hardware; web
+  and Android ignore the new events. Honest limits: voice cancel needs the
+  network (ASR is server-side), and iOS cannot place calls itself — the call
+  button needs a human tap.
+
 ## 2026-08-01 — Helmet board: dual cameras that tell the truth
 
 RDK X5 embedded client (`rdk/` — the day-by-day record lives in

@@ -41,6 +41,10 @@ final class MainViewModel: ObservableObject {
         static let testingTestCaseId = "testing_test_case_id"
         static let testingRunId = "testing_run_id"
         static let testingAssignmentId = "testing_assignment_id"
+        static let crashContact = "crash_contact_number"   // SecureTokenStore account, not a defaults key
+        static let crashRelayOptIn = "crash_relay_opt_in"
+        static let crashCallTarget = "crash_call_target"
+        static let crashLogOnly = "crash_log_only"
     }
 
     let session = AgentSession.shared
@@ -117,6 +121,27 @@ final class MainViewModel: ObservableObject {
     }
     @Published var testingAssignmentId: String {
         didSet { defaults.set(testingAssignmentId, forKey: Keys.testingAssignmentId) }
+    }
+
+    /// Emergency contact number (or name — resolved via Contacts, see
+    /// `resolveCrashContactIfNeeded`). Quasi-secret, so it lives in the
+    /// Keychain via `SecureTokenStore`, not UserDefaults.
+    @Published var crashContactNumber: String {
+        didSet { SecureTokenStore.write(crashContactNumber, account: Keys.crashContact) }
+    }
+    /// Off by default — the rider must explicitly opt in to sending the
+    /// contact's number to the relay on an escalated crash.
+    @Published var crashRelayOptIn: Bool {
+        didSet { defaults.set(crashRelayOptIn, forKey: Keys.crashRelayOptIn) }
+    }
+    /// Who the crash alarm view dials: `"contact"` or `"120"`.
+    @Published var crashCallTarget: String {
+        didSet { defaults.set(crashCallTarget, forKey: Keys.crashCallTarget) }
+    }
+    /// Detect and log crash candidates without alarming or escalating —
+    /// for collecting false-positive data.
+    @Published var crashLogOnly: Bool {
+        didSet { defaults.set(crashLogOnly, forKey: Keys.crashLogOnly) }
     }
 
     var isLoggedIn: Bool { !authUsername.isEmpty && !sessionToken.isEmpty }
@@ -242,7 +267,22 @@ final class MainViewModel: ObservableObject {
         testingTestCaseId = defaults.string(forKey: Keys.testingTestCaseId) ?? "baseline-live-session"
         testingRunId = defaults.string(forKey: Keys.testingRunId) ?? ""
         testingAssignmentId = defaults.string(forKey: Keys.testingAssignmentId) ?? ""
+        crashContactNumber = SecureTokenStore.read(account: Keys.crashContact) ?? ""
+        crashRelayOptIn = defaults.bool(forKey: Keys.crashRelayOptIn)          // default OFF — the privacy carve-out is opt-in
+        crashCallTarget = defaults.string(forKey: Keys.crashCallTarget) ?? "120"
+        crashLogOnly = defaults.bool(forKey: Keys.crashLogOnly)
         session.selectTranscriptOwner(isLoggedIn && !authUserId.isEmpty ? authUserId : nil)
+
+        session.crashSettingsProvider = { [weak self] in
+            guard let self else { return CrashSettings(contactNumber: nil, relayOptIn: false, callTarget: "120", logOnly: false) }
+            let number = self.crashContactNumber.trimmingCharacters(in: .whitespaces)
+            return CrashSettings(
+                contactNumber: number.isEmpty ? nil : number,
+                relayOptIn: self.crashRelayOptIn,
+                callTarget: self.crashCallTarget,
+                logOnly: self.crashLogOnly
+            )
+        }
     }
 
     func toggleDevMode() {
@@ -270,6 +310,18 @@ final class MainViewModel: ObservableObject {
 
     /// Mutes/unmutes the mic mid-session (bottom mute control).
     func toggleMute() { session.toggleMute() }
+
+    /// A name in the contact field resolves to its number via Contacts, the
+    /// same resolver the dial action uses. Numbers pass through untouched.
+    func resolveCrashContactIfNeeded() {
+        let raw = crashContactNumber.trimmingCharacters(in: .whitespaces)
+        guard !raw.isEmpty, raw.rangeOfCharacter(from: .decimalDigits) == nil else { return }
+        Task { @MainActor in
+            let resolver = SystemContactResolver()
+            guard await resolver.isAuthorized(), let number = await resolver.number(matching: raw) else { return }
+            self.crashContactNumber = number
+        }
+    }
 
     /// Empties the conversation log and its persisted copy (设置 → 诊断 → 清空).
     func clearTranscript() { session.clearTranscript() }

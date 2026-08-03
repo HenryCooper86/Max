@@ -211,7 +211,7 @@ struct AgentScreen: View {
                 CrashAlarmView(
                     phase: state.crashPhase,
                     locationText: state.crashLocationText,
-                    callNumber: "120",
+                    callNumber: viewModel.crashCallTarget == "contact" ? (viewModel.crashContactNumber.isEmpty ? "120" : viewModel.crashContactNumber) : "120",
                     onCancel: { session.crashController.riderTapCancelled() }
                 )
                 .zIndex(10)

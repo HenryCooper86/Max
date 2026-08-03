@@ -177,6 +177,45 @@ struct SettingsPanel: View {
             }
         }
 
+        // Crash detection: emergency contact, relay opt-in, alarm-view call
+        // target, and a log-only mode for collecting false-positive data.
+        SectionCard(title: "紧急求助") {
+            Text("紧急联系人号码").font(.system(size: 12)).foregroundColor(HudColors.muted)
+            TextField("+86 …", text: $viewModel.crashContactNumber)
+                .font(.system(size: 14))
+                .foregroundColor(HudColors.text)
+                .keyboardType(.phonePad)
+                .padding(12)
+                .background(RoundedRectangle(cornerRadius: 10).fill(HudColors.panelElevated))
+                .disabled(state.handsFree)   // never mid-session
+                .onSubmit { viewModel.resolveCrashContactIfNeeded() }
+
+            HStack {
+                Text("事故升级时通知紧急联系人（号码仅在升级时发送到服务器）")
+                    .font(.system(size: 12)).foregroundColor(HudColors.muted)
+                Spacer()
+                Toggle("", isOn: $viewModel.crashRelayOptIn).labelsHidden().tint(HudColors.accent)
+            }
+            .disabled(state.handsFree)
+
+            ChipRow(label: "警报界面拨打") {
+                HudChip(label: "120", selected: viewModel.crashCallTarget == "120", selectedColor: HudColors.accent) {
+                    viewModel.crashCallTarget = "120"
+                }
+                HudChip(label: "紧急联系人", selected: viewModel.crashCallTarget == "contact", selectedColor: HudColors.accent) {
+                    viewModel.crashCallTarget = "contact"
+                }
+            }
+
+            HStack {
+                Text("仅记录模式（只记录检测，不报警 — 采集误报数据用）")
+                    .font(.system(size: 12)).foregroundColor(HudColors.muted)
+                Spacer()
+                Toggle("", isOn: $viewModel.crashLogOnly).labelsHidden().tint(HudColors.accent)
+            }
+            .disabled(state.handsFree)
+        }
+
         SectionCard(title: "QA 任务归因") {
             Text("从网页管理台的 Release runs 复制任务标识。下一次会话会按构建、平台和任务进入发布证据矩阵。")
                 .font(.system(size: 11))

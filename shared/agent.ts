@@ -22,6 +22,10 @@ type ProviderMode = "mock" | "live";
 type NetworkState = "online" | "degraded" | "offline";
 export type HazardLevel = RideIntelligence["hazardLevel"];
 
+/** Truthful outcome of relay-side crash escalation. "unconfigured" covers
+ *  both "no SMS channel" and "rider didn't opt in" — nobody was texted. */
+export type CrashAckStatus = "notified" | "failed" | "unconfigured";
+
 export type TesterTranscriptTurn = {
   sessionId: string;
   /** Stable relay-issued identity for one logical rider/agent turn. */
@@ -274,7 +278,26 @@ export type ClientEvent =
   // One frame the rider asked Max to look at, in response to a `camera.look`
   // device command. `image` is base64 JPEG, size-capped in validation — the
   // control plane is not a bulk media channel.
-  | { type: "camera.frame"; commandId: string; image: string };
+  | { type: "camera.frame"; commandId: string; image: string }
+  | {
+      // Client → server: the phone's crash detector escalated. lat/lon are
+      // present only when a GPS fix existed; contactNumber only when the
+      // rider opted in to relay escalation (the one privacy carve-out).
+      type: "crash.alert";
+      incidentId: string;
+      lat?: number;
+      lon?: number;
+      speedKmhRecent?: number;
+      contactNumber?: string;
+      contactOptIn: boolean;
+      detectedAt?: number;
+    }
+  | {
+      // Client → server: the rider cancelled after escalation — the relay
+      // sends the false-alarm follow-up so the contact stops worrying.
+      type: "crash.cancel";
+      incidentId: string;
+    };
 
 export type AgentEvent =
   | {
@@ -353,7 +376,21 @@ export type AgentEvent =
       args: Record<string, unknown>;
       tier: DeviceActionTier;
     }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | {
+      // Server → client: the real outcome of crash escalation. Max only
+      // claims the contact was notified when status is "notified".
+      type: "crash.ack";
+      incidentId: string;
+      status: CrashAckStatus;
+      detail?: string;
+    }
+  | {
+      // Server → client (mock scenarios only): rehearse the crash flow by
+      // promoting the client's detector straight to check-in. The embedded
+      // board never receives this (it detects for real).
+      type: "crash.simulate";
+    };
 
 export type AgentHealth = {
   ok: boolean;

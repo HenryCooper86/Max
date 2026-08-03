@@ -176,6 +176,30 @@
             }
           },
           "required": ["type", "commandId", "image"]
+        },
+        {
+          "title": "CrashAlert",
+          "type": "object",
+          "properties": {
+            "type": { "const": "crash.alert" },
+            "incidentId": { "type": "string", "minLength": 1 },
+            "lat": { "type": "number" },
+            "lon": { "type": "number" },
+            "speedKmhRecent": { "type": "number" },
+            "contactNumber": { "type": "string" },
+            "contactOptIn": { "type": "boolean" },
+            "detectedAt": { "type": "number" }
+          },
+          "required": ["type", "incidentId", "contactOptIn"]
+        },
+        {
+          "title": "CrashCancel",
+          "type": "object",
+          "properties": {
+            "type": { "const": "crash.cancel" },
+            "incidentId": { "type": "string", "minLength": 1 }
+          },
+          "required": ["type", "incidentId"]
         }
       ]
     },
@@ -444,6 +468,25 @@
             }
           },
           "required": ["type", "message"]
+        },
+        {
+          "title": "CrashAck",
+          "type": "object",
+          "properties": {
+            "type": { "const": "crash.ack" },
+            "incidentId": { "type": "string", "minLength": 1 },
+            "status": { "enum": ["notified", "failed", "unconfigured"] },
+            "detail": { "type": "string" }
+          },
+          "required": ["type", "incidentId", "status"]
+        },
+        {
+          "title": "CrashSimulate",
+          "type": "object",
+          "properties": {
+            "type": { "const": "crash.simulate" }
+          },
+          "required": ["type"]
         }
       ]
     }

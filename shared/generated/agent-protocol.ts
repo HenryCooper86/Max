@@ -10,7 +10,9 @@ export const CLIENT_EVENT_TYPES = [
   "turn.feedback",
   "device.result",
   "hazard.report",
-  "camera.frame"
+  "camera.frame",
+  "crash.alert",
+  "crash.cancel"
 ] as const;
 
 export const SERVER_EVENT_TYPES = [
@@ -25,7 +27,9 @@ export const SERVER_EVENT_TYPES = [
   "telemetry",
   "hazard.alert",
   "device.command",
-  "error"
+  "error",
+  "crash.ack",
+  "crash.simulate"
 ] as const;
 
 export const SERVER_EVENT_REQUIRED_FIELDS = {
@@ -95,5 +99,13 @@ export const SERVER_EVENT_REQUIRED_FIELDS = {
   "error": [
     "type",
     "message"
+  ],
+  "crash.ack": [
+    "type",
+    "incidentId",
+    "status"
+  ],
+  "crash.simulate": [
+    "type"
   ]
 } as const;

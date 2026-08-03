@@ -233,6 +233,22 @@ export function parseClientEvent(data: RawData): ClientEvent {
     };
   }
 
+  if (value.type === "crash.alert") {
+    if (typeof value.incidentId !== "string" || value.incidentId.length === 0) throw new Error("Invalid crash.alert incidentId");
+    if (typeof value.contactOptIn !== "boolean") throw new Error("Invalid crash.alert contactOptIn");
+    if (value.lat !== undefined && typeof value.lat !== "number") throw new Error("Invalid crash.alert lat");
+    if (value.lon !== undefined && typeof value.lon !== "number") throw new Error("Invalid crash.alert lon");
+    if (value.speedKmhRecent !== undefined && typeof value.speedKmhRecent !== "number") throw new Error("Invalid crash.alert speedKmhRecent");
+    if (value.contactNumber !== undefined && typeof value.contactNumber !== "string") throw new Error("Invalid crash.alert contactNumber");
+    if (value.detectedAt !== undefined && typeof value.detectedAt !== "number") throw new Error("Invalid crash.alert detectedAt");
+    return value as ClientEvent;
+  }
+
+  if (value.type === "crash.cancel") {
+    if (typeof value.incidentId !== "string" || value.incidentId.length === 0) throw new Error("Invalid crash.cancel incidentId");
+    return value as ClientEvent;
+  }
+
   if (value.type === "camera.frame") {
     if (typeof value.commandId !== "string" || !value.commandId.trim() || value.commandId.length > 120) {
       throw new Error("Invalid camera.frame commandId");

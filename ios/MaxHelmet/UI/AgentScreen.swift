@@ -78,6 +78,15 @@ private func stateTelltale(_ state: AgentSession.State) -> String {
     }
 }
 
+/// True once a crash incident is past check-in — the point at which the
+/// full-screen alarm cover replaces the check-in banner in the alerts stack.
+func isAlarmPhase(_ phase: CrashUIPhase) -> Bool {
+    switch phase {
+    case .alarm, .escalated: return true
+    default: return false
+    }
+}
+
 /// Drive mode for the instrument bezel — mirrors the web HelmetVisual gauge, so
 /// the tick ring and the caption always agree on what Max is doing.
 enum GaugeMode { case offline, idle, connecting, mic, thinking, speaking, hazard }
@@ -149,6 +158,10 @@ struct AgentScreen: View {
                 let available = proxy.size
                 let hazardVisible = state.hazardAlert != nil
                 let guidanceVisible = state.guidance != nil
+                let crashVisible: Bool = {
+                    if case .checkIn = state.crashPhase { return true }
+                    return false
+                }()
                 let captions =
                     viewModel.showCaptions
                     ? captionsHeight(
@@ -156,7 +169,8 @@ struct AgentScreen: View {
                         available: available,
                         hazardVisible: hazardVisible,
                         recordingVisible: state.recording,
-                        guidanceVisible: guidanceVisible
+                        guidanceVisible: guidanceVisible,
+                        crashVisible: crashVisible
                     ) : nil
                 let helmet = helmetDiameter(
                     layout: layout,
@@ -164,7 +178,8 @@ struct AgentScreen: View {
                     captionsVisible: captions != nil,
                     hazardVisible: hazardVisible,
                     recordingVisible: state.recording,
-                    guidanceVisible: guidanceVisible
+                    guidanceVisible: guidanceVisible,
+                    crashVisible: crashVisible
                 )
 
                 Group {
@@ -182,6 +197,16 @@ struct AgentScreen: View {
             .padding(.bottom, layout == .landscape ? 10 : 18)
             .frame(maxWidth: layout == .landscape ? .infinity : 560)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if isAlarmPhase(state.crashPhase) {
+                CrashAlarmView(
+                    phase: state.crashPhase,
+                    locationText: state.crashLocationText,
+                    callNumber: "120",
+                    onCancel: { session.crashController.riderTapCancelled() }
+                )
+                .zIndex(10)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(HudColors.void.ignoresSafeArea())
@@ -221,6 +246,10 @@ struct AgentScreen: View {
     @ViewBuilder private var alerts: some View {
         if let alert = state.hazardAlert {
             HazardBanner(alert: alert).padding(.horizontal, 4)
+        }
+        if case .checkIn = state.crashPhase {
+            CrashCheckInBanner(onCancel: { session.crashController.riderTapCancelled() })
+                .padding(.horizontal, 4)
         }
         if let guidance = state.guidance {
             GuidanceCard(guidance: guidance)

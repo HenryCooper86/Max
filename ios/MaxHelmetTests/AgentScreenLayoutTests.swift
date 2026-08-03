@@ -136,4 +136,15 @@ final class AgentScreenLayoutTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - the crash check-in banner reserves chrome like a hazard banner
+
+    func testCrashBannerReservesChromeLikeAHazardBanner() {
+        let without = portraitChromeHeight(captionsVisible: false, hazardVisible: false, recordingVisible: false)
+        let with = portraitChromeHeight(
+            captionsVisible: false, hazardVisible: false, recordingVisible: false, crashVisible: true
+        )
+        XCTAssertEqual(with - without, HudMetrics.hazardBanner,
+                       "the check-in banner reserves the same vertical space as a hazard banner")
+    }
 }

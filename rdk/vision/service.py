@@ -115,7 +115,6 @@ class ControlHandler(socketserver.StreamRequestHandler):
 
 class ControlServer(socketserver.ThreadingUnixStreamServer):
     allow_reuse_address = True
-    daemon_threads = True
 
     def __init__(
         self,

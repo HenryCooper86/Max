@@ -1,3 +1,4 @@
+import contextlib
 import json
 import shutil
 import socket
@@ -23,8 +24,8 @@ def make_runtime(tmp_path, name="runtime"):
 
 
 def make_socket_dir():
-    """Keep Unix socket paths under macOS's 104-byte pathname limit."""
-    return Path(tempfile.mkdtemp(prefix="vision-", dir="/private/tmp"))
+    """Keep Unix socket paths short on every supported test platform."""
+    return Path(tempfile.mkdtemp(prefix="vision-", dir="/tmp"))
 
 
 def test_concurrent_writes_do_not_interleave(tmp_path):
@@ -33,6 +34,14 @@ def test_concurrent_writes_do_not_interleave(tmp_path):
     socket_dir = make_socket_dir()
     sock_path = str(socket_dir / "ctl.sock")
     runtime = make_runtime(tmp_path)
+    handler_finished = threading.Event()
+    unregister = runtime.events.unregister
+
+    def unregister_and_signal(write):
+        unregister(write)
+        handler_finished.set()
+
+    runtime.events.unregister = unregister_and_signal
     server = service.ControlServer(sock_path, service.ControlHandler, runtime)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
@@ -76,10 +85,14 @@ def test_concurrent_writes_do_not_interleave(tmp_path):
         assert len(hazard_events) > 0
     finally:
         if client is not None:
+            with contextlib.suppress(OSError):
+                client.shutdown(socket.SHUT_RDWR)
             client.close()
+            assert handler_finished.wait(timeout=5.0)
         server.shutdown()
         server.server_close()
         server_thread.join(timeout=5.0)
+        assert not server_thread.is_alive()
         shutil.rmtree(socket_dir)
 
 
@@ -101,18 +114,6 @@ def test_control_servers_own_separate_runtime_state(tmp_path):
     finally:
         first.server_close()
         second.server_close()
-        shutil.rmtree(socket_dir)
-
-
-def test_control_server_daemonizes_client_threads(tmp_path):
-    socket_dir = make_socket_dir()
-    server = service.ControlServer(
-        str(socket_dir / "daemon.sock"), service.ControlHandler, make_runtime(tmp_path)
-    )
-    try:
-        assert server.daemon_threads is True
-    finally:
-        server.server_close()
         shutil.rmtree(socket_dir)
 
 

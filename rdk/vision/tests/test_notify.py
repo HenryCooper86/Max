@@ -12,8 +12,8 @@ from notify import sd_notify
 
 
 def make_socket_dir():
-    """Keep filesystem socket paths below macOS's AF_UNIX pathname limit."""
-    return Path(tempfile.mkdtemp(prefix="notify-", dir="/private/tmp"))
+    """Keep filesystem socket paths short on every supported test platform."""
+    return Path(tempfile.mkdtemp(prefix="notify-", dir="/tmp"))
 
 
 def test_is_a_no_op_outside_systemd():

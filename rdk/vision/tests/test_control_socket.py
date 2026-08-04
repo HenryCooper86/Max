@@ -56,6 +56,7 @@ def test_concurrent_writes_do_not_interleave(tmp_path):
     server_thread.start()
     client = None
     reader_thread = None
+    threads = []
     try:
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         client.connect(sock_path)
@@ -117,6 +118,9 @@ def test_concurrent_writes_do_not_interleave(tmp_path):
             with contextlib.suppress(OSError):
                 client.shutdown(socket.SHUT_RDWR)
             client.close()
+            for thread in threads:
+                thread.join(timeout=1.0)
+            assert all(not thread.is_alive() for thread in threads)
             if reader_thread is not None:
                 reader_thread.join(timeout=5.0)
                 assert not reader_thread.is_alive()

@@ -96,3 +96,33 @@ transport anomaly.
   launched after the controller explicitly directed no further long tool call
   once it independently obtained the 4/4, 0.51-second GREEN result. The
   controller result is clearly attributed above.
+
+## Follow-up review — producer cleanup on failure paths
+
+Review found that the four hammer threads were created only inside `try` and
+joined only on its normal path. If `sendall` or a later assertion raised, the
+client was closed but the test did not explicitly join or verify those
+non-daemon producers.
+
+The follow-up initializes `threads = []` before `try`. In `finally`, after
+`shutdown()`/`close()` unblocks any socket-backed writer, it joins every
+existing producer for at most one second and asserts that all are dead. This
+is before the existing non-daemon reader join; the handler-unregister and
+server cleanup ordering remains unchanged. The normal-path one-second
+producer liveness assertion remains, so the cleanup does not add another
+normal-path wait.
+
+The cleanup assertions can replace an earlier test failure only if a producer
+does not terminate after the client has been closed. That is intentional: it
+reports the more serious test-resource leak directly, while retaining bounded
+teardown.
+
+Focused verification:
+
+```text
+.venv/bin/python -m pytest -q -c rdk/vision/pytest.ini rdk/vision/tests/test_control_socket.py
+....                                                                     [100%]
+4 passed in 0.52s
+```
+
+`git diff --check` exited 0 before this verification.

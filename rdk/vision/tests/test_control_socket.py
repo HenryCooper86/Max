@@ -55,11 +55,38 @@ def test_concurrent_writes_do_not_interleave(tmp_path):
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
     client = None
+    reader_thread = None
     try:
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         client.connect(sock_path)
         client.settimeout(5.0)
         assert handler_registered.wait(timeout=5.0)
+
+        expected_messages = 50 + 4 * 200
+        parsed = []
+        reader_errors = []
+        reader_started = threading.Event()
+        reader_finished = threading.Event()
+
+        def drain():
+            buffer = ""
+            reader_started.set()
+            try:
+                while len(parsed) < expected_messages:
+                    chunk = client.recv(65536)
+                    if not chunk:
+                        raise AssertionError("control socket closed before all messages arrived")
+                    parts = (buffer + chunk.decode("utf-8")).split("\n")
+                    buffer = parts.pop()
+                    parsed.extend(json.loads(line) for line in parts if line)
+            except Exception as error:  # noqa: BLE001 - reported by the test thread below
+                reader_errors.append(error)
+            finally:
+                reader_finished.set()
+
+        reader_thread = threading.Thread(target=drain)
+        reader_thread.start()
+        assert reader_started.wait(timeout=5.0)
 
         def hammer():
             for i in range(200):
@@ -73,34 +100,26 @@ def test_concurrent_writes_do_not_interleave(tmp_path):
                 (json.dumps({"id": str(i), "op": "camera.photo", "args": {}}) + "\n").encode()
             )
         for thread in threads:
-            thread.join(timeout=5.0)
-
-        received = b""
-        client.settimeout(1.0)
-        try:
-            while True:
-                chunk = client.recv(65536)
-                if not chunk:
-                    break
-                received += chunk
-        except socket.timeout:
-            pass
-
-        lines = [line for line in received.decode("utf-8").split("\n") if line]
-        assert len(lines) >= 50
-        parsed = [json.loads(line) for line in lines]  # raises if two writes interleaved mid-line
+            thread.join(timeout=1.0)
+        assert all(not thread.is_alive() for thread in threads)
+        assert reader_finished.wait(timeout=5.0)
+        assert not reader_errors
+        assert len(parsed) == expected_messages
         rpc_responses = [message for message in parsed if "id" in message]
         hazard_events = [message for message in parsed if message.get("event") == "hazard"]
         assert len(rpc_responses) == 50
         assert {response["id"] for response in rpc_responses} == {str(i) for i in range(50)}
         assert all(response["status"] == "ok" for response in rpc_responses)
         assert all(response["detail"] == "injected-handler-ran" for response in rpc_responses)
-        assert len(hazard_events) > 0
+        assert len(hazard_events) == 800
     finally:
         if client is not None:
             with contextlib.suppress(OSError):
                 client.shutdown(socket.SHUT_RDWR)
             client.close()
+            if reader_thread is not None:
+                reader_thread.join(timeout=5.0)
+                assert not reader_thread.is_alive()
             assert handler_finished.wait(timeout=5.0)
         server.shutdown()
         server.server_close()

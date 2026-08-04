@@ -786,17 +786,51 @@ writer without changing the state machine.
 
 ## Running the Python suite
 
-pytest is a dev-only dependency. The recorder needs no third-party packages;
-the ADAS pipeline added in M1 needs numpy, which is already present on the
-board (1.26.4).
+The hardware-independent vision and ADAS suite runs on macOS, Ubuntu, CI, and
+the board. It uses Python 3.10, the same version supplied by Ubuntu 22.04 on the
+RDK image. Camera, ROS/ISP, and BPU libraries are not imported by this suite.
 
-**The suite runs on the board.** There is no pytest or numpy on the usual dev
-machine, so tests are deployed and run over SSH:
+Install macOS prerequisites and create the local environment:
 
 ```bash
-scp -r rdk/vision root@192.168.50.9:/opt/max/rdk/
-ssh root@192.168.50.9 'cd /opt/max/rdk/vision && python3 -m pytest tests/ -q'
+brew install python@3.10 ffmpeg
+/opt/homebrew/bin/python3.10 -m venv .venv  # Apple Silicon
+# On Intel Homebrew, use /usr/local/bin/python3.10 instead.
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -r rdk/vision/requirements-dev.txt
 ```
+
+On Ubuntu:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y python3.10-venv ffmpeg
+python3.10 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -r rdk/vision/requirements-dev.txt
+```
+
+Run every hardware-independent test from the repository root:
+
+```bash
+PATH="$PWD/.venv/bin:$PATH" npm run test:rdk-vision
+```
+
+The command treats missing NumPy, OpenCV, FFmpeg, or `ffprobe` as a failure. It
+skips only tests explicitly marked `hardware`, and strict marker checking makes
+a misspelled marker fail collection.
+
+The deployed board already has NumPy, OpenCV, pytest, FFmpeg, and Node. After
+syncing the checkout to `/opt/max`, run the same gate there:
+
+```bash
+cd /opt/max
+npm run test:rdk-vision
+```
+
+Real camera and BPU validation stays separate because CI cannot emulate the
+hardware. Use the on-hardware checklist above and `tools/check_anchors.py`; a
+future pytest that opens either resource must use `@pytest.mark.hardware`.
 
 ## ADAS M1 — the measurement pipeline
 

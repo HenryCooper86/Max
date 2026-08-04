@@ -81,6 +81,11 @@ final class AgentSession: NSObject, ObservableObject {
     /// Mirrors IDLE_CLOSE_CODE in shared/agent.ts: the relay closed this idle
     /// session to free its upstream slot; auto-reconnecting would defeat it.
     static let idleCloseCode = 4001
+    /// Past the normal give-up point, an active incident with an un-acked
+    /// crash.alert keeps retrying at this slower, indefinite cadence instead
+    /// of giving up — the alert queues and survives reconnect; the network
+    /// is delivery-only, and an unconscious rider can't re-toggle hands-free.
+    static let crashOutageRetryDelayS: TimeInterval = 30
 
     /// Process-wide owner of the single session, mirroring AgentSessionHolder in
     /// android/.../AgentSession.kt.
@@ -269,6 +274,20 @@ final class AgentSession: NSObject, ObservableObject {
         onCrash { controller in
             controller.onUIChange = { [weak self] phase in self?.update { $0.crashPhase = phase } }
             controller.onLocationText = { [weak self] text in self?.update { $0.crashLocationText = text } }
+            controller.onIncidentResolved = { [weak self] in
+                guard let self, !self.state.value.handsFree else { return }
+                // stop() skipped this teardown while the incident was active
+                // (see stop()'s hasActiveIncident branch) so the siren could
+                // keep sounding through a dead session. The incident has now
+                // resolved and the session is still dead, so finish what
+                // stop() deferred — otherwise the engine, the AVAudioSession,
+                // the mic tap, and CrashController's 0.5 s tick timer would
+                // all keep running forever with no session behind them.
+                self.mic.stop()
+                self.player.release()
+                self.audioRouter.stopVoiceRouting()
+                self.onCrash { $0.disarm() }
+            }
         }
     }
 
@@ -812,6 +831,28 @@ final class AgentSession: NSObject, ObservableObject {
         // Unexpected drop: reconnect with exponential backoff (mirrors src/main.tsx).
         reconnectAttempts += 1
         if reconnectAttempts > Self.maxReconnectAttempts {
+            // The alert queues and survives reconnect — the network is
+            // delivery-only. An active incident with a crash.alert still
+            // waiting on its ack must not be abandoned just because the
+            // relay has been unreachable for a while: the rider may be
+            // unconscious and unable to re-toggle hands-free, so keep
+            // retrying at a slow, indefinite cadence instead of giving up.
+            // reconnectAttempts is deliberately left over the threshold (not
+            // reset) so every subsequent failure re-checks this condition —
+            // once the incident resolves (ack/cancel/disarm), the very next
+            // failure falls through to the normal give-up path below.
+            let hasActiveIncident = onCrash { $0.hasActiveIncident }
+            let hasPendingAlert = onCrash { $0.hasPendingUnackedAlert }
+            if hasActiveIncident && hasPendingAlert {
+                update {
+                    $0.connection = .offline
+                    $0.statusText = "网络中断 — 求助信息将在恢复后自动发送"
+                }
+                let work = DispatchWorkItem { [weak self] in self?.connect() }
+                reconnectWorkItem = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.crashOutageRetryDelayS, execute: work)
+                return
+            }
             reconnectAttempts = 0
             stop()
             update {

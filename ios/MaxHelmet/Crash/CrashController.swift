@@ -51,7 +51,13 @@ final class CrashController {
 
     var onUIChange: ((CrashUIPhase) -> Void)?
     var onLocationText: ((String?) -> Void)?
+    /// Fires whenever an active incident leaves the checkIn/alarm/escalated
+    /// phases (i.e. a cancel resolves it) — see `apply()`. Lets the caller
+    /// finish any teardown it deferred while the incident kept the audio
+    /// path alive (see `hasActiveIncident`).
+    var onIncidentResolved: (() -> Void)?
     var activeIncidentIdForTesting: String? { activeIncidentId }
+    var pendingAlertJsonForTesting: String? { pendingAlertJson }
 
     /// True once an incident has passed check-in and is still running
     /// (check-in, alarm, or escalated) — the point past which the incident
@@ -63,6 +69,12 @@ final class CrashController {
         case .armed, .impactCandidate: return false
         }
     }
+
+    /// True while an alert has been sent but not yet acknowledged — the
+    /// condition under which a network outage must not give up on reconnect
+    /// (spec: "the alert queues and survives reconnect — the network is
+    /// delivery-only").
+    var hasPendingUnackedAlert: Bool { pendingAlertJson != nil && !acked }
 
     init(motion: MotionStreaming,
          locate: @escaping (@escaping (CLLocationCoordinate2D?) -> Void) -> Void,
@@ -166,7 +178,7 @@ final class CrashController {
         switch status {
         case .notified: line = lines.ackNotified
         case .failed: line = detail.map { "\(lines.ackFailed)（\($0)）" } ?? lines.ackFailed
-        case .unconfigured: line = lines.ackUnconfigured
+        case .unconfigured: line = detail.map { "\(lines.ackUnconfigured)（\($0)）" } ?? lines.ackUnconfigured
         }
         speak(line)
         if case .escalated = state.phase { onUIChange?(.escalated(ackText: line)) }
@@ -177,8 +189,18 @@ final class CrashController {
     }
 
     private func apply(_ update: CrashUpdate) {
+        // Captured before `state` is overwritten below, and checked again
+        // only after every effect for this update has been processed — a
+        // cancelled escalation's `.sendCancel` (which still needs
+        // `activeIncidentId`) runs before `onIncidentResolved` fires, so a
+        // caller that reacts to it (e.g. by disarming) can never unset
+        // fields `.sendCancel` hasn't read yet.
+        let wasActive = hasActiveIncident
         state = update.state
         for effect in update.effects { perform(effect) }
+        if wasActive && !hasActiveIncident {
+            onIncidentResolved?()
+        }
     }
 
     private func perform(_ effect: CrashEffect) {
@@ -237,6 +259,12 @@ final class CrashController {
         onUIChange?(.escalated(ackText: nil))
         locate { [weak self] coordinate in
             guard let self else { return }
+            // The rider may have cancelled (我没事 / tap) while location was
+            // resolving (up to ~2.5 s) — a cancelled incident must never send
+            // its crash.alert after the crash.cancel already sent, and must
+            // never repopulate pendingAlertJson for a later resend. Checking
+            // activeIncidentId too guards against a same-tick new incident.
+            guard case .escalated = self.state.phase, self.activeIncidentId == incidentId else { return }
             if let coordinate {
                 self.onLocationText?(String(format: "%.5f, %.5f", coordinate.latitude, coordinate.longitude))
             }

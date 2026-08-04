@@ -1,4 +1,5 @@
 import XCTest
+import CoreLocation
 @testable import MaxHelmet
 
 private final class FakeMotion: MotionStreaming, @unchecked Sendable {
@@ -87,6 +88,16 @@ final class CrashControllerTests: XCTestCase {
         XCTAssertTrue(spoken.last?.contains("请手动拨打") ?? false, "unconfigured must never sound like success")
     }
 
+    func testUnconfiguredAckAppendsTheServersDetail() {
+        let controller = makeController()
+        controller.arm()
+        controller.handleSimulate()
+        escalate(controller)
+        let incidentId = controller.activeIncidentIdForTesting ?? ""
+        controller.handleAck(incidentId: incidentId, status: .unconfigured, detail: "未开启紧急联系人通知")
+        XCTAssertTrue(spoken.last?.contains("未开启紧急联系人通知") ?? false, "the server's actual reason must reach the rider")
+    }
+
     func testTapCancelDuringAlarmStopsSirenAndNeverEscalates() {
         let controller = makeController()
         controller.arm()
@@ -147,6 +158,36 @@ final class CrashControllerTests: XCTestCase {
         XCTAssertEqual(alert["type"] as? String, ClientEventTypes.crashAlert)
         let cancel = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(sent[1].utf8)) as? [String: Any])
         XCTAssertEqual(cancel["type"] as? String, ClientEventTypes.crashCancel)
+    }
+
+    func testCancelDuringLocateResolutionNeverSendsTheQueuedAlert() {
+        // A real locate() takes up to ~2.5 s; hold the completion so the test
+        // controls exactly when it resolves, after the rider has cancelled.
+        var deferredLocate: ((CLLocationCoordinate2D?) -> Void)?
+        let controller = CrashController(
+            motion: motion,
+            locate: { completion in deferredLocate = completion },
+            speak: { [weak self] line in self?.spoken.append(line) },
+            interruptPlayback: { [weak self] in self?.interrupted += 1 },
+            siren: SirenPlayer(play: { [weak self] _ in self?.sirenOn += 1 }, stop: { [weak self] in self?.sirenOff += 1 }),
+            send: { [weak self] json in self?.sent.append(json) },
+            settings: { [weak self] in self!.settings },
+            now: { [weak self] in self!.now }
+        )
+        controller.onUIChange = { [weak self] phase in self?.phases.append(phase) }
+
+        controller.arm()
+        controller.handleSimulate()
+        escalate(controller)
+        XCTAssertTrue(sent.isEmpty, "escalate() must wait on locate() resolving before sending anything")
+        XCTAssertNotNil(deferredLocate, "escalate() must have called locate()")
+
+        controller.riderTapCancelled()
+        XCTAssertEqual(sent.count, 1, "the cancel's own crash.cancel sends immediately")
+
+        deferredLocate?(.init(latitude: 31.23, longitude: 121.47))
+        XCTAssertEqual(sent.count, 1, "a cancelled incident's crash.alert must never send once location finally resolves")
+        XCTAssertNil(controller.pendingAlertJsonForTesting, "pendingAlertJson must not be repopulated for a later resend")
     }
 
     func testHasActiveIncidentAcrossPhases() {
@@ -219,5 +260,27 @@ final class CrashControllerTests: XCTestCase {
         controller.sessionEnded()
         XCTAssertFalse(motion.started)
         XCTAssertEqual(phases.last ?? .hidden, .hidden)
+    }
+
+    func testOnIncidentResolvedFiresWhenCancellingAnActiveAlarm() {
+        let controller = makeController()
+        var resolvedCount = 0
+        controller.onIncidentResolved = { resolvedCount += 1 }
+        controller.arm()
+        controller.handleSimulate()
+        now += 15
+        controller.handleTick()
+        controller.riderTapCancelled()
+        XCTAssertEqual(resolvedCount, 1, "cancelling an active alarm must resolve the incident exactly once")
+    }
+
+    func testOnIncidentResolvedDoesNotFireOnLogOnlySilentRearm() {
+        settings.logOnly = true
+        let controller = makeController()
+        var resolvedCount = 0
+        controller.onIncidentResolved = { resolvedCount += 1 }
+        controller.arm()
+        controller.handleSimulate()
+        XCTAssertEqual(resolvedCount, 0, "a log-only silent re-arm was never really active, so it must not resolve")
     }
 }

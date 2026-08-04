@@ -4,6 +4,8 @@ import { CLIENT_EVENT_TYPES } from "../shared/generated/agent-protocol";
 import { TESTING_PLATFORMS as CANONICAL_TESTING_PLATFORMS } from "../shared/testing";
 import type { Logger } from "./logger";
 import type { AgentProvider, ClientEvent, ProviderSessionContext, ProviderTelemetry } from "./providers/types";
+import { handleCrashAlert, handleCrashCancel, selectCrashNotifier } from "./crash-escalation";
+import { config } from "./config";
 import {
   beginTesterSession,
   endTesterSession,
@@ -34,7 +36,7 @@ const MAX_CLIENT_AUDIO_BYTES = 32 * 1024;
 const VOICE_GENDERS = new Set(["female", "male"]);
 const VOICE_PERSONALITIES = new Set(["concise", "friendly", "technical", "rally"]);
 const RIDE_MODES = new Set(["ride", "stop", "navigation", "emergency"]);
-const DEMO_SCENARIOS = new Set(["commute", "wind", "fuel", "group", "emergency", "adas"]);
+const DEMO_SCENARIOS = new Set(["commute", "wind", "fuel", "group", "emergency", "adas", "crash"]);
 const MEMORY_LANGUAGES = new Set(["zh", "en"]);
 const RESPONSE_MODES = new Set(["concise", "normal", "emergency"]);
 const RIDER_INTENTS = new Set(["navigation", "weather", "emergency", "diagnostics", "group", "casual"]);
@@ -233,6 +235,39 @@ export function parseClientEvent(data: RawData): ClientEvent {
     };
   }
 
+  if (value.type === "crash.alert") {
+    if (typeof value.incidentId !== "string" || value.incidentId.length === 0)
+      throw new Error("Invalid crash.alert incidentId");
+    if (typeof value.contactOptIn !== "boolean") throw new Error("Invalid crash.alert contactOptIn");
+    if (value.lat !== undefined && typeof value.lat !== "number") throw new Error("Invalid crash.alert lat");
+    if (value.lon !== undefined && typeof value.lon !== "number") throw new Error("Invalid crash.alert lon");
+    if (value.speedKmhRecent !== undefined && typeof value.speedKmhRecent !== "number")
+      throw new Error("Invalid crash.alert speedKmhRecent");
+    if (value.contactNumber !== undefined && typeof value.contactNumber !== "string")
+      throw new Error("Invalid crash.alert contactNumber");
+    if (value.detectedAt !== undefined && typeof value.detectedAt !== "number")
+      throw new Error("Invalid crash.alert detectedAt");
+    return {
+      type: "crash.alert",
+      incidentId: value.incidentId,
+      contactOptIn: value.contactOptIn,
+      lat: value.lat as number | undefined,
+      lon: value.lon as number | undefined,
+      speedKmhRecent: value.speedKmhRecent as number | undefined,
+      contactNumber: value.contactNumber as string | undefined,
+      detectedAt: value.detectedAt as number | undefined
+    };
+  }
+
+  if (value.type === "crash.cancel") {
+    if (typeof value.incidentId !== "string" || value.incidentId.length === 0)
+      throw new Error("Invalid crash.cancel incidentId");
+    return {
+      type: "crash.cancel",
+      incidentId: value.incidentId
+    };
+  }
+
   if (value.type === "camera.frame") {
     if (typeof value.commandId !== "string" || !value.commandId.trim() || value.commandId.length > 120) {
       throw new Error("Invalid camera.frame commandId");
@@ -294,6 +329,7 @@ export function parseClientEvent(data: RawData): ClientEvent {
 export class AgentSessionController {
   private readonly relaySessionId = randomUUID();
   private readonly provider: AgentProvider;
+  private readonly crashNotifier = selectCrashNotifier(config.crashNotifier);
   private sessionStartReceived = false;
   private providerStarted = false;
   private audioActive = false;
@@ -448,6 +484,9 @@ export class AgentSessionController {
       if (event.type === "testing.metric") recordTesterAudioQuality(this.relaySessionId, event);
       if (event.type === "device.result") await this.provider.deviceResult?.(event);
       if (event.type === "camera.frame") await this.provider.cameraFrame?.(event);
+      if (event.type === "crash.alert")
+        await handleCrashAlert(event, this.crashNotifier, (payload) => this.send(payload));
+      if (event.type === "crash.cancel") await handleCrashCancel(event, this.crashNotifier);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Voice relay failed";
       this.log?.warn("client message failed", { message });

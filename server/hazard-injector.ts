@@ -99,3 +99,30 @@ export function createHazardInjector({ send, emitRideContext, platform }: Hazard
     }
   };
 }
+
+export type CrashSimulatorOptions = {
+  send: (payload: unknown) => void;
+  /** The embedded board detects crashes for real — never simulate at it. */
+  platform?: () => string | undefined;
+};
+
+/**
+ * Demo-only crash trigger for the mock "crash" scenario. Fires a single
+ * `crash.simulate` after `delayMs` so the full crash-escalation flow (rider
+ * unresponsive prompt → alert → notifier → cancel/ack) can be rehearsed
+ * without a real fall. Suppressed on "embedded", which runs a real detector.
+ */
+export function createCrashSimulator({ send, platform }: CrashSimulatorOptions) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return {
+    start(delayMs: number) {
+      if (platform?.() === "embedded") return;
+      clearTimeout(timer);
+      timer = setTimeout(() => send({ type: "crash.simulate" }), delayMs);
+    },
+    stop() {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+  };
+}

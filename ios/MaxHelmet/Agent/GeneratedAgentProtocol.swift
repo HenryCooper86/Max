@@ -12,7 +12,9 @@ enum ClientEventTypes {
     static let deviceResult = "device.result"
     static let hazardReport = "hazard.report"
     static let cameraFrame = "camera.frame"
-    static let all: Set<String> = [sessionStart, audioStart, audioStop, demoGuided, locationUpdate, testingMetric, turnFeedback, deviceResult, hazardReport, cameraFrame]
+    static let crashAlert = "crash.alert"
+    static let crashCancel = "crash.cancel"
+    static let all: Set<String> = [sessionStart, audioStart, audioStop, demoGuided, locationUpdate, testingMetric, turnFeedback, deviceResult, hazardReport, cameraFrame, crashAlert, crashCancel]
 }
 
 enum ServerEventTypes {
@@ -28,7 +30,9 @@ enum ServerEventTypes {
     static let hazardAlert = "hazard.alert"
     static let deviceCommand = "device.command"
     static let error = "error"
-    static let all: Set<String> = [sessionStarted, connection, status, transcript, metric, weather, rideContext, sessionMemory, telemetry, hazardAlert, deviceCommand, error]
+    static let crashAck = "crash.ack"
+    static let crashSimulate = "crash.simulate"
+    static let all: Set<String> = [sessionStarted, connection, status, transcript, metric, weather, rideContext, sessionMemory, telemetry, hazardAlert, deviceCommand, error, crashAck, crashSimulate]
 }
 
 let serverEventRequiredFields: [String: Set<String>] = [
@@ -43,5 +47,7 @@ let serverEventRequiredFields: [String: Set<String>] = [
     "telemetry": ["type"],
     "hazard.alert": ["type", "threat", "direction", "severity", "label", "message", "advice"],
     "device.command": ["type", "commandId", "action", "args", "tier"],
-    "error": ["type", "message"]
+    "error": ["type", "message"],
+    "crash.ack": ["type", "incidentId", "status"],
+    "crash.simulate": ["type"]
 ]

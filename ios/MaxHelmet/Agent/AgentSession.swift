@@ -57,6 +57,10 @@ final class AgentSession: NSObject, ObservableObject {
         /// live session transcript, so a restored/previous-session turn could
         /// tag the wrong turn). Int.max = nothing flaggable (offline).
         var feedbackFloorId = Int.max
+        /// Crash-detection UI phase, owned entirely by CrashController.onUIChange.
+        var crashPhase: CrashUIPhase = .hidden
+        /// Human-readable coordinates for the active incident, or nil.
+        var crashLocationText: String?
 
         /// Whether the flag control should show for a transcript item at all
         /// (mirrors canFlagTurn in useHelmetAgent.ts). The connection check
@@ -77,6 +81,11 @@ final class AgentSession: NSObject, ObservableObject {
     /// Mirrors IDLE_CLOSE_CODE in shared/agent.ts: the relay closed this idle
     /// session to free its upstream slot; auto-reconnecting would defeat it.
     static let idleCloseCode = 4001
+    /// Past the normal give-up point, an active incident with an un-acked
+    /// crash.alert keeps retrying at this slower, indefinite cadence instead
+    /// of giving up — the alert queues and survives reconnect; the network
+    /// is delivery-only, and an unconscious rider can't re-toggle hands-free.
+    static let crashOutageRetryDelayS: TimeInterval = 30
 
     /// Process-wide owner of the single session, mirroring AgentSessionHolder in
     /// android/.../AgentSession.kt.
@@ -117,9 +126,15 @@ final class AgentSession: NSObject, ObservableObject {
     /// Plain mirror of `state.micMuted`, read off the audio thread alongside
     /// `transmitting` so the mic callback never touches `@Published` state.
     private var micMuted = false
+    /// Plain mirror of `state.rideContext.speedKmh` (nil until `hasRideContext`),
+    /// read by CrashController's motion feed on CoreMotion's background queue
+    /// at ~100 Hz — same reasoning as `micMuted` above: never touch `@Published`
+    /// state off-main.
+    private var latestSpeedKmh: Double?
     /// Serializes the transport-gate fields (`webSocket`, `transmitting`,
-    /// `micMuted`, `socketOpen`): the main thread writes them, but the
-    /// audio-render thread (mic callbacks, `sendMicFrame`), the URLSession
+    /// `micMuted`, `socketOpen`, `latestSpeedKmh`): the main thread writes them,
+    /// but the audio-render thread (mic callbacks, `sendMicFrame`), the
+    /// CoreMotion queue (`SystemMotionFeed`'s speed provider), the URLSession
     /// delegate queue (`receive`), and the ping queue read them. The key hazard is
     /// the `webSocket` reference — an off-main read otherwise races ARC
     /// retain/release against a main-thread reassignment (ThreadSanitizer-flagged;
@@ -145,6 +160,10 @@ final class AgentSession: NSObject, ObservableObject {
     /// The one capture store shared by the camera handler (writes) and the
     /// gallery UI (reads).
     let captureStore = CaptureStore()
+    /// Supplied by MainViewModel (Task 12); safe defaults until then.
+    var crashSettingsProvider: () -> CrashSettings = {
+        CrashSettings(contactNumber: nil, relayOptIn: false, callTarget: "120", logOnly: false)
+    }
     private let audioRouter = AudioRouter()
     private lazy var mic = MicStreamer(
         engine: voiceEngine,
@@ -161,6 +180,41 @@ final class AgentSession: NSObject, ObservableObject {
 
     private let synthesizer = AVSpeechSynthesizer()
     private let locationProvider = LocationProvider()
+
+    /// One-shot location resolver for crash escalation, separate from the
+    /// session-start `locationProvider` so a stale ride-start fix never
+    /// substitutes for the rider's actual position at the moment of impact.
+    private lazy var crashLocationProvider = LocationProvider()
+    /// `CrashController` is `@MainActor` (Task 10 spec); `AgentSession` predates
+    /// Swift concurrency isolation and is not itself an actor, so constructing
+    /// and driving it from here is a synchronous call into main-actor-isolated
+    /// code from a nonisolated type. Every touch point below (`init()`,
+    /// `start()`, `stop()`, and `handleEvent()`'s cases) already runs on the
+    /// main thread in practice — `handleEvent` is always invoked from inside a
+    /// `DispatchQueue.main.async` — so `onCrash` asserts that isolation rather
+    /// than restructuring the class. This is the one deviation Step 5 forced;
+    /// see the task report.
+    private(set) lazy var crashController: CrashController = MainActor.assumeIsolated {
+        CrashController(
+            motion: SystemMotionFeed(speedProvider: { [weak self] in self?.latestSpeedKmhGate() }),
+            locate: { [weak self] completion in self?.crashLocationProvider.resolve(completion) ?? completion(nil) },
+            speak: { [weak self] line in self?.speak(line) },
+            interruptPlayback: { [weak self] in self?.stopAgentSpeech() },
+            siren: SirenPlayer(
+                play: { [weak self] pcm in self?.player.play(pcm) },
+                stop: { [weak self] in self?.player.stopPlayback() }
+            ),
+            send: { [weak self] json in self?.webSocket?.send(.string(json)) { _ in } },
+            settings: { [weak self] in self?.crashSettingsProvider() ?? CrashSettings(contactNumber: nil, relayOptIn: false, callTarget: "120", logOnly: false) }
+        )
+    }
+
+    /// Runs `body` against `crashController` while asserting the main-actor
+    /// isolation its every call site already guarantees at runtime (see the
+    /// comment on `crashController` above).
+    private func onCrash<T>(_ body: @MainActor (CrashController) -> T) -> T {
+        MainActor.assumeIsolated { body(crashController) }
+    }
 
     /// Routes relay-issued device commands to one handler each. Built lazily so
     /// `player` (the volume handler's gain target) is available. The message
@@ -217,6 +271,24 @@ final class AgentSession: NSObject, ObservableObject {
         // The legacy cache was device-global and cannot be assigned safely to
         // whichever account logs in first after an upgrade.
         UserDefaults.standard.removeObject(forKey: Self.legacyTranscriptStoreKey)
+        onCrash { controller in
+            controller.onUIChange = { [weak self] phase in self?.update { $0.crashPhase = phase } }
+            controller.onLocationText = { [weak self] text in self?.update { $0.crashLocationText = text } }
+            controller.onIncidentResolved = { [weak self] in
+                guard let self, !self.state.value.handsFree else { return }
+                // stop() skipped this teardown while the incident was active
+                // (see stop()'s hasActiveIncident branch) so the siren could
+                // keep sounding through a dead session. The incident has now
+                // resolved and the session is still dead, so finish what
+                // stop() deferred — otherwise the engine, the AVAudioSession,
+                // the mic tap, and CrashController's 0.5 s tick timer would
+                // all keep running forever with no session behind them.
+                self.mic.stop()
+                self.player.release()
+                self.audioRouter.stopVoiceRouting()
+                self.onCrash { $0.disarm() }
+            }
+        }
     }
 
     // MARK: - public API
@@ -261,6 +333,11 @@ final class AgentSession: NSObject, ObservableObject {
         withTransportLock {
             transmitting = true
             micMuted = false
+            // A stale ride's speed must not outlive it (mirrors hasRideContext
+            // below) — otherwise CrashController's speed gate could see a
+            // leftover fast reading before the first ride.context of the new
+            // session arrives.
+            latestSpeedKmh = nil
         }
         spokenDeliveryIds.removeAll(keepingCapacity: true)
         spokenDeliveryOrder.removeAll(keepingCapacity: true)
@@ -276,6 +353,7 @@ final class AgentSession: NSObject, ObservableObject {
             $0.guidance = nil
             $0.hasRideContext = false
         }
+        onCrash { $0.arm() }
 
         locationProvider.resolve { [weak self] coordinate in
             guard let self else { return }
@@ -343,10 +421,28 @@ final class AgentSession: NSObject, ObservableObject {
             socketOpen = false
             webSocket = nil
         }
-        mic.stop()
         synthesizer.stopSpeaking(at: .immediate)
-        player.release()
-        audioRouter.stopVoiceRouting()
+        // An incident past check-in owns the shared engine until it resolves:
+        // the siren renders through the same AVAudioEngine as agent speech
+        // (see SirenPlayer's play/stop closures below), and both
+        // `player.release()` and `audioRouter.stopVoiceRouting()` (which
+        // deactivates the whole AVAudioSession) would silence it along with
+        // everything else. `mic.stop()` would too — it calls `engine.stop()`,
+        // halting every node on the engine — so this uses `pauseCapture()`
+        // instead, which removes the tap (capture genuinely stops) without
+        // touching the engine. Consulted before any of that teardown runs.
+        let hasActiveIncident = onCrash { $0.hasActiveIncident }
+        if hasActiveIncident {
+            mic.pauseCapture()
+        } else {
+            mic.stop()
+            player.release()
+            audioRouter.stopVoiceRouting()
+        }
+        // Not disarm(): an incident past check-in outlives the session — its
+        // countdowns, siren, and UI keep running. onUIChange is the only
+        // writer of crashPhase, so the teardown update below leaves it alone.
+        onCrash { $0.sessionEnded() }
         update {
             $0.handsFree = false
             $0.connection = .offline
@@ -735,6 +831,30 @@ final class AgentSession: NSObject, ObservableObject {
         // Unexpected drop: reconnect with exponential backoff (mirrors src/main.tsx).
         reconnectAttempts += 1
         if reconnectAttempts > Self.maxReconnectAttempts {
+            // The alert queues and survives reconnect — the network is
+            // delivery-only. ANY active incident (check-in, alarm, or
+            // escalated) must keep the session retrying, not only once a
+            // crash.alert is already pending: the give-up threshold (~31 s of
+            // backoff) lands well before escalation (~45 s: 15 s check-in +
+            // 30 s alarm) can even build one. Vetoing on "has an incident"
+            // rather than "has a pending alert" is what actually covers the
+            // scenario this exists for — an unconscious rider can't
+            // re-toggle hands-free, so keep retrying at a slow, indefinite
+            // cadence instead of giving up. reconnectAttempts is deliberately
+            // left over the threshold (not reset) so every subsequent
+            // failure re-checks this condition — once the incident resolves
+            // (ack/cancel/disarm), the very next failure falls through to the
+            // normal give-up path below.
+            if onCrash({ $0.hasActiveIncident }) {
+                update {
+                    $0.connection = .offline
+                    $0.statusText = "网络中断 — 求助信息将在恢复后自动发送"
+                }
+                let work = DispatchWorkItem { [weak self] in self?.connect() }
+                reconnectWorkItem = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.crashOutageRetryDelayS, execute: work)
+                return
+            }
             reconnectAttempts = 0
             stop()
             update {
@@ -766,6 +886,7 @@ final class AgentSession: NSObject, ObservableObject {
                 $0.connection = .ready
                 $0.statusText = mode == "mock" ? "模拟路线已启用" : "豆包实时语音在线"
             }
+            onCrash { $0.socketBecameReady() }
 
         case let .connection(connState, detail):
             update {
@@ -794,6 +915,7 @@ final class AgentSession: NSObject, ObservableObject {
             // Barge-in: the rider talking always silences the agent.
             if speaker == .rider {
                 stopAgentSpeech()
+                onCrash { $0.riderTranscript(text) }
             }
             pushTranscript(
                 speaker: speaker, text: text, final: final,
@@ -821,6 +943,7 @@ final class AgentSession: NSObject, ObservableObject {
             update { $0.weather = weather }
 
         case let .rideContextUpdate(rideContext):
+            withTransportLock { latestSpeedKmh = Double(rideContext.speedKmh) }
             update {
                 $0.rideContext = rideContext
                 $0.hasRideContext = true
@@ -844,6 +967,12 @@ final class AgentSession: NSObject, ObservableObject {
 
         case let .error(message):
             update { $0.statusText = message }
+
+        case let .crashAck(incidentId, status, detail):
+            onCrash { $0.handleAck(incidentId: incidentId, status: status, detail: detail) }
+
+        case .crashSimulate:
+            onCrash { $0.handleSimulate() }
 
         case .unhandled:
             break
@@ -875,6 +1004,16 @@ final class AgentSession: NSObject, ObservableObject {
         transportLock.lock()
         defer { transportLock.unlock() }
         return transmitting && !micMuted
+    }
+
+    /// CoreMotion-queue gate (~100 Hz): the most recent ride speed, or nil when
+    /// unknown/no ride context yet. CrashController's `SystemMotionFeed` calls
+    /// this synchronously from its background delivery queue — never read
+    /// `state` (a `@Published` property) from there.
+    private func latestSpeedKmhGate() -> Double? {
+        transportLock.lock()
+        defer { transportLock.unlock() }
+        return latestSpeedKmh
     }
 
     /// Off-main identity check (URLSession delegate / ping queues) against the

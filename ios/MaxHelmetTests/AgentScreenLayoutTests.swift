@@ -136,4 +136,30 @@ final class AgentScreenLayoutTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - the crash check-in banner reserves chrome like a hazard banner
+
+    func testCrashBannerReservesChromeLikeAHazardBanner() {
+        let without = portraitChromeHeight(captionsVisible: false, hazardVisible: false, recordingVisible: false)
+        let with = portraitChromeHeight(
+            captionsVisible: false, hazardVisible: false, recordingVisible: false, crashVisible: true
+        )
+        XCTAssertEqual(with - without, HudMetrics.hazardBanner,
+                       "the check-in banner reserves the same vertical space as a hazard banner")
+    }
+
+    // MARK: - crash countdown arithmetic (uptime clock, never wall-clock)
+
+    func testCrashCountdownShowsTheFullWindowAtTheStart() {
+        XCTAssertEqual(crashCountdownSeconds(windowS: 30, sinceT: 1000, now: 1000), 30)
+    }
+
+    func testCrashCountdownCountsDownAsTimeElapses() {
+        XCTAssertEqual(crashCountdownSeconds(windowS: 30, sinceT: 1000, now: 1012), 18)
+    }
+
+    func testCrashCountdownClampsToZeroPastExpiry() {
+        XCTAssertEqual(crashCountdownSeconds(windowS: 15, sinceT: 1000, now: 1015), 0)
+        XCTAssertEqual(crashCountdownSeconds(windowS: 15, sinceT: 1000, now: 9999), 0)
+    }
 }

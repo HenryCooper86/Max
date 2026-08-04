@@ -116,6 +116,26 @@ final class MicStreamer {
         pending.removeAll(keepingCapacity: true)
     }
 
+    /// Stops capture without tearing down the shared engine. `stop()`'s
+    /// `engine.stop()` halts every node on the engine, including PcmPlayer's —
+    /// so a caller that must keep something else rendering through this same
+    /// engine (the crash siren, which shares it for echo-cancellation reasons)
+    /// uses this instead: the tap comes off (no more frames, same as `stop()`
+    /// from the rider's perspective) but the engine — and whatever else is
+    /// playing through it — keeps running.
+    func pauseCapture() {
+        guard running else { return }
+        running = false
+        if let observer = configObserver {
+            NotificationCenter.default.removeObserver(observer)
+            configObserver = nil
+        }
+        engine.inputNode.removeTap(onBus: 0)
+        converter = nil
+        converterInputFormat = nil
+        pending.removeAll(keepingCapacity: true)
+    }
+
     /// Reconfigures capture for a new audio route: reinstall the tap for the
     /// current input format and restart the engine if the change stopped it.
     /// Runs on the main queue (see start()); process() rebuilds the resampler

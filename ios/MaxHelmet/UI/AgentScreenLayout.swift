@@ -54,12 +54,14 @@ func portraitChromeHeight(
     captionsVisible: Bool,
     hazardVisible: Bool,
     recordingVisible: Bool,
-    guidanceVisible: Bool = false
+    guidanceVisible: Bool = false,
+    crashVisible: Bool = false
 ) -> CGFloat {
     var height = HudMetrics.portraitChrome
     if hazardVisible { height += HudMetrics.hazardBanner }
     if recordingVisible { height += HudMetrics.recordingIndicator }
     if guidanceVisible { height += HudMetrics.guidanceCard }
+    if crashVisible { height += HudMetrics.hazardBanner }
     if captionsVisible { height += HudMetrics.captionsMax }
     return height
 }
@@ -75,7 +77,8 @@ func helmetDiameter(
     captionsVisible: Bool = false,
     hazardVisible: Bool = false,
     recordingVisible: Bool = false,
-    guidanceVisible: Bool = false
+    guidanceVisible: Bool = false,
+    crashVisible: Bool = false
 ) -> CGFloat {
     let unbounded: CGFloat
     switch layout {
@@ -84,13 +87,15 @@ func helmetDiameter(
             captionsVisible: captionsVisible,
             hazardVisible: hazardVisible,
             recordingVisible: recordingVisible,
-            guidanceVisible: guidanceVisible
+            guidanceVisible: guidanceVisible,
+            crashVisible: crashVisible
         )
         unbounded = available.height - chrome
     case .landscape:
         // Whichever axis runs out first, so the helmet never overlaps the
         // column beside it and never overflows the row above the dock.
         var height = available.height - HudMetrics.hazardBanner * (hazardVisible ? 1 : 0)
+        height -= HudMetrics.hazardBanner * (crashVisible ? 1 : 0)
         height -= 44  // top bar + spacing
         unbounded = min(height, available.width * HudMetrics.landscapeHelmetColumn)
     }
@@ -105,7 +110,8 @@ func captionsHeight(
     available: CGSize,
     hazardVisible: Bool,
     recordingVisible: Bool,
-    guidanceVisible: Bool = false
+    guidanceVisible: Bool = false,
+    crashVisible: Bool = false
 ) -> CGFloat? {
     let reserved: CGFloat
     switch layout {
@@ -115,7 +121,8 @@ func captionsHeight(
                 captionsVisible: false,
                 hazardVisible: hazardVisible,
                 recordingVisible: recordingVisible,
-                guidanceVisible: guidanceVisible
+                guidanceVisible: guidanceVisible,
+                crashVisible: crashVisible
             ) + HudMetrics.helmetMinDiameter
     case .landscape:
         // The helmet sits beside the captions, so it costs no height here —
@@ -123,6 +130,7 @@ func captionsHeight(
         reserved =
             190 + (hazardVisible ? HudMetrics.hazardBanner : 0)
             + (guidanceVisible ? HudMetrics.guidanceCard : 0)
+            + (crashVisible ? HudMetrics.hazardBanner : 0)
     }
     let room = available.height - reserved
     guard room >= HudMetrics.captionsMin else { return nil }

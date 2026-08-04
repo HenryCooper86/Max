@@ -19,7 +19,9 @@ def make_runtime(tmp_path, name="runtime"):
             min_free_mb=0,
         )
     )
-    runtime.handlers = {"camera.photo": lambda args: {"status": "ok"}}
+    runtime.handlers = {
+        "camera.photo": lambda args: {"status": "ok", "detail": "injected-handler-ran"}
+    }
     return runtime
 
 
@@ -34,13 +36,20 @@ def test_concurrent_writes_do_not_interleave(tmp_path):
     socket_dir = make_socket_dir()
     sock_path = str(socket_dir / "ctl.sock")
     runtime = make_runtime(tmp_path)
+    handler_registered = threading.Event()
     handler_finished = threading.Event()
+    register = runtime.events.register
     unregister = runtime.events.unregister
+
+    def register_and_signal(write):
+        register(write)
+        handler_registered.set()
 
     def unregister_and_signal(write):
         unregister(write)
         handler_finished.set()
 
+    runtime.events.register = register_and_signal
     runtime.events.unregister = unregister_and_signal
     server = service.ControlServer(sock_path, service.ControlHandler, runtime)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -50,6 +59,7 @@ def test_concurrent_writes_do_not_interleave(tmp_path):
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         client.connect(sock_path)
         client.settimeout(5.0)
+        assert handler_registered.wait(timeout=5.0)
 
         def hammer():
             for i in range(200):
@@ -60,7 +70,7 @@ def test_concurrent_writes_do_not_interleave(tmp_path):
             thread.start()
         for i in range(50):
             client.sendall(
-                (json.dumps({"id": str(i), "method": "camera.photo", "args": {}}) + "\n").encode()
+                (json.dumps({"id": str(i), "op": "camera.photo", "args": {}}) + "\n").encode()
             )
         for thread in threads:
             thread.join(timeout=5.0)
@@ -82,6 +92,9 @@ def test_concurrent_writes_do_not_interleave(tmp_path):
         rpc_responses = [message for message in parsed if "id" in message]
         hazard_events = [message for message in parsed if message.get("event") == "hazard"]
         assert len(rpc_responses) == 50
+        assert {response["id"] for response in rpc_responses} == {str(i) for i in range(50)}
+        assert all(response["status"] == "ok" for response in rpc_responses)
+        assert all(response["detail"] == "injected-handler-ran" for response in rpc_responses)
         assert len(hazard_events) > 0
     finally:
         if client is not None:

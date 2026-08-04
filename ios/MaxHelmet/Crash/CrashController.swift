@@ -63,18 +63,17 @@ final class CrashController {
     /// (check-in, alarm, or escalated) — the point past which the incident
     /// outlives the session (see `sessionEnded()`) and the caller must keep
     /// the audio path (siren) alive even while tearing everything else down.
+    /// Also the veto AgentSession uses to keep retrying a dead relay
+    /// connection instead of giving up (see its handleSocketClosed): any
+    /// active incident qualifies, not only one that has already built its
+    /// crash.alert (escalation, and the alert with it, can still be ~30 s
+    /// away when the give-up threshold is reached).
     var hasActiveIncident: Bool {
         switch state.phase {
         case .checkIn, .alarm, .escalated: return true
         case .armed, .impactCandidate: return false
         }
     }
-
-    /// True while an alert has been sent but not yet acknowledged — the
-    /// condition under which a network outage must not give up on reconnect
-    /// (spec: "the alert queues and survives reconnect — the network is
-    /// delivery-only").
-    var hasPendingUnackedAlert: Bool { pendingAlertJson != nil && !acked }
 
     init(motion: MotionStreaming,
          locate: @escaping (@escaping (CLLocationCoordinate2D?) -> Void) -> Void,

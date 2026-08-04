@@ -832,18 +832,20 @@ final class AgentSession: NSObject, ObservableObject {
         reconnectAttempts += 1
         if reconnectAttempts > Self.maxReconnectAttempts {
             // The alert queues and survives reconnect — the network is
-            // delivery-only. An active incident with a crash.alert still
-            // waiting on its ack must not be abandoned just because the
-            // relay has been unreachable for a while: the rider may be
-            // unconscious and unable to re-toggle hands-free, so keep
-            // retrying at a slow, indefinite cadence instead of giving up.
-            // reconnectAttempts is deliberately left over the threshold (not
-            // reset) so every subsequent failure re-checks this condition —
-            // once the incident resolves (ack/cancel/disarm), the very next
-            // failure falls through to the normal give-up path below.
-            let hasActiveIncident = onCrash { $0.hasActiveIncident }
-            let hasPendingAlert = onCrash { $0.hasPendingUnackedAlert }
-            if hasActiveIncident && hasPendingAlert {
+            // delivery-only. ANY active incident (check-in, alarm, or
+            // escalated) must keep the session retrying, not only once a
+            // crash.alert is already pending: the give-up threshold (~31 s of
+            // backoff) lands well before escalation (~45 s: 15 s check-in +
+            // 30 s alarm) can even build one. Vetoing on "has an incident"
+            // rather than "has a pending alert" is what actually covers the
+            // scenario this exists for — an unconscious rider can't
+            // re-toggle hands-free, so keep retrying at a slow, indefinite
+            // cadence instead of giving up. reconnectAttempts is deliberately
+            // left over the threshold (not reset) so every subsequent
+            // failure re-checks this condition — once the incident resolves
+            // (ack/cancel/disarm), the very next failure falls through to the
+            // normal give-up path below.
+            if onCrash({ $0.hasActiveIncident }) {
                 update {
                     $0.connection = .offline
                     $0.statusText = "网络中断 — 求助信息将在恢复后自动发送"

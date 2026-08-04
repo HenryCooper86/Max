@@ -20,6 +20,7 @@
     "check": "npm run check:protocol && npm run format:check && npm run lint && npm run check:dead-code && npm test && npm run test:fault-matrix && npm run build",
     "check:dead-code": "knip",
     "test": "vitest run",
+    "test:rdk-vision": "python3 -m pytest -c rdk/vision/pytest.ini -m \"not hardware\" --strict-markers rdk/vision/tests",
     "test:watch": "vitest",
     "test:fault-matrix": "tsx scripts/testing-fault-matrix.ts",
     "test:release-gate": "tsx scripts/testing-release-gate.ts"

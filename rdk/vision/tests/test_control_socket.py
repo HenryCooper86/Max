@@ -1,6 +1,8 @@
 import json
+import shutil
 import socket
 import sys
+import tempfile
 import threading
 from pathlib import Path
 
@@ -9,13 +11,32 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import service
 
 
+def make_runtime(tmp_path, name="runtime"):
+    runtime = service.build_runtime(
+        service.VisionConfig(
+            gallery_dir=str(tmp_path / name / "gallery"),
+            min_free_mb=0,
+        )
+    )
+    runtime.handlers = {"camera.photo": lambda args: {"status": "ok"}}
+    return runtime
+
+
+def make_socket_dir():
+    """Keep Unix socket paths under macOS's 104-byte pathname limit."""
+    return Path(tempfile.mkdtemp(prefix="vision-", dir="/private/tmp"))
+
+
 def test_concurrent_writes_do_not_interleave(tmp_path):
     """RPC responses and hazard broadcasts share one wfile; every line must
     still parse alone."""
-    sock_path = str(tmp_path / "ctl.sock")
-    server = service.ControlServer(sock_path, service.ControlHandler)
+    socket_dir = make_socket_dir()
+    sock_path = str(socket_dir / "ctl.sock")
+    runtime = make_runtime(tmp_path)
+    server = service.ControlServer(sock_path, service.ControlHandler, runtime)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
+    client = None
     try:
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         client.connect(sock_path)
@@ -23,7 +44,7 @@ def test_concurrent_writes_do_not_interleave(tmp_path):
 
         def hammer():
             for i in range(200):
-                service.events.broadcast({"event": "hazard", "threat": f"t{i}"})
+                runtime.events.broadcast({"event": "hazard", "threat": f"t{i}"})
 
         threads = [threading.Thread(target=hammer) for _ in range(4)]
         for thread in threads:
@@ -54,7 +75,45 @@ def test_concurrent_writes_do_not_interleave(tmp_path):
         assert len(rpc_responses) == 50
         assert len(hazard_events) > 0
     finally:
+        if client is not None:
+            client.close()
         server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=5.0)
+        shutil.rmtree(socket_dir)
+
+
+def test_control_servers_own_separate_runtime_state(tmp_path):
+    first_runtime = make_runtime(tmp_path, "first")
+    second_runtime = make_runtime(tmp_path, "second")
+    socket_dir = make_socket_dir()
+    first = service.ControlServer(
+        str(socket_dir / "first.sock"), service.ControlHandler, first_runtime
+    )
+    second = service.ControlServer(
+        str(socket_dir / "second.sock"), service.ControlHandler, second_runtime
+    )
+    try:
+        assert first.runtime is first_runtime
+        assert second.runtime is second_runtime
+        assert first.runtime.events is not second.runtime.events
+        assert first.runtime.handlers is not second.runtime.handlers
+    finally:
+        first.server_close()
+        second.server_close()
+        shutil.rmtree(socket_dir)
+
+
+def test_control_server_daemonizes_client_threads(tmp_path):
+    socket_dir = make_socket_dir()
+    server = service.ControlServer(
+        str(socket_dir / "daemon.sock"), service.ControlHandler, make_runtime(tmp_path)
+    )
+    try:
+        assert server.daemon_threads is True
+    finally:
+        server.server_close()
+        shutil.rmtree(socket_dir)
 
 
 class FakeRecordingPair:

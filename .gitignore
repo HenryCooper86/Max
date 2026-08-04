@@ -22,6 +22,7 @@ ios/build/
 *.xcuserstate
 
 # Python tooling state (rdk/vision test suite)
+.venv/
 __pycache__/
 .pytest_cache/
 

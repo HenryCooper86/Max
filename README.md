@@ -1,5 +1,7 @@
 # Max 摩托车头盔 AI
 
+[![pipeline status](https://gitlab-ce.orb.local/hct/doubao/badges/main/pipeline.svg)](https://gitlab-ce.orb.local/hct/doubao/-/pipelines)
+
 Production-oriented AI voice testing framework for the Max motorcycle helmet assistant. Max keeps the same name and motorcycle helmet assistant role, speaks Chinese by default, can also use English, and refuses other languages. The framework combines the hands-free web HUD, iOS and Android clients, a secure realtime relay, mock/live providers, scenario injection, telemetry, and per-tester QA statistics for validating helmet voice behavior before field release. Realtime Doubao voice defaults to the working female Chinese voice.
 
 ## Frontend Preview

@@ -11,6 +11,7 @@ AGENTS.md
 CLAUDE.md
 MR_DESCRIPTION.md
 .claude/
+.superpowers/
 .worktrees/
 
 # Generated native build output

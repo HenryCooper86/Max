@@ -69,6 +69,11 @@ def test_concurrent_writes_do_not_interleave(tmp_path):
         reader_started = threading.Event()
         reader_finished = threading.Event()
 
+        # The handler's writers share one blocking socket, so once the kernel
+        # buffers fill, broadcast() blocks until the client reads. The reader
+        # must drain while the producers write: reading only after joining
+        # them deadlocks the producers, and the liveness assertion below
+        # fails after four timed-out joins (~20 s).
         def drain():
             buffer = ""
             reader_started.set()
@@ -102,6 +107,8 @@ def test_concurrent_writes_do_not_interleave(tmp_path):
             )
         for thread in threads:
             thread.join(timeout=1.0)
+        # Regression guard for the pre-drain hang: without the concurrent
+        # reader, backpressure-blocked producers outlive these bounded joins.
         assert all(not thread.is_alive() for thread in threads)
         assert reader_finished.wait(timeout=5.0)
         assert not reader_errors
@@ -110,6 +117,9 @@ def test_concurrent_writes_do_not_interleave(tmp_path):
         hazard_events = [message for message in parsed if message.get("event") == "hazard"]
         assert len(rpc_responses) == 50
         assert {response["id"] for response in rpc_responses} == {str(i) for i in range(50)}
+        # rpc.dispatch() selects handlers by "op"; a request shaped any other
+        # way (e.g. the obsolete "method" key) is answered "unsupported", which
+        # only these two assertions distinguish from the injected handler.
         assert all(response["status"] == "ok" for response in rpc_responses)
         assert all(response["detail"] == "injected-handler-ran" for response in rpc_responses)
         assert len(hazard_events) == 800
@@ -118,6 +128,10 @@ def test_concurrent_writes_do_not_interleave(tmp_path):
             with contextlib.suppress(OSError):
                 client.shutdown(socket.SHUT_RDWR)
             client.close()
+            # These teardown asserts can replace an earlier in-flight failure.
+            # That is intentional: a producer or reader surviving socket close
+            # is the more serious defect (a leaked non-daemon thread), and the
+            # bounded joins keep teardown from hanging.
             for thread in threads:
                 thread.join(timeout=1.0)
             assert all(not thread.is_alive() for thread in threads)

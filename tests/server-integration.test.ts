@@ -4,11 +4,16 @@ import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 
 const require = createRequire(import.meta.url);
-const tsxCli = require.resolve("tsx/cli");
+// Load tsx in-process via --import rather than the tsx CLI: the CLI wraps the
+// server in a relay process that SIGKILLs it (and exits 143) whenever the
+// child's IPC signal acknowledgment misses a 30 ms window, so on slower
+// machines a graceful SIGTERM shutdown still fails the exit-code assertions.
+const tsxImport = pathToFileURL(require.resolve("tsx")).href;
 
 let relay: ChildProcess | null = null;
 let tempDir: string | null = null;
@@ -54,7 +59,7 @@ describe("relay process integration", () => {
     const baseUrl = `http://127.0.0.1:${port}`;
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "max-relay-integration-"));
     let logs = "";
-    relay = spawn(process.execPath, [tsxCli, "server/index.ts"], {
+    relay = spawn(process.execPath, ["--import", tsxImport, "server/index.ts"], {
       cwd: process.cwd(),
       env: {
         ...process.env,
@@ -268,7 +273,7 @@ describe("relay process integration", () => {
     const port = await reservePort();
     const baseUrl = `http://127.0.0.1:${port}`;
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "max-relay-readiness-"));
-    relay = spawn(process.execPath, [tsxCli, "server/index.ts"], {
+    relay = spawn(process.execPath, ["--import", tsxImport, "server/index.ts"], {
       cwd: process.cwd(),
       env: {
         ...process.env,
@@ -317,7 +322,7 @@ describe("relay process integration", () => {
     const port = await reservePort();
     const baseUrl = `http://127.0.0.1:${port}`;
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "max-relay-review-attribution-"));
-    relay = spawn(process.execPath, [tsxCli, "server/index.ts"], {
+    relay = spawn(process.execPath, ["--import", tsxImport, "server/index.ts"], {
       cwd: process.cwd(),
       env: {
         ...process.env,

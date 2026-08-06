@@ -1,6 +1,6 @@
 // tests/amap-proxy.test.ts
 import { describe, expect, it } from "vitest";
-import { amapProxyTarget, isAllowedProxyReferer } from "../server/amap-proxy";
+import { amapProxyTarget, isAllowedProxyReferer, resolveRequestScheme } from "../server/amap-proxy";
 
 describe("amapProxyTarget", () => {
   it("maps styles, vectormap, and restapi hosts with jscode appended", () => {
@@ -44,5 +44,23 @@ describe("isAllowedProxyReferer", () => {
 
   it("refuses a malformed Referer URL", () => {
     expect(isAllowedProxyReferer("not-a-url", selfOrigin)).toBe(false);
+  });
+});
+
+describe("resolveRequestScheme", () => {
+  it("ignores X-Forwarded-Proto when trustProxy is off", () => {
+    expect(resolveRequestScheme("http", "https", false)).toBe("http");
+  });
+
+  it("uses X-Forwarded-Proto when trustProxy is on", () => {
+    expect(resolveRequestScheme("http", "https", true)).toBe("https");
+  });
+
+  it("takes the first entry of a comma-separated X-Forwarded-Proto list", () => {
+    expect(resolveRequestScheme("http", "https, http", true)).toBe("https");
+  });
+
+  it("falls back to reqProtocol when X-Forwarded-Proto is absent, even with trustProxy on", () => {
+    expect(resolveRequestScheme("http", undefined, true)).toBe("http");
   });
 });

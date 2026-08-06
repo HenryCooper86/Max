@@ -66,6 +66,27 @@ export function isAllowedProxyReferer(referer: string | undefined, selfOrigin: s
   }
 }
 
+/**
+ * Pure scheme resolver for the Referer-origin gate above. Behind the
+ * documented Caddy/Lightsail deploy, TLS terminates at the proxy and Express
+ * sees plain HTTP, so `req.protocol` alone would make `selfOrigin` always
+ * "http://…" and reject every legitimate "https://…" browser Referer. Mirrors
+ * `clientAddress()` in server/auth.ts: X-Forwarded-* is only trustworthy when
+ * the operator has explicitly declared a trusted proxy (RELAY_TRUST_PROXY),
+ * since otherwise a client could spoof it directly.
+ */
+export function resolveRequestScheme(
+  reqProtocol: string,
+  forwardedProto: string | undefined,
+  trustProxy: boolean
+): string {
+  if (trustProxy && forwardedProto) {
+    const first = forwardedProto.split(",")[0]?.trim();
+    if (first) return first;
+  }
+  return reqProtocol;
+}
+
 /** Registers `/nav/js-config` and the `/_AMapService/*` proxy. Must be
  *  mounted before the static/SPA-fallback block so these routes aren't
  *  swallowed by it. */
@@ -82,7 +103,8 @@ export function registerAmapRoutes(app: express.Express): void {
       return;
     }
     const referer = req.get("referer");
-    const selfOrigin = `${req.protocol}://${req.get("host")}`;
+    const scheme = resolveRequestScheme(req.protocol, req.get("x-forwarded-proto"), config.trustProxy);
+    const selfOrigin = `${scheme}://${req.get("host")}`;
     if (!isAllowedProxyReferer(referer, selfOrigin)) {
       res.status(403).end();
       return;

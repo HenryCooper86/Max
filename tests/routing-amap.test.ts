@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createAmapRouteProvider } from "../server/routing";
+import { haversineMeters } from "../shared/guidance";
 
 const PLACE_OK = JSON.stringify({
   status: "1",
@@ -49,18 +50,47 @@ describe("AmapRouteProvider.resolveDestination", () => {
 });
 
 describe("AmapRouteProvider.planRoute", () => {
-  it("maps distance, eta, concatenated polyline, and step-end maneuvers", async () => {
+  it("maps eta, concatenated polyline, and step-end maneuvers", async () => {
     const provider = createAmapRouteProvider({ apiKey: "k", fetchImpl: fetchReturning(DRIVING_OK) });
     const route = await provider.planRoute(origin, destination);
     expect(route).not.toBeNull();
-    expect(route!.distanceMeters).toBe(1200);
     expect(route!.etaSeconds).toBe(300);
     expect(route!.polyline[0]).toEqual({ lat: 31.2304, lon: 121.4737 });
     expect(route!.polyline.at(-1)).toEqual({ lat: 31.236, lon: 121.4751 });
-    expect(route!.steps).toEqual([
-      { instruction: "向北行驶", lat: 31.236, lon: 121.4737, alongRouteMeters: 700 },
-      { instruction: "右转进入南京东路", lat: 31.236, lon: 121.4751, alongRouteMeters: 1200 }
+    expect(route!.steps.map((s) => ({ instruction: s.instruction, lat: s.lat, lon: s.lon }))).toEqual([
+      { instruction: "向北行驶", lat: 31.236, lon: 121.4737 },
+      { instruction: "右转进入南京东路", lat: 31.236, lon: 121.4751 }
     ]);
+  });
+
+  it("derives alongRouteMeters and distanceMeters from the polyline, not step_distance", async () => {
+    // The fixture's step_distance values (700/500) deliberately disagree with
+    // the polyline's real haversine lengths (~623/~133 m): live Amap responses
+    // drift the same way (126 m measured on a 2.8 km route), and the guidance
+    // engine measures the rider on the polyline — the maneuvers must share
+    // that base or prompts and advancement fire early.
+    const provider = createAmapRouteProvider({ apiKey: "k", fetchImpl: fetchReturning(DRIVING_OK) });
+    const route = await provider.planRoute(origin, destination);
+    expect(route).not.toBeNull();
+    expect(route!.steps[0].alongRouteMeters).toBeGreaterThan(615);
+    expect(route!.steps[0].alongRouteMeters).toBeLessThan(630);
+    expect(route!.distanceMeters).toBeGreaterThan(748);
+    expect(route!.distanceMeters).toBeLessThan(764);
+    expect(route!.steps.at(-1)!.alongRouteMeters).toBe(route!.distanceMeters);
+    // Exact contract: each maneuver's alongRouteMeters equals the cumulative
+    // haversine length of the polyline up to that maneuver's coordinate.
+    let cumulative = 0;
+    let index = 0;
+    for (const step of route!.steps) {
+      while (
+        index < route!.polyline.length - 1 &&
+        (route!.polyline[index].lat !== step.lat || route!.polyline[index].lon !== step.lon)
+      ) {
+        cumulative += haversineMeters(route!.polyline[index], route!.polyline[index + 1]);
+        index += 1;
+      }
+      expect(Math.abs(step.alongRouteMeters - cumulative)).toBeLessThanOrEqual(1);
+    }
   });
 
   it("returns null on malformed numbers and reports the failure", async () => {

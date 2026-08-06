@@ -13,6 +13,7 @@
 
 import type { NavErrorEvent, NavManeuver, NavRequestEvent, NavRouteEvent } from "../shared/agent";
 import type { GeoPoint } from "../shared/geo";
+import { haversineMeters } from "../shared/guidance";
 import { MOCK_ROUTE } from "../shared/nav-fixtures";
 import type { Logger } from "./logger";
 
@@ -92,21 +93,26 @@ export function createAmapRouteProvider(options: {
       const route = body.route as { paths?: unknown } | undefined;
       const path = Array.isArray(route?.paths) ? (route.paths[0] as Record<string, unknown> | undefined) : undefined;
       if (body.status !== "1" || !path) return fail("driving.status");
-      const distanceMeters = Number(path.distance);
       const etaSeconds = Number((path.cost as { duration?: unknown } | undefined)?.duration);
       const rawSteps = Array.isArray(path.steps) ? (path.steps as Array<Record<string, unknown>>) : [];
-      if (!Number.isFinite(distanceMeters) || !Number.isFinite(etaSeconds) || !rawSteps.length) {
+      // path.distance is validated as a sanity check but deliberately NOT used:
+      // every distance the route reports is derived from the polyline instead
+      // (see below), so the guidance engine's snap-to-polyline positions and
+      // the maneuvers' alongRouteMeters share one base. Amap's step_distance
+      // sums drift from the polyline's haversine length by >100 m on real
+      // routes (126 m measured on a 2.8 km ride), which advanced maneuvers and
+      // fired the "now" prompt that far early.
+      if (!Number.isFinite(Number(path.distance)) || !Number.isFinite(etaSeconds) || !rawSteps.length) {
         return fail("driving.shape");
       }
       const polyline: GeoPoint[] = [];
       const steps: NavManeuver[] = [];
-      let alongRouteMeters = 0;
+      let cumulativeMeters = 0;
       for (const rawStep of rawSteps) {
-        const stepDistance = Number(rawStep.step_distance);
         if (
           typeof rawStep.instruction !== "string" ||
           typeof rawStep.polyline !== "string" ||
-          !Number.isFinite(stepDistance)
+          !Number.isFinite(Number(rawStep.step_distance))
         ) {
           return fail("driving.step");
         }
@@ -114,13 +120,20 @@ export function createAmapRouteProvider(options: {
         if (points.some((p) => p === null) || !points.length) return fail("driving.polyline");
         for (const point of points as GeoPoint[]) {
           const last = polyline.at(-1);
-          if (!last || last.lat !== point.lat || last.lon !== point.lon) polyline.push(point);
+          if (!last || last.lat !== point.lat || last.lon !== point.lon) {
+            if (last) cumulativeMeters += haversineMeters(last, point);
+            polyline.push(point);
+          }
         }
-        alongRouteMeters += stepDistance;
         const end = polyline.at(-1)!;
-        steps.push({ instruction: rawStep.instruction, lat: end.lat, lon: end.lon, alongRouteMeters });
+        steps.push({
+          instruction: rawStep.instruction,
+          lat: end.lat,
+          lon: end.lon,
+          alongRouteMeters: Math.round(cumulativeMeters)
+        });
       }
-      return { distanceMeters, etaSeconds, polyline, steps };
+      return { distanceMeters: Math.round(cumulativeMeters), etaSeconds, polyline, steps };
     }
   };
 }

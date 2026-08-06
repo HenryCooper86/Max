@@ -82,4 +82,22 @@ describe("step", () => {
     expect(u.remainingSeconds).toBeGreaterThan(110);
     expect(u.remainingSeconds).toBeLessThan(130);
   });
+
+  it("off-route never advances the maneuver", () => {
+    // Along-route projection lands past the first maneuver's 555 m, but
+    // ~95 m cross-track keeps this fix off-route: progression must freeze.
+    const u = step({ lat: 31.236, lon: 121.471 }, route, INITIAL_PROGRESS);
+    expect(u.offRoute).toBe(true);
+    expect(u.progress.maneuverIndex).toBe(0);
+    expect(u.progress.firedThresholds).toEqual([]);
+  });
+
+  it("the now prompt fires before advancement on the same tick", () => {
+    // ~22 m along-route from a fresh start: crosses "now" and the 30 m
+    // reached radius in the same fix. The prompt for the maneuver just
+    // completed must still be reported alongside the post-advance progress.
+    const u = step({ lat: 31.2348, lon: 121.47 }, route, INITIAL_PROGRESS);
+    expect(u.spokenPrompt).toBe("右转");
+    expect(u.progress.maneuverIndex).toBe(1);
+  });
 });

@@ -129,10 +129,36 @@ function snapToRoute(position: GeoPoint, polyline: readonly GeoPoint[]): RouteSn
  * the caller supplies the previous `GuidanceProgress` and gets the next one
  * back in `progress`, never mutated in place, so a fix can be re-run safely.
  *
- * Order of operations per fix: snap → off-route → arrival → prompt the
- * *current* maneuver (suppressed while off-route) → advance the maneuver if
- * reached (clearing its thresholds) → report distance/instruction for
- * whichever maneuver is now current.
+ * Port contract for the Kotlin/Swift siblings — keep these five rules
+ * identical across platforms so guidance never diverges by device:
+ *
+ * 1. Single distance metric: every prompt threshold AND the "reached this
+ *    maneuver" check both read the SAME along-route distance (maneuver
+ *    `alongRouteMeters` − snapped along-route position). There is no second,
+ *    straight-line-to-coordinate metric — a curved approach means haversine
+ *    distance is a chord shorter than the along-route path, and mixing
+ *    metrics lets "reached" (30 m) fire before "now" (40 m), skipping the
+ *    safety-critical prompt entirely.
+ * 2. Prompt-before-advance ordering: within one fix, the current maneuver's
+ *    threshold prompt is decided FIRST, using its pre-advance distance; only
+ *    then is the advance condition evaluated. A fix that both crosses the
+ *    "now" threshold and reaches the maneuver in the same tick still speaks
+ *    the prompt — the returned `progress` reflects the post-advance maneuver,
+ *    but `spokenPrompt` is the one that just fired for the maneuver being
+ *    left behind.
+ * 3. Off-route freezes progression, not just prompts: while `offRoute` is
+ *    true, `maneuverIndex` and `firedThresholds` are carried through
+ *    unchanged — no prompt fires and no advance happens, however far along
+ *    the route the (untrusted) snapped position appears to be. Reroute
+ *    policy is the caller's job; this function just reports the fact and
+ *    waits.
+ * 4. `arrived` is sticky: once true it stays true regardless of subsequent
+ *    fixes (a noisy GPS reading after arrival must not un-arrive the rider).
+ *    The caller resets it by starting a fresh `GuidanceProgress` for a new
+ *    route (e.g. `INITIAL_PROGRESS`), not by any in-band "un-arrive" call.
+ * 5. Snap tie-break: when two polyline segments are equidistant, the FIRST
+ *    one in array order (lowest index) wins — `snapToRoute` only replaces
+ *    the best match on a strictly-smaller cross-track distance.
  */
 export function step(position: GeoPoint, route: NavRouteEvent, progress: GuidanceProgress): GuidanceUpdate {
   const snap = snapToRoute(position, route.polyline);
@@ -147,11 +173,12 @@ export function step(position: GeoPoint, route: NavRouteEvent, progress: Guidanc
   let firedThresholds = progress.firedThresholds;
   let spokenPrompt: string | null = null;
 
-  const currentManeuver = maneuverIndex < steps.length ? steps[maneuverIndex] : undefined;
-  if (currentManeuver) {
-    const distanceToManeuver = Math.max(0, currentManeuver.alongRouteMeters - snap.alongRouteMeters);
+  // Prompt-then-advance, gated entirely behind on-route — see rules 1–3 above.
+  if (!offRoute) {
+    const currentManeuver = maneuverIndex < steps.length ? steps[maneuverIndex] : undefined;
+    if (currentManeuver) {
+      const distanceToManeuver = Math.max(0, currentManeuver.alongRouteMeters - snap.alongRouteMeters);
 
-    if (!offRoute) {
       const due = THRESHOLDS.filter((t) => distanceToManeuver <= t.meters && !firedThresholds.includes(t.id));
       if (due.length > 0) {
         const urgent = due.reduce((most, candidate) => (candidate.meters < most.meters ? candidate : most));
@@ -161,15 +188,14 @@ export function step(position: GeoPoint, route: NavRouteEvent, progress: Guidanc
             ? currentManeuver.instruction
             : `前方${Math.round(distanceToManeuver / 50) * 50}米，${currentManeuver.instruction}`;
       }
-    }
 
-    const straightLineToManeuver = haversineMeters(position, { lat: currentManeuver.lat, lon: currentManeuver.lon });
-    const reachedManeuver =
-      straightLineToManeuver <= MANEUVER_ADVANCE_METERS || snap.alongRouteMeters > currentManeuver.alongRouteMeters;
-    const hasNextManeuver = maneuverIndex + 1 < steps.length;
-    if (reachedManeuver && hasNextManeuver) {
-      maneuverIndex += 1;
-      firedThresholds = [];
+      const reachedManeuver =
+        distanceToManeuver <= MANEUVER_ADVANCE_METERS || snap.alongRouteMeters > currentManeuver.alongRouteMeters;
+      const hasNextManeuver = maneuverIndex + 1 < steps.length;
+      if (reachedManeuver && hasNextManeuver) {
+        maneuverIndex += 1;
+        firedThresholds = [];
+      }
     }
   }
 

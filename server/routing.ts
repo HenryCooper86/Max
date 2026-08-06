@@ -151,10 +151,10 @@ export function createMockRouteProvider(): RouteProvider {
 }
 
 // Module-level latch for missing-key warning: latches once per process, not once per
-// selection (unlike vision.ts's per-instance closure flag). Sessions re-select a provider
-// on every connection, so a per-session warn would print for every rider connection. The
-// once-per-process latch implements startup semantics — the warning surfaces once when the
-// relay boots without AMAP_API_KEY, not once per connection.
+// selection (vision.ts's selectVisionProvider uses the same latch and references this comment).
+// Sessions re-select a provider on every connection, so a per-session warn would print for every
+// rider connection. The once-per-process latch implements startup semantics — the warning
+// surfaces once when the relay boots without AMAP_API_KEY, not once per connection.
 let warnedMissingKey = false;
 
 export function selectRouteProvider(amapApiKey: string, log?: Pick<Logger, "warn">): RouteProvider {

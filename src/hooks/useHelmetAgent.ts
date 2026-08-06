@@ -13,6 +13,7 @@ import {
 } from "../../shared/agent";
 import { validateAgentEvent } from "../../shared/events";
 import { detectLanguage } from "../../shared/language";
+import { MOCK_ROUTE } from "../../shared/nav-fixtures";
 import {
   defaultTestCaseForCampaign,
   findTestingCampaign,
@@ -46,6 +47,8 @@ import {
   saveStoredSettings,
   saveStoredTranscript
 } from "../lib/persistence";
+import { createNavigationController, type NavPhase } from "../lib/navigation";
+import { createRideSimulator } from "../lib/nav-simulator";
 import { createAgentSocket, fetchAgentHealth, getRiderLocation, mapTurnState } from "../lib/utils";
 import type {
   HazardAlertState,
@@ -141,6 +144,11 @@ export function useHelmetAgent() {
   const [micPermission, setMicPermission] = useState<PermissionStateLabel>("unknown");
   const [locationPermission, setLocationPermission] = useState<PermissionStateLabel>("unknown");
   const [guidedDemo, setGuidedDemoState] = useState(false);
+  // Guidance HUD state, owned by the navigation controller below via its
+  // `onState` callback. reset() (on socket close) does NOT emit through
+  // onState, so every reset() call site also sets this back to idle itself —
+  // otherwise a stale "guiding" card would survive a disconnect.
+  const [navState, setNavState] = useState<NavPhase>({ phase: "idle" });
   // Transcript ids above this floor belong to the current relay session and
   // may be flagged via turn.feedback. MAX_SAFE_INTEGER = nothing flaggable.
   const [feedbackFloorId, setFeedbackFloorId] = useState(Number.MAX_SAFE_INTEGER);
@@ -183,6 +191,8 @@ export function useHelmetAgent() {
   const spokenDeliveryIdsRef = useRef(new Set<string>());
   const lastQualityReportAtRef = useRef(0);
   const transcriptOwnerRef = useRef<string | null>(null);
+  // The 演示导航/演示偏航 ride simulator, if one is currently running.
+  const navSimulatorRef = useRef<{ start(detour: boolean): void; stop(): void } | null>(null);
 
   const onInterrupted = useCallback(() => {
     setTurnState("listening");
@@ -194,6 +204,24 @@ export function useHelmetAgent() {
     transmittingRef,
     onInterrupted
   });
+
+  // Created once for the hook's lifetime (not per socket connection/reconnect
+  // — a fresh controller on every reconnect would silently drop an in-flight
+  // "requesting"/"guiding" session). `sendJson` and `speak` both resolve
+  // against the live socket/voice settings at call time (socketRef.current,
+  // voiceGenderRef inside `speak`), so a single instance stays correct across
+  // reconnects and settings changes; only navController.reset() + setNavState
+  // below reset its navigation-specific state, on socket close.
+  const [navController] = useState(() =>
+    createNavigationController({
+      sendJson: (payload) => {
+        const socket = socketRef.current;
+        if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
+      },
+      speak,
+      onState: setNavState
+    })
+  );
 
   const {
     voiceLevel,
@@ -622,6 +650,12 @@ export function useHelmetAgent() {
             totalMs: Math.max(0, event.totalMs)
           });
         }
+        if (event.type === "device.command") {
+          navController.handleDeviceCommand(event);
+        }
+        if (event.type === "nav.route" || event.type === "nav.error") {
+          navController.handleAgentEvent(event);
+        }
         if (event.type === "error") setStatus(event.message);
       } catch {
         setStatus("收到异常代理消息");
@@ -637,6 +671,12 @@ export function useHelmetAgent() {
       socketRef.current = null;
       isLiveRef.current = false;
       providerReadyRef.current = false;
+      // reset() clears the controller's own navigation state but never calls
+      // onState (see its doc comment) — without this explicit setNavState,
+      // the last "guiding"/"requesting" card would survive the disconnect as
+      // a phantom HUD element.
+      navController.reset();
+      setNavState({ phase: "idle" });
       if (intentionalCloseRef.current) {
         setStatus("离线");
         return;
@@ -673,7 +713,7 @@ export function useHelmetAgent() {
       setConnectionState("degraded");
       setStatus("连接错误");
     });
-  }, [playPcm16, pushTranscript, setPacketStats, speak, stopAgentSpeech, stopMic]);
+  }, [navController, playPcm16, pushTranscript, setPacketStats, speak, stopAgentSpeech, stopMic]);
 
   useEffect(() => {
     connectRef.current = connect;
@@ -873,6 +913,27 @@ export function useHelmetAgent() {
     }
   }, []);
 
+  // 演示导航/演示偏航: walks a route without a real GPS fix, for QA and demos.
+  // Uses the currently guided route's polyline when one exists, so a demo
+  // started mid-ride continues on the real destination; otherwise falls back
+  // to MOCK_ROUTE (the manual-QA flow starts the walk before the rider has
+  // asked for a destination at all).
+  const startNavDemo = useCallback(
+    (detour: boolean) => {
+      navSimulatorRef.current?.stop();
+      const route = navState.phase === "guiding" ? navState.route : MOCK_ROUTE;
+      const simulator = createRideSimulator({ route, onPosition: navController.updatePosition });
+      navSimulatorRef.current = simulator;
+      simulator.start(detour);
+    },
+    [navController, navState]
+  );
+
+  const stopNavDemo = useCallback(() => {
+    navSimulatorRef.current?.stop();
+    navSimulatorRef.current = null;
+  }, []);
+
   // Tester flags a bad turn. Works only while the relay session is live (the
   // relay attaches the flag to the matching server-side transcript turn);
   // returns false so the UI can explain instead of silently dropping it.
@@ -1040,6 +1101,7 @@ export function useHelmetAgent() {
     releaseMic();
     stopAgentSpeech();
     closePlayback();
+    stopNavDemo();
     socketRef.current?.close();
     socketRef.current = null;
     providerReadyRef.current = false;
@@ -1047,7 +1109,7 @@ export function useHelmetAgent() {
     setConnectionState("offline");
     setTurnState("idle");
     setStatus("离线");
-  }, [closePlayback, releaseMic, stopAgentSpeech, stopMic]);
+  }, [closePlayback, releaseMic, stopAgentSpeech, stopMic, stopNavDemo]);
 
   useEffect(() => () => disconnect(), [disconnect]);
 
@@ -1067,6 +1129,9 @@ export function useHelmetAgent() {
         const next = { lat: position.coords.latitude, lon: position.coords.longitude };
         // Future session.starts (settings-change restarts) carry fresh coords too.
         locationRef.current = next;
+        // Every real fix feeds guidance, independent of the throttled
+        // location.update send below (which exists only to refetch weather).
+        navController.updatePosition(next);
         const now = Date.now();
         if (now - lastSentAt < LOCATION_UPDATE_MIN_INTERVAL_MS) return;
         if (lastSent && approxDistanceKm(lastSent, next) < LOCATION_UPDATE_MIN_MOVE_KM) return;
@@ -1084,7 +1149,7 @@ export function useHelmetAgent() {
     );
 
     return () => navigator.geolocation.clearWatch(watchId);
-  }, [listening]);
+  }, [listening, navController]);
 
   // Keep the screen awake while a hands-free session is active. Mobile browsers
   // (iOS Safari 16.4+, Android Chrome) dim and then lock the screen on idle,
@@ -1163,6 +1228,9 @@ export function useHelmetAgent() {
     locationPermission,
     audioProcessing,
     guidedDemo,
+    navState,
+    startNavDemo,
+    stopNavDemo,
     setVoiceGender,
     setVoicePersonality,
     setTesterId,

@@ -7,12 +7,15 @@
 // are ignored, not errors, so older clients tolerate newer relays).
 
 import { ADAS_DIRECTIONS, ADAS_THREATS, type AdasDirection, type AdasSeverity, type AdasThreat } from "./adas";
-import type { AgentEvent, ConnectionState, ProviderCapabilities } from "./agent";
+import type { AgentEvent, ConnectionState, NavManeuver, ProviderCapabilities } from "./agent";
 import type { DemoScenario, RideMode } from "./ride";
 import { MAX_MEMORY_DESTINATION_CHARS } from "./session";
 import { SERVER_EVENT_REQUIRED_FIELDS, SERVER_EVENT_TYPES } from "./generated/agent-protocol";
+import type { DeviceActionName, DeviceActionTier } from "../server/device-actions";
 
 const CONNECTION_STATES = new Set(["offline", "connecting", "relay", "provider", "ready", "degraded"]);
+const DEVICE_ACTION_TIERS = new Set(["low", "high"]);
+const NAV_ERROR_CODES = new Set(["destination.notFound", "route.unavailable"]);
 const PROVIDER_MODES = new Set(["mock", "live"]);
 const SPEAKERS = new Set(["rider", "agent"]);
 const HAZARD_LEVELS = new Set(["normal", "caution", "critical"]);
@@ -57,6 +60,20 @@ function finiteOrUndefined(
 
 function enumOrUndefined<T extends string>(value: unknown, allowed: Set<string>): T | undefined {
   return isString(value) && allowed.has(value) ? (value as T) : undefined;
+}
+
+function isGeoPoint(value: unknown): value is { lat: number; lon: number } {
+  return isRecord(value) && isFiniteNumber(value.lat) && isFiniteNumber(value.lon);
+}
+
+function isNavManeuver(value: unknown): value is NavManeuver {
+  return (
+    isRecord(value) &&
+    isString(value.instruction) &&
+    isFiniteNumber(value.lat) &&
+    isFiniteNumber(value.lon) &&
+    isFiniteNumber(value.alongRouteMeters)
+  );
 }
 
 /**
@@ -215,6 +232,50 @@ export function validateAgentEvent(value: unknown): AgentEvent | null {
         ttcSeconds: finiteInRange(value.ttcSeconds, 6, 0, 300),
         interrupt: value.interrupt === true
       };
+    }
+
+    case "device.command": {
+      // Web has no handler for most actions yet (Task 8 wires navigation.*
+      // only); other actions pass through unconsumed rather than being
+      // rejected here, matching how iOS/RDK dispatchers no-op on the unknown.
+      if (!isString(value.commandId) || !value.commandId) return null;
+      if (!isString(value.action)) return null;
+      if (!isRecord(value.args)) return null;
+      const tier = enumOrUndefined<DeviceActionTier>(value.tier, DEVICE_ACTION_TIERS);
+      if (!tier) return null;
+      return {
+        type: "device.command",
+        commandId: value.commandId,
+        action: value.action as DeviceActionName,
+        args: value.args,
+        tier
+      };
+    }
+
+    case "nav.route": {
+      if (!isString(value.commandId) || !value.commandId) return null;
+      if (!isString(value.destinationName)) return null;
+      if (!isGeoPoint(value.destination)) return null;
+      if (!isFiniteNumber(value.distanceMeters) || !isFiniteNumber(value.etaSeconds)) return null;
+      if (!Array.isArray(value.polyline) || !value.polyline.every(isGeoPoint)) return null;
+      if (!Array.isArray(value.steps) || !value.steps.every(isNavManeuver)) return null;
+      return {
+        type: "nav.route",
+        commandId: value.commandId,
+        destinationName: value.destinationName,
+        destination: value.destination,
+        distanceMeters: value.distanceMeters,
+        etaSeconds: value.etaSeconds,
+        polyline: value.polyline,
+        steps: value.steps
+      };
+    }
+
+    case "nav.error": {
+      if (!isString(value.commandId) || !value.commandId) return null;
+      const code = enumOrUndefined<"destination.notFound" | "route.unavailable">(value.code, NAV_ERROR_CODES);
+      if (!code) return null;
+      return { type: "nav.error", commandId: value.commandId, code };
     }
 
     case "error": {

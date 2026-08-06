@@ -1,22 +1,24 @@
-import { ChatCircleText, GearSix, Microphone, X } from "@phosphor-icons/react";
+import { ArrowBendUpRight, ChatCircleText, GearSix, Microphone, NavigationArrow, X } from "@phosphor-icons/react";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { adasDirectionLabel } from "../shared/adas";
 import { combineHazardLevels } from "../shared/ride";
 import { HelmetVisual, VoiceStateReadout } from "./components/HelmetVisual";
 import { LoginGate } from "./components/LoginGate";
+import { NavigationPanel } from "./components/NavigationPanel";
 import { VoiceTranscript } from "./components/VoiceTranscript";
 import { WebSettingsSheet } from "./components/WebSettingsSheet";
 import { LanguageProvider, useLanguage } from "./components/LanguageToggle";
 import { surfaceAfterAuthentication, type AppSurface } from "./components/admin/admin-model";
 import { useHelmetAgent } from "./hooks/useHelmetAgent";
 import { fetchCurrentUser, type AuthUser } from "./lib/auth";
+import { localized } from "./lib/i18n";
 
 const AdminWorkspace = lazy(() =>
   import("./components/admin/AdminWorkspace").then((module) => ({ default: module.AdminWorkspace }))
 );
 
 function AppContent() {
-  const { t } = useLanguage();
+  const { language, t } = useLanguage();
   const agent = useHelmetAgent();
   const { listening, starting, startMic, stopMic } = agent;
   const [surface, setSurface] = useState<AppSurface>("voice");
@@ -209,6 +211,8 @@ function AppContent() {
 
         <VoiceStateReadout connected={agent.connected} turnState={agent.turnState} hazardLevel={fusedHazard} />
 
+        {agent.navState.phase !== "idle" ? <NavigationPanel state={agent.navState} /> : null}
+
         {captionsOpen ? <VoiceTranscript agent={agent} /> : null}
 
         <nav className="voiceUtilities" aria-label={t("voice.viewLabel")}>
@@ -221,6 +225,18 @@ function AppContent() {
             <ChatCircleText size={20} weight="regular" aria-hidden="true" />
             {t("voice.captions")}
           </button>
+          {agent.provider === "mock" ? (
+            <button type="button" onClick={() => agent.startNavDemo(false)}>
+              <NavigationArrow size={20} weight="regular" aria-hidden="true" />
+              {localized(language, "演示导航", "Demo navigate")}
+            </button>
+          ) : null}
+          {agent.provider === "mock" ? (
+            <button type="button" onClick={() => agent.startNavDemo(true)}>
+              <ArrowBendUpRight size={20} weight="regular" aria-hidden="true" />
+              {localized(language, "演示偏航", "Demo detour")}
+            </button>
+          ) : null}
           <button ref={settingsButtonRef} type="button" onClick={openSettings} aria-haspopup="dialog">
             <GearSix size={20} weight="regular" aria-hidden="true" />
             {t("voice.settings")}

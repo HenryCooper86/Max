@@ -280,6 +280,35 @@ export function parseClientEvent(data: RawData): ClientEvent {
     return { type: "camera.frame", commandId: value.commandId, image: value.image };
   }
 
+  if (value.type === "nav.request") {
+    if (typeof value.commandId !== "string" || !value.commandId.trim() || value.commandId.length > 120) {
+      throw new Error("Invalid nav.request commandId");
+    }
+    if (value.reason !== "start" && value.reason !== "reroute") throw new Error("Invalid nav.request reason");
+    const origin = value.origin as Record<string, unknown> | undefined;
+    if (!origin || typeof origin !== "object") throw new Error("Invalid nav.request origin");
+    assertCoordinate(origin.lat, -90, 90, "lat");
+    assertCoordinate(origin.lon, -180, 180, "lon");
+    if (value.reason === "start") {
+      if (typeof value.query !== "string" || !value.query.trim() || Buffer.byteLength(value.query) > 256) {
+        throw new Error("Invalid nav.request query");
+      }
+    } else {
+      const destination = value.destination as Record<string, unknown> | undefined;
+      if (!destination || typeof destination !== "object") throw new Error("Invalid nav.request destination");
+      assertCoordinate(destination.lat, -90, 90, "lat");
+      assertCoordinate(destination.lon, -180, 180, "lon");
+      if (
+        typeof value.destinationName !== "string" ||
+        !value.destinationName.trim() ||
+        Buffer.byteLength(value.destinationName) > 256
+      ) {
+        throw new Error("Invalid nav.request destinationName");
+      }
+    }
+    return value as ClientEvent;
+  }
+
   if (value.type === "testing.metric") {
     const metric = (field: string, max: number) => {
       const candidate = value[field];

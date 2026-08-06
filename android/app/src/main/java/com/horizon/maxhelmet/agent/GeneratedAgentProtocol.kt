@@ -14,7 +14,8 @@ object ClientEventTypes {
     const val CAMERA_FRAME = "camera.frame"
     const val CRASH_ALERT = "crash.alert"
     const val CRASH_CANCEL = "crash.cancel"
-    val all: Set<String> = setOf(SESSION_START, AUDIO_START, AUDIO_STOP, DEMO_GUIDED, LOCATION_UPDATE, TESTING_METRIC, TURN_FEEDBACK, DEVICE_RESULT, HAZARD_REPORT, CAMERA_FRAME, CRASH_ALERT, CRASH_CANCEL)
+    const val NAV_REQUEST = "nav.request"
+    val all: Set<String> = setOf(SESSION_START, AUDIO_START, AUDIO_STOP, DEMO_GUIDED, LOCATION_UPDATE, TESTING_METRIC, TURN_FEEDBACK, DEVICE_RESULT, HAZARD_REPORT, CAMERA_FRAME, CRASH_ALERT, CRASH_CANCEL, NAV_REQUEST)
 }
 
 object ServerEventTypes {
@@ -32,7 +33,9 @@ object ServerEventTypes {
     const val ERROR = "error"
     const val CRASH_ACK = "crash.ack"
     const val CRASH_SIMULATE = "crash.simulate"
-    val all: Set<String> = setOf(SESSION_STARTED, CONNECTION, STATUS, TRANSCRIPT, METRIC, WEATHER, RIDE_CONTEXT, SESSION_MEMORY, TELEMETRY, HAZARD_ALERT, DEVICE_COMMAND, ERROR, CRASH_ACK, CRASH_SIMULATE)
+    const val NAV_ROUTE = "nav.route"
+    const val NAV_ERROR = "nav.error"
+    val all: Set<String> = setOf(SESSION_STARTED, CONNECTION, STATUS, TRANSCRIPT, METRIC, WEATHER, RIDE_CONTEXT, SESSION_MEMORY, TELEMETRY, HAZARD_ALERT, DEVICE_COMMAND, ERROR, CRASH_ACK, CRASH_SIMULATE, NAV_ROUTE, NAV_ERROR)
 }
 
 val SERVER_EVENT_REQUIRED_FIELDS: Map<String, Set<String>> = mapOf(
@@ -49,5 +52,7 @@ val SERVER_EVENT_REQUIRED_FIELDS: Map<String, Set<String>> = mapOf(
         "device.command" to setOf("type", "commandId", "action", "args", "tier"),
         "error" to setOf("type", "message"),
         "crash.ack" to setOf("type", "incidentId", "status"),
-        "crash.simulate" to setOf("type")
+        "crash.simulate" to setOf("type"),
+        "nav.route" to setOf("type", "commandId", "destinationName", "destination", "distanceMeters", "etaSeconds", "polyline", "steps"),
+        "nav.error" to setOf("type", "commandId", "code")
 )

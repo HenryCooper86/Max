@@ -12,7 +12,8 @@ export const CLIENT_EVENT_TYPES = [
   "hazard.report",
   "camera.frame",
   "crash.alert",
-  "crash.cancel"
+  "crash.cancel",
+  "nav.request"
 ] as const;
 
 export const SERVER_EVENT_TYPES = [
@@ -29,7 +30,9 @@ export const SERVER_EVENT_TYPES = [
   "device.command",
   "error",
   "crash.ack",
-  "crash.simulate"
+  "crash.simulate",
+  "nav.route",
+  "nav.error"
 ] as const;
 
 export const SERVER_EVENT_REQUIRED_FIELDS = {
@@ -107,5 +110,20 @@ export const SERVER_EVENT_REQUIRED_FIELDS = {
   ],
   "crash.simulate": [
     "type"
+  ],
+  "nav.route": [
+    "type",
+    "commandId",
+    "destinationName",
+    "destination",
+    "distanceMeters",
+    "etaSeconds",
+    "polyline",
+    "steps"
+  ],
+  "nav.error": [
+    "type",
+    "commandId",
+    "code"
   ]
 } as const;

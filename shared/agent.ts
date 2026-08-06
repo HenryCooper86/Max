@@ -297,7 +297,45 @@ export type ClientEvent =
       // sends the false-alarm follow-up so the contact stops worrying.
       type: "crash.cancel";
       incidentId: string;
-    };
+    }
+  | NavRequestEvent;
+
+export type NavManeuver = { instruction: string; lat: number; lon: number; alongRouteMeters: number };
+
+/** Client → server: ask the relay to route the rider. `origin` and, when
+ *  present, `destination` are GCJ-02, like every nav.* coordinate. */
+export type NavRequestEvent = {
+  type: "nav.request";
+  commandId: string;
+  reason: "start" | "reroute";
+  /** GCJ-02, like every nav.* coordinate. */
+  origin: { lat: number; lon: number };
+  /** reason "start": the spoken destination phrase. */
+  query?: string;
+  /** reason "reroute": the destination nav.route previously announced. */
+  destination?: { lat: number; lon: number };
+  destinationName?: string;
+};
+
+/** Server → client: the relay resolved a `nav.request` into a route.
+ *  Every coordinate here is GCJ-02, like every nav.* coordinate. */
+export type NavRouteEvent = {
+  type: "nav.route";
+  commandId: string;
+  destinationName: string;
+  destination: { lat: number; lon: number };
+  distanceMeters: number;
+  etaSeconds: number;
+  polyline: Array<{ lat: number; lon: number }>;
+  steps: NavManeuver[];
+};
+
+/** Server → client: the relay could not resolve or route a `nav.request`. */
+export type NavErrorEvent = {
+  type: "nav.error";
+  commandId: string;
+  code: "destination.notFound" | "route.unavailable";
+};
 
 export type AgentEvent =
   | {
@@ -390,7 +428,9 @@ export type AgentEvent =
       // promoting the client's detector straight to check-in. The embedded
       // board never receives this (it detects for real).
       type: "crash.simulate";
-    };
+    }
+  | NavRouteEvent
+  | NavErrorEvent;
 
 export type AgentHealth = {
   ok: boolean;

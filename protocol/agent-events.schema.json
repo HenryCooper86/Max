@@ -200,6 +200,29 @@
             "incidentId": { "type": "string", "minLength": 1 }
           },
           "required": ["type", "incidentId"]
+        },
+        {
+          "title": "NavRequest",
+          "type": "object",
+          "properties": {
+            "type": { "const": "nav.request" },
+            "commandId": { "type": "string", "minLength": 1 },
+            "reason": { "enum": ["start", "reroute"] },
+            "origin": {
+              "description": "GCJ-02, like every nav.* coordinate.",
+              "type": "object",
+              "properties": { "lat": { "type": "number" }, "lon": { "type": "number" } },
+              "required": ["lat", "lon"]
+            },
+            "query": { "type": "string" },
+            "destination": {
+              "type": "object",
+              "properties": { "lat": { "type": "number" }, "lon": { "type": "number" } },
+              "required": ["lat", "lon"]
+            },
+            "destinationName": { "type": "string" }
+          },
+          "required": ["type", "commandId", "reason", "origin"]
         }
       ]
     },
@@ -487,6 +510,64 @@
             "type": { "const": "crash.simulate" }
           },
           "required": ["type"]
+        },
+        {
+          "title": "NavRoute",
+          "type": "object",
+          "properties": {
+            "type": { "const": "nav.route" },
+            "commandId": { "type": "string", "minLength": 1 },
+            "destinationName": { "type": "string" },
+            "destination": {
+              "description": "GCJ-02, like every nav.* coordinate.",
+              "type": "object",
+              "properties": { "lat": { "type": "number" }, "lon": { "type": "number" } },
+              "required": ["lat", "lon"]
+            },
+            "distanceMeters": { "type": "number" },
+            "etaSeconds": { "type": "number" },
+            "polyline": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": { "lat": { "type": "number" }, "lon": { "type": "number" } },
+                "required": ["lat", "lon"]
+              }
+            },
+            "steps": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "instruction": { "type": "string" },
+                  "lat": { "type": "number" },
+                  "lon": { "type": "number" },
+                  "alongRouteMeters": { "type": "number" }
+                },
+                "required": ["instruction", "lat", "lon", "alongRouteMeters"]
+              }
+            }
+          },
+          "required": [
+            "type",
+            "commandId",
+            "destinationName",
+            "destination",
+            "distanceMeters",
+            "etaSeconds",
+            "polyline",
+            "steps"
+          ]
+        },
+        {
+          "title": "NavError",
+          "type": "object",
+          "properties": {
+            "type": { "const": "nav.error" },
+            "commandId": { "type": "string", "minLength": 1 },
+            "code": { "enum": ["destination.notFound", "route.unavailable"] }
+          },
+          "required": ["type", "commandId", "code"]
         }
       ]
     }

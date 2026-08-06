@@ -379,3 +379,33 @@ describe("DEVICE_ACTION_TIERS", () => {
     });
   });
 });
+
+describe("camera.look vision questions", () => {
+  it("keeps generic look phrases question-free (fixed prompt)", () => {
+    for (const phrase of ["你能看到什么", "看看前面", "what do you see"]) {
+      const command = extractDeviceCommand(phrase);
+      expect(command).toMatchObject({ action: "camera.look", args: {} });
+      expect(command?.args).not.toHaveProperty("question");
+    }
+  });
+
+  it("carries the raw utterance for specific questions", () => {
+    for (const phrase of ["前面那个路牌写的什么", "前方的标志是什么", "前面那辆车是什么样", "what is that ahead"]) {
+      const command = extractDeviceCommand(phrase);
+      expect(command).toMatchObject({ action: "camera.look", args: { question: phrase } });
+    }
+  });
+
+  it("does not swallow gallery phrases", () => {
+    expect(extractDeviceCommand("看看相册")).toMatchObject({ action: "gallery.open" });
+    expect(extractDeviceCommand("打开相册")).toMatchObject({ action: "gallery.open" });
+  });
+
+  it("threads the question through PendingDeviceCommands.issue", () => {
+    const pending = new PendingDeviceCommands();
+    const issued = pending.issue("camera.look", "我看看…", Date.now(), "路牌写的什么");
+    expect(pending.peek(issued.commandId)?.question).toBe("路牌写的什么");
+    const plain = pending.issue("torch.set", "好的");
+    expect(pending.peek(plain.commandId)?.question).toBeUndefined();
+  });
+});

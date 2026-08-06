@@ -40,7 +40,7 @@ type DeviceCommand =
   | { action: "destination.show"; args: { query: string } }
   | { action: "camera.photo"; args: Record<string, never> }
   | { action: "camera.record"; args: { start: boolean } }
-  | { action: "camera.look"; args: Record<string, never> }
+  | { action: "camera.look"; args: { question?: string } }
   | { action: "gallery.open"; args: Record<string, never> }
   | { action: "navigation.start"; args: { query: string } }
   | { action: "navigation.stop"; args: Record<string, never> }
@@ -245,7 +245,12 @@ function matchCamera(raw: string): DeviceCommand | null {
   ) {
     return { action: "camera.record", args: { start: true } };
   }
-  if (/(你能?看到?什么|前面是什么|看看前面|看一下前面)/.test(raw) || /what\s+(do|can)\s+you\s+see/i.test(raw)) {
+  const visionQuestionPattern =
+    /(前面|前方).{0,8}(是什么|什么样|写的什么|写着什么)|(路牌|标志|招牌|牌子).{0,6}(写的什么|写着什么|是什么)/;
+  if (visionQuestionPattern.test(raw) || /what('s| is)\s+(that|ahead)/i.test(raw)) {
+    return { action: "camera.look", args: { question: raw } };
+  }
+  if (/(你能?看到?什么|看看前面|看一下前面)/.test(raw) || /what\s+(do|can)\s+you\s+see/i.test(raw)) {
     return { action: "camera.look", args: {} };
   }
   if (/(拍照|拍个?照|拍张?照片?|照相)/.test(raw) || /take\s+a\s+(photo|picture|pic)/i.test(raw)) {
@@ -452,14 +457,15 @@ export type IssuedDeviceCommand = {
   issuedAt: number;
   /** Deterministic confirmation to speak on success; see deviceSuccessSpeech. */
   okSpeech?: string;
+  question?: string;
 };
 
 /** Tracks dispatched commands so no command can be left pending forever. */
 export class PendingDeviceCommands {
   private readonly pending = new Map<string, IssuedDeviceCommand>();
 
-  issue(action: DeviceActionName, okSpeech?: string, now: number = Date.now()): IssuedDeviceCommand {
-    const issued: IssuedDeviceCommand = { commandId: randomUUID(), action, issuedAt: now, okSpeech };
+  issue(action: DeviceActionName, okSpeech?: string, now: number = Date.now(), question?: string): IssuedDeviceCommand {
+    const issued: IssuedDeviceCommand = { commandId: randomUUID(), action, issuedAt: now, okSpeech, question };
     this.pending.set(issued.commandId, issued);
     return issued;
   }

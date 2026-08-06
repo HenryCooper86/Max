@@ -29,5 +29,10 @@ describe("selectRouteProvider", () => {
     expect(warnings.length).toBe(0);
     expect(selectRouteProvider("", log).mode).toBe("mock");
     expect(warnings.length).toBe(1);
+    // The once-per-process latch is intentional: sessions re-select on every
+    // connection, so a per-session warn would spam the log. The latch implements
+    // startup semantics — the warning surfaces once per process, not per selection.
+    expect(selectRouteProvider("", log).mode).toBe("mock");
+    expect(warnings.length).toBe(1);
   });
 });

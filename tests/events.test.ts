@@ -204,4 +204,90 @@ describe("validateAgentEvent", () => {
     });
     expect(validateAgentEvent({ type: "session.memory", language: "fr", responseMode: "concise" })).toBeNull();
   });
+
+  it("validates device.command and preserves action/args/tier", () => {
+    const event = validateAgentEvent({
+      type: "device.command",
+      commandId: "cmd-1",
+      action: "navigation.start",
+      args: { query: "外滩" },
+      tier: "low"
+    });
+    expect(event).toEqual({
+      type: "device.command",
+      commandId: "cmd-1",
+      action: "navigation.start",
+      args: { query: "外滩" },
+      tier: "low"
+    });
+  });
+
+  it("rejects a device.command missing commandId or with an invalid tier", () => {
+    expect(
+      validateAgentEvent({ type: "device.command", action: "navigation.start", args: {}, tier: "low" })
+    ).toBeNull();
+    expect(
+      validateAgentEvent({
+        type: "device.command",
+        commandId: "cmd-1",
+        action: "navigation.start",
+        args: {},
+        tier: "urgent"
+      })
+    ).toBeNull();
+  });
+
+  it("validates a nav.route event and preserves its route data", () => {
+    const event = validateAgentEvent({
+      type: "nav.route",
+      commandId: "c1",
+      destinationName: "外滩",
+      destination: { lat: 31.2364, lon: 121.4782 },
+      distanceMeters: 1094,
+      etaSeconds: 240,
+      polyline: [
+        { lat: 31.2304, lon: 121.4737 },
+        { lat: 31.2364, lon: 121.4782 }
+      ],
+      steps: [{ instruction: "右转进入南京东路", lat: 31.2364, lon: 121.4737, alongRouteMeters: 666 }]
+    });
+    expect(event).toMatchObject({
+      type: "nav.route",
+      commandId: "c1",
+      destinationName: "外滩",
+      distanceMeters: 1094,
+      etaSeconds: 240
+    });
+  });
+
+  it("rejects a nav.route with a non-array polyline or a malformed maneuver", () => {
+    const base = {
+      type: "nav.route",
+      commandId: "c1",
+      destinationName: "外滩",
+      destination: { lat: 31.2364, lon: 121.4782 },
+      distanceMeters: 1094,
+      etaSeconds: 240,
+      steps: [] as unknown[]
+    };
+    expect(validateAgentEvent({ ...base, polyline: "not-an-array" })).toBeNull();
+    expect(
+      validateAgentEvent({
+        ...base,
+        polyline: [{ lat: 31.2304, lon: 121.4737 }],
+        // Missing lon/alongRouteMeters — a real maneuver the schematic can render on.
+        steps: [{ instruction: "右转" }]
+      })
+    ).toBeNull();
+  });
+
+  it("validates nav.error and rejects an unknown code or missing commandId", () => {
+    expect(validateAgentEvent({ type: "nav.error", commandId: "c1", code: "destination.notFound" })).toEqual({
+      type: "nav.error",
+      commandId: "c1",
+      code: "destination.notFound"
+    });
+    expect(validateAgentEvent({ type: "nav.error", commandId: "c1", code: "totally.unknown" })).toBeNull();
+    expect(validateAgentEvent({ type: "nav.error", code: "route.unavailable" })).toBeNull();
+  });
 });

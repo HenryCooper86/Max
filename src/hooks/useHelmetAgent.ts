@@ -1102,6 +1102,17 @@ export function useHelmetAgent() {
     stopAgentSpeech();
     closePlayback();
     stopNavDemo();
+    // The close-event handler's own navController.reset()/setNavState is
+    // gated on `socketRef.current !== socket` (stale-socket guard), but this
+    // function nulls socketRef.current synchronously below, BEFORE that
+    // async close event fires — so the guard trips and the handler's reset
+    // never runs. Every other piece of state this function tears down
+    // (setConnected/setConnectionState/setTurnState/setStatus) is
+    // re-implemented here for the identical reason; the nav reset must be
+    // too, or a logout mid-guidance leaves a phantom "guiding" card until
+    // the next full page reload.
+    navController.reset();
+    setNavState({ phase: "idle" });
     socketRef.current?.close();
     socketRef.current = null;
     providerReadyRef.current = false;
@@ -1109,7 +1120,7 @@ export function useHelmetAgent() {
     setConnectionState("offline");
     setTurnState("idle");
     setStatus("离线");
-  }, [closePlayback, releaseMic, stopAgentSpeech, stopMic, stopNavDemo]);
+  }, [closePlayback, navController, releaseMic, stopAgentSpeech, stopMic, stopNavDemo]);
 
   useEffect(() => () => disconnect(), [disconnect]);
 

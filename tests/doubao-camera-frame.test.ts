@@ -15,13 +15,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // issued for camera.look — never on a hand-rolled or reused id.
 //
 // describeFrame is mocked at the module boundary (server/vision.ts), not via
-// a stubbed global fetch: server/providers/doubao.ts builds describeFrame
-// once, at module load, via createDescriber({ ... }) with no explicit
-// fetchImpl — createDescriber's default parameter binds `fetchImpl` to
-// whatever `fetch` resolves to AT THAT MOMENT (import time), which is well
-// before any `vi.stubGlobal("fetch", ...)` a test could later perform. A
-// stubbed global therefore never reaches it. Mocking createDescriber's return
-// value sidesteps that entirely and is also a more direct seam for these tests.
+// a stubbed global fetch: server/providers/doubao.ts builds its vision
+// provider once, at module load, via selectVisionProvider({ ... }) with no
+// explicit fetchImpl — createArkVisionProvider's default parameter binds
+// `fetchImpl` to whatever `fetch` resolves to AT THAT MOMENT (import time),
+// which is well before any `vi.stubGlobal("fetch", ...)` a test could later
+// perform. A stubbed global therefore never reaches it. Mocking
+// selectVisionProvider's return value sidesteps that entirely and is also a
+// more direct seam for these tests.
 const { MockWebSocket, upstreamInstances } = vi.hoisted(() => {
   const upstreamInstances: MockWebSocket[] = [];
   class MockWebSocket {
@@ -59,7 +60,7 @@ vi.mock("ws", () => ({ WebSocket: MockWebSocket }));
 const { mockDescribeFrame } = vi.hoisted(() => ({ mockDescribeFrame: vi.fn() }));
 vi.mock("../server/vision", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../server/vision")>();
-  return { ...actual, createDescriber: () => mockDescribeFrame };
+  return { ...actual, selectVisionProvider: () => ({ mode: "mock" as const, describe: mockDescribeFrame }) };
 });
 
 import { createDoubaoProvider } from "../server/providers/doubao";
@@ -283,10 +284,42 @@ describe("camera.frame ignores an unrecognised commandId (I2a)", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(mockDescribeFrame).toHaveBeenCalledTimes(1);
-    expect(mockDescribeFrame).toHaveBeenCalledWith("AAAA");
+    expect(mockDescribeFrame).toHaveBeenCalledWith(["AAAA"], undefined);
     expect(
       clientEvents(send).some(
         (event) => event.type === "transcript" && event.speaker === "agent" && event.text === "前面是一条空路。"
+      )
+    ).toBe(true);
+
+    await controller.close();
+  });
+});
+
+describe("camera.frame threads the rider's question into the vision request", () => {
+  it("passes the camera.look question through to the vision provider's describe call", async () => {
+    stubWeatherFetch();
+    const { resolveVision } = gateDescribeFrame();
+    const { controller, send, upstream } = await startEmbeddedSession();
+
+    // Open the wake window with an explicit "Max", then ask the
+    // specific-question phrasing as an addressed follow-up with no repeated
+    // wake word — mirrors a live rider chaining a follow-up within
+    // WAKE_FOLLOWUP_WINDOW_MS — so the raw utterance captured as
+    // camera.look's question is exactly the question text, not "Max <question>".
+    await riderTurn(upstream, "Max 你好");
+    await riderTurn(upstream, "路牌写的什么");
+    const commandId = captureDeviceCommandId(send, "camera.look");
+
+    const cameraFrameBuffer = Buffer.from(JSON.stringify({ type: "camera.frame", commandId, image: "AAAA" }));
+    await controller.handleMessage(cameraFrameBuffer, false);
+    resolveVision("前方有一个蓝色路牌。");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(mockDescribeFrame).toHaveBeenCalledTimes(1);
+    expect(mockDescribeFrame).toHaveBeenCalledWith(["AAAA"], "路牌写的什么");
+    expect(
+      clientEvents(send).some(
+        (event) => event.type === "transcript" && event.speaker === "agent" && event.text === "前方有一个蓝色路牌。"
       )
     ).toBe(true);
 

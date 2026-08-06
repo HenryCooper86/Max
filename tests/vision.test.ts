@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildChatCompletionsEndpoint,
-  createDescriber,
   createArkVisionProvider,
   createMockVisionProvider,
   selectVisionProvider,
@@ -32,18 +31,22 @@ function reply(text: string) {
   } as unknown as Response;
 }
 
-function describer(overrides: Partial<Parameters<typeof createDescriber>[0]> = {}) {
+function describer(overrides: Partial<Parameters<typeof createArkVisionProvider>[0]> = {}) {
   const fetchImpl = vi.fn(async () => reply("前面是一条空路。"));
-  const describe_ = createDescriber({
+  const provider = createArkVisionProvider({
     apiKey: "key",
     model: "vision-model",
     fetchImpl: fetchImpl as unknown as typeof fetch,
     ...overrides
   });
-  return { describe: describe_, fetchImpl };
+  return { describe: (image: string) => provider.describe([image]), fetchImpl };
 }
 
-describe("createDescriber", () => {
+// Migrated from the old createDescriber (deleted — createArkVisionProvider is
+// its last consumer's replacement, driven single-frame here). Every
+// failure-class assertion the old suite made is preserved: missing key, HTTP
+// error, timeout, empty content, and malformed/network failure.
+describe("createArkVisionProvider (single frame, migrated from createDescriber)", () => {
   it("returns the description", async () => {
     const { describe: run } = describer();
     expect(await run("AAAA")).toBe("前面是一条空路。");
@@ -65,34 +68,50 @@ describe("createDescriber", () => {
     expect(parts.find((p: { type: string }) => p.type === "text").text).toMatch(/描述/);
   });
 
-  it("returns null without a key and never calls out", async () => {
+  it("returns null without a key and never calls out (missing key)", async () => {
     const fetchImpl = vi.fn();
-    const run = createDescriber({ model: "m", fetchImpl: fetchImpl as unknown as typeof fetch });
-    expect(await run("AAAA")).toBeNull();
+    const provider = createArkVisionProvider({ model: "m", fetchImpl: fetchImpl as unknown as typeof fetch });
+    expect(await provider.describe(["AAAA"])).toBeNull();
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("returns null when the service rejects", async () => {
+  it("returns null when the service rejects (HTTP error)", async () => {
     const { describe: run } = describer({
       fetchImpl: (async () => ({ ok: false, json: async () => ({}) })) as unknown as typeof fetch
     });
     expect(await run("AAAA")).toBeNull();
   });
 
-  it("returns null when the payload has no text", async () => {
+  it("returns null when the payload has no text (empty content)", async () => {
     const { describe: run } = describer({
       fetchImpl: (async () => ({ ok: true, json: async () => ({ choices: [] }) })) as unknown as typeof fetch
     });
     expect(await run("AAAA")).toBeNull();
   });
 
-  it("returns null when fetch throws", async () => {
+  it("returns null when fetch throws (malformed / network failure)", async () => {
     const { describe: run } = describer({
       fetchImpl: (async () => {
         throw new Error("network down");
       }) as unknown as typeof fetch
     });
     expect(await run("AAAA")).toBeNull();
+  });
+
+  it("returns null and reports 'timed out' when the request exceeds timeoutMs", async () => {
+    const reasons: string[] = [];
+    const hangingFetch = (async (_url: unknown, init?: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+      });
+    }) as unknown as typeof fetch;
+    const { describe: run } = describer({
+      timeoutMs: 5,
+      fetchImpl: hangingFetch,
+      onFailure: (reason) => reasons.push(reason)
+    });
+    expect(await run("AAAA")).toBeNull();
+    expect(reasons).toEqual(["timed out"]);
   });
 
   it("reports a reason on each failure", async () => {

@@ -25,7 +25,7 @@ import { createLogger, type Logger } from "../logger";
 import { metrics } from "../metrics";
 import { createSpeaker, createSynthesizer } from "../speech";
 import { createTranscriptDelivery, transcriptEvent } from "../transcript-events";
-import { buildChatCompletionsEndpoint, createDescriber } from "../vision";
+import { buildChatCompletionsEndpoint, selectVisionProvider } from "../vision";
 import { fetchRiderWeather } from "../weather";
 import {
   approxDistanceKm,
@@ -513,25 +513,30 @@ const synthesizeConfirmation = createSynthesizer({
 });
 
 // Same module-scope reasoning as synthesizeConfirmation above, minus the
-// cache: createDescriber never caches (a scene is never the same twice), so
-// there is nothing here that would go stale across sessions — this just
-// avoids reconstructing the closure on every WebSocket connection.
+// cache: the vision provider never caches (a scene is never the same
+// twice), so there is nothing here that would go stale across sessions —
+// this just avoids reconstructing it on every WebSocket connection.
 //
 // Credentials are ARK_API_KEY / ARK_BASE_URL / ARK_MODEL (Volcano Ark), not
 // DOUBAO_API_KEY — that key authenticates the realtime speech socket, not
 // Ark's chat-completions endpoint, and it is deliberately not used as a
 // fallback here (see server/vision.ts). Per Task 1's report, ARK_BASE_URL is
 // the base URL and the chat-completions path must be appended; when
-// ARK_BASE_URL is unset, createDescriber falls back to its own hardcoded
-// VISION_ENDPOINT constant (the same value, measured in Task 1).
+// ARK_BASE_URL is unset, selectVisionProvider falls back to its own
+// hardcoded VISION_ENDPOINT constant (the same value, measured in Task 1).
+// Without ARK_API_KEY/ARK_MODEL, selectVisionProvider falls back to the mock
+// provider (with a once-per-process warning) instead of failing every call.
 const visionLog = createLogger("vision");
 const arkBaseUrl = process.env.ARK_BASE_URL?.trim();
-const describeFrame = createDescriber({
-  apiKey: process.env.ARK_API_KEY,
-  model: process.env.ARK_MODEL,
-  endpoint: arkBaseUrl ? buildChatCompletionsEndpoint(arkBaseUrl) : undefined,
-  onFailure: (reason) => visionLog.warn("scene description failed", { reason })
-});
+const visionProvider = selectVisionProvider(
+  {
+    apiKey: process.env.ARK_API_KEY,
+    model: process.env.ARK_MODEL,
+    endpoint: arkBaseUrl ? buildChatCompletionsEndpoint(arkBaseUrl) : undefined,
+    onFailure: (reason) => visionLog.warn("scene description failed", { reason })
+  },
+  visionLog
+);
 
 export function createDoubaoProvider(
   client: WebSocket,
@@ -776,7 +781,12 @@ export function createDoubaoProvider(
   function dispatchDeviceCommand(text: string): void {
     const command = extractDeviceCommandForPlatform(text, sessionPlatform);
     if (!command) return;
-    const issued = pendingDeviceCommands.issue(command.action, deviceSuccessSpeech(command));
+    const issued = pendingDeviceCommands.issue(
+      command.action,
+      deviceSuccessSpeech(command),
+      Date.now(),
+      command.action === "camera.look" ? command.args.question : undefined
+    );
     sendClient({
       type: "device.command",
       commandId: issued.commandId,
@@ -1741,7 +1751,7 @@ export function createDoubaoProvider(
       // `.catch` is the backstop should that contract ever regress, so a
       // rejection here can never become an unhandled rejection.
       void (async () => {
-        const description = await describeFrame(event.image);
+        const description = await visionProvider.describe([event.image], issued.question);
         const line = description ?? "我看不清。";
         sendClient(transcriptEvent(delivery, "agent", line, { final: true, useBrowserSpeech: true }));
         void speaker.speak(line).catch(() => {});

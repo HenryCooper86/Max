@@ -31,16 +31,6 @@ export function buildChatCompletionsEndpoint(baseUrl: string): string {
 const DEFAULT_PROMPT = "用一句话描述这张照片里的场景，简洁自然，像对骑手说话。";
 const DEFAULT_TIMEOUT_MS = 10_000;
 
-export type DescriberOptions = {
-  apiKey?: string;
-  model?: string;
-  endpoint?: string;
-  prompt?: string;
-  fetchImpl?: typeof fetch;
-  timeoutMs?: number;
-  onFailure?: (reason: string) => void;
-};
-
 function parseArkContent(body: unknown): string | null {
   // UNVERIFIED response shape. `choices[0].message.content` is the
   // documented OpenAI-compatible shape for Ark's chat-completions endpoint,
@@ -57,68 +47,6 @@ function parseArkContent(body: unknown): string | null {
   const parsed = body as { choices?: { message?: { content?: string } }[] };
   const text = parsed.choices?.[0]?.message?.content?.trim();
   return text || null;
-}
-
-export function createDescriber(options: DescriberOptions): (imageBase64: string) => Promise<string | null> {
-  const {
-    apiKey,
-    model,
-    endpoint = VISION_ENDPOINT,
-    prompt = DEFAULT_PROMPT,
-    fetchImpl = fetch,
-    timeoutMs = DEFAULT_TIMEOUT_MS,
-    onFailure
-  } = options;
-
-  let loggedMissingKey = false;
-
-  return async function describe(imageBase64: string): Promise<string | null> {
-    if (!apiKey || !model) {
-      if (!loggedMissingKey) {
-        loggedMissingKey = true;
-        onFailure?.("not configured");
-      }
-      return null;
-    }
-
-    const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(), timeoutMs);
-    try {
-      const response = await fetchImpl(endpoint, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model,
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "text", text: prompt },
-                { type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}` } }
-              ]
-            }
-          ]
-        }),
-        signal: abort.signal
-      });
-      if (!response.ok) {
-        onFailure?.(`rejected — http ${response.status}`);
-        return null;
-      }
-      const body = await response.json();
-      const text = parseArkContent(body);
-      if (!text) {
-        onFailure?.("no description in the response");
-        return null;
-      }
-      return text;
-    } catch (error) {
-      onFailure?.(abort.signal.aborted ? "timed out" : `failed — ${String(error)}`);
-      return null;
-    } finally {
-      clearTimeout(timer);
-    }
-  };
 }
 
 export type VisionProvider = {

@@ -408,4 +408,29 @@ describe("camera.look vision questions", () => {
     const plain = pending.issue("torch.set", "好的");
     expect(pending.peek(plain.commandId)?.question).toBeUndefined();
   });
+
+  it("keeps navigation-intent phrases out of the vision grammar — guard prevents matchCamera from hijacking them before matchNavigation runs", () => {
+    // A phrase with both a nav verb and nearby question words must go to navigation, not vision.
+    // This probe-verified defect would have hijacked "导航去前面那个什么样的加油站" into camera.look.
+    expect(extractDeviceCommand("导航去前面那个什么样的加油站")).toMatchObject({
+      action: "navigation.start",
+      args: { query: "前面那个什么样的加油站" }
+    });
+  });
+
+  it("brings a 带我去 phrase out of vision grammar toward navigation", () => {
+    expect(extractDeviceCommand("带我去前面是什么路的那个路口")).toMatchObject({
+      action: "navigation.start",
+      args: { query: "前面是什么路的那个路口" }
+    });
+  });
+
+  it("distinguishes no-nav-verb vision questions from navigation phrases — the guard is verb-scoped", () => {
+    // Without a nav verb, "前面那个路口是什么路" is genuinely asking about what is visible, not
+    // requesting navigation. The guard must not exclude it; only the presence of 导航/带我去/怎么走 does.
+    expect(extractDeviceCommand("前面那个路口是什么路")).toMatchObject({
+      action: "camera.look",
+      args: { question: "前面那个路口是什么路" }
+    });
+  });
 });

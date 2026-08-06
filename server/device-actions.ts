@@ -245,12 +245,24 @@ function matchCamera(raw: string): DeviceCommand | null {
   ) {
     return { action: "camera.record", args: { start: true } };
   }
+  // matchCamera runs before matchNavigation. The vision question pattern is
+  // greedy and can catch navigation-intent phrases whose destination sits near a
+  // question word (e.g., "导航去前面那个什么样的加油站" would match the 前面/什么样
+  // part and hijack into camera.look). Exclude navigation verbs first so the
+  // phrase falls through to matchNavigation later.
+  const navigationIntent = /(导航|带我去|怎么走)/.test(raw);
+
+  // Specific-question branch runs before generic so a phrase matching both
+  // (e.g., "前面是什么") carries its question for the vision model.
   const visionQuestionPattern =
     /(前面|前方).{0,8}(是什么|什么样|写的什么|写着什么)|(路牌|标志|招牌|牌子).{0,6}(写的什么|写着什么|是什么)/;
-  if (visionQuestionPattern.test(raw) || /what('s| is)\s+(that|ahead)/i.test(raw)) {
+  if (!navigationIntent && (visionQuestionPattern.test(raw) || /what('s| is)\s+(that|ahead)/i.test(raw))) {
     return { action: "camera.look", args: { question: raw } };
   }
-  if (/(你能?看到?什么|看看前面|看一下前面)/.test(raw) || /what\s+(do|can)\s+you\s+see/i.test(raw)) {
+  if (
+    !navigationIntent &&
+    (/(你能?看到?什么|看看前面|看一下前面)/.test(raw) || /what\s+(do|can)\s+you\s+see/i.test(raw))
+  ) {
     return { action: "camera.look", args: {} };
   }
   if (/(拍照|拍个?照|拍张?照片?|照相)/.test(raw) || /take\s+a\s+(photo|picture|pic)/i.test(raw)) {

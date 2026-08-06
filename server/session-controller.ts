@@ -293,20 +293,33 @@ export function parseClientEvent(data: RawData): ClientEvent {
       if (typeof value.query !== "string" || !value.query.trim() || Buffer.byteLength(value.query) > 256) {
         throw new Error("Invalid nav.request query");
       }
-    } else {
-      const destination = value.destination as Record<string, unknown> | undefined;
-      if (!destination || typeof destination !== "object") throw new Error("Invalid nav.request destination");
-      assertCoordinate(destination.lat, -90, 90, "lat");
-      assertCoordinate(destination.lon, -180, 180, "lon");
-      if (
-        typeof value.destinationName !== "string" ||
-        !value.destinationName.trim() ||
-        Buffer.byteLength(value.destinationName) > 256
-      ) {
-        throw new Error("Invalid nav.request destinationName");
-      }
+      return {
+        type: "nav.request",
+        commandId: value.commandId,
+        reason: "start",
+        origin: { lat: origin.lat as number, lon: origin.lon as number },
+        query: value.query
+      };
     }
-    return value as ClientEvent;
+    const destination = value.destination as Record<string, unknown> | undefined;
+    if (!destination || typeof destination !== "object") throw new Error("Invalid nav.request destination");
+    assertCoordinate(destination.lat, -90, 90, "lat");
+    assertCoordinate(destination.lon, -180, 180, "lon");
+    if (
+      typeof value.destinationName !== "string" ||
+      !value.destinationName.trim() ||
+      Buffer.byteLength(value.destinationName) > 256
+    ) {
+      throw new Error("Invalid nav.request destinationName");
+    }
+    return {
+      type: "nav.request",
+      commandId: value.commandId,
+      reason: "reroute",
+      origin: { lat: origin.lat as number, lon: origin.lon as number },
+      destination: { lat: destination.lat as number, lon: destination.lon as number },
+      destinationName: value.destinationName
+    };
   }
 
   if (value.type === "testing.metric") {

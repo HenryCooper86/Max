@@ -63,12 +63,11 @@ export function createNavigationController(deps: {
   // First-off-route-detection-per-excursion latch; cleared once back on route.
   let offRouteAnnounced = false;
 
-  function sendResult(commandId: string, status: "ok" | "failed" | "denied", reason?: string): void {
-    deps.sendJson(
-      reason !== undefined
-        ? { type: "device.result", commandId, status, reason }
-        : { type: "device.result", commandId, status }
-    );
+  function sendResult(commandId: string, status: "ok" | "failed" | "denied", reason?: string, detail?: string): void {
+    const payload: Record<string, unknown> = { type: "device.result", commandId, status };
+    if (reason !== undefined) payload.reason = reason;
+    if (detail !== undefined) payload.detail = detail;
+    deps.sendJson(payload);
   }
 
   function emitIdle(): void {
@@ -93,6 +92,19 @@ export function createNavigationController(deps: {
     return pendingCommandId !== null || activeRoute !== null;
   }
 
+  /** Resolves a still-held navigation.start's device.result before it would
+   *  otherwise be silently dropped by a state reset (superseding start, or
+   *  stop while requesting). "Exactly one device.result per command; silence
+   *  is a bug" — leaving it unresolved would let the relay's own ~8s
+   *  silence-timeout speak an unrelated generic failure instead of the truth.
+   *  `detail` is what the relay actually speaks (reconciliation prefers
+   *  `result.detail` over the FAILURE_SPEECH map), so no server-side change
+   *  is needed for this to be heard correctly. No-op when nothing is held. */
+  function cancelHeldStart(): void {
+    if (pendingCommandId === null) return;
+    sendResult(pendingCommandId, "failed", "navigation.cancelled", "已取消导航请求。");
+  }
+
   /** Runs one guidance step from `lastFix` and pushes the resulting phase.
    *  Only called where `lastFix` is known-present (start-ack and reroute-ack
    *  both require a prior fix by construction). */
@@ -110,14 +122,13 @@ export function createNavigationController(deps: {
       return;
     }
     const query = typeof args.query === "string" ? args.query : "";
-    // Judgment call: navigation.start while a previous request/route is still
-    // active supersedes it outright. If the previous start's device.result
-    // was already held (never acked/failed), it stays unresolved forever from
-    // this controller's side rather than being falsely acked or invented a
-    // failure reason for — the relay's own device.result timeout is the
-    // documented fallback for silence (see shared/agent.ts DeviceResultEvent).
-    // Any late nav.route/nav.error answer for the dropped commandId will not
-    // match the new pendingCommandId and is ignored as stale (see below).
+    // navigation.start while a previous request/route is still active
+    // supersedes it outright. A still-held previous start is resolved FIRST
+    // (failed, "navigation.cancelled") — sent before this start's own
+    // nav.request — so its device.result is never silently dropped. Any late
+    // nav.route/nav.error answer for the dropped commandId will not match the
+    // new pendingCommandId and is ignored as stale (see below).
+    cancelHeldStart();
     resetNavigationState();
     pendingCommandId = commandId;
     deps.sendJson({
@@ -135,6 +146,10 @@ export function createNavigationController(deps: {
       sendResult(commandId, "failed", "navigation.notActive");
       return;
     }
+    // A held start (stop arriving while still "requesting") is resolved
+    // BEFORE the stop's own ok, so the spoken sequence is the cancellation
+    // followed by the stop confirmation, not the reverse.
+    cancelHeldStart();
     resetNavigationState();
     sendResult(commandId, "ok");
     emitIdle();

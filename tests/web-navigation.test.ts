@@ -98,4 +98,46 @@ describe("createNavigationController", () => {
     const { controller } = harness();
     expect(controller.handleDeviceCommand({ commandId: "x", action: "torch.set", args: { on: true } })).toBe(false);
   });
+
+  it("a superseding start resolves the held command before requesting anew", () => {
+    const { controller, sent } = harness();
+    controller.updatePosition({ lat: 31.2304, lon: 121.4737 });
+    controller.handleDeviceCommand({ commandId: "c1", action: "navigation.start", args: { query: "外滩" } });
+    controller.handleDeviceCommand({ commandId: "c2", action: "navigation.start", args: { query: "人民广场" } });
+    const cancelIndex = sent.findIndex(
+      (p) =>
+        p.type === "device.result" &&
+        p.commandId === "c1" &&
+        p.status === "failed" &&
+        p.reason === "navigation.cancelled"
+    );
+    const c2RequestIndex = sent.findIndex((p) => p.type === "nav.request" && p.commandId === "c2");
+    expect(cancelIndex).toBeGreaterThanOrEqual(0);
+    expect(c2RequestIndex).toBeGreaterThan(cancelIndex);
+    controller.handleAgentEvent({ ...routeEvent, commandId: "c2" } as never);
+    expect(sent.at(-1)).toMatchObject({ type: "device.result", commandId: "c2", status: "ok" });
+  });
+
+  it("stop during requesting resolves the held start then acks the stop", () => {
+    const { controller, sent, states } = harness();
+    controller.updatePosition({ lat: 31.2304, lon: 121.4737 });
+    controller.handleDeviceCommand({ commandId: "c1", action: "navigation.start", args: { query: "外滩" } });
+    controller.handleDeviceCommand({ commandId: "s1", action: "navigation.stop", args: {} });
+    const results = sent.filter((p) => p.type === "device.result");
+    expect(results).toEqual([
+      {
+        type: "device.result",
+        commandId: "c1",
+        status: "failed",
+        reason: "navigation.cancelled",
+        detail: "已取消导航请求。"
+      },
+      { type: "device.result", commandId: "s1", status: "ok" }
+    ]);
+    expect(states.at(-1)).toBe("idle");
+    const requestCountBefore = sent.filter((p) => p.type === "nav.request").length;
+    controller.handleAgentEvent(routeEvent as never); // late answer for the cancelled c1 — must be ignored
+    expect(sent.filter((p) => p.type === "nav.request").length).toBe(requestCountBefore);
+    expect(sent.filter((p) => p.type === "device.result").length).toBe(2);
+  });
 });

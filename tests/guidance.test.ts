@@ -1,0 +1,85 @@
+import { describe, expect, it } from "vitest";
+import { INITIAL_PROGRESS, haversineMeters, step } from "../shared/guidance";
+import type { NavRouteEvent } from "../shared/agent";
+
+const route: NavRouteEvent = {
+  type: "nav.route",
+  commandId: "t",
+  destinationName: "测试终点",
+  destination: { lat: 31.24, lon: 121.47 },
+  distanceMeters: 1109,
+  etaSeconds: 240,
+  polyline: [
+    { lat: 31.23, lon: 121.47 },
+    { lat: 31.235, lon: 121.47 },
+    { lat: 31.24, lon: 121.47 }
+  ],
+  steps: [
+    { instruction: "右转", lat: 31.235, lon: 121.47, alongRouteMeters: 555 },
+    { instruction: "到达终点", lat: 31.24, lon: 121.47, alongRouteMeters: 1109 }
+  ]
+};
+
+describe("haversineMeters", () => {
+  it("measures ~1109 m across the test route", () => {
+    expect(haversineMeters({ lat: 31.23, lon: 121.47 }, { lat: 31.24, lon: 121.47 })).toBeCloseTo(1109, -1);
+  });
+});
+
+describe("step", () => {
+  it("reports distance to the first maneuver from the start", () => {
+    const u = step({ lat: 31.23, lon: 121.47 }, route, INITIAL_PROGRESS);
+    expect(u.distanceToManeuverMeters).toBeGreaterThan(540);
+    expect(u.distanceToManeuverMeters).toBeLessThan(570);
+    expect(u.offRoute).toBe(false);
+    expect(u.spokenPrompt).toBeNull(); // 555 m > far threshold
+    expect(u.currentInstruction).toBe("右转");
+  });
+
+  it("fires far once, then near once, then now once", () => {
+    let progress = INITIAL_PROGRESS;
+    const at = (lat: number) => {
+      const u = step({ lat, lon: 121.47 }, route, progress);
+      progress = u.progress;
+      return u;
+    };
+    expect(at(31.232).spokenPrompt).toMatch(/^前方\d+米，右转$/); // ~333 m → far
+    expect(at(31.2325).spokenPrompt).toBeNull(); // far already fired
+    expect(at(31.234).spokenPrompt).toMatch(/^前方\d+米，右转$/); // ~111 m → near
+    expect(at(31.2348).spokenPrompt).toBe("右转"); // ~22 m → now
+    expect(at(31.2349).spokenPrompt).toBeNull();
+  });
+
+  it("advances past the maneuver and clears thresholds", () => {
+    let progress = INITIAL_PROGRESS;
+    for (const lat of [31.232, 31.234, 31.2348, 31.2355]) {
+      progress = step({ lat, lon: 121.47 }, route, progress).progress;
+    }
+    expect(progress.maneuverIndex).toBe(1);
+    const u = step({ lat: 31.2355, lon: 121.47 }, route, progress);
+    expect(u.currentInstruction).toBe("到达终点");
+  });
+
+  it("flags off-route beyond 50 m cross-track", () => {
+    // 0.001° lon at lat 31.23 ≈ 95 m east of the line.
+    const u = step({ lat: 31.232, lon: 121.471 }, route, INITIAL_PROGRESS);
+    expect(u.offRoute).toBe(true);
+    expect(u.spokenPrompt).toBeNull(); // no prompts while off-route
+  });
+
+  it("arrives within 30 m of the destination", () => {
+    let progress = INITIAL_PROGRESS;
+    for (const lat of [31.232, 31.234, 31.2348, 31.2355, 31.2398]) {
+      progress = step({ lat, lon: 121.47 }, route, progress).progress;
+    }
+    expect(progress.arrived).toBe(true);
+  });
+
+  it("scales remaining time from remaining distance", () => {
+    const u = step({ lat: 31.235, lon: 121.47 }, route, INITIAL_PROGRESS);
+    expect(u.remainingMeters).toBeGreaterThan(520);
+    expect(u.remainingMeters).toBeLessThan(590);
+    expect(u.remainingSeconds).toBeGreaterThan(110);
+    expect(u.remainingSeconds).toBeLessThan(130);
+  });
+});

@@ -190,6 +190,12 @@ export function createNavHandler(options: {
 
   return async function handleNavRequest(event: NavRequestEvent): Promise<void> {
     if (event.reason === "start") {
+      // A new navigation session must never inherit the previous cache —
+      // success or failure — or a reroute that lands seconds later (still
+      // inside the guard window) could silently resend turn-by-turn for the
+      // stale, now-irrelevant destination.
+      lastRoute = undefined;
+      lastRerouteAt = undefined;
       const resolved = await provider.resolveDestination(event.query ?? "", event.origin);
       if (!resolved) {
         send({ type: "nav.error", commandId: event.commandId, code: "destination.notFound" });
@@ -208,8 +214,19 @@ export function createNavHandler(options: {
 
     // reason: "reroute" — inside the quota-guard window, resend the cached
     // route unchanged (with the new commandId) instead of calling the
-    // provider again.
-    if (lastRoute && lastRerouteAt !== undefined && now() - lastRerouteAt < minRerouteIntervalMs) {
+    // provider again. Only when the request targets the SAME destination as
+    // the cache: the client echoes nav.route's destination verbatim, so an
+    // exact match means "still routing to what we already answered" and a
+    // mismatch means the rider (or app) asked for somewhere new, which must
+    // always get a fresh plan rather than the old destination's turn-by-turn.
+    if (
+      lastRoute &&
+      lastRerouteAt !== undefined &&
+      now() - lastRerouteAt < minRerouteIntervalMs &&
+      event.destination &&
+      event.destination.lat === lastRoute.destination.lat &&
+      event.destination.lon === lastRoute.destination.lon
+    ) {
       send({ ...lastRoute, commandId: event.commandId });
       return;
     }

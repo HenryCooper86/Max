@@ -86,7 +86,14 @@ export const config = {
   authAttemptsPerMinute: resolveBoundedInt(process.env.AUTH_ATTEMPTS_PER_MINUTE, 10, 3, 1000),
   // Crash escalation delivery channel. Only "log" exists today: incidents are
   // audited but nobody is texted, and the ack says so honestly.
-  crashNotifier: process.env.CRASH_NOTIFIER?.trim().toLowerCase() || "log"
+  crashNotifier: process.env.CRASH_NOTIFIER?.trim().toLowerCase() || "log",
+  // Amap Web 服务 key for relay-side routing. Empty selects the mock route
+  // provider, so navigation demos keylessly like the mock voice provider.
+  amapApiKey: process.env.AMAP_API_KEY?.trim() ?? "",
+  // Web 端 (JS API) key served to the browser HUD; the map panel hides without it.
+  amapJsKey: process.env.AMAP_JS_KEY?.trim() ?? "",
+  // JS API 安全密钥 — used only inside the /_AMapService proxy, never sent to a client.
+  amapJsSecret: process.env.AMAP_JS_SECRET?.trim() ?? ""
 };
 
 function resolveBoundedInt(raw: string | undefined, fallback: number, min: number, max: number): number {

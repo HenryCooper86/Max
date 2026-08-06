@@ -13,6 +13,8 @@
 
 import type { NavManeuver } from "../shared/agent";
 import type { GeoPoint } from "../shared/geo";
+import { MOCK_ROUTE } from "../shared/nav-fixtures";
+import type { Logger } from "./logger";
 
 const PLACE_ENDPOINT = "https://restapi.amap.com/v5/place/text";
 const DRIVING_ENDPOINT = "https://restapi.amap.com/v5/direction/driving";
@@ -117,4 +119,29 @@ export function createAmapRouteProvider(options: {
       return { distanceMeters, etaSeconds, polyline, steps };
     }
   };
+}
+
+export function createMockRouteProvider(): RouteProvider {
+  return {
+    mode: "mock",
+    async resolveDestination(query) {
+      return { name: query, location: MOCK_ROUTE.polyline.at(-1)! };
+    },
+    async planRoute() {
+      return MOCK_ROUTE;
+    }
+  };
+}
+
+let warnedMissingKey = false;
+
+export function selectRouteProvider(amapApiKey: string, log?: Pick<Logger, "warn">): RouteProvider {
+  if (amapApiKey) {
+    return createAmapRouteProvider({ apiKey: amapApiKey });
+  }
+  if (!warnedMissingKey) {
+    warnedMissingKey = true;
+    log?.warn("AMAP_API_KEY is not set; navigation uses the mock route provider");
+  }
+  return createMockRouteProvider();
 }

@@ -216,7 +216,8 @@ export function createMockVisionProvider(): VisionProvider {
 }
 
 // A warn-once latch implements startup semantics — the warning surfaces once when the
-// relay boots without ARK_API_KEY/ARK_MODEL, not once per connection.
+// relay boots without ARK_API_KEY/ARK_MODEL, not once per connection. Same deliberate
+// once-per-process divergence documented in server/routing.ts.
 let warnedMissingKey = false;
 
 export function selectVisionProvider(

@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildChatCompletionsEndpoint, createDescriber, VISION_ENDPOINT } from "../server/vision";
+import {
+  buildChatCompletionsEndpoint,
+  createDescriber,
+  createArkVisionProvider,
+  createMockVisionProvider,
+  selectVisionProvider,
+  VISION_ENDPOINT
+} from "../server/vision";
 
 describe("buildChatCompletionsEndpoint", () => {
   it("appends the chat-completions path to a bare base url", () => {
@@ -106,8 +113,6 @@ describe("createDescriber", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 });
-
-import { createArkVisionProvider, createMockVisionProvider, selectVisionProvider } from "../server/vision";
 
 const FRAME = "aGVsbG8="; // any base64 string; the provider never decodes it
 const ARK_OK = JSON.stringify({ choices: [{ message: { content: "前方有一个蓝色路牌。" } }] });

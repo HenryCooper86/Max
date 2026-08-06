@@ -15,7 +15,10 @@ describe("wgs84ToGcj02", () => {
   });
 
   it("shifts China points by a plausible offset (100–700 m)", () => {
-    // ~1 deg lat ≈ 111 km, so 100–700 m ≈ 0.0009–0.0063 deg.
+    // Offset measured as degree-hypot of (lat_delta, lon_delta). Longitude degrees
+    // are metrically smaller at higher latitudes (lon_m ≈ lat_m * cos(lat)), so the
+    // degree-hypot can legitimately exceed the naive 0.0063° ≈ 700 m bound.
+    // The test exists to catch datum errors, which produce ~0 or wildly larger values.
     for (const p of [
       { lat: 39.911954, lon: 116.377817 }, // Beijing
       { lat: 22.543847, lon: 113.912316 }, // Shenzhen
@@ -24,7 +27,7 @@ describe("wgs84ToGcj02", () => {
       const gcj = wgs84ToGcj02(p);
       const offsetDeg = Math.hypot(gcj.lat - p.lat, gcj.lon - p.lon);
       expect(offsetDeg).toBeGreaterThan(0.0009);
-      expect(offsetDeg).toBeLessThan(0.0063);
+      expect(offsetDeg).toBeLessThan(0.008);
     }
   });
 });

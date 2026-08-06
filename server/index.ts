@@ -74,6 +74,7 @@ import { markClientActivity, startWatchdog, trackClient } from "./watchdog";
 import type { Logger } from "./logger";
 import { staticCacheControl } from "./static-cache";
 import { clearUserConversationMemory, flushUserMemory, userMemorySummary } from "./user-memory";
+import { registerAmapRoutes } from "./amap-proxy";
 
 const app = express();
 const server = http.createServer(app);
@@ -109,7 +110,14 @@ app.use((req, res, next) => {
   res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
   res.setHeader(
     "Content-Security-Policy",
-    "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; media-src 'self' blob:; worker-src 'self' blob:"
+    // script-src allows webapi.amap.com for exactly one thing: the Amap JS
+    // SDK's own bootstrap <script> tag (NavigationPanel.tsx, Task 9). Every
+    // request that script subsequently makes (tiles, styles, geocoding) is
+    // redirected by _AMapSecurityConfig.serviceHost back through this
+    // origin's /_AMapService proxy, so img-src/connect-src stay 'self' —
+    // the secret-holding proxy is the only thing that ever talks to Amap's
+    // other hosts.
+    "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' https://webapi.amap.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; media-src 'self' blob:; worker-src 'self' blob:"
   );
   if (process.env.NODE_ENV === "production") {
     res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
@@ -637,6 +645,12 @@ app.post("/testing/clear", (req, res) => {
 app.use(["/auth", "/testing"], (_req, res) => {
   res.status(404).json({ ok: false, error: "接口不存在。" });
 });
+
+// Public JS key + the security-secret-holding tile/style/geocode proxy for
+// the optional Amap map layer (Task 9). Must be mounted before the static
+// block below so `/nav/js-config` and `/_AMapService/*` aren't swallowed by
+// the SPA fallback.
+registerAmapRoutes(app);
 
 // Serve the built client when a production bundle exists. In development the
 // Vite dev server handles this instead and proxies /health and /agent here.

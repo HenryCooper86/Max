@@ -3,9 +3,186 @@
 // markers) renders unconditionally whenever the panel itself renders — no
 // Amap key is required for a fully functional panel. The optional Amap JS
 // tile map (Task 9) mounts underneath this schematic without touching it.
+//
+// The 安全密钥 (security secret) that the Amap JS SDK needs for every request
+// never reaches the browser: this component only ever sees the public JS key
+// (from `/nav/js-config`) and points the SDK's internal requests at the
+// relay's own `/_AMapService` proxy (server/amap-proxy.ts), which appends the
+// secret server-side. With no key configured, `/nav/js-config` returns
+// `{ key: null }` and the panel stays exactly as it is without this task: the
+// schematic only, no script tag, no network request beyond the config fetch
+// itself. A script-load failure degrades the same way, silently.
 
+import { useEffect, useRef, useState } from "react";
 import type { GeoPoint } from "../../shared/geo";
 import type { NavPhase } from "../lib/navigation";
+
+// Minimal surface of the Amap JS API 2.0 this component actually calls. The
+// SDK is never bundled (it loads at runtime from webapi.amap.com), so there
+// are no upstream types to import — this is deliberately narrow rather than
+// `any`, matching the rest of this codebase's avoidance of `any`.
+type AMapLatLng = [number, number]; // [lon, lat] — Amap's own coordinate order
+
+type AMapMapInstance = { destroy: () => void };
+type AMapOverlay = { setMap: (map: AMapMapInstance | null) => void };
+type AMapMarker = AMapOverlay & { setPosition: (position: AMapLatLng) => void };
+type AMapNamespace = {
+  Map: new (container: HTMLDivElement, options: { zoom: number; center: AMapLatLng }) => AMapMapInstance;
+  Polyline: new (options: { path: AMapLatLng[]; strokeColor: string; strokeWeight: number }) => AMapOverlay;
+  Marker: new (options: { position: AMapLatLng }) => AMapMarker;
+};
+
+declare global {
+  interface Window {
+    AMap?: AMapNamespace;
+    _AMapSecurityConfig?: { serviceHost: string };
+  }
+}
+
+// Module-level (not component-level) so every NavigationPanel mount across
+// the app's lifetime reuses the same script tag/promise instead of injecting
+// the Amap SDK repeatedly.
+let amapScriptPromise: Promise<void> | null = null;
+
+function loadAmapScript(key: string): Promise<void> {
+  if (window.AMap) return Promise.resolve();
+  if (amapScriptPromise) return amapScriptPromise;
+
+  amapScriptPromise = new Promise<void>((resolve, reject) => {
+    // Must be set before the script tag is injected: the SDK reads this
+    // during its own initialization to route its internal tile/style/geocode
+    // requests through the relay's secret-holding proxy instead of calling
+    // Amap directly with no jscode.
+    window._AMapSecurityConfig = { serviceHost: `${window.location.origin}/_AMapService` };
+    const script = document.createElement("script");
+    script.src = `https://webapi.amap.com/maps?v=2.0&key=${encodeURIComponent(key)}`;
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("amap script failed to load"));
+    document.head.appendChild(script);
+  }).catch((error: unknown) => {
+    // Allow a later mount to retry after a transient network blip instead of
+    // latching a permanent failure for the rest of the page's lifetime.
+    amapScriptPromise = null;
+    throw error;
+  });
+
+  return amapScriptPromise;
+}
+
+/** Fetches the public JS key once per app lifetime. Null (unset key, fetch
+ *  failure, or non-browser environment) means "keep the schematic only" —
+ *  never surfaced as an error. */
+function useAmapJsKey(): string | null {
+  const [key, setKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let cancelled = false;
+    fetch("/nav/js-config")
+      .then((res) => (res.ok ? (res.json() as Promise<{ key?: string | null }>) : { key: null }))
+      .then((data) => {
+        if (!cancelled && typeof data.key === "string" && data.key) setKey(data.key);
+      })
+      .catch(() => {
+        // Keyless mode must stay fully functional and silent; nothing to do.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return key;
+}
+
+function AmapTileMap({
+  mapKey,
+  polyline,
+  rider
+}: {
+  mapKey: string;
+  polyline: readonly GeoPoint[];
+  rider: GeoPoint | null;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<AMapMapInstance | null>(null);
+  const polylineRef = useRef<AMapOverlay | null>(null);
+  const markerRef = useRef<AMapMarker | null>(null);
+  const [ready, setReady] = useState(false);
+
+  // Load the SDK once for this mapKey and flag readiness; a failure warns
+  // once and leaves `ready` false forever, so only the schematic shows.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let cancelled = false;
+    loadAmapScript(mapKey)
+      .then(() => {
+        if (!cancelled) setReady(true);
+      })
+      .catch((error: unknown) => {
+        console.warn("Amap JS SDK failed to load; showing the route schematic only.", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mapKey]);
+
+  // Create the map instance once the SDK is ready, and destroy it on unmount.
+  useEffect(() => {
+    if (!ready || typeof window === "undefined" || !window.AMap || !containerRef.current) return;
+    const first = polyline[0];
+    const center: AMapLatLng = rider ? [rider.lon, rider.lat] : first ? [first.lon, first.lat] : [116.397428, 39.90923]; // Beijing — only ever shown for an instant before route data arrives
+    mapRef.current = new window.AMap.Map(containerRef.current, { zoom: 15, center });
+    return () => {
+      mapRef.current?.destroy();
+      mapRef.current = null;
+    };
+    // Intentionally only re-runs when the SDK becomes ready; the map's own
+    // center/overlays update via the effects below instead of a full re-init.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready]);
+
+  // Keep the route polyline in sync with the current route.
+  useEffect(() => {
+    if (!ready || typeof window === "undefined" || !window.AMap || !mapRef.current) return;
+    polylineRef.current?.setMap(null);
+    polylineRef.current = null;
+    if (polyline.length > 1) {
+      const overlay = new window.AMap.Polyline({
+        path: polyline.map((p): AMapLatLng => [p.lon, p.lat]),
+        strokeColor: "#4fd1c5",
+        strokeWeight: 4
+      });
+      overlay.setMap(mapRef.current);
+      polylineRef.current = overlay;
+    }
+  }, [ready, polyline]);
+
+  // Keep the rider marker in sync with the current position.
+  useEffect(() => {
+    if (!ready || typeof window === "undefined" || !window.AMap || !mapRef.current) return;
+    if (!rider) {
+      markerRef.current?.setMap(null);
+      markerRef.current = null;
+      return;
+    }
+    const position: AMapLatLng = [rider.lon, rider.lat];
+    if (markerRef.current) {
+      markerRef.current.setPosition(position);
+    } else {
+      const marker = new window.AMap.Marker({ position });
+      marker.setMap(mapRef.current);
+      markerRef.current = marker;
+    }
+  }, [ready, rider]);
+
+  // Nothing renders while the SDK is loading or if it never becomes ready
+  // (absent key never gets here; a load failure leaves `ready` false
+  // forever) — no placeholder box, no layout shift, panel stays exactly as
+  // it is without the map, matching the schematic-only behavior above.
+  if (!ready) return null;
+  return <div ref={containerRef} className="navigationMap" aria-hidden="true" />;
+}
 
 const VIEW_WIDTH = 280;
 const VIEW_HEIGHT = 160;
@@ -81,6 +258,12 @@ function RouteSchematic({
 }
 
 export function NavigationPanel({ state }: { state: NavPhase }) {
+  // Called unconditionally, before either early return, per the Rules of
+  // Hooks — Node-side/test renders (no window) always resolve to null, so
+  // the tile map never mounts there and the schematic-only tests are
+  // unaffected.
+  const amapKey = useAmapJsKey();
+
   if (state.phase === "idle") return null;
 
   if (state.phase === "requesting") {
@@ -93,6 +276,7 @@ export function NavigationPanel({ state }: { state: NavPhase }) {
           <p className="navigationInstruction">{state.query}</p>
         </div>
         <RouteSchematic polyline={[]} maneuvers={[]} rider={null} />
+        {amapKey ? <AmapTileMap mapKey={amapKey} polyline={[]} rider={null} /> : null}
       </section>
     );
   }
@@ -120,6 +304,7 @@ export function NavigationPanel({ state }: { state: NavPhase }) {
         ) : null}
       </div>
       <RouteSchematic polyline={route.polyline} maneuvers={route.steps} rider={position} />
+      {amapKey ? <AmapTileMap mapKey={amapKey} polyline={route.polyline} rider={position} /> : null}
     </section>
   );
 }

@@ -4318,6 +4318,19 @@ button.opsCard:disabled {
   stroke-width: 2;
 }
 
+/* Optional Amap tile map (Task 9): only mounted once /nav/js-config resolves
+   a public key, underneath the always-on schematic above. Amap's Map
+   constructor needs a container with real pixel dimensions, so — unlike the
+   schematic's SVG viewBox — this sets an explicit height rather than
+   aspect-ratio-from-zero. */
+.navigationMap {
+  width: 100%;
+  height: 220px;
+  margin-top: 8px;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
 /* Settings mirrors the iOS sheet: one calm surface, grouped controls, and the
    full testing console tucked into the final advanced section. */
 .settingsBackdrop {

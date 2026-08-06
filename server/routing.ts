@@ -22,8 +22,8 @@ const DRIVING_ENDPOINT = "https://restapi.amap.com/v5/direction/driving";
 // calls (resolve, then plan) run back to back.
 const DEFAULT_TIMEOUT_MS = 3500;
 
-export type ResolvedDestination = { name: string; location: GeoPoint };
-export type PlannedRoute = {
+type ResolvedDestination = { name: string; location: GeoPoint };
+type PlannedRoute = {
   distanceMeters: number;
   etaSeconds: number;
   polyline: GeoPoint[];

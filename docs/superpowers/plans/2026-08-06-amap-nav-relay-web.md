@@ -26,10 +26,12 @@
 ### Task 1: GCJ-02 conversion (`shared/geo.ts`)
 
 **Files:**
+
 - Create: `shared/geo.ts`
 - Test: `tests/geo.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces: `type GeoPoint = { lat: number; lon: number }`; `wgs84ToGcj02(p: GeoPoint): GeoPoint`. (No inverse in TS — no TS platform ever converts GCJ→WGS; the inverse lives in Swift in Plan B. Do not add it; knip would flag it dead.)
 
@@ -143,6 +145,7 @@ git commit -m "feat(nav): add wgs84ToGcj02 with golden-vector tests"
 ### Task 2: `nav.*` protocol events
 
 **Files:**
+
 - Modify: `protocol/agent-events.schema.json` (add NavRequest to `ClientEvent.oneOf`, NavRoute + NavError to `AgentEvent.oneOf`)
 - Modify: `shared/generated/agent-protocol.ts` (via `npm run generate:protocol` — never by hand)
 - Modify: `shared/agent.ts` (`ClientEvent` union at ~line 232, `AgentEvent` union at ~line 302)
@@ -150,6 +153,7 @@ git commit -m "feat(nav): add wgs84ToGcj02 with golden-vector tests"
 - Test: `tests/nav-protocol.test.ts`
 
 **Interfaces:**
+
 - Consumes: `parseClientEvent` (session-controller), existing union patterns in `shared/agent.ts`.
 - Produces (used by every later task):
 
@@ -236,9 +240,9 @@ describe("parseClientEvent nav.request", () => {
   });
 
   it("rejects a reroute request without a destination", () => {
-    expect(() =>
-      parseClientEvent(encode({ type: "nav.request", commandId: "c4", reason: "reroute", origin }))
-    ).toThrow(/destination/);
+    expect(() => parseClientEvent(encode({ type: "nav.request", commandId: "c4", reason: "reroute", origin }))).toThrow(
+      /destination/
+    );
   });
 
   it("rejects an out-of-range origin", () => {
@@ -405,10 +409,12 @@ git commit -m "feat(nav): add nav.request/nav.route/nav.error protocol events"
 ### Task 3: `AmapRouteProvider` (`server/routing.ts`)
 
 **Files:**
+
 - Create: `server/routing.ts`
 - Test: `tests/routing-amap.test.ts`
 
 **Interfaces:**
+
 - Consumes: `NavManeuver` from `shared/agent.ts`; `GeoPoint` from `shared/geo.ts`.
 - Produces:
 
@@ -482,7 +488,10 @@ describe("AmapRouteProvider.resolveDestination", () => {
   });
 
   it("returns null on empty pois, bad status, and HTTP error", async () => {
-    for (const body of [JSON.stringify({ status: "1", pois: [] }), JSON.stringify({ status: "0", info: "INVALID_USER_KEY" })]) {
+    for (const body of [
+      JSON.stringify({ status: "1", pois: [] }),
+      JSON.stringify({ status: "0", info: "INVALID_USER_KEY" })
+    ]) {
       const provider = createAmapRouteProvider({ apiKey: "k", fetchImpl: fetchReturning(body) });
       expect(await provider.resolveDestination("x", origin)).toBeNull();
     }
@@ -606,7 +615,11 @@ export function createAmapRouteProvider(options): RouteProvider {
       let alongRouteMeters = 0;
       for (const rawStep of rawSteps) {
         const stepDistance = Number(rawStep.step_distance);
-        if (typeof rawStep.instruction !== "string" || typeof rawStep.polyline !== "string" || !Number.isFinite(stepDistance)) {
+        if (
+          typeof rawStep.instruction !== "string" ||
+          typeof rawStep.polyline !== "string" ||
+          !Number.isFinite(stepDistance)
+        ) {
           return fail("driving.step");
         }
         const points = rawStep.polyline.split(";").map(parseLonLat);
@@ -645,12 +658,14 @@ git commit -m "feat(nav): add Amap route provider (place search + v5 driving)"
 ### Task 4: `MockRouteProvider` + provider selection + config keys
 
 **Files:**
+
 - Create: `shared/nav-fixtures.ts` (the fixture lives in `shared/`, NOT `server/` — the web simulator in Task 8 imports it, and client code must never import server modules)
 - Modify: `server/routing.ts`
 - Modify: `server/config.ts` (three new keys on the `config` object, following the existing trimmed-string pattern like `relayAuthToken`)
 - Test: `tests/routing-mock.test.ts`
 
 **Interfaces:**
+
 - Consumes: `RouteProvider`, `PlannedRoute` from Task 3; `Logger` type from `server/logger.ts`.
 - Produces:
   - `shared/nav-fixtures.ts` exports `MOCK_ROUTE: PlannedRoute` — exact literal below; Tasks 7 and 8 import it from `../shared/nav-fixtures`.
@@ -768,12 +783,14 @@ git commit -m "feat(nav): add mock route provider, provider selection, and AMAP_
 ### Task 5: Nav request handler + session wiring + failure speech
 
 **Files:**
+
 - Modify: `server/routing.ts` (add `createNavHandler`)
 - Modify: `server/session-controller.ts` (instantiate per session; dispatch `nav.request`)
 - Modify: `server/device-actions.ts` (`FAILURE_SPEECH` map at ~line 310)
 - Test: `tests/nav-handler.test.ts`
 
 **Interfaces:**
+
 - Consumes: `RouteProvider` (Tasks 3–4), `NavRequestEvent`/`NavRouteEvent`/`NavErrorEvent` (Task 2), `config.amapApiKey`.
 - Produces:
 
@@ -787,6 +804,7 @@ export function createNavHandler(options: {
 ```
 
 Behavior:
+
 - `reason: "start"` — `resolveDestination(query, origin)`; null → `nav.error destination.notFound`. Then `planRoute(origin, resolved.location)`; null → `nav.error route.unavailable`. Else send `nav.route` (destinationName/destination from resolution).
 - `reason: "reroute"` — if a reroute was answered less than `minRerouteIntervalMs` ago **and** a last route exists, resend the last `nav.route` with the new commandId (quota guard, per spec: "a rejected-by-interval reroute returns the current route unchanged"). Otherwise `planRoute(origin, destination)` with the request's `destination`/`destinationName`; null → `nav.error route.unavailable`.
 - The handler keeps `lastRoute` and `lastRerouteAt` per instance (one instance per session).
@@ -902,10 +920,12 @@ git commit -m "feat(nav): handle nav.request on the relay with reroute quota gua
 ### Task 6: Shared guidance engine (`shared/guidance.ts`)
 
 **Files:**
+
 - Create: `shared/guidance.ts`
 - Test: `tests/guidance.test.ts`
 
 **Interfaces:**
+
 - Consumes: `GeoPoint` (Task 1), `NavManeuver`/`NavRouteEvent` (Task 2).
 - Produces (Task 7 consumes all of this; Plans B/C port these exact semantics):
 
@@ -983,16 +1003,16 @@ describe("step", () => {
       progress = u.progress;
       return u;
     };
-    expect(at(31.2320).spokenPrompt).toMatch(/^前方\d+米，右转$/); // ~333 m → far
+    expect(at(31.232).spokenPrompt).toMatch(/^前方\d+米，右转$/); // ~333 m → far
     expect(at(31.2325).spokenPrompt).toBeNull(); // far already fired
-    expect(at(31.2340).spokenPrompt).toMatch(/^前方\d+米，右转$/); // ~111 m → near
+    expect(at(31.234).spokenPrompt).toMatch(/^前方\d+米，右转$/); // ~111 m → near
     expect(at(31.2348).spokenPrompt).toBe("右转"); // ~22 m → now
     expect(at(31.2349).spokenPrompt).toBeNull();
   });
 
   it("advances past the maneuver and clears thresholds", () => {
     let progress = INITIAL_PROGRESS;
-    for (const lat of [31.2320, 31.2340, 31.2348, 31.2355]) {
+    for (const lat of [31.232, 31.234, 31.2348, 31.2355]) {
       progress = step({ lat, lon: 121.47 }, route, progress).progress;
     }
     expect(progress.maneuverIndex).toBe(1);
@@ -1002,14 +1022,14 @@ describe("step", () => {
 
   it("flags off-route beyond 50 m cross-track", () => {
     // 0.001° lon at lat 31.23 ≈ 95 m east of the line.
-    const u = step({ lat: 31.2320, lon: 121.4710 }, route, INITIAL_PROGRESS);
+    const u = step({ lat: 31.232, lon: 121.471 }, route, INITIAL_PROGRESS);
     expect(u.offRoute).toBe(true);
     expect(u.spokenPrompt).toBeNull(); // no prompts while off-route
   });
 
   it("arrives within 30 m of the destination", () => {
     let progress = INITIAL_PROGRESS;
-    for (const lat of [31.2320, 31.2340, 31.2348, 31.2355, 31.2398]) {
+    for (const lat of [31.232, 31.234, 31.2348, 31.2355, 31.2398]) {
       progress = step({ lat, lon: 121.47 }, route, progress).progress;
     }
     expect(progress.arrived).toBe(true);
@@ -1050,10 +1070,12 @@ git commit -m "feat(nav): add shared guidance engine with table tests"
 ### Task 7: Web navigation controller (`src/lib/navigation.ts`)
 
 **Files:**
+
 - Create: `src/lib/navigation.ts`
 - Test: `tests/web-navigation.test.ts`
 
 **Interfaces:**
+
 - Consumes: `wgs84ToGcj02` (Task 1), `step`/`INITIAL_PROGRESS`/`GuidanceUpdate` (Task 6), `NavRouteEvent`/`NavErrorEvent`/`NavManeuver` types (Task 2).
 - Produces (Task 8 consumes):
 
@@ -1078,6 +1100,7 @@ export function createNavigationController(deps: {
 ```
 
 Behavior:
+
 - `navigation.start {query}`: no position fix yet → `device.result { status: "denied", reason: "permission.location" }` immediately. Else send `nav.request` (reason `start`, origin = `wgs84ToGcj02(lastFix)`), state `requesting`.
 - `nav.route` while requesting: send `device.result { status: "ok" }` for the stored commandId, state `guiding`, run one engine step at the current position.
 - `nav.route` while guiding (reroute answer): swap route, reset progress to `INITIAL_PROGRESS`, speak "已重新规划路线".
@@ -1121,7 +1144,11 @@ function harness(nowRef = { t: 0 }) {
 describe("createNavigationController", () => {
   it("denies navigation.start without a position fix", () => {
     const { controller, sent } = harness();
-    const consumed = controller.handleDeviceCommand({ commandId: "c1", action: "navigation.start", args: { query: "外滩" } });
+    const consumed = controller.handleDeviceCommand({
+      commandId: "c1",
+      action: "navigation.start",
+      args: { query: "外滩" }
+    });
     expect(consumed).toBe(true);
     expect(sent[0]).toMatchObject({ type: "device.result", status: "denied", reason: "permission.location" });
   });
@@ -1159,7 +1186,7 @@ describe("createNavigationController", () => {
     controller.handleDeviceCommand({ commandId: "c1", action: "navigation.start", args: { query: "外滩" } });
     controller.handleAgentEvent(routeEvent as never);
     // ~190 m east of the route — off-route on every fix.
-    const off = { lat: 31.2320, lon: 121.4757 };
+    const off = { lat: 31.232, lon: 121.4757 };
     controller.updatePosition(off);
     controller.updatePosition(off);
     nowRef.t = 5_000;
@@ -1212,6 +1239,7 @@ git commit -m "feat(nav): add web navigation controller (device.command to guida
 ### Task 8: Web nav panel, ride simulator, and hook wiring
 
 **Files:**
+
 - Create: `src/components/NavigationPanel.tsx`
 - Create: `src/lib/nav-simulator.ts`
 - Modify: `src/hooks/useHelmetAgent.ts` (instantiate the controller; route events; expose `navState` + simulator controls)
@@ -1219,10 +1247,11 @@ git commit -m "feat(nav): add web navigation controller (device.command to guida
 - Test: `tests/navigation-panel.test.tsx`, `tests/nav-simulator.test.ts`
 
 **Interfaces:**
+
 - Consumes: `createNavigationController`/`NavPhase` (Task 7), `MOCK_ROUTE` (Task 4), `speak` from `src/lib/speech.ts`.
 - Produces:
   - `NavigationPanel({ state }: { state: NavPhase })` — guidance card (current instruction, `distanceToManeuverMeters` rounded to 10 m, remaining km + ETA minutes, destination name; "已偏离路线，重新规划中…" while off-route) above an SVG schematic: the polyline normalized into a 280×160 viewBox, rider position dot, maneuver markers. **The SVG renders always — with no Amap key the panel is fully functional.** (The optional Amap JS tile map behind it lands in Task 9; this task must not reference it.)
-  - `createRideSimulator({ route, tickMs, speedMps, onPosition }): { start(detour: boolean): void; stop(): void }` — walks the polyline at `speedMps` (default 12), interpolating between vertices per tick (default 1000 ms); with `detour: true`, ticks 4–6 shift 0.002° east (≈190 m — beyond the 50 m off-route threshold) then return to the line. Emits **WGS-84-equivalent** positions: since the fixture polyline is GCJ-02 and `updatePosition` converts WGS→GCJ, the simulator must emit positions that *arrive* on the route after conversion — implement by binary-searching the WGS point whose `wgs84ToGcj02` lands on the target vertex, or more simply subtract the local offset: `wgs ≈ target − (wgs84ToGcj02(target) − target)`. The approximation error (<2 m) is far below every threshold. Uses `setInterval`; `stop()` clears it.
+  - `createRideSimulator({ route, tickMs, speedMps, onPosition }): { start(detour: boolean): void; stop(): void }` — walks the polyline at `speedMps` (default 12), interpolating between vertices per tick (default 1000 ms); with `detour: true`, ticks 4–6 shift 0.002° east (≈190 m — beyond the 50 m off-route threshold) then return to the line. Emits **WGS-84-equivalent** positions: since the fixture polyline is GCJ-02 and `updatePosition` converts WGS→GCJ, the simulator must emit positions that _arrive_ on the route after conversion — implement by binary-searching the WGS point whose `wgs84ToGcj02` lands on the target vertex, or more simply subtract the local offset: `wgs ≈ target − (wgs84ToGcj02(target) − target)`. The approximation error (<2 m) is far below every threshold. Uses `setInterval`; `stop()` clears it.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1257,7 +1286,12 @@ describe("createRideSimulator", () => {
   it("leaves the route during a detour run", () => {
     vi.useFakeTimers();
     const emitted: Array<{ lat: number; lon: number }> = [];
-    const sim = createRideSimulator({ route: MOCK_ROUTE, tickMs: 1000, speedMps: 12, onPosition: (p) => emitted.push(p) });
+    const sim = createRideSimulator({
+      route: MOCK_ROUTE,
+      tickMs: 1000,
+      speedMps: 12,
+      onPosition: (p) => emitted.push(p)
+    });
     sim.start(true);
     vi.advanceTimersByTime(6000);
     sim.stop();
@@ -1322,6 +1356,7 @@ Run: `npx vitest run tests/nav-simulator.test.ts tests/navigation-panel.test.tsx
 - [ ] **Step 5: Wire the hook and App**
 
 In `src/hooks/useHelmetAgent.ts`:
+
 - Create the controller once (in the socket-setup effect, where `socket.send` is in scope): `sendJson` = `(p) => socket.send(JSON.stringify(p))`, `speak` from `src/lib/speech.ts` (the same helper the TTS fallback path uses), `onState` = a `setNavState` React state setter.
 - In the server-event switch (the `if (event.type === ...)` chain around line 497): pass `device.command` events to `controller.handleDeviceCommand(event)` and `nav.route`/`nav.error` to `controller.handleAgentEvent(event)`.
 - Feed `controller.updatePosition({ lat, lon })` from the existing geolocation `watchPosition` callback (~line 1075) and from the simulator.
@@ -1350,12 +1385,14 @@ git commit -m "feat(nav): web HUD guidance panel, ride simulator, and hook wirin
 ### Task 9: Amap JS map layer — `/nav/js-config` + `/_AMapService` proxy
 
 **Files:**
+
 - Create: `server/amap-proxy.ts`
 - Modify: `server/index.ts` (mount both routes before the static handler at ~line 645)
 - Modify: `src/components/NavigationPanel.tsx` (optional tile map under the schematic)
 - Test: `tests/amap-proxy.test.ts`
 
 **Interfaces:**
+
 - Consumes: `config.amapJsKey`, `config.amapJsSecret` (Task 4).
 - Produces:
   - `GET /nav/js-config` → `{ key: string | null }` (null when `amapJsKey` is empty; the client hides the tile map and keeps the schematic).
@@ -1403,7 +1440,11 @@ app.get("/nav/js-config", (_req, res) => {
 });
 app.get(/^\/_AMapService\//, async (req, res) => {
   if (!config.amapJsSecret) return res.status(404).end();
-  const target = amapProxyTarget(req.path, req.originalUrl.includes("?") ? "?" + req.originalUrl.split("?")[1] : "", config.amapJsSecret);
+  const target = amapProxyTarget(
+    req.path,
+    req.originalUrl.includes("?") ? "?" + req.originalUrl.split("?")[1] : "",
+    config.amapJsSecret
+  );
   if (!target) return res.status(404).end();
   const upstream = await fetch(target, { signal: AbortSignal.timeout(8000) });
   res.status(upstream.status);
@@ -1434,6 +1475,7 @@ git commit -m "feat(nav): amap js map layer with server-held security secret"
 ### Task 10: Full check, README, and closeout
 
 **Files:**
+
 - Modify: `README.md` (Current Capabilities — replace the iOS-only navigation bullet's claim of exclusivity: note web HUD guidance, relay-side Amap routing, mock keyless mode; keep the honest car-routing limitation sentence)
 - Modify: `.env.example` if one exists (`grep -l AMAP .env* 2>/dev/null`; add `AMAP_API_KEY=`, `AMAP_JS_KEY=`, `AMAP_JS_SECRET=` with one-line comments) — skip silently if the repo has no env template.
 

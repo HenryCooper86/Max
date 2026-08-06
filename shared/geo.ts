@@ -9,7 +9,9 @@
 export type GeoPoint = { lat: number; lon: number };
 
 const A = 6378245;
-const EE = 0.00669342162296594323;
+// Double-precision-safe form of the published 0.00669342162296594323 (identical
+// runtime value; the extra published digits exceed what a double can hold).
+const EE = 0.006693421622965943;
 
 function outOfChina(lat: number, lon: number): boolean {
   return lon < 72.004 || lon > 137.8347 || lat < 0.8293 || lat > 55.8271;

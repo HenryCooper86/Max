@@ -207,12 +207,12 @@ GCJ-02 positions.
 
 ## Keys & configuration
 
-| Where | Variable / place | Amap key type |
-| --- | --- | --- |
-| Relay | `AMAP_API_KEY` | Web 服务 (routing + place search) |
-| Relay | `AMAP_JS_SECRET` | the JS API 安全密钥, used only by the proxy |
-| Web HUD | served by relay config endpoint | Web 端 (JS API) key |
-| Android | manifest meta-data | Android SDK key |
+| Where   | Variable / place                | Amap key type                               |
+| ------- | ------------------------------- | ------------------------------------------- |
+| Relay   | `AMAP_API_KEY`                  | Web 服务 (routing + place search)           |
+| Relay   | `AMAP_JS_SECRET`                | the JS API 安全密钥, used only by the proxy |
+| Web HUD | served by relay config endpoint | Web 端 (JS API) key                         |
+| Android | manifest meta-data              | Android SDK key                             |
 
 No iOS key. Register all three keys under one Amap console account. Until the
 keys exist, everything runs on the mock provider.

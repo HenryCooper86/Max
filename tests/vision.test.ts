@@ -106,3 +106,94 @@ describe("createDescriber", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 });
+
+import { createArkVisionProvider, createMockVisionProvider, selectVisionProvider } from "../server/vision";
+
+const FRAME = "aGVsbG8="; // any base64 string; the provider never decodes it
+const ARK_OK = JSON.stringify({ choices: [{ message: { content: "前方有一个蓝色路牌。" } }] });
+
+function fetchCapturing(body: string, captured: { url?: string; body?: unknown }): typeof fetch {
+  return (async (url: unknown, init?: RequestInit) => {
+    captured.url = String(url);
+    captured.body = JSON.parse(String(init?.body));
+    return new Response(body, { status: 200 });
+  }) as typeof fetch;
+}
+
+describe("createArkVisionProvider", () => {
+  it("sends images first, then the question as the text part", async () => {
+    const captured: { url?: string; body?: unknown } = {};
+    const provider = createArkVisionProvider({
+      apiKey: "k",
+      model: "m",
+      fetchImpl: fetchCapturing(ARK_OK, captured)
+    });
+    const answer = await provider.describe([FRAME, FRAME], "路牌写的什么");
+    expect(answer).toBe("前方有一个蓝色路牌。");
+    const content = (captured.body as { messages: Array<{ content: Array<Record<string, unknown>> }> }).messages[0]
+      .content;
+    expect(content).toHaveLength(3);
+    expect(content[0].type).toBe("image_url");
+    expect(content[1].type).toBe("image_url");
+    expect(content[2]).toEqual({ type: "text", text: "路牌写的什么" });
+  });
+
+  it("falls back to the fixed describe prompt when no question is asked", async () => {
+    const captured: { url?: string; body?: unknown } = {};
+    const provider = createArkVisionProvider({ apiKey: "k", model: "m", fetchImpl: fetchCapturing(ARK_OK, captured) });
+    await provider.describe([FRAME]);
+    const content = (captured.body as { messages: Array<{ content: Array<Record<string, unknown>> }> }).messages[0]
+      .content;
+    expect(content).toHaveLength(2);
+    expect((content[1] as { text: string }).text).toContain("描述");
+  });
+
+  it("returns null with one onFailure on missing credentials, HTTP error, and empty content", async () => {
+    for (const setup of [
+      { options: { apiKey: undefined, model: "m" } },
+      { options: { apiKey: "k", model: undefined } },
+      {
+        options: {
+          apiKey: "k",
+          model: "m",
+          fetchImpl: (async () => new Response("no", { status: 500 })) as typeof fetch
+        }
+      },
+      {
+        options: {
+          apiKey: "k",
+          model: "m",
+          fetchImpl: (async () => new Response(JSON.stringify({ choices: [] }), { status: 200 })) as typeof fetch
+        }
+      }
+    ]) {
+      const reasons: string[] = [];
+      const provider = createArkVisionProvider({ ...setup.options, onFailure: (r) => reasons.push(r) });
+      expect(await provider.describe([FRAME], "q")).toBeNull();
+      expect(reasons.length).toBe(1);
+    }
+  });
+});
+
+describe("createMockVisionProvider", () => {
+  it("answers deterministically for photo, clip, and question", async () => {
+    const provider = createMockVisionProvider();
+    expect(provider.mode).toBe("mock");
+    expect(await provider.describe([FRAME])).toBe("前方道路畅通，天气晴朗。");
+    expect(await provider.describe([FRAME, FRAME, FRAME])).toBe("这段视频里，前方道路畅通，一路顺利。");
+    expect(await provider.describe([FRAME], "前面是什么")).toBe('关于"前面是什么"：我看到前方道路畅通。');
+  });
+});
+
+describe("selectVisionProvider", () => {
+  it("selects ark with credentials, mock without, warning once per process", () => {
+    const warnings: string[] = [];
+    const log = { warn: (m: string) => warnings.push(m) };
+    expect(selectVisionProvider({ apiKey: "k", model: "m" }, log).mode).toBe("ark");
+    expect(warnings.length).toBe(0);
+    expect(selectVisionProvider({ apiKey: "k" }, log).mode).toBe("mock"); // model missing counts as unconfigured
+    expect(warnings.length).toBe(1);
+    selectVisionProvider({}, log); // second unconfigured selection: latch already fired
+    expect(warnings.length).toBe(1);
+  });
+});

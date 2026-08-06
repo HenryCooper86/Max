@@ -41,6 +41,24 @@ export type DescriberOptions = {
   onFailure?: (reason: string) => void;
 };
 
+function parseArkContent(body: unknown): string | null {
+  // UNVERIFIED response shape. `choices[0].message.content` is the
+  // documented OpenAI-compatible shape for Ark's chat-completions endpoint,
+  // and matches what this parser assumes — but no successful call has ever
+  // been made from this project. Task 1's probe (see
+  // .superpowers/sdd/2026-07-28-vision-describe/task-1-report.md) never got
+  // past authentication: the configured ARK_API_KEY was rejected with
+  // HTTP 401 "The API key doesn't exist" on every attempt, so the real
+  // response body — and whether the model even accepts an image — was
+  // never observed. This parser is a best-effort guess at the documented
+  // shape, not a confirmed one. It would be confirmed by a successful call
+  // against the real endpoint with a valid ARK_API_KEY, logging (not
+  // guessing) the actual JSON body that comes back.
+  const parsed = body as { choices?: { message?: { content?: string } }[] };
+  const text = parsed.choices?.[0]?.message?.content?.trim();
+  return text || null;
+}
+
 export function createDescriber(options: DescriberOptions): (imageBase64: string) => Promise<string | null> {
   const {
     apiKey,
@@ -87,20 +105,8 @@ export function createDescriber(options: DescriberOptions): (imageBase64: string
         onFailure?.(`rejected — http ${response.status}`);
         return null;
       }
-      // UNVERIFIED response shape. `choices[0].message.content` is the
-      // documented OpenAI-compatible shape for Ark's chat-completions endpoint,
-      // and matches what this parser assumes — but no successful call has ever
-      // been made from this project. Task 1's probe (see
-      // .superpowers/sdd/2026-07-28-vision-describe/task-1-report.md) never got
-      // past authentication: the configured ARK_API_KEY was rejected with
-      // HTTP 401 "The API key doesn't exist" on every attempt, so the real
-      // response body — and whether the model even accepts an image — was
-      // never observed. This parser is a best-effort guess at the documented
-      // shape, not a confirmed one. It would be confirmed by a successful call
-      // against the real endpoint with a valid ARK_API_KEY, logging (not
-      // guessing) the actual JSON body that comes back.
-      const body = (await response.json()) as { choices?: { message?: { content?: string } }[] };
-      const text = body.choices?.[0]?.message?.content?.trim();
+      const body = await response.json();
+      const text = parseArkContent(body);
       if (!text) {
         onFailure?.("no description in the response");
         return null;
@@ -113,4 +119,121 @@ export function createDescriber(options: DescriberOptions): (imageBase64: string
       clearTimeout(timer);
     }
   };
+}
+
+export type VisionProvider = {
+  mode: "ark" | "mock";
+  describe(frames: string[], question?: string): Promise<string | null>;
+};
+
+export function createArkVisionProvider(options: {
+  apiKey?: string;
+  model?: string;
+  endpoint?: string;
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+  onFailure?: (reason: string) => void;
+}): VisionProvider {
+  const {
+    apiKey,
+    model,
+    endpoint = VISION_ENDPOINT,
+    fetchImpl = fetch,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    onFailure
+  } = options;
+
+  return {
+    mode: "ark",
+    async describe(frames: string[], question?: string): Promise<string | null> {
+      if (!apiKey || !model) {
+        onFailure?.("not configured");
+        return null;
+      }
+
+      const abort = new AbortController();
+      const timer = setTimeout(() => abort.abort(), timeoutMs);
+      try {
+        const content = [
+          ...frames.map((frame) => ({
+            type: "image_url" as const,
+            image_url: { url: `data:image/jpeg;base64,${frame}` }
+          })),
+          { type: "text" as const, text: question?.trim() || DEFAULT_PROMPT }
+        ];
+
+        const response = await fetchImpl(endpoint, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model,
+            messages: [
+              {
+                role: "user",
+                content
+              }
+            ]
+          }),
+          signal: abort.signal
+        });
+        if (!response.ok) {
+          onFailure?.(`rejected — http ${response.status}`);
+          return null;
+        }
+        const body = await response.json();
+        const text = parseArkContent(body);
+        if (!text) {
+          onFailure?.("no description in the response");
+          return null;
+        }
+        return text;
+      } catch (error) {
+        onFailure?.(abort.signal.aborted ? "timed out" : `failed — ${String(error)}`);
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+  };
+}
+
+export function createMockVisionProvider(): VisionProvider {
+  return {
+    mode: "mock",
+    async describe(frames: string[], question?: string): Promise<string | null> {
+      if (frames.length > 1) {
+        if (question) {
+          return `关于"${question}"：我看到前方道路畅通。`;
+        }
+        return "这段视频里，前方道路畅通，一路顺利。";
+      }
+      if (question) {
+        return `关于"${question}"：我看到前方道路畅通。`;
+      }
+      return "前方道路畅通，天气晴朗。";
+    }
+  };
+}
+
+// A warn-once latch implements startup semantics — the warning surfaces once when the
+// relay boots without ARK_API_KEY/ARK_MODEL, not once per connection.
+let warnedMissingKey = false;
+
+export function selectVisionProvider(
+  options: {
+    apiKey?: string;
+    model?: string;
+    endpoint?: string;
+    onFailure?: (reason: string) => void;
+  },
+  log?: { warn(message: string, meta?: Record<string, unknown>): void }
+): VisionProvider {
+  if (options.apiKey && options.model) {
+    return createArkVisionProvider(options);
+  }
+  if (!warnedMissingKey) {
+    warnedMissingKey = true;
+    log?.warn("ARK_API_KEY/ARK_MODEL is not set; vision uses the mock provider");
+  }
+  return createMockVisionProvider();
 }

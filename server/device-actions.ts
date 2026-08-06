@@ -313,7 +313,11 @@ const FAILURE_SPEECH: Record<string, string> = {
   "device.locked": "手机锁屏了，解锁后我再执行。",
   "unsafe.speed": "骑行中我不发短信，停车以后我再帮你发。",
   "player.unsupported": "我只能控制 Apple Music 和本机音乐。",
-  "route.unavailable": "这个目的地我查不到路线。",
+  // Shared by the phone's destination.show device action and the relay's own
+  // nav.request handling (server/routing.ts) and the embedded navigation
+  // controller's device.result reason — one reason code, one truthful line.
+  "destination.notFound": "没找到这个地方。",
+  "route.unavailable": "路线规划失败。",
   "contact.notFound": "通讯录里没找到这个人。",
   "torch.unavailable": "这台设备没有可用的手电筒。",
   "permission.camera": "我没有相机权限，去设置里开启后我再帮你拍。",

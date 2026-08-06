@@ -1,11 +1,13 @@
 import type { RawData, WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
+import type { NavRequestEvent } from "../shared/agent";
 import { CLIENT_EVENT_TYPES } from "../shared/generated/agent-protocol";
 import { TESTING_PLATFORMS as CANONICAL_TESTING_PLATFORMS } from "../shared/testing";
 import type { Logger } from "./logger";
 import type { AgentProvider, ClientEvent, ProviderSessionContext, ProviderTelemetry } from "./providers/types";
 import { handleCrashAlert, handleCrashCancel, selectCrashNotifier } from "./crash-escalation";
 import { config } from "./config";
+import { createNavHandler, selectRouteProvider } from "./routing";
 import {
   beginTesterSession,
   endTesterSession,
@@ -372,6 +374,7 @@ export class AgentSessionController {
   private readonly relaySessionId = randomUUID();
   private readonly provider: AgentProvider;
   private readonly crashNotifier = selectCrashNotifier(config.crashNotifier);
+  private readonly navHandler: (event: NavRequestEvent) => Promise<void>;
   private sessionStartReceived = false;
   private providerStarted = false;
   private audioActive = false;
@@ -397,6 +400,10 @@ export class AgentSessionController {
         recordTesterServerAudio(this.relaySessionId, bytes);
       },
       ttsFallback: () => recordTesterTtsFallback(this.relaySessionId)
+    });
+    this.navHandler = createNavHandler({
+      provider: selectRouteProvider(config.amapApiKey, log),
+      send: (payload) => this.send(payload)
     });
     this.send({ type: "connection", state: "relay", detail: "语音中继 WebSocket 已连接" });
   }
@@ -529,6 +536,7 @@ export class AgentSessionController {
       if (event.type === "crash.alert")
         await handleCrashAlert(event, this.crashNotifier, (payload) => this.send(payload));
       if (event.type === "crash.cancel") await handleCrashCancel(event, this.crashNotifier);
+      if (event.type === "nav.request") await this.navHandler(event);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Voice relay failed";
       this.log?.warn("client message failed", { message });

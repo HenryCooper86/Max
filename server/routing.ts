@@ -11,7 +11,7 @@
  * AMAP_API_KEY gates navigation and is separate by design.
  */
 
-import type { NavManeuver } from "../shared/agent";
+import type { NavErrorEvent, NavManeuver, NavRequestEvent, NavRouteEvent } from "../shared/agent";
 import type { GeoPoint } from "../shared/geo";
 import { MOCK_ROUTE } from "../shared/nav-fixtures";
 import type { Logger } from "./logger";
@@ -149,4 +149,83 @@ export function selectRouteProvider(amapApiKey: string, log?: Pick<Logger, "warn
     log?.warn("AMAP_API_KEY is not set; navigation uses the mock route provider");
   }
   return createMockRouteProvider();
+}
+
+// A rejected-by-interval reroute returns the current route unchanged, so 10 s
+// is the quota guard for chatty riders (or a GPS-jitter off-route loop)
+// re-requesting a reroute faster than the routing API should be re-queried.
+const DEFAULT_MIN_REROUTE_INTERVAL_MS = 10_000;
+
+function toNavRouteEvent(
+  commandId: string,
+  destinationName: string,
+  destination: GeoPoint,
+  planned: PlannedRoute
+): NavRouteEvent {
+  return {
+    type: "nav.route",
+    commandId,
+    destinationName,
+    destination,
+    distanceMeters: planned.distanceMeters,
+    etaSeconds: planned.etaSeconds,
+    polyline: planned.polyline,
+    steps: planned.steps
+  };
+}
+
+/** One instance per session (see AgentSessionController): handles every
+ *  `nav.request` the rider's device sends, answering with `nav.route` or
+ *  `nav.error` over `send`. Never throws — every provider failure becomes a
+ *  `nav.error` so a flaky map API degrades to speech, not a dropped session. */
+export function createNavHandler(options: {
+  provider: RouteProvider;
+  send: (payload: NavRouteEvent | NavErrorEvent) => void;
+  now?: () => number;
+  minRerouteIntervalMs?: number;
+}): (event: NavRequestEvent) => Promise<void> {
+  const { provider, send, now = Date.now, minRerouteIntervalMs = DEFAULT_MIN_REROUTE_INTERVAL_MS } = options;
+  let lastRoute: NavRouteEvent | undefined;
+  let lastRerouteAt: number | undefined;
+
+  return async function handleNavRequest(event: NavRequestEvent): Promise<void> {
+    if (event.reason === "start") {
+      const resolved = await provider.resolveDestination(event.query ?? "", event.origin);
+      if (!resolved) {
+        send({ type: "nav.error", commandId: event.commandId, code: "destination.notFound" });
+        return;
+      }
+      const planned = await provider.planRoute(event.origin, resolved.location);
+      if (!planned) {
+        send({ type: "nav.error", commandId: event.commandId, code: "route.unavailable" });
+        return;
+      }
+      lastRoute = toNavRouteEvent(event.commandId, resolved.name, resolved.location, planned);
+      lastRerouteAt = now();
+      send(lastRoute);
+      return;
+    }
+
+    // reason: "reroute" — inside the quota-guard window, resend the cached
+    // route unchanged (with the new commandId) instead of calling the
+    // provider again.
+    if (lastRoute && lastRerouteAt !== undefined && now() - lastRerouteAt < minRerouteIntervalMs) {
+      send({ ...lastRoute, commandId: event.commandId });
+      return;
+    }
+
+    const destination = event.destination;
+    if (!destination) {
+      send({ type: "nav.error", commandId: event.commandId, code: "route.unavailable" });
+      return;
+    }
+    const planned = await provider.planRoute(event.origin, destination);
+    if (!planned) {
+      send({ type: "nav.error", commandId: event.commandId, code: "route.unavailable" });
+      return;
+    }
+    lastRoute = toNavRouteEvent(event.commandId, event.destinationName ?? "", destination, planned);
+    lastRerouteAt = now();
+    send(lastRoute);
+  };
 }

@@ -28,6 +28,14 @@ import {
 } from "../device-actions";
 import { createCrashSimulator, createHazardInjector } from "../hazard-injector";
 import { createTranscriptDelivery, transcriptEvent } from "../transcript-events";
+import { createMockVisionProvider } from "../vision";
+
+// Deliberately NOT selectVisionProvider: the mock voice provider is the
+// zero-credential demo surface and must never spend Ark quota (spec M1) —
+// even when ARK_API_KEY/ARK_MODEL are configured for the real (doubao)
+// provider elsewhere in the same process. Module scope, not per-connection,
+// because the mock vision provider is stateless (see server/vision.ts).
+const mockVisionProvider = createMockVisionProvider();
 
 type MockTurn = {
   rider: string;
@@ -76,7 +84,13 @@ const SCENARIOS: Record<DemoScenario, ScenarioProfile> = {
         latencyBase: 90
       },
       { rider: "前面堵吗？", agent: "前方 1.4 公里轻微拥堵。我会提前提示变道。", latencyBase: 112 },
-      { rider: "导航提示保持简短。", agent: "已切换极简提示。只报下一动作和距离。", latencyBase: 88 }
+      { rider: "导航提示保持简短。", agent: "已切换极简提示。只报下一动作和距离。", latencyBase: 88 },
+      // Exercises the keyless camera.look demo path (spec M1): on the
+      // embedded board this dispatches a real device.command and the board
+      // answers with camera.frame, describing the frame at zero credential
+      // cost via createMockVisionProvider — see server/vision.ts.
+      { rider: "你能看到什么", agent: "前方视野清楚，路况正常。", latencyBase: 95 },
+      { rider: "前面那个路牌写的什么", agent: "我看看，稍后告诉你路牌上写的什么。", latencyBase: 100 }
     ]
   },
   wind: {
@@ -244,7 +258,12 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
   function dispatchDeviceCommand(text: string): void {
     const command = extractDeviceCommandForPlatform(text, sessionPlatform);
     if (!command) return;
-    const issued = pendingDeviceCommands.issue(command.action, deviceSuccessSpeech(command));
+    const issued = pendingDeviceCommands.issue(
+      command.action,
+      deviceSuccessSpeech(command),
+      Date.now(),
+      command.action === "camera.look" ? command.args.question : undefined
+    );
     send({
       type: "device.command",
       commandId: issued.commandId,
@@ -460,6 +479,32 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
       const issued = pendingDeviceCommands.resolve(event.commandId);
       if (!issued) return;
       applyDeviceReconciliation(issued.action, event, issued.okSpeech);
+    },
+    async cameraFrame(event) {
+      // Mirrors doubao.ts's guard exactly: only describe a frame that
+      // answers a camera.look this relay actually issued. Peek — never
+      // resolve/consume — so the later device.result for the same
+      // commandId still has an entry to resolve. An unrecognised or
+      // wrong-action commandId is ignored quietly.
+      const issued = pendingDeviceCommands.peek(event.commandId);
+      if (!issued || issued.action !== "camera.look") return;
+
+      // Captured now, synchronously — same reasoning as doubao.ts's
+      // cameraFrame, even though nothing here can go stale: unlike doubao's
+      // per-session agentDelivery, this delivery is freshly allocated per
+      // call, not read from a mutable outer binding a later turn could reassign.
+      const delivery = createTranscriptDelivery();
+
+      // Detached from the caller for the same reason as doubao.ts: the
+      // message queue that awaits this method also carries mic PCM and
+      // audio.stop, and must not stall behind a vision call. The mock's
+      // describe() never actually blocks or throws (see server/vision.ts),
+      // but this stays symmetric with the live path's contract rather than
+      // assuming that will always hold.
+      void (async () => {
+        const description = await mockVisionProvider.describe([event.image], issued.question);
+        send(transcriptEvent(delivery, "agent", description ?? "我看不清。", { final: true, useBrowserSpeech: true }));
+      })().catch(() => {});
     },
     async stopAudio() {
       if (timer) clearInterval(timer);

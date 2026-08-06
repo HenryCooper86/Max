@@ -29,10 +29,12 @@
 ### Task 1: Vision core (`server/vision.ts` service shape)
 
 **Files:**
+
 - Modify: `server/vision.ts` (keep `VISION_ENDPOINT`, `buildChatCompletionsEndpoint`, the header comment, `DEFAULT_PROMPT`, the UNVERIFIED comment; keep `createDescriber` TEMPORARILY — Task 3 deletes it after migrating its one consumer)
 - Modify: `tests/vision.test.ts` (extend; migrate nothing yet — existing `createDescriber` tests keep passing untouched in this task)
 
 **Interfaces:**
+
 - Consumes: existing `DescriberOptions` internals (fetch shape, abort/timeout pattern at vision.ts:66-114).
 - Produces (Tasks 3 and 4 rely on these exact names):
 
@@ -92,8 +94,8 @@ describe("createArkVisionProvider", () => {
     });
     const answer = await provider.describe([FRAME, FRAME], "路牌写的什么");
     expect(answer).toBe("前方有一个蓝色路牌。");
-    const content = (captured.body as { messages: Array<{ content: Array<Record<string, unknown>> }> })
-      .messages[0].content;
+    const content = (captured.body as { messages: Array<{ content: Array<Record<string, unknown>> }> }).messages[0]
+      .content;
     expect(content).toHaveLength(3);
     expect(content[0].type).toBe("image_url");
     expect(content[1].type).toBe("image_url");
@@ -104,8 +106,8 @@ describe("createArkVisionProvider", () => {
     const captured: { url?: string; body?: unknown } = {};
     const provider = createArkVisionProvider({ apiKey: "k", model: "m", fetchImpl: fetchCapturing(ARK_OK, captured) });
     await provider.describe([FRAME]);
-    const content = (captured.body as { messages: Array<{ content: Array<Record<string, unknown>> }> })
-      .messages[0].content;
+    const content = (captured.body as { messages: Array<{ content: Array<Record<string, unknown>> }> }).messages[0]
+      .content;
     expect(content).toHaveLength(2);
     expect((content[1] as { text: string }).text).toContain("描述");
   });
@@ -114,7 +116,13 @@ describe("createArkVisionProvider", () => {
     for (const setup of [
       { options: { apiKey: undefined, model: "m" } },
       { options: { apiKey: "k", model: undefined } },
-      { options: { apiKey: "k", model: "m", fetchImpl: (async () => new Response("no", { status: 500 })) as typeof fetch } },
+      {
+        options: {
+          apiKey: "k",
+          model: "m",
+          fetchImpl: (async () => new Response("no", { status: 500 })) as typeof fetch
+        }
+      },
       {
         options: {
           apiKey: "k",
@@ -164,7 +172,7 @@ Expected: existing tests PASS; new tests FAIL (`createArkVisionProvider` is not 
 
 In `server/vision.ts`, below the existing code (leave `createDescriber` in place):
 
-- `createArkVisionProvider` reuses the exact fetch/abort/timeout/parse pattern of `createDescriber` (vision.ts:66-114), with the body's `content` built as: every frame mapped to `{ type: "image_url", image_url: { url: \`data:image/jpeg;base64,${frame}\` } }` in order, then `{ type: "text", text: question?.trim() || prompt }` where `prompt` defaults to `DEFAULT_PROMPT`. Missing `apiKey`/`model` → one `onFailure("not configured")` per call, null (defensive: `selectVisionProvider` never constructs it unconfigured, but the contract stays airtight). Keep (move, don't duplicate) the UNVERIFIED response-shape comment so it sits on the one parser both functions share — extract a small private `parseArkContent(body): string | null` used by both `createDescriber` and the new provider so the comment lives once.
+- `createArkVisionProvider` reuses the exact fetch/abort/timeout/parse pattern of `createDescriber` (vision.ts:66-114), with the body's `content` built as: every frame mapped to `{ type: "image_url", image_url: { url: \`data:image/jpeg;base64,${frame}\` } }`in order, then`{ type: "text", text: question?.trim() || prompt }`where`prompt`defaults to`DEFAULT_PROMPT`. Missing `apiKey`/`model`→ one`onFailure("not configured")`per call, null (defensive:`selectVisionProvider`never constructs it unconfigured, but the contract stays airtight). Keep (move, don't duplicate) the UNVERIFIED response-shape comment so it sits on the one parser both functions share — extract a small private`parseArkContent(body): string | null`used by both`createDescriber` and the new provider so the comment lives once.
 - `createMockVisionProvider` returns the three exact strings from Global Constraints, keyed only on `frames.length > 1` and `question` presence.
 - `selectVisionProvider`: ark when `apiKey` and `model` are both non-empty; otherwise mock plus one process-lifetime `log?.warn("ARK_API_KEY/ARK_MODEL is not set; vision uses the mock provider")` behind a module-level latch with a comment referencing the deliberate once-per-process divergence documented in `server/routing.ts`.
 
@@ -186,10 +194,12 @@ git commit -m "feat(vision): provider-neutral vision core with ark and mock prov
 ### Task 2: Vision-question grammar + question plumbing types
 
 **Files:**
+
 - Modify: `server/device-actions.ts` (camera.look args type at line ~43; extraction block at lines ~248-249; `IssuedDeviceCommand` type and `PendingDeviceCommands.issue` at lines ~455-465)
 - Test: `tests/device-actions.test.ts` (append)
 
 **Interfaces:**
+
 - Consumes: existing `extractDeviceCommand` and `PendingDeviceCommands` (device-actions.ts).
 - Produces (Task 3 relies on these):
   - `DeviceCommand` variant becomes `{ action: "camera.look"; args: { question?: string } }`.
@@ -211,12 +221,7 @@ describe("camera.look vision questions", () => {
   });
 
   it("carries the raw utterance for specific questions", () => {
-    for (const phrase of [
-      "前面那个路牌写的什么",
-      "前方的标志是什么",
-      "前面那辆车是什么样",
-      "what is that ahead"
-    ]) {
+    for (const phrase of ["前面那个路牌写的什么", "前方的标志是什么", "前面那辆车是什么样", "what is that ahead"]) {
       const command = extractDeviceCommand(phrase);
       expect(command).toMatchObject({ action: "camera.look", args: { question: phrase } });
     }
@@ -285,12 +290,14 @@ git commit -m "feat(vision): detect specific vision questions and thread them to
 ### Task 3: Doubao provider migration (question-threaded describe)
 
 **Files:**
+
 - Modify: `server/providers/doubao.ts` (module-scope describer at lines ~515-534; `cameraFrame` at lines ~1714-1751; the `pendingDeviceCommands.issue` dispatch site — grep for it in this file)
 - Modify: `server/vision.ts` (DELETE `createDescriber` and its `DescriberOptions` type — its last consumer migrates here; keep everything else)
 - Modify: `tests/vision.test.ts` (migrate the old `createDescriber` tests to `createArkVisionProvider` single-frame equivalents — preserve every failure-class case; delete none)
 - Test: `tests/doubao-camera-frame.test.ts` (extend)
 
 **Interfaces:**
+
 - Consumes: `selectVisionProvider`/`VisionProvider` (Task 1); `IssuedDeviceCommand.question` + `issue(..., question)` (Task 2); `buildChatCompletionsEndpoint` (unchanged).
 - Produces: no new exports. The doubao provider's `cameraFrame` behavior contract: describes `[event.image]` with `issued.question`, speaks the description (or "我看不清。") through the existing transcript+speaker path, detached from the session message queue exactly as today (vision.ts's fire-and-forget block at doubao.ts:1743-1750 — keep the comment).
 
@@ -360,10 +367,12 @@ git commit -m "feat(vision): thread rider questions through the doubao camera.lo
 ### Task 4: Mock voice provider camera.look demo path
 
 **Files:**
+
 - Modify: `server/providers/mock.ts` (add a `cameraFrame` method to the provider object; module- or factory-scope `createMockVisionProvider()`)
 - Test: `tests/mock-camera-frame.test.ts` (create; model its harness on `tests/doubao-camera-frame.test.ts`'s structure and on how existing mock-provider tests in `tests/agent.test.ts` / `tests/golden-replay.test.ts` construct the mock provider — read those first)
 
 **Interfaces:**
+
 - Consumes: `createMockVisionProvider` (Task 1); mock.ts's existing `pendingDeviceCommands` instance (line ~247) and its transcript/speech emission utilities (study `dispatchDeviceCommand` at ~244 and the turn machinery at ~310-334 before writing).
 - Produces: the mock provider answers `camera.frame` events for issued `camera.look` commands with the deterministic mock strings, emitted as a final agent transcript with `useBrowserSpeech: true` — so an embedded (or any) client demoing against the mock voice provider hears a description with zero credentials.
 
@@ -408,6 +417,7 @@ Run: `npx vitest run tests/mock-camera-frame.test.ts` — Expected: FAIL (`camer
 - [ ] **Step 3: Implement**
 
 In `server/providers/mock.ts`:
+
 - Construct one `createMockVisionProvider()` (module scope; it is stateless). Deliberately NOT `selectVisionProvider`: the mock voice provider is the zero-credential demo surface and must never spend Ark quota (spec M1) — put that sentence in a comment.
 - Add `async cameraFrame(event)` to the returned provider object, mirroring doubao.ts's guard exactly: `const issued = pendingDeviceCommands.peek(event.commandId); if (!issued || issued.action !== "camera.look") return;` then `const description = await mockVision.describe([event.image], issued.question);` (mock never returns null, but keep the `?? "我看不清。"` fallback for contract symmetry) and emit it through the mock's existing final-agent-transcript path with `useBrowserSpeech: true`.
 - Ensure mock's `dispatchDeviceCommand` passes the question into `issue(...)` the same way Task 3 did for doubao (fourth argument).
@@ -431,6 +441,7 @@ git commit -m "feat(vision): keyless camera.look demos on the mock voice provide
 ### Task 5: Closeout — full check, README, env template
 
 **Files:**
+
 - Modify: `README.md` (Current Capabilities — extend the vision-related bullet: live look now answers the rider's actual question; works keylessly on the mock provider; the real Ark key drops in via `ARK_API_KEY`/`ARK_MODEL`)
 - Verify: `.env.example` already documents `ARK_API_KEY` / `ARK_BASE_URL` / `ARK_MODEL` (`grep ARK .env.example`) — add the three with one-line comments only if absent.
 

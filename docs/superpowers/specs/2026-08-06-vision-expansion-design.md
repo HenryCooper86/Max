@@ -75,7 +75,7 @@ VisionProvider
   the text part the rider's question, or the existing fixed describe prompt
   when no question was asked. Endpoint/key/model config is unchanged
   (`ARK_API_KEY`, `ARK_BASE_URL`, `ARK_MODEL`); the 10 s model timeout stays —
-  every describe call happens *after* the device-result round trip closes, so
+  every describe call happens _after_ the device-result round trip closes, so
   the relay's 8 s device window is never in play (the 07-28 spec's sequencing,
   kept deliberately).
 - `MockVisionProvider` answers deterministically: one frame →
@@ -132,15 +132,15 @@ entry).
 vision.frames { commandId, reason: "gallery", index, total, image, question? }
 ```
 
-  Validation caps: `total` ≤ 8, `index` < `total`, image ≤ 200,000 chars,
-  question ≤ 500 bytes. `commandId` is required when `reason` is
-  `"gallery"` and absent for `"watch"` (the same reason-conditional
-  validation shape `nav.request` uses). The relay assembles per commandId
-  with a 10 s assembly timeout; an incomplete set is discarded and — because
-  the ok result and the "我看看…" filler have already gone out — the relay
-  speaks "我看不清", the same sentence a null model answer produces, so the
-  rider is never left in silence after the filler. `reason` exists so M3 can
-  reuse the event; only `"gallery"` is valid until V-C.
+Validation caps: `total` ≤ 8, `index` < `total`, image ≤ 200,000 chars,
+question ≤ 500 bytes. `commandId` is required when `reason` is
+`"gallery"` and absent for `"watch"` (the same reason-conditional
+validation shape `nav.request` uses). The relay assembles per commandId
+with a 10 s assembly timeout; an incomplete set is discarded and — because
+the ok result and the "我看看…" filler have already gone out — the relay
+speaks "我看不清", the same sentence a null model answer produces, so the
+rider is never left in silence after the filler. `reason` exists so M3 can
+reuse the event; only `"gallery"` is valid until V-C.
 
 ### Ordering and truth
 
@@ -174,7 +174,7 @@ off. Max confirms honestly via the result path ("已开启环境观察。").
 
 Every 30 s while enabled, grab the frame the ADAS feed already produces and
 run a grayscale-histogram distance against the last frame that was actually
-*shipped*; below threshold → drop locally, zero network, zero model cost (a
+_shipped_; below threshold → drop locally, zero network, zero model cost (a
 highway that looks the same for ten minutes costs nothing). Above threshold →
 one `vision.frames { reason: "watch", index: 0, total: 1, image }` (no
 commandId — unsolicited). Threshold fixture-tested in V-C against
@@ -215,11 +215,11 @@ governor work.
 
 ## Configuration
 
-| Variable | Consumer | Notes |
-| --- | --- | --- |
-| `ARK_API_KEY` | vision core | absent → mock provider |
+| Variable       | Consumer    | Notes                                  |
+| -------------- | ----------- | -------------------------------------- |
+| `ARK_API_KEY`  | vision core | absent → mock provider                 |
 | `ARK_BASE_URL` | vision core | optional; default Ark Beijing endpoint |
-| `ARK_MODEL` | vision core | must be a vision-capable Doubao model |
+| `ARK_MODEL`    | vision core | must be a vision-capable Doubao model  |
 
 No new credentials. M3's constants (30 s, 40/hr, 2 min, 30 s ADAS window,
 8-frame cap, 10 s assembly timeout) live in one tunable block like the crash

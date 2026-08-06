@@ -159,6 +159,17 @@ function snapToRoute(position: GeoPoint, polyline: readonly GeoPoint[]): RouteSn
  * 5. Snap tie-break: when two polyline segments are equidistant, the FIRST
  *    one in array order (lowest index) wins — `snapToRoute` only replaces
  *    the best match on a strictly-smaller cross-track distance.
+ * 6. Arrival is a DIFFERENT metric from rule 1 by design: it is the
+ *    straight-line (haversine) distance from the fix to the route's final
+ *    polyline vertex, not an along-route distance. It is evaluated on every
+ *    fix regardless of `offRoute` — arrival wins over off-route, because a
+ *    rider who is close enough to the destination but has drifted off the
+ *    plotted polyline (parking lot, driveway, wrong side of a divided road)
+ *    must still be told they've arrived; the web controller relies on this
+ *    to end navigation in that case. Like rule 4, arrival is sticky: once
+ *    `arrived` is true it stays true regardless of subsequent fixes, and the
+ *    caller resets it only by starting a new route (a fresh
+ *    `GuidanceProgress`), never by an in-band "un-arrive" call.
  */
 export function step(position: GeoPoint, route: NavRouteEvent, progress: GuidanceProgress): GuidanceUpdate {
   const snap = snapToRoute(position, route.polyline);

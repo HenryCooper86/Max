@@ -536,7 +536,20 @@ export class AgentSessionController {
       if (event.type === "crash.alert")
         await handleCrashAlert(event, this.crashNotifier, (payload) => this.send(payload));
       if (event.type === "crash.cancel") await handleCrashCancel(event, this.crashNotifier);
-      if (event.type === "nav.request") await this.navHandler(event);
+      // Detached from the caller, same rationale as camera.frame in
+      // server/providers/doubao.ts (~line 1737): this handler runs inside the
+      // same strictly serialized messageQueue that also carries the rider's
+      // live mic PCM. Awaiting a real-key Amap round trip here (up to two
+      // sequential provider calls — resolveDestination then planRoute, see
+      // server/routing.ts's DEFAULT_TIMEOUT_MS) would stall ALL client
+      // messages behind a slow navigation provider. Out-of-order interleaving
+      // is already safe: the handler's destination-matched cache and the
+      // client's stale-answer rejection make it benign for nav.route/nav.error
+      // to arrive slightly out of wire order relative to other events.
+      if (event.type === "nav.request")
+        void this.navHandler(event).catch((error) =>
+          this.log?.warn("nav.request failed", { message: error instanceof Error ? error.message : String(error) })
+        );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Voice relay failed";
       this.log?.warn("client message failed", { message });

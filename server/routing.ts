@@ -18,9 +18,13 @@ import type { Logger } from "./logger";
 
 const PLACE_ENDPOINT = "https://restapi.amap.com/v5/place/text";
 const DRIVING_ENDPOINT = "https://restapi.amap.com/v5/direction/driving";
-// Must finish well inside the relay's 8 s device-result timeout even when both
-// calls (resolve, then plan) run back to back.
-const DEFAULT_TIMEOUT_MS = 3500;
+// A "start" nav.request makes two sequential calls (resolveDestination, then
+// planRoute) that together must finish inside the relay's 8 s device-result
+// timeout, which also has to cover four WebSocket/HTTP hops (device → relay →
+// Amap → relay → device) around those two calls. 2 × 3000 ms caps provider
+// time at 6 s, leaving headroom for those hops instead of eating the whole
+// budget on the two fetches alone.
+const DEFAULT_TIMEOUT_MS = 3000;
 
 type ResolvedDestination = { name: string; location: GeoPoint };
 type PlannedRoute = {

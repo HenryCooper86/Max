@@ -44,7 +44,26 @@ export function amapProxyTarget(path: string, search: string, jscode: string): s
   }
 
   const separator = search ? "&" : "?";
-  return `${upstreamBase}${search}${separator}jscode=${jscode}`;
+  return `${upstreamBase}${search}${separator}jscode=${encodeURIComponent(jscode)}`;
+}
+
+/**
+ * Pure gate for the `/_AMapService/*` proxy: same-origin only. Amap's own JS
+ * SDK always sends a Referer from a browser, so requiring one to MATCH the
+ * relay's own origin when present is enough to stop another site from
+ * riding this relay's proxy (and thus its jscode secret) for its own map
+ * traffic. No Referer at all (curl, server-side tooling, some QA harnesses)
+ * is allowed through rather than rejected — browsers are the only client
+ * this gate needs to constrain, and they never omit Referer for a same-tab
+ * navigation/XHR to a same-site path like this one.
+ */
+export function isAllowedProxyReferer(referer: string | undefined, selfOrigin: string): boolean {
+  if (!referer) return true;
+  try {
+    return new URL(referer).origin === selfOrigin;
+  } catch {
+    return false;
+  }
 }
 
 /** Registers `/nav/js-config` and the `/_AMapService/*` proxy. Must be
@@ -62,6 +81,12 @@ export function registerAmapRoutes(app: express.Express): void {
       res.status(404).end();
       return;
     }
+    const referer = req.get("referer");
+    const selfOrigin = `${req.protocol}://${req.get("host")}`;
+    if (!isAllowedProxyReferer(referer, selfOrigin)) {
+      res.status(403).end();
+      return;
+    }
     const search = req.originalUrl.includes("?") ? "?" + req.originalUrl.split("?")[1] : "";
     const target = amapProxyTarget(req.path, search, config.amapJsSecret);
     if (!target) {
@@ -69,7 +94,13 @@ export function registerAmapRoutes(app: express.Express): void {
       return;
     }
     try {
-      const upstream = await fetch(target, { signal: AbortSignal.timeout(8000) });
+      // Forward Referer upstream: Amap's domain allowlist on the JS key gates
+      // via Referer, so a domain-restricted key would otherwise see every
+      // request as referer-less and reject it once it's behind this proxy.
+      const upstream = await fetch(target, {
+        signal: AbortSignal.timeout(8000),
+        headers: referer ? { referer } : undefined
+      });
       res.status(upstream.status);
       const type = upstream.headers.get("content-type");
       if (type) res.setHeader("Content-Type", type);

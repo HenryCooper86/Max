@@ -4,7 +4,7 @@
 
 **Goal:** Opt-in ambient observation from the helmet camera: the board samples 1 frame/30 s behind a scene-change gate, and Max volunteers at most one short non-hazard observation per two minutes — never over ADAS, never over speech, ≤40 model calls/hour, every drop metered.
 
-**Architecture:** "开启环境观察" → `vision.watch { on }` (embedded-gated) reaches the board's existing vision RPC path untouched; the Python vision process runs a sampler thread (ride.py's `_stop.wait` idiom) over the same `FrameBuffer` ADAS reads, gates on grayscale-histogram distance vs the last *shipped* frame, and broadcasts a `watch.frame` event; the TS agent forwards it as an unsolicited `vision.frames { reason: "watch" }`. The relay's pure `server/vision-governor.ts` (per session, per provider) applies the Conservative rules in order — disabled, budget, ADAS window, speech gate, cooldown — then asks the vision core with a dedicated watching prompt whose "无。" sentinel separates nothing-notable from model failure. Watching dies with the session twice over: the agent switches the board off when the relay socket drops, and the governor's `disabled` rule refuses frames from any session that never enabled it.
+**Architecture:** "开启环境观察" → `vision.watch { on }` (embedded-gated) reaches the board's existing vision RPC path untouched; the Python vision process runs a sampler thread (ride.py's `_stop.wait` idiom) over the same `FrameBuffer` ADAS reads, gates on grayscale-histogram distance vs the last _shipped_ frame, and broadcasts a `watch.frame` event; the TS agent forwards it as an unsolicited `vision.frames { reason: "watch" }`. The relay's pure `server/vision-governor.ts` (per session, per provider) applies the Conservative rules in order — disabled, budget, ADAS window, speech gate, cooldown — then asks the vision core with a dedicated watching prompt whose "无。" sentinel separates nothing-notable from model failure. Watching dies with the session twice over: the agent switches the board off when the relay socket drops, and the governor's `disabled` rule refuses frames from any session that never enabled it.
 
 **Tech Stack:** TypeScript (relay + rdk/agent, vitest), Python 3.10 (rdk/vision, pytest, cv2/numpy via requirements-dev — available off-board). No new dependencies.
 
@@ -31,6 +31,7 @@
 ### Task 1: Protocol + `vision.watch` action plumbing
 
 **Files:**
+
 - Modify: `protocol/agent-events.schema.json` (DeviceCommand action enum += "vision.watch"; VisionFrames `reason` enum → ["gallery", "watch"], `commandId` dropped from `required`)
 - Modify: generated siblings via `npm run generate:protocol` only
 - Modify: `shared/agent.ts` (`VisionFramesEvent`: `reason: "gallery" | "watch"`, `commandId?: string`, doc comment updated)
@@ -39,6 +40,7 @@
 - Test: `tests/vision-frames-protocol.test.ts` (extend), `tests/device-actions.test.ts` (extend)
 
 **Interfaces:**
+
 - Produces (later tasks rely on):
   - `VisionFramesEvent` with `reason: "gallery" | "watch"` and `commandId?: string`.
   - `DeviceCommand` variant `{ action: "vision.watch"; args: { on: boolean } }`.
@@ -54,7 +56,12 @@ describe("parseClientEvent vision.frames watch reason", () => {
   const watch = { type: "vision.frames", reason: "watch", index: 0, total: 1, image: "aGVsbG8=" };
 
   it("accepts a bare watch frame", () => {
-    expect(parseClientEvent(encode(watch))).toMatchObject({ type: "vision.frames", reason: "watch", index: 0, total: 1 });
+    expect(parseClientEvent(encode(watch))).toMatchObject({
+      type: "vision.frames",
+      reason: "watch",
+      index: 0,
+      total: 1
+    });
   });
 
   it("rejects watch frames with a commandId, a question, or multi-frame shape", () => {
@@ -64,9 +71,9 @@ describe("parseClientEvent vision.frames watch reason", () => {
   });
 
   it("still requires commandId for gallery", () => {
-    expect(() => parseClientEvent(encode({ type: "vision.frames", reason: "gallery", index: 0, total: 1, image: "x" }))).toThrow(
-      /commandId/
-    );
+    expect(() =>
+      parseClientEvent(encode({ type: "vision.frames", reason: "gallery", index: 0, total: 1, image: "x" }))
+    ).toThrow(/commandId/);
   });
 });
 ```
@@ -145,24 +152,20 @@ git commit -m "feat(vision): vision.watch toggle and the watch frame reason"
 ### Task 2: The governor (`server/vision-governor.ts`) + watch prompt + metrics
 
 **Files:**
+
 - Create: `server/vision-governor.ts`
 - Modify: `server/vision.ts` (export `WATCH_PROMPT`; MockVisionProvider answers it with "前方有施工路段，注意慢行。")
 - Modify: `server/metrics.ts` (a `watchDrops` per-reason counter object on the existing `metrics` export at ~line 75, following its current fields' style, plus a `watchDrop(reason: string)` increment method; surface the counters wherever that object's fields already surface)
 - Test: `tests/vision-governor.test.ts`, `tests/vision.test.ts` (extend: WATCH_PROMPT mock answer)
 
 **Interfaces:**
+
 - Consumes: `VisionProvider.describe(frames, question?)` (V-A).
 - Produces (Task 3 consumes):
 
 ```ts
 export type WatchDropReason =
-  | "disabled"
-  | "budget"
-  | "adas-window"
-  | "speech"
-  | "cooldown"
-  | "nothing-notable"
-  | "model-failure";
+  "disabled" | "budget" | "adas-window" | "speech" | "cooldown" | "nothing-notable" | "model-failure";
 
 export function createVisionGovernor(options: {
   describe(frames: string[], question?: string): Promise<string | null>;
@@ -338,12 +341,14 @@ git commit -m "feat(vision): the watch governor with metered conservative rules"
 ### Task 3: Provider wiring — watch frames reach the governor
 
 **Files:**
+
 - Modify: `server/providers/types.ts` (`hazardReport?(event: HazardReportEvent): Promise<void>;` — check shared/agent.ts for the parsed hazard.report type name and use it)
 - Modify: `server/session-controller.ts` (forward: `if (event.type === "hazard.report") await this.provider.hazardReport?.(event);` beside the other forwards — the FIRST consumer of this event; keep the existing "never echo back" comment intact)
 - Modify: `server/providers/doubao.ts`, `server/providers/mock.ts`
 - Test: `tests/doubao-watch.test.ts` (create), `tests/mock-watch.test.ts` (create) — study the harnesses of tests/doubao-vision-frames.test.ts and tests/mock-vision-frames.test.ts first; their idioms govern
 
 **Interfaces:**
+
 - Consumes: `createVisionGovernor` + `WatchDropReason` (Task 2), `metrics.watchDrop` (Task 2), `IssuedDeviceCommand.watchOn` (Task 1), each provider's existing visionFrames/speech machinery (V-B).
 - Produces, per provider:
   - `visionFrames` branches on reason FIRST: `"watch"` → `void governor.handleWatchFrame(event.image)` (fire-and-forget with a `.catch` backstop — the session queue must never stall behind a describe); `"gallery"` → the existing V-B path (guard on `event.commandId` presence for type narrowing).
@@ -400,11 +405,13 @@ git commit -m "feat(vision): providers govern and speak watch observations"
 ### Task 4: Board Python — sampler, change gate, toggle op
 
 **Files:**
+
 - Create: `rdk/vision/watch/__init__.py`, `rdk/vision/watch/tuning.py`, `rdk/vision/watch/gate.py`, `rdk/vision/watch/sampler.py`
 - Modify: `rdk/vision/service.py` (handlers dict += `"vision.watch"`; sampler wired into `build_runtime`; ControlHandler disables watching on disconnect)
 - Test: `rdk/vision/tests/test_watch_gate.py`, `rdk/vision/tests/test_watch_sampler.py` (create)
 
 **Interfaces:**
+
 - Produces:
 
 ```python
@@ -489,11 +496,13 @@ git commit -m "feat(rdk): watch sampler with a histogram change gate behind visi
 ### Task 5: Board TS agent — capability, forwarding, dies-with-session
 
 **Files:**
+
 - Modify: `rdk/agent/src/device/capabilities.ts` (`EMBEDDED_CAPABILITIES["vision.watch"]` — supported; the exhaustiveness vitest fails without it)
 - Modify: `rdk/agent/src/main.ts` (vision `onEvent`: new `event.event === "watch.frame"` branch → `relay.sendEvent({ type: "vision.frames", reason: "watch", index: 0, total: 1, image: event.image })`; relay socket close handler → best-effort `void vision.request("vision.watch", { on: false }).catch(() => {})` with a comment: watching dies with the session — a reconnecting rider must re-enable it)
 - Test: `tests/rdk-device-dispatch.test.ts` (capability exhaustiveness now passes; add a dispatch case), `tests/rdk-watch-forwarding.test.ts` (create — model on how tests/rdk-hazard.test.ts / rdk-relay tests fake the relay and vision client)
 
 **Interfaces:**
+
 - Consumes: `dispatch.ts`'s existing fall-through to `options.vision.request(command.action, command.args)` — vision.watch needs NO new dispatch branch (verify with the test below); `relay.sendEvent` (fire-and-forget); the vision client's `onEvent` plumbing.
 - Produces: the board end-to-end: toggle command → vision RPC; vision `watch.frame` push → unsolicited `vision.frames` to the relay; relay disconnect → watching off.
 
@@ -548,6 +557,7 @@ git commit -m "feat(rdk): forward watch frames and kill watching with the sessio
 ### Task 6: Closeout — gates, README, audit
 
 **Files:**
+
 - Modify: `README.md` (Current Capabilities: a 环境观察 bullet — opt-in voice toggle, board samples 1 frame/30 s behind a scene-change gate, relay governor's caps/cooldowns/ADAS-dedupe/speech-gate with the exact numbers, silent failures, keyless mock behavior, honest limits: no promise the model notices everything, off by default, dies with the session)
 
 - [ ] **Step 1: README** per above, dry mechanism-first voice.

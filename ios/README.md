@@ -189,13 +189,17 @@ hide the toggle, use the hardened `Info.plist`, and require a trusted certificat
   music reaches only Apple Music and the local library, never 网易云/QQ音乐; SMS is refused above
   5 km/h. Contact numbers never leave the device, and spoken contact names are redacted from stored
   QA transcripts.
-- Voice-triggered live navigation: "导航去X" starts in-app turn-by-turn guidance — a pure guidance
-  engine matches the rider to an MKDirections route and speaks maneuver prompts at ~400 m, ~150 m,
-  and the turn, with one debounced reroute per wrong turn and an arrival announcement. "停止导航"
-  ends it. The live card shows the next maneuver, distance, and ETA over a route map. Guidance runs
-  during the foreground hands-free session (the screen stays awake), so it needs no background-location
-  permission. Car routing only — MapKit has no motorcycle profile, so it does not respect 摩托车禁行
-  roads, and the spoken summary says so.
+- Voice-triggered live navigation: "导航去X" starts in-app turn-by-turn guidance built on a pure
+  `GuidanceEngine` — route matching, off-route detection, and prompt timing, all unit-tested from
+  lat/lon literals — and speaks maneuver prompts at ~400 m, ~150 m, and the turn, with one debounced
+  reroute per wrong turn and an arrival announcement. "停止导航" ends it. The live card shows the next
+  maneuver, distance, and ETA over a route map. Routing is relay-side: `nav.request`/`nav.route`/
+  `nav.error` over the agent socket reach the same Amap driving service the web HUD uses (GCJ-02 on
+  the wire, WGS-84 inside the app, converted at the protocol boundary), so the keyless mock route
+  works end-to-end with no Amap key configured. Guidance runs during the foreground hands-free
+  session (the screen stays awake), so it needs no background-location permission. Honest limits:
+  car routing only, so it does not respect 摩托车禁行 roads, and there is no MKDirections fallback —
+  a relay that's down or unreachable is a spoken failure, not a silent retry elsewhere.
 - Reconnect with exponential backoff and user-visible connection status.
 - Live weather card and fused `态势摘要` ride-pulse card.
 - Transcript with in-place updates, deduplication, timestamps, and JSON export via share sheet.

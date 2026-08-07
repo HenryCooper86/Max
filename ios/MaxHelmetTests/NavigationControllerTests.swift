@@ -289,6 +289,148 @@ final class NavigationControllerTests: XCTestCase {
         XCTAssertFalse(box.spoken.contains { $0.contains("无法重新规划路线") }, "the stale reroute's failure speech must be suppressed")
     }
 
+    // Final-review fix wave: a route committed after a teardown must never
+    // land on a stopped stream, and nothing must ever revive navigation
+    // after an explicit 停止导航. See the "Final-review fix wave" section of
+    // the task-4 report for the chosen arrival-vs-stop asymmetry and why.
+
+    func testStartCommittedAfterArrivalTeardownReassertsTheStream() async {
+        let stream = FakeStream(), search = FakeSearch()
+        let routeA = straightRoute()
+        search.route = routeA
+        let (controller, box) = make(stream, search, clock: { 0 })
+
+        let first = await controller.perform(.navigationStart(query: "终点"))
+        XCTAssertEqual(first, .ok)
+
+        // Rider asks for a new, unrelated destination B while still
+        // approaching A. Hold B's search so an arrival on A can land while
+        // B is still in flight.
+        search.holdRoute = true
+        let routeB = NavigationRoute(
+            destinationName: "新终点",
+            destinationCoordinate: CLLocationCoordinate2D(latitude: 39.95, longitude: 116.45),
+            polyline: [
+                CLLocationCoordinate2D(latitude: 39.90, longitude: 116.40),
+                CLLocationCoordinate2D(latitude: 39.95, longitude: 116.45)
+            ],
+            steps: [ManeuverStep(
+                instruction: "到达新终点",
+                coordinate: CLLocationCoordinate2D(latitude: 39.95, longitude: 116.45),
+                alongRouteMeters: 3000
+            )],
+            totalDistanceMeters: 3000, totalEtaSeconds: 500
+        )
+        let secondTask = Task { await controller.perform(.navigationStart(query: "新终点")) }
+        try? await Task.sleep(nanoseconds: 50_000_000) // let it reach the held search
+
+        // A fix arrives within A's arrival radius — arrival tears the stream
+        // down while B's request is still in flight.
+        stream.feed(routeA.destinationCoordinate)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertFalse(stream.started, "arrival on A stopped the stream")
+        XCTAssertNil(box.guidance)
+
+        // B's search now resolves — a fresh, independent request must still
+        // commit, on a live stream, rather than being silently discarded.
+        search.resolveHeld(with: routeB)
+        let second = await secondTask.value
+
+        XCTAssertEqual(second, .ok, "arrival on the OLD route must not discard the still-valid new request")
+        XCTAssertTrue(stream.started, "committing the new route re-asserts the stream")
+        XCTAssertEqual(box.guidance?.destinationName, "新终点")
+    }
+
+    func testStopDuringHeldSearchDiscardsTheStaleInstall() async {
+        let stream = FakeStream(), search = FakeSearch()
+        search.route = straightRoute()
+        let (controller, box) = make(stream, search, clock: { 0 })
+
+        let first = await controller.perform(.navigationStart(query: "终点"))
+        XCTAssertEqual(first, .ok)
+
+        search.holdRoute = true
+        let secondTask = Task { await controller.perform(.navigationStart(query: "新终点")) }
+        try? await Task.sleep(nanoseconds: 50_000_000) // let it reach the held search
+
+        let stopResult = await controller.perform(.navigationStop)
+        XCTAssertEqual(stopResult, .ok)
+        XCTAssertFalse(stream.started)
+        XCTAssertNil(box.guidance)
+
+        // The stale answer arrives after the explicit stop — it must never
+        // revive navigation, on a live stream or otherwise.
+        search.resolveHeld(with: straightRoute())
+        let second = await secondTask.value
+
+        XCTAssertEqual(second.status, .unsupported)
+        XCTAssertEqual(second.reason, "route.unavailable")
+        XCTAssertFalse(stream.started, "the stale install must not restart the stream")
+        XCTAssertNil(box.guidance, "the stale install must not revive guidance")
+    }
+
+    func testStopWhileAwaitingFirstFixForANewStartResolvesImmediately() async {
+        executionTimeAllowance = 5 // safety net, not the actual bound this test proves
+        let stream = FakeStream(), search = FakeSearch()
+        search.route = straightRoute()
+        // Deliberately short relative to the 1 s assertion below: if `stop`
+        // didn't resolve the pending first-fix wait directly, this test
+        // would only pass by accident, after waiting out the 2 s watchdog —
+        // the timing assertion distinguishes "resolved immediately by the
+        // stop" from "resolved eventually by its own watchdog" (which would
+        // otherwise see the generation the stop just bumped and correctly
+        // refuse to resolve it, since a stale request must not revive
+        // anything — but must still resolve promptly, not hang).
+        let (controller, _) = make(stream, search, clock: { 0 }, firstFixTimeoutSeconds: 2)
+
+        let first = await controller.perform(.navigationStart(query: "终点"))
+        XCTAssertEqual(first, .ok)
+
+        // A second start is awaiting its OWN first fix — not yet even at the
+        // search stage — when the rider stops navigation outright.
+        stream.fixOnStart = nil
+        let secondTask = Task { await controller.perform(.navigationStart(query: "新终点")) }
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        let stopResult = await controller.perform(.navigationStop)
+        XCTAssertEqual(stopResult, .ok)
+
+        let resolvedFrom = Date()
+        let second = await secondTask.value
+        XCTAssertLessThan(
+            Date().timeIntervalSince(resolvedFrom), 1.0,
+            "stop must resolve the pending first-fix wait immediately, not via its own 2 s watchdog"
+        )
+        XCTAssertEqual(second.status, .unsupported)
+        XCTAssertEqual(second.reason, "route.unavailable")
+    }
+
+    func testRerouteSuccessReassertsTheStream() async {
+        let stream = FakeStream(), search = FakeSearch()
+        let route = straightRoute()
+        search.route = route
+        let (controller, box) = make(stream, search, clock: { 0 })
+        _ = await controller.perform(.navigationStart(query: "终点"))
+
+        search.holdReroute = true
+        let off = CLLocationCoordinate2D(latitude: 39.9060, longitude: 116.4020)
+        stream.feed(off)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(search.rerouteCalls, 1)
+
+        // Simulate the stream having stopped for any reason (e.g. an
+        // arrival teardown on this same route) while the reroute was
+        // in flight.
+        stream.stop()
+        XCTAssertFalse(stream.started)
+
+        search.resolveHeldReroute(with: route)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertTrue(stream.started, "committing a rerouted route re-asserts the stream")
+        XCTAssertNotNil(box.guidance)
+    }
+
     func testStartWithNoFixWithinBoundReportsRouteUnavailable() async {
         let stream = FakeStream()
         stream.fixOnStart = nil // GPS never reports a fix

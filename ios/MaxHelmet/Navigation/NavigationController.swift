@@ -128,6 +128,11 @@ final class NavigationController: DeviceActionHandler {
             // generation now owns `route`/the stream; do not stomp on it.
             return .unsupported("route.unavailable")
         }
+        // Re-assert: a teardown elsewhere (e.g. arrival on the route this
+        // request supersedes) may have stopped the stream since the
+        // stream.start() call above ran — a route about to commit must
+        // never land on a dead stream. Idempotent when it's already running.
+        stream.start()
         route = resolved
         progress = GuidanceProgress(maneuverIndex: 0, firedThresholds: [], arrived: false)
         publish(location: nil)
@@ -171,6 +176,16 @@ final class NavigationController: DeviceActionHandler {
 
     private func stopGuidance() -> DeviceActionResult {
         guard route != nil else { return .failed("navigation.notActive") }
+        // Teardown invalidates the generation: an explicit stop is a
+        // deliberate "cancel everything" — any start or reroute already in
+        // flight must never revive navigation once its answer arrives late.
+        navigationGeneration += 1
+        // A concurrent start() awaiting its first fix must not hang forever
+        // once the bump above invalidates its generation: its own watchdog
+        // would see the mismatch and correctly refuse to resolve it (see
+        // awaitFirstFix), so the resolve has to happen here instead — a
+        // no-op when nothing is currently awaiting a fix.
+        resolveFirstFix(nil)
         route = nil
         stream.stop()
         onGuidance(nil)
@@ -195,6 +210,14 @@ final class NavigationController: DeviceActionHandler {
         publish(location: location, update: update)
 
         if update.arrived {
+            // Deliberately does NOT bump navigationGeneration: arrival only
+            // retires THIS route, not any other in-flight request. A start
+            // already in progress for an unrelated destination (or a
+            // reroute still trying to fix this very route) must be free to
+            // land — its own commit site re-asserts stream.start(), so a
+            // route that lands after this teardown is never streamless.
+            // Contrast with stopGuidance/reroute-failure below, which are
+            // explicit "stop everything" events and DO bump the generation.
             self.route = nil
             stream.stop()
             onGuidance(nil)
@@ -221,10 +244,19 @@ final class NavigationController: DeviceActionHandler {
             // already installed one.
             guard generation == navigationGeneration else { return }
             if let fresh {
+                // Re-assert for the same reason start()'s commit does: an
+                // arrival teardown on this same route (see handleFix) may
+                // have stopped the stream while this reroute was in flight.
+                stream.start()
                 route = fresh
                 progress = GuidanceProgress(maneuverIndex: 0, firedThresholds: [], arrived: false)
                 publish(location: origin)
             } else {
+                // A genuine reroute failure is itself a "stop everything"
+                // event — bump the generation for the same reason
+                // stopGuidance does, so nothing still tied to this
+                // generation can later revive what was just torn down.
+                navigationGeneration += 1
                 route = nil
                 stream.stop()
                 onGuidance(nil)

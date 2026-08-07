@@ -1,13 +1,10 @@
 import CoreLocation
-import MapKit
 import XCTest
 @testable import MaxHelmet
 
 final class RouteSearchTests: XCTestCase {
 
-    func testMapsAnMKRouteIntoANavigationRoute() {
-        // MKRoute can't be constructed in a test, so we verify the mapping helper
-        // against a hand-built polyline + steps stand-in via the pure entry point.
+    func testAssemblesANavigationRouteFromRawFields() {
         let dest = CLLocationCoordinate2D(latitude: 39.9087, longitude: 116.3975)
         let polyline = [
             CLLocationCoordinate2D(latitude: 39.90, longitude: 116.40),

@@ -132,14 +132,20 @@ final class RelayNavigationSearch: NavigationRouteSearching {
     private func awaitAnswer(commandId: String, request: String) async -> NavigationRoute? {
         failPending()
         return await withCheckedContinuation { (continuation: CheckedContinuation<NavigationRoute?, Never>) in
-            let watchdogTask = Task.detached { [weak self, timeoutSeconds] in
-                try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
-                self?.timeoutIfCurrent(commandId)
-            }
+            // Register the continuation AND the watchdog together under one
+            // lock acquisition before the watchdog can possibly run: with a
+            // very small (e.g. test-injected) timeoutSeconds, a detached
+            // Task created before this registration could race ahead and
+            // fire while `pendingCommandId`/`pendingContinuation` are still
+            // unset, finding nothing to resolve — and then never getting
+            // another chance, permanently hanging this continuation.
             lock.lock()
             pendingCommandId = commandId
             pendingContinuation = continuation
-            watchdog = watchdogTask
+            watchdog = Task.detached { [weak self, timeoutSeconds] in
+                try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                self?.timeoutIfCurrent(commandId)
+            }
             lock.unlock()
             sendJson(request)
         }

@@ -136,12 +136,12 @@ export function createMockVisionProvider(): VisionProvider {
       }
       if (frames.length > 1) {
         if (question) {
-          return `关于"${question}"：我看到前方道路畅通。`;
+          return `关于“${question}”：我看到前方道路畅通。`;
         }
         return "这段视频里，前方道路畅通，一路顺利。";
       }
       if (question) {
-        return `关于"${question}"：我看到前方道路畅通。`;
+        return `关于“${question}”：我看到前方道路畅通。`;
       }
       return "前方道路畅通，天气晴朗。";
     }

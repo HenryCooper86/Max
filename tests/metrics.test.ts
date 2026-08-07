@@ -837,3 +837,32 @@ describe("tester turn feedback recording", () => {
     clearAllTesterData();
   });
 });
+
+describe("metrics watch drops", () => {
+  it("snapshot includes flattened watch drops", () => {
+    metrics.watchDrop("disabled");
+    metrics.watchDrop("budget");
+    metrics.watchDrop("budget");
+
+    const snap = metrics.snapshot();
+    expect(snap.watchDrops_disabled).toBe(1);
+    expect(snap.watchDrops_budget).toBe(2);
+    expect(snap.watchDrops_adas_window).toBe(0);
+    expect(snap.watchDrops_speech).toBe(0);
+    expect(snap.watchDrops_cooldown).toBe(0);
+    expect(snap.watchDrops_nothing_notable).toBe(0);
+    expect(snap.watchDrops_model_failure).toBe(0);
+  });
+
+  it("reset clears watch drops", () => {
+    metrics.watchDrop("speech");
+    metrics.watchDrop("cooldown");
+    expect(metrics.snapshot().watchDrops_speech).toBe(1);
+    expect(metrics.snapshot().watchDrops_cooldown).toBe(1);
+
+    metrics.reset();
+
+    expect(metrics.snapshot().watchDrops_speech).toBe(0);
+    expect(metrics.snapshot().watchDrops_cooldown).toBe(0);
+  });
+});

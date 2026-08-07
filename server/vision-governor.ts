@@ -13,6 +13,8 @@
  * silence is logged and the ride continues.
  */
 
+import { WATCH_PROMPT } from "./vision";
+
 export type WatchDropReason =
   "disabled" | "budget" | "adas-window" | "speech" | "cooldown" | "nothing-notable" | "model-failure";
 
@@ -44,6 +46,7 @@ export function createVisionGovernor(options: {
   let enabled = false;
   let hazardAt = -1;
   let lastSpokenAt = -1;
+  let describeInFlight = false;
   const describeTimestamps: number[] = [];
 
   function isNothingNotable(text: string): boolean {
@@ -86,8 +89,8 @@ export function createVisionGovernor(options: {
         return;
       }
 
-      // Rule 4: speech open
-      if (isSpeechOpen()) {
+      // Rule 4: speech open or describe in flight
+      if (isSpeechOpen() || describeInFlight) {
         onDrop("speech");
         return;
       }
@@ -98,27 +101,30 @@ export function createVisionGovernor(options: {
         return;
       }
 
-      // Record this describe call and call the model
+      // Record this describe call and mark in-flight
       describeTimestamps.push(currentTime);
+      describeInFlight = true;
 
-      // Import WATCH_PROMPT from vision.ts
-      const { WATCH_PROMPT } = await import("./vision");
-      const answer = await describe([image], WATCH_PROMPT);
+      try {
+        const answer = await describe([image], WATCH_PROMPT);
 
-      // Handle answer
-      if (answer === null) {
-        onDrop("model-failure");
-        return;
+        // Handle answer
+        if (answer === null) {
+          onDrop("model-failure");
+          return;
+        }
+
+        if (isNothingNotable(answer)) {
+          onDrop("nothing-notable");
+          return;
+        }
+
+        // Success: speak and record timestamp
+        speak(answer);
+        lastSpokenAt = currentTime;
+      } finally {
+        describeInFlight = false;
       }
-
-      if (isNothingNotable(answer)) {
-        onDrop("nothing-notable");
-        return;
-      }
-
-      // Success: speak and record timestamp
-      speak(answer);
-      lastSpokenAt = currentTime;
     }
   };
 }

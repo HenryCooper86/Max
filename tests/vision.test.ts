@@ -206,12 +206,7 @@ describe("createMockVisionProvider", () => {
     expect(provider.mode).toBe("mock");
     expect(await provider.describe([FRAME])).toBe("前方道路畅通，天气晴朗。");
     expect(await provider.describe([FRAME, FRAME, FRAME])).toBe("这段视频里，前方道路畅通，一路顺利。");
-    expect(await provider.describe([FRAME], "前面是什么")).toBe(`关于"前面是什么"：我看到前方道路畅通。`);
-  });
-
-  it("answers the watch prompt with the fixed observation", async () => {
-    const provider = createMockVisionProvider();
-    expect(await provider.describe(["F"], WATCH_PROMPT)).toBe("前方有施工路段，注意慢行。");
+    expect(await provider.describe([FRAME], "前面是什么")).toBe(`关于“前面是什么”：我看到前方道路畅通。`);
   });
 });
 

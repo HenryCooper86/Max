@@ -89,6 +89,18 @@ export const metrics = {
       this.watchDrops[key] += 1;
     }
   },
+  snapshot(): ReturnType<typeof relayMetrics.snapshot> & Record<string, number> {
+    return {
+      ...relayMetrics.snapshot(),
+      watchDrops_disabled: this.watchDrops.disabled,
+      watchDrops_budget: this.watchDrops.budget,
+      watchDrops_adas_window: this.watchDrops["adas-window"],
+      watchDrops_speech: this.watchDrops.speech,
+      watchDrops_cooldown: this.watchDrops.cooldown,
+      watchDrops_nothing_notable: this.watchDrops["nothing-notable"],
+      watchDrops_model_failure: this.watchDrops["model-failure"]
+    };
+  },
   /** Test hook. */
   reset() {
     resetRelayMetrics();

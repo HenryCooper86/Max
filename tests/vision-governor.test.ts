@@ -117,4 +117,30 @@ describe("createVisionGovernor", () => {
     await h.governor.handleWatchFrame("F");
     expect(h.drops).toEqual(["disabled"]);
   });
+
+  it("detects in-flight describes and drops overlapping frames as speech", async () => {
+    let resolveDescribe: (value: string) => void;
+    const describePromise = new Promise<string>((resolve) => {
+      resolveDescribe = resolve;
+    });
+
+    const h = harness({
+      describe: async () => describePromise
+    });
+    h.governor.setEnabled(true);
+
+    // Start first frame (will hang waiting for resolve)
+    const firstFramePromise = h.governor.handleWatchFrame("A");
+
+    // Deliver second frame while first is in flight
+    await h.governor.handleWatchFrame("B");
+
+    // Resolve the first describe
+    resolveDescribe!("前方有慢车。");
+    await firstFramePromise;
+
+    // Exactly one speak (from first), one drop (speech) for second
+    expect(h.spoken).toHaveLength(1);
+    expect(h.drops).toEqual(["speech"]);
+  });
 });

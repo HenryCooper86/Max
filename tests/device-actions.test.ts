@@ -375,6 +375,7 @@ describe("DEVICE_ACTION_TIERS", () => {
       "camera.look": "low",
       "gallery.open": "low",
       "gallery.describe": "low",
+      "vision.watch": "low",
       "navigation.start": "low",
       "navigation.stop": "low",
       "system.shutdown": "high"
@@ -546,5 +547,33 @@ describe("gallery.describe", () => {
     };
     const parsed = parseClientEvent(Buffer.from(JSON.stringify(event)));
     expect(parsed).toMatchObject({ type: "vision.frames", question: truncatedQuestion });
+  });
+});
+
+describe("vision.watch", () => {
+  it("detects the toggle phrases in both languages", () => {
+    expect(extractDeviceCommand("开启环境观察")).toMatchObject({ action: "vision.watch", args: { on: true } });
+    expect(extractDeviceCommand("打开一下环境观察")).toMatchObject({ action: "vision.watch", args: { on: true } });
+    expect(extractDeviceCommand("关闭环境观察")).toMatchObject({ action: "vision.watch", args: { on: false } });
+    expect(extractDeviceCommand("stop watching")).toMatchObject({ action: "vision.watch", args: { on: false } });
+    expect(extractDeviceCommand("start scene watching")).toMatchObject({ action: "vision.watch", args: { on: true } });
+  });
+
+  it("does not fire on unrelated 观察/watch phrases", () => {
+    expect(extractDeviceCommand("观察一下路况")).toBeNull();
+    expect(extractDeviceCommand("watch out")).toBeNull();
+  });
+
+  it("is embedded-gated with honest toggle speech", () => {
+    expect(extractDeviceCommandForPlatform("开启环境观察", "embedded")).toMatchObject({ action: "vision.watch" });
+    expect(extractDeviceCommandForPlatform("开启环境观察", "ios")).toBeNull();
+    expect(deviceSuccessSpeech({ action: "vision.watch", args: { on: true } })).toBe("已开启环境观察。");
+    expect(deviceSuccessSpeech({ action: "vision.watch", args: { on: false } })).toBe("已关闭环境观察。");
+  });
+
+  it("carries watchOn through PendingDeviceCommands", () => {
+    const pending = new PendingDeviceCommands();
+    const issued = pending.issue("vision.watch", "已开启环境观察。", Date.now(), undefined, true);
+    expect(pending.peek(issued.commandId)?.watchOn).toBe(true);
   });
 });

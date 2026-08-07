@@ -22,6 +22,7 @@ export type DeviceActionName =
   | "camera.look"
   | "gallery.open"
   | "gallery.describe"
+  | "vision.watch"
   | "navigation.start"
   | "navigation.stop"
   | "system.shutdown";
@@ -44,6 +45,7 @@ type DeviceCommand =
   | { action: "camera.look"; args: { question?: string } }
   | { action: "gallery.open"; args: Record<string, never> }
   | { action: "gallery.describe"; args: { kind: "photo" | "video" | "latest"; question?: string } }
+  | { action: "vision.watch"; args: { on: boolean } }
   | { action: "navigation.start"; args: { query: string } }
   | { action: "navigation.stop"; args: Record<string, never> }
   | { action: "system.shutdown"; args: { cancel?: boolean } };
@@ -63,6 +65,7 @@ export const DEVICE_ACTION_TIERS: Record<DeviceActionName, DeviceActionTier> = {
   "camera.look": "low",
   "gallery.open": "low",
   "gallery.describe": "low",
+  "vision.watch": "low",
   "navigation.start": "low",
   "navigation.stop": "low",
   // High like dialing: consequential, and satisfied on the board by the 10 s
@@ -92,7 +95,10 @@ const PLATFORM_RESTRICTED_ACTIONS: Partial<Record<DeviceActionName, string>> = {
   // Phones cannot poweroff, and an older app build receiving an unknown
   // action would sit out the result timeout in silence.
   "system.shutdown": "embedded",
-  "gallery.describe": "ios"
+  "gallery.describe": "ios",
+  // Proactive scene watching (V-C) drives the embedded board's own camera
+  // loop; a phone has no such loop to toggle.
+  "vision.watch": "embedded"
 };
 
 /**
@@ -192,6 +198,16 @@ export const extractDeviceCommand: IntentExtractor = (text) => {
   }
   if (/(小声|轻一点|声音.{0,2}小|调小|quieter|softer|volume down)/i.test(raw)) {
     return { action: "volume.set", args: { direction: "down" } };
+  }
+
+  // vision.watch (V-C): toggles the embedded board's proactive scene-watching
+  // loop. 环境观察 collides with nothing else in this grammar, so it needs no
+  // particular ordering relative to the other toggles above or below it.
+  if (/(打开|开启).{0,4}环境观察/.test(raw) || /(start|begin)\s+(the\s+)?(scene\s+)?watching/i.test(raw)) {
+    return { action: "vision.watch", args: { on: true } };
+  }
+  if (/(关闭|关掉|关).{0,4}环境观察/.test(raw) || /stop\s+watching/i.test(raw)) {
+    return { action: "vision.watch", args: { on: false } };
   }
 
   // 关机 must not be preceded by 手/机 — "我手机关机了" is about the rider's
@@ -416,6 +432,7 @@ const ACTION_LABELS: Record<DeviceActionName, string> = {
   "camera.look": "看看",
   "gallery.open": "相册",
   "gallery.describe": "描述照片",
+  "vision.watch": "环境观察",
   "navigation.start": "导航",
   "navigation.stop": "导航",
   "system.shutdown": "关机"
@@ -483,6 +500,8 @@ export function deviceSuccessSpeech(command: DeviceCommand): string | undefined 
       return command.args.direction === "up" ? "音量调大了。" : "音量调小了。";
     case "gallery.open":
       return "相册打开了。";
+    case "vision.watch":
+      return command.args.on ? "已开启环境观察。" : "已关闭环境观察。";
     case "music.control":
       switch (command.args.control) {
         case "play":
@@ -523,14 +542,23 @@ export type IssuedDeviceCommand = {
   /** Deterministic confirmation to speak on success; see deviceSuccessSpeech. */
   okSpeech?: string;
   question?: string;
+  /** The requested vision.watch toggle state. Task 3 flips the embedded
+   *  watch governor on the matching device.result "ok". */
+  watchOn?: boolean;
 };
 
 /** Tracks dispatched commands so no command can be left pending forever. */
 export class PendingDeviceCommands {
   private readonly pending = new Map<string, IssuedDeviceCommand>();
 
-  issue(action: DeviceActionName, okSpeech?: string, now: number = Date.now(), question?: string): IssuedDeviceCommand {
-    const issued: IssuedDeviceCommand = { commandId: randomUUID(), action, issuedAt: now, okSpeech, question };
+  issue(
+    action: DeviceActionName,
+    okSpeech?: string,
+    now: number = Date.now(),
+    question?: string,
+    watchOn?: boolean
+  ): IssuedDeviceCommand {
+    const issued: IssuedDeviceCommand = { commandId: randomUUID(), action, issuedAt: now, okSpeech, question, watchOn };
     this.pending.set(issued.commandId, issued);
     return issued;
   }

@@ -549,6 +549,10 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
       })().catch(() => {});
     },
     async visionFrames(event) {
+      // Watch frames (V-C) carry no commandId — this handler is the gallery
+      // path only; Task 3 adds the watch branching. Narrows event.commandId
+      // to string for the rest of this function.
+      if (!event.commandId) return;
       // Same guard shape as cameraFrame, plus the recentGalleryCommands
       // fallback declared above: a stray extra chunk can arrive after
       // device.result already resolved (deleted) the pending entry, and this

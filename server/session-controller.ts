@@ -283,10 +283,31 @@ export function parseClientEvent(data: RawData): ClientEvent {
   }
 
   if (value.type === "vision.frames") {
+    if (value.reason !== "gallery" && value.reason !== "watch") throw new Error("Invalid vision.frames reason");
+
+    // Image cap is shared by both reasons — a control-plane guard against a
+    // bulk media channel, not a quality setting.
+    const checkImage = () => {
+      if (typeof value.image !== "string" || !value.image || value.image.length > 200_000) {
+        throw new Error("Invalid vision.frames image");
+      }
+    };
+
+    if (value.reason === "watch") {
+      // Watch frames are unsolicited: no commandId to answer, no question to
+      // carry, and always exactly one frame.
+      if (value.commandId !== undefined) throw new Error("Invalid vision.frames commandId for watch");
+      if (value.question !== undefined) throw new Error("Invalid vision.frames question for watch");
+      if (value.total !== 1) throw new Error("Invalid vision.frames total for watch");
+      if (value.index !== 0) throw new Error("Invalid vision.frames index for watch");
+      checkImage();
+      return { type: "vision.frames", reason: "watch", index: 0, total: 1, image: value.image as string };
+    }
+
+    // Gallery validation unchanged from before V-C.
     if (typeof value.commandId !== "string" || !value.commandId.trim() || value.commandId.length > 120) {
       throw new Error("Invalid vision.frames commandId");
     }
-    if (value.reason !== "gallery") throw new Error("Invalid vision.frames reason");
     if (typeof value.total !== "number" || !Number.isInteger(value.total) || value.total < 1 || value.total > 8) {
       throw new Error("Invalid vision.frames total");
     }
@@ -298,9 +319,7 @@ export function parseClientEvent(data: RawData): ClientEvent {
     ) {
       throw new Error("Invalid vision.frames index");
     }
-    if (typeof value.image !== "string" || !value.image || value.image.length > 200_000) {
-      throw new Error("Invalid vision.frames image");
-    }
+    checkImage();
     if (
       value.question !== undefined &&
       (typeof value.question !== "string" || Buffer.byteLength(value.question) > 500)
@@ -313,7 +332,7 @@ export function parseClientEvent(data: RawData): ClientEvent {
       reason: "gallery",
       index: value.index,
       total: value.total,
-      image: value.image,
+      image: value.image as string,
       question: value.question as string | undefined
     };
   }

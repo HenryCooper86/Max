@@ -39,7 +39,13 @@ export const EMBEDDED_CAPABILITIES: Record<DeviceActionName, EmbeddedCapability>
   "sms.compose": { supported: false, reason: "device.noPhone" },
   "call.dial": { supported: false, reason: "device.noPhone" },
   "navigation.start": { supported: false, reason: "device.notYet" },
-  "navigation.stop": { supported: false, reason: "device.notYet" }
+  "navigation.stop": { supported: false, reason: "device.notYet" },
+  // Same "device.notYet" reasoning as navigation above: V-C Task 1 only wires
+  // the protocol and grammar. The dispatcher has no vision.watch branch yet —
+  // that governor lands in Task 3 — so claiming support here would route the
+  // command into the vision socket's request() fallback with nothing on the
+  // other end to honor it.
+  "vision.watch": { supported: false, reason: "device.notYet" }
 };
 
 export function capabilityFor(action: DeviceActionName): EmbeddedCapability {

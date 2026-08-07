@@ -23,8 +23,8 @@ describe("parseClientEvent vision.frames", () => {
     expect(withQuestion).toMatchObject({ question: "有什么" });
   });
 
-  it("rejects a watch reason until V-C", () => {
-    expect(() => parseClientEvent(encode({ ...base, reason: "watch" }))).toThrow(/reason/);
+  it("rejects a gallery-shaped payload relabelled as watch (V-C narrows the watch shape, not just the reason enum)", () => {
+    expect(() => parseClientEvent(encode({ ...base, reason: "watch" }))).toThrow(/commandId/);
   });
 
   it("rejects out-of-range index/total", () => {
@@ -43,5 +43,30 @@ describe("parseClientEvent vision.frames", () => {
   it("returns an allowlisted reconstruction, not the raw blob", () => {
     const event = parseClientEvent(encode({ ...base, extra: "smuggled" })) as Record<string, unknown>;
     expect(event).not.toHaveProperty("extra");
+  });
+});
+
+describe("parseClientEvent vision.frames watch reason", () => {
+  const watch = { type: "vision.frames", reason: "watch", index: 0, total: 1, image: "aGVsbG8=" };
+
+  it("accepts a bare watch frame", () => {
+    expect(parseClientEvent(encode(watch))).toMatchObject({
+      type: "vision.frames",
+      reason: "watch",
+      index: 0,
+      total: 1
+    });
+  });
+
+  it("rejects watch frames with a commandId, a question, or multi-frame shape", () => {
+    expect(() => parseClientEvent(encode({ ...watch, commandId: "c1" }))).toThrow(/commandId/);
+    expect(() => parseClientEvent(encode({ ...watch, question: "x" }))).toThrow(/question/);
+    expect(() => parseClientEvent(encode({ ...watch, total: 2, index: 1 }))).toThrow(/total/);
+  });
+
+  it("still requires commandId for gallery", () => {
+    expect(() =>
+      parseClientEvent(encode({ type: "vision.frames", reason: "gallery", index: 0, total: 1, image: "x" }))
+    ).toThrow(/commandId/);
   });
 });

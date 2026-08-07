@@ -318,16 +318,19 @@ export type NavRequestEvent = {
   destinationName?: string;
 };
 
-/** Client → server: one chunk of a multi-frame gallery understanding request.
- *  `total` frames arrive as separate `vision.frames` events sharing one
- *  `commandId`, `index` order 0..total-1; `question` only accompanies the
- *  rider's spoken prompt, not every chunk. `reason` is "gallery" only —
- *  V-C adds "watch" later. */
+/** Client → server: one chunk of a multi-frame gallery understanding request,
+ *  or one unsolicited scene-watching frame. Gallery frames carry the
+ *  `commandId` of the `gallery.describe` they answer, with `total` frames
+ *  arriving as separate `vision.frames` events sharing that `commandId`,
+ *  `index` order 0..total-1, and `question` only on the chunk that carries
+ *  the rider's spoken prompt. Watch frames are unsolicited and carry none of
+ *  that: no `commandId`, no `question`, always a single frame
+ *  (`index: 0, total: 1`). */
 export type VisionFramesEvent = {
   type: "vision.frames";
-  commandId: string;
-  /** Only "gallery" until V-C adds "watch". */
-  reason: "gallery";
+  /** Present for "gallery", absent for "watch". */
+  commandId?: string;
+  reason: "gallery" | "watch";
   index: number;
   total: number;
   image: string;

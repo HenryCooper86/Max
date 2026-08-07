@@ -46,6 +46,12 @@ export function createFrameAssembler(options: {
   const sets = new Map<string, FrameSet>();
 
   function accept(event: VisionFramesEvent): void {
+    // This assembler is gallery-only — watch frames (V-C) are unsolicited
+    // singletons with no commandId to assemble under, and never reach this
+    // path in practice because the providers guard on it first. The check is
+    // repeated here (defense in depth) and narrows commandId to string for
+    // the Map-of-string-keys logic below.
+    if (!event.commandId) return;
     const { commandId, index, total, image, question } = event;
 
     let set = sets.get(commandId);

@@ -230,13 +230,13 @@
           "properties": {
             "type": { "const": "vision.frames" },
             "commandId": { "type": "string", "minLength": 1 },
-            "reason": { "enum": ["gallery"] },
+            "reason": { "enum": ["gallery", "watch"] },
             "index": { "type": "number" },
             "total": { "type": "number" },
             "image": { "type": "string" },
             "question": { "type": "string" }
           },
-          "required": ["type", "commandId", "reason", "index", "total", "image"]
+          "required": ["type", "reason", "index", "total", "image"]
         }
       ]
     },
@@ -484,6 +484,7 @@
                 "navigation.stop",
                 "camera.look",
                 "gallery.describe",
+                "vision.watch",
                 "system.shutdown"
               ]
             },

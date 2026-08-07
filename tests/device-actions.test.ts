@@ -522,7 +522,7 @@ describe("gallery.describe", () => {
     const command = extractDeviceCommand(padded);
     expect(command).toMatchObject({ action: "gallery.describe", args: { kind: "video" } });
     expect(command?.args).toHaveProperty("question");
-    const question = (command?.args as any)?.question;
+    const question = (command?.args as Record<string, unknown>)?.question;
     expect(Buffer.byteLength(question as string)).toBeLessThanOrEqual(500);
     expect(question).toBe(padded.substring(0, question?.length));
   });
@@ -532,7 +532,7 @@ describe("gallery.describe", () => {
     const padded = base + "细节".repeat(120);
     const command = extractDeviceCommand(padded);
     expect(command?.action).toBe("gallery.describe");
-    const truncatedQuestion = (command?.args as any)?.question;
+    const truncatedQuestion = (command?.args as Record<string, unknown>)?.question;
     expect(Buffer.byteLength(truncatedQuestion as string)).toBeLessThanOrEqual(500);
     // Construct a full vision.frames event with the truncated question and verify
     // parseClientEvent accepts it (the way tests/vision-frames-protocol.test.ts does).

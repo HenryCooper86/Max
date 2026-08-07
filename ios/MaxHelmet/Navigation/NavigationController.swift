@@ -23,7 +23,9 @@ protocol LocationStreaming: AnyObject {
 /// orchestration and speech. Reference type: it holds live navigation state.
 @MainActor
 final class NavigationController: DeviceActionHandler {
-    private static let rerouteCooldownSeconds: TimeInterval = 15
+    // Mirrors the web client's REROUTE_COOLDOWN_MS (src/lib/navigation.ts):
+    // 20 s from send time. Was 15 s here pre-Task-4 — aligned to match.
+    private static let rerouteCooldownSeconds: TimeInterval = 20
 
     private let search: NavigationRouteSearching
     private let stream: LocationStreaming
@@ -31,11 +33,14 @@ final class NavigationController: DeviceActionHandler {
     private let speak: (String) -> Void
     private let interruptPlayback: () -> Void
     private let now: () -> TimeInterval
+    private let firstFixTimeoutSeconds: TimeInterval
 
     private var route: NavigationRoute?
     private var progress = GuidanceProgress(maneuverIndex: 0, firedThresholds: [], arrived: false)
     private var rerouting = false
     private var lastRerouteAt: TimeInterval = -.greatestFiniteMagnitude
+    private var firstFixContinuation: CheckedContinuation<CLLocationCoordinate2D?, Never>?
+    private var firstFixWatchdog: Task<Void, Never>?
 
     /// Nonisolated so a non-`@MainActor` owner (AgentSession's router) can build
     /// it in a stored/lazy property. It only wires collaborators; all navigation
@@ -46,7 +51,8 @@ final class NavigationController: DeviceActionHandler {
         onGuidance: @escaping (GuidanceState?) -> Void,
         speak: @escaping (String) -> Void,
         interruptPlayback: @escaping () -> Void,
-        now: @escaping () -> TimeInterval
+        now: @escaping () -> TimeInterval,
+        firstFixTimeoutSeconds: TimeInterval = 3
     ) {
         self.search = search
         self.stream = stream
@@ -54,6 +60,7 @@ final class NavigationController: DeviceActionHandler {
         self.speak = speak
         self.interruptPlayback = interruptPlayback
         self.now = now
+        self.firstFixTimeoutSeconds = firstFixTimeoutSeconds
         self.stream.onUpdate = { [weak self] coord in
             Task { @MainActor in self?.handleFix(coord) }
         }
@@ -86,13 +93,45 @@ final class NavigationController: DeviceActionHandler {
         case .authorized:
             break
         }
-        guard let resolved = await search.route(to: query) else { return .unsupported("route.unavailable") }
+        // The first fix must be in hand BEFORE searching: the relay routes
+        // FROM the rider's position, so there is no query to send without it.
+        stream.start()
+        guard let origin = await awaitFirstFix() else {
+            stream.stop()
+            return .unsupported("route.unavailable")
+        }
+        guard let resolved = await search.route(to: query, from: origin) else {
+            stream.stop()
+            return .unsupported("route.unavailable")
+        }
         route = resolved
         progress = GuidanceProgress(maneuverIndex: 0, firedThresholds: [], arrived: false)
-        stream.start()
         publish(location: nil)
         speak(openingSummary(resolved))
         return .ok
+    }
+
+    /// Awaits the location stream's first fix, bounded so a stalled GPS never
+    /// hangs navigation.start indefinitely. Every fix — including this first
+    /// one — still flows through `handleFix` (wired in `init`); the resolve
+    /// there is a no-op once this has already resolved (by answer or timeout).
+    private func awaitFirstFix() async -> CLLocationCoordinate2D? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<CLLocationCoordinate2D?, Never>) in
+            firstFixContinuation = continuation
+            firstFixWatchdog = Task { @MainActor [weak self] in
+                let timeout = self?.firstFixTimeoutSeconds ?? 3
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                self?.resolveFirstFix(nil)
+            }
+        }
+    }
+
+    private func resolveFirstFix(_ coordinate: CLLocationCoordinate2D?) {
+        guard let continuation = firstFixContinuation else { return }
+        firstFixContinuation = nil
+        firstFixWatchdog?.cancel()
+        firstFixWatchdog = nil
+        continuation.resume(returning: coordinate)
     }
 
     private func stopGuidance() -> DeviceActionResult {
@@ -105,6 +144,7 @@ final class NavigationController: DeviceActionHandler {
     }
 
     private func handleFix(_ location: CLLocationCoordinate2D) {
+        resolveFirstFix(location)
         guard let route else { return }
         let update = GuidanceEngine.step(position: location, route: route, progress: progress)
         progress = update.progress

@@ -7,9 +7,16 @@ private final class FakeStream: LocationStreaming, @unchecked Sendable {
     var auth: LocationAuthorization = .authorized
     var granted = true
     var started = false
+    /// Delivered synchronously from `start()`, mirroring a location manager
+    /// that already has a cached fix ready. Set to nil to simulate a stalled
+    /// GPS for the bounded first-fix wait.
+    var fixOnStart: CLLocationCoordinate2D? = CLLocationCoordinate2D(latitude: 39.90, longitude: 116.40)
     func authorization() -> LocationAuthorization { auth }
     func requestAccess() async -> Bool { granted }
-    func start() { started = true }
+    func start() {
+        started = true
+        if let fixOnStart { onUpdate?(fixOnStart) }
+    }
     func stop() { started = false }
     func feed(_ c: CLLocationCoordinate2D) { onUpdate?(c) }
 }
@@ -18,10 +25,34 @@ private final class FakeSearch: NavigationRouteSearching, @unchecked Sendable {
     var route: NavigationRoute?
     var rerouteResult: NavigationRoute?
     var rerouteCalls = 0
-    func route(to query: String) async -> NavigationRoute? { route }
+    var routeOrigin: CLLocationCoordinate2D?
+    var rerouteOrigin: CLLocationCoordinate2D?
+    var rerouteDestination: CLLocationCoordinate2D?
+
+    /// When true, `route(to:from:)` suspends until `resolveHeld(with:)` is
+    /// called — mirrors the relay's real async round trip so a test can
+    /// assert nothing observable happens before the answer arrives.
+    var holdRoute = false
+    private var holdContinuation: CheckedContinuation<NavigationRoute?, Never>?
+
+    func route(to query: String, from origin: CLLocationCoordinate2D) async -> NavigationRoute? {
+        routeOrigin = origin
+        if holdRoute {
+            return await withCheckedContinuation { holdContinuation = $0 }
+        }
+        return route
+    }
+
     func reroute(to destination: CLLocationCoordinate2D, from origin: CLLocationCoordinate2D) async -> NavigationRoute? {
         rerouteCalls += 1
+        rerouteOrigin = origin
+        rerouteDestination = destination
         return rerouteResult
+    }
+
+    func resolveHeld(with result: NavigationRoute?) {
+        holdContinuation?.resume(returning: result)
+        holdContinuation = nil
     }
 }
 
@@ -57,14 +88,19 @@ final class NavigationControllerTests: XCTestCase {
 
     final class Box { var guidance: GuidanceState?; var spoken: [String] = []; var interrupts = 0 }
 
-    private func make(_ stream: FakeStream, _ search: FakeSearch, clock: @escaping () -> TimeInterval = { 0 }) -> (NavigationController, Box) {
+    private func make(
+        _ stream: FakeStream, _ search: FakeSearch,
+        clock: @escaping () -> TimeInterval = { 0 },
+        firstFixTimeoutSeconds: TimeInterval = 3
+    ) -> (NavigationController, Box) {
         let box = Box()
         let controller = NavigationController(
             search: search, stream: stream,
             onGuidance: { box.guidance = $0 },
             speak: { box.spoken.append($0) },
             interruptPlayback: { box.interrupts += 1 },
-            now: clock
+            now: clock,
+            firstFixTimeoutSeconds: firstFixTimeoutSeconds
         )
         return (controller, box)
     }
@@ -80,6 +116,55 @@ final class NavigationControllerTests: XCTestCase {
         XCTAssertTrue(stream.started)
         XCTAssertNotNil(box.guidance)
         XCTAssertFalse(box.spoken.isEmpty, "opening summary is spoken")
+    }
+
+    func testStartPassesTheFirstFixAsOrigin() async {
+        let stream = FakeStream()
+        let origin = CLLocationCoordinate2D(latitude: 39.87, longitude: 116.33)
+        stream.fixOnStart = origin
+        let search = FakeSearch()
+        search.route = straightRoute()
+        let (controller, _) = make(stream, search)
+
+        _ = await controller.perform(.navigationStart(query: "终点"))
+
+        XCTAssertNotNil(search.routeOrigin)
+        if let routeOrigin = search.routeOrigin {
+            XCTAssertTrue(coordinatesEqual(routeOrigin, origin))
+        }
+    }
+
+    func testStartHoldsUntilSearchResolves() async {
+        // Mirrors the web client's "requests, then acks ok only after
+        // nav.route arrives" — nothing observable happens while suspended.
+        let stream = FakeStream(), search = FakeSearch()
+        search.holdRoute = true
+        let (controller, box) = make(stream, search)
+
+        let task = Task { await controller.perform(.navigationStart(query: "终点")) }
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertNil(box.guidance, "no guidance is published until the search resolves")
+
+        search.resolveHeld(with: straightRoute())
+        let result = await task.value
+
+        XCTAssertEqual(result, .ok)
+        XCTAssertNotNil(box.guidance)
+    }
+
+    func testStartWithNoFixWithinBoundReportsRouteUnavailable() async {
+        let stream = FakeStream()
+        stream.fixOnStart = nil // GPS never reports a fix
+        let search = FakeSearch()
+        search.route = straightRoute()
+        let (controller, _) = make(stream, search, firstFixTimeoutSeconds: 0.05)
+
+        let result = await controller.perform(.navigationStart(query: "终点"))
+
+        XCTAssertEqual(result.status, .unsupported)
+        XCTAssertEqual(result.reason, "route.unavailable")
+        XCTAssertFalse(stream.started, "the stream is stopped after giving up on a fix")
+        XCTAssertNil(search.routeOrigin, "search is never invoked without an origin fix")
     }
 
     func testStartReportsUnresolvableRoute() async {
@@ -139,6 +224,25 @@ final class NavigationControllerTests: XCTestCase {
         try? await Task.sleep(nanoseconds: 50_000_000)
 
         XCTAssertEqual(search.rerouteCalls, 1)
+    }
+
+    func testRerouteEchoesTheActiveRouteDestination() async {
+        let stream = FakeStream(), search = FakeSearch()
+        let route = straightRoute()
+        search.route = route
+        search.rerouteResult = route
+        let (controller, _) = make(stream, search, clock: { 0 })
+        _ = await controller.perform(.navigationStart(query: "终点"))
+
+        let off = CLLocationCoordinate2D(latitude: 39.9060, longitude: 116.4020)
+        stream.feed(off)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertEqual(search.rerouteCalls, 1)
+        XCTAssertNotNil(search.rerouteDestination)
+        if let rerouteDestination = search.rerouteDestination {
+            XCTAssertTrue(coordinatesEqual(rerouteDestination, route.destinationCoordinate))
+        }
     }
 
     func testArrivalEndsGuidance() async {

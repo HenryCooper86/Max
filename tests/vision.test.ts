@@ -210,6 +210,11 @@ describe("createMockVisionProvider", () => {
   });
 });
 
+it("answers the watch prompt with the fixed observation", async () => {
+  const provider = createMockVisionProvider();
+  expect(await provider.describe(["F"], WATCH_PROMPT)).toBe("前方有施工路段，注意慢行。");
+});
+
 describe("selectVisionProvider", () => {
   it("selects ark with credentials, mock without, warning once per process", () => {
     const warnings: string[] = [];

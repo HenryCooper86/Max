@@ -60,6 +60,49 @@ function setAlsaVolume(device: string, level: number): Promise<boolean> {
   });
 }
 
+export type VisionEventRouterOptions = {
+  hazards: { handle(event: VisionEvent): Promise<void> };
+  /** Same client-event path hazard.report already uses (relay.sendEvent) —
+   *  not a new one. */
+  sendEvent(event: unknown): void;
+  log?: (line: string) => void;
+};
+
+/**
+ * Routes an unsolicited vision-sidecar event. Extracted out of the
+ * `connectVision` callback in `start()` so it is directly testable: a hazard
+ * goes to the ADAS handler as before; a `watch.frame` push (from the
+ * sidecar's WatchSampler) becomes a single-image `vision.frames` event to the
+ * relay; anything else is only logged, unchanged from before this event
+ * carried real payloads.
+ */
+export function createVisionEventRouter(options: VisionEventRouterOptions): (event: VisionEvent) => void {
+  const log = options.log ?? ((line: string) => console.log(line));
+  return (event: VisionEvent): void => {
+    if (event.event === "hazard") {
+      void options.hazards.handle(event);
+      return;
+    }
+    if (event.event === "watch.frame") {
+      options.sendEvent({ type: "vision.frames", reason: "watch", index: 0, total: 1, image: event.image });
+      return;
+    }
+    log(`[vision] ${JSON.stringify(event)}`);
+  };
+}
+
+/**
+ * Best-effort: turns proactive watching off when the relay session ends.
+ * Watching dies with the session — a reconnecting rider must explicitly
+ * re-enable it, not resume from a stale toggle left on from before the drop.
+ * The vision socket may be down too (that is a separate failure the sidecar
+ * reconnect loop already handles), so a rejection here is swallowed rather
+ * than surfaced.
+ */
+export function stopWatchOnClose(vision: Pick<VisionClient, "request">): void {
+  void vision.request("vision.watch", { on: false }).catch(() => {});
+}
+
 /**
  * Connects to the vision sidecar's control socket. A dead sidecar must never
  * leave the relay waiting: every in-flight request is failed immediately so each
@@ -136,13 +179,10 @@ function start(): void {
     console.log("[adas] shadow mode: hazards are logged, never spoken");
   }
 
-  const vision = connectVision(config.visionSocket, (event) => {
-    if (event.event === "hazard") {
-      void hazards.handle(event as never);
-      return;
-    }
-    console.log("[vision]", JSON.stringify(event));
-  });
+  const vision = connectVision(
+    config.visionSocket,
+    createVisionEventRouter({ hazards, sendEvent: (event) => relay.sendEvent(event) })
+  );
 
   const poweroff = createPoweroffController({
     exec: () => {
@@ -197,6 +237,10 @@ function start(): void {
     },
     onClosed: (idle) => {
       playback.flush();
+      // Watching dies with the session: a reconnecting rider must explicitly
+      // re-enable it rather than resume from a stale toggle left on from
+      // before the drop.
+      stopWatchOnClose(vision);
       const decision = reconnectDecision(shuttingDown, idle, gateOpen);
       if (decision === "never") return;
       if (decision === "wait-for-voice") {

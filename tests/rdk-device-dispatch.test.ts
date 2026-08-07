@@ -5,12 +5,17 @@ import { EMBEDDED_CAPABILITIES, capabilityFor } from "../rdk/agent/src/device/ca
 import { createDeviceDispatcher } from "../rdk/agent/src/device/dispatch";
 import type { VisionClient, VisionResponse } from "../rdk/agent/src/vision-client";
 
-function fakeVision(response: VisionResponse): VisionClient & { calls: string[] } {
+function fakeVision(
+  response: VisionResponse
+): VisionClient & { calls: string[]; requests: { op: string; args: Record<string, unknown> }[] } {
   const calls: string[] = [];
+  const requests: { op: string; args: Record<string, unknown> }[] = [];
   return {
     calls,
-    request: async (op: string) => {
+    requests,
+    request: async (op: string, args: Record<string, unknown> = {}) => {
       calls.push(op);
+      requests.push({ op, args });
       return response;
     },
     handleChunk: () => {},
@@ -40,7 +45,14 @@ describe("EMBEDDED_CAPABILITIES", () => {
       .filter(([, capability]) => capability.supported)
       .map(([action]) => action)
       .sort();
-    expect(supported).toEqual(["camera.look", "camera.photo", "camera.record", "system.shutdown", "volume.set"]);
+    expect(supported).toEqual([
+      "camera.look",
+      "camera.photo",
+      "camera.record",
+      "system.shutdown",
+      "vision.watch",
+      "volume.set"
+    ]);
   });
 
   it("gives every refusal a reason that maps to real speech", () => {
@@ -115,6 +127,19 @@ describe("createDeviceDispatcher", () => {
     const dispatch = createDeviceDispatcher({ vision, setVolume: async () => false });
     const result = await dispatch({ commandId: "c5", action: "volume.set", args: { level: 0.5 } });
     expect(result.status).toBe("failed");
+  });
+
+  it("forwards vision.watch to the vision control plane", async () => {
+    // No dispatch.ts branch for this action: it rides the same
+    // options.vision.request(command.action, command.args) fall-through as
+    // camera.photo/camera.record above, now that the sidecar has a real
+    // "vision.watch" handler (Task 4) and EMBEDDED_CAPABILITIES marks it
+    // supported (Task 5).
+    const vision = fakeVision({ id: "v1", status: "ok" });
+    const dispatch = createDeviceDispatcher({ vision, setVolume: async () => true });
+    const result = await dispatch({ commandId: "w1", action: "vision.watch", args: { on: true } });
+    expect(result).toEqual({ type: "device.result", commandId: "w1", status: "ok" });
+    expect(vision.requests).toContainEqual({ op: "vision.watch", args: { on: true } });
   });
 
   it("never lets a thrown handler swallow the result", async () => {

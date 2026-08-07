@@ -40,12 +40,12 @@ export const EMBEDDED_CAPABILITIES: Record<DeviceActionName, EmbeddedCapability>
   "call.dial": { supported: false, reason: "device.noPhone" },
   "navigation.start": { supported: false, reason: "device.notYet" },
   "navigation.stop": { supported: false, reason: "device.notYet" },
-  // Same "device.notYet" reasoning as navigation above: V-C Task 1 only wires
-  // the protocol and grammar. The dispatcher has no vision.watch branch yet —
-  // that governor lands in Task 3 — so claiming support here would route the
-  // command into the vision socket's request() fallback with nothing on the
-  // other end to honor it.
-  "vision.watch": { supported: false, reason: "device.notYet" }
+  // V-C Task 5: the Python sidecar now has a real "vision.watch" handler
+  // (rdk/vision/service.py's WatchSampler) behind the same request() fallback
+  // volume.set etc. skip — dispatch.ts needs no new branch. Honest to claim
+  // support now that something on the other end actually honors it and
+  // main.ts's onEvent forwards the resulting watch.frame pushes to the relay.
+  "vision.watch": { supported: true }
 };
 
 export function capabilityFor(action: DeviceActionName): EmbeddedCapability {

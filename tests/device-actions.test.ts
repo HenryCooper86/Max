@@ -8,6 +8,7 @@ import {
   extractDeviceCommand,
   extractDeviceCommandForPlatform
 } from "../server/device-actions";
+import { parseClientEvent } from "../server/session-controller";
 
 describe("extractDeviceCommand — torch", () => {
   it("turns the torch on in Chinese and English", () => {
@@ -525,15 +526,25 @@ describe("gallery.describe", () => {
     expect(question).toBe(padded.substring(0, question?.length));
   });
 
-  it("truncated question round-trips parseClientEvent", async () => {
+  it("truncated question round-trips parseClientEvent", () => {
     const base = "看看我刚拍的视频里有什么";
     const padded = base + "细节".repeat(120);
     const command = extractDeviceCommand(padded);
     expect(command?.action).toBe("gallery.describe");
     const truncatedQuestion = (command?.args as any)?.question;
-    // Verify the truncated question can be used in a vision.frames event
-    // and parseClientEvent accepts it without complaint (import and call directly
-    // from session-controller like tests/vision-frames-protocol.test.ts does).
     expect(Buffer.byteLength(truncatedQuestion as string)).toBeLessThanOrEqual(500);
+    // Construct a full vision.frames event with the truncated question and verify
+    // parseClientEvent accepts it (the way tests/vision-frames-protocol.test.ts does).
+    const event = {
+      type: "vision.frames",
+      commandId: "c1",
+      reason: "gallery",
+      index: 0,
+      total: 1,
+      image: "aGVsbG8=",
+      question: truncatedQuestion
+    };
+    const parsed = parseClientEvent(Buffer.from(JSON.stringify(event)));
+    expect(parsed).toMatchObject({ type: "vision.frames", question: truncatedQuestion });
   });
 });

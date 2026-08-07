@@ -150,7 +150,7 @@ class ControlServer(socketserver.ThreadingUnixStreamServer):
         super().__init__(socket_path, handler)
 
 
-def finalize(cameras, gallery, ride) -> None:
+def finalize(cameras, gallery, ride, watcher) -> None:
     """Shutdown: finish a live recording, stop the ride, release the cameras.
 
     An ordinary `systemctl stop` should produce a finished manifest itself
@@ -158,10 +158,17 @@ def finalize(cameras, gallery, ride) -> None:
     """
     if cameras.recording_id is not None:
         cameras.stop_recording(gallery)
-    # Ride first among the readers: its threads read from the cameras, so
-    # stopping the cameras out from under them would raise on the way down.
+    # Ride and the watcher both read from the cameras (ride's ADAS threads
+    # directly, the watcher through front_jpeg_for_watch), so both must stop
+    # before the cameras do or their next grab raises on the way down.
+    # ControlHandler's disconnect-disable does NOT cover this path: SIGTERM's
+    # sys.exit(0) unwinds serve_forever() in the main thread, but an already
+    # accepted connection's handler thread keeps running on its own — nothing
+    # about a signal closes it, so finally in ControlHandler.handle() never
+    # runs here and the watcher would otherwise keep sampling.
     if ride is not None:
         ride.stop()
+    watcher.stop()
     # An orphaned mipi_cam holds the ISP, and the next start cannot open
     # the camera at all. Reaping at startup covers a crash; this covers
     # every ordinary stop.
@@ -273,7 +280,7 @@ def main() -> None:
         try:
             server.serve_forever()
         finally:
-            finalize(runtime.cameras, runtime.gallery, ride)
+            finalize(runtime.cameras, runtime.gallery, ride, runtime.watcher)
             with contextlib.suppress(OSError):
                 os.unlink(config.socket_path)
 

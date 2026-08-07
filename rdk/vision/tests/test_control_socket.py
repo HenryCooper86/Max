@@ -188,17 +188,61 @@ class FakeRide:
         self.stopped = True
 
 
+class FakeWatcher:
+    def __init__(self):
+        self.stopped = False
+
+    def stop(self):
+        self.stopped = True
+
+
 def test_finalize_finishes_a_live_recording_and_stops_the_ride():
     pair = FakeRecordingPair()
     ride = FakeRide()
+    watcher = FakeWatcher()
     sentinel_gallery = object()
-    service.finalize(pair, sentinel_gallery, ride)
+    service.finalize(pair, sentinel_gallery, ride, watcher)
     assert pair.stopped_with is sentinel_gallery
     assert ride.stopped is True
+    assert watcher.stopped is True
 
 
 def test_finalize_tolerates_no_recording_and_no_ride():
     pair = FakeRecordingPair()
     pair.recording_id = None
-    service.finalize(pair, object(), None)
+    watcher = FakeWatcher()
+    service.finalize(pair, object(), None, watcher)
     assert pair.stopped_with is None
+    # No ride, but the watcher stops unconditionally -- it has nothing to do
+    # with whether ADAS shadow mode was ever on.
+    assert watcher.stopped is True
+
+
+class _OrderTrackingCamera:
+    def __init__(self, name: str, order: list[str]):
+        self.name = name
+        self.order = order
+
+    def stop(self):
+        self.order.append(self.name)
+
+
+class _OrderTrackingWatcher:
+    def __init__(self, order: list[str]):
+        self.order = order
+
+    def stop(self):
+        self.order.append("watcher")
+
+
+def test_finalize_stops_the_watcher_before_the_cameras():
+    # The watcher reads through front_jpeg_for_watch() same as ride's ADAS
+    # threads read the cameras directly -- stopping the cameras first would
+    # have a live sampler tick raise on the way down.
+    order: list[str] = []
+    pair = FakeRecordingPair()
+    pair.front = _OrderTrackingCamera("front", order)
+    pair.rear = _OrderTrackingCamera("rear", order)
+    watcher = _OrderTrackingWatcher(order)
+    service.finalize(pair, object(), None, watcher)
+    assert order == ["watcher", "front", "rear"]

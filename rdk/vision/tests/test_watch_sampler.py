@@ -205,3 +205,44 @@ def test_a_none_grab_skips_the_tick_without_crashing():
         assert base64.b64decode(payload["image"]) == a
     finally:
         sampler.set_enabled(False)
+
+
+def test_a_stale_epochs_tick_cannot_write_a_newer_epochs_last_shipped():
+    """Regression for a race set_enabled's bounded join does not close:
+    set_enabled(False)'s ``thread.join(timeout=5.0)`` is not a guarantee, and
+    broadcast() can block on backpressure (see test_control_socket.py). A
+    tick still mid-flight when a disable+re-enable pair completes sees
+    `_enabled` flip back to True under the *new* epoch — indistinguishable
+    from its own epoch by a plain boolean. It must not be able to write the
+    new epoch's last_shipped anyway.
+
+    This drives that stale tick directly with epoch 1's captured stop Event
+    (what a real backgrounded tick would have closed over) rather than
+    reproducing the real timing: doing that for real means a tick blocked
+    past the 5 s join timeout, which is not expressible as a fast,
+    deterministic test with this class's current seams.
+    """
+    a = gradient_jpeg()
+    checker = checkerboard_jpeg()
+    grab = FakeGrab(a)
+    broadcast = FakeBroadcast()
+    sampler = new_sampler(grab, broadcast)
+
+    sampler.set_enabled(True)
+    broadcast.wait_for_broadcast()  # epoch 1's first frame
+    epoch_1 = sampler._stop
+    assert epoch_1 is not None
+
+    sampler.set_enabled(False)
+    sampler.set_enabled(True)
+    broadcast.wait_for_broadcast()  # epoch 2's own first-frame ship
+    assert sampler._stop is not epoch_1
+    epoch_2_last_shipped = sampler._last_shipped
+
+    # A different frame than either epoch has shipped, so a wrongful write
+    # would be unmistakable rather than accidentally matching by content.
+    grab.set(checker)
+    sampler._tick(epoch_1)  # epoch 1's stale identity, driven directly
+
+    assert sampler._last_shipped == epoch_2_last_shipped
+    sampler.set_enabled(False)

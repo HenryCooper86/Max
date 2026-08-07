@@ -9,6 +9,17 @@ thread-local argument at start time rather than read back off ``self`` on
 every loop iteration, so a later re-enable's fresh ``Event`` can never be
 mistaken by an old thread for its own — which would otherwise leave that old
 thread spinning forever, un-joinable, sampling alongside the new one.
+
+The same captured identity also guards every read/write of ``_last_shipped``
+inside a tick, not just the run loop's exit. A plain ``_enabled`` boolean is
+not enough there: ``set_enabled``'s ``thread.join(timeout=5.0)`` is bounded,
+not a guarantee, and ``broadcast()`` can block for a while on backpressure
+(see test_control_socket.py's note that it blocks until the client reads).
+A tick stuck inside a slow ``broadcast()`` call can still be mid-flight after
+a disable *and* a re-enable have both completed and started a fresh epoch —
+at which point ``_enabled`` reads back ``True`` again, indistinguishable from
+the tick's own epoch. Comparing the tick's captured ``Event`` against
+``self._stop`` is what tells the two epochs apart.
 """
 
 from __future__ import annotations
@@ -86,18 +97,24 @@ class WatchSampler:
     def _run(self, stop_event: threading.Event) -> None:
         while not stop_event.wait(self._interval):
             try:
-                self._tick()
+                self._tick(stop_event)
             except Exception as error:  # noqa: BLE001 - one bad tick must not kill the thread
                 print(f"[vision.watch] tick failed: {error}", flush=True)
 
-    def _tick(self) -> None:
+    def _tick(self, stop_event: threading.Event) -> None:
         jpeg = self._grab_jpeg()
         if jpeg is None:
             return  # camera not ready this tick; try again next interval
 
         with self._lock:
-            if not self._enabled:
-                return  # disabled while this tick's grab was in flight
+            if self._stop is not stop_event:
+                # This tick's epoch is no longer the live one: a disable, or
+                # a disable+re-enable pair, completed while grab_jpeg() was in
+                # flight. `_enabled` alone can't tell an old epoch from a new
+                # one that also happens to be enabled — see the module
+                # docstring — so this checks the exact Event this tick's
+                # thread was born with.
+                return
             last_shipped = self._last_shipped
 
         if not scene_changed(last_shipped, jpeg, self._tuning):
@@ -106,7 +123,9 @@ class WatchSampler:
         self._broadcast({"event": "watch.frame", "image": base64.b64encode(jpeg).decode("ascii")})
 
         with self._lock:
-            # Re-check enabled: a disable that landed mid-tick must not leave
-            # a reference frame behind for a re-enable to see.
-            if self._enabled:
+            # Re-check identity, not just _enabled, for the same reason as
+            # above: a disable+re-enable pair can complete while this tick
+            # was blocked inside broadcast(). A stale epoch must never write
+            # into a newer epoch's last_shipped.
+            if self._stop is stop_event:
                 self._last_shipped = jpeg

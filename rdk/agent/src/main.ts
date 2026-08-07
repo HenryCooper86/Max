@@ -84,7 +84,17 @@ export function createVisionEventRouter(options: VisionEventRouterOptions): (eve
       return;
     }
     if (event.event === "watch.frame") {
-      options.sendEvent({ type: "vision.frames", reason: "watch", index: 0, total: 1, image: event.image });
+      const image = event.image;
+      // The sidecar's payload is unknown-typed on this wire; a malformed push
+      // must be dropped, not forwarded — the relay rejects an invalid
+      // vision.frames event, and that failure would otherwise be silent on
+      // the board. Same skip-don't-throw posture as vision-client.ts's line
+      // decoder.
+      if (typeof image !== "string" || image.length === 0) {
+        log(`[vision] dropped watch.frame with invalid image`);
+        return;
+      }
+      options.sendEvent({ type: "vision.frames", reason: "watch", index: 0, total: 1, image });
       return;
     }
     log(`[vision] ${JSON.stringify(event)}`);

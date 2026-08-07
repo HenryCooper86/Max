@@ -31,6 +31,30 @@ describe("createVisionEventRouter", () => {
     expect(hazards.calls).toEqual([]);
   });
 
+  it("drops a watch.frame with no image rather than forwarding a malformed event", () => {
+    const sendEvent = vi.fn();
+    const lines: string[] = [];
+    const hazards = fakeHazards();
+    const router = createVisionEventRouter({ hazards, sendEvent, log: (line) => lines.push(line) });
+
+    router({ event: "watch.frame" });
+
+    expect(sendEvent).not.toHaveBeenCalled();
+    expect(lines.some((line) => line.includes("dropped watch.frame"))).toBe(true);
+  });
+
+  it("drops a watch.frame whose image is not a string", () => {
+    const sendEvent = vi.fn();
+    const lines: string[] = [];
+    const hazards = fakeHazards();
+    const router = createVisionEventRouter({ hazards, sendEvent, log: (line) => lines.push(line) });
+
+    router({ event: "watch.frame", image: 12345 });
+
+    expect(sendEvent).not.toHaveBeenCalled();
+    expect(lines.some((line) => line.includes("dropped watch.frame"))).toBe(true);
+  });
+
   it("still routes a hazard event to the hazard handler, not straight to the relay", () => {
     const sendEvent = vi.fn();
     const hazards = fakeHazards();

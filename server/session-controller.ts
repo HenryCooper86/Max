@@ -569,6 +569,7 @@ export class AgentSessionController {
       if (event.type === "testing.metric") recordTesterAudioQuality(this.relaySessionId, event);
       if (event.type === "device.result") await this.provider.deviceResult?.(event);
       if (event.type === "camera.frame") await this.provider.cameraFrame?.(event);
+      if (event.type === "vision.frames") await this.provider.visionFrames?.(event);
       if (event.type === "crash.alert")
         await handleCrashAlert(event, this.crashNotifier, (payload) => this.send(payload));
       if (event.type === "crash.cancel") await handleCrashCancel(event, this.crashNotifier);

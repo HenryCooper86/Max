@@ -26,6 +26,7 @@ import { metrics } from "../metrics";
 import { createSpeaker, createSynthesizer } from "../speech";
 import { createTranscriptDelivery, transcriptEvent } from "../transcript-events";
 import { buildChatCompletionsEndpoint, selectVisionProvider } from "../vision";
+import { createFrameAssembler } from "../vision-frames";
 import { fetchRiderWeather } from "../weather";
 import {
   approxDistanceKm,
@@ -785,7 +786,7 @@ export function createDoubaoProvider(
       command.action,
       deviceSuccessSpeech(command),
       Date.now(),
-      command.action === "camera.look" ? command.args.question : undefined
+      command.action === "camera.look" || command.action === "gallery.describe" ? command.args.question : undefined
     );
     sendClient({
       type: "device.command",
@@ -1007,6 +1008,49 @@ export function createDoubaoProvider(
     sendAudio: (pcm) => client.send(pcm, { binary: true }),
     platform: () => sessionPlatform,
     onError: (error) => log.warn("confirmation speech failed", { error: String(error) })
+  });
+
+  // Companion to pendingDeviceCommands, scoped to gallery.describe frame sets:
+  // vision.frames chunks all arrive before the device.result for the same
+  // commandId (wire order), so pendingDeviceCommands.peek() is enough while a
+  // set is still assembling — but the frame assembler's 10 s onIncomplete
+  // timer can fire well after device.result has already resolved (deleted)
+  // the pending entry. This map keeps just enough (the action, to satisfy the
+  // same "issued for this action" guard visionFrames() runs, and the
+  // question, authoritative over whatever a chunk's own `question` field
+  // claims) alive from accept time through completion or timeout, then
+  // prunes itself — at most one live entry per in-flight gallery command.
+  const recentGalleryCommands = new Map<string, { action: DeviceActionName; question?: string }>();
+
+  /** Speaks a gallery.describe answer (or its "我看不清。" fallback) exactly
+   *  the way cameraFrame speaks a camera.look answer: transcript + speaker.
+   *  Reads agentDelivery at call time, which for the onComplete path is
+   *  synchronous with the last chunk's arrival — the same "now" cameraFrame
+   *  captures its delivery at. */
+  function speakGalleryLine(line: string): void {
+    sendClient(transcriptEvent(agentDelivery, "agent", line, { final: true, useBrowserSpeech: true }));
+    void speaker.speak(line).catch(() => {});
+  }
+
+  // Per-session assembler for gallery.describe's multi-frame sets. Mirrors
+  // cameraFrame's detached-async shape below: the vision-model round trip
+  // must never block the message queue that also carries mic PCM.
+  const galleryFrameAssembler = createFrameAssembler({
+    onComplete: ({ commandId, frames, question }) => {
+      const record = recentGalleryCommands.get(commandId);
+      recentGalleryCommands.delete(commandId);
+      const finalQuestion = record?.question ?? question;
+      void (async () => {
+        const description = await visionProvider.describe(frames, finalQuestion);
+        speakGalleryLine(description ?? "我看不清。");
+      })().catch((error) => {
+        log.warn("gallery frame set description failed unexpectedly", { error: String(error) });
+      });
+    },
+    onIncomplete: (commandId) => {
+      recentGalleryCommands.delete(commandId);
+      speakGalleryLine("我看不清。");
+    }
   });
 
   /** Refetches weather for the current location and pushes the HUD update. */
@@ -1744,12 +1788,12 @@ export function createDoubaoProvider(
 
       // Detached from the caller: session-controller.ts's message queue awaits
       // this method, and that queue also carries mic PCM and audio.stop in
-      // wire order. Awaiting describeFrame (up to a 10 s timeout) here would
-      // stall the rider's live audio behind a vision-model round trip. The
-      // work below still happens — describeFrame never throws (see
-      // server/vision.ts: it resolves null on every failure path) — but the
-      // `.catch` is the backstop should that contract ever regress, so a
-      // rejection here can never become an unhandled rejection.
+      // wire order. Awaiting visionProvider.describe (up to a 10 s timeout)
+      // here would stall the rider's live audio behind a vision-model round
+      // trip. The work below still happens — visionProvider.describe never
+      // throws (see server/vision.ts: it resolves null on every failure
+      // path) — but the `.catch` is the backstop should that contract ever
+      // regress, so a rejection here can never become an unhandled rejection.
       void (async () => {
         const description = await visionProvider.describe([event.image], issued.question);
         const line = description ?? "我看不清。";
@@ -1758,6 +1802,18 @@ export function createDoubaoProvider(
       })().catch((error) => {
         log.warn("camera frame description failed unexpectedly", { error: String(error) });
       });
+    },
+    async visionFrames(event) {
+      // Same guard shape as cameraFrame, plus the recentGalleryCommands
+      // fallback declared above: a stray extra chunk can arrive after
+      // device.result already resolved (deleted) the pending entry, and this
+      // keeps recognising it as long as this provider itself opened the set.
+      const issued = pendingDeviceCommands.peek(event.commandId) ?? recentGalleryCommands.get(event.commandId);
+      if (!issued || issued.action !== "gallery.describe") return;
+      if (!recentGalleryCommands.has(event.commandId)) {
+        recentGalleryCommands.set(event.commandId, { action: issued.action, question: issued.question });
+      }
+      galleryFrameAssembler.accept(event);
     },
     async stopAudio() {
       audioActive = false;

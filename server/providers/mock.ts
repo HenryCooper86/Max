@@ -29,6 +29,7 @@ import {
 import { createCrashSimulator, createHazardInjector } from "../hazard-injector";
 import { createTranscriptDelivery, transcriptEvent } from "../transcript-events";
 import { createMockVisionProvider } from "../vision";
+import { createFrameAssembler } from "../vision-frames";
 
 // Deliberately NOT selectVisionProvider: the mock voice provider is the
 // zero-credential demo surface and must never spend Ark quota (spec M1) —
@@ -90,7 +91,14 @@ const SCENARIOS: Record<DemoScenario, ScenarioProfile> = {
       // answers with camera.frame, describing the frame at zero credential
       // cost via createMockVisionProvider — see server/vision.ts.
       { rider: "你能看到什么", agent: "前方视野清楚，路况正常。", latencyBase: 95 },
-      { rider: "前面那个路牌写的什么", agent: "我看看，稍后告诉你路牌上写的什么。", latencyBase: 100 }
+      { rider: "前面那个路牌写的什么", agent: "我看看，稍后告诉你路牌上写的什么。", latencyBase: 100 },
+      // Exercises the keyless gallery.describe demo path (spec V-B): on iOS
+      // this dispatches a real device.command and the client answers with a
+      // chunked vision.frames set, assembled and described at zero
+      // credential cost via createMockVisionProvider — see server/vision.ts
+      // and server/vision-frames.ts.
+      { rider: "看看我刚拍的视频", agent: "我看看，稍后告诉你视频里都拍了什么。", latencyBase: 98 },
+      { rider: "看看我刚拍的照片", agent: "我看看，稍后告诉你照片里都拍了什么。", latencyBase: 93 }
     ]
   },
   wind: {
@@ -242,6 +250,40 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
   let memory: SessionMemory = createSessionMemory("navigation");
   const pendingDeviceCommands = new PendingDeviceCommands();
 
+  // Companion to pendingDeviceCommands, scoped to gallery.describe frame
+  // sets — same reasoning as server/providers/doubao.ts's twin: vision.frames
+  // chunks all arrive before device.result (wire order), so
+  // pendingDeviceCommands.peek() is enough while a set is still assembling —
+  // but the frame assembler's 10 s onIncomplete timer can fire after
+  // device.result already resolved (deleted) the pending entry. Keeps the
+  // action (for the same "issued for this action" guard visionFrames() runs)
+  // and the question (authoritative over a chunk's own claimed question)
+  // alive from accept time through completion or timeout, then prunes
+  // itself — at most one live entry per in-flight gallery command.
+  const recentGalleryCommands = new Map<string, { action: DeviceActionName; question?: string }>();
+
+  // Per-session assembler for gallery.describe's multi-frame sets. Mirrors
+  // cameraFrame's guard and detached-async shape below.
+  const galleryFrameAssembler = createFrameAssembler({
+    onComplete: ({ commandId, frames, question }) => {
+      const record = recentGalleryCommands.get(commandId);
+      recentGalleryCommands.delete(commandId);
+      const finalQuestion = record?.question ?? question;
+      // Captured now, synchronously — same reasoning as cameraFrame below:
+      // freshly allocated per call, not read from a mutable outer binding.
+      const delivery = createTranscriptDelivery();
+      void (async () => {
+        const description = await mockVisionProvider.describe(frames, finalQuestion);
+        send(transcriptEvent(delivery, "agent", description ?? "我看不清。", { final: true, useBrowserSpeech: true }));
+      })().catch(() => {});
+    },
+    onIncomplete: (commandId) => {
+      recentGalleryCommands.delete(commandId);
+      const delivery = createTranscriptDelivery();
+      send(transcriptEvent(delivery, "agent", "我看不清。", { final: true, useBrowserSpeech: true }));
+    }
+  });
+
   function send(payload: unknown) {
     if (client.readyState === client.OPEN) {
       const encoded = JSON.stringify(payload);
@@ -262,7 +304,7 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
       command.action,
       deviceSuccessSpeech(command),
       Date.now(),
-      command.action === "camera.look" ? command.args.question : undefined
+      command.action === "camera.look" || command.action === "gallery.describe" ? command.args.question : undefined
     );
     send({
       type: "device.command",
@@ -505,6 +547,18 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
         const description = await mockVisionProvider.describe([event.image], issued.question);
         send(transcriptEvent(delivery, "agent", description ?? "我看不清。", { final: true, useBrowserSpeech: true }));
       })().catch(() => {});
+    },
+    async visionFrames(event) {
+      // Same guard shape as cameraFrame, plus the recentGalleryCommands
+      // fallback declared above: a stray extra chunk can arrive after
+      // device.result already resolved (deleted) the pending entry, and this
+      // keeps recognising it as long as this provider itself opened the set.
+      const issued = pendingDeviceCommands.peek(event.commandId) ?? recentGalleryCommands.get(event.commandId);
+      if (!issued || issued.action !== "gallery.describe") return;
+      if (!recentGalleryCommands.has(event.commandId)) {
+        recentGalleryCommands.set(event.commandId, { action: issued.action, question: issued.question });
+      }
+      galleryFrameAssembler.accept(event);
     },
     async stopAudio() {
       if (timer) clearInterval(timer);

@@ -1,4 +1,4 @@
-import type { DeviceResultEvent, SessionStartEvent } from "../../shared/agent";
+import type { DeviceResultEvent, SessionStartEvent, VisionFramesEvent } from "../../shared/agent";
 import type { UserMemoryFact, UserMemoryTurn } from "../user-memory";
 
 export type { ClientEvent, SessionStartEvent, VoiceGender } from "../../shared/agent";
@@ -34,4 +34,7 @@ export type AgentProvider = {
   /** One frame the rider asked Max to look at. Providers without a vision path
    *  omit this. */
   cameraFrame?(event: { commandId: string; image: string }): Promise<void>;
+  /** One chunk of a multi-frame gallery understanding request. Providers
+   *  without a vision path omit this. */
+  visionFrames?(event: VisionFramesEvent): Promise<void>;
 };

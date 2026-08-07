@@ -205,7 +205,7 @@ describe("createMockVisionProvider", () => {
     expect(provider.mode).toBe("mock");
     expect(await provider.describe([FRAME])).toBe("前方道路畅通，天气晴朗。");
     expect(await provider.describe([FRAME, FRAME, FRAME])).toBe("这段视频里，前方道路畅通，一路顺利。");
-    expect(await provider.describe([FRAME], "前面是什么")).toBe(`关于\u{201C}前面是什么\u{201D}：我看到前方道路畅通。`);
+    expect(await provider.describe([FRAME], "前面是什么")).toBe(`关于“前面是什么”：我看到前方道路畅通。`);
   });
 });
 

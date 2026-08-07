@@ -26,6 +26,13 @@ export const EMBEDDED_CAPABILITIES: Record<DeviceActionName, EmbeddedCapability>
   "camera.look": { supported: true },
   "volume.set": { supported: true },
   "gallery.open": { supported: false, reason: "device.noScreen" },
+  // Gated to the iOS platform at the source (device-actions.ts's
+  // PLATFORM_RESTRICTED_ACTIONS), so the relay never actually dispatches this
+  // to the board — listed here only for Record<DeviceActionName, ...>
+  // exhaustiveness. Describing the rider's PHONE photo gallery is a phone
+  // feature the helmet lacks, same reasoning as music.control/sms.compose/
+  // call.dial below, not a screen feature like gallery.open above.
+  "gallery.describe": { supported: false, reason: "device.noPhone" },
   "destination.show": { supported: false, reason: "device.noScreen" },
   "torch.set": { supported: false, reason: "torch.unavailable" },
   "music.control": { supported: false, reason: "device.noPhone" },

@@ -232,13 +232,14 @@ export const extractDeviceCommand: IntentExtractor = (text) => {
 };
 
 const GALLERY_REF = /(我|刚|刚才).{0,4}(拍|录)的/;
-const GALLERY_ACTION = /(看看|描述)/;
+const GALLERY_ACTION = /(看看|描述|讲讲)|\b(describe|show( me)?|look at|check)\b/i;
 const GALLERY_QUESTION = /(是什么|什么样|写的什么|写着什么|有什么|有没有)/;
 
 function matchGalleryDescribe(raw: string): DeviceCommand | null {
   if (!GALLERY_REF.test(raw) && !/\b(photo|picture|video) (i|we) (just )?(took|recorded|shot)\b/i.test(raw))
     return null;
-  // Require either an explicit action verb (看看, 描述) or a content question pattern
+  // A gallery reference alone is not enough — the utterance must also carry a describe-verb
+  // (either language) or a content question, which keeps delete/send/navigate phrasings out.
   if (!GALLERY_ACTION.test(raw) && !GALLERY_QUESTION.test(raw) && !/\bwhat('s| is)\b/i.test(raw)) return null;
   const kind = /(视频|录像|影片|video)/i.test(raw)
     ? ("video" as const)

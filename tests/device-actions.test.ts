@@ -483,4 +483,28 @@ describe("gallery.describe", () => {
     expect(deviceFailureSpeech("gallery.describe", "failed", "gallery.empty")).toBe("相册里还没有照片或视频。");
     expect(deviceFailureSpeech("gallery.describe", "failed", "gallery.unreadable")).toBe("这段内容我处理不了。");
   });
+
+  it("recognizes English describe verbs", () => {
+    expect(extractDeviceCommand("describe the video I just recorded")).toMatchObject({
+      action: "gallery.describe",
+      args: { kind: "video" }
+    });
+    expect(extractDeviceCommand("show me the photo I just took")).toMatchObject({
+      action: "gallery.describe",
+      args: { kind: "photo" }
+    });
+  });
+
+  it("carries English what questions", () => {
+    expect(extractDeviceCommand("what's in the photo I just took")).toMatchObject({
+      action: "gallery.describe",
+      args: { kind: "photo", question: "what's in the photo I just took" }
+    });
+  });
+
+  it("rejects delete, send, and navigate phrasings that reference recent media", () => {
+    expect(extractDeviceCommand("把刚拍的照片删了")?.action).not.toBe("gallery.describe");
+    expect(extractDeviceCommand("导航去我刚拍的地方")?.action).not.toBe("gallery.describe");
+    expect(extractDeviceCommand("拍的照片发给我")?.action).not.toBe("gallery.describe");
+  });
 });

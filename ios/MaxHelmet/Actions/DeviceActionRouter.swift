@@ -20,6 +20,9 @@ struct DeviceActionRouter {
         guard let handler = handlers[DeviceActionRoute(command.action)] else {
             return .unsupported("handler.missing")
         }
+        if let identified = handler as? IdentifiedDeviceActionHandler {
+            return await identified.perform(command.action, commandId: command.commandId)
+        }
         return await handler.perform(command.action)
     }
 }

@@ -304,6 +304,7 @@ enum DeviceAction: Equatable {
     case cameraPhoto
     case cameraRecord(start: Bool)
     case galleryOpen
+    case galleryDescribe(kind: String, question: String?)
     case navigationStart(query: String)
     case navigationStop
 }
@@ -592,6 +593,8 @@ func parseDeviceAction(_ name: String, _ args: [String: Any]) -> DeviceAction? {
         return .cameraRecord(start: args["start"] as? Bool ?? false)
     case "gallery.open":
         return .galleryOpen
+    case "gallery.describe":
+        return .galleryDescribe(kind: args["kind"] as? String ?? "latest", question: args["question"] as? String)
     case "navigation.start":
         guard let query = args["query"] as? String, !query.isEmpty else { return nil }
         return .navigationStart(query: query)
@@ -628,6 +631,23 @@ func buildCrashAlert(incidentId: String, lat: Double?, lon: Double?, speedKmhRec
     if let lon { payload["lon"] = lon }
     if let speedKmhRecent { payload["speedKmhRecent"] = speedKmhRecent }
     if let contactNumber, contactOptIn { payload["contactNumber"] = contactNumber }
+    guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return "{}" }
+    return String(data: data, encoding: .utf8) ?? "{}"
+}
+
+/// Client → server vision.frames: one chunk of a gallery.describe upload
+/// (validated by server/session-controller.ts). `question` is omitted
+/// entirely, not sent as null, when the rider didn't ask one.
+func buildVisionFrame(commandId: String, index: Int, total: Int, image: String, question: String?) -> String {
+    var payload: [String: Any] = [
+        "type": ClientEventTypes.visionFrames,
+        "commandId": commandId,
+        "reason": "gallery",
+        "index": index,
+        "total": total,
+        "image": image
+    ]
+    if let question { payload["question"] = question }
     guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return "{}" }
     return String(data: data, encoding: .utf8) ?? "{}"
 }

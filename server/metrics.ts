@@ -74,6 +74,21 @@ const log = createLogger("testing-history");
 
 export const metrics = {
   ...relayMetrics,
+  watchDrops: {
+    disabled: 0,
+    budget: 0,
+    "adas-window": 0,
+    speech: 0,
+    cooldown: 0,
+    "nothing-notable": 0,
+    "model-failure": 0
+  },
+  watchDrop(reason: string): void {
+    const key = reason as keyof typeof this.watchDrops;
+    if (key in this.watchDrops) {
+      this.watchDrops[key] += 1;
+    }
+  },
   /** Test hook. */
   reset() {
     resetRelayMetrics();
@@ -83,6 +98,13 @@ export const metrics = {
     completedSessions.length = 0;
     testingHistoryLoaded = false;
     resetTestingStore();
+    this.watchDrops.disabled = 0;
+    this.watchDrops.budget = 0;
+    this.watchDrops["adas-window"] = 0;
+    this.watchDrops.speech = 0;
+    this.watchDrops.cooldown = 0;
+    this.watchDrops["nothing-notable"] = 0;
+    this.watchDrops["model-failure"] = 0;
   }
 };
 

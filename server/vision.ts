@@ -30,6 +30,8 @@ export function buildChatCompletionsEndpoint(baseUrl: string): string {
 
 const DEFAULT_PROMPT = "用一句话描述这张照片里的场景，简洁自然，像对骑手说话。";
 const DEFAULT_TIMEOUT_MS = 10_000;
+export const WATCH_PROMPT =
+  "如果这张照片里有一件值得骑手注意的非危险情况，用一句话说出来。如果没有值得说的，只回答：无。";
 
 function parseArkContent(body: unknown): string | null {
   // UNVERIFIED response shape. `choices[0].message.content` is the
@@ -129,14 +131,17 @@ export function createMockVisionProvider(): VisionProvider {
   return {
     mode: "mock",
     async describe(frames: string[], question?: string): Promise<string | null> {
+      if (question === WATCH_PROMPT) {
+        return "前方有施工路段，注意慢行。";
+      }
       if (frames.length > 1) {
         if (question) {
-          return `关于“${question}”：我看到前方道路畅通。`;
+          return `关于"${question}"：我看到前方道路畅通。`;
         }
         return "这段视频里，前方道路畅通，一路顺利。";
       }
       if (question) {
-        return `关于“${question}”：我看到前方道路畅通。`;
+        return `关于"${question}"：我看到前方道路畅通。`;
       }
       return "前方道路畅通，天气晴朗。";
     }

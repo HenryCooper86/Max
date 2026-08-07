@@ -6,8 +6,8 @@ export type { ClientEvent, SessionStartEvent, VoiceGender } from "../../shared/a
 // shared/agent.ts's hazard.report variant has no standalone exported name (it
 // is inline in the ClientEvent union) — same situation crash-escalation.ts
 // solved for crash.alert/crash.cancel, and the same fix: derive it here with
-// Extract rather than duplicating the field list.
-export type HazardReportEvent = Extract<ClientEvent, { type: "hazard.report" }>;
+// Extract rather than duplicating the field list. Export when a consumer imports it by name.
+type HazardReportEvent = Extract<ClientEvent, { type: "hazard.report" }>;
 
 export type ProviderTelemetry = {
   serverEvent(payload: unknown, bytes: number): void;

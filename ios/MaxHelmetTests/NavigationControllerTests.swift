@@ -35,6 +35,15 @@ private final class FakeSearch: NavigationRouteSearching, @unchecked Sendable {
     var holdRoute = false
     private var holdContinuation: CheckedContinuation<NavigationRoute?, Never>?
 
+    /// Same idea for `reroute(to:from:)`, kept as its own gate (rather than
+    /// sharing `holdContinuation`) so a test can hold a reroute open while a
+    /// concurrent `route(to:from:)` call completes normally — the real
+    /// relay's single-outstanding nav.request slot would fail the reroute
+    /// the moment the new request is sent; this lets a test control that
+    /// ordering explicitly instead of racing it.
+    var holdReroute = false
+    private var holdRerouteContinuation: CheckedContinuation<NavigationRoute?, Never>?
+
     func route(to query: String, from origin: CLLocationCoordinate2D) async -> NavigationRoute? {
         routeOrigin = origin
         if holdRoute {
@@ -47,12 +56,20 @@ private final class FakeSearch: NavigationRouteSearching, @unchecked Sendable {
         rerouteCalls += 1
         rerouteOrigin = origin
         rerouteDestination = destination
+        if holdReroute {
+            return await withCheckedContinuation { holdRerouteContinuation = $0 }
+        }
         return rerouteResult
     }
 
     func resolveHeld(with result: NavigationRoute?) {
         holdContinuation?.resume(returning: result)
         holdContinuation = nil
+    }
+
+    func resolveHeldReroute(with result: NavigationRoute?) {
+        holdRerouteContinuation?.resume(returning: result)
+        holdRerouteContinuation = nil
     }
 }
 
@@ -150,6 +167,126 @@ final class NavigationControllerTests: XCTestCase {
 
         XCTAssertEqual(result, .ok)
         XCTAssertNotNil(box.guidance)
+    }
+
+    // fix round 1 (review findings Important #1/#2/#3): concurrent starts,
+    // an active route surviving a failed re-start, and a superseding start
+    // surviving a stale in-flight reroute's failure branch. These interact —
+    // see NavigationController's `navigationGeneration` and the fix-round-1
+    // section of the task-4 report for the full rationale.
+
+    func testConcurrentStartsEachYieldExactlyOneResultWithoutLeakOrSpuriousFailure() async {
+        executionTimeAllowance = 5 // guards against a regression reintroducing the leaked-continuation hang
+        let stream = FakeStream()
+        stream.fixOnStart = nil // fix delivery is controlled manually below
+        let search = FakeSearch()
+        search.route = straightRoute()
+        // Long enough that neither request's own watchdog reaches its
+        // natural deadline during this test — the assertions below exercise
+        // the explicit supersede-and-cancel path (a concurrent start()
+        // resolving the stale one immediately), not a race against a timeout.
+        let (controller, box) = make(stream, search, firstFixTimeoutSeconds: 5)
+
+        let firstTask = Task { await controller.perform(.navigationStart(query: "第一个")) }
+        try? await Task.sleep(nanoseconds: 20_000_000) // let the first reach its first-fix wait
+
+        let secondTask = Task { await controller.perform(.navigationStart(query: "第二个")) }
+        try? await Task.sleep(nanoseconds: 20_000_000) // let the second supersede the first
+
+        // The superseded first request must resolve promptly on its own —
+        // proves its continuation was never leaked (which would otherwise
+        // hang perform() forever, holding the device slot, and log a
+        // "SWIFT TASK CONTINUATION MISUSE" leak).
+        let firstResult = await firstTask.value
+        XCTAssertEqual(firstResult.status, .unsupported)
+        XCTAssertEqual(firstResult.reason, "route.unavailable")
+
+        // Deliver the real fix — it must satisfy the SECOND (current)
+        // request. The superseded first request's watchdog was cancelled the
+        // instant the second one began (awaitFirstFix's resolveFirstFix(nil)
+        // call), so it cannot still be "authoritative" here.
+        stream.feed(CLLocationCoordinate2D(latitude: 39.90, longitude: 116.40))
+
+        let secondResult = await secondTask.value
+        XCTAssertEqual(secondResult, .ok, "the current request gets the real fix, not a spurious failure")
+        XCTAssertNotNil(box.guidance)
+        XCTAssertTrue(stream.started, "the superseded request's own failure cleanup must not have stopped it")
+    }
+
+    func testFailedRestartWhileNavigatingLeavesActiveRouteRunning() async {
+        let stream = FakeStream(), search = FakeSearch()
+        let activeRoute = straightRoute()
+        search.route = activeRoute
+        let (controller, box) = make(stream, search)
+
+        let first = await controller.perform(.navigationStart(query: "终点"))
+        XCTAssertEqual(first, .ok)
+        XCTAssertTrue(stream.started)
+
+        // A second, unrelated destination fails to resolve while already navigating.
+        search.route = nil
+        let second = await controller.perform(.navigationStart(query: "无法到达的地方"))
+
+        XCTAssertEqual(second.status, .unsupported)
+        XCTAssertEqual(second.reason, "route.unavailable")
+        XCTAssertTrue(stream.started, "the active route's stream must keep running")
+        XCTAssertNotNil(box.guidance)
+        XCTAssertEqual(box.guidance?.destinationName, activeRoute.destinationName, "the original route is still active")
+
+        // Prove guidance is genuinely live, not merely that `started` wasn't
+        // flipped: a fresh fix on the original route still produces arrival.
+        stream.feed(CLLocationCoordinate2D(latitude: 39.9180, longitude: 116.40)) // at destination
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertTrue(box.spoken.contains { $0.contains("到达") }, "guidance is still processing fixes on the original route")
+    }
+
+    func testSupersedingStartSurvivesAStaleRerouteFailure() async {
+        let stream = FakeStream(), search = FakeSearch()
+        search.route = straightRoute()
+        let (controller, box) = make(stream, search, clock: { 0 })
+
+        let first = await controller.perform(.navigationStart(query: "终点"))
+        XCTAssertEqual(first, .ok)
+
+        // Drift off-route to kick off a reroute, held so the test controls
+        // exactly when it resolves — like the relay's real single-outstanding
+        // nav.request slot, which a concurrent start() would fail.
+        search.holdReroute = true
+        let off = CLLocationCoordinate2D(latitude: 39.9060, longitude: 116.4020)
+        stream.feed(off)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(search.rerouteCalls, 1)
+
+        // A brand-new start supersedes it and succeeds while the reroute is
+        // still held.
+        let newRoute = NavigationRoute(
+            destinationName: "新终点",
+            destinationCoordinate: CLLocationCoordinate2D(latitude: 39.95, longitude: 116.45),
+            polyline: [
+                CLLocationCoordinate2D(latitude: 39.90, longitude: 116.40),
+                CLLocationCoordinate2D(latitude: 39.95, longitude: 116.45)
+            ],
+            steps: [ManeuverStep(
+                instruction: "到达新终点",
+                coordinate: CLLocationCoordinate2D(latitude: 39.95, longitude: 116.45),
+                alongRouteMeters: 3000
+            )],
+            totalDistanceMeters: 3000, totalEtaSeconds: 500
+        )
+        search.route = newRoute
+        let second = await controller.perform(.navigationStart(query: "新终点"))
+        XCTAssertEqual(second, .ok)
+        XCTAssertEqual(box.guidance?.destinationName, "新终点")
+
+        // NOW the stale reroute's failure answer arrives — it must be
+        // discarded entirely: the fresh route and its stream must survive.
+        search.resolveHeldReroute(with: nil)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertTrue(stream.started, "the fresh start's stream must keep running")
+        XCTAssertNotNil(box.guidance)
+        XCTAssertEqual(box.guidance?.destinationName, "新终点", "the stale reroute must not tear down the new navigation")
+        XCTAssertFalse(box.spoken.contains { $0.contains("无法重新规划路线") }, "the stale reroute's failure speech must be suppressed")
     }
 
     func testStartWithNoFixWithinBoundReportsRouteUnavailable() async {

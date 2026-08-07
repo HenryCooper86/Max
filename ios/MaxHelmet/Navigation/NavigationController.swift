@@ -41,6 +41,13 @@ final class NavigationController: DeviceActionHandler {
     private var lastRerouteAt: TimeInterval = -.greatestFiniteMagnitude
     private var firstFixContinuation: CheckedContinuation<CLLocationCoordinate2D?, Never>?
     private var firstFixWatchdog: Task<Void, Never>?
+    /// Bumped once per `start(_:)` attempt. Nothing tears down `route`/the
+    /// stream on behalf of a stale generation: a concurrent `start()` can
+    /// supersede an in-flight first-fix wait, an in-flight search (both share
+    /// RelayNavigationSearch's single-outstanding nav.request slot), or an
+    /// in-flight reroute — and none of those superseded operations' eventual
+    /// answers may still act once a newer generation owns navigation state.
+    private var navigationGeneration = 0
 
     /// Nonisolated so a non-`@MainActor` owner (AgentSession's router) can build
     /// it in a stored/lazy property. It only wires collaborators; all navigation
@@ -93,15 +100,32 @@ final class NavigationController: DeviceActionHandler {
         case .authorized:
             break
         }
+        // Each attempt gets its own generation so a superseded attempt — at
+        // any stage (first fix, search, or an in-flight reroute racing a
+        // fresh start; see `attemptReroute`) — can tell it is no longer the
+        // one responsible for `route`/the stream before touching either.
+        navigationGeneration += 1
+        let generation = navigationGeneration
+
         // The first fix must be in hand BEFORE searching: the relay routes
         // FROM the rider's position, so there is no query to send without it.
         stream.start()
-        guard let origin = await awaitFirstFix() else {
-            stream.stop()
+        guard let origin = await awaitFirstFix(generation: generation) else {
+            // Only stop the stream if nothing else is relying on it: a
+            // still-active route from an earlier, already-succeeded start
+            // (Important #2), or a newer generation that superseded this one
+            // and is still in flight (Important #1), must keep it running.
+            if generation == navigationGeneration, route == nil { stream.stop() }
             return .unsupported("route.unavailable")
         }
         guard let resolved = await search.route(to: query, from: origin) else {
-            stream.stop()
+            if generation == navigationGeneration, route == nil { stream.stop() }
+            return .unsupported("route.unavailable")
+        }
+        guard generation == navigationGeneration else {
+            // Superseded while the search was in flight (Important #3's
+            // sibling case: a newer start(), not a reroute) — the newer
+            // generation now owns `route`/the stream; do not stomp on it.
             return .unsupported("route.unavailable")
         }
         route = resolved
@@ -115,13 +139,24 @@ final class NavigationController: DeviceActionHandler {
     /// hangs navigation.start indefinitely. Every fix — including this first
     /// one — still flows through `handleFix` (wired in `init`); the resolve
     /// there is a no-op once this has already resolved (by answer or timeout).
-    private func awaitFirstFix() async -> CLLocationCoordinate2D? {
-        await withCheckedContinuation { (continuation: CheckedContinuation<CLLocationCoordinate2D?, Never>) in
+    ///
+    /// Single-outstanding: a concurrent `start()` supersedes any first-fix
+    /// wait already in flight. The stale one is resolved nil immediately
+    /// (mirrors `RelayNavigationSearch.failPending()`) so its `perform()`
+    /// always gets its one `device.result` instead of leaking the
+    /// continuation forever — and its watchdog is guarded by `generation` so
+    /// that even though `.cancel()` can't stop an already-sleeping Task's
+    /// code from running, it can't resolve a LATER request's continuation
+    /// once it wakes.
+    private func awaitFirstFix(generation: Int) async -> CLLocationCoordinate2D? {
+        resolveFirstFix(nil)
+        return await withCheckedContinuation { (continuation: CheckedContinuation<CLLocationCoordinate2D?, Never>) in
             firstFixContinuation = continuation
             firstFixWatchdog = Task { @MainActor [weak self] in
                 let timeout = self?.firstFixTimeoutSeconds ?? 3
                 try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                self?.resolveFirstFix(nil)
+                guard let self, generation == self.navigationGeneration else { return }
+                self.resolveFirstFix(nil)
             }
         }
     }
@@ -172,10 +207,20 @@ final class NavigationController: DeviceActionHandler {
         guard !rerouting, now() - lastRerouteAt >= Self.rerouteCooldownSeconds else { return }
         rerouting = true
         lastRerouteAt = now()
+        let generation = navigationGeneration
         speak("已偏离路线，正在重新规划。")
         Task { @MainActor in
             defer { rerouting = false }
-            if let fresh = await search.reroute(to: destination, from: origin) {
+            let fresh = await search.reroute(to: destination, from: origin)
+            // A concurrent start() shares RelayNavigationSearch's single
+            // outstanding nav.request slot, so it can fail THIS reroute
+            // (nil) via failPending() while it supersedes it. Whichever way
+            // this reroute resolves, a stale answer must never touch
+            // `route`/the stream once a newer generation owns them — that
+            // newer start is either still installing its own route or has
+            // already installed one.
+            guard generation == navigationGeneration else { return }
+            if let fresh {
                 route = fresh
                 progress = GuidanceProgress(maneuverIndex: 0, firedThresholds: [], arrived: false)
                 publish(location: origin)

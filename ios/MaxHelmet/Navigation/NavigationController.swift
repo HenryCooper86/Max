@@ -106,17 +106,20 @@ final class NavigationController: DeviceActionHandler {
 
     private func handleFix(_ location: CLLocationCoordinate2D) {
         guard let route else { return }
-        let update = GuidanceEngine.step(location: location, route: route, progress: progress)
+        let update = GuidanceEngine.step(position: location, route: route, progress: progress)
         progress = update.progress
 
-        if let prompt = update.spokenPrompt {
-            if prompt.contains("现在") { interruptPlayback() } // the safety-critical turn
-            speak(prompt)
-        }
+        // Keyed on threshold IDENTITY, never on prompt text: the TS-ported
+        // "now" template is the bare instruction with no "现在" marker left to
+        // grep for, so a substring check here would silently swallow the
+        // safety-critical interrupt.
+        if update.firedThreshold == .now { interruptPlayback() }
+        if let prompt = update.spokenPrompt { speak(prompt) }
+        if update.arrived { speak("已到达目的地。") }
 
         publish(location: location, update: update)
 
-        if update.progress.arrived {
+        if update.arrived {
             self.route = nil
             stream.stop()
             onGuidance(nil)
@@ -147,14 +150,14 @@ final class NavigationController: DeviceActionHandler {
 
     private func publish(location: CLLocationCoordinate2D?, update: GuidanceUpdate? = nil) {
         guard let route else { return }
-        let maneuver = progress.maneuverIndex < route.steps.count ? route.steps[progress.maneuverIndex].instruction : nil
+        let maneuver = update?.currentInstruction ?? route.steps.first?.instruction
         onGuidance(GuidanceState(
             destinationName: route.destinationName,
             polyline: route.polyline,
             currentLocation: location,
             maneuverInstruction: maneuver,
             distanceToManeuverMeters: update?.distanceToManeuverMeters ?? route.totalDistanceMeters,
-            remainingDistanceMeters: update?.remainingDistanceMeters ?? route.totalDistanceMeters,
+            remainingDistanceMeters: update?.remainingMeters ?? route.totalDistanceMeters,
             remainingSeconds: update?.remainingSeconds ?? route.totalEtaSeconds,
             offRoute: update?.offRoute ?? false
         ))

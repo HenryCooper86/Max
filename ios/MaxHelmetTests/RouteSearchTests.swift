@@ -13,7 +13,7 @@ final class RouteSearchTests: XCTestCase {
             CLLocationCoordinate2D(latitude: 39.90, longitude: 116.40),
             CLLocationCoordinate2D(latitude: 39.91, longitude: 116.40)
         ]
-        let steps = [ManeuverStep(instruction: "右转", coordinate: dest, distanceMeters: 500)]
+        let steps = [ManeuverStep(instruction: "右转", coordinate: dest, alongRouteMeters: 500)]
         let route = makeNavigationRoute(
             name: "天安门", destination: dest, polyline: polyline, steps: steps,
             totalDistanceMeters: 1200, totalEtaSeconds: 300

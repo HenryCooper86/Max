@@ -10,12 +10,14 @@ func coordinatesEqual(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) 
 struct ManeuverStep: Equatable {
     let instruction: String
     let coordinate: CLLocationCoordinate2D
-    let distanceMeters: Double
+    /// Cumulative along-route distance from the route start to this maneuver,
+    /// matching NavManeuver.alongRouteMeters on the wire. NOT a per-leg length.
+    let alongRouteMeters: Double
 
     static func == (lhs: ManeuverStep, rhs: ManeuverStep) -> Bool {
         lhs.instruction == rhs.instruction
             && coordinatesEqual(lhs.coordinate, rhs.coordinate)
-            && lhs.distanceMeters == rhs.distanceMeters
+            && lhs.alongRouteMeters == rhs.alongRouteMeters
     }
 }
 

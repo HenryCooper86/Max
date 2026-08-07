@@ -33,7 +33,24 @@ final class NavigationControllerTests: XCTestCase {
         return NavigationRoute(
             destinationName: "终点", destinationCoordinate: dest,
             polyline: [CLLocationCoordinate2D(latitude: 39.90, longitude: 116.40), dest],
-            steps: [ManeuverStep(instruction: "到达终点", coordinate: dest, distanceMeters: 2000)],
+            steps: [ManeuverStep(instruction: "到达终点", coordinate: dest, alongRouteMeters: 2000)],
+            totalDistanceMeters: 2000, totalEtaSeconds: 400
+        )
+    }
+
+    // A route with an intermediate turn, so a "now" fix near it is well clear
+    // of the arrival radius — isolates the interrupt-identity assertion below
+    // from arrival's own (separate) speech.
+    private func routeWithTurn() -> NavigationRoute {
+        let turn = CLLocationCoordinate2D(latitude: 39.9090, longitude: 116.40)
+        let dest = CLLocationCoordinate2D(latitude: 39.9180, longitude: 116.40)
+        return NavigationRoute(
+            destinationName: "终点", destinationCoordinate: dest,
+            polyline: [CLLocationCoordinate2D(latitude: 39.9000, longitude: 116.40), turn, dest],
+            steps: [
+                ManeuverStep(instruction: "右转", coordinate: turn, alongRouteMeters: 1000),
+                ManeuverStep(instruction: "到达终点", coordinate: dest, alongRouteMeters: 2000)
+            ],
             totalDistanceMeters: 2000, totalEtaSeconds: 400
         )
     }
@@ -135,6 +152,26 @@ final class NavigationControllerTests: XCTestCase {
 
         XCTAssertFalse(stream.started, "arrival stops the stream")
         XCTAssertTrue(box.spoken.contains { $0.contains("到达") })
+    }
+
+    func testNowThresholdInterruptsPlaybackByIdentityNotText() async {
+        // The TS-ported "now" template is the bare instruction — no "现在"
+        // substring left to grep for — so the interrupt must key on the
+        // engine's `firedThreshold` identity, not on the spoken text.
+        let stream = FakeStream(), search = FakeSearch()
+        search.route = routeWithTurn()
+        let (controller, box) = make(stream, search)
+        _ = await controller.perform(.navigationStart(query: "终点"))
+
+        // ~22 m short of the turn: within the 40 m "now" band, well clear of
+        // the 30 m arrival radius to the (much farther away) destination.
+        let nearTurn = CLLocationCoordinate2D(latitude: 39.9090 - 22.0 / 111_000, longitude: 116.40)
+        stream.feed(nearTurn)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertEqual(box.interrupts, 1)
+        XCTAssertEqual(box.spoken.last, "右转")
+        XCTAssertFalse(box.spoken.last?.contains("现在") ?? true)
     }
 
     func testActionMismatchIsRejected() async {

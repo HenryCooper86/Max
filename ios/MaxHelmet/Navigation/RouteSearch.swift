@@ -55,9 +55,20 @@ struct MapKitNavigationSearch: NavigationRouteSearching {
         let pointCount = mkRoute.polyline.pointCount
         var coords = [CLLocationCoordinate2D](repeating: .init(), count: pointCount)
         mkRoute.polyline.getCoordinates(&coords, range: NSRange(location: 0, length: pointCount))
-        let steps = mkRoute.steps
-            .filter { !$0.instructions.isEmpty }
-            .map { ManeuverStep(instruction: $0.instructions, coordinate: $0.polyline.coordinate, distanceMeters: $0.distance) }
+
+        // MKRoute.Step.distance is a per-leg length (the segment covered by
+        // that step, ending at its maneuver); ManeuverStep.alongRouteMeters
+        // needs the cumulative distance from the route start instead, to
+        // match the wire's NavManeuver shape — so walk every step in order
+        // and accumulate, keeping only the ones with a spoken instruction.
+        var cumulativeMeters = 0.0
+        var steps: [ManeuverStep] = []
+        for step in mkRoute.steps {
+            cumulativeMeters += step.distance
+            guard !step.instructions.isEmpty else { continue }
+            steps.append(ManeuverStep(instruction: step.instructions, coordinate: step.polyline.coordinate, alongRouteMeters: cumulativeMeters))
+        }
+
         return makeNavigationRoute(
             name: name, destination: destination, polyline: coords, steps: steps,
             totalDistanceMeters: mkRoute.distance, totalEtaSeconds: mkRoute.expectedTravelTime

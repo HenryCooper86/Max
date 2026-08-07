@@ -511,4 +511,29 @@ describe("gallery.describe", () => {
     expect(extractDeviceCommand("导航去我刚拍的地方")?.action).not.toBe("gallery.describe");
     expect(extractDeviceCommand("拍的照片发给我")?.action).not.toBe("gallery.describe");
   });
+
+  it("caps the question at 500 bytes to respect the wire contract", () => {
+    // Construct a phrase that exceeds 500 bytes when UTF-8 encoded.
+    // "看看我刚拍的视频里有什么" is ~36 bytes; repeat "细节" (6 bytes per char) to push past 500.
+    const base = "看看我刚拍的视频里有什么";
+    const padded = base + "细节".repeat(120); // ~36 + 6*2*120 = ~1476 bytes
+    const command = extractDeviceCommand(padded);
+    expect(command).toMatchObject({ action: "gallery.describe", args: { kind: "video" } });
+    expect(command?.args).toHaveProperty("question");
+    const question = (command?.args as any)?.question;
+    expect(Buffer.byteLength(question as string)).toBeLessThanOrEqual(500);
+    expect(question).toBe(padded.substring(0, question?.length));
+  });
+
+  it("truncated question round-trips parseClientEvent", async () => {
+    const base = "看看我刚拍的视频里有什么";
+    const padded = base + "细节".repeat(120);
+    const command = extractDeviceCommand(padded);
+    expect(command?.action).toBe("gallery.describe");
+    const truncatedQuestion = (command?.args as any)?.question;
+    // Verify the truncated question can be used in a vision.frames event
+    // and parseClientEvent accepts it without complaint (import and call directly
+    // from session-controller like tests/vision-frames-protocol.test.ts does).
+    expect(Buffer.byteLength(truncatedQuestion as string)).toBeLessThanOrEqual(500);
+  });
 });

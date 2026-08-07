@@ -31,6 +31,7 @@
 ### Task 1: `vision.frames` protocol event + schema action sync
 
 **Files:**
+
 - Modify: `protocol/agent-events.schema.json` (ClientEvent.oneOf += VisionFrames; DeviceCommand action enum += "gallery.describe", "camera.look", "system.shutdown")
 - Modify: `shared/generated/agent-protocol.ts` + Swift/Kotlin siblings (via `npm run generate:protocol` only)
 - Modify: `shared/agent.ts` (`VisionFramesEvent` type + `ClientEvent` union)
@@ -38,6 +39,7 @@
 - Test: `tests/vision-frames-protocol.test.ts`
 
 **Interfaces:**
+
 - Produces (every later task relies on):
 
 ```ts
@@ -75,7 +77,12 @@ describe("generated protocol", () => {
 
 describe("parseClientEvent vision.frames", () => {
   it("accepts a frame chunk with and without a question", () => {
-    expect(parseClientEvent(encode(base))).toMatchObject({ type: "vision.frames", commandId: "c1", index: 0, total: 2 });
+    expect(parseClientEvent(encode(base))).toMatchObject({
+      type: "vision.frames",
+      commandId: "c1",
+      index: 0,
+      total: 2
+    });
     const withQuestion = parseClientEvent(encode({ ...base, question: "有什么" }));
     expect(withQuestion).toMatchObject({ question: "有什么" });
   });
@@ -145,7 +152,12 @@ if (value.type === "vision.frames") {
   if (typeof value.total !== "number" || !Number.isInteger(value.total) || value.total < 1 || value.total > 8) {
     throw new Error("Invalid vision.frames total");
   }
-  if (typeof value.index !== "number" || !Number.isInteger(value.index) || value.index < 0 || value.index >= value.total) {
+  if (
+    typeof value.index !== "number" ||
+    !Number.isInteger(value.index) ||
+    value.index < 0 ||
+    value.index >= value.total
+  ) {
     throw new Error("Invalid vision.frames index");
   }
   if (typeof value.image !== "string" || !value.image || value.image.length > 200_000) {
@@ -185,10 +197,12 @@ git commit -m "feat(vision): add the chunked vision.frames client event"
 ### Task 2: `gallery.describe` grammar + action plumbing
 
 **Files:**
+
 - Modify: `server/device-actions.ts` (DeviceActionName, DeviceCommand union, DEVICE_ACTION_TIERS, PLATFORM_RESTRICTED_ACTIONS, deviceSuccessSpeech, FAILURE_SPEECH, extraction)
 - Test: `tests/device-actions.test.ts` (append)
 
 **Interfaces:**
+
 - Produces:
   - `DeviceCommand` variant: `{ action: "gallery.describe"; args: { kind: "photo" | "video" | "latest"; question?: string } }`
   - `DEVICE_ACTION_TIERS["gallery.describe"] = "low"`; `PLATFORM_RESTRICTED_ACTIONS["gallery.describe"] = "ios"`; `deviceSuccessSpeech` case → `"我看看…"`; `FAILURE_SPEECH` += `"gallery.empty": "相册里还没有照片或视频。"`, `"gallery.unreadable": "这段内容我处理不了。"`.
@@ -203,12 +217,18 @@ describe("gallery.describe", () => {
       action: "gallery.describe",
       args: { kind: "photo" }
     });
-    expect(extractDeviceCommand("描述一下我拍的相片")).toMatchObject({ action: "gallery.describe", args: { kind: "photo" } });
+    expect(extractDeviceCommand("描述一下我拍的相片")).toMatchObject({
+      action: "gallery.describe",
+      args: { kind: "photo" }
+    });
     expect(extractDeviceCommand("刚才录的视频里有什么")).toMatchObject({
       action: "gallery.describe",
       args: { kind: "video", question: "刚才录的视频里有什么" }
     });
-    expect(extractDeviceCommand("看看我刚拍的")).toMatchObject({ action: "gallery.describe", args: { kind: "latest" } });
+    expect(extractDeviceCommand("看看我刚拍的")).toMatchObject({
+      action: "gallery.describe",
+      args: { kind: "latest" }
+    });
   });
 
   it("carries a question only when one is asked", () => {
@@ -256,7 +276,8 @@ const GALLERY_REF = /(我|刚|刚才).{0,4}(拍|录)的/;
 const GALLERY_QUESTION = /(是什么|什么样|写的什么|写着什么|有什么|有没有)/;
 
 function matchGalleryDescribe(raw: string): DeviceCommand | null {
-  if (!GALLERY_REF.test(raw) && !/\b(photo|picture|video) (i|we) (just )?(took|recorded|shot)\b/i.test(raw)) return null;
+  if (!GALLERY_REF.test(raw) && !/\b(photo|picture|video) (i|we) (just )?(took|recorded|shot)\b/i.test(raw))
+    return null;
   const kind = /(视频|录像|影片|video)/i.test(raw)
     ? ("video" as const)
     : /(照片|相片|photo|picture)/i.test(raw)
@@ -286,10 +307,12 @@ git commit -m "feat(vision): gallery.describe grammar, gate, and speech strings"
 ### Task 3: Frame assembler (`server/vision-frames.ts`)
 
 **Files:**
+
 - Create: `server/vision-frames.ts`
 - Test: `tests/vision-frames.test.ts`
 
 **Interfaces:**
+
 - Consumes: `VisionFramesEvent` (Task 1).
 - Produces (Task 4 consumes):
 
@@ -314,7 +337,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFrameAssembler } from "../server/vision-frames";
 import type { VisionFramesEvent } from "../shared/agent";
 
-const chunk = (commandId: string, index: number, total: number, image: string, question?: string): VisionFramesEvent => ({
+const chunk = (
+  commandId: string,
+  index: number,
+  total: number,
+  image: string,
+  question?: string
+): VisionFramesEvent => ({
   type: "vision.frames",
   commandId,
   reason: "gallery",
@@ -400,6 +429,7 @@ git commit -m "feat(vision): pure chunked-frame assembler with timeout"
 ### Task 4: Provider wiring (doubao + mock speak assembled sets)
 
 **Files:**
+
 - Modify: `server/providers/types.ts` (`visionFrames?(event: VisionFramesEvent): Promise<void>;` on AgentProvider, below cameraFrame)
 - Modify: `server/session-controller.ts` (`if (event.type === "vision.frames") await this.provider.visionFrames?.(event);` beside the camera.frame forward at ~line 535)
 - Modify: `server/providers/doubao.ts` (assembler + visionFrames + carry-over comment cleanups)
@@ -409,6 +439,7 @@ git commit -m "feat(vision): pure chunked-frame assembler with timeout"
 - Test: `tests/doubao-vision-frames.test.ts` (create, mirroring tests/doubao-camera-frame.test.ts's harness), `tests/mock-vision-frames.test.ts` (create, mirroring tests/mock-camera-frame.test.ts's harness)
 
 **Interfaces:**
+
 - Consumes: `createFrameAssembler` (Task 3), `visionProvider.describe` (V-A), `pendingDeviceCommands.peek` (V-A), `issued.question`.
 - Produces: both providers implement `visionFrames`:
 
@@ -467,12 +498,14 @@ git commit -m "feat(vision): providers assemble and speak gallery frame sets"
 ### Task 5: iOS wire types — action case, parsing, event builder
 
 **Files:**
+
 - Modify: `ios/MaxHelmet/Agent/AgentProtocol.swift` (DeviceAction case, parseDeviceAction branch, `buildVisionFrame`)
 - Modify: `ios/MaxHelmet/Actions/DeviceActionHandler.swift` (`DeviceActionRoute` case `galleryDescribe` + init mapping; new `IdentifiedDeviceActionHandler` protocol)
 - Modify: `ios/MaxHelmet/Actions/DeviceActionRouter.swift` (route to the identified variant when the handler implements it)
 - Test: `ios/MaxHelmetTests/GalleryDescribeProtocolTests.swift` (create)
 
 **Interfaces:**
+
 - Consumes: `ClientEventTypes.visionFrames` (generated in Task 1); existing `DeviceAction`/`DeviceActionResult`/`parseDeviceAction`/`buildDeviceResult` shapes in AgentProtocol.swift.
 - Produces (Task 7 relies on):
   - `case galleryDescribe(kind: String, question: String?)` on `DeviceAction`.
@@ -558,12 +591,14 @@ git commit -m "feat(vision-ios): gallery.describe action, route, and vision.fram
 ### Task 6: iOS frame extraction (`FrameExtraction` + shared downscale)
 
 **Files:**
+
 - Create: `ios/MaxHelmet/Capture/ImageDownscale.swift` (internal `extension UIImage { func downscaled(to maxDimension: CGFloat) -> UIImage? }` — MOVED verbatim from CaptureStore.swift's private extension)
 - Modify: `ios/MaxHelmet/Capture/CaptureStore.swift` (delete the now-duplicated private extension; thumbnails keep working through the internal one)
 - Create: `ios/MaxHelmet/Capture/FrameExtraction.swift`
 - Test: `ios/MaxHelmetTests/FrameExtractionTests.swift` (create)
 
 **Interfaces:**
+
 - Produces (Task 7 consumes):
 
 ```swift
@@ -656,11 +691,13 @@ git commit -m "feat(vision-ios): key-frame and photo extraction under the frame 
 ### Task 7: iOS `GalleryDescribeController` + AgentSession wiring
 
 **Files:**
+
 - Create: `ios/MaxHelmet/Actions/GalleryDescribeController.swift`
 - Modify: `ios/MaxHelmet/Agent/AgentSession.swift` (register in the `deviceRouter` handlers dict, ~line 237-246, with the CrashController-style send closure from ~line 207)
 - Test: `ios/MaxHelmetTests/GalleryDescribeControllerTests.swift` (create)
 
 **Interfaces:**
+
 - Consumes: `IdentifiedDeviceActionHandler` + `buildVisionFrame` (Task 5), `FrameExtraction` (Task 6), `CaptureStoring` (`captures()` is newest-first; `fileURL(for:)`), `Capture.Kind`.
 - Produces:
 
@@ -741,6 +778,7 @@ git commit -m "feat(vision-ios): gallery.describe handler streams frames then th
 ### Task 8: Closeout — gates, README, branch audit
 
 **Files:**
+
 - Modify: `README.md` (extend the camera/gallery capability bullet: Max can describe the latest gallery photo or video — video via 8 on-device key frames, never uploaded; the privacy exception sentence VERBATIM from Global Constraints; keyless mock behavior; honest failure lines)
 
 - [ ] **Step 1: README** per above, dry mechanism-first voice, no overclaiming (the live Ark path is still unverified — do not claim description quality).

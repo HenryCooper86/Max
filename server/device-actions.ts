@@ -235,6 +235,21 @@ const GALLERY_REF = /(我|刚|刚才).{0,4}(拍|录)的/;
 const GALLERY_ACTION = /(看看|描述|讲讲)|\b(describe|show( me)?|look at|check)\b/i;
 const GALLERY_QUESTION = /(是什么|什么样|写的什么|写着什么|有什么|有没有)/;
 
+/** Truncate a string to at most maxBytes, cutting on a character boundary
+ *  (never mid-codepoint). The wire's 500-byte cap on vision.frames.question
+ *  would otherwise reject every chunk that echoes an over-long question — truncating
+ *  here keeps the relay from breaking a contract with itself, and the model still
+ *  sees the leading 500 bytes of the ask. */
+function truncateToBytes(text: string, maxBytes: number): string {
+  if (Buffer.byteLength(text) <= maxBytes) return text;
+  let result = "";
+  for (const char of text) {
+    if (Buffer.byteLength(result + char) > maxBytes) break;
+    result += char;
+  }
+  return result;
+}
+
 function matchGalleryDescribe(raw: string): DeviceCommand | null {
   if (!GALLERY_REF.test(raw) && !/\b(photo|picture|video) (i|we) (just )?(took|recorded|shot)\b/i.test(raw))
     return null;
@@ -246,7 +261,7 @@ function matchGalleryDescribe(raw: string): DeviceCommand | null {
     : /(照片|相片|photo|picture)/i.test(raw)
       ? ("photo" as const)
       : ("latest" as const);
-  const question = GALLERY_QUESTION.test(raw) || /\bwhat('s| is)\b/i.test(raw) ? raw : undefined;
+  const question = GALLERY_QUESTION.test(raw) || /\bwhat('s| is)\b/i.test(raw) ? truncateToBytes(raw, 500) : undefined;
   return { action: "gallery.describe", args: question ? { kind, question } : { kind } };
 }
 

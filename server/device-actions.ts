@@ -206,7 +206,7 @@ export const extractDeviceCommand: IntentExtractor = (text) => {
   if (/(打开|开启).{0,4}环境观察/.test(raw) || /(start|begin)\s+(the\s+)?(scene\s+)?watching/i.test(raw)) {
     return { action: "vision.watch", args: { on: true } };
   }
-  if (/(关闭|关掉|关).{0,4}环境观察/.test(raw) || /stop\s+watching/i.test(raw)) {
+  if (/(关闭|关掉|停止|取消)(一下)?环境观察/.test(raw) || /stop\s+watching/i.test(raw)) {
     return { action: "vision.watch", args: { on: false } };
   }
 

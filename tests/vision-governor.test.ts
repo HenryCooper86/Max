@@ -143,4 +143,55 @@ describe("createVisionGovernor", () => {
     expect(h.spoken).toHaveLength(1);
     expect(h.drops).toEqual(["speech"]);
   });
+
+  it("re-checks enabled after the describe round trip — disabling mid-describe drops, never speaks", async () => {
+    let resolveDescribe: (value: string) => void;
+    const describePromise = new Promise<string>((resolve) => {
+      resolveDescribe = resolve;
+    });
+    const h = harness({ describe: async () => describePromise });
+    h.governor.setEnabled(true);
+
+    const framePromise = h.governor.handleWatchFrame("A");
+    h.governor.setEnabled(false); // rider (or session) disables while the model call is in flight
+    resolveDescribe!("前方有慢车。");
+    await framePromise;
+
+    expect(h.spoken).toHaveLength(0);
+    expect(h.drops).toEqual(["disabled"]);
+  });
+
+  it("re-checks the ADAS window after the describe round trip — a hazard landing mid-describe drops", async () => {
+    let resolveDescribe: (value: string) => void;
+    const describePromise = new Promise<string>((resolve) => {
+      resolveDescribe = resolve;
+    });
+    const h = harness({ describe: async () => describePromise });
+    h.governor.setEnabled(true);
+
+    const framePromise = h.governor.handleWatchFrame("A");
+    h.governor.noteHazard(); // hazard lands while the model call is in flight
+    resolveDescribe!("前方有慢车。");
+    await framePromise;
+
+    expect(h.spoken).toHaveLength(0);
+    expect(h.drops).toEqual(["adas-window"]);
+  });
+
+  it("re-checks speech-open after the describe round trip — a rider turn opening mid-describe drops", async () => {
+    let resolveDescribe: (value: string) => void;
+    const describePromise = new Promise<string>((resolve) => {
+      resolveDescribe = resolve;
+    });
+    const h = harness({ describe: async () => describePromise });
+    h.governor.setEnabled(true);
+
+    const framePromise = h.governor.handleWatchFrame("A");
+    h.setSpeechOpen(true); // a rider turn opens while the model call is in flight
+    resolveDescribe!("前方有慢车。");
+    await framePromise;
+
+    expect(h.spoken).toHaveLength(0);
+    expect(h.drops).toEqual(["speech"]);
+  });
 });

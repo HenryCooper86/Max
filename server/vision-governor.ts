@@ -5,12 +5,24 @@
  * this safe?" must reflect what was in the frame when it was taken, not when
  * the queue finally processes it.
  *
+ * Rules run once at frame arrival to decide whether to call the model at all
+ * (Rules 1-5 below). The describe() round trip can then take up to ~10 s on
+ * the live path, during which a rider turn can open, a hazard can land, or
+ * watching can be disabled — so once the model answers, the "disabled",
+ * "adas-window", and "speech" gates are re-checked, in that same order,
+ * before the answer is spoken. Budget and cooldown are not re-checked post-
+ * describe: this frame's budget slot was already reserved pre-describe, and
+ * an in-flight describe already holds newer frames off the cooldown gate.
+ * Every drop — pre- or post-describe — is metered via onDrop, never queued
+ * or replayed.
+ *
  * The sentinel values exist because the model's null-on-failure does not
- * distinguish "nothing to say" (無 in Chinese, the model's chosen empty
+ * distinguish "nothing to say" (无 in Chinese, the model's chosen empty
  * response) from "the service broke" (null). A rider told "I couldn't see the
  * scene and I have no guidance" (empty) is less safe than "I saw it and it was
- * clear" (nothing notable). Only the empty marker triggers a drop; failure
- * silence is logged and the ride continues.
+ * clear" (nothing notable). Both are silent: the empty marker drops as
+ * "nothing-notable" and failure drops as "model-failure", each metered via
+ * onDrop, and the ride continues either way.
  */
 
 import { WATCH_PROMPT } from "./vision";
@@ -119,9 +131,36 @@ export function createVisionGovernor(options: {
           return;
         }
 
-        // Success: speak and record timestamp
+        // Post-describe re-check, same order as the pre-describe rules
+        // above: the round trip can take up to ~10 s on the live path, long
+        // enough for the ride to have changed underneath this frame.
+
+        // Rule 1 (re-check): disabled
+        if (!enabled) {
+          onDrop("disabled");
+          return;
+        }
+
+        // Rule 3 (re-check): adas-window
+        const recheckTime = now();
+        if (hazardAt >= 0 && recheckTime - hazardAt < adasWindowMs) {
+          onDrop("adas-window");
+          return;
+        }
+
+        // Rule 4 (re-check): speech open. describeInFlight is not
+        // re-checked here — it is still true for this very call until the
+        // finally block below runs, so it would always (wrongly) drop.
+        if (isSpeechOpen()) {
+          onDrop("speech");
+          return;
+        }
+
+        // Success: speak and anchor the cooldown at the moment the words
+        // actually went out, not when the frame arrived — the 2 min gap is
+        // between spoken observations.
         speak(answer);
-        lastSpokenAt = currentTime;
+        lastSpokenAt = now();
       } finally {
         describeInFlight = false;
       }

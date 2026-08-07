@@ -555,6 +555,8 @@ describe("vision.watch", () => {
     expect(extractDeviceCommand("开启环境观察")).toMatchObject({ action: "vision.watch", args: { on: true } });
     expect(extractDeviceCommand("打开一下环境观察")).toMatchObject({ action: "vision.watch", args: { on: true } });
     expect(extractDeviceCommand("关闭环境观察")).toMatchObject({ action: "vision.watch", args: { on: false } });
+    expect(extractDeviceCommand("停止环境观察")).toMatchObject({ action: "vision.watch", args: { on: false } });
+    expect(extractDeviceCommand("取消环境观察")).toMatchObject({ action: "vision.watch", args: { on: false } });
     expect(extractDeviceCommand("stop watching")).toMatchObject({ action: "vision.watch", args: { on: false } });
     expect(extractDeviceCommand("start scene watching")).toMatchObject({ action: "vision.watch", args: { on: true } });
   });
@@ -562,6 +564,10 @@ describe("vision.watch", () => {
   it("does not fire on unrelated 观察/watch phrases", () => {
     expect(extractDeviceCommand("观察一下路况")).toBeNull();
     expect(extractDeviceCommand("watch out")).toBeNull();
+  });
+
+  it("does not treat 关于环境观察 as the off-toggle — bare 关 is not a match", () => {
+    expect(extractDeviceCommand("关于环境观察")?.action).not.toBe("vision.watch");
   });
 
   it("is embedded-gated with honest toggle speech", () => {

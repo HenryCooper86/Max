@@ -59,9 +59,14 @@ class WatchSampler:
         """Idempotent; starts or stops the sampling thread.
 
         Enabling always starts fresh (no reference frame carried over from a
-        previous session). Disabling joins the thread before returning, so a
-        caller — the control-socket disconnect path, in production — can
-        trust that no broadcast follows once this call is back.
+        previous session). Disabling joins the thread before returning, with
+        a bounded 5 s timeout — not a guarantee that no broadcast follows: a
+        tick already blocked inside broadcast() can still be draining after
+        this call returns. What the caller can trust is the epoch guard (see
+        the module docstring) plus the disabled `_enabled` flag: a still-
+        draining tick from this epoch cannot write a newer epoch's state, and
+        a relay that has already marked the session disabled will not act on
+        whatever it sends.
         """
         with self._lock:
             if on == self._enabled:
@@ -89,6 +94,13 @@ class WatchSampler:
             stop_event.set()
         if thread is not None:
             thread.join(timeout=5.0)
+            if thread.is_alive():
+                print(
+                    "[vision.watch] set_enabled(False) returned after a 5s join with the sampling "
+                    "thread still alive; its tick is still draining — the epoch guard keeps it from "
+                    "writing into a newer epoch's state",
+                    flush=True,
+                )
 
     def stop(self) -> None:
         """Process shutdown: same as disabling."""

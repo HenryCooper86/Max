@@ -453,6 +453,14 @@ export function createMockProvider(
   // Notes every injected hazard.alert (below) into the watch governor, same
   // as provider.hazardReport does for a board-detected hazard — a simulated
   // ADAS scenario must gate watching exactly like a real one would.
+  //
+  // CURRENTLY structurally unreachable: hazardInjector.start() (below)
+  // unconditionally no-ops when platform() === "embedded" ("the embedded
+  // board detects hazards for real" — see hazard-injector.ts), and
+  // vision.watch is only ever dispatchable on platform "embedded"
+  // (device-actions.ts's PLATFORM_RESTRICTED_ACTIONS). So no session that
+  // can ever enable the watch governor can also have this injector firing.
+  // Kept wired for when that gate changes, rather than left as a silent gap.
   function sendWithHazardNote(payload: unknown): void {
     if (payload && typeof payload === "object" && (payload as { type?: unknown }).type === "hazard.alert") {
       visionGovernor.noteHazard();

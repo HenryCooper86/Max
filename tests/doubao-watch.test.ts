@@ -64,6 +64,7 @@ const SESSION_STARTED = 150;
 const ASR_INFO = 450;
 const ASR_RESPONSE = 451;
 const ASR_ENDED = 459;
+const TTS_ENDED = 359;
 const FULL_SERVER_RESPONSE = 0b1001;
 
 function uint32(value: number) {
@@ -142,6 +143,13 @@ async function toggleWatchOn(
     Buffer.from(JSON.stringify({ type: "device.result", commandId, status: "ok" })),
     false
   );
+  // Doubao's own model still generates a conversational reply to every
+  // addressed turn, independent of the device action — close that reply out
+  // (no text/audio needed here) the same way a real session's
+  // ChatResponse/TtsSentence/TtsEnded cycle eventually would, so the
+  // toggle-on turn does not leave awaitingReply (server/providers/doubao.ts)
+  // stuck open for whatever the test does next.
+  await upstream.emit("message", jsonFrame(TTS_ENDED, {}));
 }
 
 afterEach(() => {
@@ -203,6 +211,7 @@ describe("vision.watch drops a frame while a rider turn is open (speech gate)", 
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(mockDescribeFrame).not.toHaveBeenCalled();
+    expect(metrics.watchDrops.speech).toBe(1);
 
     // Close the turn (unaddressed, so it resolves immediately with no reply).
     await upstream.emit("message", jsonFrame(ASR_RESPONSE, { results: [{ text: "随便说点什么" }] }));
@@ -222,6 +231,52 @@ describe("vision.watch drops a frame while a rider turn is open (speech gate)", 
   });
 });
 
+describe("vision.watch drops a frame while a reply is composing (post-AsrEnded, pre-first-audio)", () => {
+  it("drops the frame during the thinking window, then speaks a later frame once the reply resolves", async () => {
+    stubWeatherFetch();
+    mockDescribeFrame.mockResolvedValue("前方有慢车。");
+    const { controller, send, upstream } = await startEmbeddedSession();
+
+    await toggleWatchOn(controller, upstream, send);
+
+    // A new addressed turn: AsrEnded has fired (riderTurnFinalized = true),
+    // but no ChatResponse/TtsSentence/TtsEnded has arrived yet — Doubao is
+    // still composing the reply. riderTurnFinalized alone reads
+    // speech-CLOSED here; awaitingReply (server/providers/doubao.ts) is what
+    // must still gate a watch frame arriving in this exact gap.
+    await riderTurn(upstream, "Max 现在几点了");
+
+    await controller.handleMessage(watchFrameMessage("F"), false);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(mockDescribeFrame).not.toHaveBeenCalled();
+    expect(metrics.watchDrops.speech).toBe(1);
+    expect(
+      clientEvents(send).some(
+        (event) => event.type === "transcript" && event.speaker === "agent" && event.text === "前方有慢车。"
+      )
+    ).toBe(false);
+
+    // The reply resolves (TtsEnded — no real audio arrived, same as an
+    // empty/suppressed reply): the thinking window closes and the gate
+    // reopens for the next frame.
+    await upstream.emit("message", jsonFrame(TTS_ENDED, {}));
+
+    await controller.handleMessage(watchFrameMessage("F2"), false);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(mockDescribeFrame).toHaveBeenCalledTimes(1);
+    expect(mockDescribeFrame).toHaveBeenCalledWith(["F2"], WATCH_PROMPT);
+    expect(
+      clientEvents(send).some(
+        (event) => event.type === "transcript" && event.speaker === "agent" && event.text === "前方有慢车。"
+      )
+    ).toBe(true);
+
+    await controller.close();
+  });
+});
+
 describe("vision.watch is disabled by default", () => {
   it("never calls describe for a watch frame before any toggle", async () => {
     stubWeatherFetch();
@@ -232,6 +287,7 @@ describe("vision.watch is disabled by default", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(mockDescribeFrame).not.toHaveBeenCalled();
+    expect(metrics.watchDrops.disabled).toBe(1);
     expect(
       clientEvents(send).some(
         (event) => event.type === "transcript" && event.speaker === "agent" && event.text === "前方有慢车。"

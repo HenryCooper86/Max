@@ -104,6 +104,7 @@ describe("mock provider watch frames", () => {
     await provider.visionFrames!({ type: "vision.frames", reason: "watch", index: 0, total: 1, image: "F" });
 
     expect(agentTranscripts(messages, WATCH_ANSWER)).toHaveLength(0);
+    expect(metrics.watchDrops.disabled).toBe(1);
 
     await provider.close();
   });
@@ -123,10 +124,13 @@ describe("mock provider watch frames", () => {
     clock += 60_000; // 1 min later — still inside the 2 min cooldown
     await provider.visionFrames!({ type: "vision.frames", reason: "watch", index: 0, total: 1, image: "F" });
     expect(agentTranscripts(messages, WATCH_ANSWER)).toHaveLength(1);
+    expect(metrics.watchDrops.cooldown).toBe(1);
 
     clock += 60_001; // past 2 min since the FIRST observation
     await provider.visionFrames!({ type: "vision.frames", reason: "watch", index: 0, total: 1, image: "F" });
     expect(agentTranscripts(messages, WATCH_ANSWER)).toHaveLength(2);
+    // The successful re-speak must not itself register as a drop.
+    expect(metrics.watchDrops.cooldown).toBe(1);
 
     await provider.close();
   });
@@ -152,6 +156,7 @@ describe("mock provider watch frames", () => {
     await provider.visionFrames!({ type: "vision.frames", reason: "watch", index: 0, total: 1, image: "F" });
 
     expect(agentTranscripts(messages, WATCH_ANSWER)).toHaveLength(0);
+    expect(metrics.watchDrops["adas-window"]).toBe(1);
 
     await provider.close();
   });

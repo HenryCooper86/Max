@@ -594,6 +594,16 @@ export function createDoubaoProvider(
   // Whether the current rider turn's transcript was already closed with a
   // final event (AsrEnded can repeat without new speech in between).
   let riderTurnFinalized = false;
+  // True from AsrEnded (once a turn is decided addressed) until the reply is
+  // fully resolved — TtsEnded's real-completion branch, or the TTS-fallback
+  // timer taking over. Closes the gap isSpeechOpen (further below) would
+  // otherwise have: riderTurnFinalized flips true right at AsrEnded, before
+  // the reply is even composed, and receivedTtsAudio only flips true once
+  // Doubao's first TTS byte arrives — the "thinking" span between those two
+  // (asrEndedAt → firstAudioAt, tracked as lastFirstAudioLatencyMs, floored
+  // at TTS_FALLBACK_MS, default 1800 ms) previously read as speech-CLOSED,
+  // letting a watch observation speak right over an incoming reply.
+  let awaitingReply = false;
   let addressedUntil = 0;
   // When the rider last said "Max" explicitly — follow-up turns slide the
   // window but never past this + WAKE_FOLLOWUP_MAX_CHAIN_MS.
@@ -962,6 +972,11 @@ export function createDoubaoProvider(
         flushPendingAgentText(true);
         // Browser speech now owns this reply; suppress any late Doubao audio.
         fallbackSpoke = true;
+        // The browser-speech fallback has taken over the reply — the
+        // thinking window this flag holds open is over, same as a real
+        // TtsEnded completion (below, TtsEnded may still arrive later and
+        // clear it again — harmless, since it's already false by then).
+        awaitingReply = false;
         sendClient({
           type: "status",
           state: "ready",
@@ -1077,25 +1092,43 @@ export function createDoubaoProvider(
 
   // Watch-frame governor (V-C), per session. describe reuses the same
   // module-scope visionProvider as cameraFrame/gallery above. isSpeechOpen
-  // composes three existing bindings: riderTurnFinalized (false for the
-  // "hearing"/"asr"/"thinking" span of the CURRENT rider turn — reset at
-  // every AsrInfo, the same event that sends the "hearing" status),
-  // receivedTtsAudio (true for the span Doubao's own audio is streaming —
-  // set in forwardTtsAudio, the same place that sends the "speaking"
-  // status, and reset once TtsEnded finishes), and speakerActive (the
-  // embedded-relay-synthesised speech span defined above). Any one of the
-  // three being true means "the agent is audibly speaking or a rider turn
+  // composes four existing bindings, each covering a different span of one
+  // rider turn's lifecycle:
+  //   - riderTurnFinalized: false for the "hearing"/"asr" span BEFORE
+  //     AsrEnded — reset at every AsrInfo, the same event that sends the
+  //     "hearing" status.
+  //   - awaitingReply: true for the "thinking" span from AsrEnded (once a
+  //     turn is decided addressed) until the reply resolves — declared
+  //     above, alongside riderTurnFinalized, with the full rationale for why
+  //     this flag exists (it closes a gap neither of the other three cover).
+  //   - receivedTtsAudio: true for the span Doubao's own audio is
+  //     streaming — set in forwardTtsAudio, the same place that sends the
+  //     "speaking" status, and reset once TtsEnded finishes. (Its true
+  //     window sits entirely inside awaitingReply's; kept as its own term
+  //     anyway so "the agent is audibly speaking" reads directly at the
+  //     call site instead of only implicitly via awaitingReply.)
+  //   - speakerActive: the embedded-relay-synthesised speech span defined
+  //     above (device confirmations, gallery/watch lines).
+  // Any one being true means "the agent is audibly speaking or a rider turn
   // is mid-flight".
   const visionGovernor = createVisionGovernor({
     describe: (frames, question) => visionProvider.describe(frames, question),
     speak: speakWatchLine,
-    isSpeechOpen: () => !riderTurnFinalized || receivedTtsAudio || speakerActive,
+    isSpeechOpen: () => !riderTurnFinalized || awaitingReply || receivedTtsAudio || speakerActive,
     onDrop: (reason) => metrics.watchDrop(reason)
   });
 
   // Notes every injected hazard.alert (below) into the watch governor, same
   // as provider.hazardReport does for a board-detected hazard — a simulated
   // ADAS scenario must gate watching exactly like a real one would.
+  //
+  // CURRENTLY structurally unreachable: hazardInjector.start() (below)
+  // unconditionally no-ops when platform() === "embedded" ("the embedded
+  // board detects hazards for real" — see hazard-injector.ts), and
+  // vision.watch is only ever dispatchable on platform "embedded"
+  // (device-actions.ts's PLATFORM_RESTRICTED_ACTIONS). So no session that
+  // can ever enable the watch governor can also have this injector firing.
+  // Kept wired for when that gate changes, rather than left as a silent gap.
   function sendWithHazardNote(payload: unknown): void {
     if (payload && typeof payload === "object" && (payload as { type?: unknown }).type === "hazard.alert") {
       visionGovernor.noteHazard();
@@ -1383,6 +1416,11 @@ export function createDoubaoProvider(
           fallbackSpoke = false;
           riderTurnText = "";
           riderTurnFinalized = false;
+          // A new rider turn (barge-in) supersedes whatever the previous
+          // turn's reply was doing — truncateInterruptedReply()/the flush
+          // above already handled the interrupted reply itself, so the gate
+          // this flag holds open for it must not leak into the new turn.
+          awaitingReply = false;
           riderTurnAddressed = false;
           replyDecided = false;
           replyAddressed = false;
@@ -1499,6 +1537,7 @@ export function createDoubaoProvider(
             // "TTS 未返回音频，浏览器备用" here would read as a fault. Just go
             // back to listening, and don't pollute latency telemetry either.
             receivedTtsAudio = false;
+            awaitingReply = false;
             clearUndecidedTtsAudio();
             resetPendingReply();
             markCurrentTurnSuppressed();
@@ -1522,6 +1561,10 @@ export function createDoubaoProvider(
                 : "豆包 TTS 未返回音频，正在使用浏览器语音备用模式"
           });
           receivedTtsAudio = false;
+          // The reply is fully resolved (real audio finished, or there never
+          // was any and the flush above — empty or not — is the whole
+          // "reply") — the thinking window this flag holds open is over.
+          awaitingReply = false;
           emitTelemetry();
           return;
         }
@@ -1536,6 +1579,12 @@ export function createDoubaoProvider(
           recordFirstAudioLatency();
           const addressed = replyIsAddressed();
           if (addressed) {
+            // A reply is now expected — the "thinking" window starts here,
+            // before any ChatResponse/TtsSentence has even arrived. Cleared
+            // below when TtsEnded already beat us here (ttsEndedBeforeWakeDecision),
+            // or otherwise in TtsEnded's main branch / the TTS-fallback timer,
+            // whichever resolves the reply first.
+            awaitingReply = true;
             const text = riderTurnText.trim();
             if (text) {
               memory = updateSessionMemory(memory, text, rideContext.mode);
@@ -1549,6 +1598,7 @@ export function createDoubaoProvider(
               if (pendingReplyText()) flushPendingAgentText(!receivedTtsAudio);
               emitTelemetry();
               ttsEndedBeforeWakeDecision = false;
+              awaitingReply = false;
             }
           } else {
             clearUndecidedTtsAudio();

@@ -978,6 +978,11 @@ final class AgentSession: NSObject, ObservableObject {
         case .crashSimulate:
             onCrash { $0.handleSimulate() }
 
+        case .navRoute, .navError:
+            // Guidance-engine wiring (WGS-84 conversion, route start/reroute) lands
+            // in the follow-up task; this task only parses the wire event.
+            break
+
         case .unhandled:
             break
         }

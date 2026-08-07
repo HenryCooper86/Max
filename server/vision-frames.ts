@@ -1,3 +1,25 @@
+/**
+ * Pure chunked-frame assembler: collects multi-frame gallery understanding
+ * requests into complete sets before passing them to Task 4's providers.
+ *
+ * Assembly is COMMAND-SCOPED: one set per commandId. Chunks from different
+ * commands can interleave on one socket; assembly keeps them separate so the
+ * relay can pipeline multiple lookups in parallel.
+ *
+ * FIRST-WRITE-WINS on duplicate indexes: a retransmitted chunk must not
+ * corrupt a slot already filled. Silently ignoring duplicates avoids lock
+ * overhead and prevents a stale copy from overwriting valid data.
+ *
+ * EXPIRED SETS NEVER RESURRECT: the timer drops the set on timeout, and a
+ * late chunk for an expired commandId opens a NEW set instead of awakening
+ * the old one. Why? The rider already heard "我看不清" (vision unavailable).
+ * A belated completion would answer the same question twice, at best
+ * redundant and at worst confusing if the rider has moved and the scene has
+ * changed. The provider guard upstream only accepts issued commandIds anyway.
+ *
+ * Timers are injectable for deterministic testing (vi.useFakeTimers).
+ */
+
 import type { VisionFramesEvent } from "../shared/agent";
 
 export type AssembledFrames = { commandId: string; frames: string[]; question?: string };

@@ -260,6 +260,10 @@ final class AgentSession: NSObject, ObservableObject {
                     // Reuse the existing local-speech path; no relay turn to reconcile.
                     self?.speak("录像已达十分钟上限，已保存。")
                 }
+            ),
+            .galleryDescribe: GalleryDescribeController(
+                store: captureStore,
+                send: { [weak self] json in self?.webSocket?.send(.string(json)) { _ in } }
             )
         ],
         isDeviceUnlocked: { UIApplication.shared.isProtectedDataAvailable }

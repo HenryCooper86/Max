@@ -108,4 +108,4 @@ def test_runtime_uses_the_supplied_storage_and_camera_config(tmp_path):
     assert runtime.gallery.min_free_mb == 0
     assert runtime.cameras.front_channel == 4
     assert runtime.cameras.rear_channel == 6
-    assert set(runtime.handlers) == {"camera.photo", "camera.record"}
+    assert set(runtime.handlers) == {"camera.photo", "camera.record", "vision.watch"}

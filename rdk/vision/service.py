@@ -16,6 +16,7 @@ from camera import CameraPair
 from events import EventBus
 from gallery import Gallery
 from rpc import Handler, decode_lines, dispatch
+from watch.sampler import WatchSampler
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,19 @@ class VisionRuntime:
     events: EventBus
     cameras: CameraPair
     handlers: dict[str, Handler]
+    watcher: WatchSampler
+
+
+def _handle_watch_toggle(watcher: WatchSampler, args: dict) -> dict:
+    """vision.watch: {"on": bool} -> the sampler's enabled state.
+
+    device-actions.ts's IssuedDeviceCommand for "vision.watch" carries
+    ``args: { on: boolean }``, forwarded to the vision RPC unchanged by
+    dispatch.ts — so ``on`` is the key this handler reads, matching
+    ``camera.record``'s ``start`` for the same on/off shape.
+    """
+    watcher.set_enabled(bool(args.get("on")))
+    return {"status": "ok"}
 
 
 def build_runtime(config: VisionConfig) -> VisionRuntime:
@@ -65,6 +79,10 @@ def build_runtime(config: VisionConfig) -> VisionRuntime:
         front_channel=config.front_channel,
         rear_channel=config.rear_channel,
     )
+    # grab_jpeg reads through CameraPair.front_jpeg_for_watch(), which mirrors
+    # /frame/front's _grab + downscale path in-process — no HTTP round trip,
+    # since the sampler already lives inside this service.
+    watcher = WatchSampler(grab_jpeg=cameras.front_jpeg_for_watch, broadcast=events.broadcast)
     handlers: dict[str, Handler] = {
         "camera.photo": lambda args: cameras.capture_photo(gallery),
         "camera.record": lambda args: (
@@ -72,12 +90,14 @@ def build_runtime(config: VisionConfig) -> VisionRuntime:
             if args.get("start")
             else cameras.stop_recording(gallery)
         ),
+        "vision.watch": lambda args: _handle_watch_toggle(watcher, args),
     }
     return VisionRuntime(
         gallery=gallery,
         events=events,
         cameras=cameras,
         handlers=handlers,
+        watcher=watcher,
     )
 
 
@@ -111,6 +131,10 @@ class ControlHandler(socketserver.StreamRequestHandler):
             # ThreadingUnixStreamServer gives each connection its own thread, so
             # a client that goes away leaves a closure behind unless we say so.
             runtime.events.unregister(write)
+            # Watching dies with the connection: the agent is the only control
+            # client in production, so any disconnect — clean or not — must
+            # stop the sampler rather than leave it broadcasting to no one.
+            runtime.watcher.set_enabled(False)
 
 
 class ControlServer(socketserver.ThreadingUnixStreamServer):

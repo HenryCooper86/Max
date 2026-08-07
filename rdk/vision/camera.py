@@ -108,6 +108,27 @@ class CameraPair:
         except Exception:  # noqa: BLE001 - one dead camera must not fail the pair
             return None
 
+    def front_jpeg_for_watch(self, max_age_ms: float | None = JPEG_MAX_AGE_MS) -> bytes | None:
+        """The vision.watch sampler's frame grab.
+
+        Mirrors bench_server's ``/frame/front`` route exactly -- ``_grab``
+        then ``downscale`` to the same target width -- but in-process rather
+        than over HTTP: the sampler lives inside this service already, so
+        there is no socket to cross for a frame the process already holds.
+
+        Both imports are function-local, not the usual board-only cv2/numpy
+        kind: bench_server imports ``RECORDING_FPS`` from this module, so a
+        module-level import of ``downscale`` here would be a cycle; watch.tuning
+        is kept local alongside it rather than singled out as the one eager one.
+        """
+        from bench_server import downscale  # noqa: PLC0415 - see docstring
+        from watch.tuning import DEFAULT as watch_default  # noqa: PLC0415
+
+        data = self._grab(self.front, max_age_ms=max_age_ms)
+        if data is None:
+            return None
+        return downscale(data, watch_default.frame_width)
+
     def capture_photo(self, gallery: Gallery) -> dict:
         if not gallery.has_space():
             return {"status": "failed", "reason": "storage.full"}

@@ -373,6 +373,7 @@ describe("DEVICE_ACTION_TIERS", () => {
       "camera.record": "low",
       "camera.look": "low",
       "gallery.open": "low",
+      "gallery.describe": "low",
       "navigation.start": "low",
       "navigation.stop": "low",
       "system.shutdown": "high"
@@ -432,5 +433,54 @@ describe("camera.look vision questions", () => {
       action: "camera.look",
       args: { question: "前面那个路口是什么路" }
     });
+  });
+});
+
+describe("gallery.describe", () => {
+  it("detects photo, video, and latest references", () => {
+    expect(extractDeviceCommand("看看我刚拍的照片")).toMatchObject({
+      action: "gallery.describe",
+      args: { kind: "photo" }
+    });
+    expect(extractDeviceCommand("描述一下我拍的相片")).toMatchObject({
+      action: "gallery.describe",
+      args: { kind: "photo" }
+    });
+    expect(extractDeviceCommand("刚才录的视频里有什么")).toMatchObject({
+      action: "gallery.describe",
+      args: { kind: "video", question: "刚才录的视频里有什么" }
+    });
+    expect(extractDeviceCommand("看看我刚拍的")).toMatchObject({
+      action: "gallery.describe",
+      args: { kind: "latest" }
+    });
+  });
+
+  it("carries a question only when one is asked", () => {
+    const bare = extractDeviceCommand("看看我刚拍的照片");
+    expect(bare?.args).not.toHaveProperty("question");
+    expect(extractDeviceCommand("我刚拍的照片里那辆车是什么")).toMatchObject({
+      action: "gallery.describe",
+      args: { kind: "photo", question: "我刚拍的照片里那辆车是什么" }
+    });
+  });
+
+  it("does not steal neighboring commands", () => {
+    expect(extractDeviceCommand("拍照")).toMatchObject({ action: "camera.photo" });
+    expect(extractDeviceCommand("看看相册")).toMatchObject({ action: "gallery.open" });
+    expect(extractDeviceCommand("打开相册")).toMatchObject({ action: "gallery.open" });
+    expect(extractDeviceCommand("你能看到什么")).toMatchObject({ action: "camera.look" });
+  });
+
+  it("is gated to ios", () => {
+    expect(extractDeviceCommandForPlatform("看看我刚拍的照片", "ios")).toMatchObject({ action: "gallery.describe" });
+    expect(extractDeviceCommandForPlatform("看看我刚拍的照片", "android")).toBeNull();
+    expect(extractDeviceCommandForPlatform("看看我刚拍的照片", "embedded")).toBeNull();
+  });
+
+  it("speaks the filler on success and honest failures", () => {
+    expect(deviceSuccessSpeech({ action: "gallery.describe", args: { kind: "photo" } })).toBe("我看看…");
+    expect(deviceFailureSpeech("gallery.describe", "failed", "gallery.empty")).toBe("相册里还没有照片或视频。");
+    expect(deviceFailureSpeech("gallery.describe", "failed", "gallery.unreadable")).toBe("这段内容我处理不了。");
   });
 });

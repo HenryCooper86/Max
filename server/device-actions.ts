@@ -21,6 +21,7 @@ export type DeviceActionName =
   | "camera.record"
   | "camera.look"
   | "gallery.open"
+  | "gallery.describe"
   | "navigation.start"
   | "navigation.stop"
   | "system.shutdown";
@@ -42,6 +43,7 @@ type DeviceCommand =
   | { action: "camera.record"; args: { start: boolean } }
   | { action: "camera.look"; args: { question?: string } }
   | { action: "gallery.open"; args: Record<string, never> }
+  | { action: "gallery.describe"; args: { kind: "photo" | "video" | "latest"; question?: string } }
   | { action: "navigation.start"; args: { query: string } }
   | { action: "navigation.stop"; args: Record<string, never> }
   | { action: "system.shutdown"; args: { cancel?: boolean } };
@@ -60,6 +62,7 @@ export const DEVICE_ACTION_TIERS: Record<DeviceActionName, DeviceActionTier> = {
   "camera.record": "low",
   "camera.look": "low",
   "gallery.open": "low",
+  "gallery.describe": "low",
   "navigation.start": "low",
   "navigation.stop": "low",
   // High like dialing: consequential, and satisfied on the board by the 10 s
@@ -88,7 +91,8 @@ const PLATFORM_RESTRICTED_ACTIONS: Partial<Record<DeviceActionName, string>> = {
   "camera.look": "embedded",
   // Phones cannot poweroff, and an older app build receiving an unknown
   // action would sit out the result timeout in silence.
-  "system.shutdown": "embedded"
+  "system.shutdown": "embedded",
+  "gallery.describe": "ios"
 };
 
 /**
@@ -202,6 +206,13 @@ export const extractDeviceCommand: IntentExtractor = (text) => {
     return { action: "system.shutdown", args: {} };
   }
 
+  // matchGalleryDescribe must run before matchCamera because the 拍-verbs
+  // (拍照、拍视频) would otherwise collide with camera.photo, and 看看 with
+  // the vision branches of camera.look. The gallery grammar requires explicit
+  // recency markers (我刚拍的、刚才录的) to distinguish describe from taking a photo.
+  const gallery = matchGalleryDescribe(raw);
+  if (gallery) return gallery;
+
   const camera = matchCamera(raw);
   if (camera) return camera;
 
@@ -219,6 +230,24 @@ export const extractDeviceCommand: IntentExtractor = (text) => {
 
   return null;
 };
+
+const GALLERY_REF = /(我|刚|刚才).{0,4}(拍|录)的/;
+const GALLERY_ACTION = /(看看|描述)/;
+const GALLERY_QUESTION = /(是什么|什么样|写的什么|写着什么|有什么|有没有)/;
+
+function matchGalleryDescribe(raw: string): DeviceCommand | null {
+  if (!GALLERY_REF.test(raw) && !/\b(photo|picture|video) (i|we) (just )?(took|recorded|shot)\b/i.test(raw))
+    return null;
+  // Require either an explicit action verb (看看, 描述) or a content question pattern
+  if (!GALLERY_ACTION.test(raw) && !GALLERY_QUESTION.test(raw) && !/\bwhat('s| is)\b/i.test(raw)) return null;
+  const kind = /(视频|录像|影片|video)/i.test(raw)
+    ? ("video" as const)
+    : /(照片|相片|photo|picture)/i.test(raw)
+      ? ("photo" as const)
+      : ("latest" as const);
+  const question = GALLERY_QUESTION.test(raw) || /\bwhat('s| is)\b/i.test(raw) ? raw : undefined;
+  return { action: "gallery.describe", args: question ? { kind, question } : { kind } };
+}
 
 function matchCamera(raw: string): DeviceCommand | null {
   // Stop is checked before start so "停止录像" is never read as "录像", and its
@@ -346,6 +375,8 @@ const FAILURE_SPEECH: Record<string, string> = {
   "vision.sharingOff": "我现在不能看。",
   "navigation.notActive": "现在没有在导航。",
   "permission.location": "我没有定位权限，去设置里开启后我再帮你导航。",
+  "gallery.empty": "相册里还没有照片或视频。",
+  "gallery.unreadable": "这段内容我处理不了。",
   // Embedded (helmet) refusals. Worded generically because "device.noScreen"
   // serves both gallery.open and destination.show. Navigation gets its own code
   // rather than borrowing device.noPhone: audio-only turn-by-turn needs neither
@@ -368,6 +399,7 @@ const ACTION_LABELS: Record<DeviceActionName, string> = {
   "camera.record": "录像",
   "camera.look": "看看",
   "gallery.open": "相册",
+  "gallery.describe": "描述照片",
   "navigation.start": "导航",
   "navigation.stop": "导航",
   "system.shutdown": "关机"
@@ -423,6 +455,11 @@ export function deviceSuccessSpeech(command: DeviceCommand): string | undefined 
       // A filler, not the answer. The description arrives seconds later and is
       // spoken separately; silence here reads as "he didn't hear me" and gets
       // the question repeated, which would send a second frame.
+      return "我看看…";
+    case "gallery.describe":
+      // A filler, not the answer. The description arrives seconds later and is
+      // spoken separately; silence here reads as "he didn't hear me" and gets
+      // the question repeated, which would send a second request.
       return "我看看…";
     case "torch.set":
       return command.args.on ? "手电筒开了。" : "手电筒关了。";

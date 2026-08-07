@@ -1328,6 +1328,11 @@ export function createDoubaoProvider(
           const sessionPayload = parseJsonPayload(frame);
           providerDialogId = stringField(sessionPayload, "dialog_id") ?? providerDialogId;
           sessionReady = true;
+          // Defensive: the close handler above already clears this on every
+          // drop, but a resumed session must never start believing a reply
+          // is still owed to a turn whose socket is gone — a dead socket
+          // delivered no reply, and there is nothing left here to await it.
+          awaitingReply = false;
           // NOT reset here: an upstream that reaches SessionStarted then drops a
           // moment later (quota/model error surfacing once the dialogue is live)
           // would otherwise clear its retry count on every flap and reconnect
@@ -1660,6 +1665,11 @@ export function createDoubaoProvider(
       log.info("doubao upstream closed");
       clearTtsFallbackTimer();
       if (pendingReplyText()) flushPendingAgentText(true);
+      // A dead socket can deliver no reply — an addressed turn that reached
+      // AsrEnded but dropped before TtsEnded would otherwise leave this flag
+      // stuck true, silencing watching (isSpeechOpen) until the rider's next
+      // utterance, on a socket that may not even reconnect for seconds.
+      awaitingReply = false;
 
       // Torn down by the relay itself (client disconnected / provider closed):
       // nothing to revive.

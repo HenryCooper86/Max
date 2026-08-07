@@ -277,6 +277,52 @@ describe("vision.watch drops a frame while a reply is composing (post-AsrEnded, 
   });
 });
 
+describe("vision.watch releases the speech gate when the upstream dies mid-reply", () => {
+  it("speaks a watch frame after a disconnect + in-place reconnect, instead of staying gated forever", async () => {
+    stubWeatherFetch();
+    mockDescribeFrame.mockResolvedValue("前方有慢车。");
+    const { controller, send, upstream } = await startEmbeddedSession();
+
+    await toggleWatchOn(controller, upstream, send);
+
+    // Same awaitingReply=true setup as the thinking-window test above:
+    // AsrEnded fired, but no ChatResponse/TtsSentence/TtsEnded has arrived.
+    await riderTurn(upstream, "Max 现在几点了");
+
+    // The Doubao socket dies before ever delivering that reply — the close
+    // handler (server/providers/doubao.ts) must release the gate here, not
+    // leave it stuck on a reply that can never arrive on a dead socket.
+    upstream.emit("close");
+
+    // In-place reconnect: same real socket-event path doubao-session.test.ts's
+    // "revives a dropped upstream in place" uses — real timers, past the
+    // ~500 ms first-retry backoff.
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    const resumedUpstream = upstreamInstances[upstreamInstances.length - 1];
+    expect(resumedUpstream).not.toBe(upstream);
+    resumedUpstream.emit("open");
+    await resumedUpstream.emit("message", jsonFrame(CONNECTION_STARTED, {}));
+    resumedUpstream.emit("message", jsonFrame(SESSION_STARTED, { dialog_id: "dialog-resumed" }));
+
+    await controller.handleMessage(watchFrameMessage("F"), false);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Speaks — not dropped as "speech". Before the fix, awaitingReply stayed
+    // true across the disconnect/reconnect and this frame would have been
+    // silently dropped, unbounded, until the rider's next AsrInfo.
+    expect(mockDescribeFrame).toHaveBeenCalledTimes(1);
+    expect(mockDescribeFrame).toHaveBeenCalledWith(["F"], WATCH_PROMPT);
+    expect(metrics.watchDrops.speech).toBe(0);
+    expect(
+      clientEvents(send).some(
+        (event) => event.type === "transcript" && event.speaker === "agent" && event.text === "前方有慢车。"
+      )
+    ).toBe(true);
+
+    await controller.close();
+  });
+});
+
 describe("vision.watch is disabled by default", () => {
   it("never calls describe for a watch frame before any toggle", async () => {
     stubWeatherFetch();

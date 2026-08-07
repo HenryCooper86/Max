@@ -143,6 +143,18 @@ function visionFrameMessage(commandId: string, index: number, total: number, ima
   return Buffer.from(JSON.stringify({ type: "vision.frames", commandId, reason: "gallery", index, total, image }));
 }
 
+/** Points describe() at a promise the test controls, so it can prove
+ *  behaviour while the "vision call" is still pending — same idiom as
+ *  doubao-camera-frame.test.ts's gateDescribeFrame(). */
+function gateDescribeFrame() {
+  let resolveVision!: (value: string | null) => void;
+  const gate = new Promise<string | null>((resolve) => {
+    resolveVision = resolve;
+  });
+  mockDescribeFrame.mockImplementation(() => gate);
+  return { resolveVision };
+}
+
 afterEach(() => {
   upstreamInstances.length = 0;
   mockDescribeFrame.mockReset();
@@ -219,6 +231,94 @@ describe("gallery.describe frame sets that never complete", () => {
         (event) => event.type === "transcript" && event.speaker === "agent" && event.text === "我看不清。"
       )
     ).toBe(true);
+
+    await controller.close();
+  });
+});
+
+describe("gallery.describe frame sets keep the ORIGINAL turn's delivery", () => {
+  it("speaks the answer against the turn that asked, not a later turn that started while describe() was still pending", async () => {
+    stubWeatherFetch();
+    const { resolveVision } = gateDescribeFrame();
+    const { controller, send, upstream } = await startIosSession();
+
+    await riderTurn(upstream, "Max 你好");
+    await riderTurn(upstream, "我刚拍的照片里面有什么");
+    const commandId = captureDeviceCommandId(send, "gallery.describe");
+
+    // Single-frame set: the assembler completes synchronously on this one
+    // accept() call, capturing THIS turn's agentDelivery into
+    // recentGalleryCommands and starting the (gated) describe() call.
+    await controller.handleMessage(visionFrameMessage(commandId, 0, 1, "F0"), false);
+
+    // device.result's "我看看…" filler is spoken now, against the same live
+    // agentDelivery binding — capture its ids as the ORIGINAL turn's delivery.
+    await controller.handleMessage(
+      Buffer.from(JSON.stringify({ type: "device.result", commandId, status: "ok" })),
+      false
+    );
+    const filler = clientEvents(send).find(
+      (event) => event.type === "transcript" && event.speaker === "agent" && event.text === "我看看…"
+    );
+    expect(filler).toBeDefined();
+    const originalTurnId = filler!.turnId;
+    const originalDeliveryId = filler!.deliveryId;
+    expect(originalTurnId).toBeDefined();
+    expect(originalDeliveryId).toBeDefined();
+
+    // A brand new rider turn begins and finishes WHILE describe() is still
+    // gated open — the same turn machinery a live ride uses reassigns the
+    // mutable agentDelivery binding here, exactly the gap the brief's
+    // "captured synchronously" requirement exists to survive.
+    await riderTurn(upstream, "现在几点了");
+
+    resolveVision("前方有一段畅通的道路。");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const answer = clientEvents(send).find(
+      (event) => event.type === "transcript" && event.speaker === "agent" && event.text === "前方有一段畅通的道路。"
+    );
+    expect(answer).toBeDefined();
+    // The spoken answer must carry the ORIGINAL turn's delivery ids, not the
+    // new turn's — proving the capture happened at accept time, not at
+    // (post-await) speak time.
+    expect(answer!.turnId).toBe(originalTurnId);
+    expect(answer!.deliveryId).toBe(originalDeliveryId);
+
+    await controller.close();
+  });
+});
+
+describe("gallery.describe frame sets in flight silence the generic expiry failure", () => {
+  it("speaks no generic failure at the 8 s device-result timeout, then exactly one 我看不清 line at the assembler's own 10 s timeout", async () => {
+    vi.useFakeTimers();
+    stubWeatherFetch();
+    const { controller, send, upstream } = await startIosSession();
+
+    await riderTurn(upstream, "Max 看看我刚拍的照片");
+    const commandId = captureDeviceCommandId(send, "gallery.describe");
+
+    // Only 1 of 2 declared frames ever arrives, and device.result never
+    // arrives either — the frame set is genuinely still "in flight" when the
+    // 8 s pendingDeviceCommands watchdog fires.
+    await controller.handleMessage(visionFrameMessage(commandId, 0, 2, "F0"), false);
+
+    vi.advanceTimersByTime(8_000);
+    await Promise.resolve();
+
+    // The generic "描述照片操作没成功。" (or any other reconciliation) line
+    // must not have been spoken — the assembler, not the pending-command
+    // watchdog, owns this outcome for a command whose frame set is in flight.
+    expect(clientEvents(send).filter((event) => event.type === "transcript" && event.speaker === "agent")).toEqual([]);
+
+    vi.advanceTimersByTime(2_000); // 10 s total: the assembler's own onIncomplete timeout
+    await Promise.resolve();
+
+    const agentTranscripts = clientEvents(send).filter(
+      (event) => event.type === "transcript" && event.speaker === "agent"
+    );
+    expect(agentTranscripts).toHaveLength(1);
+    expect(agentTranscripts[0].text).toBe("我看不清。");
 
     await controller.close();
   });

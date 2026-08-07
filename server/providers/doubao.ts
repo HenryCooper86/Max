@@ -24,7 +24,7 @@ import { createHazardInjector } from "../hazard-injector";
 import { createLogger, type Logger } from "../logger";
 import { metrics } from "../metrics";
 import { createSpeaker, createSynthesizer } from "../speech";
-import { createTranscriptDelivery, transcriptEvent } from "../transcript-events";
+import { createTranscriptDelivery, transcriptEvent, type TranscriptDelivery } from "../transcript-events";
 import { buildChatCompletionsEndpoint, selectVisionProvider } from "../vision";
 import { createFrameAssembler } from "../vision-frames";
 import { fetchRiderWeather } from "../weather";
@@ -803,6 +803,15 @@ export function createDoubaoProvider(
     deviceExpiryTimer = setTimeout(() => {
       deviceExpiryTimer = undefined;
       for (const expired of pendingDeviceCommands.expire()) {
+        // A gallery.describe whose frame set is still assembling under the
+        // frame assembler's OWN (longer, 10 s) timeout must not also get the
+        // generic 8 s device-result-timeout failure spoken here — that would
+        // produce failure-then-answer (or failure-then-"我看不清") double
+        // speak for one command. recentGalleryCommands holding an entry for
+        // this commandId is exactly "a frame set is in flight"; the
+        // assembler's own onComplete/onIncomplete is the single voice for
+        // that outcome, so skip the spoken failure and let it run its course.
+        if (expired.action === "gallery.describe" && recentGalleryCommands.has(expired.commandId)) continue;
         applyDeviceReconciliation(expired.action, { status: "failed", reason: "timeout" });
       }
     }, DEVICE_RESULT_TIMEOUT_MS);
@@ -1015,20 +1024,33 @@ export function createDoubaoProvider(
   // commandId (wire order), so pendingDeviceCommands.peek() is enough while a
   // set is still assembling — but the frame assembler's 10 s onIncomplete
   // timer can fire well after device.result has already resolved (deleted)
-  // the pending entry. This map keeps just enough (the action, to satisfy the
-  // same "issued for this action" guard visionFrames() runs, and the
-  // question, authoritative over whatever a chunk's own `question` field
-  // claims) alive from accept time through completion or timeout, then
-  // prunes itself — at most one live entry per in-flight gallery command.
-  const recentGalleryCommands = new Map<string, { action: DeviceActionName; question?: string }>();
+  // the pending entry. This map keeps just enough alive from accept time
+  // through completion or timeout, then prunes itself — at most one live
+  // entry per in-flight gallery command:
+  //   - action: satisfies the same "issued for this action" guard
+  //     visionFrames() runs;
+  //   - question: authoritative over whatever a chunk's own `question`
+  //     field claims;
+  //   - delivery: `agentDelivery` captured SYNCHRONOUSLY at accept time (the
+  //     first chunk of the set), exactly like cameraFrame's `const delivery =
+  //     agentDelivery;` capture — never read live at speak time, which for
+  //     onComplete is after an awaited vision-model round trip and for
+  //     onIncomplete is up to 10 s later, either of which a new rider turn
+  //     can easily fall inside of and reassign the mutable `agentDelivery`
+  //     binding in between. Reading it late would tag the gallery line onto
+  //     whatever turn happens to be live when it finally speaks instead of
+  //     the one that actually asked to look.
+  const recentGalleryCommands = new Map<
+    string,
+    { action: DeviceActionName; question?: string; delivery: TranscriptDelivery }
+  >();
 
   /** Speaks a gallery.describe answer (or its "我看不清。" fallback) exactly
-   *  the way cameraFrame speaks a camera.look answer: transcript + speaker.
-   *  Reads agentDelivery at call time, which for the onComplete path is
-   *  synchronous with the last chunk's arrival — the same "now" cameraFrame
-   *  captures its delivery at. */
-  function speakGalleryLine(line: string): void {
-    sendClient(transcriptEvent(agentDelivery, "agent", line, { final: true, useBrowserSpeech: true }));
+   *  the way cameraFrame speaks a camera.look answer: transcript + speaker,
+   *  against the delivery the caller captured at accept time (see
+   *  recentGalleryCommands above) — never the live `agentDelivery` binding. */
+  function speakGalleryLine(delivery: TranscriptDelivery, line: string): void {
+    sendClient(transcriptEvent(delivery, "agent", line, { final: true, useBrowserSpeech: true }));
     void speaker.speak(line).catch(() => {});
   }
 
@@ -1040,16 +1062,23 @@ export function createDoubaoProvider(
       const record = recentGalleryCommands.get(commandId);
       recentGalleryCommands.delete(commandId);
       const finalQuestion = record?.question ?? question;
+      // record is always set by visionFrames() before accept() is called
+      // (below); the `?? agentDelivery` fallback only guards a state that
+      // should be unreachable, so a defensive read here can never silently
+      // resurrect the exact staleness bug this design exists to prevent.
+      const delivery = record?.delivery ?? agentDelivery;
       void (async () => {
         const description = await visionProvider.describe(frames, finalQuestion);
-        speakGalleryLine(description ?? "我看不清。");
+        speakGalleryLine(delivery, description ?? "我看不清。");
       })().catch((error) => {
         log.warn("gallery frame set description failed unexpectedly", { error: String(error) });
       });
     },
     onIncomplete: (commandId) => {
+      const record = recentGalleryCommands.get(commandId);
       recentGalleryCommands.delete(commandId);
-      speakGalleryLine("我看不清。");
+      const delivery = record?.delivery ?? agentDelivery;
+      speakGalleryLine(delivery, "我看不清。");
     }
   });
 
@@ -1811,7 +1840,14 @@ export function createDoubaoProvider(
       const issued = pendingDeviceCommands.peek(event.commandId) ?? recentGalleryCommands.get(event.commandId);
       if (!issued || issued.action !== "gallery.describe") return;
       if (!recentGalleryCommands.has(event.commandId)) {
-        recentGalleryCommands.set(event.commandId, { action: issued.action, question: issued.question });
+        // Capture agentDelivery HERE, synchronously, on the first chunk —
+        // see the recentGalleryCommands declaration above for why this must
+        // not be deferred to speak time.
+        recentGalleryCommands.set(event.commandId, {
+          action: issued.action,
+          question: issued.question,
+          delivery: agentDelivery
+        });
       }
       galleryFrameAssembler.accept(event);
     },

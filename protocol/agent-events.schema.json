@@ -223,6 +223,20 @@
             "destinationName": { "type": "string" }
           },
           "required": ["type", "commandId", "reason", "origin"]
+        },
+        {
+          "title": "VisionFrames",
+          "type": "object",
+          "properties": {
+            "type": { "const": "vision.frames" },
+            "commandId": { "type": "string", "minLength": 1 },
+            "reason": { "enum": ["gallery"] },
+            "index": { "type": "number" },
+            "total": { "type": "number" },
+            "image": { "type": "string" },
+            "question": { "type": "string" }
+          },
+          "required": ["type", "commandId", "reason", "index", "total", "image"]
         }
       ]
     },
@@ -467,7 +481,10 @@
                 "camera.record",
                 "gallery.open",
                 "navigation.start",
-                "navigation.stop"
+                "navigation.stop",
+                "camera.look",
+                "gallery.describe",
+                "system.shutdown"
               ]
             },
             "args": {

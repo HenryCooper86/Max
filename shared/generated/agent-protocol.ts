@@ -13,7 +13,8 @@ export const CLIENT_EVENT_TYPES = [
   "camera.frame",
   "crash.alert",
   "crash.cancel",
-  "nav.request"
+  "nav.request",
+  "vision.frames"
 ] as const;
 
 export const SERVER_EVENT_TYPES = [

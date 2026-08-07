@@ -298,7 +298,8 @@ export type ClientEvent =
       type: "crash.cancel";
       incidentId: string;
     }
-  | NavRequestEvent;
+  | NavRequestEvent
+  | VisionFramesEvent;
 
 export type NavManeuver = { instruction: string; lat: number; lon: number; alongRouteMeters: number };
 
@@ -315,6 +316,22 @@ export type NavRequestEvent = {
   /** reason "reroute": the destination nav.route previously announced. */
   destination?: { lat: number; lon: number };
   destinationName?: string;
+};
+
+/** Client → server: one chunk of a multi-frame gallery understanding request.
+ *  `total` frames arrive as separate `vision.frames` events sharing one
+ *  `commandId`, `index` order 0..total-1; `question` only accompanies the
+ *  rider's spoken prompt, not every chunk. `reason` is "gallery" only —
+ *  V-C adds "watch" later. */
+export type VisionFramesEvent = {
+  type: "vision.frames";
+  commandId: string;
+  /** Only "gallery" until V-C adds "watch". */
+  reason: "gallery";
+  index: number;
+  total: number;
+  image: string;
+  question?: string;
 };
 
 /** Server → client: the relay resolved a `nav.request` into a route.

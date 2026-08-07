@@ -282,6 +282,42 @@ export function parseClientEvent(data: RawData): ClientEvent {
     return { type: "camera.frame", commandId: value.commandId, image: value.image };
   }
 
+  if (value.type === "vision.frames") {
+    if (typeof value.commandId !== "string" || !value.commandId.trim() || value.commandId.length > 120) {
+      throw new Error("Invalid vision.frames commandId");
+    }
+    if (value.reason !== "gallery") throw new Error("Invalid vision.frames reason");
+    if (typeof value.total !== "number" || !Number.isInteger(value.total) || value.total < 1 || value.total > 8) {
+      throw new Error("Invalid vision.frames total");
+    }
+    if (
+      typeof value.index !== "number" ||
+      !Number.isInteger(value.index) ||
+      value.index < 0 ||
+      value.index >= value.total
+    ) {
+      throw new Error("Invalid vision.frames index");
+    }
+    if (typeof value.image !== "string" || !value.image || value.image.length > 200_000) {
+      throw new Error("Invalid vision.frames image");
+    }
+    if (
+      value.question !== undefined &&
+      (typeof value.question !== "string" || Buffer.byteLength(value.question) > 500)
+    ) {
+      throw new Error("Invalid vision.frames question");
+    }
+    return {
+      type: "vision.frames",
+      commandId: value.commandId,
+      reason: "gallery",
+      index: value.index,
+      total: value.total,
+      image: value.image,
+      question: value.question as string | undefined
+    };
+  }
+
   if (value.type === "nav.request") {
     if (typeof value.commandId !== "string" || !value.commandId.trim() || value.commandId.length > 120) {
       throw new Error("Invalid nav.request commandId");

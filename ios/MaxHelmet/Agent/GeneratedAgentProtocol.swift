@@ -15,7 +15,8 @@ enum ClientEventTypes {
     static let crashAlert = "crash.alert"
     static let crashCancel = "crash.cancel"
     static let navRequest = "nav.request"
-    static let all: Set<String> = [sessionStart, audioStart, audioStop, demoGuided, locationUpdate, testingMetric, turnFeedback, deviceResult, hazardReport, cameraFrame, crashAlert, crashCancel, navRequest]
+    static let visionFrames = "vision.frames"
+    static let all: Set<String> = [sessionStart, audioStart, audioStop, demoGuided, locationUpdate, testingMetric, turnFeedback, deviceResult, hazardReport, cameraFrame, crashAlert, crashCancel, navRequest, visionFrames]
 }
 
 enum ServerEventTypes {

@@ -493,6 +493,10 @@ describe("gallery.describe", () => {
       action: "gallery.describe",
       args: { kind: "photo" }
     });
+    expect(extractDeviceCommand("check the video we just recorded")).toMatchObject({
+      action: "gallery.describe",
+      args: { kind: "video" }
+    });
   });
 
   it("carries English what questions", () => {

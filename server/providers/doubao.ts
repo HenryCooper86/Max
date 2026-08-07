@@ -27,6 +27,7 @@ import { createSpeaker, createSynthesizer } from "../speech";
 import { createTranscriptDelivery, transcriptEvent, type TranscriptDelivery } from "../transcript-events";
 import { buildChatCompletionsEndpoint, selectVisionProvider } from "../vision";
 import { createFrameAssembler } from "../vision-frames";
+import { createVisionGovernor } from "../vision-governor";
 import { fetchRiderWeather } from "../weather";
 import {
   approxDistanceKm,
@@ -786,7 +787,8 @@ export function createDoubaoProvider(
       command.action,
       deviceSuccessSpeech(command),
       Date.now(),
-      command.action === "camera.look" || command.action === "gallery.describe" ? command.args.question : undefined
+      command.action === "camera.look" || command.action === "gallery.describe" ? command.args.question : undefined,
+      command.action === "vision.watch" ? command.args.on : undefined
     );
     sendClient({
       type: "device.command",
@@ -835,7 +837,7 @@ export function createDoubaoProvider(
       // handler, so a future regression in that contract would otherwise take
       // the whole process down for every rider on the box — the `.catch` is
       // the backstop for that, not evidence that speak() is expected to fail.
-      void speaker.speak(decision.speech).catch(() => {});
+      void speakEmbedded(decision.speech).catch(() => {});
     }
   }
 
@@ -998,14 +1000,6 @@ export function createDoubaoProvider(
   // alerts on the embedded board, which detects hazards for real.
   let sessionPlatform: string | undefined;
 
-  // Simulated ADAS hazards on the live path — only for the dedicated ADAS scenario
-  // so normal voice sessions aren't interrupted. See server/hazard-injector.ts.
-  const hazardInjector = createHazardInjector({
-    send: sendClient,
-    emitRideContext,
-    platform: () => sessionPlatform
-  });
-
   // The helmet has no way to speak generated text: it drops `useBrowserSpeech`
   // transcripts, and pre-rendered alert WAVs cannot cover arbitrary wording. So
   // the relay synthesises and sends the bytes down the same binary channel
@@ -1018,6 +1012,19 @@ export function createDoubaoProvider(
     platform: () => sessionPlatform,
     onError: (error) => log.warn("confirmation speech failed", { error: String(error) })
   });
+
+  // True for the duration of an embedded-relay-synthesised utterance (device
+  // confirmations, gallery/watch lines) — the part of "the agent is audibly
+  // speaking" that createSpeaker itself does not track. Wraps every
+  // speaker.speak() call site below so isSpeechOpen (on visionGovernor,
+  // further down) can read it.
+  let speakerActive = false;
+  function speakEmbedded(text: string): Promise<void> {
+    speakerActive = true;
+    return speaker.speak(text).finally(() => {
+      speakerActive = false;
+    });
+  }
 
   // Companion to pendingDeviceCommands, scoped to gallery.describe frame sets:
   // vision.frames chunks all arrive before the device.result for the same
@@ -1051,8 +1058,58 @@ export function createDoubaoProvider(
    *  recentGalleryCommands above) — never the live `agentDelivery` binding. */
   function speakGalleryLine(delivery: TranscriptDelivery, line: string): void {
     sendClient(transcriptEvent(delivery, "agent", line, { final: true, useBrowserSpeech: true }));
-    void speaker.speak(line).catch(() => {});
+    void speakEmbedded(line).catch(() => {});
   }
+
+  /** Speaks a watch observation (V-C) the same way speakGalleryLine speaks a
+   *  gallery answer — transcript + speaker — except the delivery is
+   *  allocated FRESH here, at speak time, rather than captured from the
+   *  mutable `agentDelivery` binding: a watch line belongs to no rider turn,
+   *  the same "no owning turn" situation hazard-injector.ts's fire() solves
+   *  for hazard.alert lines by calling createTranscriptDelivery() inline
+   *  instead of reading a turn-scoped delivery. That inline-allocation idiom
+   *  is what this reuses. */
+  function speakWatchLine(line: string): void {
+    const delivery = createTranscriptDelivery();
+    sendClient(transcriptEvent(delivery, "agent", line, { final: true, useBrowserSpeech: true }));
+    void speakEmbedded(line).catch(() => {});
+  }
+
+  // Watch-frame governor (V-C), per session. describe reuses the same
+  // module-scope visionProvider as cameraFrame/gallery above. isSpeechOpen
+  // composes three existing bindings: riderTurnFinalized (false for the
+  // "hearing"/"asr"/"thinking" span of the CURRENT rider turn — reset at
+  // every AsrInfo, the same event that sends the "hearing" status),
+  // receivedTtsAudio (true for the span Doubao's own audio is streaming —
+  // set in forwardTtsAudio, the same place that sends the "speaking"
+  // status, and reset once TtsEnded finishes), and speakerActive (the
+  // embedded-relay-synthesised speech span defined above). Any one of the
+  // three being true means "the agent is audibly speaking or a rider turn
+  // is mid-flight".
+  const visionGovernor = createVisionGovernor({
+    describe: (frames, question) => visionProvider.describe(frames, question),
+    speak: speakWatchLine,
+    isSpeechOpen: () => !riderTurnFinalized || receivedTtsAudio || speakerActive,
+    onDrop: (reason) => metrics.watchDrop(reason)
+  });
+
+  // Notes every injected hazard.alert (below) into the watch governor, same
+  // as provider.hazardReport does for a board-detected hazard — a simulated
+  // ADAS scenario must gate watching exactly like a real one would.
+  function sendWithHazardNote(payload: unknown): void {
+    if (payload && typeof payload === "object" && (payload as { type?: unknown }).type === "hazard.alert") {
+      visionGovernor.noteHazard();
+    }
+    sendClient(payload);
+  }
+
+  // Simulated ADAS hazards on the live path — only for the dedicated ADAS scenario
+  // so normal voice sessions aren't interrupted. See server/hazard-injector.ts.
+  const hazardInjector = createHazardInjector({
+    send: sendWithHazardNote,
+    emitRideContext,
+    platform: () => sessionPlatform
+  });
 
   // Per-session assembler for gallery.describe's multi-frame sets. Mirrors
   // cameraFrame's detached-async shape below: the vision-model round trip
@@ -1792,7 +1849,13 @@ export function createDoubaoProvider(
     async deviceResult(event) {
       const issued = pendingDeviceCommands.resolve(event.commandId);
       if (!issued) return;
+      if (issued.action === "vision.watch" && event.status === "ok") {
+        visionGovernor.setEnabled(issued.watchOn === true);
+      }
       applyDeviceReconciliation(issued.action, event, issued.okSpeech);
+    },
+    async hazardReport() {
+      visionGovernor.noteHazard();
     },
     async cameraFrame(event) {
       // Only describe a frame that answers a camera.look this relay actually
@@ -1827,15 +1890,24 @@ export function createDoubaoProvider(
         const description = await visionProvider.describe([event.image], issued.question);
         const line = description ?? "我看不清。";
         sendClient(transcriptEvent(delivery, "agent", line, { final: true, useBrowserSpeech: true }));
-        void speaker.speak(line).catch(() => {});
+        void speakEmbedded(line).catch(() => {});
       })().catch((error) => {
         log.warn("camera frame description failed unexpectedly", { error: String(error) });
       });
     },
     async visionFrames(event) {
-      // Watch frames (V-C) carry no commandId — this handler is the gallery
-      // path only; Task 3 adds the watch branching. Narrows event.commandId
-      // to string for the rest of this function.
+      // Branch on reason FIRST. Watch frames (V-C) are unsolicited and carry
+      // no commandId — handed to the governor fire-and-forget so a stalled
+      // (or gated) describe can never stall session-controller.ts's message
+      // queue, which also carries mic PCM and audio.stop. The `.catch` is a
+      // backstop; handleWatchFrame's own try/finally already keeps every
+      // rule branch synchronous-safe (see vision-governor.ts).
+      if (event.reason === "watch") {
+        void visionGovernor.handleWatchFrame(event.image).catch(() => {});
+        return;
+      }
+      // Gallery path (V-B), unchanged. Narrows event.commandId to string for
+      // the rest of this function.
       if (!event.commandId) return;
       // Same guard shape as cameraFrame, plus the recentGalleryCommands
       // fallback declared above: a stray extra chunk can arrive after

@@ -587,6 +587,11 @@ export class AgentSessionController {
       if (event.type === "turn.feedback") recordTesterTurnFeedback(this.relaySessionId, event);
       if (event.type === "testing.metric") recordTesterAudioQuality(this.relaySessionId, event);
       if (event.type === "device.result") await this.provider.deviceResult?.(event);
+      // The FIRST consumer of hazard.report (see parseClientEvent's "never
+      // echo back" comment above): forwarded so the vision governor can gate
+      // watching on a hazard the board already announced, never echoed to
+      // any client as hazard.alert.
+      if (event.type === "hazard.report") await this.provider.hazardReport?.(event);
       if (event.type === "camera.frame") await this.provider.cameraFrame?.(event);
       if (event.type === "vision.frames") await this.provider.visionFrames?.(event);
       if (event.type === "crash.alert")

@@ -27,9 +27,11 @@ import {
   type DeviceActionStatus
 } from "../device-actions";
 import { createCrashSimulator, createHazardInjector } from "../hazard-injector";
+import { metrics } from "../metrics";
 import { createTranscriptDelivery, transcriptEvent } from "../transcript-events";
 import { createMockVisionProvider } from "../vision";
 import { createFrameAssembler } from "../vision-frames";
+import { createVisionGovernor } from "../vision-governor";
 
 // Deliberately NOT selectVisionProvider: the mock voice provider is the
 // zero-credential demo surface and must never spend Ark quota (spec M1) —
@@ -98,7 +100,11 @@ const SCENARIOS: Record<DemoScenario, ScenarioProfile> = {
       // credential cost via createMockVisionProvider — see server/vision.ts
       // and server/vision-frames.ts.
       { rider: "看看我刚拍的视频", agent: "我看看，稍后告诉你视频里都拍了什么。", latencyBase: 98 },
-      { rider: "看看我刚拍的照片", agent: "我看看，稍后告诉你照片里都拍了什么。", latencyBase: 93 }
+      { rider: "看看我刚拍的照片", agent: "我看看，稍后告诉你照片里都拍了什么。", latencyBase: 93 },
+      // Exercises the keyless watch-frame demo path (spec V-C): on the
+      // embedded board this toggles the proactive scene-watching governor —
+      // see createVisionGovernor below and server/vision-governor.ts.
+      { rider: "开启环境观察", agent: "好的，我开始帮你留意路况。", latencyBase: 91 }
     ]
   },
   wind: {
@@ -228,7 +234,16 @@ const GUIDED_TOUR: [DemoScenario, ...DemoScenario[]] = ["commute", "wind", "fuel
 /** One guided chapter shows ~2 turns at the 6 s conversation cadence. */
 const GUIDED_CHAPTER_MS = 14_000;
 
-export function createMockProvider(client: WebSocket, telemetry?: ProviderTelemetry): AgentProvider {
+export function createMockProvider(
+  client: WebSocket,
+  telemetry?: ProviderTelemetry,
+  // Injectable clock for the watch governor's budget/cooldown/adas-window
+  // rules, which compare timestamps rather than run on setTimeout — the mock
+  // has no other seam for a test to control that math (contrast with the
+  // frame assembler's timeout, which vi.useFakeTimers() already covers via
+  // its own setTimeout). Defaults to the governor's own Date.now default.
+  now?: () => number
+): AgentProvider {
   let frameCount = 0;
   let timer: NodeJS.Timeout | undefined;
   let promptIndex = 0;
@@ -239,6 +254,10 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
   // alerts on the embedded board, which detects hazards for real.
   let sessionPlatform: string | undefined;
   let guidedStep = 0;
+  // True from the moment a scripted turn begins (emitConversation) until its
+  // 650 ms reply timer fires — the mock's stand-in for "a rider turn is
+  // mid-flight", since the mock has no real ASR/TTS state machine to read.
+  let replyPending = false;
   let rideContext: RideContext = {
     mode: "navigation",
     scenario,
@@ -304,7 +323,8 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
       command.action,
       deviceSuccessSpeech(command),
       Date.now(),
-      command.action === "camera.look" || command.action === "gallery.describe" ? command.args.question : undefined
+      command.action === "camera.look" || command.action === "gallery.describe" ? command.args.question : undefined,
+      command.action === "vision.watch" ? command.args.on : undefined
     );
     send({
       type: "device.command",
@@ -366,6 +386,7 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
   function clearTurnTimers() {
     for (const turnTimer of turnTimers) clearTimeout(turnTimer);
     turnTimers = [];
+    replyPending = false;
   }
 
   // Walks the turn states (hearing → thinking → speaking → listening) so the
@@ -383,6 +404,7 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
     const riderDelivery = createTranscriptDelivery();
     const agentDelivery = createTranscriptDelivery();
 
+    replyPending = true;
     send({ type: "status", state: "hearing", detail: "正在聆听骑手讲话" });
     send(transcriptEvent(riderDelivery, "rider", turn.rider, { final: true }));
     dispatchDeviceCommand(turn.rider);
@@ -392,6 +414,7 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
 
     turnTimers.push(
       setTimeout(() => {
+        replyPending = false;
         send({ type: "status", state: "speaking", detail: "Max 正在回答" });
         send(transcriptEvent(agentDelivery, "agent", turn.agent, { final: true }));
         send({ type: "metric", latencyMs: firstAudioMs });
@@ -411,10 +434,40 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
     );
   }
 
+  // Watch-frame governor (V-C): per-session, mirroring every other piece of
+  // session state above. describe/speak reuse the same mock vision provider
+  // and transcript idiom as cameraFrame/speakGalleryLine below — a FRESH
+  // delivery per watch line, since a watch observation belongs to no rider
+  // turn. isSpeechOpen mirrors replyPending, set alongside emitConversation's
+  // own "hearing"/"speaking" status events above.
+  const visionGovernor = createVisionGovernor({
+    describe: (frames, question) => mockVisionProvider.describe(frames, question),
+    speak: (line) => {
+      send(transcriptEvent(createTranscriptDelivery(), "agent", line, { final: true, useBrowserSpeech: true }));
+    },
+    isSpeechOpen: () => replyPending,
+    onDrop: (reason) => metrics.watchDrop(reason),
+    now
+  });
+
+  // Notes every injected hazard.alert (below) into the watch governor, same
+  // as provider.hazardReport does for a board-detected hazard — a simulated
+  // ADAS scenario must gate watching exactly like a real one would.
+  function sendWithHazardNote(payload: unknown): void {
+    if (payload && typeof payload === "object" && (payload as { type?: unknown }).type === "hazard.alert") {
+      visionGovernor.noteHazard();
+    }
+    send(payload);
+  }
+
   // Simulates an ADAS sensor event: the agent interrupts whatever it is saying
   // and announces the directional warning. Cycles through the hazard catalog so
   // a single demo session exercises rear / front / side alerts.
-  const hazardInjector = createHazardInjector({ send, emitRideContext, platform: () => sessionPlatform });
+  const hazardInjector = createHazardInjector({
+    send: sendWithHazardNote,
+    emitRideContext,
+    platform: () => sessionPlatform
+  });
   const crashSimulator = createCrashSimulator({ send, platform: () => sessionPlatform });
 
   /** Applies a scenario's profile to the ride context and refreshes the HUD. */
@@ -520,7 +573,13 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
     async deviceResult(event) {
       const issued = pendingDeviceCommands.resolve(event.commandId);
       if (!issued) return;
+      if (issued.action === "vision.watch" && event.status === "ok") {
+        visionGovernor.setEnabled(issued.watchOn === true);
+      }
       applyDeviceReconciliation(issued.action, event, issued.okSpeech);
+    },
+    async hazardReport() {
+      visionGovernor.noteHazard();
     },
     async cameraFrame(event) {
       // Mirrors doubao.ts's guard exactly: only describe a frame that
@@ -549,9 +608,17 @@ export function createMockProvider(client: WebSocket, telemetry?: ProviderTeleme
       })().catch(() => {});
     },
     async visionFrames(event) {
-      // Watch frames (V-C) carry no commandId — this handler is the gallery
-      // path only; Task 3 adds the watch branching. Narrows event.commandId
-      // to string for the rest of this function.
+      // Branch on reason FIRST. Watch frames (V-C) are unsolicited and carry
+      // no commandId — handed to the governor fire-and-forget so a stalled
+      // (or gated) describe can never stall the caller's message queue. The
+      // `.catch` is a backstop; handleWatchFrame's own try/finally already
+      // keeps every rule branch synchronous-safe (see vision-governor.ts).
+      if (event.reason === "watch") {
+        void visionGovernor.handleWatchFrame(event.image).catch(() => {});
+        return;
+      }
+      // Gallery path (V-B), unchanged. Narrows event.commandId to string for
+      // the rest of this function.
       if (!event.commandId) return;
       // Same guard shape as cameraFrame, plus the recentGalleryCommands
       // fallback declared above: a stray extra chunk can arrive after

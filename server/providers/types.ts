@@ -1,7 +1,13 @@
-import type { DeviceResultEvent, SessionStartEvent, VisionFramesEvent } from "../../shared/agent";
+import type { ClientEvent, DeviceResultEvent, SessionStartEvent, VisionFramesEvent } from "../../shared/agent";
 import type { UserMemoryFact, UserMemoryTurn } from "../user-memory";
 
 export type { ClientEvent, SessionStartEvent, VoiceGender } from "../../shared/agent";
+
+// shared/agent.ts's hazard.report variant has no standalone exported name (it
+// is inline in the ClientEvent union) — same situation crash-escalation.ts
+// solved for crash.alert/crash.cancel, and the same fix: derive it here with
+// Extract rather than duplicating the field list.
+export type HazardReportEvent = Extract<ClientEvent, { type: "hazard.report" }>;
 
 export type ProviderTelemetry = {
   serverEvent(payload: unknown, bytes: number): void;
@@ -31,6 +37,10 @@ export type AgentProvider = {
   /** Result of a dispatched device command. Providers without a device-action
    *  path omit this. */
   deviceResult?(event: DeviceResultEvent): Promise<void>;
+  /** A hazard the embedded board detected and already announced — flows
+   *  upward only (see shared/agent.ts's hazard.report doc comment). Every
+   *  provider gates its watch governor on this. */
+  hazardReport?(event: HazardReportEvent): Promise<void>;
   /** One frame the rider asked Max to look at. Providers without a vision path
    *  omit this. */
   cameraFrame?(event: { commandId: string; image: string }): Promise<void>;

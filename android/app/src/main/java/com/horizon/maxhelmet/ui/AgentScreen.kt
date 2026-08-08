@@ -68,6 +68,7 @@ import com.horizon.maxhelmet.agent.Speaker
 import com.horizon.maxhelmet.agent.TURN_FLAG_REASONS
 import com.horizon.maxhelmet.agent.TranscriptItem
 import com.horizon.maxhelmet.agent.TurnState
+import com.horizon.maxhelmet.navigation.NavGuidanceState
 import com.horizon.maxhelmet.ui.theme.HudColors
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -245,6 +246,13 @@ fun AgentScreen(
             state.hazardAlert?.let {
                 Spacer(Modifier.height(12.dp))
                 HazardBanner(it)
+            }
+
+            if (isNavPresentationActive(state)) {
+                state.navGuidance?.let { guidance ->
+                    Spacer(Modifier.height(12.dp))
+                    GuidanceCard(guidance)
+                }
             }
 
             Spacer(Modifier.weight(1f))
@@ -834,6 +842,56 @@ private fun HazardBanner(alert: AgentEvent.HazardAlert) {
             }
             Spacer(Modifier.width(8.dp))
             Text("${alert.ttcSeconds}s", color = color, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+// ---- navigation guidance card (mirrors ios/MaxHelmet/Navigation/GuidanceCard.swift) --
+
+/**
+ * The live turn-by-turn surface: destination first, the next maneuver
+ * dominates (large), then distance-to-maneuver and the remaining trip below.
+ * Gated by [isNavPresentationActive] at the call site; `guidance.arrived` is
+ * never true here (arrival publishes `navGuidance = null` instead — see
+ * NavGuidanceState's doc), so there is no arrived branch to render.
+ */
+@Composable
+private fun GuidanceCard(guidance: NavGuidanceState) {
+    HudCard(borderColor = if (guidance.offRoute) HudColors.Amber else Color.Transparent) {
+        Row(verticalAlignment = Alignment.Top) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(guidance.destinationName, color = HudColors.Muted, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = guidance.currentInstruction ?: guidance.destinationName,
+                    color = HudColors.Text,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "距下一路口 ${formatDistanceMeters(guidance.distanceToManeuverMeters)}",
+                    color = HudColors.HudDim,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = "剩余 ${formatRemaining(guidance.remainingMeters, guidance.remainingSeconds)}",
+                    color = HudColors.Muted,
+                    fontSize = 12.sp
+                )
+            }
+            if (guidance.offRoute) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(HudColors.Amber.copy(alpha = 0.2f))
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Text("已偏离路线", color = HudColors.Amber, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
         }
     }
 }

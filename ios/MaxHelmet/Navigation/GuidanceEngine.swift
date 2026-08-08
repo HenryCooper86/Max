@@ -1,11 +1,12 @@
 import CoreLocation
 import Foundation
 
-/// Distance bands at which a maneuver is announced. Each fires once per maneuver.
-enum PromptThreshold: CaseIterable {
+/// Distance bands at which a maneuver is announced. Each fires once per
+/// maneuver; thresholds are cleared when the engine advances to the next one.
+enum PromptThreshold: CaseIterable, Equatable {
     case far, near, now
 
-    var distanceMeters: Double {
+    var meters: Double {
         switch self {
         case .far: return 400
         case .near: return 150
@@ -17,6 +18,7 @@ enum PromptThreshold: CaseIterable {
 /// The mutable state the engine advances across fixes.
 struct GuidanceProgress: Equatable {
     var maneuverIndex: Int
+    /// Thresholds already spoken for the *current* maneuver only; cleared on advance.
     var firedThresholds: Set<PromptThreshold>
     var arrived: Bool
 }
@@ -25,95 +27,137 @@ struct GuidanceProgress: Equatable {
 struct GuidanceUpdate: Equatable {
     var progress: GuidanceProgress
     var distanceToManeuverMeters: Double
-    var remainingDistanceMeters: Double
+    var remainingMeters: Double
     var remainingSeconds: Double
     var offRoute: Bool
+    var arrived: Bool
     var spokenPrompt: String?
+    /// Identity of the threshold that fired this tick, if any. The interrupt
+    /// decision MUST key on this, never on `spokenPrompt` text: the "now"
+    /// template is the bare instruction, with no "现在" marker left to grep for.
+    var firedThreshold: PromptThreshold?
+    var currentInstruction: String?
 }
 
 /// Pure route math and prompt timing — no I/O, no CoreLocation manager. Every
-/// decision the rider's safety depends on lives here, so it can be table-tested.
+/// decision the rider's safety depends on lives here, so it can be table-
+/// tested. Literal port of shared/guidance.ts's `step`: the constants, the
+/// snap math (see Geo.swift), and the six rules below must stay identical to
+/// the TypeScript/Kotlin siblings so guidance never diverges by device.
 enum GuidanceEngine {
     static let offRouteThresholdMeters = 50.0
     static let arrivalRadiusMeters = 30.0
-    static let maneuverReachedMeters = 25.0
+    static let maneuverAdvanceMeters = 30.0
 
+    /// Advances guidance by one fix. Pure function of (position, route,
+    /// progress): the caller supplies the previous `GuidanceProgress` and
+    /// gets the next one back in `update.progress`, never mutated in place,
+    /// so a fix can be re-run safely (e.g. after a GPS correction).
+    ///
+    /// Port contract shared with the TypeScript/Kotlin siblings
+    /// (shared/guidance.ts:128-170, adapted here) — keep these six rules
+    /// identical across platforms so guidance never diverges by device:
+    ///
+    /// 1. Single distance metric: every prompt threshold AND the "reached
+    ///    this maneuver" check both read the SAME along-route distance
+    ///    (maneuver `alongRouteMeters` minus the snapped along-route
+    ///    position). There is no second, straight-line-to-coordinate metric —
+    ///    a curved approach means haversine distance is a chord shorter than
+    ///    the along-route path, and mixing metrics lets "reached" (30 m) fire
+    ///    before "now" (40 m), skipping the safety-critical prompt entirely.
+    /// 2. Prompt-before-advance ordering: within one fix, the current
+    ///    maneuver's threshold prompt is decided FIRST, using its pre-advance
+    ///    distance; only then is the advance condition evaluated. A fix that
+    ///    both crosses the "now" threshold and reaches the maneuver in the
+    ///    same tick still speaks the prompt — the returned `progress`
+    ///    reflects the post-advance maneuver, but `spokenPrompt` is the one
+    ///    that just fired for the maneuver being left behind.
+    /// 3. Off-route freezes progression, not just prompts: while `offRoute`
+    ///    is true, `maneuverIndex` and `firedThresholds` carry through
+    ///    unchanged — no prompt fires and no advance happens, however far
+    ///    along the route the (untrusted) snapped position appears to be.
+    ///    Reroute policy is the caller's job; this function only reports the
+    ///    fact and waits.
+    /// 4. `arrived` is sticky: once true it stays true regardless of
+    ///    subsequent fixes (a noisy GPS reading after arrival must not
+    ///    un-arrive the rider). The caller resets it only by starting a
+    ///    fresh `GuidanceProgress` for a new route, never by an in-band
+    ///    "un-arrive" call.
+    /// 5. Snap tie-break: when two polyline segments are equidistant, the
+    ///    FIRST one in array order (lowest index) wins — the snap loop only
+    ///    replaces the best match on a strictly-smaller cross-track distance.
+    /// 6. Arrival is a DIFFERENT metric from rule 1 by design: it is the
+    ///    straight-line (haversine) distance from the fix to the route's
+    ///    final polyline vertex, not an along-route distance. It is evaluated
+    ///    on every fix regardless of `offRoute` — arrival wins over
+    ///    off-route, because a rider who is close enough to the destination
+    ///    but has drifted off the plotted polyline (parking lot, driveway,
+    ///    wrong side of a divided road) must still be told they've arrived.
+    ///    Like rule 4, arrival is sticky.
     static func step(
-        location: CLLocationCoordinate2D,
+        position: CLLocationCoordinate2D,
         route: NavigationRoute,
         progress: GuidanceProgress
     ) -> GuidanceUpdate {
-        var progress = progress
-        let offRoute = Geo.nearestSegmentDistance(location, route.polyline) > offRouteThresholdMeters
-        let distanceToDest = Geo.haversineMeters(location, route.destinationCoordinate)
+        let snap = Geo.snapToRoute(position, route.polyline)
+        let offRoute = snap.crossTrackMeters > offRouteThresholdMeters
 
-        if distanceToDest <= arrivalRadiusMeters {
-            progress.arrived = true
-            return GuidanceUpdate(
-                progress: progress, distanceToManeuverMeters: 0,
-                remainingDistanceMeters: 0, remainingSeconds: 0,
-                offRoute: offRoute, spokenPrompt: "已到达目的地。"
-            )
+        let lastPoint = route.polyline.last
+        let distanceToDestination = lastPoint.map { Geo.haversineMeters(position, $0) } ?? .infinity
+        let arrived = progress.arrived || distanceToDestination <= arrivalRadiusMeters
+
+        var maneuverIndex = progress.maneuverIndex
+        var firedThresholds = progress.firedThresholds
+        var spokenPrompt: String?
+        var firedThreshold: PromptThreshold?
+
+        // Prompt-then-advance, gated entirely behind on-route — see rules 1-3 above.
+        if !offRoute {
+            let currentManeuver = maneuverIndex < route.steps.count ? route.steps[maneuverIndex] : nil
+            if let currentManeuver {
+                let distanceToManeuver = max(0, currentManeuver.alongRouteMeters - snap.alongRouteMeters)
+
+                let due = PromptThreshold.allCases.filter { distanceToManeuver <= $0.meters && !firedThresholds.contains($0) }
+                if !due.isEmpty {
+                    let urgent = due.min { $0.meters < $1.meters }!
+                    due.forEach { firedThresholds.insert($0) }
+                    firedThreshold = urgent
+                    spokenPrompt = urgent == .now
+                        ? currentManeuver.instruction
+                        : "前方\(Int((distanceToManeuver / 50).rounded()) * 50)米，\(currentManeuver.instruction)"
+                }
+
+                let reachedManeuver = distanceToManeuver <= maneuverAdvanceMeters
+                    || snap.alongRouteMeters > currentManeuver.alongRouteMeters
+                let hasNextManeuver = maneuverIndex + 1 < route.steps.count
+                if reachedManeuver && hasNextManeuver {
+                    maneuverIndex += 1
+                    firedThresholds = []
+                }
+            }
         }
 
-        guard progress.maneuverIndex < route.steps.count else {
-            return GuidanceUpdate(
-                progress: progress, distanceToManeuverMeters: distanceToDest,
-                remainingDistanceMeters: distanceToDest,
-                remainingSeconds: eta(route, distanceToDest),
-                offRoute: offRoute, spokenPrompt: nil
-            )
-        }
+        let finalManeuver = maneuverIndex < route.steps.count ? route.steps[maneuverIndex] : nil
+        let distanceToManeuverMeters = finalManeuver
+            .map { max(0, $0.alongRouteMeters - snap.alongRouteMeters) }
+            ?? max(0, route.totalDistanceMeters - snap.alongRouteMeters)
+        let currentInstruction = finalManeuver?.instruction
 
-        let maneuver = route.steps[progress.maneuverIndex]
-        let distToManeuver = Geo.haversineMeters(location, maneuver.coordinate)
+        let remainingMeters = max(0, route.totalDistanceMeters - snap.alongRouteMeters)
+        let remainingSeconds = route.totalDistanceMeters > 0
+            ? route.totalEtaSeconds * remainingMeters / route.totalDistanceMeters
+            : 0
 
-        // Reached this maneuver: advance to the next and announce nothing this tick.
-        if distToManeuver <= maneuverReachedMeters, progress.maneuverIndex + 1 < route.steps.count {
-            progress.maneuverIndex += 1
-            progress.firedThresholds = []
-            let next = route.steps[progress.maneuverIndex]
-            let d = Geo.haversineMeters(location, next.coordinate)
-            return GuidanceUpdate(
-                progress: progress, distanceToManeuverMeters: d,
-                remainingDistanceMeters: remaining(route, progress, d),
-                remainingSeconds: eta(route, remaining(route, progress, d)),
-                offRoute: offRoute, spokenPrompt: nil
-            )
-        }
-
-        // Fire the most urgent unfired threshold the rider has crossed; mark all
-        // crossed thresholds fired so a skipped-over one cannot fire later.
-        var prompt: String?
-        let due = PromptThreshold.allCases.filter { distToManeuver <= $0.distanceMeters && !progress.firedThresholds.contains($0) }
-        if let urgent = due.min(by: { $0.distanceMeters < $1.distanceMeters }) {
-            due.forEach { progress.firedThresholds.insert($0) }
-            prompt = phrase(urgent, maneuver.instruction)
-        }
-
-        let remain = remaining(route, progress, distToManeuver)
         return GuidanceUpdate(
-            progress: progress, distanceToManeuverMeters: distToManeuver,
-            remainingDistanceMeters: remain, remainingSeconds: eta(route, remain),
-            offRoute: offRoute, spokenPrompt: prompt
+            progress: GuidanceProgress(maneuverIndex: maneuverIndex, firedThresholds: firedThresholds, arrived: arrived),
+            distanceToManeuverMeters: distanceToManeuverMeters,
+            remainingMeters: remainingMeters,
+            remainingSeconds: remainingSeconds,
+            offRoute: offRoute,
+            arrived: arrived,
+            spokenPrompt: offRoute ? nil : spokenPrompt,
+            firedThreshold: offRoute ? nil : firedThreshold,
+            currentInstruction: currentInstruction
         )
-    }
-
-    private static func remaining(_ route: NavigationRoute, _ progress: GuidanceProgress, _ distToManeuver: Double) -> Double {
-        let rest = route.steps.dropFirst(progress.maneuverIndex + 1).reduce(0.0) { $0 + $1.distanceMeters }
-        return distToManeuver + rest
-    }
-
-    private static func eta(_ route: NavigationRoute, _ remaining: Double) -> Double {
-        guard route.totalDistanceMeters > 0 else { return 0 }
-        return route.totalEtaSeconds * min(1, remaining / route.totalDistanceMeters)
-    }
-
-    private static func phrase(_ threshold: PromptThreshold, _ instruction: String) -> String {
-        switch threshold {
-        case .far: return "前方400米，\(instruction)"
-        case .near: return "150米后，\(instruction)"
-        case .now: return "现在，\(instruction)"
-        }
     }
 }

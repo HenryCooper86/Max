@@ -1,3 +1,4 @@
+import CoreLocation
 import Foundation
 
 // ============================================================
@@ -338,6 +339,30 @@ struct DeviceActionResult: Equatable {
     }
 }
 
+/// Server → client: the relay resolved a `nav.request` into a route. Every
+/// coordinate here is GCJ-02 exactly as received — WGS-84 conversion is the
+/// map layer's job (Task 4's edge), not this parsing layer's.
+struct NavRouteData: Equatable {
+    let commandId: String
+    let destinationName: String
+    let destination: CLLocationCoordinate2D
+    let polyline: [CLLocationCoordinate2D]
+    let steps: [ManeuverStep]
+    let distanceMeters: Double
+    let etaSeconds: Double
+
+    static func == (lhs: NavRouteData, rhs: NavRouteData) -> Bool {
+        lhs.commandId == rhs.commandId
+            && lhs.destinationName == rhs.destinationName
+            && coordinatesEqual(lhs.destination, rhs.destination)
+            && lhs.polyline.count == rhs.polyline.count
+            && zip(lhs.polyline, rhs.polyline).allSatisfy { coordinatesEqual($0, $1) }
+            && lhs.steps == rhs.steps
+            && lhs.distanceMeters == rhs.distanceMeters
+            && lhs.etaSeconds == rhs.etaSeconds
+    }
+}
+
 enum AgentEvent {
     case sessionStarted(provider: String, mode: String, capabilities: ProviderCapabilities)
     case connection(state: String, detail: String)
@@ -353,6 +378,8 @@ enum AgentEvent {
     case crashAck(incidentId: String, status: CrashAckStatus, detail: String?)
     case crashSimulate
     case error(message: String)
+    case navRoute(NavRouteData)
+    case navError(commandId: String, code: String)
     /// Event types this client does not consume.
     case unhandled
 }
@@ -494,9 +521,80 @@ func parseAgentEvent(_ text: String) -> AgentEvent {
     case ServerEventTypes.crashSimulate:
         return .crashSimulate
 
+    case ServerEventTypes.navRoute:
+        guard let destination = parseCoordinateDict(json["destination"]),
+              let polyline = parseCoordinateArray(json["polyline"]),
+              let steps = parseManeuverSteps(json["steps"]),
+              let distanceMeters = numberValue(json["distanceMeters"]),
+              let etaSeconds = numberValue(json["etaSeconds"]) else {
+            return .unhandled
+        }
+        return .navRoute(NavRouteData(
+            commandId: str("commandId"),
+            destinationName: str("destinationName"),
+            destination: destination,
+            polyline: polyline,
+            steps: steps,
+            distanceMeters: distanceMeters,
+            etaSeconds: etaSeconds
+        ))
+
+    case ServerEventTypes.navError:
+        return .navError(commandId: str("commandId"), code: str("code"))
+
     default:
         return .unhandled
     }
+}
+
+/// Extracts a numeric JSON value regardless of whether JSONSerialization
+/// produced it as an Int or a Double (a whole-number lat/lon like `31`
+/// bridges differently than `31.2`), matching the `int(_:)` dual-check above.
+private func numberValue(_ any: Any?) -> Double? {
+    if let d = any as? Double { return d }
+    if let n = any as? Int { return Double(n) }
+    return nil
+}
+
+/// Parses a `{lat, lon}` object into a coordinate; nil when either field is
+/// missing or not numeric.
+private func parseCoordinateDict(_ any: Any?) -> CLLocationCoordinate2D? {
+    guard let dict = any as? [String: Any],
+          let lat = numberValue(dict["lat"]),
+          let lon = numberValue(dict["lon"]) else { return nil }
+    return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+}
+
+/// Parses a `nav.route` polyline array of `{lat, lon}` objects; nil if the
+/// array is missing or any entry fails to parse — a corrupt point silently
+/// truncating the route is worse than dropping the whole event.
+private func parseCoordinateArray(_ any: Any?) -> [CLLocationCoordinate2D]? {
+    guard let array = any as? [[String: Any]] else { return nil }
+    var result: [CLLocationCoordinate2D] = []
+    result.reserveCapacity(array.count)
+    for item in array {
+        guard let coordinate = parseCoordinateDict(item) else { return nil }
+        result.append(coordinate)
+    }
+    return result
+}
+
+/// Parses a `nav.route` steps array of `{instruction, lat, lon, alongRouteMeters}`
+/// objects; nil if the array is missing or any entry fails to parse.
+private func parseManeuverSteps(_ any: Any?) -> [ManeuverStep]? {
+    guard let array = any as? [[String: Any]] else { return nil }
+    var result: [ManeuverStep] = []
+    result.reserveCapacity(array.count)
+    for item in array {
+        guard let coordinate = parseCoordinateDict(item),
+              let alongRouteMeters = numberValue(item["alongRouteMeters"]) else { return nil }
+        result.append(ManeuverStep(
+            instruction: item["instruction"] as? String ?? "",
+            coordinate: coordinate,
+            alongRouteMeters: alongRouteMeters
+        ))
+    }
+    return result
 }
 
 /// Client → server session.start payload (validated by server/session-controller.ts).
@@ -615,6 +713,30 @@ func buildDeviceResult(commandId: String, result: DeviceActionResult) -> String 
     ]
     if let reason = result.reason { payload["reason"] = reason }
     if let detail = result.detail { payload["detail"] = detail }
+    let data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
+    return String(data: data, encoding: .utf8) ?? "{}"
+}
+
+/// Client → server nav.request: ask the relay to route the rider (validated
+/// by server/session-controller.ts). `origin`/`destination` are GCJ-02, like
+/// every nav.* coordinate — no CoordinateDatum conversion at this layer.
+/// Optional keys are omitted entirely rather than sent as null: reason
+/// "start" carries `query` and no destination; reason "reroute" carries
+/// `destination`/`destinationName` and no `query`.
+func buildNavRequest(commandId: String, reason: String, originLat: Double, originLon: Double,
+                     query: String?, destinationLat: Double?, destinationLon: Double?,
+                     destinationName: String?) -> String {
+    var payload: [String: Any] = [
+        "type": ClientEventTypes.navRequest,
+        "commandId": commandId,
+        "reason": reason,
+        "origin": ["lat": originLat, "lon": originLon]
+    ]
+    if let query { payload["query"] = query }
+    if let destinationLat, let destinationLon {
+        payload["destination"] = ["lat": destinationLat, "lon": destinationLon]
+    }
+    if let destinationName { payload["destinationName"] = destinationName }
     let data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
     return String(data: data, encoding: .utf8) ?? "{}"
 }

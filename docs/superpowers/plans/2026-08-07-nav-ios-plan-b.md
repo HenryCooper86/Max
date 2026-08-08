@@ -32,10 +32,12 @@
 ### Task 1: Swift coordinate datum transforms (`CoordinateDatum.swift`)
 
 **Files:**
+
 - Create: `ios/MaxHelmet/Navigation/CoordinateDatum.swift`
 - Test: `ios/MaxHelmetTests/CoordinateDatumTests.swift`
 
 **Interfaces:**
+
 - Produces (Tasks 3-4 rely on):
 
 ```swift
@@ -114,6 +116,7 @@ final class CoordinateDatumTests: XCTestCase {
 ### Task 2: Guidance engine reconciliation to the six-rule contract
 
 **Files:**
+
 - Modify: `ios/MaxHelmet/Navigation/NavigationRoute.swift` (`ManeuverStep.distanceMeters` per-leg → `alongRouteMeters` cumulative, matching `NavManeuver`)
 - Modify: `ios/MaxHelmet/Navigation/GuidanceEngine.swift` (rewrite to the contract)
 - Modify: `ios/MaxHelmet/Navigation/Geo.swift` (add the equirectangular snap primitives — literal duplicates of shared/guidance.ts's `toLocal`/`nearestOnSegment`/snap loop)
@@ -122,6 +125,7 @@ final class CoordinateDatumTests: XCTestCase {
 - Test: `ios/MaxHelmetTests/GuidanceEngineTests.swift` (REPLACED by the ported TS table), `ios/MaxHelmetTests/NavigationControllerTests.swift` (interrupt-identity case updated)
 
 **Interfaces:**
+
 - Produces:
 
 ```swift
@@ -163,7 +167,7 @@ struct GuidanceUpdate {
   - off-route at (31.2320, 121.4710): offRoute true, no prompt, and — with along-route position past the maneuver at (31.2360, 121.4710) — maneuverIndex stays put and firedThresholds carry through (freeze).
   - arrival within 30 m of the LAST POLYLINE VERTEX (31.2399) sets sticky arrived; a later far-away fix keeps arrived true.
   - remaining/ETA scaling at 31.235: remaining ∈ (520, 590), seconds ∈ (110, 130).
-  Update NavigationControllerTests: the interrupt case asserts `interrupts == 1` when the engine reports `.now` identity even though the spoken text is the bare instruction (no 现在 substring).
+    Update NavigationControllerTests: the interrupt case asserts `interrupts == 1` when the engine reports `.now` identity even though the spoken text is the bare instruction (no 现在 substring).
 - [ ] **Step 2: RED** — the new table fails against the old engine (metric, radius, ordering, templates all differ).
 - [ ] **Step 3: Implement** — Geo.swift gains `localXY(of:around:)` (equirectangular: x = Δlon·R·cos(originLat), y = Δlat·R — literal port), `nearestOnSegment` (clamped t), and the snap loop (strictly-smaller replacement, cumulative along-route). GuidanceEngine rewritten: snap → cross-track/offRoute → arrival (last vertex, sticky, unconditional) → if !offRoute { prompts (pre-advance distance, once per maneuver) then advancement (along-route ≤ 30 OR position past alongRouteMeters) } → remaining/ETA from position. MapKitNavigationSearch.convert accumulates MKRoute step distances into cumulative alongRouteMeters.
 - [ ] **Step 4: GREEN** — GuidanceEngineTests + NavigationControllerTests + RouteSearchTests scoped, then the FULL iOS suite.
@@ -174,10 +178,12 @@ struct GuidanceUpdate {
 ### Task 3: Wire layer — nav.route/nav.error parsing + buildNavRequest
 
 **Files:**
+
 - Modify: `ios/MaxHelmet/Agent/AgentProtocol.swift` (AgentEvent cases, parse cases, builder)
 - Test: `ios/MaxHelmetTests/NavProtocolTests.swift` (create)
 
 **Interfaces:**
+
 - Produces (Task 4 relies on):
 
 ```swift
@@ -200,7 +206,7 @@ struct NavRouteData: Equatable {
 ```
 
 - [ ] **Step 1: Write the failing tests** — NavProtocolTests: parse a full nav.route JSON (2 steps, 3 polyline points) into NavRouteData field-by-field; parse nav.error; malformed nav.route (missing polyline) → .unhandled; buildNavRequest start-shape (no destination keys present) and reroute-shape (destination + destinationName present, no query key) verified via JSONSerialization round-trip, matching the schema's required fields.
-- [ ] **Step 2: RED** (cases missing). **Step 3: Implement.** **Step 4: GREEN** scoped + full build. 
+- [ ] **Step 2: RED** (cases missing). **Step 3: Implement.** **Step 4: GREEN** scoped + full build.
 - [ ] **Step 5: Commit** — `git commit -m "feat(nav-ios): parse nav.route and build nav.request"`
 
 ---
@@ -208,6 +214,7 @@ struct NavRouteData: Equatable {
 ### Task 4: RelayNavigationSearch + seam change + AgentSession wiring
 
 **Files:**
+
 - Modify: `ios/MaxHelmet/Navigation/RouteSearch.swift` (protocol gains origin: `route(to query: String, from origin: CLLocationCoordinate2D) async -> NavigationRoute?`; DELETE `MapKitNavigationSearch` + the MKLocalSearch/MKDirections imports; `makeNavigationRoute` stays as the pure assembler)
 - Create: `ios/MaxHelmet/Navigation/RelayNavigationSearch.swift`
 - Modify: `ios/MaxHelmet/Navigation/NavigationController.swift` (obtain the first fix BEFORE searching: start the stream, await the first fix with a bounded 3 s wait via the existing continuation idiom; no fix in time → `.unsupported("route.unavailable")`; pass the fix as origin; reroute path already has origin)
@@ -215,6 +222,7 @@ struct NavRouteData: Equatable {
 - Test: `ios/MaxHelmetTests/RelayNavigationSearchTests.swift` (create), `ios/MaxHelmetTests/NavigationControllerTests.swift` (extend: held-ordering + no-fix case)
 
 **Interfaces:**
+
 - Produces:
 
 ```swift
@@ -237,6 +245,7 @@ final class RelayNavigationSearch: NavigationRouteSearching {
 ```
 
 Behavior (binding):
+
 - `route(to:from:)`: synthesize `commandId = "nav-" + UUID().uuidString`; store a single continuation keyed by that id (a second concurrent call fails the first with nil before proceeding — single-outstanding, like the web client); `send(buildNavRequest(commandId:, reason: "start", origin: wgs84ToGcj02(origin), query: query, ...))`; suspend; on `handleNavRoute` with matching id → convert EVERY coordinate `gcj02ToWgs84` (destination, polyline vertices, step coordinates), build `NavigationRoute` via `makeNavigationRoute` (name/destination/polyline/steps with cumulative alongRouteMeters/distanceMeters/etaSeconds) → resume with it; `handleNavError`/timeout/`failPending` → resume nil. The stored destinationName + WGS destination let reroutes echo GCJ values later.
 - `reroute(to:from:)` mirrors it with `reason: "reroute"`, converting BOTH origin and the echoed destination WGS→GCJ, carrying the remembered destinationName. NavigationController's existing 20 s reroute debounce is preserved (verify it matches the web's 20 s from-send cooldown; align the constant if it differs, noting the change).
 - Timeout via a detached watchdog Task cancelled on resume; every resume path nils the stored continuation exactly once (double-resume is a crash in Swift — guard it).

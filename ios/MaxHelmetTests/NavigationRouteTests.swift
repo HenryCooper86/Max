@@ -13,7 +13,7 @@ final class NavigationRouteTests: XCTestCase {
     }
 
     func testRouteAndStepAreEquatable() {
-        let step = ManeuverStep(instruction: "右转", coordinate: .init(latitude: 39.9, longitude: 116.4), distanceMeters: 200)
+        let step = ManeuverStep(instruction: "右转", coordinate: .init(latitude: 39.9, longitude: 116.4), alongRouteMeters: 200)
         let route = NavigationRoute(
             destinationName: "天安门",
             destinationCoordinate: .init(latitude: 39.9087, longitude: 116.3975),

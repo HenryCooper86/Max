@@ -216,6 +216,15 @@ final class AgentSession: NSObject, ObservableObject {
         MainActor.assumeIsolated { body(crashController) }
     }
 
+    /// Relay-backed nav search, shared by the `.navigation` route (as the
+    /// origin of `nav.request`) and `handleEvent`'s `.navRoute`/`.navError`
+    /// cases (which forward the relay's answer back into it). The send
+    /// closure mirrors `crashController`'s: write straight to the live
+    /// socket, dropping the send if there isn't one.
+    private lazy var relayNavigationSearch = RelayNavigationSearch(
+        send: { [weak self] json in self?.webSocket?.send(.string(json)) { _ in } }
+    )
+
     /// Routes relay-issued device commands to one handler each. Built lazily so
     /// `player` (the volume handler's gain target) is available. The message
     /// presenter is main-actor isolated, so it is created on demand inside its
@@ -235,7 +244,7 @@ final class AgentSession: NSObject, ObservableObject {
             ),
             .call: CallDialer(),
             .navigation: NavigationController(
-                search: MapKitNavigationSearch(),
+                search: relayNavigationSearch,
                 stream: SystemLocationStream(),
                 onGuidance: { [weak self] guidance in
                     self?.update { $0.guidance = guidance }
@@ -425,6 +434,10 @@ final class AgentSession: NSObject, ObservableObject {
             socketOpen = false
             webSocket = nil
         }
+        // A dead socket delivers no route: resolve any suspended nav.request
+        // now rather than leaving NavigationController's perform() — and the
+        // device slot it holds — suspended until its own 7 s watchdog fires.
+        relayNavigationSearch.failPending()
         synthesizer.stopSpeaking(at: .immediate)
         // An incident past check-in owns the shared engine until it resolves:
         // the siren renders through the same AVAudioEngine as agent speech
@@ -789,6 +802,11 @@ final class AgentSession: NSObject, ObservableObject {
             socketOpen = false
             webSocket = nil
         }
+        // This socket is gone — whatever nav.request it might have carried
+        // will never get an answer on it (even a reconnect starts a fresh
+        // relay session that doesn't know the old commandId). Resolve any
+        // suspended request now rather than waiting out its own timeout.
+        relayNavigationSearch.failPending()
 
         if intentionalClose {
             if state.value.handsFree { return } // restartSession() will reconnect
@@ -977,6 +995,12 @@ final class AgentSession: NSObject, ObservableObject {
 
         case .crashSimulate:
             onCrash { $0.handleSimulate() }
+
+        case let .navRoute(data):
+            relayNavigationSearch.handleNavRoute(data)
+
+        case let .navError(commandId, code):
+            relayNavigationSearch.handleNavError(commandId: commandId, code: code)
 
         case .unhandled:
             break

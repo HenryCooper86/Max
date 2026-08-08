@@ -31,12 +31,22 @@ class RelayNavigationSearch(
     private val timeoutMillis: Long = 7_000 // under the relay's 8 s device backstop
 ) {
     /** Guards the two fields below. Every completion path — a matching
-     *  `handleNavRoute`/`handleNavError`, the await timeout, `failPending`,
-     *  and a second concurrent request preempting the first — funnels
-     *  through [takePending], the single lock-guarded take-and-clear: only
-     *  the first caller to match a held commandId ever completes its
-     *  deferred, and `CompletableDeferred.complete` being idempotent is the
-     *  second net on top of that. Never held across a suspension point. */
+     *  `handleNavRoute`/`handleNavError`, the await timeout, and `failPending`
+     *  (teardown) — funnels through [takePending], the single lock-guarded
+     *  take-and-clear: only the first caller to match a held commandId ever
+     *  completes its deferred, and `CompletableDeferred.complete` being
+     *  idempotent is the second net on top of that.
+     *
+     *  A second concurrent request preempting the first is deliberately
+     *  NOT routed through `failPending()`/`takePending()`: that would be
+     *  two separate lock acquisitions (take-the-old, then register-the-new),
+     *  and a truly parallel third caller could slip its own registration in
+     *  between them, orphaning whichever deferred that call's own take
+     *  believed it had already claimed. [awaitAnswer] instead takes the
+     *  previous deferred and installs the new registration in one
+     *  `synchronized` block, so "the request that was pending gets
+     *  completed null" and "my request is now the one held" are atomic
+     *  together. Never held across a suspension point. */
     private val lock = Any()
     private var pendingCommandId: String? = null
     private var pendingDeferred: CompletableDeferred<NavigationRoute?>? = null
@@ -101,17 +111,23 @@ class RelayNavigationSearch(
         takePending()?.complete(null)
     }
 
-    /** Fails any request already in flight, sends `request`, stores it as the
-     *  single outstanding deferred, and awaits it under [timeoutMillis].
+    /** Atomically preempts any request already in flight (completing it null)
+     *  and installs `commandId`/a fresh deferred as the single outstanding
+     *  one — take-the-old and register-the-new in ONE `synchronized` block,
+     *  not two, so a truly parallel caller can never register in the gap
+     *  between them and orphan the deferred this call just took. Then sends
+     *  `request` and awaits the new deferred under [timeoutMillis].
      *  Single-outstanding, like the web client's
      *  pendingCommandId/rerouteInFlight discipline. */
     private suspend fun awaitAnswer(commandId: String, request: String): NavigationRoute? {
-        failPending()
         val deferred = CompletableDeferred<NavigationRoute?>()
-        synchronized(lock) {
+        val preempted = synchronized(lock) {
+            val previous = pendingDeferred
             pendingCommandId = commandId
             pendingDeferred = deferred
+            previous
         }
+        preempted?.complete(null)
         send(request)
         val result = withTimeoutOrNull(timeoutMillis) { deferred.await() }
         if (result == null) {
@@ -126,11 +142,13 @@ class RelayNavigationSearch(
         return result
     }
 
-    /** The single lock-guarded take-and-clear every completion path shares.
-     *  `commandId == null` takes unconditionally (`failPending`, and
-     *  preempting a still-pending prior request before a new one
-     *  registers); a non-null `commandId` takes only on an exact match,
-     *  leaving a non-matching pending request untouched. */
+    /** The single lock-guarded take-and-clear every non-preemption completion
+     *  path shares (`handleNavRoute`, `handleNavError`, the await timeout,
+     *  `failPending`). `commandId == null` takes unconditionally
+     *  (`failPending`); a non-null `commandId` takes only on an exact match,
+     *  leaving a non-matching pending request untouched. NOT used for
+     *  preempting a prior request when a new one starts — see
+     *  [awaitAnswer]'s own single critical section for why. */
     private fun takePending(commandId: String? = null): CompletableDeferred<NavigationRoute?>? {
         synchronized(lock) {
             if (commandId != null && pendingCommandId != commandId) return null

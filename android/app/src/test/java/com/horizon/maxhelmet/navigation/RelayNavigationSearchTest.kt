@@ -160,6 +160,57 @@ class RelayNavigationSearchTest {
     }
 
     @Test
+    fun `two truly parallel route calls never orphan the loser's deferred`() = runBlocking {
+        // Fix-round-1 regression coverage: the original awaitAnswer called
+        // failPending() (one lock acquisition) and THEN re-locked to
+        // register the new request (a second, separate acquisition). Two
+        // real threads racing through that gap could both register after
+        // both had already found nothing pending to preempt, silently
+        // orphaning one deferred until its own full timeoutMillis elapsed.
+        // Unlike the "second concurrent route call" test above, this one
+        // does NOT poll `sent` between starting the two calls — their
+        // prologues are launched together, unserialized, on Dispatchers.Default
+        // real threads, so whichever wins the registration race is not
+        // predetermined by the test.
+        val sent = CopyOnWriteArrayList<String>()
+        val relay = RelayNavigationSearch(send = { sent.add(it) }, timeoutMillis = 5_000)
+        // NavigationRoute carries no commandId, so the assembled route is
+        // byte-for-byte identical regardless of which of the two commandIds
+        // it was built from — one fixed expectation covers whichever call
+        // turns out to be the survivor.
+        val expected = expectedRoute("nav-irrelevant-content-identical-either-way")
+
+        val startedAt = System.currentTimeMillis()
+        val firstResultDeferred = async(Dispatchers.Default) { relay.route("第一目的地", origin) }
+        val secondResultDeferred = async(Dispatchers.Default) { relay.route("第二目的地", origin) }
+
+        awaitCondition { sent.size == 2 }
+
+        // By the time both sends are observed, whichever call lost the
+        // registration race has already been preempted to null (the winner
+        // completes the loser's deferred before it ever calls send() for its
+        // own request) — so trying both commandIds here is safe: the live
+        // one resolves with a real route, the dead one is a no-op mismatch.
+        sent.map { JSONObject(it).getString("commandId") }.forEach { commandId ->
+            relay.handleNavRoute(sampleRouteData(commandId))
+        }
+
+        val firstResult = firstResultDeferred.await()
+        val secondResult = secondResultDeferred.await()
+        val elapsedMs = System.currentTimeMillis() - startedAt
+
+        // Both callers must resolve promptly, well under the 5s timeout: an
+        // orphaned-deferred regression would dead-wait the loser out to the
+        // full timeout instead of resolving it immediately on preemption.
+        assertTrue("resolved in ${elapsedMs}ms, expected well under 1000ms", elapsedMs < 1_000)
+
+        val results = listOf(firstResult, secondResult)
+        assertEquals("exactly one call must be preempted to null", 1, results.count { it == null })
+        assertEquals("exactly one call must receive the routed answer", 1, results.count { it != null })
+        assertEquals(expected, results.single { it != null })
+    }
+
+    @Test
     fun `reroute sends a reroute request with destination and destinationName and no query`() = runBlocking {
         val sent = CopyOnWriteArrayList<String>()
         val relay = RelayNavigationSearch(send = { sent.add(it) }, timeoutMillis = 50)

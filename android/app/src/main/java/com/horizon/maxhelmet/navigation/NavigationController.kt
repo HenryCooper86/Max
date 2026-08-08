@@ -176,18 +176,42 @@ class NavigationController(
         // GPS listener feeding phantom fixes into the shared `onFix`/
         // `resolveFirstFix` path (which could spuriously resolve a LATER
         // start's first-fix wait) until the next teardown. Merging the two
-        // means a stop/teardown can now only land before this block (this
-        // generation is stale everywhere, including at the eventual
-        // `stopSourceIfOrphaned` call below) or after it (the stop's own
-        // `locationSource.stop()` wins, since nothing between here and there
-        // touches the source again) — the window is structurally gone, same
-        // discipline `commitRouteLocked` already uses to keep its own
+        // means a stop/teardown can now only land before this block or
+        // after it — never inside it. Landing before: it's whatever THAT
+        // stop/teardown invalidated (an earlier attempt) that goes stale,
+        // not this one — this block's own bump, captured below before
+        // `locationSource.start` runs, is a strictly newer generation than
+        // anything the stop just bumped past, so this start is never
+        // mistaken for stale by its own hand. Landing after: the stop's own
+        // `locationSource.stop()` wins, since nothing between here and the
+        // eventual `stopSourceIfOrphaned`/`awaitFirstFix` touches the source
+        // again — the window is structurally gone, same discipline
+        // `commitRouteLocked` already uses to keep its own
         // `locationSource.start` atomic with its generation check.
         // `locationSource.start` is a plain non-suspending call, so holding
         // the lock across it is safe (see the class doc).
         val generation = synchronized(lock) {
             navigationGeneration += 1
             starting = true
+            // Captured BEFORE `locationSource.start` below, not after —
+            // fix-round-2: `locationSource.start` runs a caller-supplied
+            // implementation, and while the lock makes that call atomic
+            // with respect to another THREAD's stop/teardown, it does not
+            // block a REENTRANT one on this same thread (Kotlin's
+            // `synchronized` is a JVM monitor, reentrant per-thread) — a
+            // `LocationSource.start` that itself, synchronously, triggers a
+            // stop/teardown would bump `navigationGeneration` before this
+            // block returns. Capturing `generation` after that call would
+            // silently absorb that bump into THIS start's own generation,
+            // making it indistinguishable from "never superseded" — which
+            // could in principle carry a stale attempt past the commit
+            // guard below (`generation != navigationGeneration`) onto a
+            // session `teardown` just tore down, the exact invariant
+            // `teardown`'s own KDoc promises callers. Capturing here, before
+            // the call, keeps `generation` a true snapshot of "this
+            // attempt's identity at the moment it was born" — untouched by
+            // anything `locationSource.start` itself goes on to do.
+            val generation = navigationGeneration
             // The first fix must be in hand BEFORE searching: the relay
             // routes FROM the rider's position, so there is no query to send
             // without it. Two concurrent navigation.start commands (each its
@@ -199,7 +223,7 @@ class NavigationController(
             // phantom fixes flowing, unfixable by any later stop/teardown
             // since neither knows the orphaned listener exists.
             locationSource.start(::onFix)
-            navigationGeneration
+            generation
         }
         try {
             // [awaitFirstFix] resolves with [onFix]'s already-GCJ-02 value —

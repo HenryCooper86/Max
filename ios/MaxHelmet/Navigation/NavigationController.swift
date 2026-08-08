@@ -46,11 +46,17 @@ final class NavigationController: DeviceActionHandler {
     /// search, the stale-generation guard, or a successful commit — see
     /// `start(_:)`'s `defer`). A superseded attempt's own exit leaves this
     /// alone: its captured `generation` no longer matches
-    /// `navigationGeneration`, so it knows a later attempt — or an explicit
-    /// stop — already owns it and already cleared this itself.
-    /// `stopGuidance` reads this to tell "a start is genuinely in flight,
-    /// with no route committed yet" apart from "nothing is happening at
-    /// all" — both otherwise look identical as `route == nil`.
+    /// `navigationGeneration`, so it knows a later attempt already owns it
+    /// and already cleared this itself. That "later attempt" is never the
+    /// superseded one's own `defer` in that case — it is whichever of the
+    /// THREE sites bumps `navigationGeneration` (`start(_:)`'s own next
+    /// call, `stopGuidance`, or `attemptReroute`'s failure branch), and
+    /// every one of them clears `starting` explicitly alongside its own
+    /// bump for exactly that reason: none of them can rely on a stale
+    /// attempt's exit to do it on their behalf. `stopGuidance` reads this to
+    /// tell "a start is genuinely in flight, with no route committed yet"
+    /// apart from "nothing is happening at all" — both otherwise look
+    /// identical as `route == nil`.
     private var starting = false
     /// Bumped once per `start(_:)` attempt. Nothing tears down `route`/the
     /// stream on behalf of a stale generation: a concurrent `start()` can
@@ -330,7 +336,16 @@ final class NavigationController: DeviceActionHandler {
                 // event — bump the generation for the same reason
                 // stopGuidance does, so nothing still tied to this
                 // generation can later revive what was just torn down.
+                // This is the third of the three generation-bump sites
+                // (alongside start(_:) and stopGuidance): it must clear
+                // `starting` too, exactly like the other two — a start
+                // superseded by THIS bump (its generation captured by the
+                // reroute this failure resolves) can never clear the latch
+                // via its own exit once stale, so leaving it to that alone
+                // would strand `starting` true forever, and a later
+                // genuinely-idle stop would wrongly answer `.ok`.
                 navigationGeneration += 1
+                starting = false
                 route = nil
                 stream.stop()
                 onGuidance(nil)

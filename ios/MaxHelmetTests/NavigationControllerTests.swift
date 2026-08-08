@@ -480,6 +480,60 @@ final class NavigationControllerTests: XCTestCase {
         XCTAssertEqual(second.reason, "navigation.cancelled", "the explicit stop superseded it, not a genuine route failure")
         XCTAssertFalse(stream.started, "the stale install must not restart the stream")
         XCTAssertNil(box.guidance, "the stale install must not revive guidance")
+
+        // The stop above already cleared `starting` alongside its own
+        // generation bump — a genuinely idle stop right after must not find
+        // it stuck true.
+        let idleStop = await controller.perform(.navigationStop)
+        XCTAssertEqual(idleStop.reason, "navigation.notActive", "the cancelled start must not leave `starting` stuck true")
+    }
+
+    func testStaleRerouteFailureBumpClearsTheStartingLatch() async {
+        // Fix-round-1 Important #1: the reroute-failure branch is a THIRD
+        // generation-bump site (alongside start(_:) and stopGuidance) and
+        // must clear `starting` too — otherwise a start superseded by a
+        // reroute failure (rather than by a newer start or an explicit
+        // stop) strands the latch true forever, and a later genuinely-idle
+        // stop wrongly answers `.ok` instead of `navigation.notActive`.
+        let stream = FakeStream(), search = FakeSearch()
+        let routeA = straightRoute()
+        search.route = routeA
+        let (controller, box) = make(stream, search, clock: { 0 })
+
+        let first = await controller.perform(.navigationStart(query: "终点"))
+        XCTAssertEqual(first, .ok)
+
+        // A second start supersedes generation-wise but is held mid-search
+        // — its OWN eventual exit will correctly decline to clear
+        // `starting` once stale, so nothing but the reroute-failure bump
+        // below can clear it.
+        search.holdRoute = true
+        let secondTask = Task { await controller.perform(.navigationStart(query: "新终点")) }
+        try? await Task.sleep(nanoseconds: 50_000_000) // let it reach the held search
+
+        // A drifts off-route: the reroute captures the CURRENT generation
+        // (the second start's, since it already bumped it), then fails.
+        search.rerouteResult = nil
+        let off = CLLocationCoordinate2D(latitude: 39.9060, longitude: 116.4020)
+        stream.feed(off)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(search.rerouteCalls, 1)
+        XCTAssertFalse(stream.started, "the reroute failure tore down route A")
+        XCTAssertNil(box.guidance)
+
+        // Nothing is genuinely actionable now: route is nil, and the
+        // superseded second start can never land (its generation is
+        // permanently stale). An explicit stop here must report
+        // notActive, not silently succeed because `starting` was left
+        // stuck true by the reroute-failure bump.
+        let idleStop = await controller.perform(.navigationStop)
+        XCTAssertEqual(idleStop.status, .failed)
+        XCTAssertEqual(idleStop.reason, "navigation.notActive", "the reroute-failure bump must clear `starting` too")
+
+        // Let the superseded second start resolve so its continuation isn't
+        // leaked past the test.
+        search.resolveHeld(with: nil)
+        _ = await secondTask.value
     }
 
     func testStopWhileAwaitingFirstFixForANewStartResolvesImmediately() async {

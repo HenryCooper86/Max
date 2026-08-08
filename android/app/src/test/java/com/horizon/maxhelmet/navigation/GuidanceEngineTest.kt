@@ -103,6 +103,19 @@ class GuidanceEngineTest {
     }
 
     @Test
+    fun `advances past the maneuver and clears thresholds`() {
+        var progress = fresh()
+        for (lat in listOf(31.2320, 31.2340, 31.2348, 31.2355)) {
+            progress = step(lat, progress).progress
+        }
+        assertEquals(1, progress.maneuverIndex)
+        assertEquals(emptySet<PromptThreshold>(), progress.firedThresholds)
+
+        val u = step(31.2355, progress)
+        assertEquals("到达终点", u.currentInstruction)
+    }
+
+    @Test
     fun `off-route flags beyond 50 m cross-track and speaks no prompt`() {
         // 0.001 degree lon at lat 31.232 is ~95 m east of the line.
         val u = GuidanceEngine.step(LatLon(31.2320, 121.4710), route(), fresh())

@@ -6,7 +6,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -225,11 +224,19 @@ class NavigationController(
      *  rest ([locationSource.stop], `onGuidance(null)`, the reroute-latch
      *  reset) are safe no-ops when nothing was running.
      *
-     *  Also cancels [scope]: this instance is terminal after teardown — a
-     *  torn-down controller must never be reused for a later
-     *  `navigation.start` on the same session, since a cancelled scope can
-     *  no longer run a first-fix watchdog or a reroute. A new session gets a
-     *  new `NavigationController`. */
+     *  Does NOT cancel [scope] — the controller is reusable across session
+     *  cycles: Task 6 wires it as a long-lived field of `AgentSession`,
+     *  itself a process-wide singleton whose `stop()`/`start()` (and
+     *  therefore this `teardown()`) cycles repeatedly on the same instance
+     *  across every hands-free toggle, idle close, and reconnect. Cancelling
+     *  `scope` here would kill it for the rest of the process: a later
+     *  `navigation.start`'s first-fix watchdog would launch onto a dead
+     *  scope and never run, hanging that start forever with no
+     *  device.result, and a later reroute's `scope.launch { performReroute
+     *  }` would never run its body — spoken and cooldown-stamped but never
+     *  actually sent, with `rerouting` stuck true. The generation bump above
+     *  is what closes the dead-session race; the scope itself must outlive
+     *  any one `teardown()` call. */
     fun teardown() {
         synchronized(lock) {
             navigationGeneration += 1
@@ -241,7 +248,6 @@ class NavigationController(
             onGuidance(null)
             pendingFix?.complete(null)
         }
-        scope.cancel()
     }
 
     /** Feed one raw WGS-84 fix (the location callback and tests both enter

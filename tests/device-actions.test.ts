@@ -6,7 +6,8 @@ import {
   deviceFailureSpeech,
   deviceSuccessSpeech,
   extractDeviceCommand,
-  extractDeviceCommandForPlatform
+  extractDeviceCommandForPlatform,
+  navRouteOkSpeech
 } from "../server/device-actions";
 import { parseClientEvent } from "../server/session-controller";
 
@@ -121,6 +122,28 @@ describe("deviceFailureSpeech", () => {
     expect(deviceFailureSpeech("torch.set", "failed", undefined)).toBe("手电筒操作没成功。");
     expect(deviceFailureSpeech("call.dial", "failed", "unrecognized-key")).toBe("电话操作没成功。");
   });
+
+  it("explains a cancelled navigation", () => {
+    expect(deviceFailureSpeech("navigation.start", "failed", "navigation.cancelled")).toBe("已取消导航。");
+  });
+});
+
+describe("navRouteOkSpeech", () => {
+  it("composes the relay-spoken route summary, whole km at/above 10", () => {
+    expect(navRouteOkSpeech("人民广场", 12_300, 1_500)).toBe(
+      "已找到人民广场，全程12公里，预计25分钟。仅供参考，请注意实际路况。"
+    );
+  });
+
+  it("uses one decimal below 10 km, and ceils minutes", () => {
+    expect(navRouteOkSpeech("外滩", 2_450, 301)).toBe("已找到外滩，全程2.5公里，预计6分钟。仅供参考，请注意实际路况。");
+  });
+
+  it("treats exactly 10_000 m as the whole-number boundary", () => {
+    expect(navRouteOkSpeech("虹桥机场", 10_000, 600)).toBe(
+      "已找到虹桥机场，全程10公里，预计10分钟。仅供参考，请注意实际路况。"
+    );
+  });
 });
 
 describe("deviceSuccessSpeech", () => {
@@ -173,6 +196,38 @@ describe("PendingDeviceCommands", () => {
   it("peek returns undefined for a commandId nobody issued", () => {
     const pending = new PendingDeviceCommands();
     expect(pending.peek("no-such-id")).toBeUndefined();
+  });
+
+  describe("attachOkSpeech", () => {
+    it("attaches to the most recently issued unexpired command with that action", () => {
+      const pending = new PendingDeviceCommands();
+      const older = pending.issue("navigation.start", undefined, 1_000);
+      const newer = pending.issue("navigation.start", undefined, 2_000);
+      pending.attachOkSpeech("navigation.start", "已找到目的地。");
+      expect(pending.resolve(older.commandId)?.okSpeech).toBeUndefined();
+      expect(pending.resolve(newer.commandId)?.okSpeech).toBe("已找到目的地。");
+    });
+
+    it("is a silent no-op when nothing is outstanding for that action", () => {
+      const pending = new PendingDeviceCommands();
+      expect(() => pending.attachOkSpeech("navigation.start", "已找到目的地。")).not.toThrow();
+    });
+
+    it("is a silent no-op once the entry has expired", () => {
+      const pending = new PendingDeviceCommands();
+      const issued = pending.issue("navigation.start", undefined, 1_000);
+      pending.expire(issued.issuedAt + DEVICE_RESULT_TIMEOUT_MS);
+      expect(() => pending.attachOkSpeech("navigation.start", "已找到目的地。")).not.toThrow();
+      expect(pending.resolve(issued.commandId)).toBeUndefined();
+    });
+
+    it("last write wins when attached twice", () => {
+      const pending = new PendingDeviceCommands();
+      const issued = pending.issue("navigation.start", undefined, 1_000);
+      pending.attachOkSpeech("navigation.start", "第一次。");
+      pending.attachOkSpeech("navigation.start", "第二次。");
+      expect(pending.resolve(issued.commandId)?.okSpeech).toBe("第二次。");
+    });
   });
 });
 

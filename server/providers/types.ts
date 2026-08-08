@@ -47,4 +47,10 @@ export type AgentProvider = {
   /** One chunk of a multi-frame gallery understanding request. Providers
    *  without a vision path omit this. */
   visionFrames?(event: VisionFramesEvent): Promise<void>;
+  /** Attaches the relay-spoken route summary to the most recently issued
+   *  navigation.start command, once server/routing.ts's createNavHandler has
+   *  resolved a destination and planned a route (see its onRouteAnnounced
+   *  option, wired in session-controller.ts). Providers without a navigation
+   *  confirmation path omit this. */
+  attachNavOkSpeech?(speech: string): void;
 };

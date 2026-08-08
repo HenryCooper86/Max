@@ -2027,6 +2027,9 @@ export function createDoubaoProvider(
       }
       upstream?.close();
       log.info("doubao provider closed");
+    },
+    attachNavOkSpeech(speech: string) {
+      pendingDeviceCommands.attachOkSpeech("navigation.start", speech);
     }
   };
 }

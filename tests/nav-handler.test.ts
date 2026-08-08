@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { navRouteOkSpeech } from "../server/device-actions";
 import { createMockRouteProvider, createNavHandler } from "../server/routing";
 import type { NavErrorEvent, NavRequestEvent, NavRouteEvent } from "../shared/agent";
 
@@ -134,5 +135,67 @@ describe("createNavHandler", () => {
     expect(planCalls).toBe(2); // the destination mismatch bypasses the cache guard
     expect(sent[1]).toMatchObject({ type: "nav.route", commandId: "r1" });
     expect((sent[1] as NavRouteEvent).destination).toEqual(otherDestination);
+  });
+
+  describe("onRouteAnnounced", () => {
+    it("is invoked exactly once, with the composed line, when a start answers with nav.route", async () => {
+      const { sent, send } = collector();
+      const announced: string[] = [];
+      const handle = createNavHandler({
+        provider: createMockRouteProvider(),
+        send,
+        onRouteAnnounced: (speech) => announced.push(speech)
+      });
+      await handle(start);
+      const routed = sent[0] as NavRouteEvent;
+      expect(announced).toEqual([navRouteOkSpeech(routed.destinationName, routed.distanceMeters, routed.etaSeconds)]);
+    });
+
+    it("is NOT invoked for a reroute answer", async () => {
+      const { sent, send } = collector();
+      const announced: string[] = [];
+      const handle = createNavHandler({
+        provider: createMockRouteProvider(),
+        send,
+        onRouteAnnounced: (speech) => announced.push(speech)
+      });
+      await handle(start); // one announcement for the start
+      expect(announced).toHaveLength(1);
+      const routed = sent[0] as NavRouteEvent;
+      await handle({
+        type: "nav.request",
+        commandId: "r1",
+        reason: "reroute",
+        origin,
+        destination: routed.destination,
+        destinationName: routed.destinationName
+      });
+      expect(announced).toHaveLength(1); // unchanged by the reroute
+    });
+
+    it("is NOT invoked for a nav.error answer", async () => {
+      const failing = {
+        mode: "amap" as const,
+        resolveDestination: async () => null,
+        planRoute: async () => null
+      };
+      const { sent, send } = collector();
+      const announced: string[] = [];
+      const handle = createNavHandler({
+        provider: failing,
+        send,
+        onRouteAnnounced: (speech) => announced.push(speech)
+      });
+      await handle(start);
+      expect(sent[0]).toMatchObject({ type: "nav.error" });
+      expect(announced).toEqual([]);
+    });
+
+    it("omitting the callback changes nothing", async () => {
+      const { sent, send } = collector();
+      const handle = createNavHandler({ provider: createMockRouteProvider(), send });
+      await handle(start);
+      expect(sent[0]).toMatchObject({ type: "nav.route", commandId: "c1", destinationName: "外滩" });
+    });
   });
 });

@@ -677,6 +677,9 @@ export function createMockProvider(
       stopGuidedTour();
       hazardInjector.stop();
       crashSimulator.stop();
+    },
+    attachNavOkSpeech(speech: string) {
+      pendingDeviceCommands.attachOkSpeech("navigation.start", speech);
     }
   };
 }

@@ -15,6 +15,7 @@ import type { NavErrorEvent, NavManeuver, NavRequestEvent, NavRouteEvent } from 
 import type { GeoPoint } from "../shared/geo";
 import { haversineMeters } from "../shared/guidance";
 import { MOCK_ROUTE } from "../shared/nav-fixtures";
+import { navRouteOkSpeech } from "./device-actions";
 import type { Logger } from "./logger";
 
 const PLACE_ENDPOINT = "https://restapi.amap.com/v5/place/text";
@@ -200,8 +201,19 @@ export function createNavHandler(options: {
   send: (payload: NavRouteEvent | NavErrorEvent) => void;
   now?: () => number;
   minRerouteIntervalMs?: number;
+  /** Called exactly once per "start" request answered with nav.route, with
+   *  the relay-spoken summary composed from that same route. Never called
+   *  for a reroute answer or a nav.error. Providers without a navigation
+   *  confirmation path (see AgentProvider.attachNavOkSpeech) omit this. */
+  onRouteAnnounced?: (speech: string) => void;
 }): (event: NavRequestEvent) => Promise<void> {
-  const { provider, send, now = Date.now, minRerouteIntervalMs = DEFAULT_MIN_REROUTE_INTERVAL_MS } = options;
+  const {
+    provider,
+    send,
+    now = Date.now,
+    minRerouteIntervalMs = DEFAULT_MIN_REROUTE_INTERVAL_MS,
+    onRouteAnnounced
+  } = options;
   let lastRoute: NavRouteEvent | undefined;
   let lastRerouteAt: number | undefined;
 
@@ -226,6 +238,7 @@ export function createNavHandler(options: {
       lastRoute = toNavRouteEvent(event.commandId, resolved.name, resolved.location, planned);
       lastRerouteAt = now();
       send(lastRoute);
+      onRouteAnnounced?.(navRouteOkSpeech(resolved.name, planned.distanceMeters, planned.etaSeconds));
       return;
     }
 

@@ -40,15 +40,23 @@ final class GuidanceEngineTests: XCTestCase {
         )
     }
 
-    private func assertMatchesFarNearTemplate(_ prompt: String?, file: StaticString = #filePath, line: UInt = #line) {
-        guard let prompt else {
-            XCTFail("expected a spoken prompt", file: file, line: line)
-            return
-        }
-        XCTAssertNotNil(
-            prompt.range(of: #"^前方\d+米，右转$"#, options: .regularExpression),
-            "\"\(prompt)\" does not match the far/near template",
-            file: file, line: line
+    // Same fixture as `route()`, but the destination sits ~100 m past the last
+    // polyline vertex — arrival must key on the vertex (rule 6), not this coordinate.
+    private func routeWithDestinationPastLastVertex() -> NavigationRoute {
+        NavigationRoute(
+            destinationName: "测试终点",
+            destinationCoordinate: CLLocationCoordinate2D(latitude: 31.2409, longitude: 121.47),
+            polyline: [
+                CLLocationCoordinate2D(latitude: 31.23, longitude: 121.47),
+                CLLocationCoordinate2D(latitude: 31.235, longitude: 121.47),
+                CLLocationCoordinate2D(latitude: 31.24, longitude: 121.47)
+            ],
+            steps: [
+                ManeuverStep(instruction: "右转", coordinate: CLLocationCoordinate2D(latitude: 31.235, longitude: 121.47), alongRouteMeters: 555),
+                ManeuverStep(instruction: "到达终点", coordinate: CLLocationCoordinate2D(latitude: 31.24, longitude: 121.47), alongRouteMeters: 1109)
+            ],
+            totalDistanceMeters: 1109,
+            totalEtaSeconds: 240
         )
     }
 
@@ -77,7 +85,7 @@ final class GuidanceEngineTests: XCTestCase {
         }
 
         let far = at(31.232) // ~333 m → far
-        assertMatchesFarNearTemplate(far.spokenPrompt)
+        XCTAssertEqual(far.spokenPrompt, "前方350米，右转")
         XCTAssertEqual(far.firedThreshold, .far)
 
         let farAlreadyFired = at(31.2325)
@@ -85,7 +93,7 @@ final class GuidanceEngineTests: XCTestCase {
         XCTAssertNil(farAlreadyFired.firedThreshold)
 
         let near = at(31.234) // ~111 m → near
-        assertMatchesFarNearTemplate(near.spokenPrompt)
+        XCTAssertEqual(near.spokenPrompt, "前方100米，右转")
         XCTAssertEqual(near.firedThreshold, .near)
 
         let now = at(31.2348) // ~22 m → now
@@ -159,5 +167,23 @@ final class GuidanceEngineTests: XCTestCase {
         XCTAssertLessThan(u.remainingMeters, 590)
         XCTAssertGreaterThan(u.remainingSeconds, 110)
         XCTAssertLessThan(u.remainingSeconds, 130)
+    }
+
+    func testArrivalKeysOnTheLastPolylineVertexNotTheDestination() {
+        // destination is ~100 m past the last vertex (31.24). Fix (a) is ~167 m
+        // from the vertex and ~267 m from the destination → not arrived. Fix (b)
+        // is ~22 m from the vertex (inside the 30 m radius) but ~122 m from the
+        // destination → an engine measuring to destinationCoordinate would miss this.
+        let notYet = GuidanceEngine.step(
+            position: CLLocationCoordinate2D(latitude: 31.2385, longitude: 121.47),
+            route: routeWithDestinationPastLastVertex(), progress: fresh()
+        )
+        XCTAssertFalse(notYet.arrived)
+
+        let arrived = GuidanceEngine.step(
+            position: CLLocationCoordinate2D(latitude: 31.2398, longitude: 121.47),
+            route: routeWithDestinationPastLastVertex(), progress: notYet.progress
+        )
+        XCTAssertTrue(arrived.arrived)
     }
 }

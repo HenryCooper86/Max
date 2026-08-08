@@ -34,6 +34,15 @@ single caption and minimal controls. Every setting lives in the 设置 sheet.
 
 ## Build
 
+This project needs a gitignored `android/local.properties` pointing at your Android SDK:
+
+```
+sdk.dir=/Users/admin/Library/Android/sdk
+```
+
+Android Studio writes this automatically on first open; command-line Gradle (including
+`./gradlew test`, which needs no device or emulator) needs it too.
+
 From this `android/` directory:
 
 ```bash
@@ -47,6 +56,7 @@ Android Studio and press Run.
 Useful Gradle checks:
 
 ```bash
+JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew test
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew assembleDebug
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew lintDebug
 ```
@@ -134,6 +144,36 @@ The emulator forwards the host Mac's microphone, so the full voice loop is testa
   release builds require trusted TLS and block cleartext
 - Keystore-backed AES-GCM storage for relay/login tokens, including migration from older preferences
 - Release-run/test-case/assignment attribution with explicit Android platform and stamped git commit
+
+## Navigation
+
+Voice-triggered turn-by-turn guidance: "导航去X" starts an in-app session, "停止导航" ends it.
+Routing is relay-side — the app sends `nav.request` and receives `nav.route` / `nav.error` over
+the same `/agent` socket the voice session already uses, reaching the same Amap driving service
+web and iOS use. A missing `AMAP_API_KEY` on the relay still resolves a deterministic mock route
+end-to-end, so the whole flow works keyless — no Amap credential of any kind lives on the Android
+side.
+
+- **Coordinates.** GCJ-02 on the wire _and_ inside the app — routes arrive already GCJ-02 and stay
+  that way. Raw WGS-84 exists only for the instant between a GPS fix and
+  `NavigationController`'s one `CoordinateDatum.wgs84ToGcj02` call, the app's single datum
+  conversion site. The reverse direction is never implemented anywhere in the app.
+- **Guidance logic.** `GuidanceEngine.kt` is a Kotlin port of the same six-rule contract as
+  `shared/guidance.ts` (web) and the iOS Swift port, tested against the identical shared table:
+  maneuver prompts at ~400 m / ~150 m / the turn, one debounced reroute per wrong turn, an arrival
+  announcement, and a clean stop (not a silent retry) when the relay fails.
+- **Display: card + voice only.** There is no map yet. The Amap Android Map SDK key is
+  unregistered, so `GuidanceCard` (in `AgentScreen.kt`) shows the destination, current
+  instruction, distance-to-maneuver, and remaining distance/ETA as a HUD card, with an amber
+  badge when the rider drifts off-route. A route map is a follow-up once that key registers.
+- **Location.** `LocationManagerSource` requests fixes from `LocationManager.GPS_PROVIDER` only
+  (no fused/network provider), and the first fix is bound to 3 s — guidance quietly doesn't start
+  if none lands in time or `ACCESS_FINE_LOCATION` was never granted.
+- **Session scope.** Navigation lives entirely inside the foreground hands-free session: it wires
+  up with `AgentSession` and tears down with it, the same lifetime as the mic. No
+  background-location permission, no guidance outside a live session.
+- **Honest limits.** Car routing profile only — 摩托车禁行 (motorcycle-restricted) roads are not
+  respected, matching iOS and web.
 
 ## Protocol parity checklist
 

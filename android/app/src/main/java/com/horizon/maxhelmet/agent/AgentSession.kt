@@ -787,6 +787,10 @@ class AgentSession(
 
             is AgentEvent.ErrorEvent -> _state.update { it.copy(statusText = event.message) }
 
+            // TODO(Task 6): forward device.command dispatch and nav.route/nav.error
+            // to the navigation engine. No-op for now to keep this `when` exhaustive.
+            is AgentEvent.DeviceCommand, is AgentEvent.NavRoute, is AgentEvent.NavError -> Unit
+
             AgentEvent.Unhandled -> Unit
         }
     }

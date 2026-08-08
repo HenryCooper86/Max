@@ -9,6 +9,11 @@ import android.os.Build
 import android.speech.tts.TextToSpeech
 import android.util.Log
 import com.horizon.maxhelmet.BuildConfig
+import com.horizon.maxhelmet.navigation.LocationManagerSource
+import com.horizon.maxhelmet.navigation.NavGuidanceState
+import com.horizon.maxhelmet.navigation.NavSpeaker
+import com.horizon.maxhelmet.navigation.NavigationController
+import com.horizon.maxhelmet.navigation.RelayNavigationSearch
 import com.horizon.maxhelmet.service.VoiceAgentService
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
@@ -45,7 +50,7 @@ import javax.net.ssl.X509TrustManager
 class AgentSession(
     private val context: Context,
     private val scope: CoroutineScope
-) {
+) : NavSpeaker {
 
     data class State(
         val handsFree: Boolean = false,
@@ -75,6 +80,11 @@ class AgentSession(
         val bluetoothRouted: Boolean = false,
         /** The active ADAS hazard alert, shown as a banner until it auto-clears. */
         val hazardAlert: AgentEvent.HazardAlert? = null,
+        /** NavigationController's published turn-by-turn state, rendered as the
+         *  guidance card. Null whenever no navigation session is running —
+         *  including at arrival, which publishes null rather than a terminal
+         *  "arrived" guidance value (see NavGuidanceState's doc). */
+        val navGuidance: NavGuidanceState? = null,
         /** Guided demo ride: the mock provider auto-tours the scenario catalog. */
         val guidedDemo: Boolean = false,
         /** The relay refused the connection with HTTP 401 — a login (or token)
@@ -213,6 +223,26 @@ class AgentSession(
         }
     )
 
+    // ---- navigation ---------------------------------------------------------
+
+    /** Relay-backed route search: turns navigation.start/reroute into a
+     *  nav.request over the same socket, matched back through handleEvent's
+     *  NavRoute/NavError forwarding. */
+    private val navSearch = RelayNavigationSearch(send = { webSocket?.send(it) })
+
+    /** Long-lived, constructed once — never rebuilt per hands-free cycle.
+     *  teardown() (called from stop()) is what resets it between sessions;
+     *  see NavigationController's class doc for why re-construction here
+     *  would be wrong. */
+    private val navController = NavigationController(
+        search = navSearch,
+        locationSource = LocationManagerSource(context),
+        speaker = this,
+        sendResult = { webSocket?.send(it) },
+        onGuidance = { guidance -> _state.update { it.copy(navGuidance = guidance) } },
+        hasLocationPermission = ::hasFineLocationPermission
+    )
+
     // Device-TTS fallback, the counterpart of the browser speechSynthesis path:
     // speaks agent reply text when there is no synthesized audio (always the
     // case for the mock provider).
@@ -327,6 +357,14 @@ class AgentSession(
         // stop() is also called internally on idle/auth/startup failures, not
         // only through MainViewModel, so it owns foreground-service cleanup.
         VoiceAgentService.stop(context)
+        // A dead/closing socket delivers no route: resolve any in-flight
+        // nav.request as an honest failure and retire the active route
+        // (silently — there is no rider-facing turn left to answer or speak
+        // it to). Every abnormal handleSocketClosed branch that ends the
+        // session (idle close, rejected upgrade, exhausted reconnects) routes
+        // through this same stop(), so they inherit the same teardown.
+        navSearch.failPending()
+        navController.teardown()
         _state.update {
             it.copy(
                 handsFree = false,
@@ -337,6 +375,7 @@ class AgentSession(
                 micMuted = false,
                 bluetoothRouted = false,
                 hazardAlert = null,
+                navGuidance = null,
                 feedbackFloorId = Int.MAX_VALUE
             )
         }
@@ -763,7 +802,7 @@ class AgentSession(
                 val shouldSpeak = event.useBrowserSpeech ?: event.final
                 if (event.speaker == Speaker.AGENT && shouldSpeak && spokenDeliveryIds.add(event.deliveryId)) {
                     if (spokenDeliveryIds.size > 512) spokenDeliveryIds.remove(spokenDeliveryIds.first())
-                    speak(event.text)
+                    ttsSpeak(event.text)
                 }
             }
 
@@ -786,6 +825,18 @@ class AgentSession(
             is AgentEvent.HazardAlert -> handleHazardAlert(event)
 
             is AgentEvent.ErrorEvent -> _state.update { it.copy(statusText = event.message) }
+
+            // Only navigation.* actions route to the controller — every other
+            // device.command action stays silent, as before Task 6.
+            is AgentEvent.DeviceCommand -> {
+                if (event.action.startsWith("navigation.")) {
+                    scope.launch { navController.handleCommand(event.commandId, event.action, event.query) }
+                }
+            }
+
+            is AgentEvent.NavRoute -> navSearch.handleNavRoute(event.data)
+
+            is AgentEvent.NavError -> navSearch.handleNavError(event.commandId, event.code)
 
             AgentEvent.Unhandled -> Unit
         }
@@ -866,7 +917,7 @@ class AgentSession(
         _state.update {
             it.copy(hazardAlert = alert, turnState = TurnState.SPEAKING, statusText = "⚠️ ${alert.label}")
         }
-        speak("${alert.message} ${alert.advice}")
+        ttsSpeak("${alert.message} ${alert.advice}")
         scope.launch {
             delay((alert.ttcSeconds + 2) * 1000L)
             if (hazardAlertGeneration == generation) {
@@ -886,11 +937,34 @@ class AgentSession(
         }
     }
 
-    private fun speak(text: String) {
+    /** Device-TTS speech, generalized to take a queueing mode: `flush = true`
+     *  (agent replies, ADAS hazards) cuts whatever is currently queued;
+     *  `flush = false` (nav far/near prompts) appends behind it instead, so a
+     *  turn-by-turn prompt never cuts an in-flight agent reply. */
+    private fun ttsSpeak(text: String, flush: Boolean = true) {
         val engine = tts ?: return
         if (!ttsReady || text.isBlank()) return
         engine.language = if (detectLanguage(text) == "zh") Locale.SIMPLIFIED_CHINESE else Locale.US
-        engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "max-reply")
+        engine.speak(text, if (flush) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, "max-reply")
+    }
+
+    // ---- NavSpeaker (NavigationController's speech + hazard-suppression seam) ----
+
+    /** Read-only: NavigationController checks this before speaking a
+     *  maneuver prompt (a suppressed prompt is DROPPED, not queued — see
+     *  NavSpeaker's doc). Never calls back into navController — onFix holds
+     *  NavigationController's lock across this whole speaker path, so any
+     *  such call would deadlock. */
+    override val hazardActive: Boolean
+        get() = _state.value.hazardAlert != null
+
+    /** NOW-identity prompts (interrupt = true) cut whatever the agent is
+     *  currently saying first; far/near prompts (interrupt = false) queue
+     *  behind it instead. Strictly speech emission — never touches
+     *  navController. */
+    override fun speak(text: String, interrupt: Boolean) {
+        if (interrupt) stopAgentSpeech()
+        ttsSpeak(text, flush = interrupt)
     }
 
     // ---- location ----------------------------------------------------------
@@ -920,6 +994,18 @@ class AgentSession(
         ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED ||
             ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+
+    /** navigation.start's permission gate — deliberately FINE-only, unlike
+     *  [hasLocationPermission] above (which also accepts COARSE for the
+     *  best-effort weather fix). LocationManagerSource requests only
+     *  GPS_PROVIDER and itself requires FINE; a COARSE-accepting check here
+     *  would report permission granted while the location stream silently
+     *  never starts, so navigation.start would time out after
+     *  firstFixTimeoutMillis and answer unsupported/route.unavailable
+     *  instead of the truthful denied/permission.location. */
+    private fun hasFineLocationPermission(): Boolean =
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
 }
 

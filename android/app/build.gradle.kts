@@ -70,4 +70,11 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.kotlinx.coroutines.android)
     testImplementation(libs.junit)
+    // Test-only: the unit-test android.jar's org.json.* classes are throwing
+    // stubs (Robolectric-less JVM unit tests get "not mocked" RuntimeExceptions
+    // on JSONObject.put/optString/... ). This shadows those stubs with the real
+    // implementation so parseAgentEvent/buildNavRequest/etc. can be unit tested
+    // directly. Never reaches the production classpath. Authorized exception,
+    // plan Tech Stack line (2026-08-08-nav-android-plan-c), Task 3.
+    testImplementation("org.json:json:20231013")
 }

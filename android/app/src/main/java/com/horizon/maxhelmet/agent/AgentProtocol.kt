@@ -1,5 +1,7 @@
 package com.horizon.maxhelmet.agent
 
+import com.horizon.maxhelmet.navigation.LatLon
+import com.horizon.maxhelmet.navigation.ManeuverStep
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
@@ -241,9 +243,38 @@ sealed interface AgentEvent {
 
     data class ErrorEvent(val message: String) : AgentEvent
 
+    /** Server → client: execute one device action. `commandId` is relay-issued
+     *  and must be echoed back in the matching device.result. `query` is the
+     *  navigation.start destination phrase (args.query); null for actions
+     *  (like navigation.stop) that carry none. */
+    data class DeviceCommand(val commandId: String, val action: String, val query: String?) : AgentEvent
+
+    /** Server → client: the relay resolved a nav.request into a route. */
+    data class NavRoute(val data: NavRouteData) : AgentEvent
+
+    /** Server → client: the relay could not resolve or route a nav.request. */
+    data class NavError(val commandId: String, val code: String) : AgentEvent
+
     /** Event types this client does not consume. */
     data object Unhandled : AgentEvent
 }
+
+/**
+ * Server → client nav.route payload (shared/agent.ts NavRouteEvent). Every
+ * coordinate is GCJ-02 exactly as received — never converted at this layer,
+ * that edge belongs to CoordinateDatum at the location source — and
+ * `ManeuverStep.alongRouteMeters` is cumulative from the route start, parsed
+ * straight through with no arithmetic.
+ */
+data class NavRouteData(
+    val commandId: String,
+    val destinationName: String,
+    val destination: LatLon,
+    val polyline: List<LatLon>,
+    val steps: List<ManeuverStep>,
+    val distanceMeters: Double,
+    val etaSeconds: Double
+)
 
 fun parseAgentEvent(text: String): AgentEvent {
     val json = JSONObject(text)
@@ -345,8 +376,77 @@ fun parseAgentEvent(text: String): AgentEvent {
 
         ServerEventTypes.ERROR -> AgentEvent.ErrorEvent(json.optString("message", "Voice relay failed"))
 
+        ServerEventTypes.DEVICE_COMMAND -> {
+            val args = json.optJSONObject("args") ?: JSONObject()
+            AgentEvent.DeviceCommand(
+                commandId = json.optString("commandId"),
+                action = json.optString("action"),
+                query = args.optString("query").ifEmpty { null }
+            )
+        }
+
+        ServerEventTypes.NAV_ROUTE -> {
+            val destination = json.optJSONObject("destination")?.let(::parseLatLon) ?: return AgentEvent.Unhandled
+            val polyline = json.optJSONArray("polyline")?.let(::parsePolyline) ?: return AgentEvent.Unhandled
+            val steps = json.optJSONArray("steps")?.let(::parseManeuverSteps) ?: return AgentEvent.Unhandled
+            val distanceMeters = (json.opt("distanceMeters") as? Number)?.toDouble() ?: return AgentEvent.Unhandled
+            val etaSeconds = (json.opt("etaSeconds") as? Number)?.toDouble() ?: return AgentEvent.Unhandled
+            AgentEvent.NavRoute(
+                NavRouteData(
+                    commandId = json.optString("commandId"),
+                    destinationName = json.optString("destinationName"),
+                    destination = destination,
+                    polyline = polyline,
+                    steps = steps,
+                    distanceMeters = distanceMeters,
+                    etaSeconds = etaSeconds
+                )
+            )
+        }
+
+        ServerEventTypes.NAV_ERROR -> AgentEvent.NavError(
+            commandId = json.optString("commandId"),
+            code = json.optString("code")
+        )
+
         else -> AgentEvent.Unhandled
     }
+}
+
+/**
+ * Parses a `{lat, lon}` object into a GCJ-02 LatLon; null when either field is
+ * missing or not a number, so a malformed nav.* coordinate fails the parse
+ * instead of silently becoming 0,0.
+ */
+private fun parseLatLon(json: JSONObject): LatLon? {
+    val lat = json.opt("lat") as? Number ?: return null
+    val lon = json.opt("lon") as? Number ?: return null
+    return LatLon(lat.toDouble(), lon.toDouble())
+}
+
+/** Parses a nav.route `polyline` array; null if any entry is malformed. */
+private fun parsePolyline(array: JSONArray): List<LatLon>? {
+    val points = ArrayList<LatLon>(array.length())
+    for (index in 0 until array.length()) {
+        val point = array.optJSONObject(index) ?: return null
+        points.add(parseLatLon(point) ?: return null)
+    }
+    return points
+}
+
+/**
+ * Parses a nav.route `steps` array into ManeuverStep, preserving the wire's
+ * cumulative alongRouteMeters verbatim; null if any entry is malformed.
+ */
+private fun parseManeuverSteps(array: JSONArray): List<ManeuverStep>? {
+    val steps = ArrayList<ManeuverStep>(array.length())
+    for (index in 0 until array.length()) {
+        val step = array.optJSONObject(index) ?: return null
+        val coordinate = parseLatLon(step) ?: return null
+        val alongRouteMeters = (step.opt("alongRouteMeters") as? Number)?.toDouble() ?: return null
+        steps.add(ManeuverStep(step.optString("instruction"), coordinate, alongRouteMeters))
+    }
+    return steps
 }
 
 /** Client → server session.start payload (validated by server/session-controller.ts). */
@@ -424,6 +524,60 @@ fun buildTurnFeedback(turnId: String, speaker: Speaker, text: String, reason: St
         put("speaker", speaker.wire)
         put("text", text)
         put("reason", reason)
+    }.toString()
+
+/**
+ * Client → server nav.request: ask the relay to route the rider (shared/agent.ts
+ * NavRequestEvent). `reason == "start"` carries the spoken destination `query`
+ * and omits `destination`/`destinationName`; `reason == "reroute"` carries the
+ * previously announced `destination`/`destinationName` and omits `query`.
+ * `originLat`/`originLon` (and destination, when present) are GCJ-02.
+ */
+fun buildNavRequest(
+    commandId: String,
+    reason: String,
+    originLat: Double,
+    originLon: Double,
+    query: String? = null,
+    destinationLat: Double? = null,
+    destinationLon: Double? = null,
+    destinationName: String? = null
+): String =
+    JSONObject().apply {
+        put("type", ClientEventTypes.NAV_REQUEST)
+        put("commandId", commandId)
+        put("reason", reason)
+        put(
+            "origin",
+            JSONObject().apply {
+                put("lat", originLat)
+                put("lon", originLon)
+            }
+        )
+        if (query != null) put("query", query)
+        if (destinationLat != null && destinationLon != null) {
+            put(
+                "destination",
+                JSONObject().apply {
+                    put("lat", destinationLat)
+                    put("lon", destinationLon)
+                }
+            )
+        }
+        if (destinationName != null) put("destinationName", destinationName)
+    }.toString()
+
+/**
+ * Client → server device.result: the outcome of one device.command, echoing
+ * its commandId (shared/agent.ts DeviceResultEvent). `reason` is omitted when
+ * null.
+ */
+fun buildDeviceResult(commandId: String, status: String, reason: String? = null): String =
+    JSONObject().apply {
+        put("type", ClientEventTypes.DEVICE_RESULT)
+        put("commandId", commandId)
+        put("status", status)
+        if (reason != null) put("reason", reason)
     }.toString()
 
 const val AUDIO_START_EVENT = """{"type":"audio.start"}"""

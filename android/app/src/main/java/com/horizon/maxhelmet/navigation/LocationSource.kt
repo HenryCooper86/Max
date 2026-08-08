@@ -36,8 +36,11 @@ class LocationManagerSource(private val context: Context) : LocationSource {
         if (listener != null) return // idempotent: already streaming
         if (!hasPermission()) return
         val newListener = LocationListenerAdapter(onFix)
-        listener = newListener
-        runCatching {
+        // Assign only on success: if requestLocationUpdates throws,
+        // `listener` must stay null, or the idempotence guard above no-ops
+        // every later start() forever — permanently disabling GPS for the
+        // rest of the process on what should have been a retryable failure.
+        val requested = runCatching {
             manager?.requestLocationUpdates(
                 LocationManager.GPS_PROVIDER,
                 1_000L,
@@ -45,6 +48,9 @@ class LocationManagerSource(private val context: Context) : LocationSource {
                 newListener,
                 Looper.getMainLooper()
             )
+        }
+        if (requested.isSuccess) {
+            listener = newListener
         }
     }
 

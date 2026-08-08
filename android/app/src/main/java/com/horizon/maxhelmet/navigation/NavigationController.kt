@@ -146,8 +146,19 @@ class NavigationController(
         // `wgs84ToGcj02` is a nonlinear warp, NOT idempotent, so converting
         // it again here would silently corrupt the origin; onFix (THE datum
         // edge) is the only place this fix is ever converted.
-        locationSource.start(::onFix)
-        val origin = awaitFirstFix(generation)
+        //
+        // Locked (same shape as commitRouteLocked): this is the one
+        // lifecycle side effect that touches [locationSource] outside a
+        // synchronized block if left bare, and LocationManagerSource is not
+        // internally synchronized — two concurrent navigation.start commands
+        // (each its own coroutine; nothing upstream serializes them) could
+        // otherwise both observe an unstarted source and both register a
+        // GPS listener, and only the last-assigned one is ever removed by a
+        // later `stop()`. The other leaks for the process lifetime: GPS held
+        // on permanently, phantom fixes flowing, unfixable by any later
+        // stop/teardown since neither knows the orphaned listener exists.
+        synchronized(lock) { locationSource.start(::onFix) }
+        val origin = awaitFirstFix()
         if (origin == null) {
             stopSourceIfOrphaned(generation)
             sendResult(buildDeviceResult(commandId, "unsupported", "route.unavailable"))
@@ -382,12 +393,22 @@ class NavigationController(
      *  registration into the gap between "take the old" and "install the
      *  new" and orphan a deferred.
      *
-     *  The watchdog checks `generation` and takes the pending continuation
-     *  in that SAME synchronized block — not two separate acquisitions — so
-     *  a newer generation's fresh registration (which happens after this
-     *  one's own generation is superseded) can never be resolved by an
-     *  older, still-sleeping watchdog. */
-    private suspend fun awaitFirstFix(generation: Int): LatLon? {
+     *  The watchdog resolves on DEFERRED IDENTITY (`firstFixContinuation
+     *  === deferred`), not generation — checked and taken in the SAME
+     *  synchronized block, not two separate acquisitions. A generation-only
+     *  guard would protect a newer registration from an older, stale
+     *  watchdog, but it ALSO refuses a start's own watchdog from resolving
+     *  its own still-current registration whenever an unrelated stop/
+     *  teardown bumps the generation in the gap between this start's
+     *  generation snapshot and its own registration below — hanging that
+     *  start forever with no `device.result` (breaking the exact "no GPS in
+     *  the garage" case this watchdog exists to self-heal). Identity is
+     *  correct in both directions without that gap: an older watchdog's
+     *  captured `deferred` can never equal whatever object a NEWER
+     *  registration installed, and THIS watchdog's own `deferred` stays the
+     *  one pending exactly until something legitimately consumes it — a
+     *  real fix, an explicit stop/teardown, or this watchdog itself. */
+    private suspend fun awaitFirstFix(): LatLon? {
         val deferred = CompletableDeferred<LatLon?>()
         val preempted = synchronized(lock) {
             val previous = takePendingFirstFixLocked()
@@ -395,7 +416,7 @@ class NavigationController(
             firstFixWatchdog = scope.launch {
                 delay(firstFixTimeoutMillis)
                 val timedOut = synchronized(lock) {
-                    if (generation != navigationGeneration) return@launch
+                    if (firstFixContinuation !== deferred) return@launch
                     takePendingFirstFixLocked()
                 }
                 timedOut?.complete(null)

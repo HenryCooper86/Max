@@ -202,13 +202,13 @@ export function createNavigationController(deps: {
       return;
     }
     if (activeRoute && rerouteInFlight) {
-      // The reroute attempt failed while still guiding on the old route.
-      // Clear the in-flight marker only — lastRerouteSentAt (and so the 20 s
-      // cooldown) still applies from send time, and guidance continues
-      // uninterrupted on the existing route rather than aborting the ride.
-      // Not spoken: no reroute-failure phrase is specified, and inventing
-      // one would go beyond the exact strings this task owns.
-      rerouteInFlight = false;
+      // Spec rule (2026-08-06): a reroute failure mid-ride stops cleanly with
+      // a spoken explanation, never leaves the rider guided on a route the
+      // engine can no longer correct — matching iOS's and Android's
+      // NavigationController, which speak this same line on this same case.
+      resetNavigationState();
+      deps.speak("无法重新规划路线，已停止导航");
+      emitIdle();
       return;
     }
     // Stale/unknown commandId: nothing active it could belong to. Ignore.

@@ -118,6 +118,34 @@ describe("createNavigationController", () => {
     expect(sent.at(-1)).toMatchObject({ type: "device.result", commandId: "c2", status: "ok" });
   });
 
+  it("stops cleanly with a spoken line when a reroute fails, instead of retrying on the stale route", () => {
+    const nowRef = { t: 0 };
+    const { controller, sent, spoken, states } = harness(nowRef);
+    controller.updatePosition({ lat: 31.2304, lon: 121.4737 });
+    controller.handleDeviceCommand({ commandId: "c1", action: "navigation.start", args: { query: "外滩" } });
+    controller.handleAgentEvent(routeEvent as never);
+    // ~190 m east of the route — off-route, triggers a reroute request.
+    const off = { lat: 31.232, lon: 121.4757 };
+    controller.updatePosition(off);
+    const rerouteReq = sent.find((p) => p.type === "nav.request" && p.reason === "reroute");
+    expect(rerouteReq).toBeDefined();
+
+    controller.handleAgentEvent({
+      type: "nav.error",
+      commandId: rerouteReq!.commandId as string,
+      code: "route.unavailable"
+    } as never);
+
+    expect(spoken).toEqual(["已偏离路线，正在重新规划", "无法重新规划路线，已停止导航"]);
+    expect(states.at(-1)).toBe("idle");
+
+    const requestCountAfterFailure = sent.filter((p) => p.type === "nav.request").length;
+    const spokenCountAfterFailure = spoken.length;
+    controller.updatePosition(off);
+    expect(sent.filter((p) => p.type === "nav.request").length).toBe(requestCountAfterFailure);
+    expect(spoken.length).toBe(spokenCountAfterFailure);
+  });
+
   it("stop during requesting resolves the held start then acks the stop", () => {
     const { controller, sent, states } = harness();
     controller.updatePosition({ lat: 31.2304, lon: 121.4737 });

@@ -6,6 +6,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -212,10 +213,25 @@ class NavigationController(
 
     /** Session teardown: stop guidance silently (no speech, no result) — for
      *  socket death, where there is no one left to answer and nothing left
-     *  to hear it. A no-op when nothing is active. */
+     *  to hear it. Unconditional — never distinguishes "was navigation
+     *  active" from "was it not": a start can be suspended with `route`
+     *  still null (its first fix already resolved, its `search.route`
+     *  answer already queued to resume on [scope]'s dispatcher but not yet
+     *  run) at the exact instant the socket dies. Bumping the generation and
+     *  resolving any pending first-fix wait here — unconditionally, before
+     *  that queued resumption runs — is what stops it from later passing the
+     *  generation check and committing a route onto a session nothing can
+     *  ever stop again (no navigation.stop can arrive on a dead socket). The
+     *  rest ([locationSource.stop], `onGuidance(null)`, the reroute-latch
+     *  reset) are safe no-ops when nothing was running.
+     *
+     *  Also cancels [scope]: this instance is terminal after teardown — a
+     *  torn-down controller must never be reused for a later
+     *  `navigation.start` on the same session, since a cancelled scope can
+     *  no longer run a first-fix watchdog or a reroute. A new session gets a
+     *  new `NavigationController`. */
     fun teardown() {
         synchronized(lock) {
-            if (route == null) return
             navigationGeneration += 1
             val pendingFix = takePendingFirstFixLocked()
             route = null
@@ -225,6 +241,7 @@ class NavigationController(
             onGuidance(null)
             pendingFix?.complete(null)
         }
+        scope.cancel()
     }
 
     /** Feed one raw WGS-84 fix (the location callback and tests both enter
@@ -254,7 +271,9 @@ class NavigationController(
                 // bump navigationGeneration: a start already in progress for
                 // a different destination must be free to land — its own
                 // commit site re-asserts the stream, so a route that commits
-                // after this teardown is never streamless.
+                // after this cleanup is never streamless. (A reroute already
+                // in flight for THIS SAME route is a different story — see
+                // performReroute's route-null guard below.)
                 speaker.speak(ARRIVED_SPOKEN, interrupt = false)
                 route = null
                 onGuidance(null)
@@ -286,12 +305,23 @@ class NavigationController(
         try {
             val fresh = search.reroute(attempt.destination, attempt.destinationName, attempt.origin)
             synchronized(lock) {
-                // Guarded BEFORE either branch: a stale answer (this
-                // generation was superseded by a stop or a newer start while
-                // the reroute was in flight) must not touch `route`/the
-                // stream — the newer generation already owns them, or owns
-                // nothing at all after an explicit stop.
-                if (attempt.generation != navigationGeneration) return@synchronized
+                // Guarded BEFORE either branch, on TWO conditions:
+                // (1) a stale answer (this generation was superseded by a
+                // stop or a newer start while the reroute was in flight)
+                // must not touch `route`/the stream — the newer generation
+                // already owns them, or owns nothing at all after an
+                // explicit stop; (2) `route == null` catches the one case
+                // where the generation check alone is not enough: arrival on
+                // THIS SAME route, which deliberately does not bump the
+                // generation (see onFix) so an unrelated concurrent start
+                // can still land. Without this second check, a reroute
+                // launched one tick before arrival would pass the
+                // generation-only guard and — on success — restart the
+                // stream and reinstall a route the rider was just told had
+                // finished ("已到达目的地。"), or — on failure — speak
+                // "无法重新规划路线，已停止导航。" right after it. Either
+                // branch is moot once the route it was fixing is gone.
+                if (attempt.generation != navigationGeneration || route == null) return@synchronized
                 if (fresh != null) {
                     // Re-assert for the same reason start()'s commit does: an
                     // arrival teardown on this same route may have stopped

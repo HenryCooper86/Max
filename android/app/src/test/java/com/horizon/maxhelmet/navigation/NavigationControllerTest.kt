@@ -512,6 +512,65 @@ class NavigationControllerTest {
         assertEquals("reroute", newReroute.getString("reason"))
     }
 
+    // Fix-round-1 regression coverage (Important #2): arrival deliberately
+    // does not bump the generation (an unrelated concurrent start must still
+    // be free to land), so a reroute already in flight for THIS SAME route
+    // needs its own route-null guard — the generation check alone is not
+    // enough to stop its eventual answer from reviving what arrival just
+    // retired.
+
+    @Test
+    fun `a reroute answer landing after arrival on the same route does not revive guidance on success`() =
+        runBlocking {
+            val h = Harness()
+            commitRoute(h)
+
+            h.locationSource.fix(31.2320, 121.4710) // off-route, not yet arrived -> reroute sent
+            awaitCondition(description = "reroute nav.request sent") { h.sent.size == 2 }
+            val rerouteCommandId = JSONObject(h.sent[1]).getString("commandId")
+
+            // The very next fix arrives, while the reroute above is still in flight.
+            h.locationSource.fix(31.24, 121.47)
+            assertTrue(h.speaker.spoken.contains(ARRIVED_TEXT to false))
+            assertEquals(null, h.guidanceUpdates.last())
+            assertFalse(h.locationSource.started)
+
+            h.guidanceUpdates.clear()
+            h.speaker.spoken.clear()
+
+            h.relay.handleNavRoute(sampleRouteData(rerouteCommandId)) // succeeds AFTER arrival retired the route
+            assertConditionHoldsFor(windowMs = 250, description = "a post-arrival reroute success must not revive guidance") {
+                h.guidanceUpdates.isEmpty() && !h.locationSource.started
+            }
+        }
+
+    @Test
+    fun `a reroute answer landing after arrival on the same route does not speak a spurious failure`() =
+        runBlocking {
+            val h = Harness()
+            commitRoute(h)
+
+            h.locationSource.fix(31.2320, 121.4710) // off-route, not yet arrived -> reroute sent
+            awaitCondition(description = "reroute nav.request sent") { h.sent.size == 2 }
+            val rerouteCommandId = JSONObject(h.sent[1]).getString("commandId")
+
+            // The very next fix arrives, while the reroute above is still in flight.
+            h.locationSource.fix(31.24, 121.47)
+            assertTrue(h.speaker.spoken.contains(ARRIVED_TEXT to false))
+            assertFalse(h.locationSource.started)
+
+            h.guidanceUpdates.clear()
+            h.speaker.spoken.clear()
+
+            h.relay.handleNavError(rerouteCommandId, "route.unavailable") // fails AFTER arrival retired the route
+            assertConditionHoldsFor(
+                windowMs = 250,
+                description = "a post-arrival reroute failure must not speak the failure line"
+            ) {
+                h.speaker.spoken.isEmpty() && h.guidanceUpdates.isEmpty() && !h.locationSource.started
+            }
+        }
+
     // ---- teardown -------------------------------------------------------
 
     @Test
@@ -534,13 +593,43 @@ class NavigationControllerTest {
     }
 
     @Test
-    fun `teardown with nothing active is a silent no-op`() = runBlocking {
+    fun `teardown with nothing active still silently stops the source and clears guidance`() = runBlocking {
         val h = Harness()
 
         h.controller.teardown()
 
+        // No speech, no result — teardown never has anyone to talk to. The
+        // source-stop/guidance-clear DO run unconditionally (see teardown's
+        // KDoc) but are harmless no-ops when nothing was ever active.
         assertTrue(h.results.isEmpty())
         assertTrue(h.speaker.spoken.isEmpty())
-        assertTrue(h.guidanceUpdates.isEmpty())
+        assertEquals(listOf<NavGuidanceState?>(null), h.guidanceUpdates)
+        assertFalse(h.locationSource.started)
     }
+
+    // Fix-round-1 regression coverage (Important #1): teardown() used to
+    // early-return whenever `route == null`, which includes the exact
+    // instant a start is suspended awaiting the relay's answer (its first
+    // fix already resolved `route` is still null). That skipped the
+    // generation bump entirely, so the eventual answer could still commit —
+    // starting GPS on a session nothing can ever stop again.
+    @Test
+    fun `teardown while a start is suspended at the relay await prevents its eventual answer from committing`() =
+        runBlocking {
+            val h = Harness()
+            val job = launch(Dispatchers.Default) {
+                h.controller.handleCommand("cmd-1", "navigation.start", "人民广场")
+            }
+            feedFixUntil(h, neutralWgsFix, description = "nav.request sent") { h.sent.size == 1 }
+            val commandId = JSONObject(h.sent[0]).getString("commandId")
+
+            h.controller.teardown() // the socket dies while suspended awaiting the relay
+            assertFalse("teardown must stop the source even though no route was ever committed", h.locationSource.started)
+
+            h.relay.handleNavRoute(sampleRouteData(commandId)) // the relay answers anyway, after teardown
+            job.join()
+
+            assertFalse("a torn-down attempt's late answer must never restart the source", h.locationSource.started)
+            assertTrue("nor may it publish a committed route's guidance", h.guidanceUpdates.none { it != null })
+        }
 }

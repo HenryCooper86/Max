@@ -284,6 +284,64 @@ class NavigationControllerTest {
         assertFalse(h.locationSource.started)
     }
 
+    // Nav-parity-closure Task 4: stop-cancels. No route has committed yet
+    // (unlike the tests above, nothing is navigating at all), but a start is
+    // genuinely in flight — mirrors web's `cancelHeldStart` semantics and
+    // iOS Task 3's `stopGuidance`: the stop itself succeeds, and the
+    // cancelled start gets its own truthful `navigation.cancelled` result
+    // rather than hanging until its own timeout.
+
+    @Test
+    fun `stop mid first-fix cancels the in-flight start, and a later idle stop is not stuck ok`() = runBlocking {
+        val h = Harness(firstFixTimeoutMillis = 5_000) // long enough that the timeout never fires in this test
+        val job = launch(Dispatchers.Default) {
+            h.controller.handleCommand("cmd-1", "navigation.start", "终点")
+        }
+        awaitCondition(description = "start reaches the first-fix wait") { h.locationSource.started }
+
+        h.controller.handleCommand("cmd-stop", "navigation.stop", null)
+        val stopResult = JSONObject(h.results.single { JSONObject(it).getString("commandId") == "cmd-stop" })
+        assertEquals("ok", stopResult.getString("status"))
+
+        job.join()
+        val startResult = JSONObject(h.results.single { JSONObject(it).getString("commandId") == "cmd-1" })
+        assertEquals("failed", startResult.getString("status"))
+        assertEquals("navigation.cancelled", startResult.getString("reason"))
+        assertTrue("nothing installs", h.guidanceUpdates.none { it != null })
+        assertFalse("the source is stopped", h.locationSource.started)
+        assertTrue("no nav.request was ever sent — cancelled before reaching the relay", h.sent.isEmpty())
+
+        // The stop above already cleared `starting` alongside its own
+        // generation bump — a genuinely idle stop right after must not find
+        // it stuck true (the same lesson iOS's fix round paid for).
+        h.controller.handleCommand("cmd-idle-stop", "navigation.stop", null)
+        val idleStopResult = JSONObject(h.results.last())
+        assertEquals("failed", idleStopResult.getString("status"))
+        assertEquals("navigation.notActive", idleStopResult.getString("reason"))
+    }
+
+    @Test
+    fun `stop mid relay-await cancels the in-flight start via search-failPending`() = runBlocking {
+        val h = Harness()
+        val job = launch(Dispatchers.Default) {
+            h.controller.handleCommand("cmd-1", "navigation.start", "终点")
+        }
+        feedFixUntil(h, neutralWgsFix, description = "nav.request sent") { h.sent.size == 1 }
+
+        h.controller.handleCommand("cmd-stop", "navigation.stop", null)
+        val stopResult = JSONObject(h.results.single { JSONObject(it).getString("commandId") == "cmd-stop" })
+        assertEquals("ok", stopResult.getString("status"))
+
+        // Without search.failPending() wired through, this would hang until
+        // RelayNavigationSearch's own 7 s timeout instead of resolving here.
+        job.join()
+        val startResult = JSONObject(h.results.single { JSONObject(it).getString("commandId") == "cmd-1" })
+        assertEquals("failed", startResult.getString("status"))
+        assertEquals("navigation.cancelled", startResult.getString("reason"))
+        assertTrue("nothing installs", h.guidanceUpdates.none { it != null })
+        assertFalse("the source is stopped", h.locationSource.started)
+    }
+
     // ---- concurrency -------------------------------------------------
 
     @Test
@@ -302,8 +360,11 @@ class NavigationControllerTest {
 
             jobA.join()
             val resultA = JSONObject(h.results.single { JSONObject(it).getString("commandId") == "cmd-A" })
-            assertEquals("unsupported", resultA.getString("status"))
-            assertEquals("route.unavailable", resultA.getString("reason"))
+            // B's start already superseded A's generation by the time A's
+            // search resolves null (RelayNavigationSearch's single-outstanding
+            // slot preempted A) — a cancellation, not a genuine route failure.
+            assertEquals("failed", resultA.getString("status"))
+            assertEquals("navigation.cancelled", resultA.getString("reason"))
 
             val commandIdB = JSONObject(h.sent[1]).getString("commandId")
             h.relay.handleNavRoute(sampleRouteData(commandIdB))
@@ -453,8 +514,19 @@ class NavigationControllerTest {
 
             assertEquals(1, results.size)
             val result = JSONObject(results[0])
-            assertEquals("unsupported", result.getString("status"))
-            assertEquals("route.unavailable", result.getString("reason"))
+            // teardown() bumped the generation before this start's watchdog
+            // ever fired — a cancellation (superseded), not a genuine route
+            // failure.
+            assertEquals("failed", result.getString("status"))
+            assertEquals("navigation.cancelled", result.getString("reason"))
+
+            // teardown() must clear the `starting` latch alongside its own
+            // generation bump (same lesson as the iOS fix round): a
+            // genuinely idle stop right after must not find it stuck true.
+            controller.handleCommand("cmd-idle-stop", "navigation.stop", null)
+            val idleStopResult = JSONObject(results.last())
+            assertEquals("failed", idleStopResult.getString("status"))
+            assertEquals("navigation.notActive", idleStopResult.getString("reason"))
         }
 
     // ---- prompts -------------------------------------------------------

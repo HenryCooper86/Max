@@ -112,11 +112,33 @@ class NavigationController(
     private var firstFixContinuation: CompletableDeferred<LatLon?>? = null
     private var firstFixWatchdog: Job? = null
 
+    /** True from the generation bump inside [handleStart] until that SAME
+     *  generation's own terminal exit (first-fix timeout, an unresolved
+     *  search, the stale-generation guard, or a successful commit — see
+     *  `handleStart`'s `finally`). A superseded attempt's own exit leaves
+     *  this alone: its captured `generation` no longer matches
+     *  [navigationGeneration], so it knows a later attempt already owns it
+     *  and already cleared this itself. That "later attempt" is never the
+     *  superseded one's own `finally` in that case — it is whichever of the
+     *  FOUR sites bumps [navigationGeneration] ([handleStart]'s own next
+     *  call, [handleStop], [teardown], or [performReroute]'s failure
+     *  branch), and every one of them clears `starting` explicitly alongside
+     *  its own bump for exactly that reason: none of them can rely on a
+     *  stale attempt's exit to do it on their behalf. [handleStop] reads
+     *  this to tell "a start is genuinely in flight, with no route
+     *  committed yet" apart from "nothing is happening at all" — both
+     *  otherwise look identical as `route == null`. Ported from
+     *  `ios/MaxHelmet/Navigation/NavigationController.swift`'s `starting`
+     *  (nav-parity-closure Task 4, mirroring Task 3's fix round — see that
+     *  file's doc comment and commit e06995c for the "every bump site must
+     *  clear it" lesson this already applies proactively). */
+    private var starting = false
+
     /** Bumped once per `navigation.start` attempt and once per explicit
-     *  stop/teardown — never on arrival or a successful reroute. Every
-     *  superseded operation's eventual answer (a stale first fix, a stale
-     *  route search, a stale reroute) checks this before touching [route] or
-     *  [locationSource]. */
+     *  stop/teardown/reroute-failure — never on arrival or a successful
+     *  reroute. Every superseded operation's eventual answer (a stale first
+     *  fix, a stale route search, a stale reroute) checks this before
+     *  touching [route] or [locationSource]. */
     private var navigationGeneration = 0
 
     /** Handles navigation.start / navigation.stop; exactly one device.result
@@ -137,88 +159,137 @@ class NavigationController(
 
         // Each attempt gets its own generation so a superseded attempt — at
         // any stage — can tell it is no longer the one responsible for
-        // `route`/the stream before touching either.
-        val generation = synchronized(lock) { ++navigationGeneration }
-
-        // The first fix must be in hand BEFORE searching: the relay routes
-        // FROM the rider's position, so there is no query to send without it.
-        // [awaitFirstFix] resolves with [onFix]'s already-GCJ-02 value —
-        // `wgs84ToGcj02` is a nonlinear warp, NOT idempotent, so converting
-        // it again here would silently corrupt the origin; onFix (THE datum
-        // edge) is the only place this fix is ever converted.
-        //
-        // Locked (same shape as commitRouteLocked): this is the one
-        // lifecycle side effect that touches [locationSource] outside a
-        // synchronized block if left bare, and LocationManagerSource is not
-        // internally synchronized — two concurrent navigation.start commands
-        // (each its own coroutine; nothing upstream serializes them) could
-        // otherwise both observe an unstarted source and both register a
-        // GPS listener, and only the last-assigned one is ever removed by a
-        // later `stop()`. The other leaks for the process lifetime: GPS held
-        // on permanently, phantom fixes flowing, unfixable by any later
-        // stop/teardown since neither knows the orphaned listener exists.
-        synchronized(lock) { locationSource.start(::onFix) }
-        val origin = awaitFirstFix()
-        if (origin == null) {
-            stopSourceIfOrphaned(generation)
-            sendResult(buildDeviceResult(commandId, "unsupported", "route.unavailable"))
-            return
+        // `route`/the stream before touching either. `starting` stays true
+        // until THIS generation's own terminal exit (the `finally` below) —
+        // [handleStop] reads it to recognize a genuinely in-flight start
+        // even before any [route] is ever committed.
+        val generation = synchronized(lock) {
+            navigationGeneration += 1
+            starting = true
+            navigationGeneration
         }
-
-        val resolved = search.route(query, origin)
-        if (resolved == null) {
-            stopSourceIfOrphaned(generation)
-            sendResult(buildDeviceResult(commandId, "unsupported", "route.unavailable"))
-            return
-        }
-
-        val committed = synchronized(lock) {
-            if (generation != navigationGeneration) {
-                // Superseded while the search was in flight — the newer
-                // generation now owns `route`/the stream; do not stomp on it.
-                return@synchronized false
+        try {
+            // The first fix must be in hand BEFORE searching: the relay routes
+            // FROM the rider's position, so there is no query to send without it.
+            // [awaitFirstFix] resolves with [onFix]'s already-GCJ-02 value —
+            // `wgs84ToGcj02` is a nonlinear warp, NOT idempotent, so converting
+            // it again here would silently corrupt the origin; onFix (THE datum
+            // edge) is the only place this fix is ever converted.
+            //
+            // Locked (same shape as commitRouteLocked): this is the one
+            // lifecycle side effect that touches [locationSource] outside a
+            // synchronized block if left bare, and LocationManagerSource is not
+            // internally synchronized — two concurrent navigation.start commands
+            // (each its own coroutine; nothing upstream serializes them) could
+            // otherwise both observe an unstarted source and both register a
+            // GPS listener, and only the last-assigned one is ever removed by a
+            // later `stop()`. The other leaks for the process lifetime: GPS held
+            // on permanently, phantom fixes flowing, unfixable by any later
+            // stop/teardown since neither knows the orphaned listener exists.
+            synchronized(lock) { locationSource.start(::onFix) }
+            val origin = awaitFirstFix()
+            if (origin == null) {
+                stopSourceIfOrphaned(generation)
+                sendResult(startFailureResult(commandId, generation))
+                return
             }
-            commitRouteLocked(resolved)
-            // Parity-backlog fix (see class doc): a fresh route must not
-            // inherit a stale cooldown from whatever this generation
-            // superseded.
-            rerouting = false
-            lastRerouteAt = NO_PRIOR_REROUTE
-            true
-        }
-        sendResult(
-            if (committed) {
-                buildDeviceResult(commandId, "ok")
-            } else {
-                buildDeviceResult(commandId, "unsupported", "route.unavailable")
+
+            val resolved = search.route(query, origin)
+            if (resolved == null) {
+                stopSourceIfOrphaned(generation)
+                sendResult(startFailureResult(commandId, generation))
+                return
             }
-        )
+
+            val committed = synchronized(lock) {
+                if (generation != navigationGeneration) {
+                    // Superseded while the search was in flight — the newer
+                    // generation now owns `route`/the stream; do not stomp on it.
+                    return@synchronized false
+                }
+                commitRouteLocked(resolved)
+                // Parity-backlog fix (see class doc): a fresh route must not
+                // inherit a stale cooldown from whatever this generation
+                // superseded.
+                rerouting = false
+                lastRerouteAt = NO_PRIOR_REROUTE
+                true
+            }
+            sendResult(
+                if (committed) {
+                    buildDeviceResult(commandId, "ok")
+                } else {
+                    startFailureResult(commandId, generation)
+                }
+            )
+        } finally {
+            // Only THIS generation's own exit clears the latch — a stale
+            // attempt (superseded by a newer start, an explicit stop, or a
+            // reroute failure) must leave it alone: whichever of the other
+            // three sites bumped `navigationGeneration` past this attempt's
+            // own already cleared it itself (see `starting`'s doc comment).
+            synchronized(lock) { if (generation == navigationGeneration) starting = false }
+        }
+    }
+
+    /** A start exit with no route in hand: "route.unavailable" when this
+     *  generation is still the current one (a genuine failure — no fix, or
+     *  no route, while nothing else touched navigation state in the
+     *  meantime), or "navigation.cancelled" when a newer start, an explicit
+     *  stop, or a reroute failure already superseded it while it waited. */
+    private fun startFailureResult(commandId: String, generation: Int): String {
+        val current = synchronized(lock) { navigationGeneration }
+        return if (generation == current) {
+            buildDeviceResult(commandId, "unsupported", "route.unavailable")
+        } else {
+            buildDeviceResult(commandId, "failed", "navigation.cancelled")
+        }
     }
 
     private fun handleStop(commandId: String) {
-        val hadActiveRoute = synchronized(lock) {
-            if (route == null) return@synchronized false
-            // An explicit stop is a deliberate "cancel everything": any
-            // start or reroute already in flight must never revive
-            // navigation once its answer arrives late.
-            navigationGeneration += 1
-            val pendingFix = takePendingFirstFixLocked()
-            route = null
-            rerouting = false
-            lastRerouteAt = NO_PRIOR_REROUTE
-            locationSource.stop()
-            onGuidance(null)
-            speaker.speak(STOP_SPOKEN, interrupt = false)
-            pendingFix?.complete(null)
-            true
-        }
-        sendResult(
-            if (hadActiveRoute) {
-                buildDeviceResult(commandId, "ok")
-            } else {
-                buildDeviceResult(commandId, "failed", "navigation.notActive")
+        val result = synchronized(lock) {
+            when {
+                route != null -> {
+                    // An explicit stop is a deliberate "cancel everything":
+                    // any start or reroute already in flight must never
+                    // revive navigation once its answer arrives late.
+                    navigationGeneration += 1
+                    starting = false
+                    val pendingFix = takePendingFirstFixLocked()
+                    route = null
+                    rerouting = false
+                    lastRerouteAt = NO_PRIOR_REROUTE
+                    locationSource.stop()
+                    onGuidance(null)
+                    speaker.speak(STOP_SPOKEN, interrupt = false)
+                    pendingFix?.complete(null)
+                    buildDeviceResult(commandId, "ok")
+                }
+                starting -> {
+                    // No route committed yet, but a start is genuinely in
+                    // flight (awaiting its first fix or the relay's search)
+                    // — very much something to cancel, even though `route`
+                    // looks identical to the truly-idle case below.
+                    navigationGeneration += 1
+                    starting = false
+                    val pendingFix = takePendingFirstFixLocked()
+                    pendingFix?.complete(null)
+                    // The pendingFix take/complete above only covers the
+                    // first-fix stage; fail whatever the search itself is
+                    // holding too (a no-op if the start hasn't reached the
+                    // search yet), and stop the source nothing else needs
+                    // anymore. Silent here: the cancelled start's own
+                    // device.result (navigation.cancelled) is what the
+                    // relay's failure-speech map speaks — "已取消导航。" —
+                    // once it arrives, not this stop's own `ok`.
+                    search.failPending()
+                    locationSource.stop()
+                    buildDeviceResult(commandId, "ok")
+                }
+                else -> buildDeviceResult(commandId, "failed", "navigation.notActive")
             }
-        )
+        }
+        sendResult(result)
     }
 
     /** Session teardown: stop guidance silently (no speech, no result) — for
@@ -251,6 +322,14 @@ class NavigationController(
     fun teardown() {
         synchronized(lock) {
             navigationGeneration += 1
+            // A fourth generation-bump site (alongside handleStart,
+            // handleStop, and performReroute's failure branch) — must clear
+            // `starting` too, for the same reason the other three do: a
+            // start superseded by THIS bump can never clear the latch via
+            // its own exit once stale, so leaving it to that alone would
+            // strand `starting` true forever, and a later genuinely-idle
+            // stop would wrongly answer `ok`.
+            starting = false
             val pendingFix = takePendingFirstFixLocked()
             route = null
             rerouting = false
@@ -353,7 +432,17 @@ class NavigationController(
                     // event — bump the generation for the same reason
                     // handleStop does, so nothing still tied to this
                     // generation can later revive what was just torn down.
+                    // This is the third of the four generation-bump sites
+                    // (alongside handleStart, handleStop, and teardown): it
+                    // must clear `starting` too, exactly like the others —
+                    // a start superseded by THIS bump (its generation
+                    // captured by the reroute this failure resolves) can
+                    // never clear the latch via its own exit once stale, so
+                    // leaving it to that alone would strand `starting` true
+                    // forever, and a later genuinely-idle stop would
+                    // wrongly answer `ok`.
                     navigationGeneration += 1
+                    starting = false
                     route = null
                     onGuidance(null)
                     locationSource.stop()

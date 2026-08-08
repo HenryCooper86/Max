@@ -470,25 +470,59 @@ class NavigationControllerTest {
         assertEquals(2, results.size)
     }
 
+    // Fix-round-1: `locationSource.start` used to live in its OWN
+    // `synchronized(lock) { ... }` block, separate from the one right above
+    // it that bumped the generation and set `starting = true`. A concurrent
+    // stop/teardown landing in the gap BETWEEN those two blocks (the lock is
+    // released and reacquired) would call `locationSource.stop()`, and then
+    // this block's own `locationSource.start()` — carrying no generation
+    // re-check — would unconditionally undo it, restarting a GPS listener
+    // nothing could ever stop again: `stopSourceIfOrphaned`'s
+    // `generation == navigationGeneration` guard forever refuses once this
+    // generation is stale, so the listener leaks for the process lifetime,
+    // feeding phantom fixes into the shared onFix/resolveFirstFix path.
+    // `locationSource.start` is now folded into the SAME synchronized block
+    // as the bump (see handleStart's doc comment), closing that gap BY
+    // CONSTRUCTION: a `synchronized(lock)` block is a JVM monitor critical
+    // section, so a concurrent stop/teardown's own `synchronized(lock)`
+    // acquisition can only run entirely before this block or entirely after
+    // it — never interleaved within it. That guarantee comes from the JVM's
+    // mutual-exclusion semantics, not from timing, and is not independently
+    // pinnable by a test: the gap it closes lived between two lock sections
+    // on ONE coroutine, with no suspension point between them for another
+    // coroutine to land in even under the OLD code — only a genuinely
+    // parallel OS thread could have raced it, and no seam in this file lets
+    // a test force that interleaving deterministically (forcing it would
+    // mean either a real, timing-dependent race — flaky — or adding a
+    // production-code seam purely for test control, out of scope for this
+    // fix). The test below is retained as defense-in-depth regression
+    // coverage for a RELATED, still-reachable shape (a reentrant call
+    // arriving DURING locationSource.start itself, legal because Kotlin's
+    // synchronized is a JVM monitor, reentrant per-thread) — it no longer
+    // pins the closed gap, since the reentrant teardown's bump now happens
+    // INSIDE this start's own atomic block and is folded into the very
+    // `generation` this start captures, so this start is never stale
+    // relative to itself. What it still proves: even under that contrived
+    // reentrancy, the source ends up genuinely stopped, never leaked running.
     @Test
-    fun `a stop landing between locationSource-start and first-fix registration still lets the start resolve`() =
+    fun `a teardown reentering from within locationSource-start is absorbed into the start's own generation, never leaking the source`() =
         runBlocking {
-            // A LocationSource whose start() reenters the controller (same
-            // thread, same lock — legal: Kotlin's synchronized is a JVM
-            // monitor, reentrant per-thread) to simulate a stop/teardown
-            // landing in the exact gap between handleStart's pre-await
-            // locationSource.start call and its own first-fix registration —
-            // deterministic, no timing dependency.
             lateinit var controllerRef: NavigationController
             var teardownTriggered = false
+            var started = false
+            var stopCalls = 0
             val locationSource = object : LocationSource {
                 override fun start(onFix: (LatLon) -> Unit) {
+                    started = true
                     if (!teardownTriggered) {
                         teardownTriggered = true
                         controllerRef.teardown()
                     }
                 }
-                override fun stop() {}
+                override fun stop() {
+                    started = false
+                    stopCalls++
+                }
             }
             val results = CopyOnWriteArrayList<String>()
             val controller = NavigationController(
@@ -506,19 +540,24 @@ class NavigationControllerTest {
             val job = launch(Dispatchers.Default) {
                 controller.handleCommand("cmd-1", "navigation.start", "人民广场")
             }
-            // Bounded: a generation-only watchdog guard would hang this
-            // start forever (its own registration outlives the teardown's
-            // bump); a deferred-identity guard resolves it at the 50 ms
-            // timeout regardless.
+            // Bounded: nothing ever feeds a fix, so this only resolves via
+            // its own first-fix watchdog timeout.
             withTimeout(2_000) { job.join() }
 
             assertEquals(1, results.size)
             val result = JSONObject(results[0])
-            // teardown() bumped the generation before this start's watchdog
-            // ever fired — a cancellation (superseded), not a genuine route
-            // failure.
-            assertEquals("failed", result.getString("status"))
-            assertEquals("navigation.cancelled", result.getString("reason"))
+            // The reentrant teardown's bump is folded into THIS start's own
+            // captured `generation` (it happens inside the same atomic
+            // block) — this start is never stale relative to itself, so its
+            // eventual first-fix timeout is a genuine failure, not a
+            // cancellation.
+            assertEquals("unsupported", result.getString("status"))
+            assertEquals("route.unavailable", result.getString("reason"))
+            // The property fix-round-1 actually cares about: the source is
+            // never left running. teardown()'s own stop() and the eventual
+            // stopSourceIfOrphaned both fire; either way it must land stopped.
+            assertFalse("the source must end up stopped, never leaked running", started)
+            assertTrue("teardown's own stop, and/or stopSourceIfOrphaned's, must have run", stopCalls >= 1)
 
             // teardown() must clear the `starting` latch alongside its own
             // generation bump (same lesson as the iOS fix round): a

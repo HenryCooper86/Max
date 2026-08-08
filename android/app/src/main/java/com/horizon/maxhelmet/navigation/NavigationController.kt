@@ -163,30 +163,50 @@ class NavigationController(
         // until THIS generation's own terminal exit (the `finally` below) —
         // [handleStop] reads it to recognize a genuinely in-flight start
         // even before any [route] is ever committed.
+        //
+        // `locationSource.start` is folded into this SAME synchronized block
+        // as the bump — fix-round-1 Important: when it lived in a SEPARATE
+        // `synchronized(lock) { ... }` right after this one, a concurrent
+        // stop/teardown landing in the gap between the two blocks would call
+        // `locationSource.stop()` and then, with no generation re-check, this
+        // statement would unconditionally start it right back up — on a
+        // generation the bump above already made stale, so
+        // [stopSourceIfOrphaned]'s `generation == navigationGeneration` guard
+        // would forever refuse to stop it again. That's a permanently leaked
+        // GPS listener feeding phantom fixes into the shared `onFix`/
+        // `resolveFirstFix` path (which could spuriously resolve a LATER
+        // start's first-fix wait) until the next teardown. Merging the two
+        // means a stop/teardown can now only land before this block (this
+        // generation is stale everywhere, including at the eventual
+        // `stopSourceIfOrphaned` call below) or after it (the stop's own
+        // `locationSource.stop()` wins, since nothing between here and there
+        // touches the source again) — the window is structurally gone, same
+        // discipline `commitRouteLocked` already uses to keep its own
+        // `locationSource.start` atomic with its generation check.
+        // `locationSource.start` is a plain non-suspending call, so holding
+        // the lock across it is safe (see the class doc).
         val generation = synchronized(lock) {
             navigationGeneration += 1
             starting = true
+            // The first fix must be in hand BEFORE searching: the relay
+            // routes FROM the rider's position, so there is no query to send
+            // without it. Two concurrent navigation.start commands (each its
+            // own coroutine; nothing upstream serializes them) could
+            // otherwise both observe an unstarted source and both register a
+            // GPS listener if this weren't locked, and only the
+            // last-assigned one is ever removed by a later `stop()` — the
+            // other leaks for the process lifetime: GPS held on permanently,
+            // phantom fixes flowing, unfixable by any later stop/teardown
+            // since neither knows the orphaned listener exists.
+            locationSource.start(::onFix)
             navigationGeneration
         }
         try {
-            // The first fix must be in hand BEFORE searching: the relay routes
-            // FROM the rider's position, so there is no query to send without it.
             // [awaitFirstFix] resolves with [onFix]'s already-GCJ-02 value —
-            // `wgs84ToGcj02` is a nonlinear warp, NOT idempotent, so converting
-            // it again here would silently corrupt the origin; onFix (THE datum
-            // edge) is the only place this fix is ever converted.
-            //
-            // Locked (same shape as commitRouteLocked): this is the one
-            // lifecycle side effect that touches [locationSource] outside a
-            // synchronized block if left bare, and LocationManagerSource is not
-            // internally synchronized — two concurrent navigation.start commands
-            // (each its own coroutine; nothing upstream serializes them) could
-            // otherwise both observe an unstarted source and both register a
-            // GPS listener, and only the last-assigned one is ever removed by a
-            // later `stop()`. The other leaks for the process lifetime: GPS held
-            // on permanently, phantom fixes flowing, unfixable by any later
-            // stop/teardown since neither knows the orphaned listener exists.
-            synchronized(lock) { locationSource.start(::onFix) }
+            // `wgs84ToGcj02` is a nonlinear warp, NOT idempotent, so
+            // converting it again here would silently corrupt the origin;
+            // onFix (THE datum edge) is the only place this fix is ever
+            // converted.
             val origin = awaitFirstFix()
             if (origin == null) {
                 stopSourceIfOrphaned(generation)

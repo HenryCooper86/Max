@@ -14,9 +14,45 @@ final class RelayNavigationSearchTests: XCTestCase {
         func handle(_ json: String) { lock.lock(); _sent.append(json); lock.unlock() }
     }
 
+    /// Records whether/what a suspended `route`/`reroute` call resolved to,
+    /// settable from whatever thread resumes its continuation. Locked for the
+    /// same reason `SendBox` is: the watchdog (and, here, the preempted
+    /// caller's own resumption) can run off the calling thread.
+    private final class ResolutionBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _resolved = false
+        private var _route: NavigationRoute?
+        var resolved: Bool { lock.lock(); defer { lock.unlock() }; return _resolved }
+        var route: NavigationRoute? { lock.lock(); defer { lock.unlock() }; return _route }
+        func record(_ route: NavigationRoute?) {
+            lock.lock()
+            _resolved = true
+            _route = route
+            lock.unlock()
+        }
+    }
+
     private func decode(_ json: String) -> [String: Any] {
         let object = try? JSONSerialization.jsonObject(with: Data(json.utf8))
         return object as? [String: Any] ?? [:]
+    }
+
+    /// Bounded busy-wait for an observable condition instead of an arbitrary
+    /// fixed sleep — mirrors the Kotlin test suite's own `awaitCondition`
+    /// helper (`android/.../RelayNavigationSearchTest.kt`).
+    private func awaitCondition(
+        timeoutSeconds: Double = 2,
+        description: String = "condition",
+        _ check: () -> Bool
+    ) async {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while !check() {
+            if Date() > deadline {
+                XCTFail("Timed out waiting for \(description)")
+                return
+            }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
     }
 
     // MARK: - route(to:from:)
@@ -162,6 +198,51 @@ final class RelayNavigationSearchTests: XCTestCase {
         }
         search.handleNavError(commandId: commandId, code: "route.unavailable")
         _ = await secondTask.value
+    }
+
+    /// Pins the atomic preempt-and-register swap: a second `route()` started
+    /// while the first is suspended must resolve the first with `nil`
+    /// strictly BEFORE the second's request is sent, not merely "eventually,
+    /// before the second's own answer arrives". Ordering is read off the
+    /// captured `sent` array itself (by-count, bounded-polled) rather than a
+    /// fixed sleep, mirroring the Kotlin suite's own by-count assertions.
+    func testSecondRouteResolvesFirstWithNilBeforeSecondRequestIsSent() async {
+        let box = SendBox()
+        let firstResolution = ResolutionBox()
+        let search = RelayNavigationSearch(send: box.handle, timeoutSeconds: 5)
+        let origin = CLLocationCoordinate2D(latitude: 39.90, longitude: 116.40)
+
+        let firstTask = Task {
+            let route = await search.route(to: "第一个", from: origin)
+            firstResolution.record(route)
+        }
+        await awaitCondition(description: "first request sent") { box.sent.count == 1 }
+
+        let secondTask = Task { await search.route(to: "第二个", from: origin) }
+        // Poll `sent` before inspecting the first's resolution: proves the
+        // second request was actually dispatched, not merely that the first
+        // was preempted at some later, unobserved point.
+        await awaitCondition(description: "second request sent") { box.sent.count == 2 }
+
+        XCTAssertTrue(firstResolution.resolved, "first route() must already be resolved by the time the second request is sent")
+        XCTAssertNil(firstResolution.route, "the preempted first call resolves with nil")
+
+        guard let secondCommandId = decode(box.sent[1])["commandId"] as? String else {
+            return XCTFail("missing second commandId")
+        }
+        search.handleNavRoute(NavRouteData(
+            commandId: secondCommandId,
+            destinationName: "第二个",
+            destination: CLLocationCoordinate2D(latitude: 39.911954, longitude: 116.377817),
+            polyline: [],
+            steps: [],
+            distanceMeters: 500,
+            etaSeconds: 100
+        ))
+        let secondResult = await secondTask.value
+        XCTAssertNotNil(secondResult, "the surviving second call resolves with a routed answer")
+
+        _ = await firstTask.value
     }
 
     // MARK: - reroute(to:from:)

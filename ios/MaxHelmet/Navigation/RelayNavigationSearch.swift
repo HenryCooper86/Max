@@ -126,20 +126,27 @@ final class RelayNavigationSearch: NavigationRouteSearching {
     }
 
     /// Sends `request`, stores it as the single outstanding continuation, and
-    /// starts its timeout watchdog. A request already in flight is failed
-    /// with nil first — single-outstanding, like the web client's
+    /// starts its timeout watchdog. A request already in flight is preempted
+    /// with nil — single-outstanding, like the web client's
     /// `pendingCommandId`/`rerouteInFlight` discipline.
+    ///
+    /// Preempting the old registration and installing the new one happen in
+    /// ONE lock acquisition, not two (i.e. not `failPending()` followed by a
+    /// separate register step): with two separate acquisitions, a truly
+    /// concurrent second caller could register in the gap between them,
+    /// getting silently overwritten by this call's own registration and
+    /// orphaning its continuation until its own watchdog — which, by then,
+    /// no longer matches what's held — fires. Swapping in one critical
+    /// section makes "the previous request resolves null" and "my request is
+    /// now the one held" atomic together, so that gap can't exist. The
+    /// preempted continuation is resumed, and the new request sent, only
+    /// after the section closes — a checked continuation must never resume
+    /// while a lock is held.
     private func awaitAnswer(commandId: String, request: String) async -> NavigationRoute? {
-        failPending()
         return await withCheckedContinuation { (continuation: CheckedContinuation<NavigationRoute?, Never>) in
-            // Register the continuation AND the watchdog together under one
-            // lock acquisition before the watchdog can possibly run: with a
-            // very small (e.g. test-injected) timeoutSeconds, a detached
-            // Task created before this registration could race ahead and
-            // fire while `pendingCommandId`/`pendingContinuation` are still
-            // unset, finding nothing to resolve — and then never getting
-            // another chance, permanently hanging this continuation.
             lock.lock()
+            let preempted = pendingContinuation
+            let preemptedWatchdog = watchdog
             pendingCommandId = commandId
             pendingContinuation = continuation
             watchdog = Task.detached { [weak self, timeoutSeconds] in
@@ -147,6 +154,8 @@ final class RelayNavigationSearch: NavigationRouteSearching {
                 self?.timeoutIfCurrent(commandId)
             }
             lock.unlock()
+            preemptedWatchdog?.cancel()
+            preempted?.resume(returning: nil)
             sendJson(request)
         }
     }

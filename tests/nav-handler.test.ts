@@ -11,6 +11,12 @@ function collector() {
   return { sent, send: (p: NavRouteEvent | NavErrorEvent) => sent.push(p) };
 }
 
+function defer<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => (resolve = r));
+  return { promise, resolve };
+}
+
 describe("createNavHandler", () => {
   it("answers start with nav.route from the provider", async () => {
     const { sent, send } = collector();
@@ -196,6 +202,110 @@ describe("createNavHandler", () => {
       const handle = createNavHandler({ provider: createMockRouteProvider(), send });
       await handle(start);
       expect(sent[0]).toMatchObject({ type: "nav.route", commandId: "c1", destinationName: "外滩" });
+    });
+  });
+
+  describe("out-of-order start completions", () => {
+    it("drops a superseded start's late completion instead of attaching the wrong destination's summary", async () => {
+      // session-controller.ts dispatches nav.request fire-and-forget, so two
+      // "start" requests can run concurrently in the same handler. The rider
+      // re-starts to B before A's (slower) provider round trip returns; B
+      // must win — A's late completion must be a total no-op.
+      const resolveA = defer<{ name: string; location: typeof origin } | null>();
+      const resolveB = defer<{ name: string; location: typeof origin } | null>();
+      const planA = defer<{
+        distanceMeters: number;
+        etaSeconds: number;
+        polyline: (typeof origin)[];
+        steps: never[];
+      } | null>();
+      const planB = defer<{
+        distanceMeters: number;
+        etaSeconds: number;
+        polyline: (typeof origin)[];
+        steps: never[];
+      } | null>();
+      const destA = { lat: 1, lon: 1 };
+      const destB = { lat: 2, lon: 2 };
+
+      const provider = {
+        mode: "amap" as const,
+        resolveDestination: async (query: string) => (query === "A地" ? resolveA.promise : resolveB.promise),
+        planRoute: async (_origin: typeof origin, destination: typeof origin) =>
+          destination === destA ? planA.promise : planB.promise
+      };
+
+      const { sent, send } = collector();
+      const announced: string[] = [];
+      const handle = createNavHandler({ provider, send, onRouteAnnounced: (speech) => announced.push(speech) });
+
+      const startA: NavRequestEvent = { type: "nav.request", commandId: "a1", reason: "start", origin, query: "A地" };
+      const startB: NavRequestEvent = { type: "nav.request", commandId: "b1", reason: "start", origin, query: "B地" };
+
+      const doneA = handle(startA); // A's round trip begins first…
+      const doneB = handle(startB); // …but the rider immediately re-starts to B
+
+      // B — the rider's actual, current destination — resolves and completes first.
+      resolveB.resolve({ name: "B地", location: destB });
+      planB.resolve({ distanceMeters: 2_000, etaSeconds: 200, polyline: [], steps: [] });
+      await doneB;
+      expect(sent).toEqual([expect.objectContaining({ type: "nav.route", commandId: "b1", destinationName: "B地" })]);
+      expect(announced).toEqual([navRouteOkSpeech("B地", 2_000, 200)]);
+
+      // A's stale round trip finally lands — it must be dropped silently: no
+      // second nav.route, no nav.error for the abandoned request, and no
+      // second onRouteAnnounced call carrying A's summary.
+      resolveA.resolve({ name: "A地", location: destA });
+      planA.resolve({ distanceMeters: 9_000, etaSeconds: 900, polyline: [], steps: [] });
+      await doneA;
+      expect(sent).toHaveLength(1);
+      expect(announced).toHaveLength(1);
+
+      // Sibling hazard: A's late completion must also not have clobbered the
+      // cached route a subsequent reroute serves — it must still be B's.
+      await handle({
+        type: "nav.request",
+        commandId: "r1",
+        reason: "reroute",
+        origin,
+        destination: destB,
+        destinationName: "B地"
+      });
+      expect(sent).toHaveLength(2);
+      expect(sent[1]).toMatchObject({ type: "nav.route", commandId: "r1", destinationName: "B地" });
+    });
+
+    it("also drops a superseded start that resolves to nav.error after being superseded", async () => {
+      const resolveA = defer<{ name: string; location: typeof origin } | null>();
+      const resolveB = defer<{ name: string; location: typeof origin } | null>();
+
+      const provider = {
+        mode: "amap" as const,
+        resolveDestination: async (query: string) => (query === "A地" ? resolveA.promise : resolveB.promise),
+        planRoute: async () => ({ distanceMeters: 2_000, etaSeconds: 200, polyline: [], steps: [] })
+      };
+
+      const { sent, send } = collector();
+      const announced: string[] = [];
+      const handle = createNavHandler({ provider, send, onRouteAnnounced: (speech) => announced.push(speech) });
+
+      const startA: NavRequestEvent = { type: "nav.request", commandId: "a1", reason: "start", origin, query: "A地" };
+      const startB: NavRequestEvent = { type: "nav.request", commandId: "b1", reason: "start", origin, query: "B地" };
+
+      const doneA = handle(startA);
+      const doneB = handle(startB);
+
+      resolveB.resolve({ name: "B地", location: { lat: 2, lon: 2 } });
+      await doneB;
+      expect(sent).toHaveLength(1);
+      expect(announced).toHaveLength(1);
+
+      // A's stale destination lookup fails after being superseded — no
+      // nav.error for the abandoned request should reach the client.
+      resolveA.resolve(null);
+      await doneA;
+      expect(sent).toHaveLength(1);
+      expect(announced).toHaveLength(1);
     });
   });
 });

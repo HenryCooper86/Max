@@ -2,10 +2,12 @@ package com.horizon.maxhelmet.navigation
 
 import com.horizon.maxhelmet.agent.NavRouteData
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -336,6 +338,124 @@ class NavigationControllerTest {
         assertTrue("route A must still publish guidance after B's failure", h.guidanceUpdates.isNotEmpty())
         assertNotNull(h.guidanceUpdates.last())
     }
+
+    // Final-review fix-wave regression coverage: the pre-await
+    // `locationSource.start(::onFix)` in `handleStart` used to run outside
+    // `lock`, and the first-fix watchdog used to guard on generation rather
+    // than deferred identity. Both fakes below are built ad hoc (not via
+    // [Harness]) since they exercise `NavigationController` directly against
+    // a purpose-built `LocationSource`, not [FakeLocationSource].
+
+    /** Detects concurrent entry into `start()` by widening the critical
+     *  section with a sleep. Deterministic, not timing-sensitive: as long as
+     *  `NavigationController` holds its lock around every call to
+     *  `locationSource.start`, two genuinely parallel callers can never both
+     *  be inside this method at once, however the sleep lands relative to
+     *  the scheduler — the exclusion is a hard guarantee from the lock, not
+     *  a probabilistic one from the timing. If the lock were ever dropped
+     *  from the line-149 call site, two truly parallel
+     *  `handleCommand("navigation.start")` invocations racing into this
+     *  method would be caught with near certainty (a 30 ms window versus
+     *  microsecond-scale scheduling jitter). */
+    private class ExclusionProbeLocationSource : LocationSource {
+        private val entered = AtomicBoolean(false)
+
+        @Volatile
+        var concurrentEntryDetected = false
+            private set
+
+        override fun start(onFix: (LatLon) -> Unit) {
+            if (!entered.compareAndSet(false, true)) {
+                concurrentEntryDetected = true
+                return
+            }
+            try {
+                Thread.sleep(30)
+            } finally {
+                entered.set(false)
+            }
+        }
+
+        override fun stop() {}
+    }
+
+    @Test
+    fun `two concurrent starts never enter locationSource-start concurrently`() = runBlocking {
+        val probe = ExclusionProbeLocationSource()
+        val results = CopyOnWriteArrayList<String>()
+        val controller = NavigationController(
+            search = RelayNavigationSearch(send = {}),
+            locationSource = probe,
+            speaker = FakeSpeaker(),
+            sendResult = { results.add(it) },
+            onGuidance = {},
+            hasLocationPermission = { true },
+            now = { 0L },
+            firstFixTimeoutMillis = 50
+        )
+
+        val jobA = launch(Dispatchers.Default) { controller.handleCommand("cmd-A", "navigation.start", "第一目的地") }
+        val jobB = launch(Dispatchers.Default) { controller.handleCommand("cmd-B", "navigation.start", "第二目的地") }
+        withTimeout(2_000) {
+            jobA.join()
+            jobB.join()
+        }
+
+        assertFalse(
+            "locationSource.start must never be entered concurrently — the pre-await call must stay inside the lock",
+            probe.concurrentEntryDetected
+        )
+        // Both attempts still resolve on their own (no fix ever delivered, 50 ms timeout).
+        assertEquals(2, results.size)
+    }
+
+    @Test
+    fun `a stop landing between locationSource-start and first-fix registration still lets the start resolve`() =
+        runBlocking {
+            // A LocationSource whose start() reenters the controller (same
+            // thread, same lock — legal: Kotlin's synchronized is a JVM
+            // monitor, reentrant per-thread) to simulate a stop/teardown
+            // landing in the exact gap between handleStart's pre-await
+            // locationSource.start call and its own first-fix registration —
+            // deterministic, no timing dependency.
+            lateinit var controllerRef: NavigationController
+            var teardownTriggered = false
+            val locationSource = object : LocationSource {
+                override fun start(onFix: (LatLon) -> Unit) {
+                    if (!teardownTriggered) {
+                        teardownTriggered = true
+                        controllerRef.teardown()
+                    }
+                }
+                override fun stop() {}
+            }
+            val results = CopyOnWriteArrayList<String>()
+            val controller = NavigationController(
+                search = RelayNavigationSearch(send = {}),
+                locationSource = locationSource,
+                speaker = FakeSpeaker(),
+                sendResult = { results.add(it) },
+                onGuidance = {},
+                hasLocationPermission = { true },
+                now = { 0L },
+                firstFixTimeoutMillis = 50
+            )
+            controllerRef = controller
+
+            val job = launch(Dispatchers.Default) {
+                controller.handleCommand("cmd-1", "navigation.start", "人民广场")
+            }
+            // Bounded: a generation-only watchdog guard would hang this
+            // start forever (its own registration outlives the teardown's
+            // bump); a deferred-identity guard resolves it at the 50 ms
+            // timeout regardless.
+            withTimeout(2_000) { job.join() }
+
+            assertEquals(1, results.size)
+            val result = JSONObject(results[0])
+            assertEquals("unsupported", result.getString("status"))
+            assertEquals("route.unavailable", result.getString("reason"))
+        }
 
     // ---- prompts -------------------------------------------------------
 

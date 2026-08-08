@@ -155,6 +155,24 @@ class NavProtocolTest {
         assertEquals(AgentEvent.Unhandled, parseAgentEvent(json))
     }
 
+    @Test
+    fun `rejects a nav-route whose destination has a non-numeric lat`() {
+        val json = """
+            {
+              "type": "nav.route",
+              "commandId": "cmd-7",
+              "destinationName": "目的地",
+              "destination": {"lat": "north", "lon": 121.47},
+              "distanceMeters": 100,
+              "etaSeconds": 60,
+              "polyline": [{"lat": 31.2, "lon": 121.4}],
+              "steps": []
+            }
+        """.trimIndent()
+
+        assertEquals(AgentEvent.Unhandled, parseAgentEvent(json))
+    }
+
     // ---- nav.error ----------------------------------------------------------
 
     @Test

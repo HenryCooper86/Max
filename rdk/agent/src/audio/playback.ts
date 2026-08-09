@@ -76,6 +76,7 @@ export function createPlayback(options: PlaybackOptions): Playback {
   type QueuedChunk = {
     pcm: Int16Array;
     rank: number;
+    operation: number;
     outcome: "pending" | "accepted" | "rejected";
   };
 
@@ -121,6 +122,21 @@ export function createPlayback(options: PlaybackOptions): Playback {
     for (const chunk of queue) reject(chunk);
     queue = [];
     queuedSamples = 0;
+  }
+
+  function rejectQueueOwnedBy(operation: number): void {
+    const kept: QueuedChunk[] = [];
+    let keptSamples = 0;
+    for (const chunk of queue) {
+      if (chunk.operation === operation) {
+        reject(chunk);
+        continue;
+      }
+      kept.push(chunk);
+      keptSamples += chunk.pcm.length;
+    }
+    queue = kept;
+    queuedSamples = keptSamples;
   }
 
   function discardSuppressedQueue(): void {
@@ -221,7 +237,11 @@ export function createPlayback(options: PlaybackOptions): Playback {
 
     if (queue.length > 0 && !pumping) {
       pumping = true;
-      schedule(pump, PUMP_MS);
+      const scheduledOperation = operationGeneration;
+      schedule(() => {
+        if (operationGeneration !== scheduledOperation) return;
+        pump();
+      }, PUMP_MS);
     }
   }
 
@@ -240,13 +260,23 @@ export function createPlayback(options: PlaybackOptions): Playback {
       // Respawn-on-next-write is the already-designed path; take it.
       spawned.on("exit", (code, signal) => {
         if (child !== spawned) return;
+        const invalidatedOperation = operationGeneration;
         console.log(`[playback] aplay exited code=${code} signal=${signal}; respawning on next write`);
+        if (child !== spawned || operationGeneration !== invalidatedOperation) return;
+        rejectQueueOwnedBy(invalidatedOperation);
+        drainedUntil = 0;
+        pumping = false;
         operationGeneration += 1;
         child = null;
       });
       spawned.on("error", (error) => {
         if (child !== spawned) return;
+        const invalidatedOperation = operationGeneration;
         console.log(`[playback] aplay failed to start: ${error.message}`);
+        if (child !== spawned || operationGeneration !== invalidatedOperation) return;
+        rejectQueueOwnedBy(invalidatedOperation);
+        drainedUntil = 0;
+        pumping = false;
         operationGeneration += 1;
         child = null;
       });
@@ -277,7 +307,12 @@ export function createPlayback(options: PlaybackOptions): Playback {
       // that assumes the echo path is linear, and cancellation would fall apart
       // precisely when Max is loudest.
       const processed = applySoftLimit(upsample(pcm), options.gain, options.threshold);
-      const queued: QueuedChunk = { pcm: processed, rank: effectiveRank, outcome: "pending" };
+      const queued: QueuedChunk = {
+        pcm: processed,
+        rank: effectiveRank,
+        operation: expectedOperation,
+        outcome: "pending"
+      };
       queue.push(queued);
       queuedSamples += processed.length;
       pump();

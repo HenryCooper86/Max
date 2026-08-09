@@ -392,6 +392,113 @@ describe("ranked playback writes", () => {
     expect(fake.stdin.readableLength).toBe(1_920);
     expect(playback.priorityRank()).toBe(1);
   });
+
+  it.each(["flush", "stop", "exit", "error"] as const)(
+    "drops pending work when now triggers live child %s invalidation",
+    (boundary) => {
+      const children: ReturnType<typeof fakeChild>[] = [];
+      const timers: Array<() => void> = [];
+      const reference: number[] = [];
+      const holder: { playback?: ReturnType<typeof createPlayback> } = {};
+      let invalidate = true;
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      try {
+        const playback = createPlayback({
+          device: "plughw:0,0",
+          spawn: () => {
+            const fake = fakeChild();
+            children.push(fake);
+            return fake.child;
+          },
+          now: () => {
+            if (!invalidate) return 0;
+            invalidate = false;
+            if (boundary === "flush") holder.playback!.flush();
+            if (boundary === "stop") holder.playback!.stop();
+            if (boundary === "exit") children[0]!.child.emit("exit", 1, null);
+            if (boundary === "error") children[0]!.child.emit("error", new Error("aplay failed"));
+            return 500;
+          },
+          schedule: (fn) => {
+            timers.push(fn);
+            return 0 as unknown as NodeJS.Timeout;
+          },
+          reference: {
+            write: (pcm) => reference.push(pcm.length),
+            flush: () => undefined,
+            close: () => undefined
+          }
+        });
+        holder.playback = playback;
+
+        const firstResult = playback.write(new Int16Array(480));
+        const initialReferenceFrames = reference.length;
+        const initialDacBytes = children[0]!.stdin.readableLength;
+        const initialTimers = timers.length;
+        const freshResult = playback.write(new Int16Array(480));
+
+        expect({
+          firstResult,
+          initialReferenceFrames,
+          initialDacBytes,
+          initialTimers,
+          freshResult,
+          childCount: children.length,
+          replacementDacBytes: children[1]?.stdin.readableLength,
+          totalReferenceFrames: reference.length,
+          finalTimers: timers.length
+        }).toEqual({
+          firstResult: false,
+          initialReferenceFrames: 0,
+          initialDacBytes: 0,
+          initialTimers: 0,
+          freshResult: true,
+          childCount: 2,
+          replacementDacBytes: 1_920,
+          totalReferenceFrames: 1,
+          finalTimers: 0
+        });
+      } finally {
+        log.mockRestore();
+      }
+    }
+  );
+
+  it("does not let an invalidated child's stale pump timer consume a replacement queue", () => {
+    const children: ReturnType<typeof fakeChild>[] = [];
+    const timers: Array<() => void> = [];
+    let clock = 0;
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      const playback = createPlayback({
+        device: "plughw:0,0",
+        spawn: () => {
+          const fake = fakeChild();
+          children.push(fake);
+          return fake.child;
+        },
+        now: () => clock,
+        schedule: (fn) => {
+          timers.push(fn);
+          return 0 as unknown as NodeJS.Timeout;
+        }
+      });
+      for (let index = 0; index < 5; index += 1) playback.write(new Int16Array(480));
+      expect(timers).toHaveLength(1);
+      children[0]!.child.emit("exit", 1, null);
+
+      for (let index = 0; index < 5; index += 1) playback.write(new Int16Array(480));
+      expect(timers).toHaveLength(2);
+      expect(children[1]!.stdin.readableLength).toBe(7_680);
+      clock = 10;
+      timers[0]!();
+      expect(children[1]!.stdin.readableLength).toBe(7_680);
+      timers[1]!();
+      expect(children[1]!.stdin.readableLength).toBe(9_600);
+    } finally {
+      log.mockRestore();
+    }
+  });
 });
 
 describe("playback priority ownership", () => {

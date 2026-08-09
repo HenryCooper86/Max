@@ -36,6 +36,20 @@ final class RDKCompanionClient {
         let desiredRide: Bool
     }
 
+    private struct OpenAttemptReservation: Equatable {
+        let identifier: Int
+        let generation: Int
+        let recoveryDepth: Int
+        var isInvalidated: Bool
+        var requestsReopen: Bool
+    }
+
+    private struct ReceiveRegistration: Equatable {
+        let identifier: Int
+        let epoch: Int
+        let generation: Int
+    }
+
     private enum ActionFamily {
         case pairing
         case ride
@@ -61,6 +75,14 @@ final class RDKCompanionClient {
     private var sendEpoch = 0
     private var pairingActionEpoch = 0
     private var rideActionEpoch = 0
+    private var nextOpenAttemptIdentifier = 0
+    private var openAttempt: OpenAttemptReservation?
+    private var openRecoveryOwner = 0
+    private var receiveEpoch = 0
+    private var nextReceiveRegistrationIdentifier = 0
+    private var activeReceiveRegistration: ReceiveRegistration?
+    private var registeringReceive: ReceiveRegistration?
+    private var pendingReceiveRearm: ReceiveRegistration?
 
     init(
         socketFactory: @escaping (URLRequest, Bool) -> CompanionSocketTask,
@@ -112,6 +134,9 @@ final class RDKCompanionClient {
             self.generation &+= 1
             self.pairingActionEpoch &+= 1
             self.rideActionEpoch &+= 1
+            self.openAttempt = nil
+            self.invalidateOpenRecovery()
+            self.resetReceivePump()
             self.invalidateReconnect()
             self.desiredRide = false
             self.clearLocationWork()
@@ -153,6 +178,12 @@ final class RDKCompanionClient {
             if self.socket == nil {
                 self.reconnectAttempts = 0
                 self.invalidateReconnect()
+                if self.openAttempt?.generation == self.generation {
+                    if self.openAttempt?.isInvalidated == true {
+                        self.openAttempt?.requestsReopen = true
+                    }
+                    return
+                }
                 self.openSocket(generation: self.generation)
                 return
             }
@@ -170,6 +201,8 @@ final class RDKCompanionClient {
             guard let self else { return }
             self.rideActionEpoch &+= 1
             self.desiredRide = false
+            self.invalidateOpenRecovery()
+            self.invalidateOpenAttempt()
             self.invalidateReconnect()
             self.clearLocationWork()
             self.startSentOnSocket = false
@@ -186,6 +219,8 @@ final class RDKCompanionClient {
             self.pairingActionEpoch &+= 1
             self.rideActionEpoch &+= 1
             self.desiredRide = false
+            self.invalidateOpenRecovery()
+            self.invalidateOpenAttempt()
             self.invalidateReconnect()
             self.clearLocationWork()
             self.startSentOnSocket = false
@@ -214,6 +249,9 @@ final class RDKCompanionClient {
             self.generation &+= 1
             self.pairingActionEpoch &+= 1
             self.rideActionEpoch &+= 1
+            self.openAttempt = nil
+            self.invalidateOpenRecovery()
+            self.resetReceivePump()
             self.invalidateReconnect()
             self.desiredRide = false
             self.configuration = nil
@@ -227,10 +265,11 @@ final class RDKCompanionClient {
         }
     }
 
-    private func openSocket(generation expectedGeneration: Int) {
+    private func openSocket(generation expectedGeneration: Int, recoveryDepth: Int = 0) {
         assert(Thread.isMainThread)
         guard expectedGeneration == generation,
               socket == nil,
+              openAttempt == nil,
               let configuration,
               let url = Self.companionURL(
                 fromRelay: configuration.relayURL,
@@ -241,11 +280,47 @@ final class RDKCompanionClient {
 
         var request = URLRequest(url: url)
         request.timeoutInterval = 12
+        nextOpenAttemptIdentifier &+= 1
+        let attempt = OpenAttemptReservation(
+            identifier: nextOpenAttemptIdentifier,
+            generation: expectedGeneration,
+            recoveryDepth: recoveryDepth,
+            isInvalidated: false,
+            requestsReopen: false
+        )
+        openAttempt = attempt
         let newSocket = socketFactory(request, configuration.allowSelfSignedTLS)
-        guard expectedGeneration == generation, socket == nil, self.configuration != nil else {
-            newSocket.cancel(with: .goingAway, reason: nil)
+        let returnedAttempt = openAttempt.flatMap { currentAttempt in
+            currentAttempt.identifier == attempt.identifier ? currentAttempt : nil
+        }
+        let shouldDeferReopen = returnedAttempt?.isInvalidated == true
+            && returnedAttempt?.requestsReopen == true
+            && returnedAttempt?.recoveryDepth == 0
+            && expectedGeneration == generation
+            && desiredRide
+            && self.configuration != nil
+            && socket == nil
+        guard let currentAttempt = openAttempt,
+              currentAttempt.identifier == attempt.identifier,
+              currentAttempt.generation == expectedGeneration,
+              !currentAttempt.isInvalidated,
+              expectedGeneration == generation,
+              socket == nil,
+              self.configuration != nil else {
+            if openAttempt?.identifier == attempt.identifier {
+                openAttempt = nil
+            }
+            if newSocket !== socket {
+                newSocket.cancel(with: .goingAway, reason: nil)
+            }
+            if shouldDeferReopen {
+                scheduleDeferredOpen(generation: expectedGeneration)
+            }
             return
         }
+        openAttempt = nil
+        invalidateOpenRecovery()
+        resetReceivePump()
         socket = newSocket
         transportState = .connecting
         startSentOnSocket = false
@@ -258,26 +333,85 @@ final class RDKCompanionClient {
     }
 
     private func receive(on receivingSocket: CompanionSocketTask, generation expectedGeneration: Int) {
+        assert(Thread.isMainThread)
+        guard isCurrent(receivingSocket, generation: expectedGeneration),
+              activeReceiveRegistration == nil,
+              pendingReceiveRearm == nil else {
+            return
+        }
+        nextReceiveRegistrationIdentifier &+= 1
+        let registration = ReceiveRegistration(
+            identifier: nextReceiveRegistrationIdentifier,
+            epoch: receiveEpoch,
+            generation: expectedGeneration
+        )
+        activeReceiveRegistration = registration
+        registeringReceive = registration
         receivingSocket.receive { [weak self, weak receivingSocket] result in
             guard let self, let receivingSocket else { return }
             self.onMain { [weak self, weak receivingSocket] in
                 guard let self,
                       let receivingSocket,
+                      self.activeReceiveRegistration == registration,
+                      self.receiveEpoch == registration.epoch,
                       self.isCurrent(receivingSocket, generation: expectedGeneration) else {
                     return
                 }
+                self.activeReceiveRegistration = nil
+                let completedSynchronously = self.registeringReceive == registration
                 switch result {
                 case let .success(message):
                     if let state = RDKCompanionProtocol.parseServerMessage(message) {
                         self.handleServerState(state, on: receivingSocket, generation: expectedGeneration)
                     }
-                    if self.isCurrent(receivingSocket, generation: expectedGeneration) {
+                    guard self.receiveEpoch == registration.epoch,
+                          self.isCurrent(receivingSocket, generation: expectedGeneration) else {
+                        return
+                    }
+                    if completedSynchronously {
+                        self.scheduleReceiveRearm(
+                            after: registration,
+                            on: receivingSocket,
+                            generation: expectedGeneration
+                        )
+                    } else {
                         self.receive(on: receivingSocket, generation: expectedGeneration)
                     }
                 case .failure:
                     self.handleTransportFailure(on: receivingSocket, generation: expectedGeneration)
                 }
             }
+        }
+        if registeringReceive == registration {
+            registeringReceive = nil
+        }
+    }
+
+    private func scheduleReceiveRearm(
+        after registration: ReceiveRegistration,
+        on receivingSocket: CompanionSocketTask,
+        generation expectedGeneration: Int
+    ) {
+        assert(Thread.isMainThread)
+        guard pendingReceiveRearm == nil,
+              activeReceiveRegistration == nil,
+              receiveEpoch == registration.epoch,
+              isCurrent(receivingSocket, generation: expectedGeneration) else {
+            return
+        }
+        pendingReceiveRearm = registration
+        DispatchQueue.main.async { [weak self, weak receivingSocket] in
+            guard let self,
+                  let receivingSocket,
+                  self.pendingReceiveRearm == registration else {
+                return
+            }
+            self.pendingReceiveRearm = nil
+            guard self.receiveEpoch == registration.epoch,
+                  self.isCurrent(receivingSocket, generation: expectedGeneration) else {
+                return
+            }
+            self.receive(on: receivingSocket, generation: expectedGeneration)
         }
     }
 
@@ -312,6 +446,7 @@ final class RDKCompanionClient {
         if case .paired = state,
            !desiredRide,
            semanticCallbackTicket() == callbackTicket {
+            resetReceivePump()
             socket = nil
             canSendLocation = false
             receivingSocket.cancel(with: .normalClosure, reason: nil)
@@ -340,6 +475,39 @@ final class RDKCompanionClient {
             rideActionEpoch: rideActionEpoch,
             desiredRide: desiredRide
         )
+    }
+
+    private func invalidateOpenAttempt() {
+        guard openAttempt?.generation == generation else { return }
+        openAttempt?.isInvalidated = true
+    }
+
+    private func invalidateOpenRecovery() {
+        openRecoveryOwner &+= 1
+    }
+
+    private func scheduleDeferredOpen(generation expectedGeneration: Int) {
+        assert(Thread.isMainThread)
+        let expectedOwner = openRecoveryOwner
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  self.generation == expectedGeneration,
+                  self.openRecoveryOwner == expectedOwner,
+                  self.desiredRide,
+                  self.configuration != nil,
+                  self.socket == nil,
+                  self.openAttempt == nil else {
+                return
+            }
+            self.openSocket(generation: expectedGeneration, recoveryDepth: 1)
+        }
+    }
+
+    private func resetReceivePump() {
+        receiveEpoch &+= 1
+        activeReceiveRegistration = nil
+        registeringReceive = nil
+        pendingReceiveRearm = nil
     }
 
     private func sendAction(_ text: String, family: ActionFamily) {
@@ -422,6 +590,7 @@ final class RDKCompanionClient {
         let httpStatus = (failedSocket as? CompanionHTTPStatusProviding)?.httpStatusCode
 
         invalidateLocationSends(retainInFlight: true)
+        resetReceivePump()
         socket = nil
         canSendLocation = false
         startSentOnSocket = false

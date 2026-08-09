@@ -19,6 +19,489 @@ final class RDKCompanionClientTests: XCTestCase {
         XCTAssertTrue(Thread.isMainThread)
     }
 
+    func testSynchronousReceiveSequenceUsesOneStackFrameAndStopsAfterTerminalFailure() {
+        let statusCount = 96
+        let expectedStatuses = (0..<statusCount).map {
+            CompanionConnectionState.ready(deviceId: "rdk-\($0)", label: "Helmet \($0)")
+        }
+        let results = (0..<statusCount).map {
+            Result<URLSessionWebSocketTask.Message, Error>.success(
+                .string(
+                    "{\"type\":\"companion.status\",\"state\":\"ready\","
+                    + "\"deviceId\":\"rdk-\($0)\",\"deviceLabel\":\"Helmet \($0)\"}"
+                )
+            )
+        }
+        let socket = SynchronousCompanionSocket(results: results)
+        let pending = expectation(description: "one receive remains pending after buffered statuses")
+        socket.onFirstPendingReceive = { pending.fulfill() }
+        var states: [CompanionConnectionState] = []
+        let client = RDKCompanionClient(
+            socketFactory: { _, _ in socket },
+            schedule: { _, _ in XCTFail("Stopped pair-only transport must not reconnect") }
+        )
+        client.onState = { states.append($0) }
+
+        client.connect(
+            relayURL: "wss://relay.example/agent",
+            sessionToken: "account-token",
+            allowSelfSignedTLS: false
+        )
+        wait(for: [pending], timeout: 2)
+
+        XCTAssertEqual(socket.maximumReceiveDepth, 1)
+        XCTAssertEqual(socket.receiveCallCount, statusCount + 1)
+        XCTAssertEqual(socket.pendingReceiveCount, 1)
+        XCTAssertEqual(states, [.connecting] + expectedStatuses)
+
+        socket.failPending(TestError.transport)
+        let settled = expectation(description: "terminal failure cannot rearm")
+        DispatchQueue.main.async { settled.fulfill() }
+        wait(for: [settled], timeout: 1)
+
+        XCTAssertEqual(socket.receiveCallCount, statusCount + 1)
+        XCTAssertEqual(socket.pendingReceiveCount, 0)
+        XCTAssertEqual(socket.cancelCount, 1)
+        XCTAssertEqual(states.last, .failed(code: "connection", detail: "Companion connection closed."))
+    }
+
+    func testSynchronousMalformedUnknownAndBinaryMessagesRearmWithoutRecursion() {
+        let socket = SynchronousCompanionSocket(results: [
+            .success(.string("{bad")),
+            .success(.string("{\"type\":\"unexpected.message\"}")),
+            .success(.data(Data("binary".utf8)))
+        ])
+        let pending = expectation(description: "malformed sequence rearms once")
+        socket.onFirstPendingReceive = { pending.fulfill() }
+        var states: [CompanionConnectionState] = []
+        let client = RDKCompanionClient(
+            socketFactory: { _, _ in socket },
+            schedule: { _, _ in XCTFail("Malformed messages must not schedule reconnect") }
+        )
+        client.onState = { states.append($0) }
+
+        client.connect(
+            relayURL: "wss://relay.example/agent",
+            sessionToken: "account-token",
+            allowSelfSignedTLS: false
+        )
+        wait(for: [pending], timeout: 1)
+
+        XCTAssertEqual(states, [.connecting])
+        XCTAssertEqual(socket.maximumReceiveDepth, 1)
+        XCTAssertEqual(socket.receiveCallCount, 4)
+        XCTAssertEqual(socket.pendingReceiveCount, 1)
+    }
+
+    func testSynchronousTerminalReceiveFailureStopsWithoutRearm() {
+        let socket = SynchronousCompanionSocket(results: [
+            .success(.string("{bad")),
+            .failure(TestError.transport)
+        ])
+        let failed = expectation(description: "synchronous failure is terminal")
+        var states: [CompanionConnectionState] = []
+        let client = RDKCompanionClient(
+            socketFactory: { _, _ in socket },
+            schedule: { _, _ in XCTFail("Pair-only synchronous failure must not reconnect") }
+        )
+        client.onState = { state in
+            states.append(state)
+            if case .failed = state {
+                failed.fulfill()
+            }
+        }
+
+        client.connect(
+            relayURL: "wss://relay.example/agent",
+            sessionToken: "account-token",
+            allowSelfSignedTLS: false
+        )
+        wait(for: [failed], timeout: 1)
+        let settled = expectation(description: "failure leaves no deferred rearm")
+        DispatchQueue.main.async { settled.fulfill() }
+        wait(for: [settled], timeout: 1)
+
+        XCTAssertEqual(socket.maximumReceiveDepth, 1)
+        XCTAssertEqual(socket.receiveCallCount, 2)
+        XCTAssertEqual(socket.pendingReceiveCount, 0)
+        XCTAssertEqual(socket.cancelCount, 1)
+        XCTAssertEqual(states, [.connecting, .failed(code: "connection", detail: "Companion connection closed.")])
+    }
+
+    func testDuplicateSynchronousCompletionIsConsumedOnlyOnce() {
+        let socket = SynchronousCompanionSocket(
+            results: [
+                .success(.string("{\"type\":\"companion.status\",\"state\":\"ready\",\"deviceId\":\"rdk-one\"}"))
+            ],
+            duplicateFirstResult: .success(
+                .string("{\"type\":\"companion.status\",\"state\":\"sharing\",\"deviceId\":\"duplicate\"}")
+            )
+        )
+        let pending = expectation(description: "one receive registration follows the consumed callback")
+        socket.onFirstPendingReceive = { pending.fulfill() }
+        var states: [CompanionConnectionState] = []
+        let client = RDKCompanionClient(
+            socketFactory: { _, _ in socket },
+            schedule: { _, _ in XCTFail("Duplicate success must not schedule reconnect") }
+        )
+        client.onState = { states.append($0) }
+
+        client.connect(
+            relayURL: "wss://relay.example/agent",
+            sessionToken: "account-token",
+            allowSelfSignedTLS: false
+        )
+        wait(for: [pending], timeout: 1)
+
+        XCTAssertEqual(states, [.connecting, .ready(deviceId: "rdk-one", label: nil)])
+        XCTAssertEqual(socket.maximumReceiveDepth, 1)
+        XCTAssertEqual(socket.receiveCallCount, 2)
+        XCTAssertEqual(socket.pendingReceiveCount, 1)
+    }
+
+    func testTeardownBeforeDeferredSynchronousRearmPreventsAnotherReceive() {
+        let socket = SynchronousCompanionSocket(results: [.success(.string("{bad"))])
+        let client = RDKCompanionClient(
+            socketFactory: { _, _ in socket },
+            schedule: { _, _ in XCTFail("Explicit disconnect must not schedule reconnect") }
+        )
+        client.connect(
+            relayURL: "wss://relay.example/agent",
+            sessionToken: "account-token",
+            allowSelfSignedTLS: false
+        )
+
+        client.disconnect()
+        let settled = expectation(description: "deferred receive rearm is invalidated")
+        DispatchQueue.main.async { settled.fulfill() }
+        wait(for: [settled], timeout: 1)
+
+        XCTAssertEqual(socket.receiveCallCount, 1)
+        XCTAssertEqual(socket.pendingReceiveCount, 0)
+        XCTAssertEqual(socket.cancelCount, 1)
+    }
+
+    func testReentrantReplacementDuringSynchronousStatusOwnsTheOnlyNextReceive() {
+        let oldSocket = SynchronousCompanionSocket(results: [
+            .success(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+        ])
+        let replacementSocket = FakeCompanionSocket()
+        var requests: [URLRequest] = []
+        var replaced = false
+        let client = RDKCompanionClient(
+            socketFactory: { request, _ in
+                requests.append(request)
+                return requests.count == 1 ? oldSocket : replacementSocket
+            },
+            schedule: { _, _ in XCTFail("Replacement must not schedule reconnect") }
+        )
+        client.onState = { state in
+            guard case .ready = state, !replaced else { return }
+            replaced = true
+            client.connect(
+                relayURL: "wss://relay.example/agent",
+                sessionToken: "account-b",
+                allowSelfSignedTLS: false
+            )
+        }
+
+        client.connect(
+            relayURL: "wss://relay.example/agent",
+            sessionToken: "account-a",
+            allowSelfSignedTLS: false
+        )
+        let settled = expectation(description: "old deferred rearm cannot run")
+        DispatchQueue.main.async { settled.fulfill() }
+        wait(for: [settled], timeout: 1)
+
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(oldSocket.receiveCallCount, 1)
+        XCTAssertEqual(oldSocket.pendingReceiveCount, 0)
+        XCTAssertEqual(oldSocket.cancelCount, 1)
+        XCTAssertEqual(replacementSocket.resumeCount, 1)
+        XCTAssertEqual(replacementSocket.pendingReceiveCount, 1)
+    }
+
+    func testFactoryCallingStartOnEveryInvocationOwnsOneBoundedOpenAttempt() throws {
+        let sockets = (0..<4).map { _ in FakeCompanionSocket() }
+        var factoryCalls = 0
+        var client: RDKCompanionClient!
+        client = RDKCompanionClient(
+            socketFactory: { _, _ in
+                let socket = sockets[factoryCalls]
+                factoryCalls += 1
+                if factoryCalls == sockets.count {
+                    client.disconnect()
+                }
+                client.startRide()
+                return socket
+            },
+            schedule: { _, _ in XCTFail("Factory reentry must not schedule reconnect") }
+        )
+
+        client.connect(
+            relayURL: "wss://relay.example/agent",
+            sessionToken: "account-token",
+            allowSelfSignedTLS: false
+        )
+
+        XCTAssertEqual(factoryCalls, 1)
+        XCTAssertEqual(sockets[0].cancelCount, 0)
+        XCTAssertEqual(sockets[0].resumeCount, 1)
+        XCTAssertEqual(sockets[0].pendingReceiveCount, 1)
+        guard sockets[0].pendingReceiveCount == 1 else { return }
+        sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+        XCTAssertEqual(try messageTypes(sockets[0].sentMessages), ["companion.start"])
+    }
+
+    func testFactoryStopUnpairAndDisconnectInvalidateReturnedAttempt() {
+        for action in ["stop", "unpair", "disconnect"] {
+            let socket = FakeCompanionSocket()
+            var client: RDKCompanionClient!
+            var states: [CompanionConnectionState] = []
+            client = RDKCompanionClient(
+                socketFactory: { _, _ in
+                    switch action {
+                    case "stop": client.stopRide()
+                    case "unpair": client.unpair()
+                    default: client.disconnect()
+                    }
+                    return socket
+                },
+                schedule: { _, _ in XCTFail("Invalidated factory attempt must not reconnect") }
+            )
+            client.onState = { states.append($0) }
+
+            client.connect(
+                relayURL: "wss://relay.example/agent",
+                sessionToken: "account-token",
+                allowSelfSignedTLS: false
+            )
+
+            XCTAssertEqual(socket.cancelCount, 1, "action \(action)")
+            XCTAssertEqual(socket.resumeCount, 0, "action \(action)")
+            XCTAssertEqual(socket.pendingReceiveCount, 0, "action \(action)")
+            if action == "disconnect" {
+                XCTAssertEqual(states, [.signedOut])
+            } else {
+                XCTAssertTrue(states.isEmpty, "action \(action)")
+            }
+        }
+    }
+
+    func testFactoryStopOrUnpairThenStartDefersOneFreshOwnedAttempt() throws {
+        for cutoff in ["stop", "unpair"] {
+            let sockets = [FakeCompanionSocket(), FakeCompanionSocket()]
+            var factoryCalls = 0
+            var client: RDKCompanionClient!
+            client = RDKCompanionClient(
+                socketFactory: { _, _ in
+                    let socket = sockets[factoryCalls]
+                    factoryCalls += 1
+                    if factoryCalls == 1 {
+                        if cutoff == "stop" {
+                            client.stopRide()
+                        } else {
+                            client.unpair()
+                        }
+                        client.startRide()
+                    }
+                    return socket
+                },
+                schedule: { _, _ in XCTFail("Semantic reopen must not use reconnect backoff") }
+            )
+
+            client.connect(
+                relayURL: "wss://relay.example/agent",
+                sessionToken: "account-token",
+                allowSelfSignedTLS: false
+            )
+            XCTAssertEqual(factoryCalls, 1, "reopen must wait until the \(cutoff)-start factory unwinds")
+            let settled = expectation(description: "fresh factory attempt after \(cutoff)-start")
+            DispatchQueue.main.async { settled.fulfill() }
+            wait(for: [settled], timeout: 1)
+
+            XCTAssertEqual(factoryCalls, 2, "cutoff \(cutoff)")
+            XCTAssertEqual(sockets[0].cancelCount, 1, "cutoff \(cutoff)")
+            XCTAssertEqual(sockets[0].resumeCount, 0, "cutoff \(cutoff)")
+            XCTAssertEqual(sockets[0].pendingReceiveCount, 0, "cutoff \(cutoff)")
+            XCTAssertEqual(sockets[1].cancelCount, 0, "cutoff \(cutoff)")
+            XCTAssertEqual(sockets[1].resumeCount, 1, "cutoff \(cutoff)")
+            XCTAssertEqual(sockets[1].pendingReceiveCount, 1, "cutoff \(cutoff)")
+            guard sockets[1].pendingReceiveCount == 1 else { continue }
+            sockets[1].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+            XCTAssertEqual(try messageTypes(sockets[1].sentMessages), ["companion.start"], "cutoff \(cutoff)")
+        }
+    }
+
+    func testFactoryAlwaysStopThenStartLimitsSemanticRecoveryToOneFreshAttempt() {
+        let sockets = (0..<4).map { _ in FakeCompanionSocket() }
+        var factoryCalls = 0
+        var client: RDKCompanionClient!
+        client = RDKCompanionClient(
+            socketFactory: { _, _ in
+                let socket = sockets[factoryCalls]
+                factoryCalls += 1
+                if factoryCalls == sockets.count {
+                    client.disconnect()
+                } else {
+                    client.stopRide()
+                    client.startRide()
+                }
+                return socket
+            },
+            schedule: { _, _ in XCTFail("Semantic recovery must remain separate from reconnect backoff") }
+        )
+
+        client.connect(
+            relayURL: "wss://relay.example/agent",
+            sessionToken: "account-token",
+            allowSelfSignedTLS: false
+        )
+        XCTAssertEqual(factoryCalls, 1, "semantic recovery must not recurse before Connect returns")
+        let settled = expectation(description: "bounded semantic recovery settles")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { settled.fulfill() }
+        wait(for: [settled], timeout: 1)
+
+        XCTAssertEqual(factoryCalls, 2)
+        XCTAssertEqual(sockets[0].cancelCount, 1)
+        XCTAssertEqual(sockets[1].cancelCount, 1)
+        XCTAssertEqual(sockets[0].resumeCount, 0)
+        XCTAssertEqual(sockets[1].resumeCount, 0)
+        XCTAssertEqual(sockets[0].pendingReceiveCount, 0)
+        XCTAssertEqual(sockets[1].pendingReceiveCount, 0)
+    }
+
+    func testDeferredFactoryRecoveryRevalidatesSemanticAndGenerationOwnership() {
+        for boundary in ["stop", "unpair", "disconnect", "connect"] {
+            let sockets = [FakeCompanionSocket(), FakeCompanionSocket()]
+            var requests: [URLRequest] = []
+            var client: RDKCompanionClient!
+            client = RDKCompanionClient(
+                socketFactory: { request, _ in
+                    let socket = sockets[requests.count]
+                    requests.append(request)
+                    if requests.count == 1 {
+                        client.stopRide()
+                        client.startRide()
+                    }
+                    return socket
+                },
+                schedule: { _, _ in XCTFail("Semantic recovery must not use reconnect backoff") }
+            )
+
+            client.connect(
+                relayURL: "wss://relay.example/agent",
+                sessionToken: "account-a",
+                allowSelfSignedTLS: false
+            )
+            XCTAssertEqual(requests.count, 1, "deferred recovery must not recurse before Connect returns")
+            switch boundary {
+            case "stop":
+                client.stopRide()
+            case "unpair":
+                client.unpair()
+            case "disconnect":
+                client.disconnect()
+            default:
+                client.connect(
+                    relayURL: "wss://relay.example/agent",
+                    sessionToken: "account-b",
+                    allowSelfSignedTLS: false
+                )
+            }
+
+            let settled = expectation(description: "deferred recovery rejected after \(boundary)")
+            DispatchQueue.main.async { settled.fulfill() }
+            wait(for: [settled], timeout: 1)
+
+            XCTAssertEqual(requests.count, boundary == "connect" ? 2 : 1, "boundary \(boundary)")
+            XCTAssertEqual(sockets[0].cancelCount, 1, "boundary \(boundary)")
+            XCTAssertEqual(sockets[0].resumeCount, 0, "boundary \(boundary)")
+            XCTAssertEqual(sockets[0].pendingReceiveCount, 0, "boundary \(boundary)")
+            if boundary == "connect" {
+                XCTAssertEqual(
+                    URLComponents(url: requests[1].url!, resolvingAgainstBaseURL: false)?
+                        .queryItems?.first?.value,
+                    "account-b"
+                )
+                XCTAssertEqual(sockets[1].cancelCount, 0)
+                XCTAssertEqual(sockets[1].resumeCount, 1)
+                XCTAssertEqual(sockets[1].pendingReceiveCount, 1)
+            } else {
+                XCTAssertEqual(sockets[1].resumeCount, 0, "boundary \(boundary)")
+                XCTAssertEqual(sockets[1].pendingReceiveCount, 0, "boundary \(boundary)")
+            }
+        }
+    }
+
+    func testFactoryNewConnectMakesNewGenerationAuthoritative() {
+        let sockets = [FakeCompanionSocket(), FakeCompanionSocket()]
+        var requests: [URLRequest] = []
+        var client: RDKCompanionClient!
+        client = RDKCompanionClient(
+            socketFactory: { request, _ in
+                let index = requests.count
+                requests.append(request)
+                if index == 0 {
+                    client.connect(
+                        relayURL: "wss://relay.example/agent",
+                        sessionToken: "account-b",
+                        allowSelfSignedTLS: false
+                    )
+                }
+                return sockets[index]
+            },
+            schedule: { _, _ in XCTFail("Explicit replacement must not schedule reconnect") }
+        )
+
+        client.connect(
+            relayURL: "wss://relay.example/agent",
+            sessionToken: "account-a",
+            allowSelfSignedTLS: false
+        )
+
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(URLComponents(url: requests[1].url!, resolvingAgainstBaseURL: false)?.queryItems?.first?.value, "account-b")
+        XCTAssertEqual(sockets[0].cancelCount, 1)
+        XCTAssertEqual(sockets[0].resumeCount, 0)
+        XCTAssertEqual(sockets[0].pendingReceiveCount, 0)
+        XCTAssertEqual(sockets[1].cancelCount, 0)
+        XCTAssertEqual(sockets[1].resumeCount, 1)
+        XCTAssertEqual(sockets[1].pendingReceiveCount, 1)
+    }
+
+    func testFactoryNewConnectDoesNotCancelSharedAuthoritativeTaskOnStaleUnwind() {
+        let socket = FakeCompanionSocket()
+        var factoryCalls = 0
+        var client: RDKCompanionClient!
+        client = RDKCompanionClient(
+            socketFactory: { _, _ in
+                factoryCalls += 1
+                if factoryCalls == 1 {
+                    client.connect(
+                        relayURL: "wss://relay.example/agent",
+                        sessionToken: "account-b",
+                        allowSelfSignedTLS: false
+                    )
+                }
+                return socket
+            },
+            schedule: { _, _ in XCTFail("Explicit replacement must not schedule reconnect") }
+        )
+
+        client.connect(
+            relayURL: "wss://relay.example/agent",
+            sessionToken: "account-a",
+            allowSelfSignedTLS: false
+        )
+
+        XCTAssertEqual(factoryCalls, 2)
+        XCTAssertEqual(socket.cancelCount, 0)
+        XCTAssertEqual(socket.resumeCount, 1)
+        XCTAssertEqual(socket.pendingReceiveCount, 1)
+    }
+
     func testInitialConnectingStartCallbackIsBoundedWithoutRecursivePublication() throws {
         let harness = ClientHarness(socketCount: 1)
         var connectingCallbacks = 0
@@ -1155,6 +1638,68 @@ private final class FakeCompanionSocket: CompanionSocketTask, CompanionHTTPStatu
 
     func completeSend(at index: Int, error: Error? = nil) {
         sendCompletions[index](error)
+    }
+}
+
+private final class SynchronousCompanionSocket: CompanionSocketTask, CompanionHTTPStatusProviding {
+    private var results: [Result<URLSessionWebSocketTask.Message, Error>]
+    private let duplicateFirstResult: Result<URLSessionWebSocketTask.Message, Error>?
+    private var didDeliverDuplicate = false
+    private var receiveCompletions: [(Result<URLSessionWebSocketTask.Message, Error>) -> Void] = []
+    private var receiveDepth = 0
+    private(set) var maximumReceiveDepth = 0
+    private(set) var receiveCallCount = 0
+    private(set) var resumeCount = 0
+    private(set) var cancelCount = 0
+    private(set) var sentMessages: [URLSessionWebSocketTask.Message] = []
+    var onFirstPendingReceive: (() -> Void)?
+    var httpStatusCode: Int?
+    var pendingReceiveCount: Int { receiveCompletions.count }
+
+    init(
+        results: [Result<URLSessionWebSocketTask.Message, Error>],
+        duplicateFirstResult: Result<URLSessionWebSocketTask.Message, Error>? = nil
+    ) {
+        self.results = results
+        self.duplicateFirstResult = duplicateFirstResult
+    }
+
+    func resume() {
+        resumeCount += 1
+    }
+
+    func send(_ message: URLSessionWebSocketTask.Message, completionHandler: @escaping (Error?) -> Void) {
+        sentMessages.append(message)
+    }
+
+    func receive(completionHandler: @escaping (Result<URLSessionWebSocketTask.Message, Error>) -> Void) {
+        receiveCallCount += 1
+        guard !results.isEmpty else {
+            receiveCompletions.append(completionHandler)
+            if receiveCompletions.count == 1 {
+                onFirstPendingReceive?()
+            }
+            return
+        }
+
+        let result = results.removeFirst()
+        receiveDepth += 1
+        maximumReceiveDepth = max(maximumReceiveDepth, receiveDepth)
+        completionHandler(result)
+        if !didDeliverDuplicate, let duplicateFirstResult {
+            didDeliverDuplicate = true
+            completionHandler(duplicateFirstResult)
+        }
+        receiveDepth -= 1
+    }
+
+    func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+        cancelCount += 1
+    }
+
+    func failPending(_ error: Error) {
+        let completion = receiveCompletions.removeFirst()
+        completion(.failure(error))
     }
 }
 

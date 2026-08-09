@@ -1068,6 +1068,38 @@ final class CompanionViewModelTests: XCTestCase {
         XCTAssertFalse(harness.viewModel.helmetRideActive)
     }
 
+    func testAuthRequiredReenteredFromUnpairLocationStopJoinsRequiredStopBeforeIdentityClear() {
+        let harness = Harness()
+        harness.stream.startResults = [true]
+        harness.stream.permissionOnStart = .precise
+        harness.client.publish(.paired(deviceId: "rdk", label: nil))
+        harness.viewModel.startHelmetRide()
+        harness.viewModel.pairCode = "123456"
+        var didRequireAuth = false
+        harness.stream.onStop = {
+            guard !didRequireAuth else { return }
+            didRequireAuth = true
+            harness.viewModel.handleAuthRequired()
+        }
+        harness.events.removeAll()
+        harness.voiceEvents.removeAll()
+
+        harness.viewModel.unpairHelmet()
+
+        XCTAssertEqual(
+            harness.events.filter { $0 == "location.stop" || $0.hasPrefix("companion.") },
+            ["location.stop", "companion.stop", "companion.disconnect"]
+        )
+        XCTAssertEqual(harness.client.stopCount, 1)
+        XCTAssertEqual(harness.client.disconnectCount, 1)
+        XCTAssertEqual(harness.client.unpairCount, 0)
+        XCTAssertEqual(harness.viewModel.sessionToken, "")
+        XCTAssertEqual(harness.viewModel.companionState, .signedOut)
+        XCTAssertFalse(harness.viewModel.helmetRideActive)
+        XCTAssertEqual(harness.viewModel.pairCode, "123456")
+        XCTAssertEqual(harness.voiceEvents, ["voice.auth.ack", "voice.owner:nil"])
+    }
+
     func testAccountReplacementReenteredFromUnpairLocationStopJoinsOneTeardown() {
         let harness = Harness()
         harness.stream.startResults = [true, true]

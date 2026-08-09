@@ -1347,6 +1347,93 @@ final class CompanionViewModelTests: XCTestCase {
         XCTAssertEqual(harness.requests.count, 3, "no old-account socket may reopen")
     }
 
+    func testReceiveFailureFinalizesEveryAccountStopOwnershipAndNewestIntent() {
+        let ownerships = ["account-stop", "joined-user-stop"]
+        let boundaries = ["logout", "replace-c", "replace-clear"]
+
+        for ownership in ownerships {
+            for boundary in boundaries {
+                XCTContext.runActivity(named: "\(ownership)-\(boundary)") { _ in
+                    let pairSocket = ViewModelRecordingSocket()
+                    let rideSocket = ViewModelRecordingSocket()
+                    let harness = RealCompanionViewModelHarness(sockets: [pairSocket, rideSocket])
+                    harness.completePairOnly()
+                    harness.stream.startResults = [true, true]
+                    harness.stream.permissionOnStart = .precise
+                    harness.viewModel.startHelmetRide()
+                    rideSocket.deliver(
+                        .string("{\"type\":\"companion.status\",\"state\":\"ready\",\"deviceId\":\"rdk\"}")
+                    )
+                    rideSocket.automaticallyCompletesSends = false
+
+                    var suppliedReentrantIntent = false
+                    let cancellable = harness.viewModel.$companionState.sink { state in
+                        guard !suppliedReentrantIntent,
+                              state == .failed(code: "connection", detail: "Companion connection closed.") else {
+                            return
+                        }
+                        suppliedReentrantIntent = true
+                        harness.viewModel.startHelmetRide()
+                        switch boundary {
+                        case "logout": harness.viewModel.logout()
+                        case "replace-c": harness.viewModel.sessionToken = "account-c"
+                        default: harness.viewModel.sessionToken = " \n "
+                        }
+                    }
+
+                    if ownership == "joined-user-stop" {
+                        harness.viewModel.stopHelmetRide()
+                    }
+                    switch boundary {
+                    case "logout": harness.viewModel.logout()
+                    default: harness.viewModel.sessionToken = "account-b"
+                    }
+
+                    XCTAssertEqual(
+                        try? viewModelMessageTypes(rideSocket.sentMessages),
+                        ["companion.start", "companion.stop"]
+                    )
+                    XCTAssertEqual(harness.stream.stopCount, 1)
+                    XCTAssertEqual(harness.client.stopCount, 1)
+                    XCTAssertEqual(harness.client.disconnectCount, 0)
+
+                    rideSocket.failReceive(ViewModelTestError.transport)
+                    if (ownership == "account-stop") == (boundary == "logout") {
+                        rideSocket.completeSend(at: 1, error: ViewModelTestError.transport)
+                        rideSocket.completeSend(at: 1)
+                    } else {
+                        rideSocket.completeSend(at: 1)
+                        rideSocket.completeSend(at: 1, error: ViewModelTestError.transport)
+                    }
+
+                    let expectedToken: String
+                    switch boundary {
+                    case "logout": expectedToken = ""
+                    case "replace-c": expectedToken = "account-c"
+                    default: expectedToken = " \n "
+                    }
+                    XCTAssertEqual(harness.viewModel.sessionToken, expectedToken)
+                    XCTAssertNotEqual(harness.viewModel.sessionToken, "account-session-token")
+                    XCTAssertEqual(harness.viewModel.companionState, .signedOut)
+                    XCTAssertFalse(harness.viewModel.helmetRideActive)
+                    XCTAssertEqual(harness.stream.stopCount, 1)
+                    XCTAssertEqual(harness.client.stopCount, 1)
+                    XCTAssertEqual(harness.client.disconnectCount, 1)
+                    XCTAssertEqual(rideSocket.cancelCount, 1)
+                    XCTAssertEqual(harness.requests.count, 2, "no account-A reconnect or reentrant Start may escape")
+                    if boundary == "logout" {
+                        XCTAssertEqual(harness.authLogoutTokens, ["account-session-token"])
+                        XCTAssertEqual(harness.secretWrites.map(\.value), [""])
+                    } else {
+                        XCTAssertTrue(harness.authLogoutTokens.isEmpty)
+                        XCTAssertEqual(harness.secretWrites.map(\.value), [expectedToken])
+                    }
+                    withExtendedLifetime(cancellable) {}
+                }
+            }
+        }
+    }
+
     func testAccountBoundaryDefersDisconnectStartAcrossNestedNewestTokenMatrix() {
         for nestedToken in ["account-c", " \n ", " account-session-token "] {
             let harness = Harness()
@@ -1525,6 +1612,10 @@ private final class ViewModelRecordingSocket: CompanionSocketTask {
         receiveCompletions.removeFirst()(.success(message))
     }
 
+    func failReceive(_ error: Error) {
+        receiveCompletions.removeFirst()(.failure(error))
+    }
+
     func completeSend(at index: Int, error: Error? = nil) {
         sendCompletions[index](error)
     }
@@ -1533,8 +1624,10 @@ private final class ViewModelRecordingSocket: CompanionSocketTask {
 private final class RealCompanionViewModelHarness {
     let sockets: [ViewModelRecordingSocket]
     private(set) var requests: [URLRequest] = []
+    private(set) var authLogoutTokens: [String] = []
+    private(set) var secretWrites: [(account: String, value: String)] = []
     let stream = FakeLocationStream()
-    private lazy var client = RDKCompanionClient(
+    private lazy var realClient = RDKCompanionClient(
         socketFactory: { [unowned self] request, _ in
             let socket = self.sockets[self.requests.count]
             self.requests.append(request)
@@ -1542,6 +1635,7 @@ private final class RealCompanionViewModelHarness {
         },
         schedule: { _, _ in XCTFail("Explicit unpair must not schedule reconnect") }
     )
+    private(set) lazy var client = ObservedCompanionClient(base: realClient)
     private(set) lazy var viewModel: MainViewModel = {
         let defaults = UserDefaults(suiteName: "RealCompanionViewModelHarness.\(UUID().uuidString)")!
         defaults.set("ws://relay.example/agent", forKey: "relay_url")
@@ -1555,8 +1649,8 @@ private final class RealCompanionViewModelHarness {
             initialSessionToken: "account-session-token",
             companionClient: client,
             locationStream: stream,
-            authLogout: { _, _, _ in },
-            persistSecret: { _, _ in },
+            authLogout: { [unowned self] _, token, _ in self.authLogoutTokens.append(token) },
+            persistSecret: { [unowned self] account, value in self.secretWrites.append((account, value)) },
             monotonicNow: { 0 },
             wallClock: { .distantPast },
             schedule: { _, _ in XCTFail("Explicit unpair must not schedule fixes") },
@@ -1578,6 +1672,55 @@ private final class RealCompanionViewModelHarness {
         viewModel.pairCode = "123456"
         viewModel.pairHelmet()
         sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"paired\",\"deviceId\":\"rdk\"}"))
+    }
+}
+
+private final class ObservedCompanionClient: CompanionClientControlling {
+    private let base: RDKCompanionClient
+    private(set) var stopCount = 0
+    private(set) var disconnectCount = 0
+
+    var onState: ((CompanionConnectionState) -> Void)? {
+        get { base.onState }
+        set { base.onState = newValue }
+    }
+
+    init(base: RDKCompanionClient) {
+        self.base = base
+    }
+
+    func connect(relayURL: String, sessionToken: String, allowSelfSignedTLS: Bool) {
+        base.connect(
+            relayURL: relayURL,
+            sessionToken: sessionToken,
+            allowSelfSignedTLS: allowSelfSignedTLS
+        )
+    }
+
+    func pair(code: String) { base.pair(code: code) }
+    func startRide() { base.startRide() }
+
+    func stopRide() {
+        stopCount += 1
+        base.stopRide()
+    }
+
+    func stopRide(completion: @escaping (CompanionActionResult) -> Void) {
+        stopCount += 1
+        base.stopRide(completion: completion)
+    }
+
+    func unpair() { base.unpair() }
+
+    func unpair(completion: @escaping (CompanionActionResult) -> Void) {
+        base.unpair(completion: completion)
+    }
+
+    func sendLatest(_ fix: CompanionFix) { base.sendLatest(fix) }
+
+    func disconnect() {
+        disconnectCount += 1
+        base.disconnect()
     }
 }
 

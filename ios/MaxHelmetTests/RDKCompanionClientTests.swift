@@ -267,7 +267,8 @@ final class RDKCompanionClientTests: XCTestCase {
     func testOnlyNewestReplacementWaitsBehindOneInFlightFix() throws {
         let harness = ClientHarness(socketCount: 1)
         harness.connect()
-        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+        harness.client.startRide()
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"sharing\"}"))
         harness.client.sendLatest(fix(sequence: 1))
         harness.client.sendLatest(fix(sequence: 2))
         harness.client.sendLatest(fix(sequence: 3))
@@ -312,7 +313,8 @@ final class RDKCompanionClientTests: XCTestCase {
         for action in ["stop", "unpair", "disconnect"] {
             let harness = ClientHarness(socketCount: 1)
             harness.connect()
-            harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+            harness.client.startRide()
+            harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"sharing\"}"))
             harness.client.sendLatest(fix(sequence: 1))
             harness.client.sendLatest(fix(sequence: 2))
             switch action {
@@ -351,6 +353,112 @@ final class RDKCompanionClientTests: XCTestCase {
         let harness = ClientHarness(socketCount: 1)
         XCTAssertTrue(harness.requests.isEmpty)
         XCTAssertEqual(harness.sockets[0].resumeCount, 0)
+    }
+
+    func testReadyBeforeStartRideCannotAuthorizeLocation() throws {
+        let harness = ClientHarness(socketCount: 1)
+        harness.connect()
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+
+        harness.client.sendLatest(fix(sequence: 20))
+
+        XCTAssertTrue(try locationSequences(harness.sockets[0].sentMessages).isEmpty)
+    }
+
+    func testStopRejectsRacedFixAcrossReadyAndLateSharing() throws {
+        let harness = ClientHarness(socketCount: 1)
+        harness.connect()
+        harness.client.startRide()
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"sharing\"}"))
+        harness.client.stopRide()
+
+        harness.client.sendLatest(fix(sequence: 21))
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+        harness.client.sendLatest(fix(sequence: 22))
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"sharing\"}"))
+        harness.client.sendLatest(fix(sequence: 23))
+
+        XCTAssertEqual(
+            try messageTypes(harness.sockets[0].sentMessages),
+            ["companion.start", "companion.stop"]
+        )
+    }
+
+    func testStopLateSharingRapidRestartAndReadySendsOneFreshStart() throws {
+        let harness = ClientHarness(socketCount: 1)
+        harness.connect()
+        harness.client.startRide()
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"sharing\"}"))
+        harness.client.stopRide()
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"sharing\"}"))
+
+        harness.client.startRide()
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"sharing\"}"))
+
+        XCTAssertEqual(
+            try messageTypes(harness.sockets[0].sentMessages),
+            ["companion.start", "companion.stop", "companion.start"]
+        )
+    }
+
+    func testUnpairRejectsNewFixesAcrossLateReadyAndSharing() throws {
+        let harness = ClientHarness(socketCount: 1)
+        harness.connect()
+        harness.client.startRide()
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+        harness.client.unpair()
+
+        harness.client.sendLatest(fix(sequence: 24))
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"sharing\"}"))
+
+        XCTAssertTrue(try locationSequences(harness.sockets[0].sentMessages).isEmpty)
+    }
+
+    func testDisconnectRejectsNewFixThatCouldCrossAReconnect() throws {
+        let harness = ClientHarness(socketCount: 2)
+        harness.connect()
+        harness.client.startRide()
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+        harness.client.disconnect()
+        harness.client.sendLatest(fix(sequence: 25))
+
+        harness.connect(token: "next-account-token")
+        harness.sockets[1].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+
+        XCTAssertTrue(try locationSequences(harness.sockets[1].sentMessages).isEmpty)
+    }
+
+    func testConvenienceClientConstructionIsHeadlessUntilConnect() {
+        let client = RDKCompanionClient()
+        var states: [CompanionConnectionState] = []
+        client.onState = { states.append($0) }
+
+        XCTAssertTrue(states.isEmpty)
+        client.disconnect()
+        XCTAssertEqual(states, [.signedOut])
+    }
+
+    func testProductionCompanionSourcesHaveNoVoiceAgentCoupling() throws {
+        let sourceDirectory = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("MaxHelmet/Companion", isDirectory: true)
+        let sources = try ["RDKCompanionProtocol.swift", "RDKCompanionClient.swift"]
+            .map { try String(contentsOf: sourceDirectory.appendingPathComponent($0), encoding: .utf8) }
+            .joined(separator: "\n")
+        let normalizedSources = sources.lowercased()
+
+        for forbidden in ["AgentSession", "MicStreamer", "AVAudioSession", "microphone", "/agent"] {
+            XCTAssertFalse(
+                normalizedSources.contains(forbidden.lowercased()),
+                "Companion source must not reference \(forbidden)"
+            )
+        }
     }
 
     private func fix(sequence: Int) -> CompanionFix {

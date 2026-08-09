@@ -144,7 +144,9 @@ final class RDKCompanionClient {
             }
             guard case .ready = self.transportState, !self.startSentOnSocket else { return }
             self.startSentOnSocket = true
+            self.canSendLocation = true
             self.sendAction(RDKCompanionProtocol.startMessage())
+            self.drainLatestFix()
         }
     }
 
@@ -180,7 +182,11 @@ final class RDKCompanionClient {
 
     func sendLatest(_ fix: CompanionFix) {
         onMain { [weak self] in
-            guard let self, RDKCompanionProtocol.locationMessage(fix) != nil else { return }
+            guard let self,
+                  self.desiredRide,
+                  RDKCompanionProtocol.locationMessage(fix) != nil else {
+                return
+            }
             self.pendingFix = fix
             self.drainLatestFix()
         }
@@ -279,12 +285,9 @@ final class RDKCompanionClient {
         transportState = state
         switch state {
         case .ready, .sharing:
-            canSendLocation = true
+            canSendLocation = desiredRide
         default:
             canSendLocation = false
-        }
-        if case .sharing = state {
-            startSentOnSocket = true
         }
         publish(state)
 
@@ -326,7 +329,8 @@ final class RDKCompanionClient {
 
     private func drainLatestFix() {
         assert(Thread.isMainThread)
-        guard canSendLocation,
+        guard desiredRide,
+              canSendLocation,
               inFlightFix == nil,
               let sendingSocket = socket,
               let fix = pendingFix,

@@ -50,11 +50,11 @@ describe("step", () => {
       progress = u.progress;
       return u;
     };
-    expect(at(31.232).spokenPrompt).toBe("前方350米，右转"); // ~333 m → far
-    expect(at(31.2325).spokenPrompt).toBeNull(); // far already fired
-    expect(at(31.234).spokenPrompt).toBe("前方100米，右转"); // ~111 m → near
-    expect(at(31.2348).spokenPrompt).toBe("右转"); // ~22 m → now
-    expect(at(31.2349).spokenPrompt).toBeNull();
+    expect(at(31.232)).toMatchObject({ spokenPrompt: "前方350米，右转", firedThreshold: "far" }); // ~333 m → far
+    expect(at(31.2325)).toMatchObject({ spokenPrompt: null, firedThreshold: null }); // far already fired
+    expect(at(31.234)).toMatchObject({ spokenPrompt: "前方100米，右转", firedThreshold: "near" }); // ~111 m → near
+    expect(at(31.2348)).toMatchObject({ spokenPrompt: "右转", firedThreshold: "now" }); // ~22 m → now
+    expect(at(31.2349)).toMatchObject({ spokenPrompt: null, firedThreshold: null });
   });
 
   it("advances past the maneuver and clears thresholds", () => {
@@ -105,7 +105,9 @@ describe("step", () => {
     // completed must still be reported alongside the post-advance progress.
     const u = step({ lat: 31.2348, lon: 121.47 }, route, INITIAL_PROGRESS);
     expect(u.spokenPrompt).toBe("右转");
+    expect(u.firedThreshold).toBe("now");
     expect(u.progress.maneuverIndex).toBe(1);
+    expect(u.progress.firedThresholds).toEqual([]);
   });
 
   it("arrival keys on the last polyline vertex, not the destination", () => {

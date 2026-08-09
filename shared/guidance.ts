@@ -11,7 +11,7 @@
 import type { GeoPoint } from "./geo";
 import type { NavRouteEvent } from "./agent";
 
-type PromptThreshold = "far" | "near" | "now";
+export type PromptThreshold = "far" | "near" | "now";
 
 export type GuidanceProgress = {
   maneuverIndex: number;
@@ -35,6 +35,7 @@ export type GuidanceUpdate = {
   arrived: boolean;
   spokenPrompt: string | null;
   currentInstruction: string | null;
+  firedThreshold: PromptThreshold | null;
 };
 
 const EARTH_RADIUS_METERS = 6371008.8;
@@ -183,6 +184,7 @@ export function step(position: GeoPoint, route: NavRouteEvent, progress: Guidanc
   let maneuverIndex = progress.maneuverIndex;
   let firedThresholds = progress.firedThresholds;
   let spokenPrompt: string | null = null;
+  let firedThreshold: PromptThreshold | null = null;
 
   // Prompt-then-advance, gated entirely behind on-route — see rules 1–3 above.
   if (!offRoute) {
@@ -194,6 +196,7 @@ export function step(position: GeoPoint, route: NavRouteEvent, progress: Guidanc
       if (due.length > 0) {
         const urgent = due.reduce((most, candidate) => (candidate.meters < most.meters ? candidate : most));
         firedThresholds = [...firedThresholds, ...due.map((t) => t.id)];
+        firedThreshold = urgent.id;
         spokenPrompt =
           urgent.id === "now"
             ? currentManeuver.instruction
@@ -227,6 +230,7 @@ export function step(position: GeoPoint, route: NavRouteEvent, progress: Guidanc
     offRoute,
     arrived,
     spokenPrompt: offRoute ? null : spokenPrompt,
-    currentInstruction
+    currentInstruction,
+    firedThreshold: offRoute ? null : firedThreshold
   };
 }

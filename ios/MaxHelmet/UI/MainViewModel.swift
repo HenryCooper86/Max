@@ -95,6 +95,7 @@ final class MainViewModel: ObservableObject {
     private var lastThrottleEmissionTime: TimeInterval?
     private var nextFlushTicket = 0
     private var scheduledFlushTicket: Int?
+    private var rideTeardownDepth = 0
 
     /// Presents the Max gallery sheet.
     @Published var showGallery = false
@@ -123,6 +124,13 @@ final class MainViewModel: ObservableObject {
     /// The login session token, stored SEPARATELY from the manual 认证令牌
     /// field so signing in/out never destroys a pasted operator relay token.
     @Published var sessionToken: String {
+        willSet(newToken) {
+            let oldAccount = sessionToken.trimmingCharacters(in: .whitespacesAndNewlines)
+            let newAccount = newToken.trimmingCharacters(in: .whitespacesAndNewlines)
+            if oldAccount != newAccount, ownsCompanionAccountSession {
+                endCompanionAccountSession()
+            }
+        }
         didSet { persistSecret(Keys.sessionToken, sessionToken) }
     }
 
@@ -488,12 +496,27 @@ final class MainViewModel: ObservableObject {
     private func performUnpairHelmet() {
         dispatchPrecondition(condition: .onQueue(.main))
         guard hasAccountSession, canUnpair(from: companionState) || rideOwned else { return }
+        let pairOnlySocketWasClosed: Bool
+        if case .paired = companionState {
+            pairOnlySocketWasClosed = !rideOwned && !helmetRideActive
+        } else {
+            pairOnlySocketWasClosed = false
+        }
 
         if rideOwned || helmetRideActive {
             terminateOwnedRide(sendStop: true)
         } else {
             invalidateRideWithoutSocketStop()
             locationStream.stop()
+        }
+        let owner = companionGeneration
+        if pairOnlySocketWasClosed {
+            companionClient.connect(
+                relayURL: relayURL.trimmingCharacters(in: .whitespacesAndNewlines),
+                sessionToken: sessionToken.trimmingCharacters(in: .whitespacesAndNewlines),
+                allowSelfSignedTLS: allowSelfSigned
+            )
+            guard ownsCompanionGeneration(owner), hasAccountSession else { return }
         }
         companionClient.unpair()
         pairCode = ""
@@ -525,14 +548,18 @@ final class MainViewModel: ObservableObject {
         switch state {
         case .failed(code: "auth", detail: _):
             if rideOwned || helmetRideActive {
-                terminateOwnedRide(sendStop: true)
+                let teardownOwner = terminateOwnedRide(sendStop: true)
+                guard ownsCompanionGeneration(teardownOwner) else { return }
+                companionState = state
             } else {
                 let replacementOwner = advanceCompanionGeneration()
                 bindCompanionState(owner: replacementOwner)
             }
         case .unpaired:
             if rideOwned || helmetRideActive {
-                terminateOwnedRide(sendStop: true)
+                let teardownOwner = terminateOwnedRide(sendStop: true)
+                guard ownsCompanionGeneration(teardownOwner) else { return }
+                companionState = state
             }
         default:
             break
@@ -556,6 +583,7 @@ final class MainViewModel: ObservableObject {
         let now = monotonicNow()
         guard ownsRide(owner) else { return }
         if let fix = fixThrottle.accept(location, now: now) {
+            scheduledFlushTicket = nil
             lastThrottleEmissionTime = now
             forward(fix, owner: owner)
             return
@@ -567,10 +595,15 @@ final class MainViewModel: ObservableObject {
               scheduledFlushTicket == nil else {
             return
         }
+        scheduleNewestFlush(owner: owner, delay: max(0, 1 - (now - lastThrottleEmissionTime)))
+    }
+
+    private func scheduleNewestFlush(owner: Int, delay: TimeInterval) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard ownsRide(owner), scheduledFlushTicket == nil else { return }
         nextFlushTicket &+= 1
         let ticket = nextFlushTicket
         scheduledFlushTicket = ticket
-        let delay = max(0, 1 - (now - lastThrottleEmissionTime))
         schedule({ [weak self] in
             self?.onMain { [weak self] in self?.flushNewest(owner: owner, ticket: ticket) }
         }, delay)
@@ -579,8 +612,18 @@ final class MainViewModel: ObservableObject {
     private func flushNewest(owner: Int, ticket: Int) {
         dispatchPrecondition(condition: .onQueue(.main))
         guard ownsRide(owner), scheduledFlushTicket == ticket else { return }
-        scheduledFlushTicket = nil
         let now = monotonicNow()
+        guard now.isFinite, let lastEmissionTime = lastThrottleEmissionTime else {
+            scheduledFlushTicket = nil
+            return
+        }
+        let elapsed = now - lastEmissionTime
+        if elapsed < 1 {
+            scheduledFlushTicket = nil
+            scheduleNewestFlush(owner: owner, delay: max(0, 1 - elapsed))
+            return
+        }
+        scheduledFlushTicket = nil
         guard ownsRide(owner), let fix = fixThrottle.flushNewest(now: now) else { return }
         lastThrottleEmissionTime = now
         forward(fix, owner: owner)
@@ -608,6 +651,8 @@ final class MainViewModel: ObservableObject {
         locationStream.onPermission = nil
         bindCompanionState(owner: owner)
 
+        rideTeardownDepth += 1
+        defer { rideTeardownDepth -= 1 }
         locationStream.stop()
         if sendStop { companionClient.stopRide() }
         guard ownsCompanionGeneration(owner) else { return owner }
@@ -629,7 +674,9 @@ final class MainViewModel: ObservableObject {
 
     private func endCompanionAccountSession() {
         dispatchPrecondition(condition: .onQueue(.main))
-        if rideOwned || helmetRideActive {
+        if rideTeardownDepth > 0, !rideOwned {
+            invalidateRideWithoutSocketStop()
+        } else if rideOwned || helmetRideActive {
             terminateOwnedRide(sendStop: true)
         } else {
             invalidateRideWithoutSocketStop()
@@ -657,6 +704,10 @@ final class MainViewModel: ObservableObject {
     private var hasAccountSession: Bool {
         !authUsername.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !sessionToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var ownsCompanionAccountSession: Bool {
+        rideOwned || helmetRideActive || companionState != .signedOut
     }
 
     private func canPair(from state: CompanionConnectionState) -> Bool {

@@ -247,9 +247,10 @@ audio + session logic; the `UI/` layer is the SwiftUI HUD.
 
 ### Platform notes vs. Android
 
-- **Background audio** replaces the Android foreground service: `UIBackgroundModes = audio`
-  in `Info.plist` keeps the mic and playback alive when the app is backgrounded or the screen
-  is off. There is no separate notification.
+- **Background audio and explicit Helmet Ride location** replace Android foreground services:
+  `UIBackgroundModes = audio, location` keeps voice alive and permits an explicitly started
+  Helmet Ride to continue forwarding under the iOS location indicator while locked. There is
+  no separate Android-style service notification.
 - **Bluetooth routing** is handled by iOS itself — `AVAudioSession` with `.playAndRecord` +
   Bluetooth category options automatically prefers a connected HFP headset, so there is no
   manual SCO start/stop.

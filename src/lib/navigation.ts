@@ -179,12 +179,11 @@ export function createNavigationController(deps: {
       return;
     }
     if (activeRoute && rerouteInFlight) {
-      // Reroute answer: swap the route in, restart progress, announce it.
+      // Reroute answer: swap the route in, restart progress; relay speaks the confirmation.
       activeRoute = event;
       progress = INITIAL_PROGRESS;
       rerouteInFlight = false;
       offRouteAnnounced = false;
-      deps.speak("已重新规划路线");
       stepAndEmit();
       return;
     }

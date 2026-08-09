@@ -40,9 +40,39 @@ exit 1
 
 After creating the acceptance template and this report, that existence gate exits `0`. The focused test was rerun after documentation changes and remained `2/2` green; final fresh verification is recorded below.
 
+## Independent-review correction round 1
+
+The cumulative review of `c696b50edcff1a8fc457735f7c578f9440451fff` found two Important
+operational defects and one Minor wording defect in Task 16's documentation: root-level checkout
+`rsync --delete` could upload ignored files and erase the board-only AEC executable/armed alerts;
+the readiness grep could accept a marker from the previous systemd invocation; and the generic
+privacy text overstated encryption for Debug LAN `ws://`.
+
+Before changing the documentation, `tests/rdk-release-operations.test.ts` supplied the required
+executable regression contract:
+
+```text
+npx vitest run tests/rdk-release-operations.test.ts
+FAIL — 3 failed, 1 passed
+```
+
+The failures were the three reviewed documentation defects. The already-green test was a safe local
+dry-run: it created a temporary Git repository, archived a reviewed commit, proved ignored/untracked
+checkout sentinels were absent, then proved an executable AEC fixture and armed `.wav` alert survived
+explicit preservation. No product or deployment file was changed to create the RED.
+
+After correcting the rollout, acceptance template, and transport wording, the same contract passed;
+an additional executable assertion now parses every new rollout/rollback and acceptance `bash`
+fence through `bash -n`:
+
+```text
+npx vitest run tests/rdk-release-operations.test.ts
+PASS — 1 file, 5 tests
+```
+
 ## Broad gates
 
-Fresh Task 16 runs:
+Initial Task 16 runs at `c696b50edcff1a8fc457735f7c578f9440451fff`:
 
 | Command                                                                    | Result                                                                                              |
 | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
@@ -60,6 +90,28 @@ Fresh Task 16 runs:
 | Android `testDebugUnitTest lintDebug assembleDebug` with installed SDK/JBR | PASS — 53 Gradle tasks; non-fatal native-access/strip-symbol warnings                               |
 | `git diff --check`                                                         | PASS                                                                                                |
 | `bash -n deploy-lightsail.command`                                         | PASS                                                                                                |
+
+Fresh review-correction runs:
+
+| Command                                                                    | Result                                                                         |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `npx vitest run tests/rdk-release-operations.test.ts`                      | PASS — 5/5                                                                     |
+| Both Task 16 Vitest files                                                  | PASS — 2 files, 7 tests                                                        |
+| `npm test`                                                                 | PASS — 102 files, 1,296 tests                                                  |
+| `npx tsc -p rdk/agent/tsconfig.json`                                       | PASS                                                                           |
+| `npm run check:protocol`                                                   | PASS                                                                           |
+| `npm run lint`                                                             | PASS                                                                           |
+| `npm run test:fault-matrix`                                                | PASS — 24/24                                                                   |
+| `npm run build`                                                            | PASS                                                                           |
+| Affected-file Prettier checks, including the ignored report explicitly     | PASS                                                                           |
+| Executable rollout/rollback/acceptance Bash-fence assertions               | PASS inside `rdk-release-operations.test.ts`                                   |
+| `bash -n deploy-lightsail.command`                                         | PASS                                                                           |
+| Full MaxHelmet simulator test command                                      | PASS — 397/397; known post-success `simctl` diagnostic-collection warning only |
+| Unsigned MaxHelmet simulator build                                         | PASS                                                                           |
+| Android `testDebugUnitTest lintDebug assembleDebug` with installed SDK/JBR | PASS — 53 Gradle tasks; the documented native-access warning remains non-fatal |
+| `git diff --check`                                                         | PASS                                                                           |
+| `npm run check`                                                            | BLOCKED at unchanged ledgered Prettier finding: `server/companion-store.ts`    |
+| `npm run check:dead-code`                                                  | BLOCKED by the same four ledgered file/binary/export findings printed below    |
 
 The exact pre-ledgered dead-code output remains:
 
@@ -110,7 +162,22 @@ The root, RDK, and iOS READMEs and changelog now consistently document:
 
 Required deployment inputs are `LIGHTSAIL_KEY`, `LIGHTSAIL_HOST`, `LIGHTSAIL_APP_DIR`, `LIGHTSAIL_HEALTH_URL`, `LIGHTSAIL_READY_URL`, and optionally `LIGHTSAIL_DEPLOY_BRANCH`; no secret values were printed. The default key file exists locally, but credentials/connectivity were not exercised. The script currently uses `curl --insecure` for the documented controlled self-signed test box; production acceptance still requires trusted TLS.
 
-The safe RDK sync/install/restart/rollback commands are recorded in `rdk/README.md`. They preserve `/var/lib/max/device-id`, keep secrets under `/etc/max`, install dependencies only when the lockfile changed, deploy unit files with their code, restart `max-agent`, verify systemd state, compare the private identity without printing it, and select only the fixed `[relay] session ready` journal marker.
+The corrected RDK archive/stage/build/activation/rollback commands are recorded in `rdk/README.md`.
+They require the reviewed SHA to equal `origin/main`, stream `git archive "$REVIEWED_SHA"` into a
+new root-owned stage, and therefore cannot import ignored/unreviewed checkout files. Before
+activation they explicitly preserve and compare `/opt/max/rdk/aec/max-aec` and the armed
+`/opt/max/rdk/audio/alerts` clip set; dependencies and the build run from that exact stage. They
+verify `/opt/max` and private device-identity ownership/modes, preserve `/var/lib/max/device-id` and
+`/etc/max`, and use one controlled forward restart. Readiness is bounded to 60 seconds and accepts
+`[relay] session ready` only from the new/current
+`systemctl show -p InvocationID --value max-agent`; the acceptance follow-up performs no second
+restart. Rollback restores the entire former release, including its native/audio artifacts, and
+repeats the new-invocation proof.
+
+The relay acceptance probe now runs as the relay account and verifies the configured binding parent
+and file owner/group with `0700`/`0600` modes plus atomic rename capability without reading the
+snapshot. Root privacy wording now distinguishes production `wss://` with trusted TLS, the
+TLS-protected self-signed Debug test endpoint, and unencrypted Debug LAN `ws://`.
 
 ## External and physical checks still PENDING
 
@@ -132,6 +199,7 @@ No physical-device, audio-hardware, Amap, or Lightsail acceptance is claimed.
 Created:
 
 - `tests/rdk-companion-navigation-e2e.test.ts`
+- `tests/rdk-release-operations.test.ts`
 - `docs/rdk-ios-companion-acceptance.md`
 - `.superpowers/sdd/2026-08-09-rdk-ios-companion-navigation/task-16-report.md`
 

@@ -712,46 +712,199 @@ systemctl restart max-agent && journalctl -u max-agent -f
 ### Reviewed RDK rollout
 
 Deploy only after the matching relay SHA is live/ready and the signed iOS build is installed. From
-the reviewed clean checkout, set `RDK_HOST` to the board's SSH target (do not put credentials in
-the repository), record `git rev-parse HEAD`, and sync the reviewed tree while leaving durable
-state in `/var/lib/max` and secrets in `/etc/max`:
+the reviewed clean `main` checkout, set `RDK_HOST` to the board's SSH target (do not put credentials
+in the repository). The commands below require the local SHA to equal `origin/main`, then stream
+only that reviewed Git archive into a new root-owned stage. They never copy ignored/untracked
+checkout files or destructively mirror a live checkout onto `/opt/max`:
 
 ```bash
+set -euo pipefail
 RDK_HOST=root@board.example.com
-rsync -azc --delete \
-  --exclude='.git' --exclude='.env' --exclude='node_modules' \
-  --exclude='android' --exclude='ios' --exclude='dist' \
-  ./ "$RDK_HOST":/opt/max/
+git fetch origin main
+REVIEWED_SHA=$(git rev-parse HEAD)
+test "$REVIEWED_SHA" = "$(git rev-parse origin/main)"
+test -z "$(git status --porcelain --untracked-files=no)"
+case "$REVIEWED_SHA" in
+  (????????????????????????????????????????) ;;
+  (*) echo "expected a full reviewed Git SHA" >&2; exit 1 ;;
+esac
+REMOTE_STAGE="/opt/max.stage-$REVIEWED_SHA"
 
-# Run only when package-lock.json changed from the previously recorded SHA.
-ssh "$RDK_HOST" 'cd /opt/max && npm ci --omit=dev --no-audit --no-fund'
-
-ssh "$RDK_HOST" \
-  'cp /opt/max/rdk/systemd/*.service /etc/systemd/system/ && \
-   systemctl daemon-reload && systemctl restart max-agent && \
-   systemctl is-active --quiet max-agent && \
-   systemctl show max-agent -p ActiveEnterTimestamp -p MainPID --no-pager'
+ssh "$RDK_HOST" bash -s -- "$REMOTE_STAGE" <<'REMOTE'
+set -euo pipefail
+REMOTE_STAGE=$1
+test ! -e "$REMOTE_STAGE"
+install -d -o root -g root -m 0755 "$REMOTE_STAGE"
+REMOTE
+git archive "$REVIEWED_SHA" | ssh "$RDK_HOST" "tar -xf - -C '$REMOTE_STAGE'"
 ```
 
-After restart, verify the private identity file without displaying it and inspect only the fixed
-startup marker—never print the device ID, pairing code, location payload, or `/etc/max/agent.env`:
+The native WebRTC AEC executable and rendered ADAS alert clips are armed board artifacts, not Git
+files. Preserve them explicitly from the current release, verify their contents, then install all
+dependencies and build from the exact staged tree. A missing/non-executable AEC binary or an empty
+alert set blocks activation:
 
 ```bash
-ssh "$RDK_HOST" 'set -eu
-  before=$(sha256sum /var/lib/max/device-id | cut -d" " -f1)
-  test "$(stat -c %a /var/lib/max)" = 700
-  test "$(stat -c %a /var/lib/max/device-id)" = 600
-  systemctl restart max-agent
-  after=$(sha256sum /var/lib/max/device-id | cut -d" " -f1)
-  test "$before" = "$after" && echo "device identity: stable"
-  journalctl -u max-agent --since "2 minutes ago" --no-pager | grep -F "[relay] session ready"
-  systemctl is-active --quiet max-agent'
+ssh "$RDK_HOST" bash -s -- "$REMOTE_STAGE" "$REVIEWED_SHA" <<'REMOTE'
+set -euo pipefail
+REMOTE_STAGE=$1
+REVIEWED_SHA=$2
+CURRENT_AEC=/opt/max/rdk/aec/max-aec
+CURRENT_ALERTS=/opt/max/rdk/audio/alerts
+STAGED_AEC="$REMOTE_STAGE/rdk/aec/max-aec"
+STAGED_ALERTS="$REMOTE_STAGE/rdk/audio/alerts"
+
+test -x "$CURRENT_AEC"
+find "$CURRENT_ALERTS" -maxdepth 1 -type f -name '*.wav' -print -quit | grep -q .
+install -d -o root -g root -m 0755 "$(dirname "$STAGED_AEC")" "$STAGED_ALERTS"
+install -o root -g root -m 0755 "$CURRENT_AEC" "$STAGED_AEC"
+cp -a "$CURRENT_ALERTS"/. "$STAGED_ALERTS"/
+test -x "$REMOTE_STAGE/rdk/aec/max-aec"
+cmp -s "$CURRENT_AEC" "$STAGED_AEC"
+diff -qr "$CURRENT_ALERTS" "$STAGED_ALERTS"
+find "$STAGED_ALERTS" -maxdepth 1 -type f -name '*.wav' -readable -print -quit | grep -q .
+
+cd "$REMOTE_STAGE"
+npm ci --no-audit --no-fund
+npm run build
+printf '%s\n' "$REVIEWED_SHA" > .rdk-release-sha
+chown -R root:root "$REMOTE_STAGE"
+chmod 0755 "$REMOTE_STAGE"
+test "$(stat -c '%U:%G:%a' "$REMOTE_STAGE")" = root:root:755
+test -x "$REMOTE_STAGE/rdk/aec/max-aec"
+find "$REMOTE_STAGE/rdk/audio/alerts" -maxdepth 1 -type f -name '*.wav' -readable -print -quit | grep -q .
+REMOTE
 ```
 
-Rollback uses the previously recorded reviewed checkout: resync that tree, run `npm ci` if its
-lockfile differs, restore its unit files, `daemon-reload`, restart, and repeat the same private-ID
-and session-ready checks. Do not roll back `/var/lib/max/device-id` or copy a binding identity from
-another board.
+Activate the staged directory and perform **one** controlled restart. Set `RDK_DEVICE_ID_FILE` to
+the configured `MAX_DEVICE_ID_FILE` path when it differs from the default. The bounded readiness
+loop rejects an old marker: it requires a nonempty Invocation ID different from the pre-restart
+one, reads only that invocation's journal, and finally proves that invocation is still current.
+It also compares the private device identity around that same restart without printing it:
+
+```bash
+RDK_DEVICE_ID_FILE=/var/lib/max/device-id
+PREVIOUS_ROOT="/opt/max.previous-$REVIEWED_SHA"
+ssh "$RDK_HOST" bash -s -- \
+  "$REMOTE_STAGE" "$PREVIOUS_ROOT" "$RDK_DEVICE_ID_FILE" <<'REMOTE'
+set -euo pipefail
+REMOTE_STAGE=$1
+PREVIOUS_ROOT=$2
+DEVICE_ID=$3
+DEVICE_ID_PARENT=$(dirname "$DEVICE_ID")
+
+test "$(stat -c '%U:%G:%a' /opt/max)" = root:root:755
+test "$(stat -c '%U:%G:%a' "$REMOTE_STAGE")" = root:root:755
+test "$(stat -c '%U:%G:%a' "$DEVICE_ID_PARENT")" = root:root:700
+test "$(stat -c '%U:%G:%a' "$DEVICE_ID")" = root:root:600
+test ! -e "$PREVIOUS_ROOT"
+before=$(sha256sum "$DEVICE_ID" | cut -d' ' -f1)
+old_invocation=$(systemctl show -p InvocationID --value max-agent)
+
+mv /opt/max "$PREVIOUS_ROOT"
+mv "$REMOTE_STAGE" /opt/max
+test "$(stat -c '%U:%G:%a' /opt/max)" = root:root:755
+test -x /opt/max/rdk/aec/max-aec
+find /opt/max/rdk/audio/alerts -maxdepth 1 -type f -name '*.wav' -readable -print -quit | grep -q .
+install -o root -g root -m 0644 /opt/max/rdk/systemd/*.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl restart max-agent
+
+invocation_id=
+for _ in $(seq 1 20); do
+  invocation_id=$(systemctl show -p InvocationID --value max-agent)
+  if test -n "$invocation_id" && test "$invocation_id" != "$old_invocation"; then
+    break
+  fi
+  sleep 1
+done
+test -n "$invocation_id"
+test "$invocation_id" != "$old_invocation"
+
+ready=0
+for _ in $(seq 1 60); do
+  if journalctl _SYSTEMD_INVOCATION_ID="$invocation_id" --no-pager -o cat | \
+      grep -F '[relay] session ready' >/dev/null; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+test "$ready" = 1
+systemctl is-active --quiet max-agent
+test "$(systemctl show -p InvocationID --value max-agent)" = "$invocation_id"
+after=$(sha256sum "$DEVICE_ID" | cut -d' ' -f1)
+test "$before" = "$after"
+test "$(stat -c '%U:%G:%a' "$DEVICE_ID_PARENT")" = root:root:700
+test "$(stat -c '%U:%G:%a' "$DEVICE_ID")" = root:root:600
+systemctl show max-agent -p InvocationID -p ActiveEnterTimestamp -p MainPID --no-pager
+echo 'device identity: stable'
+REMOTE
+```
+
+Never print the device ID, pairing code, location payload, or `/etc/max/agent.env`. Keep the prior
+release directory until acceptance is complete.
+
+### Reviewed RDK rollback
+
+If archive staging, artifact preservation, dependency installation, or build fails, do not activate
+the stage. If activation or its invocation-scoped readiness check fails, move the failed release
+aside, restore `PREVIOUS_ROOT`, reinstall that release's units, and perform one rollback restart.
+Use the same bounded new-Invocation-ID readiness proof above. Preserve `/var/lib/max/device-id` and
+`/etc/max`; never copy an identity from another board. The previous directory is the entire former
+release, so it retains the exact AEC executable and armed alert clips that were active before the
+rollout:
+
+```bash
+FAILED_ROOT="/opt/max.failed-$REVIEWED_SHA"
+ssh "$RDK_HOST" bash -s -- \
+  "$PREVIOUS_ROOT" "$FAILED_ROOT" "$RDK_DEVICE_ID_FILE" <<'REMOTE'
+set -euo pipefail
+PREVIOUS_ROOT=$1
+FAILED_ROOT=$2
+DEVICE_ID=$3
+DEVICE_ID_PARENT=$(dirname "$DEVICE_ID")
+test -d "$PREVIOUS_ROOT"
+test ! -e "$FAILED_ROOT"
+before=$(sha256sum "$DEVICE_ID" | cut -d' ' -f1)
+old_invocation=$(systemctl show -p InvocationID --value max-agent)
+mv /opt/max "$FAILED_ROOT"
+mv "$PREVIOUS_ROOT" /opt/max
+test "$(stat -c '%U:%G:%a' /opt/max)" = root:root:755
+test -x /opt/max/rdk/aec/max-aec
+find /opt/max/rdk/audio/alerts -maxdepth 1 -type f -name '*.wav' -readable -print -quit | grep -q .
+install -o root -g root -m 0644 /opt/max/rdk/systemd/*.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl restart max-agent
+
+invocation_id=
+for _ in $(seq 1 20); do
+  invocation_id=$(systemctl show -p InvocationID --value max-agent)
+  if test -n "$invocation_id" && test "$invocation_id" != "$old_invocation"; then
+    break
+  fi
+  sleep 1
+done
+test -n "$invocation_id"
+test "$invocation_id" != "$old_invocation"
+ready=0
+for _ in $(seq 1 60); do
+  if journalctl _SYSTEMD_INVOCATION_ID="$invocation_id" --no-pager -o cat | \
+      grep -F '[relay] session ready' >/dev/null; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+test "$ready" = 1
+systemctl is-active --quiet max-agent
+test "$(systemctl show -p InvocationID --value max-agent)" = "$invocation_id"
+after=$(sha256sum "$DEVICE_ID" | cut -d' ' -f1)
+test "$before" = "$after"
+test "$(stat -c '%U:%G:%a' "$DEVICE_ID_PARENT")" = root:root:700
+test "$(stat -c '%U:%G:%a' "$DEVICE_ID")" = root:root:600
+REMOTE
+```
 
 Two footguns worth knowing when poking at the board over SSH:
 

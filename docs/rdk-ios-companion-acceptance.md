@@ -46,11 +46,33 @@ curl --fail --silent --show-error https://relay.example.com/ready
 ```
 
 For the controlled self-signed test relay only, `curl --insecure` may be recorded as test evidence;
-it is not production TLS acceptance. Inspect permissions without reading binding contents:
+it is not production TLS acceptance. Run the permission/write probe as the configured relay account,
+not root. It proves the configured binding parent owner/group/mode, binding file owner/group/mode,
+and atomic rename capability without reading binding contents:
 
 ```bash
-ssh -i /path/to/key ubuntu@relay.example.com \
-  'stat -c "%a %U:%G %n" /path/to/binding-parent /path/to/companion-bindings.json && pm2 describe horizon'
+BINDING_PARENT=/home/ubuntu/.horizon-helmet-testing
+BINDING_FILE="$BINDING_PARENT/companion-bindings.json"
+ssh -i /path/to/key ubuntu@relay.example.com bash -s -- \
+  "$BINDING_PARENT" "$BINDING_FILE" <<'REMOTE'
+set -euo pipefail
+BINDING_PARENT=$1
+BINDING_FILE=$2
+expected_owner=$(id -un)
+expected_group=$(id -gn)
+test "$(dirname "$BINDING_FILE")" = "$BINDING_PARENT"
+test "$(stat -c '%U:%G:%a' "$BINDING_PARENT")" = "$expected_owner:$expected_group:700"
+test "$(stat -c '%U:%G:%a' "$BINDING_FILE")" = "$expected_owner:$expected_group:600"
+probe="$BINDING_PARENT/.companion-write-probe.$$"
+moved="$probe.moved"
+trap 'rm -f "$probe" "$moved"' EXIT
+umask 077
+: > "$probe"
+mv "$probe" "$moved"
+rm -f "$moved"
+trap - EXIT
+pm2 describe horizon
+REMOTE
 ```
 
 If `/ready` is not `200` with the reviewed build stamp and an empty `issues` array, do not install
@@ -79,20 +101,56 @@ no map/raw-coordinate UI and no stored fix history.
 
 ## RDK release — deploy third
 
-| Evidence                                            | Value   | Result  |
-| --------------------------------------------------- | ------- | ------- |
-| Board/source reviewed SHA                           | PENDING | PENDING |
-| `MAX_DEVICE_ID_FILE` path (value not recorded)      | PENDING | PENDING |
-| Identity parent/file owner and modes `0700`/`0600`  | PENDING | PENDING |
-| Identity unchanged across service restart           | PENDING | PENDING |
-| `max-agent` active timestamp / MainPID              | PENDING | PENDING |
-| Sanitized `[relay] session ready` journal timestamp | PENDING | PENDING |
-| HUD reports paired/ready before ride                | PENDING | PENDING |
-| Previous RDK SHA and rollback readiness             | PENDING | PENDING |
+| Evidence                                                      | Value   | Result  |
+| ------------------------------------------------------------- | ------- | ------- |
+| Board/source reviewed SHA and `.rdk-release-sha`              | PENDING | PENDING |
+| Exact reviewed Git archive staged; checkout-only files absent | PENDING | PENDING |
+| `/opt/max` owner/mode `root:root:0755`                        | PENDING | PENDING |
+| AEC executable preserved, executable, and byte-identical      | PENDING | PENDING |
+| Armed `.wav` alert set preserved and readable                 | PENDING | PENDING |
+| Dependencies installed and build passed inside staged tree    | PENDING | PENDING |
+| `MAX_DEVICE_ID_FILE` path (value not recorded)                | PENDING | PENDING |
+| Identity parent/file owner and modes `root:root:0700`/`0600`  | PENDING | PENDING |
+| Identity unchanged across the one controlled service restart  | PENDING | PENDING |
+| New/current `max-agent` Invocation ID                         | PENDING | PENDING |
+| `max-agent` active timestamp / MainPID                        | PENDING | PENDING |
+| Same-invocation `[relay] session ready` within 60 seconds     | PENDING | PENDING |
+| HUD reports paired/ready before ride                          | PENDING | PENDING |
+| Previous RDK SHA and rollback readiness                       | PENDING | PENDING |
 
-Use the reviewed sync/install/restart commands in [`../rdk/README.md`](../rdk/README.md). Compare
-the private device identity across restart in shell variables and record only `stable` or
-`changed`; never print its value. Do not run an unfiltered `journalctl` into this evidence file.
+Use the reviewed archive/stage/build/activation commands in
+[`../rdk/README.md`](../rdk/README.md); do not sync a live checkout to `/opt/max`. Keep the
+`InvocationID=` value emitted by that rollout as `ROLLOUT_INVOCATION_ID`. Do **not** restart again
+for evidence collection and do not accept a marker from an earlier invocation. This read-only
+follow-up rechecks the current Invocation ID, exact release stamp, owners/modes, preserved board
+artifacts, and only the journal belonging to the rollout invocation. Record only `stable`/`changed`
+for the private identity digest; never print its value or run an unfiltered `journalctl` into this
+evidence file:
+
+```bash
+RDK_HOST=root@board.example.com
+REVIEWED_SHA=0000000000000000000000000000000000000000
+RDK_DEVICE_ID_FILE=/var/lib/max/device-id
+ROLLOUT_INVOCATION_ID=00000000000000000000000000000000
+ssh "$RDK_HOST" bash -s -- \
+  "$REVIEWED_SHA" "$RDK_DEVICE_ID_FILE" "$ROLLOUT_INVOCATION_ID" <<'REMOTE'
+set -euo pipefail
+REVIEWED_SHA=$1
+DEVICE_ID=$2
+invocation_id=$3
+test "$(cat /opt/max/.rdk-release-sha)" = "$REVIEWED_SHA"
+test "$(stat -c '%U:%G:%a' /opt/max)" = root:root:755
+test "$(stat -c '%U:%G:%a' "$(dirname "$DEVICE_ID")")" = root:root:700
+test "$(stat -c '%U:%G:%a' "$DEVICE_ID")" = root:root:600
+test -x /opt/max/rdk/aec/max-aec
+find /opt/max/rdk/audio/alerts -maxdepth 1 -type f -name '*.wav' -readable -print -quit | grep -q .
+test "$(systemctl show -p InvocationID --value max-agent)" = "$invocation_id"
+systemctl is-active --quiet max-agent
+journalctl _SYSTEMD_INVOCATION_ID="$invocation_id" --no-pager -o cat | \
+  grep -F '[relay] session ready' >/dev/null
+systemctl show max-agent -p InvocationID -p ActiveEnterTimestamp -p MainPID --no-pager
+REMOTE
+```
 
 ## Physical ride acceptance
 

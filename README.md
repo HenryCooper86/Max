@@ -733,8 +733,10 @@ oversized, stale, duplicate, too-fast, inaccurate, and out-of-range frames are r
 
 Companion telemetry is aggregate-only (`companionEventsAccepted` and
 `companionEventsRejected`); raw fixes and pairing codes are not logged, added to tester evidence,
-or recorded in user memory. Current location necessarily appears in the encrypted protocol frame
-while Helmet Ride is active, but it is not persisted by the relay.
+or recorded in user memory. Current location necessarily appears in the protocol payload while
+Helmet Ride is active, but it is not persisted by the relay. That payload is protected in
+production `wss://` with trusted TLS; the controlled self-signed test endpoint also uses TLS with
+an explicit Debug trust opt-in. A Debug `ws://` LAN transport is not encrypted.
 
 ## Scripts
 

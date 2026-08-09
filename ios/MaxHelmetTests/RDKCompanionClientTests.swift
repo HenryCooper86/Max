@@ -19,6 +19,451 @@ final class RDKCompanionClientTests: XCTestCase {
         XCTAssertTrue(Thread.isMainThread)
     }
 
+    func testInitialConnectingStartCallbackIsBoundedWithoutRecursivePublication() throws {
+        let harness = ClientHarness(socketCount: 1)
+        var connectingCallbacks = 0
+        harness.client.onState = { state in
+            guard case .connecting = state else { return }
+            connectingCallbacks += 1
+            if connectingCallbacks < 4 {
+                harness.client.startRide()
+            } else {
+                harness.client.disconnect()
+            }
+        }
+
+        harness.connect()
+
+        XCTAssertEqual(connectingCallbacks, 1)
+        XCTAssertEqual(harness.requests.count, 1)
+        XCTAssertEqual(harness.sockets[0].resumeCount, 1)
+        XCTAssertEqual(harness.sockets[0].pendingReceiveCount, 1)
+        guard harness.requests.count == 1, harness.sockets[0].pendingReceiveCount == 1 else { return }
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+        XCTAssertEqual(try messageTypes(harness.sockets[0].sentMessages), ["companion.start"])
+    }
+
+    func testReconnectConnectingStartCallbackHasNoSynchronousReentryAndRetainsRide() throws {
+        let harness = ClientHarness(socketCount: 2)
+        harness.connect()
+        harness.client.startRide()
+        harness.sockets[0].failReceive(TestError.transport)
+        var insideConnectingCallback = false
+        var recursivelyReentered = false
+        var connectingCallbacks = 0
+        harness.client.onState = { state in
+            guard case .connecting = state else { return }
+            connectingCallbacks += 1
+            if insideConnectingCallback {
+                recursivelyReentered = true
+                return
+            }
+            insideConnectingCallback = true
+            harness.client.startRide()
+            insideConnectingCallback = false
+        }
+
+        harness.runScheduled(at: 0)
+
+        XCTAssertFalse(recursivelyReentered)
+        XCTAssertEqual(connectingCallbacks, 1)
+        XCTAssertEqual(harness.requests.count, 2)
+        XCTAssertEqual(harness.sockets[1].resumeCount, 1)
+        XCTAssertEqual(harness.sockets[1].pendingReceiveCount, 1)
+        harness.sockets[1].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+        XCTAssertEqual(try messageTypes(harness.sockets[1].sentMessages), ["companion.start"])
+    }
+
+    func testEveryConnectingCallbackMayStartRideWithoutRecursion() {
+        do {
+            let harness = ClientHarness(socketCount: 1)
+            var connectingCallbacks = 0
+            harness.client.onState = { state in
+                guard case .connecting = state else { return }
+                connectingCallbacks += 1
+                harness.client.startRide()
+            }
+
+            harness.connect()
+
+            XCTAssertEqual(connectingCallbacks, 1)
+            XCTAssertEqual(harness.requests.count, 1)
+            XCTAssertEqual(harness.sockets[0].resumeCount, 1)
+            XCTAssertEqual(harness.sockets[0].pendingReceiveCount, 1)
+        }
+
+        do {
+            let harness = ClientHarness(socketCount: 2)
+            harness.connect()
+            harness.client.startRide()
+            harness.sockets[0].failReceive(TestError.transport)
+            var connectingCallbacks = 0
+            harness.client.onState = { state in
+                guard case .connecting = state else { return }
+                connectingCallbacks += 1
+                harness.client.startRide()
+            }
+
+            harness.runScheduled(at: 0)
+
+            XCTAssertEqual(connectingCallbacks, 1)
+            XCTAssertEqual(harness.requests.count, 2)
+            XCTAssertEqual(harness.sockets[1].resumeCount, 1)
+            XCTAssertEqual(harness.sockets[1].pendingReceiveCount, 1)
+        }
+    }
+
+    func testInitialConnectingCandidateOwnsReentrantPairStopUnpairAndLocation() throws {
+        for action in ["pair", "stop", "unpair", "location"] {
+            let harness = ClientHarness(socketCount: 1)
+            var handled = false
+            harness.client.onState = { state in
+                guard case .connecting = state, !handled else { return }
+                handled = true
+                switch action {
+                case "pair": harness.client.pair(code: "ABC123")
+                case "stop": harness.client.stopRide()
+                case "unpair": harness.client.unpair()
+                default: harness.client.sendLatest(self.fix(sequence: 40))
+                }
+            }
+
+            harness.connect()
+
+            XCTAssertEqual(harness.requests.count, 1, "action \(action)")
+            XCTAssertEqual(harness.sockets[0].resumeCount, 1, "action \(action)")
+            XCTAssertEqual(harness.sockets[0].pendingReceiveCount, 1, "action \(action)")
+            let expectedMessages: [String]
+            switch action {
+            case "pair": expectedMessages = ["companion.pair"]
+            case "stop": expectedMessages = ["companion.stop"]
+            case "unpair": expectedMessages = ["companion.unpair"]
+            default: expectedMessages = []
+            }
+            XCTAssertEqual(try messageTypes(harness.sockets[0].sentMessages), expectedMessages, "action \(action)")
+            harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+            harness.client.sendLatest(fix(sequence: 41))
+            XCTAssertTrue(try locationSequences(harness.sockets[0].sentMessages).isEmpty, "action \(action)")
+            harness.sockets[0].failReceive(TestError.transport)
+            XCTAssertTrue(harness.scheduled.isEmpty, "action \(action)")
+        }
+    }
+
+    func testReconnectConnectingCandidateOwnsReentrantPairStopUnpairAndNewestLocation() throws {
+        for action in ["pair", "stop", "unpair", "location"] {
+            let harness = ClientHarness(socketCount: 2)
+            harness.connect()
+            harness.client.startRide()
+            harness.sockets[0].failReceive(TestError.transport)
+            var handled = false
+            harness.client.onState = { state in
+                guard case .connecting = state, !handled else { return }
+                handled = true
+                switch action {
+                case "pair": harness.client.pair(code: "ABC123")
+                case "stop": harness.client.stopRide()
+                case "unpair": harness.client.unpair()
+                default: harness.client.sendLatest(self.fix(sequence: 42))
+                }
+            }
+
+            harness.runScheduled(at: 0)
+
+            XCTAssertEqual(harness.requests.count, 2, "action \(action)")
+            XCTAssertEqual(harness.sockets[1].resumeCount, 1, "action \(action)")
+            XCTAssertEqual(harness.sockets[1].pendingReceiveCount, 1, "action \(action)")
+            harness.sockets[1].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+            let expectedMessages: [String]
+            switch action {
+            case "pair": expectedMessages = ["companion.pair", "companion.start"]
+            case "stop": expectedMessages = ["companion.stop"]
+            case "unpair": expectedMessages = ["companion.unpair"]
+            default: expectedMessages = ["companion.start", "companion.location"]
+            }
+            XCTAssertEqual(try messageTypes(harness.sockets[1].sentMessages), expectedMessages, "action \(action)")
+            if action == "stop" || action == "unpair" {
+                harness.client.sendLatest(fix(sequence: 43))
+                XCTAssertTrue(try locationSequences(harness.sockets[1].sentMessages).isEmpty, "action \(action)")
+                harness.sockets[1].failReceive(TestError.transport)
+                XCTAssertEqual(harness.scheduled.count, 1, "action \(action)")
+            }
+        }
+    }
+
+    func testInitialConnectingTeardownAndReplacementOwnTheirCandidateSockets() {
+        do {
+            let harness = ClientHarness(socketCount: 1)
+            harness.client.onState = { state in
+                guard case .connecting = state else { return }
+                harness.client.disconnect()
+            }
+
+            harness.connect()
+
+            XCTAssertEqual(harness.requests.count, 1)
+            XCTAssertEqual(harness.sockets[0].cancelCount, 1)
+            XCTAssertEqual(harness.sockets[0].resumeCount, 0)
+            XCTAssertEqual(harness.sockets[0].pendingReceiveCount, 0)
+        }
+
+        do {
+            let harness = ClientHarness(socketCount: 2)
+            var replaced = false
+            harness.client.onState = { state in
+                guard case .connecting = state, !replaced else { return }
+                replaced = true
+                harness.connect(token: "account-b")
+            }
+
+            harness.connect(token: "account-a")
+
+            XCTAssertEqual(harness.requests.count, 2)
+            XCTAssertEqual(harness.sockets[0].cancelCount, 1)
+            XCTAssertEqual(harness.sockets[0].resumeCount, 0)
+            XCTAssertEqual(harness.sockets[0].pendingReceiveCount, 0)
+            XCTAssertEqual(harness.sockets[1].resumeCount, 1)
+            XCTAssertEqual(harness.sockets[1].pendingReceiveCount, 1)
+        }
+    }
+
+    func testReconnectConnectingTeardownAndReplacementOwnTheirCandidateSockets() {
+        do {
+            let harness = ClientHarness(socketCount: 2)
+            harness.connect()
+            harness.client.startRide()
+            harness.sockets[0].failReceive(TestError.transport)
+            harness.client.onState = { state in
+                guard case .connecting = state else { return }
+                harness.client.disconnect()
+            }
+
+            harness.runScheduled(at: 0)
+
+            XCTAssertEqual(harness.requests.count, 2)
+            XCTAssertEqual(harness.sockets[1].cancelCount, 1)
+            XCTAssertEqual(harness.sockets[1].resumeCount, 0)
+            XCTAssertEqual(harness.sockets[1].pendingReceiveCount, 0)
+        }
+
+        do {
+            let harness = ClientHarness(socketCount: 3)
+            harness.connect()
+            harness.client.startRide()
+            harness.sockets[0].failReceive(TestError.transport)
+            var replaced = false
+            harness.client.onState = { state in
+                guard case .connecting = state, !replaced else { return }
+                replaced = true
+                harness.connect(token: "account-b")
+            }
+
+            harness.runScheduled(at: 0)
+
+            XCTAssertEqual(harness.requests.count, 3)
+            XCTAssertEqual(harness.sockets[1].cancelCount, 1)
+            XCTAssertEqual(harness.sockets[1].resumeCount, 0)
+            XCTAssertEqual(harness.sockets[1].pendingReceiveCount, 0)
+            XCTAssertEqual(harness.sockets[2].resumeCount, 1)
+            XCTAssertEqual(harness.sockets[2].pendingReceiveCount, 1)
+        }
+    }
+
+    func testPairedCallbackPairUnpairAndStopPreventOuterCloseAndKeepFailureOwnership() throws {
+        for action in ["pair", "unpair", "stop"] {
+            let harness = ClientHarness(socketCount: 1)
+            var handled = false
+            var states: [CompanionConnectionState] = []
+            harness.client.onState = { state in
+                states.append(state)
+                guard case .paired = state, !handled else { return }
+                handled = true
+                switch action {
+                case "pair": harness.client.pair(code: "NEXT42")
+                case "unpair": harness.client.unpair()
+                default: harness.client.stopRide()
+                }
+            }
+            harness.sockets[0].sendErrorOnCancel = TestError.transport
+
+            harness.connect()
+            harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"paired\",\"deviceId\":\"rdk-1\"}"))
+
+            let expectedType: String
+            switch action {
+            case "pair": expectedType = "companion.pair"
+            case "unpair": expectedType = "companion.unpair"
+            default: expectedType = "companion.stop"
+            }
+            XCTAssertEqual(try messageTypes(harness.sockets[0].sentMessages), [expectedType], "action \(action)")
+            XCTAssertEqual(harness.sockets[0].cancelCount, 0, "action \(action)")
+
+            guard harness.sockets[0].cancelCount == 0 else { continue }
+            harness.sockets[0].completeSend(at: 0, error: TestError.transport)
+            XCTAssertEqual(harness.sockets[0].cancelCount, 1, "action \(action)")
+            XCTAssertEqual(
+                states.last,
+                .failed(code: "connection", detail: "Companion connection closed."),
+                "action \(action)"
+            )
+        }
+    }
+
+    func testPairedCallbackStartDisconnectAndNewConnectRemainAuthoritative() throws {
+        do {
+            let harness = ClientHarness(socketCount: 1)
+            var handled = false
+            harness.client.onState = { state in
+                guard case .paired = state, !handled else { return }
+                handled = true
+                harness.client.startRide()
+            }
+
+            harness.connect()
+            harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"paired\"}"))
+
+            XCTAssertEqual(harness.sockets[0].cancelCount, 0)
+            harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+            XCTAssertEqual(try messageTypes(harness.sockets[0].sentMessages), ["companion.start"])
+        }
+
+        do {
+            let harness = ClientHarness(socketCount: 1)
+            var handled = false
+            var states: [CompanionConnectionState] = []
+            harness.client.onState = { state in
+                states.append(state)
+                guard case .paired = state, !handled else { return }
+                handled = true
+                harness.client.disconnect()
+            }
+
+            harness.connect()
+            harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"paired\"}"))
+
+            XCTAssertEqual(harness.sockets[0].cancelCount, 1)
+            XCTAssertEqual(states.last, .signedOut)
+        }
+
+        do {
+            let harness = ClientHarness(socketCount: 2)
+            var handled = false
+            harness.client.onState = { state in
+                guard case .paired = state, !handled else { return }
+                handled = true
+                harness.connect(token: "account-b")
+            }
+
+            harness.connect(token: "account-a")
+            harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"paired\"}"))
+
+            XCTAssertEqual(harness.requests.count, 2)
+            XCTAssertEqual(harness.sockets[0].cancelCount, 1)
+            XCTAssertEqual(harness.sockets[1].resumeCount, 1)
+            XCTAssertEqual(harness.sockets[1].pendingReceiveCount, 1)
+        }
+    }
+
+    func testPairedCallbackRejectedLocationAndObservationOnlyStateCloseOnce() throws {
+        for callbackSendsLocation in [false, true] {
+            let harness = ClientHarness(socketCount: 1)
+            harness.client.onState = { state in
+                guard case .paired = state, callbackSendsLocation else { return }
+                harness.client.sendLatest(self.fix(sequence: 45))
+            }
+
+            harness.connect()
+            harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"paired\"}"))
+
+            XCTAssertTrue(try messageTypes(harness.sockets[0].sentMessages).isEmpty)
+            XCTAssertEqual(harness.sockets[0].cancelCount, 1)
+        }
+    }
+
+    func testReadyCallbackQueuesNewestLocationUntilStartIsSent() throws {
+        let harness = ClientHarness(socketCount: 1)
+        var handled = false
+        harness.client.onState = { state in
+            guard case .ready = state, !handled else { return }
+            handled = true
+            harness.client.sendLatest(self.fix(sequence: 46))
+        }
+        harness.connect()
+        harness.client.startRide()
+
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+
+        XCTAssertEqual(
+            try messageTypes(harness.sockets[0].sentMessages),
+            ["companion.start", "companion.location"]
+        )
+        XCTAssertEqual(try locationSequences(harness.sockets[0].sentMessages), [46])
+    }
+
+    func testReadyCallbackPublicActionsRemainAuthoritative() throws {
+        for action in ["pair", "start", "stop", "unpair", "disconnect", "connect"] {
+            let socketCount = action == "connect" ? 2 : 1
+            let harness = ClientHarness(socketCount: socketCount)
+            var handled = false
+            harness.client.onState = { state in
+                guard case .ready = state, !handled else { return }
+                handled = true
+                switch action {
+                case "pair": harness.client.pair(code: "READY1")
+                case "start": harness.client.startRide()
+                case "stop": harness.client.stopRide()
+                case "unpair": harness.client.unpair()
+                case "disconnect": harness.client.disconnect()
+                default: harness.connect(token: "account-b")
+                }
+            }
+            harness.connect(token: "account-a")
+            harness.client.startRide()
+
+            harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+
+            let expectedTypes: [String]
+            switch action {
+            case "pair": expectedTypes = ["companion.pair", "companion.start"]
+            case "start": expectedTypes = ["companion.start"]
+            case "stop": expectedTypes = ["companion.stop"]
+            case "unpair": expectedTypes = ["companion.unpair"]
+            default: expectedTypes = []
+            }
+            XCTAssertEqual(try messageTypes(harness.sockets[0].sentMessages), expectedTypes, "action \(action)")
+            if action == "disconnect" {
+                XCTAssertEqual(harness.sockets[0].cancelCount, 1)
+            } else if action == "connect" {
+                XCTAssertEqual(harness.requests.count, 2)
+                XCTAssertEqual(harness.sockets[0].cancelCount, 1)
+                XCTAssertEqual(harness.sockets[1].resumeCount, 1)
+            }
+        }
+    }
+
+    func testTerminalReconnectFailureCallbackCanStartFreshSocketWithoutOuterRollback() {
+        let harness = ClientHarness(socketCount: 8)
+        var restarted = false
+        harness.client.onState = { state in
+            guard case let .failed(code, _) = state, code == "connection", !restarted else { return }
+            restarted = true
+            harness.client.startRide()
+        }
+        harness.connect()
+        harness.client.startRide()
+
+        for socketIndex in 0..<7 {
+            harness.sockets[socketIndex].failReceive(TestError.transport)
+            if socketIndex < 6 {
+                harness.runScheduled(at: socketIndex)
+            }
+        }
+
+        XCTAssertTrue(restarted)
+        XCTAssertEqual(harness.requests.count, 8)
+        XCTAssertEqual(harness.sockets[7].resumeCount, 1)
+        XCTAssertEqual(harness.sockets[7].pendingReceiveCount, 1)
+    }
+
     func testServerStatesArriveInOrderOnMainAndReceiveLoopStaysSingle() {
         let harness = ClientHarness(socketCount: 1)
         var states: [CompanionConnectionState] = []
@@ -244,7 +689,6 @@ final class RDKCompanionClientTests: XCTestCase {
         harness.client.startRide()
 
         harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
-        harness.sockets[0].completeSend(at: 0, error: TestError.transport)
         harness.sockets[1].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
         harness.sockets[1].deliver(.string("{\"type\":\"companion.status\",\"state\":\"sharing\"}"))
 
@@ -671,6 +1115,7 @@ private final class FakeCompanionSocket: CompanionSocketTask, CompanionHTTPStatu
     private var receiveCompletions: [(Result<URLSessionWebSocketTask.Message, Error>) -> Void] = []
     private var lastReceiveCompletion: ((Result<URLSessionWebSocketTask.Message, Error>) -> Void)?
     private(set) var cancelCount = 0
+    var sendErrorOnCancel: Error?
     var httpStatusCode: Int?
     var pendingReceiveCount: Int { receiveCompletions.count }
 
@@ -688,6 +1133,10 @@ private final class FakeCompanionSocket: CompanionSocketTask, CompanionHTTPStatu
 
     func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         cancelCount += 1
+        guard let error = sendErrorOnCancel else { return }
+        sendErrorOnCancel = nil
+        let completions = sendCompletions
+        completions.forEach { $0(error) }
     }
 
     func deliver(_ message: URLSessionWebSocketTask.Message) {

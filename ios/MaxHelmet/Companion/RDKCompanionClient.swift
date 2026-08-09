@@ -29,6 +29,13 @@ final class RDKCompanionClient {
         let sendEpoch: Int
     }
 
+    private struct SemanticCallbackTicket: Equatable {
+        let generation: Int
+        let pairingActionEpoch: Int
+        let rideActionEpoch: Int
+        let desiredRide: Bool
+    }
+
     private enum ActionFamily {
         case pairing
         case ride
@@ -232,9 +239,6 @@ final class RDKCompanionClient {
             return
         }
 
-        publish(.connecting)
-        guard expectedGeneration == generation, socket == nil, self.configuration != nil else { return }
-
         var request = URLRequest(url: url)
         request.timeoutInterval = 12
         let newSocket = socketFactory(request, configuration.allowSelfSignedTLS)
@@ -246,6 +250,8 @@ final class RDKCompanionClient {
         transportState = .connecting
         startSentOnSocket = false
         canSendLocation = false
+        publish(.connecting)
+        guard isCurrent(newSocket, generation: expectedGeneration), self.configuration != nil else { return }
         newSocket.resume()
         guard isCurrent(newSocket, generation: expectedGeneration) else { return }
         receive(on: newSocket, generation: expectedGeneration)
@@ -292,9 +298,9 @@ final class RDKCompanionClient {
             reconnectAttempts = 0
         }
 
-        transportState = state
+        let callbackTicket = semanticCallbackTicket()
         switch state {
-        case .ready, .sharing:
+        case .sharing:
             canSendLocation = desiredRide
         default:
             canSendLocation = false
@@ -303,7 +309,9 @@ final class RDKCompanionClient {
 
         guard isCurrent(receivingSocket, generation: expectedGeneration) else { return }
 
-        if case .paired = state, !desiredRide {
+        if case .paired = state,
+           !desiredRide,
+           semanticCallbackTicket() == callbackTicket {
             socket = nil
             canSendLocation = false
             receivingSocket.cancel(with: .normalClosure, reason: nil)
@@ -316,7 +324,22 @@ final class RDKCompanionClient {
             sendAction(RDKCompanionProtocol.startMessage(), family: .ride)
         }
         guard isCurrent(receivingSocket, generation: expectedGeneration) else { return }
+        switch state {
+        case .ready, .sharing:
+            canSendLocation = desiredRide
+        default:
+            canSendLocation = false
+        }
         drainLatestFix()
+    }
+
+    private func semanticCallbackTicket() -> SemanticCallbackTicket {
+        SemanticCallbackTicket(
+            generation: generation,
+            pairingActionEpoch: pairingActionEpoch,
+            rideActionEpoch: rideActionEpoch,
+            desiredRide: desiredRide
+        )
     }
 
     private func sendAction(_ text: String, family: ActionFamily) {

@@ -36,6 +36,16 @@ struct MainViewModelVoiceActions {
 /// Bridges the process-wide AgentSession and rider preferences to the SwiftUI HUD.
 /// The iOS counterpart of android/.../ui/MainViewModel.kt.
 final class MainViewModel: ObservableObject {
+    private enum PendingUnpairPhase: Equatable {
+        case stoppingLocation
+        case stoppingCompanion
+        case sendingUnpair
+    }
+
+    private enum RideTeardownPhase {
+        case stoppingLocation
+        case stoppingCompanion
+    }
 
     /// On the iOS Simulator, `localhost` reaches the host machine where the relay
     /// listens on :8787. On a physical device, `localhost` is the phone itself, so
@@ -98,12 +108,21 @@ final class MainViewModel: ObservableObject {
     private var nextFlushTicket = 0
     private var scheduledFlushTicket: Int?
     private var rideTeardownDepth = 0
+    private var rideTeardownOwner: Int?
+    private var rideTeardownPhase: RideTeardownPhase?
     private var pendingHelmetRideStart = false
     private var sessionTokenTransitionActive = false
     private var pendingSessionTokenIntent: String?
+    private var drainingSessionTokenTransition = false
     private var companionAccountTeardownActive = false
+    private var companionAccountStopOwner: Int?
+    private var logoutRequestActive = false
+    private var logoutRequestRelayURL = ""
+    private var logoutRequestToken = ""
+    private var logoutRequestAllowsSelfSigned = false
     private var pendingUnpairOwner: Int?
     private var pendingUnpairSendOwner: Int?
+    private var pendingUnpairPhase: PendingUnpairPhase?
 
     /// Presents the Max gallery sheet.
     @Published var showGallery = false
@@ -278,21 +297,16 @@ final class MainViewModel: ObservableObject {
     /// identity + token. An active hands-free session is stopped — the login
     /// that authorized it just ended.
     func logout() {
+        guard !logoutRequestActive else { return }
+        guard isLoggedIn || ownsCompanionAccountSession else { return }
+        logoutRequestActive = true
+        logoutRequestRelayURL = relayURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        logoutRequestToken = sessionToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        logoutRequestAllowsSelfSigned = allowSelfSigned
         endCompanionAccountSession()
-        authLogout(
-            relayURL.trimmingCharacters(in: .whitespacesAndNewlines),
-            sessionToken.trimmingCharacters(in: .whitespacesAndNewlines),
-            allowSelfSigned
-        )
-        sessionToken = ""
-        authUserId = ""
-        authUsername = ""
-        authDisplayName = ""
-        authRole = ""
-        loginError = nil
-        pendingHandsFreeRetry = false
-        voiceActions.selectTranscriptOwner(nil)
-        if voiceActions.isHandsFree() { voiceActions.stop() }
+        if !companionAccountTeardownActive {
+            finalizePendingLogout()
+        }
     }
 
     /// A transcript export ready to share. Wrapping the URL keeps it usable with
@@ -533,17 +547,19 @@ final class MainViewModel: ObservableObject {
         let owner = invalidateRideWithoutSocketStop()
         pendingUnpairOwner = owner
         pendingUnpairSendOwner = nil
+        pendingUnpairPhase = .stoppingLocation
         rideTeardownDepth += 1
         locationStream.stop()
         rideTeardownDepth -= 1
         pendingHelmetRideStart = false
-        guard ownsPendingUnpair(owner), hasAccountSession else {
-            pendingUnpairOwner = nil
-            pendingUnpairSendOwner = nil
+        guard ownsPendingUnpair(owner),
+              hasAccountSession || companionAccountTeardownActive else {
+            cancelPendingUnpairTransaction()
             return
         }
 
         if shouldStopRide {
+            pendingUnpairPhase = .stoppingCompanion
             companionClient.stopRide { [weak self] result in
                 self?.onMain { [weak self] in
                     self?.handleUnpairStopResult(
@@ -553,6 +569,9 @@ final class MainViewModel: ObservableObject {
                     )
                 }
             }
+        } else if companionAccountTeardownActive {
+            cancelPendingUnpairTransaction()
+            finishCompanionAccountTeardown()
         } else {
             continueUnpair(owner: owner, reconnectBeforeUnpair: pairOnlySocketWasClosed)
         }
@@ -565,9 +584,13 @@ final class MainViewModel: ObservableObject {
     ) {
         dispatchPrecondition(condition: .onQueue(.main))
         guard ownsPendingUnpair(owner) else { return }
+        if companionAccountTeardownActive {
+            cancelPendingUnpairTransaction()
+            finishCompanionAccountTeardown()
+            return
+        }
         guard result == .accepted, canSendUnpair(from: companionState) else {
-            pendingUnpairOwner = nil
-            pendingUnpairSendOwner = nil
+            cancelPendingUnpairTransaction()
             return
         }
         continueUnpair(owner: owner, reconnectBeforeUnpair: reconnectBeforeUnpair)
@@ -585,10 +608,10 @@ final class MainViewModel: ObservableObject {
             guard ownsPendingUnpair(owner), hasAccountSession else { return }
         }
         guard canSendUnpair(from: companionState) else {
-            pendingUnpairOwner = nil
-            pendingUnpairSendOwner = nil
+            cancelPendingUnpairTransaction()
             return
         }
+        pendingUnpairPhase = .sendingUnpair
         pendingUnpairSendOwner = owner
         companionClient.unpair { [weak self] result in
             self?.onMain { [weak self] in self?.finishUnpair(result, owner: owner) }
@@ -597,9 +620,12 @@ final class MainViewModel: ObservableObject {
 
     private func finishUnpair(_ result: CompanionActionResult, owner: Int) {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard ownsPendingUnpair(owner), pendingUnpairSendOwner == owner else { return }
-        pendingUnpairOwner = nil
-        pendingUnpairSendOwner = nil
+        guard ownsPendingUnpair(owner),
+              pendingUnpairSendOwner == owner,
+              pendingUnpairPhase == .sendingUnpair else {
+            return
+        }
+        cancelPendingUnpairTransaction()
         guard result == .accepted, canCompleteUnpair(from: companionState) else { return }
         pairCode = ""
     }
@@ -627,6 +653,22 @@ final class MainViewModel: ObservableObject {
         companionState = state
         guard ownsCompanionGeneration(owner) else { return }
 
+        let terminalRetiresRideStop = isCompanionTerminal(state) && rideTeardownPhase != nil
+        if isCompanionTerminal(state) {
+            rideTeardownOwner = nil
+            rideTeardownPhase = nil
+        }
+        if companionAccountTeardownActive,
+           isCompanionTerminal(state),
+           companionAccountStopOwner != nil
+               || pendingUnpairPhase == .stoppingCompanion
+               || terminalRetiresRideStop {
+            companionAccountStopOwner = nil
+            cancelPendingUnpairTransaction()
+            finishCompanionAccountTeardown()
+            return
+        }
+
         switch state {
         case .failed(code: "auth", detail: _):
             if rideOwned || helmetRideActive {
@@ -640,10 +682,12 @@ final class MainViewModel: ObservableObject {
         case .unpaired:
             if let owner = pendingUnpairOwner,
                pendingUnpairSendOwner == owner,
+               pendingUnpairPhase == .sendingUnpair,
                ownsPendingUnpair(owner) {
-                pendingUnpairOwner = nil
-                pendingUnpairSendOwner = nil
+                cancelPendingUnpairTransaction()
                 pairCode = ""
+            } else if pendingUnpairOwner != nil {
+                cancelPendingUnpairTransaction()
             }
             if rideOwned || helmetRideActive {
                 let teardownOwner = terminateOwnedRide(sendStop: true)
@@ -652,8 +696,7 @@ final class MainViewModel: ObservableObject {
             }
         default:
             if case .failed = state {
-                pendingUnpairOwner = nil
-                pendingUnpairSendOwner = nil
+                cancelPendingUnpairTransaction()
             }
             break
         }
@@ -745,6 +788,8 @@ final class MainViewModel: ObservableObject {
         locationStream.onPermission = nil
         bindCompanionState(owner: owner)
 
+        rideTeardownOwner = owner
+        rideTeardownPhase = .stoppingLocation
         rideTeardownDepth += 1
         defer {
             rideTeardownDepth -= 1
@@ -755,8 +800,36 @@ final class MainViewModel: ObservableObject {
             }
         }
         locationStream.stop()
-        if sendStop { companionClient.stopRide() }
+        guard ownsCompanionGeneration(owner) else {
+            if rideTeardownOwner == owner {
+                rideTeardownOwner = nil
+                rideTeardownPhase = nil
+            }
+            return owner
+        }
+        if sendStop {
+            rideTeardownPhase = .stoppingCompanion
+            companionClient.stopRide { [weak self] _ in
+                self?.onMain { [weak self] in self?.handleRideTeardownStop(owner: owner) }
+            }
+        } else {
+            rideTeardownOwner = nil
+            rideTeardownPhase = nil
+            if companionAccountTeardownActive {
+                finishCompanionAccountTeardown()
+            }
+        }
         return owner
+    }
+
+    private func handleRideTeardownStop(owner: Int) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard rideTeardownOwner == owner else { return }
+        rideTeardownOwner = nil
+        rideTeardownPhase = nil
+        if companionAccountTeardownActive {
+            finishCompanionAccountTeardown()
+        }
     }
 
     @discardableResult
@@ -777,56 +850,137 @@ final class MainViewModel: ObservableObject {
         dispatchPrecondition(condition: .onQueue(.main))
         guard !companionAccountTeardownActive else { return }
         companionAccountTeardownActive = true
-        defer {
-            companionAccountTeardownActive = false
-            if !sessionTokenTransitionActive {
-                pendingHelmetRideStart = false
+
+        switch pendingUnpairPhase {
+        case .stoppingLocation, .stoppingCompanion:
+            return
+        case .sendingUnpair:
+            cancelPendingUnpairTransaction()
+            finishCompanionAccountTeardown()
+            return
+        case nil:
+            break
+        }
+
+        if rideTeardownPhase != nil {
+            return
+        }
+
+        let shouldStopCompanion = rideOwned || helmetRideActive
+        let owner = invalidateRideWithoutSocketStop()
+        companionAccountStopOwner = shouldStopCompanion ? owner : nil
+        locationStream.stop()
+        guard companionAccountTeardownActive else { return }
+
+        if shouldStopCompanion {
+            companionClient.stopRide { [weak self] _ in
+                self?.onMain { [weak self] in self?.handleCompanionAccountStop(owner: owner) }
             }
-        }
-        if rideTeardownDepth > 0, !rideOwned {
-            invalidateRideWithoutSocketStop()
-        } else if rideOwned || helmetRideActive {
-            terminateOwnedRide(sendStop: true)
         } else {
-            invalidateRideWithoutSocketStop()
-            locationStream.stop()
+            finishCompanionAccountTeardown()
         }
+    }
+
+    private func handleCompanionAccountStop(owner: Int) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard companionAccountTeardownActive, companionAccountStopOwner == owner else { return }
+        companionAccountStopOwner = nil
+        finishCompanionAccountTeardown()
+    }
+
+    private func finishCompanionAccountTeardown() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard companionAccountTeardownActive else { return }
+        companionAccountStopOwner = nil
+        cancelPendingUnpairTransaction()
         companionClient.disconnect()
         let owner = advanceCompanionGeneration()
         bindCompanionState(owner: owner)
         companionState = .signedOut
+        companionAccountTeardownActive = false
+
+        finalizePendingLogout()
+        if sessionTokenTransitionActive {
+            drainSessionTokenTransition()
+        } else {
+            pendingHelmetRideStart = false
+        }
     }
 
     private func transitionSessionToken(to newToken: String) {
         dispatchPrecondition(condition: .onQueue(.main))
         pendingSessionTokenIntent = newToken
-        guard !sessionTokenTransitionActive else { return }
-
-        sessionTokenTransitionActive = true
-        defer {
-            sessionTokenTransitionActive = false
-            let shouldStart = pendingHelmetRideStart
-            pendingHelmetRideStart = false
-            if shouldStart { performStartHelmetRide() }
+        if !sessionTokenTransitionActive {
+            sessionTokenTransitionActive = true
         }
-        while let intent = pendingSessionTokenIntent {
+        drainSessionTokenTransition()
+    }
+
+    private func drainSessionTokenTransition() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard sessionTokenTransitionActive,
+              !drainingSessionTokenTransition,
+              !companionAccountTeardownActive else {
+            return
+        }
+
+        drainingSessionTokenTransition = true
+        defer { drainingSessionTokenTransition = false }
+        while sessionTokenTransitionActive, let intent = pendingSessionTokenIntent {
             pendingSessionTokenIntent = nil
             let oldAccount = committedSessionToken.trimmingCharacters(in: .whitespacesAndNewlines)
             let newAccount = intent.trimmingCharacters(in: .whitespacesAndNewlines)
             if oldAccount != newAccount, ownsCompanionAccountSession {
                 endCompanionAccountSession()
+                if companionAccountTeardownActive {
+                    if pendingSessionTokenIntent == nil {
+                        pendingSessionTokenIntent = intent
+                    }
+                    return
+                }
+                guard sessionTokenTransitionActive else { return }
             }
             guard pendingSessionTokenIntent == nil else { continue }
             committedSessionToken = intent
             persistSecret(Keys.sessionToken, intent)
         }
+
+        guard sessionTokenTransitionActive, pendingSessionTokenIntent == nil else { return }
+        sessionTokenTransitionActive = false
+        let shouldStart = pendingHelmetRideStart
+        pendingHelmetRideStart = false
+        if shouldStart { performStartHelmetRide() }
+    }
+
+    private func finalizePendingLogout() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard logoutRequestActive, !companionAccountTeardownActive else { return }
+
+        authLogout(logoutRequestRelayURL, logoutRequestToken, logoutRequestAllowsSelfSigned)
+        pendingSessionTokenIntent = nil
+        sessionTokenTransitionActive = false
+        committedSessionToken = ""
+        persistSecret(Keys.sessionToken, "")
+        authUserId = ""
+        authUsername = ""
+        authDisplayName = ""
+        authRole = ""
+        loginError = nil
+        pendingHandsFreeRetry = false
+        pendingHelmetRideStart = false
+        voiceActions.selectTranscriptOwner(nil)
+        if voiceActions.isHandsFree() { voiceActions.stop() }
+
+        logoutRequestActive = false
+        logoutRequestRelayURL = ""
+        logoutRequestToken = ""
+        logoutRequestAllowsSelfSigned = false
     }
 
     private func advanceCompanionGeneration() -> Int {
         companionGeneration &+= 1
         if let pendingUnpairOwner, pendingUnpairOwner != companionGeneration {
-            self.pendingUnpairOwner = nil
-            pendingUnpairSendOwner = nil
+            cancelPendingUnpairTransaction()
         }
         return companionGeneration
     }
@@ -841,6 +995,18 @@ final class MainViewModel: ObservableObject {
 
     private func ownsPendingUnpair(_ owner: Int) -> Bool {
         pendingUnpairOwner == owner && ownsCompanionGeneration(owner)
+    }
+
+    private func cancelPendingUnpairTransaction() {
+        pendingUnpairOwner = nil
+        pendingUnpairSendOwner = nil
+        pendingUnpairPhase = nil
+    }
+
+    private func isCompanionTerminal(_ state: CompanionConnectionState) -> Bool {
+        if state == .unpaired { return true }
+        if case let .failed(code, _) = state { return code == "auth" }
+        return false
     }
 
     private var hasAccountSession: Bool {

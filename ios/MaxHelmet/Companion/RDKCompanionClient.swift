@@ -55,10 +55,16 @@ final class RDKCompanionClient {
         let generation: Int
     }
 
-    private enum ActionFamily {
+    private enum ActionFamily: Hashable {
         case pairing
         case ride
         case stop
+    }
+
+    private struct ActionReservation: Equatable {
+        let identifier: Int
+        let generation: Int
+        let epoch: Int
     }
 
     private final class ActionCompletionGate {
@@ -86,6 +92,8 @@ final class RDKCompanionClient {
     private var pairingActionEpoch = 0
     private var rideActionEpoch = 0
     private var stopActionEpoch = 0
+    private var nextActionIdentifier = 0
+    private var activeActions: [ActionFamily: ActionReservation] = [:]
     private var nextOpenAttemptIdentifier = 0
     private var openAttempt: OpenAttemptReservation?
     private var openRecoveryOwner = 0
@@ -143,9 +151,7 @@ final class RDKCompanionClient {
         onMain { [weak self] in
             guard let self else { return }
             self.generation &+= 1
-            self.pairingActionEpoch &+= 1
-            self.rideActionEpoch &+= 1
-            self.stopActionEpoch &+= 1
+            self.invalidateAllActionOwnership()
             self.openAttempt = nil
             self.invalidateOpenRecovery()
             self.resetReceivePump()
@@ -178,7 +184,7 @@ final class RDKCompanionClient {
                   let message = RDKCompanionProtocol.pairMessage(code: code) else {
                 return
             }
-            self.pairingActionEpoch &+= 1
+            self.advanceActionEpoch(.pairing)
             self.sendAction(message, family: .pairing)
         }
     }
@@ -186,7 +192,11 @@ final class RDKCompanionClient {
     func startRide() {
         onMain { [weak self] in
             guard let self, self.configuration != nil else { return }
+            let isFreshIntent = !self.desiredRide
             self.desiredRide = true
+            if isFreshIntent {
+                self.advanceActionEpoch(.stop)
+            }
             if self.socket == nil {
                 self.reconnectAttempts = 0
                 self.invalidateReconnect()
@@ -200,8 +210,7 @@ final class RDKCompanionClient {
                 return
             }
             guard case .ready = self.transportState, !self.startSentOnSocket else { return }
-            self.rideActionEpoch &+= 1
-            self.stopActionEpoch &+= 1
+            self.advanceActionEpoch(.ride)
             self.startSentOnSocket = true
             self.canSendLocation = true
             self.sendAction(RDKCompanionProtocol.startMessage(), family: .ride)
@@ -220,8 +229,8 @@ final class RDKCompanionClient {
     private func performStopRide(completion: ((CompanionActionResult) -> Void)?) {
         onMain { [weak self] in
             guard let self else { return }
-            self.rideActionEpoch &+= 1
-            self.stopActionEpoch &+= 1
+            self.advanceActionEpoch(.ride)
+            self.advanceActionEpoch(.stop)
             self.desiredRide = false
             self.invalidateOpenRecovery()
             self.invalidateOpenAttempt()
@@ -248,8 +257,8 @@ final class RDKCompanionClient {
     private func performUnpair(completion: ((CompanionActionResult) -> Void)?) {
         onMain { [weak self] in
             guard let self else { return }
-            self.pairingActionEpoch &+= 1
-            self.rideActionEpoch &+= 1
+            self.advanceActionEpoch(.pairing)
+            self.advanceActionEpoch(.ride)
             self.desiredRide = false
             self.invalidateOpenRecovery()
             self.invalidateOpenAttempt()
@@ -281,9 +290,7 @@ final class RDKCompanionClient {
         onMain { [weak self] in
             guard let self else { return }
             self.generation &+= 1
-            self.pairingActionEpoch &+= 1
-            self.rideActionEpoch &+= 1
-            self.stopActionEpoch &+= 1
+            self.invalidateAllActionOwnership()
             self.openAttempt = nil
             self.invalidateOpenRecovery()
             self.resetReceivePump()
@@ -467,6 +474,17 @@ final class RDKCompanionClient {
             reconnectAttempts = 0
         }
 
+        if isAuthoritativeTerminal(state) {
+            desiredRide = false
+            invalidateOpenRecovery()
+            invalidateOpenAttempt()
+            invalidateReconnect()
+            clearLocationWork()
+            startSentOnSocket = false
+            canSendLocation = false
+            invalidateAllActionOwnership()
+        }
+
         let callbackTicket = semanticCallbackTicket()
         switch state {
         case .sharing:
@@ -481,16 +499,12 @@ final class RDKCompanionClient {
         if case .paired = state,
            !desiredRide,
            semanticCallbackTicket() == callbackTicket {
-            resetReceivePump()
-            socket = nil
-            canSendLocation = false
-            receivingSocket.cancel(with: .normalClosure, reason: nil)
+            closePairOnlySocketIfIdle(receivingSocket, generation: expectedGeneration)
             return
         }
 
         if case .ready = state, desiredRide, !startSentOnSocket {
-            rideActionEpoch &+= 1
-            stopActionEpoch &+= 1
+            advanceActionEpoch(.ride)
             startSentOnSocket = true
             sendAction(RDKCompanionProtocol.startMessage(), family: .ride)
         }
@@ -558,6 +572,13 @@ final class RDKCompanionClient {
         }
         let expectedGeneration = generation
         let expectedActionEpoch = actionEpoch(for: family)
+        nextActionIdentifier &+= 1
+        let reservation = ActionReservation(
+            identifier: nextActionIdentifier,
+            generation: expectedGeneration,
+            epoch: expectedActionEpoch
+        )
+        activeActions[family] = reservation
         let gate = ActionCompletionGate()
         sendingSocket.send(.string(text)) { [weak self, weak sendingSocket] error in
             guard let self, let sendingSocket else { return }
@@ -567,17 +588,58 @@ final class RDKCompanionClient {
                 guard let self,
                       let sendingSocket,
                       self.isCurrent(sendingSocket, generation: expectedGeneration),
-                      self.actionEpoch(for: family) == expectedActionEpoch else {
+                      self.actionEpoch(for: family) == expectedActionEpoch,
+                      self.activeActions[family] == reservation else {
                     return
                 }
+                self.activeActions[family] = nil
                 if error != nil {
                     self.handleTransportFailure(on: sendingSocket, generation: expectedGeneration)
                     completion?(.failed)
                 } else {
                     completion?(.accepted)
+                    self.closePairOnlySocketIfIdle(sendingSocket, generation: expectedGeneration)
                 }
             }
         }
+    }
+
+    private func advanceActionEpoch(_ family: ActionFamily) {
+        switch family {
+        case .pairing: pairingActionEpoch &+= 1
+        case .ride: rideActionEpoch &+= 1
+        case .stop: stopActionEpoch &+= 1
+        }
+        activeActions[family] = nil
+    }
+
+    private func invalidateAllActionOwnership() {
+        pairingActionEpoch &+= 1
+        rideActionEpoch &+= 1
+        stopActionEpoch &+= 1
+        activeActions.removeAll()
+    }
+
+    private func isAuthoritativeTerminal(_ state: CompanionConnectionState) -> Bool {
+        if state == .unpaired { return true }
+        if case let .failed(code, _) = state { return code == "auth" }
+        return false
+    }
+
+    private func closePairOnlySocketIfIdle(
+        _ candidate: CompanionSocketTask,
+        generation expectedGeneration: Int
+    ) {
+        guard isCurrent(candidate, generation: expectedGeneration),
+              !desiredRide,
+              activeActions.isEmpty,
+              case .paired = transportState else {
+            return
+        }
+        resetReceivePump()
+        socket = nil
+        canSendLocation = false
+        candidate.cancel(with: .normalClosure, reason: nil)
     }
 
     private func actionEpoch(for family: ActionFamily) -> Int {
@@ -641,6 +703,7 @@ final class RDKCompanionClient {
         guard isCurrent(failedSocket, generation: expectedGeneration) else { return }
         let httpStatus = (failedSocket as? CompanionHTTPStatusProviding)?.httpStatusCode
 
+        invalidateAllActionOwnership()
         invalidateLocationSends(retainInFlight: true)
         resetReceivePump()
         socket = nil

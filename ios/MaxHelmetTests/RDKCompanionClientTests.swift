@@ -1226,6 +1226,27 @@ final class RDKCompanionClientTests: XCTestCase {
         XCTAssertTrue(harness.scheduled.isEmpty)
     }
 
+    func testUnpairCannotDisownPendingStopTransportFailure() throws {
+        let harness = ClientHarness(socketCount: 1)
+        var states: [CompanionConnectionState] = []
+        harness.client.onState = { states.append($0) }
+        harness.connect()
+        harness.client.startRide()
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+        harness.sockets[0].completeSend(at: 0)
+
+        harness.client.stopRide()
+        harness.client.unpair()
+        XCTAssertEqual(
+            try messageTypes(harness.sockets[0].sentMessages),
+            ["companion.start", "companion.stop", "companion.unpair"]
+        )
+        harness.sockets[0].completeSend(at: 1, error: TestError.transport)
+
+        XCTAssertEqual(harness.sockets[0].cancelCount, 1)
+        XCTAssertEqual(states.last, .failed(code: "connection", detail: "Companion connection closed."))
+    }
+
     func testRepeatedStartAtConnectingReadyAndSharingPreservesPendingStartFailure() throws {
         let harness = ClientHarness(socketCount: 2)
         harness.connect()

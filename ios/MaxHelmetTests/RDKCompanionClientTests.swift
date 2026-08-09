@@ -1247,6 +1247,118 @@ final class RDKCompanionClientTests: XCTestCase {
         XCTAssertEqual(states.last, .failed(code: "connection", detail: "Companion connection closed."))
     }
 
+    func testPairedObservationWaitsForOwnedUnpairSuccessThenClosesExactlyOnce() {
+        let harness = ClientHarness(socketCount: 1)
+        var states: [CompanionConnectionState] = []
+        var results: [CompanionActionResult] = []
+        harness.client.onState = { states.append($0) }
+        harness.connect()
+        harness.client.unpair { results.append($0) }
+
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"paired\"}"))
+
+        XCTAssertEqual(harness.sockets[0].cancelCount, 0, "paired observation must not cancel its pending Unpair")
+        XCTAssertTrue(results.isEmpty)
+        harness.sockets[0].completeSend(at: 0)
+        XCTAssertEqual(results, [.accepted])
+        XCTAssertEqual(harness.sockets[0].cancelCount, 1)
+        XCTAssertEqual(states.last, .paired(deviceId: nil, label: nil))
+
+        harness.sockets[0].completeSend(at: 0, error: TestError.transport)
+        XCTAssertEqual(results, [.accepted], "duplicate transport completion is consumed once")
+        XCTAssertEqual(harness.sockets[0].cancelCount, 1)
+        XCTAssertEqual(states.last, .paired(deviceId: nil, label: nil))
+    }
+
+    func testPairedObservationWaitsForOwnedUnpairFailureThenFailsAndClosesExactlyOnce() {
+        let harness = ClientHarness(socketCount: 1)
+        var states: [CompanionConnectionState] = []
+        var results: [CompanionActionResult] = []
+        harness.client.onState = { states.append($0) }
+        harness.connect()
+        harness.client.unpair { results.append($0) }
+
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"paired\"}"))
+
+        XCTAssertEqual(harness.sockets[0].cancelCount, 0)
+        harness.sockets[0].completeSend(at: 0, error: TestError.transport)
+        XCTAssertEqual(results, [.failed])
+        XCTAssertEqual(harness.sockets[0].cancelCount, 1)
+        XCTAssertEqual(states.last, .failed(code: "connection", detail: "Companion connection closed."))
+
+        harness.sockets[0].completeSend(at: 0)
+        XCTAssertEqual(results, [.failed])
+        XCTAssertEqual(harness.sockets[0].cancelCount, 1)
+        XCTAssertEqual(states.last, .failed(code: "connection", detail: "Companion connection closed."))
+    }
+
+    func testAuthoritativeAuthAndUnpairedStatusesRetirePendingStopAndUnpairCompletions() {
+        let terminalCases: [(message: String, expected: CompanionConnectionState)] = [
+            (
+                "{\"type\":\"companion.error\",\"code\":\"auth\",\"detail\":\"expired\"}",
+                .failed(code: "auth", detail: "expired")
+            ),
+            (
+                "{\"type\":\"companion.status\",\"state\":\"unpaired\"}",
+                .unpaired
+            )
+        ]
+
+        for action in ["stop", "unpair"] {
+            for terminal in terminalCases {
+                let harness = ClientHarness(socketCount: 1)
+                var states: [CompanionConnectionState] = []
+                var results: [CompanionActionResult] = []
+                harness.client.onState = { states.append($0) }
+                harness.connect()
+                harness.client.startRide()
+                harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+                harness.sockets[0].completeSend(at: 0)
+
+                if action == "stop" {
+                    harness.client.stopRide { results.append($0) }
+                } else {
+                    harness.client.unpair { results.append($0) }
+                }
+                harness.sockets[0].deliver(.string(terminal.message))
+                harness.sockets[0].completeSend(at: 1, error: TestError.transport)
+                harness.sockets[0].completeSend(at: 1)
+
+                XCTAssertEqual(states.last, terminal.expected, "\(action) after \(terminal.expected)")
+                XCTAssertTrue(results.isEmpty, "terminal state owns and retires \(action) completion")
+                XCTAssertTrue(harness.scheduled.isEmpty)
+            }
+        }
+    }
+
+    func testFreshStartAtSharingImmediatelyRetiresOldStopAndStartsOnNextReady() throws {
+        let harness = ClientHarness(socketCount: 1)
+        var states: [CompanionConnectionState] = []
+        var stopResults: [CompanionActionResult] = []
+        harness.client.onState = { states.append($0) }
+        harness.connect()
+        harness.client.startRide()
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+        harness.sockets[0].completeSend(at: 0)
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"sharing\"}"))
+
+        harness.client.stopRide { stopResults.append($0) }
+        harness.client.startRide()
+        harness.sockets[0].completeSend(at: 1, error: TestError.transport)
+        harness.sockets[0].completeSend(at: 1)
+
+        XCTAssertTrue(stopResults.isEmpty)
+        XCTAssertEqual(harness.sockets[0].cancelCount, 0)
+        XCTAssertTrue(harness.scheduled.isEmpty)
+        XCTAssertEqual(states.last, .sharing(deviceId: nil, label: nil))
+
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+        XCTAssertEqual(
+            try messageTypes(harness.sockets[0].sentMessages),
+            ["companion.start", "companion.stop", "companion.start"]
+        )
+    }
+
     func testRepeatedStartAtConnectingReadyAndSharingPreservesPendingStartFailure() throws {
         let harness = ClientHarness(socketCount: 2)
         harness.connect()

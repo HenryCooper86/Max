@@ -852,6 +852,8 @@ final class CompanionViewModelTests: XCTestCase {
 
         XCTAssertEqual(try viewModelMessageTypes(unpairSocket.sentMessages), ["companion.unpair"])
         XCTAssertEqual(harness.viewModel.pairCode, "123456", "submission is not asynchronous acceptance")
+        unpairSocket.deliver(.string("{\"type\":\"companion.status\",\"state\":\"paired\",\"deviceId\":\"rdk\"}"))
+        XCTAssertEqual(unpairSocket.cancelCount, 0, "normal reconnect status must wait for Unpair completion")
         unpairSocket.completeSend(at: 0, error: ViewModelTestError.transport)
         XCTAssertEqual(harness.viewModel.pairCode, "123456")
         XCTAssertEqual(
@@ -872,8 +874,11 @@ final class CompanionViewModelTests: XCTestCase {
 
         XCTAssertEqual(try viewModelMessageTypes(unpairSocket.sentMessages), ["companion.unpair"])
         XCTAssertEqual(harness.viewModel.pairCode, "123456")
+        unpairSocket.deliver(.string("{\"type\":\"companion.status\",\"state\":\"paired\",\"deviceId\":\"rdk\"}"))
+        XCTAssertEqual(unpairSocket.cancelCount, 0)
         unpairSocket.completeSend(at: 0)
         XCTAssertEqual(harness.viewModel.pairCode, "")
+        XCTAssertEqual(unpairSocket.cancelCount, 1)
 
         harness.viewModel.pairCode = "654321"
         unpairSocket.completeSend(at: 0)
@@ -906,7 +911,7 @@ final class CompanionViewModelTests: XCTestCase {
         )
     }
 
-    func testUnpairedStatusDuringPendingStopCannotClearCodeBeforeUnpairAcceptance() throws {
+    func testUnpairedStatusDuringPendingStopRetainsCodeAndRetiresOldCompletion() throws {
         let pairSocket = ViewModelRecordingSocket()
         let rideSocket = ViewModelRecordingSocket()
         rideSocket.automaticallyCompletesSends = false
@@ -923,15 +928,13 @@ final class CompanionViewModelTests: XCTestCase {
 
         XCTAssertEqual(harness.viewModel.pairCode, "123456", "Stop-stage state cannot acknowledge Unpair")
         XCTAssertEqual(try viewModelMessageTypes(rideSocket.sentMessages), ["companion.start", "companion.stop"])
+        XCTAssertEqual(harness.viewModel.companionState, .unpaired)
 
         rideSocket.completeSend(at: 1)
-        let messageTypes = try viewModelMessageTypes(rideSocket.sentMessages)
-        XCTAssertEqual(messageTypes, ["companion.start", "companion.stop", "companion.unpair"])
+        rideSocket.completeSend(at: 1, error: ViewModelTestError.transport)
+        XCTAssertEqual(try viewModelMessageTypes(rideSocket.sentMessages), ["companion.start", "companion.stop"])
         XCTAssertEqual(harness.viewModel.pairCode, "123456")
-
-        guard messageTypes.count == 3 else { return }
-        rideSocket.completeSend(at: 2)
-        XCTAssertEqual(harness.viewModel.pairCode, "")
+        XCTAssertEqual(harness.viewModel.companionState, .unpaired)
     }
 
     func testActiveRideRepeatedUnpairWaitsForStopThenUnpairSuccessAndClearsOnce() throws {
@@ -998,6 +1001,171 @@ final class CompanionViewModelTests: XCTestCase {
 
         XCTAssertEqual(harness.viewModel.pairCode, "654321")
         XCTAssertEqual(harness.viewModel.companionState, .failed(code: "auth", detail: "expired"))
+    }
+
+    func testActiveUnpairTerminalAuthAndUnpairedRetireDelayedStopFailure() throws {
+        let terminalCases: [(message: String, expected: CompanionConnectionState)] = [
+            (
+                "{\"type\":\"companion.error\",\"code\":\"auth\",\"detail\":\"expired\"}",
+                .failed(code: "auth", detail: "expired")
+            ),
+            (
+                "{\"type\":\"companion.status\",\"state\":\"unpaired\"}",
+                .unpaired
+            )
+        ]
+
+        for terminal in terminalCases {
+            let pairSocket = ViewModelRecordingSocket()
+            let rideSocket = ViewModelRecordingSocket()
+            rideSocket.automaticallyCompletesSends = false
+            let harness = RealCompanionViewModelHarness(sockets: [pairSocket, rideSocket])
+            harness.completePairOnly()
+            harness.stream.startResults = [true]
+            harness.stream.permissionOnStart = .precise
+            harness.viewModel.startHelmetRide()
+            rideSocket.deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\",\"deviceId\":\"rdk\"}"))
+            rideSocket.completeSend(at: 0)
+
+            harness.viewModel.unpairHelmet()
+            rideSocket.deliver(.string(terminal.message))
+            XCTAssertEqual(harness.viewModel.companionState, terminal.expected)
+            XCTAssertEqual(harness.viewModel.pairCode, "123456")
+
+            rideSocket.completeSend(at: 1, error: ViewModelTestError.transport)
+            XCTAssertEqual(harness.viewModel.companionState, terminal.expected)
+            XCTAssertEqual(harness.viewModel.pairCode, "123456")
+        }
+    }
+
+    func testLogoutReenteredFromUnpairLocationStopJoinsRequiredStopBeforeDisconnect() {
+        let harness = Harness()
+        harness.stream.startResults = [true]
+        harness.stream.permissionOnStart = .precise
+        harness.client.publish(.paired(deviceId: "rdk", label: nil))
+        harness.viewModel.startHelmetRide()
+        harness.viewModel.pairCode = "123456"
+        var didRequestLogout = false
+        harness.stream.onStop = {
+            guard !didRequestLogout else { return }
+            didRequestLogout = true
+            harness.viewModel.startHelmetRide()
+            harness.viewModel.logout()
+        }
+        harness.events.removeAll()
+
+        harness.viewModel.unpairHelmet()
+
+        XCTAssertEqual(
+            harness.events.filter { $0 == "location.stop" || $0.hasPrefix("companion.") || $0.hasPrefix("auth.logout:") },
+            ["location.stop", "companion.stop", "companion.disconnect", "auth.logout:account-session-token"]
+        )
+        XCTAssertEqual(harness.client.stopCount, 1)
+        XCTAssertEqual(harness.client.disconnectCount, 1)
+        XCTAssertEqual(harness.client.unpairCount, 0)
+        XCTAssertEqual(harness.viewModel.sessionToken, "")
+        XCTAssertEqual(harness.viewModel.companionState, .signedOut)
+        XCTAssertFalse(harness.viewModel.helmetRideActive)
+    }
+
+    func testAccountReplacementReenteredFromUnpairLocationStopJoinsOneTeardown() {
+        let harness = Harness()
+        harness.stream.startResults = [true, true]
+        harness.stream.permissionOnStart = .precise
+        harness.client.publish(.paired(deviceId: "rdk", label: nil))
+        harness.viewModel.startHelmetRide()
+        var replacedAccount = false
+        harness.stream.onStop = {
+            guard !replacedAccount else { return }
+            replacedAccount = true
+            harness.viewModel.startHelmetRide()
+            harness.viewModel.sessionToken = "account-b"
+        }
+        harness.events.removeAll()
+        harness.secretWrites.removeAll()
+
+        harness.viewModel.unpairHelmet()
+
+        XCTAssertEqual(
+            harness.events.filter { $0 == "location.stop" || $0.hasPrefix("companion.") },
+            ["location.stop", "companion.stop", "companion.disconnect"]
+        )
+        XCTAssertEqual(harness.client.stopCount, 1)
+        XCTAssertEqual(harness.client.disconnectCount, 1)
+        XCTAssertEqual(harness.client.unpairCount, 0)
+        XCTAssertEqual(harness.viewModel.sessionToken, "account-b")
+        XCTAssertEqual(harness.viewModel.companionState, .signedOut)
+        XCTAssertEqual(harness.secretWrites.map(\.value), ["account-b"])
+        XCTAssertFalse(harness.viewModel.helmetRideActive)
+    }
+
+    func testDelayedUnpairStopAccountReplacementWaitsWithoutRepeatingLocationAndNewestTokenWins() {
+        let harness = Harness()
+        harness.client.automaticallyCompletesStopActions = false
+        harness.stream.startResults = [true, true]
+        harness.stream.permissionOnStart = .precise
+        harness.client.publish(.paired(deviceId: "rdk", label: nil))
+        harness.viewModel.startHelmetRide()
+        harness.events.removeAll()
+        harness.secretWrites.removeAll()
+
+        harness.viewModel.unpairHelmet()
+        harness.viewModel.sessionToken = "account-b"
+        harness.viewModel.startHelmetRide()
+        harness.viewModel.sessionToken = "account-c"
+
+        XCTAssertEqual(harness.events.filter { $0 == "location.stop" }, ["location.stop"])
+        XCTAssertEqual(harness.client.stopCount, 1)
+        XCTAssertEqual(harness.client.disconnectCount, 0, "account disconnect waits for owned Stop resolution")
+        XCTAssertEqual(harness.client.unpairCount, 0)
+
+        harness.client.completeStopAction(.accepted)
+
+        XCTAssertEqual(harness.events.filter { $0 == "location.stop" }, ["location.stop"])
+        XCTAssertEqual(harness.client.stopCount, 1)
+        XCTAssertEqual(harness.client.disconnectCount, 1)
+        XCTAssertEqual(harness.client.unpairCount, 0)
+        XCTAssertEqual(harness.viewModel.sessionToken, "account-c")
+        XCTAssertEqual(harness.viewModel.companionState, .signedOut)
+        XCTAssertFalse(harness.viewModel.helmetRideActive)
+        XCTAssertFalse(
+            harness.events.contains("companion.connect:ws://relay.example/agent:account-session-token:false")
+        )
+    }
+
+    func testRepeatedLogoutDuringDelayedUnpairStopWaitsAndFinishesExactlyOnce() {
+        let harness = Harness(voiceHandsFree: true)
+        harness.client.automaticallyCompletesStopActions = false
+        harness.stream.startResults = [true]
+        harness.stream.permissionOnStart = .precise
+        harness.client.publish(.paired(deviceId: "rdk", label: nil))
+        harness.viewModel.startHelmetRide()
+        harness.events.removeAll()
+        harness.voiceEvents.removeAll()
+        harness.secretWrites.removeAll()
+
+        harness.viewModel.unpairHelmet()
+        harness.viewModel.logout()
+        harness.viewModel.logout()
+
+        XCTAssertEqual(harness.events.filter { $0 == "location.stop" }, ["location.stop"])
+        XCTAssertEqual(harness.client.stopCount, 1)
+        XCTAssertEqual(harness.client.disconnectCount, 0)
+        XCTAssertFalse(harness.events.contains(where: { $0.hasPrefix("auth.logout:") }))
+        XCTAssertEqual(harness.viewModel.sessionToken, "account-session-token")
+
+        harness.client.completeStopAction(.accepted)
+
+        XCTAssertEqual(
+            harness.events.filter { $0 == "location.stop" || $0.hasPrefix("companion.") || $0.hasPrefix("auth.logout:") },
+            ["location.stop", "companion.stop", "companion.disconnect", "auth.logout:account-session-token"]
+        )
+        XCTAssertEqual(harness.client.stopCount, 1)
+        XCTAssertEqual(harness.client.disconnectCount, 1)
+        XCTAssertEqual(harness.client.unpairCount, 0)
+        XCTAssertEqual(harness.viewModel.sessionToken, "")
+        XCTAssertEqual(harness.viewModel.companionState, .signedOut)
+        XCTAssertEqual(harness.voiceEvents, ["voice.owner:nil", "voice.stop"])
     }
 
     func testAccountBoundaryDefersDisconnectStartAcrossNestedNewestTokenMatrix() {
@@ -1312,6 +1480,8 @@ private final class FakeCompanionClient: CompanionClientControlling {
     var stopCount = 0
     var disconnectCount = 0
     var unpairCount = 0
+    var automaticallyCompletesStopActions = true
+    private var stopActionCompletions: [(CompanionActionResult) -> Void] = []
 
     func connect(relayURL: String, sessionToken: String, allowSelfSignedTLS: Bool) {
         eventSink?("companion.connect:\(relayURL):\(sessionToken):\(allowSelfSignedTLS)")
@@ -1337,7 +1507,15 @@ private final class FakeCompanionClient: CompanionClientControlling {
 
     func stopRide(completion: @escaping (CompanionActionResult) -> Void) {
         stopRide()
-        completion(.accepted)
+        if automaticallyCompletesStopActions {
+            completion(.accepted)
+        } else {
+            stopActionCompletions.append(completion)
+        }
+    }
+
+    func completeStopAction(_ result: CompanionActionResult, at index: Int = 0) {
+        stopActionCompletions[index](result)
     }
 
     func unpair() {

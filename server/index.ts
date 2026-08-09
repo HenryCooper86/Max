@@ -78,6 +78,11 @@ import { registerAmapRoutes } from "./amap-proxy";
 import { createCompanionBindingStore } from "./companion-store";
 import { createCompanionRegistry } from "./companion-registry";
 import { createCompanionSocketServer } from "./companion-socket";
+import {
+  closeAuthenticatedConnections,
+  registerAuthenticatedConnection,
+  unregisterAuthenticatedConnection
+} from "./authenticated-connections";
 
 const app = express();
 const server = http.createServer(app);
@@ -97,21 +102,13 @@ server.headersTimeout = 15_000;
 server.requestTimeout = 30_000;
 server.keepAliveTimeout = 5_000;
 server.maxRequestsPerSocket = 1_000;
-type AuthenticatedConnection = { userId: string; token: string };
-const authenticatedConnections = new Map<WebSocket, AuthenticatedConnection>();
 const activeSessions = new Map<WebSocket, AgentSessionController>();
 const log = createLogger("relay");
 const companionStore = createCompanionBindingStore();
 const companionRegistry = createCompanionRegistry({ store: companionStore, log });
 const companionSockets = createCompanionSocketServer({
   registry: companionRegistry,
-  log,
-  onAuthenticated(client, session) {
-    authenticatedConnections.set(client, { userId: session.user.id, token: session.token });
-  },
-  onDisconnected(client) {
-    authenticatedConnections.delete(client);
-  }
+  log
 });
 let shuttingDown = false;
 
@@ -231,11 +228,11 @@ app.post("/auth/password", (req, res) => {
     .then((result) => {
       if (result.ok) {
         if (currentUser) {
-          for (const [client, connection] of authenticatedConnections) {
-            if (connection.userId === currentUser.id && connection.token !== token) {
-              client.close(1008, "session revoked");
-            }
-          }
+          closeAuthenticatedConnections(
+            (connection) => connection.userId === currentUser.id && connection.token !== token,
+            1008,
+            "session revoked"
+          );
         }
         log.info("password changed", { username: currentUser?.username });
         res.json(result);
@@ -252,9 +249,7 @@ app.post("/auth/logout", (req, res) => {
   const bearer = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length).trim() : "";
   const token = typeof body.token === "string" ? body.token : bearer;
   logoutSession(token);
-  for (const [client, connection] of authenticatedConnections) {
-    if (connection.token === token) client.close(1008, "signed out");
-  }
+  closeAuthenticatedConnections((connection) => connection.token === token, 1008, "signed out");
   res.json({ ok: true });
 });
 
@@ -331,9 +326,7 @@ app.post("/auth/admin/users/delete", (req, res) => {
   const result = deleteUser(body.username);
   if (result.ok) {
     clearUserConversationMemory(result.user.id);
-    for (const [client, connection] of authenticatedConnections) {
-      if (connection.userId === result.user.id) client.close(1008, "account deleted");
-    }
+    closeAuthenticatedConnections((connection) => connection.userId === result.user.id, 1008, "account deleted");
     log.info("user deleted", { by: admin.username, username: body.username });
     res.json(result);
   } else {
@@ -767,7 +760,7 @@ wss.on("connection", (client, request) => {
   const authenticatedSession = requestSession(request) ?? undefined;
   const authenticatedUser = authenticatedSession?.user;
   if (authenticatedSession) {
-    authenticatedConnections.set(client, {
+    registerAuthenticatedConnection(client, {
       userId: authenticatedSession.user.id,
       token: authenticatedSession.token
     });
@@ -797,7 +790,7 @@ wss.on("connection", (client, request) => {
   });
 
   client.on("close", async (code) => {
-    authenticatedConnections.delete(client);
+    unregisterAuthenticatedConnection(client);
     activeSessions.delete(client);
     sessionLog.info("client disconnected", { code });
     metrics.sessionClosed();
@@ -831,9 +824,7 @@ const stopWatchdog = startWatchdog({
 // or be revoked while a helmet remains connected. Revalidate at a low cadence
 // so a stale socket cannot outlive its login indefinitely.
 const authSessionSweepTimer = setInterval(() => {
-  for (const [client, connection] of authenticatedConnections) {
-    if (!sessionUser(connection.token)) client.close(1008, "session expired");
-  }
+  closeAuthenticatedConnections((connection) => !sessionUser(connection.token), 1008, "session expired");
 }, 60_000);
 authSessionSweepTimer.unref();
 

@@ -7,6 +7,7 @@ import type { PublicUser } from "./accounts";
 import type { CompanionRegistry } from "./companion-registry";
 import type { Logger } from "./logger";
 import { metrics } from "./metrics";
+import { registerAuthenticatedConnection, unregisterAuthenticatedConnection } from "./authenticated-connections";
 
 const DEFAULT_MAX_PAYLOAD_BYTES = 8 * 1024;
 // Leave enough room for the application layer to return companion.error/1008
@@ -30,8 +31,6 @@ export function createCompanionSocketServer(options: {
   registry: CompanionRegistry;
   maxPayloadBytes?: number;
   log: Logger;
-  onAuthenticated?: (client: WebSocket, session: AuthenticatedCompanion) => void;
-  onDisconnected?: (client: WebSocket) => void;
 }): {
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void;
   close(): Promise<void>;
@@ -78,7 +77,7 @@ export function createCompanionSocketServer(options: {
       }
     });
     clientsByAccount.set(session.user.id, client);
-    options.onAuthenticated?.(client, session);
+    registerAuthenticatedConnection(client, { userId: session.user.id, token: session.token });
 
     client.on("message", (data, isBinary) => {
       if (rejectingClients.has(client)) return;
@@ -104,7 +103,7 @@ export function createCompanionSocketServer(options: {
     client.once("close", () => {
       connection.detach();
       if (clientsByAccount.get(session.user.id) === client) clientsByAccount.delete(session.user.id);
-      options.onDisconnected?.(client);
+      unregisterAuthenticatedConnection(client);
     });
     client.on("error", (error) => {
       options.log.warn("companion socket error", {

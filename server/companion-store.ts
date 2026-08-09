@@ -138,6 +138,9 @@ export function createCompanionBindingStore(options: { filePath?: string | null;
     if (!filePath) return;
     const tempPath = `${filePath}.write`;
     await ensureTestingStorageDirectory(filePath);
+    // Explicit companion paths can have a pre-existing parent; unlike the
+    // shared default evidence directory, it still needs to become private.
+    await fs.promises.chmod(path.dirname(filePath), 0o700);
     await fs.promises.writeFile(tempPath, serializeSnapshot(candidate), { mode: 0o600 });
     await fs.promises.chmod(tempPath, 0o600);
     await fs.promises.rename(tempPath, filePath);

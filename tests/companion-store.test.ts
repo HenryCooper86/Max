@@ -39,6 +39,17 @@ describe("companion binding store", () => {
     });
   });
 
+  it("repairs an existing explicit binding directory to private mode", async () => {
+    const filePath = bindingPath();
+    fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o755 });
+    fs.chmodSync(path.dirname(filePath), 0o755);
+    const store = createCompanionBindingStore({ filePath });
+
+    await store.bind("acct-a", "rdk-a", 100);
+
+    expect(fs.statSync(path.dirname(filePath)).mode & 0o777).toBe(0o700);
+  });
+
   it("writes a staged .write file before atomically renaming it into place", async () => {
     const filePath = bindingPath();
     const originalRename = fs.promises.rename;

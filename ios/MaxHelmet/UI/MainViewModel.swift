@@ -666,19 +666,16 @@ final class MainViewModel: ObservableObject {
             case .sendingUnpair, nil:
                 break
             }
+            if companionAccountStopOwner != nil || rideTeardownPhase != nil {
+                companionAccountStopOwner = nil
+                settleRideTeardown()
+                finishCompanionAccountTeardown()
+                return
+            }
         }
 
-        let terminalRetiresRideStop = terminalState && rideTeardownPhase != nil
         if terminalState {
             settleRideTeardown()
-        }
-        if companionAccountTeardownActive,
-           terminalState,
-           companionAccountStopOwner != nil
-               || terminalRetiresRideStop {
-            companionAccountStopOwner = nil
-            finishCompanionAccountTeardown()
-            return
         }
 
         switch state {

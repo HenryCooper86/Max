@@ -10,6 +10,48 @@ import {
 
 type HelmetEvent = CompanionPairingEvent | PhoneLocationEvent | PhoneLocationStatusEvent;
 
+type Deferred = {
+  promise: Promise<void>;
+  resolve(): void;
+};
+
+function deferred(): Deferred {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+function gatedBindingStore() {
+  const base = createCompanionBindingStore({ filePath: null });
+  const bindEntered = deferred();
+  const bindGate = deferred();
+  const unbindGate = deferred();
+  let unbindStarted = false;
+  const store: CompanionBindingStore = {
+    ...base,
+    async bind(accountId, deviceId, now) {
+      bindEntered.resolve();
+      await bindGate.promise;
+      return base.bind(accountId, deviceId, now);
+    },
+    async unbindAccount(accountId) {
+      unbindStarted = true;
+      await unbindGate.promise;
+      return base.unbindAccount(accountId);
+    }
+  };
+  return {
+    base,
+    store,
+    bindEntered: bindEntered.promise,
+    releaseBind: bindGate.resolve,
+    releaseUnbind: unbindGate.resolve,
+    unbindStarted: () => unbindStarted
+  };
+}
+
 type Harness = {
   registry: CompanionRegistry;
   store: CompanionBindingStore;
@@ -442,5 +484,310 @@ describe("companion registry sharing lifecycle", () => {
     expect(
       helmet.events.filter((event) => event.type === "phone.location.status" && event.state === "stale")
     ).toHaveLength(0);
+  });
+});
+
+describe("companion registry concurrent lifecycle reconciliation", () => {
+  it("orders a later unpair after an in-flight pair for the same account", async () => {
+    const gated = gatedBindingStore();
+    const h = harness({ store: gated.store, codes: ["123456", "234567"] });
+    const helmet = h.helmet("rdk-a");
+    const phone = h.phone("acct-a");
+
+    const pair = phone.connection.handle({ type: "companion.pair", code: "123456" });
+    await gated.bindEntered;
+    const unpair = phone.connection.handle({ type: "companion.unpair" });
+    gated.releaseBind();
+    await pair;
+    await Promise.resolve();
+    const unbindStartedAfterPair = gated.unbindStarted();
+    gated.releaseUnbind();
+    await unpair;
+
+    expect(unbindStartedAfterPair).toBe(true);
+    expect(gated.base.bindingForAccount("acct-a")).toBeUndefined();
+    expect(phone.events.at(-1)).toMatchObject({ type: "companion.status", state: "unpaired" });
+    expect(latest(helmet.events, "phone.location.status")).toEqual({
+      type: "phone.location.status",
+      state: "unpaired"
+    });
+  });
+
+  it("reconciles pair completion to a replacement phone generation", async () => {
+    const gated = gatedBindingStore();
+    const h = harness({ store: gated.store });
+    const helmet = h.helmet("rdk-a");
+    const first = h.phone("acct-a");
+
+    const pair = first.connection.handle({ type: "companion.pair", code: "123456" });
+    await gated.bindEntered;
+    const firstEventCount = first.events.length;
+    const replacement = h.phone("acct-a");
+    gated.releaseBind();
+    await pair;
+
+    expect(gated.base.bindingForAccount("acct-a")?.deviceId).toBe("rdk-a");
+    expect(first.events).toHaveLength(firstEventCount);
+    expect(replacement.events.at(-1)).toMatchObject({
+      type: "companion.status",
+      state: "ready",
+      deviceId: "rdk-a"
+    });
+    expect(latest(helmet.events, "phone.location.status")).toEqual({
+      type: "phone.location.status",
+      state: "connected"
+    });
+  });
+
+  it("finishes an in-flight pair after phone detach without reviving that phone generation", async () => {
+    const gated = gatedBindingStore();
+    const h = harness({ store: gated.store });
+    const helmet = h.helmet("rdk-a");
+    const phone = h.phone("acct-a");
+
+    const pair = phone.connection.handle({ type: "companion.pair", code: "123456" });
+    await gated.bindEntered;
+    const eventCount = phone.events.length;
+    phone.connection.detach();
+    gated.releaseBind();
+    await pair;
+
+    expect(gated.base.bindingForAccount("acct-a")?.deviceId).toBe("rdk-a");
+    expect(phone.events).toHaveLength(eventCount);
+    expect(latest(helmet.events, "companion.pairing")).toMatchObject({ paired: true });
+    expect(latest(helmet.events, "phone.location.status")).toEqual({
+      type: "phone.location.status",
+      state: "stopped"
+    });
+  });
+
+  it("orders start and location after an in-flight pair", async () => {
+    const gated = gatedBindingStore();
+    const h = harness({ store: gated.store });
+    const helmet = h.helmet("rdk-a");
+    const phone = h.phone("acct-a");
+
+    const pair = phone.connection.handle({ type: "companion.pair", code: "123456" });
+    await gated.bindEntered;
+    const start = phone.connection.handle({ type: "companion.start" });
+    const fix = phone.connection.handle(location(1, h.now()));
+    gated.releaseBind();
+    await Promise.all([pair, start, fix]);
+
+    expect(phone.events.at(-1)).toMatchObject({ type: "companion.status", state: "sharing" });
+    expect(phone.events.some((event) => event.type === "companion.error")).toBe(false);
+    expect(helmet.events.at(-1)).toMatchObject({ type: "phone.location", sequence: 1 });
+  });
+
+  it("waits for in-flight account work on close and suppresses post-close peer notifications", async () => {
+    const gated = gatedBindingStore();
+    const h = harness({ store: gated.store });
+    const helmet = h.helmet("rdk-a");
+    const phone = h.phone("acct-a");
+    const pair = phone.connection.handle({ type: "companion.pair", code: "123456" });
+    await gated.bindEntered;
+    const helmetEventCount = helmet.events.length;
+    const phoneEventCount = phone.events.length;
+    let closeFinished = false;
+    const close = h.registry.close().then(() => {
+      closeFinished = true;
+    });
+    await Promise.resolve();
+    const closedBeforeBindFinished = closeFinished;
+
+    gated.releaseBind();
+    await Promise.all([pair, close]);
+
+    expect(closedBeforeBindFinished).toBe(false);
+    expect(gated.base.bindingForAccount("acct-a")?.deviceId).toBe("rdk-a");
+    expect(helmet.events).toHaveLength(helmetEventCount);
+    expect(phone.events).toHaveLength(phoneEventCount);
+  });
+
+  it("uses only the replacement helmet pairing-code generation after an in-flight pair", async () => {
+    const gated = gatedBindingStore();
+    const h = harness({ store: gated.store, codes: ["123456", "234567"] });
+    const firstHelmet = h.helmet("rdk-a");
+    const phone = h.phone("acct-a");
+    const pair = phone.connection.handle({ type: "companion.pair", code: "123456" });
+    await gated.bindEntered;
+
+    const replacement = h.helmet("rdk-a", "Replacement helmet");
+    firstHelmet.detach();
+    gated.releaseBind();
+    await pair;
+
+    expect(
+      replacement.events.filter((event): event is CompanionPairingEvent => event.type === "companion.pairing")
+    ).toEqual([
+      { type: "companion.pairing", code: "234567", expiresAt: 1_300_000, paired: false },
+      { type: "companion.pairing", code: "234567", expiresAt: 1_300_000, paired: true }
+    ]);
+    expect(phone.events.at(-1)).toMatchObject({ type: "companion.status", state: "ready" });
+  });
+});
+
+describe("companion registry throwing transport isolation", () => {
+  it("keeps a successful binding authoritative when the helmet throws during post-bind notification", async () => {
+    const h = harness();
+    const helmetEvents: HelmetEvent[] = [];
+    h.registry.attachHelmet({
+      deviceId: "rdk-a",
+      deviceLabel: "Throwing helmet",
+      send(event) {
+        if (event.type === "companion.pairing" && event.paired) throw new Error("helmet transport closed");
+        helmetEvents.push(event);
+      }
+    });
+    const phone = h.phone("acct-a");
+
+    await phone.connection.handle({ type: "companion.pair", code: "123456" });
+
+    expect(h.store.bindingForAccount("acct-a")?.deviceId).toBe("rdk-a");
+    expect(phone.events.some((event) => event.type === "companion.error" && event.code === "pair.persistence")).toBe(
+      false
+    );
+    expect(phone.events.at(-1)).toMatchObject({
+      type: "companion.status",
+      state: "helmetOffline",
+      deviceId: "rdk-a"
+    });
+    expect(helmetEvents).toHaveLength(1);
+  });
+
+  it("continues helmet reconciliation when the phone throws after a successful bind", async () => {
+    const h = harness();
+    const helmet = h.helmet("rdk-a");
+    const phoneEvents: CompanionServerEvent[] = [];
+    const phone = h.registry.attachCompanion({
+      accountId: "acct-a",
+      address: "203.0.113.10",
+      send(event) {
+        if (event.type === "companion.status" && event.state === "ready") throw new Error("phone transport closed");
+        phoneEvents.push(event);
+      }
+    });
+
+    await phone.handle({ type: "companion.pair", code: "123456" });
+
+    expect(h.store.bindingForAccount("acct-a")?.deviceId).toBe("rdk-a");
+    expect(phoneEvents.some((event) => event.type === "companion.error" && event.code === "pair.persistence")).toBe(
+      false
+    );
+    expect(latest(helmet.events, "companion.pairing")).toMatchObject({ paired: true });
+    expect(latest(helmet.events, "phone.location.status")).toEqual({
+      type: "phone.location.status",
+      state: "stopped"
+    });
+  });
+
+  it("continues every surviving displacement notification after phone and helmet sends throw", async () => {
+    const store = createCompanionBindingStore({ filePath: null });
+    await store.bind("acct-a", "rdk-a", 1);
+    await store.bind("acct-b", "rdk-b", 2);
+    const h = harness({ store, codes: ["111111", "222222", "333333"] });
+    h.registry.attachHelmet({
+      deviceId: "rdk-a",
+      deviceLabel: "Broken old helmet",
+      send(event) {
+        if (event.type === "phone.location.status" && event.state === "unpaired") {
+          throw new Error("old helmet transport closed");
+        }
+      }
+    });
+    const targetHelmet = h.helmet("rdk-b");
+    const phoneA = h.phone("acct-a", "203.0.113.10");
+    h.registry.attachCompanion({
+      accountId: "acct-b",
+      address: "203.0.113.11",
+      send(event) {
+        if (event.type === "companion.status" && event.state === "unpaired") {
+          throw new Error("displaced phone transport closed");
+        }
+      }
+    });
+
+    await phoneA.connection.handle({ type: "companion.pair", code: "222222" });
+
+    expect(store.bindingForAccount("acct-a")?.deviceId).toBe("rdk-b");
+    expect(store.bindingForAccount("acct-b")).toBeUndefined();
+    expect(phoneA.events.at(-1)).toMatchObject({ type: "companion.status", state: "ready", deviceId: "rdk-b" });
+    expect(latest(targetHelmet.events, "companion.pairing")).toMatchObject({ paired: true });
+    expect(latest(targetHelmet.events, "phone.location.status")).toEqual({
+      type: "phone.location.status",
+      state: "connected"
+    });
+  });
+
+  it("continues helmet unpair notification when the phone send throws", async () => {
+    const store = createCompanionBindingStore({ filePath: null });
+    await store.bind("acct-a", "rdk-a", 1);
+    const h = harness({ store, codes: ["123456", "234567"] });
+    const helmet = h.helmet("rdk-a");
+    const phone = h.registry.attachCompanion({
+      accountId: "acct-a",
+      address: "203.0.113.10",
+      send(event) {
+        if (event.type === "companion.status" && event.state === "unpaired") {
+          throw new Error("phone transport closed");
+        }
+      }
+    });
+
+    await phone.handle({ type: "companion.unpair" });
+
+    expect(store.bindingForAccount("acct-a")).toBeUndefined();
+    expect(latest(helmet.events, "phone.location.status")).toEqual({
+      type: "phone.location.status",
+      state: "unpaired"
+    });
+    expect(latest(helmet.events, "companion.pairing")).toMatchObject({ paired: false, code: "234567" });
+  });
+
+  it("contains a stale-timer helmet throw and reconciles the surviving phone offline", async () => {
+    vi.useFakeTimers();
+    const h = harness();
+    h.registry.attachHelmet({
+      deviceId: "rdk-a",
+      deviceLabel: "Throwing helmet",
+      send(event) {
+        if (event.type === "phone.location.status" && event.state === "stale") {
+          throw new Error("helmet transport closed");
+        }
+      }
+    });
+    const phone = h.phone("acct-a");
+    await phone.connection.handle({ type: "companion.pair", code: "123456" });
+    await phone.connection.handle({ type: "companion.start" });
+    await phone.connection.handle(location(1, h.now()));
+
+    expect(() => h.advance(10_000)).not.toThrow();
+    expect(phone.events.at(-1)).toMatchObject({
+      type: "companion.status",
+      state: "helmetOffline",
+      deviceId: "rdk-a"
+    });
+  });
+
+  it("contains initial peer sends that throw", () => {
+    const h = harness();
+    expect(() =>
+      h.registry.attachHelmet({
+        deviceId: "rdk-a",
+        deviceLabel: "Throwing helmet",
+        send() {
+          throw new Error("helmet transport closed");
+        }
+      })
+    ).not.toThrow();
+    expect(() =>
+      h.registry.attachCompanion({
+        accountId: "acct-a",
+        address: "203.0.113.10",
+        send() {
+          throw new Error("phone transport closed");
+        }
+      })
+    ).not.toThrow();
   });
 });

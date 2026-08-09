@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { createRelayClient, defaultSocketOptions, HANDSHAKE_TIMEOUT_MS, type SocketLike } from "../rdk/agent/src/relay";
+import {
+  buildSessionStart,
+  createRelayClient,
+  defaultSocketOptions,
+  HANDSHAKE_TIMEOUT_MS,
+  type SocketLike
+} from "../rdk/agent/src/relay";
 import type { RdkConfig } from "../rdk/agent/src/config";
 
 const CONFIG = {
@@ -31,12 +37,19 @@ function fakeSocket() {
 }
 
 const HANDLERS = { onEvent: () => {}, onVoice: () => {}, onReady: () => {}, onClosed: () => {} };
+const DEVICE_ID = "rdk-123e4567-e89b-42d3-a456-426614174000";
+
+describe("buildSessionStart", () => {
+  it("includes the already-loaded RDK identity", () => {
+    expect(buildSessionStart(CONFIG, DEVICE_ID).deviceId).toBe(DEVICE_ID);
+  });
+});
 
 describe("createRelayClient lifecycle", () => {
   it("connect() while a socket is open or connecting is a no-op", () => {
     const sockets: ReturnType<typeof fakeSocket>[] = [];
     const lines: string[] = [];
-    const client = createRelayClient(CONFIG, HANDLERS, {
+    const client = createRelayClient(CONFIG, DEVICE_ID, HANDLERS, {
       wsFactory: () => {
         const socket = fakeSocket();
         sockets.push(socket);
@@ -53,7 +66,7 @@ describe("createRelayClient lifecycle", () => {
   it("logs the close code and reason", () => {
     const lines: string[] = [];
     const socket = fakeSocket();
-    const client = createRelayClient(CONFIG, HANDLERS, {
+    const client = createRelayClient(CONFIG, DEVICE_ID, HANDLERS, {
       wsFactory: () => socket,
       log: (line) => lines.push(line)
     });
@@ -65,7 +78,7 @@ describe("createRelayClient lifecycle", () => {
   it("logs socket errors with their message", () => {
     const lines: string[] = [];
     const socket = fakeSocket();
-    const client = createRelayClient(CONFIG, HANDLERS, {
+    const client = createRelayClient(CONFIG, DEVICE_ID, HANDLERS, {
       wsFactory: () => socket,
       log: (line) => lines.push(line)
     });
@@ -76,7 +89,7 @@ describe("createRelayClient lifecycle", () => {
 
   it("reconnect after a close creates a fresh socket", () => {
     const sockets: ReturnType<typeof fakeSocket>[] = [];
-    const client = createRelayClient(CONFIG, HANDLERS, {
+    const client = createRelayClient(CONFIG, DEVICE_ID, HANDLERS, {
       wsFactory: () => {
         const socket = fakeSocket();
         sockets.push(socket);
@@ -94,6 +107,7 @@ describe("createRelayClient lifecycle", () => {
     const closedCalls: boolean[] = [];
     const client = createRelayClient(
       CONFIG,
+      DEVICE_ID,
       { ...HANDLERS, onClosed: (idle) => closedCalls.push(idle) },
       {
         wsFactory: () => {
@@ -131,6 +145,7 @@ describe("createRelayClient lifecycle", () => {
     const closedCalls: boolean[] = [];
     const client = createRelayClient(
       CONFIG,
+      DEVICE_ID,
       { ...HANDLERS, onClosed: (idle) => closedCalls.push(idle) },
       { wsFactory: () => socket, log: () => {} }
     );
@@ -153,6 +168,7 @@ describe("createRelayClient lifecycle", () => {
     const closedCalls: boolean[] = [];
     const client = createRelayClient(
       CONFIG,
+      DEVICE_ID,
       { ...HANDLERS, onClosed: (idle) => closedCalls.push(idle) },
       {
         wsFactory: () => {
@@ -185,6 +201,7 @@ describe("createRelayClient lifecycle", () => {
     const closedCalls: boolean[] = [];
     const client = createRelayClient(
       CONFIG,
+      DEVICE_ID,
       { ...HANDLERS, onClosed: (idle) => closedCalls.push(idle) },
       {
         wsFactory: () => {
@@ -224,7 +241,7 @@ describe("relay liveness", () => {
     const socket = fakeSocket();
     const ticks: Array<() => void> = [];
     const cleared: unknown[] = [];
-    const client = createRelayClient(CONFIG, HANDLERS, {
+    const client = createRelayClient(CONFIG, DEVICE_ID, HANDLERS, {
       wsFactory: () => socket,
       pingIntervalMs: 15_000,
       setInterval: ((fn: () => void) => {

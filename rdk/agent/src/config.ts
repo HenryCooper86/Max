@@ -9,6 +9,7 @@ export type RdkConfig = {
   alsaPlayback: string;
   cameraFront: string;
   cameraRear: string;
+  deviceIdFile: string;
   galleryDir: string;
   galleryMinFreeMb: number;
   hudPort: number;
@@ -107,6 +108,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RdkConfig {
     // Verified on hardware — see "Camera findings" in rdk/README.md.
     cameraFront: optionalString(env, "RDK_CAMERA_FRONT", "2"),
     cameraRear: optionalString(env, "RDK_CAMERA_REAR", "3"),
+    deviceIdFile: optionalString(env, "MAX_DEVICE_ID_FILE", "/var/lib/max/device-id"),
     galleryDir: optionalString(env, "MAX_GALLERY_DIR", "/var/lib/max/gallery"),
     galleryMinFreeMb: optionalNumber(env, "MAX_GALLERY_MIN_FREE_MB", 1024),
     hudPort: optionalNumber(env, "MAX_HUD_PORT", 8080),

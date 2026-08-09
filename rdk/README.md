@@ -11,8 +11,11 @@ curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt-get install -y nodejs alsa-utils python3-pip
 node --version   # expect v22.13+
 
-sudo mkdir -p /var/lib/max/gallery
-sudo chown -R "$USER" /var/lib/max
+# Keep durable helmet state private. The agent stores its stable companion
+# identity at /var/lib/max/device-id; do not delete or copy this file between
+# boards. systemd also provisions /var/lib/max for normal service starts.
+sudo install -d -m 0700 /var/lib/max
+sudo install -d -m 0700 /var/lib/max/gallery
 
 # Hardware watchdog: a kernel-level hang reboots the board instead of hanging.
 sudo mkdir -p /etc/systemd/system.conf.d
@@ -646,6 +649,7 @@ sudo tee /etc/max/agent.env >/dev/null <<'ENV'
 MAX_RELAY_URL=ws://<lan-ip>:8787/agent
 MAX_RELAY_TOKEN=                           # required once the relay has accounts
 MAX_RELAY_INSECURE_TLS=0
+MAX_DEVICE_ID_FILE=/var/lib/max/device-id # durable per-board identity; preserve across upgrades
 RDK_ALSA_CAPTURE=plughw:0,0
 RDK_ALSA_PLAYBACK=plughw:0,0
 MAX_GALLERY_DIR=/var/lib/max/gallery

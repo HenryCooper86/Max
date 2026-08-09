@@ -11,6 +11,10 @@ StartLimitIntervalSec=0
 Type=simple
 EnvironmentFile=/etc/max/agent.env
 WorkingDirectory=/opt/max
+# Durable helmet pairing identity lives here; systemd creates it before the
+# agent starts, with no world-readable state directory.
+StateDirectory=max
+StateDirectoryMode=0700
 ExecStart=/opt/max/node_modules/.bin/tsx /opt/max/rdk/agent/src/main.ts
 Restart=always
 RestartSec=2

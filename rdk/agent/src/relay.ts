@@ -43,12 +43,17 @@ export function authorizedRelayUrl(relayUrl: string, token: string): string {
   }
 }
 
-export function buildSessionStart(config: RdkConfig, memory?: SessionMemorySnapshot): SessionStartEvent {
+export function buildSessionStart(
+  config: RdkConfig,
+  deviceId: string,
+  memory?: SessionMemorySnapshot
+): SessionStartEvent {
   const event: SessionStartEvent = {
     type: "session.start",
     sampleRate: UPLINK_RATE,
     channels: 1,
     platform: "embedded",
+    deviceId,
     deviceLabel: "RDK X5",
     networkType: "wifi"
   };
@@ -108,6 +113,7 @@ export function defaultSocketOptions(config: RdkConfig): { rejectUnauthorized: b
 
 export function createRelayClient(
   config: RdkConfig,
+  deviceId: string,
   handlers: RelayHandlers,
   options: RelayClientOptions = {}
 ): RelayClient {
@@ -142,7 +148,7 @@ export function createRelayClient(
     let awaitingPong = false;
 
     current.on("open", () => {
-      current.send(JSON.stringify(buildSessionStart(config, memory)));
+      current.send(JSON.stringify(buildSessionStart(config, deviceId, memory)));
       awaitingPong = false;
       liveness = timers.set(() => {
         if (awaitingPong) {

@@ -10,6 +10,7 @@ import { createReferenceSink, type ReferenceSink } from "./audio/reference";
 import { createVoiceGate } from "./audio/voice-gate";
 import { loadConfig } from "./config";
 import { createDeviceDispatcher } from "./device/dispatch";
+import { loadOrCreateDeviceId } from "./device/identity";
 import { createPoweroffController } from "./device/poweroff";
 import { writeCue } from "./audio/cues";
 import { createHudServer } from "./hud/server";
@@ -136,6 +137,9 @@ function connectVision(socketPath: string, onEvent: (event: VisionEvent) => void
 
 function start(): void {
   const config = loadConfig();
+  // Load once at startup, before networking: a persistence failure must stop
+  // this process so systemd reports it rather than rotating a trusted pairing.
+  const deviceId = loadOrCreateDeviceId({ path: config.deviceIdFile });
   let attempt = 0;
   let waitingForVoice = false;
   let gateOpen = false;
@@ -216,7 +220,7 @@ function start(): void {
     onFrame: (commandId, jpeg) => relay.sendEvent({ type: "camera.frame", commandId, image: jpeg.toString("base64") })
   });
 
-  const relay = createRelayClient(config, {
+  const relay = createRelayClient(config, deviceId, {
     onReady: () => {
       attempt = 0;
       waitingForVoice = false;

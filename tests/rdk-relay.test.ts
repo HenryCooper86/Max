@@ -3,6 +3,7 @@ import { IDLE_CLOSE_CODE } from "../shared/agent";
 import { authorizedRelayUrl, buildSessionStart, loadConfig, nextBackoffMs } from "../rdk/agent/src/relay";
 
 const BASE_ENV = { MAX_RELAY_URL: "ws://localhost:8787/agent" } as NodeJS.ProcessEnv;
+const DEVICE_ID = "rdk-123e4567-e89b-42d3-a456-426614174000";
 
 describe("loadConfig", () => {
   it("requires a relay URL", () => {
@@ -31,7 +32,7 @@ describe("loadConfig", () => {
 
 describe("buildSessionStart", () => {
   it("declares the embedded platform and the uplink format", () => {
-    const event = buildSessionStart(loadConfig(BASE_ENV));
+    const event = buildSessionStart(loadConfig(BASE_ENV), DEVICE_ID);
     expect(event.type).toBe("session.start");
     expect(event.sampleRate).toBe(16000);
     expect(event.channels).toBe(1);
@@ -40,7 +41,7 @@ describe("buildSessionStart", () => {
   });
 
   it("echoes a session-memory snapshot when one is known", () => {
-    const event = buildSessionStart(loadConfig(BASE_ENV), {
+    const event = buildSessionStart(loadConfig(BASE_ENV), DEVICE_ID, {
       language: "zh",
       destination: "杭州",
       responseMode: "normal"
@@ -49,7 +50,7 @@ describe("buildSessionStart", () => {
   });
 
   it("omits memory entirely on a cold start", () => {
-    expect(buildSessionStart(loadConfig(BASE_ENV)).memory).toBeUndefined();
+    expect(buildSessionStart(loadConfig(BASE_ENV), DEVICE_ID).memory).toBeUndefined();
   });
 });
 

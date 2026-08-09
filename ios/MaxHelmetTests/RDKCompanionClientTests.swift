@@ -207,6 +207,52 @@ final class RDKCompanionClientTests: XCTestCase {
         XCTAssertTrue(harness.sockets[1].sentMessages.isEmpty)
     }
 
+    func testEveryExplicitConnectClearsRideAndLocationAcrossSessionBoundary() throws {
+        for replacementToken in ["account-b", "account-token"] {
+            let harness = ClientHarness(socketCount: 2)
+            harness.connect(token: "account-token")
+            harness.client.startRide()
+            harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+            harness.client.sendLatest(fix(sequence: 30))
+            harness.client.sendLatest(fix(sequence: 31))
+
+            harness.connect(token: replacementToken)
+            harness.sockets[0].completeSend(at: 0, error: TestError.transport)
+            harness.sockets[0].completeSend(at: 1, error: TestError.transport)
+            harness.sockets[1].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+            harness.sockets[1].deliver(.string("{\"type\":\"companion.status\",\"state\":\"sharing\"}"))
+
+            XCTAssertTrue(
+                harness.sockets[1].sentMessages.isEmpty,
+                "Explicit connect must reset ride authority even for token \(replacementToken)"
+            )
+            XCTAssertTrue(harness.scheduled.isEmpty)
+        }
+    }
+
+    func testReentrantExplicitConnectClearsRideAndNewestLocationBeforeNewReady() throws {
+        let harness = ClientHarness(socketCount: 2)
+        var replacedSession = false
+        harness.client.onState = { state in
+            guard case .ready = state, !replacedSession else { return }
+            replacedSession = true
+            harness.client.sendLatest(self.fix(sequence: 32))
+            harness.client.sendLatest(self.fix(sequence: 33))
+            harness.connect(token: "account-b")
+        }
+        harness.connect(token: "account-a")
+        harness.client.startRide()
+
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+        harness.sockets[0].completeSend(at: 0, error: TestError.transport)
+        harness.sockets[1].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+        harness.sockets[1].deliver(.string("{\"type\":\"companion.status\",\"state\":\"sharing\"}"))
+
+        XCTAssertEqual(harness.requests.count, 2)
+        XCTAssertTrue(harness.sockets[1].sentMessages.isEmpty)
+        XCTAssertTrue(harness.scheduled.isEmpty)
+    }
+
     func testReentrantReadyCallbackCanStopBeforeStartIsSent() throws {
         let harness = ClientHarness(socketCount: 1)
         harness.client.onState = { state in
@@ -251,6 +297,90 @@ final class RDKCompanionClientTests: XCTestCase {
         XCTAssertEqual(harness.sockets[0].cancelCount, 0)
         XCTAssertEqual(states.last, .ready(deviceId: nil, label: nil))
         XCTAssertTrue(harness.scheduled.isEmpty)
+    }
+
+    func testRepeatedStartAtConnectingReadyAndSharingPreservesPendingStartFailure() throws {
+        let harness = ClientHarness(socketCount: 2)
+        harness.connect()
+        harness.client.startRide()
+        harness.client.startRide()
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+        harness.client.startRide()
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"sharing\"}"))
+        harness.client.startRide()
+
+        XCTAssertEqual(try messageTypes(harness.sockets[0].sentMessages), ["companion.start"])
+        harness.sockets[0].completeSend(at: 0, error: TestError.transport)
+
+        XCTAssertEqual(harness.sockets[0].cancelCount, 1)
+        XCTAssertEqual(harness.scheduled.map(\.delay), [1])
+        guard harness.scheduled.count == 1 else { return }
+        harness.runScheduled(at: 0)
+        harness.sockets[1].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+        harness.sockets[1].deliver(.string("{\"type\":\"companion.status\",\"state\":\"sharing\"}"))
+        harness.client.startRide()
+        XCTAssertEqual(try messageTypes(harness.sockets[1].sentMessages), ["companion.start"])
+    }
+
+    func testStartWhilePairSendIsPendingPreservesPairFailureOwnership() {
+        let harness = ClientHarness(socketCount: 2)
+        harness.connect()
+        harness.client.pair(code: "ABC123")
+        harness.client.startRide()
+
+        harness.sockets[0].completeSend(at: 0, error: TestError.transport)
+
+        XCTAssertEqual(harness.sockets[0].cancelCount, 1)
+        XCTAssertEqual(harness.scheduled.map(\.delay), [1])
+    }
+
+    func testFreshStartSendDoesNotDisownPendingPairTransportFailure() {
+        let harness = ClientHarness(socketCount: 2)
+        harness.connect()
+        harness.client.pair(code: "ABC123")
+        harness.client.startRide()
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+
+        harness.sockets[0].completeSend(at: 0, error: TestError.transport)
+
+        XCTAssertEqual(harness.sockets[0].cancelCount, 1)
+        XCTAssertEqual(harness.scheduled.map(\.delay), [1])
+    }
+
+    func testPairSendDoesNotDisownPendingStartTransportFailure() {
+        let harness = ClientHarness(socketCount: 2)
+        harness.connect()
+        harness.client.startRide()
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+        harness.client.pair(code: "ABC123")
+
+        harness.sockets[0].completeSend(at: 0, error: TestError.transport)
+
+        XCTAssertEqual(harness.sockets[0].cancelCount, 1)
+        XCTAssertEqual(harness.scheduled.map(\.delay), [1])
+    }
+
+    func testStopAndFreshStartInvalidateOldActionsButFreshStartStillOwnsFailure() throws {
+        let harness = ClientHarness(socketCount: 2)
+        harness.connect()
+        harness.client.startRide()
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+        harness.client.stopRide()
+        harness.client.startRide()
+        harness.client.startRide()
+
+        XCTAssertEqual(
+            try messageTypes(harness.sockets[0].sentMessages),
+            ["companion.start", "companion.stop", "companion.start"]
+        )
+        harness.sockets[0].completeSend(at: 0, error: TestError.transport)
+        harness.sockets[0].completeSend(at: 1, error: TestError.transport)
+        XCTAssertEqual(harness.sockets[0].cancelCount, 0)
+        XCTAssertTrue(harness.scheduled.isEmpty)
+
+        harness.sockets[0].completeSend(at: 2, error: TestError.transport)
+        XCTAssertEqual(harness.sockets[0].cancelCount, 1)
+        XCTAssertEqual(harness.scheduled.map(\.delay), [1])
     }
 
     func testStopImmediatelyPreventsNewLocationDrain() throws {
@@ -443,7 +573,7 @@ final class RDKCompanionClientTests: XCTestCase {
         XCTAssertEqual(states, [.signedOut])
     }
 
-    func testProductionCompanionSourcesHaveNoVoiceAgentCoupling() throws {
+    func testProductionCompanionSourcesUseDedicatedSessionAndHaveNoVoiceAgentCoupling() throws {
         let sourceDirectory = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -452,6 +582,10 @@ final class RDKCompanionClientTests: XCTestCase {
             .map { try String(contentsOf: sourceDirectory.appendingPathComponent($0), encoding: .utf8) }
             .joined(separator: "\n")
         let normalizedSources = sources.lowercased()
+
+        XCTAssertTrue(sources.contains("DedicatedCompanionSocket(request: request, allowSelfSignedTLS: allowSelfSignedTLS)"))
+        XCTAssertTrue(sources.contains("URLSession(configuration: configuration, delegate: self, delegateQueue: nil)"))
+        XCTAssertTrue(sources.contains("session.webSocketTask(with: request)"))
 
         for forbidden in ["AgentSession", "MicStreamer", "AVAudioSession", "microphone", "/agent"] {
             XCTAssertFalse(

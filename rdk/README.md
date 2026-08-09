@@ -649,7 +649,8 @@ sudo tee /etc/max/agent.env >/dev/null <<'ENV'
 MAX_RELAY_URL=ws://<lan-ip>:8787/agent
 MAX_RELAY_TOKEN=                           # required once the relay has accounts
 MAX_RELAY_INSECURE_TLS=0
-MAX_DEVICE_ID_FILE=/var/lib/max/device-id # durable per-board identity; preserve across upgrades
+# Durable per-board identity; preserve across upgrades.
+MAX_DEVICE_ID_FILE=/var/lib/max/device-id
 RDK_ALSA_CAPTURE=plughw:0,0
 RDK_ALSA_PLAYBACK=plughw:0,0
 MAX_GALLERY_DIR=/var/lib/max/gallery

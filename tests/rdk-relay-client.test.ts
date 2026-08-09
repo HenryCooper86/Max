@@ -46,6 +46,27 @@ describe("buildSessionStart", () => {
 });
 
 describe("createRelayClient lifecycle", () => {
+  it("reuses the loaded identity in every reconnect handshake", () => {
+    const sockets: ReturnType<typeof fakeSocket>[] = [];
+    const client = createRelayClient(CONFIG, DEVICE_ID, HANDLERS, {
+      wsFactory: () => {
+        const socket = fakeSocket();
+        sockets.push(socket);
+        return socket;
+      }
+    });
+
+    client.connect();
+    sockets[0]!.readyState = 1;
+    sockets[0]!.emit("open");
+    sockets[0]!.emit("close", 1006, Buffer.alloc(0));
+    client.connect();
+    sockets[1]!.readyState = 1;
+    sockets[1]!.emit("open");
+
+    expect(sockets.map((socket) => JSON.parse(socket.sent[0] as string).deviceId)).toEqual([DEVICE_ID, DEVICE_ID]);
+  });
+
   it("connect() while a socket is open or connecting is a no-op", () => {
     const sockets: ReturnType<typeof fakeSocket>[] = [];
     const lines: string[] = [];

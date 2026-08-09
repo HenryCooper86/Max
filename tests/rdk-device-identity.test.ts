@@ -1,18 +1,71 @@
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { spawn, type ChildProcess } from "node:child_process";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync
+} from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadConfig } from "../rdk/agent/src/config";
 import { loadOrCreateDeviceId } from "../rdk/agent/src/device/identity";
 
 const DEVICE_ID = "rdk-123e4567-e89b-42d3-a456-426614174000";
-const COMPETING_DEVICE_ID = "rdk-123e4567-e89b-42d3-a456-426614174001";
 const TEMPORARY_DIRECTORIES: string[] = [];
+const require = createRequire(import.meta.url);
+const tsxImport = pathToFileURL(require.resolve("tsx")).href;
 
 function temporaryPath(): string {
   const directory = mkdtempSync(join(tmpdir(), "max-device-identity-"));
   TEMPORARY_DIRECTORIES.push(directory);
   return join(directory, "state", "device-id");
+}
+
+function child(
+  path: string,
+  id: string,
+  extra: NodeJS.ProcessEnv = {}
+): { process: ChildProcess; done: Promise<string> } {
+  const childProcess = spawn(process.execPath, ["--import", tsxImport, "tests/fixtures/rdk-device-identity-child.ts"], {
+    cwd: process.cwd(),
+    env: { ...process.env, IDENTITY_PATH: path, IDENTITY_ID: id, ...extra },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  let output = "";
+  let error = "";
+  childProcess.stdout?.on("data", (chunk: Buffer) => (output += chunk));
+  childProcess.stderr?.on("data", (chunk: Buffer) => (error += chunk));
+  return {
+    process: childProcess,
+    done: new Promise((resolve, reject) =>
+      childProcess.once("exit", (code, signal) => {
+        if (code === 0) resolve(output);
+        else reject(new Error(`identity child failed code=${code} signal=${signal}: ${error}`));
+      })
+    )
+  };
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForPath(path: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (existsSync(path)) return;
+    await wait(10);
+  }
+  throw new Error(`timed out waiting for ${path}`);
 }
 
 afterEach(() => {
@@ -26,6 +79,34 @@ afterEach(() => {
 });
 
 describe("loadOrCreateDeviceId", () => {
+  it("converges concurrent initializers on one persisted identity", async () => {
+    const path = temporaryPath();
+    const first = child(path, DEVICE_ID, { IDENTITY_HOLD_MS: "250" });
+    await wait(50);
+    const second = child(path, "rdk-123e4567-e89b-42d3-a456-426614174001");
+
+    await expect(Promise.all([first.done, second.done])).resolves.toEqual([DEVICE_ID, DEVICE_ID]);
+    expect(readFileSync(path, "utf8")).toBe(`${DEVICE_ID}\n`);
+  });
+
+  it("reclaims the recorded candidate after an owner crashes before publish", async () => {
+    const path = temporaryPath();
+    const first = child(path, DEVICE_ID, { IDENTITY_HOLD_MS: "1000" });
+    await waitForPath(join(dirname(path), ".device-id.marker"));
+    first.process.kill("SIGKILL");
+    await expect(first.done).rejects.toThrow(/signal=SIGKILL/);
+
+    await expect(child(path, "rdk-123e4567-e89b-42d3-a456-426614174001").done).resolves.toBe(DEVICE_ID);
+  });
+
+  it("commits the same candidate after a crash following rename", async () => {
+    const path = temporaryPath();
+    const first = child(path, DEVICE_ID, { IDENTITY_CRASH_AFTER_RENAME: "1" });
+    await expect(first.done).rejects.toThrow(/signal=SIGKILL/);
+
+    await expect(child(path, "rdk-123e4567-e89b-42d3-a456-426614174001").done).resolves.toBe(DEVICE_ID);
+  });
+
   it("creates and atomically persists a canonical RDK identity with private modes", () => {
     const path = temporaryPath();
 
@@ -52,6 +133,35 @@ describe("loadOrCreateDeviceId", () => {
     ).toBe(DEVICE_ID);
   });
 
+  it("rejects a final identity symlink instead of following it", () => {
+    const path = temporaryPath();
+    const external = join(dirname(dirname(path)), "external-device-id");
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    writeFileSync(external, `${DEVICE_ID}\n`, { mode: 0o600 });
+    symlinkSync(external, path);
+
+    expect(() => loadOrCreateDeviceId({ path })).toThrow(/regular|symlink|identity/i);
+  });
+
+  it("rejects an insecure existing identity mode", () => {
+    const path = temporaryPath();
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    writeFileSync(path, `${DEVICE_ID}\n`, { mode: 0o600 });
+    chmodSync(path, 0o644);
+
+    expect(() => loadOrCreateDeviceId({ path })).toThrow(/private|mode|identity/i);
+  });
+
+  it("rejects a symlinked or insecure state parent", () => {
+    const path = temporaryPath();
+    const realParent = join(dirname(dirname(path)), "real-state");
+    mkdirSync(realParent, { recursive: true, mode: 0o700 });
+    symlinkSync(realParent, dirname(path));
+
+    expect(() => loadOrCreateDeviceId({ path, randomId: () => DEVICE_ID })).toThrow(/parent|directory|private/i);
+    expect(lstatSync(dirname(path)).isSymbolicLink()).toBe(true);
+  });
+
   it.each(["", "rdk-123e4567-e89b-12d3-a456-426614174000\n", "RDK-123e4567-e89b-42d3-a456-426614174000\n"])(
     "rejects an empty or malformed persisted identity",
     (contents) => {
@@ -67,7 +177,6 @@ describe("loadOrCreateDeviceId", () => {
     const path = temporaryPath();
 
     expect(() => loadOrCreateDeviceId({ path, randomId: () => "rdk-not-a-uuid" })).toThrow(/device identity/i);
-    expect(() => statSync(dirname(path))).toThrow();
   });
 
   it("fails loudly when its state directory cannot be created", () => {
@@ -83,19 +192,24 @@ describe("loadOrCreateDeviceId", () => {
     ).toThrow("mkdir denied");
   });
 
-  it("fails closed while another initializer owns the identity lock", () => {
+  it("reclaims a recoverable marker and preserves its recorded candidate", () => {
     const path = temporaryPath();
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    const lockPath = join(dirname(path), ".device-id.lock");
-    writeFileSync(lockPath, "another initializer");
+    const markerPath = join(dirname(path), ".device-id.marker");
+    writeFileSync(
+      markerPath,
+      `${JSON.stringify({ version: 1, owner: "00000000-0000-4000-8000-000000000000", pid: process.pid, candidate: DEVICE_ID, phase: "recoverable" })}\n`,
+      { mode: 0o600 }
+    );
 
-    expect(() => loadOrCreateDeviceId({ path, randomId: () => DEVICE_ID })).toThrow(/initialization/i);
-    expect(readFileSync(lockPath, "utf8")).toBe("another initializer");
-    expect(readdirSync(dirname(path))).toEqual([".device-id.lock"]);
+    expect(loadOrCreateDeviceId({ path, randomId: () => "rdk-123e4567-e89b-42d3-a456-426614174001" })).toBe(DEVICE_ID);
+    expect(readdirSync(dirname(path))).toEqual(["device-id"]);
   });
 
   it("fails loudly when an existing identity cannot be read", () => {
     const path = temporaryPath();
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    writeFileSync(path, `${DEVICE_ID}\n`, { mode: 0o600 });
 
     expect(() =>
       loadOrCreateDeviceId({
@@ -123,7 +237,8 @@ describe("loadOrCreateDeviceId", () => {
       })
     ).toThrow("write failed after create");
 
-    expect(readdirSync(dirname(path))).toEqual([]);
+    expect(loadOrCreateDeviceId({ path })).toBe(DEVICE_ID);
+    expect(readdirSync(dirname(path))).toEqual(["device-id"]);
     expect(createdTemporaryPath).toContain(".device-id.tmp-");
   });
 
@@ -142,24 +257,8 @@ describe("loadOrCreateDeviceId", () => {
       })
     ).toThrow("rename denied");
 
-    expect(readdirSync(dirname(path))).toEqual(["unrelated"]);
-  });
-
-  it("returns the already-persisted winner if finalization finds one", () => {
-    const path = temporaryPath();
-
-    expect(
-      loadOrCreateDeviceId({
-        path,
-        randomId: () => DEVICE_ID,
-        rename: (_source, target) => {
-          writeFileSync(target, `${COMPETING_DEVICE_ID}\n`, { mode: 0o600, flag: "wx" });
-          const error = new Error("identity already created") as NodeJS.ErrnoException;
-          error.code = "EEXIST";
-          throw error;
-        }
-      })
-    ).toBe(COMPETING_DEVICE_ID);
+    expect(loadOrCreateDeviceId({ path })).toBe(DEVICE_ID);
+    expect(readdirSync(dirname(path))).toEqual(["device-id", "unrelated"]);
   });
 
   it("fails loudly when the final private mode cannot be applied", () => {
@@ -174,6 +273,7 @@ describe("loadOrCreateDeviceId", () => {
         }
       })
     ).toThrow("chmod denied");
+    expect(loadOrCreateDeviceId({ path })).toBe(DEVICE_ID);
   });
 
   it("uses the configured identity file path", () => {

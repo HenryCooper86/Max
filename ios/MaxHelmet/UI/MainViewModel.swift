@@ -49,7 +49,7 @@ final class MainViewModel: ObservableObject {
 
     private struct CompanionStatePublication {
         let ticket: Int
-        let owner: Int
+        let epoch: Int
         let state: CompanionConnectionState
         let publishesValue: Bool
         let completion: () -> Void
@@ -131,6 +131,7 @@ final class MainViewModel: ObservableObject {
     private var pendingUnpairOwner: Int?
     private var pendingUnpairSendOwner: Int?
     private var pendingUnpairPhase: PendingUnpairPhase?
+    private var companionStatePublicationEpoch = 0
     private var nextCompanionStatePublicationTicket = 0
     private var newestCompanionStatePublicationTicket = 0
     private var companionStatePublicationActive = false
@@ -475,6 +476,7 @@ final class MainViewModel: ObservableObject {
         }
 
         let owner = advanceCompanionGeneration()
+        advanceCompanionStatePublicationEpoch()
         bindCompanionState(owner: owner)
         companionClient.connect(
             relayURL: relayURL.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -507,6 +509,7 @@ final class MainViewModel: ObservableObject {
         fixThrottle.reset()
         lastThrottleEmissionTime = nil
         scheduledFlushTicket = nil
+        advanceCompanionStatePublicationEpoch()
         bindCompanionState(owner: owner)
         bindLocationStream(owner: owner)
 
@@ -624,6 +627,8 @@ final class MainViewModel: ObservableObject {
         dispatchPrecondition(condition: .onQueue(.main))
         guard ownsPendingUnpair(owner), hasAccountSession else { return }
         if reconnectBeforeUnpair {
+            advanceCompanionStatePublicationEpoch()
+            bindCompanionState(owner: owner)
             companionClient.connect(
                 relayURL: relayURL.trimmingCharacters(in: .whitespacesAndNewlines),
                 sessionToken: sessionToken.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -655,8 +660,15 @@ final class MainViewModel: ObservableObject {
     }
 
     private func bindCompanionState(owner: Int) {
+        let publicationEpoch = companionStatePublicationEpoch
         companionClient.onState = { [weak self] state in
-            self?.onMain { [weak self] in self?.handleCompanionState(state, owner: owner) }
+            self?.onMain { [weak self] in
+                self?.handleCompanionState(
+                    state,
+                    owner: owner,
+                    publicationEpoch: publicationEpoch
+                )
+            }
         }
     }
 
@@ -669,19 +681,29 @@ final class MainViewModel: ObservableObject {
         }
     }
 
-    private func handleCompanionState(_ state: CompanionConnectionState, owner: Int) {
+    private func handleCompanionState(
+        _ state: CompanionConnectionState,
+        owner: Int,
+        publicationEpoch: Int
+    ) {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard ownsCompanionGeneration(owner) else { return }
+        guard ownsCompanionGeneration(owner),
+              ownsCompanionStatePublicationEpoch(publicationEpoch) else {
+            return
+        }
         if !hasAccountSession, state != .signedOut { return }
 
-        publishCompanionState(state, owner: owner) { [weak self] in
-            self?.handleCommittedCompanionState(state, owner: owner)
+        publishCompanionState(
+            state,
+            owner: owner,
+            publicationEpoch: publicationEpoch
+        ) { [weak self] in
+            self?.handleCommittedCompanionState(state)
         }
     }
 
-    private func handleCommittedCompanionState(_ state: CompanionConnectionState, owner: Int) {
+    private func handleCommittedCompanionState(_ state: CompanionConnectionState) {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard ownsCompanionGeneration(owner) else { return }
 
         let terminalState = isCompanionTerminal(state)
         if interruptsCompanionAction(state) {
@@ -885,11 +907,8 @@ final class MainViewModel: ObservableObject {
     private func abortOwnedStart(owner: Int, clientRideStarted: Bool) {
         dispatchPrecondition(condition: .onQueue(.main))
         guard ownsRide(owner) else { return }
-        let interruptedState = authoritativeCompanionState
         if clientRideStarted {
-            let teardownOwner = terminateOwnedRide(sendStop: true)
-            guard ownsCompanionGeneration(teardownOwner) else { return }
-            publishCompanionState(interruptedState, owner: teardownOwner)
+            terminateOwnedRide(sendStop: true)
         } else {
             _ = invalidateRideWithoutSocketStop()
         }
@@ -913,6 +932,8 @@ final class MainViewModel: ObservableObject {
         dispatchPrecondition(condition: .onQueue(.main))
         guard !companionAccountTeardownActive else { return }
         companionAccountTeardownActive = true
+        advanceCompanionStatePublicationEpoch()
+        bindCompanionState(owner: companionGeneration)
 
         switch pendingUnpairPhase {
         case .stoppingLocation, .stoppingCompanion:
@@ -981,11 +1002,14 @@ final class MainViewModel: ObservableObject {
     private func publishCompanionState(
         _ state: CompanionConnectionState,
         owner: Int,
+        publicationEpoch: Int? = nil,
         coalescesIdenticalState: Bool = false,
         completion: @escaping () -> Void = {}
     ) {
         dispatchPrecondition(condition: .onQueue(.main))
         guard ownsCompanionGeneration(owner) else { return }
+        let publicationEpoch = publicationEpoch ?? companionStatePublicationEpoch
+        guard ownsCompanionStatePublicationEpoch(publicationEpoch) else { return }
         if !hasAccountSession, state != .signedOut { return }
         let publishesValue: Bool
         if coalescesIdenticalState {
@@ -1001,7 +1025,7 @@ final class MainViewModel: ObservableObject {
         nextCompanionStatePublicationTicket &+= 1
         let publication = CompanionStatePublication(
             ticket: nextCompanionStatePublicationTicket,
-            owner: owner,
+            epoch: publicationEpoch,
             state: state,
             publishesValue: publishesValue,
             completion: completion
@@ -1014,7 +1038,7 @@ final class MainViewModel: ObservableObject {
         defer { companionStatePublicationActive = false }
         while !pendingCompanionStatePublications.isEmpty {
             let next = pendingCompanionStatePublications.removeFirst()
-            guard ownsCompanionGeneration(next.owner) else { continue }
+            guard ownsCompanionStatePublicationEpoch(next.epoch) else { continue }
             if !hasAccountSession, next.state != .signedOut { continue }
 
             if next.publishesValue {
@@ -1023,7 +1047,7 @@ final class MainViewModel: ObservableObject {
                 companionStateAssignmentInProgress = nil
             }
             guard next.ticket == newestCompanionStatePublicationTicket,
-                  ownsCompanionGeneration(next.owner) else {
+                  ownsCompanionStatePublicationEpoch(next.epoch) else {
                 continue
             }
             next.completion()
@@ -1110,6 +1134,14 @@ final class MainViewModel: ObservableObject {
 
     private func ownsCompanionGeneration(_ owner: Int) -> Bool {
         companionGeneration == owner
+    }
+
+    private func advanceCompanionStatePublicationEpoch() {
+        companionStatePublicationEpoch &+= 1
+    }
+
+    private func ownsCompanionStatePublicationEpoch(_ epoch: Int) -> Bool {
+        companionStatePublicationEpoch == epoch
     }
 
     private func ownsRide(_ owner: Int) -> Bool {

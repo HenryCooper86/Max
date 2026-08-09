@@ -204,6 +204,99 @@ describe("RDK HUD navigation card", () => {
     now.mockRestore();
   });
 
+  it("shows the pairing code and expiry before navigation exists", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(20_000);
+    const harness = renderHarness();
+    harness.render(
+      state({
+        companion: {
+          paired: false,
+          pairingCode: "123456",
+          pairingExpiresAt: 80_000,
+          locationState: "unpaired"
+        },
+        navigation: null
+      })
+    );
+
+    expect(element(harness, "navigation-card").hidden).toBe(false);
+    expect(element(harness, "phone-status").textContent).toBe("配对码 123456 · 1 分钟内有效");
+    expect(element(harness, "nav-instruction").textContent).toBe("");
+    expect(element(harness, "nav-distance").textContent).toBe("");
+    expect(element(harness, "nav-summary").textContent).toBe("");
+    expect(element(harness, "nav-paused").hidden).toBe(true);
+    now.mockRestore();
+  });
+
+  it("hides and clears a pairing-only card at the exact expiry boundary without another socket frame", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(20_000);
+    const harness = renderHarness();
+    harness.render(
+      state({
+        companion: {
+          paired: false,
+          pairingCode: "123456",
+          pairingExpiresAt: 20_001,
+          locationState: "unpaired"
+        },
+        navigation: null
+      })
+    );
+    expect(element(harness, "navigation-card").hidden).toBe(false);
+
+    now.mockReturnValue(20_001);
+    harness.runTimeouts();
+    expect(element(harness, "navigation-card").hidden).toBe(true);
+    expect(element(harness, "phone-status").textContent).toBe("");
+    now.mockRestore();
+  });
+
+  it("hides a pairing-only card when pairing succeeds", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(20_000);
+    const harness = renderHarness();
+    harness.render(
+      state({
+        companion: {
+          paired: false,
+          pairingCode: "123456",
+          pairingExpiresAt: 80_000,
+          locationState: "unpaired"
+        },
+        navigation: null
+      })
+    );
+    harness.render(
+      state({
+        companion: { paired: true, locationState: "connected" },
+        navigation: null
+      })
+    );
+
+    expect(element(harness, "navigation-card").hidden).toBe(true);
+    expect(element(harness, "phone-status").textContent).toBe("");
+    harness.runTimeouts();
+    expect(element(harness, "navigation-card").hidden).toBe(true);
+    now.mockRestore();
+  });
+
+  it.each([
+    {
+      paired: false,
+      pairingCode: "123456",
+      pairingExpiresAt: 20_000,
+      locationState: "unpaired" as const
+    },
+    { paired: false, locationState: "unpaired" as const }
+  ])("hides an expired or missing-code unpaired card when navigation is null", (companion) => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(20_000);
+    const harness = renderHarness();
+    harness.render(state({ companion, navigation: null }));
+
+    expect(element(harness, "navigation-card").hidden).toBe(true);
+    expect(element(harness, "phone-status").textContent).toBe("");
+    now.mockRestore();
+  });
+
   it("removes a displayed pairing code when its expiry boundary passes without another socket message", () => {
     const now = vi.spyOn(Date, "now").mockReturnValueOnce(20_000).mockReturnValue(20_001);
     const harness = renderHarness();
@@ -221,6 +314,8 @@ describe("RDK HUD navigation card", () => {
 
     harness.runTimeouts();
     expect(element(harness, "phone-status").textContent).toBe("手机未配对");
+    expect(element(harness, "navigation-card").hidden).toBe(false);
+    expect(element(harness, "nav-instruction").textContent).toBe("前方右转进入西藏中路");
     now.mockRestore();
   });
 
@@ -307,6 +402,13 @@ describe("RDK HUD navigation card", () => {
       .join(" ");
     expect(element(harness, "nav-summary").textContent).toBe("预计 1 分钟");
     expect(rendered).not.toMatch(/undefined|NaN/);
+  });
+
+  it.each([999.5, 999.9, 999.99])("uses kilometers when rounding %s m crosses the unit boundary", (meters) => {
+    const harness = renderHarness();
+    harness.render(state({ navigation: { ...state().navigation!, distanceToManeuverMeters: meters } }));
+
+    expect(element(harness, "nav-distance").textContent).toBe("1.0 km");
   });
 
   it("renders hostile destination and instruction values only as text content", () => {

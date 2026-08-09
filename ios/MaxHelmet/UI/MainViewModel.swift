@@ -1,5 +1,35 @@
 import SwiftUI
 import Combine
+import CoreLocation
+
+protocol CompanionClientControlling: AnyObject {
+    var onState: ((CompanionConnectionState) -> Void)? { get set }
+    func connect(relayURL: String, sessionToken: String, allowSelfSignedTLS: Bool)
+    func pair(code: String)
+    func startRide()
+    func stopRide()
+    func unpair()
+    func sendLatest(_ fix: CompanionFix)
+    func disconnect()
+}
+
+extension RDKCompanionClient: CompanionClientControlling {}
+
+protocol CompanionLocationStreaming: AnyObject {
+    var onFix: ((CLLocation) -> Void)? { get set }
+    var onPermission: ((CompanionLocationPermission) -> Void)? { get set }
+    func startFromForeground() -> Bool
+    func stop()
+}
+
+extension CompanionLocationStream: CompanionLocationStreaming {}
+
+struct MainViewModelVoiceActions {
+    let acknowledgeAuthRequired: () -> Void
+    let selectTranscriptOwner: (String?) -> Void
+    let isHandsFree: () -> Bool
+    let stop: () -> Void
+}
 
 /// Bridges the process-wide AgentSession and rider preferences to the SwiftUI HUD.
 /// The iOS counterpart of android/.../ui/MainViewModel.kt.
@@ -48,8 +78,23 @@ final class MainViewModel: ObservableObject {
     }
 
     let session = AgentSession.shared
-    private let defaults = UserDefaults.standard
-    private let authClient = AuthClient()
+    private let defaults: UserDefaults
+    private let authClient: AuthClient?
+    private let authLogout: (String, String, Bool) -> Void
+    private let persistSecret: (String, String) -> Void
+    private let companionClient: CompanionClientControlling
+    private let locationStream: CompanionLocationStreaming
+    private let monotonicNow: () -> TimeInterval
+    private let wallClock: () -> Date
+    private let schedule: (@escaping () -> Void, TimeInterval) -> Void
+    private let voiceActions: MainViewModelVoiceActions
+
+    private var companionGeneration = 0
+    private var rideOwned = false
+    private var fixThrottle = CompanionFixThrottle()
+    private var lastThrottleEmissionTime: TimeInterval?
+    private var nextFlushTicket = 0
+    private var scheduledFlushTicket: Int?
 
     /// Presents the Max gallery sheet.
     @Published var showGallery = false
@@ -67,7 +112,7 @@ final class MainViewModel: ObservableObject {
     /// Optional shared auth token for the relay; appended to the /agent URL as
     /// `?token=…` when non-empty. Empty means the relay requires no token.
     @Published var authToken: String {
-        didSet { SecureTokenStore.write(authToken, account: Keys.authToken) }
+        didSet { persistSecret(Keys.authToken, authToken) }
     }
 
     /// Trust the test relay's self-signed certificate for wss:// (prototype only).
@@ -78,7 +123,7 @@ final class MainViewModel: ObservableObject {
     /// The login session token, stored SEPARATELY from the manual 认证令牌
     /// field so signing in/out never destroys a pasted operator relay token.
     @Published var sessionToken: String {
-        didSet { SecureTokenStore.write(sessionToken, account: Keys.sessionToken) }
+        didSet { persistSecret(Keys.sessionToken, sessionToken) }
     }
 
     /// What the WebSocket presents: the login session first (a dead one is
@@ -127,7 +172,7 @@ final class MainViewModel: ObservableObject {
     /// `resolveCrashContactIfNeeded`). Quasi-secret, so it lives in the
     /// Keychain via `SecureTokenStore`, not UserDefaults.
     @Published var crashContactNumber: String {
-        didSet { SecureTokenStore.write(crashContactNumber, account: Keys.crashContact) }
+        didSet { persistSecret(Keys.crashContact, crashContactNumber) }
     }
     /// Off by default — the rider must explicitly opt in to sending the
     /// contact's number to the relay on an escalated crash.
@@ -144,13 +189,25 @@ final class MainViewModel: ObservableObject {
         didSet { defaults.set(crashLogOnly, forKey: Keys.crashLogOnly) }
     }
 
-    var isLoggedIn: Bool { !authUsername.isEmpty && !sessionToken.isEmpty }
+    @Published private(set) var companionState: CompanionConnectionState = .signedOut
+    @Published private(set) var helmetRideActive = false
+    @Published private(set) var companionPermission: CompanionLocationPermission = .notDetermined
+    @Published private(set) var lastForwardedAt: Date?
+    @Published var pairCode = ""
+
+    var helmetRideOwned: Bool { rideOwned }
+
+    var isLoggedIn: Bool {
+        !authUsername.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !sessionToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     /// A 401 from the relay: the session (if any) is dead — drop the stale
     /// identity so the login form shows, consume the flag, and open settings
     /// on the 账号 section. Called by the screen when authRequired flips on.
     func handleAuthRequired() {
-        session.acknowledgeAuthRequired()
+        voiceActions.acknowledgeAuthRequired()
+        endCompanionAccountSession()
         if isLoggedIn {
             sessionToken = ""
             authUserId = ""
@@ -158,17 +215,21 @@ final class MainViewModel: ObservableObject {
             authDisplayName = ""
             authRole = ""
         }
-        session.selectTranscriptOwner(nil)
+        voiceActions.selectTranscriptOwner(nil)
         pendingHandsFreeRetry = true
         showPreferences = true
     }
 
-    /// POST /auth/login against the configured relay; on success the session
-    /// token lands in `authToken`, so the WebSocket connect just works.
+    /// POST /auth/login against the configured relay; on success the account
+    /// token lands in `sessionToken`, separate from the manual operator token.
     func login(username: String, password: String) {
         let name = username.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, !password.isEmpty else {
             loginError = "请输入用户名和密码"
+            return
+        }
+        guard let authClient else {
+            loginError = "登录服务不可用"
             return
         }
         loginBusy = true
@@ -188,7 +249,7 @@ final class MainViewModel: ObservableObject {
                 self.authUsername = login.user.username
                 self.authDisplayName = login.user.displayName
                 self.authRole = login.user.role
-                self.session.selectTranscriptOwner(login.user.id)
+                self.voiceActions.selectTranscriptOwner(login.user.id)
                 self.loginError = nil
                 // A 401 cut the last attempt short — resume hands-free with
                 // the fresh session instead of demanding another tap.
@@ -206,10 +267,11 @@ final class MainViewModel: ObservableObject {
     /// identity + token. An active hands-free session is stopped — the login
     /// that authorized it just ended.
     func logout() {
-        authClient.logout(
-            relayURL: relayURL.trimmingCharacters(in: .whitespacesAndNewlines),
-            token: sessionToken,
-            allowSelfSignedTls: allowSelfSigned
+        endCompanionAccountSession()
+        authLogout(
+            relayURL.trimmingCharacters(in: .whitespacesAndNewlines),
+            sessionToken.trimmingCharacters(in: .whitespacesAndNewlines),
+            allowSelfSigned
         )
         sessionToken = ""
         authUserId = ""
@@ -218,8 +280,8 @@ final class MainViewModel: ObservableObject {
         authRole = ""
         loginError = nil
         pendingHandsFreeRetry = false
-        session.selectTranscriptOwner(nil)
-        if session.state.handsFree { session.stop() }
+        voiceActions.selectTranscriptOwner(nil)
+        if voiceActions.isHandsFree() { voiceActions.stop() }
     }
 
     /// A transcript export ready to share. Wrapping the URL keeps it usable with
@@ -249,10 +311,65 @@ final class MainViewModel: ObservableObject {
     /// Developer panel sheet, opened from the wrench (only shown when devMode is on).
     @Published var showDevPanel = false
 
-    init() {
+    convenience init() {
+        let defaults = UserDefaults.standard
+        let authClient = AuthClient()
+        let session = AgentSession.shared
+        self.init(
+            defaults: defaults,
+            initialAuthToken: SecureTokenStore.migrate(account: Keys.authToken, defaults: defaults),
+            initialSessionToken: SecureTokenStore.migrate(account: Keys.sessionToken, defaults: defaults),
+            initialCrashContactNumber: SecureTokenStore.read(account: Keys.crashContact) ?? "",
+            companionClient: RDKCompanionClient(),
+            locationStream: CompanionLocationStream(),
+            authClient: authClient,
+            authLogout: { relayURL, token, allowSelfSigned in
+                authClient.logout(relayURL: relayURL, token: token, allowSelfSignedTls: allowSelfSigned)
+            },
+            persistSecret: { account, value in SecureTokenStore.write(value, account: account) },
+            monotonicNow: { ProcessInfo.processInfo.systemUptime },
+            wallClock: Date.init,
+            schedule: { callback, delay in
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: callback)
+            },
+            voiceActions: MainViewModelVoiceActions(
+                acknowledgeAuthRequired: { session.acknowledgeAuthRequired() },
+                selectTranscriptOwner: { session.selectTranscriptOwner($0) },
+                isHandsFree: { session.state.handsFree },
+                stop: { session.stop() }
+            )
+        )
+    }
+
+    init(
+        defaults: UserDefaults,
+        initialAuthToken: String,
+        initialSessionToken: String,
+        initialCrashContactNumber: String = "",
+        companionClient: CompanionClientControlling,
+        locationStream: CompanionLocationStreaming,
+        authClient: AuthClient? = nil,
+        authLogout: @escaping (String, String, Bool) -> Void,
+        persistSecret: @escaping (String, String) -> Void,
+        monotonicNow: @escaping () -> TimeInterval,
+        wallClock: @escaping () -> Date,
+        schedule: @escaping (@escaping () -> Void, TimeInterval) -> Void,
+        voiceActions: MainViewModelVoiceActions
+    ) {
+        self.defaults = defaults
+        self.authClient = authClient
+        self.authLogout = authLogout
+        self.persistSecret = persistSecret
+        self.companionClient = companionClient
+        self.locationStream = locationStream
+        self.monotonicNow = monotonicNow
+        self.wallClock = wallClock
+        self.schedule = schedule
+        self.voiceActions = voiceActions
+
         relayURL = defaults.string(forKey: Keys.relayURL) ?? Self.defaultRelayURL
-        authToken = SecureTokenStore.migrate(account: Keys.authToken, defaults: defaults)
-        sessionToken = SecureTokenStore.migrate(account: Keys.sessionToken, defaults: defaults)
+        authToken = initialAuthToken
+        sessionToken = initialSessionToken
         authUserId = defaults.string(forKey: Keys.authUserId) ?? ""
         authUsername = defaults.string(forKey: Keys.authUsername) ?? ""
         authDisplayName = defaults.string(forKey: Keys.authDisplayName) ?? ""
@@ -267,11 +384,13 @@ final class MainViewModel: ObservableObject {
         testingTestCaseId = defaults.string(forKey: Keys.testingTestCaseId) ?? "baseline-live-session"
         testingRunId = defaults.string(forKey: Keys.testingRunId) ?? ""
         testingAssignmentId = defaults.string(forKey: Keys.testingAssignmentId) ?? ""
-        crashContactNumber = SecureTokenStore.read(account: Keys.crashContact) ?? ""
+        crashContactNumber = initialCrashContactNumber
         crashRelayOptIn = defaults.bool(forKey: Keys.crashRelayOptIn)          // default OFF — the privacy carve-out is opt-in
         crashCallTarget = defaults.string(forKey: Keys.crashCallTarget) ?? "120"
         crashLogOnly = defaults.bool(forKey: Keys.crashLogOnly)
-        session.selectTranscriptOwner(isLoggedIn && !authUserId.isEmpty ? authUserId : nil)
+        voiceActions.selectTranscriptOwner(isLoggedIn && !authUserId.isEmpty ? authUserId : nil)
+
+        bindCompanionState(owner: companionGeneration)
 
         session.crashSettingsProvider = { [weak self] in
             guard let self else { return CrashSettings(contactNumber: nil, relayOptIn: false, callTarget: "120", logOnly: false) }
@@ -282,6 +401,303 @@ final class MainViewModel: ObservableObject {
                 callTarget: self.crashCallTarget,
                 logOnly: self.crashLogOnly
             )
+        }
+    }
+
+    func pairHelmet() {
+        onMain { [weak self] in self?.performPairHelmet() }
+    }
+
+    func startHelmetRide() {
+        onMain { [weak self] in self?.performStartHelmetRide() }
+    }
+
+    func stopHelmetRide() {
+        onMain { [weak self] in
+            guard let self, self.rideOwned || self.helmetRideActive else { return }
+            self.terminateOwnedRide(sendStop: true)
+        }
+    }
+
+    func unpairHelmet() {
+        onMain { [weak self] in self?.performUnpairHelmet() }
+    }
+
+    private func performPairHelmet() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        let code = pairCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard hasAccountSession,
+              isSixASCIIDigitCode(code),
+              !rideOwned,
+              canPair(from: companionState) else {
+            return
+        }
+
+        let owner = advanceCompanionGeneration()
+        bindCompanionState(owner: owner)
+        companionClient.connect(
+            relayURL: relayURL.trimmingCharacters(in: .whitespacesAndNewlines),
+            sessionToken: sessionToken.trimmingCharacters(in: .whitespacesAndNewlines),
+            allowSelfSignedTLS: allowSelfSigned
+        )
+        guard ownsCompanionGeneration(owner), hasAccountSession, !rideOwned else { return }
+        companionClient.pair(code: code)
+    }
+
+    private func performStartHelmetRide() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard hasAccountSession,
+              !rideOwned,
+              !helmetRideActive,
+              canStartRide(from: companionState) else {
+            return
+        }
+
+        let owner = advanceCompanionGeneration()
+        rideOwned = true
+        helmetRideActive = false
+        lastForwardedAt = nil
+        fixThrottle.reset()
+        lastThrottleEmissionTime = nil
+        scheduledFlushTicket = nil
+        bindCompanionState(owner: owner)
+        bindLocationStream(owner: owner)
+
+        companionClient.connect(
+            relayURL: relayURL.trimmingCharacters(in: .whitespacesAndNewlines),
+            sessionToken: sessionToken.trimmingCharacters(in: .whitespacesAndNewlines),
+            allowSelfSignedTLS: allowSelfSigned
+        )
+        guard ownsRide(owner) else { return }
+
+        companionClient.startRide()
+        guard ownsRide(owner) else { return }
+
+        let foregroundStartAccepted = locationStream.startFromForeground()
+        guard ownsRide(owner) else { return }
+        guard foregroundStartAccepted,
+              companionPermission != .denied,
+              companionPermission != .reduced else {
+            terminateOwnedRide(sendStop: true)
+            return
+        }
+
+        helmetRideActive = true
+    }
+
+    private func performUnpairHelmet() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard hasAccountSession, canUnpair(from: companionState) || rideOwned else { return }
+
+        if rideOwned || helmetRideActive {
+            terminateOwnedRide(sendStop: true)
+        } else {
+            invalidateRideWithoutSocketStop()
+            locationStream.stop()
+        }
+        companionClient.unpair()
+        pairCode = ""
+    }
+
+    private func bindCompanionState(owner: Int) {
+        companionClient.onState = { [weak self] state in
+            self?.onMain { [weak self] in self?.handleCompanionState(state, owner: owner) }
+        }
+    }
+
+    private func bindLocationStream(owner: Int) {
+        locationStream.onPermission = { [weak self] permission in
+            self?.onMain { [weak self] in self?.handlePermission(permission, owner: owner) }
+        }
+        locationStream.onFix = { [weak self] location in
+            self?.onMain { [weak self] in self?.handleLocation(location, owner: owner) }
+        }
+    }
+
+    private func handleCompanionState(_ state: CompanionConnectionState, owner: Int) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard ownsCompanionGeneration(owner) else { return }
+        if !hasAccountSession, state != .signedOut { return }
+
+        companionState = state
+        guard ownsCompanionGeneration(owner) else { return }
+
+        switch state {
+        case .failed(code: "auth", detail: _):
+            if rideOwned || helmetRideActive {
+                terminateOwnedRide(sendStop: true)
+            } else {
+                let replacementOwner = advanceCompanionGeneration()
+                bindCompanionState(owner: replacementOwner)
+            }
+        case .unpaired:
+            if rideOwned || helmetRideActive {
+                terminateOwnedRide(sendStop: true)
+            }
+        default:
+            break
+        }
+    }
+
+    private func handlePermission(_ permission: CompanionLocationPermission, owner: Int) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard ownsRide(owner) else { return }
+        companionPermission = permission
+        guard ownsRide(owner) else { return }
+        if permission == .denied || permission == .reduced {
+            terminateOwnedRide(sendStop: true)
+        }
+    }
+
+    private func handleLocation(_ location: CLLocation, owner: Int) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard ownsRide(owner), helmetRideActive, companionPermission == .precise else { return }
+
+        let now = monotonicNow()
+        guard ownsRide(owner) else { return }
+        if let fix = fixThrottle.accept(location, now: now) {
+            lastThrottleEmissionTime = now
+            forward(fix, owner: owner)
+            return
+        }
+
+        guard now.isFinite,
+              let lastThrottleEmissionTime,
+              now >= lastThrottleEmissionTime,
+              scheduledFlushTicket == nil else {
+            return
+        }
+        nextFlushTicket &+= 1
+        let ticket = nextFlushTicket
+        scheduledFlushTicket = ticket
+        let delay = max(0, 1 - (now - lastThrottleEmissionTime))
+        schedule({ [weak self] in
+            self?.onMain { [weak self] in self?.flushNewest(owner: owner, ticket: ticket) }
+        }, delay)
+    }
+
+    private func flushNewest(owner: Int, ticket: Int) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard ownsRide(owner), scheduledFlushTicket == ticket else { return }
+        scheduledFlushTicket = nil
+        let now = monotonicNow()
+        guard ownsRide(owner), let fix = fixThrottle.flushNewest(now: now) else { return }
+        lastThrottleEmissionTime = now
+        forward(fix, owner: owner)
+    }
+
+    private func forward(_ fix: CompanionFix, owner: Int) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard ownsRide(owner), helmetRideActive, companionPermission == .precise else { return }
+        companionClient.sendLatest(fix)
+        guard ownsRide(owner), helmetRideActive else { return }
+        let forwardedAt = wallClock()
+        guard ownsRide(owner), helmetRideActive else { return }
+        lastForwardedAt = forwardedAt
+    }
+
+    @discardableResult
+    private func terminateOwnedRide(sendStop: Bool) -> Int {
+        dispatchPrecondition(condition: .onQueue(.main))
+        let owner = advanceCompanionGeneration()
+        rideOwned = false
+        fixThrottle.reset()
+        lastThrottleEmissionTime = nil
+        scheduledFlushTicket = nil
+        locationStream.onFix = nil
+        locationStream.onPermission = nil
+        bindCompanionState(owner: owner)
+
+        locationStream.stop()
+        if sendStop { companionClient.stopRide() }
+        guard ownsCompanionGeneration(owner) else { return owner }
+        helmetRideActive = false
+        return owner
+    }
+
+    private func invalidateRideWithoutSocketStop() {
+        let owner = advanceCompanionGeneration()
+        rideOwned = false
+        helmetRideActive = false
+        fixThrottle.reset()
+        lastThrottleEmissionTime = nil
+        scheduledFlushTicket = nil
+        locationStream.onFix = nil
+        locationStream.onPermission = nil
+        bindCompanionState(owner: owner)
+    }
+
+    private func endCompanionAccountSession() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        if rideOwned || helmetRideActive {
+            terminateOwnedRide(sendStop: true)
+        } else {
+            invalidateRideWithoutSocketStop()
+            locationStream.stop()
+        }
+        companionClient.disconnect()
+        let owner = advanceCompanionGeneration()
+        bindCompanionState(owner: owner)
+        companionState = .signedOut
+    }
+
+    private func advanceCompanionGeneration() -> Int {
+        companionGeneration &+= 1
+        return companionGeneration
+    }
+
+    private func ownsCompanionGeneration(_ owner: Int) -> Bool {
+        companionGeneration == owner
+    }
+
+    private func ownsRide(_ owner: Int) -> Bool {
+        rideOwned && ownsCompanionGeneration(owner)
+    }
+
+    private var hasAccountSession: Bool {
+        !authUsername.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !sessionToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func canPair(from state: CompanionConnectionState) -> Bool {
+        switch state {
+        case .signedOut, .unpaired:
+            return true
+        case let .failed(code, _):
+            return code != "auth"
+        default:
+            return false
+        }
+    }
+
+    private func canStartRide(from state: CompanionConnectionState) -> Bool {
+        switch state {
+        case .paired, .ready:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func canUnpair(from state: CompanionConnectionState) -> Bool {
+        switch state {
+        case .paired, .helmetOffline, .ready, .sharing:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func isSixASCIIDigitCode(_ code: String) -> Bool {
+        let scalars = code.unicodeScalars
+        return scalars.count == 6 && scalars.allSatisfy { (48...57).contains($0.value) }
+    }
+
+    private func onMain(_ work: @escaping () -> Void) {
+        if Thread.isMainThread {
+            work()
+        } else {
+            DispatchQueue.main.async(execute: work)
         }
     }
 

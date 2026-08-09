@@ -74,11 +74,131 @@ private struct LoginFields: View {
     }
 }
 
+struct CompanionSettingsPresentation: Equatable {
+    let statusText: String
+    let permissionText: String
+    let forwardingText: String
+    let primaryActionTitle: String
+    let isPairEnabled: Bool
+    let isPrimaryActionEnabled: Bool
+    let showsUnpair: Bool
+    let isUnpairEnabled: Bool
+
+    var renderedStrings: [String] {
+        [statusText, permissionText, forwardingText, primaryActionTitle]
+    }
+
+    static func filteredPairCode(_ input: String) -> String {
+        String(input.unicodeScalars.filter { (48...57).contains($0.value) }.prefix(6))
+    }
+
+    static func make(
+        isLoggedIn: Bool,
+        pairCode: String,
+        connectionState: CompanionConnectionState,
+        rideOwned: Bool,
+        permission: CompanionLocationPermission,
+        lastForwardedAt: Date?,
+        now: Date
+    ) -> CompanionSettingsPresentation {
+        let statusText: String
+        switch connectionState {
+        case .signedOut:
+            statusText = isLoggedIn ? "尚未连接 RDK 头盔" : "请先登录账号"
+        case .connecting:
+            statusText = "正在连接 RDK 头盔…"
+        case .unpaired:
+            statusText = "尚未配对"
+        case .paired:
+            statusText = "已配对，等待开始骑行"
+        case .helmetOffline:
+            statusText = "已配对，头盔离线"
+        case .ready:
+            statusText = "RDK 头盔已连接"
+        case .sharing:
+            statusText = "正在向 RDK 头盔转发导航位置"
+        case let .failed(code, _):
+            statusText = code == "auth" ? "账号会话已失效，请重新登录" : "RDK 头盔连接失败，请重试"
+        }
+
+        let permissionText: String
+        switch permission {
+        case .notDetermined:
+            permissionText = "位置权限将在开始 Helmet Ride 时请求"
+        case .denied:
+            permissionText = "位置权限已拒绝，请在系统设置中允许使用位置"
+        case .reduced:
+            permissionText = "位置精度不足，请在系统设置中开启精确位置"
+        case .precise:
+            permissionText = "精确位置可用"
+        }
+
+        let forwardingText: String
+        if let lastForwardedAt {
+            let age = max(0, Int(now.timeIntervalSince(lastForwardedAt)))
+            forwardingText = "上次转发：\(age) 秒前"
+        } else {
+            forwardingText = "尚未转发位置"
+        }
+
+        let paired: Bool
+        let startable: Bool
+        let pairingState: Bool
+        let busy: Bool
+        switch connectionState {
+        case .paired, .ready:
+            paired = true
+            startable = true
+            pairingState = false
+            busy = false
+        case .helmetOffline:
+            paired = true
+            startable = false
+            pairingState = false
+            busy = false
+        case .sharing:
+            paired = true
+            startable = false
+            pairingState = false
+            busy = true
+        case .connecting:
+            paired = false
+            startable = false
+            pairingState = false
+            busy = true
+        case .signedOut, .unpaired:
+            paired = false
+            startable = false
+            pairingState = true
+            busy = false
+        case let .failed(code, _):
+            paired = false
+            startable = false
+            pairingState = code != "auth"
+            busy = false
+        }
+
+        let exactCode = pairCode.unicodeScalars.count == 6
+            && pairCode.unicodeScalars.allSatisfy { (48...57).contains($0.value) }
+        return CompanionSettingsPresentation(
+            statusText: statusText,
+            permissionText: permissionText,
+            forwardingText: forwardingText,
+            primaryActionTitle: rideOwned ? "停止 Helmet Ride" : "开始 Helmet Ride",
+            isPairEnabled: isLoggedIn && exactCode && pairingState && !rideOwned && !busy,
+            isPrimaryActionEnabled: rideOwned || (isLoggedIn && startable && !busy),
+            showsUnpair: paired,
+            isUnpairEnabled: paired && !rideOwned && !busy
+        )
+    }
+}
+
 // MARK: - settings (account · voice · connection · demo · diagnostics)
 
 struct SettingsPanel: View {
     let state: AgentSession.State
     @ObservedObject var viewModel: MainViewModel
+    @State private var showUnpairConfirmation = false
 
     var body: some View {
         // Account: sign in with the same username/password as the web HUD; the
@@ -102,6 +222,79 @@ struct SettingsPanel: View {
                 }
             } else {
                 LoginFields(viewModel: viewModel)
+            }
+        }
+
+        let companion = CompanionSettingsPresentation.make(
+            isLoggedIn: viewModel.isLoggedIn,
+            pairCode: viewModel.pairCode,
+            connectionState: viewModel.companionState,
+            rideOwned: viewModel.helmetRideOwned,
+            permission: viewModel.companionPermission,
+            lastForwardedAt: viewModel.lastForwardedAt,
+            now: Date()
+        )
+        SectionCard(title: "RDK 头盔") {
+            Text(companion.statusText)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(HudColors.text)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel("RDK 头盔状态：\(companion.statusText)")
+            Text(companion.permissionText)
+                .font(.system(size: 11))
+                .foregroundColor(HudColors.muted)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(companion.forwardingText)
+                .font(.system(size: 11))
+                .foregroundColor(HudColors.muted)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            TextField(
+                "六位配对码",
+                text: Binding(
+                    get: { viewModel.pairCode },
+                    set: { viewModel.pairCode = CompanionSettingsPresentation.filteredPairCode($0) }
+                )
+            )
+            .font(.system(size: 14, design: .monospaced))
+            .foregroundColor(HudColors.text)
+            .keyboardType(.numberPad)
+            .textContentType(.oneTimeCode)
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 10).fill(HudColors.panelElevated))
+            .accessibilityLabel("RDK 头盔六位配对码")
+
+            Button("配对头盔") { viewModel.pairHelmet() }
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(HudColors.accent)
+                .disabled(!companion.isPairEnabled)
+                .accessibilityHint("只建立配对，不会开始位置转发")
+
+            Button(companion.primaryActionTitle) {
+                if viewModel.helmetRideOwned {
+                    viewModel.stopHelmetRide()
+                } else {
+                    viewModel.startHelmetRide()
+                }
+            }
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundColor(HudColors.background)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(RoundedRectangle(cornerRadius: 10).fill(HudColors.accent))
+            .disabled(!companion.isPrimaryActionEnabled)
+            .accessibilityHint(viewModel.helmetRideOwned ? "停止向 RDK 头盔转发位置" : "从前台开始导航位置转发")
+
+            if companion.showsUnpair {
+                Button("取消配对", role: .destructive) { showUnpairConfirmation = true }
+                    .font(.system(size: 13, weight: .semibold))
+                    .disabled(!companion.isUnpairEnabled)
+                    .confirmationDialog("取消 RDK 头盔配对？", isPresented: $showUnpairConfirmation) {
+                        Button("取消配对", role: .destructive) { viewModel.unpairHelmet() }
+                        Button("保留配对", role: .cancel) {}
+                    } message: {
+                        Text("Helmet Ride 会先停止，之后需要新的六位配对码才能重新连接。")
+                    }
             }
         }
 

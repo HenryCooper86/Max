@@ -91,6 +91,26 @@ with `platform=ios` on the next `session.start`. Command-line/CI builds should a
 `HORIZON_GIT_COMMIT`; an unstamped local Xcode build reports `unknown` honestly and cannot receive
 credit for an assignment targeting a specific candidate commit.
 
+### RDK 头盔配对与 Helmet Ride
+
+RDK 导航位置转发是设置里的独立、显式流程，不会随登录、启动 App 或开启免提自动开始：
+
+1. 先登录账号，在 **RDK 头盔** 设置中输入头盔显示的六位配对码，然后点 **配对头盔**。
+   配对只建立账号与头盔的关系，不会启动定位。
+2. 配对成功且头盔在线后，点 **开始 Helmet Ride**。首次使用时允许 **使用 App 期间**
+   的位置权限，并在系统设置中保持 **精确位置** 开启。骑行期间 iOS 会显示连续的后台/锁屏
+   位置指示器；锁屏后仍可继续把最新位置转发给 RDK 头盔导航。
+3. 骑行结束时点 **停止 Helmet Ride**。**取消配对**和**退出登录**也会先停止定位与转发，
+   再关闭独立的头盔连接。
+
+头盔连接只使用登录取得的**账号会话令牌**；连接设置里的**手动操作员令牌**只服务于
+`/agent` 语音会话，不能代替账号登录来配对头盔。App 不显示地图、不显示原始坐标，也不持久化位置；
+配对码同样不会写入持久化存储。iOS **强制退出** App 会停止后台转发，重新启动后**不会自动恢复**
+Helmet Ride，必须由骑手再次显式开始。
+
+Debug 构建可通过设置开关连接使用自签名证书的测试中继；生产/Release 构建没有该绕过，必须使用
+主机名匹配的受信任证书。这个区别同时适用于 `/agent` 和独立的 `/companion` 连接。
+
 ### Simulator quick start
 
 ```bash
@@ -147,9 +167,9 @@ re-run the build/install to refresh it. The installed app defaults to the Lights
 | Permission / capability               | Why it is needed                                                        |
 | ------------------------------------- | ----------------------------------------------------------------------- |
 | `NSMicrophoneUsageDescription`        | Stream rider speech to the relay.                                       |
-| `NSLocationWhenInUseUsageDescription` | Send coordinates for weather and ride-risk context.                     |
+| `NSLocationWhenInUseUsageDescription` | With precise When In Use approval, forward Helmet Ride navigation fixes. |
 | `NSLocalNetworkUsageDescription`      | Connect to a relay running on the same LAN during local development.    |
-| `UIBackgroundModes = audio`           | Keep mic/playback active when the app is backgrounded or screen sleeps. |
+| `UIBackgroundModes = audio, location` | Keep voice active and an explicitly started Helmet Ride alive while locked. |
 | `NSAllowsArbitraryLoads`              | Debug-plist-only support for `ws://` development relays.                |
 
 Location is optional. If denied, the server can use fallback weather coordinates.

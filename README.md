@@ -66,6 +66,7 @@ single status caption and minimal controls.
 - Voice-triggered live navigation (iOS) — "导航去X" starts in-app turn-by-turn guidance built on a pure `GuidanceEngine` (route matching, off-route detection, prompt timing — all unit-tested from lat/lon literals). Routing is relay-side: `nav.request`/`nav.route`/`nav.error` over the agent socket reach the same Amap driving service the web HUD uses (GCJ-02 on the wire, WGS-84 inside the app, converted at the protocol boundary), so destinations resolve identically across platforms and the keyless mock route works end-to-end with no Amap key configured. Guidance semantics are shared verbatim with web — one six-rule `GuidanceEngine` contract, ported to Swift and tested against the same table — and speak maneuver prompts at ~400 m / ~150 m / the turn, with one debounced reroute per wrong turn and an arrival announcement; a live card shows the next maneuver, distance, and ETA over a route map. "停止导航" ends it. Stays in-app (never hands off) so the device-action layer keeps working; runs during the foreground hands-free session, so no background-location permission. Honest limits kept: car routing only, so it does not respect 摩托车禁行 roads, and there is no MKDirections fallback — a relay that's down or unreachable is a spoken failure, not a silent retry elsewhere.
 - Voice-triggered live navigation (web) — the same "导航去X" / "停止导航" flow now guides from the browser HUD too. Routing runs relay-side (`nav.request`/`nav.route`/`nav.error` over `/agent`) against the Amap Web 服务 REST API (place search + v5 driving, GCJ-02 throughout); with no `AMAP_API_KEY` configured the relay falls back to a deterministic mock route so the demo still works keylessly. The web HUD guides with the same maneuver-timing rules as iOS, ported to a shared TypeScript `GuidanceEngine` (`shared/guidance.ts`) so both platforms are tested against one table, plus an on-map ride simulator (演示导航 walks the route; 演示偏航 forces an off-route reroute) for demoing without a real ride; if that reroute request fails, guidance stops cleanly with a spoken "无法重新规划路线，已停止导航" instead of continuing on the stale route, matching iOS and Android. The Amap JS API tile layer renders the route on a live map; its 安全密钥 (`AMAP_JS_SECRET`) never reaches the browser — it stays server-side inside the `/_AMapService` proxy, which signs requests on the map's behalf. Same honesty limit as iOS: car routing only, no motorcycle profile, so 摩托车禁行 roads aren't respected.
 - Voice-triggered live navigation (Android) — the same "导航去X" / "停止导航" flow now guides from the native app too, on the same relay routing web and iOS use (`nav.request`/`nav.route`/`nav.error`, the same Amap driving service, and a keyless mock route end-to-end with no Amap key configured). GCJ-02 on the wire **and** inside the app — routes arrive already GCJ-02 and stay that way; the one WGS-84→GCJ-02 conversion happens at `NavigationController`'s fix boundary, with no inverse transform anywhere in the app. Guidance is the same six-rule `GuidanceEngine` contract as iOS and web, ported to Kotlin and tested against the identical shared table, speaking maneuver prompts at ~400 m / ~150 m / the turn with one debounced reroute per wrong turn and an arrival announcement. Display is card + voice only for now: a `GuidanceCard` shows the next maneuver, distance, and ETA, but there's no route map yet because the Amap Android Map SDK key is unregistered — that follow-up lands once it does. Runs only inside the foreground hands-free session (no background-location permission), first-fixes off `GPS_PROVIDER` alone with a 3 s bound, and keeps the same honest limits as iOS and web: car routing only, so 摩托车禁行 roads aren't respected.
+- iPhone companion navigation for the RDK helmet — an authenticated iOS account pairs to one durable RDK device with a six-digit, single-use code, then explicitly starts a separate **Helmet Ride** to forward precise phone fixes through `/companion`. The RDK HUD and ranked audio path own route guidance, pause when the fix is stale or unavailable, resume on a fresh fix, and let armed ADAS alerts preempt ordinary navigation speech. Pairing never starts location, login/app launch never resumes a ride, and Stop Helmet Ride, Unpair, logout, or force-quit ends forwarding. No map or raw-coordinate UI and no fix persistence are added to the phone companion flow.
 - Agent identity — attributes its development to Horizon Continental Technology (neueHCT) and names the CEO (Li Biao / Stone Li), in Chinese and English.
 - Acoustic echo cancellation — built-in-speaker echo is cancelled so the agent doesn't hear and answer itself (web `echoCancellation`; iOS shared voice-processing engine; Android `VOICE_COMMUNICATION` + `AcousticEchoCanceler`).
 - Native iOS and Android clients that reuse the same `/agent` relay protocol as the web HUD, with a width-capped, centered HUD that reads the same on phones and tablets/iPad.
@@ -721,6 +722,20 @@ overflow the stack), the reconnect mic buffer is capped at 5 s and replayed grad
 PCM pauses above a 1 MB write backlog, and reply audio is abandoned explicitly when a client
 socket exceeds a 512 KiB backlog instead of queueing without limit.
 
+### `WS /companion`
+
+The iOS Helmet Ride client connects with an authenticated **account session token**. An operator
+`RELAY_AUTH_TOKEN` can authorize `/agent`, but it cannot impersonate an account or own a helmet
+binding on `/companion`. Bindings are one account to one RDK device; replacing either live peer
+retires the old session. Text frames carry `companion.pair`, explicit `companion.start` /
+`companion.stop`, `companion.unpair`, and bounded current location fixes. Binary, malformed,
+oversized, stale, duplicate, too-fast, inaccurate, and out-of-range frames are rejected.
+
+Companion telemetry is aggregate-only (`companionEventsAccepted` and
+`companionEventsRejected`); raw fixes and pairing codes are not logged, added to tester evidence,
+or recorded in user memory. Current location necessarily appears in the encrypted protocol frame
+while Helmet Ride is active, but it is not persisted by the relay.
+
 ## Scripts
 
 ```bash
@@ -827,6 +842,34 @@ LIGHTSAIL_KEY=/path/to/LightsailDefaultKey-ap-northeast-2.pem ./deploy-lightsail
 
 An intentional staging deployment from another branch requires the explicit
 `LIGHTSAIL_ALLOW_NON_MAIN=on` override. Production delivery should never use it.
+
+### RDK companion data and rollout
+
+Set `COMPANION_BINDINGS_FILE` in the relay's protected `.env` to an explicit durable path (the
+default is `~/.horizon-helmet-testing/companion-bindings.json`). Its parent directory must be
+owned by the relay account at mode `0700`; the JSON file is atomically replaced at mode `0600`.
+The snapshot contains only account ID, RDK device ID, and creation/update timestamps—never a
+pairing code or phone fix. Back up the file with owner-only permissions before relay changes.
+For recovery, stop traffic, restore one known-good complete snapshot with the same ownership and
+modes, restart `horizon`, and require `/ready` to return `200` before pairing. An unreadable,
+invalid, or failed-to-persist snapshot makes readiness fail; `/health` can remain `200` because it
+is process liveness, not permission to route traffic. Before the first pairing on a new path,
+perform a non-secret owner write/rename probe so an unwritable empty directory is caught early.
+
+Roll out one reviewed SHA in this order: **relay first**, then the signed iOS build, then the RDK
+board. `deploy-lightsail.command` refuses a dirty tree, the wrong branch, or a local `HEAD` that
+differs from `origin/main`; it archives and stamps that exact SHA, restarts the expected PM2
+service `horizon`, and accepts the release only when both `/health` and `/ready` report the stamp.
+The script's `LIGHTSAIL_KEY`, `LIGHTSAIL_HOST`, `LIGHTSAIL_APP_DIR`,
+`LIGHTSAIL_HEALTH_URL`, and `LIGHTSAIL_READY_URL` inputs identify the deployment without placing
+secret values in logs or documentation. Do not use the non-main override for production.
+
+If a stage fails, stop there. The relay deploy automatically restores the previous release after
+an activation/check failure; otherwise restore the recorded previous relay release, reinstall the
+previous signed iOS build, and restore the previous `/opt/max` checkout/unit files before
+restarting `max-agent`. Re-run liveness, readiness, service, privacy, and pairing checks after any
+rollback. The evidence template and physical checklist live in
+[`docs/rdk-ios-companion-acceptance.md`](docs/rdk-ios-companion-acceptance.md).
 
 ## Security Notes
 

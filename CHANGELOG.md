@@ -2,6 +2,16 @@
 
 ### Added
 
+- **iPhone companion navigation for the RDK helmet** — an authenticated iOS account can pair to a
+  durable RDK device with a six-digit single-use code and explicitly start/stop Helmet Ride. The
+  phone forwards precise current fixes over the independent `/companion` socket while locked; the
+  RDK owns Amap route requests, far/near/now prompts, rerouting, stale-location pause/resume,
+  arrival, HUD state, and ranked playback so armed ADAS alerts retain priority. Pairing and ride
+  state do not auto-start on login or relaunch; unpair/logout/force-quit stop forwarding. Binding
+  persistence contains only account/device metadata at owner-only permissions, companion metrics
+  are aggregate-only, and neither relay nor iOS persists fixes. Added deterministic real-component
+  end-to-end/privacy coverage plus a PENDING-until-observed physical/deployment evidence template.
+
 - **Crash detection & emergency escalation (iOS)** — during a hands-free session
   the phone's IMU watches for a crash signature (≥4.5 g sustained pulse or ≥6 rad/s
   tumble, then stillness; speed-gated below 10 km/h). A pure, trace-tested

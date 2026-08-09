@@ -111,6 +111,12 @@ Helmet Ride，必须由骑手再次显式开始。
 Debug 构建可通过设置开关连接使用自签名证书的测试中继；生产/Release 构建没有该绕过，必须使用
 主机名匹配的受信任证书。这个区别同时适用于 `/agent` 和独立的 `/companion` 连接。
 
+部署顺序固定为：已评审且 `/health`、`/ready` 均匹配目标 SHA 的中继 → 签名后的 iOS 构建 →
+RDK。安装后先登录、配对并确认头盔 HUD 为 ready，再开始 Helmet Ride；不要用配对成功代替定位
+许可或骑行启动的验收。回滚时先停止 Helmet Ride，再安装上一份已记录的签名构建；重新登录后
+不会自动恢复骑行。完整的构建标识、设备/OS、锁屏十分钟、断网/精确位置恢复、ADAS 抢占、第二条
+路线和隐私检查记录在 [`../docs/rdk-ios-companion-acceptance.md`](../docs/rdk-ios-companion-acceptance.md)。
+
 ### Simulator quick start
 
 ```bash
@@ -164,15 +170,20 @@ re-run the build/install to refresh it. The installed app defaults to the Lights
 
 ### Permissions
 
-| Permission / capability               | Why it is needed                                                        |
-| ------------------------------------- | ----------------------------------------------------------------------- |
-| `NSMicrophoneUsageDescription`        | Stream rider speech to the relay.                                       |
-| `NSLocationWhenInUseUsageDescription` | With precise When In Use approval, forward Helmet Ride navigation fixes. |
-| `NSLocalNetworkUsageDescription`      | Connect to a relay running on the same LAN during local development.    |
+| Permission / capability               | Why it is needed                                                            |
+| ------------------------------------- | --------------------------------------------------------------------------- |
+| `NSMicrophoneUsageDescription`        | Stream rider speech to the relay.                                           |
+| `NSLocationWhenInUseUsageDescription` | With precise When In Use approval, forward Helmet Ride navigation fixes.    |
+| `NSLocalNetworkUsageDescription`      | Connect to a relay running on the same LAN during local development.        |
 | `UIBackgroundModes = audio, location` | Keep voice active and an explicitly started Helmet Ride alive while locked. |
-| `NSAllowsArbitraryLoads`              | Debug-plist-only support for `ws://` development relays.                |
+| `NSAllowsArbitraryLoads`              | Debug-plist-only support for `ws://` development relays.                    |
 
 Location is optional. If denied, the server can use fallback weather coordinates.
+
+Weather location and Helmet Ride are separate. Weather may operate with ordinary foreground
+permission or a server fallback; RDK forwarding requires precise When-In-Use authorization plus
+an explicit Start Helmet Ride. The system location indicator remains visible while forwarding
+under lock. Force-quit terminates forwarding, and neither login nor relaunch resumes it.
 
 ### Self-signed test server
 
@@ -285,6 +296,11 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
   HORIZON_GIT_COMMIT=$(git rev-parse --short=12 HEAD) build
 ```
+
+For a release candidate, also record the full reviewed SHA, Xcode build configuration, app build
+number, physical device model, and iOS version in the acceptance template. Debug self-signed trust
+is for the controlled test relay only; a production build must connect through a hostname-matched,
+publicly trusted TLS certificate.
 
 ## Troubleshooting
 

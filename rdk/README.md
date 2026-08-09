@@ -28,6 +28,13 @@ hand vanishes on the next reboot and `max-vision` then fails to bind
 `MAX_VISION_SOCKET`. `max-vision.service` declares `RuntimeDirectory=max`, which
 makes systemd create and own the directory on every start.
 
+`MAX_DEVICE_ID_FILE` is a per-board identity, not a deployment artifact. On first start the agent
+creates a canonical RDK UUID at mode `0600` under an owner-only `0700` directory and refuses an
+invalid owner, mode, symlink, hard link, partial write, or changed identity. Preserve the file
+across `/opt/max` releases and never copy it to another board. Verify stability without printing
+the value: capture a digest in a shell variable, restart, compare the new digest, and record only
+`stable`/`changed` in the acceptance record.
+
 ## Hardware checklist
 
 Record the result of every step in "Bench findings" below.
@@ -702,6 +709,50 @@ reliably survive the session:
 systemctl restart max-agent && journalctl -u max-agent -f
 ```
 
+### Reviewed RDK rollout
+
+Deploy only after the matching relay SHA is live/ready and the signed iOS build is installed. From
+the reviewed clean checkout, set `RDK_HOST` to the board's SSH target (do not put credentials in
+the repository), record `git rev-parse HEAD`, and sync the reviewed tree while leaving durable
+state in `/var/lib/max` and secrets in `/etc/max`:
+
+```bash
+RDK_HOST=root@board.example.com
+rsync -azc --delete \
+  --exclude='.git' --exclude='.env' --exclude='node_modules' \
+  --exclude='android' --exclude='ios' --exclude='dist' \
+  ./ "$RDK_HOST":/opt/max/
+
+# Run only when package-lock.json changed from the previously recorded SHA.
+ssh "$RDK_HOST" 'cd /opt/max && npm ci --omit=dev --no-audit --no-fund'
+
+ssh "$RDK_HOST" \
+  'cp /opt/max/rdk/systemd/*.service /etc/systemd/system/ && \
+   systemctl daemon-reload && systemctl restart max-agent && \
+   systemctl is-active --quiet max-agent && \
+   systemctl show max-agent -p ActiveEnterTimestamp -p MainPID --no-pager'
+```
+
+After restart, verify the private identity file without displaying it and inspect only the fixed
+startup marker—never print the device ID, pairing code, location payload, or `/etc/max/agent.env`:
+
+```bash
+ssh "$RDK_HOST" 'set -eu
+  before=$(sha256sum /var/lib/max/device-id | cut -d" " -f1)
+  test "$(stat -c %a /var/lib/max)" = 700
+  test "$(stat -c %a /var/lib/max/device-id)" = 600
+  systemctl restart max-agent
+  after=$(sha256sum /var/lib/max/device-id | cut -d" " -f1)
+  test "$before" = "$after" && echo "device identity: stable"
+  journalctl -u max-agent --since "2 minutes ago" --no-pager | grep -F "[relay] session ready"
+  systemctl is-active --quiet max-agent'
+```
+
+Rollback uses the previously recorded reviewed checkout: resync that tree, run `npm ci` if its
+lockfile differs, restore its unit files, `daemon-reload`, restart, and repeat the same private-ID
+and session-ready checks. Do not roll back `/var/lib/max/device-id` or copy a binding identity from
+another board.
+
 Two footguns worth knowing when poking at the board over SSH:
 
 - `pkill -f rdk/agent/src/main.ts` matches **its own SSH command line** and kills
@@ -753,6 +804,14 @@ With `npm run dev:server` running on the LAN host:
 2. Say "Max，现在天气怎么样" into the headset and hear a spoken reply.
 3. Interrupt a reply mid-sentence; speech must stop within ~120 ms.
 4. Unplug and replug the headset; the service recovers without a restart.
+
+**iPhone companion navigation**
+
+1. With Helmet Ride stopped, open the RDK HUD and record the six-digit code privately; do not put
+   it in a terminal command, journal, screenshot, or acceptance document.
+2. Pair from the signed-in iOS app and confirm the HUD reports ready before starting the ride.
+3. Run the locked-screen navigation, loss/resume, ADAS-preemption, second-route, and privacy
+   checks in [`../docs/rdk-ios-companion-acceptance.md`](../docs/rdk-ios-companion-acceptance.md).
 
 **Cameras**
 

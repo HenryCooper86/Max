@@ -501,13 +501,22 @@ final class MainViewModel: ObservableObject {
             sessionToken: sessionToken.trimmingCharacters(in: .whitespacesAndNewlines),
             allowSelfSignedTLS: allowSelfSigned
         )
-        guard ownsRide(owner) else { return }
+        guard ownsRide(owner), canContinueStart(from: companionState) else {
+            abortOwnedStart(owner: owner, clientRideStarted: false)
+            return
+        }
 
         companionClient.startRide()
-        guard ownsRide(owner) else { return }
+        guard ownsRide(owner), canContinueStart(from: companionState) else {
+            abortOwnedStart(owner: owner, clientRideStarted: true)
+            return
+        }
 
         let foregroundStartAccepted = locationStream.startFromForeground()
-        guard ownsRide(owner) else { return }
+        guard ownsRide(owner), canContinueStart(from: companionState) else {
+            abortOwnedStart(owner: owner, clientRideStarted: true)
+            return
+        }
         guard foregroundStartAccepted,
               companionPermission != .denied,
               companionPermission != .reduced else {
@@ -655,22 +664,25 @@ final class MainViewModel: ObservableObject {
         guard ownsCompanionGeneration(owner) else { return }
 
         let terminalState = isCompanionTerminal(state)
-        if companionAccountTeardownActive,
-           interruptsCompanionAction(state) {
-            switch pendingUnpairPhase {
-            case .stoppingLocation:
-                return
-            case .stoppingCompanion:
-                finishJoinedUnpairAccountTeardown()
-                return
-            case .sendingUnpair, nil:
-                break
-            }
-            if companionAccountStopOwner != nil || rideTeardownPhase != nil {
-                companionAccountStopOwner = nil
+        if interruptsCompanionAction(state) {
+            if companionAccountTeardownActive {
+                switch pendingUnpairPhase {
+                case .stoppingLocation:
+                    return
+                case .stoppingCompanion:
+                    finishJoinedUnpairAccountTeardown()
+                    return
+                case .sendingUnpair, nil:
+                    break
+                }
+                if companionAccountStopOwner != nil || rideTeardownPhase != nil {
+                    companionAccountStopOwner = nil
+                    settleRideTeardown()
+                    finishCompanionAccountTeardown()
+                    return
+                }
+            } else if rideTeardownPhase != nil {
                 settleRideTeardown()
-                finishCompanionAccountTeardown()
-                return
             }
         }
 
@@ -848,6 +860,19 @@ final class MainViewModel: ObservableObject {
     private func settleRideTeardown() {
         rideTeardownOwner = nil
         rideTeardownPhase = nil
+    }
+
+    private func abortOwnedStart(owner: Int, clientRideStarted: Bool) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard ownsRide(owner) else { return }
+        let interruptedState = companionState
+        if clientRideStarted {
+            let teardownOwner = terminateOwnedRide(sendStop: true)
+            guard ownsCompanionGeneration(teardownOwner) else { return }
+            companionState = interruptedState
+        } else {
+            _ = invalidateRideWithoutSocketStop()
+        }
     }
 
     @discardableResult
@@ -1061,6 +1086,15 @@ final class MainViewModel: ObservableObject {
     private func canStartRide(from state: CompanionConnectionState) -> Bool {
         switch state {
         case .paired, .ready:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func canContinueStart(from state: CompanionConnectionState) -> Bool {
+        switch state {
+        case .paired, .connecting, .ready, .sharing:
             return true
         default:
             return false

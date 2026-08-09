@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NavPromptEvent, NavRequestEvent, NavRouteEvent } from "../shared/agent";
 import { createRdkNavigationController, type RdkNavigationSnapshot } from "../rdk/agent/src/navigation/controller";
-import type { PhoneFix, PhoneLocationSource, PhoneLocationState } from "../rdk/agent/src/navigation/phone-location";
+import {
+  createPhoneLocationSource,
+  type PhoneFix,
+  type PhoneLocationSource,
+  type PhoneLocationState
+} from "../rdk/agent/src/navigation/phone-location";
 
 const ORIGIN_FIX: PhoneFix = {
   sequence: 1,
@@ -63,6 +68,9 @@ type HarnessOptions = {
   onState?: (state: RdkNavigationSnapshot) => void;
   interrupt?: () => void;
   now?: () => number;
+  canPromptHook?: () => void;
+  randomIdHook?: (id: string, index: number) => void;
+  latest?: () => PhoneFix | undefined;
 };
 
 function harness(options: HarnessOptions = {}) {
@@ -70,13 +78,14 @@ function harness(options: HarnessOptions = {}) {
   const states: RdkNavigationSnapshot[] = [];
   const order: string[] = [];
   const ids = ["nav-1", "prompt-1", "prompt-2", "prompt-3", "reroute-1", "prompt-4", "prompt-5"];
+  let randomIdIndex = 0;
   let canPrompt = options.canPrompt ?? true;
   const waitForUsableFix = vi.fn(
     options.waitForFix ?? (() => Promise.resolve(options.initialFix === undefined ? ORIGIN_FIX : options.initialFix))
   );
   const location: Pick<PhoneLocationSource, "waitForUsableFix" | "latest"> = {
     waitForUsableFix,
-    latest: () => options.initialFix
+    latest: options.latest ?? (() => options.initialFix ?? ORIGIN_FIX)
   };
   const controller = createRdkNavigationController({
     location,
@@ -89,13 +98,20 @@ function harness(options: HarnessOptions = {}) {
       states.push({ ...state, ...(state.location === undefined ? {} : { location: { ...state.location } }) });
       options.onState?.(state);
     },
-    canPrompt: () => canPrompt,
+    canPrompt: () => {
+      options.canPromptHook?.();
+      return canPrompt;
+    },
     interruptOrdinaryPlayback: () => {
       order.push("interrupt");
       options.interrupt?.();
     },
     now: options.now ?? (() => Date.now()),
-    randomId: () => ids.shift() ?? "extra-id"
+    randomId: () => {
+      const id = ids.shift() ?? "extra-id";
+      options.randomIdHook?.(id, randomIdIndex++);
+      return id;
+    }
   });
   return {
     controller,
@@ -344,6 +360,78 @@ describe("RDK navigation command lifecycle", () => {
     });
   });
 
+  it("installs the matching initial route as paused when the source current fix disappeared", async () => {
+    let current: PhoneFix | undefined = ORIGIN_FIX;
+    const h = harness({ latest: () => current });
+    const result = h.controller.handleCommand({
+      commandId: "device-1",
+      action: "navigation.start",
+      args: { query: "人民广场" }
+    });
+    await flush();
+    current = undefined;
+    h.controller.handleRoute(route("nav-1"));
+    await expect(result).resolves.toEqual({ type: "device.result", commandId: "device-1", status: "ok" });
+    expect(h.events.at(-1)).toEqual({
+      type: "nav.prompt",
+      promptId: "prompt-1",
+      routeCommandId: "nav-1",
+      kind: "locationLost"
+    });
+    expect(h.states.at(-1)).toMatchObject({ phase: "paused", destinationName: "人民广场" });
+
+    current = fix(2, 31.232);
+    h.controller.handleLocationState(USABLE_LOCATION);
+    h.controller.handleFix(current);
+    expect(h.states.at(-1)?.phase).toBe("guiding");
+    expect(h.states.at(-1)!.distanceToManeuverMeters).toBeGreaterThan(320);
+    expect(h.states.at(-1)!.distanceToManeuverMeters).toBeLessThan(340);
+    expect(h.events.at(-1)).toMatchObject({ kind: "maneuver", threshold: "far" });
+  });
+
+  it("treats a throwing current-fix authority as unavailable while keeping the route result truthful", async () => {
+    const h = harness({
+      latest: () => {
+        throw new Error("source closed");
+      }
+    });
+    const result = h.controller.handleCommand({
+      commandId: "device-1",
+      action: "navigation.start",
+      args: { query: "人民广场" }
+    });
+    await flush();
+    expect(() => h.controller.handleRoute(route("nav-1"))).not.toThrow();
+    await expect(result).resolves.toEqual({ type: "device.result", commandId: "device-1", status: "ok" });
+    expect(h.states.at(-1)).toMatchObject({ phase: "paused", destinationName: "人民广场" });
+    expect(h.events.at(-1)).toMatchObject({ kind: "locationLost", routeCommandId: "nav-1" });
+  });
+
+  it("does not resume initial route installation after latest reenters with a newer location transition", async () => {
+    const owner: { controller?: ReturnType<typeof createRdkNavigationController> } = {};
+    let reentered = false;
+    const h = harness({
+      latest: () => {
+        if (!reentered) {
+          reentered = true;
+          owner.controller?.handleLocationState({ connection: "stale", usable: false, reason: "stale" });
+        }
+        return ORIGIN_FIX;
+      }
+    });
+    owner.controller = h.controller;
+    const result = h.controller.handleCommand({
+      commandId: "device-1",
+      action: "navigation.start",
+      args: { query: "人民广场" }
+    });
+    await flush();
+    h.controller.handleRoute(route("nav-1"));
+    await expect(result).resolves.toMatchObject({ status: "ok" });
+    expect(h.states.at(-1)).toMatchObject({ phase: "paused", location: { usable: false, reason: "stale" } });
+    expect(h.events.filter((event) => event.type === "nav.prompt" && event.kind === "locationLost")).toHaveLength(1);
+  });
+
   it("close is idempotent, cancels a pending command, and ignores every late continuation", async () => {
     const pendingFix = deferred<PhoneFix | undefined>();
     const h = harness({ waitForFix: () => pendingFix.promise });
@@ -450,6 +538,141 @@ describe("RDK route guidance and rerouting", () => {
     expect(h.order).toEqual(["send:maneuver", "send:maneuver", "interrupt", "send:maneuver"]);
   });
 
+  it.each([
+    ["canPrompt", ["near"]],
+    ["randomId", ["near"]],
+    ["sendEvent", ["far", "near"]],
+    ["onState", ["far", "near"]]
+  ] as const)("keeps the newest same-route fix when %s reenters guidance", async (boundary, expectedThresholds) => {
+    const owner: { controller?: ReturnType<typeof createRdkNavigationController> } = {};
+    let enabled = false;
+    let reentered = false;
+    const reenter = () => {
+      if (!enabled || reentered) return;
+      reentered = true;
+      owner.controller?.handleFix(fix(3, 31.234));
+    };
+    const h = harness({
+      canPromptHook: boundary === "canPrompt" ? reenter : undefined,
+      randomIdHook: boundary === "randomId" ? (_id, index) => index === 1 && reenter() : undefined,
+      sendEvent: boundary === "sendEvent" ? (event) => event.type === "nav.prompt" && reenter() : undefined,
+      onState:
+        boundary === "onState"
+          ? (state) => state.phase === "guiding" && state.distanceToManeuverMeters! > 300 && reenter()
+          : undefined
+    });
+    owner.controller = h.controller;
+    await startGuiding(h);
+    h.events.length = 0;
+    enabled = true;
+    h.controller.handleFix(fix(2, 31.232));
+    expect(h.states.at(-1)?.phase).toBe("guiding");
+    expect(h.states.at(-1)!.distanceToManeuverMeters).toBeGreaterThan(100);
+    expect(h.states.at(-1)!.distanceToManeuverMeters).toBeLessThan(120);
+    expect(
+      h.events
+        .filter(
+          (event): event is Extract<NavPromptEvent, { kind: "maneuver" }> =>
+            event.type === "nav.prompt" && event.kind === "maneuver"
+        )
+        .map((event) => event.threshold)
+    ).toEqual(expectedThresholds);
+  });
+
+  it("keeps the newer fix when interruptOrdinaryPlayback reenters on the same route", async () => {
+    const owner: { controller?: ReturnType<typeof createRdkNavigationController> } = {};
+    let reentered = false;
+    const h = harness({
+      interrupt: () => {
+        if (reentered) return;
+        reentered = true;
+        owner.controller?.handleFix(fix(5, 31.2365));
+      }
+    });
+    owner.controller = h.controller;
+    await startGuiding(h);
+    h.controller.handleFix(fix(2, 31.232));
+    h.controller.handleFix(fix(3, 31.234));
+    h.events.length = 0;
+    h.controller.handleFix(fix(4, 31.2348));
+    expect(h.states.at(-1)).toMatchObject({ phase: "guiding", instruction: "到达终点" });
+    expect(h.states.at(-1)!.distanceToManeuverMeters).toBeGreaterThan(375);
+    expect(h.states.at(-1)!.distanceToManeuverMeters).toBeLessThan(400);
+    expect(
+      h.events
+        .filter(
+          (event): event is Extract<NavPromptEvent, { kind: "maneuver" }> =>
+            event.type === "nav.prompt" && event.kind === "maneuver"
+        )
+        .map((event) => [event.maneuverIndex, event.threshold])
+    ).toEqual([[1, "far"]]);
+  });
+
+  it("keeps a newer paused transition when the reroute clock reenters", async () => {
+    const owner: { controller?: ReturnType<typeof createRdkNavigationController> } = {};
+    let reentered = false;
+    const h = harness({
+      now: () => {
+        if (!reentered) {
+          reentered = true;
+          owner.controller?.handleLocationState({ connection: "stale", usable: false, reason: "stale" });
+        }
+        return 10_000;
+      }
+    });
+    owner.controller = h.controller;
+    await startGuiding(h);
+    h.events.length = 0;
+    h.controller.handleFix(fix(2, 31.232, 121.471));
+    expect(h.states.at(-1)).toMatchObject({ phase: "paused", location: { usable: false, reason: "stale" } });
+    expect(h.events).toEqual([
+      { type: "nav.prompt", promptId: "prompt-1", routeCommandId: "nav-1", kind: "offRoute" },
+      { type: "nav.prompt", promptId: "prompt-2", routeCommandId: "nav-1", kind: "locationLost" }
+    ]);
+  });
+
+  it("consumes arrival before prompt delivery so a synchronous replay emits and clears once", async () => {
+    const owner: { controller?: ReturnType<typeof createRdkNavigationController> } = {};
+    let replayed = false;
+    const h = harness({
+      sendEvent: (event) => {
+        if (event.type !== "nav.prompt" || event.kind !== "arrived" || replayed) return;
+        replayed = true;
+        owner.controller?.handleFix(fix(3, 31.2399));
+      }
+    });
+    owner.controller = h.controller;
+    await startGuiding(h);
+    h.events.length = 0;
+    h.controller.handleFix(fix(2, 31.2398));
+    expect(h.events).toEqual([{ type: "nav.prompt", promptId: "prompt-1", routeCommandId: "nav-1", kind: "arrived" }]);
+    expect(h.states.filter((state) => state.phase === "idle")).toHaveLength(1);
+    expect(h.states.at(-1)).toEqual({ phase: "idle" });
+  });
+
+  it("consumes reroute failure before prompt delivery so a synchronous replay emits and clears once", async () => {
+    const owner: { controller?: ReturnType<typeof createRdkNavigationController> } = {};
+    let replayed = false;
+    const error = { type: "nav.error", commandId: "prompt-2", code: "route.unavailable" } as const;
+    const h = harness({
+      sendEvent: (event) => {
+        if (event.type !== "nav.prompt" || event.kind !== "rerouteFailed" || replayed) return;
+        replayed = true;
+        owner.controller?.handleError(error);
+      }
+    });
+    owner.controller = h.controller;
+    await startGuiding(h);
+    h.events.length = 0;
+    h.controller.handleFix(fix(2, 31.232, 121.471));
+    h.controller.handleError(error);
+    expect(h.events.filter((event) => event.type === "nav.prompt" && event.kind === "rerouteFailed")).toEqual([
+      { type: "nav.prompt", promptId: "prompt-3", routeCommandId: "nav-1", kind: "rerouteFailed" }
+    ]);
+    expect(h.states.filter((state) => state.phase === "idle")).toHaveLength(1);
+    expect(h.states.at(-1)).toEqual({ phase: "idle" });
+  });
+
   it("retains consumed progress while prompt transport is unavailable", async () => {
     const h = await startGuiding(harness({ canPrompt: false }));
     h.events.length = 0;
@@ -496,6 +719,22 @@ describe("RDK route guidance and rerouting", () => {
     await vi.advanceTimersByTimeAsync(20_000);
     h.controller.handleFix(fix(4, 31.232, 121.471));
     expect(h.events.filter((event) => event.type === "nav.request")).toHaveLength(2);
+  });
+
+  it("installs a reroute answer paused when the source no longer has a current fix", async () => {
+    let current: PhoneFix | undefined = ORIGIN_FIX;
+    const h = await startGuiding(harness({ latest: () => current }));
+    h.events.length = 0;
+    h.controller.handleFix(fix(2, 31.232, 121.471));
+    current = undefined;
+    h.controller.handleRoute(route("prompt-2", { destinationName: "新路线" }));
+    expect(h.states.at(-1)).toMatchObject({ phase: "paused", destinationName: "新路线" });
+    expect(h.events.at(-1)).toEqual({
+      type: "nav.prompt",
+      promptId: "prompt-3",
+      routeCommandId: "prompt-2",
+      kind: "locationLost"
+    });
   });
 
   it("sends rerouteFailed before clearing only for the matching reroute", async () => {
@@ -601,6 +840,153 @@ describe("RDK location pause and resume", () => {
     expect(h.events).toEqual([
       { type: "nav.prompt", promptId: "prompt-2", routeCommandId: "nav-1", kind: "locationLost" }
     ]);
+  });
+
+  it.each([
+    {
+      label: "inaccurate",
+      state: {
+        connection: "sharing",
+        usable: false,
+        horizontalAccuracyMeters: 80,
+        ageMs: 0,
+        reason: "inaccurate"
+      } satisfies PhoneLocationState
+    },
+    {
+      label: "stale",
+      state: { connection: "stale", usable: false, reason: "stale" } satisfies PhoneLocationState
+    },
+    {
+      label: "disconnected",
+      state: { connection: "connected", usable: false, reason: "disconnected" } satisfies PhoneLocationState
+    },
+    {
+      label: "stopped",
+      state: { connection: "stopped", usable: false, reason: "stopped" } satisfies PhoneLocationState
+    },
+    {
+      label: "unpaired",
+      state: { connection: "unpaired", usable: false, reason: "unpaired" } satisfies PhoneLocationState
+    }
+  ])("freezes every fix and one-shot while $label until a usable state plus fresh fix", async ({ state }) => {
+    const h = await startGuiding();
+    h.controller.handleFix(fix(2, 31.232));
+    h.controller.handleLocationState(state);
+    const paused = h.states.at(-1)!;
+    h.events.length = 0;
+    h.order.length = 0;
+
+    h.controller.handleFix(fix(3, 31.2348));
+    h.controller.handleFix(fix(4, 31.232, 121.471));
+    h.controller.handleFix(fix(5, 31.2398));
+    h.controller.handleLocationState(state);
+
+    expect(h.states.at(-1)).toEqual(paused);
+    expect(h.events).toEqual([]);
+    expect(h.order).toEqual([]);
+
+    h.controller.handleLocationState(USABLE_LOCATION);
+    expect(h.states.at(-1)?.phase).toBe("paused");
+    h.controller.handleFix(fix(6, 31.234));
+    expect(h.states.at(-1)).toMatchObject({ phase: "guiding", instruction: "右转" });
+    expect(h.events).toHaveLength(1);
+    expect(h.events[0]).toMatchObject({ kind: "maneuver", maneuverIndex: 0, threshold: "near" });
+  });
+
+  it("does not replay an already-consumed off-route one-shot after ignored paused fixes", async () => {
+    const h = await startGuiding();
+    h.events.length = 0;
+    h.controller.handleFix(fix(2, 31.232, 121.471));
+    expect(h.events.filter((event) => event.type === "nav.prompt" && event.kind === "offRoute")).toHaveLength(1);
+    expect(h.events.filter((event) => event.type === "nav.request")).toHaveLength(1);
+
+    h.controller.handleLocationState({ connection: "stale", usable: false, reason: "stale" });
+    h.controller.handleFix(fix(3, 31.234));
+    h.controller.handleLocationState({ connection: "stale", usable: false, reason: "stale" });
+    h.controller.handleLocationState(USABLE_LOCATION);
+    h.controller.handleFix(fix(4, 31.2321, 121.471));
+
+    expect(h.events.filter((event) => event.type === "nav.prompt" && event.kind === "offRoute")).toHaveLength(1);
+    expect(h.events.filter((event) => event.type === "nav.request")).toHaveLength(1);
+  });
+
+  it("resumes in the real PhoneLocationSource usable-state-before-fix callback order", async () => {
+    const events: Array<NavRequestEvent | NavPromptEvent> = [];
+    const states: RdkNavigationSnapshot[] = [];
+    const owner: { controller?: ReturnType<typeof createRdkNavigationController> } = {};
+    const source = createPhoneLocationSource({
+      now: () => Date.now(),
+      onState: (state) => owner.controller?.handleLocationState(state),
+      onFix: (accepted) => owner.controller?.handleFix(accepted)
+    });
+    const ids = ["nav-real", "lost-real"];
+    const controller = createRdkNavigationController({
+      location: source,
+      sendEvent: (event) => events.push(event),
+      onState: (state) => states.push(state),
+      canPrompt: () => true,
+      interruptOrdinaryPlayback: () => undefined,
+      now: () => Date.now(),
+      randomId: () => ids.shift() ?? "extra-real"
+    });
+    owner.controller = controller;
+    source.acceptStatus({ type: "phone.location.status", state: "sharing" });
+    source.acceptLocation({
+      type: "phone.location",
+      sequence: 1,
+      lat: 31.23,
+      lon: 121.47,
+      horizontalAccuracyMeters: 5,
+      timestamp: Date.now()
+    });
+    const accepted = source.latest()!;
+    const start = controller.handleCommand({
+      commandId: "device-real",
+      action: "navigation.start",
+      args: { query: "真实定位" }
+    });
+    await flush();
+    controller.handleRoute(
+      route("nav-real", {
+        destinationName: "真实定位",
+        destination: { lat: accepted.position.lat + 0.01, lon: accepted.position.lon },
+        polyline: [
+          accepted.position,
+          { lat: accepted.position.lat + 0.005, lon: accepted.position.lon },
+          { lat: accepted.position.lat + 0.01, lon: accepted.position.lon }
+        ],
+        steps: [
+          {
+            instruction: "右转",
+            lat: accepted.position.lat + 0.005,
+            lon: accepted.position.lon,
+            alongRouteMeters: 555
+          },
+          {
+            instruction: "到达终点",
+            lat: accepted.position.lat + 0.01,
+            lon: accepted.position.lon,
+            alongRouteMeters: 1_109
+          }
+        ]
+      })
+    );
+    await expect(start).resolves.toMatchObject({ status: "ok" });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(states.at(-1)).toMatchObject({ phase: "paused", location: { usable: false, reason: "stale" } });
+    source.acceptLocation({
+      type: "phone.location",
+      sequence: 2,
+      lat: 31.23,
+      lon: 121.47,
+      horizontalAccuracyMeters: 5,
+      timestamp: Date.now()
+    });
+    expect(states.at(-1)).toMatchObject({ phase: "guiding", location: { usable: true } });
+    source.close();
+    controller.close();
   });
 
   it("a fresh fix resumes, clears the loss latch, and can immediately trigger ordinary off-route logic", async () => {

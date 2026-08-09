@@ -54,6 +54,12 @@ type PendingReroute = {
   commandId: string;
 };
 
+type FinishingNavigation = {
+  generation: number;
+  route: NavRouteEvent;
+  token: symbol;
+};
+
 function copyLocation(state: PhoneLocationState): PhoneLocationState {
   return { ...state };
 }
@@ -92,17 +98,21 @@ export function createRdkNavigationController(options: {
 
   let closed = false;
   let generation = 0;
+  let revision = 0;
   let pendingStart: PendingStart | undefined;
   let activeRoute: NavRouteEvent | undefined;
   let progress: GuidanceProgress = { ...INITIAL_PROGRESS, firedThresholds: [] };
   let reroute: PendingReroute | undefined;
   let lastRerouteSentAt: number | undefined;
   let locationState: PhoneLocationState | undefined;
+  let locationUsableForGuidance = false;
   let offRouteAnnounced = false;
   let locationLostAnnounced = false;
+  let finishing: FinishingNavigation | undefined;
   let snapshot: RdkNavigationSnapshot = { phase: "idle" };
 
-  function publish(next: RdkNavigationSnapshot): void {
+  function publish(next: RdkNavigationSnapshot, expectedRevision = revision): boolean {
+    if (revision !== expectedRevision) return false;
     snapshot = {
       ...next,
       ...(next.location === undefined ? {} : { location: copyLocation(next.location) })
@@ -115,6 +125,7 @@ export function createRdkNavigationController(options: {
     } catch {
       // State observers cannot own or interrupt the navigation lifecycle.
     }
+    return revision === expectedRevision;
   }
 
   function withLocation(next: Omit<RdkNavigationSnapshot, "location">): RdkNavigationSnapshot {
@@ -135,6 +146,8 @@ export function createRdkNavigationController(options: {
     lastRerouteSentAt = undefined;
     offRouteAnnounced = false;
     locationLostAnnounced = false;
+    locationUsableForGuidance = false;
+    finishing = undefined;
   }
 
   function clearPendingTimer(pending: PendingStart): void {
@@ -212,19 +225,22 @@ export function createRdkNavigationController(options: {
   function emitLifecyclePrompt(
     kind: Exclude<NavPromptEvent["kind"], "maneuver">,
     route: NavRouteEvent,
-    expectedGeneration: number
-  ): void {
-    if (!ownsRoute(expectedGeneration, route)) return;
-    if (!promptAllowed()) return;
-    if (!ownsRoute(expectedGeneration, route)) return;
+    expectedGeneration: number,
+    expectedRevision: number
+  ): boolean {
+    if (revision !== expectedRevision) return false;
+    if (!ownsRoute(expectedGeneration, route)) return false;
+    if (!promptAllowed()) return revision === expectedRevision;
+    if (revision !== expectedRevision || !ownsRoute(expectedGeneration, route)) return false;
     let promptId: string;
     try {
       promptId = randomId();
     } catch {
-      return;
+      return revision === expectedRevision;
     }
-    if (!ownsRoute(expectedGeneration, route)) return;
+    if (revision !== expectedRevision || !ownsRoute(expectedGeneration, route)) return false;
     send({ type: "nav.prompt", promptId, routeCommandId: route.commandId, kind });
+    return revision === expectedRevision;
   }
 
   function emitManeuverPrompt(
@@ -232,29 +248,31 @@ export function createRdkNavigationController(options: {
     maneuverIndex: number,
     threshold: PromptThreshold,
     update: GuidanceUpdate,
-    expectedGeneration: number
-  ): void {
-    if (!ownsRoute(expectedGeneration, route)) return;
-    if (!promptAllowed()) return;
-    if (!ownsRoute(expectedGeneration, route)) return;
+    expectedGeneration: number,
+    expectedRevision: number
+  ): boolean {
+    if (revision !== expectedRevision) return false;
+    if (!ownsRoute(expectedGeneration, route)) return false;
+    if (!promptAllowed()) return revision === expectedRevision;
+    if (revision !== expectedRevision || !ownsRoute(expectedGeneration, route)) return false;
     const maneuver = route.steps[maneuverIndex];
-    if (!maneuver) return;
+    if (!maneuver) return true;
     const snappedAlongRouteMeters = route.distanceMeters - update.remainingMeters;
     const distanceMeters = Math.round(Math.max(0, maneuver.alongRouteMeters - snappedAlongRouteMeters));
     let promptId: string;
     try {
       promptId = randomId();
     } catch {
-      return;
+      return revision === expectedRevision;
     }
-    if (!ownsRoute(expectedGeneration, route)) return;
+    if (revision !== expectedRevision || !ownsRoute(expectedGeneration, route)) return false;
     if (threshold === "now") {
       try {
         options.interruptOrdinaryPlayback();
       } catch {
         // A failed playback flush must not replay the already-consumed prompt.
       }
-      if (!ownsRoute(expectedGeneration, route)) return;
+      if (revision !== expectedRevision || !ownsRoute(expectedGeneration, route)) return false;
     }
     send({
       type: "nav.prompt",
@@ -265,6 +283,7 @@ export function createRdkNavigationController(options: {
       threshold,
       distanceMeters
     });
+    return revision === expectedRevision;
   }
 
   function beginStart(pending: PendingStart): void {
@@ -280,6 +299,7 @@ export function createRdkNavigationController(options: {
         failPendingStart(pending, "location.unavailable");
         return;
       }
+      const expectedRevision = revision;
       try {
         pending.navCommandId = randomId();
       } catch {
@@ -287,6 +307,11 @@ export function createRdkNavigationController(options: {
         return;
       }
       if (closed || pendingStart !== pending || pending.generation !== generation) return;
+      if (revision !== expectedRevision) {
+        beginStart(pending);
+        return;
+      }
+      pending.timer = setTimeout(() => failPendingStart(pending, "route.unavailable"), routeTimeoutMs);
       const sent = send({
         type: "nav.request",
         commandId: pending.navCommandId,
@@ -295,15 +320,14 @@ export function createRdkNavigationController(options: {
         query: pending.query
       });
       if (closed || pendingStart !== pending || pending.generation !== generation) return;
+      if (revision !== expectedRevision) return;
       if (!sent) {
         failPendingStart(pending, "route.unavailable");
-        return;
       }
-      pending.timer = setTimeout(() => failPendingStart(pending, "route.unavailable"), routeTimeoutMs);
     })();
   }
 
-  function handleStart(command: DeviceCommand): Promise<DeviceResultEvent> {
+  function handleStart(command: DeviceCommand, expectedRevision: number): Promise<DeviceResultEvent> {
     if (closed) return Promise.resolve(result(command.commandId, "failed", "navigation.cancelled"));
     generation += 1;
     cancelPendingStart();
@@ -317,39 +341,45 @@ export function createRdkNavigationController(options: {
         resolve
       };
       pendingStart = pending;
-      publish(withLocation({ phase: "starting", destinationName: query }));
+      publish(withLocation({ phase: "starting", destinationName: query }), expectedRevision);
       if (closed || pendingStart !== pending || pending.generation !== generation) return;
       beginStart(pending);
     });
   }
 
-  function handleStop(command: DeviceCommand): Promise<DeviceResultEvent> {
+  function handleStop(command: DeviceCommand, expectedRevision: number): Promise<DeviceResultEvent> {
     const wasActive = pendingStart !== undefined || activeRoute !== undefined;
     if (!wasActive) return Promise.resolve(result(command.commandId, "failed", "navigation.notActive"));
     generation += 1;
     cancelPendingStart();
     clearRouteState();
-    publishIdle();
+    publish(withLocation({ phase: "idle" }), expectedRevision);
     return Promise.resolve(result(command.commandId, "ok"));
   }
 
-  function maybeReroute(fix: PhoneFix, expectedGeneration: number, expectedRoute: NavRouteEvent): void {
-    if (closed || generation !== expectedGeneration || activeRoute !== expectedRoute || reroute) return;
+  function maybeReroute(
+    fix: PhoneFix,
+    expectedGeneration: number,
+    expectedRoute: NavRouteEvent,
+    expectedRevision: number
+  ): boolean {
+    if (revision !== expectedRevision) return false;
+    if (closed || generation !== expectedGeneration || activeRoute !== expectedRoute || reroute) return true;
     let sentAt: number;
     try {
       sentAt = now();
     } catch {
-      return;
+      return revision === expectedRevision;
     }
-    if (!ownsRoute(expectedGeneration, expectedRoute) || reroute) return;
-    if (lastRerouteSentAt !== undefined && sentAt - lastRerouteSentAt < REROUTE_COOLDOWN_MS) return;
+    if (revision !== expectedRevision || !ownsRoute(expectedGeneration, expectedRoute) || reroute) return false;
+    if (lastRerouteSentAt !== undefined && sentAt - lastRerouteSentAt < REROUTE_COOLDOWN_MS) return true;
     let commandId: string;
     try {
       commandId = randomId();
     } catch {
-      return;
+      return revision === expectedRevision;
     }
-    if (!ownsRoute(expectedGeneration, expectedRoute) || reroute) return;
+    if (revision !== expectedRevision || !ownsRoute(expectedGeneration, expectedRoute) || reroute) return false;
     reroute = { generation: expectedGeneration, commandId };
     lastRerouteSentAt = sentAt;
     const sent = send({
@@ -360,14 +390,50 @@ export function createRdkNavigationController(options: {
       destination: { ...expectedRoute.destination },
       destinationName: expectedRoute.destinationName
     });
-    if (closed || generation !== expectedGeneration || activeRoute !== expectedRoute) return;
+    if (closed || generation !== expectedGeneration || activeRoute !== expectedRoute) return false;
     if (!sent && reroute?.commandId === commandId) reroute = undefined;
+    return revision === expectedRevision;
+  }
+
+  function installRoute(event: NavRouteEvent, expectedRevision: number): void {
+    activeRoute = copyRoute(event);
+    progress = { ...INITIAL_PROGRESS, firedThresholds: [] };
+    reroute = undefined;
+    offRouteAnnounced = false;
+    locationLostAnnounced = false;
+    locationUsableForGuidance = false;
+    finishing = undefined;
+    const route = activeRoute;
+    snapshot = baseRouteSnapshot("paused");
+
+    let currentFix: PhoneFix | undefined;
+    try {
+      currentFix = options.location.latest();
+    } catch {
+      currentFix = undefined;
+    }
+    if (revision !== expectedRevision || !ownsRoute(generation, route)) return;
+
+    locationUsableForGuidance = currentFix !== undefined && locationState?.usable !== false;
+    if (locationUsableForGuidance) {
+      publish(baseRouteSnapshot("guiding"), expectedRevision);
+      return;
+    }
+
+    locationLostAnnounced = true;
+    if (!emitLifecyclePrompt("locationLost", route, generation, expectedRevision)) return;
+    publish(baseRouteSnapshot("paused"), expectedRevision);
   }
 
   const controller: RdkNavigationController = {
     handleCommand(command): Promise<DeviceResultEvent> {
-      if (command.action === "navigation.start") return handleStart(command);
-      if (command.action === "navigation.stop") return handleStop(command);
+      if (command.action === "navigation.start") return handleStart(command, ++revision);
+      if (command.action === "navigation.stop") {
+        if (pendingStart === undefined && activeRoute === undefined) {
+          return Promise.resolve(result(command.commandId, "failed", "navigation.notActive"));
+        }
+        return handleStop(command, ++revision);
+      }
       return Promise.resolve(result(command.commandId, "unsupported"));
     },
 
@@ -375,50 +441,28 @@ export function createRdkNavigationController(options: {
       if (closed) return;
       const pending = pendingStart;
       if (pending?.navCommandId === event.commandId && pending.generation === generation) {
+        const expectedRevision = ++revision;
         pendingStart = undefined;
         clearPendingTimer(pending);
-        activeRoute = copyRoute(event);
-        progress = { ...INITIAL_PROGRESS, firedThresholds: [] };
-        reroute = undefined;
-        offRouteAnnounced = false;
-        locationLostAnnounced = false;
-        const route = activeRoute;
-        if (locationState?.usable === false) {
-          locationLostAnnounced = true;
-          emitLifecyclePrompt("locationLost", route, generation);
-          if (ownsRoute(generation, route)) publish(baseRouteSnapshot("paused"));
-        } else {
-          publish(baseRouteSnapshot("guiding"));
-        }
+        installRoute(event, expectedRevision);
         pending.resolve(result(pending.deviceCommandId, "ok"));
         return;
       }
       if (!activeRoute || !reroute || reroute.commandId !== event.commandId || reroute.generation !== generation) {
         return;
       }
-      activeRoute = copyRoute(event);
-      progress = { ...INITIAL_PROGRESS, firedThresholds: [] };
-      reroute = undefined;
-      offRouteAnnounced = false;
-      locationLostAnnounced = false;
-      const route = activeRoute;
-      if (locationState?.usable === false) {
-        locationLostAnnounced = true;
-        emitLifecyclePrompt("locationLost", route, generation);
-        if (ownsRoute(generation, route)) publish(baseRouteSnapshot("paused"));
-      } else {
-        publish(baseRouteSnapshot("guiding"));
-      }
+      installRoute(event, ++revision);
     },
 
     handleError(event): void {
       if (closed) return;
       const pending = pendingStart;
       if (pending?.navCommandId === event.commandId && pending.generation === generation) {
+        const expectedRevision = ++revision;
         pendingStart = undefined;
         clearPendingTimer(pending);
         clearRouteState();
-        publishIdle();
+        publish(withLocation({ phase: "idle" }), expectedRevision);
         pending.resolve(result(pending.deviceCommandId, "failed", event.code));
         return;
       }
@@ -432,9 +476,15 @@ export function createRdkNavigationController(options: {
       ) {
         return;
       }
+      const expectedRevision = ++revision;
       const expectedGeneration = generation;
-      emitLifecyclePrompt("rerouteFailed", route, expectedGeneration);
-      if (closed || generation !== expectedGeneration || activeRoute !== route || reroute !== outstanding) return;
+      reroute = undefined;
+      const terminal: FinishingNavigation = { generation: expectedGeneration, route, token: Symbol() };
+      finishing = terminal;
+      emitLifecyclePrompt("rerouteFailed", route, expectedGeneration, expectedRevision);
+      if (closed || generation !== expectedGeneration || activeRoute !== route || finishing?.token !== terminal.token) {
+        return;
+      }
       clearRouteState();
       publishIdle();
     },
@@ -442,7 +492,8 @@ export function createRdkNavigationController(options: {
     handleFix(fix): void {
       if (closed) return;
       const route = activeRoute;
-      if (!route) return;
+      if (!route || finishing || !locationUsableForGuidance) return;
+      const expectedRevision = ++revision;
       const expectedGeneration = generation;
       locationLostAnnounced = false;
       const maneuverIndex = progress.maneuverIndex;
@@ -450,64 +501,82 @@ export function createRdkNavigationController(options: {
       progress = update.progress;
 
       if (update.arrived) {
-        emitLifecyclePrompt("arrived", route, expectedGeneration);
-        if (closed || generation !== expectedGeneration || activeRoute !== route) return;
+        const terminal: FinishingNavigation = { generation: expectedGeneration, route, token: Symbol() };
+        finishing = terminal;
+        emitLifecyclePrompt("arrived", route, expectedGeneration, expectedRevision);
+        if (
+          closed ||
+          generation !== expectedGeneration ||
+          activeRoute !== route ||
+          finishing?.token !== terminal.token
+        ) {
+          return;
+        }
         clearRouteState();
         publishIdle();
         return;
       }
 
       if (update.spokenPrompt && update.firedThreshold) {
-        emitManeuverPrompt(route, maneuverIndex, update.firedThreshold, update, expectedGeneration);
-        if (closed || generation !== expectedGeneration || activeRoute !== route) return;
+        if (
+          !emitManeuverPrompt(route, maneuverIndex, update.firedThreshold, update, expectedGeneration, expectedRevision)
+        ) {
+          return;
+        }
       }
 
       if (update.offRoute) {
         if (!offRouteAnnounced) {
           offRouteAnnounced = true;
-          emitLifecyclePrompt("offRoute", route, expectedGeneration);
-          if (closed || generation !== expectedGeneration || activeRoute !== route) return;
+          if (!emitLifecyclePrompt("offRoute", route, expectedGeneration, expectedRevision)) return;
         }
-        maybeReroute(fix, expectedGeneration, route);
-        if (closed || generation !== expectedGeneration || activeRoute !== route) return;
-        publish(updateSnapshot(update, reroute ? "rerouting" : "guiding"));
+        if (!maybeReroute(fix, expectedGeneration, route, expectedRevision)) return;
+        if (revision !== expectedRevision || !ownsRoute(expectedGeneration, route)) return;
+        publish(updateSnapshot(update, reroute ? "rerouting" : "guiding"), expectedRevision);
         return;
       }
 
       offRouteAnnounced = false;
-      publish(updateSnapshot(update, reroute ? "rerouting" : "guiding"));
+      if (revision !== expectedRevision || !ownsRoute(expectedGeneration, route)) return;
+      publish(updateSnapshot(update, reroute ? "rerouting" : "guiding"), expectedRevision);
     },
 
     handleLocationState(state): void {
       if (closed) return;
+      const expectedRevision = ++revision;
       locationState = copyLocation(state);
+      locationUsableForGuidance = state.usable;
       const route = activeRoute;
       if (!route) {
-        if (pendingStart) publish(withLocation({ phase: "starting", destinationName: pendingStart.query }));
-        else publishIdle();
+        if (pendingStart) {
+          publish(withLocation({ phase: "starting", destinationName: pendingStart.query }), expectedRevision);
+        } else {
+          publish(withLocation({ phase: "idle" }), expectedRevision);
+        }
         return;
       }
       if (state.usable) {
-        publish({ ...snapshot, location: copyLocation(state) });
+        publish({ ...snapshot, location: copyLocation(state) }, expectedRevision);
         return;
       }
       const expectedGeneration = generation;
       if (!locationLostAnnounced) {
         locationLostAnnounced = true;
-        emitLifecyclePrompt("locationLost", route, expectedGeneration);
-        if (closed || generation !== expectedGeneration || activeRoute !== route) return;
+        if (!emitLifecyclePrompt("locationLost", route, expectedGeneration, expectedRevision)) return;
       }
-      publish({ ...snapshot, phase: "paused", location: copyLocation(state) });
+      if (revision !== expectedRevision || !ownsRoute(expectedGeneration, route)) return;
+      publish({ ...snapshot, phase: "paused", location: copyLocation(state) }, expectedRevision);
     },
 
     close(): void {
       if (closed) return;
+      const expectedRevision = ++revision;
       const wasActive = pendingStart !== undefined || activeRoute !== undefined;
       closed = true;
       generation += 1;
       cancelPendingStart();
       clearRouteState();
-      if (wasActive) publishIdle();
+      if (wasActive) publish(withLocation({ phase: "idle" }), expectedRevision);
     }
   };
 

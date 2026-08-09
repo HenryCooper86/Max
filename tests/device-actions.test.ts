@@ -144,6 +144,23 @@ describe("navRouteOkSpeech", () => {
       "已找到虹桥机场，全程10公里，预计10分钟。仅供参考，请注意实际路况。"
     );
   });
+
+  it("rounds up to the whole-number branch before formatting (round-then-branch)", () => {
+    // 9_975 m → 9.975 km, which floating-point .toFixed(1) mis-renders as
+    // "10.0" — round to one decimal FIRST (9.975 → 10.0), then branch on
+    // that rounded value (>= 10 → whole number), so it renders "10" not "10.0".
+    expect(navRouteOkSpeech("人民广场", 9_975, 600)).toBe(
+      "已找到人民广场，全程10公里，预计10分钟。仅供参考，请注意实际路况。"
+    );
+  });
+
+  it("stays on the one-decimal branch just below the rounded boundary", () => {
+    // 9_949 m → 9.949 km, which rounds to 9.9 (not 10) at one decimal, so it
+    // stays on the one-decimal branch.
+    expect(navRouteOkSpeech("人民广场", 9_949, 600)).toBe(
+      "已找到人民广场，全程9.9公里，预计10分钟。仅供参考，请注意实际路况。"
+    );
+  });
 });
 
 describe("deviceSuccessSpeech", () => {

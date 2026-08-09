@@ -53,4 +53,13 @@ export type AgentProvider = {
    *  option, wired in session-controller.ts). Providers without a navigation
    *  confirmation path omit this. */
   attachNavOkSpeech?(speech: string): void;
+  /** Speaks a relay-composed navigation line that has no associated
+   *  device.command to reconcile against — currently only the
+   *  reroute-success confirmation (server/routing.ts's onRerouteAnnounced
+   *  option, wired in session-controller.ts). One transcript send, mirroring
+   *  applyDeviceReconciliation's own delivery shape
+   *  (transcriptEvent(..., "agent", text, { final: true, useBrowserSpeech:
+   *  true }) → send). Providers without a navigation confirmation path omit
+   *  this. */
+  speakNavLine?(text: string): void;
 };

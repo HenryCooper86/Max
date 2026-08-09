@@ -2030,6 +2030,9 @@ export function createDoubaoProvider(
     },
     attachNavOkSpeech(speech: string) {
       pendingDeviceCommands.attachOkSpeech("navigation.start", speech);
+    },
+    speakNavLine(text: string) {
+      sendClient(transcriptEvent(agentDelivery, "agent", text, { final: true, useBrowserSpeech: true }));
     }
   };
 }

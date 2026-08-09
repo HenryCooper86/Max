@@ -680,6 +680,9 @@ export function createMockProvider(
     },
     attachNavOkSpeech(speech: string) {
       pendingDeviceCommands.attachOkSpeech("navigation.start", speech);
+    },
+    speakNavLine(text: string) {
+      send(transcriptEvent(createTranscriptDelivery(), "agent", text, { final: true, useBrowserSpeech: true }));
     }
   };
 }

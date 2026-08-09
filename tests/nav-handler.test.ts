@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { navRouteOkSpeech } from "../server/device-actions";
+import { REROUTE_OK_SPEECH, navRouteOkSpeech } from "../server/device-actions";
 import { createMockRouteProvider, createNavHandler } from "../server/routing";
 import type { NavErrorEvent, NavRequestEvent, NavRouteEvent } from "../shared/agent";
 
@@ -202,6 +202,169 @@ describe("createNavHandler", () => {
       const handle = createNavHandler({ provider: createMockRouteProvider(), send });
       await handle(start);
       expect(sent[0]).toMatchObject({ type: "nav.route", commandId: "c1", destinationName: "外滩" });
+    });
+  });
+
+  describe("onRerouteAnnounced", () => {
+    it("is invoked exactly once, with the reroute-success line, when a FRESH reroute answers with nav.route", async () => {
+      const { sent, send } = collector();
+      const rerouted: string[] = [];
+      const handle = createNavHandler({
+        provider: createMockRouteProvider(),
+        send,
+        onRerouteAnnounced: (speech) => rerouted.push(speech)
+      });
+      await handle(start);
+      const routed = sent[0] as NavRouteEvent;
+      // A destination mismatch bypasses the cache-resend fast path, forcing a
+      // fresh provider.planRoute call — the only path that speaks.
+      await handle({
+        type: "nav.request",
+        commandId: "r1",
+        reason: "reroute",
+        origin,
+        destination: { lat: routed.destination.lat + 1, lon: routed.destination.lon },
+        destinationName: "别的地方"
+      });
+      expect(sent[1]).toMatchObject({ type: "nav.route", commandId: "r1" });
+      expect(rerouted).toEqual([REROUTE_OK_SPEECH]);
+    });
+
+    it("is NOT invoked when the reroute is served from the cache (same destination, inside the interval)", async () => {
+      let clock = 0;
+      const { sent, send } = collector();
+      const rerouted: string[] = [];
+      const handle = createNavHandler({
+        provider: createMockRouteProvider(),
+        send,
+        now: () => clock,
+        minRerouteIntervalMs: 10_000,
+        onRerouteAnnounced: (speech) => rerouted.push(speech)
+      });
+      await handle(start);
+      const routed = sent[0] as NavRouteEvent;
+      clock = 1_000; // inside the interval, same destination → cache-resend fast path
+      await handle({
+        type: "nav.request",
+        commandId: "r1",
+        reason: "reroute",
+        origin,
+        destination: routed.destination,
+        destinationName: routed.destinationName
+      });
+      expect(sent[1]).toMatchObject({ type: "nav.route", commandId: "r1" });
+      expect(rerouted).toEqual([]);
+    });
+
+    it("a reroute's nav.error path stays unchanged and silent", async () => {
+      const failing = {
+        mode: "amap" as const,
+        resolveDestination: async () => null,
+        planRoute: async () => null
+      };
+      const { sent, send } = collector();
+      const rerouted: string[] = [];
+      const handle = createNavHandler({
+        provider: failing,
+        send,
+        onRerouteAnnounced: (speech) => rerouted.push(speech)
+      });
+      await handle({
+        type: "nav.request",
+        commandId: "r1",
+        reason: "reroute",
+        origin,
+        destination: { lat: 1, lon: 1 },
+        destinationName: "X"
+      });
+      expect(sent[0]).toEqual({ type: "nav.error", commandId: "r1", code: "route.unavailable" });
+      expect(rerouted).toEqual([]);
+    });
+
+    it("omitting the callback changes nothing about a fresh reroute", async () => {
+      const { sent, send } = collector();
+      const handle = createNavHandler({ provider: createMockRouteProvider(), send });
+      await handle(start);
+      const routed = sent[0] as NavRouteEvent;
+      await handle({
+        type: "nav.request",
+        commandId: "r1",
+        reason: "reroute",
+        origin,
+        destination: { lat: routed.destination.lat + 1, lon: routed.destination.lon },
+        destinationName: "别的地方"
+      });
+      expect(sent[1]).toMatchObject({ type: "nav.route", commandId: "r1" });
+    });
+
+    it("a start landing while a reroute's planRoute is still in flight supersedes the reroute: no send, no cache write, no speech", async () => {
+      // Same shape as the "out-of-order start completions" block below, but
+      // for the new reroute epoch guard: the reroute captures the SAME
+      // startEpoch counter the start path bumps, so a start that completes
+      // while an older reroute's provider call is still pending must make
+      // that reroute's eventual completion a total no-op.
+      const destA = { lat: 1, lon: 1 }; // the reroute's (deferred) destination
+      const destB = { lat: 2, lon: 2 }; // the new start's destination
+      const planA = defer<{
+        distanceMeters: number;
+        etaSeconds: number;
+        polyline: (typeof origin)[];
+        steps: never[];
+      } | null>();
+
+      const provider = {
+        mode: "amap" as const,
+        resolveDestination: async () => ({ name: "B地", location: destB }),
+        planRoute: async (_o: typeof origin, destination: typeof origin) =>
+          destination === destA ? planA.promise : { distanceMeters: 3_000, etaSeconds: 300, polyline: [], steps: [] }
+      };
+
+      const { sent, send } = collector();
+      const rerouted: string[] = [];
+      const handle = createNavHandler({ provider, send, onRerouteAnnounced: (speech) => rerouted.push(speech) });
+
+      const rerouteEvent: NavRequestEvent = {
+        type: "nav.request",
+        commandId: "r1",
+        reason: "reroute",
+        origin,
+        destination: destA,
+        destinationName: "A地"
+      };
+      const startEvent: NavRequestEvent = {
+        type: "nav.request",
+        commandId: "s1",
+        reason: "start",
+        origin,
+        query: "B地"
+      };
+
+      const doneReroute = handle(rerouteEvent); // begins provider.planRoute(destA), deferred
+      const doneStart = handle(startEvent); // resolves fully, bumping the shared epoch counter
+
+      await doneStart;
+      expect(sent).toEqual([expect.objectContaining({ type: "nav.route", commandId: "s1" })]);
+
+      planA.resolve({ distanceMeters: 5_000, etaSeconds: 500, polyline: [], steps: [] });
+      await doneReroute;
+
+      // The superseded reroute must be a total no-op.
+      expect(sent).toHaveLength(1);
+      expect(rerouted).toEqual([]);
+
+      // And the cache must still hold the start's route, not clobbered by the
+      // dropped reroute — a follow-up reroute to the start's destination
+      // hits the cache fast path unchanged.
+      await handle({
+        type: "nav.request",
+        commandId: "r2",
+        reason: "reroute",
+        origin,
+        destination: destB,
+        destinationName: "B地"
+      });
+      expect(sent).toHaveLength(2);
+      expect(sent[1]).toMatchObject({ type: "nav.route", commandId: "r2" });
     });
   });
 

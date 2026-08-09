@@ -47,6 +47,14 @@ final class MainViewModel: ObservableObject {
         case stoppingCompanion
     }
 
+    private struct CompanionStatePublication {
+        let ticket: Int
+        let owner: Int
+        let state: CompanionConnectionState
+        let publishesValue: Bool
+        let completion: () -> Void
+    }
+
     /// On the iOS Simulator, `localhost` reaches the host machine where the relay
     /// listens on :8787. On a physical device, `localhost` is the phone itself, so
     /// default to the shared AWS Lightsail test relay (self-signed wss://) instead.
@@ -123,6 +131,12 @@ final class MainViewModel: ObservableObject {
     private var pendingUnpairOwner: Int?
     private var pendingUnpairSendOwner: Int?
     private var pendingUnpairPhase: PendingUnpairPhase?
+    private var nextCompanionStatePublicationTicket = 0
+    private var newestCompanionStatePublicationTicket = 0
+    private var companionStatePublicationActive = false
+    private var companionStateAssignmentInProgress: CompanionConnectionState?
+    private var pendingCompanionStatePublications: [CompanionStatePublication] = []
+    private var authoritativeCompanionState: CompanionConnectionState = .signedOut
 
     /// Presents the Max gallery sheet.
     @Published var showGallery = false
@@ -456,7 +470,7 @@ final class MainViewModel: ObservableObject {
               hasAccountSession,
               isSixASCIIDigitCode(code),
               !rideOwned,
-              canPair(from: companionState) else {
+              canPair(from: authoritativeCompanionState) else {
             return
         }
 
@@ -481,7 +495,7 @@ final class MainViewModel: ObservableObject {
         guard hasAccountSession,
               !rideOwned,
               !helmetRideActive,
-              canStartRide(from: companionState) else {
+              canStartRide(from: authoritativeCompanionState) else {
             return
         }
         settleRideTeardownForNewStart()
@@ -501,19 +515,19 @@ final class MainViewModel: ObservableObject {
             sessionToken: sessionToken.trimmingCharacters(in: .whitespacesAndNewlines),
             allowSelfSignedTLS: allowSelfSigned
         )
-        guard ownsRide(owner), canContinueStart(from: companionState) else {
+        guard ownsRide(owner), canContinueStart(from: authoritativeCompanionState) else {
             abortOwnedStart(owner: owner, clientRideStarted: false)
             return
         }
 
         companionClient.startRide()
-        guard ownsRide(owner), canContinueStart(from: companionState) else {
+        guard ownsRide(owner), canContinueStart(from: authoritativeCompanionState) else {
             abortOwnedStart(owner: owner, clientRideStarted: true)
             return
         }
 
         let foregroundStartAccepted = locationStream.startFromForeground()
-        guard ownsRide(owner), canContinueStart(from: companionState) else {
+        guard ownsRide(owner), canContinueStart(from: authoritativeCompanionState) else {
             abortOwnedStart(owner: owner, clientRideStarted: true)
             return
         }
@@ -543,11 +557,11 @@ final class MainViewModel: ObservableObject {
               !sessionTokenTransitionActive,
               !companionAccountTeardownActive,
               hasAccountSession,
-              canUnpair(from: companionState) || rideOwned else {
+              canUnpair(from: authoritativeCompanionState) || rideOwned else {
             return
         }
         let pairOnlySocketWasClosed: Bool
-        if case .paired = companionState {
+        if case .paired = authoritativeCompanionState {
             pairOnlySocketWasClosed = !rideOwned && !helmetRideActive
         } else {
             pairOnlySocketWasClosed = false
@@ -599,7 +613,7 @@ final class MainViewModel: ObservableObject {
             finishCompanionAccountTeardown()
             return
         }
-        guard result == .accepted, canSendUnpair(from: companionState) else {
+        guard result == .accepted, canSendUnpair(from: authoritativeCompanionState) else {
             cancelPendingUnpairTransaction()
             return
         }
@@ -617,7 +631,7 @@ final class MainViewModel: ObservableObject {
             )
             guard ownsPendingUnpair(owner), hasAccountSession else { return }
         }
-        guard canSendUnpair(from: companionState) else {
+        guard canSendUnpair(from: authoritativeCompanionState) else {
             cancelPendingUnpairTransaction()
             return
         }
@@ -636,7 +650,7 @@ final class MainViewModel: ObservableObject {
             return
         }
         cancelPendingUnpairTransaction()
-        guard result == .accepted, canCompleteUnpair(from: companionState) else { return }
+        guard result == .accepted, canCompleteUnpair(from: authoritativeCompanionState) else { return }
         pairCode = ""
     }
 
@@ -660,7 +674,13 @@ final class MainViewModel: ObservableObject {
         guard ownsCompanionGeneration(owner) else { return }
         if !hasAccountSession, state != .signedOut { return }
 
-        companionState = state
+        publishCompanionState(state, owner: owner) { [weak self] in
+            self?.handleCommittedCompanionState(state, owner: owner)
+        }
+    }
+
+    private func handleCommittedCompanionState(_ state: CompanionConnectionState, owner: Int) {
+        dispatchPrecondition(condition: .onQueue(.main))
         guard ownsCompanionGeneration(owner) else { return }
 
         let terminalState = isCompanionTerminal(state)
@@ -695,7 +715,7 @@ final class MainViewModel: ObservableObject {
             if rideOwned || helmetRideActive {
                 let teardownOwner = terminateOwnedRide(sendStop: true)
                 guard ownsCompanionGeneration(teardownOwner) else { return }
-                companionState = state
+                publishCompanionState(state, owner: teardownOwner)
             } else {
                 let replacementOwner = advanceCompanionGeneration()
                 bindCompanionState(owner: replacementOwner)
@@ -713,7 +733,7 @@ final class MainViewModel: ObservableObject {
             if rideOwned || helmetRideActive {
                 let teardownOwner = terminateOwnedRide(sendStop: true)
                 guard ownsCompanionGeneration(teardownOwner) else { return }
-                companionState = state
+                publishCompanionState(state, owner: teardownOwner)
             }
         default:
             if case .failed = state {
@@ -865,11 +885,11 @@ final class MainViewModel: ObservableObject {
     private func abortOwnedStart(owner: Int, clientRideStarted: Bool) {
         dispatchPrecondition(condition: .onQueue(.main))
         guard ownsRide(owner) else { return }
-        let interruptedState = companionState
+        let interruptedState = authoritativeCompanionState
         if clientRideStarted {
             let teardownOwner = terminateOwnedRide(sendStop: true)
             guard ownsCompanionGeneration(teardownOwner) else { return }
-            companionState = interruptedState
+            publishCompanionState(interruptedState, owner: teardownOwner)
         } else {
             _ = invalidateRideWithoutSocketStop()
         }
@@ -936,10 +956,18 @@ final class MainViewModel: ObservableObject {
         guard companionAccountTeardownActive else { return }
         companionAccountStopOwner = nil
         cancelPendingUnpairTransaction()
-        companionClient.disconnect()
         let owner = advanceCompanionGeneration()
+        companionClient.disconnect()
+        guard ownsCompanionGeneration(owner), companionAccountTeardownActive else { return }
         bindCompanionState(owner: owner)
-        companionState = .signedOut
+        publishCompanionState(.signedOut, owner: owner, coalescesIdenticalState: true) { [weak self] in
+            self?.finishCompanionAccountTeardownAfterState(owner: owner)
+        }
+    }
+
+    private func finishCompanionAccountTeardownAfterState(owner: Int) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard ownsCompanionGeneration(owner), companionAccountTeardownActive else { return }
         companionAccountTeardownActive = false
 
         finalizePendingLogout()
@@ -947,6 +975,58 @@ final class MainViewModel: ObservableObject {
             drainSessionTokenTransition()
         } else {
             pendingHelmetRideStart = false
+        }
+    }
+
+    private func publishCompanionState(
+        _ state: CompanionConnectionState,
+        owner: Int,
+        coalescesIdenticalState: Bool = false,
+        completion: @escaping () -> Void = {}
+    ) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard ownsCompanionGeneration(owner) else { return }
+        if !hasAccountSession, state != .signedOut { return }
+        let publishesValue: Bool
+        if coalescesIdenticalState {
+            if let companionStateAssignmentInProgress {
+                publishesValue = companionStateAssignmentInProgress != state
+            } else {
+                publishesValue = companionState != state
+            }
+        } else {
+            publishesValue = true
+        }
+        authoritativeCompanionState = state
+        nextCompanionStatePublicationTicket &+= 1
+        let publication = CompanionStatePublication(
+            ticket: nextCompanionStatePublicationTicket,
+            owner: owner,
+            state: state,
+            publishesValue: publishesValue,
+            completion: completion
+        )
+        newestCompanionStatePublicationTicket = publication.ticket
+        pendingCompanionStatePublications.append(publication)
+        guard !companionStatePublicationActive else { return }
+
+        companionStatePublicationActive = true
+        defer { companionStatePublicationActive = false }
+        while !pendingCompanionStatePublications.isEmpty {
+            let next = pendingCompanionStatePublications.removeFirst()
+            guard ownsCompanionGeneration(next.owner) else { continue }
+            if !hasAccountSession, next.state != .signedOut { continue }
+
+            if next.publishesValue {
+                companionStateAssignmentInProgress = next.state
+                companionState = next.state
+                companionStateAssignmentInProgress = nil
+            }
+            guard next.ticket == newestCompanionStatePublicationTicket,
+                  ownsCompanionGeneration(next.owner) else {
+                continue
+            }
+            next.completion()
         }
     }
 
@@ -1069,7 +1149,7 @@ final class MainViewModel: ObservableObject {
     }
 
     private var ownsCompanionAccountSession: Bool {
-        rideOwned || helmetRideActive || companionState != .signedOut
+        rideOwned || helmetRideActive || authoritativeCompanionState != .signedOut
     }
 
     private func canPair(from state: CompanionConnectionState) -> Bool {

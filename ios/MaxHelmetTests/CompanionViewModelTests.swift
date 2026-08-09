@@ -2257,6 +2257,191 @@ final class CompanionViewModelTests: XCTestCase {
         XCTAssertEqual(activityCount, 10)
     }
 
+    func testQueuedStartTerminalOutranksRollbackReadyStress() {
+        let terminals: [CompanionConnectionState] = [
+            .failed(code: "auth", detail: "expired"),
+            .unpaired
+        ]
+        let paired = CompanionConnectionState.paired(deviceId: "rdk", label: nil)
+        let staleReady = CompanionConnectionState.ready(deviceId: "stale-rdk", label: nil)
+        var activityCount = 0
+
+        for repetition in 0..<20 {
+            for terminal in terminals {
+                XCTContext.runActivity(named: "\(repetition)-\(terminal)") { _ in
+                    activityCount += 1
+                    let harness = Harness()
+                    harness.stream.startResults = [true]
+                    harness.stream.permissionOnStart = .precise
+                    harness.client.onStart = { harness.client.publish(terminal) }
+                    harness.client.onStop = { harness.client.publish(staleReady) }
+                    var startsOnPaired = true
+                    var nestedAccountToken: String?
+                    var publishedStates: [CompanionConnectionState] = []
+                    let cancellable = harness.viewModel.$companionState.dropFirst().sink { state in
+                        publishedStates.append(state)
+                        if startsOnPaired, state == paired {
+                            startsOnPaired = false
+                            harness.viewModel.startHelmetRide()
+                        } else if state == .signedOut, let token = nestedAccountToken {
+                            nestedAccountToken = nil
+                            harness.viewModel.sessionToken = token
+                        }
+                    }
+
+                    harness.client.publish(paired)
+
+                    XCTAssertEqual(publishedStates, [paired, terminal])
+                    XCTAssertEqual(harness.viewModel.companionState, terminal)
+                    XCTAssertFalse(harness.viewModel.helmetRideActive)
+                    XCTAssertFalse(harness.viewModel.helmetRideOwned)
+                    XCTAssertEqual(harness.client.startCount, 1)
+                    XCTAssertEqual(harness.client.stopCount, 1)
+                    XCTAssertEqual(harness.client.disconnectCount, 0)
+                    XCTAssertEqual(harness.stream.startCount, 0)
+                    XCTAssertEqual(harness.stream.stopCount, 1)
+                    XCTAssertTrue(harness.client.fixes.isEmpty)
+                    XCTAssertNil(harness.viewModel.lastForwardedAt)
+
+                    let staleCallback = harness.client.onState
+                    let publicationCountBeforeAccount = publishedStates.count
+                    let expectedToken: String
+                    switch repetition % 3 {
+                    case 0:
+                        expectedToken = ""
+                        harness.viewModel.logout()
+                    case 1:
+                        expectedToken = "account-c"
+                        nestedAccountToken = expectedToken
+                        harness.viewModel.sessionToken = "account-b"
+                    default:
+                        expectedToken = " \n "
+                        nestedAccountToken = expectedToken
+                        harness.viewModel.sessionToken = "account-b"
+                    }
+                    staleCallback?(terminal)
+                    staleCallback?(staleReady)
+
+                    XCTAssertEqual(harness.viewModel.sessionToken, expectedToken)
+                    XCTAssertEqual(harness.viewModel.companionState, .signedOut)
+                    XCTAssertEqual(harness.client.disconnectCount, 1)
+                    XCTAssertEqual(
+                        Array(publishedStates.dropFirst(publicationCountBeforeAccount)),
+                        [.signedOut],
+                        "logout and B to nested C/clear own the only final publication"
+                    )
+                    XCTAssertEqual(harness.secretWrites.map(\.value), [expectedToken])
+                    withExtendedLifetime(cancellable) {}
+                }
+            }
+        }
+
+        XCTAssertEqual(activityCount, 40)
+    }
+
+    func testQueuedOrdinaryThenDuplicateTerminalLeavesLatestTerminalAuthoritative() {
+        let paired = CompanionConnectionState.paired(deviceId: "rdk", label: nil)
+        let ordinary = CompanionConnectionState.ready(deviceId: "rdk", label: nil)
+        let terminals: [CompanionConnectionState] = [
+            .failed(code: "auth", detail: "expired"),
+            .unpaired
+        ]
+
+        for terminal in terminals {
+            XCTContext.runActivity(named: "\(terminal)") { _ in
+                let harness = Harness()
+                var queuesNestedStates = true
+                var publishedStates: [CompanionConnectionState] = []
+                let cancellable = harness.viewModel.$companionState.dropFirst().sink { state in
+                    publishedStates.append(state)
+                    guard queuesNestedStates, state == paired else { return }
+                    queuesNestedStates = false
+                    harness.client.publish(ordinary)
+                    harness.client.publish(terminal)
+                    harness.client.publish(terminal)
+                }
+
+                harness.client.publish(paired)
+
+                XCTAssertEqual(publishedStates, [paired, ordinary, terminal, terminal])
+                XCTAssertEqual(harness.viewModel.companionState, terminal)
+                XCTAssertFalse(harness.viewModel.helmetRideActive)
+                XCTAssertEqual(harness.client.startCount, 0)
+                XCTAssertEqual(harness.client.stopCount, 0)
+                XCTAssertEqual(harness.client.disconnectCount, 0)
+                XCTAssertEqual(harness.stream.startCount, 0)
+                XCTAssertEqual(harness.stream.stopCount, 0)
+                withExtendedLifetime(cancellable) {}
+            }
+        }
+    }
+
+    func testTerminalSubscriberExplicitReplacementAndFreshStartOwnNewEpoch() {
+        let terminals: [CompanionConnectionState] = [
+            .failed(code: "auth", detail: "expired"),
+            .unpaired
+        ]
+        let paired = CompanionConnectionState.paired(deviceId: "rdk", label: nil)
+        let ready = CompanionConnectionState.ready(deviceId: "rdk", label: nil)
+
+        for terminal in terminals {
+            XCTContext.runActivity(named: "\(terminal)") { _ in
+                let harness = Harness()
+                harness.viewModel.pairCode = "123456"
+                harness.stream.startResults = [true]
+                harness.stream.permissionOnStart = .precise
+                var connectCount = 0
+                harness.client.onConnect = {
+                    connectCount += 1
+                    harness.client.publish(connectCount == 1 ? .connecting : ready)
+                }
+                var replacesTerminal = true
+                var publishedStates: [CompanionConnectionState] = []
+                let cancellable = harness.viewModel.$companionState.dropFirst().sink { state in
+                    publishedStates.append(state)
+                    guard replacesTerminal, state == terminal else { return }
+                    replacesTerminal = false
+                    if terminal == .unpaired {
+                        harness.viewModel.pairHelmet()
+                    } else {
+                        harness.viewModel.sessionToken = "account-b"
+                    }
+                }
+
+                harness.client.publish(terminal)
+
+                if terminal == .unpaired {
+                    XCTAssertEqual(publishedStates, [terminal, .connecting])
+                    XCTAssertEqual(harness.viewModel.sessionToken, "account-session-token")
+                    XCTAssertEqual(harness.client.disconnectCount, 0)
+                    XCTAssertEqual(harness.stream.stopCount, 0)
+                } else {
+                    XCTAssertEqual(publishedStates, [terminal, .signedOut])
+                    XCTAssertEqual(harness.viewModel.sessionToken, "account-b")
+                    XCTAssertEqual(harness.client.disconnectCount, 1)
+                    XCTAssertEqual(harness.stream.stopCount, 1)
+                    harness.viewModel.pairHelmet()
+                }
+                XCTAssertEqual(harness.viewModel.companionState, .connecting)
+                XCTAssertEqual(harness.client.pairCodes, ["123456"])
+                XCTAssertEqual(connectCount, 1)
+
+                harness.client.publish(paired)
+                harness.viewModel.startHelmetRide()
+
+                XCTAssertEqual(harness.viewModel.companionState, ready)
+                XCTAssertTrue(harness.viewModel.helmetRideActive)
+                XCTAssertEqual(connectCount, 2)
+                XCTAssertEqual(harness.client.startCount, 1)
+                XCTAssertEqual(harness.stream.startCount, 1)
+                harness.viewModel.stopHelmetRide()
+                XCTAssertFalse(harness.viewModel.helmetRideActive)
+                XCTAssertEqual(harness.client.stopCount, 1)
+                withExtendedLifetime(cancellable) {}
+            }
+        }
+    }
+
     func testAccountBoundaryDefersDisconnectStartAcrossNestedNewestTokenMatrix() {
         for nestedToken in ["account-c", " \n ", " account-session-token "] {
             let harness = Harness()

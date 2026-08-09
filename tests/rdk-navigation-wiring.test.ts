@@ -34,10 +34,14 @@ const fixtures = vi.hoisted(() => ({
     handleLocationState: ReturnType<typeof vi.fn>;
     states: RdkNavigationSnapshot[];
     emitState: (state: RdkNavigationSnapshot) => void;
+    canPrompt: () => boolean;
+    interruptOrdinaryPlayback: () => void;
   }>,
   captureStop: vi.fn(),
   playbackStop: vi.fn(),
   playbackFlush: vi.fn(),
+  playbackWrite: vi.fn(() => true),
+  playbackRank: 0,
   hudClose: vi.fn(),
   signalHandlers: new Map<string, (...args: unknown[]) => void>()
 }));
@@ -86,10 +90,11 @@ vi.mock("../rdk/agent/src/audio/capture", () => ({
 
 vi.mock("../rdk/agent/src/audio/playback", () => ({
   createPlayback: () => ({
-    write: vi.fn(),
+    write: fixtures.playbackWrite,
     flush: fixtures.playbackFlush,
     holdPriority: vi.fn(),
     releasePriority: vi.fn(),
+    priorityRank: () => fixtures.playbackRank,
     stop: fixtures.playbackStop
   })
 }));
@@ -191,7 +196,16 @@ vi.mock("../rdk/agent/src/navigation/controller", async (importOriginal) => {
       controller.close = close;
       controller.handleFix = handleFix;
       controller.handleLocationState = handleLocationState;
-      fixtures.controllers.push({ controller, close, handleFix, handleLocationState, states, emitState: onState });
+      fixtures.controllers.push({
+        controller,
+        close,
+        handleFix,
+        handleLocationState,
+        states,
+        emitState: onState,
+        canPrompt: options.canPrompt,
+        interruptOrdinaryPlayback: options.interruptOrdinaryPlayback
+      });
       return controller;
     }
   };
@@ -406,6 +420,29 @@ describe("routeAgentNavigationEvent", () => {
 });
 
 describe.sequential("start navigation lifecycle wiring", () => {
+  it("keeps relay PCM rankless and gives navigation the live shared ADAS priority gate", () => {
+    const handlers = fixtures.relayHandlers!;
+    const active = fixtures.controllers.at(-1)!;
+    const pcm = new Int16Array([12, 34]);
+    fixtures.playbackWrite.mockClear();
+    fixtures.playbackFlush.mockClear();
+
+    handlers.onVoice(pcm);
+    expect(fixtures.playbackWrite).toHaveBeenCalledWith(pcm);
+    expect(fixtures.playbackWrite.mock.calls[0]).toHaveLength(1);
+
+    fixtures.playbackRank = 1;
+    expect(active.canPrompt()).toBe(false);
+    fixtures.playbackRank = 2;
+    expect(active.canPrompt()).toBe(false);
+    fixtures.playbackRank = 0;
+    expect(active.canPrompt()).toBe(true);
+
+    active.interruptOrdinaryPlayback();
+    expect(fixtures.playbackFlush).toHaveBeenCalledOnce();
+    expect(fixtures.playbackFlush.mock.calls[0]).toHaveLength(0);
+  });
+
   it("publishes coordinate-free companion and navigation HUD snapshots in owner order", () => {
     const firstSource = fixtures.sources[0]!;
     const firstController = fixtures.controllers[0]!;
@@ -545,6 +582,10 @@ describe.sequential("start navigation lifecycle wiring", () => {
     expect(fixtures.sources).toHaveLength(2);
     expect(fixtures.controllers).toHaveLength(2);
     const secondController = fixtures.controllers[1]!;
+    fixtures.playbackRank = 2;
+    expect(secondController.canPrompt()).toBe(false);
+    fixtures.playbackRank = 0;
+    expect(secondController.canPrompt()).toBe(true);
     const publishCountAfterReconnect = fixtures.hudPublishes.length;
     firstSource.emitState({ connection: "stale", usable: false, reason: "stale" });
     firstController.emitState({ phase: "guiding", destinationName: "stale route" });
@@ -600,6 +641,10 @@ describe.sequential("start navigation lifecycle wiring", () => {
     expect(fixtures.sources).toHaveLength(3);
     expect(fixtures.controllers).toHaveLength(3);
     const thirdController = fixtures.controllers[2]!;
+    fixtures.playbackRank = 1;
+    expect(thirdController.canPrompt()).toBe(false);
+    fixtures.playbackRank = 0;
+    expect(thirdController.canPrompt()).toBe(true);
     handlers!.onEvent(SHARING);
     handlers!.onEvent(phoneFix(1));
     expect(thirdController.handleFix).toHaveBeenCalledOnce();

@@ -20,7 +20,7 @@ export const ALERT_RATE = 24_000;
 const CHUNK_SAMPLES = 480;
 
 export type AlertPlayback = {
-  write(pcm: Int16Array): void;
+  write(pcm: Int16Array, rank?: number): boolean;
   flush(rank?: number): void;
   holdPriority(rank?: number): void;
   releasePriority(): void;
@@ -91,9 +91,10 @@ export function createAlertPlayer(options: AlertPlayerOptions): {
       // own level.
       options.playback.flush(rank);
       options.playback.holdPriority(rank);
+      let acceptedAny = false;
       try {
         for (let offset = 0; offset < pcm.length; offset += CHUNK_SAMPLES) {
-          options.playback.write(pcm.subarray(offset, offset + CHUNK_SAMPLES));
+          if (options.playback.write(pcm.subarray(offset, offset + CHUNK_SAMPLES), rank)) acceptedAny = true;
         }
       } catch (error) {
         console.log(`[adas] alert playback failed for ${threat}: ${(error as Error).message}`);
@@ -102,7 +103,7 @@ export function createAlertPlayer(options: AlertPlayerOptions): {
         // Always: a stuck lock would silence Max for the rest of the ride.
         options.playback.releasePriority();
       }
-      return now() - started;
+      return acceptedAny ? now() - started : null;
     }
   };
 }

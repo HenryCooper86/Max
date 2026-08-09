@@ -538,7 +538,7 @@ describe("playback priority lock", () => {
     });
     playback.holdPriority();
     // 12_000 samples at 24 kHz = 500 ms of alert audio.
-    playback.write(new Int16Array(12_000));
+    playback.write(new Int16Array(12_000), 1);
     playback.releasePriority();
 
     playback.flush(); // mid-alert: must be refused
@@ -552,7 +552,7 @@ describe("playback priority lock", () => {
     expect(fake.kill).toHaveBeenCalled();
   });
 
-  it("audio queued after the release request does not extend the hold", () => {
+  it("ordinary audio after the release request is dropped and does not extend the hold", () => {
     let clock = 0;
     const scheduled: Array<{ fn: () => void; ms: number }> = [];
     const fake = fakeChild();
@@ -566,10 +566,10 @@ describe("playback priority lock", () => {
       }
     });
     playback.holdPriority();
-    playback.write(new Int16Array(12_000)); // the 500 ms alert
+    playback.write(new Int16Array(12_000), 1); // the 500 ms alert
     playback.releasePriority();
     const release = scheduled.find(({ ms }) => ms >= 400);
-    playback.write(new Int16Array(48_000)); // 2 s of relay speech behind it
+    expect(playback.write(new Int16Array(48_000))).toBe(false);
     clock = 600;
     release!.fn();
     playback.flush(); // Max's ordinary speech is interruptible again
@@ -624,7 +624,7 @@ describe("playback priority lock", () => {
       }
     });
     playback.holdPriority();
-    playback.write(new Int16Array(12_000));
+    playback.write(new Int16Array(12_000), 1);
     playback.releasePriority();
     const stale = scheduled.find(({ ms }) => ms >= 400);
     playback.holdPriority(); // second alert begins before the first release fires

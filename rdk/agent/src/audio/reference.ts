@@ -28,7 +28,7 @@ export type ReferenceSink = {
 
 export type ReferenceOptions = {
   /** fd 3 of the max-aec child, or null when AEC is off. */
-  stream: NodeJS.WritableStream | null;
+  stream: (NodeJS.WritableStream & { readonly destroyed?: boolean }) | null;
 };
 
 function frameHeader(byteLength: number): Buffer {

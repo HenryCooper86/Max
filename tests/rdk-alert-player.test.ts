@@ -24,19 +24,27 @@ function wav(samples: number, rate = 24000, channels = 1, bits = 16): Buffer {
   return Buffer.concat([header, data]);
 }
 
-function fakePlayback() {
+function fakePlayback(accept: (pcm: Int16Array, rank: number | undefined) => boolean = () => true) {
   const order: string[] = [];
   const written: number[] = [];
+  const writeRanks: Array<number | undefined> = [];
+  const accepted: number[] = [];
   const flushRanks: Array<number | undefined> = [];
   const holdRanks: Array<number | undefined> = [];
   return {
     order,
     written,
+    writeRanks,
+    accepted,
     flushRanks,
     holdRanks,
-    write(pcm: Int16Array) {
+    write(pcm: Int16Array, rank?: number) {
       written.push(pcm.length);
+      writeRanks.push(rank);
       order.push("write");
+      const didAccept = accept(pcm, rank);
+      if (didAccept) accepted.push(pcm.length);
+      return didAccept;
     },
     flush(rank?: number) {
       flushRanks.push(rank);
@@ -148,6 +156,7 @@ describe("createAlertPlayer", () => {
     await createAlertPlayer({ dir, playback }).play("forward_collision", "critical");
     expect(playback.flushRanks).toEqual([2]);
     expect(playback.holdRanks).toEqual([2]);
+    expect(playback.writeRanks).toEqual([2, 2]);
   });
 
   it("a caution alert carries the caution rank and an unknown severity sinks to it", async () => {
@@ -161,6 +170,7 @@ describe("createAlertPlayer", () => {
     // Never let an unrecognised severity outrank a real critical.
     expect(playback.flushRanks).toEqual([1, 1, 1]);
     expect(playback.holdRanks).toEqual([1, 1, 1]);
+    expect(playback.writeRanks).toEqual([1, 1, 1, 1, 1, 1]);
   });
 
   it("hands the whole clip over in chunks", async () => {
@@ -168,6 +178,18 @@ describe("createAlertPlayer", () => {
     writeFileSync(join(dir, "forward_collision.wav"), wav(2400));
     const playback = fakePlayback();
     await createAlertPlayer({ dir, playback }).play("forward_collision");
-    expect(playback.written.reduce((a, b) => a + b, 0)).toBe(2400);
+    expect(playback.accepted.reduce((a, b) => a + b, 0)).toBe(2400);
+    expect(playback.writeRanks).toEqual([1, 1, 1, 1, 1]);
+  });
+
+  it("returns null rather than claiming a fully rejected lower alert was audible", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "alerts-"));
+    writeFileSync(join(dir, "tailgating.wav"), wav(960));
+    const playback = fakePlayback(() => false);
+    await expect(createAlertPlayer({ dir, playback }).play("tailgating", "caution")).resolves.toBeNull();
+    expect(playback.written).toEqual([480, 480]);
+    expect(playback.writeRanks).toEqual([1, 1]);
+    expect(playback.accepted).toEqual([]);
+    expect(playback.order.at(-1)).toBe("release");
   });
 });

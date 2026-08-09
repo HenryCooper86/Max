@@ -284,7 +284,7 @@ function start(): void {
         if (!ownsCallbacks()) return;
         publishHud({ type: "rdk.navigation", navigation: state.phase === "idle" ? null : state });
       },
-      canPrompt: () => true,
+      canPrompt: () => playback.priorityRank() === 0,
       interruptOrdinaryPlayback: () => playback.flush()
     });
     return { location, navigation, closed: false };

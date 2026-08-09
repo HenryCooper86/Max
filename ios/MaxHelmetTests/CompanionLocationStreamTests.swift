@@ -318,12 +318,74 @@ final class CompanionLocationStreamTests: XCTestCase {
             authorization = newAuthorization
             accuracy = newAccuracy
             stream.locationManagerDidChangeAuthorization(CLLocationManager())
+            XCTAssertFalse(stream.startFromForeground())
             stream.locationManager(CLLocationManager(), didUpdateLocations: [location(latitude: 41)])
 
-            XCTAssertEqual(permissions, [.precise, expectedPermission])
-            XCTAssertEqual(latitudes, [40])
+            authorization = .authorizedAlways
+            accuracy = .fullAccuracy
+            stream.locationManagerDidChangeAuthorization(CLLocationManager())
+            XCTAssertTrue(stream.startFromForeground())
+            stream.locationManager(CLLocationManager(), didUpdateLocations: [location(latitude: 42)])
+
+            XCTAssertEqual(permissions, [.precise, expectedPermission, .precise])
+            XCTAssertEqual(latitudes, [40, 42])
             XCTAssertEqual(manager.startCount, 1)
+            XCTAssertEqual(manager.requestCount, 0)
             XCTAssertTrue(manager.allowsBackgroundLocationUpdates, "the coordinator still owns explicit cleanup")
+        }
+    }
+
+    func testCleanupFlagReentrantStopsDischargeOwnedManagerUpdatesExactlyOnce() {
+        for reentryPoint in ["background", "indicator"] {
+            let manager = FakeCompanionLocationManager()
+            let stream = makeStream(manager: manager, authorization: { .authorizedAlways }, accuracy: { .fullAccuracy })
+            XCTAssertTrue(stream.startFromForeground())
+            var didReenter = false
+            let reenter: (Bool) -> Void = { value in
+                guard !value, !didReenter else { return }
+                didReenter = true
+                stream.stop()
+            }
+            if reentryPoint == "background" {
+                manager.onBackgroundFlagWrite = reenter
+            } else {
+                manager.onIndicatorFlagWrite = reenter
+            }
+
+            stream.stop()
+            stream.stop()
+
+            XCTAssertTrue(didReenter, reentryPoint)
+            XCTAssertEqual(manager.stopCount, 1, reentryPoint)
+            XCTAssertFalse(manager.allowsBackgroundLocationUpdates, reentryPoint)
+            XCTAssertFalse(manager.showsBackgroundLocationIndicator, reentryPoint)
+        }
+    }
+
+    func testCleanupFlagReentrantFreshStartRemainsAuthoritative() {
+        for reentryPoint in ["background", "indicator"] {
+            let manager = FakeCompanionLocationManager()
+            let stream = makeStream(manager: manager, authorization: { .authorizedAlways }, accuracy: { .fullAccuracy })
+            XCTAssertTrue(stream.startFromForeground())
+            var didReenter = false
+            let startFresh: (Bool) -> Void = { value in
+                guard !value, !didReenter else { return }
+                didReenter = true
+                XCTAssertTrue(stream.startFromForeground())
+            }
+            if reentryPoint == "background" {
+                manager.onBackgroundFlagWrite = startFresh
+            } else {
+                manager.onIndicatorFlagWrite = startFresh
+            }
+
+            stream.stop()
+
+            XCTAssertTrue(didReenter, reentryPoint)
+            XCTAssertEqual(manager.stopCount, 1, reentryPoint)
+            XCTAssertEqual(manager.startCount, 2, reentryPoint)
+            XCTAssertTrue(manager.allowsBackgroundLocationUpdates, reentryPoint)
+            XCTAssertTrue(manager.showsBackgroundLocationIndicator, reentryPoint)
         }
     }
 
@@ -414,6 +476,77 @@ final class CompanionLocationStreamTests: XCTestCase {
         XCTAssertEqual(manager.stopCount, 1)
     }
 
+    func testStopUpdatingReentrantStopStartPreservesFreshLifecycleAndRejectsOldEffectFix() {
+        let manager = FakeCompanionLocationManager()
+        let stream = makeStream(manager: manager, authorization: { .authorizedAlways }, accuracy: { .fullAccuracy })
+        var latitudes: [Double] = []
+        stream.onFix = { latitudes.append($0.coordinate.latitude) }
+        XCTAssertTrue(stream.startFromForeground())
+        manager.onStop = {
+            manager.onStop = nil
+            stream.stop()
+            XCTAssertTrue(stream.startFromForeground())
+            stream.locationManager(CLLocationManager(), didUpdateLocations: [self.location(latitude: 51)])
+        }
+
+        stream.stop()
+        stream.locationManager(CLLocationManager(), didUpdateLocations: [location(latitude: 52)])
+
+        XCTAssertEqual(latitudes, [52])
+        XCTAssertEqual(manager.stopCount, 1)
+        XCTAssertEqual(manager.startCount, 2)
+        XCTAssertTrue(manager.allowsBackgroundLocationUpdates)
+        XCTAssertTrue(manager.showsBackgroundLocationIndicator)
+    }
+
+    func testOffMainCallbackAfterReplacementKeepsSupersededEffectOwner() {
+        let manager = FakeCompanionLocationManager()
+        let stream = makeStream(manager: manager, authorization: { .authorizedAlways }, accuracy: { .fullAccuracy })
+        var latitudes: [Double] = []
+        stream.onFix = { latitudes.append($0.coordinate.latitude) }
+        manager.onDesiredAccuracyWrite = {
+            manager.onDesiredAccuracyWrite = nil
+            stream.stop()
+            XCTAssertTrue(stream.startFromForeground())
+            let captured = DispatchSemaphore(value: 0)
+            DispatchQueue.global().async {
+                stream.locationManager(CLLocationManager(), didUpdateLocations: [self.location(latitude: 92)])
+                captured.signal()
+            }
+            XCTAssertEqual(captured.wait(timeout: .now() + 2), .success)
+        }
+
+        _ = stream.startFromForeground()
+        drainMainQueue()
+        stream.locationManager(CLLocationManager(), didUpdateLocations: [location(latitude: 93)])
+
+        XCTAssertEqual(latitudes, [93])
+    }
+
+    func testOffMainCallbackCapturedBeforeReplacementRemainsInvalidated() {
+        let manager = FakeCompanionLocationManager()
+        let stream = makeStream(manager: manager, authorization: { .authorizedAlways }, accuracy: { .fullAccuracy })
+        var latitudes: [Double] = []
+        stream.onFix = { latitudes.append($0.coordinate.latitude) }
+        manager.onDesiredAccuracyWrite = {
+            manager.onDesiredAccuracyWrite = nil
+            let captured = DispatchSemaphore(value: 0)
+            DispatchQueue.global().async {
+                stream.locationManager(CLLocationManager(), didUpdateLocations: [self.location(latitude: 91)])
+                captured.signal()
+            }
+            XCTAssertEqual(captured.wait(timeout: .now() + 2), .success)
+            stream.stop()
+            XCTAssertTrue(stream.startFromForeground())
+        }
+
+        _ = stream.startFromForeground()
+        drainMainQueue()
+        stream.locationManager(CLLocationManager(), didUpdateLocations: [location(latitude: 93)])
+
+        XCTAssertEqual(latitudes, [93])
+    }
+
     func testStopThenFreshStartAcceptsOnlyFreshLifecycleCallbacks() {
         let manager = FakeCompanionLocationManager()
         let stream = makeStream(manager: manager, authorization: { .authorizedAlways }, accuracy: { .fullAccuracy })
@@ -455,6 +588,12 @@ final class CompanionLocationStreamTests: XCTestCase {
             timestamp: Date(timeIntervalSince1970: 1)
         )
     }
+
+    private func drainMainQueue() {
+        let drained = expectation(description: "main queue drained")
+        DispatchQueue.main.async { drained.fulfill() }
+        wait(for: [drained], timeout: 2)
+    }
 }
 
 private enum TestLocationError: Error {
@@ -462,13 +601,21 @@ private enum TestLocationError: Error {
 }
 
 private final class FakeCompanionLocationManager: CompanionLocationManaging {
-    var desiredAccuracy: CLLocationAccuracy = kCLLocationAccuracyThreeKilometers
+    var desiredAccuracy: CLLocationAccuracy = kCLLocationAccuracyThreeKilometers {
+        didSet { onDesiredAccuracyWrite?() }
+    }
     var activityType: CLActivityType = .other
     var allowsBackgroundLocationUpdates = false {
-        didSet { events.append("background:\(allowsBackgroundLocationUpdates)") }
+        didSet {
+            events.append("background:\(allowsBackgroundLocationUpdates)")
+            onBackgroundFlagWrite?(allowsBackgroundLocationUpdates)
+        }
     }
     var showsBackgroundLocationIndicator = false {
-        didSet { events.append("indicator:\(showsBackgroundLocationIndicator)") }
+        didSet {
+            events.append("indicator:\(showsBackgroundLocationIndicator)")
+            onIndicatorFlagWrite?(showsBackgroundLocationIndicator)
+        }
     }
     var pausesLocationUpdatesAutomatically = true {
         didSet { events.append("request-pausing:\(pausesLocationUpdatesAutomatically)") }
@@ -481,6 +628,9 @@ private final class FakeCompanionLocationManager: CompanionLocationManaging {
     var onRequest: (() -> Void)?
     var onStart: (() -> Void)?
     var onStop: (() -> Void)?
+    var onDesiredAccuracyWrite: (() -> Void)?
+    var onBackgroundFlagWrite: ((Bool) -> Void)?
+    var onIndicatorFlagWrite: ((Bool) -> Void)?
 
     func requestWhenInUseAuthorization() {
         requestCount += 1

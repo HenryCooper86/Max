@@ -29,11 +29,12 @@ final class CompanionLocationStream: NSObject, CLLocationManagerDelegate {
     private let applicationState: () -> UIApplication.State
     private let authorizationStatus: () -> CLAuthorizationStatus
     private let accuracyAuthorization: () -> CLAccuracyAuthorization
-    private let generationLock = NSLock()
+    private let ownershipLock = NSLock()
 
     private var generation = 0
     private var managerEffectOwners: [Int] = []
     private var ownsStartAttempt = false
+    private var managerStopPending = false
     private var updatesStarted = false
     private var precisePermissionConfirmed = false
     private var acceptsFixes = false
@@ -67,11 +68,12 @@ final class CompanionLocationStream: NSObject, CLLocationManagerDelegate {
         dispatchPrecondition(condition: .onQueue(.main))
         guard applicationState() == .active else { return false }
         if ownsStartAttempt {
-            return updatesStarted
+            return activeStartResult
         }
 
         let owner = advanceGeneration()
         ownsStartAttempt = true
+        managerStopPending = true
         updatesStarted = false
         precisePermissionConfirmed = false
         acceptsFixes = false
@@ -129,7 +131,6 @@ final class CompanionLocationStream: NSObject, CLLocationManagerDelegate {
 
     func stop() {
         dispatchPrecondition(condition: .onQueue(.main))
-        let hadStartAttempt = ownsStartAttempt
         let owner = advanceGeneration()
         ownsStartAttempt = false
         updatesStarted = false
@@ -137,17 +138,18 @@ final class CompanionLocationStream: NSObject, CLLocationManagerDelegate {
         acceptsFixes = false
         lastPublishedPermission = nil
 
+        if managerStopPending {
+            managerStopPending = false
+            guard performManagerEffect(owner: owner, effect: {
+                manager.stopUpdatingLocation()
+            }) else { return }
+        }
         guard performManagerEffect(owner: owner, effect: {
             manager.allowsBackgroundLocationUpdates = false
         }) else { return }
         guard performManagerEffect(owner: owner, effect: {
             manager.showsBackgroundLocationIndicator = false
         }) else { return }
-        if hadStartAttempt {
-            _ = performManagerEffect(owner: owner, effect: {
-                manager.stopUpdatingLocation()
-            })
-        }
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
@@ -202,17 +204,17 @@ final class CompanionLocationStream: NSObject, CLLocationManagerDelegate {
     }
 
     private func advanceGeneration() -> Int {
-        generationLock.lock()
+        ownershipLock.lock()
         generation &+= 1
         let value = generation
-        generationLock.unlock()
+        ownershipLock.unlock()
         return value
     }
 
     private func currentGeneration() -> Int {
-        generationLock.lock()
+        ownershipLock.lock()
         let value = generation
-        generationLock.unlock()
+        ownershipLock.unlock()
         return value
     }
 
@@ -221,26 +223,32 @@ final class CompanionLocationStream: NSObject, CLLocationManagerDelegate {
     }
 
     private var activeStartResult: Bool {
-        ownsStartAttempt && updatesStarted
+        guard ownsStartAttempt, updatesStarted else { return false }
+        return precisePermissionConfirmed || lastPublishedPermission == .notDetermined
     }
 
     private func captureCallbackOwner() -> Int {
-        if Thread.isMainThread, let effectOwner = managerEffectOwners.last {
-            return effectOwner
-        }
-        return currentGeneration()
+        ownershipLock.lock()
+        let owner = managerEffectOwners.last ?? generation
+        ownershipLock.unlock()
+        return owner
     }
 
     @discardableResult
     private func performManagerEffect(owner: Int, effect: () -> Void) -> Bool {
         dispatchPrecondition(condition: .onQueue(.main))
+        ownershipLock.lock()
         managerEffectOwners.append(owner)
-        defer {
-            assert(managerEffectOwners.last == owner)
-            managerEffectOwners.removeLast()
-        }
+        ownershipLock.unlock()
+
         effect()
-        return isCurrent(owner)
+
+        ownershipLock.lock()
+        assert(managerEffectOwners.last == owner)
+        managerEffectOwners.removeLast()
+        let remainsCurrent = generation == owner
+        ownershipLock.unlock()
+        return remainsCurrent
     }
 
     private func onMain(_ block: @escaping () -> Void) {

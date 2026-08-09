@@ -401,38 +401,129 @@ class NavigationControllerTest {
         )
     }
 
-    // Nav-fast-follow Task 4 item 2 (deferred-identity watchdog pin) is
-    // deliberately NOT here. Investigated thoroughly — including writing
-    // and running the scenario below — and confirmed the premise is false
-    // for Android's actual implementation; see the task report for the
-    // full proof. Summary: `RerouteAttempt.generation` is captured at
-    // reroute-SEND time, and `performReroute`'s failure branch only runs
-    // its OWN generation-bumping "else" path when that captured value still
-    // equals `navigationGeneration` at ANSWER time. Any second
-    // `navigation.start` (the would-be "B") bumps `navigationGeneration`
-    // unconditionally the instant it begins — before it ever reaches its
-    // own first-fix registration — so if B starts before the reroute's
-    // answer arrives, the answer is always discarded as stale (the "else"
-    // branch never runs, no further bump, no teardown speech: confirmed by
-    // running exactly this ordering, which timed out waiting for
-    // REROUTE_FAILED_TEXT). The only alternative ordering — triggering A's
-    // off-route fix AFTER B is already parked, so the captured generation
-    // matches — is blocked by a different wall: EVERY fix delivery
-    // (including the one needed to trigger the reroute) runs through the
-    // single shared `onFix`, whose first line unconditionally resolves
-    // whatever first-fix wait is currently pending — so it would resolve
-    // B's wait directly, violating "no fix fed to B" and collapsing the
-    // scenario into something a generation-only guard would ALSO pass
-    // (proven: nothing bumps `navigationGeneration` again after B's own
-    // start in that ordering, so identity and generation are
-    // indistinguishable there — no regression protection). Every other
-    // generation-bump site (`handleStart`'s own supersession preempting via
-    // `awaitFirstFix`'s registration, `handleStop`, `teardown`) already
-    // resolves or steals any pending first-fix wait directly, as part of
-    // its own bump — none of them exercise the watchdog's identity guard
-    // either. `performReroute`'s failure branch is the only site that
-    // doesn't touch `firstFixContinuation` at all, which is exactly what
-    // makes it structurally unable to coexist with an untouched, parked B.
+    // Nav-fast-follow Task 4 item 2 (deferred-identity watchdog pin),
+    // corrected in fix round 1. An earlier version of this file argued this
+    // scenario was unconstructible, on the premise that "start B bumps the
+    // generation" and "B registers its own first-fix continuation" are one
+    // atomic event — so any fix delivered late enough to carry B's
+    // generation into a reroute would necessarily already find B registered
+    // and resolve it. That premise is false: they are TWO separate
+    // `synchronized(lock)` acquisitions with a real gap between them (see
+    // `handleStart`), and `locationSource.start(::onFix)` — a
+    // caller-supplied collaborator — runs INSIDE that gap: after the
+    // generation bump and the `generation` snapshot, but before
+    // `awaitFirstFix()`'s registration. A `LocationSource` fake that
+    // reenters the controller synchronously from inside its own `start()`
+    // (the same idiom `a teardown reentering from within
+    // locationSource-start...` below already uses, just re-purposed) can
+    // deliver an off-route fix for A from exactly inside that gap: the
+    // resulting `RerouteAttempt` captures B's already-bumped generation
+    // (since `onFix` reads `navigationGeneration` live), while
+    // `resolveFirstFix` inside that same `onFix` call is a no-op (B hasn't
+    // registered yet). By the time B's own `awaitFirstFix()` registration
+    // runs afterward, the reroute is already in flight against B's
+    // generation — so when it later fails, `performReroute`'s guard
+    // (`attempt.generation == navigationGeneration && route != null`)
+    // matches, and its failure branch's OWN bump leaves B on a now-stale
+    // generation, parked, deferred untouched. Only the identity guard
+    // (not a hypothetical generation one) can still resolve it.
+    private class ReentrantRerouteTriggerSource : LocationSource {
+        lateinit var controller: NavigationController
+
+        /** Set true only once route A is already committed and B's start is
+         *  about to begin — so the reentrant trigger below fires on B's
+         *  `locationSource.start` call, not A's own (initial) one. */
+        @Volatile
+        var armed = false
+        private var fired = false
+        private var callback: ((LatLon) -> Unit)? = null
+
+        override fun start(onFix: (LatLon) -> Unit) {
+            callback = onFix
+            if (armed && !fired) {
+                fired = true
+                // Reentrant: same thread, same (reentrant JVM monitor) lock
+                // as the `synchronized(lock) { ... }` block this start()
+                // call is itself running inside of — see the class doc
+                // above for why this lands inside the bump-to-registration
+                // gap.
+                controller.onFix(LatLon(31.2320, 121.4710)) // off route.A's polyline
+            }
+        }
+
+        override fun stop() {}
+
+        fun fix(p: LatLon) {
+            callback?.invoke(p)
+        }
+    }
+
+    @Test
+    fun `a reroute failure captured at start B's generation bumps it stale while B still sits untouched at first-fix, and B's identity watchdog resolves it`() =
+        runBlocking {
+            val sent = CopyOnWriteArrayList<String>()
+            val results = CopyOnWriteArrayList<String>()
+            val speaker = FakeSpeaker()
+            val source = ReentrantRerouteTriggerSource()
+            // Short: nobody ever answers this reroute (it's captured on a
+            // generation nothing will ever match with an explicit
+            // handleNavError) — RelayNavigationSearch's own watchdog is
+            // what resolves it null, race-free.
+            val relay = RelayNavigationSearch(send = { sent.add(it) }, timeoutMillis = 300)
+            val controller = NavigationController(
+                search = relay,
+                locationSource = source,
+                speaker = speaker,
+                sendResult = { results.add(it) },
+                onGuidance = {},
+                hasLocationPermission = { true },
+                now = { 0L },
+                firstFixTimeoutMillis = 1_500 // comfortably after the reroute's 300 ms failure
+            )
+            source.controller = controller
+
+            // ---- route A: committed and active -------------------------
+            val jobA = launch(Dispatchers.Default) { controller.handleCommand("cmd-A", "navigation.start", "第一目的地") }
+            awaitCondition(description = "A's nav.request sent") {
+                source.fix(neutralWgsFix)
+                sent.size == 1
+            }
+            relay.handleNavRoute(sampleRouteData(JSONObject(sent[0]).getString("commandId")))
+            jobA.join()
+            assertEquals(
+                "ok",
+                JSONObject(results.single { JSONObject(it).getString("commandId") == "cmd-A" }).getString("status")
+            )
+
+            // ---- start B: bumps the generation, then — from inside its
+            // OWN locationSource.start, still holding the lock, still
+            // BEFORE its own first-fix registration — delivers the
+            // off-route fix that launches route A's reroute, captured at
+            // B's generation.
+            source.armed = true
+            val jobB = launch(Dispatchers.Default) { controller.handleCommand("cmd-B", "navigation.start", "第二目的地") }
+
+            awaitCondition(description = "the reroute nav.request went out") {
+                sent.size == 2 && JSONObject(sent[1]).getString("reason") == "reroute"
+            }
+            // No answer ever comes: the relay's own 300 ms timeout resolves
+            // it null, and performReroute's failure branch runs its OWN
+            // generation bump (generation still matches — B's start is what
+            // stamped it — and route A is still non-null).
+            awaitCondition(timeoutMs = 3_000, description = "the reroute genuinely failed and tore down route A") {
+                speaker.spoken.contains(REROUTE_FAILED_TEXT to false)
+            }
+            assertTrue("B never sent a nav.request — it is still parked at first-fix", sent.size == 2)
+
+            // ---- B is parked, untouched, on a now-stale generation. Only
+            // its identity-guarded watchdog can resolve it — a
+            // generation-guarded one would hang here forever (verified via
+            // a temporary revert; see the task report).
+            withTimeout(4_000) { jobB.join() }
+            val resultB = JSONObject(results.single { JSONObject(it).getString("commandId") == "cmd-B" })
+            assertEquals("failed", resultB.getString("status"))
+            assertEquals("navigation.cancelled", resultB.getString("reason"))
+        }
 
     // ---- concurrency -------------------------------------------------
 

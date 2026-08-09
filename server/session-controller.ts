@@ -560,7 +560,10 @@ export class AgentSessionController {
    */
   handleMessage(data: RawData, isBinary: boolean): Promise<void> {
     if (!this.acceptingMessages) return Promise.resolve();
-    const task = this.messageQueue.then(() => this.processMessage(data, isBinary));
+    const task = this.messageQueue.then(() => {
+      if (!this.acceptingMessages) return;
+      return this.processMessage(data, isBinary);
+    });
     // Keep the queue usable even if an unexpected error escapes processMessage.
     this.messageQueue = task.catch(() => undefined);
     return task;

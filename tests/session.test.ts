@@ -372,6 +372,35 @@ describe("stable RDK session registration", () => {
     }
   );
 
+  it("drops a no-device session.start queued behind a terminal unauthorized claim", async () => {
+    const providerStart = vi.fn(async () => undefined);
+    const providerClose = vi.fn(async () => undefined);
+    const onDeviceRegistered = vi.fn(() => () => undefined);
+    const socketClose = vi.fn();
+    const controller = new AgentSessionController(
+      { readyState: 1, OPEN: 1, send: vi.fn(), close: socketClose } as never,
+      () => makeProvider({ start: providerStart, close: providerClose }),
+      undefined,
+      "127.0.0.1",
+      undefined,
+      undefined,
+      { deviceRegistrationAuthorized: false, onDeviceRegistered }
+    );
+
+    const unauthorized = controller.handleMessage(startEvent({ deviceId: null, platform: "embedded" }), false);
+    const pipelinedStart = controller.handleMessage(startEvent({ platform: "web" }), false);
+    await Promise.all([unauthorized, pipelinedStart]);
+    await Promise.all([controller.close(), controller.close()]);
+
+    expect(socketClose).toHaveBeenCalledTimes(1);
+    expect(socketClose).toHaveBeenCalledWith(1008, expect.any(String));
+    expect(providerStart).not.toHaveBeenCalled();
+    expect(onDeviceRegistered).not.toHaveBeenCalled();
+    expect(providerClose).toHaveBeenCalledTimes(1);
+    expect(testingSnapshot().totals.activeTestSessions).toBe(0);
+    expect(testingSnapshot().totals.totalTestSessions).toBe(0);
+  });
+
   it("keeps malformed authorized and no-claim sessions on the ordinary error path", async () => {
     for (const testCase of [
       { hooks: { deviceRegistrationAuthorized: true }, event: { deviceId: "bad-id", platform: "embedded" } },

@@ -12,6 +12,7 @@ import {
   openSync,
   closeSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -51,6 +52,20 @@ function temporaryPath(): string {
   const directory = mkdtempSync(join(tmpdir(), "max-device-identity-"));
   TEMPORARY_DIRECTORIES.push(directory);
   return join(directory, "state", "device-id");
+}
+
+function canonicalMarkerPath(path: string): string {
+  return join(dirname(path), ".device-id.marker");
+}
+
+function pendingMarkerPath(path: string): string {
+  return `${canonicalMarkerPath(path)}.pending`;
+}
+
+function markerSourcePaths(path: string): string[] {
+  return readdirSync(dirname(path))
+    .filter((entry) => entry.startsWith(".device-id.marker.new-"))
+    .map((entry) => join(dirname(path), entry));
 }
 
 function writeMarker(
@@ -163,6 +178,179 @@ describe("loadOrCreateDeviceId", () => {
     };
     expect(marker).toMatchObject({ createdAt: 42_000, ownerFingerprint: OWNER_FINGERPRINT });
     expect(fingerprintCalls).toEqual([process.pid]);
+  });
+
+  it("allows a new candidate only when a crash loses the not-yet-durable pending assignment", () => {
+    const path = temporaryPath();
+    const pending = pendingMarkerPath(path);
+    let denied = false;
+    seam.__maxRdkDeviceIdentityFsSeam = {
+      fsyncSync: (fd) => {
+        if (!denied && existsSync(pending) && !existsSync(canonicalMarkerPath(path))) {
+          denied = true;
+          throw new Error("pending parent fsync denied");
+        }
+        fsyncSync(fd);
+      }
+    };
+
+    expect(() => loadOrCreateDeviceId({ path, randomId: () => DEVICE_ID })).toThrow("pending parent fsync denied");
+    expect(existsSync(pending)).toBe(true);
+
+    // Model a crash losing directory entries whose parent fsync did not finish.
+    unlinkSync(pending);
+    for (const source of markerSourcePaths(path)) unlinkSync(source);
+    delete seam.__maxRdkDeviceIdentityFsSeam;
+
+    expect(loadOrCreateDeviceId({ path, randomId: () => OTHER_DEVICE_ID })).toBe(OTHER_DEVICE_ID);
+  });
+
+  it("promotes the durable pending candidate after an unconfirmed canonical entry is lost", () => {
+    const path = temporaryPath();
+    const pending = pendingMarkerPath(path);
+    const canonical = canonicalMarkerPath(path);
+    let denied = false;
+    seam.__maxRdkDeviceIdentityFsSeam = {
+      fsyncSync: (fd) => {
+        if (!denied && existsSync(pending) && existsSync(canonical) && !existsSync(path)) {
+          denied = true;
+          throw new Error("canonical parent fsync denied");
+        }
+        fsyncSync(fd);
+      }
+    };
+
+    expect(() => loadOrCreateDeviceId({ path, randomId: () => DEVICE_ID })).toThrow("canonical parent fsync denied");
+    expect(existsSync(pending)).toBe(true);
+
+    // The canonical link was visible but its directory fsync failed, so model
+    // that entry disappearing across the crash while durable pending survives.
+    unlinkSync(canonical);
+    delete seam.__maxRdkDeviceIdentityFsSeam;
+
+    expect(
+      loadOrCreateDeviceId({
+        path,
+        randomId: () => {
+          throw new Error("must promote pending candidate");
+        }
+      })
+    ).toBe(DEVICE_ID);
+    expect(readdirSync(dirname(path))).toEqual(["device-id"]);
+  });
+
+  it("reconciles a pending unlink that was lost after canonical publication", () => {
+    const path = temporaryPath();
+    const pending = pendingMarkerPath(path);
+    const canonical = canonicalMarkerPath(path);
+    let observedPublishedPair = false;
+    let denied = false;
+    seam.__maxRdkDeviceIdentityFsSeam = {
+      fsyncSync: (fd) => {
+        if (existsSync(pending) && existsSync(canonical)) observedPublishedPair = true;
+        if (observedPublishedPair && !denied && !existsSync(pending) && existsSync(canonical) && !existsSync(path)) {
+          denied = true;
+          throw new Error("pending unlink parent fsync denied");
+        }
+        fsyncSync(fd);
+      }
+    };
+
+    expect(() => loadOrCreateDeviceId({ path, randomId: () => DEVICE_ID })).toThrow(
+      "pending unlink parent fsync denied"
+    );
+
+    // Model the uncommitted unlink disappearing: pending returns as a hard link
+    // to the already durable canonical record.
+    linkSync(canonical, pending);
+    delete seam.__maxRdkDeviceIdentityFsSeam;
+
+    expect(
+      loadOrCreateDeviceId({
+        path,
+        randomId: () => {
+          throw new Error("must reconcile published marker");
+        }
+      })
+    ).toBe(DEVICE_ID);
+    expect(readdirSync(dirname(path))).toEqual(["device-id"]);
+  });
+
+  it("re-cleans a unique marker source whose durable unlink was lost", () => {
+    const path = temporaryPath();
+    const pending = pendingMarkerPath(path);
+    const canonical = canonicalMarkerPath(path);
+    let sourcePath = "";
+    let observedPending = false;
+    let pendingRemovalSynced = false;
+    let denied = false;
+    seam.__maxRdkDeviceIdentityFsSeam = {
+      fsyncSync: (fd) => {
+        const sources = markerSourcePaths(path);
+        if (sources[0]) sourcePath = sources[0];
+        if (existsSync(pending)) observedPending = true;
+        if (observedPending && existsSync(canonical) && !existsSync(pending) && sources.length > 0)
+          pendingRemovalSynced = true;
+        if (pendingRemovalSynced && !denied && existsSync(canonical) && sources.length === 0 && !existsSync(path)) {
+          denied = true;
+          throw new Error("marker source unlink parent fsync denied");
+        }
+        fsyncSync(fd);
+      }
+    };
+
+    expect(() => loadOrCreateDeviceId({ path, randomId: () => DEVICE_ID })).toThrow(
+      "marker source unlink parent fsync denied"
+    );
+
+    // Model the unique source unlink being lost across the crash.
+    linkSync(canonical, sourcePath);
+    delete seam.__maxRdkDeviceIdentityFsSeam;
+
+    expect(loadOrCreateDeviceId({ path, randomId: () => OTHER_DEVICE_ID })).toBe(DEVICE_ID);
+    expect(readdirSync(dirname(path))).toEqual(["device-id"]);
+  });
+
+  it("promotes a pending-only marker and removes the pending name", () => {
+    const path = temporaryPath();
+    const { markerPath } = writeMarker(path, { pid: 2_147_483_647 });
+    renameSync(markerPath, pendingMarkerPath(path));
+
+    expect(
+      loadOrCreateDeviceId({
+        path,
+        randomId: () => {
+          throw new Error("pending assignment must win");
+        }
+      })
+    ).toBe(DEVICE_ID);
+    expect(readdirSync(dirname(path))).toEqual(["device-id"]);
+  });
+
+  it("reconciles matching pending and canonical marker names", () => {
+    const path = temporaryPath();
+    const { markerPath } = writeMarker(path, { pid: 2_147_483_647 });
+    linkSync(markerPath, pendingMarkerPath(path));
+
+    expect(loadOrCreateDeviceId({ path, randomId: () => OTHER_DEVICE_ID })).toBe(DEVICE_ID);
+    expect(readdirSync(dirname(path))).toEqual(["device-id"]);
+  });
+
+  it.each(["conflicting", "torn"])("fails closed on a %s pending marker beside canonical", (kind) => {
+    const path = temporaryPath();
+    const { markerPath } = writeMarker(path, { pid: 2_147_483_647 });
+    const pending = pendingMarkerPath(path);
+    if (kind === "torn") {
+      writeFileSync(pending, "{", { mode: 0o600 });
+    } else {
+      const marker = JSON.parse(readFileSync(markerPath, "utf8")) as { candidate: string };
+      marker.candidate = OTHER_DEVICE_ID;
+      writeFileSync(pending, `${JSON.stringify(marker)}\n`, { mode: 0o600 });
+    }
+
+    expect(() => loadOrCreateDeviceId({ path, randomId: () => OTHER_DEVICE_ID })).toThrow(
+      /pending|marker|conflict|malformed|disagree/i
+    );
   });
 
   it.each([
@@ -297,6 +485,105 @@ describe("loadOrCreateDeviceId", () => {
       })
     ).toBe(DEVICE_ID);
     expect(waits).toBe(0);
+  });
+
+  it.each(["final", "parent"])(
+    "retains a proven-live stale owner's temp and marker when helper %s sync fails",
+    (failureTarget) => {
+      const path = temporaryPath();
+      const { markerPath, temporary } = writeMarker(path);
+      writeFileSync(temporary, `${DEVICE_ID}\n`, { mode: 0o600 });
+      const opened = new Map<number, string>();
+      seam.__maxRdkDeviceIdentityFsSeam = {
+        now: () => 86_401_000,
+        fingerprint: () => OWNER_FINGERPRINT,
+        openSync: (target, flags) => {
+          const fd = openSync(target, flags);
+          opened.set(fd, target.toString());
+          return fd;
+        },
+        fsyncSync: (fd) => {
+          const target = opened.get(fd);
+          if (
+            existsSync(path) &&
+            ((failureTarget === "final" && target === path) || (failureTarget === "parent" && target === dirname(path)))
+          ) {
+            throw new Error(`helper ${failureTarget} fsync denied`);
+          }
+          fsyncSync(fd);
+        },
+        closeSync: (fd) => {
+          opened.delete(fd);
+          closeSync(fd);
+        }
+      };
+
+      expect(() => loadOrCreateDeviceId({ path, randomId: () => OTHER_DEVICE_ID })).toThrow(
+        `helper ${failureTarget} fsync denied`
+      );
+      expect(readFileSync(temporary, "utf8")).toBe(`${DEVICE_ID}\n`);
+      expect(existsSync(markerPath)).toBe(true);
+    }
+  );
+
+  it("cleans a deterministic orphaned recovery temp on a later successful retry", () => {
+    const path = temporaryPath();
+    const { temporary } = writeMarker(path, { pid: 2_147_483_647 });
+    const sentinel = join(dirname(dirname(path)), "recovery-sentinel");
+    writeFileSync(sentinel, "preserve");
+    const expectedRecovery = `${temporary}.recover`;
+    let observedRecovery = "";
+
+    expect(() =>
+      loadOrCreateDeviceId({
+        path,
+        randomId: () => {
+          throw new Error("recovery must not generate");
+        },
+        writeFile: (target, data, options) => {
+          if (target.toString().includes(".recover")) {
+            observedRecovery = target.toString();
+            writeFileSync(target, data, options);
+            throw new Error("recovery write failed after create");
+          }
+          writeFileSync(target, data, options);
+        },
+        unlink: (target) => {
+          if (target.toString() === observedRecovery) throw new Error("recovery cleanup denied");
+          unlinkSync(target);
+        }
+      })
+    ).toThrow(/recovery write failed after create.*recovery cleanup denied/i);
+    expect(observedRecovery).toBe(expectedRecovery);
+    expect(readFileSync(observedRecovery, "utf8")).toBe(`${DEVICE_ID}\n`);
+
+    expect(
+      loadOrCreateDeviceId({
+        path,
+        randomId: () => {
+          throw new Error("retry must reuse marker candidate");
+        }
+      })
+    ).toBe(DEVICE_ID);
+    expect(readdirSync(dirname(path))).toEqual(["device-id"]);
+    expect(readFileSync(sentinel, "utf8")).toBe("preserve");
+  });
+
+  it("durably replaces a malformed owned deterministic recovery temp", () => {
+    const path = temporaryPath();
+    const { temporary } = writeMarker(path, { pid: 2_147_483_647 });
+    const recoveryTemporary = `${temporary}.recover`;
+    writeFileSync(recoveryTemporary, "partial", { mode: 0o600 });
+
+    expect(
+      loadOrCreateDeviceId({
+        path,
+        randomId: () => {
+          throw new Error("malformed recovery retry must not generate");
+        }
+      })
+    ).toBe(DEVICE_ID);
+    expect(readdirSync(dirname(path))).toEqual(["device-id"]);
   });
 
   it.each([undefined, ""])("treats an unavailable live-owner fingerprint as unknown (%s)", (observed) => {
@@ -540,11 +827,29 @@ describe("loadOrCreateDeviceId", () => {
     expect(randomCalls).toBe(2);
   });
 
+  it("does not unlink an unrelated entry that collides with the unique marker source", () => {
+    const path = temporaryPath();
+    let collision = "";
+    seam.__maxRdkDeviceIdentityFsSeam = {
+      writeFileSync: (target) => {
+        collision = target.toString();
+        writeFileSync(target, "unrelated", { mode: 0o600, flag: "wx" });
+        const error = new Error("marker source collision") as NodeJS.ErrnoException;
+        error.code = "EEXIST";
+        throw error;
+      }
+    };
+
+    expect(() => loadOrCreateDeviceId({ path, randomId: () => DEVICE_ID })).toThrow("marker source collision");
+    expect(readFileSync(collision, "utf8")).toBe("unrelated");
+  });
+
   it("recovers the canonical candidate and cleans the marker publication link after its unlink fails", () => {
     const path = temporaryPath();
     seam.__maxRdkDeviceIdentityFsSeam = {
-      unlinkSync: () => {
-        throw new Error("marker publication cleanup denied");
+      unlinkSync: (target) => {
+        if (target.toString().includes(".device-id.marker.new-")) throw new Error("marker publication cleanup denied");
+        unlinkSync(target);
       }
     };
 
@@ -655,7 +960,7 @@ describe("loadOrCreateDeviceId", () => {
     seam.__maxRdkDeviceIdentityFsSeam = {
       fsyncSync: (fd) => {
         calls += 1;
-        if (calls === 6) throw new Error("post-unlink fsync denied");
+        if (calls === 9) throw new Error("post-unlink fsync denied");
         fsyncSync(fd);
       }
     };
@@ -671,7 +976,7 @@ describe("loadOrCreateDeviceId", () => {
     ).toBe(DEVICE_ID);
   });
 
-  it.each([2, 3, 4, 5, 6])("reuses the canonical candidate after fsync failure %i", (failureCall) => {
+  it.each([2, 3, 4, 5, 6, 7, 8, 9])("reuses the canonical candidate after fsync failure %i", (failureCall) => {
     const path = temporaryPath();
     let calls = 0;
     seam.__maxRdkDeviceIdentityFsSeam = {
@@ -694,7 +999,7 @@ describe("loadOrCreateDeviceId", () => {
     ).toBe(DEVICE_ID);
   });
 
-  it.each([2, 3, 4, 5, 6])("reuses the canonical candidate after open failure %i", (failureCall) => {
+  it.each([2, 3, 4, 5, 6, 7, 8, 9])("reuses the canonical candidate after open failure %i", (failureCall) => {
     const path = temporaryPath();
     let calls = 0;
     seam.__maxRdkDeviceIdentityFsSeam = {
@@ -716,7 +1021,7 @@ describe("loadOrCreateDeviceId", () => {
     ).toBe(DEVICE_ID);
   });
 
-  it.each([2, 3, 4, 5, 6])("reuses the canonical candidate after close failure %i", (failureCall) => {
+  it.each([2, 3, 4, 5, 6, 7, 8, 9])("reuses the canonical candidate after close failure %i", (failureCall) => {
     const path = temporaryPath();
     let calls = 0;
     seam.__maxRdkDeviceIdentityFsSeam = {
@@ -775,6 +1080,17 @@ describe("loadOrCreateDeviceId", () => {
     await expect(Promise.all([first.done, second.done])).resolves.toEqual([DEVICE_ID, DEVICE_ID]);
     expect(readFileSync(path, "utf8")).toBe(`${DEVICE_ID}\n`);
   });
+
+  it("lets a stale helper and the still-live slow owner converge on the same identity", async () => {
+    const path = temporaryPath();
+    const first = child(path, DEVICE_ID, { IDENTITY_HOLD_MS: "6500" });
+    await first.ready;
+    const second = child(path, OTHER_DEVICE_ID);
+
+    await expect(Promise.all([first.done, second.done])).resolves.toEqual([DEVICE_ID, DEVICE_ID]);
+    expect(readFileSync(path, "utf8")).toBe(`${DEVICE_ID}\n`);
+    expect(readdirSync(dirname(path))).toEqual(["device-id"]);
+  }, 15_000);
 
   it("reclaims the recorded candidate after an owner crashes before publish", async () => {
     const path = temporaryPath();

@@ -97,6 +97,15 @@ function sync(path: string): void {
 function markerPath(path: string): string {
   return join(dirname(path), `.${basename(path)}.marker`);
 }
+function pendingMarkerPath(canonical: string): string {
+  return `${canonical}.pending`;
+}
+function markerSourcePath(canonical: string, token: string): string {
+  return `${canonical}.new-${token}`;
+}
+function recoveryTemporaryPath(marker: Marker): string {
+  return `${marker.temporary}.recover`;
+}
 function requirePrivateEntry(entry: Stats, directory: boolean, singleLink = !directory): void {
   if ((directory ? !entry.isDirectory() : !entry.isFile()) || entry.isSymbolicLink())
     throw new Error(
@@ -163,10 +172,10 @@ function existing(path: string, read: typeof readFileSync): string | undefined {
   if (result === undefined) throw new Error("Device identity read produced no result");
   return result;
 }
-function expectedTemporary(markerFile: string, token: string): string {
-  const markerName = basename(markerFile);
+function expectedTemporary(canonical: string, token: string): string {
+  const markerName = basename(canonical);
   const identityName = markerName.slice(1, -".marker".length);
-  return join(dirname(markerFile), `.${identityName}.tmp-${token}`);
+  return join(dirname(canonical), `.${identityName}.tmp-${token}`);
 }
 function validFingerprint(value: unknown): value is string {
   return (
@@ -177,7 +186,7 @@ function validFingerprint(value: unknown): value is string {
     !/[\0\r\n]/.test(value)
   );
 }
-function readMarker(path: string): Marker | undefined {
+function readMarker(path: string, canonical = path): Marker | undefined {
   try {
     privateEntry(path, false, false);
   } catch (error) {
@@ -204,11 +213,23 @@ function readMarker(path: string): Marker | undefined {
     m.createdAt < 0 ||
     !validFingerprint(m.ownerFingerprint) ||
     typeof m.temporary !== "string" ||
-    m.temporary !== expectedTemporary(path, m.token)
+    m.temporary !== expectedTemporary(canonical, m.token)
   )
     throw new Error("Device identity marker is malformed");
   required(m.candidate);
   return m as Marker;
+}
+
+function markersMatch(left: Marker, right: Marker): boolean {
+  return (
+    left.version === right.version &&
+    left.candidate === right.candidate &&
+    left.token === right.token &&
+    left.pid === right.pid &&
+    left.createdAt === right.createdAt &&
+    left.ownerFingerprint === right.ownerFingerprint &&
+    left.temporary === right.temporary
+  );
 }
 
 function defaultFingerprint(pid: number): string | undefined {
@@ -266,46 +287,118 @@ function pidExists(pid: number): boolean {
   }
 }
 
-function canTakeOver(marker: Marker): boolean {
-  if (marker.pid === process.pid) return !active.has(marker.token);
-  if (!pidExists(marker.pid)) return true;
+type OwnerDisposition = { takeOver: boolean; mayRemoveTemporary: boolean };
+
+function ownerDisposition(marker: Marker): OwnerDisposition {
+  if (marker.pid === process.pid) {
+    const abandoned = !active.has(marker.token);
+    return { takeOver: abandoned, mayRemoveTemporary: abandoned };
+  }
+  if (!pidExists(marker.pid)) return { takeOver: true, mayRemoveTemporary: true };
   const observedFingerprint = fingerprint(marker.pid);
-  if (observedFingerprint && observedFingerprint !== marker.ownerFingerprint) return true;
+  if (observedFingerprint && observedFingerprint !== marker.ownerFingerprint)
+    return { takeOver: true, mayRemoveTemporary: true };
   const age = now() - marker.createdAt;
-  return age < 0 || age >= STALE_OWNER_MS;
+  return { takeOver: age < 0 || age >= STALE_OWNER_MS, mayRemoveTemporary: false };
 }
 
-function publishMarker(marker: Marker, canonical: string): void {
-  const io = internalSeam();
-  const temporary = `${canonical}.new-${marker.token}`;
-  let primary: unknown;
+function internalUnlink(path: string): boolean {
   try {
-    (io.writeFileSync ?? writeFileSync)(temporary, `${JSON.stringify(marker)}\n`, { mode: 0o600, flag: "wx" });
-    sync(temporary);
-    try {
-      (io.linkSync ?? linkSync)(temporary, canonical);
-    } catch (error) {
-      const published = readMarker(canonical);
-      if (!published || published.token !== marker.token) throw error;
-    }
-    sync(dirname(canonical));
+    (internalSeam().unlinkSync ?? unlinkSync)(path);
+    return true;
   } catch (error) {
-    primary = error;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
   }
+}
+
+function linkMatchingMarker(
+  source: string,
+  target: string,
+  marker: Marker,
+  canonical: string,
+  existingTargetIsContention: boolean
+): void {
+  try {
+    (internalSeam().linkSync ?? linkSync)(source, target);
+  } catch (error) {
+    const found = readMarker(target, canonical);
+    if (found && markersMatch(found, marker)) return;
+    if (found && !existingTargetIsContention)
+      throw new Error("Device identity marker publication conflicts", { cause: error });
+    throw error;
+  }
+}
+
+function cleanupMarkerSource(marker: Marker, canonical: string): void {
+  const source = markerSourcePath(canonical, marker.token);
+  const found = readMarker(source, canonical);
+  if (!found) return;
+  if (!markersMatch(found, marker)) throw new Error("Device identity marker source conflicts");
+  internalUnlink(source);
+  sync(dirname(canonical));
+}
+
+function throwPublicationFailure(marker: Marker, canonical: string, primary: unknown): never {
   let cleanupFailure: unknown;
   try {
-    (io.unlinkSync ?? unlinkSync)(temporary);
+    cleanupMarkerSource(marker, canonical);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") cleanupFailure = error;
+    cleanupFailure = error;
   }
-  if (primary && cleanupFailure) {
+  if (cleanupFailure) {
     throw new Error(
       `Device identity marker publication failed: ${primary instanceof Error ? primary.message : String(primary)}; marker temp cleanup failed: ${cleanupFailure instanceof Error ? cleanupFailure.message : String(cleanupFailure)}`,
       { cause: cleanupFailure }
     );
   }
-  if (primary) throw primary;
-  if (cleanupFailure) throw cleanupFailure;
+  throw primary;
+}
+
+function publishMarker(marker: Marker, canonical: string): void {
+  const source = markerSourcePath(canonical, marker.token);
+  const pending = pendingMarkerPath(canonical);
+  let pendingEstablished = false;
+  try {
+    (internalSeam().writeFileSync ?? writeFileSync)(source, `${JSON.stringify(marker)}\n`, {
+      mode: 0o600,
+      flag: "wx"
+    });
+    sync(source);
+    linkMatchingMarker(source, pending, marker, canonical, true);
+    pendingEstablished = true;
+    sync(dirname(canonical));
+    linkMatchingMarker(pending, canonical, marker, canonical, false);
+    sync(dirname(canonical));
+    internalUnlink(pending);
+    sync(dirname(canonical));
+    cleanupMarkerSource(marker, canonical);
+  } catch (error) {
+    if (!pendingEstablished) throwPublicationFailure(marker, canonical, error);
+    throw error;
+  }
+}
+
+function reconcileMarker(canonical: string): Marker | undefined {
+  const pendingPath = pendingMarkerPath(canonical);
+  const pending = readMarker(pendingPath, canonical);
+  let published = readMarker(canonical, canonical);
+  if (pending) {
+    if (published && !markersMatch(pending, published)) throw new Error("Device identity pending marker conflicts");
+    if (!published) {
+      linkMatchingMarker(pendingPath, canonical, pending, canonical, false);
+      published = readMarker(canonical, canonical);
+      if (!published || !markersMatch(pending, published))
+        throw new Error("Device identity pending marker promotion failed");
+    }
+    sync(dirname(canonical));
+    internalUnlink(pendingPath);
+    sync(dirname(canonical));
+    cleanupMarkerSource(pending, canonical);
+    return pending;
+  }
+  if (published) cleanupMarkerSource(published, canonical);
+  return published;
 }
 function wait(): void {
   const injected = internalSeam().wait;
@@ -326,17 +419,10 @@ function removeMarker(path: string, unlink: typeof unlinkSync): void {
   sync(dirname(path));
 }
 
-function stabilizeMarker(marker: Marker, canonical: string, unlink: typeof unlinkSync): void {
+function stabilizeMarker(marker: Marker, canonical: string): void {
   sync(canonical);
   sync(dirname(canonical));
-  const publicationTemporary = `${canonical}.new-${marker.token}`;
-  try {
-    unlink(publicationTemporary);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-    throw error;
-  }
-  sync(dirname(canonical));
+  cleanupMarkerSource(marker, canonical);
 }
 
 function cleanupAfterFailure(path: string, unlink: typeof unlinkSync, primary: unknown): never {
@@ -353,6 +439,65 @@ function cleanupAfterFailure(path: string, unlink: typeof unlinkSync, primary: u
   throw primary;
 }
 
+function ensureRecoveryTemporary(
+  path: string,
+  candidate: string,
+  write: typeof writeFileSync,
+  unlink: typeof unlinkSync
+): void {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let existingCandidate: string | undefined;
+    try {
+      existingCandidate = existing(path, readFileSync);
+    } catch (error) {
+      try {
+        privateEntry(path, false);
+      } catch (validationError) {
+        if ((validationError as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw error;
+      }
+      try {
+        unlink(path);
+      } catch (unlinkError) {
+        if ((unlinkError as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw unlinkError;
+      }
+      sync(dirname(path));
+      continue;
+    }
+    if (existingCandidate) {
+      if (existingCandidate !== candidate) throw new Error("Device identity recovery temp conflicts");
+      return;
+    }
+    try {
+      write(path, `${candidate}\n`, { mode: 0o600, flag: "wx" });
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+  }
+  throw new Error("Device identity recovery temp could not be established");
+}
+
+function finishMatchingFinal(
+  path: string,
+  candidate: string,
+  read: typeof readFileSync,
+  chmod: typeof chmodSync,
+  canonical: string,
+  unlink: typeof unlinkSync,
+  removeRecoverableMarker: boolean
+): string | undefined {
+  const final = existing(path, read);
+  if (!final) return undefined;
+  if (final !== candidate) throw new Error("Device identity marker and file disagree");
+  chmod(path, 0o600);
+  sync(path);
+  sync(dirname(path));
+  if (removeRecoverableMarker) removeMarker(canonical, unlink);
+  return candidate;
+}
+
 export function loadOrCreateDeviceId(options: DeviceIdentityOptions): string {
   const read = options.readFile ?? readFileSync,
     write = options.writeFile ?? writeFileSync,
@@ -363,33 +508,39 @@ export function loadOrCreateDeviceId(options: DeviceIdentityOptions): string {
   secureParents(options.path, mkdir);
   const canonical = markerPath(options.path);
   for (let attempts = 0; attempts < MAX_WAITS; attempts += 1) {
-    const marker = readMarker(canonical),
+    const marker = reconcileMarker(canonical),
       final = existing(options.path, read);
     if (marker) {
       if (final && final !== marker.candidate) throw new Error("Device identity marker and file disagree");
-      const recoverable = canTakeOver(marker);
+      const disposition = ownerDisposition(marker);
       if (final === marker.candidate) {
-        chmod(options.path, 0o600);
-        sync(options.path);
-        sync(dirname(options.path));
-        if (recoverable) removeMarker(canonical, unlink);
-        return final;
+        return finishMatchingFinal(
+          options.path,
+          marker.candidate,
+          read,
+          chmod,
+          canonical,
+          unlink,
+          disposition.takeOver
+        )!;
       }
-      if (!recoverable) {
+      if (!disposition.takeOver) {
         wait();
         continue;
       }
       // The immutable marker remains the authority after a crash or failed call.
       active.add(marker.token);
-      const recoveryTemporary = `${marker.temporary}.recover-${randomUUID()}`;
+      const recoveryTemporary = recoveryTemporaryPath(marker);
       try {
-        stabilizeMarker(marker, canonical, unlink);
-        try {
-          unlink(marker.temporary);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        stabilizeMarker(marker, canonical);
+        if (disposition.mayRemoveTemporary) {
+          try {
+            unlink(marker.temporary);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          }
         }
-        write(recoveryTemporary, `${marker.candidate}\n`, { mode: 0o600, flag: "wx" });
+        ensureRecoveryTemporary(recoveryTemporary, marker.candidate, write, unlink);
         sync(recoveryTemporary);
         rename(recoveryTemporary, options.path);
         chmod(options.path, 0o600);
@@ -398,6 +549,10 @@ export function loadOrCreateDeviceId(options: DeviceIdentityOptions): string {
         removeMarker(canonical, unlink);
         return marker.candidate;
       } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          const converged = finishMatchingFinal(options.path, marker.candidate, read, chmod, canonical, unlink, true);
+          if (converged) return converged;
+        }
         cleanupAfterFailure(recoveryTemporary, unlink, error);
       } finally {
         active.delete(marker.token);
@@ -436,6 +591,10 @@ export function loadOrCreateDeviceId(options: DeviceIdentityOptions): string {
       removeMarker(canonical, unlink);
       return candidate;
     } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        const converged = finishMatchingFinal(options.path, candidate, read, chmod, canonical, unlink, true);
+        if (converged) return converged;
+      }
       cleanupAfterFailure(ours.temporary, unlink, error);
     } finally {
       active.delete(token);

@@ -947,7 +947,7 @@ final class RDKCompanionClientTests: XCTestCase {
         XCTAssertEqual(harness.sockets[7].pendingReceiveCount, 1)
     }
 
-    func testServerStatesArriveInOrderOnMainAndReceiveLoopStaysSingle() {
+    func testServerTerminalArrivesOnMainAndStopsTheReceiveLoop() {
         let harness = ClientHarness(socketCount: 1)
         var states: [CompanionConnectionState] = []
         var mainFlags: [Bool] = []
@@ -958,11 +958,14 @@ final class RDKCompanionClientTests: XCTestCase {
         harness.connect()
 
         harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"unpaired\"}"))
-        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\",\"deviceId\":\"rdk-1\",\"deviceLabel\":\"Helmet\"}"))
+        harness.sockets[0].redeliverLast(
+            .string("{\"type\":\"companion.status\",\"state\":\"ready\",\"deviceId\":\"rdk-1\",\"deviceLabel\":\"Helmet\"}")
+        )
 
-        XCTAssertEqual(states, [.connecting, .unpaired, .ready(deviceId: "rdk-1", label: "Helmet")])
-        XCTAssertEqual(mainFlags, [true, true, true])
-        XCTAssertEqual(harness.sockets[0].pendingReceiveCount, 1)
+        XCTAssertEqual(states, [.connecting, .unpaired])
+        XCTAssertEqual(mainFlags, [true, true])
+        XCTAssertEqual(harness.sockets[0].pendingReceiveCount, 0)
+        XCTAssertEqual(harness.sockets[0].cancelCount, 1)
     }
 
     func testBackgroundReceivePublishesStateOnMainThread() {
@@ -1328,6 +1331,128 @@ final class RDKCompanionClientTests: XCTestCase {
                 XCTAssertTrue(results.isEmpty, "terminal state owns and retires \(action) completion")
                 XCTAssertTrue(harness.scheduled.isEmpty)
             }
+        }
+    }
+
+    func testAuthoritativeTerminalRetiresTransportBeforeCallbackAndRequiresExplicitConnect() {
+        let terminalCases: [(message: String, expected: CompanionConnectionState)] = [
+            (
+                "{\"type\":\"companion.error\",\"code\":\"auth\",\"detail\":\"expired\"}",
+                .failed(code: "auth", detail: "expired")
+            ),
+            (
+                "{\"type\":\"companion.status\",\"state\":\"unpaired\"}",
+                .unpaired
+            )
+        ]
+
+        for terminal in terminalCases {
+            let harness = ClientHarness(socketCount: 2)
+            var states: [CompanionConnectionState] = []
+            var cancellationObservedByCallback: [Int] = []
+            harness.client.onState = { state in
+                states.append(state)
+                guard state == terminal.expected else { return }
+                cancellationObservedByCallback.append(harness.sockets[0].cancelCount)
+                harness.client.startRide()
+            }
+            harness.connect(token: "account-a")
+            harness.client.startRide()
+            harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+            harness.sockets[0].deliver(.string(terminal.message))
+
+            XCTAssertEqual(cancellationObservedByCallback, [1], "terminal callback must observe retired transport")
+            XCTAssertEqual(harness.sockets[0].cancelCount, 1)
+            XCTAssertEqual(harness.sockets[0].pendingReceiveCount, 0)
+            XCTAssertEqual(harness.requests.count, 1, "Start cannot reuse the terminal account configuration")
+            XCTAssertTrue(harness.scheduled.isEmpty)
+
+            harness.sockets[0].refailLast(TestError.transport)
+            harness.sockets[0].completeSend(at: 0, error: TestError.transport)
+            harness.sockets[0].redeliverLast(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+            XCTAssertEqual(states.last, terminal.expected)
+            XCTAssertTrue(harness.scheduled.isEmpty)
+            XCTAssertEqual(harness.sockets[0].cancelCount, 1)
+
+            harness.client.startRide()
+            XCTAssertEqual(harness.requests.count, 1)
+            harness.client.connect(
+                relayURL: "wss://relay.example/agent",
+                sessionToken: "account-b",
+                allowSelfSignedTLS: false
+            )
+            XCTAssertEqual(harness.requests.count, 2)
+            XCTAssertEqual(harness.sockets[1].resumeCount, 1)
+            XCTAssertEqual(states.last, .connecting)
+        }
+    }
+
+    func testHTTP401RetiresAccountConfigurationBeforeAuthCallback() {
+        let harness = ClientHarness(socketCount: 2)
+        var states: [CompanionConnectionState] = []
+        harness.client.onState = { state in
+            states.append(state)
+            guard state == .failed(code: "auth", detail: "Authentication failed (HTTP 401).") else { return }
+            harness.client.startRide()
+        }
+        harness.connect(token: "rejected-account")
+        harness.sockets[0].httpStatusCode = 401
+
+        harness.sockets[0].failReceive(TestError.transport)
+
+        XCTAssertEqual(
+            states.last,
+            .failed(code: "auth", detail: "Authentication failed (HTTP 401).")
+        )
+        XCTAssertEqual(harness.sockets[0].cancelCount, 1)
+        XCTAssertEqual(harness.requests.count, 1, "auth callback Start cannot reopen the rejected account")
+        XCTAssertTrue(harness.scheduled.isEmpty)
+
+        harness.client.connect(
+            relayURL: "wss://relay.example/agent",
+            sessionToken: "account-b",
+            allowSelfSignedTLS: false
+        )
+        XCTAssertEqual(harness.requests.count, 2)
+        XCTAssertEqual(harness.sockets[1].resumeCount, 1)
+    }
+
+    func testReentrantExplicitConnectFromTerminalCallbackOwnsReplacementTransport() {
+        for message in [
+            "{\"type\":\"companion.error\",\"code\":\"auth\",\"detail\":\"expired\"}",
+            "{\"type\":\"companion.status\",\"state\":\"unpaired\"}"
+        ] {
+            let harness = ClientHarness(socketCount: 2)
+            var didReplace = false
+            var states: [CompanionConnectionState] = []
+            harness.client.onState = { state in
+                states.append(state)
+                guard !didReplace,
+                      state == .unpaired || state == .failed(code: "auth", detail: "expired") else {
+                    return
+                }
+                didReplace = true
+                harness.client.connect(
+                    relayURL: "wss://relay.example/agent",
+                    sessionToken: "account-b",
+                    allowSelfSignedTLS: false
+                )
+            }
+            harness.connect(token: "account-a")
+            harness.sockets[0].deliver(.string(message))
+
+            XCTAssertEqual(harness.requests.count, 2)
+            XCTAssertEqual(harness.sockets[0].cancelCount, 1)
+            XCTAssertEqual(harness.sockets[1].cancelCount, 0)
+            XCTAssertEqual(harness.sockets[1].resumeCount, 1)
+            XCTAssertEqual(harness.sockets[1].pendingReceiveCount, 1)
+            XCTAssertEqual(states.last, .connecting)
+
+            harness.sockets[0].refailLast(TestError.transport)
+            harness.sockets[0].redeliverLast(.string(message))
+            XCTAssertEqual(states.last, .connecting)
+            XCTAssertTrue(harness.scheduled.isEmpty)
+            XCTAssertEqual(harness.sockets[1].cancelCount, 0)
         }
     }
 
@@ -1762,6 +1887,10 @@ private final class FakeCompanionSocket: CompanionSocketTask, CompanionHTTPStatu
 
     func redeliverLast(_ message: URLSessionWebSocketTask.Message) {
         lastReceiveCompletion?(.success(message))
+    }
+
+    func refailLast(_ error: Error) {
+        lastReceiveCompletion?(.failure(error))
     }
 
     func failReceive(_ error: Error) {

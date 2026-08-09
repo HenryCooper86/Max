@@ -60,6 +60,14 @@ type FinishingNavigation = {
   token: symbol;
 };
 
+type OneShotPrompt = {
+  status: "eligible" | "emitting" | "delivered" | "suppressed";
+};
+
+function eligibleOneShot(): OneShotPrompt {
+  return { status: "eligible" };
+}
+
 function copyLocation(state: PhoneLocationState): PhoneLocationState {
   return { ...state };
 }
@@ -106,8 +114,8 @@ export function createRdkNavigationController(options: {
   let lastRerouteSentAt: number | undefined;
   let locationState: PhoneLocationState | undefined;
   let locationUsableForGuidance = false;
-  let offRouteAnnounced = false;
-  let locationLostAnnounced = false;
+  let offRoutePrompt = eligibleOneShot();
+  let locationLostPrompt = eligibleOneShot();
   let finishing: FinishingNavigation | undefined;
   let snapshot: RdkNavigationSnapshot = { phase: "idle" };
 
@@ -144,8 +152,8 @@ export function createRdkNavigationController(options: {
     progress = { ...INITIAL_PROGRESS, firedThresholds: [] };
     reroute = undefined;
     lastRerouteSentAt = undefined;
-    offRouteAnnounced = false;
-    locationLostAnnounced = false;
+    offRoutePrompt = eligibleOneShot();
+    locationLostPrompt = eligibleOneShot();
     locationUsableForGuidance = false;
     finishing = undefined;
   }
@@ -240,6 +248,40 @@ export function createRdkNavigationController(options: {
     }
     if (revision !== expectedRevision || !ownsRoute(expectedGeneration, route)) return false;
     send({ type: "nav.prompt", promptId, routeCommandId: route.commandId, kind });
+    return revision === expectedRevision;
+  }
+
+  function currentOneShot(kind: "offRoute" | "locationLost"): OneShotPrompt {
+    return kind === "offRoute" ? offRoutePrompt : locationLostPrompt;
+  }
+
+  function emitOneShotPrompt(
+    kind: "offRoute" | "locationLost",
+    owner: OneShotPrompt,
+    route: NavRouteEvent,
+    expectedGeneration: number,
+    expectedRevision: number
+  ): boolean {
+    if (owner.status !== "eligible" || currentOneShot(kind) !== owner) return revision === expectedRevision;
+    owner.status = "emitting";
+    const allowed = promptAllowed();
+    if (!allowed) {
+      if (currentOneShot(kind) === owner) owner.status = "suppressed";
+      return revision === expectedRevision;
+    }
+    if (!ownsRoute(expectedGeneration, route) || currentOneShot(kind) !== owner) return false;
+
+    let promptId: string;
+    try {
+      promptId = randomId();
+    } catch {
+      if (currentOneShot(kind) === owner) owner.status = "suppressed";
+      return revision === expectedRevision;
+    }
+    if (!ownsRoute(expectedGeneration, route) || currentOneShot(kind) !== owner) return false;
+
+    const sent = send({ type: "nav.prompt", promptId, routeCommandId: route.commandId, kind });
+    if (currentOneShot(kind) === owner) owner.status = sent ? "delivered" : "suppressed";
     return revision === expectedRevision;
   }
 
@@ -399,8 +441,8 @@ export function createRdkNavigationController(options: {
     activeRoute = copyRoute(event);
     progress = { ...INITIAL_PROGRESS, firedThresholds: [] };
     reroute = undefined;
-    offRouteAnnounced = false;
-    locationLostAnnounced = false;
+    offRoutePrompt = eligibleOneShot();
+    locationLostPrompt = eligibleOneShot();
     locationUsableForGuidance = false;
     finishing = undefined;
     const route = activeRoute;
@@ -420,8 +462,8 @@ export function createRdkNavigationController(options: {
       return;
     }
 
-    locationLostAnnounced = true;
-    if (!emitLifecyclePrompt("locationLost", route, generation, expectedRevision)) return;
+    const owner = locationLostPrompt;
+    if (!emitOneShotPrompt("locationLost", owner, route, generation, expectedRevision)) return;
     publish(baseRouteSnapshot("paused"), expectedRevision);
   }
 
@@ -495,7 +537,7 @@ export function createRdkNavigationController(options: {
       if (!route || finishing || !locationUsableForGuidance) return;
       const expectedRevision = ++revision;
       const expectedGeneration = generation;
-      locationLostAnnounced = false;
+      locationLostPrompt = eligibleOneShot();
       const maneuverIndex = progress.maneuverIndex;
       const update = step(fix.position, route, progress);
       progress = update.progress;
@@ -526,9 +568,9 @@ export function createRdkNavigationController(options: {
       }
 
       if (update.offRoute) {
-        if (!offRouteAnnounced) {
-          offRouteAnnounced = true;
-          if (!emitLifecyclePrompt("offRoute", route, expectedGeneration, expectedRevision)) return;
+        if (offRoutePrompt.status === "eligible") {
+          const owner = offRoutePrompt;
+          if (!emitOneShotPrompt("offRoute", owner, route, expectedGeneration, expectedRevision)) return;
         }
         if (!maybeReroute(fix, expectedGeneration, route, expectedRevision)) return;
         if (revision !== expectedRevision || !ownsRoute(expectedGeneration, route)) return;
@@ -536,13 +578,18 @@ export function createRdkNavigationController(options: {
         return;
       }
 
-      offRouteAnnounced = false;
+      offRoutePrompt = eligibleOneShot();
       if (revision !== expectedRevision || !ownsRoute(expectedGeneration, route)) return;
       publish(updateSnapshot(update, reroute ? "rerouting" : "guiding"), expectedRevision);
     },
 
     handleLocationState(state): void {
       if (closed) return;
+      if (finishing) {
+        locationState = copyLocation(state);
+        locationUsableForGuidance = state.usable;
+        return;
+      }
       const expectedRevision = ++revision;
       locationState = copyLocation(state);
       locationUsableForGuidance = state.usable;
@@ -560,9 +607,9 @@ export function createRdkNavigationController(options: {
         return;
       }
       const expectedGeneration = generation;
-      if (!locationLostAnnounced) {
-        locationLostAnnounced = true;
-        if (!emitLifecyclePrompt("locationLost", route, expectedGeneration, expectedRevision)) return;
+      if (locationLostPrompt.status === "eligible") {
+        const owner = locationLostPrompt;
+        if (!emitOneShotPrompt("locationLost", owner, route, expectedGeneration, expectedRevision)) return;
       }
       if (revision !== expectedRevision || !ownsRoute(expectedGeneration, route)) return;
       publish({ ...snapshot, phase: "paused", location: copyLocation(state) }, expectedRevision);

@@ -673,6 +673,198 @@ describe("RDK route guidance and rerouting", () => {
     expect(h.states.at(-1)).toEqual({ phase: "idle" });
   });
 
+  it.each(["canPrompt", "randomId", "sendEvent"] as const)(
+    "delivers arrived exactly once when %s reenters with unusable then usable location",
+    async (boundary) => {
+      const owner: { controller?: ReturnType<typeof createRdkNavigationController> } = {};
+      let enabled = false;
+      let reentered = false;
+      const reenter = () => {
+        if (!enabled || reentered) return;
+        reentered = true;
+        owner.controller?.handleLocationState({ connection: "stale", usable: false, reason: "stale" });
+        owner.controller?.handleLocationState(USABLE_LOCATION);
+      };
+      const h = harness({
+        canPromptHook: boundary === "canPrompt" ? reenter : undefined,
+        randomIdHook: boundary === "randomId" ? reenter : undefined,
+        sendEvent:
+          boundary === "sendEvent"
+            ? (event) => event.type === "nav.prompt" && event.kind === "arrived" && reenter()
+            : undefined
+      });
+      owner.controller = h.controller;
+      await startGuiding(h);
+      h.events.length = 0;
+      enabled = true;
+      h.controller.handleFix(fix(2, 31.2398));
+      expect(h.events.filter((event) => event.type === "nav.prompt" && event.kind === "arrived")).toHaveLength(1);
+      expect(h.events.filter((event) => event.type === "nav.prompt" && event.kind === "locationLost")).toHaveLength(0);
+      expect(h.states.at(-1)).toEqual({ phase: "idle", location: USABLE_LOCATION });
+    }
+  );
+
+  it.each(["canPrompt", "randomId", "sendEvent"] as const)(
+    "delivers rerouteFailed exactly once when %s reenters with unusable then usable location",
+    async (boundary) => {
+      const owner: { controller?: ReturnType<typeof createRdkNavigationController> } = {};
+      let enabled = false;
+      let reentered = false;
+      const reenter = () => {
+        if (!enabled || reentered) return;
+        reentered = true;
+        owner.controller?.handleLocationState({ connection: "stopped", usable: false, reason: "stopped" });
+        owner.controller?.handleLocationState(USABLE_LOCATION);
+      };
+      const h = harness({
+        canPromptHook: boundary === "canPrompt" ? reenter : undefined,
+        randomIdHook: boundary === "randomId" ? reenter : undefined,
+        sendEvent:
+          boundary === "sendEvent"
+            ? (event) => event.type === "nav.prompt" && event.kind === "rerouteFailed" && reenter()
+            : undefined
+      });
+      owner.controller = h.controller;
+      await startGuiding(h);
+      h.controller.handleFix(fix(2, 31.232, 121.471));
+      h.events.length = 0;
+      enabled = true;
+      h.controller.handleError({ type: "nav.error", commandId: "prompt-2", code: "route.unavailable" });
+      expect(h.events.filter((event) => event.type === "nav.prompt" && event.kind === "rerouteFailed")).toHaveLength(1);
+      expect(h.events.filter((event) => event.type === "nav.prompt" && event.kind === "locationLost")).toHaveLength(0);
+      expect(h.states.at(-1)).toEqual({ phase: "idle", location: USABLE_LOCATION });
+    }
+  );
+
+  it.each(["canPrompt", "randomId", "sendEvent"] as const)(
+    "delivers offRoute exactly once when %s reenters with a newer off-route fix",
+    async (boundary) => {
+      const owner: { controller?: ReturnType<typeof createRdkNavigationController> } = {};
+      let enabled = false;
+      let reentered = false;
+      const reenter = () => {
+        if (!enabled || reentered) return;
+        reentered = true;
+        owner.controller?.handleFix(fix(3, 31.2321, 121.471));
+      };
+      const h = harness({
+        canPromptHook: boundary === "canPrompt" ? reenter : undefined,
+        randomIdHook: boundary === "randomId" ? reenter : undefined,
+        sendEvent:
+          boundary === "sendEvent"
+            ? (event) => event.type === "nav.prompt" && event.kind === "offRoute" && reenter()
+            : undefined
+      });
+      owner.controller = h.controller;
+      await startGuiding(h);
+      h.events.length = 0;
+      enabled = true;
+      h.controller.handleFix(fix(2, 31.232, 121.471));
+      expect(h.events.filter((event) => event.type === "nav.prompt" && event.kind === "offRoute")).toHaveLength(1);
+      expect(h.events.filter((event) => event.type === "nav.request")).toHaveLength(1);
+      expect(h.states.at(-1)).toMatchObject({ phase: "rerouting", offRoute: true });
+      expect(h.states.at(-1)!.remainingMeters).toBeLessThan(880);
+    }
+  );
+
+  it.each(["canPrompt", "randomId", "sendEvent"] as const)(
+    "delivers locationLost exactly once when %s reenters with a newer unusable state",
+    async (boundary) => {
+      const owner: { controller?: ReturnType<typeof createRdkNavigationController> } = {};
+      let enabled = false;
+      let reentered = false;
+      const reenter = () => {
+        if (!enabled || reentered) return;
+        reentered = true;
+        owner.controller?.handleLocationState({ connection: "stopped", usable: false, reason: "stopped" });
+      };
+      const h = harness({
+        canPromptHook: boundary === "canPrompt" ? reenter : undefined,
+        randomIdHook: boundary === "randomId" ? reenter : undefined,
+        sendEvent:
+          boundary === "sendEvent"
+            ? (event) => event.type === "nav.prompt" && event.kind === "locationLost" && reenter()
+            : undefined
+      });
+      owner.controller = h.controller;
+      await startGuiding(h);
+      h.events.length = 0;
+      enabled = true;
+      h.controller.handleLocationState({ connection: "stale", usable: false, reason: "stale" });
+      expect(h.events.filter((event) => event.type === "nav.prompt" && event.kind === "locationLost")).toHaveLength(1);
+      expect(h.states.at(-1)).toMatchObject({ phase: "paused", location: { usable: false, reason: "stopped" } });
+    }
+  );
+
+  it("suppresses only the offRoute one-shot when canPrompt is false during nested off-route guidance", async () => {
+    const owner: { controller?: ReturnType<typeof createRdkNavigationController> } = {};
+    let enabled = false;
+    let reentered = false;
+    const h = harness({
+      canPrompt: false,
+      canPromptHook: () => {
+        if (!enabled || reentered) return;
+        reentered = true;
+        owner.controller?.handleFix(fix(3, 31.2321, 121.471));
+      }
+    });
+    owner.controller = h.controller;
+    await startGuiding(h);
+    h.events.length = 0;
+    enabled = true;
+    h.controller.handleFix(fix(2, 31.232, 121.471));
+    h.setCanPrompt(true);
+    h.controller.handleFix(fix(4, 31.2322, 121.471));
+    h.controller.handleLocationState({ connection: "stale", usable: false, reason: "stale" });
+    expect(h.events.filter((event) => event.type === "nav.prompt" && event.kind === "offRoute")).toHaveLength(0);
+    expect(h.events.filter((event) => event.type === "nav.prompt" && event.kind === "locationLost")).toHaveLength(1);
+    expect(h.events.filter((event) => event.type === "nav.request")).toHaveLength(1);
+  });
+
+  it("suppresses one locationLost episode when canPrompt is false and allows a later episode", async () => {
+    const owner: { controller?: ReturnType<typeof createRdkNavigationController> } = {};
+    let enabled = false;
+    let reentered = false;
+    const h = harness({
+      canPrompt: false,
+      canPromptHook: () => {
+        if (!enabled || reentered) return;
+        reentered = true;
+        owner.controller?.handleLocationState({ connection: "stopped", usable: false, reason: "stopped" });
+      }
+    });
+    owner.controller = h.controller;
+    await startGuiding(h);
+    h.events.length = 0;
+    enabled = true;
+    h.controller.handleLocationState({ connection: "stale", usable: false, reason: "stale" });
+    h.setCanPrompt(true);
+    h.controller.handleLocationState({ connection: "unpaired", usable: false, reason: "unpaired" });
+    expect(h.events.filter((event) => event.type === "nav.prompt" && event.kind === "locationLost")).toHaveLength(0);
+
+    h.controller.handleLocationState(USABLE_LOCATION);
+    h.controller.handleFix(fix(2, 31.23));
+    h.controller.handleLocationState({ connection: "stale", usable: false, reason: "stale" });
+    expect(h.events.filter((event) => event.type === "nav.prompt" && event.kind === "locationLost")).toHaveLength(1);
+  });
+
+  it.each(["arrived", "rerouteFailed"] as const)("suppresses terminal %s when canPrompt is false", async (kind) => {
+    const h = await startGuiding();
+    h.events.length = 0;
+    h.setCanPrompt(false);
+    if (kind === "arrived") {
+      h.controller.handleFix(fix(2, 31.2398));
+    } else {
+      h.setCanPrompt(true);
+      h.controller.handleFix(fix(2, 31.232, 121.471));
+      h.events.length = 0;
+      h.setCanPrompt(false);
+      h.controller.handleError({ type: "nav.error", commandId: "prompt-2", code: "route.unavailable" });
+    }
+    expect(h.events.filter((event) => event.type === "nav.prompt")).toHaveLength(0);
+    expect(h.states.at(-1)).toEqual({ phase: "idle" });
+  });
+
   it("retains consumed progress while prompt transport is unavailable", async () => {
     const h = await startGuiding(harness({ canPrompt: false }));
     h.events.length = 0;

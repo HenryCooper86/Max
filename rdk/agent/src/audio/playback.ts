@@ -73,7 +73,13 @@ export function createPlayback(options: PlaybackOptions): Playback {
 
   // Audio waiting to be handed to aplay, and the wall-clock time at which
   // everything already handed over finishes playing.
-  let queue: Array<{ pcm: Int16Array; rank: number }> = [];
+  type QueuedChunk = {
+    pcm: Int16Array;
+    rank: number;
+    outcome: "pending" | "accepted" | "rejected";
+  };
+
+  let queue: QueuedChunk[] = [];
   let drainedUntil = 0;
   let pumping = false;
   // While a hazard alert is playing, voice may never cut it off — but a
@@ -88,6 +94,9 @@ export function createPlayback(options: PlaybackOptions): Playback {
   // Incremented by holdPriority/stop so a scheduled release from a previous
   // alert can recognise itself as stale and do nothing.
   let releaseGeneration = 0;
+  // Separate from alert-release ownership: this invalidates synchronous work
+  // that captured a child or chunk before flush/stop/preemption/death.
+  let operationGeneration = 0;
   let referenceResetGeneration = 0;
   // Synchronous AlertPlayer calls normally nest only through injected I/O
   // callbacks. Keeping those acquisitions explicit lets an ignored lower
@@ -104,12 +113,25 @@ export function createPlayback(options: PlaybackOptions): Playback {
     return priorityHeld && rank < heldRank;
   }
 
+  function reject(chunk: QueuedChunk): void {
+    if (chunk.outcome === "pending") chunk.outcome = "rejected";
+  }
+
+  function rejectQueue(): void {
+    for (const chunk of queue) reject(chunk);
+    queue = [];
+    queuedSamples = 0;
+  }
+
   function discardSuppressedQueue(): void {
     if (!priorityHeld || queue.length === 0) return;
-    const kept: Array<{ pcm: Int16Array; rank: number }> = [];
+    const kept: QueuedChunk[] = [];
     let keptSamples = 0;
     for (const chunk of queue) {
-      if (chunk.rank < heldRank) continue;
+      if (chunk.rank < heldRank) {
+        reject(chunk);
+        continue;
+      }
       kept.push(chunk);
       keptSamples += chunk.pcm.length;
     }
@@ -122,33 +144,78 @@ export function createPlayback(options: PlaybackOptions): Playback {
     referenceResetGeneration += 1;
   }
 
+  function ownsOperation(expected: number, target: ChildProcessLike, chunk?: QueuedChunk): boolean {
+    return (
+      operationGeneration === expected &&
+      child === target &&
+      (chunk === undefined || (chunk.outcome !== "rejected" && !suppressed(chunk.rank)))
+    );
+  }
+
   function pump(): void {
     pumping = false;
     discardSuppressedQueue();
     if (queue.length === 0) return;
+    const expectedOperation = operationGeneration;
     const target = ensure();
+    if (!ownsOperation(expectedOperation, target)) {
+      discardSuppressedQueue();
+      return;
+    }
     const at = now();
+    if (!ownsOperation(expectedOperation, target)) {
+      discardSuppressedQueue();
+      return;
+    }
+    discardSuppressedQueue();
+    if (queue.length === 0) return;
     if (drainedUntil < at) drainedUntil = at;
 
     while (queue.length > 0 && drainedUntil - at < MAX_QUEUE_MS) {
       discardSuppressedQueue();
       const queued = queue.shift();
       if (!queued) break;
-      const { pcm: chunk, rank } = queued;
+      const { pcm: chunk } = queued;
       queuedSamples -= chunk.length;
-      if (suppressed(rank)) continue;
+      if (!ownsOperation(expectedOperation, target, queued)) {
+        reject(queued);
+        break;
+      }
       // The reference goes out here, alongside the write to the DAC, so APM is
       // told about audio when it plays rather than when it was received.
       const resetBeforeWrite = referenceResetGeneration;
-      options.reference?.write(chunk);
-      if (suppressed(rank)) {
+      try {
+        options.reference?.write(chunk);
+      } catch (error) {
+        reject(queued);
+        if (referenceResetGeneration === resetBeforeWrite) resetReference();
+        throw error;
+      }
+      if (!ownsOperation(expectedOperation, target, queued)) {
+        reject(queued);
         // AlertPlayer normally flushed before taking its hold. If a hold began
         // directly inside the reference callback, add the same in-band reset
         // so APM never models PCM that the DAC did not receive.
         if (referenceResetGeneration === resetBeforeWrite) resetReference();
-        continue;
+        break;
       }
-      target.stdin?.write(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength));
+      const stdin = target.stdin;
+      if (!stdin || !ownsOperation(expectedOperation, target, queued)) {
+        reject(queued);
+        if (referenceResetGeneration === resetBeforeWrite) resetReference();
+        break;
+      }
+      try {
+        stdin.write(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength));
+      } catch (error) {
+        reject(queued);
+        if (referenceResetGeneration === resetBeforeWrite) resetReference();
+        throw error;
+      }
+      queued.outcome = "accepted";
+      // stdin.write is observable and may reenter flush/stop/child lifecycle.
+      // The handoff remains accepted, but stale timing must not survive it.
+      if (!ownsOperation(expectedOperation, target)) break;
       drainedUntil += (chunk.length / CAPTURE_RATE) * 1000;
     }
 
@@ -160,8 +227,8 @@ export function createPlayback(options: PlaybackOptions): Playback {
 
   function ensure(): ChildProcessLike {
     if (!child) {
+      const expectedOperation = operationGeneration;
       const spawned = spawn("aplay", playbackArgs(options.device));
-      child = spawned;
       // Barge-in SIGKILLs this child, so a write already in flight lands on a
       // dead pipe. Node raises 'error' on the stdin socket, and with no listener
       // that is an unhandled 'error' event — which crashed the agent the first
@@ -174,13 +241,22 @@ export function createPlayback(options: PlaybackOptions): Playback {
       spawned.on("exit", (code, signal) => {
         if (child !== spawned) return;
         console.log(`[playback] aplay exited code=${code} signal=${signal}; respawning on next write`);
+        operationGeneration += 1;
         child = null;
       });
       spawned.on("error", (error) => {
         if (child !== spawned) return;
         console.log(`[playback] aplay failed to start: ${error.message}`);
+        operationGeneration += 1;
         child = null;
       });
+      // spawn is an injected/external boundary. A synchronous stop/flush or a
+      // reentrant write may have installed a newer owner before it returned.
+      if (operationGeneration !== expectedOperation || child !== null) {
+        spawned.kill("SIGTERM");
+        return child ?? spawned;
+      }
+      child = spawned;
       upsample = createUpsampler2x();
     }
     return child;
@@ -191,19 +267,21 @@ export function createPlayback(options: PlaybackOptions): Playback {
     write(pcm: Int16Array, rank?: number): boolean {
       const effectiveRank = normalizedRank(rank, 0);
       if (suppressed(effectiveRank)) return false;
-      ensure();
+      const expectedOperation = operationGeneration;
+      const target = ensure();
       // spawn() is injectable and can reenter alert handling. Once a higher
       // hold exists, this write must stop before it mutates DSP or the queue.
-      if (suppressed(effectiveRank)) return false;
+      if (!ownsOperation(expectedOperation, target) || suppressed(effectiveRank)) return false;
       // Post-limiter, so the canceller models exactly what the DAC receives.
       // Tapping before it would hide the limiter's non-linearity from a filter
       // that assumes the echo path is linear, and cancellation would fall apart
       // precisely when Max is loudest.
       const processed = applySoftLimit(upsample(pcm), options.gain, options.threshold);
-      queue.push({ pcm: processed, rank: effectiveRank });
+      const queued: QueuedChunk = { pcm: processed, rank: effectiveRank, outcome: "pending" };
+      queue.push(queued);
       queuedSamples += processed.length;
       pump();
-      return true;
+      return queued.outcome !== "rejected";
     },
 
     /**
@@ -224,16 +302,17 @@ export function createPlayback(options: PlaybackOptions): Playback {
       // reached the speaker.
       // Audio still queued here was never handed to aplay, so it will never be
       // heard and APM must not be told about it.
-      queue = [];
-      queuedSamples = 0;
+      const flushOperation = ++operationGeneration;
+      rejectQueue();
       drainedUntil = 0;
       resetReference();
       // The reference sink is an injected boundary and may synchronously
       // start an alert. Reapply strict-higher-only preemption before killing
       // the child so an older rank-0 flush cannot cut that new hazard.
-      if (priorityHeld && rank <= heldRank) return;
-      child?.kill("SIGKILL");
+      if (operationGeneration !== flushOperation || (priorityHeld && rank <= heldRank)) return;
+      const target = child;
       child = null;
+      target?.kill("SIGKILL");
     },
 
     holdPriority(rank?: number): void {
@@ -304,12 +383,13 @@ export function createPlayback(options: PlaybackOptions): Playback {
       priorityHeld = false;
       heldRank = 0;
       releaseGeneration += 1;
+      operationGeneration += 1;
       holdClaims.length = 0;
-      queue = [];
-      queuedSamples = 0;
+      rejectQueue();
       drainedUntil = 0;
-      child?.kill("SIGTERM");
+      const target = child;
       child = null;
+      target?.kill("SIGTERM");
     }
   };
 }

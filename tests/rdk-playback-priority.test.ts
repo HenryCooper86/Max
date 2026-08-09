@@ -5,13 +5,19 @@ import { createPlayback } from "../rdk/agent/src/audio/playback";
 function fakeChild() {
   const stdin = new PassThrough();
   const kill = vi.fn();
+  const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
   return {
     stdin,
     kill,
     child: {
       stdin,
       kill,
-      on: () => undefined
+      on(event: string, listener: (...args: unknown[]) => void) {
+        listeners.set(event, [...(listeners.get(event) ?? []), listener]);
+      },
+      emit(event: string, ...args: unknown[]) {
+        for (const listener of listeners.get(event) ?? []) listener(...args);
+      }
     }
   };
 }
@@ -215,6 +221,176 @@ describe("ranked playback writes", () => {
 
     expect(playback.priorityRank()).toBe(2);
     expect(fake.kill).not.toHaveBeenCalled();
+  });
+
+  it("invalidates a chunk when its reference callback flushes and leaves no stale DAC or drain state", () => {
+    const children: ReturnType<typeof fakeChild>[] = [];
+    const timers: Array<() => void> = [];
+    const order: string[] = [];
+    let flushInsideReference = true;
+    const playback = createPlayback({
+      device: "plughw:0,0",
+      spawn: () => {
+        const fake = fakeChild();
+        fake.kill.mockImplementation(() => order.push("kill"));
+        children.push(fake);
+        return fake.child;
+      },
+      now: () => 0,
+      schedule: (fn) => {
+        timers.push(fn);
+        return 0 as unknown as NodeJS.Timeout;
+      },
+      reference: {
+        write: () => {
+          order.push("reference:audio");
+          if (!flushInsideReference) return;
+          flushInsideReference = false;
+          playback.flush();
+        },
+        flush: () => order.push("reference:reset"),
+        close: () => undefined
+      }
+    });
+
+    expect(playback.write(new Int16Array(12_000))).toBe(false);
+    expect(order).toEqual(["reference:audio", "reference:reset", "kill"]);
+    expect(children[0]!.stdin.readableLength).toBe(0);
+    expect(playback.priorityRank()).toBe(0);
+
+    expect(playback.write(new Int16Array(480))).toBe(true);
+    expect(children).toHaveLength(2);
+    expect(children[1]!.stdin.readableLength).toBe(1_920);
+    expect(timers).toEqual([]);
+  });
+
+  it.each(["stop", "exit", "error"] as const)(
+    "invalidates a referenced chunk when the active child receives a reentrant %s",
+    (boundary) => {
+      const children: ReturnType<typeof fakeChild>[] = [];
+      let invalidate = true;
+      let playback: ReturnType<typeof createPlayback>;
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      try {
+        playback = createPlayback({
+          device: "plughw:0,0",
+          spawn: () => {
+            const fake = fakeChild();
+            children.push(fake);
+            return fake.child;
+          },
+          now: () => 0,
+          reference: {
+            write: () => {
+              if (!invalidate) return;
+              invalidate = false;
+              if (boundary === "stop") playback.stop();
+              if (boundary === "exit") children[0]!.child.emit("exit", 1, null);
+              if (boundary === "error") children[0]!.child.emit("error", new Error("aplay failed"));
+            },
+            flush: () => undefined,
+            close: () => undefined
+          }
+        });
+
+        expect(playback.write(new Int16Array(12_000))).toBe(false);
+        expect(children[0]!.stdin.readableLength).toBe(0);
+        expect(playback.write(new Int16Array(480))).toBe(true);
+        expect(children).toHaveLength(2);
+        expect(children[1]!.stdin.readableLength).toBe(1_920);
+      } finally {
+        log.mockRestore();
+      }
+    }
+  );
+
+  it("returns false with zero sink effects when now starts critical priority before handoff", () => {
+    const fake = fakeChild();
+    const reference: number[] = [];
+    const timers: Array<() => void> = [];
+    let startCritical = true;
+    const playback = createPlayback({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      now: () => {
+        if (startCritical) {
+          startCritical = false;
+          playback.holdPriority(2);
+          return 500;
+        }
+        return 0;
+      },
+      schedule: (fn) => {
+        timers.push(fn);
+        return 0 as unknown as NodeJS.Timeout;
+      },
+      reference: {
+        write: (pcm) => reference.push(pcm.length),
+        flush: () => undefined,
+        close: () => undefined
+      }
+    });
+
+    expect(playback.write(new Int16Array(12_000))).toBe(false);
+    expect(playback.priorityRank()).toBe(2);
+    expect(reference).toEqual([]);
+    expect(fake.stdin.readableLength).toBe(0);
+
+    playback.releasePriority();
+    expect(playback.priorityRank()).toBe(0);
+    expect(timers).toEqual([]);
+    expect(playback.write(new Int16Array(480))).toBe(true);
+    expect(fake.stdin.readableLength).toBe(1_920);
+  });
+
+  it("does not adopt a child whose spawn boundary was invalidated by stop", () => {
+    const children = [fakeChild(), fakeChild()];
+    const holder: { playback?: ReturnType<typeof createPlayback> } = {};
+    let spawns = 0;
+    let stopDuringSpawn = true;
+    const playback = createPlayback({
+      device: "plughw:0,0",
+      spawn: () => {
+        const spawned = children[spawns++]!;
+        if (stopDuringSpawn) {
+          stopDuringSpawn = false;
+          holder.playback!.stop();
+        }
+        return spawned.child;
+      },
+      now: () => 0
+    });
+    holder.playback = playback;
+
+    expect(playback.write(new Int16Array(480))).toBe(false);
+    expect(children[0]!.stdin.readableLength).toBe(0);
+    expect(children[0]!.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(playback.write(new Int16Array(480))).toBe(true);
+    expect(spawns).toBe(2);
+    expect(children[1]!.stdin.readableLength).toBe(1_920);
+  });
+
+  it("preserves a higher-ranked handoff when a lower hold starts at the reference boundary", () => {
+    const fake = fakeChild();
+    let holdCaution = true;
+    const playback = createPlayback({
+      device: "plughw:0,0",
+      spawn: () => fake.child,
+      now: () => 0,
+      reference: {
+        write: () => {
+          if (!holdCaution) return;
+          holdCaution = false;
+          playback.holdPriority(1);
+        },
+        flush: () => undefined,
+        close: () => undefined
+      }
+    });
+
+    expect(playback.write(new Int16Array(480), 2)).toBe(true);
+    expect(fake.stdin.readableLength).toBe(1_920);
+    expect(playback.priorityRank()).toBe(1);
   });
 });
 

@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { createAlertPlayer, readWavMono24k } from "../rdk/agent/src/audio/alert-player";
+import { createPlayback } from "../rdk/agent/src/audio/playback";
 
 function wav(samples: number, rate = 24000, channels = 1, bits = 16): Buffer {
   const data = Buffer.alloc(samples * 2);
@@ -58,6 +60,67 @@ function fakePlayback(accept: (pcm: Int16Array, rank: number | undefined) => boo
       order.push("release");
     }
   };
+}
+
+function playbackChild() {
+  const stdin = new PassThrough();
+  const kill = vi.fn();
+  const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+  return {
+    stdin,
+    kill,
+    child: {
+      stdin,
+      kill,
+      on(event: string, listener: (...args: unknown[]) => void) {
+        listeners.set(event, [...(listeners.get(event) ?? []), listener]);
+      }
+    }
+  };
+}
+
+async function nestedRealAlerts(cautionSamples: number, triggerReferenceWrite: number) {
+  const dir = mkdtempSync(join(tmpdir(), "alerts-ranked-"));
+  writeFileSync(join(dir, "tailgating.wav"), wav(cautionSamples));
+  writeFileSync(join(dir, "forward_collision.wav"), wav(480));
+  const children: ReturnType<typeof playbackChild>[] = [];
+  const timers: Array<() => void> = [];
+  const nested: {
+    player?: ReturnType<typeof createAlertPlayer>;
+    result?: Promise<number | null>;
+  } = {};
+  let referenceWrites = 0;
+  let triggered = false;
+  const playback = createPlayback({
+    device: "plughw:0,0",
+    spawn: () => {
+      const child = playbackChild();
+      children.push(child);
+      return child.child;
+    },
+    now: () => 0,
+    schedule: (fn) => {
+      timers.push(fn);
+      return 0 as unknown as NodeJS.Timeout;
+    },
+    reference: {
+      write: () => {
+        referenceWrites += 1;
+        if (triggered || referenceWrites !== triggerReferenceWrite) return;
+        triggered = true;
+        nested.result = nested.player!.play("forward_collision", "critical");
+      },
+      flush: () => undefined,
+      close: () => undefined
+    }
+  });
+  let cautionClock = 0;
+  let criticalClock = 0;
+  nested.player = createAlertPlayer({ dir, playback, now: () => (criticalClock += 5) });
+  const caution = createAlertPlayer({ dir, playback, now: () => (cautionClock += 5) });
+  const cautionResult = await caution.play("tailgating", "caution");
+  const criticalResult = await nested.result;
+  return { playback, children, timers, cautionResult, criticalResult };
 }
 
 describe("readWavMono24k", () => {
@@ -191,5 +254,29 @@ describe("createAlertPlayer", () => {
     expect(playback.writeRanks).toEqual([1, 1]);
     expect(playback.accepted).toEqual([]);
     expect(playback.order.at(-1)).toBe("release");
+  });
+
+  it("reports null when a nested real critical alert invalidates caution before its first sink handoff", async () => {
+    const h = await nestedRealAlerts(480, 1);
+    expect(h.criticalResult).not.toBeNull();
+    expect(h.cautionResult).toBeNull();
+    expect(h.children).toHaveLength(2);
+    expect(h.children[0]!.kill).toHaveBeenCalledWith("SIGKILL");
+    expect(h.children[0]!.stdin.readableLength).toBe(0);
+    expect(h.children[1]!.stdin.readableLength).toBe(1_920);
+    expect(h.playback.priorityRank()).toBe(2);
+    expect(h.timers).toHaveLength(1);
+    h.timers[0]!();
+    expect(h.playback.priorityRank()).toBe(0);
+  });
+
+  it("retains a non-null result only when caution handed off a chunk before nested critical preemption", async () => {
+    const h = await nestedRealAlerts(960, 2);
+    expect(h.criticalResult).not.toBeNull();
+    expect(h.cautionResult).not.toBeNull();
+    expect(h.children[0]!.stdin.readableLength).toBe(1_920);
+    expect(h.children[1]!.stdin.readableLength).toBe(1_920);
+    expect(h.playback.priorityRank()).toBe(2);
+    expect(h.timers).toHaveLength(1);
   });
 });

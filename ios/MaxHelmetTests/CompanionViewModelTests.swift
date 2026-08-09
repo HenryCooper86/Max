@@ -1631,6 +1631,221 @@ final class CompanionViewModelTests: XCTestCase {
         }
     }
 
+    func testPublishedStateReentrancyCommitsNewestAccountAcrossInjectedStartMatrix() {
+        let boundaries = ["connect", "client-start", "location-start"]
+        let states: [CompanionConnectionState] = [
+            .failed(code: "connection", detail: "closed"),
+            .failed(code: "configuration", detail: "invalid"),
+            .failed(code: "auth", detail: "expired"),
+            .unpaired
+        ]
+        let accountIntents = ["logout", "replace-c", "replace-clear"]
+        var activityCount = 0
+
+        for boundary in boundaries {
+            for state in states {
+                for accountIntent in accountIntents {
+                    XCTContext.runActivity(named: "\(boundary)-\(state)-\(accountIntent)") { _ in
+                        activityCount += 1
+                        let harness = Harness()
+                        harness.stream.startResults = [true, true]
+                        harness.stream.permissionOnStart = .precise
+                        harness.client.publish(.paired(deviceId: "rdk", label: nil))
+                        harness.events.removeAll()
+                        harness.secretWrites.removeAll()
+
+                        var interruptedCallback: ((CompanionConnectionState) -> Void)?
+                        var suppliedAccountIntent = false
+                        var suppliedNestedIntent = false
+                        var publishedStates: [CompanionConnectionState] = []
+                        let cancellable = harness.viewModel.$companionState.dropFirst().sink { publishedState in
+                            publishedStates.append(publishedState)
+                            if !suppliedAccountIntent, publishedState == state {
+                                suppliedAccountIntent = true
+                                harness.viewModel.startHelmetRide()
+                                if accountIntent == "logout" {
+                                    harness.viewModel.logout()
+                                } else {
+                                    harness.viewModel.sessionToken = "account-b"
+                                }
+                            } else if suppliedAccountIntent,
+                                      !suppliedNestedIntent,
+                                      accountIntent != "logout",
+                                      publishedState == .signedOut {
+                                suppliedNestedIntent = true
+                                harness.viewModel.startHelmetRide()
+                                harness.viewModel.sessionToken = accountIntent == "replace-c" ? "account-c" : " \n "
+                            }
+                        }
+
+                        let publishInterruption = {
+                            let callback = harness.client.onState
+                            interruptedCallback = callback
+                            callback?(state)
+                        }
+                        switch boundary {
+                        case "connect": harness.client.onConnect = publishInterruption
+                        case "client-start": harness.client.onStart = publishInterruption
+                        default: harness.stream.onStart = publishInterruption
+                        }
+
+                        harness.viewModel.startHelmetRide()
+                        interruptedCallback?(state)
+                        harness.stream.publishFix(self.location(latitude: 31.2))
+
+                        let expectedToken: String
+                        switch accountIntent {
+                        case "logout": expectedToken = ""
+                        case "replace-c": expectedToken = "account-c"
+                        default: expectedToken = " \n "
+                        }
+                        XCTAssertTrue(suppliedAccountIntent)
+                        XCTAssertEqual(harness.viewModel.sessionToken, expectedToken)
+                        XCTAssertEqual(harness.viewModel.companionState, .signedOut)
+                        XCTAssertFalse(harness.viewModel.helmetRideActive)
+                        XCTAssertEqual(harness.stream.stopCount, 1)
+                        XCTAssertEqual(harness.client.stopCount, 1)
+                        XCTAssertEqual(harness.client.disconnectCount, 1)
+                        XCTAssertEqual(harness.client.startCount, boundary == "connect" ? 0 : 1)
+                        XCTAssertEqual(harness.stream.startCount, boundary == "location-start" ? 1 : 0)
+                        XCTAssertTrue(harness.client.fixes.isEmpty)
+                        XCTAssertNil(harness.viewModel.lastForwardedAt)
+                        XCTAssertEqual(publishedStates.filter { $0 == state }.count, 1, "late old-generation duplicate must be stale")
+                        XCTAssertEqual(publishedStates.filter { $0 == .signedOut }.count, 1, "one account boundary publishes one final state")
+                        XCTAssertEqual(harness.secretWrites.map(\.value), [expectedToken])
+                        withExtendedLifetime(cancellable) {}
+                    }
+                }
+            }
+        }
+
+        XCTAssertEqual(activityCount, 36)
+    }
+
+    func testRealClientStatePublicationReentrancyCommitsNewestAccountMatrix() {
+        let publications = ["connecting", "ready", "configuration"]
+        let accountIntents = ["logout", "replace-c", "replace-clear"]
+        var activityCount = 0
+
+        for publication in publications {
+            for accountIntent in accountIntents {
+                XCTContext.runActivity(named: "\(publication)-\(accountIntent)") { _ in
+                    activityCount += 1
+                    let pairSocket = ViewModelRecordingSocket()
+                    let rideSocket = ViewModelRecordingSocket()
+                    let harness = RealCompanionViewModelHarness(sockets: [pairSocket, rideSocket])
+                    harness.completePairOnly()
+                    harness.stream.startResults = [true, true]
+                    harness.stream.permissionOnStart = .precise
+                    if publication == "configuration" {
+                        harness.viewModel.relayURL = "not a relay url"
+                    }
+
+                    let targetState: CompanionConnectionState
+                    switch publication {
+                    case "connecting": targetState = .connecting
+                    case "ready": targetState = .ready(deviceId: "rdk", label: nil)
+                    default:
+                        targetState = .failed(
+                            code: "configuration",
+                            detail: "Invalid relay URL or session token."
+                        )
+                    }
+                    var suppliedAccountIntent = false
+                    var suppliedNestedIntent = false
+                    var publishedStates: [CompanionConnectionState] = []
+                    let cancellable = harness.viewModel.$companionState.dropFirst().sink { publishedState in
+                        publishedStates.append(publishedState)
+                        if !suppliedAccountIntent, publishedState == targetState {
+                            suppliedAccountIntent = true
+                            harness.viewModel.startHelmetRide()
+                            if accountIntent == "logout" {
+                                harness.viewModel.logout()
+                            } else {
+                                harness.viewModel.sessionToken = "account-b"
+                            }
+                        } else if suppliedAccountIntent,
+                                  !suppliedNestedIntent,
+                                  accountIntent != "logout",
+                                  publishedState == .signedOut {
+                            suppliedNestedIntent = true
+                            harness.viewModel.startHelmetRide()
+                            harness.viewModel.sessionToken = accountIntent == "replace-c" ? "account-c" : " \n "
+                        }
+                    }
+
+                    harness.viewModel.startHelmetRide()
+                    if publication == "ready" {
+                        rideSocket.deliver(
+                            .string("{\"type\":\"companion.status\",\"state\":\"ready\",\"deviceId\":\"rdk\"}")
+                        )
+                    }
+                    harness.stream.publishFix(self.location(latitude: 31.2))
+
+                    let expectedToken: String
+                    switch accountIntent {
+                    case "logout": expectedToken = ""
+                    case "replace-c": expectedToken = "account-c"
+                    default: expectedToken = " \n "
+                    }
+                    XCTAssertTrue(suppliedAccountIntent)
+                    XCTAssertEqual(harness.viewModel.sessionToken, expectedToken)
+                    XCTAssertEqual(harness.viewModel.companionState, .signedOut)
+                    XCTAssertFalse(harness.viewModel.helmetRideActive)
+                    XCTAssertEqual(harness.stream.stopCount, 1)
+                    XCTAssertEqual(harness.client.stopCount, 1)
+                    XCTAssertEqual(harness.client.disconnectCount, 1)
+                    XCTAssertEqual(harness.client.startCount, publication == "ready" ? 1 : 0)
+                    XCTAssertEqual(harness.stream.startCount, publication == "ready" ? 1 : 0)
+                    XCTAssertEqual(harness.client.fixCount, 0)
+                    XCTAssertNil(harness.viewModel.lastForwardedAt)
+                    XCTAssertEqual(harness.requests.count, publication == "configuration" ? 1 : 2)
+                    XCTAssertEqual(rideSocket.cancelCount, publication == "configuration" ? 0 : 1)
+                    XCTAssertEqual(publishedStates.filter { $0 == targetState }.count, 1)
+                    XCTAssertEqual(publishedStates.filter { $0 == .signedOut }.count, 1)
+                    XCTAssertEqual(harness.secretWrites.map(\.value), [expectedToken])
+                    if accountIntent == "logout" {
+                        XCTAssertEqual(harness.authLogoutTokens, ["account-session-token"])
+                    } else {
+                        XCTAssertTrue(harness.authLogoutTokens.isEmpty)
+                    }
+                    withExtendedLifetime(cancellable) {}
+                }
+            }
+        }
+
+        XCTAssertEqual(activityCount, 9)
+    }
+
+    func testOrdinaryAndDuplicateStatePublicationsEmitExactlyOncePerEvent() {
+        let states: [CompanionConnectionState] = [
+            .signedOut,
+            .connecting,
+            .unpaired,
+            .paired(deviceId: "rdk", label: "Helmet"),
+            .helmetOffline(deviceId: "rdk", label: "Helmet"),
+            .ready(deviceId: "rdk", label: "Helmet"),
+            .sharing(deviceId: "rdk", label: "Helmet"),
+            .failed(code: "connection", detail: "closed")
+        ]
+
+        for state in states {
+            XCTContext.runActivity(named: "\(state)") { _ in
+                let harness = Harness()
+                var publishedStates: [CompanionConnectionState] = []
+                let cancellable = harness.viewModel.$companionState.dropFirst().sink { publishedStates.append($0) }
+
+                harness.client.publish(state)
+                harness.client.publish(state)
+
+                XCTAssertEqual(publishedStates, [state, state])
+                XCTAssertEqual(harness.viewModel.companionState, state)
+                XCTAssertEqual(harness.client.disconnectCount, 0)
+                withExtendedLifetime(cancellable) {}
+            }
+        }
+    }
+
     func testAccountBoundaryDefersDisconnectStartAcrossNestedNewestTokenMatrix() {
         for nestedToken in ["account-c", " \n ", " account-session-token "] {
             let harness = Harness()
@@ -2092,6 +2307,7 @@ private final class FakeLocationStream: CompanionLocationStreaming {
     var eventSink: ((String) -> Void)?
     var startResults: [Bool] = []
     var permissionOnStart: CompanionLocationPermission?
+    var onStart: (() -> Void)?
     var onStop: (() -> Void)?
     private(set) var startCount = 0
     private(set) var stopCount = 0
@@ -2099,6 +2315,7 @@ private final class FakeLocationStream: CompanionLocationStreaming {
     func startFromForeground() -> Bool {
         startCount += 1
         eventSink?("location.start")
+        onStart?()
         if let permissionOnStart { onPermission?(permissionOnStart) }
         return startResults.isEmpty ? false : startResults.removeFirst()
     }

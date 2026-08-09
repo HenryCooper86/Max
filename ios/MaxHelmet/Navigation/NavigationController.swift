@@ -234,6 +234,20 @@ final class NavigationController: DeviceActionHandler {
         // awaitFirstFix), so the resolve has to happen here instead — a
         // no-op when nothing is currently awaiting a fix.
         resolveFirstFix(nil)
+        // Fail whatever the search itself is currently holding — UNCONDITIONALLY,
+        // not only in the "no route yet" branch below. iOS can hold a
+        // committed route AND an in-flight second start (or reroute) at the
+        // same time; a stop in that state must not leave that second
+        // request's `nav.request` suspended until the relay's own ~7 s
+        // timeout — that would tear down the active route's guidance now
+        // and only deliver the superseded request's own "已取消导航。" up to
+        // 7 s later, as a stray non-sequitur. A no-op when nothing is held.
+        // Safe even when a route IS active: the bump above (plus, in the
+        // hadRoute branch below, `route = nil`) makes any in-flight reroute
+        // answer this could also resolve fail `attemptReroute`'s guard
+        // (generation + route != nil), so this can never trigger the
+        // reroute-failure teardown speech.
+        search.failPending()
         if hadRoute {
             route = nil
             // Web/Android parity: a stopped route's reroute cooldown and
@@ -245,15 +259,11 @@ final class NavigationController: DeviceActionHandler {
             onGuidance(nil)
             speak("已停止导航。")
         } else {
-            // No route yet, but a start was genuinely in flight. The
-            // resolveFirstFix above only covers the first-fix stage; fail
-            // whatever the search itself is holding too (a no-op if the
-            // start hasn't reached the search yet), and stop the stream
-            // nothing else needs anymore. Silent here: the cancelled
-            // start's own device.result (navigation.cancelled) is what the
-            // relay's FAILURE_SPEECH map speaks — "已取消导航。" — once it
-            // arrives, not this stop's own `.ok`.
-            search.failPending()
+            // No route yet, but a start was genuinely in flight, and
+            // nothing else needs the stream anymore. Silent here: the
+            // cancelled start's own device.result (navigation.cancelled) is
+            // what the relay's FAILURE_SPEECH map speaks — "已取消导航。" —
+            // once it arrives, not this stop's own `.ok`.
             stream.stop()
         }
         return .ok

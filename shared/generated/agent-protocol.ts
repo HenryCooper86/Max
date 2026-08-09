@@ -14,6 +14,7 @@ export const CLIENT_EVENT_TYPES = [
   "crash.alert",
   "crash.cancel",
   "nav.request",
+  "nav.prompt",
   "vision.frames"
 ] as const;
 
@@ -32,6 +33,9 @@ export const SERVER_EVENT_TYPES = [
   "error",
   "crash.ack",
   "crash.simulate",
+  "companion.pairing",
+  "phone.location",
+  "phone.location.status",
   "nav.route",
   "nav.error"
 ] as const;
@@ -111,6 +115,24 @@ export const SERVER_EVENT_REQUIRED_FIELDS = {
   ],
   "crash.simulate": [
     "type"
+  ],
+  "companion.pairing": [
+    "type",
+    "code",
+    "expiresAt",
+    "paired"
+  ],
+  "phone.location": [
+    "type",
+    "sequence",
+    "lat",
+    "lon",
+    "horizontalAccuracyMeters",
+    "timestamp"
+  ],
+  "phone.location.status": [
+    "type",
+    "state"
   ],
   "nav.route": [
     "type",

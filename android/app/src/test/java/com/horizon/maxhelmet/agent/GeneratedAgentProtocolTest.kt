@@ -18,4 +18,12 @@ class GeneratedAgentProtocolTest {
     fun `feedback event is generated for native clients`() {
         assertTrue(ClientEventTypes.all.contains(ClientEventTypes.TURN_FEEDBACK))
     }
+
+    @Test
+    fun `RDK companion and navigation prompt events are generated for native clients`() {
+        assertTrue(ClientEventTypes.all.contains(ClientEventTypes.NAV_PROMPT))
+        assertTrue(ServerEventTypes.all.contains(ServerEventTypes.COMPANION_PAIRING))
+        assertTrue(ServerEventTypes.all.contains(ServerEventTypes.PHONE_LOCATION))
+        assertTrue(ServerEventTypes.all.contains(ServerEventTypes.PHONE_LOCATION_STATUS))
+    }
 }

@@ -15,8 +15,9 @@ enum ClientEventTypes {
     static let crashAlert = "crash.alert"
     static let crashCancel = "crash.cancel"
     static let navRequest = "nav.request"
+    static let navPrompt = "nav.prompt"
     static let visionFrames = "vision.frames"
-    static let all: Set<String> = [sessionStart, audioStart, audioStop, demoGuided, locationUpdate, testingMetric, turnFeedback, deviceResult, hazardReport, cameraFrame, crashAlert, crashCancel, navRequest, visionFrames]
+    static let all: Set<String> = [sessionStart, audioStart, audioStop, demoGuided, locationUpdate, testingMetric, turnFeedback, deviceResult, hazardReport, cameraFrame, crashAlert, crashCancel, navRequest, navPrompt, visionFrames]
 }
 
 enum ServerEventTypes {
@@ -34,9 +35,12 @@ enum ServerEventTypes {
     static let error = "error"
     static let crashAck = "crash.ack"
     static let crashSimulate = "crash.simulate"
+    static let companionPairing = "companion.pairing"
+    static let phoneLocation = "phone.location"
+    static let phoneLocationStatus = "phone.location.status"
     static let navRoute = "nav.route"
     static let navError = "nav.error"
-    static let all: Set<String> = [sessionStarted, connection, status, transcript, metric, weather, rideContext, sessionMemory, telemetry, hazardAlert, deviceCommand, error, crashAck, crashSimulate, navRoute, navError]
+    static let all: Set<String> = [sessionStarted, connection, status, transcript, metric, weather, rideContext, sessionMemory, telemetry, hazardAlert, deviceCommand, error, crashAck, crashSimulate, companionPairing, phoneLocation, phoneLocationStatus, navRoute, navError]
 }
 
 let serverEventRequiredFields: [String: Set<String>] = [
@@ -54,6 +58,9 @@ let serverEventRequiredFields: [String: Set<String>] = [
     "error": ["type", "message"],
     "crash.ack": ["type", "incidentId", "status"],
     "crash.simulate": ["type"],
+    "companion.pairing": ["type", "code", "expiresAt", "paired"],
+    "phone.location": ["type", "sequence", "lat", "lon", "horizontalAccuracyMeters", "timestamp"],
+    "phone.location.status": ["type", "state"],
     "nav.route": ["type", "commandId", "destinationName", "destination", "distanceMeters", "etaSeconds", "polyline", "steps"],
     "nav.error": ["type", "commandId", "code"]
 ]

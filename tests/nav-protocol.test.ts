@@ -8,8 +8,59 @@ const origin = { lat: 31.2304, lon: 121.4737 };
 describe("generated protocol", () => {
   it("includes the nav events", () => {
     expect(CLIENT_EVENT_TYPES).toContain("nav.request");
+    expect(CLIENT_EVENT_TYPES).toContain("nav.prompt");
     expect(SERVER_EVENT_TYPES).toContain("nav.route");
     expect(SERVER_EVENT_TYPES).toContain("nav.error");
+  });
+});
+
+describe("parseClientEvent nav.prompt", () => {
+  const maneuver = {
+    type: "nav.prompt",
+    promptId: "p-1",
+    routeCommandId: "nav-1",
+    kind: "maneuver",
+    maneuverIndex: 2,
+    threshold: "near",
+    distanceMeters: 80
+  };
+
+  it("accepts a bounded maneuver prompt", () => {
+    expect(parseClientEvent(encode(maneuver))).toEqual(maneuver);
+  });
+
+  it.each(["offRoute", "rerouteFailed", "arrived", "locationLost"] as const)("accepts the %s status prompt", (kind) => {
+    expect(parseClientEvent(encode({ type: "nav.prompt", promptId: "p-2", routeCommandId: "nav-1", kind }))).toEqual({
+      type: "nav.prompt",
+      promptId: "p-2",
+      routeCommandId: "nav-1",
+      kind
+    });
+  });
+
+  it("cannot carry arbitrary navigation speech", () => {
+    expect(() =>
+      parseClientEvent(
+        Buffer.from(
+          JSON.stringify({
+            type: "nav.prompt",
+            promptId: "p-1",
+            routeCommandId: "nav-1",
+            kind: "arrived",
+            text: "say anything"
+          })
+        )
+      )
+    ).toThrow("Invalid nav.prompt fields");
+  });
+
+  it("rejects invalid maneuver fields", () => {
+    expect(() => parseClientEvent(encode({ ...maneuver, maneuverIndex: 1.5 }))).toThrow("Invalid nav.prompt fields");
+    expect(() => parseClientEvent(encode({ ...maneuver, threshold: "soon" }))).toThrow("Invalid nav.prompt fields");
+    expect(() => parseClientEvent(encode({ ...maneuver, distanceMeters: -1 }))).toThrow("Invalid nav.prompt fields");
+    expect(() => parseClientEvent(encode({ ...maneuver, promptId: "p".repeat(121) }))).toThrow(
+      "Invalid nav.prompt fields"
+    );
   });
 });
 

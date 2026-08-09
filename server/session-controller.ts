@@ -49,6 +49,7 @@ const MAX_MEMORY_DESTINATION_BYTES = 256;
 const MAX_TESTER_ID_BYTES = 80;
 const MAX_TESTER_REGION_BYTES = 96;
 const MAX_TESTING_META_BYTES = 160;
+const RDK_DEVICE_ID = /^rdk-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 export function normalizeRawData(data: RawData): Buffer {
   if (Buffer.isBuffer(data)) return data;
@@ -337,6 +338,64 @@ export function parseClientEvent(data: RawData): ClientEvent {
     };
   }
 
+  if (value.type === "nav.prompt") {
+    const invalid = () => {
+      throw new Error("Invalid nav.prompt fields");
+    };
+    if (
+      typeof value.promptId !== "string" ||
+      !value.promptId.trim() ||
+      Buffer.byteLength(value.promptId) > 120 ||
+      typeof value.routeCommandId !== "string" ||
+      !value.routeCommandId.trim() ||
+      Buffer.byteLength(value.routeCommandId) > 120
+    ) {
+      invalid();
+    }
+    if (value.kind === "maneuver") {
+      if (
+        !Number.isInteger(value.maneuverIndex) ||
+        (value.maneuverIndex as number) < 0 ||
+        (value.threshold !== "far" && value.threshold !== "near" && value.threshold !== "now") ||
+        typeof value.distanceMeters !== "number" ||
+        !Number.isFinite(value.distanceMeters) ||
+        value.distanceMeters < 0 ||
+        Object.keys(value).some(
+          (field) =>
+            !["type", "promptId", "routeCommandId", "kind", "maneuverIndex", "threshold", "distanceMeters"].includes(
+              field
+            )
+        )
+      ) {
+        invalid();
+      }
+      return {
+        type: "nav.prompt",
+        promptId: value.promptId as string,
+        routeCommandId: value.routeCommandId as string,
+        kind: "maneuver",
+        maneuverIndex: value.maneuverIndex as number,
+        threshold: value.threshold as "far" | "near" | "now",
+        distanceMeters: value.distanceMeters as number
+      };
+    }
+    if (
+      (value.kind !== "offRoute" &&
+        value.kind !== "rerouteFailed" &&
+        value.kind !== "arrived" &&
+        value.kind !== "locationLost") ||
+      Object.keys(value).some((field) => !["type", "promptId", "routeCommandId", "kind"].includes(field))
+    ) {
+      invalid();
+    }
+    return {
+      type: "nav.prompt",
+      promptId: value.promptId as string,
+      routeCommandId: value.routeCommandId as string,
+      kind: value.kind as "offRoute" | "rerouteFailed" | "arrived" | "locationLost"
+    };
+  }
+
   if (value.type === "nav.request") {
     if (typeof value.commandId !== "string" || !value.commandId.trim() || value.commandId.length > 120) {
       throw new Error("Invalid nav.request commandId");
@@ -402,6 +461,9 @@ export function parseClientEvent(data: RawData): ClientEvent {
 
   if (value.sampleRate !== 16000) throw new Error("Invalid sampleRate");
   if (value.channels !== 1) throw new Error("Invalid channels");
+  if (value.deviceId !== undefined && (typeof value.deviceId !== "string" || !RDK_DEVICE_ID.test(value.deviceId))) {
+    throw new Error("Invalid deviceId");
+  }
   assertOptionalEnum(value.voiceGender, VOICE_GENDERS, "voiceGender");
   assertOptionalEnum(value.voicePersonality, VOICE_PERSONALITIES, "voicePersonality");
   assertOptionalEnum(value.rideMode, RIDE_MODES, "rideMode");

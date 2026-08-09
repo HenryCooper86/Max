@@ -18,6 +18,9 @@
             },
             "channels": {
               "type": "number"
+            },
+            "deviceId": {
+              "type": "string"
             }
           },
           "required": ["type", "sampleRate", "channels"]
@@ -223,6 +226,20 @@
             "destinationName": { "type": "string" }
           },
           "required": ["type", "commandId", "reason", "origin"]
+        },
+        {
+          "title": "NavPrompt",
+          "type": "object",
+          "properties": {
+            "type": { "const": "nav.prompt" },
+            "promptId": { "type": "string", "minLength": 1 },
+            "routeCommandId": { "type": "string", "minLength": 1 },
+            "kind": { "enum": ["maneuver", "offRoute", "rerouteFailed", "arrived", "locationLost"] },
+            "maneuverIndex": { "type": "number" },
+            "threshold": { "enum": ["far", "near", "now"] },
+            "distanceMeters": { "type": "number" }
+          },
+          "required": ["type", "promptId", "routeCommandId", "kind"]
         },
         {
           "title": "VisionFrames",
@@ -528,6 +545,41 @@
             "type": { "const": "crash.simulate" }
           },
           "required": ["type"]
+        },
+        {
+          "title": "CompanionPairing",
+          "type": "object",
+          "properties": {
+            "type": { "const": "companion.pairing" },
+            "code": { "type": "string" },
+            "expiresAt": { "type": "number" },
+            "paired": { "type": "boolean" }
+          },
+          "required": ["type", "code", "expiresAt", "paired"]
+        },
+        {
+          "title": "PhoneLocation",
+          "type": "object",
+          "properties": {
+            "type": { "const": "phone.location" },
+            "sequence": { "type": "number" },
+            "lat": { "type": "number" },
+            "lon": { "type": "number" },
+            "horizontalAccuracyMeters": { "type": "number" },
+            "timestamp": { "type": "number" },
+            "courseDegrees": { "type": "number" },
+            "speedMps": { "type": "number" }
+          },
+          "required": ["type", "sequence", "lat", "lon", "horizontalAccuracyMeters", "timestamp"]
+        },
+        {
+          "title": "PhoneLocationStatus",
+          "type": "object",
+          "properties": {
+            "type": { "const": "phone.location.status" },
+            "state": { "enum": ["connected", "sharing", "stopped", "stale", "unpaired"] }
+          },
+          "required": ["type", "state"]
         },
         {
           "title": "NavRoute",

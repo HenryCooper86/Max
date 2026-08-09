@@ -191,6 +191,8 @@ export type SessionStartEvent = {
   type: "session.start";
   sampleRate: number;
   channels: number;
+  /** Canonical identity of an RDK helmet, when this is an embedded session. */
+  deviceId?: string;
   /** Human-readable tester/workstation identifier for QA statistics. */
   testerId?: string;
   /** Client-reported region/time zone label for QA attribution. */
@@ -299,6 +301,7 @@ export type ClientEvent =
       incidentId: string;
     }
   | NavRequestEvent
+  | NavPromptEvent
   | VisionFramesEvent;
 
 export type NavManeuver = { instruction: string; lat: number; lon: number; alongRouteMeters: number };
@@ -317,6 +320,25 @@ export type NavRequestEvent = {
   destination?: { lat: number; lon: number };
   destinationName?: string;
 };
+
+/** Client → server: a deterministic navigation prompt selected by the helmet.
+ *  The relay accepts no arbitrary speech through this event. */
+export type NavPromptEvent =
+  | {
+      type: "nav.prompt";
+      promptId: string;
+      routeCommandId: string;
+      kind: "maneuver";
+      maneuverIndex: number;
+      threshold: "far" | "near" | "now";
+      distanceMeters: number;
+    }
+  | {
+      type: "nav.prompt";
+      promptId: string;
+      routeCommandId: string;
+      kind: "offRoute" | "rerouteFailed" | "arrived" | "locationLost";
+    };
 
 /** Client → server: one chunk of a multi-frame gallery understanding request,
  *  or one unsolicited scene-watching frame. Gallery frames carry the
@@ -355,6 +377,29 @@ export type NavErrorEvent = {
   type: "nav.error";
   commandId: string;
   code: "destination.notFound" | "route.unavailable";
+};
+
+export type CompanionPairingEvent = {
+  type: "companion.pairing";
+  code: string;
+  expiresAt: number;
+  paired: boolean;
+};
+
+export type PhoneLocationEvent = {
+  type: "phone.location";
+  sequence: number;
+  lat: number;
+  lon: number;
+  horizontalAccuracyMeters: number;
+  timestamp: number;
+  courseDegrees?: number;
+  speedMps?: number;
+};
+
+export type PhoneLocationStatusEvent = {
+  type: "phone.location.status";
+  state: "connected" | "sharing" | "stopped" | "stale" | "unpaired";
 };
 
 export type AgentEvent =
@@ -449,6 +494,9 @@ export type AgentEvent =
       // board never receives this (it detects for real).
       type: "crash.simulate";
     }
+  | CompanionPairingEvent
+  | PhoneLocationEvent
+  | PhoneLocationStatusEvent
   | NavRouteEvent
   | NavErrorEvent;
 

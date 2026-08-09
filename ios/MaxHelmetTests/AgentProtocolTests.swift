@@ -3,6 +3,13 @@ import XCTest
 
 final class AgentProtocolTests: XCTestCase {
 
+    func testGeneratedProtocolIncludesRDKCompanionAndNavigationPrompts() {
+        XCTAssertTrue(ClientEventTypes.all.contains(ClientEventTypes.navPrompt))
+        XCTAssertTrue(ServerEventTypes.all.contains(ServerEventTypes.companionPairing))
+        XCTAssertTrue(ServerEventTypes.all.contains(ServerEventTypes.phoneLocation))
+        XCTAssertTrue(ServerEventTypes.all.contains(ServerEventTypes.phoneLocationStatus))
+    }
+
     func testParsesWeatherEventWithFallbacks() {
         let event = parseAgentEvent("""
         {

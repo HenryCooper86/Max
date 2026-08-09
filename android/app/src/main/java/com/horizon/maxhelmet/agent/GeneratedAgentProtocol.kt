@@ -15,8 +15,9 @@ object ClientEventTypes {
     const val CRASH_ALERT = "crash.alert"
     const val CRASH_CANCEL = "crash.cancel"
     const val NAV_REQUEST = "nav.request"
+    const val NAV_PROMPT = "nav.prompt"
     const val VISION_FRAMES = "vision.frames"
-    val all: Set<String> = setOf(SESSION_START, AUDIO_START, AUDIO_STOP, DEMO_GUIDED, LOCATION_UPDATE, TESTING_METRIC, TURN_FEEDBACK, DEVICE_RESULT, HAZARD_REPORT, CAMERA_FRAME, CRASH_ALERT, CRASH_CANCEL, NAV_REQUEST, VISION_FRAMES)
+    val all: Set<String> = setOf(SESSION_START, AUDIO_START, AUDIO_STOP, DEMO_GUIDED, LOCATION_UPDATE, TESTING_METRIC, TURN_FEEDBACK, DEVICE_RESULT, HAZARD_REPORT, CAMERA_FRAME, CRASH_ALERT, CRASH_CANCEL, NAV_REQUEST, NAV_PROMPT, VISION_FRAMES)
 }
 
 object ServerEventTypes {
@@ -34,9 +35,12 @@ object ServerEventTypes {
     const val ERROR = "error"
     const val CRASH_ACK = "crash.ack"
     const val CRASH_SIMULATE = "crash.simulate"
+    const val COMPANION_PAIRING = "companion.pairing"
+    const val PHONE_LOCATION = "phone.location"
+    const val PHONE_LOCATION_STATUS = "phone.location.status"
     const val NAV_ROUTE = "nav.route"
     const val NAV_ERROR = "nav.error"
-    val all: Set<String> = setOf(SESSION_STARTED, CONNECTION, STATUS, TRANSCRIPT, METRIC, WEATHER, RIDE_CONTEXT, SESSION_MEMORY, TELEMETRY, HAZARD_ALERT, DEVICE_COMMAND, ERROR, CRASH_ACK, CRASH_SIMULATE, NAV_ROUTE, NAV_ERROR)
+    val all: Set<String> = setOf(SESSION_STARTED, CONNECTION, STATUS, TRANSCRIPT, METRIC, WEATHER, RIDE_CONTEXT, SESSION_MEMORY, TELEMETRY, HAZARD_ALERT, DEVICE_COMMAND, ERROR, CRASH_ACK, CRASH_SIMULATE, COMPANION_PAIRING, PHONE_LOCATION, PHONE_LOCATION_STATUS, NAV_ROUTE, NAV_ERROR)
 }
 
 val SERVER_EVENT_REQUIRED_FIELDS: Map<String, Set<String>> = mapOf(
@@ -54,6 +58,9 @@ val SERVER_EVENT_REQUIRED_FIELDS: Map<String, Set<String>> = mapOf(
         "error" to setOf("type", "message"),
         "crash.ack" to setOf("type", "incidentId", "status"),
         "crash.simulate" to setOf("type"),
+        "companion.pairing" to setOf("type", "code", "expiresAt", "paired"),
+        "phone.location" to setOf("type", "sequence", "lat", "lon", "horizontalAccuracyMeters", "timestamp"),
+        "phone.location.status" to setOf("type", "state"),
         "nav.route" to setOf("type", "commandId", "destinationName", "destination", "distanceMeters", "etaSeconds", "polyline", "steps"),
         "nav.error" to setOf("type", "commandId", "code")
 )

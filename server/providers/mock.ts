@@ -579,7 +579,11 @@ export function createMockProvider(
       void chunk;
     },
     async deviceResult(event) {
-      const issued = pendingDeviceCommands.resolve(event.commandId);
+      const receivedAt = Date.now();
+      const issued = pendingDeviceCommands.resolve(event.commandId, receivedAt);
+      for (const expired of pendingDeviceCommands.expire(receivedAt)) {
+        applyDeviceReconciliation(expired.action, { status: "failed", reason: "timeout" });
+      }
       if (!issued) return;
       if (issued.action === "vision.watch" && event.status === "ok") {
         visionGovernor.setEnabled(issued.watchOn === true);

@@ -56,9 +56,11 @@ const { MockWebSocket, upstreamInstances } = vi.hoisted(() => {
 
 vi.mock("ws", () => ({ WebSocket: MockWebSocket }));
 
-const { mockDescribeFrame, synthesizedText } = vi.hoisted(() => ({
+const { mockDescribeFrame, synthesizedText, synthesisGates, routeProviderOverride } = vi.hoisted(() => ({
   mockDescribeFrame: vi.fn(),
-  synthesizedText: [] as string[]
+  synthesizedText: [] as string[],
+  synthesisGates: new Map<string, Promise<Buffer>>(),
+  routeProviderOverride: { current: undefined as unknown }
 }));
 vi.mock("../server/vision", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../server/vision")>();
@@ -70,8 +72,18 @@ vi.mock("../server/speech", async (importOriginal) => {
     ...actual,
     createSynthesizer: () => async (text: string) => {
       synthesizedText.push(text);
+      const gate = synthesisGates.get(text);
+      if (gate) return gate;
       return Buffer.from(`pcm:${text}`);
     }
+  };
+});
+vi.mock("../server/routing", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../server/routing")>();
+  return {
+    ...actual,
+    selectRouteProvider: (...args: Parameters<typeof actual.selectRouteProvider>) =>
+      routeProviderOverride.current ?? actual.selectRouteProvider(...args)
   };
 });
 
@@ -97,6 +109,12 @@ function uint32(value: number) {
   const buffer = Buffer.alloc(4);
   buffer.writeUInt32BE(value);
   return buffer;
+}
+
+function defer<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => (resolve = done));
+  return { promise, resolve };
 }
 
 function jsonFrame(event: number, payload: Record<string, unknown>, sessionId = "s") {
@@ -171,6 +189,8 @@ afterEach(() => {
   upstreamInstances.length = 0;
   mockDescribeFrame.mockReset();
   synthesizedText.length = 0;
+  synthesisGates.clear();
+  routeProviderOverride.current = undefined;
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -311,6 +331,79 @@ describe("doubao provider speakNavPrompt", () => {
     expect(clientEvents(send).some((event) => event.text === "前方150米，右转进入南京东路")).toBe(false);
     await controller.close();
   });
+
+  it("rechecks a newer ordinary reply when a prompt reaches the generated-speech queue head", async () => {
+    stubWeatherFetch();
+    const occupied = defer<Buffer>();
+    synthesisGates.set("占用生成语音。", occupied.promise);
+    const { controller, send, upstream, provider } = await startSession("embedded");
+
+    provider.speakNavLine!("占用生成语音。");
+    await vi.waitFor(() => expect(synthesizedText).toContain("占用生成语音。"));
+    provider.speakNavPrompt!({ text: "已到达目的地。", interrupt: false });
+    await riderTurn(upstream, "Max 这是更新的普通回复");
+
+    occupied.resolve(Buffer.from("occupied-pcm"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(synthesizedText).not.toContain("已到达目的地。");
+    expect(clientEvents(send).some((event) => event.text === "已到达目的地。")).toBe(false);
+
+    await upstream.emit("message", jsonFrame(TTS_ENDED, {}));
+    await vi.waitFor(() => expect(synthesizedText).toContain("已到达目的地。"));
+    expect(clientEvents(send).filter((event) => event.text === "已到达目的地。")).toHaveLength(1);
+    await controller.close();
+  });
+
+  it("serializes multiple re-waiting prompts and drops one that expires at the start boundary", async () => {
+    stubWeatherFetch();
+    const occupied = defer<Buffer>();
+    synthesisGates.set("占用生成语音。", occupied.promise);
+    const { controller, send, upstream, provider } = await startSession("embedded");
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+
+    provider.speakNavLine!("占用生成语音。");
+    await vi.waitFor(() => expect(synthesizedText).toContain("占用生成语音。"));
+    provider.speakNavPrompt!({ text: "已偏离路线，正在重新规划。", interrupt: false });
+    provider.speakNavPrompt!({
+      text: "前方150米，右转进入南京东路",
+      interrupt: false,
+      expiresAt: 1_500
+    });
+    await riderTurn(upstream, "Max 这是更新的普通回复");
+
+    now.mockReturnValue(1_500);
+    occupied.resolve(Buffer.from("occupied-pcm"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(synthesizedText).not.toContain("已偏离路线，正在重新规划。");
+    expect(synthesizedText).not.toContain("前方150米，右转进入南京东路");
+
+    await upstream.emit("message", jsonFrame(TTS_ENDED, {}));
+    await vi.waitFor(() => expect(synthesizedText).toContain("已偏离路线，正在重新规划。"));
+    expect(synthesizedText).not.toContain("前方150米，右转进入南京东路");
+    expect(clientEvents(send).some((event) => event.text === "前方150米，右转进入南京东路")).toBe(false);
+    await controller.close();
+  });
+
+  it("drops a prompt released from an ordinary-speech wait after provider close", async () => {
+    stubWeatherFetch();
+    const { controller, send, upstream, provider } = await startSession("embedded");
+    await riderTurn(upstream, "Max 这是关闭前的普通回复");
+    provider.speakNavPrompt!({ text: "已到达目的地。", interrupt: false });
+
+    await controller.close();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(synthesizedText).not.toContain("已到达目的地。");
+    expect(clientEvents(send).some((event) => event.text === "已到达目的地。")).toBe(false);
+    expect(
+      send.mock.calls.some(
+        ([data, options]) =>
+          Buffer.isBuffer(data) &&
+          data.includes(Buffer.from("已到达目的地。")) &&
+          (options as { binary?: boolean })?.binary
+      )
+    ).toBe(false);
+  });
 });
 
 describe("doubao navigation command deadline", () => {
@@ -334,6 +427,25 @@ describe("doubao navigation command deadline", () => {
 
     await vi.advanceTimersByTimeAsync(1);
     expect(clientEvents(send).filter((event) => event.text === "导航操作没成功。")).toHaveLength(1);
+    await controller.close();
+  });
+
+  it("turns an exactly-at-deadline device result into the timeout outcome", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    stubWeatherFetch();
+    const { controller, send, upstream } = await startSession("ios");
+    await riderTurn(upstream, "Max 拍照");
+    const commandId = captureDeviceCommandId(send, "camera.photo");
+
+    vi.setSystemTime(18_000);
+    await controller.handleMessage(
+      Buffer.from(JSON.stringify({ type: "device.result", commandId, status: "ok" })),
+      false
+    );
+
+    expect(clientEvents(send).filter((event) => event.text === "拍照操作没成功。")).toHaveLength(1);
+    expect(clientEvents(send).some((event) => event.text === "拍好了。")).toBe(false);
     await controller.close();
   });
 });
@@ -380,5 +492,70 @@ describe("session navigation prompt wiring", () => {
       clientEvents(send).filter((event) => event.type === "transcript" && event.text === "已到达目的地。")
     ).toHaveLength(1);
     await controller.close();
+  });
+
+  it("drops a fresh reroute completion released after the controller closes", async () => {
+    stubWeatherFetch();
+    const planned = {
+      distanceMeters: 1_000,
+      etaSeconds: 300,
+      polyline: [
+        { lat: 31.23, lon: 121.47 },
+        { lat: 31.24, lon: 121.49 }
+      ],
+      steps: [{ instruction: "右转", lat: 31.24, lon: 121.49, alongRouteMeters: 1_000 }]
+    };
+    const reroutePlan = defer<typeof planned | null>();
+    let planCalls = 0;
+    routeProviderOverride.current = {
+      mode: "amap" as const,
+      resolveDestination: async () => ({ name: "外滩", location: { lat: 31.24, lon: 121.49 } }),
+      planRoute: async () => {
+        planCalls += 1;
+        return planCalls === 1 ? planned : reroutePlan.promise;
+      }
+    };
+    const { controller, send } = await startSession("embedded");
+    await controller.handleMessage(
+      Buffer.from(
+        JSON.stringify({
+          type: "nav.request",
+          commandId: "nav-start",
+          reason: "start",
+          origin: { lat: 31.23, lon: 121.47 },
+          query: "外滩"
+        })
+      ),
+      false
+    );
+    await vi.waitFor(() =>
+      expect(clientEvents(send).some((event) => event.type === "nav.route" && event.commandId === "nav-start")).toBe(
+        true
+      )
+    );
+    await controller.handleMessage(
+      Buffer.from(
+        JSON.stringify({
+          type: "nav.request",
+          commandId: "reroute-after-close",
+          reason: "reroute",
+          origin: { lat: 31.23, lon: 121.47 },
+          destination: { lat: 31.25, lon: 121.5 },
+          destinationName: "新目的地"
+        })
+      ),
+      false
+    );
+    await vi.waitFor(() => expect(planCalls).toBe(2));
+
+    await controller.close();
+    const eventsBeforeRelease = clientEvents(send).length;
+    const binaryBeforeRelease = send.mock.calls.filter(([data]) => Buffer.isBuffer(data)).length;
+    reroutePlan.resolve(planned);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(clientEvents(send)).toHaveLength(eventsBeforeRelease);
+    expect(send.mock.calls.filter(([data]) => Buffer.isBuffer(data))).toHaveLength(binaryBeforeRelease);
+    expect(synthesizedText).not.toContain("已重新规划路线。");
   });
 });

@@ -623,9 +623,10 @@ export class PendingDeviceCommands {
     return issued;
   }
 
-  resolve(commandId: string): IssuedDeviceCommand | undefined {
+  resolve(commandId: string, now: number = Date.now()): IssuedDeviceCommand | undefined {
     const issued = this.pending.get(commandId);
-    if (issued) this.pending.delete(commandId);
+    if (!issued || now >= issued.expiresAt) return undefined;
+    this.pending.delete(commandId);
     return issued;
   }
 
@@ -635,8 +636,9 @@ export class PendingDeviceCommands {
    *  arrived — the frame is not itself the command's result and must not
    *  resolve (and thereby delete) the entry that the later `device.result`
    *  for the same commandId still needs to resolve. */
-  peek(commandId: string): IssuedDeviceCommand | undefined {
-    return this.pending.get(commandId);
+  peek(commandId: string, now: number = Date.now()): IssuedDeviceCommand | undefined {
+    const issued = this.pending.get(commandId);
+    return issued && now < issued.expiresAt ? issued : undefined;
   }
 
   /** Attaches okSpeech to the most recently issued unexpired command with this
@@ -645,10 +647,10 @@ export class PendingDeviceCommands {
    *  onRouteAnnounced). Silent no-op when none is outstanding: expired, or a
    *  reroute forward with no start currently in flight. Ties break by
    *  insertion order; last write wins if called more than once. */
-  attachOkSpeech(action: DeviceActionName, okSpeech: string): void {
+  attachOkSpeech(action: DeviceActionName, okSpeech: string, now: number = Date.now()): void {
     let target: IssuedDeviceCommand | undefined;
     for (const issued of this.pending.values()) {
-      if (issued.action !== action) continue;
+      if (issued.action !== action || now >= issued.expiresAt) continue;
       if (!target || issued.issuedAt >= target.issuedAt) target = issued;
     }
     if (target) target.okSpeech = okSpeech;

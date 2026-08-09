@@ -238,6 +238,45 @@ describe("PendingDeviceCommands", () => {
     expect(pending.nextExpiryAt()).toBe(12_200);
   });
 
+  it("resolves a result just before its deadline", () => {
+    const pending = new PendingDeviceCommands();
+    const issued = pending.issue("camera.photo", undefined, 100);
+    expect(pending.resolve(issued.commandId, 8_099)).toBe(issued);
+  });
+
+  it("rejects a result exactly at its deadline and leaves it for the timeout outcome", () => {
+    const pending = new PendingDeviceCommands();
+    const issued = pending.issue("camera.photo", undefined, 100);
+    expect(pending.resolve(issued.commandId, 8_100)).toBeUndefined();
+    expect(pending.expire(8_100)).toEqual([issued]);
+  });
+
+  it("rejects a result after its deadline and leaves it for the timeout outcome", () => {
+    const pending = new PendingDeviceCommands();
+    const issued = pending.issue("navigation.start", undefined, 100);
+    expect(pending.resolve(issued.commandId, 12_101)).toBeUndefined();
+    expect(pending.expire(12_101)).toEqual([issued]);
+  });
+
+  it("keeps mixed ordinary and navigation deadlines independent", () => {
+    const pending = new PendingDeviceCommands();
+    const ordinary = pending.issue("camera.photo", undefined, 100);
+    const navigation = pending.issue("navigation.start", undefined, 100);
+
+    expect(pending.resolve(ordinary.commandId, 8_100)).toBeUndefined();
+    expect(pending.resolve(navigation.commandId, 8_100)).toBe(navigation);
+    expect(pending.expire(8_100)).toEqual([ordinary]);
+    expect(pending.nextExpiryAt()).toBeUndefined();
+  });
+
+  it("does not authorize expired peeks or attach speech to expired commands", () => {
+    const pending = new PendingDeviceCommands();
+    const issued = pending.issue("navigation.start", undefined, 100);
+    expect(pending.peek(issued.commandId, 12_100)).toBeUndefined();
+    pending.attachOkSpeech("navigation.start", "不应附加。", 12_100);
+    expect(pending.expire(12_100)[0]?.okSpeech).toBeUndefined();
+  });
+
   it("peek finds a pending command without consuming it", () => {
     const pending = new PendingDeviceCommands();
     const issued = pending.issue("camera.look");
@@ -260,9 +299,9 @@ describe("PendingDeviceCommands", () => {
       const pending = new PendingDeviceCommands();
       const older = pending.issue("navigation.start", undefined, 1_000);
       const newer = pending.issue("navigation.start", undefined, 2_000);
-      pending.attachOkSpeech("navigation.start", "已找到目的地。");
-      expect(pending.resolve(older.commandId)?.okSpeech).toBeUndefined();
-      expect(pending.resolve(newer.commandId)?.okSpeech).toBe("已找到目的地。");
+      pending.attachOkSpeech("navigation.start", "已找到目的地。", 2_000);
+      expect(pending.resolve(older.commandId, 2_000)?.okSpeech).toBeUndefined();
+      expect(pending.resolve(newer.commandId, 2_000)?.okSpeech).toBe("已找到目的地。");
     });
 
     it("is a silent no-op when nothing is outstanding for that action", () => {
@@ -281,9 +320,9 @@ describe("PendingDeviceCommands", () => {
     it("last write wins when attached twice", () => {
       const pending = new PendingDeviceCommands();
       const issued = pending.issue("navigation.start", undefined, 1_000);
-      pending.attachOkSpeech("navigation.start", "第一次。");
-      pending.attachOkSpeech("navigation.start", "第二次。");
-      expect(pending.resolve(issued.commandId)?.okSpeech).toBe("第二次。");
+      pending.attachOkSpeech("navigation.start", "第一次。", 1_000);
+      pending.attachOkSpeech("navigation.start", "第二次。", 1_000);
+      expect(pending.resolve(issued.commandId, 1_000)?.okSpeech).toBe("第二次。");
     });
   });
 });

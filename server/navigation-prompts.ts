@@ -4,6 +4,7 @@ import type { NavPromptSpeech } from "./routing";
 const MAX_ID_BYTES = 120;
 const ONE_MINUTE_MS = 60_000;
 const DEFAULT_MAX_PER_MINUTE = 30;
+const MAX_RETAINED_PROMPT_IDS = 256;
 
 const NAV_FIXED_TEXT = {
   offRoute: "已偏离路线，正在重新规划。",
@@ -25,11 +26,17 @@ export function createNavPromptHandler(options: {
   const { activeRoute, speak, now = Date.now, maxPerMinute = DEFAULT_MAX_PER_MINUTE } = options;
   const seenPromptIds = new Set<string>();
   const acceptedAt: number[] = [];
+  let accountingRouteCommandId: string | undefined;
 
   return function handleNavPrompt(event: NavPromptEvent): void {
     const receivedAt = now();
     if (!validId(event.promptId) || !validId(event.routeCommandId)) return;
     const route = activeRoute();
+    if (route?.commandId !== accountingRouteCommandId) {
+      accountingRouteCommandId = route?.commandId;
+      seenPromptIds.clear();
+      acceptedAt.length = 0;
+    }
     if (!route || event.routeCommandId !== route.commandId) return;
 
     let speech: NavPromptSpeech;
@@ -71,11 +78,15 @@ export function createNavPromptHandler(options: {
     }
 
     if (seenPromptIds.has(event.promptId)) return;
-    seenPromptIds.add(event.promptId);
-
     while (acceptedAt.length && receivedAt - acceptedAt[0]! >= ONE_MINUTE_MS) acceptedAt.shift();
     if (acceptedAt.length >= Math.max(0, Math.floor(maxPerMinute))) return;
+
     acceptedAt.push(receivedAt);
+    seenPromptIds.add(event.promptId);
+    if (seenPromptIds.size > MAX_RETAINED_PROMPT_IDS) {
+      const oldest = seenPromptIds.values().next().value;
+      if (oldest !== undefined) seenPromptIds.delete(oldest);
+    }
     speak(speech);
   };
 }

@@ -548,9 +548,15 @@ export class AgentSessionController {
     });
     this.navHandler = createNavHandler({
       provider: selectRouteProvider(config.amapApiKey, log),
-      send: (payload) => this.send(payload),
-      onRouteAnnounced: (speech) => this.provider.attachNavOkSpeech?.(speech),
-      onRerouteAnnounced: (speech) => this.provider.speakNavLine?.(speech)
+      send: (payload) => {
+        if (this.acceptingMessages) this.send(payload);
+      },
+      onRouteAnnounced: (speech) => {
+        if (this.acceptingMessages) this.provider.attachNavOkSpeech?.(speech);
+      },
+      onRerouteAnnounced: (speech) => {
+        if (this.acceptingMessages) this.provider.speakNavLine?.(speech);
+      }
     });
     this.navPromptHandler = createNavPromptHandler({
       activeRoute: this.navHandler.activeRoute,

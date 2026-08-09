@@ -134,6 +134,7 @@ export type SpeakerOptions = {
 export type SpeakOptions = {
   expiresAt?: number;
   now?: () => number;
+  beforeStart?: () => boolean | Promise<boolean>;
   onStart?: () => void;
 };
 
@@ -189,6 +190,8 @@ export function createSpeaker(options: SpeakerOptions): {
     speak(text: string, speakOptions: SpeakOptions = {}): Promise<void> {
       const run = tail.then(async () => {
         if (!text.trim()) return;
+        if (platform() !== "embedded") return;
+        if (speakOptions.beforeStart && !(await speakOptions.beforeStart())) return;
         if (platform() !== "embedded") return;
         const currentTime = speakOptions.now ?? Date.now;
         if (speakOptions.expiresAt !== undefined && currentTime() >= speakOptions.expiresAt) return;

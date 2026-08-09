@@ -820,23 +820,27 @@ export function createDoubaoProvider(
     deviceExpiryTimer = setTimeout(
       () => {
         deviceExpiryTimer = undefined;
-        for (const expired of pendingDeviceCommands.expire()) {
-          // A gallery.describe whose frame set is still assembling under the
-          // frame assembler's OWN (longer, 10 s) timeout must not also get the
-          // generic 8 s device-result-timeout failure spoken here — that would
-          // produce failure-then-answer (or failure-then-"我看不清") double
-          // speak for one command. recentGalleryCommands holding an entry for
-          // this commandId is exactly "a frame set is in flight"; the
-          // assembler's own onComplete/onIncomplete is the single voice for
-          // that outcome, so skip the spoken failure and let it run its course.
-          if (expired.action === "gallery.describe" && recentGalleryCommands.has(expired.commandId)) continue;
-          applyDeviceReconciliation(expired.action, { status: "failed", reason: "timeout" });
-        }
+        applyExpiredDeviceCommands(Date.now());
         scheduleDeviceExpiry();
       },
       Math.max(0, nextExpiryAt - Date.now())
     );
     deviceExpiryTimer.unref?.();
+  }
+
+  function applyExpiredDeviceCommands(now: number): void {
+    for (const expired of pendingDeviceCommands.expire(now)) {
+      // A gallery.describe whose frame set is still assembling under the
+      // frame assembler's OWN (longer, 10 s) timeout must not also get the
+      // generic 8 s device-result-timeout failure spoken here — that would
+      // produce failure-then-answer (or failure-then-"我看不清") double
+      // speak for one command. recentGalleryCommands holding an entry for
+      // this commandId is exactly "a frame set is in flight"; the
+      // assembler's own onComplete/onIncomplete is the single voice for
+      // that outcome, so skip the spoken failure and let it run its course.
+      if (expired.action === "gallery.describe" && recentGalleryCommands.has(expired.commandId)) continue;
+      applyDeviceReconciliation(expired.action, { status: "failed", reason: "timeout" });
+    }
   }
 
   function applyDeviceReconciliation(
@@ -1034,7 +1038,7 @@ export function createDoubaoProvider(
   const speaker = createSpeaker({
     synthesize: synthesizeConfirmation,
     sendAudio: (pcm) => client.send(pcm, { binary: true }),
-    platform: () => sessionPlatform,
+    platform: () => (closedByProvider ? undefined : sessionPlatform),
     onError: (error) => log.warn("confirmation speech failed", { error: String(error) })
   });
 
@@ -1055,9 +1059,10 @@ export function createDoubaoProvider(
     return awaitingReply || receivedTtsAudio;
   }
 
-  function waitForOrdinarySpeech(): Promise<void> {
-    if (!ordinarySpeechOpen()) return Promise.resolve();
-    return new Promise((resolve) => ordinarySpeechWaiters.add(resolve));
+  async function waitForOrdinarySpeech(): Promise<void> {
+    while (!closedByProvider && ordinarySpeechOpen()) {
+      await new Promise<void>((resolve) => ordinarySpeechWaiters.add(resolve));
+    }
   }
 
   function releaseOrdinarySpeechWaiters(force = false): void {
@@ -1938,9 +1943,11 @@ export function createDoubaoProvider(
       }
     },
     async deviceResult(event) {
-      const issued = pendingDeviceCommands.resolve(event.commandId);
-      if (!issued) return;
+      const receivedAt = Date.now();
+      const issued = pendingDeviceCommands.resolve(event.commandId, receivedAt);
+      applyExpiredDeviceCommands(receivedAt);
       scheduleDeviceExpiry();
+      if (!issued) return;
       if (issued.action === "vision.watch" && event.status === "ok") {
         visionGovernor.setEnabled(issued.watchOn === true);
       }
@@ -2073,26 +2080,34 @@ export function createDoubaoProvider(
     // speakWatchLine above: allocate a FRESH delivery inline, at speak time.
     // The RDK also needs the generated PCM on its binary audio channel.
     speakNavLine(text: string) {
+      if (closedByProvider) return;
       const delivery = createTranscriptDelivery();
       sendClient(transcriptEvent(delivery, "agent", text, { final: true, useBrowserSpeech: true }));
       void speakEmbedded(text).catch(() => {});
     },
     speakNavPrompt(speech) {
+      if (closedByProvider) return;
       const deliverTranscript = () => {
         const delivery = createTranscriptDelivery();
         sendClient(transcriptEvent(delivery, "agent", speech.text, { final: true, useBrowserSpeech: true }));
       };
       if (speech.interrupt) truncateInterruptedReply();
       void (async () => {
-        if (!speech.interrupt) await waitForOrdinarySpeech();
-        if (speech.expiresAt !== undefined && Date.now() >= speech.expiresAt) return;
         if (sessionPlatform === "embedded") {
           await speakEmbedded(speech.text, {
             expiresAt: speech.expiresAt,
+            beforeStart: speech.interrupt
+              ? undefined
+              : async () => {
+                  await waitForOrdinarySpeech();
+                  return !closedByProvider;
+                },
             onStart: deliverTranscript
           });
           return;
         }
+        if (!speech.interrupt) await waitForOrdinarySpeech();
+        if (closedByProvider || (speech.expiresAt !== undefined && Date.now() >= speech.expiresAt)) return;
         deliverTranscript();
       })().catch(() => {});
     }

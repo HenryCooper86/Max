@@ -19,11 +19,18 @@ const route: NavRouteEvent = {
   ]
 };
 
-function harness(overrides: { route?: NavRouteEvent; now?: () => number; maxPerMinute?: number } = {}) {
+function harness(
+  overrides: {
+    route?: NavRouteEvent;
+    activeRoute?: () => NavRouteEvent | undefined;
+    now?: () => number;
+    maxPerMinute?: number;
+  } = {}
+) {
   const spoken: NavPromptSpeech[] = [];
   const active = Object.prototype.hasOwnProperty.call(overrides, "route") ? overrides.route : route;
   const handle = createNavPromptHandler({
-    activeRoute: () => active,
+    activeRoute: overrides.activeRoute ?? (() => active),
     speak: (speech) => spoken.push(speech),
     now: overrides.now,
     maxPerMinute: overrides.maxPerMinute
@@ -167,5 +174,53 @@ describe("createNavPromptHandler", () => {
     now += 60_000;
     handle(maneuver({ promptId: "p-4" }));
     expect(spoken).toHaveLength(3);
+  });
+
+  it("does not consume a rate-rejected prompt ID before that ID can be retried", () => {
+    let now = 0;
+    const { handle, spoken } = harness({ now: () => now, maxPerMinute: 1 });
+    handle({ type: "nav.prompt", promptId: "p-1", routeCommandId: "nav-7", kind: "arrived" });
+    handle({ type: "nav.prompt", promptId: "p-2", routeCommandId: "nav-7", kind: "offRoute" });
+    expect(spoken).toHaveLength(1);
+
+    now = 60_000;
+    handle({ type: "nav.prompt", promptId: "p-2", routeCommandId: "nav-7", kind: "offRoute" });
+    expect(spoken.map((speech) => speech.text)).toEqual(["已到达目的地。", "已偏离路线，正在重新规划。"]);
+  });
+
+  it("invalid, stale, and duplicate events consume neither prompt IDs nor rate budget", () => {
+    const invalid = harness({ maxPerMinute: 1 });
+    invalid.handle(maneuver({ promptId: "reusable", distanceMeters: -1 }));
+    invalid.handle(maneuver({ promptId: "reusable", distanceMeters: 50 }));
+    expect(invalid.spoken).toHaveLength(1);
+
+    const stale = harness({ maxPerMinute: 1 });
+    stale.handle(maneuver({ promptId: "reusable", routeCommandId: "nav-old" }));
+    stale.handle(maneuver({ promptId: "reusable" }));
+    expect(stale.spoken).toHaveLength(1);
+
+    const duplicate = harness({ maxPerMinute: 2 });
+    duplicate.handle(maneuver({ promptId: "p-1" }));
+    duplicate.handle(maneuver({ promptId: "p-1" }));
+    duplicate.handle(maneuver({ promptId: "p-2" }));
+    expect(duplicate.spoken).toHaveLength(2);
+  });
+
+  it("resets rate and dedupe accounting when the active route command changes", () => {
+    let active = route;
+    const { handle, spoken } = harness({ activeRoute: () => active, maxPerMinute: 1 });
+    handle({ type: "nav.prompt", promptId: "same-id", routeCommandId: "nav-7", kind: "arrived" });
+    active = { ...route, commandId: "nav-8" };
+    handle({ type: "nav.prompt", promptId: "same-id", routeCommandId: "nav-8", kind: "arrived" });
+    expect(spoken).toHaveLength(2);
+  });
+
+  it("bounds retained prompt IDs for a long-running route", () => {
+    const { handle, spoken } = harness({ maxPerMinute: 1_000 });
+    for (let index = 0; index < 257; index += 1) {
+      handle({ type: "nav.prompt", promptId: `p-${index}`, routeCommandId: "nav-7", kind: "arrived" });
+    }
+    handle({ type: "nav.prompt", promptId: "p-0", routeCommandId: "nav-7", kind: "arrived" });
+    expect(spoken).toHaveLength(258);
   });
 });

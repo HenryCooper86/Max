@@ -2,6 +2,7 @@ import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { registerUser, resetAccounts, setUserRole } from "../server/accounts";
 import {
+  authorizeAccountUpgrade,
   authorizeUpgrade,
   checkAuthRateLimit,
   checkRateLimit,
@@ -109,6 +110,34 @@ describe("authorizeUpgrade", () => {
     // window would have reset the whole bucket at t+60s and allowed a fresh burst.
     expect(checkRateLimit("a", t + 61_000)).toBe(true); // only the t hit expired
     expect(checkRateLimit("a", t + 62_000)).toBe(false); // hits @ +30s/+40s/+61s still count
+  });
+});
+
+describe("authorizeAccountUpgrade", () => {
+  it("requires a live account session and rejects the operator token", async () => {
+    config.relayAuthToken = "operator-token";
+    config.allowedOrigins = [];
+    config.connPerMinute = 0;
+    const registeredAt = Date.now();
+    const registered = await registerUser("phone-rider", "password123", undefined, registeredAt);
+    expect(registered.ok).toBe(true);
+    if (!registered.ok) return;
+
+    expect(authorizeAccountUpgrade(fakeRequest())).toMatchObject({ ok: false, code: 401 });
+    expect(authorizeAccountUpgrade(fakeRequest({ url: "/companion?token=operator-token" }))).toMatchObject({
+      ok: false,
+      code: 401
+    });
+    expect(authorizeAccountUpgrade(fakeRequest({ url: `/companion?token=${registered.token}` }))).toMatchObject({
+      ok: true,
+      token: registered.token,
+      user: { id: registered.user.id }
+    });
+
+    const expiredAt = registeredAt + config.authSessionDays * 86_400_000 + 1;
+    expect(
+      authorizeAccountUpgrade(fakeRequest({ url: `/companion?token=${registered.token}` }), expiredAt)
+    ).toMatchObject({ ok: false, code: 401 });
   });
 });
 

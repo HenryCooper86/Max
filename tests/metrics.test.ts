@@ -113,6 +113,17 @@ describe("relay metrics", () => {
     });
   });
 
+  it("keeps companion telemetry to aggregate accepted and rejected counters", () => {
+    metrics.companionAccepted();
+    metrics.companionAccepted();
+    metrics.companionRejected();
+
+    expect(metrics.snapshot()).toMatchObject({
+      companionEventsAccepted: 2,
+      companionEventsRejected: 1
+    });
+  });
+
   it("exposes a snapshot on /health that later mutations cannot alter", () => {
     metrics.sessionOpened();
     const health = buildHealth(42);

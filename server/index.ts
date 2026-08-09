@@ -75,6 +75,9 @@ import type { Logger } from "./logger";
 import { staticCacheControl } from "./static-cache";
 import { clearUserConversationMemory, flushUserMemory, userMemorySummary } from "./user-memory";
 import { registerAmapRoutes } from "./amap-proxy";
+import { createCompanionBindingStore } from "./companion-store";
+import { createCompanionRegistry } from "./companion-registry";
+import { createCompanionSocketServer } from "./companion-socket";
 
 const app = express();
 const server = http.createServer(app);
@@ -98,6 +101,18 @@ type AuthenticatedConnection = { userId: string; token: string };
 const authenticatedConnections = new Map<WebSocket, AuthenticatedConnection>();
 const activeSessions = new Map<WebSocket, AgentSessionController>();
 const log = createLogger("relay");
+const companionStore = createCompanionBindingStore();
+const companionRegistry = createCompanionRegistry({ store: companionStore, log });
+const companionSockets = createCompanionSocketServer({
+  registry: companionRegistry,
+  log,
+  onAuthenticated(client, session) {
+    authenticatedConnections.set(client, { userId: session.user.id, token: session.token });
+  },
+  onDisconnected(client) {
+    authenticatedConnections.delete(client);
+  }
+});
 let shuttingDown = false;
 
 app.disable("x-powered-by");
@@ -136,7 +151,12 @@ app.get("/health", (_req, res) => {
 });
 
 app.get("/ready", (_req, res) => {
-  const issues = [...readinessIssues(), ...(shuttingDown ? ["shutting-down"] : [])];
+  const companionIssue = companionStore.readinessIssue();
+  const issues = [
+    ...readinessIssues(),
+    ...(companionIssue ? [companionIssue] : []),
+    ...(shuttingDown ? ["shutting-down"] : [])
+  ];
   res.status(issues.length ? 503 : 200).json({ ok: issues.length === 0, issues, build: { ...buildInfo } });
 });
 
@@ -706,6 +726,10 @@ server.on("upgrade", (request, socket, head) => {
     return;
   }
   const url = new URL(request.url ?? "/", "http://relay.local");
+  if (url.pathname === "/companion") {
+    companionSockets.handleUpgrade(request, socket, head);
+    return;
+  }
   if (url.pathname !== "/agent") {
     socket.destroy();
     return;
@@ -844,11 +868,15 @@ function shutdown(signal: NodeJS.Signals): Promise<void> {
 
     const forceTimer = setTimeout(() => {
       for (const client of wss.clients) client.terminate();
+      for (const client of companionSockets.clients()) client.terminate();
       server.closeAllConnections?.();
     }, 5_000);
     forceTimer.unref();
 
     for (const client of wss.clients) client.close(1001, "server shutdown");
+    await companionSockets.close();
+    await companionRegistry.close();
+    await companionStore.flush();
     await Promise.allSettled([...activeSessions.values()].map((session) => session.close()));
     await Promise.allSettled([flushAccounts(), flushUserMemory(), flushTestingHistory()]);
     closeTestingStore();

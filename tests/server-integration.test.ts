@@ -256,6 +256,22 @@ describe("relay process integration", () => {
       socket.once("close", (code, reason) => resolve({ code, reason: reason.toString() }));
     });
 
+    const companion = new WebSocket(`ws://127.0.0.1:${port}/companion?token=${encodeURIComponent(registered.token)}`);
+    const companionStatus = new Promise<Record<string, unknown>>((resolve, reject) => {
+      companion.once("message", (data, isBinary) => {
+        if (isBinary) reject(new Error("Expected companion JSON"));
+        else resolve(JSON.parse(data.toString()) as Record<string, unknown>);
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      companion.once("open", resolve);
+      companion.once("error", reject);
+    });
+    await expect(companionStatus).resolves.toMatchObject({ type: "companion.status", state: "unpaired" });
+    const companionClosed = new Promise<{ code: number; reason: string }>((resolve) => {
+      companion.once("close", (code, reason) => resolve({ code, reason: reason.toString() }));
+    });
+
     const logout = await fetch(`${baseUrl}/auth/logout`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${registered.token}`, Connection: "close" },
@@ -263,6 +279,7 @@ describe("relay process integration", () => {
     });
     expect(logout.status).toBe(200);
     await expect(socketClosed).resolves.toEqual({ code: 1008, reason: "signed out" });
+    await expect(companionClosed).resolves.toEqual({ code: 1008, reason: "signed out" });
 
     relay.kill("SIGTERM");
     await expect(relayExit).resolves.toEqual({ code: 0, signal: null });
@@ -273,6 +290,8 @@ describe("relay process integration", () => {
     const port = await reservePort();
     const baseUrl = `http://127.0.0.1:${port}`;
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "max-relay-readiness-"));
+    const unreadableCompanionPath = path.join(tempDir, "companion-bindings.json");
+    fs.mkdirSync(unreadableCompanionPath);
     relay = spawn(process.execPath, ["--import", tsxImport, "server/index.ts"], {
       cwd: process.cwd(),
       env: {
@@ -283,6 +302,7 @@ describe("relay process integration", () => {
         RELAY_AUTH_TOKEN: "",
         AUTH_REGISTRATION: "on",
         ACCOUNTS_FILE: path.join(tempDir, "accounts.json"),
+        COMPANION_BINDINGS_FILE: unreadableCompanionPath,
         USER_MEMORY_FILE: "off",
         TESTING_DATABASE: "off",
         TESTING_HISTORY_DIR: "off"
@@ -297,7 +317,10 @@ describe("relay process integration", () => {
     const unprotected = await fetch(`${baseUrl}/ready`, { headers: { Connection: "close" } });
     expect(unprotected.status).toBe(503);
     expect((await unprotected.json()) as { issues: string[] }).toMatchObject({
-      issues: expect.arrayContaining(["access-control-not-configured"])
+      issues: expect.arrayContaining([
+        "access-control-not-configured",
+        expect.stringContaining("Companion binding store unreadable")
+      ])
     });
 
     const registration = await fetch(`${baseUrl}/auth/register`, {

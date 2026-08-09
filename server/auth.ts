@@ -12,6 +12,8 @@ import { authActive, sessionUser, type PublicUser } from "./accounts";
 import { config } from "./config";
 
 export type UpgradeDecision = { ok: true } | { ok: false; code: number; reason: string };
+export type AccountUpgradeDecision =
+  { ok: true; token: string; user: PublicUser } | { ok: false; code: number; reason: string };
 
 const RATE_WINDOW_MS = 60_000;
 // Per-address timestamps of recent upgrade attempts within the trailing window.
@@ -123,9 +125,9 @@ export function requestUser(request: IncomingMessage): PublicUser | null {
 
 /** The concrete login session presented by a request, including its opaque
  * token so an HTTP logout/password change can revoke matching live sockets. */
-export function requestSession(request: IncomingMessage): { token: string; user: PublicUser } | null {
+export function requestSession(request: IncomingMessage, now = Date.now()): { token: string; user: PublicUser } | null {
   for (const token of presentedTokens(request)) {
-    const user = sessionUser(token);
+    const user = sessionUser(token, now);
     if (user) return { token, user };
   }
   return null;
@@ -229,4 +231,24 @@ export function authorizeUpgrade(request: IncomingMessage, now = Date.now()): Up
   }
 
   return { ok: true };
+}
+
+/** Account-only access for the phone companion. The operator token is
+ * deliberately insufficient because every companion must have a stable
+ * account identity for pairing and session revocation. */
+export function authorizeAccountUpgrade(request: IncomingMessage, now = Date.now()): AccountUpgradeDecision {
+  if (!checkRateLimit(clientAddress(request), now)) {
+    return { ok: false, code: 429, reason: "Too many connection attempts" };
+  }
+
+  if (config.allowedOrigins.length) {
+    const origin = request.headers.origin;
+    if (origin && !config.allowedOrigins.includes(origin)) {
+      return { ok: false, code: 403, reason: "Origin not allowed" };
+    }
+  }
+
+  const session = requestSession(request, now);
+  if (!session) return { ok: false, code: 401, reason: "Account login required" };
+  return { ok: true, ...session };
 }

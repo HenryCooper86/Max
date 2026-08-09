@@ -72,6 +72,9 @@ import {
 
 const log = createLogger("testing-history");
 
+let companionEventsAccepted = 0;
+let companionEventsRejected = 0;
+
 export const metrics = {
   ...relayMetrics,
   watchDrops: {
@@ -89,9 +92,17 @@ export const metrics = {
       this.watchDrops[key] += 1;
     }
   },
+  companionAccepted(): void {
+    companionEventsAccepted += 1;
+  },
+  companionRejected(): void {
+    companionEventsRejected += 1;
+  },
   snapshot(): ReturnType<typeof relayMetrics.snapshot> & Record<string, number> {
     return {
       ...relayMetrics.snapshot(),
+      companionEventsAccepted,
+      companionEventsRejected,
       watchDrops_disabled: this.watchDrops.disabled,
       watchDrops_budget: this.watchDrops.budget,
       watchDrops_adas_window: this.watchDrops["adas-window"],
@@ -110,6 +121,8 @@ export const metrics = {
     completedSessions.length = 0;
     testingHistoryLoaded = false;
     resetTestingStore();
+    companionEventsAccepted = 0;
+    companionEventsRejected = 0;
     this.watchDrops.disabled = 0;
     this.watchDrops.budget = 0;
     this.watchDrops["adas-window"] = 0;

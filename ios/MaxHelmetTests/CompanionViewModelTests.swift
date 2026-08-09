@@ -1940,6 +1940,323 @@ final class CompanionViewModelTests: XCTestCase {
         withExtendedLifetime(cancellable) {}
     }
 
+    func testAcceptedSynchronousStartFailurePublishesAcrossRideRollbackStress() {
+        let states: [CompanionConnectionState] = [
+            .failed(code: "connection", detail: "closed"),
+            .failed(code: "configuration", detail: "invalid"),
+            .failed(code: "auth", detail: "expired"),
+            .unpaired
+        ]
+        let paired = CompanionConnectionState.paired(deviceId: "rdk", label: nil)
+        var activityCount = 0
+
+        for repetition in 0..<10 {
+            for state in states {
+                XCTContext.runActivity(named: "\(repetition)-\(state)") { _ in
+                    activityCount += 1
+                    let harness = Harness()
+                    harness.stream.startResults = [true]
+                    harness.stream.permissionOnStart = .precise
+                    harness.client.onConnect = { harness.client.publish(state) }
+                    var startsOnPaired = true
+                    var nestedAccountToken: String?
+                    var publishedStates: [CompanionConnectionState] = []
+                    let cancellable = harness.viewModel.$companionState.dropFirst().sink { publishedState in
+                        publishedStates.append(publishedState)
+                        if startsOnPaired, publishedState == paired {
+                            startsOnPaired = false
+                            harness.viewModel.startHelmetRide()
+                        } else if publishedState == .signedOut, let token = nestedAccountToken {
+                            nestedAccountToken = nil
+                            harness.viewModel.sessionToken = token
+                        }
+                    }
+
+                    harness.client.publish(paired)
+
+                    XCTAssertEqual(publishedStates, [paired, state])
+                    XCTAssertEqual(harness.viewModel.companionState, state)
+                    XCTAssertFalse(harness.viewModel.helmetRideActive)
+                    XCTAssertFalse(harness.viewModel.helmetRideOwned)
+                    XCTAssertEqual(
+                        harness.events.filter { $0.hasPrefix("companion.connect:") }.count,
+                        1
+                    )
+                    XCTAssertEqual(harness.client.startCount, 0)
+                    XCTAssertEqual(harness.client.stopCount, 0)
+                    XCTAssertEqual(harness.client.disconnectCount, 0)
+                    XCTAssertEqual(harness.stream.startCount, 0)
+                    XCTAssertEqual(harness.stream.stopCount, 0)
+                    XCTAssertTrue(harness.client.fixes.isEmpty)
+
+                    harness.viewModel.startHelmetRide()
+
+                    XCTAssertEqual(
+                        harness.events.filter { $0.hasPrefix("companion.connect:") }.count,
+                        1,
+                        "the published failure must agree with Start eligibility"
+                    )
+                    let staleCallback = harness.client.onState
+                    let publicationCountBeforeAccount = publishedStates.count
+                    let expectedToken = repetition.isMultiple(of: 2) ? "account-c" : " \n "
+                    nestedAccountToken = expectedToken
+                    harness.viewModel.sessionToken = "account-b"
+                    staleCallback?(state)
+                    staleCallback?(state)
+
+                    XCTAssertEqual(harness.viewModel.sessionToken, expectedToken)
+                    XCTAssertEqual(harness.viewModel.companionState, .signedOut)
+                    XCTAssertEqual(harness.client.disconnectCount, 1)
+                    XCTAssertEqual(
+                        Array(publishedStates.dropFirst(publicationCountBeforeAccount)),
+                        [.signedOut],
+                        "old-client duplicate states must be stale after B to C/clear"
+                    )
+                    XCTAssertEqual(harness.secretWrites.map(\.value), [expectedToken])
+                    withExtendedLifetime(cancellable) {}
+                }
+            }
+        }
+
+        XCTAssertEqual(activityCount, 40)
+    }
+
+    func testRealClientInvalidRelayFailurePublishesAcrossRideRollbackStress() {
+        let paired = CompanionConnectionState.paired(deviceId: "rdk", label: nil)
+        let failure = CompanionConnectionState.failed(
+            code: "configuration",
+            detail: "Invalid relay URL or session token."
+        )
+        var activityCount = 0
+
+        for repetition in 0..<10 {
+            XCTContext.runActivity(named: "\(repetition)-invalid-relay") { _ in
+                activityCount += 1
+                let pairSocket = ViewModelRecordingSocket()
+                let harness = RealCompanionViewModelHarness(sockets: [pairSocket])
+                harness.viewModel.pairCode = "123456"
+                harness.viewModel.pairHelmet()
+                harness.viewModel.relayURL = "not a relay url"
+                harness.stream.startResults = [true]
+                harness.stream.permissionOnStart = .precise
+                var startsOnPaired = true
+                var nestedAccountToken: String?
+                var publishedStates: [CompanionConnectionState] = []
+                let cancellable = harness.viewModel.$companionState.dropFirst().sink { publishedState in
+                    publishedStates.append(publishedState)
+                    if startsOnPaired, publishedState == paired {
+                        startsOnPaired = false
+                        harness.viewModel.startHelmetRide()
+                    } else if publishedState == .signedOut, let token = nestedAccountToken {
+                        nestedAccountToken = nil
+                        harness.viewModel.sessionToken = token
+                    }
+                }
+
+                pairSocket.deliver(
+                    .string("{\"type\":\"companion.status\",\"state\":\"paired\",\"deviceId\":\"rdk\"}")
+                )
+
+                XCTAssertEqual(publishedStates, [paired, failure])
+                XCTAssertEqual(harness.viewModel.companionState, failure)
+                XCTAssertFalse(harness.viewModel.helmetRideActive)
+                XCTAssertFalse(harness.viewModel.helmetRideOwned)
+                XCTAssertEqual(harness.requests.count, 1)
+                XCTAssertEqual(harness.client.startCount, 0)
+                XCTAssertEqual(harness.client.stopCount, 0)
+                XCTAssertEqual(harness.client.disconnectCount, 0)
+                XCTAssertEqual(harness.stream.startCount, 0)
+                XCTAssertEqual(harness.stream.stopCount, 0)
+                XCTAssertEqual(harness.client.fixCount, 0)
+                XCTAssertEqual(pairSocket.cancelCount, 1)
+
+                harness.viewModel.startHelmetRide()
+
+                XCTAssertEqual(harness.requests.count, 1, "failed configuration must remain ineligible")
+                let staleCallback = harness.client.onState
+                let publicationCountBeforeAccount = publishedStates.count
+                let expectedToken = repetition.isMultiple(of: 2) ? "account-c" : " \n "
+                nestedAccountToken = expectedToken
+                harness.viewModel.sessionToken = "account-b"
+                staleCallback?(failure)
+                staleCallback?(failure)
+
+                XCTAssertEqual(harness.viewModel.sessionToken, expectedToken)
+                XCTAssertEqual(harness.viewModel.companionState, .signedOut)
+                XCTAssertEqual(harness.client.disconnectCount, 1)
+                XCTAssertEqual(
+                    Array(publishedStates.dropFirst(publicationCountBeforeAccount)),
+                    [.signedOut]
+                )
+                XCTAssertEqual(harness.secretWrites.map(\.value), [expectedToken])
+                withExtendedLifetime(cancellable) {}
+            }
+        }
+
+        XCTAssertEqual(activityCount, 10)
+    }
+
+    func testAcceptedStartStatePublishesAcrossOrdinaryStopStress() {
+        let states: [CompanionConnectionState] = [
+            .connecting,
+            .ready(deviceId: "rdk", label: nil)
+        ]
+        let paired = CompanionConnectionState.paired(deviceId: "rdk", label: nil)
+        var activityCount = 0
+
+        for repetition in 0..<10 {
+            for state in states {
+                XCTContext.runActivity(named: "\(repetition)-\(state)") { _ in
+                    activityCount += 1
+                    let harness = Harness()
+                    harness.stream.startResults = [true, true]
+                    harness.stream.permissionOnStart = .precise
+                    harness.client.onConnect = { harness.client.publish(state) }
+                    var startsAndStopsOnPaired = true
+                    var nestedAccountToken: String?
+                    var publishedStates: [CompanionConnectionState] = []
+                    let cancellable = harness.viewModel.$companionState.dropFirst().sink { publishedState in
+                        publishedStates.append(publishedState)
+                        if startsAndStopsOnPaired, publishedState == paired {
+                            startsAndStopsOnPaired = false
+                            harness.viewModel.startHelmetRide()
+                            harness.viewModel.stopHelmetRide()
+                        } else if publishedState == .signedOut, let token = nestedAccountToken {
+                            nestedAccountToken = nil
+                            harness.viewModel.sessionToken = token
+                        }
+                    }
+
+                    harness.client.publish(paired)
+
+                    XCTAssertEqual(publishedStates, [paired, state])
+                    XCTAssertEqual(harness.viewModel.companionState, state)
+                    XCTAssertFalse(harness.viewModel.helmetRideActive)
+                    XCTAssertFalse(harness.viewModel.helmetRideOwned)
+                    XCTAssertEqual(
+                        harness.events.filter { $0.hasPrefix("companion.connect:") }.count,
+                        1
+                    )
+                    XCTAssertEqual(harness.client.startCount, 1)
+                    XCTAssertEqual(harness.client.stopCount, 1)
+                    XCTAssertEqual(harness.client.disconnectCount, 0)
+                    XCTAssertEqual(harness.stream.startCount, 1)
+                    XCTAssertEqual(harness.stream.stopCount, 1)
+
+                    harness.viewModel.startHelmetRide()
+                    if case .ready = state {
+                        XCTAssertTrue(harness.viewModel.helmetRideActive)
+                        XCTAssertEqual(harness.client.startCount, 2)
+                        XCTAssertEqual(harness.stream.startCount, 2)
+                        harness.viewModel.stopHelmetRide()
+                        XCTAssertEqual(harness.client.stopCount, 2)
+                        XCTAssertEqual(harness.stream.stopCount, 2)
+                    } else {
+                        XCTAssertFalse(harness.viewModel.helmetRideActive)
+                        XCTAssertEqual(harness.client.startCount, 1)
+                        XCTAssertEqual(harness.stream.startCount, 1)
+                    }
+
+                    let staleCallback = harness.client.onState
+                    let publicationCountBeforeAccount = publishedStates.count
+                    let expectedToken = repetition.isMultiple(of: 2) ? "account-c" : " \n "
+                    nestedAccountToken = expectedToken
+                    harness.viewModel.sessionToken = "account-b"
+                    staleCallback?(state)
+                    staleCallback?(state)
+
+                    XCTAssertEqual(harness.viewModel.sessionToken, expectedToken)
+                    XCTAssertEqual(harness.viewModel.companionState, .signedOut)
+                    XCTAssertEqual(harness.client.disconnectCount, 1)
+                    XCTAssertEqual(
+                        Array(publishedStates.dropFirst(publicationCountBeforeAccount)),
+                        [.signedOut]
+                    )
+                    XCTAssertEqual(harness.secretWrites.map(\.value), [expectedToken])
+                    withExtendedLifetime(cancellable) {}
+                }
+            }
+        }
+
+        XCTAssertEqual(activityCount, 20)
+    }
+
+    func testRealClientConnectingPublishesAcrossOrdinaryStopStress() throws {
+        let paired = CompanionConnectionState.paired(deviceId: "rdk", label: nil)
+        var activityCount = 0
+
+        for repetition in 0..<10 {
+            try XCTContext.runActivity(named: "\(repetition)-real-connecting") { _ in
+                activityCount += 1
+                let pairSocket = ViewModelRecordingSocket()
+                let rideSocket = ViewModelRecordingSocket()
+                let harness = RealCompanionViewModelHarness(sockets: [pairSocket, rideSocket])
+                harness.viewModel.pairCode = "123456"
+                harness.viewModel.pairHelmet()
+                harness.stream.startResults = [true]
+                harness.stream.permissionOnStart = .precise
+                var startsAndStopsOnPaired = true
+                var nestedAccountToken: String?
+                var publishedStates: [CompanionConnectionState] = []
+                let cancellable = harness.viewModel.$companionState.dropFirst().sink { publishedState in
+                    publishedStates.append(publishedState)
+                    if startsAndStopsOnPaired, publishedState == paired {
+                        startsAndStopsOnPaired = false
+                        harness.viewModel.startHelmetRide()
+                        harness.viewModel.stopHelmetRide()
+                    } else if publishedState == .signedOut, let token = nestedAccountToken {
+                        nestedAccountToken = nil
+                        harness.viewModel.sessionToken = token
+                    }
+                }
+
+                pairSocket.deliver(
+                    .string("{\"type\":\"companion.status\",\"state\":\"paired\",\"deviceId\":\"rdk\"}")
+                )
+
+                XCTAssertEqual(publishedStates, [paired, .connecting])
+                XCTAssertEqual(harness.viewModel.companionState, .connecting)
+                XCTAssertFalse(harness.viewModel.helmetRideActive)
+                XCTAssertFalse(harness.viewModel.helmetRideOwned)
+                XCTAssertEqual(harness.requests.count, 2)
+                XCTAssertEqual(harness.client.startCount, 1)
+                XCTAssertEqual(harness.client.stopCount, 1)
+                XCTAssertEqual(harness.client.disconnectCount, 0)
+                XCTAssertEqual(harness.stream.startCount, 1)
+                XCTAssertEqual(harness.stream.stopCount, 1)
+                XCTAssertEqual(try self.viewModelMessageTypes(rideSocket.sentMessages), ["companion.stop"])
+                XCTAssertEqual(pairSocket.cancelCount, 1)
+                XCTAssertEqual(rideSocket.cancelCount, 0)
+
+                harness.viewModel.startHelmetRide()
+
+                XCTAssertEqual(harness.requests.count, 2, "connecting presentation must remain ineligible")
+                XCTAssertEqual(harness.client.startCount, 1)
+                XCTAssertEqual(harness.stream.startCount, 1)
+                let staleCallback = harness.client.onState
+                let publicationCountBeforeAccount = publishedStates.count
+                let expectedToken = repetition.isMultiple(of: 2) ? "account-c" : " \n "
+                nestedAccountToken = expectedToken
+                harness.viewModel.sessionToken = "account-b"
+                staleCallback?(.connecting)
+                staleCallback?(.connecting)
+
+                XCTAssertEqual(harness.viewModel.sessionToken, expectedToken)
+                XCTAssertEqual(harness.viewModel.companionState, .signedOut)
+                XCTAssertEqual(harness.client.disconnectCount, 1)
+                XCTAssertEqual(rideSocket.cancelCount, 1)
+                XCTAssertEqual(
+                    Array(publishedStates.dropFirst(publicationCountBeforeAccount)),
+                    [.signedOut]
+                )
+                XCTAssertEqual(harness.secretWrites.map(\.value), [expectedToken])
+                withExtendedLifetime(cancellable) {}
+            }
+        }
+
+        XCTAssertEqual(activityCount, 10)
+    }
+
     func testAccountBoundaryDefersDisconnectStartAcrossNestedNewestTokenMatrix() {
         for nestedToken in ["account-c", " \n ", " account-session-token "] {
             let harness = Harness()

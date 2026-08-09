@@ -9,16 +9,19 @@ import { createPlayback } from "./audio/playback";
 import { createReferenceSink, type ReferenceSink } from "./audio/reference";
 import { createVoiceGate } from "./audio/voice-gate";
 import { loadConfig } from "./config";
-import { createDeviceDispatcher } from "./device/dispatch";
+import { createDeviceDispatcher, type DeviceCommand } from "./device/dispatch";
 import { loadOrCreateDeviceId } from "./device/identity";
 import { createPoweroffController } from "./device/poweroff";
 import { writeCue } from "./audio/cues";
 import { createHudServer } from "./hud/server";
 import { initialHudState, reduceHud } from "./hud/state";
 import { createHazardHandler } from "./hazard";
+import { createRdkNavigationController, type RdkNavigationController } from "./navigation/controller";
+import { createPhoneLocationSource, type PhoneLocationSource } from "./navigation/phone-location";
 import { createRelayClient, nextBackoffMs } from "./relay";
 import { createVisionClient, type VisionClient, type VisionEvent } from "./vision-client";
 import { startHeartbeat } from "./watchdog";
+import type { AgentEvent, DeviceResultEvent } from "../../../shared/agent";
 
 const VISION_RECONNECT_MS = 2_000;
 
@@ -45,6 +48,55 @@ export function reconnectDecision(
 ): "now" | "wait-for-voice" | "never" {
   const reason: CloseReason = shuttingDown ? "intentional" : idle ? "idle" : "dropped";
   return decideReconnect(reason, gateOpen);
+}
+
+export async function routeDeviceCommand(options: {
+  command: DeviceCommand;
+  navigation: RdkNavigationController;
+  dispatch: ReturnType<typeof createDeviceDispatcher>;
+}): Promise<DeviceResultEvent> {
+  try {
+    if (options.command.action === "navigation.start" || options.command.action === "navigation.stop") {
+      return await options.navigation.handleCommand(options.command);
+    }
+    return await options.dispatch(options.command);
+  } catch {
+    return {
+      type: "device.result",
+      commandId: options.command.commandId,
+      status: "failed"
+    };
+  }
+}
+
+export function routeAgentNavigationEvent(
+  event: AgentEvent,
+  location: PhoneLocationSource,
+  navigation: RdkNavigationController
+): boolean {
+  try {
+    if (event.type === "nav.route") {
+      navigation.handleRoute(event);
+      return true;
+    }
+    if (event.type === "nav.error") {
+      navigation.handleError(event);
+      return true;
+    }
+    if (event.type === "phone.location") {
+      location.acceptLocation(event);
+      return true;
+    }
+    if (event.type === "phone.location.status") {
+      location.acceptStatus(event);
+      return true;
+    }
+    return false;
+  } catch {
+    // A stale or synchronously closing session owns this event even when its
+    // callback refuses it. Do not fall through and route it a second time.
+    return true;
+  }
 }
 
 /**
@@ -176,6 +228,40 @@ function start(): void {
     }
   });
 
+  type NavigationSession = {
+    location: PhoneLocationSource;
+    navigation: RdkNavigationController;
+    closed: boolean;
+  };
+
+  function createNavigationSession(): NavigationSession {
+    const location = createPhoneLocationSource({
+      onFix: (fix) => navigation.handleFix(fix),
+      onState: (state) => navigation.handleLocationState(state)
+    });
+    const navigation = createRdkNavigationController({
+      location,
+      sendEvent: (event) => relay.sendEvent(event),
+      onState: () => {},
+      canPrompt: () => true,
+      interruptOrdinaryPlayback: () => playback.flush()
+    });
+    return { location, navigation, closed: false };
+  }
+
+  let navigationSession = createNavigationSession();
+
+  function closeNavigationSession(): void {
+    if (navigationSession.closed) return;
+    navigationSession.closed = true;
+    navigationSession.navigation.close();
+    navigationSession.location.close();
+  }
+
+  function ensureNavigationSession(): void {
+    if (navigationSession.closed) navigationSession = createNavigationSession();
+  }
+
   const hud = createHudServer(config.hudPort, config.visionPreviewPort);
   let hudState = initialHudState();
 
@@ -222,6 +308,7 @@ function start(): void {
 
   const relay = createRelayClient(config, deviceId, {
     onReady: () => {
+      if (!shuttingDown) ensureNavigationSession();
       attempt = 0;
       waitingForVoice = false;
       console.log("[relay] session ready");
@@ -230,6 +317,7 @@ function start(): void {
     onEvent: (event) => {
       hudState = reduceHud(hudState, event);
       hud.publish(hudState);
+      routeAgentNavigationEvent(event, navigationSession.location, navigationSession.navigation);
       if (event.type === "status" && event.state === "hearing") {
         // Barge-in: the rider started talking, so drop the queued reply — but
         // only if our own echo-cancelled mic heard them too. Doubao's VAD runs
@@ -244,12 +332,14 @@ function start(): void {
         playback.flush();
       }
       if (event.type === "device.command") {
-        void dispatch({ commandId: event.commandId, action: event.action, args: event.args }).then((result) =>
+        const command = { commandId: event.commandId, action: event.action, args: event.args };
+        void routeDeviceCommand({ command, navigation: navigationSession.navigation, dispatch }).then((result) =>
           relay.sendEvent(result)
         );
       }
     },
     onClosed: (idle) => {
+      closeNavigationSession();
       playback.flush();
       // Watching dies with the session: a reconnecting rider must explicitly
       // re-enable it rather than resume from a stale toggle left on from
@@ -320,6 +410,7 @@ function start(): void {
 
   const shutdown = (): void => {
     shuttingDown = true;
+    closeNavigationSession();
     capture.stop();
     playback.stop();
     relay.disconnect();

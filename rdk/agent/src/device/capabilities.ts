@@ -15,9 +15,6 @@ export type EmbeddedCapability = {
  * would have Max claim the rider is looking at photos that are not in front of
  * them.
  *
- * Navigation gets `device.notYet` rather than `device.noPhone` because
- * audio-only turn-by-turn needs neither a phone nor a screen — it simply is not
- * built yet, and claiming otherwise would be a false explanation.
  */
 export const EMBEDDED_CAPABILITIES: Record<DeviceActionName, EmbeddedCapability> = {
   "camera.photo": { supported: true },
@@ -38,8 +35,8 @@ export const EMBEDDED_CAPABILITIES: Record<DeviceActionName, EmbeddedCapability>
   "music.control": { supported: false, reason: "device.noPhone" },
   "sms.compose": { supported: false, reason: "device.noPhone" },
   "call.dial": { supported: false, reason: "device.noPhone" },
-  "navigation.start": { supported: false, reason: "device.notYet" },
-  "navigation.stop": { supported: false, reason: "device.notYet" },
+  "navigation.start": { supported: true },
+  "navigation.stop": { supported: true },
   // V-C Task 5: the Python sidecar now has a real "vision.watch" handler
   // (rdk/vision/service.py's WatchSampler) behind the same request() fallback
   // volume.set etc. skip — dispatch.ts needs no new branch. Honest to claim

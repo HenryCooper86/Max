@@ -49,6 +49,8 @@ describe("EMBEDDED_CAPABILITIES", () => {
       "camera.look",
       "camera.photo",
       "camera.record",
+      "navigation.start",
+      "navigation.stop",
       "system.shutdown",
       "vision.watch",
       "volume.set"
@@ -64,9 +66,11 @@ describe("EMBEDDED_CAPABILITIES", () => {
     }
   });
 
-  it("does not blame a missing phone for unbuilt navigation", () => {
-    expect(capabilityFor("navigation.start").reason).toBe("device.notYet");
+  it("supports helmet navigation without claiming it can show a destination", () => {
+    expect(capabilityFor("navigation.start")).toEqual({ supported: true });
+    expect(capabilityFor("navigation.stop")).toEqual({ supported: true });
     expect(capabilityFor("gallery.open").reason).toBe("device.noScreen");
+    expect(capabilityFor("destination.show")).toEqual({ supported: false, reason: "device.noScreen" });
     expect(capabilityFor("call.dial").reason).toBe("device.noPhone");
   });
 });

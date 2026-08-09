@@ -6,6 +6,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import {
+  authActive,
   changePassword,
   createInvite,
   deleteUser,
@@ -774,7 +775,11 @@ wss.on("connection", (client, request) => {
     sessionLog,
     address,
     region,
-    authenticatedUser
+    authenticatedUser,
+    {
+      deviceRegistrationAuthorized: relayTokenPresented(request) || (!config.relayAuthToken && !authActive()),
+      onDeviceRegistered: (peer) => companionRegistry.attachHelmet(peer)
+    }
   );
   activeSessions.set(client, session);
 

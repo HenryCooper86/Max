@@ -6,7 +6,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import WebSocket from "ws";
+import WebSocket, { type RawData } from "ws";
 
 const require = createRequire(import.meta.url);
 // Load tsx in-process via --import rather than the tsx CLI: the CLI wraps the
@@ -51,6 +51,49 @@ async function waitForServer(baseUrl: string): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error("Relay did not become healthy");
+}
+
+function waitForSocketOpen(socket: WebSocket): Promise<void> {
+  return new Promise((resolve, reject) => {
+    socket.once("open", resolve);
+    socket.once("error", reject);
+  });
+}
+
+function waitForSocketClose(socket: WebSocket): Promise<{ code: number; reason: string }> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("Timed out waiting for WebSocket close")), 1_500);
+    socket.once("close", (code, reason) => {
+      clearTimeout(timeout);
+      resolve({ code, reason: reason.toString() });
+    });
+  });
+}
+
+function waitForEvent(
+  socket: WebSocket,
+  predicate: (event: Record<string, unknown>) => boolean
+): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("Timed out waiting for WebSocket event")), 1_500);
+    const onMessage = (data: RawData, isBinary: boolean) => {
+      if (isBinary) return;
+      const event = JSON.parse(data.toString()) as Record<string, unknown>;
+      if (!predicate(event)) return;
+      clearTimeout(timeout);
+      socket.off("message", onMessage);
+      resolve(event);
+    };
+    socket.on("message", onMessage);
+  });
+}
+
+function closeSocket(socket: WebSocket): Promise<void> {
+  if (socket.readyState === WebSocket.CLOSED) return Promise.resolve();
+  return new Promise((resolve) => {
+    socket.once("close", () => resolve());
+    socket.close();
+  });
 }
 
 describe("relay process integration", () => {
@@ -284,6 +327,221 @@ describe("relay process integration", () => {
     relay.kill("SIGTERM");
     await expect(relayExit).resolves.toEqual({ code: 0, signal: null });
     relay = null;
+  }, 15_000);
+
+  it("does not let an authenticated account claim an RDK identity", async () => {
+    const port = await reservePort();
+    const baseUrl = `http://127.0.0.1:${port}`;
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "max-rdk-account-auth-"));
+    relay = spawn(process.execPath, ["--import", tsxImport, "server/index.ts"], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PORT: String(port),
+        NODE_ENV: "production",
+        VOICE_PROVIDER: "mock",
+        RELAY_AUTH_TOKEN: "rdk-operator-token",
+        AUTH_REGISTRATION: "on",
+        ACCOUNTS_FILE: path.join(tempDir, "accounts.json"),
+        COMPANION_BINDINGS_FILE: path.join(tempDir, "companion-bindings.json"),
+        USER_MEMORY_FILE: path.join(tempDir, "user-memory.json"),
+        TESTING_DATABASE: "off",
+        TESTING_HISTORY_DIR: "off"
+      },
+      stdio: ["ignore", "ignore", "ignore"]
+    });
+    await waitForServer(baseUrl);
+
+    const registration = await fetch(`${baseUrl}/auth/register`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer rdk-operator-token",
+        Connection: "close"
+      },
+      body: JSON.stringify({ username: "rdk-account", password: "password123" })
+    });
+    const account = (await registration.json()) as { token: string };
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/agent?token=${encodeURIComponent(account.token)}`);
+    await waitForSocketOpen(socket);
+    const closed = waitForSocketClose(socket);
+    socket.send(
+      JSON.stringify({
+        type: "session.start",
+        sampleRate: 16_000,
+        channels: 1,
+        deviceId: "rdk-66666666-6666-4666-8666-666666666666",
+        platform: "embedded"
+      })
+    );
+
+    await expect(closed).resolves.toMatchObject({ code: 1008 });
+  });
+
+  it("lets the operator RDK receive pairing and phone location without adding QA or user-memory evidence", async () => {
+    const port = await reservePort();
+    const baseUrl = `http://127.0.0.1:${port}`;
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "max-rdk-companion-privacy-"));
+    relay = spawn(process.execPath, ["--import", tsxImport, "server/index.ts"], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PORT: String(port),
+        NODE_ENV: "production",
+        VOICE_PROVIDER: "mock",
+        RELAY_AUTH_TOKEN: "rdk-operator-token",
+        AUTH_REGISTRATION: "on",
+        ACCOUNTS_FILE: path.join(tempDir, "accounts.json"),
+        COMPANION_BINDINGS_FILE: path.join(tempDir, "companion-bindings.json"),
+        USER_MEMORY_FILE: path.join(tempDir, "user-memory.json"),
+        TESTING_DATABASE: "off",
+        TESTING_HISTORY_DIR: "off"
+      },
+      stdio: ["ignore", "ignore", "ignore"]
+    });
+    await waitForServer(baseUrl);
+
+    const registration = await fetch(`${baseUrl}/auth/register`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer rdk-operator-token",
+        Connection: "close"
+      },
+      body: JSON.stringify({ username: "phone-rider", password: "password123" })
+    });
+    const account = (await registration.json()) as { token: string };
+    const agentEvents: Array<Record<string, unknown>> = [];
+    const agent = new WebSocket(`ws://127.0.0.1:${port}/agent?token=rdk-operator-token`);
+    agent.on("message", (data, isBinary) => {
+      if (!isBinary) agentEvents.push(JSON.parse(data.toString()) as Record<string, unknown>);
+    });
+    await waitForSocketOpen(agent);
+    const pairing = waitForEvent(agent, (event) => event.type === "companion.pairing");
+    agent.send(
+      JSON.stringify({
+        type: "session.start",
+        sampleRate: 16_000,
+        channels: 1,
+        deviceId: "rdk-77777777-7777-4777-8777-777777777777",
+        deviceLabel: "  Privacy helmet  ",
+        testerId: "rdk-privacy-evidence",
+        platform: "embedded"
+      })
+    );
+    const pairingEvent = await pairing;
+    expect(pairingEvent).toMatchObject({ type: "companion.pairing", paired: false });
+    expect(pairingEvent.code).toMatch(/^\d{6}$/);
+
+    const companion = new WebSocket(`ws://127.0.0.1:${port}/companion?token=${encodeURIComponent(account.token)}`);
+    const initialCompanionStatus = waitForEvent(companion, (event) => event.type === "companion.status");
+    await waitForSocketOpen(companion);
+    await expect(initialCompanionStatus).resolves.toMatchObject({ state: "unpaired" });
+    const ready = waitForEvent(companion, (event) => event.type === "companion.status" && event.state === "ready");
+    companion.send(JSON.stringify({ type: "companion.pair", code: pairingEvent.code }));
+    await ready;
+    const sharing = waitForEvent(companion, (event) => event.type === "companion.status" && event.state === "sharing");
+    companion.send(JSON.stringify({ type: "companion.start" }));
+    await sharing;
+
+    const location = waitForEvent(agent, (event) => event.type === "phone.location");
+    companion.send(
+      JSON.stringify({
+        type: "companion.location",
+        sequence: 1,
+        lat: 31.2304,
+        lon: 121.4737,
+        horizontalAccuracyMeters: 5,
+        timestamp: Date.now()
+      })
+    );
+    await expect(location).resolves.toMatchObject({
+      type: "phone.location",
+      sequence: 1,
+      lat: 31.2304,
+      lon: 121.4737
+    });
+
+    await closeSocket(agent);
+    const sessionsResponse = await fetch(`${baseUrl}/testing/sessions?testerId=rdk-privacy-evidence`, {
+      headers: { Authorization: "Bearer rdk-operator-token", Connection: "close" }
+    });
+    const sessions = (await sessionsResponse.json()) as {
+      items: Array<{ serverEvents: number; controlDownBytes: number }>;
+    };
+    expect(sessions.items).toHaveLength(1);
+    const recordedTypes = new Set(["companion.pairing", "phone.location", "phone.location.status"]);
+    const ordinaryEvents = agentEvents.filter(
+      (event) => event.type !== "connection" && !recordedTypes.has(String(event.type))
+    );
+    expect(sessions.items[0]?.serverEvents).toBe(ordinaryEvents.length);
+    expect(JSON.stringify(sessions.items[0])).not.toContain(String(pairingEvent.code));
+    expect(JSON.stringify(sessions.items[0])).not.toContain("31.2304");
+
+    const memoryResponse = await fetch(`${baseUrl}/auth/memory`, {
+      headers: { Authorization: `Bearer ${account.token}`, Connection: "close" }
+    });
+    await expect(memoryResponse.json()).resolves.toMatchObject({ memory: { turnCount: 0, factCount: 0 } });
+    await closeSocket(companion);
+  }, 15_000);
+
+  it("allows device registration only while development mode has no token and no accounts", async () => {
+    const port = await reservePort();
+    const baseUrl = `http://127.0.0.1:${port}`;
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "max-rdk-open-development-"));
+    relay = spawn(process.execPath, ["--import", tsxImport, "server/index.ts"], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PORT: String(port),
+        NODE_ENV: "development",
+        VOICE_PROVIDER: "mock",
+        RELAY_AUTH_TOKEN: "",
+        AUTH_REGISTRATION: "on",
+        ACCOUNTS_FILE: path.join(tempDir, "accounts.json"),
+        COMPANION_BINDINGS_FILE: path.join(tempDir, "companion-bindings.json"),
+        USER_MEMORY_FILE: "off",
+        TESTING_DATABASE: "off",
+        TESTING_HISTORY_DIR: "off"
+      },
+      stdio: ["ignore", "ignore", "ignore"]
+    });
+    await waitForServer(baseUrl);
+
+    const openDevice = new WebSocket(`ws://127.0.0.1:${port}/agent`);
+    await waitForSocketOpen(openDevice);
+    const pairing = waitForEvent(openDevice, (event) => event.type === "companion.pairing");
+    openDevice.send(
+      JSON.stringify({
+        type: "session.start",
+        sampleRate: 16_000,
+        channels: 1,
+        deviceId: "rdk-88888888-8888-4888-8888-888888888888",
+        platform: "embedded"
+      })
+    );
+    await expect(pairing).resolves.toMatchObject({ type: "companion.pairing" });
+    await closeSocket(openDevice);
+
+    const registration = await fetch(`${baseUrl}/auth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Connection: "close" },
+      body: JSON.stringify({ username: "development-account", password: "password123" })
+    });
+    const account = (await registration.json()) as { token: string };
+    const claimedDevice = new WebSocket(`ws://127.0.0.1:${port}/agent?token=${encodeURIComponent(account.token)}`);
+    await waitForSocketOpen(claimedDevice);
+    const closed = waitForSocketClose(claimedDevice);
+    claimedDevice.send(
+      JSON.stringify({
+        type: "session.start",
+        sampleRate: 16_000,
+        channels: 1,
+        deviceId: "rdk-99999999-9999-4999-8999-999999999999",
+        platform: "embedded"
+      })
+    );
+    await expect(closed).resolves.toMatchObject({ code: 1008 });
   }, 15_000);
 
   it("keeps production readiness closed until access control and registration are hardened", async () => {

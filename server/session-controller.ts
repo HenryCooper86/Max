@@ -20,8 +20,14 @@ import {
   recordTesterTurnFeedback
 } from "./metrics";
 import { recordUserMemoryEvent, userConversationMemory, userMemoryEnabled } from "./user-memory";
+import type { HelmetPeer } from "./companion-registry";
 
 export type ProviderFactory = (client: WebSocket, telemetry: ProviderTelemetry) => AgentProvider;
+
+export type AgentSessionHooks = {
+  onDeviceRegistered?(peer: HelmetPeer): () => void;
+  deviceRegistrationAuthorized: boolean;
+};
 
 // 256 KiB: every other client event fits comfortably under a few KB, but
 // camera.frame carries a base64 JPEG capped at 200_000 chars below. Without
@@ -496,6 +502,7 @@ export class AgentSessionController {
   private providerStarted = false;
   private audioActive = false;
   private closed = false;
+  private detachHelmet?: () => void;
   private messageQueue: Promise<void> = Promise.resolve();
 
   constructor(
@@ -504,7 +511,8 @@ export class AgentSessionController {
     private readonly log?: Logger,
     private readonly clientIp = "unknown-ip",
     private readonly requestRegion?: string,
-    private readonly authenticatedUser?: { id: string; username: string }
+    private readonly authenticatedUser?: { id: string; username: string },
+    private readonly hooks?: AgentSessionHooks
   ) {
     this.provider = providerFactory(client, {
       serverEvent: (payload, bytes) => {
@@ -557,6 +565,11 @@ export class AgentSessionController {
       if (event.type === "session.start") {
         if (this.sessionStartReceived) throw new Error("session.start has already been received");
         this.sessionStartReceived = true;
+        if (event.deviceId && !this.hooks?.deviceRegistrationAuthorized) {
+          this.closed = true;
+          this.client.close(1008, "device registration unauthorized");
+          return;
+        }
       } else if (!this.sessionStartReceived) {
         throw new Error("session.start is required before control events");
       } else if (!this.providerStarted) {
@@ -621,6 +634,14 @@ export class AgentSessionController {
         try {
           await this.provider.start(providerEvent, providerContext);
           this.providerStarted = true;
+          if (event.deviceId) {
+            this.detachHelmet?.();
+            this.detachHelmet = this.hooks?.onDeviceRegistered?.({
+              deviceId: event.deviceId,
+              deviceLabel: event.deviceLabel?.trim() || "RDK X5",
+              send: (payload) => this.sendEphemeral(payload)
+            });
+          }
         } catch (error) {
           // A failed start is not recoverable on this socket: the provider may
           // be partially initialized and duplicate session.start is forbidden.
@@ -690,9 +711,23 @@ export class AgentSessionController {
       await this.messageQueue;
       await this.provider.close();
     } finally {
-      // Always settle the tester stats — a provider close failure must not
-      // leave a phantom active session (and an untrimmable tester) behind.
-      endTesterSession(this.relaySessionId);
+      const detachHelmet = this.detachHelmet;
+      this.detachHelmet = undefined;
+      try {
+        detachHelmet?.();
+      } finally {
+        // Always settle the tester stats — a provider close failure must not
+        // leave a phantom active session (and an untrimmable tester) behind.
+        endTesterSession(this.relaySessionId);
+      }
+    }
+  }
+
+  private sendEphemeral(payload: unknown) {
+    if (this.client.readyState === this.client.OPEN) {
+      const encoded = JSON.stringify(payload);
+      metrics.serverEvent(Buffer.byteLength(encoded));
+      this.client.send(encoded);
     }
   }
 

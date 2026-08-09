@@ -1,4 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { HelmetPeer } from "../server/companion-registry";
+import { metrics, testingSnapshot } from "../server/metrics";
+import type { AgentProvider } from "../server/providers/types";
+import { AgentSessionController, type AgentSessionHooks, type ProviderFactory } from "../server/session-controller";
+import { resetUserMemoryForTests, userConversationMemory } from "../server/user-memory";
 import {
   buildIntentGuidancePrompt,
   buildPersonalityPrompt,
@@ -10,6 +15,260 @@ import {
   restoreSessionMemory,
   updateSessionMemory
 } from "../shared/session";
+
+function makeProvider(overrides: Partial<AgentProvider> = {}): AgentProvider {
+  return {
+    start: async () => undefined,
+    startAudio: async () => undefined,
+    sendAudio: async () => undefined,
+    stopAudio: async () => undefined,
+    close: async () => undefined,
+    ...overrides
+  };
+}
+
+function startEvent(overrides: Record<string, unknown> = {}): Buffer {
+  return Buffer.from(
+    JSON.stringify({
+      type: "session.start",
+      sampleRate: 16_000,
+      channels: 1,
+      ...overrides
+    })
+  );
+}
+
+afterEach(() => {
+  metrics.reset();
+  resetUserMemoryForTests();
+});
+
+describe("stable RDK session registration", () => {
+  it("attaches once after provider start, forwards events, and detaches once on close", async () => {
+    const order: string[] = [];
+    const sent: string[] = [];
+    const detach = vi.fn(() => order.push("detach"));
+    let peer: HelmetPeer | undefined;
+    const hooks: AgentSessionHooks = {
+      deviceRegistrationAuthorized: true,
+      onDeviceRegistered(candidate) {
+        order.push("attach");
+        peer = candidate;
+        candidate.send({ type: "companion.pairing", code: "123456", expiresAt: 2_000, paired: false });
+        return detach;
+      }
+    };
+    const client = { readyState: 1, OPEN: 1, send: (payload: string) => sent.push(payload), close: vi.fn() } as never;
+    const controller = new AgentSessionController(
+      client,
+      () =>
+        makeProvider({
+          start: async () => {
+            order.push("provider.start");
+          }
+        }),
+      undefined,
+      "127.0.0.1",
+      undefined,
+      undefined,
+      hooks
+    );
+
+    await controller.handleMessage(
+      startEvent({
+        deviceId: "rdk-11111111-1111-4111-8111-111111111111",
+        deviceLabel: "  Trail helmet  ",
+        platform: "embedded"
+      }),
+      false
+    );
+    await controller.handleMessage(
+      startEvent({ deviceId: "rdk-11111111-1111-4111-8111-111111111111", platform: "embedded" }),
+      false
+    );
+
+    expect(order).toEqual(["provider.start", "attach"]);
+    expect(peer).toMatchObject({
+      deviceId: "rdk-11111111-1111-4111-8111-111111111111",
+      deviceLabel: "Trail helmet"
+    });
+    peer?.send({
+      type: "phone.location",
+      sequence: 7,
+      lat: 31.2304,
+      lon: 121.4737,
+      horizontalAccuracyMeters: 5,
+      timestamp: 1_000
+    });
+    expect(sent.map((payload) => JSON.parse(payload) as { type: string }).map((event) => event.type)).toEqual([
+      "connection",
+      "companion.pairing",
+      "error",
+      "phone.location"
+    ]);
+
+    await controller.close();
+    await controller.close();
+    expect(detach).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses RDK X5 as the fallback label and never attaches sessions without a device identity", async () => {
+    const peers: HelmetPeer[] = [];
+    const hooks: AgentSessionHooks = {
+      deviceRegistrationAuthorized: true,
+      onDeviceRegistered(peer) {
+        peers.push(peer);
+        return () => undefined;
+      }
+    };
+    const client = { readyState: 1, OPEN: 1, send: vi.fn(), close: vi.fn() } as never;
+    const first = new AgentSessionController(
+      client,
+      () => makeProvider(),
+      undefined,
+      "127.0.0.1",
+      undefined,
+      undefined,
+      hooks
+    );
+    await first.handleMessage(
+      startEvent({
+        deviceId: "rdk-22222222-2222-4222-8222-222222222222",
+        deviceLabel: "   ",
+        platform: "embedded"
+      }),
+      false
+    );
+    await first.close();
+
+    const second = new AgentSessionController(
+      client,
+      () => makeProvider(),
+      undefined,
+      "127.0.0.1",
+      undefined,
+      undefined,
+      hooks
+    );
+    await second.handleMessage(startEvent({ deviceLabel: "mobile app", platform: "ios" }), false);
+    await second.close();
+
+    expect(peers).toHaveLength(1);
+    expect(peers[0]?.deviceLabel).toBe("RDK X5");
+  });
+
+  it("does not attach when provider startup fails", async () => {
+    const onDeviceRegistered = vi.fn(() => () => undefined);
+    const client = { readyState: 1, OPEN: 1, send: vi.fn(), close: vi.fn() } as never;
+    const controller = new AgentSessionController(
+      client,
+      () =>
+        makeProvider({
+          start: async () => {
+            throw new Error("upstream unavailable");
+          }
+        }),
+      undefined,
+      "127.0.0.1",
+      undefined,
+      undefined,
+      { deviceRegistrationAuthorized: true, onDeviceRegistered }
+    );
+
+    await controller.handleMessage(
+      startEvent({ deviceId: "rdk-33333333-3333-4333-8333-333333333333", platform: "embedded" }),
+      false
+    );
+
+    expect(onDeviceRegistered).not.toHaveBeenCalled();
+  });
+
+  it("closes an unauthorized device registration with policy code 1008 before provider start", async () => {
+    const start = vi.fn(async () => undefined);
+    const close = vi.fn();
+    const client = { readyState: 1, OPEN: 1, send: vi.fn(), close } as never;
+    const controller = new AgentSessionController(
+      client,
+      () => makeProvider({ start }),
+      undefined,
+      "127.0.0.1",
+      undefined,
+      undefined,
+      { deviceRegistrationAuthorized: false }
+    );
+
+    await controller.handleMessage(
+      startEvent({ deviceId: "rdk-44444444-4444-4444-8444-444444444444", platform: "embedded" }),
+      false
+    );
+
+    expect(close).toHaveBeenCalledWith(1008, expect.any(String));
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("delivers pairing and phone location without adding QA or user-memory evidence", async () => {
+    const userId = "55555555-5555-4555-8555-555555555555";
+    const sent: Array<Record<string, unknown>> = [];
+    let peer: HelmetPeer | undefined;
+    const client = {
+      readyState: 1,
+      OPEN: 1,
+      send(payload: string) {
+        sent.push(JSON.parse(payload) as Record<string, unknown>);
+      },
+      close: vi.fn()
+    } as never;
+    const providerFactory: ProviderFactory = (socket, telemetry) =>
+      makeProvider({
+        start: async () => {
+          const ordinary = { type: "transcript", speaker: "agent", text: "Ordinary evidence", final: true };
+          const encoded = JSON.stringify(ordinary);
+          socket.send(encoded);
+          telemetry.serverEvent(ordinary, Buffer.byteLength(encoded));
+        }
+      });
+    const controller = new AgentSessionController(
+      client,
+      providerFactory,
+      undefined,
+      "127.0.0.1",
+      undefined,
+      { id: userId, username: "privacy-rider" },
+      {
+        deviceRegistrationAuthorized: true,
+        onDeviceRegistered(candidate) {
+          peer = candidate;
+          candidate.send({ type: "companion.pairing", code: "654321", expiresAt: 2_000, paired: false });
+          return () => undefined;
+        }
+      }
+    );
+
+    await controller.handleMessage(
+      startEvent({ deviceId: "rdk-55555555-5555-4555-8555-555555555555", platform: "embedded" }),
+      false
+    );
+    peer?.send({
+      type: "phone.location",
+      sequence: 1,
+      lat: 31.2304,
+      lon: 121.4737,
+      horizontalAccuracyMeters: 4,
+      timestamp: 1_000
+    });
+    await controller.close();
+
+    expect(sent).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "companion.pairing", code: "654321" }),
+        expect.objectContaining({ type: "phone.location", lat: 31.2304, lon: 121.4737 })
+      ])
+    );
+    expect(testingSnapshot().sessions).toHaveLength(1);
+    expect(testingSnapshot().sessions[0]).toMatchObject({ serverEvents: 1 });
+    expect(userConversationMemory(userId)?.turns.map((turn) => turn.text)).toEqual(["Ordinary evidence"]);
+  });
+});
 
 describe("session memory and safety policy", () => {
   it("detects emergency intent and escalates response mode", () => {

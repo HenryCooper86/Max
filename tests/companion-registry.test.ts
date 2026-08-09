@@ -380,7 +380,7 @@ describe("companion registry sharing lifecycle", () => {
     expect(reattached.events.at(-1)).toMatchObject({ type: "phone.location", sequence: 3 });
   });
 
-  it("forwards accepted fixes only to the bound live helmet and never retains or logs coordinates", async () => {
+  it("forwards accepted fixes only to the bound live helmet and never persists private pairing or location data", async () => {
     const h = harness();
     const bound = h.helmet("rdk-a");
     const other = h.helmet("rdk-b");
@@ -400,7 +400,10 @@ describe("companion registry sharing lifecycle", () => {
       speedMps: 12
     });
     expect(other.events.some((event) => event.type === "phone.location")).toBe(false);
-    expect(JSON.stringify(h.store.bindingForAccount("acct-a"))).not.toContain("31.2304");
+    const durableBinding = JSON.stringify(h.store.bindingForAccount("acct-a"));
+    expect(durableBinding).not.toContain("123456");
+    expect(durableBinding).not.toContain("31.2304");
+    expect(h.logs.join(" ")).not.toContain("123456");
     expect(h.logs.join(" ")).not.toContain("121.4737");
   });
 

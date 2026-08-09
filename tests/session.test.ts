@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { HelmetPeer } from "../server/companion-registry";
+import { createCompanionRegistry, type HelmetPeer } from "../server/companion-registry";
+import { createCompanionBindingStore } from "../server/companion-store";
 import { metrics, testingSnapshot } from "../server/metrics";
 import type { AgentProvider } from "../server/providers/types";
 import { AgentSessionController, type AgentSessionHooks, type ProviderFactory } from "../server/session-controller";
@@ -36,6 +37,14 @@ function startEvent(overrides: Record<string, unknown> = {}): Buffer {
       ...overrides
     })
   );
+}
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 afterEach(() => {
@@ -183,6 +192,136 @@ describe("stable RDK session registration", () => {
     expect(onDeviceRegistered).not.toHaveBeenCalled();
   });
 
+  it("closes provider and tester state exactly once when device registration throws", async () => {
+    const providerClose = vi.fn(async () => undefined);
+    const socketClose = vi.fn();
+    const controller = new AgentSessionController(
+      { readyState: 1, OPEN: 1, send: vi.fn(), close: socketClose } as never,
+      () => makeProvider({ close: providerClose }),
+      undefined,
+      "127.0.0.1",
+      undefined,
+      undefined,
+      {
+        deviceRegistrationAuthorized: true,
+        onDeviceRegistered() {
+          throw new Error("registry unavailable");
+        }
+      }
+    );
+
+    await controller.handleMessage(
+      startEvent({
+        deviceId: "rdk-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        testerId: "throwing-registration",
+        platform: "embedded"
+      }),
+      false
+    );
+    await Promise.all([controller.close(), controller.close()]);
+
+    expect(socketClose).toHaveBeenCalledWith(1011, expect.any(String));
+    expect(providerClose).toHaveBeenCalledTimes(1);
+    expect(testingSnapshot().totals.activeTestSessions).toBe(0);
+    expect(testingSnapshot().sessions).toHaveLength(1);
+  });
+
+  it("makes concurrent closes await one cleanup and invokes an acquired detach once", async () => {
+    const providerCloseEntered = deferred();
+    const releaseProviderClose = deferred();
+    const providerClose = vi.fn(async () => {
+      providerCloseEntered.resolve();
+      await releaseProviderClose.promise;
+    });
+    const detach = vi.fn();
+    const controller = new AgentSessionController(
+      { readyState: 1, OPEN: 1, send: vi.fn(), close: vi.fn() } as never,
+      () => makeProvider({ close: providerClose }),
+      undefined,
+      "127.0.0.1",
+      undefined,
+      undefined,
+      { deviceRegistrationAuthorized: true, onDeviceRegistered: () => detach }
+    );
+    await controller.handleMessage(
+      startEvent({ deviceId: "rdk-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", platform: "embedded" }),
+      false
+    );
+
+    const firstClose = controller.close();
+    await providerCloseEntered.promise;
+    let secondSettled = false;
+    const secondClose = controller.close().then(() => {
+      secondSettled = true;
+    });
+    await Promise.resolve();
+    expect(secondSettled).toBe(false);
+
+    releaseProviderClose.resolve();
+    await Promise.all([firstClose, secondClose]);
+    expect(providerClose).toHaveBeenCalledTimes(1);
+    expect(detach).toHaveBeenCalledTimes(1);
+    expect(testingSnapshot().totals.activeTestSessions).toBe(0);
+  });
+
+  it("does not displace a live registry peer when close races provider startup", async () => {
+    const store = createCompanionBindingStore({ filePath: null });
+    const codes = ["123456", "234567"];
+    const registry = createCompanionRegistry({ store, randomCode: () => codes.shift() ?? "999999" });
+    const liveHelmetEvents: Array<Record<string, unknown>> = [];
+    const detachLiveHelmet = registry.attachHelmet({
+      deviceId: "rdk-cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      deviceLabel: "Live helmet",
+      send: (event) => liveHelmetEvents.push(event)
+    });
+    const providerStartEntered = deferred();
+    const releaseProviderStart = deferred();
+    const providerClose = vi.fn(async () => undefined);
+    const controller = new AgentSessionController(
+      { readyState: 1, OPEN: 1, send: vi.fn(), close: vi.fn() } as never,
+      () =>
+        makeProvider({
+          start: async () => {
+            providerStartEntered.resolve();
+            await releaseProviderStart.promise;
+          },
+          close: providerClose
+        }),
+      undefined,
+      "127.0.0.1",
+      undefined,
+      undefined,
+      { deviceRegistrationAuthorized: true, onDeviceRegistered: (peer) => registry.attachHelmet(peer) }
+    );
+
+    const starting = controller.handleMessage(
+      startEvent({ deviceId: "rdk-cccccccc-cccc-4ccc-8ccc-cccccccccccc", platform: "embedded" }),
+      false
+    );
+    await providerStartEntered.promise;
+    const closing = controller.close();
+    releaseProviderStart.resolve();
+    await Promise.all([starting, closing]);
+
+    const phoneEvents: Array<Record<string, unknown>> = [];
+    const phone = registry.attachCompanion({
+      accountId: "live-account",
+      address: "127.0.0.1",
+      send: (event) => phoneEvents.push(event)
+    });
+    await phone.handle({ type: "companion.pair", code: "123456" });
+
+    expect(store.bindingForAccount("live-account")?.deviceId).toBe("rdk-cccccccc-cccc-4ccc-8ccc-cccccccccccc");
+    expect(phoneEvents.at(-1)).toMatchObject({ type: "companion.status", state: "ready" });
+    expect(liveHelmetEvents.at(-1)).toMatchObject({ type: "phone.location.status", state: "connected" });
+    expect(providerClose).toHaveBeenCalledTimes(1);
+    expect(testingSnapshot().totals.activeTestSessions).toBe(0);
+
+    phone.detach();
+    detachLiveHelmet();
+    await registry.close();
+  });
+
   it("closes an unauthorized device registration with policy code 1008 before provider start", async () => {
     const start = vi.fn(async () => undefined);
     const close = vi.fn();
@@ -204,6 +343,62 @@ describe("stable RDK session registration", () => {
 
     expect(close).toHaveBeenCalledWith(1008, expect.any(String));
     expect(start).not.toHaveBeenCalled();
+  });
+
+  it.each(["not-an-rdk-id", "", 42, null])(
+    "policy-closes an unauthorized deviceId claim before validating %j",
+    async (deviceId) => {
+      const start = vi.fn(async () => undefined);
+      const providerClose = vi.fn(async () => undefined);
+      const onDeviceRegistered = vi.fn(() => () => undefined);
+      const socketClose = vi.fn();
+      const controller = new AgentSessionController(
+        { readyState: 1, OPEN: 1, send: vi.fn(), close: socketClose } as never,
+        () => makeProvider({ start, close: providerClose }),
+        undefined,
+        "127.0.0.1",
+        undefined,
+        undefined,
+        { deviceRegistrationAuthorized: false, onDeviceRegistered }
+      );
+
+      await controller.handleMessage(startEvent({ deviceId, platform: "embedded" }), false);
+      await controller.close();
+
+      expect(socketClose).toHaveBeenCalledWith(1008, expect.any(String));
+      expect(start).not.toHaveBeenCalled();
+      expect(onDeviceRegistered).not.toHaveBeenCalled();
+      expect(providerClose).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it("keeps malformed authorized and no-claim sessions on the ordinary error path", async () => {
+    for (const testCase of [
+      { hooks: { deviceRegistrationAuthorized: true }, event: { deviceId: "bad-id", platform: "embedded" } },
+      { hooks: { deviceRegistrationAuthorized: false }, event: { sampleRate: 8_000, platform: "web" } }
+    ]) {
+      const send = vi.fn();
+      const close = vi.fn();
+      const start = vi.fn(async () => undefined);
+      const controller = new AgentSessionController(
+        { readyState: 1, OPEN: 1, send, close } as never,
+        () => makeProvider({ start }),
+        undefined,
+        "127.0.0.1",
+        undefined,
+        undefined,
+        testCase.hooks
+      );
+
+      await controller.handleMessage(startEvent(testCase.event), false);
+
+      expect(close).not.toHaveBeenCalled();
+      expect(start).not.toHaveBeenCalled();
+      expect(
+        send.mock.calls.some(([payload]) => (JSON.parse(String(payload)) as { type?: string }).type === "error")
+      ).toBe(true);
+      await controller.close();
+    }
   });
 
   it("delivers pairing and phone location without adding QA or user-memory evidence", async () => {

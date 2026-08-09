@@ -63,6 +63,23 @@ export function normalizeRawData(data: RawData): Buffer {
   return Buffer.from(data);
 }
 
+function hasDeviceRegistrationClaim(data: RawData): boolean {
+  const buffer = normalizeRawData(data);
+  if (buffer.byteLength > MAX_CLIENT_JSON_BYTES) return false;
+  try {
+    const value = JSON.parse(buffer.toString()) as Record<string, unknown>;
+    return (
+      Boolean(value) &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      value.type === "session.start" &&
+      Object.prototype.hasOwnProperty.call(value, "deviceId")
+    );
+  } catch {
+    return false;
+  }
+}
+
 function assertOptionalEnum(value: unknown, allowed: Set<string>, field: string) {
   if (value !== undefined && (typeof value !== "string" || !allowed.has(value))) {
     throw new Error(`Invalid ${field}`);
@@ -501,8 +518,9 @@ export class AgentSessionController {
   private sessionStartReceived = false;
   private providerStarted = false;
   private audioActive = false;
-  private closed = false;
+  private acceptingMessages = true;
   private detachHelmet?: () => void;
+  private cleanupPromise?: Promise<void>;
   private messageQueue: Promise<void> = Promise.resolve();
 
   constructor(
@@ -541,7 +559,7 @@ export class AgentSessionController {
    * provider in wire order instead of racing one another.
    */
   handleMessage(data: RawData, isBinary: boolean): Promise<void> {
-    if (this.closed) return Promise.resolve();
+    if (!this.acceptingMessages) return Promise.resolve();
     const task = this.messageQueue.then(() => this.processMessage(data, isBinary));
     // Keep the queue usable even if an unexpected error escapes processMessage.
     this.messageQueue = task.catch(() => undefined);
@@ -561,15 +579,14 @@ export class AgentSessionController {
         return;
       }
 
+      if (!this.hooks?.deviceRegistrationAuthorized && hasDeviceRegistrationClaim(data)) {
+        this.terminate(1008, "device registration unauthorized");
+        return;
+      }
       const event = parseClientEvent(data);
       if (event.type === "session.start") {
         if (this.sessionStartReceived) throw new Error("session.start has already been received");
         this.sessionStartReceived = true;
-        if (event.deviceId && !this.hooks?.deviceRegistrationAuthorized) {
-          this.closed = true;
-          this.client.close(1008, "device registration unauthorized");
-          return;
-        }
       } else if (!this.sessionStartReceived) {
         throw new Error("session.start is required before control events");
       } else if (!this.providerStarted) {
@@ -633,15 +650,6 @@ export class AgentSessionController {
         });
         try {
           await this.provider.start(providerEvent, providerContext);
-          this.providerStarted = true;
-          if (event.deviceId) {
-            this.detachHelmet?.();
-            this.detachHelmet = this.hooks?.onDeviceRegistered?.({
-              deviceId: event.deviceId,
-              deviceLabel: event.deviceLabel?.trim() || "RDK X5",
-              send: (payload) => this.sendEphemeral(payload)
-            });
-          }
         } catch (error) {
           // A failed start is not recoverable on this socket: the provider may
           // be partially initialized and duplicate session.start is forbidden.
@@ -650,13 +658,29 @@ export class AgentSessionController {
           const message = error instanceof Error ? error.message : "Provider session failed to start";
           this.log?.error("provider session start failed", { message });
           this.send({ type: "error", message: "语音服务暂时不可用，请重新连接。" });
-          // Mark closed before asking the socket to close so any messages the
+          // Stop messages before asking the socket to close so any traffic the
           // client already pipelined behind session.start (audio.start,
           // location.update) are dropped by handleMessage instead of each
           // throwing "session.start did not complete" until the TCP close lands.
-          this.closed = true;
-          this.client.close(1011, "provider start failed");
+          this.terminate(1011, "provider start failed");
           return;
+        }
+        this.providerStarted = true;
+        if (!this.acceptingMessages) return;
+        if (event.deviceId) {
+          try {
+            this.detachHelmet = this.hooks?.onDeviceRegistered?.({
+              deviceId: event.deviceId,
+              deviceLabel: event.deviceLabel?.trim() || "RDK X5",
+              send: (payload) => this.sendEphemeral(payload)
+            });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "Device registration failed";
+            this.log?.error("device registration failed", { message });
+            this.send({ type: "error", message: "设备注册暂时不可用，请重新连接。" });
+            this.terminate(1011, "device registration failed");
+            return;
+          }
         }
       }
       if (event.type === "audio.start" && !this.audioActive) {
@@ -703,24 +727,39 @@ export class AgentSessionController {
     }
   }
 
-  async close() {
-    if (this.closed) return;
-    this.closed = true;
+  close(): Promise<void> {
+    this.acceptingMessages = false;
     this.audioActive = false;
-    try {
-      await this.messageQueue;
-      await this.provider.close();
-    } finally {
-      const detachHelmet = this.detachHelmet;
-      this.detachHelmet = undefined;
-      try {
-        detachHelmet?.();
-      } finally {
-        // Always settle the tester stats — a provider close failure must not
-        // leave a phantom active session (and an untrimmable tester) behind.
-        endTesterSession(this.relaySessionId);
-      }
+    if (!this.cleanupPromise) {
+      const pendingMessages = this.messageQueue;
+      this.cleanupPromise = (async () => {
+        try {
+          await pendingMessages;
+          await this.provider.close();
+        } finally {
+          const detachHelmet = this.detachHelmet;
+          this.detachHelmet = undefined;
+          try {
+            detachHelmet?.();
+          } finally {
+            // Always settle the tester stats — a provider close failure must not
+            // leave a phantom active session (and an untrimmable tester) behind.
+            endTesterSession(this.relaySessionId);
+          }
+        }
+      })();
     }
+    return this.cleanupPromise;
+  }
+
+  private terminate(code: number, reason: string): void {
+    const cleanup = this.close();
+    this.client.close(code, reason);
+    void cleanup.catch((error) => {
+      this.log?.warn("session cleanup failed", {
+        message: error instanceof Error ? error.message : String(error)
+      });
+    });
   }
 
   private sendEphemeral(payload: unknown) {

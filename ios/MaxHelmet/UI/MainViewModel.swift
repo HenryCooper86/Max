@@ -484,6 +484,7 @@ final class MainViewModel: ObservableObject {
               canStartRide(from: companionState) else {
             return
         }
+        settleRideTeardownForNewStart()
 
         let owner = advanceCompanionGeneration()
         rideOwned = true
@@ -653,18 +654,29 @@ final class MainViewModel: ObservableObject {
         companionState = state
         guard ownsCompanionGeneration(owner) else { return }
 
-        let terminalRetiresRideStop = isCompanionTerminal(state) && rideTeardownPhase != nil
-        if isCompanionTerminal(state) {
-            rideTeardownOwner = nil
-            rideTeardownPhase = nil
+        let terminalState = isCompanionTerminal(state)
+        if companionAccountTeardownActive,
+           interruptsCompanionAction(state) {
+            switch pendingUnpairPhase {
+            case .stoppingLocation:
+                return
+            case .stoppingCompanion:
+                finishJoinedUnpairAccountTeardown()
+                return
+            case .sendingUnpair, nil:
+                break
+            }
+        }
+
+        let terminalRetiresRideStop = terminalState && rideTeardownPhase != nil
+        if terminalState {
+            settleRideTeardown()
         }
         if companionAccountTeardownActive,
-           isCompanionTerminal(state),
+           terminalState,
            companionAccountStopOwner != nil
-               || pendingUnpairPhase == .stoppingCompanion
                || terminalRetiresRideStop {
             companionAccountStopOwner = nil
-            cancelPendingUnpairTransaction()
             finishCompanionAccountTeardown()
             return
         }
@@ -825,11 +837,20 @@ final class MainViewModel: ObservableObject {
     private func handleRideTeardownStop(owner: Int) {
         dispatchPrecondition(condition: .onQueue(.main))
         guard rideTeardownOwner == owner else { return }
-        rideTeardownOwner = nil
-        rideTeardownPhase = nil
+        settleRideTeardown()
         if companionAccountTeardownActive {
             finishCompanionAccountTeardown()
         }
+    }
+
+    private func settleRideTeardownForNewStart() {
+        guard rideTeardownPhase != nil else { return }
+        settleRideTeardown()
+    }
+
+    private func settleRideTeardown() {
+        rideTeardownOwner = nil
+        rideTeardownPhase = nil
     }
 
     @discardableResult
@@ -1001,6 +1022,17 @@ final class MainViewModel: ObservableObject {
         pendingUnpairOwner = nil
         pendingUnpairSendOwner = nil
         pendingUnpairPhase = nil
+    }
+
+    private func finishJoinedUnpairAccountTeardown() {
+        cancelPendingUnpairTransaction()
+        finishCompanionAccountTeardown()
+    }
+
+    private func interruptsCompanionAction(_ state: CompanionConnectionState) -> Bool {
+        if state == .unpaired { return true }
+        if case .failed = state { return true }
+        return false
     }
 
     private func isCompanionTerminal(_ state: CompanionConnectionState) -> Bool {

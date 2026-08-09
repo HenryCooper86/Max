@@ -475,14 +475,10 @@ final class RDKCompanionClient {
         }
 
         if isAuthoritativeTerminal(state) {
-            desiredRide = false
-            invalidateOpenRecovery()
-            invalidateOpenAttempt()
-            invalidateReconnect()
-            clearLocationWork()
-            startSentOnSocket = false
-            canSendLocation = false
-            invalidateAllActionOwnership()
+            retireAuthoritativeTerminalTransport(
+                receivingSocket,
+                generation: expectedGeneration
+            )
         }
 
         let callbackTicket = semanticCallbackTicket()
@@ -626,6 +622,26 @@ final class RDKCompanionClient {
         return false
     }
 
+    private func retireAuthoritativeTerminalTransport(
+        _ terminalSocket: CompanionSocketTask,
+        generation expectedGeneration: Int
+    ) {
+        guard isCurrent(terminalSocket, generation: expectedGeneration) else { return }
+        generation &+= 1
+        configuration = nil
+        openAttempt = nil
+        invalidateOpenRecovery()
+        resetReceivePump()
+        invalidateReconnect()
+        desiredRide = false
+        clearLocationWork()
+        startSentOnSocket = false
+        canSendLocation = false
+        invalidateAllActionOwnership()
+        socket = nil
+        terminalSocket.cancel(with: .normalClosure, reason: nil)
+    }
+
     private func closePairOnlySocketIfIdle(
         _ candidate: CompanionSocketTask,
         generation expectedGeneration: Int
@@ -713,6 +729,9 @@ final class RDKCompanionClient {
 
         if httpStatus == 401 {
             desiredRide = false
+            configuration = nil
+            openAttempt = nil
+            invalidateOpenRecovery()
             invalidateReconnect()
             publish(.failed(code: "auth", detail: "Authentication failed (HTTP 401)."))
             return

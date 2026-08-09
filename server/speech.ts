@@ -131,6 +131,12 @@ export type SpeakerOptions = {
   onError?: (error: unknown) => void;
 };
 
+export type SpeakOptions = {
+  expiresAt?: number;
+  now?: () => number;
+  onStart?: () => void;
+};
+
 /**
  * 20 ms of 24 kHz mono PCM16: 480 samples * 2 bytes/sample = 960 bytes.
  *
@@ -173,23 +179,33 @@ function chunkPcm(pcm: Buffer): Buffer[] {
  * see that constant's comment for why an unchunked send breaks the board's
  * playback pacing instead of merely being unpaced.
  */
-export function createSpeaker(options: SpeakerOptions): { speak(text: string): Promise<void> } {
+export function createSpeaker(options: SpeakerOptions): {
+  speak(text: string, options?: SpeakOptions): Promise<void>;
+} {
   const { synthesize, sendAudio, platform, onError } = options;
+  let tail = Promise.resolve();
 
   return {
-    async speak(text: string): Promise<void> {
-      if (!text.trim()) return;
-      if (platform() !== "embedded") return;
+    speak(text: string, speakOptions: SpeakOptions = {}): Promise<void> {
+      const run = tail.then(async () => {
+        if (!text.trim()) return;
+        if (platform() !== "embedded") return;
+        const currentTime = speakOptions.now ?? Date.now;
+        if (speakOptions.expiresAt !== undefined && currentTime() >= speakOptions.expiresAt) return;
 
-      try {
-        const pcm = await synthesize(text);
-        if (!pcm) return;
-        for (const chunk of chunkPcm(pcm)) sendAudio(chunk);
-      } catch (error) {
-        // Silence is the documented degradation. Throwing here would take out
-        // the reconciliation that tells the rider the truth.
-        onError?.(error);
-      }
+        try {
+          speakOptions.onStart?.();
+          const pcm = await synthesize(text);
+          if (!pcm) return;
+          for (const chunk of chunkPcm(pcm)) sendAudio(chunk);
+        } catch (error) {
+          // Silence is the documented degradation. Throwing here would take out
+          // the reconciliation that tells the rider the truth.
+          onError?.(error);
+        }
+      });
+      tail = run.catch(() => undefined);
+      return run;
     }
   };
 }

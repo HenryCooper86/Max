@@ -683,6 +683,9 @@ export function createMockProvider(
     },
     speakNavLine(text: string) {
       send(transcriptEvent(createTranscriptDelivery(), "agent", text, { final: true, useBrowserSpeech: true }));
+    },
+    speakNavPrompt(speech) {
+      send(transcriptEvent(createTranscriptDelivery(), "agent", speech.text, { final: true, useBrowserSpeech: true }));
     }
   };
 }

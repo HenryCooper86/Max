@@ -126,6 +126,12 @@ describe("deviceFailureSpeech", () => {
   it("explains a cancelled navigation", () => {
     expect(deviceFailureSpeech("navigation.start", "failed", "navigation.cancelled")).toBe("已取消导航。");
   });
+
+  it("tells the rider how to restore navigation when the phone location is unavailable", () => {
+    expect(deviceFailureSpeech("navigation.start", "failed", "location.unavailable")).toBe(
+      "手机定位未连接，请打开 Max 并开始头盔骑行。"
+    );
+  });
 });
 
 describe("navRouteOkSpeech", () => {
@@ -212,9 +218,24 @@ describe("PendingDeviceCommands", () => {
     const issued = pending.issue("call.dial");
     expect(pending.expire(issued.issuedAt + DEVICE_RESULT_TIMEOUT_MS - 1)).toEqual([]);
     expect(pending.expire(issued.issuedAt + DEVICE_RESULT_TIMEOUT_MS)).toEqual([
-      { commandId: issued.commandId, action: "call.dial", issuedAt: issued.issuedAt }
+      { commandId: issued.commandId, action: "call.dial", issuedAt: issued.issuedAt, expiresAt: issued.expiresAt }
     ]);
     expect(pending.expire(issued.issuedAt + DEVICE_RESULT_TIMEOUT_MS)).toEqual([]);
+  });
+
+  it("assigns ordinary and navigation-specific deadlines", () => {
+    const pending = new PendingDeviceCommands();
+    expect(pending.issue("camera.photo", undefined, 100).expiresAt).toBe(8_100);
+    expect(pending.issue("navigation.start", undefined, 100).expiresAt).toBe(12_100);
+  });
+
+  it("returns the next live deadline after an earlier command expires", () => {
+    const pending = new PendingDeviceCommands();
+    pending.issue("camera.photo", undefined, 100);
+    pending.issue("navigation.start", undefined, 200);
+    expect(pending.nextExpiryAt()).toBe(8_100);
+    pending.expire(8_100);
+    expect(pending.nextExpiryAt()).toBe(12_200);
   });
 
   it("peek finds a pending command without consuming it", () => {
@@ -252,7 +273,7 @@ describe("PendingDeviceCommands", () => {
     it("is a silent no-op once the entry has expired", () => {
       const pending = new PendingDeviceCommands();
       const issued = pending.issue("navigation.start", undefined, 1_000);
-      pending.expire(issued.issuedAt + DEVICE_RESULT_TIMEOUT_MS);
+      pending.expire(issued.expiresAt);
       expect(() => pending.attachOkSpeech("navigation.start", "已找到目的地。")).not.toThrow();
       expect(pending.resolve(issued.commandId)).toBeUndefined();
     });

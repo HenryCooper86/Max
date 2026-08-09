@@ -74,6 +74,35 @@ describe("createNavHandler", () => {
     expect(sent[2]).toMatchObject({ type: "nav.route", commandId: "r2" });
   });
 
+  it("exposes the exact owned active route, including the copied command ID sent by a cached reroute", async () => {
+    let clock = 0;
+    const { sent, send } = collector();
+    const handle = createNavHandler({
+      provider: createMockRouteProvider(),
+      send,
+      now: () => clock,
+      minRerouteIntervalMs: 10_000
+    });
+    expect(handle.activeRoute()).toBeUndefined();
+
+    await handle(start);
+    expect(handle.activeRoute()).toBe(sent[0]);
+    const initial = handle.activeRoute()!;
+
+    clock = 1_000;
+    await handle({
+      type: "nav.request",
+      commandId: "cached-reroute",
+      reason: "reroute",
+      origin,
+      destination: initial.destination,
+      destinationName: initial.destinationName
+    });
+
+    expect(handle.activeRoute()).toBe(sent[1]);
+    expect(handle.activeRoute()?.commandId).toBe("cached-reroute");
+  });
+
   it("a failed start clears the cached route", async () => {
     let clock = 0;
     let planCalls = 0;

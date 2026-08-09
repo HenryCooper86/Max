@@ -380,10 +380,10 @@ function matchNavigation(raw: string): DeviceCommand | null {
   return null;
 }
 
-/** How long the relay waits for a device.result before treating the command as
- *  failed. Long enough for the rider to read a permission prompt, short enough
- *  that Max does not go quiet mid-ride. */
+/** Ordinary device-result deadline. Navigation gets longer below because route
+ *  planning includes the phone/RDK handoff before the result returns. */
 export const DEVICE_RESULT_TIMEOUT_MS = 8_000;
+const NAVIGATION_RESULT_TIMEOUT_MS = 12_000;
 
 const FAILURE_SPEECH: Record<string, string> = {
   "permission.contacts": "我没有通讯录权限，去设置里开启后我再帮你拨号。",
@@ -419,7 +419,8 @@ const FAILURE_SPEECH: Record<string, string> = {
   // A navigation.start that never reaches a route (rider cancels mid-flight,
   // or a later stage supersedes it) reports this reason on its device.result
   // rather than the generic "导航操作没成功。".
-  "navigation.cancelled": "已取消导航。"
+  "navigation.cancelled": "已取消导航。",
+  "location.unavailable": "手机定位未连接，请打开 Max 并开始头盔骑行。"
 };
 
 /** Spoken names for the fallback line, so a failure with no known reason still
@@ -588,6 +589,7 @@ export type IssuedDeviceCommand = {
   commandId: string;
   action: DeviceActionName;
   issuedAt: number;
+  expiresAt: number;
   /** Deterministic confirmation to speak on success; see deviceSuccessSpeech. */
   okSpeech?: string;
   question?: string;
@@ -607,7 +609,16 @@ export class PendingDeviceCommands {
     question?: string,
     watchOn?: boolean
   ): IssuedDeviceCommand {
-    const issued: IssuedDeviceCommand = { commandId: randomUUID(), action, issuedAt: now, okSpeech, question, watchOn };
+    const expiresAt = now + (action === "navigation.start" ? NAVIGATION_RESULT_TIMEOUT_MS : DEVICE_RESULT_TIMEOUT_MS);
+    const issued: IssuedDeviceCommand = {
+      commandId: randomUUID(),
+      action,
+      issuedAt: now,
+      expiresAt,
+      okSpeech,
+      question,
+      watchOn
+    };
     this.pending.set(issued.commandId, issued);
     return issued;
   }
@@ -647,10 +658,18 @@ export class PendingDeviceCommands {
   expire(now: number = Date.now()): IssuedDeviceCommand[] {
     const expired: IssuedDeviceCommand[] = [];
     for (const issued of this.pending.values()) {
-      if (now - issued.issuedAt >= DEVICE_RESULT_TIMEOUT_MS) expired.push(issued);
+      if (now >= issued.expiresAt) expired.push(issued);
     }
     for (const issued of expired) this.pending.delete(issued.commandId);
     return expired;
+  }
+
+  nextExpiryAt(): number | undefined {
+    let next: number | undefined;
+    for (const issued of this.pending.values()) {
+      if (next === undefined || issued.expiresAt < next) next = issued.expiresAt;
+    }
+    return next;
   }
 }
 

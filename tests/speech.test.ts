@@ -256,4 +256,49 @@ describe("createSpeaker", () => {
     await speak("拍好了。");
     expect(sent).toHaveLength(1);
   });
+
+  it("serializes generated utterances so their PCM cannot interleave", async () => {
+    let releaseFirst!: (pcm: Buffer) => void;
+    const first = new Promise<Buffer>((resolve) => (releaseFirst = resolve));
+    const started: string[] = [];
+    const { speak, sent } = speaker({
+      synthesize: async (text) => {
+        started.push(text);
+        return text === "第一句。" ? first : Buffer.from(text);
+      }
+    });
+
+    const speakingFirst = speak("第一句。");
+    const speakingSecond = speak("第二句。");
+    await Promise.resolve();
+    expect(started).toEqual(["第一句。"]);
+
+    releaseFirst(Buffer.from("first-pcm"));
+    await Promise.all([speakingFirst, speakingSecond]);
+    expect(started).toEqual(["第一句。", "第二句。"]);
+    expect(Buffer.concat(sent).toString()).toBe("first-pcm第二句。");
+  });
+
+  it("checks expiry immediately before synthesis begins", async () => {
+    let now = 1_000;
+    let releaseFirst!: (pcm: Buffer) => void;
+    const first = new Promise<Buffer>((resolve) => (releaseFirst = resolve));
+    const synthesized: string[] = [];
+    const { speak, sent } = speaker({
+      synthesize: async (text) => {
+        synthesized.push(text);
+        return text === "占用语音。" ? first : Buffer.from("late-pcm");
+      }
+    });
+
+    const occupying = speak("占用语音。");
+    const expiring = speak("过期提示。", { expiresAt: 1_500, now: () => now });
+    await Promise.resolve();
+    now = 1_501;
+    releaseFirst(Buffer.from("first-pcm"));
+    await Promise.all([occupying, expiring]);
+
+    expect(synthesized).toEqual(["占用语音。"]);
+    expect(Buffer.concat(sent).toString()).toBe("first-pcm");
+  });
 });

@@ -56,14 +56,29 @@ const { MockWebSocket, upstreamInstances } = vi.hoisted(() => {
 
 vi.mock("ws", () => ({ WebSocket: MockWebSocket }));
 
-const { mockDescribeFrame } = vi.hoisted(() => ({ mockDescribeFrame: vi.fn() }));
+const { mockDescribeFrame, synthesizedText } = vi.hoisted(() => ({
+  mockDescribeFrame: vi.fn(),
+  synthesizedText: [] as string[]
+}));
 vi.mock("../server/vision", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../server/vision")>();
   return { ...actual, selectVisionProvider: () => ({ mode: "mock" as const, describe: mockDescribeFrame }) };
 });
+vi.mock("../server/speech", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../server/speech")>();
+  return {
+    ...actual,
+    createSynthesizer: () => async (text: string) => {
+      synthesizedText.push(text);
+      return Buffer.from(`pcm:${text}`);
+    }
+  };
+});
 
 import { createDoubaoProvider } from "../server/providers/doubao";
+import { createMockProvider } from "../server/providers/mock";
 import type { AgentProvider } from "../server/providers/types";
+import type { NavPromptSpeech } from "../server/routing";
 import { AgentSessionController, type ProviderFactory } from "../server/session-controller";
 import { metrics } from "../server/metrics";
 
@@ -73,6 +88,9 @@ const SESSION_STARTED = 150;
 const ASR_INFO = 450;
 const ASR_RESPONSE = 451;
 const ASR_ENDED = 459;
+const TTS_SENTENCE_START = 350;
+const TTS_RESPONSE = 352;
+const TTS_ENDED = 359;
 const FULL_SERVER_RESPONSE = 0b1001;
 
 function uint32(value: number) {
@@ -100,6 +118,10 @@ function clientEvents(send: ReturnType<typeof vi.fn>): Array<Record<string, unkn
   return send.mock.calls
     .filter(([data]: unknown[]) => typeof data === "string")
     .map(([data]: unknown[]) => JSON.parse(data as string) as Record<string, unknown>);
+}
+
+function clientFrameEvent(frame: unknown): number | undefined {
+  return Buffer.isBuffer(frame) && frame.length >= 8 ? frame.readUInt32BE(4) : undefined;
 }
 
 function stubWeatherFetch() {
@@ -148,6 +170,7 @@ async function startSession(platform: string) {
 afterEach(() => {
   upstreamInstances.length = 0;
   mockDescribeFrame.mockReset();
+  synthesizedText.length = 0;
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -202,5 +225,160 @@ describe("doubao provider speakNavLine — reroute-line delivery identity", () =
     // dedupes agent browser-speech by deliveryId — the line would be
     // silently dropped in production.
     expect(rerouteLine!.deliveryId).not.toBe(consumedDeliveryId);
+  });
+
+  it("also sends reroute success through embedded PCM", async () => {
+    stubWeatherFetch();
+    const { controller, send, provider } = await startSession("embedded");
+    provider.speakNavLine!("已重新规划路线。");
+    await vi.waitFor(() => expect(synthesizedText).toContain("已重新规划路线。"));
+
+    expect(
+      clientEvents(send).filter((event) => event.type === "transcript" && event.text === "已重新规划路线。")
+    ).toHaveLength(1);
+    expect(
+      send.mock.calls.some(([data, options]) => Buffer.isBuffer(data) && (options as { binary?: boolean })?.binary)
+    ).toBe(true);
+    await controller.close();
+  });
+});
+
+describe("doubao provider speakNavPrompt", () => {
+  it("uses a fresh transcript delivery and embedded PCM for each prompt", async () => {
+    stubWeatherFetch();
+    const { controller, send, provider } = await startSession("embedded");
+    const speech: NavPromptSpeech = { text: "已到达目的地。", interrupt: false };
+    provider.speakNavPrompt!(speech);
+    provider.speakNavPrompt!({ text: "手机定位已断开，导航已暂停。", interrupt: false });
+    await vi.waitFor(() => expect(synthesizedText).toHaveLength(2));
+
+    const lines = clientEvents(send).filter(
+      (event) =>
+        event.type === "transcript" &&
+        (event.text === "已到达目的地。" || event.text === "手机定位已断开，导航已暂停。")
+    );
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatchObject({ speaker: "agent", final: true, useBrowserSpeech: true });
+    expect(lines[1]!.deliveryId).not.toBe(lines[0]!.deliveryId);
+    await controller.close();
+  });
+
+  it("interrupting prompts truncate the current ordinary reply before speaking", async () => {
+    stubWeatherFetch();
+    const { controller, upstream, provider } = await startSession("embedded");
+    await riderTurn(upstream, "Max 继续导航");
+    await upstream.emit(
+      "message",
+      jsonFrame(TTS_SENTENCE_START, { reply_id: "reply-live", text: "这是一段正在播放的普通回复。" })
+    );
+    await upstream.emit("message", jsonFrame(TTS_RESPONSE, { audio: "bytes" }));
+
+    provider.speakNavPrompt!({ text: "右转进入南京东路", interrupt: true });
+    await vi.waitFor(() => expect(synthesizedText).toContain("右转进入南京东路"));
+
+    expect(upstream.sent.some((frame) => clientFrameEvent(frame) === 513)).toBe(true);
+    await controller.close();
+  });
+
+  it("holds non-interrupting prompts behind the ordinary reply", async () => {
+    stubWeatherFetch();
+    const { controller, send, upstream, provider } = await startSession("embedded");
+    await riderTurn(upstream, "Max 现在几点");
+    provider.speakNavPrompt!({ text: "已偏离路线，正在重新规划。", interrupt: false });
+    await Promise.resolve();
+    expect(synthesizedText).not.toContain("已偏离路线，正在重新规划。");
+    expect(clientEvents(send).some((event) => event.text === "已偏离路线，正在重新规划。")).toBe(false);
+
+    await upstream.emit("message", jsonFrame(TTS_ENDED, {}));
+    await vi.waitFor(() => expect(synthesizedText).toContain("已偏离路线，正在重新规划。"));
+    expect(clientEvents(send).filter((event) => event.text === "已偏离路线，正在重新规划。")).toHaveLength(1);
+    await controller.close();
+  });
+
+  it("drops a queued maneuver prompt when it expires before synthesis begins", async () => {
+    stubWeatherFetch();
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const { controller, send, upstream, provider } = await startSession("embedded");
+    await riderTurn(upstream, "Max 现在几点");
+    provider.speakNavPrompt!({ text: "前方150米，右转进入南京东路", interrupt: false, expiresAt: 4_000 });
+
+    now.mockReturnValue(4_001);
+    await upstream.emit("message", jsonFrame(TTS_ENDED, {}));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(synthesizedText).not.toContain("前方150米，右转进入南京东路");
+    expect(clientEvents(send).some((event) => event.text === "前方150米，右转进入南京东路")).toBe(false);
+    await controller.close();
+  });
+});
+
+describe("doubao navigation command deadline", () => {
+  it("reschedules after an ordinary timeout and keeps navigation.start pending for twelve seconds", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    stubWeatherFetch();
+    const { controller, send, upstream } = await startSession("ios");
+
+    await riderTurn(upstream, "Max 打开手电筒");
+    captureDeviceCommandId(send, "torch.set");
+    await riderTurn(upstream, "Max 导航去外滩");
+    captureDeviceCommandId(send, "navigation.start");
+
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(clientEvents(send).filter((event) => event.text === "手电筒操作没成功。")).toHaveLength(1);
+    expect(clientEvents(send).some((event) => event.text === "导航操作没成功。")).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(3_999);
+    expect(clientEvents(send).some((event) => event.text === "导航操作没成功。")).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(clientEvents(send).filter((event) => event.text === "导航操作没成功。")).toHaveLength(1);
+    await controller.close();
+  });
+});
+
+describe("session navigation prompt wiring", () => {
+  it("routes one prompt through the session-owned route and mock provider as one transcript line", async () => {
+    const send = vi.fn();
+    const client = { readyState: 1, OPEN: 1, send, close: vi.fn() } as never;
+    const controller = new AgentSessionController(client, createMockProvider, silentLog);
+    await controller.handleMessage(
+      Buffer.from(JSON.stringify({ type: "session.start", sampleRate: 16000, channels: 1, platform: "web" })),
+      false
+    );
+    await controller.handleMessage(
+      Buffer.from(
+        JSON.stringify({
+          type: "nav.request",
+          commandId: "nav-session",
+          reason: "start",
+          origin: { lat: 31.2304, lon: 121.4737 },
+          query: "外滩"
+        })
+      ),
+      false
+    );
+    await vi.waitFor(() =>
+      expect(clientEvents(send).some((event) => event.type === "nav.route" && event.commandId === "nav-session")).toBe(
+        true
+      )
+    );
+    await controller.handleMessage(
+      Buffer.from(
+        JSON.stringify({
+          type: "nav.prompt",
+          promptId: "prompt-session",
+          routeCommandId: "nav-session",
+          kind: "arrived"
+        })
+      ),
+      false
+    );
+
+    expect(
+      clientEvents(send).filter((event) => event.type === "transcript" && event.text === "已到达目的地。")
+    ).toHaveLength(1);
+    await controller.close();
   });
 });

@@ -12,7 +12,6 @@ import {
 import { config as appConfig } from "../config";
 import {
   DEVICE_ACTION_TIERS,
-  DEVICE_RESULT_TIMEOUT_MS,
   PendingDeviceCommands,
   deviceSuccessSpeech,
   extractDeviceCommandForPlatform,
@@ -23,7 +22,7 @@ import {
 import { createHazardInjector } from "../hazard-injector";
 import { createLogger, type Logger } from "../logger";
 import { metrics } from "../metrics";
-import { createSpeaker, createSynthesizer } from "../speech";
+import { createSpeaker, createSynthesizer, type SpeakOptions } from "../speech";
 import { createTranscriptDelivery, transcriptEvent, type TranscriptDelivery } from "../transcript-events";
 import { buildChatCompletionsEndpoint, selectVisionProvider } from "../vision";
 import { createFrameAssembler } from "../vision-frames";
@@ -620,6 +619,7 @@ export function createDoubaoProvider(
   let agentFinalDelivered = false;
   const pendingDeviceCommands = new PendingDeviceCommands();
   let deviceExpiryTimer: NodeJS.Timeout | undefined;
+  const ordinarySpeechWaiters = new Set<() => void>();
   let rideContext: RideContext = { mode: "ride", scenario: "commute" };
   let memory: SessionMemory = createSessionMemory("ride");
   // Per-turn latency anchors. Reset at each rider turn (AsrInfo) so telemetry
@@ -811,22 +811,31 @@ export function createDoubaoProvider(
   }
 
   function scheduleDeviceExpiry(): void {
-    if (deviceExpiryTimer) return;
-    deviceExpiryTimer = setTimeout(() => {
+    if (deviceExpiryTimer) clearTimeout(deviceExpiryTimer);
+    const nextExpiryAt = pendingDeviceCommands.nextExpiryAt();
+    if (nextExpiryAt === undefined) {
       deviceExpiryTimer = undefined;
-      for (const expired of pendingDeviceCommands.expire()) {
-        // A gallery.describe whose frame set is still assembling under the
-        // frame assembler's OWN (longer, 10 s) timeout must not also get the
-        // generic 8 s device-result-timeout failure spoken here — that would
-        // produce failure-then-answer (or failure-then-"我看不清") double
-        // speak for one command. recentGalleryCommands holding an entry for
-        // this commandId is exactly "a frame set is in flight"; the
-        // assembler's own onComplete/onIncomplete is the single voice for
-        // that outcome, so skip the spoken failure and let it run its course.
-        if (expired.action === "gallery.describe" && recentGalleryCommands.has(expired.commandId)) continue;
-        applyDeviceReconciliation(expired.action, { status: "failed", reason: "timeout" });
-      }
-    }, DEVICE_RESULT_TIMEOUT_MS);
+      return;
+    }
+    deviceExpiryTimer = setTimeout(
+      () => {
+        deviceExpiryTimer = undefined;
+        for (const expired of pendingDeviceCommands.expire()) {
+          // A gallery.describe whose frame set is still assembling under the
+          // frame assembler's OWN (longer, 10 s) timeout must not also get the
+          // generic 8 s device-result-timeout failure spoken here — that would
+          // produce failure-then-answer (or failure-then-"我看不清") double
+          // speak for one command. recentGalleryCommands holding an entry for
+          // this commandId is exactly "a frame set is in flight"; the
+          // assembler's own onComplete/onIncomplete is the single voice for
+          // that outcome, so skip the spoken failure and let it run its course.
+          if (expired.action === "gallery.describe" && recentGalleryCommands.has(expired.commandId)) continue;
+          applyDeviceReconciliation(expired.action, { status: "failed", reason: "timeout" });
+        }
+        scheduleDeviceExpiry();
+      },
+      Math.max(0, nextExpiryAt - Date.now())
+    );
     deviceExpiryTimer.unref?.();
   }
 
@@ -977,6 +986,7 @@ export function createDoubaoProvider(
         // TtsEnded completion (below, TtsEnded may still arrive later and
         // clear it again — harmless, since it's already false by then).
         awaitingReply = false;
+        releaseOrdinarySpeechWaiters();
         sendClient({
           type: "status",
           state: "ready",
@@ -1033,12 +1043,27 @@ export function createDoubaoProvider(
   // speaking" that createSpeaker itself does not track. Wraps every
   // speaker.speak() call site below so isSpeechOpen (on visionGovernor,
   // further down) can read it.
-  let speakerActive = false;
-  function speakEmbedded(text: string): Promise<void> {
-    speakerActive = true;
-    return speaker.speak(text).finally(() => {
-      speakerActive = false;
+  let speakerActive = 0;
+  function speakEmbedded(text: string, options?: SpeakOptions): Promise<void> {
+    speakerActive += 1;
+    return speaker.speak(text, options).finally(() => {
+      speakerActive -= 1;
     });
+  }
+
+  function ordinarySpeechOpen(): boolean {
+    return awaitingReply || receivedTtsAudio;
+  }
+
+  function waitForOrdinarySpeech(): Promise<void> {
+    if (!ordinarySpeechOpen()) return Promise.resolve();
+    return new Promise((resolve) => ordinarySpeechWaiters.add(resolve));
+  }
+
+  function releaseOrdinarySpeechWaiters(force = false): void {
+    if (!force && ordinarySpeechOpen()) return;
+    for (const resolve of ordinarySpeechWaiters) resolve();
+    ordinarySpeechWaiters.clear();
   }
 
   // Companion to pendingDeviceCommands, scoped to gallery.describe frame sets:
@@ -1114,7 +1139,7 @@ export function createDoubaoProvider(
   const visionGovernor = createVisionGovernor({
     describe: (frames, question) => visionProvider.describe(frames, question),
     speak: speakWatchLine,
-    isSpeechOpen: () => !riderTurnFinalized || awaitingReply || receivedTtsAudio || speakerActive,
+    isSpeechOpen: () => !riderTurnFinalized || awaitingReply || receivedTtsAudio || speakerActive > 0,
     onDrop: (reason) => metrics.watchDrop(reason)
   });
 
@@ -1333,6 +1358,7 @@ export function createDoubaoProvider(
           // is still owed to a turn whose socket is gone — a dead socket
           // delivered no reply, and there is nothing left here to await it.
           awaitingReply = false;
+          releaseOrdinarySpeechWaiters();
           // NOT reset here: an upstream that reaches SessionStarted then drops a
           // moment later (quota/model error surfacing once the dialogue is live)
           // would otherwise clear its retry count on every flap and reconnect
@@ -1426,6 +1452,7 @@ export function createDoubaoProvider(
           // above already handled the interrupted reply itself, so the gate
           // this flag holds open for it must not leak into the new turn.
           awaitingReply = false;
+          releaseOrdinarySpeechWaiters();
           riderTurnAddressed = false;
           replyDecided = false;
           replyAddressed = false;
@@ -1543,6 +1570,7 @@ export function createDoubaoProvider(
             // back to listening, and don't pollute latency telemetry either.
             receivedTtsAudio = false;
             awaitingReply = false;
+            releaseOrdinarySpeechWaiters();
             clearUndecidedTtsAudio();
             resetPendingReply();
             markCurrentTurnSuppressed();
@@ -1570,6 +1598,7 @@ export function createDoubaoProvider(
           // was any and the flush above — empty or not — is the whole
           // "reply") — the thinking window this flag holds open is over.
           awaitingReply = false;
+          releaseOrdinarySpeechWaiters();
           emitTelemetry();
           return;
         }
@@ -1604,6 +1633,7 @@ export function createDoubaoProvider(
               emitTelemetry();
               ttsEndedBeforeWakeDecision = false;
               awaitingReply = false;
+              releaseOrdinarySpeechWaiters();
             }
           } else {
             clearUndecidedTtsAudio();
@@ -1670,6 +1700,7 @@ export function createDoubaoProvider(
       // stuck true, silencing watching (isSpeechOpen) until the rider's next
       // utterance, on a socket that may not even reconnect for seconds.
       awaitingReply = false;
+      releaseOrdinarySpeechWaiters();
 
       // Torn down by the relay itself (client disconnected / provider closed):
       // nothing to revive.
@@ -1909,6 +1940,7 @@ export function createDoubaoProvider(
     async deviceResult(event) {
       const issued = pendingDeviceCommands.resolve(event.commandId);
       if (!issued) return;
+      scheduleDeviceExpiry();
       if (issued.action === "vision.watch" && event.status === "ok") {
         visionGovernor.setEnabled(issued.watchOn === true);
       }
@@ -2011,6 +2043,7 @@ export function createDoubaoProvider(
         clearTimeout(deviceExpiryTimer);
         deviceExpiryTimer = undefined;
       }
+      releaseOrdinarySpeechWaiters(true);
       pendingAudio.length = 0;
       clearUndecidedTtsAudio();
       if (upstreamReconnectTimer) {
@@ -2038,13 +2071,30 @@ export function createDoubaoProvider(
     // DELIVERYID, so reusing it would make this line indistinguishable from
     // one already shown and get it silently dropped. Same fix as
     // speakWatchLine above: allocate a FRESH delivery inline, at speak time.
-    // Transcript-only (no speakEmbedded call) is intentional here, unlike
-    // speakWatchLine/speakGalleryLine: navigation does not run on the
-    // RDK/helmet client, so there is no embedded-relay-synthesised audience
-    // for this line to reach.
+    // The RDK also needs the generated PCM on its binary audio channel.
     speakNavLine(text: string) {
       const delivery = createTranscriptDelivery();
       sendClient(transcriptEvent(delivery, "agent", text, { final: true, useBrowserSpeech: true }));
+      void speakEmbedded(text).catch(() => {});
+    },
+    speakNavPrompt(speech) {
+      const deliverTranscript = () => {
+        const delivery = createTranscriptDelivery();
+        sendClient(transcriptEvent(delivery, "agent", speech.text, { final: true, useBrowserSpeech: true }));
+      };
+      if (speech.interrupt) truncateInterruptedReply();
+      void (async () => {
+        if (!speech.interrupt) await waitForOrdinarySpeech();
+        if (speech.expiresAt !== undefined && Date.now() >= speech.expiresAt) return;
+        if (sessionPlatform === "embedded") {
+          await speakEmbedded(speech.text, {
+            expiresAt: speech.expiresAt,
+            onStart: deliverTranscript
+          });
+          return;
+        }
+        deliverTranscript();
+      })().catch(() => {});
     }
   };
 }

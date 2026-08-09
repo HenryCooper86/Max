@@ -1,6 +1,6 @@
 import type { RawData, WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
-import type { NavRequestEvent } from "../shared/agent";
+import type { NavPromptEvent } from "../shared/agent";
 import { CLIENT_EVENT_TYPES } from "../shared/generated/agent-protocol";
 import { TESTING_PLATFORMS as CANONICAL_TESTING_PLATFORMS } from "../shared/testing";
 import type { Logger } from "./logger";
@@ -8,6 +8,7 @@ import type { AgentProvider, ClientEvent, ProviderSessionContext, ProviderTeleme
 import { handleCrashAlert, handleCrashCancel, selectCrashNotifier } from "./crash-escalation";
 import { config } from "./config";
 import { createNavHandler, selectRouteProvider } from "./routing";
+import { createNavPromptHandler } from "./navigation-prompts";
 import {
   beginTesterSession,
   endTesterSession,
@@ -514,7 +515,8 @@ export class AgentSessionController {
   private readonly relaySessionId = randomUUID();
   private readonly provider: AgentProvider;
   private readonly crashNotifier = selectCrashNotifier(config.crashNotifier);
-  private readonly navHandler: (event: NavRequestEvent) => Promise<void>;
+  private readonly navHandler: ReturnType<typeof createNavHandler>;
+  private readonly navPromptHandler: (event: NavPromptEvent) => void;
   private sessionStartReceived = false;
   private providerStarted = false;
   private audioActive = false;
@@ -549,6 +551,10 @@ export class AgentSessionController {
       send: (payload) => this.send(payload),
       onRouteAnnounced: (speech) => this.provider.attachNavOkSpeech?.(speech),
       onRerouteAnnounced: (speech) => this.provider.speakNavLine?.(speech)
+    });
+    this.navPromptHandler = createNavPromptHandler({
+      activeRoute: this.navHandler.activeRoute,
+      speak: (speech) => this.provider.speakNavPrompt?.(speech)
     });
     this.send({ type: "connection", state: "relay", detail: "语音中继 WebSocket 已连接" });
   }
@@ -723,6 +729,7 @@ export class AgentSessionController {
         void this.navHandler(event).catch((error) =>
           this.log?.warn("nav.request failed", { message: error instanceof Error ? error.message : String(error) })
         );
+      if (event.type === "nav.prompt") this.navPromptHandler(event);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Voice relay failed";
       this.log?.warn("client message failed", { message });

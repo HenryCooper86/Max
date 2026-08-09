@@ -1,5 +1,6 @@
 import type { ClientEvent, DeviceResultEvent, SessionStartEvent, VisionFramesEvent } from "../../shared/agent";
 import type { UserMemoryFact, UserMemoryTurn } from "../user-memory";
+import type { NavPromptSpeech } from "../routing";
 
 export type { ClientEvent, SessionStartEvent, VoiceGender } from "../../shared/agent";
 
@@ -62,4 +63,6 @@ export type AgentProvider = {
    *  true }) → send). Providers without a navigation confirmation path omit
    *  this. */
   speakNavLine?(text: string): void;
+  /** Speaks relay-validated, relay-composed RDK guidance. */
+  speakNavPrompt?(speech: NavPromptSpeech): void;
 };

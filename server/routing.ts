@@ -18,6 +18,16 @@ import { MOCK_ROUTE } from "../shared/nav-fixtures";
 import { REROUTE_OK_SPEECH, navRouteOkSpeech } from "./device-actions";
 import type { Logger } from "./logger";
 
+export type NavHandler = ((event: NavRequestEvent) => Promise<void>) & {
+  activeRoute(): NavRouteEvent | undefined;
+};
+
+export type NavPromptSpeech = {
+  text: string;
+  interrupt: boolean;
+  expiresAt?: number;
+};
+
 const PLACE_ENDPOINT = "https://restapi.amap.com/v5/place/text";
 const DRIVING_ENDPOINT = "https://restapi.amap.com/v5/direction/driving";
 // A "start" nav.request makes two sequential calls (resolveDestination, then
@@ -218,7 +228,7 @@ export function createNavHandler(options: {
    *  without a navigation confirmation path (see AgentProvider.speakNavLine)
    *  omit this. */
   onRerouteAnnounced?: (speech: string) => void;
-}): (event: NavRequestEvent) => Promise<void> {
+}): NavHandler {
   const {
     provider,
     send,
@@ -245,7 +255,7 @@ export function createNavHandler(options: {
   // both cases).
   let startEpoch = 0;
 
-  return async function handleNavRequest(event: NavRequestEvent): Promise<void> {
+  const handleNavRequest = async (event: NavRequestEvent): Promise<void> => {
     if (event.reason === "start") {
       const epoch = ++startEpoch;
       // A new navigation session must never inherit the previous cache —
@@ -296,7 +306,8 @@ export function createNavHandler(options: {
       event.destination.lat === lastRoute.destination.lat &&
       event.destination.lon === lastRoute.destination.lon
     ) {
-      send({ ...lastRoute, commandId: event.commandId });
+      lastRoute = { ...lastRoute, commandId: event.commandId };
+      send(lastRoute);
       return;
     }
 
@@ -332,4 +343,6 @@ export function createNavHandler(options: {
     send(lastRoute);
     onRerouteAnnounced?.(REROUTE_OK_SPEECH);
   };
+  handleNavRequest.activeRoute = () => lastRoute;
+  return handleNavRequest;
 }

@@ -1916,6 +1916,30 @@ final class CompanionViewModelTests: XCTestCase {
         }
     }
 
+    func testQueuedDuplicateBeforeReentrantLogoutCannotSuppressOwnedSignedOutCommit() {
+        let harness = Harness()
+        harness.client.publish(.paired(deviceId: "rdk", label: nil))
+        var suppliedLogout = false
+        var publishedStates: [CompanionConnectionState] = []
+        let interruption = CompanionConnectionState.failed(code: "connection", detail: "closed")
+        let cancellable = harness.viewModel.$companionState.dropFirst().sink { state in
+            publishedStates.append(state)
+            guard !suppliedLogout, state == interruption else { return }
+            suppliedLogout = true
+            harness.client.publish(.signedOut)
+            harness.viewModel.logout()
+        }
+
+        harness.client.publish(interruption)
+
+        XCTAssertEqual(publishedStates, [interruption, .signedOut])
+        XCTAssertEqual(harness.viewModel.companionState, .signedOut)
+        XCTAssertEqual(harness.viewModel.sessionToken, "")
+        XCTAssertEqual(harness.client.disconnectCount, 1)
+        XCTAssertFalse(harness.viewModel.helmetRideActive)
+        withExtendedLifetime(cancellable) {}
+    }
+
     func testAccountBoundaryDefersDisconnectStartAcrossNestedNewestTokenMatrix() {
         for nestedToken in ["account-c", " \n ", " account-session-token "] {
             let harness = Harness()

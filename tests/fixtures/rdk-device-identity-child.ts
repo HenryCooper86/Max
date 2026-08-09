@@ -11,6 +11,7 @@ const result = loadOrCreateDeviceId({
   writeFile: (file, data, options) => {
     writeFileSync(file, data, options);
     if (process.env.IDENTITY_HOLD_MS && file.toString().includes(".tmp-")) {
+      process.send?.({ type: "temp-written" });
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.IDENTITY_HOLD_MS));
     }
   },

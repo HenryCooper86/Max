@@ -161,6 +161,25 @@ describe("navRouteOkSpeech", () => {
       "已找到人民广场，全程9.9公里，预计10分钟。仅供参考，请注意实际路况。"
     );
   });
+
+  it("does not double-round the whole-number branch (final-review fold-in)", () => {
+    // Formatting the whole-number branch FROM the already-rounded 1-decimal
+    // value double-rounds: 10_460 m → 10.46 km → round to 1 decimal → 10.5 →
+    // round again → "11", when the correct single rounding of 10.46 km is
+    // "10". The whole-number branch must round the RAW km value directly,
+    // never the intermediate 1-decimal value.
+    expect(navRouteOkSpeech("人民广场", 10_460, 600)).toBe(
+      "已找到人民广场，全程10公里，预计10分钟。仅供参考，请注意实际路况。"
+    );
+  });
+
+  it("does not double-round a second whole-number boundary", () => {
+    // 12_460 m → 12.46 km → 1-decimal rounds to 12.5 → double-rounding would
+    // render "13"; the correct single rounding of 12.46 km is "12".
+    expect(navRouteOkSpeech("人民广场", 12_460, 600)).toBe(
+      "已找到人民广场，全程12公里，预计10分钟。仅供参考，请注意实际路况。"
+    );
+  });
 });
 
 describe("deviceSuccessSpeech", () => {

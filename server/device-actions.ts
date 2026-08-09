@@ -481,10 +481,18 @@ export type DeviceReconciliation = { truncate: boolean; speech: string | undefin
  *  one-decimal branch, and toFixed(1) rounds 9.975..9.999 up to "10.0" —
  *  the double-digit whole number bleeding a decimal back in. Rounding first
  *  (9_975 m → 9.975 → 10.0 → 10 >= 10) sends it to the whole-number branch
- *  instead, so it renders "10", matching every other value at or above 10 km. */
+ *  instead, so it renders "10", matching every other value at or above 10 km.
+ *
+ *  The whole-number branch itself rounds the RAW km value (distanceMeters /
+ *  1000), never `roundedKm` — rounding twice compounds: 10_460 m → 10.46 km
+ *  → round to 1 decimal → 10.5 → round again → "11", when 10.46 km's one
+ *  correct rounding is "10". `roundedKm` exists only to decide which branch
+ *  applies; each branch does its own single, final rounding from the raw
+ *  value. */
 function formatRouteKm(distanceMeters: number): string {
-  const roundedKm = Math.round((distanceMeters / 1000) * 10) / 10;
-  return roundedKm >= 10 ? String(Math.round(roundedKm)) : roundedKm.toFixed(1);
+  const km = distanceMeters / 1000;
+  const roundedKm = Math.round(km * 10) / 10;
+  return roundedKm >= 10 ? String(Math.round(km)) : roundedKm.toFixed(1);
 }
 
 /** The relay-spoken start summary, composed from the exact nav.route payload

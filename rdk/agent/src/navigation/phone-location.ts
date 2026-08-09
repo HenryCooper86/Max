@@ -129,6 +129,10 @@ export function createPhoneLocationSource(options: {
     }, delay);
   }
 
+  function ownsUsableFix(fix: PhoneFix): boolean {
+    return !closed && usable && storedAcceptedFix === fix;
+  }
+
   function hasValidStructure(event: PhoneLocationEvent, receivedAt: number): boolean {
     if (!Number.isSafeInteger(event.sequence) || event.sequence <= 0) return false;
     if (!Number.isFinite(event.lat) || event.lat < -90 || event.lat > 90) return false;
@@ -201,14 +205,20 @@ export function createPhoneLocationSource(options: {
       };
       storedAcceptedFix = accepted;
       usable = true;
+      // A state observer may synchronously close or stop the source. Arm the
+      // stale deadline first so that re-entrant lifecycle invalidation can
+      // cancel it before any later externally visible fix effects occur.
+      scheduleStale(accepted);
+      if (!ownsUsableFix(accepted)) return true;
       publish({
         connection: "sharing",
         usable: true,
         horizontalAccuracyMeters: accepted.horizontalAccuracyMeters,
         ageMs: receivedAt - accepted.timestamp
       });
-      scheduleStale(accepted);
+      if (!ownsUsableFix(accepted) || state.connection !== "sharing") return true;
       resolveWaiters(accepted);
+      if (!ownsUsableFix(accepted) || state.connection !== "sharing") return true;
       options.onFix?.(copyFix(accepted));
       return true;
     },

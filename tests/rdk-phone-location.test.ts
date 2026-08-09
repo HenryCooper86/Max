@@ -9,7 +9,11 @@ vi.mock("../shared/geo", async (importOriginal) => {
   return { ...actual, wgs84ToGcj02: convert };
 });
 
-import { createPhoneLocationSource, type PhoneLocationState } from "../rdk/agent/src/navigation/phone-location";
+import {
+  createPhoneLocationSource,
+  type PhoneLocationSource,
+  type PhoneLocationState
+} from "../rdk/agent/src/navigation/phone-location";
 
 function fakeClock(start = 1_000_000) {
   type Entry = { at: number; fn: () => void };
@@ -230,6 +234,72 @@ describe("createPhoneLocationSource", () => {
     expect(h.source.acceptLocation(fix(h.clock, 5))).toBe(true);
     expect(h.source.latest()).toMatchObject({ sequence: 5 });
     expect(h.states.at(-1)).toMatchObject({ connection: "sharing", usable: true });
+  });
+
+  it("cancels every accepted-fix effect when onState closes reentrantly", async () => {
+    const clock = fakeClock();
+    let fixes = 0;
+    let states = 0;
+    const source: PhoneLocationSource = createPhoneLocationSource({
+      now: clock.now,
+      setTimer: clock.setTimer,
+      clearTimer: clock.clearTimer,
+      onState: (state) => {
+        states += 1;
+        if (state.usable) source.close();
+      },
+      onFix: () => {
+        fixes += 1;
+      }
+    });
+    source.acceptStatus({ type: "phone.location.status", state: "sharing" });
+    const first = source.waitForUsableFix();
+    const second = source.waitForUsableFix();
+
+    expect(source.acceptLocation(fix(clock))).toBe(true);
+    await expect(first).resolves.toBeUndefined();
+    await expect(second).resolves.toBeUndefined();
+    expect(source.latest()).toBeUndefined();
+    expect(fixes).toBe(0);
+    expect(clock.pending()).toBe(0);
+    const statesAfterClose = states;
+    clock.advance(60_000);
+    expect(states).toBe(statesAfterClose);
+  });
+
+  it("does not report a fix after onState reentrantly stops sharing", async () => {
+    const clock = fakeClock();
+    let fixes = 0;
+    let lastState: PhoneLocationState | undefined;
+    const source: PhoneLocationSource = createPhoneLocationSource({
+      now: clock.now,
+      setTimer: clock.setTimer,
+      clearTimer: clock.clearTimer,
+      onState: (state) => {
+        lastState = state;
+        if (state.usable) source.acceptStatus({ type: "phone.location.status", state: "stopped" });
+      },
+      onFix: () => {
+        fixes += 1;
+      }
+    });
+    source.acceptStatus({ type: "phone.location.status", state: "sharing" });
+    const waiting = source.waitForUsableFix();
+
+    expect(source.acceptLocation(fix(clock))).toBe(true);
+    expect(source.latest()).toBeUndefined();
+    expect(fixes).toBe(0);
+    expect(clock.pending()).toBe(1);
+    expect(lastState).toMatchObject({ connection: "stopped", usable: false, reason: "stopped" });
+    clock.advance(2_999);
+    let settled = false;
+    void waiting.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    clock.advance(1);
+    await expect(waiting).resolves.toBeUndefined();
   });
 
   it("makes a source timestamp stale exactly ten seconds later and clears a stale status", () => {

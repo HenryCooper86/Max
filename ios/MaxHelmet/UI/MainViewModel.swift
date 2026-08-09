@@ -96,6 +96,9 @@ final class MainViewModel: ObservableObject {
     private var nextFlushTicket = 0
     private var scheduledFlushTicket: Int?
     private var rideTeardownDepth = 0
+    private var pendingHelmetRideStart = false
+    private var sessionTokenTransitionActive = false
+    private var pendingSessionTokenIntent: String?
 
     /// Presents the Max gallery sheet.
     @Published var showGallery = false
@@ -123,15 +126,10 @@ final class MainViewModel: ObservableObject {
 
     /// The login session token, stored SEPARATELY from the manual 认证令牌
     /// field so signing in/out never destroys a pasted operator relay token.
-    @Published var sessionToken: String {
-        willSet(newToken) {
-            let oldAccount = sessionToken.trimmingCharacters(in: .whitespacesAndNewlines)
-            let newAccount = newToken.trimmingCharacters(in: .whitespacesAndNewlines)
-            if oldAccount != newAccount, ownsCompanionAccountSession {
-                endCompanionAccountSession()
-            }
-        }
-        didSet { persistSecret(Keys.sessionToken, sessionToken) }
+    @Published private var committedSessionToken: String
+    var sessionToken: String {
+        get { committedSessionToken }
+        set { transitionSessionToken(to: newValue) }
     }
 
     /// What the WebSocket presents: the login session first (a dead one is
@@ -377,7 +375,7 @@ final class MainViewModel: ObservableObject {
 
         relayURL = defaults.string(forKey: Keys.relayURL) ?? Self.defaultRelayURL
         authToken = initialAuthToken
-        sessionToken = initialSessionToken
+        committedSessionToken = initialSessionToken
         authUserId = defaults.string(forKey: Keys.authUserId) ?? ""
         authUsername = defaults.string(forKey: Keys.authUsername) ?? ""
         authDisplayName = defaults.string(forKey: Keys.authDisplayName) ?? ""
@@ -422,8 +420,7 @@ final class MainViewModel: ObservableObject {
 
     func stopHelmetRide() {
         onMain { [weak self] in
-            guard let self, self.rideOwned || self.helmetRideActive else { return }
-            self.terminateOwnedRide(sendStop: true)
+            self?.performStopHelmetRide()
         }
     }
 
@@ -454,6 +451,10 @@ final class MainViewModel: ObservableObject {
 
     private func performStartHelmetRide() {
         dispatchPrecondition(condition: .onQueue(.main))
+        if rideTeardownDepth > 0 {
+            pendingHelmetRideStart = true
+            return
+        }
         guard hasAccountSession,
               !rideOwned,
               !helmetRideActive,
@@ -493,6 +494,16 @@ final class MainViewModel: ObservableObject {
         helmetRideActive = true
     }
 
+    private func performStopHelmetRide() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        if rideTeardownDepth > 0 {
+            pendingHelmetRideStart = false
+            return
+        }
+        guard rideOwned || helmetRideActive else { return }
+        terminateOwnedRide(sendStop: true, resumePendingStart: true)
+    }
+
     private func performUnpairHelmet() {
         dispatchPrecondition(condition: .onQueue(.main))
         guard hasAccountSession, canUnpair(from: companionState) || rideOwned else { return }
@@ -518,7 +529,10 @@ final class MainViewModel: ObservableObject {
             )
             guard ownsCompanionGeneration(owner), hasAccountSession else { return }
         }
+        guard canSendUnpair(from: companionState) else { return }
+        let unpairOwner = companionGeneration
         companionClient.unpair()
+        guard ownsCompanionGeneration(unpairOwner), canCompleteUnpair(from: companionState) else { return }
         pairCode = ""
     }
 
@@ -640,10 +654,11 @@ final class MainViewModel: ObservableObject {
     }
 
     @discardableResult
-    private func terminateOwnedRide(sendStop: Bool) -> Int {
+    private func terminateOwnedRide(sendStop: Bool, resumePendingStart: Bool = false) -> Int {
         dispatchPrecondition(condition: .onQueue(.main))
         let owner = advanceCompanionGeneration()
         rideOwned = false
+        helmetRideActive = false
         fixThrottle.reset()
         lastThrottleEmissionTime = nil
         scheduledFlushTicket = nil
@@ -652,11 +667,16 @@ final class MainViewModel: ObservableObject {
         bindCompanionState(owner: owner)
 
         rideTeardownDepth += 1
-        defer { rideTeardownDepth -= 1 }
+        defer {
+            rideTeardownDepth -= 1
+            if rideTeardownDepth == 0 {
+                let shouldResume = resumePendingStart && pendingHelmetRideStart
+                pendingHelmetRideStart = false
+                if shouldResume { performStartHelmetRide() }
+            }
+        }
         locationStream.stop()
         if sendStop { companionClient.stopRide() }
-        guard ownsCompanionGeneration(owner) else { return owner }
-        helmetRideActive = false
         return owner
     }
 
@@ -686,6 +706,26 @@ final class MainViewModel: ObservableObject {
         let owner = advanceCompanionGeneration()
         bindCompanionState(owner: owner)
         companionState = .signedOut
+    }
+
+    private func transitionSessionToken(to newToken: String) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        pendingSessionTokenIntent = newToken
+        guard !sessionTokenTransitionActive else { return }
+
+        sessionTokenTransitionActive = true
+        defer { sessionTokenTransitionActive = false }
+        while let intent = pendingSessionTokenIntent {
+            pendingSessionTokenIntent = nil
+            let oldAccount = committedSessionToken.trimmingCharacters(in: .whitespacesAndNewlines)
+            let newAccount = intent.trimmingCharacters(in: .whitespacesAndNewlines)
+            if oldAccount != newAccount, ownsCompanionAccountSession {
+                endCompanionAccountSession()
+            }
+            guard pendingSessionTokenIntent == nil else { continue }
+            committedSessionToken = intent
+            persistSecret(Keys.sessionToken, intent)
+        }
     }
 
     private func advanceCompanionGeneration() -> Int {
@@ -737,6 +777,19 @@ final class MainViewModel: ObservableObject {
         default:
             return false
         }
+    }
+
+    private func canSendUnpair(from state: CompanionConnectionState) -> Bool {
+        switch state {
+        case .signedOut, .failed:
+            return false
+        default:
+            return true
+        }
+    }
+
+    private func canCompleteUnpair(from state: CompanionConnectionState) -> Bool {
+        canSendUnpair(from: state) || state == .unpaired
     }
 
     private func isSixASCIIDigitCode(_ code: String) -> Bool {

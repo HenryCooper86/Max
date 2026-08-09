@@ -15,6 +15,7 @@ import type { NavErrorEvent, NavManeuver, NavRequestEvent, NavRouteEvent } from 
 import type { GeoPoint } from "../shared/geo";
 import { haversineMeters } from "../shared/guidance";
 import { MOCK_ROUTE } from "../shared/nav-fixtures";
+import { navRouteOkSpeech } from "./device-actions";
 import type { Logger } from "./logger";
 
 const PLACE_ENDPOINT = "https://restapi.amap.com/v5/place/text";
@@ -200,25 +201,62 @@ export function createNavHandler(options: {
   send: (payload: NavRouteEvent | NavErrorEvent) => void;
   now?: () => number;
   minRerouteIntervalMs?: number;
+  /** Called exactly once per "start" request answered with nav.route, with
+   *  the relay-spoken summary composed from that same route. Never called
+   *  for a reroute answer or a nav.error. Providers without a navigation
+   *  confirmation path (see AgentProvider.attachNavOkSpeech) omit this. */
+  onRouteAnnounced?: (speech: string) => void;
 }): (event: NavRequestEvent) => Promise<void> {
-  const { provider, send, now = Date.now, minRerouteIntervalMs = DEFAULT_MIN_REROUTE_INTERVAL_MS } = options;
+  const {
+    provider,
+    send,
+    now = Date.now,
+    minRerouteIntervalMs = DEFAULT_MIN_REROUTE_INTERVAL_MS,
+    onRouteAnnounced
+  } = options;
   let lastRoute: NavRouteEvent | undefined;
   let lastRerouteAt: number | undefined;
+  // Bumped at every "start" request, so an in-flight provider round trip can
+  // tell, once it finally resolves, whether it is still the rider's current
+  // destination or has been superseded by a later start. session-controller.ts
+  // dispatches nav.request fire-and-forget (never awaited), so two starts can
+  // legitimately run concurrently here — the phone cancels the old one and
+  // fires a new one the instant the rider asks for somewhere else, but the
+  // old provider call (Amap, up to a few seconds) keeps running until it
+  // settles on its own. Without this guard the later of the two completions
+  // to land — not the later of the two REQUESTS — would win: it could
+  // overwrite `lastRoute`/`lastRerouteAt` with the abandoned destination and
+  // send/announce that destination's summary on top of the correct one
+  // already delivered, and a subsequent reroute could then be served from
+  // the wrong cached route (the same root cause, so this one guard closes
+  // both cases).
+  let startEpoch = 0;
 
   return async function handleNavRequest(event: NavRequestEvent): Promise<void> {
     if (event.reason === "start") {
+      const epoch = ++startEpoch;
       // A new navigation session must never inherit the previous cache —
       // success or failure — or a reroute that lands seconds later (still
       // inside the guard window) could silently resend turn-by-turn for the
-      // stale, now-irrelevant destination.
+      // stale, now-irrelevant destination. Unconditional (not epoch-gated):
+      // this runs synchronously in the newest start's own call, before any
+      // await, so it can never race a stale completion — see the epoch
+      // field's comment above for what DOES need gating.
       lastRoute = undefined;
       lastRerouteAt = undefined;
       const resolved = await provider.resolveDestination(event.query ?? "", event.origin);
+      // Superseded by a later start while awaiting the provider — drop this
+      // completion entirely, including its nav.error case just below: an
+      // error reply for a destination the rider already abandoned is exactly
+      // as misleading as a stale route would be, and the client is waiting
+      // on the newer request's own answer instead.
+      if (epoch !== startEpoch) return;
       if (!resolved) {
         send({ type: "nav.error", commandId: event.commandId, code: "destination.notFound" });
         return;
       }
       const planned = await provider.planRoute(event.origin, resolved.location);
+      if (epoch !== startEpoch) return; // superseded during the second provider call
       if (!planned) {
         send({ type: "nav.error", commandId: event.commandId, code: "route.unavailable" });
         return;
@@ -226,6 +264,7 @@ export function createNavHandler(options: {
       lastRoute = toNavRouteEvent(event.commandId, resolved.name, resolved.location, planned);
       lastRerouteAt = now();
       send(lastRoute);
+      onRouteAnnounced?.(navRouteOkSpeech(resolved.name, planned.distanceMeters, planned.etaSeconds));
       return;
     }
 

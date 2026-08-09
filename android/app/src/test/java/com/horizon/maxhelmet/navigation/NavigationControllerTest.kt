@@ -284,6 +284,64 @@ class NavigationControllerTest {
         assertFalse(h.locationSource.started)
     }
 
+    // Nav-parity-closure Task 4: stop-cancels. No route has committed yet
+    // (unlike the tests above, nothing is navigating at all), but a start is
+    // genuinely in flight — mirrors web's `cancelHeldStart` semantics and
+    // iOS Task 3's `stopGuidance`: the stop itself succeeds, and the
+    // cancelled start gets its own truthful `navigation.cancelled` result
+    // rather than hanging until its own timeout.
+
+    @Test
+    fun `stop mid first-fix cancels the in-flight start, and a later idle stop is not stuck ok`() = runBlocking {
+        val h = Harness(firstFixTimeoutMillis = 5_000) // long enough that the timeout never fires in this test
+        val job = launch(Dispatchers.Default) {
+            h.controller.handleCommand("cmd-1", "navigation.start", "终点")
+        }
+        awaitCondition(description = "start reaches the first-fix wait") { h.locationSource.started }
+
+        h.controller.handleCommand("cmd-stop", "navigation.stop", null)
+        val stopResult = JSONObject(h.results.single { JSONObject(it).getString("commandId") == "cmd-stop" })
+        assertEquals("ok", stopResult.getString("status"))
+
+        job.join()
+        val startResult = JSONObject(h.results.single { JSONObject(it).getString("commandId") == "cmd-1" })
+        assertEquals("failed", startResult.getString("status"))
+        assertEquals("navigation.cancelled", startResult.getString("reason"))
+        assertTrue("nothing installs", h.guidanceUpdates.none { it != null })
+        assertFalse("the source is stopped", h.locationSource.started)
+        assertTrue("no nav.request was ever sent — cancelled before reaching the relay", h.sent.isEmpty())
+
+        // The stop above already cleared `starting` alongside its own
+        // generation bump — a genuinely idle stop right after must not find
+        // it stuck true (the same lesson iOS's fix round paid for).
+        h.controller.handleCommand("cmd-idle-stop", "navigation.stop", null)
+        val idleStopResult = JSONObject(h.results.last())
+        assertEquals("failed", idleStopResult.getString("status"))
+        assertEquals("navigation.notActive", idleStopResult.getString("reason"))
+    }
+
+    @Test
+    fun `stop mid relay-await cancels the in-flight start via search-failPending`() = runBlocking {
+        val h = Harness()
+        val job = launch(Dispatchers.Default) {
+            h.controller.handleCommand("cmd-1", "navigation.start", "终点")
+        }
+        feedFixUntil(h, neutralWgsFix, description = "nav.request sent") { h.sent.size == 1 }
+
+        h.controller.handleCommand("cmd-stop", "navigation.stop", null)
+        val stopResult = JSONObject(h.results.single { JSONObject(it).getString("commandId") == "cmd-stop" })
+        assertEquals("ok", stopResult.getString("status"))
+
+        // Without search.failPending() wired through, this would hang until
+        // RelayNavigationSearch's own 7 s timeout instead of resolving here.
+        job.join()
+        val startResult = JSONObject(h.results.single { JSONObject(it).getString("commandId") == "cmd-1" })
+        assertEquals("failed", startResult.getString("status"))
+        assertEquals("navigation.cancelled", startResult.getString("reason"))
+        assertTrue("nothing installs", h.guidanceUpdates.none { it != null })
+        assertFalse("the source is stopped", h.locationSource.started)
+    }
+
     // ---- concurrency -------------------------------------------------
 
     @Test
@@ -302,8 +360,11 @@ class NavigationControllerTest {
 
             jobA.join()
             val resultA = JSONObject(h.results.single { JSONObject(it).getString("commandId") == "cmd-A" })
-            assertEquals("unsupported", resultA.getString("status"))
-            assertEquals("route.unavailable", resultA.getString("reason"))
+            // B's start already superseded A's generation by the time A's
+            // search resolves null (RelayNavigationSearch's single-outstanding
+            // slot preempted A) — a cancellation, not a genuine route failure.
+            assertEquals("failed", resultA.getString("status"))
+            assertEquals("navigation.cancelled", resultA.getString("reason"))
 
             val commandIdB = JSONObject(h.sent[1]).getString("commandId")
             h.relay.handleNavRoute(sampleRouteData(commandIdB))
@@ -409,25 +470,78 @@ class NavigationControllerTest {
         assertEquals(2, results.size)
     }
 
+    // Fix-round-1: `locationSource.start` used to live in its OWN
+    // `synchronized(lock) { ... }` block, separate from the one right above
+    // it that bumped the generation and set `starting = true`. A concurrent
+    // stop/teardown landing in the gap BETWEEN those two blocks (the lock is
+    // released and reacquired) would call `locationSource.stop()`, and then
+    // this block's own `locationSource.start()` — carrying no generation
+    // re-check — would unconditionally undo it, restarting a GPS listener
+    // nothing could ever stop again: `stopSourceIfOrphaned`'s
+    // `generation == navigationGeneration` guard forever refuses once this
+    // generation is stale, so the listener leaks for the process lifetime,
+    // feeding phantom fixes into the shared onFix/resolveFirstFix path.
+    // `locationSource.start` is now folded into the SAME synchronized block
+    // as the bump, closing that gap BY CONSTRUCTION: a `synchronized(lock)`
+    // block is a JVM monitor critical section, so a concurrent stop/
+    // teardown's own `synchronized(lock)` acquisition — from a genuinely
+    // different THREAD — can only run entirely before this block or
+    // entirely after it, never interleaved within it. That guarantee comes
+    // from the JVM's mutual-exclusion semantics, not from timing, and the
+    // cross-thread race it closes is not independently pinnable by a test:
+    // it lived between two lock sections on ONE coroutine with no
+    // suspension point between them, so only a genuinely parallel OS thread
+    // could ever have raced it, and no seam in this file lets a test force
+    // that interleaving deterministically without either a flaky,
+    // timing-dependent test or a production-code seam added purely for
+    // test control (out of scope).
+    //
+    // The test below pins a RELATED, deterministically triggerable shape
+    // instead: a reentrant call arriving DURING `locationSource.start`
+    // itself (legal — Kotlin's `synchronized` is a JVM monitor, reentrant
+    // per-thread — this is a same-thread nested call, not a genuine
+    // concurrent race, but it is the closest deterministic proxy available
+    // for "a stop/teardown contemporaneous with this start's own setup").
+    // Fix-round-2 (see handleStart's doc comment) hoists `generation`'s
+    // capture to BEFORE this call, specifically so a reentrant bump landing
+    // inside it is NOT folded into this start's own snapshot — proven here
+    // by the RED/GREEN discriminator swap below (reason flips from
+    // route.unavailable to navigation.cancelled once the hoist is in
+    // place — verified against a temporary revert of the hoist, matching
+    // this plan's RED-honesty standard). One property this reentrant proxy
+    // does NOT (and structurally cannot) prove either way: whether the
+    // source ends up literally stopped. `locationSource.start` is called
+    // exactly once per attempt, and this fake's own body sets `started =
+    // true` as ITS OWN LAST ACTION, after the nested teardown's `stop()`
+    // already ran — no generation discipline inside `NavigationController`
+    // can retroactively undo a side effect a single, already-atomic
+    // `locationSource.start` call performs internally. That is a
+    // characteristic of testing a nested reentrant call this way, not a
+    // regression of the cross-thread fix above: no REAL `LocationSource`
+    // implementation calls back into the controller from within its own
+    // `start()`, so this shape does not arise in production. What IS
+    // asserted below is `stopCalls`, confirming teardown's own `stop()`
+    // genuinely ran (it is simply not the LAST word against this
+    // particular fake's own subsequent `started = true`).
     @Test
-    fun `a stop landing between locationSource-start and first-fix registration still lets the start resolve`() =
+    fun `a teardown reentering from within locationSource-start makes the start stale relative to itself`() =
         runBlocking {
-            // A LocationSource whose start() reenters the controller (same
-            // thread, same lock — legal: Kotlin's synchronized is a JVM
-            // monitor, reentrant per-thread) to simulate a stop/teardown
-            // landing in the exact gap between handleStart's pre-await
-            // locationSource.start call and its own first-fix registration —
-            // deterministic, no timing dependency.
             lateinit var controllerRef: NavigationController
             var teardownTriggered = false
+            var started = false
+            var stopCalls = 0
             val locationSource = object : LocationSource {
                 override fun start(onFix: (LatLon) -> Unit) {
                     if (!teardownTriggered) {
                         teardownTriggered = true
                         controllerRef.teardown()
                     }
+                    started = true
                 }
-                override fun stop() {}
+                override fun stop() {
+                    started = false
+                    stopCalls++
+                }
             }
             val results = CopyOnWriteArrayList<String>()
             val controller = NavigationController(
@@ -447,14 +561,38 @@ class NavigationControllerTest {
             }
             // Bounded: a generation-only watchdog guard would hang this
             // start forever (its own registration outlives the teardown's
-            // bump); a deferred-identity guard resolves it at the 50 ms
-            // timeout regardless.
+            // bump); a deferred-identity guard (see awaitFirstFix's own doc
+            // comment) resolves it at the 50 ms timeout regardless.
             withTimeout(2_000) { job.join() }
 
             assertEquals(1, results.size)
             val result = JSONObject(results[0])
-            assertEquals("unsupported", result.getString("status"))
-            assertEquals("route.unavailable", result.getString("reason"))
+            // Fix-round-2: `generation` is captured BEFORE
+            // `locationSource.start` runs, so the reentrant teardown's bump
+            // is NOT folded into this start's own snapshot — this start is
+            // stale relative to itself, exactly as if a genuinely concurrent
+            // stop had landed before it (the invariant the hoist protects:
+            // this attempt must never be mistaken for current again, which
+            // also keeps a stale attempt from passing the commit guard onto
+            // a torn-down session). A cancellation, not a genuine first-fix
+            // failure — before the hoist this asserted
+            // unsupported/route.unavailable instead (verified via a
+            // temporary revert).
+            assertEquals("failed", result.getString("status"))
+            assertEquals("navigation.cancelled", result.getString("reason"))
+            // teardown()'s own stop() ran exactly once; stopSourceIfOrphaned
+            // declines (this generation is stale, by design — see the class
+            // comment above for why that's a deliberate trade-off here, not
+            // a leak `NavigationController` is responsible for closing).
+            assertEquals(1, stopCalls)
+
+            // teardown() must clear the `starting` latch alongside its own
+            // generation bump (same lesson as the iOS fix round): a
+            // genuinely idle stop right after must not find it stuck true.
+            controller.handleCommand("cmd-idle-stop", "navigation.stop", null)
+            val idleStopResult = JSONObject(results.last())
+            assertEquals("failed", idleStopResult.getString("status"))
+            assertEquals("navigation.notActive", idleStopResult.getString("reason"))
         }
 
     // ---- prompts -------------------------------------------------------

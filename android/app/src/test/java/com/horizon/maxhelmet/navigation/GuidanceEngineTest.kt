@@ -38,10 +38,23 @@ class GuidanceEngineTest {
     private fun step(lat: Double, progress: GuidanceProgress): GuidanceUpdate =
         GuidanceEngine.step(LatLon(lat, 121.47), route(), progress)
 
-    private fun assertMatchesFarNearTemplate(prompt: String?) {
-        assertTrue("expected a spoken prompt", prompt != null)
-        assertTrue("\"$prompt\" does not match the far/near template", Regex("^前方\\d+米，右转$").matches(prompt!!))
-    }
+    // Same fixture as route(), but the destination sits ~100 m past the last
+    // polyline vertex -- arrival must key on the vertex (rule 6), not this coordinate.
+    private fun routeWithDestinationPastLastVertex(): NavigationRoute = NavigationRoute(
+        destinationName = "测试终点",
+        destination = LatLon(31.2409, 121.47),
+        polyline = listOf(
+            LatLon(31.23, 121.47),
+            LatLon(31.235, 121.47),
+            LatLon(31.24, 121.47)
+        ),
+        steps = listOf(
+            ManeuverStep(instruction = "右转", coordinate = LatLon(31.235, 121.47), alongRouteMeters = 555.0),
+            ManeuverStep(instruction = "到达终点", coordinate = LatLon(31.24, 121.47), alongRouteMeters = 1109.0)
+        ),
+        distanceMeters = 1109.0,
+        etaSeconds = 240.0
+    )
 
     @Test
     fun `haversine measures across the test route`() {
@@ -71,7 +84,7 @@ class GuidanceEngineTest {
         }
 
         val far = at(31.2320) // ~333 m -> far
-        assertMatchesFarNearTemplate(far.spokenPrompt)
+        assertEquals("前方350米，右转", far.spokenPrompt)
         assertEquals(PromptThreshold.FAR, far.firedThreshold)
 
         val between = at(31.2325) // between far and near: nothing fires
@@ -79,7 +92,7 @@ class GuidanceEngineTest {
         assertNull(between.firedThreshold)
 
         val near = at(31.2340) // ~111 m -> near
-        assertMatchesFarNearTemplate(near.spokenPrompt)
+        assertEquals("前方100米，右转", near.spokenPrompt)
         assertEquals(PromptThreshold.NEAR, near.firedThreshold)
 
         val now = at(31.2348) // ~22 m -> now
@@ -143,7 +156,7 @@ class GuidanceEngineTest {
     @Test
     fun `arrives within 30 m of the destination and stays sticky`() {
         var progress = fresh()
-        for (lat in listOf(31.2320, 31.2340, 31.2348, 31.2355, 31.2399)) {
+        for (lat in listOf(31.2320, 31.2340, 31.2348, 31.2355, 31.2398)) {
             progress = step(lat, progress).progress
         }
         assertTrue(progress.arrived)
@@ -161,5 +174,22 @@ class GuidanceEngineTest {
         assertTrue(u.remainingMeters < 590)
         assertTrue(u.remainingSeconds > 110)
         assertTrue(u.remainingSeconds < 130)
+    }
+
+    @Test
+    fun `arrival keys on the last polyline vertex not the destination`() {
+        // destination is ~100 m past the last vertex (31.24). Fix (a) is ~167 m
+        // from the vertex and ~267 m from the destination -> not arrived. Fix (b)
+        // is ~22 m from the vertex (inside the 30 m radius) but ~122 m from the
+        // destination -> an engine measuring to `destination` would miss this.
+        val notYet = GuidanceEngine.step(
+            LatLon(31.2385, 121.47), routeWithDestinationPastLastVertex(), fresh()
+        )
+        assertFalse(notYet.arrived)
+
+        val arrived = GuidanceEngine.step(
+            LatLon(31.2398, 121.47), routeWithDestinationPastLastVertex(), notYet.progress
+        )
+        assertTrue(arrived.arrived)
     }
 }

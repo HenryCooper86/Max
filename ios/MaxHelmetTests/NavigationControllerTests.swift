@@ -71,6 +71,24 @@ private final class FakeSearch: NavigationRouteSearching, @unchecked Sendable {
         holdRerouteContinuation?.resume(returning: result)
         holdRerouteContinuation = nil
     }
+
+    /// Mirrors `RelayNavigationSearch.failPending()`: resolves whatever is
+    /// currently held (route or reroute — production has a single shared
+    /// slot; this fake keeps them separate purely for test control, see the
+    /// doc comments above, so failing "the pending request" means failing
+    /// whichever of the two is actually outstanding) with an honest nil.
+    func failPending() {
+        holdContinuation?.resume(returning: nil)
+        holdContinuation = nil
+        holdRerouteContinuation?.resume(returning: nil)
+        holdRerouteContinuation = nil
+    }
+}
+
+/// A mutable clock a test can advance explicitly, so a cooldown-window
+/// assertion doesn't depend on real wall-clock time passing during the test.
+private final class FakeClock: @unchecked Sendable {
+    var value: TimeInterval = 0
 }
 
 @MainActor
@@ -122,7 +140,10 @@ final class NavigationControllerTests: XCTestCase {
         return (controller, box)
     }
 
-    func testStartResolvesStreamsAndSpeaksSummary() async {
+    func testStartResolvesAndStreamsWithoutSpeakingLocally() async {
+        // The relay speaks the start confirmation itself, as an agent
+        // transcript (via okSpeech) — the controller must stay silent on a
+        // successful commit rather than double-announcing it.
         let stream = FakeStream(), search = FakeSearch()
         search.route = straightRoute()
         let (controller, box) = make(stream, search)
@@ -132,7 +153,7 @@ final class NavigationControllerTests: XCTestCase {
         XCTAssertEqual(result, .ok)
         XCTAssertTrue(stream.started)
         XCTAssertNotNil(box.guidance)
-        XCTAssertFalse(box.spoken.isEmpty, "opening summary is spoken")
+        XCTAssertTrue(box.spoken.isEmpty, "no local opening summary — the relay's okSpeech covers it")
     }
 
     func testStartPassesTheFirstFixAsOrigin() async {
@@ -198,8 +219,8 @@ final class NavigationControllerTests: XCTestCase {
         // hang perform() forever, holding the device slot, and log a
         // "SWIFT TASK CONTINUATION MISUSE" leak).
         let firstResult = await firstTask.value
-        XCTAssertEqual(firstResult.status, .unsupported)
-        XCTAssertEqual(firstResult.reason, "route.unavailable")
+        XCTAssertEqual(firstResult.status, .failed)
+        XCTAssertEqual(firstResult.reason, "navigation.cancelled", "superseded by a newer start, not a genuine route failure")
 
         // Deliver the real fix — it must satisfy the SECOND (current)
         // request. The superseded first request's watchdog was cancelled the
@@ -289,6 +310,98 @@ final class NavigationControllerTests: XCTestCase {
         XCTAssertFalse(box.spoken.contains { $0.contains("无法重新规划路线") }, "the stale reroute's failure speech must be suppressed")
     }
 
+    // Nav-parity-closure Task 3: a reroute in flight when arrival lands must
+    // never revive navigation once its (stale, but not generation-stale —
+    // arrival deliberately does not bump the generation) answer arrives.
+
+    func testPostArrivalRerouteSuccessDoesNotRevive() async {
+        let stream = FakeStream(), search = FakeSearch()
+        let route = straightRoute()
+        search.route = route
+        let (controller, box) = make(stream, search, clock: { 0 })
+        let first = await controller.perform(.navigationStart(query: "终点"))
+        XCTAssertEqual(first, .ok)
+
+        search.holdReroute = true
+        let off = CLLocationCoordinate2D(latitude: 39.9060, longitude: 116.4020)
+        stream.feed(off)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(search.rerouteCalls, 1)
+
+        // Arrival lands while the reroute is still held.
+        stream.feed(route.destinationCoordinate)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertFalse(stream.started, "arrival stopped the stream")
+        XCTAssertNil(box.guidance)
+        XCTAssertTrue(box.spoken.contains { $0.contains("到达") })
+
+        // The stale reroute now succeeds — confirmed post-arrival revival
+        // must not happen: no stream restart, no card state.
+        search.resolveHeldReroute(with: route)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertFalse(stream.started, "a reroute answer after arrival must not restart the stream")
+        XCTAssertNil(box.guidance, "a reroute answer after arrival must not reinstall a card")
+    }
+
+    func testPostArrivalRerouteFailureDoesNotSpeak() async {
+        let stream = FakeStream(), search = FakeSearch()
+        let route = straightRoute()
+        search.route = route
+        let (controller, box) = make(stream, search, clock: { 0 })
+        let first = await controller.perform(.navigationStart(query: "终点"))
+        XCTAssertEqual(first, .ok)
+
+        search.holdReroute = true
+        let off = CLLocationCoordinate2D(latitude: 39.9060, longitude: 116.4020)
+        stream.feed(off)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(search.rerouteCalls, 1)
+
+        stream.feed(route.destinationCoordinate)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertFalse(stream.started, "arrival stopped the stream")
+
+        // The stale reroute now fails — the spurious "无法重新规划路线，已停止
+        // 导航。" line must never be heard after arrival already announced
+        // "已到达目的地。".
+        search.resolveHeldReroute(with: nil)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertFalse(box.spoken.contains { $0.contains("无法重新规划路线") }, "the spurious reroute-failure line must be suppressed after arrival")
+        XCTAssertFalse(stream.started, "the stale failure must not touch the stream again")
+    }
+
+    func testFreshStartAfterRerouteDoesNotInheritCooldown() async {
+        let stream = FakeStream(), search = FakeSearch()
+        let clock = FakeClock()
+        search.route = straightRoute()
+        search.rerouteResult = straightRoute()
+        let (controller, _) = make(stream, search, clock: { clock.value })
+
+        let first = await controller.perform(.navigationStart(query: "终点"))
+        XCTAssertEqual(first, .ok)
+
+        let off = CLLocationCoordinate2D(latitude: 39.9060, longitude: 116.4020)
+        stream.feed(off)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(search.rerouteCalls, 1, "the first off-route fix reroutes immediately (no prior cooldown)")
+
+        // A brand-new start for a different destination, well inside what
+        // would have been the previous route's 20 s cooldown window.
+        clock.value = 5
+        search.route = straightRoute()
+        let second = await controller.perform(.navigationStart(query: "新的目的地"))
+        XCTAssertEqual(second, .ok)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        // Drifting off THIS fresh route must reroute immediately — it must
+        // not inherit the superseded route's cooldown stamp.
+        stream.feed(off)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(search.rerouteCalls, 2, "a fresh route's own off-route drift must not be blocked by the old route's cooldown")
+    }
+
     // Final-review fix wave: a route committed after a teardown must never
     // land on a stopped stream, and nothing must ever revive navigation
     // after an explicit 停止导航. See the "Final-review fix wave" section of
@@ -363,10 +476,64 @@ final class NavigationControllerTests: XCTestCase {
         search.resolveHeld(with: straightRoute())
         let second = await secondTask.value
 
-        XCTAssertEqual(second.status, .unsupported)
-        XCTAssertEqual(second.reason, "route.unavailable")
+        XCTAssertEqual(second.status, .failed)
+        XCTAssertEqual(second.reason, "navigation.cancelled", "the explicit stop superseded it, not a genuine route failure")
         XCTAssertFalse(stream.started, "the stale install must not restart the stream")
         XCTAssertNil(box.guidance, "the stale install must not revive guidance")
+
+        // The stop above already cleared `starting` alongside its own
+        // generation bump — a genuinely idle stop right after must not find
+        // it stuck true.
+        let idleStop = await controller.perform(.navigationStop)
+        XCTAssertEqual(idleStop.reason, "navigation.notActive", "the cancelled start must not leave `starting` stuck true")
+    }
+
+    func testStaleRerouteFailureBumpClearsTheStartingLatch() async {
+        // Fix-round-1 Important #1: the reroute-failure branch is a THIRD
+        // generation-bump site (alongside start(_:) and stopGuidance) and
+        // must clear `starting` too — otherwise a start superseded by a
+        // reroute failure (rather than by a newer start or an explicit
+        // stop) strands the latch true forever, and a later genuinely-idle
+        // stop wrongly answers `.ok` instead of `navigation.notActive`.
+        let stream = FakeStream(), search = FakeSearch()
+        let routeA = straightRoute()
+        search.route = routeA
+        let (controller, box) = make(stream, search, clock: { 0 })
+
+        let first = await controller.perform(.navigationStart(query: "终点"))
+        XCTAssertEqual(first, .ok)
+
+        // A second start supersedes generation-wise but is held mid-search
+        // — its OWN eventual exit will correctly decline to clear
+        // `starting` once stale, so nothing but the reroute-failure bump
+        // below can clear it.
+        search.holdRoute = true
+        let secondTask = Task { await controller.perform(.navigationStart(query: "新终点")) }
+        try? await Task.sleep(nanoseconds: 50_000_000) // let it reach the held search
+
+        // A drifts off-route: the reroute captures the CURRENT generation
+        // (the second start's, since it already bumped it), then fails.
+        search.rerouteResult = nil
+        let off = CLLocationCoordinate2D(latitude: 39.9060, longitude: 116.4020)
+        stream.feed(off)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(search.rerouteCalls, 1)
+        XCTAssertFalse(stream.started, "the reroute failure tore down route A")
+        XCTAssertNil(box.guidance)
+
+        // Nothing is genuinely actionable now: route is nil, and the
+        // superseded second start can never land (its generation is
+        // permanently stale). An explicit stop here must report
+        // notActive, not silently succeed because `starting` was left
+        // stuck true by the reroute-failure bump.
+        let idleStop = await controller.perform(.navigationStop)
+        XCTAssertEqual(idleStop.status, .failed)
+        XCTAssertEqual(idleStop.reason, "navigation.notActive", "the reroute-failure bump must clear `starting` too")
+
+        // Let the superseded second start resolve so its continuation isn't
+        // leaked past the test.
+        search.resolveHeld(with: nil)
+        _ = await secondTask.value
     }
 
     func testStopWhileAwaitingFirstFixForANewStartResolvesImmediately() async {
@@ -401,8 +568,53 @@ final class NavigationControllerTests: XCTestCase {
             Date().timeIntervalSince(resolvedFrom), 1.0,
             "stop must resolve the pending first-fix wait immediately, not via its own 2 s watchdog"
         )
-        XCTAssertEqual(second.status, .unsupported)
-        XCTAssertEqual(second.reason, "route.unavailable")
+        XCTAssertEqual(second.status, .failed)
+        XCTAssertEqual(second.reason, "navigation.cancelled", "the explicit stop superseded it, not a genuine route failure")
+    }
+
+    // Nav-parity-closure Task 3: stop-cancels. No route has committed yet
+    // (unlike the tests above, nothing is navigating at all), but a start is
+    // genuinely in flight — web's `cancelHeldStart` semantics: the stop
+    // itself succeeds, and the cancelled start gets its own truthful result
+    // rather than hanging until a timeout.
+
+    func testStopMidFirstFixCancelsTheInFlightStart() async {
+        executionTimeAllowance = 5 // safety net; the assertions below prove it resolves promptly, not via a timeout
+        let stream = FakeStream()
+        stream.fixOnStart = nil // GPS never reports a fix — stays parked awaiting one
+        let search = FakeSearch()
+        let (controller, box) = make(stream, search, firstFixTimeoutSeconds: 5)
+
+        let startTask = Task { await controller.perform(.navigationStart(query: "终点")) }
+        try? await Task.sleep(nanoseconds: 20_000_000) // let it reach the first-fix wait
+
+        let stopResult = await controller.perform(.navigationStop)
+        XCTAssertEqual(stopResult, .ok)
+
+        let startResult = await startTask.value
+        XCTAssertEqual(startResult.status, .failed)
+        XCTAssertEqual(startResult.reason, "navigation.cancelled")
+        XCTAssertNil(box.guidance, "nothing installs")
+        XCTAssertFalse(stream.started, "the stream is stopped")
+    }
+
+    func testStopMidRelayAwaitCancelsTheInFlightStart() async {
+        executionTimeAllowance = 5 // safety net; without failPending() wired through, this would hang until FakeSearch's continuation leaks
+        let stream = FakeStream(), search = FakeSearch()
+        search.holdRoute = true // the relay never answers on its own — only the stop's failPending() resolves it
+        let (controller, box) = make(stream, search)
+
+        let startTask = Task { await controller.perform(.navigationStart(query: "终点")) }
+        try? await Task.sleep(nanoseconds: 50_000_000) // let it reach the held search
+
+        let stopResult = await controller.perform(.navigationStop)
+        XCTAssertEqual(stopResult, .ok)
+
+        let startResult = await startTask.value
+        XCTAssertEqual(startResult.status, .failed)
+        XCTAssertEqual(startResult.reason, "navigation.cancelled")
+        XCTAssertNil(box.guidance, "nothing installs")
+        XCTAssertFalse(stream.started, "the stream is stopped")
     }
 
     func testRerouteSuccessReassertsTheStream() async {

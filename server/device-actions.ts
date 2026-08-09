@@ -415,7 +415,11 @@ const FAILURE_SPEECH: Record<string, string> = {
   // a phone nor a screen, so either would be a false explanation.
   "device.noScreen": "头盔上没有屏幕，看不了。",
   "device.noPhone": "头盔上没有手机功能，这个我做不了。",
-  "device.notYet": "这个功能头盔上还没上线。"
+  "device.notYet": "这个功能头盔上还没上线。",
+  // A navigation.start that never reaches a route (rider cancels mid-flight,
+  // or a later stage supersedes it) reports this reason on its device.result
+  // rather than the generic "导航操作没成功。".
+  "navigation.cancelled": "已取消导航。"
 };
 
 /** Spoken names for the fallback line, so a failure with no known reason still
@@ -469,11 +473,32 @@ export function redactContactNames(text: string): string {
 
 export type DeviceReconciliation = { truncate: boolean; speech: string | undefined };
 
+/** Formats the whole-ride distance the way the relay speaks it: one decimal
+ *  place below 10 km, a whole number at or above (10_000 m → "10", never
+ *  "10.0"). */
+function formatRouteKm(distanceMeters: number): string {
+  const km = distanceMeters / 1000;
+  return distanceMeters < 10_000 ? km.toFixed(1) : String(Math.round(km));
+}
+
+/** The relay-spoken start summary, composed from the exact nav.route payload
+ *  once `createNavHandler` has resolved a destination and planned a route.
+ *  Pure so the wording is table-testable without a provider or a socket. */
+export function navRouteOkSpeech(destinationName: string, distanceMeters: number, etaSeconds: number): string {
+  const minutes = Math.ceil(etaSeconds / 60);
+  return `已找到${destinationName}，全程${formatRouteKm(distanceMeters)}公里，预计${minutes}分钟。仅供参考，请注意实际路况。`;
+}
+
 /** The short line Max speaks when an action succeeds. Deterministic and tied to
  *  the real device result, so the rider hears the truth ("拍好了", "开始录像")
- *  instead of the model's chatter or a mistaken safety refusal. Actions that
- *  speak their own confirmation elsewhere — navigation (client card + summary),
- *  dialing and SMS (system UI) — return undefined and keep that path. */
+ *  instead of the model's chatter or a mistaken safety refusal. navigation.start
+ *  returns undefined here for a different reason than the other actions below
+ *  it that share this shape (dialing, SMS: system UI owns their confirmation):
+ *  at dispatch time the relay has not resolved a destination or planned a
+ *  route yet, so there is no summary to speak. `createNavHandler`'s
+ *  `onRouteAnnounced` composes the real line via `navRouteOkSpeech` once the
+ *  route is known, and attaches it after the fact through
+ *  `PendingDeviceCommands.attachOkSpeech` — see server/session-controller.ts. */
 export function deviceSuccessSpeech(command: DeviceCommand): string | undefined {
   switch (command.action) {
     case "camera.photo":
@@ -577,6 +602,21 @@ export class PendingDeviceCommands {
    *  for the same commandId still needs to resolve. */
   peek(commandId: string): IssuedDeviceCommand | undefined {
     return this.pending.get(commandId);
+  }
+
+  /** Attaches okSpeech to the most recently issued unexpired command with this
+   *  action — used by navigation.start, whose real confirmation is not known
+   *  at dispatch time (see navRouteOkSpeech / createNavHandler's
+   *  onRouteAnnounced). Silent no-op when none is outstanding: expired, or a
+   *  reroute forward with no start currently in flight. Ties break by
+   *  insertion order; last write wins if called more than once. */
+  attachOkSpeech(action: DeviceActionName, okSpeech: string): void {
+    let target: IssuedDeviceCommand | undefined;
+    for (const issued of this.pending.values()) {
+      if (issued.action !== action) continue;
+      if (!target || issued.issuedAt >= target.issuedAt) target = issued;
+    }
+    if (target) target.okSpeech = okSpeech;
   }
 
   /** Removes and returns every command that has outlived the timeout. */

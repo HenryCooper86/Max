@@ -41,6 +41,23 @@ final class NavigationController: DeviceActionHandler {
     private var lastRerouteAt: TimeInterval = -.greatestFiniteMagnitude
     private var firstFixContinuation: CheckedContinuation<CLLocationCoordinate2D?, Never>?
     private var firstFixWatchdog: Task<Void, Never>?
+    /// True from the generation bump inside `start(_:)` until that SAME
+    /// generation's own terminal exit (first-fix timeout, an unresolved
+    /// search, the stale-generation guard, or a successful commit — see
+    /// `start(_:)`'s `defer`). A superseded attempt's own exit leaves this
+    /// alone: its captured `generation` no longer matches
+    /// `navigationGeneration`, so it knows a later attempt already owns it
+    /// and already cleared this itself. That "later attempt" is never the
+    /// superseded one's own `defer` in that case — it is whichever of the
+    /// THREE sites bumps `navigationGeneration` (`start(_:)`'s own next
+    /// call, `stopGuidance`, or `attemptReroute`'s failure branch), and
+    /// every one of them clears `starting` explicitly alongside its own
+    /// bump for exactly that reason: none of them can rely on a stale
+    /// attempt's exit to do it on their behalf. `stopGuidance` reads this to
+    /// tell "a start is genuinely in flight, with no route committed yet"
+    /// apart from "nothing is happening at all" — both otherwise look
+    /// identical as `route == nil`.
+    private var starting = false
     /// Bumped once per `start(_:)` attempt. Nothing tears down `route`/the
     /// stream on behalf of a stale generation: a concurrent `start()` can
     /// supersede an in-flight first-fix wait, an in-flight search (both share
@@ -106,6 +123,8 @@ final class NavigationController: DeviceActionHandler {
         // one responsible for `route`/the stream before touching either.
         navigationGeneration += 1
         let generation = navigationGeneration
+        starting = true
+        defer { if generation == navigationGeneration { starting = false } }
 
         // The first fix must be in hand BEFORE searching: the relay routes
         // FROM the rider's position, so there is no query to send without it.
@@ -116,17 +135,17 @@ final class NavigationController: DeviceActionHandler {
             // (Important #2), or a newer generation that superseded this one
             // and is still in flight (Important #1), must keep it running.
             if generation == navigationGeneration, route == nil { stream.stop() }
-            return .unsupported("route.unavailable")
+            return startFailureResult(generation: generation)
         }
         guard let resolved = await search.route(to: query, from: origin) else {
             if generation == navigationGeneration, route == nil { stream.stop() }
-            return .unsupported("route.unavailable")
+            return startFailureResult(generation: generation)
         }
         guard generation == navigationGeneration else {
             // Superseded while the search was in flight (Important #3's
             // sibling case: a newer start(), not a reroute) — the newer
             // generation now owns `route`/the stream; do not stomp on it.
-            return .unsupported("route.unavailable")
+            return startFailureResult(generation: generation)
         }
         // Re-assert: a teardown elsewhere (e.g. arrival on the route this
         // request supersedes) may have stopped the stream since the
@@ -135,9 +154,27 @@ final class NavigationController: DeviceActionHandler {
         stream.start()
         route = resolved
         progress = GuidanceProgress(maneuverIndex: 0, firedThresholds: [], arrived: false)
+        // Web/Android parity: a fresh route never inherits whatever this
+        // generation superseded's reroute cooldown or in-flight latch.
+        rerouting = false
+        lastRerouteAt = -.greatestFiniteMagnitude
         publish(location: nil)
-        speak(openingSummary(resolved))
+        // Deliberately silent on success: the relay speaks the confirmation
+        // itself (its okSpeech, attached once the real route is known)
+        // rather than this client re-announcing a summary it can only
+        // partially reconstruct.
         return .ok
+    }
+
+    /// A start exit with no route in hand: "route.unavailable" when this
+    /// generation is still the current one (a genuine failure — no fix, or
+    /// no route, while nothing else touched navigation state in the
+    /// meantime), or "navigation.cancelled" when a newer start or an
+    /// explicit stop already superseded it while it waited.
+    private func startFailureResult(generation: Int) -> DeviceActionResult {
+        generation == navigationGeneration
+            ? .unsupported("route.unavailable")
+            : .failed("navigation.cancelled")
     }
 
     /// Awaits the location stream's first fix, bounded so a stalled GPS never
@@ -175,21 +212,50 @@ final class NavigationController: DeviceActionHandler {
     }
 
     private func stopGuidance() -> DeviceActionResult {
-        guard route != nil else { return .failed("navigation.notActive") }
+        let hadRoute = route != nil
+        // No route committed yet AND no start in flight (`starting`) is the
+        // only genuine "nothing to stop" case — a start awaiting its first
+        // fix or the relay's search is very much something to cancel, even
+        // though `route` itself is still nil at that point too.
+        guard hadRoute || starting else { return .failed("navigation.notActive") }
         // Teardown invalidates the generation: an explicit stop is a
         // deliberate "cancel everything" — any start or reroute already in
         // flight must never revive navigation once its answer arrives late.
+        // `starting` is cleared right here, rather than left for the
+        // in-flight start's own exit to clear: that exit only clears it when
+        // its OWN generation is still current, which — once superseded by
+        // this very bump — it never is again, so leaving it to that alone
+        // would strand `starting` true forever.
         navigationGeneration += 1
+        starting = false
         // A concurrent start() awaiting its first fix must not hang forever
         // once the bump above invalidates its generation: its own watchdog
         // would see the mismatch and correctly refuse to resolve it (see
         // awaitFirstFix), so the resolve has to happen here instead — a
         // no-op when nothing is currently awaiting a fix.
         resolveFirstFix(nil)
-        route = nil
-        stream.stop()
-        onGuidance(nil)
-        speak("已停止导航。")
+        if hadRoute {
+            route = nil
+            // Web/Android parity: a stopped route's reroute cooldown and
+            // in-flight latch must not survive it — the next fresh route
+            // starts clean, same as a successful start-commit.
+            rerouting = false
+            lastRerouteAt = -.greatestFiniteMagnitude
+            stream.stop()
+            onGuidance(nil)
+            speak("已停止导航。")
+        } else {
+            // No route yet, but a start was genuinely in flight. The
+            // resolveFirstFix above only covers the first-fix stage; fail
+            // whatever the search itself is holding too (a no-op if the
+            // start hasn't reached the search yet), and stop the stream
+            // nothing else needs anymore. Silent here: the cancelled
+            // start's own device.result (navigation.cancelled) is what the
+            // relay's FAILURE_SPEECH map speaks — "已取消导航。" — once it
+            // arrives, not this stop's own `.ok`.
+            search.failPending()
+            stream.stop()
+        }
         return .ok
     }
 
@@ -235,14 +301,28 @@ final class NavigationController: DeviceActionHandler {
         Task { @MainActor in
             defer { rerouting = false }
             let fresh = await search.reroute(to: destination, from: origin)
-            // A concurrent start() shares RelayNavigationSearch's single
-            // outstanding nav.request slot, so it can fail THIS reroute
-            // (nil) via failPending() while it supersedes it. Whichever way
-            // this reroute resolves, a stale answer must never touch
-            // `route`/the stream once a newer generation owns them — that
-            // newer start is either still installing its own route or has
-            // already installed one.
-            guard generation == navigationGeneration else { return }
+            // Guarded BEFORE either branch, on TWO conditions:
+            //
+            // (1) A concurrent start() shares RelayNavigationSearch's single
+            // outstanding nav.request slot: `awaitAnswer`'s atomic swap
+            // preempts THIS reroute with a nil answer the instant a newer
+            // request registers (not a separate failPending() call racing
+            // this one). Whichever way this reroute resolves, a stale
+            // answer must never touch `route`/the stream once a newer
+            // generation owns them — that newer start is either still
+            // installing its own route or has already installed one.
+            //
+            // (2) `route == nil` catches the one case the generation check
+            // alone misses: arrival on THIS SAME route, which deliberately
+            // does not bump the generation (see handleFix) so an unrelated
+            // concurrent start can still land. Without this second check, a
+            // reroute launched one tick before arrival would pass the
+            // generation-only guard and — on success — restart the stream
+            // and reinstall a route the rider was just told had finished
+            // ("已到达目的地。"), or — on failure — speak "无法重新规划路线，
+            // 已停止导航。" right after it. Either branch is moot once the
+            // route it was fixing is gone.
+            guard generation == navigationGeneration, route != nil else { return }
             if let fresh {
                 // Re-assert for the same reason start()'s commit does: an
                 // arrival teardown on this same route (see handleFix) may
@@ -256,7 +336,16 @@ final class NavigationController: DeviceActionHandler {
                 // event — bump the generation for the same reason
                 // stopGuidance does, so nothing still tied to this
                 // generation can later revive what was just torn down.
+                // This is the third of the three generation-bump sites
+                // (alongside start(_:) and stopGuidance): it must clear
+                // `starting` too, exactly like the other two — a start
+                // superseded by THIS bump (its generation captured by the
+                // reroute this failure resolves) can never clear the latch
+                // via its own exit once stale, so leaving it to that alone
+                // would strand `starting` true forever, and a later
+                // genuinely-idle stop would wrongly answer `.ok`.
                 navigationGeneration += 1
+                starting = false
                 route = nil
                 stream.stop()
                 onGuidance(nil)
@@ -278,13 +367,6 @@ final class NavigationController: DeviceActionHandler {
             remainingSeconds: update?.remainingSeconds ?? route.totalEtaSeconds,
             offRoute: update?.offRoute ?? false
         ))
-    }
-
-    private func openingSummary(_ route: NavigationRoute) -> String {
-        let km = String(format: "%.1f", route.totalDistanceMeters / 1000)
-        let minutes = Int((route.totalEtaSeconds / 60).rounded())
-        let firstTurn = route.steps.first.map { "，" + $0.instruction } ?? ""
-        return "开始导航，全程 \(km) 公里，预计 \(minutes) 分钟\(firstTurn)。仅供参考，请注意实际路况。"
     }
 }
 

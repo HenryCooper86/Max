@@ -20,6 +20,13 @@ const route: NavRouteEvent = {
   ]
 };
 
+// Same fixture as `route`, but the destination sits ~100 m past the last
+// polyline vertex — arrival must key on the vertex (rule 6), not this coordinate.
+const routeWithDestinationPastLastVertex: NavRouteEvent = {
+  ...route,
+  destination: { lat: 31.2409, lon: 121.47 }
+};
+
 describe("haversineMeters", () => {
   it("measures ~1109 m across the test route", () => {
     expect(haversineMeters({ lat: 31.23, lon: 121.47 }, { lat: 31.24, lon: 121.47 })).toBeCloseTo(1109, -1);
@@ -43,9 +50,9 @@ describe("step", () => {
       progress = u.progress;
       return u;
     };
-    expect(at(31.232).spokenPrompt).toMatch(/^前方\d+米，右转$/); // ~333 m → far
+    expect(at(31.232).spokenPrompt).toBe("前方350米，右转"); // ~333 m → far
     expect(at(31.2325).spokenPrompt).toBeNull(); // far already fired
-    expect(at(31.234).spokenPrompt).toMatch(/^前方\d+米，右转$/); // ~111 m → near
+    expect(at(31.234).spokenPrompt).toBe("前方100米，右转"); // ~111 m → near
     expect(at(31.2348).spokenPrompt).toBe("右转"); // ~22 m → now
     expect(at(31.2349).spokenPrompt).toBeNull();
   });
@@ -99,5 +106,19 @@ describe("step", () => {
     const u = step({ lat: 31.2348, lon: 121.47 }, route, INITIAL_PROGRESS);
     expect(u.spokenPrompt).toBe("右转");
     expect(u.progress.maneuverIndex).toBe(1);
+  });
+
+  it("arrival keys on the last polyline vertex, not the destination", () => {
+    // destination is ~100 m past the last vertex (31.24). Fix (a) is ~167 m
+    // from the vertex and ~267 m from the destination → not arrived. Fix (b)
+    // is ~22 m from the vertex (inside the 30 m radius) but ~122 m from the
+    // destination → an engine measuring to `destination` would miss this.
+    let progress = INITIAL_PROGRESS;
+    const notYet = step({ lat: 31.2385, lon: 121.47 }, routeWithDestinationPastLastVertex, progress);
+    progress = notYet.progress;
+    expect(notYet.arrived).toBe(false);
+
+    const arrived = step({ lat: 31.2398, lon: 121.47 }, routeWithDestinationPastLastVertex, progress);
+    expect(arrived.arrived).toBe(true);
   });
 });

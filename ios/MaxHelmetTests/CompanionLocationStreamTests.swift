@@ -43,6 +43,63 @@ final class CompanionLocationStreamTests: XCTestCase {
         XCTAssertEqual(manager.events.suffix(2), ["request", "start"])
     }
 
+    func testNotDeterminedUpdatesNeverForwardUntilCurrentLifecycleBecomesPrecise() {
+        let manager = FakeCompanionLocationManager()
+        var authorization: CLAuthorizationStatus = .notDetermined
+        var accuracy: CLAccuracyAuthorization = .fullAccuracy
+        let stream = makeStream(manager: manager, authorization: { authorization }, accuracy: { accuracy })
+        var permissions: [CompanionLocationPermission] = []
+        var latitudes: [Double] = []
+        stream.onPermission = { permissions.append($0) }
+        stream.onFix = { latitudes.append($0.coordinate.latitude) }
+
+        XCTAssertTrue(stream.startFromForeground())
+        stream.locationManager(CLLocationManager(), didUpdateLocations: [location(latitude: 10)])
+
+        authorization = .denied
+        stream.locationManagerDidChangeAuthorization(CLLocationManager())
+        stream.locationManager(CLLocationManager(), didUpdateLocations: [location(latitude: 11)])
+
+        authorization = .authorizedWhenInUse
+        accuracy = .fullAccuracy
+        stream.locationManagerDidChangeAuthorization(CLLocationManager())
+        stream.locationManager(CLLocationManager(), didUpdateLocations: [location(latitude: 12)])
+
+        accuracy = .reducedAccuracy
+        stream.locationManagerDidChangeAuthorization(CLLocationManager())
+        stream.locationManager(CLLocationManager(), didUpdateLocations: [location(latitude: 13)])
+
+        accuracy = .fullAccuracy
+        stream.locationManagerDidChangeAuthorization(CLLocationManager())
+        stream.locationManager(CLLocationManager(), didUpdateLocations: [location(latitude: 14)])
+
+        XCTAssertEqual(permissions, [.notDetermined, .denied, .precise, .reduced, .precise])
+        XCTAssertEqual(latitudes, [12, 14])
+        XCTAssertEqual(manager.requestCount, 1)
+        XCTAssertEqual(manager.startCount, 1)
+    }
+
+    func testNotDeterminedPreciseStatusReReadCannotReplacePreciseAuthorizationCallback() {
+        let manager = FakeCompanionLocationManager()
+        var authorization: CLAuthorizationStatus = .notDetermined
+        let stream = makeStream(manager: manager, authorization: { authorization }, accuracy: { .fullAccuracy })
+        var latitudes: [Double] = []
+        stream.onFix = { latitudes.append($0.coordinate.latitude) }
+        manager.onRequest = {
+            authorization = .authorizedAlways
+        }
+
+        XCTAssertTrue(stream.startFromForeground())
+        stream.locationManager(CLLocationManager(), didUpdateLocations: [location(latitude: 15)])
+
+        stream.locationManagerDidChangeAuthorization(CLLocationManager())
+        stream.locationManager(CLLocationManager(), didUpdateLocations: [location(latitude: 16)])
+
+        XCTAssertEqual(latitudes, [16])
+        XCTAssertEqual(manager.requestCount, 1)
+        XCTAssertEqual(manager.startCount, 1)
+    }
+
     func testDeniedRestrictedAndReducedStartsPublishTruthAndRefuseUpdates() {
         let cases: [(CLAuthorizationStatus, CLAccuracyAuthorization, CompanionLocationPermission)] = [
             (.denied, .fullAccuracy, .denied),
@@ -291,6 +348,69 @@ final class CompanionLocationStreamTests: XCTestCase {
         XCTAssertEqual(received.count, 1)
         XCTAssertTrue(received[0] === first)
         XCTAssertEqual(manager.startCount, 1)
+        XCTAssertEqual(manager.stopCount, 1)
+    }
+
+    func testSupersededRequestEffectCannotAssignItsLateSynchronousFixToReplacementStart() {
+        let manager = FakeCompanionLocationManager()
+        var authorization: CLAuthorizationStatus = .notDetermined
+        let stream = makeStream(manager: manager, authorization: { authorization }, accuracy: { .fullAccuracy })
+        var latitudes: [Double] = []
+        stream.onFix = { latitudes.append($0.coordinate.latitude) }
+        manager.onRequest = {
+            manager.onRequest = nil
+            stream.stop()
+            authorization = .authorizedAlways
+            XCTAssertTrue(stream.startFromForeground())
+            stream.locationManager(CLLocationManager(), didUpdateLocations: [self.location(latitude: 31)])
+        }
+
+        _ = stream.startFromForeground()
+        stream.locationManager(CLLocationManager(), didUpdateLocations: [location(latitude: 32)])
+
+        XCTAssertEqual(latitudes, [32])
+        XCTAssertEqual(manager.requestCount, 1)
+        XCTAssertEqual(manager.startCount, 1)
+        XCTAssertEqual(manager.stopCount, 1)
+    }
+
+    func testSupersededStartEffectRejectsReviewProbeLeakButAcceptsLaterFreshFix() {
+        let manager = FakeCompanionLocationManager()
+        let stream = makeStream(manager: manager, authorization: { .authorizedAlways }, accuracy: { .fullAccuracy })
+        var latitudes: [Double] = []
+        stream.onFix = { latitudes.append($0.coordinate.latitude) }
+        manager.onStart = {
+            manager.onStart = nil
+            stream.stop()
+            XCTAssertTrue(stream.startFromForeground())
+            stream.locationManager(CLLocationManager(), didUpdateLocations: [self.location(latitude: 21)])
+        }
+
+        _ = stream.startFromForeground()
+        stream.locationManager(CLLocationManager(), didUpdateLocations: [location(latitude: 22)])
+
+        XCTAssertEqual(latitudes, [22])
+        XCTAssertEqual(manager.startCount, 2)
+        XCTAssertEqual(manager.stopCount, 1)
+    }
+
+    func testSupersededStopEffectCannotAssignItsLateSynchronousFixToNestedFreshStart() {
+        let manager = FakeCompanionLocationManager()
+        let stream = makeStream(manager: manager, authorization: { .authorizedAlways }, accuracy: { .fullAccuracy })
+        var latitudes: [Double] = []
+        stream.onFix = { latitudes.append($0.coordinate.latitude) }
+        XCTAssertTrue(stream.startFromForeground())
+        manager.onStop = {
+            manager.onStop = nil
+            XCTAssertTrue(stream.startFromForeground())
+            stream.locationManager(CLLocationManager(), didUpdateLocations: [self.location(latitude: 41)])
+        }
+
+        stream.stop()
+        stream.locationManager(CLLocationManager(), didUpdateLocations: [location(latitude: 42)])
+
+        XCTAssertEqual(latitudes, [42])
+        XCTAssertEqual(manager.startCount, 2)
         XCTAssertEqual(manager.stopCount, 1)
     }
 

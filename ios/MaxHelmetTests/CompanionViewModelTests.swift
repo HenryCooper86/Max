@@ -906,6 +906,34 @@ final class CompanionViewModelTests: XCTestCase {
         )
     }
 
+    func testUnpairedStatusDuringPendingStopCannotClearCodeBeforeUnpairAcceptance() throws {
+        let pairSocket = ViewModelRecordingSocket()
+        let rideSocket = ViewModelRecordingSocket()
+        rideSocket.automaticallyCompletesSends = false
+        let harness = RealCompanionViewModelHarness(sockets: [pairSocket, rideSocket])
+        harness.completePairOnly()
+        harness.stream.startResults = [true]
+        harness.stream.permissionOnStart = .precise
+        harness.viewModel.startHelmetRide()
+        rideSocket.deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\",\"deviceId\":\"rdk\"}"))
+        rideSocket.completeSend(at: 0)
+
+        harness.viewModel.unpairHelmet()
+        rideSocket.deliver(.string("{\"type\":\"companion.status\",\"state\":\"unpaired\"}"))
+
+        XCTAssertEqual(harness.viewModel.pairCode, "123456", "Stop-stage state cannot acknowledge Unpair")
+        XCTAssertEqual(try viewModelMessageTypes(rideSocket.sentMessages), ["companion.start", "companion.stop"])
+
+        rideSocket.completeSend(at: 1)
+        let messageTypes = try viewModelMessageTypes(rideSocket.sentMessages)
+        XCTAssertEqual(messageTypes, ["companion.start", "companion.stop", "companion.unpair"])
+        XCTAssertEqual(harness.viewModel.pairCode, "123456")
+
+        guard messageTypes.count == 3 else { return }
+        rideSocket.completeSend(at: 2)
+        XCTAssertEqual(harness.viewModel.pairCode, "")
+    }
+
     func testActiveRideRepeatedUnpairWaitsForStopThenUnpairSuccessAndClearsOnce() throws {
         let pairSocket = ViewModelRecordingSocket()
         let rideSocket = ViewModelRecordingSocket()
@@ -1307,9 +1335,19 @@ private final class FakeCompanionClient: CompanionClientControlling {
         onStop?()
     }
 
+    func stopRide(completion: @escaping (CompanionActionResult) -> Void) {
+        stopRide()
+        completion(.accepted)
+    }
+
     func unpair() {
         unpairCount += 1
         eventSink?("companion.unpair")
+    }
+
+    func unpair(completion: @escaping (CompanionActionResult) -> Void) {
+        unpair()
+        completion(.accepted)
     }
 
     func sendLatest(_ fix: CompanionFix) {

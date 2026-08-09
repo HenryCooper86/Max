@@ -1,5 +1,10 @@
 import Foundation
 
+enum CompanionActionResult: Equatable {
+    case accepted
+    case failed
+}
+
 protocol CompanionSocketTask: AnyObject {
     func resume()
     func send(_ message: URLSessionWebSocketTask.Message, completionHandler: @escaping (Error?) -> Void)
@@ -53,6 +58,11 @@ final class RDKCompanionClient {
     private enum ActionFamily {
         case pairing
         case ride
+        case stop
+    }
+
+    private final class ActionCompletionGate {
+        var isConsumed = false
     }
 
     private static let reconnectDelays: [TimeInterval] = [1, 2, 4, 8, 16, 30]
@@ -75,6 +85,7 @@ final class RDKCompanionClient {
     private var sendEpoch = 0
     private var pairingActionEpoch = 0
     private var rideActionEpoch = 0
+    private var stopActionEpoch = 0
     private var nextOpenAttemptIdentifier = 0
     private var openAttempt: OpenAttemptReservation?
     private var openRecoveryOwner = 0
@@ -134,6 +145,7 @@ final class RDKCompanionClient {
             self.generation &+= 1
             self.pairingActionEpoch &+= 1
             self.rideActionEpoch &+= 1
+            self.stopActionEpoch &+= 1
             self.openAttempt = nil
             self.invalidateOpenRecovery()
             self.resetReceivePump()
@@ -189,6 +201,7 @@ final class RDKCompanionClient {
             }
             guard case .ready = self.transportState, !self.startSentOnSocket else { return }
             self.rideActionEpoch &+= 1
+            self.stopActionEpoch &+= 1
             self.startSentOnSocket = true
             self.canSendLocation = true
             self.sendAction(RDKCompanionProtocol.startMessage(), family: .ride)
@@ -197,9 +210,18 @@ final class RDKCompanionClient {
     }
 
     func stopRide() {
+        performStopRide(completion: nil)
+    }
+
+    func stopRide(completion: @escaping (CompanionActionResult) -> Void) {
+        performStopRide(completion: completion)
+    }
+
+    private func performStopRide(completion: ((CompanionActionResult) -> Void)?) {
         onMain { [weak self] in
             guard let self else { return }
             self.rideActionEpoch &+= 1
+            self.stopActionEpoch &+= 1
             self.desiredRide = false
             self.invalidateOpenRecovery()
             self.invalidateOpenAttempt()
@@ -207,13 +229,23 @@ final class RDKCompanionClient {
             self.clearLocationWork()
             self.startSentOnSocket = false
             self.canSendLocation = false
-            if self.socket != nil {
-                self.sendAction(RDKCompanionProtocol.stopMessage(), family: .ride)
-            }
+            self.sendAction(
+                RDKCompanionProtocol.stopMessage(),
+                family: .stop,
+                completion: completion
+            )
         }
     }
 
     func unpair() {
+        performUnpair(completion: nil)
+    }
+
+    func unpair(completion: @escaping (CompanionActionResult) -> Void) {
+        performUnpair(completion: completion)
+    }
+
+    private func performUnpair(completion: ((CompanionActionResult) -> Void)?) {
         onMain { [weak self] in
             guard let self else { return }
             self.pairingActionEpoch &+= 1
@@ -225,9 +257,11 @@ final class RDKCompanionClient {
             self.clearLocationWork()
             self.startSentOnSocket = false
             self.canSendLocation = false
-            if self.socket != nil {
-                self.sendAction(RDKCompanionProtocol.unpairMessage(), family: .pairing)
-            }
+            self.sendAction(
+                RDKCompanionProtocol.unpairMessage(),
+                family: .pairing,
+                completion: completion
+            )
         }
     }
 
@@ -249,6 +283,7 @@ final class RDKCompanionClient {
             self.generation &+= 1
             self.pairingActionEpoch &+= 1
             self.rideActionEpoch &+= 1
+            self.stopActionEpoch &+= 1
             self.openAttempt = nil
             self.invalidateOpenRecovery()
             self.resetReceivePump()
@@ -455,6 +490,7 @@ final class RDKCompanionClient {
 
         if case .ready = state, desiredRide, !startSentOnSocket {
             rideActionEpoch &+= 1
+            stopActionEpoch &+= 1
             startSentOnSocket = true
             sendAction(RDKCompanionProtocol.startMessage(), family: .ride)
         }
@@ -510,21 +546,36 @@ final class RDKCompanionClient {
         pendingReceiveRearm = nil
     }
 
-    private func sendAction(_ text: String, family: ActionFamily) {
+    private func sendAction(
+        _ text: String,
+        family: ActionFamily,
+        completion: ((CompanionActionResult) -> Void)? = nil
+    ) {
         assert(Thread.isMainThread)
-        guard let sendingSocket = socket else { return }
+        guard let sendingSocket = socket else {
+            completion?(.failed)
+            return
+        }
         let expectedGeneration = generation
         let expectedActionEpoch = actionEpoch(for: family)
+        let gate = ActionCompletionGate()
         sendingSocket.send(.string(text)) { [weak self, weak sendingSocket] error in
-            guard let self, let sendingSocket, error != nil else { return }
+            guard let self, let sendingSocket else { return }
             self.onMain { [weak self, weak sendingSocket] in
+                guard !gate.isConsumed else { return }
+                gate.isConsumed = true
                 guard let self,
                       let sendingSocket,
                       self.isCurrent(sendingSocket, generation: expectedGeneration),
                       self.actionEpoch(for: family) == expectedActionEpoch else {
                     return
                 }
-                self.handleTransportFailure(on: sendingSocket, generation: expectedGeneration)
+                if error != nil {
+                    self.handleTransportFailure(on: sendingSocket, generation: expectedGeneration)
+                    completion?(.failed)
+                } else {
+                    completion?(.accepted)
+                }
             }
         }
     }
@@ -533,6 +584,7 @@ final class RDKCompanionClient {
         switch family {
         case .pairing: pairingActionEpoch
         case .ride: rideActionEpoch
+        case .stop: stopActionEpoch
         }
     }
 

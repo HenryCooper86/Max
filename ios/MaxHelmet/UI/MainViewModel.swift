@@ -8,7 +8,9 @@ protocol CompanionClientControlling: AnyObject {
     func pair(code: String)
     func startRide()
     func stopRide()
+    func stopRide(completion: @escaping (CompanionActionResult) -> Void)
     func unpair()
+    func unpair(completion: @escaping (CompanionActionResult) -> Void)
     func sendLatest(_ fix: CompanionFix)
     func disconnect()
 }
@@ -99,6 +101,9 @@ final class MainViewModel: ObservableObject {
     private var pendingHelmetRideStart = false
     private var sessionTokenTransitionActive = false
     private var pendingSessionTokenIntent: String?
+    private var companionAccountTeardownActive = false
+    private var pendingUnpairOwner: Int?
+    private var pendingUnpairSendOwner: Int?
 
     /// Presents the Max gallery sheet.
     @Published var showGallery = false
@@ -431,7 +436,10 @@ final class MainViewModel: ObservableObject {
     private func performPairHelmet() {
         dispatchPrecondition(condition: .onQueue(.main))
         let code = pairCode.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard hasAccountSession,
+        guard !sessionTokenTransitionActive,
+              !companionAccountTeardownActive,
+              pendingUnpairOwner == nil,
+              hasAccountSession,
               isSixASCIIDigitCode(code),
               !rideOwned,
               canPair(from: companionState) else {
@@ -451,10 +459,11 @@ final class MainViewModel: ObservableObject {
 
     private func performStartHelmetRide() {
         dispatchPrecondition(condition: .onQueue(.main))
-        if rideTeardownDepth > 0 {
+        if rideTeardownDepth > 0 || sessionTokenTransitionActive || companionAccountTeardownActive {
             pendingHelmetRideStart = true
             return
         }
+        guard pendingUnpairOwner == nil else { return }
         guard hasAccountSession,
               !rideOwned,
               !helmetRideActive,
@@ -496,7 +505,7 @@ final class MainViewModel: ObservableObject {
 
     private func performStopHelmetRide() {
         dispatchPrecondition(condition: .onQueue(.main))
-        if rideTeardownDepth > 0 {
+        if rideTeardownDepth > 0 || sessionTokenTransitionActive || companionAccountTeardownActive {
             pendingHelmetRideStart = false
             return
         }
@@ -506,7 +515,13 @@ final class MainViewModel: ObservableObject {
 
     private func performUnpairHelmet() {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard hasAccountSession, canUnpair(from: companionState) || rideOwned else { return }
+        guard pendingUnpairOwner == nil,
+              !sessionTokenTransitionActive,
+              !companionAccountTeardownActive,
+              hasAccountSession,
+              canUnpair(from: companionState) || rideOwned else {
+            return
+        }
         let pairOnlySocketWasClosed: Bool
         if case .paired = companionState {
             pairOnlySocketWasClosed = !rideOwned && !helmetRideActive
@@ -514,25 +529,78 @@ final class MainViewModel: ObservableObject {
             pairOnlySocketWasClosed = false
         }
 
-        if rideOwned || helmetRideActive {
-            terminateOwnedRide(sendStop: true)
-        } else {
-            invalidateRideWithoutSocketStop()
-            locationStream.stop()
+        let shouldStopRide = rideOwned || helmetRideActive
+        let owner = invalidateRideWithoutSocketStop()
+        pendingUnpairOwner = owner
+        pendingUnpairSendOwner = nil
+        rideTeardownDepth += 1
+        locationStream.stop()
+        rideTeardownDepth -= 1
+        pendingHelmetRideStart = false
+        guard ownsPendingUnpair(owner), hasAccountSession else {
+            pendingUnpairOwner = nil
+            pendingUnpairSendOwner = nil
+            return
         }
-        let owner = companionGeneration
-        if pairOnlySocketWasClosed {
+
+        if shouldStopRide {
+            companionClient.stopRide { [weak self] result in
+                self?.onMain { [weak self] in
+                    self?.handleUnpairStopResult(
+                        result,
+                        owner: owner,
+                        reconnectBeforeUnpair: false
+                    )
+                }
+            }
+        } else {
+            continueUnpair(owner: owner, reconnectBeforeUnpair: pairOnlySocketWasClosed)
+        }
+    }
+
+    private func handleUnpairStopResult(
+        _ result: CompanionActionResult,
+        owner: Int,
+        reconnectBeforeUnpair: Bool
+    ) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard ownsPendingUnpair(owner) else { return }
+        guard result == .accepted, canSendUnpair(from: companionState) else {
+            pendingUnpairOwner = nil
+            pendingUnpairSendOwner = nil
+            return
+        }
+        continueUnpair(owner: owner, reconnectBeforeUnpair: reconnectBeforeUnpair)
+    }
+
+    private func continueUnpair(owner: Int, reconnectBeforeUnpair: Bool) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard ownsPendingUnpair(owner), hasAccountSession else { return }
+        if reconnectBeforeUnpair {
             companionClient.connect(
                 relayURL: relayURL.trimmingCharacters(in: .whitespacesAndNewlines),
                 sessionToken: sessionToken.trimmingCharacters(in: .whitespacesAndNewlines),
                 allowSelfSignedTLS: allowSelfSigned
             )
-            guard ownsCompanionGeneration(owner), hasAccountSession else { return }
+            guard ownsPendingUnpair(owner), hasAccountSession else { return }
         }
-        guard canSendUnpair(from: companionState) else { return }
-        let unpairOwner = companionGeneration
-        companionClient.unpair()
-        guard ownsCompanionGeneration(unpairOwner), canCompleteUnpair(from: companionState) else { return }
+        guard canSendUnpair(from: companionState) else {
+            pendingUnpairOwner = nil
+            pendingUnpairSendOwner = nil
+            return
+        }
+        pendingUnpairSendOwner = owner
+        companionClient.unpair { [weak self] result in
+            self?.onMain { [weak self] in self?.finishUnpair(result, owner: owner) }
+        }
+    }
+
+    private func finishUnpair(_ result: CompanionActionResult, owner: Int) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard ownsPendingUnpair(owner), pendingUnpairSendOwner == owner else { return }
+        pendingUnpairOwner = nil
+        pendingUnpairSendOwner = nil
+        guard result == .accepted, canCompleteUnpair(from: companionState) else { return }
         pairCode = ""
     }
 
@@ -570,12 +638,23 @@ final class MainViewModel: ObservableObject {
                 bindCompanionState(owner: replacementOwner)
             }
         case .unpaired:
+            if let owner = pendingUnpairOwner,
+               pendingUnpairSendOwner == owner,
+               ownsPendingUnpair(owner) {
+                pendingUnpairOwner = nil
+                pendingUnpairSendOwner = nil
+                pairCode = ""
+            }
             if rideOwned || helmetRideActive {
                 let teardownOwner = terminateOwnedRide(sendStop: true)
                 guard ownsCompanionGeneration(teardownOwner) else { return }
                 companionState = state
             }
         default:
+            if case .failed = state {
+                pendingUnpairOwner = nil
+                pendingUnpairSendOwner = nil
+            }
             break
         }
     }
@@ -680,7 +759,8 @@ final class MainViewModel: ObservableObject {
         return owner
     }
 
-    private func invalidateRideWithoutSocketStop() {
+    @discardableResult
+    private func invalidateRideWithoutSocketStop() -> Int {
         let owner = advanceCompanionGeneration()
         rideOwned = false
         helmetRideActive = false
@@ -690,10 +770,19 @@ final class MainViewModel: ObservableObject {
         locationStream.onFix = nil
         locationStream.onPermission = nil
         bindCompanionState(owner: owner)
+        return owner
     }
 
     private func endCompanionAccountSession() {
         dispatchPrecondition(condition: .onQueue(.main))
+        guard !companionAccountTeardownActive else { return }
+        companionAccountTeardownActive = true
+        defer {
+            companionAccountTeardownActive = false
+            if !sessionTokenTransitionActive {
+                pendingHelmetRideStart = false
+            }
+        }
         if rideTeardownDepth > 0, !rideOwned {
             invalidateRideWithoutSocketStop()
         } else if rideOwned || helmetRideActive {
@@ -714,7 +803,12 @@ final class MainViewModel: ObservableObject {
         guard !sessionTokenTransitionActive else { return }
 
         sessionTokenTransitionActive = true
-        defer { sessionTokenTransitionActive = false }
+        defer {
+            sessionTokenTransitionActive = false
+            let shouldStart = pendingHelmetRideStart
+            pendingHelmetRideStart = false
+            if shouldStart { performStartHelmetRide() }
+        }
         while let intent = pendingSessionTokenIntent {
             pendingSessionTokenIntent = nil
             let oldAccount = committedSessionToken.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -730,6 +824,10 @@ final class MainViewModel: ObservableObject {
 
     private func advanceCompanionGeneration() -> Int {
         companionGeneration &+= 1
+        if let pendingUnpairOwner, pendingUnpairOwner != companionGeneration {
+            self.pendingUnpairOwner = nil
+            pendingUnpairSendOwner = nil
+        }
         return companionGeneration
     }
 
@@ -739,6 +837,10 @@ final class MainViewModel: ObservableObject {
 
     private func ownsRide(_ owner: Int) -> Bool {
         rideOwned && ownsCompanionGeneration(owner)
+    }
+
+    private func ownsPendingUnpair(_ owner: Int) -> Bool {
+        pendingUnpairOwner == owner && ownsCompanionGeneration(owner)
     }
 
     private var hasAccountSession: Bool {

@@ -122,6 +122,7 @@ export function createPhoneLocationSource(options: {
     staleTimer = setTimer(() => {
       if (closed || generation !== staleGeneration || !usable || storedAcceptedFix?.sequence !== fix.sequence) return;
       staleTimer = undefined;
+      lifecycleActive = false;
       usable = false;
       storedAcceptedFix = undefined;
       publish({ connection: "stale", usable: false, reason: "stale" });
@@ -155,23 +156,37 @@ export function createPhoneLocationSource(options: {
         lastSequence = undefined;
       }
 
-      if (event.state === "stopped" || event.state === "unpaired") lifecycleActive = false;
+      if (event.state === "stopped" || event.state === "unpaired" || event.state === "stale") lifecycleActive = false;
+
+      // Relay status messages are replayed during reconnect. Re-emitting a
+      // blank sharing/connected state would contradict a still-truthful fix
+      // (or an inaccurate pause), so duplicate status noise is a no-op.
+      if (event.state === state.connection) return;
 
       if (event.state !== "sharing") clearTruthfulFix();
       publish(stateForStatus(event.state));
     },
 
     acceptLocation(event): boolean {
-      if (closed || state.connection !== "sharing") return false;
+      if (closed) return false;
+      const restoresStale = state.connection === "stale" && !lifecycleActive && lastSequence !== undefined;
+      if (state.connection !== "sharing" && !restoresStale) return false;
       const receivedAt = now();
       if (!hasValidStructure(event, receivedAt)) return false;
       if (lastSequence !== undefined && event.sequence <= lastSequence) return false;
 
+      if (restoresStale) lifecycleActive = true;
       lastSequence = event.sequence;
       if (event.horizontalAccuracyMeters > MAX_ACCURACY_METERS) {
         cancelStaleTimer();
         usable = false;
-        publish({ connection: "sharing", usable: false, reason: "inaccurate" });
+        publish({
+          connection: "sharing",
+          usable: false,
+          horizontalAccuracyMeters: event.horizontalAccuracyMeters,
+          ageMs: receivedAt - event.timestamp,
+          reason: "inaccurate"
+        });
         return false;
       }
 

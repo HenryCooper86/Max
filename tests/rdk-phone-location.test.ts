@@ -154,6 +154,84 @@ describe("createPhoneLocationSource", () => {
     expect(h.source.acceptLocation(fix(h.clock, 1))).toBe(true);
   });
 
+  it("ends the lifecycle on received or timer-generated stale and resets a restarted sequence only after status", () => {
+    for (const stale of ["received", "timer"] as const) {
+      const h = sharingSource();
+      expect(h.source.acceptLocation(fix(h.clock, 10))).toBe(true);
+      if (stale === "received") {
+        h.source.acceptStatus({ type: "phone.location.status", state: "stale" });
+      } else {
+        h.clock.advance(10_000);
+      }
+
+      h.source.acceptStatus({ type: "phone.location.status", state: "connected" });
+      h.source.acceptStatus({ type: "phone.location.status", state: "sharing" });
+      expect(h.source.acceptLocation(fix(h.clock, 1))).toBe(true);
+      expect(h.source.acceptLocation(fix(h.clock, 1))).toBe(false);
+    }
+  });
+
+  it("requires a new sharing or connected status before unpaired and stopped restarts may use sequence one", () => {
+    for (const ending of ["unpaired", "stopped"] as const) {
+      const h = sharingSource();
+      expect(h.source.acceptLocation(fix(h.clock, 8))).toBe(true);
+      h.source.acceptStatus({ type: "phone.location.status", state: ending });
+      expect(h.source.acceptLocation(fix(h.clock, 1))).toBe(false);
+      h.source.acceptStatus({ type: "phone.location.status", state: "sharing" });
+      expect(h.source.acceptLocation(fix(h.clock, 1))).toBe(true);
+    }
+  });
+
+  it("keeps duplicate sharing truthful and continues the same sequence through connected then sharing", () => {
+    const h = sharingSource();
+    expect(h.source.acceptLocation(fix(h.clock, 10))).toBe(true);
+    const statesAfterFix = h.states.length;
+    const timersAfterFix = h.clock.pending();
+
+    h.source.acceptStatus({ type: "phone.location.status", state: "sharing" });
+    expect(h.source.latest()).toMatchObject({ sequence: 10 });
+    expect(h.states).toHaveLength(statesAfterFix);
+    expect(h.clock.pending()).toBe(timersAfterFix);
+
+    h.source.acceptStatus({ type: "phone.location.status", state: "connected" });
+    expect(h.source.latest()).toBeUndefined();
+    const statesAfterDisconnect = h.states.length;
+    h.source.acceptStatus({ type: "phone.location.status", state: "connected" });
+    expect(h.states).toHaveLength(statesAfterDisconnect);
+    h.source.acceptStatus({ type: "phone.location.status", state: "sharing" });
+    expect(h.source.acceptLocation(fix(h.clock, 10))).toBe(false);
+    expect(h.source.acceptLocation(fix(h.clock, 11))).toBe(true);
+  });
+
+  it("keeps a duplicate sharing status from overwriting a truthful inaccurate state", () => {
+    const h = sharingSource();
+    expect(
+      h.source.acceptLocation(fix(h.clock, 1, { horizontalAccuracyMeters: 50.01, timestamp: h.clock.now() - 500 }))
+    ).toBe(false);
+    const before = h.states.length;
+    expect(h.states.at(-1)).toMatchObject({
+      connection: "sharing",
+      usable: false,
+      horizontalAccuracyMeters: 50.01,
+      ageMs: 500,
+      reason: "inaccurate"
+    });
+
+    h.source.acceptStatus({ type: "phone.location.status", state: "sharing" });
+    expect(h.states).toHaveLength(before);
+    expect(h.states.at(-1)).toMatchObject({ reason: "inaccurate" });
+  });
+
+  it("recovers directly from stale only with a higher continuing sequence", () => {
+    const h = sharingSource();
+    expect(h.source.acceptLocation(fix(h.clock, 4))).toBe(true);
+    h.clock.advance(10_000);
+    expect(h.source.acceptLocation(fix(h.clock, 4))).toBe(false);
+    expect(h.source.acceptLocation(fix(h.clock, 5))).toBe(true);
+    expect(h.source.latest()).toMatchObject({ sequence: 5 });
+    expect(h.states.at(-1)).toMatchObject({ connection: "sharing", usable: true });
+  });
+
   it("makes a source timestamp stale exactly ten seconds later and clears a stale status", () => {
     const h = sharingSource();
     expect(h.source.acceptLocation(fix(h.clock, 1, { timestamp: h.clock.now() - 500 }))).toBe(true);

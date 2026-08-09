@@ -261,24 +261,24 @@ export function createPlayback(options: PlaybackOptions): Playback {
       spawned.on("exit", (code, signal) => {
         if (child !== spawned) return;
         const invalidatedOperation = operationGeneration;
-        console.log(`[playback] aplay exited code=${code} signal=${signal}; respawning on next write`);
         if (child !== spawned || operationGeneration !== invalidatedOperation) return;
         rejectQueueOwnedBy(invalidatedOperation);
         drainedUntil = 0;
         pumping = false;
         operationGeneration += 1;
         child = null;
+        console.log(`[playback] aplay exited code=${code} signal=${signal}; respawning on next write`);
       });
       spawned.on("error", (error) => {
         if (child !== spawned) return;
         const invalidatedOperation = operationGeneration;
-        console.log(`[playback] aplay failed to start: ${error.message}`);
         if (child !== spawned || operationGeneration !== invalidatedOperation) return;
         rejectQueueOwnedBy(invalidatedOperation);
         drainedUntil = 0;
         pumping = false;
         operationGeneration += 1;
         child = null;
+        console.log(`[playback] aplay failed to start: ${error.message}`);
       });
       // spawn is an injected/external boundary. A synchronous stop/flush or a
       // reentrant write may have installed a newer owner before it returned.

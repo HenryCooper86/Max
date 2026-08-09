@@ -464,6 +464,75 @@ describe("ranked playback writes", () => {
     }
   );
 
+  it.each([
+    ["plain", "exit", false],
+    ["plain", "error", false],
+    ["stop-first", "exit", true],
+    ["stop-first", "error", true]
+  ] as const)(
+    "preserves only a %s logger's replacement write across live child %s invalidation",
+    (_logger, boundary, stopFirst) => {
+      const children: ReturnType<typeof fakeChild>[] = [];
+      const reference: number[] = [];
+      let invalidate = true;
+      let logCalls = 0;
+      let nestedResult: boolean | undefined;
+      let playback: ReturnType<typeof createPlayback>;
+      const log = vi.spyOn(console, "log").mockImplementation(() => {
+        logCalls += 1;
+        if (logCalls !== 1) return;
+        if (stopFirst) playback.stop();
+        nestedResult = playback.write(new Int16Array(480));
+      });
+      try {
+        playback = createPlayback({
+          device: "plughw:0,0",
+          spawn: () => {
+            const fake = fakeChild();
+            children.push(fake);
+            return fake.child;
+          },
+          now: () => {
+            if (!invalidate) return 0;
+            invalidate = false;
+            if (boundary === "exit") children[0]!.child.emit("exit", 1, null);
+            if (boundary === "error") children[0]!.child.emit("error", new Error("aplay failed"));
+            return 500;
+          },
+          reference: {
+            write: (pcm) => reference.push(pcm.length),
+            flush: () => undefined,
+            close: () => undefined
+          }
+        });
+
+        const outerResult = playback.write(new Int16Array(480));
+        children[0]!.child.emit("exit", 2, null);
+        children[0]!.child.emit("error", new Error("duplicate aplay failure"));
+
+        expect({
+          outerResult,
+          nestedResult,
+          childCount: children.length,
+          dyingChildBytes: children[0]!.stdin.readableLength,
+          replacementBytes: children[1]?.stdin.readableLength,
+          reference,
+          logCalls
+        }).toEqual({
+          outerResult: false,
+          nestedResult: true,
+          childCount: 2,
+          dyingChildBytes: 0,
+          replacementBytes: 1_920,
+          reference: [960],
+          logCalls: 1
+        });
+      } finally {
+        log.mockRestore();
+      }
+    }
+  );
+
   it("does not let an invalidated child's stale pump timer consume a replacement queue", () => {
     const children: ReturnType<typeof fakeChild>[] = [];
     const timers: Array<() => void> = [];

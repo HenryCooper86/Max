@@ -11,6 +11,7 @@ import type {
 import type { DeviceCommand } from "../rdk/agent/src/device/dispatch";
 import type { RdkNavigationController, RdkNavigationSnapshot } from "../rdk/agent/src/navigation/controller";
 import type { PhoneLocationSource } from "../rdk/agent/src/navigation/phone-location";
+import type { PhoneFix, PhoneLocationState } from "../rdk/agent/src/navigation/phone-location";
 import type { RelayHandlers } from "../rdk/agent/src/relay";
 
 const fixtures = vi.hoisted(() => ({
@@ -18,13 +19,21 @@ const fixtures = vi.hoisted(() => ({
   relayEvents: [] as unknown[],
   relayConnects: 0,
   relayDisconnects: 0,
-  sources: [] as Array<{ source: PhoneLocationSource; close: ReturnType<typeof vi.fn> }>,
+  callbackOrder: [] as string[],
+  hudPublishes: [] as unknown[],
+  sources: [] as Array<{
+    source: PhoneLocationSource;
+    close: ReturnType<typeof vi.fn>;
+    emitFix: (fix: PhoneFix) => void;
+    emitState: (state: PhoneLocationState) => void;
+  }>,
   controllers: [] as Array<{
     controller: RdkNavigationController;
     close: ReturnType<typeof vi.fn>;
     handleFix: ReturnType<typeof vi.fn>;
     handleLocationState: ReturnType<typeof vi.fn>;
     states: RdkNavigationSnapshot[];
+    emitState: (state: RdkNavigationSnapshot) => void;
   }>,
   captureStop: vi.fn(),
   playbackStop: vi.fn(),
@@ -101,7 +110,13 @@ vi.mock("../rdk/agent/src/device/poweroff", () => ({
   createPoweroffController: () => ({ schedule: () => "scheduled", cancel: () => false })
 }));
 vi.mock("../rdk/agent/src/hud/server", () => ({
-  createHudServer: () => ({ publish: vi.fn(), close: fixtures.hudClose })
+  createHudServer: () => ({
+    publish: (state: unknown) => {
+      fixtures.callbackOrder.push("hud");
+      fixtures.hudPublishes.push(state);
+    },
+    close: fixtures.hudClose
+  })
 }));
 vi.mock("../rdk/agent/src/watchdog", () => ({ startHeartbeat: vi.fn() }));
 
@@ -137,7 +152,12 @@ vi.mock("../rdk/agent/src/navigation/phone-location", async (importOriginal) => 
       const originalClose = source.close.bind(source);
       const close = vi.fn(originalClose);
       source.close = close;
-      fixtures.sources.push({ source, close });
+      fixtures.sources.push({
+        source,
+        close,
+        emitFix: options.onFix ?? (() => undefined),
+        emitState: options.onState ?? (() => undefined)
+      });
       return source;
     }
   };
@@ -164,11 +184,14 @@ vi.mock("../rdk/agent/src/navigation/controller", async (importOriginal) => {
       const originalHandleLocationState = controller.handleLocationState.bind(controller);
       const close = vi.fn(originalClose);
       const handleFix = vi.fn(originalHandleFix);
-      const handleLocationState = vi.fn(originalHandleLocationState);
+      const handleLocationState = vi.fn((state: PhoneLocationState) => {
+        fixtures.callbackOrder.push("navigation");
+        originalHandleLocationState(state);
+      });
       controller.close = close;
       controller.handleFix = handleFix;
       controller.handleLocationState = handleLocationState;
-      fixtures.controllers.push({ controller, close, handleFix, handleLocationState, states });
+      fixtures.controllers.push({ controller, close, handleFix, handleLocationState, states, emitState: onState });
       return controller;
     }
   };
@@ -383,6 +406,59 @@ describe("routeAgentNavigationEvent", () => {
 });
 
 describe.sequential("start navigation lifecycle wiring", () => {
+  it("publishes coordinate-free companion and navigation HUD snapshots in owner order", () => {
+    const firstSource = fixtures.sources[0]!;
+    const firstController = fixtures.controllers[0]!;
+    fixtures.callbackOrder.length = 0;
+    const before = fixtures.hudPublishes.length;
+    firstSource.emitState({
+      connection: "sharing",
+      usable: true,
+      horizontalAccuracyMeters: 8,
+      ageMs: 500,
+      ...({ lat: 31.2304, lon: 121.4737 } as object)
+    });
+
+    expect(fixtures.callbackOrder).toEqual(["navigation", "hud", "hud"]);
+    expect(fixtures.hudPublishes).toHaveLength(before + 2);
+    expect(fixtures.hudPublishes.at(-1)).toMatchObject({
+      companion: {
+        paired: false,
+        locationState: "sharing",
+        horizontalAccuracyMeters: 8,
+        lastFixAgeMs: 500
+      }
+    });
+    expect(JSON.stringify(fixtures.hudPublishes.at(-1))).not.toMatch(/31\.2304|121\.4737/);
+
+    firstController.emitState({
+      phase: "guiding",
+      destinationName: "人民广场",
+      instruction: "前方右转",
+      remainingMeters: 2_000,
+      remainingSeconds: 300
+    });
+    expect(fixtures.hudPublishes.at(-1)).toMatchObject({ navigation: { phase: "guiding" } });
+    firstController.emitState({ phase: "idle" });
+    expect(fixtures.hudPublishes.at(-1)).toMatchObject({ navigation: null });
+  });
+
+  it("keeps ordinary pairing and status events flowing through the HUD reducer", () => {
+    const handlers = fixtures.relayHandlers!;
+    handlers.onEvent({ type: "companion.pairing", code: "246810", expiresAt: 50_000, paired: false });
+    expect(fixtures.hudPublishes.at(-1)).toMatchObject({
+      companion: {
+        pairingCode: "246810",
+        pairingExpiresAt: 50_000,
+        paired: false
+      }
+    });
+    handlers.onEvent({ type: "phone.location.status", state: "connected" });
+    expect(fixtures.hudPublishes.at(-1)).toMatchObject({
+      companion: { locationState: "connected" }
+    });
+  });
+
   it("feeds fixes and states, tears a closed session down once, and reconnects with fresh navigation", async () => {
     const handlers = fixtures.relayHandlers;
     expect(handlers).toBeDefined();
@@ -469,6 +545,10 @@ describe.sequential("start navigation lifecycle wiring", () => {
     expect(fixtures.sources).toHaveLength(2);
     expect(fixtures.controllers).toHaveLength(2);
     const secondController = fixtures.controllers[1]!;
+    const publishCountAfterReconnect = fixtures.hudPublishes.length;
+    firstSource.emitState({ connection: "stale", usable: false, reason: "stale" });
+    firstController.emitState({ phase: "guiding", destinationName: "stale route" });
+    expect(fixtures.hudPublishes).toHaveLength(publishCountAfterReconnect);
     const secondStateCount = secondController.states.length;
     firstController.controller.handleRoute(route(pendingRequest.commandId));
     firstController.controller.handleError({

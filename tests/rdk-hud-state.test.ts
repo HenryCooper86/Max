@@ -1,12 +1,32 @@
 import { describe, expect, it } from "vitest";
-import { initialHudState, reduceHud } from "../rdk/agent/src/hud/state";
+import type { RdkNavigationSnapshot } from "../rdk/agent/src/navigation/controller";
+import { initialHudState, reduceHud, type HudCompanion, type HudEvent } from "../rdk/agent/src/hud/state";
+
+function navigation(overrides: Partial<RdkNavigationSnapshot> = {}): RdkNavigationSnapshot {
+  return {
+    phase: "guiding",
+    destinationName: "人民广场",
+    instruction: "前方右转",
+    distanceToManeuverMeters: 180,
+    remainingMeters: 3_200,
+    remainingSeconds: 720,
+    offRoute: false,
+    location: { connection: "sharing", usable: true, horizontalAccuracyMeters: 8, ageMs: 400 },
+    ...overrides
+  };
+}
 
 describe("reduceHud", () => {
-  it("starts offline and idle", () => {
-    const state = initialHudState();
-    expect(state.connection).toBe("offline");
-    expect(state.turnState).toBe("idle");
-    expect(state.transcript).toEqual([]);
+  it("starts with exact offline, unpaired, and empty navigation truth", () => {
+    expect(initialHudState()).toEqual({
+      connection: "offline",
+      turnState: "idle",
+      transcript: [],
+      latencyMs: null,
+      lastError: null,
+      companion: { paired: false, locationState: "unpaired" },
+      navigation: null
+    });
   });
 
   it("tracks connection state", () => {
@@ -48,13 +68,7 @@ describe("reduceHud", () => {
       text: "今天天气不错",
       final: true
     });
-    expect(state.transcript.length).toBe(1);
-    expect(state.transcript[0]).toEqual({
-      speaker: "agent",
-      text: "今天天气不错",
-      final: true,
-      turnId: "t1"
-    });
+    expect(state.transcript).toEqual([{ speaker: "agent", text: "今天天气不错", final: true, turnId: "t1" }]);
   });
 
   it("records latency and errors", () => {
@@ -64,9 +78,124 @@ describe("reduceHud", () => {
     expect(state.lastError).toBe("relay exploded");
   });
 
-  it("does not mutate the previous state", () => {
+  it("updates only pairing-owned companion fields from relay pairing events", () => {
+    const before = reduceHud(initialHudState(), {
+      type: "rdk.companion",
+      companion: {
+        paired: false,
+        locationState: "sharing",
+        horizontalAccuracyMeters: 7,
+        lastFixAgeMs: 250
+      }
+    });
+    const after = reduceHud(before, {
+      type: "companion.pairing",
+      code: "123456",
+      expiresAt: 10_000,
+      paired: true
+    });
+
+    expect(after.companion).toEqual({
+      pairingCode: "123456",
+      pairingExpiresAt: 10_000,
+      paired: true,
+      locationState: "sharing",
+      horizontalAccuracyMeters: 7,
+      lastFixAgeMs: 250
+    });
+  });
+
+  it.each(["connected", "sharing", "stopped", "stale", "unpaired"] as const)(
+    "updates only the location connection for phone status %s",
+    (locationState) => {
+      const before = reduceHud(initialHudState(), {
+        type: "rdk.companion",
+        companion: {
+          pairingCode: "654321",
+          pairingExpiresAt: 20_000,
+          paired: true,
+          locationState: "sharing",
+          horizontalAccuracyMeters: 6,
+          lastFixAgeMs: 500
+        }
+      });
+      const after = reduceHud(before, { type: "phone.location.status", state: locationState });
+
+      expect(after.companion).toEqual({
+        pairingCode: "654321",
+        pairingExpiresAt: 20_000,
+        paired: true,
+        locationState,
+        horizontalAccuracyMeters: 6,
+        lastFixAgeMs: 500
+      });
+    }
+  );
+
+  it("replaces and defensively copies a synthetic companion snapshot without raw coordinates", () => {
+    const companion = {
+      pairingCode: "112233",
+      pairingExpiresAt: 30_000,
+      paired: false,
+      locationState: "sharing",
+      horizontalAccuracyMeters: 9,
+      lastFixAgeMs: 750,
+      lat: 31.2304,
+      lon: 121.4737
+    } as HudCompanion & { lat: number; lon: number };
+    const state = reduceHud(initialHudState(), { type: "rdk.companion", companion });
+    companion.pairingCode = "999999";
+    companion.horizontalAccuracyMeters = 99;
+
+    expect(state.companion).toEqual({
+      pairingCode: "112233",
+      pairingExpiresAt: 30_000,
+      paired: false,
+      locationState: "sharing",
+      horizontalAccuracyMeters: 9,
+      lastFixAgeMs: 750
+    });
+    expect(JSON.stringify(state)).not.toContain("31.2304");
+    expect(JSON.stringify(state)).not.toContain("121.4737");
+  });
+
+  it("defensively copies navigation and nested location without retaining unexpected coordinates", () => {
+    const snapshot = navigation();
+    Object.assign(snapshot.location!, { lat: 31.2304, lon: 121.4737 });
+    const state = reduceHud(initialHudState(), { type: "rdk.navigation", navigation: snapshot });
+    snapshot.instruction = "caller changed it";
+    snapshot.location!.horizontalAccuracyMeters = 45;
+
+    expect(state.navigation).toEqual(navigation());
+    expect(JSON.stringify(state)).not.toContain("31.2304");
+    expect(JSON.stringify(state)).not.toContain("121.4737");
+  });
+
+  it("keeps the frozen instruction, distances, and summary supplied by a paused snapshot", () => {
+    const paused = navigation({
+      phase: "paused",
+      instruction: "保持直行",
+      distanceToManeuverMeters: 88,
+      remainingMeters: 1_600,
+      remainingSeconds: 360,
+      location: { connection: "stale", usable: false, ageMs: 10_001, reason: "stale" }
+    });
+
+    expect(reduceHud(initialHudState(), { type: "rdk.navigation", navigation: paused }).navigation).toEqual(paused);
+  });
+
+  it.each(["stop", "arrival", "start failure", "reroute failure"])("clears navigation explicitly after %s", () => {
+    const active = reduceHud(initialHudState(), { type: "rdk.navigation", navigation: navigation() });
+    expect(reduceHud(active, { type: "rdk.navigation", navigation: null }).navigation).toBeNull();
+  });
+
+  it("does not mutate previous state or reuse caller-owned synthetic objects", () => {
     const before = initialHudState();
-    reduceHud(before, { type: "status", state: "speaking", detail: "" });
-    expect(before.turnState).toBe("idle");
+    const event: HudEvent = { type: "rdk.navigation", navigation: navigation() };
+    const after = reduceHud(before, event);
+
+    expect(before).toEqual(initialHudState());
+    expect(after).not.toBe(before);
+    expect(after.navigation).not.toBe(event.navigation);
   });
 });

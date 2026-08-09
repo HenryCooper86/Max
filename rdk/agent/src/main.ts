@@ -14,10 +14,14 @@ import { loadOrCreateDeviceId } from "./device/identity";
 import { createPoweroffController } from "./device/poweroff";
 import { writeCue } from "./audio/cues";
 import { createHudServer } from "./hud/server";
-import { initialHudState, reduceHud } from "./hud/state";
+import { initialHudState, reduceHud, type HudCompanion, type HudEvent } from "./hud/state";
 import { createHazardHandler } from "./hazard";
 import { createRdkNavigationController, type RdkNavigationController } from "./navigation/controller";
-import { createPhoneLocationSource, type PhoneLocationSource } from "./navigation/phone-location";
+import {
+  createPhoneLocationSource,
+  type PhoneLocationSource,
+  type PhoneLocationState
+} from "./navigation/phone-location";
 import { createRelayClient, nextBackoffMs } from "./relay";
 import { createVisionClient, type VisionClient, type VisionEvent } from "./vision-client";
 import { startHeartbeat } from "./watchdog";
@@ -228,21 +232,58 @@ function start(): void {
     }
   });
 
+  const hud = createHudServer(config.hudPort, config.visionPreviewPort);
+  let hudState = initialHudState();
+
+  function publishHud(event: HudEvent): void {
+    hudState = reduceHud(hudState, event);
+    hud.publish(hudState);
+  }
+
+  function companionForLocation(state: PhoneLocationState): HudCompanion {
+    const current = hudState.companion;
+    return {
+      paired: current.paired,
+      locationState: state.connection,
+      ...(current.pairingCode === undefined ? {} : { pairingCode: current.pairingCode }),
+      ...(current.pairingExpiresAt === undefined ? {} : { pairingExpiresAt: current.pairingExpiresAt }),
+      ...(state.horizontalAccuracyMeters === undefined
+        ? {}
+        : { horizontalAccuracyMeters: state.horizontalAccuracyMeters }),
+      ...(state.ageMs === undefined ? {} : { lastFixAgeMs: state.ageMs })
+    };
+  }
+
   type NavigationSession = {
     location: PhoneLocationSource;
     navigation: RdkNavigationController;
     closed: boolean;
   };
 
+  let activeNavigationGeneration = 0;
+
   function createNavigationSession(): NavigationSession {
+    const generation = ++activeNavigationGeneration;
+    const ownsCallbacks = (): boolean => generation === activeNavigationGeneration;
     const location = createPhoneLocationSource({
-      onFix: (fix) => navigation.handleFix(fix),
-      onState: (state) => navigation.handleLocationState(state)
+      onFix: (fix) => {
+        if (!ownsCallbacks()) return;
+        navigation.handleFix(fix);
+      },
+      onState: (state) => {
+        if (!ownsCallbacks()) return;
+        navigation.handleLocationState(state);
+        if (!ownsCallbacks()) return;
+        publishHud({ type: "rdk.companion", companion: companionForLocation(state) });
+      }
     });
     const navigation = createRdkNavigationController({
       location,
       sendEvent: (event) => relay.sendEvent(event),
-      onState: () => {},
+      onState: (state) => {
+        if (!ownsCallbacks()) return;
+        publishHud({ type: "rdk.navigation", navigation: state.phase === "idle" ? null : state });
+      },
       canPrompt: () => true,
       interruptOrdinaryPlayback: () => playback.flush()
     });
@@ -254,16 +295,15 @@ function start(): void {
   function closeNavigationSession(): void {
     if (navigationSession.closed) return;
     navigationSession.closed = true;
+    activeNavigationGeneration += 1;
     navigationSession.navigation.close();
     navigationSession.location.close();
+    publishHud({ type: "rdk.navigation", navigation: null });
   }
 
   function ensureNavigationSession(): void {
     if (navigationSession.closed) navigationSession = createNavigationSession();
   }
-
-  const hud = createHudServer(config.hudPort, config.visionPreviewPort);
-  let hudState = initialHudState();
 
   // Hazards arrive on the sidecar's event channel. In shadow mode this only
   // logs; MAX_ADAS_AUDIO=1 is what makes it speak, and that requires the M1
@@ -315,8 +355,7 @@ function start(): void {
     },
     onVoice: (pcm) => playback.write(pcm),
     onEvent: (event) => {
-      hudState = reduceHud(hudState, event);
-      hud.publish(hudState);
+      publishHud(event);
       routeAgentNavigationEvent(event, navigationSession.location, navigationSession.navigation);
       if (event.type === "status" && event.state === "hearing") {
         // Barge-in: the rider started talking, so drop the queued reply — but

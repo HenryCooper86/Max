@@ -77,6 +77,46 @@
   .muted {
     color: #7d8590;
   }
+  #navigation-card {
+    margin-bottom: 16px;
+    border-left: 4px solid #79c0ff;
+    overflow-wrap: anywhere;
+  }
+  #navigation-card.paused,
+  #navigation-card.off-route,
+  #navigation-card.rerouting {
+    border-left-color: #d29922;
+  }
+  #navigation-card.paused #nav-distance,
+  #navigation-card.off-route #nav-distance,
+  #navigation-card.rerouting #nav-distance {
+    color: #d29922;
+  }
+  #navigation-card.paused #nav-instruction {
+    opacity: 0.72;
+  }
+  #nav-instruction {
+    margin-top: 4px;
+    font-family: system-ui, sans-serif;
+    font-size: clamp(22px, 4vw, 34px);
+    font-weight: 700;
+    line-height: 1.2;
+  }
+  #nav-distance {
+    color: #79c0ff;
+    font-family: system-ui, sans-serif;
+    font-size: clamp(28px, 5vw, 42px);
+    font-weight: 800;
+    line-height: 1.15;
+  }
+  #nav-summary {
+    margin-top: 6px;
+  }
+  .warning {
+    margin-top: 8px;
+    color: #d29922;
+    font-weight: 700;
+  }
   .missing {
     padding: 24px 8px;
     text-align: center;
@@ -182,6 +222,13 @@
   }
 </style>
 <h1>Max · RDK X5 bench</h1>
+<section id="navigation-card" class="card nav" hidden>
+  <div id="phone-status" class="muted"></div>
+  <div id="nav-instruction"></div>
+  <div id="nav-distance"></div>
+  <div id="nav-summary" class="muted"></div>
+  <div id="nav-paused" class="warning" hidden>手机定位已断开 · 导航暂停</div>
+</section>
 <div class="row">
   <div class="card">
     <dl>
@@ -217,12 +264,133 @@
   document.getElementById("rear").src = `http://${host}:__PREVIEW_PORT__/preview/rear`;
 
   const socket = new WebSocket(`ws://${location.host}`);
+  const navigationCardEl = document.getElementById("navigation-card");
+  const phoneStatusEl = document.getElementById("phone-status");
+  const navInstructionEl = document.getElementById("nav-instruction");
+  const navDistanceEl = document.getElementById("nav-distance");
+  const navSummaryEl = document.getElementById("nav-summary");
+  const navPausedEl = document.getElementById("nav-paused");
+  let pairingExpiryTimer;
+  let latestHudState;
+
+  const finiteNonNegative = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0;
+  const formatDistance = (meters) => {
+    if (!finiteNonNegative(meters)) return "";
+    return meters < 1000 ? `${Math.round(meters)} m` : `${(meters / 1000).toFixed(1)} km`;
+  };
+  const formatEta = (seconds) => {
+    if (!finiteNonNegative(seconds)) return "";
+    const minutes = Math.max(1, Math.ceil(seconds / 60));
+    if (seconds < 3600) return `${minutes} 分钟`;
+    const hours = Math.floor(minutes / 60);
+    const remainder = minutes % 60;
+    return `${hours} 小时${remainder === 0 ? "" : ` ${remainder} 分钟`}`;
+  };
+  const phoneStatus = (companion, now) => {
+    if (
+      !companion.paired &&
+      typeof companion.pairingCode === "string" &&
+      companion.pairingCode.length > 0 &&
+      finiteNonNegative(companion.pairingExpiresAt) &&
+      companion.pairingExpiresAt > now
+    ) {
+      const minutes = Math.max(1, Math.ceil((companion.pairingExpiresAt - now) / 60000));
+      return `配对码 ${companion.pairingCode} · ${minutes} 分钟内有效`;
+    }
+    const labels = {
+      connected: "手机 GPS 已连接",
+      sharing: "手机 GPS 共享中",
+      stopped: "手机 GPS 已停止",
+      stale: "手机 GPS 信号过期",
+      unpaired: "手机未配对"
+    };
+    const parts = [labels[companion.locationState] ?? "手机 GPS 状态未知"];
+    if (finiteNonNegative(companion.horizontalAccuracyMeters)) {
+      parts.push(`精度 ±${Math.round(companion.horizontalAccuracyMeters)} m`);
+    }
+    if (finiteNonNegative(companion.lastFixAgeMs)) {
+      parts.push(`${Math.max(0, Math.round(companion.lastFixAgeMs / 1000))} 秒前`);
+    }
+    return parts.join(" · ");
+  };
+  const clearNavigation = () => {
+    navigationCardEl.hidden = true;
+    navigationCardEl.classList.toggle("paused", false);
+    navigationCardEl.classList.toggle("rerouting", false);
+    navigationCardEl.classList.toggle("off-route", false);
+    phoneStatusEl.textContent = "";
+    navInstructionEl.textContent = "";
+    navDistanceEl.textContent = "";
+    navSummaryEl.textContent = "";
+    navPausedEl.hidden = true;
+  };
+  const clearPairingExpiry = () => {
+    if (pairingExpiryTimer === undefined) return;
+    clearTimeout(pairingExpiryTimer);
+    pairingExpiryTimer = undefined;
+  };
+  const renderNavigation = (state) => {
+    latestHudState = state;
+    clearPairingExpiry();
+    const renderedAt = Date.now();
+    const navigation = state.navigation;
+    if (navigation === null || typeof navigation !== "object") {
+      clearNavigation();
+      return;
+    }
+    const paused = navigation.phase === "paused";
+    const rerouting = navigation.phase === "rerouting";
+    const offRoute = navigation.offRoute === true;
+    navigationCardEl.hidden = false;
+    navigationCardEl.classList.toggle("paused", paused);
+    navigationCardEl.classList.toggle("rerouting", rerouting);
+    navigationCardEl.classList.toggle("off-route", offRoute);
+    phoneStatusEl.textContent = phoneStatus(state.companion, renderedAt);
+    if (
+      !state.companion.paired &&
+      typeof state.companion.pairingCode === "string" &&
+      state.companion.pairingCode.length > 0 &&
+      finiteNonNegative(state.companion.pairingExpiresAt) &&
+      state.companion.pairingExpiresAt > renderedAt
+    ) {
+      pairingExpiryTimer = setTimeout(
+        () => {
+          pairingExpiryTimer = undefined;
+          if (latestHudState !== undefined) renderNavigation(latestHudState);
+        },
+        Math.max(0, state.companion.pairingExpiresAt - renderedAt)
+      );
+    }
+    navInstructionEl.textContent =
+      typeof navigation.instruction === "string"
+        ? navigation.instruction
+        : navigation.phase === "starting"
+          ? "正在规划路线…"
+          : "";
+    navDistanceEl.textContent = formatDistance(navigation.distanceToManeuverMeters);
+    const summary = [];
+    if (offRoute && rerouting) summary.push("偏离路线 · 正在重新规划");
+    else if (offRoute) summary.push("已偏离路线");
+    else if (rerouting) summary.push("正在重新规划");
+    if (typeof navigation.destinationName === "string" && navigation.destinationName.length > 0) {
+      summary.push(navigation.destinationName);
+    }
+    const remaining = formatDistance(navigation.remainingMeters);
+    if (remaining) summary.push(`剩余 ${remaining}`);
+    const eta = formatEta(navigation.remainingSeconds);
+    if (eta) summary.push(`预计 ${eta}`);
+    navSummaryEl.textContent = summary.join(" · ");
+    navPausedEl.textContent = "手机定位已断开 · 导航暂停";
+    navPausedEl.hidden = !paused;
+  };
+
   socket.onmessage = (message) => {
     const state = JSON.parse(message.data);
     document.getElementById("connection").textContent = state.connection;
     document.getElementById("turn").textContent = state.turnState;
     document.getElementById("latency").textContent = state.latencyMs === null ? "–" : `${state.latencyMs} ms`;
     document.getElementById("error").textContent = state.lastError ?? "–";
+    renderNavigation(state);
     document.getElementById("transcript").innerHTML = state.transcript
       .map((turn) => `<div class="${turn.speaker} ${turn.final ? "" : "partial"}">${turn.speaker}: ${turn.text}</div>`)
       .join("");

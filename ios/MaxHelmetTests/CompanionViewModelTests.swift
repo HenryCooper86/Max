@@ -1846,6 +1846,76 @@ final class CompanionViewModelTests: XCTestCase {
         }
     }
 
+    func testEveryPublishedStateIsAuthoritativeForReentrantAccountIntent() {
+        let states: [CompanionConnectionState] = [
+            .signedOut,
+            .connecting,
+            .unpaired,
+            .paired(deviceId: "rdk", label: "Helmet"),
+            .helmetOffline(deviceId: "rdk", label: "Helmet"),
+            .ready(deviceId: "rdk", label: "Helmet"),
+            .sharing(deviceId: "rdk", label: "Helmet"),
+            .failed(code: "connection", detail: "closed")
+        ]
+
+        for state in states {
+            for accountIntent in ["logout", "replace-c", "replace-clear"] {
+                XCTContext.runActivity(named: "\(state)-\(accountIntent)") { _ in
+                    let harness = Harness()
+                    harness.secretWrites.removeAll()
+                    var suppliedAccountIntent = false
+                    var suppliedNestedIntent = false
+                    var publishedStates: [CompanionConnectionState] = []
+                    let cancellable = harness.viewModel.$companionState.dropFirst().sink { publishedState in
+                        publishedStates.append(publishedState)
+                        if !suppliedAccountIntent, publishedState == state {
+                            suppliedAccountIntent = true
+                            if accountIntent == "logout" {
+                                harness.viewModel.logout()
+                            } else {
+                                harness.viewModel.sessionToken = "account-b"
+                                if state == .signedOut {
+                                    suppliedNestedIntent = true
+                                    harness.viewModel.sessionToken = accountIntent == "replace-c" ? "account-c" : " \n "
+                                }
+                            }
+                        } else if suppliedAccountIntent,
+                                  !suppliedNestedIntent,
+                                  accountIntent != "logout",
+                                  publishedState == .signedOut {
+                            suppliedNestedIntent = true
+                            harness.viewModel.sessionToken = accountIntent == "replace-c" ? "account-c" : " \n "
+                        }
+                    }
+
+                    harness.client.publish(state)
+
+                    let expectedToken: String
+                    switch accountIntent {
+                    case "logout": expectedToken = ""
+                    case "replace-c": expectedToken = "account-c"
+                    default: expectedToken = " \n "
+                    }
+                    let expectsAccountTeardown = accountIntent == "logout" || state != .signedOut
+                    XCTAssertEqual(harness.viewModel.sessionToken, expectedToken)
+                    XCTAssertEqual(harness.viewModel.companionState, .signedOut)
+                    XCTAssertEqual(harness.client.disconnectCount, expectsAccountTeardown ? 1 : 0)
+                    XCTAssertEqual(harness.client.stopCount, 0)
+                    XCTAssertFalse(harness.viewModel.helmetRideActive)
+                    XCTAssertTrue(harness.client.fixes.isEmpty)
+                    if expectsAccountTeardown {
+                        XCTAssertEqual(publishedStates.filter { $0 == .signedOut }.count, 1)
+                        XCTAssertEqual(harness.secretWrites.map(\.value), [expectedToken])
+                    } else {
+                        XCTAssertEqual(publishedStates, [.signedOut])
+                        XCTAssertEqual(harness.secretWrites.map(\.value), ["account-b", expectedToken])
+                    }
+                    withExtendedLifetime(cancellable) {}
+                }
+            }
+        }
+    }
+
     func testAccountBoundaryDefersDisconnectStartAcrossNestedNewestTokenMatrix() {
         for nestedToken in ["account-c", " \n ", " account-session-token "] {
             let harness = Harness()

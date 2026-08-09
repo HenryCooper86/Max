@@ -55,6 +55,10 @@ final class MainViewModel: ObservableObject {
         let completion: () -> Void
     }
 
+    private struct CompanionTerminalAuthority {
+        let epoch: Int
+    }
+
     /// On the iOS Simulator, `localhost` reaches the host machine where the relay
     /// listens on :8787. On a physical device, `localhost` is the phone itself, so
     /// default to the shared AWS Lightsail test relay (self-signed wss://) instead.
@@ -137,6 +141,7 @@ final class MainViewModel: ObservableObject {
     private var companionStatePublicationActive = false
     private var companionStateAssignmentInProgress: CompanionConnectionState?
     private var pendingCompanionStatePublications: [CompanionStatePublication] = []
+    private var companionTerminalAuthority: CompanionTerminalAuthority?
     private var authoritativeCompanionState: CompanionConnectionState = .signedOut
 
     /// Presents the Max gallery sheet.
@@ -735,9 +740,7 @@ final class MainViewModel: ObservableObject {
         switch state {
         case .failed(code: "auth", detail: _):
             if rideOwned || helmetRideActive {
-                let teardownOwner = terminateOwnedRide(sendStop: true)
-                guard ownsCompanionGeneration(teardownOwner) else { return }
-                publishCompanionState(state, owner: teardownOwner)
+                terminateOwnedRide(sendStop: true)
             } else {
                 let replacementOwner = advanceCompanionGeneration()
                 bindCompanionState(owner: replacementOwner)
@@ -753,9 +756,7 @@ final class MainViewModel: ObservableObject {
                 cancelPendingUnpairTransaction()
             }
             if rideOwned || helmetRideActive {
-                let teardownOwner = terminateOwnedRide(sendStop: true)
-                guard ownsCompanionGeneration(teardownOwner) else { return }
-                publishCompanionState(state, owner: teardownOwner)
+                terminateOwnedRide(sendStop: true)
             }
         default:
             if case .failed = state {
@@ -978,6 +979,7 @@ final class MainViewModel: ObservableObject {
         companionAccountStopOwner = nil
         cancelPendingUnpairTransaction()
         let owner = advanceCompanionGeneration()
+        advanceCompanionStatePublicationEpoch()
         companionClient.disconnect()
         guard ownsCompanionGeneration(owner), companionAccountTeardownActive else { return }
         bindCompanionState(owner: owner)
@@ -1011,6 +1013,12 @@ final class MainViewModel: ObservableObject {
         let publicationEpoch = publicationEpoch ?? companionStatePublicationEpoch
         guard ownsCompanionStatePublicationEpoch(publicationEpoch) else { return }
         if !hasAccountSession, state != .signedOut { return }
+        let terminalState = isCompanionTerminal(state)
+        if let companionTerminalAuthority,
+           companionTerminalAuthority.epoch == publicationEpoch,
+           !terminalState {
+            return
+        }
         let publishesValue: Bool
         if coalescesIdenticalState {
             if let companionStateAssignmentInProgress {
@@ -1020,6 +1028,9 @@ final class MainViewModel: ObservableObject {
             }
         } else {
             publishesValue = true
+        }
+        if terminalState {
+            companionTerminalAuthority = CompanionTerminalAuthority(epoch: publicationEpoch)
         }
         authoritativeCompanionState = state
         nextCompanionStatePublicationTicket &+= 1
@@ -1138,6 +1149,7 @@ final class MainViewModel: ObservableObject {
 
     private func advanceCompanionStatePublicationEpoch() {
         companionStatePublicationEpoch &+= 1
+        companionTerminalAuthority = nil
     }
 
     private func ownsCompanionStatePublicationEpoch(_ epoch: Int) -> Bool {

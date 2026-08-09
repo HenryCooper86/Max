@@ -95,7 +95,13 @@ class NavigationControllerTest {
 
     private class Harness(
         firstFixTimeoutMillis: Long = 3_000,
-        hasPermission: () -> Boolean = { true }
+        hasPermission: () -> Boolean = { true },
+        // Nav-fast-follow Task 4: overridable so the hoist test can inject a
+        // short-but-generous relay timeout — bounding how long a pre-hoist
+        // regression would take to resolve on its own, without the whole
+        // suite riding out the real default (~7 s, under the relay's own 8 s
+        // device backstop).
+        relayTimeoutMillis: Long = 7_000
     ) {
         var clockMillis: Long = 0L
         val sent = CopyOnWriteArrayList<String>()
@@ -103,7 +109,7 @@ class NavigationControllerTest {
         val guidanceUpdates = CopyOnWriteArrayList<NavGuidanceState?>()
         val locationSource = FakeLocationSource()
         val speaker = FakeSpeaker()
-        val relay = RelayNavigationSearch(send = { sent.add(it) })
+        val relay = RelayNavigationSearch(send = { sent.add(it) }, timeoutMillis = relayTimeoutMillis)
         val controller = NavigationController(
             search = relay,
             locationSource = locationSource,
@@ -342,6 +348,183 @@ class NavigationControllerTest {
         assertFalse("the source is stopped", h.locationSource.started)
     }
 
+    // Nav-fast-follow Task 4: the parity-review hoist. The test above only
+    // covers the "no route yet" branch, which already called
+    // `search.failPending()` pre-hoist. This is the ROUTE-ACTIVE branch: a
+    // stop there must fail a second, in-flight start's held search too, not
+    // just tear down the active route — otherwise the rider hears
+    // "已停止导航。" and then, up to the relay's own ~7 s timeout later, the
+    // superseded start's own "已取消导航。" arrives as a stray non-sequitur.
+    @Test
+    fun `stop with an active route fails an in-flight second start's pending search promptly`() = runBlocking {
+        // Generous relative to the bounded check below (mirrors
+        // RelayNavigationSearch's real default): pre-hoist, B is only
+        // resolved once this fires — the bounded check below must catch it
+        // resolved long before that, not ride it out.
+        val h = Harness(relayTimeoutMillis = 5_000)
+        commitRoute(h, commandId = "cmd-A") // route A resolves and becomes the committed, active route
+
+        // A second start for a NEW destination is suspended at the relay
+        // await while route A is still active — a committed route AND an
+        // in-flight second start coexisting.
+        val jobB = launch(Dispatchers.Default) {
+            h.controller.handleCommand("cmd-B", "navigation.start", "第二目的地")
+        }
+        val baseline = h.sent.size
+        feedFixUntil(h, neutralWgsFix, description = "B's nav.request sent") { h.sent.size > baseline }
+
+        h.controller.handleCommand("cmd-stop", "navigation.stop", null)
+        val stopResult = JSONObject(h.results.single { JSONObject(it).getString("commandId") == "cmd-stop" })
+        assertEquals("ok", stopResult.getString("status"))
+        assertTrue(
+            "the active route's own stop confirmation still fires",
+            h.speaker.spoken.contains(STOP_TEXT to false)
+        )
+
+        // The bounded-wait assertion: B must already have resolved well
+        // under the relay's own (generous) injected timeout — this is what
+        // fails RED promptly (B still pending here) rather than as a slow
+        // hang riding out relayTimeoutMillis.
+        withTimeout(1_000) { jobB.join() }
+        val resultB = JSONObject(h.results.single { JSONObject(it).getString("commandId") == "cmd-B" })
+        assertEquals("failed", resultB.getString("status"))
+        assertEquals("navigation.cancelled", resultB.getString("reason"))
+
+        // Safety premise (Global Constraints): the stop's generation bump
+        // (plus route == null once the route-active branch clears it) makes
+        // this stale answer fail performReroute's own guard (generation
+        // match AND route != null), so failing it early can never trigger
+        // the reroute-failure teardown speech.
+        assertFalse(
+            "no reroute-teardown speech from the failed pending search",
+            h.speaker.spoken.contains(REROUTE_FAILED_TEXT to false)
+        )
+    }
+
+    // Nav-fast-follow Task 4 item 2 (deferred-identity watchdog pin),
+    // corrected in fix round 1. An earlier version of this file argued this
+    // scenario was unconstructible, on the premise that "start B bumps the
+    // generation" and "B registers its own first-fix continuation" are one
+    // atomic event — so any fix delivered late enough to carry B's
+    // generation into a reroute would necessarily already find B registered
+    // and resolve it. That premise is false: they are TWO separate
+    // `synchronized(lock)` acquisitions with a real gap between them (see
+    // `handleStart`), and `locationSource.start(::onFix)` — a
+    // caller-supplied collaborator — runs INSIDE that gap: after the
+    // generation bump and the `generation` snapshot, but before
+    // `awaitFirstFix()`'s registration. A `LocationSource` fake that
+    // reenters the controller synchronously from inside its own `start()`
+    // (the same idiom `a teardown reentering from within
+    // locationSource-start...` below already uses, just re-purposed) can
+    // deliver an off-route fix for A from exactly inside that gap: the
+    // resulting `RerouteAttempt` captures B's already-bumped generation
+    // (since `onFix` reads `navigationGeneration` live), while
+    // `resolveFirstFix` inside that same `onFix` call is a no-op (B hasn't
+    // registered yet). By the time B's own `awaitFirstFix()` registration
+    // runs afterward, the reroute is already in flight against B's
+    // generation — so when it later fails, `performReroute`'s guard
+    // (`attempt.generation == navigationGeneration && route != null`)
+    // matches, and its failure branch's OWN bump leaves B on a now-stale
+    // generation, parked, deferred untouched. Only the identity guard
+    // (not a hypothetical generation one) can still resolve it.
+    private class ReentrantRerouteTriggerSource : LocationSource {
+        lateinit var controller: NavigationController
+
+        /** Set true only once route A is already committed and B's start is
+         *  about to begin — so the reentrant trigger below fires on B's
+         *  `locationSource.start` call, not A's own (initial) one. */
+        @Volatile
+        var armed = false
+        private var fired = false
+        private var callback: ((LatLon) -> Unit)? = null
+
+        override fun start(onFix: (LatLon) -> Unit) {
+            callback = onFix
+            if (armed && !fired) {
+                fired = true
+                // Reentrant: same thread, same (reentrant JVM monitor) lock
+                // as the `synchronized(lock) { ... }` block this start()
+                // call is itself running inside of — see the class doc
+                // above for why this lands inside the bump-to-registration
+                // gap.
+                controller.onFix(LatLon(31.2320, 121.4710)) // off route.A's polyline
+            }
+        }
+
+        override fun stop() {}
+
+        fun fix(p: LatLon) {
+            callback?.invoke(p)
+        }
+    }
+
+    @Test
+    fun `a reroute failure captured at start B's generation bumps it stale while B still sits untouched at first-fix, and B's identity watchdog resolves it`() =
+        runBlocking {
+            val sent = CopyOnWriteArrayList<String>()
+            val results = CopyOnWriteArrayList<String>()
+            val speaker = FakeSpeaker()
+            val source = ReentrantRerouteTriggerSource()
+            // Short: nobody ever answers this reroute (it's captured on a
+            // generation nothing will ever match with an explicit
+            // handleNavError) — RelayNavigationSearch's own watchdog is
+            // what resolves it null, race-free.
+            val relay = RelayNavigationSearch(send = { sent.add(it) }, timeoutMillis = 300)
+            val controller = NavigationController(
+                search = relay,
+                locationSource = source,
+                speaker = speaker,
+                sendResult = { results.add(it) },
+                onGuidance = {},
+                hasLocationPermission = { true },
+                now = { 0L },
+                firstFixTimeoutMillis = 1_500 // comfortably after the reroute's 300 ms failure
+            )
+            source.controller = controller
+
+            // ---- route A: committed and active -------------------------
+            val jobA = launch(Dispatchers.Default) { controller.handleCommand("cmd-A", "navigation.start", "第一目的地") }
+            awaitCondition(description = "A's nav.request sent") {
+                source.fix(neutralWgsFix)
+                sent.size == 1
+            }
+            relay.handleNavRoute(sampleRouteData(JSONObject(sent[0]).getString("commandId")))
+            jobA.join()
+            assertEquals(
+                "ok",
+                JSONObject(results.single { JSONObject(it).getString("commandId") == "cmd-A" }).getString("status")
+            )
+
+            // ---- start B: bumps the generation, then — from inside its
+            // OWN locationSource.start, still holding the lock, still
+            // BEFORE its own first-fix registration — delivers the
+            // off-route fix that launches route A's reroute, captured at
+            // B's generation.
+            source.armed = true
+            val jobB = launch(Dispatchers.Default) { controller.handleCommand("cmd-B", "navigation.start", "第二目的地") }
+
+            awaitCondition(description = "the reroute nav.request went out") {
+                sent.size == 2 && JSONObject(sent[1]).getString("reason") == "reroute"
+            }
+            // No answer ever comes: the relay's own 300 ms timeout resolves
+            // it null, and performReroute's failure branch runs its OWN
+            // generation bump (generation still matches — B's start is what
+            // stamped it — and route A is still non-null).
+            awaitCondition(timeoutMs = 3_000, description = "the reroute genuinely failed and tore down route A") {
+                speaker.spoken.contains(REROUTE_FAILED_TEXT to false)
+            }
+            assertTrue("B never sent a nav.request — it is still parked at first-fix", sent.size == 2)
+
+            // ---- B is parked, untouched, on a now-stale generation. Only
+            // its identity-guarded watchdog can resolve it — a
+            // generation-guarded one would hang here forever (verified via
+            // a temporary revert; see the task report).
+            withTimeout(4_000) { jobB.join() }
+            val resultB = JSONObject(results.single { JSONObject(it).getString("commandId") == "cmd-B" })
+            assertEquals("failed", resultB.getString("status"))
+            assertEquals("navigation.cancelled", resultB.getString("reason"))
+        }
+
     // ---- concurrency -------------------------------------------------
 
     @Test
@@ -511,24 +694,26 @@ class NavigationControllerTest {
     // this plan's RED-honesty standard). One property this reentrant proxy
     // does NOT (and structurally cannot) prove either way: whether the
     // source ends up literally stopped. `locationSource.start` is called
-    // exactly once per attempt, and this fake's own body sets `started =
-    // true` as ITS OWN LAST ACTION, after the nested teardown's `stop()`
-    // already ran — no generation discipline inside `NavigationController`
-    // can retroactively undo a side effect a single, already-atomic
-    // `locationSource.start` call performs internally. That is a
-    // characteristic of testing a nested reentrant call this way, not a
+    // exactly once per attempt, and a naive "started" flag on this fake
+    // would be set true as ITS OWN LAST ACTION, after the nested teardown's
+    // `stop()` already ran — no generation discipline inside
+    // `NavigationController` can retroactively undo a side effect a single,
+    // already-atomic `locationSource.start` call performs internally. That
+    // is a characteristic of testing a nested reentrant call this way, not a
     // regression of the cross-thread fix above: no REAL `LocationSource`
     // implementation calls back into the controller from within its own
-    // `start()`, so this shape does not arise in production. What IS
+    // `start()`, so this shape does not arise in production. Nav-fast-follow
+    // Task 4 polish: this fake used to carry exactly that flag (`started`,
+    // written in both `start()` and `stop()`) with nothing ever asserting
+    // it — deleted rather than asserted, since the paragraph above is
+    // precisely why its final value would prove nothing either way. What IS
     // asserted below is `stopCalls`, confirming teardown's own `stop()`
-    // genuinely ran (it is simply not the LAST word against this
-    // particular fake's own subsequent `started = true`).
+    // genuinely ran.
     @Test
     fun `a teardown reentering from within locationSource-start makes the start stale relative to itself`() =
         runBlocking {
             lateinit var controllerRef: NavigationController
             var teardownTriggered = false
-            var started = false
             var stopCalls = 0
             val locationSource = object : LocationSource {
                 override fun start(onFix: (LatLon) -> Unit) {
@@ -536,10 +721,8 @@ class NavigationControllerTest {
                         teardownTriggered = true
                         controllerRef.teardown()
                     }
-                    started = true
                 }
                 override fun stop() {
-                    started = false
                     stopCalls++
                 }
             }

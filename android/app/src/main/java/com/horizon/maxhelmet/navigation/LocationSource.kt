@@ -49,7 +49,15 @@ class LocationManagerSource(private val context: Context) : LocationSource {
                 Looper.getMainLooper()
             )
         }
-        if (requested.isSuccess) {
+        // Nav-fast-follow Task 4 tighten: `manager?.requestLocationUpdates`
+        // short-circuits to a plain `null` when `manager` itself is null
+        // (no system LocationManager service), and `runCatching { null }`
+        // is a `Result.success(null)` — so `requested.isSuccess` alone was
+        // true even though nothing was ever registered. `listener` got
+        // assigned anyway, permanently wedging the idempotence guard above
+        // (`if (listener != null) return`) for the rest of the process on a
+        // device that never had a location service to retry against.
+        if (manager != null && requested.isSuccess) {
             listener = newListener
         }
     }

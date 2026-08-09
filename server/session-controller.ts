@@ -459,7 +459,8 @@ export class AgentSessionController {
     this.navHandler = createNavHandler({
       provider: selectRouteProvider(config.amapApiKey, log),
       send: (payload) => this.send(payload),
-      onRouteAnnounced: (speech) => this.provider.attachNavOkSpeech?.(speech)
+      onRouteAnnounced: (speech) => this.provider.attachNavOkSpeech?.(speech),
+      onRerouteAnnounced: (speech) => this.provider.speakNavLine?.(speech)
     });
     this.send({ type: "connection", state: "relay", detail: "语音中继 WebSocket 已连接" });
   }

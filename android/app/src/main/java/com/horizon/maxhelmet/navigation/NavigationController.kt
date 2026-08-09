@@ -292,46 +292,55 @@ class NavigationController(
 
     private fun handleStop(commandId: String) {
         val result = synchronized(lock) {
-            when {
-                route != null -> {
-                    // An explicit stop is a deliberate "cancel everything":
-                    // any start or reroute already in flight must never
-                    // revive navigation once its answer arrives late.
-                    navigationGeneration += 1
-                    starting = false
-                    val pendingFix = takePendingFirstFixLocked()
-                    route = null
-                    rerouting = false
-                    lastRerouteAt = NO_PRIOR_REROUTE
-                    locationSource.stop()
-                    onGuidance(null)
-                    speaker.speak(STOP_SPOKEN, interrupt = false)
-                    pendingFix?.complete(null)
-                    buildDeviceResult(commandId, "ok")
-                }
-                starting -> {
-                    // No route committed yet, but a start is genuinely in
-                    // flight (awaiting its first fix or the relay's search)
-                    // — very much something to cancel, even though `route`
-                    // looks identical to the truly-idle case below.
-                    navigationGeneration += 1
-                    starting = false
-                    val pendingFix = takePendingFirstFixLocked()
-                    pendingFix?.complete(null)
-                    // The pendingFix take/complete above only covers the
-                    // first-fix stage; fail whatever the search itself is
-                    // holding too (a no-op if the start hasn't reached the
-                    // search yet), and stop the source nothing else needs
-                    // anymore. Silent here: the cancelled start's own
-                    // device.result (navigation.cancelled) is what the
-                    // relay's failure-speech map speaks — "已取消导航。" —
-                    // once it arrives, not this stop's own `ok`.
-                    search.failPending()
-                    locationSource.stop()
-                    buildDeviceResult(commandId, "ok")
-                }
-                else -> buildDeviceResult(commandId, "failed", "navigation.notActive")
+            val hadRoute = route != null
+            // No route committed yet AND no start in flight (`starting`) is
+            // the only genuine "nothing to stop" case — a start awaiting its
+            // first fix or the relay's search is very much something to
+            // cancel, even though `route` itself is still null at that
+            // point too.
+            if (!hadRoute && !starting) {
+                return@synchronized buildDeviceResult(commandId, "failed", "navigation.notActive")
             }
+            // An explicit stop is a deliberate "cancel everything": any
+            // start or reroute already in flight must never revive
+            // navigation once its answer arrives late.
+            navigationGeneration += 1
+            starting = false
+            val pendingFix = takePendingFirstFixLocked()
+            pendingFix?.complete(null)
+            // Nav-fast-follow Task 4 hoist (mirrors iOS's stopGuidance,
+            // commit 8c33ab3): fail whatever the search itself is currently
+            // holding — UNCONDITIONALLY, not only in the "no route yet"
+            // branch below. Android can hold a committed route AND an
+            // in-flight second start (or reroute) at the same time; a stop
+            // in that state must not leave that second request's
+            // nav.request suspended until the relay's own ~7 s timeout —
+            // that would tear down the active route's guidance now and only
+            // deliver the superseded request's own "已取消导航。" up to 7 s
+            // later, as a stray non-sequitur. A no-op when nothing is held.
+            // Safe even when a route IS active: the bump above (plus
+            // `route = null` below in the hadRoute branch) makes any
+            // in-flight reroute answer this could also resolve fail
+            // performReroute's own guard (generation match AND
+            // route != null), so this can never trigger the
+            // reroute-failure teardown speech.
+            search.failPending()
+            if (hadRoute) {
+                route = null
+                rerouting = false
+                lastRerouteAt = NO_PRIOR_REROUTE
+                locationSource.stop()
+                onGuidance(null)
+                speaker.speak(STOP_SPOKEN, interrupt = false)
+            } else {
+                // No route yet, but a start was genuinely in flight, and
+                // nothing else needs the source anymore. Silent here: the
+                // cancelled start's own device.result (navigation.cancelled)
+                // is what the relay's failure-speech map speaks —
+                // "已取消导航。" — once it arrives, not this stop's own `ok`.
+                locationSource.stop()
+            }
+            buildDeviceResult(commandId, "ok")
         }
         sendResult(result)
     }

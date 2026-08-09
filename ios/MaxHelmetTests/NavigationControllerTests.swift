@@ -35,6 +35,17 @@ private final class FakeSearch: NavigationRouteSearching, @unchecked Sendable {
     var holdRoute = false
     private var holdContinuation: CheckedContinuation<NavigationRoute?, Never>?
 
+    /// When set, a held `route(to:from:)` races its continuation against
+    /// this duration and resolves it to `nil` if nothing else has by
+    /// then — mirrors `RelayNavigationSearch`'s real watchdog (the relay's
+    /// own ~7 s timeout). Nil (the default) preserves every other test's
+    /// existing behavior: a hold with no auto-resolution, settled only by an
+    /// explicit `resolveHeld`/`failPending` call. Lets a test prove a stop
+    /// resolves a suspended search PROMPTLY via `failPending()`, rather than
+    /// merely "eventually" once this fires.
+    var searchTimeoutSeconds: TimeInterval?
+    private var holdGeneration = 0
+
     /// Same idea for `reroute(to:from:)`, kept as its own gate (rather than
     /// sharing `holdContinuation`) so a test can hold a reroute open while a
     /// concurrent `route(to:from:)` call completes normally — the real
@@ -47,9 +58,23 @@ private final class FakeSearch: NavigationRouteSearching, @unchecked Sendable {
     func route(to query: String, from origin: CLLocationCoordinate2D) async -> NavigationRoute? {
         routeOrigin = origin
         if holdRoute {
+            holdGeneration += 1
+            let generation = holdGeneration
+            if let searchTimeoutSeconds {
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: UInt64(searchTimeoutSeconds * 1_000_000_000))
+                    self?.timeoutHeldIfCurrent(generation)
+                }
+            }
             return await withCheckedContinuation { holdContinuation = $0 }
         }
         return route
+    }
+
+    private func timeoutHeldIfCurrent(_ generation: Int) {
+        guard generation == holdGeneration, let continuation = holdContinuation else { return }
+        holdContinuation = nil
+        continuation.resume(returning: nil)
     }
 
     func reroute(to destination: CLLocationCoordinate2D, from origin: CLLocationCoordinate2D) async -> NavigationRoute? {
@@ -615,6 +640,61 @@ final class NavigationControllerTests: XCTestCase {
         XCTAssertEqual(startResult.reason, "navigation.cancelled")
         XCTAssertNil(box.guidance, "nothing installs")
         XCTAssertFalse(stream.started, "the stream is stopped")
+    }
+
+    // Nav-fast-follow Task 3: the parity-review hoist. iOS can hold a
+    // committed route AND an in-flight second start at once — the case
+    // above (`testStopMidRelayAwaitCancelsTheInFlightStart`) only covers the
+    // "no route yet" branch, which already called `search.failPending()`
+    // pre-hoist. This is the ROUTE-ACTIVE branch: a stop there must fail the
+    // second start's held search too, not just tear down the active route —
+    // otherwise the rider hears "已停止导航。" and then, up to the relay's
+    // own ~7 s timeout later, the superseded start's own "已取消导航。"
+    // arrives as a stray non-sequitur.
+    func testStopWithActiveRouteFailsTheInFlightSecondStartsPendingSearchPromptly() async {
+        executionTimeAllowance = 6 // safety net: draining B in the RED case rides out the fake relay's own 5 s watchdog
+        let stream = FakeStream(), search = FakeSearch()
+        search.route = straightRoute() // route A resolves immediately and becomes the committed, active route
+        // Generous relative to the bounded check below (mirrors
+        // RelayNavigationSearch's real ~7 s watchdog): pre-hoist, B is only
+        // resolved by THIS firing, ~5 s away — the bounded check below must
+        // catch it still pending long before that, not ride it out.
+        search.searchTimeoutSeconds = 5
+        let (controller, box) = make(stream, search, clock: { 0 })
+
+        let first = await controller.perform(.navigationStart(query: "终点"))
+        XCTAssertEqual(first, .ok)
+
+        // A second start for a NEW destination is suspended at the relay
+        // await while route A is still active — mirrors the ledgered
+        // scenario exactly (a committed route AND an in-flight second start
+        // coexisting).
+        search.holdRoute = true
+        final class ResultBox: @unchecked Sendable { var result: DeviceActionResult? }
+        let secondResult = ResultBox()
+        let secondTask = Task { secondResult.result = await controller.perform(.navigationStart(query: "新终点")) }
+        try? await Task.sleep(nanoseconds: 50_000_000) // let it reach the held search
+
+        let stopResult = await controller.perform(.navigationStop)
+        XCTAssertEqual(stopResult, .ok)
+        XCTAssertTrue(box.spoken.contains("已停止导航。"), "the active route's own stop confirmation still fires")
+
+        // The bounded-wait assertion: B must already have resolved well
+        // under the search's own (generous) timeout — this is what fails
+        // RED promptly (B still pending here) rather than as a hang.
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertNotNil(secondResult.result, "the stop must fail B's pending search directly, not leave it to the search's own timeout")
+        if let result = secondResult.result {
+            XCTAssertEqual(result.status, .failed)
+            XCTAssertEqual(result.reason, "navigation.cancelled", "the explicit stop superseded it, not a genuine route failure")
+        }
+
+        // Safety premise: the stop's generation bump (plus route == nil)
+        // makes this stale answer fail the reroute guard, so failing it
+        // early can never trigger reroute-teardown speech.
+        XCTAssertFalse(box.spoken.contains { $0.contains("无法重新规划路线") }, "no reroute-teardown speech from the failed pending search")
+
+        _ = await secondTask.value // drain for cleanup regardless of RED/GREEN timing
     }
 
     func testRerouteSuccessReassertsTheStream() async {

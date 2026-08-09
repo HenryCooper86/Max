@@ -15,7 +15,7 @@ import type { NavErrorEvent, NavManeuver, NavRequestEvent, NavRouteEvent } from 
 import type { GeoPoint } from "../shared/geo";
 import { haversineMeters } from "../shared/guidance";
 import { MOCK_ROUTE } from "../shared/nav-fixtures";
-import { navRouteOkSpeech } from "./device-actions";
+import { REROUTE_OK_SPEECH, navRouteOkSpeech } from "./device-actions";
 import type { Logger } from "./logger";
 
 const PLACE_ENDPOINT = "https://restapi.amap.com/v5/place/text";
@@ -206,13 +206,26 @@ export function createNavHandler(options: {
    *  for a reroute answer or a nav.error. Providers without a navigation
    *  confirmation path (see AgentProvider.attachNavOkSpeech) omit this. */
   onRouteAnnounced?: (speech: string) => void;
+  /** Called exactly once per "reroute" request answered with a FRESH,
+   *  non-superseded nav.route — with the fixed REROUTE_OK_SPEECH line. Never
+   *  called for the cache-resend fast path (the `lastRoute && …` block
+   *  below — pre-await and atomic, so it never needs the epoch guard
+   *  either), a superseded reroute, or a nav.error. Unlike onRouteAnnounced,
+   *  a reroute has no navigation.start device.command to attach a summary to
+   *  (see device-actions.ts's PendingDeviceCommands.attachOkSpeech), so the
+   *  relay speaks this line directly through the provider's speakNavLine
+   *  rather than reconciling it against a dispatched command. Providers
+   *  without a navigation confirmation path (see AgentProvider.speakNavLine)
+   *  omit this. */
+  onRerouteAnnounced?: (speech: string) => void;
 }): (event: NavRequestEvent) => Promise<void> {
   const {
     provider,
     send,
     now = Date.now,
     minRerouteIntervalMs = DEFAULT_MIN_REROUTE_INTERVAL_MS,
-    onRouteAnnounced
+    onRouteAnnounced,
+    onRerouteAnnounced
   } = options;
   let lastRoute: NavRouteEvent | undefined;
   let lastRerouteAt: number | undefined;
@@ -292,7 +305,24 @@ export function createNavHandler(options: {
       send({ type: "nav.error", commandId: event.commandId, code: "route.unavailable" });
       return;
     }
+    // Epoch guard, mirroring the start path's above exactly: capture before
+    // the await, re-check after. Deliberately reuses the SAME startEpoch
+    // counter rather than a separate rerouteEpoch — a "start" landing while
+    // this reroute's planRoute is still in flight (the rider asked for
+    // somewhere new mid-reroute) must supersede it, and bumping startEpoch
+    // already gives that for free. This does NOT guard reroute against an
+    // overlapping reroute: the client (session-controller.ts's per-session
+    // nav.request dispatch) is single-outstanding, so two reroutes racing
+    // each other should never occur in practice — a rerouteEpoch bumped here
+    // would only defend against a scenario that should be unreachable. If
+    // that assumption ever changes, add one, bumped at this same point,
+    // exactly like startEpoch's own comment above documents for "start".
+    const rerouteEpoch = startEpoch;
     const planned = await provider.planRoute(event.origin, destination);
+    // Superseded by a start while awaiting the provider — drop this
+    // completion entirely, including its nav.error case just below, same
+    // reasoning as the start path's own superseded-completion comment.
+    if (rerouteEpoch !== startEpoch) return;
     if (!planned) {
       send({ type: "nav.error", commandId: event.commandId, code: "route.unavailable" });
       return;
@@ -300,5 +330,6 @@ export function createNavHandler(options: {
     lastRoute = toNavRouteEvent(event.commandId, event.destinationName ?? "", destination, planned);
     lastRerouteAt = now();
     send(lastRoute);
+    onRerouteAnnounced?.(REROUTE_OK_SPEECH);
   };
 }

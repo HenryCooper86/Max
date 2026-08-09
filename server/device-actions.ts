@@ -475,10 +475,24 @@ export type DeviceReconciliation = { truncate: boolean; speech: string | undefin
 
 /** Formats the whole-ride distance the way the relay speaks it: one decimal
  *  place below 10 km, a whole number at or above (10_000 m → "10", never
- *  "10.0"). */
+ *  "10.0"). Round-then-branch: round to one decimal FIRST, then branch on
+ *  THAT rounded value. Branching on the raw km value first (distanceMeters <
+ *  10_000 ? km.toFixed(1) : …) put every meter in [9_950, 9_999] on the
+ *  one-decimal branch, and toFixed(1) rounds 9.975..9.999 up to "10.0" —
+ *  the double-digit whole number bleeding a decimal back in. Rounding first
+ *  (9_975 m → 9.975 → 10.0 → 10 >= 10) sends it to the whole-number branch
+ *  instead, so it renders "10", matching every other value at or above 10 km.
+ *
+ *  The whole-number branch itself rounds the RAW km value (distanceMeters /
+ *  1000), never `roundedKm` — rounding twice compounds: 10_460 m → 10.46 km
+ *  → round to 1 decimal → 10.5 → round again → "11", when 10.46 km's one
+ *  correct rounding is "10". `roundedKm` exists only to decide which branch
+ *  applies; each branch does its own single, final rounding from the raw
+ *  value. */
 function formatRouteKm(distanceMeters: number): string {
   const km = distanceMeters / 1000;
-  return distanceMeters < 10_000 ? km.toFixed(1) : String(Math.round(km));
+  const roundedKm = Math.round(km * 10) / 10;
+  return roundedKm >= 10 ? String(Math.round(km)) : roundedKm.toFixed(1);
 }
 
 /** The relay-spoken start summary, composed from the exact nav.route payload
@@ -488,6 +502,16 @@ export function navRouteOkSpeech(destinationName: string, distanceMeters: number
   const minutes = Math.ceil(etaSeconds / 60);
   return `已找到${destinationName}，全程${formatRouteKm(distanceMeters)}公里，预计${minutes}分钟。仅供参考，请注意实际路况。`;
 }
+
+/** The relay-spoken reroute-success line. Fired only by createNavHandler's
+ *  FRESH, non-superseded, successful reroute path (see its
+ *  onRerouteAnnounced option) — never for the cache-resend fast path, a
+ *  superseded reroute, or a nav.error. Relay-side lines carry 。, the same
+ *  trailing-punctuation convention navRouteOkSpeech uses. Exported (rather
+ *  than inlined at the routing.ts call site) so the composer and its
+ *  wording live in one place and the tests assert against the same
+ *  constant instead of a duplicated string literal. */
+export const REROUTE_OK_SPEECH = "已重新规划路线。";
 
 /** The short line Max speaks when an action succeeds. Deterministic and tied to
  *  the real device result, so the rider hears the truth ("拍好了", "开始录像")

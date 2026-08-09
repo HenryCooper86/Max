@@ -168,4 +168,33 @@ describe("createNavigationController", () => {
     expect(sent.filter((p) => p.type === "nav.request").length).toBe(requestCountBefore);
     expect(sent.filter((p) => p.type === "device.result").length).toBe(2);
   });
+
+  it("reroute success announces off-route only (relay speaks the reroute confirmation)", () => {
+    const nowRef = { t: 0 };
+    const { controller, sent, spoken, states } = harness(nowRef);
+    controller.updatePosition({ lat: 31.2304, lon: 121.4737 });
+    controller.handleDeviceCommand({ commandId: "c1", action: "navigation.start", args: { query: "外滩" } });
+    controller.handleAgentEvent(routeEvent as never);
+    // ~190 m east of the route — off-route, triggers a reroute request.
+    const off = { lat: 31.232, lon: 121.4757 };
+    controller.updatePosition(off);
+    const rerouteReq = sent.find((p) => p.type === "nav.request" && p.reason === "reroute");
+    expect(rerouteReq).toBeDefined();
+
+    // Simulate a successful reroute response from the relay
+    controller.handleAgentEvent({
+      type: "nav.route",
+      commandId: rerouteReq!.commandId as string,
+      destinationName: "外滩",
+      destination: MOCK_ROUTE.polyline.at(-1)!,
+      distanceMeters: MOCK_ROUTE.distanceMeters,
+      etaSeconds: MOCK_ROUTE.etaSeconds,
+      polyline: MOCK_ROUTE.polyline,
+      steps: MOCK_ROUTE.steps
+    } as never);
+
+    // Should announce off-route only; relay speaks the reroute confirmation
+    expect(spoken).toEqual(["已偏离路线，正在重新规划"]);
+    expect(states.at(-1)).toBe("guiding");
+  });
 });

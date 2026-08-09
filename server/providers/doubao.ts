@@ -2030,6 +2030,21 @@ export function createDoubaoProvider(
     },
     attachNavOkSpeech(speech: string) {
       pendingDeviceCommands.attachOkSpeech("navigation.start", speech);
+    },
+    // A reroute confirmation belongs to no rider turn — an off-route rider
+    // hasn't spoken, so the mutable `agentDelivery` binding would still carry
+    // whatever deliveryId the last device-result reconciliation (or reply)
+    // already spoke on. Every client dedupes agent browser-speech BY
+    // DELIVERYID, so reusing it would make this line indistinguishable from
+    // one already shown and get it silently dropped. Same fix as
+    // speakWatchLine above: allocate a FRESH delivery inline, at speak time.
+    // Transcript-only (no speakEmbedded call) is intentional here, unlike
+    // speakWatchLine/speakGalleryLine: navigation does not run on the
+    // RDK/helmet client, so there is no embedded-relay-synthesised audience
+    // for this line to reach.
+    speakNavLine(text: string) {
+      const delivery = createTranscriptDelivery();
+      sendClient(transcriptEvent(delivery, "agent", text, { final: true, useBrowserSpeech: true }));
     }
   };
 }

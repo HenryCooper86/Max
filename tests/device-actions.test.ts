@@ -144,6 +144,42 @@ describe("navRouteOkSpeech", () => {
       "已找到虹桥机场，全程10公里，预计10分钟。仅供参考，请注意实际路况。"
     );
   });
+
+  it("rounds up to the whole-number branch before formatting (round-then-branch)", () => {
+    // 9_975 m → 9.975 km, which floating-point .toFixed(1) mis-renders as
+    // "10.0" — round to one decimal FIRST (9.975 → 10.0), then branch on
+    // that rounded value (>= 10 → whole number), so it renders "10" not "10.0".
+    expect(navRouteOkSpeech("人民广场", 9_975, 600)).toBe(
+      "已找到人民广场，全程10公里，预计10分钟。仅供参考，请注意实际路况。"
+    );
+  });
+
+  it("stays on the one-decimal branch just below the rounded boundary", () => {
+    // 9_949 m → 9.949 km, which rounds to 9.9 (not 10) at one decimal, so it
+    // stays on the one-decimal branch.
+    expect(navRouteOkSpeech("人民广场", 9_949, 600)).toBe(
+      "已找到人民广场，全程9.9公里，预计10分钟。仅供参考，请注意实际路况。"
+    );
+  });
+
+  it("does not double-round the whole-number branch (final-review fold-in)", () => {
+    // Formatting the whole-number branch FROM the already-rounded 1-decimal
+    // value double-rounds: 10_460 m → 10.46 km → round to 1 decimal → 10.5 →
+    // round again → "11", when the correct single rounding of 10.46 km is
+    // "10". The whole-number branch must round the RAW km value directly,
+    // never the intermediate 1-decimal value.
+    expect(navRouteOkSpeech("人民广场", 10_460, 600)).toBe(
+      "已找到人民广场，全程10公里，预计10分钟。仅供参考，请注意实际路况。"
+    );
+  });
+
+  it("does not double-round a second whole-number boundary", () => {
+    // 12_460 m → 12.46 km → 1-decimal rounds to 12.5 → double-rounding would
+    // render "13"; the correct single rounding of 12.46 km is "12".
+    expect(navRouteOkSpeech("人民广场", 12_460, 600)).toBe(
+      "已找到人民广场，全程12公里，预计10分钟。仅供参考，请注意实际路况。"
+    );
+  });
 });
 
 describe("deviceSuccessSpeech", () => {

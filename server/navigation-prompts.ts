@@ -35,7 +35,6 @@ export function createNavPromptHandler(options: {
     if (route?.commandId !== accountingRouteCommandId) {
       accountingRouteCommandId = route?.commandId;
       seenPromptIds.clear();
-      acceptedAt.length = 0;
     }
     if (!route || event.routeCommandId !== route.commandId) return;
 

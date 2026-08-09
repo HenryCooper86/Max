@@ -156,7 +156,7 @@ describe("createNavPromptHandler", () => {
     expect(invalidRoute.spoken).toEqual([]);
   });
 
-  it("deduplicates prompt IDs for the session", () => {
+  it("deduplicates prompt IDs for the active route", () => {
     const { handle, spoken } = harness();
     handle(maneuver());
     handle(maneuver({ threshold: "now", distanceMeters: 0 }));
@@ -206,12 +206,35 @@ describe("createNavPromptHandler", () => {
     expect(duplicate.spoken).toHaveLength(2);
   });
 
-  it("resets rate and dedupe accounting when the active route command changes", () => {
+  it("keeps the per-session rate budget exhausted when the active route command changes", () => {
     let active = route;
     const { handle, spoken } = harness({ activeRoute: () => active, maxPerMinute: 1 });
+    handle({ type: "nav.prompt", promptId: "r1-prompt", routeCommandId: "nav-7", kind: "arrived" });
+    active = { ...route, commandId: "nav-8" };
+    handle({ type: "nav.prompt", promptId: "r2-prompt", routeCommandId: "nav-8", kind: "offRoute" });
+    expect(spoken).toHaveLength(1);
+  });
+
+  it("allows a prompt ID to be reused on a new route while session capacity remains", () => {
+    let active = route;
+    const { handle, spoken } = harness({ activeRoute: () => active, maxPerMinute: 2 });
     handle({ type: "nav.prompt", promptId: "same-id", routeCommandId: "nav-7", kind: "arrived" });
     active = { ...route, commandId: "nav-8" };
-    handle({ type: "nav.prompt", promptId: "same-id", routeCommandId: "nav-8", kind: "arrived" });
+    handle({ type: "nav.prompt", promptId: "same-id", routeCommandId: "nav-8", kind: "offRoute" });
+    expect(spoken).toHaveLength(2);
+  });
+
+  it("retries a rate-rejected new-route prompt ID at exactly one minute", () => {
+    let active = route;
+    let now = 0;
+    const { handle, spoken } = harness({ activeRoute: () => active, now: () => now, maxPerMinute: 1 });
+    handle({ type: "nav.prompt", promptId: "r1-prompt", routeCommandId: "nav-7", kind: "arrived" });
+    active = { ...route, commandId: "nav-8" };
+    handle({ type: "nav.prompt", promptId: "r2-prompt", routeCommandId: "nav-8", kind: "offRoute" });
+    expect(spoken).toHaveLength(1);
+
+    now = 60_000;
+    handle({ type: "nav.prompt", promptId: "r2-prompt", routeCommandId: "nav-8", kind: "offRoute" });
     expect(spoken).toHaveLength(2);
   });
 

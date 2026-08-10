@@ -16,7 +16,7 @@ import {
   writeFileSync
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -50,6 +50,31 @@ function remoteHeredoc(block: string): string {
   expect(end, "remote heredoc must close").toBeGreaterThan(start);
 
   return block.slice(start + opening.length, end);
+}
+
+function writePreflightTraceHook(directory: string, includeReads = false): string {
+  const traceHook = join(directory, "mutation-trace.cjs");
+  const operations = ["mkdirSync", "chmodSync", "openSync", "fsyncSync", "renameSync", "unlinkSync", "rmSync"];
+  if (includeReads) operations.unshift("lstatSync", "realpathSync");
+  writeFileSync(
+    traceHook,
+    [
+      'const fs = require("node:fs");',
+      `for (const name of ${JSON.stringify(operations)}) {`,
+      "  const operation = fs[name];",
+      "  fs[name] = (...args) => {",
+      "    process._rawDebug(`PREFLIGHT_FS:${name}`);",
+      "    return operation(...args);",
+      "  };",
+      "}",
+      ""
+    ].join("\n")
+  );
+  return traceHook;
+}
+
+function readPreflightTrace(stderr: string): string[] {
+  return stderr.split("\n").filter((line) => line.startsWith("PREFLIGHT_FS:"));
 }
 
 afterEach(() => {
@@ -127,7 +152,7 @@ describe("reviewed RDK release operations", () => {
     temporaryDirectories.push(sandboxFixture);
     const sandbox = realpathSync(sandboxFixture);
     const relayHome = join(sandbox, "relay-home");
-    const parent = join(relayHome, "private");
+    const parent = join(relayHome, ".horizon-helmet-testing");
     const bindingFile = join(parent, "companion-bindings.json");
     const fixtureBin = join(sandbox, "bin");
     const statFixture = join(fixtureBin, "stat");
@@ -253,12 +278,15 @@ describe("reviewed RDK release operations", () => {
     expect(prePairBlock, "pre-pair storage preflight must exist").toBeDefined();
     const prePairScript = remoteHeredoc(prePairBlock!);
 
-    const sandbox = mkdtempSync(join(tmpdir(), "max-binding-symlink-test-"));
-    temporaryDirectories.push(sandbox);
+    const sandboxFixture = mkdtempSync(join(tmpdir(), "max-binding-symlink-test-"));
+    temporaryDirectories.push(sandboxFixture);
+    const sandbox = realpathSync(sandboxFixture);
+    const relayHome = join(sandbox, "relay-home");
     const unrelatedTarget = join(sandbox, "unrelated-target");
     const unrelatedFile = join(unrelatedTarget, "keep.txt");
-    const configuredParent = join(sandbox, "configured-parent");
+    const configuredParent = join(relayHome, ".horizon-helmet-testing");
     const bindingFile = join(configuredParent, "companion-bindings.json");
+    mkdirSync(relayHome, { mode: 0o755 });
     mkdirSync(unrelatedTarget, { mode: 0o755 });
     chmodSync(unrelatedTarget, 0o755);
     writeFileSync(unrelatedFile, "unrelated content must remain unchanged\n");
@@ -269,7 +297,8 @@ describe("reviewed RDK release operations", () => {
     const beforeContent = readFileSync(unrelatedFile, "utf8");
     const result = spawnSync("bash", ["-s", "--", configuredParent, bindingFile], {
       input: prePairScript,
-      encoding: "utf8"
+      encoding: "utf8",
+      env: { ...process.env, HOME: relayHome }
     });
 
     expect(result.status).not.toBe(0);
@@ -315,20 +344,145 @@ describe("reviewed RDK release operations", () => {
     const sandboxFixture = mkdtempSync(join(tmpdir(), "max-binding-dangling-file-test-"));
     temporaryDirectories.push(sandboxFixture);
     const sandbox = realpathSync(sandboxFixture);
-    const configuredParent = join(sandbox, "private");
+    const relayHome = join(sandbox, "relay-home");
+    const configuredParent = join(relayHome, ".horizon-helmet-testing");
     const bindingFile = join(configuredParent, "companion-bindings.json");
+    mkdirSync(relayHome, { mode: 0o755 });
     mkdirSync(configuredParent, { mode: 0o700 });
     chmodSync(configuredParent, 0o700);
     symlinkSync("missing-snapshot.json", bindingFile);
 
     const result = spawnSync("bash", ["-s", "--", configuredParent, bindingFile], {
       input: prePairScript,
-      encoding: "utf8"
+      encoding: "utf8",
+      env: { ...process.env, HOME: relayHome }
     });
 
     expect(result.status).not.toBe(0);
     expect(lstatSync(bindingFile).isSymbolicLink()).toBe(true);
     expect(readdirSync(configuredParent)).toEqual(["companion-bindings.json"]);
+  });
+
+  it("rejects every raw non-canonical pre-pair path before mutation", () => {
+    const acceptance = readRepositoryFile("docs/rdk-ios-companion-acceptance.md");
+    const prePairBlock = bashBlocks(acceptance).find((block) => block.includes(".companion-write-probe"));
+    expect(prePairBlock, "pre-pair storage preflight must exist").toBeDefined();
+    const prePairScript = remoteHeredoc(prePairBlock!);
+
+    const sandboxFixture = mkdtempSync(join(tmpdir(), "max-binding-noncanonical-test-"));
+    temporaryDirectories.push(sandboxFixture);
+    const sandbox = realpathSync(sandboxFixture);
+    const relayHome = join(sandbox, "relay-home");
+    const configuredParent = join(relayHome, ".horizon-helmet-testing");
+    const bindingFile = join(configuredParent, "companion-bindings.json");
+    const sentinelFile = join(configuredParent, "keep.txt");
+    const traceHook = writePreflightTraceHook(sandbox, true);
+    mkdirSync(relayHome, { mode: 0o755 });
+    chmodSync(relayHome, 0o755);
+    mkdirSync(configuredParent, { mode: 0o700 });
+    chmodSync(configuredParent, 0o700);
+    writeFileSync(sentinelFile, "private sentinel must remain unchanged\n");
+    const beforeParentMode = statSync(configuredParent).mode & 0o777;
+    const beforeEntries = readdirSync(configuredParent);
+    const beforeContent = readFileSync(sentinelFile, "utf8");
+    const rawCases = [
+      {
+        label: "relative parent",
+        parent: relative(repositoryRoot, configuredParent),
+        file: bindingFile
+      },
+      {
+        label: "dot-segment parent",
+        parent: `${relayHome}/./.horizon-helmet-testing`,
+        file: bindingFile
+      },
+      {
+        label: "dot-dot-segment parent",
+        parent: `${relayHome}/unused/../.horizon-helmet-testing`,
+        file: bindingFile
+      },
+      {
+        label: "repeated-separator parent",
+        parent: `${relayHome}//.horizon-helmet-testing`,
+        file: bindingFile
+      },
+      {
+        label: "relative file",
+        parent: configuredParent,
+        file: relative(repositoryRoot, bindingFile)
+      },
+      {
+        label: "dot-segment file",
+        parent: configuredParent,
+        file: `${configuredParent}/./companion-bindings.json`
+      },
+      {
+        label: "dot-dot-segment file",
+        parent: configuredParent,
+        file: `${configuredParent}/unused/../companion-bindings.json`
+      },
+      {
+        label: "repeated-separator file",
+        parent: configuredParent,
+        file: `${configuredParent}//companion-bindings.json`
+      }
+    ];
+
+    for (const fixture of rawCases) {
+      const result = spawnSync("bash", ["-s", "--", fixture.parent, fixture.file], {
+        input: prePairScript,
+        encoding: "utf8",
+        cwd: repositoryRoot,
+        env: { ...process.env, HOME: relayHome, NODE_OPTIONS: `--require=${traceHook}` }
+      });
+      const filesystemTrace = readPreflightTrace(result.stderr);
+
+      expect.soft(result.status, `${fixture.label}: ${result.stderr}`).not.toBe(0);
+      expect.soft(filesystemTrace, fixture.label).toEqual([]);
+      expect.soft(statSync(configuredParent).mode & 0o777, fixture.label).toBe(beforeParentMode);
+      expect.soft(readdirSync(configuredParent), fixture.label).toEqual(beforeEntries);
+      expect.soft(readFileSync(sentinelFile, "utf8"), fixture.label).toBe(beforeContent);
+      expect.soft(existsSync(bindingFile), fixture.label).toBe(false);
+    }
+  });
+
+  it("rejects an existing private parent below an unsafe relay home without mutation", () => {
+    const acceptance = readRepositoryFile("docs/rdk-ios-companion-acceptance.md");
+    const prePairBlock = bashBlocks(acceptance).find((block) => block.includes(".companion-write-probe"));
+    expect(prePairBlock, "pre-pair storage preflight must exist").toBeDefined();
+    const prePairScript = remoteHeredoc(prePairBlock!);
+
+    const sandboxFixture = mkdtempSync(join(tmpdir(), "max-binding-unsafe-ancestor-test-"));
+    temporaryDirectories.push(sandboxFixture);
+    const sandbox = realpathSync(sandboxFixture);
+    const relayHome = join(sandbox, "relay-home");
+    const configuredParent = join(relayHome, ".horizon-helmet-testing");
+    const bindingFile = join(configuredParent, "companion-bindings.json");
+    const sentinelFile = join(configuredParent, "keep.txt");
+    const traceHook = writePreflightTraceHook(sandbox);
+    mkdirSync(relayHome, { mode: 0o777 });
+    chmodSync(relayHome, 0o777);
+    mkdirSync(configuredParent, { mode: 0o700 });
+    chmodSync(configuredParent, 0o700);
+    writeFileSync(sentinelFile, "unsafe-ancestor sentinel must remain unchanged\n");
+    const beforeHomeMode = statSync(relayHome).mode & 0o7777;
+    const beforeParentMode = statSync(configuredParent).mode & 0o777;
+    const beforeEntries = readdirSync(configuredParent);
+    const beforeContent = readFileSync(sentinelFile, "utf8");
+    const result = spawnSync("bash", ["-s", "--", configuredParent, bindingFile], {
+      input: prePairScript,
+      encoding: "utf8",
+      env: { ...process.env, HOME: relayHome, NODE_OPTIONS: `--require=${traceHook}` }
+    });
+    const mutationTrace = readPreflightTrace(result.stderr);
+
+    expect(result.status).not.toBe(0);
+    expect(mutationTrace).toEqual([]);
+    expect(statSync(relayHome).mode & 0o7777).toBe(beforeHomeMode);
+    expect(statSync(configuredParent).mode & 0o777).toBe(beforeParentMode);
+    expect(readdirSync(configuredParent)).toEqual(beforeEntries);
+    expect(readFileSync(sentinelFile, "utf8")).toBe(beforeContent);
+    expect(existsSync(bindingFile)).toBe(false);
   });
 
   it("keeps the rollout and acceptance shell blocks syntactically executable", () => {

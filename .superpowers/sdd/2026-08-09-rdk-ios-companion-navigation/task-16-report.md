@@ -136,6 +136,41 @@ npx vitest run tests/rdk-release-operations.test.ts
 PASS — 1 file, 9 tests
 ```
 
+## Independent-review correction round 4
+
+The cumulative re-review of `a6279f737b942f300e97a8928d44673c372d6aad` found two remaining
+preflight trust gaps. Resolving `BINDING_PARENT` and `BINDING_FILE` immediately discarded evidence
+that the operator supplied a relative or lexically non-canonical raw path, so `.`, `..`, and repeated
+separators were accepted despite the prose. An existing relay-owned `0700` leaf was also accepted
+without validating its controlling relay-home ancestor, including when that ancestor was non-sticky
+`0777`.
+
+Before changing documentation, the operations suite executed the exact remote body with eight
+independent raw parent/file forms (relative, dot segment, dot-dot segment, and repeated separator for
+each argument) plus an existing documented leaf below an unsafe relay home:
+
+```text
+npx vitest run tests/rdk-release-operations.test.ts
+FAIL — 2 failed, 9 passed
+each raw form exited 0 with open/fsync/rename/unlink/rm mutation trace
+the 0700 leaf below the non-sticky 0777 home also exited 0 and probed
+```
+
+The rejection fixtures pin empty raw-path filesystem traces, an empty unsafe-ancestor mutation
+trace, unchanged home/leaf modes, unchanged sentinel bytes and entries, an absent final snapshot,
+and no probe artifact. The body now retains each raw argument and requires absolute lexical equality
+with `path.resolve(raw)` before any filesystem call.
+For deploy-practical executable evidence, it accepts only the documented
+`$HOME/.horizon-helmet-testing` parent: the canonical relay home is always checked as a real
+relay-owned directory with no group/world write, whether the child exists or will be created. Custom
+product paths require a separately reviewed full-ancestor preflight and cannot use this acceptance
+command. The focused contract is green with the prior durable sibling and post-Pair proofs intact:
+
+```text
+npx vitest run tests/rdk-release-operations.test.ts
+PASS — 1 file, 11 tests
+```
+
 ## Broad gates
 
 Initial Task 16 runs at `c696b50edcff1a8fc457735f7c578f9440451fff`:
@@ -225,6 +260,29 @@ Fresh review-correction round 3 runs:
 | `npm run check`                                                            | BLOCKED at unchanged ledgered Prettier finding: `server/companion-store.ts` |
 | `npm run check:dead-code`                                                  | BLOCKED by the same four ledgered file/binary/export findings printed below |
 
+Fresh review-correction round 4 runs:
+
+| Command                                                                    | Result                                                                      |
+| -------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `npx vitest run tests/rdk-release-operations.test.ts`                      | PASS — 11/11                                                                |
+| Both Task 16 Vitest files                                                  | PASS — 2 files, 13 tests                                                    |
+| `npm test`                                                                 | PASS — 102 files, 1,302 tests                                               |
+| `npx tsc -p rdk/agent/tsconfig.json`                                       | PASS                                                                        |
+| `npm run check:protocol`                                                   | PASS                                                                        |
+| `npm run lint`                                                             | PASS                                                                        |
+| `npm run test:fault-matrix`                                                | PASS — 24/24                                                                |
+| `npm run build`                                                            | PASS                                                                        |
+| Affected-file Prettier checks, including the ignored report explicitly     | PASS                                                                        |
+| Exact-body raw-path/unsafe-anchor/no-mutation/durability contract          | PASS                                                                        |
+| Executable rollout/rollback/acceptance Bash-fence assertions               | PASS inside `rdk-release-operations.test.ts`                                |
+| `bash -n deploy-lightsail.command`                                         | PASS                                                                        |
+| Full MaxHelmet `iPhone 17` simulator test command                          | PASS                                                                        |
+| Unsigned MaxHelmet `iPhone 17` simulator build                             | PASS                                                                        |
+| Android `testDebugUnitTest lintDebug assembleDebug` with installed SDK/JBR | PASS — 53 tasks; unchanged non-fatal native-access warning                  |
+| `git diff --check`                                                         | PASS                                                                        |
+| `npm run check`                                                            | BLOCKED at unchanged ledgered Prettier finding: `server/companion-store.ts` |
+| `npm run check:dead-code`                                                  | BLOCKED by the same four ledgered file/binary/export findings printed below |
+
 The exact pre-ledgered dead-code output remains:
 
 ```text
@@ -289,17 +347,18 @@ verify `/opt/max` and private device-identity ownership/modes, preserve `/var/li
 restart. Rollback restores the entire former release, including its native/audio artifacts, and
 repeats the new-invocation proof.
 
-The relay acceptance lifecycle now has two deliberately separate gates. Before Pair, the relay
-account validates an existing canonical real parent at `0700` without mutation, or creates only one
-absent direct child below its verified canonical home, then durably writes, file-fsyncs, renames,
-directory-fsyncs, and removes a disposable sibling. Symlinked/non-canonical/wrong-mode parents and
-dangling final-file symlinks fail without changing an unrelated target. True absence of the final
-path is recorded as expected and its file evidence remains PENDING; no empty placeholder is created.
-After the first successful Pair, a separate command requires a regular relay-owned `0600` file under
-the `0700` parent, parses exact version-1 relationship metadata, requires at least one unique
-account/device relationship, rechecks `/ready`, and prints only the relationship count. Root privacy
-wording still distinguishes production `wss://` with trusted TLS, the TLS-protected self-signed Debug
-test endpoint, and unencrypted Debug LAN `ws://`.
+The relay acceptance lifecycle now has two deliberately separate gates. Before Pair, raw path forms
+must already be absolute and lexically canonical. The command accepts only the exact documented
+direct child of the canonical relay home and validates that anchor's owner/symlink/write-mode safety
+for both an existing and absent child. It then durably writes, file-fsyncs, renames,
+directory-fsyncs, and removes a disposable sibling. Unsafe ancestors and
+symlinked/non-canonical/wrong-mode paths fail without changing an unrelated target. True absence of
+the final path is recorded as expected and its file evidence remains PENDING; no empty placeholder is
+created. After the first successful Pair, a separate command requires a regular relay-owned `0600`
+file under the `0700` parent, parses exact version-1 relationship metadata, requires at least one
+unique account/device relationship, rechecks `/ready`, and prints only the relationship count. Root
+privacy wording still distinguishes production `wss://` with trusted TLS, the TLS-protected
+self-signed Debug test endpoint, and unencrypted Debug LAN `ws://`.
 
 ## External and physical checks still PENDING
 

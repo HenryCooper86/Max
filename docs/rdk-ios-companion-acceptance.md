@@ -25,18 +25,19 @@ git ls-remote origin refs/heads/main
 
 ## Relay and binding store — deploy first
 
-| Evidence                                                         | Value   | Result  |
-| ---------------------------------------------------------------- | ------- | ------- |
-| Lightsail host/app identity (no credentials)                     | PENDING | PENDING |
-| `/health` build stamp and UTC observation                        | PENDING | PENDING |
-| `/ready` build stamp, empty issues, UTC observation              | PENDING | PENDING |
-| PM2 service `horizon` online after deploy                        | PENDING | PENDING |
-| `COMPANION_BINDINGS_FILE` configured path                        | PENDING | PENDING |
-| Binding parent real path, relay owner, and mode `0700`           | PENDING | PENDING |
-| Absent parent creation confined to verified relay-home leaf      | PENDING | PENDING |
-| Pre-pair final-file state: absent expected / present             | PENDING | PENDING |
-| Disposable sibling write + file fsync + rename + directory fsync | PENDING | PENDING |
-| Probe cleanup left no invalid snapshot                           | PENDING | PENDING |
+| Evidence                                                               | Value   | Result  |
+| ---------------------------------------------------------------------- | ------- | ------- |
+| Lightsail host/app identity (no credentials)                           | PENDING | PENDING |
+| `/health` build stamp and UTC observation                              | PENDING | PENDING |
+| `/ready` build stamp, empty issues, UTC observation                    | PENDING | PENDING |
+| PM2 service `horizon` online after deploy                              | PENDING | PENDING |
+| `COMPANION_BINDINGS_FILE` configured path                              | PENDING | PENDING |
+| Raw parent/file paths absolute and lexically canonical                 | PENDING | PENDING |
+| Parent is exact default child of verified canonical relay home         | PENDING | PENDING |
+| Home/parent real and owned; home not group/world writable; parent 0700 | PENDING | PENDING |
+| Pre-pair final-file state: absent expected / present                   | PENDING | PENDING |
+| Disposable sibling write + file fsync + rename + directory fsync       | PENDING | PENDING |
+| Probe cleanup left no invalid snapshot                                 | PENDING | PENDING |
 
 Run the guarded deployment only from reviewed clean `main`:
 
@@ -50,13 +51,16 @@ ssh -i /path/to/key ubuntu@relay.example.com 'pm2 describe horizon'
 For the controlled self-signed test relay only, `curl --insecure` may be recorded as test evidence;
 it is not production TLS acceptance. Run the permission/write probe as the configured relay account,
 not root. On a new deployment, an absent final binding file before the first Pair is expected: the
-store creates it only on its first successful mutation. This pre-pair command validates an existing
-parent before any mutation and rejects symlinks, non-directories, non-canonical paths, wrong owners,
-and wrong modes without correcting them. If the parent is absent, it creates only one direct child
-of the verified canonical relay home; it never recursively creates an arbitrary configured path.
-It rejects an existing wrong-owner/mode final file and proves a sibling file can be written, fsynced,
-atomically renamed, and durably removed. It never creates or changes `BINDING_FILE`. Pre-pair
-binding-file permission/schema evidence remains **PENDING**:
+store creates it only on its first successful mutation. This executable evidence intentionally
+supports only the documented default parent directly below the relay user's canonical home. Before
+any filesystem call, it requires both raw arguments to already be absolute and lexically canonical;
+relative paths, `.`, `..`, repeated separators, and trailing separators fail rather than being
+normalized. It then validates the relay home and any existing parent before mutation, rejecting
+symlinks, wrong owners, and unsafe modes without correcting them. If the exact default parent is
+absent, it creates that single leaf without recursively creating ancestors. It rejects an existing
+wrong-owner/mode final file and proves a sibling file can be written, fsynced, atomically renamed,
+and durably removed. It never creates or changes `BINDING_FILE`.
+Pre-pair binding-file permission/schema evidence remains **PENDING**:
 
 ```bash
 BINDING_PARENT=/home/ubuntu/.horizon-helmet-testing
@@ -70,11 +74,20 @@ node - "$BINDING_PARENT" "$BINDING_FILE" <<'NODE'
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const parent = path.resolve(process.argv[2]);
-const bindingFile = path.resolve(process.argv[3]);
+const rawParent = process.argv[2];
+const rawBindingFile = process.argv[3];
 const expectedUid = process.getuid();
 const expectedGid = process.getgid();
 
+function requireCanonicalAbsolute(raw, label) {
+  if (typeof raw !== "string" || !path.isAbsolute(raw) || raw !== path.resolve(raw)) {
+    throw new Error(`${label} must already be an absolute lexically canonical path`);
+  }
+  return raw;
+}
+
+const parent = requireCanonicalAbsolute(rawParent, "binding parent");
+const bindingFile = requireCanonicalAbsolute(rawBindingFile, "binding file");
 if (path.dirname(bindingFile) !== parent) {
   throw new Error("binding file must be directly inside the configured parent");
 }
@@ -100,20 +113,21 @@ function requireCanonicalOwnedDirectory(location, stat, label) {
   }
 }
 
+const relayHome = requireCanonicalAbsolute(os.homedir(), "relay home");
+if (parent !== path.join(relayHome, ".horizon-helmet-testing")) {
+  throw new Error("binding parent must be the documented direct child of the relay home");
+}
+const homeStat = lstatIfPresent(relayHome);
+if (homeStat === undefined) {
+  throw new Error("relay home must already exist");
+}
+requireCanonicalOwnedDirectory(relayHome, homeStat, "relay home");
+if ((homeStat.mode & 0o022) !== 0) {
+  throw new Error("relay home must not be group/world writable");
+}
+
 let parentStat = lstatIfPresent(parent);
 if (parentStat === undefined) {
-  const relayHome = path.resolve(os.homedir());
-  if (path.dirname(parent) !== relayHome) {
-    throw new Error("an absent binding parent may be created only as a direct child of the relay home");
-  }
-  const homeStat = lstatIfPresent(relayHome);
-  if (homeStat === undefined) {
-    throw new Error("relay home must already exist");
-  }
-  requireCanonicalOwnedDirectory(relayHome, homeStat, "relay home");
-  if ((homeStat.mode & 0o022) !== 0) {
-    throw new Error("relay home must not be group/world writable");
-  }
   fs.mkdirSync(parent, { mode: 0o700 });
   parentStat = fs.lstatSync(parent);
 }
@@ -170,11 +184,12 @@ NODE
 REMOTE
 ```
 
-If an existing parent fails validation, this command does not chmod or otherwise repair it. Stop,
-verify the configured path and its ancestry independently, have the operator correct that exact real
-directory to the relay owner and `0700`, and rerun. For a custom absent path outside the relay home,
-the operator must first prepare a real relay-owned `0700` directory; the preflight will not create
-its ancestors. A dangling `BINDING_FILE` symlink is an invalid existing path, not an absent snapshot.
+If the relay home or existing parent fails validation, this command does not chmod or otherwise
+repair it. Stop, verify the configured path independently, have the operator correct the exact real
+directory, and rerun. This evidence command does not accept a custom parent, even when it already
+exists: a custom location needs a separately reviewed preflight that validates its complete
+controlling ancestor chain before it can be marked ready. A dangling `BINDING_FILE` symlink is an
+invalid existing path, not an absent snapshot.
 
 If `/ready` is not `200` with the reviewed build stamp and an empty `issues` array, do not install
 clients. Record the error and roll back the relay before continuing. Do not mark binding-file mode,

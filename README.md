@@ -851,13 +851,17 @@ Set `COMPANION_BINDINGS_FILE` in the relay's protected `.env` to an explicit dur
 default is `~/.horizon-helmet-testing/companion-bindings.json`). Its parent directory must be
 owned by the relay account at mode `0700`. On a new path the JSON file is normally absent until the
 first successful Pair; do not create an empty-byte placeholder, because it is not a valid snapshot.
-Before Pair, validate an existing parent as a canonical non-symlink directory owned by the relay
-account at `0700` before any correction or probe. The acceptance command creates an absent parent
-only as one direct child of a verified relay-owned home; it does not recursively create custom paths,
-and it rejects wrong-mode or symlinked paths without mutating their targets. Use a disposable sibling
-file to prove actual write, file-fsync, same-directory rename, directory-fsync, and cleanup capability.
-File permission, schema, relationship, and backup evidence remains pending while the final path is
-absent; a dangling final-path symlink is invalid rather than absent.
+The executable acceptance preflight is deliberately scoped to the canonical default parent
+`$HOME/.horizon-helmet-testing`. It preserves the raw parent/file arguments and rejects relative or
+lexically non-canonical forms before any filesystem access. For both existing and absent parents it
+validates the canonical relay home as a real relay-owned directory that is not group/world writable;
+the parent must be its exact direct child and either already be a real relay-owned `0700` directory or
+be created as that one leaf. It rejects unsafe ancestors, wrong-mode/symlinked paths, and dangling
+final-file symlinks without mutation. A custom parent remains supported by the product, but requires
+a separately reviewed full-ancestor preflight before operational acceptance. The default-path probe
+uses a disposable sibling to prove write, file-fsync, same-directory rename, directory-fsync, and
+cleanup. File permission, schema, relationship, and backup evidence remains pending while the final
+path is absent.
 
 The first successful binding atomically creates/replaces the JSON file at mode `0600`. After Pair,
 verify it belongs to the relay account, parses as a nonempty version-1 relationship snapshot, and

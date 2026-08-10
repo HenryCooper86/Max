@@ -960,8 +960,11 @@ With `npm run dev:server` running on the LAN host:
 
 **iPhone companion navigation**
 
-1. With Helmet Ride stopped, open the RDK HUD and record the six-digit code privately; do not put
-   it in a terminal command, journal, screenshot, or acceptance document.
+1. With Helmet Ride stopped, read the six-digit code from the board-local Chromium/HDMI HUD. For
+   remote administration, make an authenticated SSH local forward with
+   `ssh -N -L 18080:127.0.0.1:8080 <board>` and open `http://127.0.0.1:18080`; do not put the code
+   in a terminal command, journal, screenshot, or acceptance document. A direct LAN browser at
+   `http://<board>:8080` intentionally cannot see the code or its expiry.
 2. Pair from the signed-in iOS app and confirm the HUD reports ready before starting the ride.
 3. Run the locked-screen navigation, loss/resume, ADAS-preemption, second-route, and privacy
    checks in [`../docs/rdk-ios-companion-acceptance.md`](../docs/rdk-ios-companion-acceptance.md).
@@ -983,9 +986,13 @@ With `npm run dev:server` running on the LAN host:
 
 **Dev HUD**
 
-Open `http://<board>:8080` from a laptop, or Chromium kiosk on the board's HDMI.
-Start a session and confirm turn state, transcript, latency, and both previews
-update live.
+Open `http://<board>:8080` from a laptop, or Chromium kiosk on the board's HDMI. Start a session and
+confirm turn state, transcript, navigation, latency, captures, and both previews update live. The
+unauthenticated direct-LAN WebSocket is deliberately a redacted status surface: it receives those
+non-secret fields but never `pairingCode` or `pairingExpiresAt`. Only a TCP peer accepted from the
+board's IPv4/IPv6 loopback—such as the local kiosk or an authenticated SSH local forward—receives
+the full pairing state. `Origin`, `Host`, forwarding headers, URL parameters, and WebSocket client
+messages do not change that decision.
 
 ## Known gap
 

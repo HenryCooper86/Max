@@ -273,7 +273,10 @@ REMOTE
 
 The first successful Pair happens only after relay, signed iOS, and RDK rollout. Keep identity values
 private: record only whether the signed-in account paired to the intended RDK and whether the HUD
-reported ready. Then complete the final-file evidence the pre-pair probe deliberately left PENDING:
+reported ready. Read the pairing code only from the board-local HDMI HUD or through an authenticated
+SSH local forward to `127.0.0.1:8080`; a direct `http://<board>:8080` LAN browser intentionally gets
+the non-secret HUD without the code or expiry. Then complete the final-file evidence the pre-pair
+probe deliberately left PENDING:
 
 | Evidence                                                               | Value   | Result  |
 | ---------------------------------------------------------------------- | ------- | ------- |
@@ -367,6 +370,7 @@ curl --fail --silent --show-error https://relay.example.com/ready
 
 | Step                                                                                           | Observation | Result  |
 | ---------------------------------------------------------------------------------------------- | ----------- | ------- |
+| Before Pair, verify direct-LAN WebSocket omits code/expiry while board-local HUD displays them | PENDING     | PENDING |
 | Start Helmet Ride, lock phone for at least 10 continuous minutes, confirm forwarding/indicator | PENDING     | PENDING |
 | Request a real Amap destination; verify RDK HUD and speech far → near → now                    | PENDING     | PENDING |
 | Force an off-route condition; verify one reroute and replacement route                         | PENDING     | PENDING |

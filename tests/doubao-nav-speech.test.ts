@@ -90,7 +90,7 @@ vi.mock("../server/routing", async (importOriginal) => {
 import { createDoubaoProvider } from "../server/providers/doubao";
 import { createMockProvider } from "../server/providers/mock";
 import type { AgentProvider } from "../server/providers/types";
-import type { NavPromptSpeech } from "../server/routing";
+import { createMockRouteProvider, type NavPromptSpeech } from "../server/routing";
 import { AgentSessionController, type ProviderFactory } from "../server/session-controller";
 import { metrics } from "../server/metrics";
 
@@ -452,6 +452,11 @@ describe("doubao navigation command deadline", () => {
 
 describe("session navigation prompt wiring", () => {
   it("routes one prompt through the session-owned route and mock provider as one transcript line", async () => {
+    // This is a relay-wiring test, not an Amap integration test. Keep its route
+    // dependency in memory even when the developer's .env has AMAP_API_KEY —
+    // otherwise the detached nav request crosses the network and races the
+    // test's observable-event wait.
+    routeProviderOverride.current = createMockRouteProvider();
     const send = vi.fn();
     const client = { readyState: 1, OPEN: 1, send, close: vi.fn() } as never;
     const controller = new AgentSessionController(client, createMockProvider, silentLog);

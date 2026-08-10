@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   writeFileSync
@@ -35,6 +36,17 @@ function sectionBetween(document: string, startHeading: string, endHeading: stri
 
 function bashBlocks(document: string): string[] {
   return Array.from(document.matchAll(/```bash\n([\s\S]*?)```/g), (match) => match[1]);
+}
+
+function remoteHeredoc(block: string): string {
+  const opening = "<<'REMOTE'\n";
+  const start = block.indexOf(opening);
+  const end = block.lastIndexOf("\nREMOTE\n");
+
+  expect(start, "remote heredoc must exist").toBeGreaterThanOrEqual(0);
+  expect(end, "remote heredoc must close").toBeGreaterThan(start);
+
+  return block.slice(start + opening.length, end);
 }
 
 afterEach(() => {
@@ -84,6 +96,8 @@ describe("reviewed RDK release operations", () => {
     expect(rootReadme).toContain("production `wss://` with trusted TLS");
     expect(rootReadme).toContain("Debug `ws://` LAN transport is not encrypted");
     expect(report).toContain("FAIL — 3 failed, 1 passed");
+    expect(report).toContain("FAIL — 1 failed, 5 passed");
+    expect(report).toContain("file evidence remains PENDING");
     expect(report).toContain("No physical-device, audio-hardware, Amap, or Lightsail acceptance is claimed.");
   });
 
@@ -95,7 +109,135 @@ describe("reviewed RDK release operations", () => {
     expect(acceptance).not.toContain('--since "2 minutes ago"');
     expect(acceptance).not.toContain("systemctl restart max-agent");
     expect(acceptance).toContain("root:root:600");
-    expect(acceptance).toContain("binding parent owner");
+    expect(acceptance).toContain("binding-file permission/schema evidence remains **PENDING**");
+    expect(acceptance).toContain("## First Pair and persisted binding — complete before ride");
+  });
+
+  it("accepts an absent pre-pair file, durably probes its parent, and validates the post-pair snapshot", () => {
+    const acceptance = readRepositoryFile("docs/rdk-ios-companion-acceptance.md");
+    const blocks = bashBlocks(acceptance);
+    const prePairBlock = blocks.find((block) => block.includes(".companion-write-probe"));
+    expect(prePairBlock, "pre-pair storage preflight must exist").toBeDefined();
+    const prePairScript = remoteHeredoc(prePairBlock!);
+
+    const sandbox = mkdtempSync(join(tmpdir(), "max-binding-acceptance-test-"));
+    temporaryDirectories.push(sandbox);
+    const parent = join(sandbox, "private");
+    const bindingFile = join(parent, "companion-bindings.json");
+    const fixtureBin = join(sandbox, "bin");
+    const statFixture = join(fixtureBin, "stat");
+    const traceHook = join(sandbox, "trace.cjs");
+    const traceFile = join(sandbox, "preflight.trace");
+    mkdirSync(parent, { recursive: true, mode: 0o700 });
+    chmodSync(parent, 0o700);
+    mkdirSync(fixtureBin);
+    // Preserve the Linux stat dialect used by the reviewed pre-fix command so
+    // this macOS-hosted regression fails on the absent-file lifecycle itself.
+    writeFileSync(
+      statFixture,
+      [
+        "#!/bin/sh",
+        'test "$1" = -c',
+        "test \"$2\" = '%U:%G:%a'",
+        "exec /usr/bin/stat -f '%Su:%Sg:%Lp' \"$3\"",
+        ""
+      ].join("\n")
+    );
+    chmodSync(statFixture, 0o755);
+    writeFileSync(
+      traceHook,
+      [
+        'const fs = require("node:fs");',
+        "const trace = process.env.PREFLIGHT_TRACE;",
+        "const fsyncSync = fs.fsyncSync;",
+        "const renameSync = fs.renameSync;",
+        "fs.fsyncSync = (fd) => {",
+        '  fs.appendFileSync(trace, `fsync:${fs.fstatSync(fd).isDirectory() ? "dir" : "file"}\\n`);',
+        "  return fsyncSync(fd);",
+        "};",
+        "fs.renameSync = (from, to) => {",
+        '  fs.appendFileSync(trace, "rename\\n");',
+        "  return renameSync(from, to);",
+        "};",
+        ""
+      ].join("\n")
+    );
+    const environment = {
+      ...process.env,
+      NODE_OPTIONS: `--require=${traceHook}`,
+      PATH: `${fixtureBin}:${process.env.PATH}`,
+      PREFLIGHT_TRACE: traceFile
+    };
+
+    const prePair = spawnSync("bash", ["-s", "--", parent, bindingFile], {
+      input: prePairScript,
+      encoding: "utf8",
+      env: environment
+    });
+
+    expect(prePair.status, prePair.stderr).toBe(0);
+    expect(prePair.stdout).toContain("binding file: absent before first Pair (expected); file evidence: PENDING");
+    expect(existsSync(bindingFile)).toBe(false);
+    expect(readdirSync(parent)).toEqual([]);
+    expect(readFileSync(traceFile, "utf8").split("\n").filter(Boolean)).toEqual([
+      "fsync:file",
+      "rename",
+      "fsync:dir",
+      "fsync:dir"
+    ]);
+
+    const validSnapshot = {
+      version: 1,
+      bindings: [{ accountId: "account-fixture", deviceId: "rdk-fixture", createdAt: 100, updatedAt: 100 }]
+    };
+    writeFileSync(bindingFile, `${JSON.stringify(validSnapshot)}\n`, { mode: 0o644 });
+    chmodSync(bindingFile, 0o644);
+    const wrongMode = spawnSync("bash", ["-s", "--", parent, bindingFile], {
+      input: prePairScript,
+      encoding: "utf8",
+      env: environment
+    });
+    expect(wrongMode.status).not.toBe(0);
+
+    const postPairBlock = blocks.find((block) => block.includes("persisted relationships"));
+    expect(postPairBlock, "post-first-pair snapshot check must exist").toBeDefined();
+    const postPairScript = remoteHeredoc(postPairBlock!);
+    const postPairWrongMode = spawnSync("bash", ["-s", "--", parent, bindingFile], {
+      input: postPairScript,
+      encoding: "utf8",
+      env: environment
+    });
+    expect(postPairWrongMode.status).not.toBe(0);
+
+    writeFileSync(bindingFile, "", { mode: 0o600 });
+    chmodSync(bindingFile, 0o600);
+    const invalidSnapshot = spawnSync("bash", ["-s", "--", parent, bindingFile], {
+      input: postPairScript,
+      encoding: "utf8",
+      env: environment
+    });
+    expect(invalidSnapshot.status).not.toBe(0);
+
+    writeFileSync(bindingFile, `${JSON.stringify({ version: 1, bindings: [] })}\n`, { mode: 0o600 });
+    chmodSync(bindingFile, 0o600);
+    const noPersistedRelationship = spawnSync("bash", ["-s", "--", parent, bindingFile], {
+      input: postPairScript,
+      encoding: "utf8",
+      env: environment
+    });
+    expect(noPersistedRelationship.status).not.toBe(0);
+
+    writeFileSync(bindingFile, `${JSON.stringify(validSnapshot)}\n`, { mode: 0o600 });
+    chmodSync(bindingFile, 0o600);
+    const postPair = spawnSync("bash", ["-s", "--", parent, bindingFile], {
+      input: postPairScript,
+      encoding: "utf8",
+      env: environment
+    });
+    expect(postPair.status, postPair.stderr).toBe(0);
+    expect(postPair.stdout).toContain("binding snapshot: valid; persisted relationships: 1");
+    expect(postPair.stdout).not.toContain("account-fixture");
+    expect(postPair.stdout).not.toContain("rdk-fixture");
   });
 
   it("keeps the rollout and acceptance shell blocks syntactically executable", () => {

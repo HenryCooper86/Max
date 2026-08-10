@@ -25,17 +25,17 @@ git ls-remote origin refs/heads/main
 
 ## Relay and binding store — deploy first
 
-| Evidence                                            | Value   | Result  |
-| --------------------------------------------------- | ------- | ------- |
-| Lightsail host/app identity (no credentials)        | PENDING | PENDING |
-| `/health` build stamp and UTC observation           | PENDING | PENDING |
-| `/ready` build stamp, empty issues, UTC observation | PENDING | PENDING |
-| PM2 service `horizon` online after deploy           | PENDING | PENDING |
-| `COMPANION_BINDINGS_FILE` configured path           | PENDING | PENDING |
-| Binding parent owner/mode `0700`                    | PENDING | PENDING |
-| Binding file owner/mode `0600`                      | PENDING | PENDING |
-| Atomic write/rename probe as relay owner            | PENDING | PENDING |
-| Owner-only backup path and restore test/reference   | PENDING | PENDING |
+| Evidence                                                         | Value   | Result  |
+| ---------------------------------------------------------------- | ------- | ------- |
+| Lightsail host/app identity (no credentials)                     | PENDING | PENDING |
+| `/health` build stamp and UTC observation                        | PENDING | PENDING |
+| `/ready` build stamp, empty issues, UTC observation              | PENDING | PENDING |
+| PM2 service `horizon` online after deploy                        | PENDING | PENDING |
+| `COMPANION_BINDINGS_FILE` configured path                        | PENDING | PENDING |
+| Binding parent owner/mode `0700`                                 | PENDING | PENDING |
+| Pre-pair final-file state: absent expected / present             | PENDING | PENDING |
+| Disposable sibling write + file fsync + rename + directory fsync | PENDING | PENDING |
+| Probe cleanup left no invalid snapshot                           | PENDING | PENDING |
 
 Run the guarded deployment only from reviewed clean `main`:
 
@@ -43,12 +43,16 @@ Run the guarded deployment only from reviewed clean `main`:
 LIGHTSAIL_KEY=/path/to/key ./deploy-lightsail.command
 curl --fail --silent --show-error https://relay.example.com/health
 curl --fail --silent --show-error https://relay.example.com/ready
+ssh -i /path/to/key ubuntu@relay.example.com 'pm2 describe horizon'
 ```
 
 For the controlled self-signed test relay only, `curl --insecure` may be recorded as test evidence;
 it is not production TLS acceptance. Run the permission/write probe as the configured relay account,
-not root. It proves the configured binding parent owner/group/mode, binding file owner/group/mode,
-and atomic rename capability without reading binding contents:
+not root. On a new deployment, an absent final binding file before the first Pair is expected: the
+store creates it only on its first successful mutation. This pre-pair command creates/private-modes
+the parent, rejects an existing wrong-owner/mode file, and proves a sibling file can be written,
+fsynced, atomically renamed, and durably removed. It never creates or changes `BINDING_FILE`, so
+binding-file permission/schema evidence remains **PENDING**:
 
 ```bash
 BINDING_PARENT=/home/ubuntu/.horizon-helmet-testing
@@ -58,25 +62,78 @@ ssh -i /path/to/key ubuntu@relay.example.com bash -s -- \
 set -euo pipefail
 BINDING_PARENT=$1
 BINDING_FILE=$2
-expected_owner=$(id -un)
-expected_group=$(id -gn)
-test "$(dirname "$BINDING_FILE")" = "$BINDING_PARENT"
-test "$(stat -c '%U:%G:%a' "$BINDING_PARENT")" = "$expected_owner:$expected_group:700"
-test "$(stat -c '%U:%G:%a' "$BINDING_FILE")" = "$expected_owner:$expected_group:600"
-probe="$BINDING_PARENT/.companion-write-probe.$$"
-moved="$probe.moved"
-trap 'rm -f "$probe" "$moved"' EXIT
-umask 077
-: > "$probe"
-mv "$probe" "$moved"
-rm -f "$moved"
-trap - EXIT
-pm2 describe horizon
+node - "$BINDING_PARENT" "$BINDING_FILE" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const parent = process.argv[2];
+const bindingFile = process.argv[3];
+const expectedUid = process.getuid();
+const expectedGid = process.getgid();
+
+if (path.resolve(path.dirname(bindingFile)) !== path.resolve(parent)) {
+  throw new Error("binding file must be directly inside the configured parent");
+}
+fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
+fs.chmodSync(parent, 0o700);
+const parentStat = fs.lstatSync(parent);
+if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) {
+  throw new Error("binding parent must be a real directory");
+}
+if (parentStat.uid !== expectedUid || parentStat.gid !== expectedGid || (parentStat.mode & 0o777) !== 0o700) {
+  throw new Error("binding parent must belong to the relay account at mode 0700");
+}
+
+if (fs.existsSync(bindingFile)) {
+  const fileStat = fs.lstatSync(bindingFile);
+  if (!fileStat.isFile() || fileStat.isSymbolicLink()) {
+    throw new Error("existing binding path must be a regular file");
+  }
+  if (fileStat.uid !== expectedUid || fileStat.gid !== expectedGid || (fileStat.mode & 0o777) !== 0o600) {
+    throw new Error("existing binding file must belong to the relay account at mode 0600");
+  }
+  console.log("binding file: present before Pair; post-pair evidence: PENDING");
+} else {
+  console.log("binding file: absent before first Pair (expected); file evidence: PENDING");
+}
+
+const probe = path.join(parent, `.companion-write-probe.${process.pid}`);
+const moved = `${probe}.moved`;
+let fd;
+let directoryFd;
+try {
+  fd = fs.openSync(probe, "wx", 0o600);
+  fs.writeFileSync(fd, "pre-pair durable-storage probe\n");
+  fs.fsyncSync(fd);
+  fs.closeSync(fd);
+  fd = undefined;
+  fs.renameSync(probe, moved);
+  directoryFd = fs.openSync(parent, "r");
+  fs.fsyncSync(directoryFd);
+  fs.closeSync(directoryFd);
+  directoryFd = undefined;
+  fs.unlinkSync(moved);
+  directoryFd = fs.openSync(parent, "r");
+  fs.fsyncSync(directoryFd);
+  fs.closeSync(directoryFd);
+  directoryFd = undefined;
+} finally {
+  if (fd !== undefined) fs.closeSync(fd);
+  if (directoryFd !== undefined) fs.closeSync(directoryFd);
+  fs.rmSync(probe, { force: true });
+  fs.rmSync(moved, { force: true });
+}
+if (fs.existsSync(probe) || fs.existsSync(moved)) {
+  throw new Error("binding storage probe cleanup failed");
+}
+console.log("binding parent: private; durable sibling rename: passed");
+NODE
 REMOTE
 ```
 
 If `/ready` is not `200` with the reviewed build stamp and an empty `issues` array, do not install
-clients. Record the error and roll back the relay before continuing.
+clients. Record the error and roll back the relay before continuing. Do not mark binding-file mode,
+schema, relationship, or backup evidence complete until after the first successful Pair persists the
+real snapshot.
 
 ## Signed iOS build — install second
 
@@ -88,7 +145,6 @@ clients. Record the error and roll back the relay before continuing.
 | Physical iPhone model / identifier              | PENDING | PENDING |
 | iOS version                                     | PENDING | PENDING |
 | Account sign-in succeeded                       | PENDING | PENDING |
-| Pair once; RDK HUD ready before ride            | PENDING | PENDING |
 | Precise When-In-Use permission granted          | PENDING | PENDING |
 | Locked-screen location indicator visible        | PENDING | PENDING |
 | Force-quit stops forwarding                     | PENDING | PENDING |
@@ -152,11 +208,104 @@ systemctl show max-agent -p InvocationID -p ActiveEnterTimestamp -p MainPID --no
 REMOTE
 ```
 
+## First Pair and persisted binding — complete before ride
+
+The first successful Pair happens only after relay, signed iOS, and RDK rollout. Keep identity values
+private: record only whether the signed-in account paired to the intended RDK and whether the HUD
+reported ready. Then complete the final-file evidence the pre-pair probe deliberately left PENDING:
+
+| Evidence                                                               | Value   | Result  |
+| ---------------------------------------------------------------------- | ------- | ------- |
+| Signed-in account paired to intended RDK; identities not recorded      | PENDING | PENDING |
+| RDK HUD reported paired/ready before Helmet Ride                       | PENDING | PENDING |
+| Binding file now exists as a regular non-symlink file                  | PENDING | PENDING |
+| Binding parent/file relay owner and modes `0700`/`0600`                | PENDING | PENDING |
+| Snapshot parses as version 1 with only valid relationship metadata     | PENDING | PENDING |
+| At least one persisted account ↔ RDK relationship; identities withheld | PENDING | PENDING |
+| `/ready` remains `200` with empty issues after persistence             | PENDING | PENDING |
+| Owner-only snapshot backup path and restore test/reference             | PENDING | PENDING |
+
+Run this as the relay account after Pair. It reads the protected snapshot only to validate the
+schema and relationship invariants; output is count-only and never prints account IDs, device IDs,
+timestamps, pairing codes, or fixes. An absent, empty-byte, malformed, wrong-owner/mode, duplicate,
+or empty-relationship snapshot fails:
+
+```bash
+BINDING_PARENT=/home/ubuntu/.horizon-helmet-testing
+BINDING_FILE="$BINDING_PARENT/companion-bindings.json"
+ssh -i /path/to/key ubuntu@relay.example.com bash -s -- \
+  "$BINDING_PARENT" "$BINDING_FILE" <<'REMOTE'
+set -euo pipefail
+BINDING_PARENT=$1
+BINDING_FILE=$2
+node - "$BINDING_PARENT" "$BINDING_FILE" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const parent = process.argv[2];
+const bindingFile = process.argv[3];
+const expectedUid = process.getuid();
+const expectedGid = process.getgid();
+
+if (path.resolve(path.dirname(bindingFile)) !== path.resolve(parent)) {
+  throw new Error("binding file must be directly inside the configured parent");
+}
+const parentStat = fs.lstatSync(parent);
+const fileStat = fs.lstatSync(bindingFile);
+if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) {
+  throw new Error("binding parent must be a real directory");
+}
+if (!fileStat.isFile() || fileStat.isSymbolicLink()) {
+  throw new Error("binding snapshot must be a regular file");
+}
+if (parentStat.uid !== expectedUid || parentStat.gid !== expectedGid || (parentStat.mode & 0o777) !== 0o700) {
+  throw new Error("binding parent must belong to the relay account at mode 0700");
+}
+if (fileStat.uid !== expectedUid || fileStat.gid !== expectedGid || (fileStat.mode & 0o777) !== 0o600) {
+  throw new Error("binding snapshot must belong to the relay account at mode 0600");
+}
+
+const snapshot = JSON.parse(fs.readFileSync(bindingFile, "utf8"));
+if (!snapshot || snapshot.version !== 1 || !Array.isArray(snapshot.bindings) || snapshot.bindings.length < 1) {
+  throw new Error("binding snapshot must contain at least one version-1 relationship");
+}
+const snapshotKeys = Object.keys(snapshot).sort();
+if (snapshotKeys.length !== 2 || snapshotKeys[0] !== "bindings" || snapshotKeys[1] !== "version") {
+  throw new Error("binding snapshot contains an unexpected top-level field");
+}
+const accounts = new Set();
+const devices = new Set();
+const allowedKeys = ["accountId", "createdAt", "deviceId", "updatedAt"];
+for (const binding of snapshot.bindings) {
+  if (!binding || typeof binding !== "object" || Array.isArray(binding)) {
+    throw new Error("binding snapshot contains a non-object relationship");
+  }
+  const keys = Object.keys(binding).sort();
+  if (keys.length !== allowedKeys.length || keys.some((key, index) => key !== allowedKeys[index])) {
+    throw new Error("binding snapshot contains an unexpected field");
+  }
+  if (typeof binding.accountId !== "string" || binding.accountId.trim() === "" ||
+      typeof binding.deviceId !== "string" || binding.deviceId.trim() === "" ||
+      typeof binding.createdAt !== "number" || !Number.isFinite(binding.createdAt) || binding.createdAt < 0 ||
+      typeof binding.updatedAt !== "number" || !Number.isFinite(binding.updatedAt) ||
+      binding.updatedAt < binding.createdAt) {
+    throw new Error("binding snapshot contains an invalid relationship");
+  }
+  if (accounts.has(binding.accountId) || devices.has(binding.deviceId)) {
+    throw new Error("binding snapshot contains a duplicate account or device");
+  }
+  accounts.add(binding.accountId);
+  devices.add(binding.deviceId);
+}
+console.log(`binding snapshot: valid; persisted relationships: ${snapshot.bindings.length}`);
+NODE
+REMOTE
+curl --fail --silent --show-error https://relay.example.com/ready
+```
+
 ## Physical ride acceptance
 
 | Step                                                                                           | Observation | Result  |
 | ---------------------------------------------------------------------------------------------- | ----------- | ------- |
-| Install signed build on physical iPhone, sign in, Pair once, verify RDK HUD ready before ride  | PENDING     | PENDING |
 | Start Helmet Ride, lock phone for at least 10 continuous minutes, confirm forwarding/indicator | PENDING     | PENDING |
 | Request a real Amap destination; verify RDK HUD and speech far → near → now                    | PENDING     | PENDING |
 | Force an off-route condition; verify one reroute and replacement route                         | PENDING     | PENDING |

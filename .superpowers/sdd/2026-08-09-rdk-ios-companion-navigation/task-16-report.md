@@ -70,6 +70,37 @@ npx vitest run tests/rdk-release-operations.test.ts
 PASS — 1 file, 5 tests
 ```
 
+## Independent-review correction round 2
+
+The cumulative re-review of `b414940c8ee927f4eea77d50edbf47d1eb462b03` found that the revised
+relay-first preflight still unconditionally required `COMPANION_BINDINGS_FILE`. Production treats
+`ENOENT` as a ready in-memory store and does not persist the final file until the first successful
+Pair, so a normal new deployment could not pass that command. It also meant the pre-pair evidence
+text falsely claimed the nonexistent file's owner/mode had been proven.
+
+Before changing documentation, the operations suite executed the documented remote preflight in a
+real owner-private temporary directory with an absent final file:
+
+```text
+npx vitest run tests/rdk-release-operations.test.ts
+FAIL — 1 failed, 5 passed
+stat: .../companion-bindings.json: No such file or directory
+```
+
+The failure was the reviewed lifecycle defect, not a compiler/import error. The regression now
+instruments the actual file/directory `fsync` and rename calls while retaining their real side
+effects. It proves pre-pair absence succeeds without creating a final snapshot or leaving probe
+files; an existing `0644` file fails both pre-pair and post-Pair; and post-Pair empty bytes or a
+schema-valid but relationship-empty snapshot cannot complete acceptance. A valid owner-private
+version-1 relationship snapshot passes with count-only output that omits account/device identities.
+
+After splitting the acceptance lifecycle, the focused contract is green:
+
+```text
+npx vitest run tests/rdk-release-operations.test.ts
+PASS — 1 file, 6 tests
+```
+
 ## Broad gates
 
 Initial Task 16 runs at `c696b50edcff1a8fc457735f7c578f9440451fff`:
@@ -113,6 +144,29 @@ Fresh review-correction runs:
 | `npm run check`                                                            | BLOCKED at unchanged ledgered Prettier finding: `server/companion-store.ts`    |
 | `npm run check:dead-code`                                                  | BLOCKED by the same four ledgered file/binary/export findings printed below    |
 
+Fresh review-correction round 2 runs:
+
+| Command                                                                    | Result                                                                         |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `npx vitest run tests/rdk-release-operations.test.ts`                      | PASS — 6/6                                                                     |
+| Both Task 16 Vitest files                                                  | PASS — 2 files, 8 tests                                                        |
+| `npm test`                                                                 | PASS — 102 files, 1,297 tests                                                  |
+| `npx tsc -p rdk/agent/tsconfig.json`                                       | PASS                                                                           |
+| `npm run check:protocol`                                                   | PASS                                                                           |
+| `npm run lint`                                                             | PASS                                                                           |
+| `npm run test:fault-matrix`                                                | PASS — 24/24                                                                   |
+| `npm run build`                                                            | PASS                                                                           |
+| Affected-file Prettier checks, including the ignored report explicitly     | PASS                                                                           |
+| Executed absent-file/fsync/rename/post-persist acceptance contract         | PASS                                                                           |
+| Executable rollout/rollback/acceptance Bash-fence assertions               | PASS inside `rdk-release-operations.test.ts`                                   |
+| `bash -n deploy-lightsail.command`                                         | PASS                                                                           |
+| Full MaxHelmet simulator test command                                      | PASS — 397/397; known post-success `simctl` diagnostic-collection warning only |
+| Unsigned MaxHelmet simulator build                                         | PASS                                                                           |
+| Android `testDebugUnitTest lintDebug assembleDebug` with installed SDK/JBR | PASS — 53 Gradle tasks; the documented native-access warning remains non-fatal |
+| `git diff --check`                                                         | PASS                                                                           |
+| `npm run check`                                                            | BLOCKED at unchanged ledgered Prettier finding: `server/companion-store.ts`    |
+| `npm run check:dead-code`                                                  | BLOCKED by the same four ledgered file/binary/export findings printed below    |
+
 The exact pre-ledgered dead-code output remains:
 
 ```text
@@ -139,7 +193,10 @@ Per the Task 16 brief, this commit does not format Task 2's store or delete/chan
 
 The root, RDK, and iOS READMEs and changelog now consistently document:
 
-- durable `COMPANION_BINDINGS_FILE` ownership/modes, atomic replacement, owner-only backup/recovery, preflight write/rename probing, and `/ready` failure after load/persist faults;
+- pre-pair `COMPANION_BINDINGS_FILE` absence as normal, private parent ownership, durable disposable
+  sibling probing, and final-file/schema evidence remaining PENDING until the first persisted Pair;
+- post-first-Pair final-file owner/mode, nonempty relationship-schema validation, owner-only
+  backup/recovery, and `/ready` failure after load/persist faults;
 - account-owned `/companion` authentication versus the manual `/agent` operator token, aggregate-only companion metrics, and `/health` liveness versus `/ready` traffic readiness;
 - per-board durable RDK ID preservation and private mode/stability verification without printing its value;
 - Pair, Start/Stop Helmet Ride, Unpair, logout, precise When-In-Use permission, locked-screen indicator, force-quit termination, no auto-resume, no raw-coordinate/map UI, and no fix persistence;
@@ -174,10 +231,15 @@ verify `/opt/max` and private device-identity ownership/modes, preserve `/var/li
 restart. Rollback restores the entire former release, including its native/audio artifacts, and
 repeats the new-invocation proof.
 
-The relay acceptance probe now runs as the relay account and verifies the configured binding parent
-and file owner/group with `0700`/`0600` modes plus atomic rename capability without reading the
-snapshot. Root privacy wording now distinguishes production `wss://` with trusted TLS, the
-TLS-protected self-signed Debug test endpoint, and unencrypted Debug LAN `ws://`.
+The relay acceptance lifecycle now has two deliberately separate gates. Before Pair, the relay
+account creates/private-modes only the configured parent and durably writes, file-fsyncs, renames,
+directory-fsyncs, and removes a disposable sibling. Absence of the final path is recorded as
+expected and its file evidence remains PENDING; no empty placeholder is created. After the first
+successful Pair, a separate command requires a regular relay-owned `0600` file under the `0700`
+parent, parses exact version-1 relationship metadata, requires at least one unique account/device
+relationship, rechecks `/ready`, and prints only the relationship count. Root privacy wording still
+distinguishes production `wss://` with trusted TLS, the TLS-protected self-signed Debug test
+endpoint, and unencrypted Debug LAN `ws://`.
 
 ## External and physical checks still PENDING
 

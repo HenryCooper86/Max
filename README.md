@@ -849,14 +849,22 @@ An intentional staging deployment from another branch requires the explicit
 
 Set `COMPANION_BINDINGS_FILE` in the relay's protected `.env` to an explicit durable path (the
 default is `~/.horizon-helmet-testing/companion-bindings.json`). Its parent directory must be
-owned by the relay account at mode `0700`; the JSON file is atomically replaced at mode `0600`.
-The snapshot contains only account ID, RDK device ID, and creation/update timestamps—never a
-pairing code or phone fix. Back up the file with owner-only permissions before relay changes.
-For recovery, stop traffic, restore one known-good complete snapshot with the same ownership and
-modes, restart `horizon`, and require `/ready` to return `200` before pairing. An unreadable,
-invalid, or failed-to-persist snapshot makes readiness fail; `/health` can remain `200` because it
-is process liveness, not permission to route traffic. Before the first pairing on a new path,
-perform a non-secret owner write/rename probe so an unwritable empty directory is caught early.
+owned by the relay account at mode `0700`. On a new path the JSON file is normally absent until the
+first successful Pair; do not create an empty-byte placeholder, because it is not a valid snapshot.
+Before Pair, create/private-mode only the parent and use a disposable sibling file to prove actual
+write, file-fsync, same-directory rename, directory-fsync, and cleanup capability. File permission,
+schema, relationship, and backup evidence remains pending while the final path is absent.
+
+The first successful binding atomically creates/replaces the JSON file at mode `0600`. After Pair,
+verify it belongs to the relay account, parses as a nonempty version-1 relationship snapshot, and
+leaves `/ready` healthy without printing account/device identities. The snapshot contains only
+account ID, RDK device ID, and creation/update timestamps—never a pairing code or phone fix. Back up
+an existing valid file with owner-only permissions before later relay changes. For recovery, stop
+traffic, restore one known-good complete snapshot with the same ownership and modes, restart
+`horizon`, and require `/ready` to return `200` before pairing. An unreadable, invalid, or
+failed-to-persist snapshot makes readiness fail; `/health` can remain `200` because it is process
+liveness, not permission to route traffic. The executable pre-pair and post-first-Pair commands are
+in [`docs/rdk-ios-companion-acceptance.md`](docs/rdk-ios-companion-acceptance.md).
 
 Roll out one reviewed SHA in this order: **relay first**, then the signed iOS build, then the RDK
 board. `deploy-lightsail.command` refuses a dirty tree, the wrong branch, or a local `HEAD` that

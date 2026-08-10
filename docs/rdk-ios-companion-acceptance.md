@@ -32,7 +32,8 @@ git ls-remote origin refs/heads/main
 | `/ready` build stamp, empty issues, UTC observation              | PENDING | PENDING |
 | PM2 service `horizon` online after deploy                        | PENDING | PENDING |
 | `COMPANION_BINDINGS_FILE` configured path                        | PENDING | PENDING |
-| Binding parent owner/mode `0700`                                 | PENDING | PENDING |
+| Binding parent real path, relay owner, and mode `0700`           | PENDING | PENDING |
+| Absent parent creation confined to verified relay-home leaf      | PENDING | PENDING |
 | Pre-pair final-file state: absent expected / present             | PENDING | PENDING |
 | Disposable sibling write + file fsync + rename + directory fsync | PENDING | PENDING |
 | Probe cleanup left no invalid snapshot                           | PENDING | PENDING |
@@ -49,9 +50,12 @@ ssh -i /path/to/key ubuntu@relay.example.com 'pm2 describe horizon'
 For the controlled self-signed test relay only, `curl --insecure` may be recorded as test evidence;
 it is not production TLS acceptance. Run the permission/write probe as the configured relay account,
 not root. On a new deployment, an absent final binding file before the first Pair is expected: the
-store creates it only on its first successful mutation. This pre-pair command creates/private-modes
-the parent, rejects an existing wrong-owner/mode file, and proves a sibling file can be written,
-fsynced, atomically renamed, and durably removed. It never creates or changes `BINDING_FILE`, so
+store creates it only on its first successful mutation. This pre-pair command validates an existing
+parent before any mutation and rejects symlinks, non-directories, non-canonical paths, wrong owners,
+and wrong modes without correcting them. If the parent is absent, it creates only one direct child
+of the verified canonical relay home; it never recursively creates an arbitrary configured path.
+It rejects an existing wrong-owner/mode final file and proves a sibling file can be written, fsynced,
+atomically renamed, and durably removed. It never creates or changes `BINDING_FILE`. Pre-pair
 binding-file permission/schema evidence remains **PENDING**:
 
 ```bash
@@ -64,27 +68,63 @@ BINDING_PARENT=$1
 BINDING_FILE=$2
 node - "$BINDING_PARENT" "$BINDING_FILE" <<'NODE'
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
-const parent = process.argv[2];
-const bindingFile = process.argv[3];
+const parent = path.resolve(process.argv[2]);
+const bindingFile = path.resolve(process.argv[3]);
 const expectedUid = process.getuid();
 const expectedGid = process.getgid();
 
-if (path.resolve(path.dirname(bindingFile)) !== path.resolve(parent)) {
+if (path.dirname(bindingFile) !== parent) {
   throw new Error("binding file must be directly inside the configured parent");
 }
-fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
-fs.chmodSync(parent, 0o700);
-const parentStat = fs.lstatSync(parent);
-if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) {
-  throw new Error("binding parent must be a real directory");
+
+function lstatIfPresent(location) {
+  try {
+    return fs.lstatSync(location);
+  } catch (error) {
+    if (error && error.code === "ENOENT") return undefined;
+    throw error;
+  }
 }
-if (parentStat.uid !== expectedUid || parentStat.gid !== expectedGid || (parentStat.mode & 0o777) !== 0o700) {
+
+function requireCanonicalOwnedDirectory(location, stat, label) {
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error(`${label} must be a real directory`);
+  }
+  if (stat.uid !== expectedUid || stat.gid !== expectedGid) {
+    throw new Error(`${label} must belong to the relay account`);
+  }
+  if (fs.realpathSync(location) !== location) {
+    throw new Error(`${label} path must not contain symlinks`);
+  }
+}
+
+let parentStat = lstatIfPresent(parent);
+if (parentStat === undefined) {
+  const relayHome = path.resolve(os.homedir());
+  if (path.dirname(parent) !== relayHome) {
+    throw new Error("an absent binding parent may be created only as a direct child of the relay home");
+  }
+  const homeStat = lstatIfPresent(relayHome);
+  if (homeStat === undefined) {
+    throw new Error("relay home must already exist");
+  }
+  requireCanonicalOwnedDirectory(relayHome, homeStat, "relay home");
+  if ((homeStat.mode & 0o022) !== 0) {
+    throw new Error("relay home must not be group/world writable");
+  }
+  fs.mkdirSync(parent, { mode: 0o700 });
+  parentStat = fs.lstatSync(parent);
+}
+
+requireCanonicalOwnedDirectory(parent, parentStat, "binding parent");
+if ((parentStat.mode & 0o777) !== 0o700) {
   throw new Error("binding parent must belong to the relay account at mode 0700");
 }
 
-if (fs.existsSync(bindingFile)) {
-  const fileStat = fs.lstatSync(bindingFile);
+const fileStat = lstatIfPresent(bindingFile);
+if (fileStat !== undefined) {
   if (!fileStat.isFile() || fileStat.isSymbolicLink()) {
     throw new Error("existing binding path must be a regular file");
   }
@@ -129,6 +169,12 @@ console.log("binding parent: private; durable sibling rename: passed");
 NODE
 REMOTE
 ```
+
+If an existing parent fails validation, this command does not chmod or otherwise repair it. Stop,
+verify the configured path and its ancestry independently, have the operator correct that exact real
+directory to the relay owner and `0700`, and rerun. For a custom absent path outside the relay home,
+the operator must first prepare a real relay-owned `0700` directory; the preflight will not create
+its ancestors. A dangling `BINDING_FILE` symlink is an invalid existing path, not an absent snapshot.
 
 If `/ready` is not `200` with the reviewed build stamp and an empty `issues` array, do not install
 clients. Record the error and roll back the relay before continuing. Do not mark binding-file mode,

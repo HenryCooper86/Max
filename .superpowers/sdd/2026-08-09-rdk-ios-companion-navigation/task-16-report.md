@@ -101,6 +101,41 @@ npx vitest run tests/rdk-release-operations.test.ts
 PASS — 1 file, 6 tests
 ```
 
+## Independent-review correction round 3
+
+The cumulative re-review of `2e8de6c50326a257479b8aa53a6f40928495438c` found that the pre-pair
+body called `chmod(0700)` before checking whether `BINDING_PARENT` was a real directory. Because
+POSIX chmod follows a symlink, a rejected configured path could still remove access from an
+unrelated target. The adjacent `existsSync` check also treated a dangling final-file symlink as an
+absent snapshot.
+
+Before changing documentation, the operations suite executed the exact remote body with a
+configured parent symlinked to an unrelated real `0755` directory containing a sentinel file:
+
+```text
+npx vitest run tests/rdk-release-operations.test.ts
+FAIL — 1 failed, 6 passed
+expected target mode 493 (0755), received 448 (0700)
+```
+
+The strict RED proved the command rejected the symlink only after mutating its target. The fixture
+also pinned the unrelated directory entries/content, absence of a final snapshot, and absence of
+probe artifacts. Before implementation, the matrix was extended to require refusal of an absent
+custom parent outside the verified relay home and refusal of a dangling final-file symlink; the old
+body failed all three reviewed boundaries (`3 failed, 6 passed`).
+
+The corrected body performs `lstat` validation before any mutation. An existing parent must be a
+canonical real directory already owned by the relay account at `0700`; wrong paths/modes are rejected
+for explicit operator inspection instead of chmodded. An absent parent is created with one
+non-recursive `mkdir` only when it is a direct child of a canonical relay-owned home that is not
+group/world writable. Final-path presence is also `lstat`-based, so dangling symlinks are invalid.
+The focused contract is green while retaining the real durable write/fsync/rename effects:
+
+```text
+npx vitest run tests/rdk-release-operations.test.ts
+PASS — 1 file, 9 tests
+```
+
 ## Broad gates
 
 Initial Task 16 runs at `c696b50edcff1a8fc457735f7c578f9440451fff`:
@@ -167,6 +202,29 @@ Fresh review-correction round 2 runs:
 | `npm run check`                                                            | BLOCKED at unchanged ledgered Prettier finding: `server/companion-store.ts`    |
 | `npm run check:dead-code`                                                  | BLOCKED by the same four ledgered file/binary/export findings printed below    |
 
+Fresh review-correction round 3 runs:
+
+| Command                                                                    | Result                                                                      |
+| -------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `npx vitest run tests/rdk-release-operations.test.ts`                      | PASS — 9/9                                                                  |
+| Both Task 16 Vitest files                                                  | PASS — 2 files, 11 tests                                                    |
+| `npm test`                                                                 | PASS — 102 files, 1,300 tests                                               |
+| `npx tsc -p rdk/agent/tsconfig.json`                                       | PASS                                                                        |
+| `npm run check:protocol`                                                   | PASS                                                                        |
+| `npm run lint`                                                             | PASS                                                                        |
+| `npm run test:fault-matrix`                                                | PASS — 24/24                                                                |
+| `npm run build`                                                            | PASS                                                                        |
+| Affected-file Prettier checks, including the ignored report explicitly     | PASS                                                                        |
+| Exact-body symlink/creation/dangling-path/durability contract              | PASS                                                                        |
+| Executable rollout/rollback/acceptance Bash-fence assertions               | PASS inside `rdk-release-operations.test.ts`                                |
+| `bash -n deploy-lightsail.command`                                         | PASS                                                                        |
+| Full MaxHelmet `iPhone 17` simulator test command                          | PASS                                                                        |
+| Unsigned MaxHelmet `iPhone 17` simulator build                             | PASS                                                                        |
+| Android `testDebugUnitTest lintDebug assembleDebug` with installed SDK/JBR | PASS — 53 tasks; unchanged non-fatal native-access warning                  |
+| `git diff --check`                                                         | PASS                                                                        |
+| `npm run check`                                                            | BLOCKED at unchanged ledgered Prettier finding: `server/companion-store.ts` |
+| `npm run check:dead-code`                                                  | BLOCKED by the same four ledgered file/binary/export findings printed below |
+
 The exact pre-ledgered dead-code output remains:
 
 ```text
@@ -232,14 +290,16 @@ restart. Rollback restores the entire former release, including its native/audio
 repeats the new-invocation proof.
 
 The relay acceptance lifecycle now has two deliberately separate gates. Before Pair, the relay
-account creates/private-modes only the configured parent and durably writes, file-fsyncs, renames,
-directory-fsyncs, and removes a disposable sibling. Absence of the final path is recorded as
-expected and its file evidence remains PENDING; no empty placeholder is created. After the first
-successful Pair, a separate command requires a regular relay-owned `0600` file under the `0700`
-parent, parses exact version-1 relationship metadata, requires at least one unique account/device
-relationship, rechecks `/ready`, and prints only the relationship count. Root privacy wording still
-distinguishes production `wss://` with trusted TLS, the TLS-protected self-signed Debug test
-endpoint, and unencrypted Debug LAN `ws://`.
+account validates an existing canonical real parent at `0700` without mutation, or creates only one
+absent direct child below its verified canonical home, then durably writes, file-fsyncs, renames,
+directory-fsyncs, and removes a disposable sibling. Symlinked/non-canonical/wrong-mode parents and
+dangling final-file symlinks fail without changing an unrelated target. True absence of the final
+path is recorded as expected and its file evidence remains PENDING; no empty placeholder is created.
+After the first successful Pair, a separate command requires a regular relay-owned `0600` file under
+the `0700` parent, parses exact version-1 relationship metadata, requires at least one unique
+account/device relationship, rechecks `/ready`, and prints only the relationship count. Root privacy
+wording still distinguishes production `wss://` with trusted TLS, the TLS-protected self-signed Debug
+test endpoint, and unencrypted Debug LAN `ws://`.
 
 ## External and physical checks still PENDING
 

@@ -4,12 +4,15 @@ import {
   copyFileSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   readdirSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -120,16 +123,18 @@ describe("reviewed RDK release operations", () => {
     expect(prePairBlock, "pre-pair storage preflight must exist").toBeDefined();
     const prePairScript = remoteHeredoc(prePairBlock!);
 
-    const sandbox = mkdtempSync(join(tmpdir(), "max-binding-acceptance-test-"));
-    temporaryDirectories.push(sandbox);
-    const parent = join(sandbox, "private");
+    const sandboxFixture = mkdtempSync(join(tmpdir(), "max-binding-acceptance-test-"));
+    temporaryDirectories.push(sandboxFixture);
+    const sandbox = realpathSync(sandboxFixture);
+    const relayHome = join(sandbox, "relay-home");
+    const parent = join(relayHome, "private");
     const bindingFile = join(parent, "companion-bindings.json");
     const fixtureBin = join(sandbox, "bin");
     const statFixture = join(fixtureBin, "stat");
     const traceHook = join(sandbox, "trace.cjs");
     const traceFile = join(sandbox, "preflight.trace");
-    mkdirSync(parent, { recursive: true, mode: 0o700 });
-    chmodSync(parent, 0o700);
+    mkdirSync(relayHome, { mode: 0o755 });
+    chmodSync(relayHome, 0o755);
     mkdirSync(fixtureBin);
     // Preserve the Linux stat dialect used by the reviewed pre-fix command so
     // this macOS-hosted regression fails on the absent-file lifecycle itself.
@@ -166,7 +171,8 @@ describe("reviewed RDK release operations", () => {
       ...process.env,
       NODE_OPTIONS: `--require=${traceHook}`,
       PATH: `${fixtureBin}:${process.env.PATH}`,
-      PREFLIGHT_TRACE: traceFile
+      PREFLIGHT_TRACE: traceFile,
+      HOME: relayHome
     };
 
     const prePair = spawnSync("bash", ["-s", "--", parent, bindingFile], {
@@ -177,6 +183,7 @@ describe("reviewed RDK release operations", () => {
 
     expect(prePair.status, prePair.stderr).toBe(0);
     expect(prePair.stdout).toContain("binding file: absent before first Pair (expected); file evidence: PENDING");
+    expect(statSync(parent).mode & 0o777).toBe(0o700);
     expect(existsSync(bindingFile)).toBe(false);
     expect(readdirSync(parent)).toEqual([]);
     expect(readFileSync(traceFile, "utf8").split("\n").filter(Boolean)).toEqual([
@@ -238,6 +245,90 @@ describe("reviewed RDK release operations", () => {
     expect(postPair.stdout).toContain("binding snapshot: valid; persisted relationships: 1");
     expect(postPair.stdout).not.toContain("account-fixture");
     expect(postPair.stdout).not.toContain("rdk-fixture");
+  });
+
+  it("rejects a symlinked pre-pair parent without mutating its target", () => {
+    const acceptance = readRepositoryFile("docs/rdk-ios-companion-acceptance.md");
+    const prePairBlock = bashBlocks(acceptance).find((block) => block.includes(".companion-write-probe"));
+    expect(prePairBlock, "pre-pair storage preflight must exist").toBeDefined();
+    const prePairScript = remoteHeredoc(prePairBlock!);
+
+    const sandbox = mkdtempSync(join(tmpdir(), "max-binding-symlink-test-"));
+    temporaryDirectories.push(sandbox);
+    const unrelatedTarget = join(sandbox, "unrelated-target");
+    const unrelatedFile = join(unrelatedTarget, "keep.txt");
+    const configuredParent = join(sandbox, "configured-parent");
+    const bindingFile = join(configuredParent, "companion-bindings.json");
+    mkdirSync(unrelatedTarget, { mode: 0o755 });
+    chmodSync(unrelatedTarget, 0o755);
+    writeFileSync(unrelatedFile, "unrelated content must remain unchanged\n");
+    symlinkSync(unrelatedTarget, configuredParent);
+
+    const beforeMode = statSync(unrelatedTarget).mode & 0o777;
+    const beforeEntries = readdirSync(unrelatedTarget);
+    const beforeContent = readFileSync(unrelatedFile, "utf8");
+    const result = spawnSync("bash", ["-s", "--", configuredParent, bindingFile], {
+      input: prePairScript,
+      encoding: "utf8"
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(statSync(unrelatedTarget).mode & 0o777).toBe(beforeMode);
+    expect(readdirSync(unrelatedTarget)).toEqual(beforeEntries);
+    expect(readFileSync(unrelatedFile, "utf8")).toBe(beforeContent);
+    expect(existsSync(bindingFile)).toBe(false);
+  });
+
+  it("does not create an absent pre-pair parent outside the verified relay home", () => {
+    const acceptance = readRepositoryFile("docs/rdk-ios-companion-acceptance.md");
+    const prePairBlock = bashBlocks(acceptance).find((block) => block.includes(".companion-write-probe"));
+    expect(prePairBlock, "pre-pair storage preflight must exist").toBeDefined();
+    const prePairScript = remoteHeredoc(prePairBlock!);
+
+    const sandboxFixture = mkdtempSync(join(tmpdir(), "max-binding-untrusted-parent-test-"));
+    temporaryDirectories.push(sandboxFixture);
+    const sandbox = realpathSync(sandboxFixture);
+    const relayHome = join(sandbox, "relay-home");
+    const unrelatedRoot = join(sandbox, "unrelated-root");
+    const configuredParent = join(unrelatedRoot, "private");
+    const bindingFile = join(configuredParent, "companion-bindings.json");
+    mkdirSync(relayHome, { mode: 0o755 });
+    mkdirSync(unrelatedRoot, { mode: 0o755 });
+
+    const result = spawnSync("bash", ["-s", "--", configuredParent, bindingFile], {
+      input: prePairScript,
+      encoding: "utf8",
+      env: { ...process.env, HOME: relayHome }
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(existsSync(configuredParent)).toBe(false);
+    expect(readdirSync(unrelatedRoot)).toEqual([]);
+  });
+
+  it("rejects a dangling final-file symlink instead of recording absence", () => {
+    const acceptance = readRepositoryFile("docs/rdk-ios-companion-acceptance.md");
+    const prePairBlock = bashBlocks(acceptance).find((block) => block.includes(".companion-write-probe"));
+    expect(prePairBlock, "pre-pair storage preflight must exist").toBeDefined();
+    const prePairScript = remoteHeredoc(prePairBlock!);
+
+    const sandboxFixture = mkdtempSync(join(tmpdir(), "max-binding-dangling-file-test-"));
+    temporaryDirectories.push(sandboxFixture);
+    const sandbox = realpathSync(sandboxFixture);
+    const configuredParent = join(sandbox, "private");
+    const bindingFile = join(configuredParent, "companion-bindings.json");
+    mkdirSync(configuredParent, { mode: 0o700 });
+    chmodSync(configuredParent, 0o700);
+    symlinkSync("missing-snapshot.json", bindingFile);
+
+    const result = spawnSync("bash", ["-s", "--", configuredParent, bindingFile], {
+      input: prePairScript,
+      encoding: "utf8"
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(lstatSync(bindingFile).isSymbolicLink()).toBe(true);
+    expect(readdirSync(configuredParent)).toEqual(["companion-bindings.json"]);
   });
 
   it("keeps the rollout and acceptance shell blocks syntactically executable", () => {

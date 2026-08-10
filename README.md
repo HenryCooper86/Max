@@ -851,9 +851,13 @@ Set `COMPANION_BINDINGS_FILE` in the relay's protected `.env` to an explicit dur
 default is `~/.horizon-helmet-testing/companion-bindings.json`). Its parent directory must be
 owned by the relay account at mode `0700`. On a new path the JSON file is normally absent until the
 first successful Pair; do not create an empty-byte placeholder, because it is not a valid snapshot.
-Before Pair, create/private-mode only the parent and use a disposable sibling file to prove actual
-write, file-fsync, same-directory rename, directory-fsync, and cleanup capability. File permission,
-schema, relationship, and backup evidence remains pending while the final path is absent.
+Before Pair, validate an existing parent as a canonical non-symlink directory owned by the relay
+account at `0700` before any correction or probe. The acceptance command creates an absent parent
+only as one direct child of a verified relay-owned home; it does not recursively create custom paths,
+and it rejects wrong-mode or symlinked paths without mutating their targets. Use a disposable sibling
+file to prove actual write, file-fsync, same-directory rename, directory-fsync, and cleanup capability.
+File permission, schema, relationship, and backup evidence remains pending while the final path is
+absent; a dangling final-path symlink is invalid rather than absent.
 
 The first successful binding atomically creates/replaces the JSON file at mode `0600`. After Pair,
 verify it belongs to the relay account, parses as a nonempty version-1 relationship snapshot, and

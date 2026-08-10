@@ -207,6 +207,31 @@ describe("companion registry pairing lifecycle", () => {
     });
   });
 
+  it("keeps a detach-first reconnect code stable without accepting it while the helmet is offline", async () => {
+    vi.useFakeTimers();
+    const h = harness({ codes: ["123456", "234567"] });
+    const firstHelmet = h.helmet("rdk-a", "Road helmet");
+    h.advance(30_000);
+    firstHelmet.detach();
+
+    const phone = h.phone("acct-a");
+    await phone.connection.handle({ type: "companion.pair", code: "123456" });
+    expect(phone.events.at(-1)).toMatchObject({ type: "companion.error", code: "pair.helmetOffline" });
+    expect(h.store.bindingForAccount("acct-a")).toBeUndefined();
+
+    const replacement = h.helmet("rdk-a", "Reconnected helmet");
+    expect(replacement.events[0]).toEqual({
+      type: "companion.pairing",
+      code: "123456",
+      expiresAt: 1_300_000,
+      paired: false
+    });
+
+    await phone.connection.handle({ type: "companion.pair", code: "123456" });
+    expect(h.store.bindingForAccount("acct-a")?.deviceId).toBe("rdk-a");
+    expect(phone.events.at(-1)).toMatchObject({ type: "companion.status", state: "ready" });
+  });
+
   it("rotates an unexpired code when an already-paired helmet reconnects", async () => {
     const h = harness({ codes: ["123456", "234567", "345678"] });
     h.helmet("rdk-a", "Road helmet");

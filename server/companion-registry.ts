@@ -352,6 +352,10 @@ export function createCompanionRegistry(options: {
       sendError(session, "pair.code", "Pairing code is invalid or expired");
       return;
     }
+    if (helmets.get(entry.deviceId) !== entry.helmet) {
+      sendError(session, "pair.helmetOffline", "Helmet is temporarily offline");
+      return;
+    }
 
     pendingPairCodes.add(code);
     let result: Awaited<ReturnType<CompanionBindingStore["bind"]>>;
@@ -562,9 +566,12 @@ export function createCompanionRegistry(options: {
       return () => {
         if (helmets.get(peer.deviceId) !== helmet) return;
         helmets.delete(peer.deviceId);
-        deleteDeviceCode(peer.deviceId);
         const currentBinding = options.store.bindingForDevice(peer.deviceId);
-        if (!currentBinding) return;
+        if (!currentBinding) {
+          expireCodes(clock());
+          return;
+        }
+        deleteDeviceCode(peer.deviceId);
         const phone = companions.get(currentBinding.accountId);
         if (!phone) return;
         cancelStale(phone);

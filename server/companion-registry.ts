@@ -177,14 +177,23 @@ export function createCompanionRegistry(options: {
     }
   }
 
-  function issuePairCode(deviceId: string, helmet: HelmetSession): PairCode {
+  function issuePairCode(deviceId: string, helmet: HelmetSession, reuseUnexpired = false): PairCode {
+    const at = clock();
+    expireCodes(at);
+    const currentCode = codeByDevice.get(deviceId);
+    const current = currentCode === undefined ? undefined : pairCodes.get(currentCode);
+    if (reuseUnexpired && current && at < current.expiresAt && !pendingPairCodes.has(current.code)) {
+      const replacement = { ...current, helmet };
+      pairCodes.set(current.code, replacement);
+      return replacement;
+    }
+
     deleteDeviceCode(deviceId);
-    expireCodes(clock());
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const code = randomCode();
       if (!/^\d{6}$/.test(code)) throw new Error("Companion pairing code source must return six digits");
       if (pairCodes.has(code) || pendingPairCodes.has(code)) continue;
-      const entry = { code, deviceId, expiresAt: clock() + pairLifetimeMs, helmet };
+      const entry = { code, deviceId, expiresAt: at + pairLifetimeMs, helmet };
       pairCodes.set(code, entry);
       codeByDevice.set(deviceId, code);
       return entry;
@@ -541,7 +550,7 @@ export function createCompanionRegistry(options: {
       }
       const helmet = { peer };
       helmets.set(peer.deviceId, helmet);
-      const entry = issuePairCode(peer.deviceId, helmet);
+      const entry = issuePairCode(peer.deviceId, helmet, !existingBinding);
       const binding = options.store.bindingForDevice(peer.deviceId);
       sendPairing(helmet, entry, Boolean(binding));
       if (binding) {

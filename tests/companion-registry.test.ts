@@ -179,6 +179,57 @@ describe("companion registry pairing lifecycle", () => {
     expect(reuse.events.at(-1)).toMatchObject({ type: "companion.error", code: "pair.code" });
   });
 
+  it("keeps an unexpired code valid when the same unpaired helmet reconnects", async () => {
+    vi.useFakeTimers();
+    const h = harness({ codes: ["123456", "234567"] });
+    const firstHelmet = h.helmet("rdk-a", "Road helmet");
+    h.advance(30_000);
+
+    const replacement = h.helmet("rdk-a", "Reconnected helmet");
+    firstHelmet.detach();
+
+    expect(replacement.events[0]).toEqual({
+      type: "companion.pairing",
+      code: "123456",
+      expiresAt: 1_300_000,
+      paired: false
+    });
+
+    const phone = h.phone("acct-a");
+    await phone.connection.handle({ type: "companion.pair", code: "123456" });
+
+    expect(h.store.bindingForAccount("acct-a")?.deviceId).toBe("rdk-a");
+    expect(phone.events.at(-1)).toMatchObject({ type: "companion.status", state: "ready" });
+    expect(latest(replacement.events, "companion.pairing")).toMatchObject({
+      type: "companion.pairing",
+      code: "123456",
+      paired: true
+    });
+  });
+
+  it("rotates an unexpired code when an already-paired helmet reconnects", async () => {
+    const h = harness({ codes: ["123456", "234567", "345678"] });
+    h.helmet("rdk-a", "Road helmet");
+    const phone = h.phone("acct-a");
+    await phone.connection.handle({ type: "companion.pair", code: "123456" });
+
+    const firstReplacement = h.helmet("rdk-a", "First replacement");
+    expect(firstReplacement.events[0]).toEqual({
+      type: "companion.pairing",
+      code: "234567",
+      expiresAt: 1_300_000,
+      paired: true
+    });
+
+    const secondReplacement = h.helmet("rdk-a", "Second replacement");
+    expect(secondReplacement.events[0]).toEqual({
+      type: "companion.pairing",
+      code: "345678",
+      expiresAt: 1_300_000,
+      paired: true
+    });
+  });
+
   it("limits failed pairing attempts independently by account and network address", async () => {
     const byAccount = harness({ codes: ["123456"] });
     byAccount.helmet("rdk-a");

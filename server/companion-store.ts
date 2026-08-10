@@ -112,7 +112,9 @@ function persistIssue(error: unknown): string {
   return `Companion binding store persist failed: ${error instanceof Error ? error.message : String(error)}`;
 }
 
-export function createCompanionBindingStore(options: { filePath?: string | null; now?: () => number } = {}): CompanionBindingStore {
+export function createCompanionBindingStore(
+  options: { filePath?: string | null; now?: () => number } = {}
+): CompanionBindingStore {
   const filePath = options.filePath === undefined ? defaultFilePath() : options.filePath;
   const clock = options.now ?? Date.now;
   let maps: BindingMaps = { byAccount: new Map(), byDevice: new Map() };
@@ -197,7 +199,10 @@ export function createCompanionBindingStore(options: { filePath?: string | null;
         const binding: CompanionBinding = {
           accountId,
           deviceId,
-          createdAt: existingAccount?.accountId === accountId && existingAccount.deviceId === deviceId ? existingAccount.createdAt : now,
+          createdAt:
+            existingAccount?.accountId === accountId && existingAccount.deviceId === deviceId
+              ? existingAccount.createdAt
+              : now,
           updatedAt: now
         };
         candidate.byAccount.set(accountId, binding);

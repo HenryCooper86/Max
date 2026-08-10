@@ -4,7 +4,7 @@ import type { CompanionClientEvent, CompanionServerEvent } from "../shared/compa
 import type { CompanionBinding, CompanionBindingStore } from "./companion-store";
 import type { Logger } from "./logger";
 
-export type CompanionPeer = {
+type CompanionPeer = {
   accountId: string;
   address: string;
   send(event: CompanionServerEvent): void;

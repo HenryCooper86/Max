@@ -1,3 +1,5 @@
 {
-  "ignore": ["public/pcm-worklet.js", "rdk/**"]
+  "entry": ["server/companion-socket.contract.ts", "tests/fixtures/rdk-device-identity-child.ts"],
+  "ignore": ["public/pcm-worklet.js", "rdk/**"],
+  "ignoreBinaries": ["mkfifo"]
 }

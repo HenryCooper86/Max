@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { RdkNavigationSnapshot } from "../rdk/agent/src/navigation/controller";
-import { initialHudState, reduceHud, type HudCompanion, type HudEvent } from "../rdk/agent/src/hud/state";
+import {
+  HUD_TRANSCRIPT_LIMIT,
+  initialHudState,
+  reduceHud,
+  type HudCompanion,
+  type HudEvent
+} from "../rdk/agent/src/hud/state";
 
 function navigation(overrides: Partial<RdkNavigationSnapshot> = {}): RdkNavigationSnapshot {
   return {
@@ -69,6 +75,50 @@ describe("reduceHud", () => {
       final: true
     });
     expect(state.transcript).toEqual([{ speaker: "agent", text: "今天天气不错", final: true, turnId: "t1" }]);
+  });
+
+  it("caps the transcript at the most recent turns instead of growing for the life of the process", () => {
+    let state = initialHudState();
+    for (let turn = 0; turn < HUD_TRANSCRIPT_LIMIT + 10; turn += 1) {
+      state = reduceHud(state, {
+        type: "transcript",
+        turnId: `t${turn}`,
+        deliveryId: `d${turn}`,
+        speaker: "rider",
+        text: `第${turn}句`,
+        final: true
+      });
+    }
+    expect(state.transcript).toHaveLength(HUD_TRANSCRIPT_LIMIT);
+    // The oldest ten fell off the front; the newest is still last.
+    expect(state.transcript[0]?.turnId).toBe("t10");
+    expect(state.transcript.at(-1)?.turnId).toBe(`t${HUD_TRANSCRIPT_LIMIT + 9}`);
+  });
+
+  it("updates a retained turn in place at the cap rather than evicting it", () => {
+    let state = initialHudState();
+    for (let turn = 0; turn < HUD_TRANSCRIPT_LIMIT; turn += 1) {
+      state = reduceHud(state, {
+        type: "transcript",
+        turnId: `t${turn}`,
+        deliveryId: `d${turn}`,
+        speaker: "agent",
+        text: "部分",
+        final: false
+      });
+    }
+    // A streaming partial for the oldest retained turn must not count as a new
+    // turn: the transcript stays exactly as long, in the same order.
+    state = reduceHud(state, {
+      type: "transcript",
+      turnId: "t0",
+      deliveryId: "d0",
+      speaker: "agent",
+      text: "完整的一句",
+      final: true
+    });
+    expect(state.transcript).toHaveLength(HUD_TRANSCRIPT_LIMIT);
+    expect(state.transcript[0]).toEqual({ speaker: "agent", text: "完整的一句", final: true, turnId: "t0" });
   });
 
   it("records latency and errors", () => {

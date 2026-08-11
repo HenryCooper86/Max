@@ -26,6 +26,34 @@ function wav(samples: number, rate = 24000, channels = 1, bits = 16): Buffer {
   return Buffer.concat([header, data]);
 }
 
+/** A valid WAV carrying an extra chunk between `fmt ` and `data` — what most
+ *  encoders emit when they stamp metadata (LIST/INFO), and what a re-render of
+ *  the alert clips could easily produce. */
+function wavWithMetadata(samples: number, metadataBytes: number): Buffer {
+  const data = Buffer.alloc(samples * 2);
+  for (let i = 0; i < samples; i += 1) data.writeInt16LE(1000, i * 2);
+  const list = Buffer.alloc(8 + metadataBytes);
+  list.write("LIST", 0);
+  list.writeUInt32LE(metadataBytes, 4);
+  list.write("INFO", 8);
+  const head = Buffer.alloc(36);
+  head.write("RIFF", 0);
+  head.writeUInt32LE(28 + list.length + 8 + data.length, 4);
+  head.write("WAVE", 8);
+  head.write("fmt ", 12);
+  head.writeUInt32LE(16, 16);
+  head.writeUInt16LE(1, 20);
+  head.writeUInt16LE(1, 22);
+  head.writeUInt32LE(24000, 24);
+  head.writeUInt32LE(48000, 28);
+  head.writeUInt16LE(2, 32);
+  head.writeUInt16LE(16, 34);
+  const dataHeader = Buffer.alloc(8);
+  dataHeader.write("data", 0);
+  dataHeader.writeUInt32LE(data.length, 4);
+  return Buffer.concat([head, list, dataHeader, data]);
+}
+
 function fakePlayback(accept: (pcm: Int16Array, rank: number | undefined) => boolean = () => true) {
   const order: string[] = [];
   const written: number[] = [];
@@ -136,6 +164,30 @@ describe("readWavMono24k", () => {
     const dir = mkdtempSync(join(tmpdir(), "alerts-"));
     writeFileSync(join(dir, "b.wav"), wav(480, 16000));
     expect(() => readWavMono24k(join(dir, "b.wav"))).toThrow(/24000/);
+  });
+
+  it("finds the data chunk behind a metadata chunk rather than playing the metadata as audio", () => {
+    const dir = mkdtempSync(join(tmpdir(), "alerts-"));
+    writeFileSync(join(dir, "meta.wav"), wavWithMetadata(480, 64));
+    const pcm = readWavMono24k(join(dir, "meta.wav"));
+    expect(pcm.length).toBe(480);
+    // Every sample of the real payload is 1000. Reading from a fixed offset 44
+    // would land inside LIST/INFO and hand the rider that as a safety alert.
+    expect(pcm[0]).toBe(1000);
+    expect(pcm.at(-1)).toBe(1000);
+  });
+
+  it("rejects a WAV with no data chunk instead of returning whatever follows the header", () => {
+    const dir = mkdtempSync(join(tmpdir(), "alerts-"));
+    const headerOnly = wav(480).subarray(0, 36);
+    writeFileSync(join(dir, "nodata.wav"), headerOnly);
+    expect(() => readWavMono24k(join(dir, "nodata.wav"))).toThrow(/data/);
+  });
+
+  it("rejects a file that is not RIFF/WAVE at all", () => {
+    const dir = mkdtempSync(join(tmpdir(), "alerts-"));
+    writeFileSync(join(dir, "mp3.wav"), Buffer.alloc(200, 0x55));
+    expect(() => readWavMono24k(join(dir, "mp3.wav"))).toThrow(/RIFF|WAVE/);
   });
 
   it("rejects stereo, which would play at double speed", () => {

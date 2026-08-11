@@ -33,6 +33,21 @@ export type HudEvent =
   | { type: "rdk.companion"; companion: HudCompanion }
   | { type: "rdk.navigation"; navigation: RdkNavigationSnapshot | null };
 
+/**
+ * How many turns the bench HUD keeps.
+ *
+ * `hudState` in main.ts is built once at process start and never reset — not
+ * on reconnect, not on session close — so an uncapped transcript grows for the
+ * life of the agent, which on this board is "until the next reboot". The cost
+ * is not only memory: every transcript event rebuilds the whole array, and
+ * streaming partials arrive many times per turn, so an unbounded list makes
+ * each keystroke of caption O(n) and the ride O(n²).
+ *
+ * 50 is a scrollback for a bench instrument nobody reads mid-ride, not a
+ * record: the relay owns session history.
+ */
+export const HUD_TRANSCRIPT_LIMIT = 50;
+
 export function initialHudState(): HudState {
   return {
     connection: "offline",
@@ -129,10 +144,14 @@ export function reduceHud(state: HudState, event: HudEvent): HudState {
         turnId: event.turnId
       };
       const index = state.transcript.findIndex((item) => item.turnId === event.turnId);
+      if (index !== -1) {
+        // A streaming partial for a turn already held. Updating in place can
+        // never grow the list, so it never needs trimming.
+        return { ...state, transcript: state.transcript.map((item, position) => (position === index ? turn : item)) };
+      }
+      const appended = [...state.transcript, turn];
       const transcript =
-        index === -1
-          ? [...state.transcript, turn]
-          : state.transcript.map((item, position) => (position === index ? turn : item));
+        appended.length > HUD_TRANSCRIPT_LIMIT ? appended.slice(appended.length - HUD_TRANSCRIPT_LIMIT) : appended;
       return { ...state, transcript };
     }
     default:

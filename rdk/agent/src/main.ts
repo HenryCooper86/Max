@@ -103,6 +103,41 @@ export function routeAgentNavigationEvent(
   }
 }
 
+type PoweroffChild = {
+  on(event: "error", listener: (error: Error) => void): void;
+  unref(): void;
+};
+
+export type PoweroffSpawn = (command: string, args: string[]) => PoweroffChild;
+
+/**
+ * Runs the actual poweroff behind "Max，关机".
+ *
+ * Extracted and injectable because of the failure it now handles: a missing or
+ * non-executable `shutdown` does not throw from spawn(), it arrives later as an
+ * 'error' event on the child. With no listener that is an unhandled 'error',
+ * which reaches the uncaughtException hook below and exits the agent — after
+ * the rider has already heard the final tone and is expecting the board to go
+ * down. Systemd restarts us and the helmet stays on, with nothing in the
+ * journal naming the cause. Log it instead: the board being up is then a
+ * visible fact rather than a mystery.
+ */
+export function runPoweroffCommand(options: { spawn?: PoweroffSpawn; log?: (line: string) => void } = {}): void {
+  const log = options.log ?? ((line: string) => console.log(line));
+  const spawnChild =
+    options.spawn ??
+    ((command: string, args: string[]) => spawn(command, args, { stdio: "ignore" }) as unknown as PoweroffChild);
+  // Clean by construction: systemd stops both services, max-vision finalizes a
+  // live recording, filesystems unmount. This exists because every hard power
+  // cut this week cost something on the next boot.
+  log("[device] voice shutdown: running shutdown -h now");
+  const child = spawnChild("/usr/sbin/shutdown", ["-h", "now"]);
+  child.on("error", (error) => {
+    log(`[device] shutdown failed to start: ${error.message}; the board is still up`);
+  });
+  child.unref();
+}
+
 /**
  * Applies playback volume on the ES8326B mixer. Resolves false if amixer did not
  * exit cleanly, so Max never claims a volume change that did not happen.
@@ -232,7 +267,10 @@ function start(): void {
     }
   });
 
-  const hud = createHudServer(config.hudPort, config.visionPreviewPort);
+  const hud = createHudServer(config.hudPort, config.visionPreviewPort, config.visionToken);
+  if (!config.visionToken) {
+    console.log("[hud] MAX_VISION_TOKEN is unset; the HUD serves 127.0.0.1 only and refuses every other peer");
+  }
   let hudState = initialHudState();
 
   function publishHud(event: HudEvent): void {
@@ -325,13 +363,7 @@ function start(): void {
   );
 
   const poweroff = createPoweroffController({
-    exec: () => {
-      // Clean by construction: systemd stops both services, max-vision
-      // finalizes a live recording, filesystems unmount. This exists because
-      // every hard power cut this week cost something on the next boot.
-      console.log("[device] voice shutdown: running shutdown -h now");
-      spawn("/usr/sbin/shutdown", ["-h", "now"], { stdio: "ignore" }).unref();
-    },
+    exec: () => runPoweroffCommand(),
     cue: (kind) => writeCue(playback, kind)
   });
 

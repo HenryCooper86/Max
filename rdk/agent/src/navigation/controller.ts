@@ -52,6 +52,11 @@ type PendingStart = {
 type PendingReroute = {
   generation: number;
   commandId: string;
+  /** Same bound the start path puts on a nav.request. Without it an answer the
+   *  relay never sends leaves this record set forever, `maybeReroute` returns
+   *  early on every later fix, and the rider is stuck in `rerouting` for the
+   *  rest of the session — no further attempt, no way back to `guiding`. */
+  timer?: Timer;
 };
 
 type FinishingNavigation = {
@@ -147,10 +152,15 @@ export function createRdkNavigationController(options: {
     publish(withLocation({ phase: "idle" }));
   }
 
+  function clearReroute(): void {
+    if (reroute?.timer !== undefined) clearTimeout(reroute.timer);
+    reroute = undefined;
+  }
+
   function clearRouteState(): void {
     activeRoute = undefined;
     progress = { ...INITIAL_PROGRESS, firedThresholds: [] };
-    reroute = undefined;
+    clearReroute();
     lastRerouteSentAt = undefined;
     offRoutePrompt = eligibleOneShot();
     locationLostPrompt = eligibleOneShot();
@@ -433,14 +443,38 @@ export function createRdkNavigationController(options: {
       destinationName: expectedRoute.destinationName
     });
     if (closed || generation !== expectedGeneration || activeRoute !== expectedRoute) return false;
-    if (!sent && reroute?.commandId === commandId) reroute = undefined;
+    if (!sent) {
+      if (reroute?.commandId === commandId) clearReroute();
+      return revision === expectedRevision;
+    }
+    // Armed only for a request actually on the wire, and identity-checked in
+    // the callback: send() is an injected boundary that may already have
+    // replaced this reroute, ended the route, or closed the controller.
+    if (reroute?.commandId === commandId) {
+      reroute.timer = setTimeout(() => abandonReroute(commandId, expectedGeneration, expectedRoute), routeTimeoutMs);
+    }
     return revision === expectedRevision;
+  }
+
+  /**
+   * A reroute nobody answered. Unlike `nav.error`, this is not evidence that no
+   * route exists — only that a reply went missing — so navigation continues on
+   * the route the rider is already following rather than ending. Dropping the
+   * record is what lets a later off-route fix ask again, still behind the
+   * 20 s cooldown.
+   */
+  function abandonReroute(commandId: string, expectedGeneration: number, expectedRoute: NavRouteEvent): void {
+    const outstanding = reroute;
+    if (!outstanding || outstanding.commandId !== commandId) return;
+    if (!ownsRoute(expectedGeneration, expectedRoute)) return;
+    clearReroute();
+    publish({ ...snapshot, phase: "guiding" }, ++revision);
   }
 
   function installRoute(event: NavRouteEvent, expectedRevision: number): void {
     activeRoute = copyRoute(event);
     progress = { ...INITIAL_PROGRESS, firedThresholds: [] };
-    reroute = undefined;
+    clearReroute();
     offRoutePrompt = eligibleOneShot();
     locationLostPrompt = eligibleOneShot();
     locationUsableForGuidance = false;
@@ -520,7 +554,7 @@ export function createRdkNavigationController(options: {
       }
       const expectedRevision = ++revision;
       const expectedGeneration = generation;
-      reroute = undefined;
+      clearReroute();
       const terminal: FinishingNavigation = { generation: expectedGeneration, route, token: Symbol() };
       finishing = terminal;
       emitLifecyclePrompt("rerouteFailed", route, expectedGeneration, expectedRevision);

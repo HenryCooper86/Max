@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { EventEmitter } from "node:events";
+import { describe, expect, it, vi } from "vitest";
 import { createPoweroffController, type PoweroffCue } from "../rdk/agent/src/device/poweroff";
+import { runPoweroffCommand } from "../rdk/agent/src/main";
 
 /** Deterministic timers: the countdown is 10 s of real time nobody wants in CI. */
 function fakeTimers() {
@@ -42,6 +44,37 @@ function harness() {
   });
   return { timers, cues, controller, executed: () => executed };
 }
+
+describe("runPoweroffCommand", () => {
+  /** A real EventEmitter, so an unlistened 'error' throws exactly as a real
+   *  ChildProcess does — that is the production failure being pinned, not a
+   *  property of the fake. */
+  function fakeChild() {
+    const child = new EventEmitter() as EventEmitter & { unref(): void };
+    child.unref = () => {};
+    return child;
+  }
+
+  it("survives and reports a shutdown binary that cannot be spawned", () => {
+    const child = fakeChild();
+    const log = vi.fn();
+    runPoweroffCommand({ spawn: () => child, log });
+    // Node reports spawn failures asynchronously on the child, not by throwing
+    // from spawn(). With no listener this is an unhandled 'error' event, which
+    // took the whole agent down after the rider had already heard the final tone.
+    expect(() => child.emit("error", new Error("spawn /usr/sbin/shutdown ENOENT"))).not.toThrow();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("ENOENT"));
+  });
+
+  it("spawns the real poweroff command and lets the process outlive the agent", () => {
+    const child = fakeChild();
+    const unref = vi.spyOn(child, "unref");
+    const spawn = vi.fn(() => child);
+    runPoweroffCommand({ spawn, log: vi.fn() });
+    expect(spawn).toHaveBeenCalledWith("/usr/sbin/shutdown", ["-h", "now"]);
+    expect(unref).toHaveBeenCalled();
+  });
+});
 
 describe("createPoweroffController", () => {
   it("arms audibly and does not execute early", () => {

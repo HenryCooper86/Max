@@ -32,6 +32,50 @@ def test_pair_ids_do_not_collide_within_a_second(gallery):
     assert first != second
 
 
+def test_a_capture_in_a_later_second_needs_no_suffix(gallery):
+    first = gallery.new_pair_id(datetime(2026, 7, 25, 14, 22, 33))
+    later = gallery.new_pair_id(datetime(2026, 7, 25, 14, 27, 33))
+    assert first == "pair-20260725-142233"
+    assert later == "pair-20260725-142733"
+
+
+def test_pair_id_does_not_reuse_a_directory_left_by_an_earlier_run(tmp_path):
+    # The board has no RTC, so every boot before NTP steps the clock stamps ids
+    # from the same fake epoch. Two captures at the same reported second, on
+    # either side of a restart, must still be two captures.
+    now = datetime(2026, 7, 25, 14, 22, 33)
+    before = Gallery(str(tmp_path), min_free_mb=0)
+    first = before.new_pair_id(now)
+    before.write_manifest(first, "front.mjpeg", None, "video")
+    (before.pair_dir(first) / "front.mjpeg").write_bytes(b"\xff\xd8\xff first clip")
+
+    after = Gallery(str(tmp_path), min_free_mb=0)
+    second = after.new_pair_id(now)
+
+    assert second != first
+    assert not after.pair_dir(second).exists()
+
+
+def test_a_colliding_id_cannot_append_onto_an_earlier_clip(tmp_path):
+    # The damage the id guard prevents: recording opens the segment with "ab",
+    # so reusing a directory fuses the new clip onto the old one and overwrites
+    # the manifest describing it.
+    now = datetime(2026, 7, 25, 14, 22, 33)
+    before = Gallery(str(tmp_path), min_free_mb=0)
+    first = before.new_pair_id(now)
+    before.pair_dir(first).mkdir(parents=True, exist_ok=True)
+    original = b"\xff\xd8\xff first clip"
+    (before.pair_dir(first) / "front.mjpeg").write_bytes(original)
+
+    after = Gallery(str(tmp_path), min_free_mb=0)
+    second_dir = after.pair_dir(after.new_pair_id(now))
+    second_dir.mkdir(parents=True, exist_ok=True)
+    with (second_dir / "front.mjpeg").open("ab") as handle:
+        handle.write(b"\xff\xd8\xff second clip")
+
+    assert (before.pair_dir(first) / "front.mjpeg").read_bytes() == original
+
+
 def test_has_space_refuses_when_below_the_floor(tmp_path):
     huge = Gallery(str(tmp_path), min_free_mb=10**9)
     assert huge.has_space() is False

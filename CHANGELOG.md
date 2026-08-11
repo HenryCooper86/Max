@@ -33,6 +33,70 @@
   network (ASR is server-side), and iOS cannot place calls itself — the call
   button needs a human tap.
 
+## 2026-08-11 — Helmet board: a review pass over `rdk/`
+
+A read of the whole embedded client, agent and sidecar, and the eleven things
+it turned up. Everything here is bench-verified by test only; none of it has
+been on the board yet, and the standing live checks in rdk/README.md still
+apply — in particular a conversation with barge-in, because the alert audio
+path changed.
+
+**Security — the bench surface now authenticates.** Ports 8080 (HUD) and 8081
+(sidecar) both bind `0.0.0.0`, the sidecar runs as root, and neither was
+authenticated: any peer on the network could stream the helmet cameras, list
+and download every recorded clip, read the rider's live transcript and
+destination, and destroy a capture with a plain cross-origin `POST` that needed
+no token, no header, and no readable reply. Both ports now require
+`MAX_VISION_TOKEN` from any peer that is not the board itself, fail closed when
+it is unset, and say so on start. The HUD is gated alongside the sidecar
+deliberately — it carries the token so the browser's own fetches work, so
+serving that page to a stranger would have handed them the key. Holding the
+token is admission, not locality: pairing-code redaction still keys off the
+peer address, so a token-bearing LAN browser still never sees the code.
+`/preview/*` also obeys the `MAX_VISION_SHARE` consent gate now, which it had
+always been exempt from — the larger of the two frame leaks, not the smaller.
+**The HUD's camera panels therefore need `MAX_VISION_SHARE=1`.**
+
+**A slow control client could stall hazard detection.** Broadcasts wrote
+straight to the connection's socket under a lock, with no timeout, from the
+ADAS threads. A client that stopped reading blocked detection itself — an alert
+could not be reported because a watch frame queued seconds earlier was still
+being written. Each connection now has a bounded outbox and one writer thread:
+a reading client still loses nothing, and a wedged one costs one bounded wait
+before it is dropped from the event registry.
+
+**Two captures could become one file.** Gallery ids carried a per-process
+counter, not the per-second one the docstring claimed, so the first capture
+after a restart took the bare timestamp back. Reusing that directory overwrote
+a photo — or, since segments open with `"ab"`, appended a new clip onto the old
+one under a manifest describing only the new. The board has no RTC, so every
+pre-NTP boot stamps from the same fake epoch, which is exactly when two runs
+report the same second. Ids are now checked against the disk as well as the
+current second.
+
+**Rerouting could wedge for the rest of a session.** A reroute request had no
+timeout, unlike the start path, so a reply that never arrived left the record
+set forever: no further attempt, and the HUD stuck on `rerouting`. It now
+expires and returns to `guiding` on the route the rider is already following —
+a missing reply is not evidence that no route exists.
+
+Also: the HUD transcript is capped (it grew for the life of the process and was
+recopied on every streaming caption); the alert WAV parser walks the chunk list
+instead of trusting fixed offsets, where a metadata chunk turned 480 samples of
+speech into 516 samples of chunk header played as a collision warning; a
+`shutdown` that cannot start is logged instead of taking the agent down as an
+unhandled `error` event; a recording start/stop race could leak a writer thread
+spinning for the life of the process; `start_adas` moved out of `service.py`,
+which is run as `__main__` and so was being loaded a second time as a duplicate
+module; and the relay's socket factory is handed the same options the real
+constructor gets.
+
+Repo hygiene, both found while checking the above: the RDK agent's TypeScript
+was type-checked by nothing (`rdk/agent/tsconfig.json` was referenced by no
+script or CI job) and is now part of `npm run check`; and a stale git worktree
+under `.claude/` was supplying 923 of the 2231 test cases a local `npm test`
+collected, so 41% of every run re-tested an abandoned branch.
+
 ## 2026-08-01 — Helmet board: dual cameras that tell the truth
 
 RDK X5 embedded client (`rdk/` — the day-by-day record lives in

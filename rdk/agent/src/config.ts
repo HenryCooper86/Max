@@ -14,6 +14,11 @@ export type RdkConfig = {
   galleryMinFreeMb: number;
   hudPort: number;
   visionPreviewPort: number;
+  /** Shared secret for the sidecar's bench HTTP surface. The sidecar reads the
+   *  same variable and refuses every non-loopback peer without it, so the agent
+   *  needs it only to template into the HUD page it serves. Empty means the
+   *  sidecar is reachable from the board itself and nowhere else. */
+  visionToken: string;
   visionSocket: string;
   voiceGateRms: number;
   voiceGateMs: number;
@@ -113,6 +118,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RdkConfig {
     galleryMinFreeMb: optionalNumber(env, "MAX_GALLERY_MIN_FREE_MB", 1024),
     hudPort: optionalNumber(env, "MAX_HUD_PORT", 8080),
     visionPreviewPort: optionalNumber(env, "MAX_VISION_PREVIEW_PORT", 8081),
+    visionToken: optionalString(env, "MAX_VISION_TOKEN", ""),
     visionSocket: optionalString(env, "MAX_VISION_SOCKET", "/run/max/vision.sock"),
     voiceGateRms: optionalNumber(env, "MAX_VOICE_GATE_RMS", 900),
     voiceGateMs: optionalNumber(env, "MAX_VOICE_GATE_MS", 400),

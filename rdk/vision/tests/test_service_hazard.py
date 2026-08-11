@@ -1,16 +1,37 @@
+import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+VISION_DIR = str(Path(__file__).resolve().parents[1])
+sys.path.insert(0, VISION_DIR)
 
 import pytest
 
+from adas.launcher import start_adas
 from adas.runtime import RuntimeConfig
 from adas.shadow import read_shadow
 from camera import CameraPair
 from perception.frame_source import Frame
 from perception.types import Detection
-from service import require_cameras, start_adas
+from service import require_cameras
+
+
+def test_reaching_the_adas_launcher_does_not_load_a_second_service_module():
+    """max-vision starts the sidecar as ``python3 service.py``, so that file is
+    ``__main__``. Any downstream ``from service import ...`` then loads a
+    second, independent copy of it — two VisionConfig classes, two of
+    everything, and any module-level state silently split in half. The launcher
+    lives outside that file so nothing on the ride path has to reach back into
+    the module being run.
+    """
+    probe = (
+        f"import sys; sys.path.insert(0, {VISION_DIR!r}); "
+        "from adas.launcher import start_adas; "
+        "print('service' in sys.modules)"
+    )
+    result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "False"
 
 
 class FakeSource:

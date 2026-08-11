@@ -39,7 +39,12 @@ def free_port() -> int:
 def start_server(pair, tmp_path) -> int:
     port = free_port()
     gallery = Gallery(str(tmp_path), min_free_mb=0)
-    threading.Thread(target=serve, args=(pair, gallery, port), daemon=True).start()
+    # /preview obeys the MAX_VISION_SHARE consent gate (see test_bench_auth.py).
+    # These tests are about serving more than one client at a time, so they turn
+    # sharing on rather than restating the gate.
+    threading.Thread(
+        target=serve, args=(pair, gallery, port), kwargs={"share_frames": True}, daemon=True
+    ).start()
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         try:

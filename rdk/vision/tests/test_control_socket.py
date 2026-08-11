@@ -146,6 +146,65 @@ def test_concurrent_writes_do_not_interleave(tmp_path):
         shutil.rmtree(socket_dir)
 
 
+def test_a_client_that_stops_reading_cannot_block_broadcasts(tmp_path):
+    """Hazard broadcasts run on the ADAS thread and watch frames on the sampler.
+
+    A control client that stops draining its socket must cost that client its
+    events, never the detection loop trying to report them. Unbounded, the
+    server's write blocks once both socket buffers fill, and an alert never
+    reaches the agent because a *previous* frame is still being written.
+    """
+    socket_dir = make_socket_dir()
+    sock_path = str(socket_dir / "ctl.sock")
+    runtime = make_runtime(tmp_path)
+    registered = threading.Event()
+    register = runtime.events.register
+
+    def register_and_signal(write):
+        register(write)
+        registered.set()
+
+    runtime.events.register = register_and_signal
+    server = service.ControlServer(sock_path, service.ControlHandler, runtime)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    client = None
+    flood_thread = None
+    try:
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        # A small receive buffer fills in a few frames instead of a few hundred,
+        # so this test costs milliseconds rather than megabytes.
+        with contextlib.suppress(OSError):
+            client.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2048)
+        client.connect(sock_path)
+        assert registered.wait(timeout=5.0)
+
+        # Nothing ever reads `client`.
+        finished = threading.Event()
+
+        def flood():
+            for _ in range(100):
+                runtime.events.broadcast({"event": "watch.frame", "image": "x" * 64_000})
+            finished.set()
+
+        flood_thread = threading.Thread(target=flood, daemon=True)
+        flood_thread.start()
+        assert finished.wait(timeout=5.0), "broadcast blocked behind a client that stopped reading"
+    finally:
+        if client is not None:
+            with contextlib.suppress(OSError):
+                client.shutdown(socket.SHUT_RDWR)
+            client.close()
+        if flood_thread is not None:
+            flood_thread.join(timeout=5.0)
+            assert not flood_thread.is_alive()
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=5.0)
+        assert not server_thread.is_alive()
+        shutil.rmtree(socket_dir)
+
+
 def test_control_servers_own_separate_runtime_state(tmp_path):
     first_runtime = make_runtime(tmp_path, "first")
     second_runtime = make_runtime(tmp_path, "second")

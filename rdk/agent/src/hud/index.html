@@ -260,8 +260,23 @@
 </div>
 <script>
   const host = location.hostname;
-  document.getElementById("front").src = `http://${host}:__PREVIEW_PORT__/preview/front`;
-  document.getElementById("rear").src = `http://${host}:__PREVIEW_PORT__/preview/rear`;
+
+  // The sidecar serves on its own port and refuses any peer that is not the
+  // board itself without this token (bench_server.authorized). The agent
+  // templates it in, so opening this page is what authorises the browser —
+  // there is nothing to type. Empty when the board has no MAX_VISION_TOKEN
+  // set, in which case only a browser running on the board can reach 8081.
+  const VISION_TOKEN = "__VISION_TOKEN__";
+
+  function sidecar(path, params = {}) {
+    const url = new URL(`http://${host}:__PREVIEW_PORT__${path}`);
+    if (VISION_TOKEN) url.searchParams.set("t", VISION_TOKEN);
+    for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+    return url.toString();
+  }
+
+  document.getElementById("front").src = sidecar("/preview/front");
+  document.getElementById("rear").src = sidecar("/preview/rear");
 
   const socket = new WebSocket(`ws://${location.host}`);
   const navigationCardEl = document.getElementById("navigation-card");
@@ -398,7 +413,6 @@
       .join("");
   };
 
-  const galleryBase = `http://${host}:__PREVIEW_PORT__`;
   const capturesEl = document.getElementById("captures");
   const statusEl = document.getElementById("captures-status");
   const viewerEl = document.getElementById("viewer");
@@ -441,8 +455,8 @@
       return `<div class="tile ${pair.recording ? "live" : ""}"><div class="${pair.recording ? "recording" : "missing"}">${missing}</div>
         <div class="meta"><span>${fmtWhen(pair)} · ${label} · ${size}</span>${del}</div></div>`;
     }
-    const href = `${galleryBase}/gallery/${pair.id}/${pair[side]}`;
-    const src = isVideo ? `${href}/thumb` : href;
+    const href = sidecar(`/gallery/${pair.id}/${pair[side]}`);
+    const src = isVideo ? sidecar(`/gallery/${pair.id}/${pair[side]}/thumb`) : href;
     const size = fmtSize(pair.sizes[side]);
     return `<div class="tile ${pair.recording ? "live" : ""}">
       <img src="${src}" alt="${pair.id}" data-view="${index}" loading="lazy" />
@@ -461,8 +475,12 @@
 
     panelsEl.innerHTML = sidesOf(pair)
       .map((side) => {
-        const href = `${galleryBase}/gallery/${pair.id}/${pair[side]}`;
-        const src = isVideo ? `${href}/play?speed=${viewerSpeed}&t=${++streamNonce}` : href;
+        const href = sidecar(`/gallery/${pair.id}/${pair[side]}`);
+        // `n` is the cache-buster that forces a fresh stream on replay; `t` is
+        // the bench token and must not be overwritten by it.
+        const src = isVideo
+          ? sidecar(`/gallery/${pair.id}/${pair[side]}/play`, { speed: viewerSpeed, n: ++streamNonce })
+          : href;
         return `<figure><img src="${src}" alt="${pair.id} ${side}" />
           <figcaption>${side} · ${fmtSize(pair.sizes[side])} · <a href="${href}" download>download</a></figcaption></figure>`;
       })
@@ -500,7 +518,7 @@
     if (!confirm(`Delete ${pair.id} from the board? There is no undo.`)) return;
     let response;
     try {
-      response = await fetch(`${galleryBase}/gallery/${pair.id}/delete`, { method: "POST" });
+      response = await fetch(sidecar(`/gallery/${pair.id}/delete`), { method: "POST" });
     } catch {
       alert("sidecar unreachable");
       return;
@@ -555,7 +573,7 @@
   async function refreshCaptures() {
     let payload;
     try {
-      const response = await fetch(`${galleryBase}/gallery`, { cache: "no-store" });
+      const response = await fetch(sidecar("/gallery"), { cache: "no-store" });
       payload = await response.json();
     } catch {
       // "Cannot reach the sidecar" and "nothing captured yet" must never look

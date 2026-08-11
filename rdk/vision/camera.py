@@ -189,37 +189,50 @@ class CameraPair:
             self._recording_frames = 0
             self._recording_written = {"front": 0, "rear": 0}
 
-        # Hard stop at the cap, so a forgotten recording cannot fill the disk.
-        self._stop_timer = threading.Timer(MAX_RECORDING_SECONDS, lambda: self.stop_recording(gallery))
-        self._stop_timer.daemon = True
-        self._stop_timer.start()
+            # Under the same lock as recording_id, not after it. Assigned in the
+            # gap, a stop landing between the two set the *previous* Event and
+            # found no thread to join, so it returned having stopped nothing —
+            # and the writer started below then owned an Event nobody would ever
+            # set, spinning at 10 Hz for the life of the process against a
+            # _recording_dir the stop had already cleared.
+            self._stop_timer = threading.Timer(MAX_RECORDING_SECONDS, lambda: self.stop_recording(gallery))
+            self._stop_timer.daemon = True
+            self._stop_timer.start()
 
-        # drive=False lets a test own the clock and call write_recording_frame
-        # itself; counting frames against a live thread would flake.
-        if drive:
-            self._recording_stop = threading.Event()
-
-            def write_loop() -> None:
-                # Pace on absolute deadlines. Sleeping a fixed interval *between*
-                # writes adds the encode time to every period — measured at 6.2 fps
-                # for a nominal 10, because a 1080p NV12->JPEG costs ~60 ms.
-                interval = 1.0 / RECORDING_FPS
-                next_at = time.monotonic() + interval
-                while not self._recording_stop.wait(max(0.0, next_at - time.monotonic())):
-                    self.write_recording_frame()
-                    next_at += interval
-                    now = time.monotonic()
-                    if next_at < now:
-                        # Encoding fell behind the target rate. Resynchronise
-                        # rather than spinning to catch up on a stale frame.
-                        next_at = now + interval
-
-            self._recording_thread = threading.Thread(
-                target=write_loop, name=f"record-{pair_id}", daemon=True
-            )
-            self._recording_thread.start()
+            # drive=False lets a test own the clock and call write_recording_frame
+            # itself; counting frames against a live thread would flake.
+            if drive:
+                stop_event = threading.Event()
+                self._recording_stop = stop_event
+                self._recording_thread = threading.Thread(
+                    target=self._write_loop, args=(stop_event,), name=f"record-{pair_id}", daemon=True
+                )
+                self._recording_thread.start()
 
         return {"status": "ok", "detail": pair_id}
+
+    def _write_loop(self, stop_event: threading.Event) -> None:
+        """Append frames until told to stop.
+
+        The Event arrives as an argument rather than being read back off ``self``
+        on every iteration: a later recording installs a fresh one, and an old
+        loop reading ``self._recording_stop`` would start waiting on the new
+        recording's Event and never exit its own. Same rule, for the same
+        reason, as watch/sampler.py's captured epoch.
+        """
+        # Pace on absolute deadlines. Sleeping a fixed interval *between* writes
+        # adds the encode time to every period — measured at 6.2 fps for a
+        # nominal 10, because a 1080p NV12->JPEG costs ~60 ms.
+        interval = 1.0 / RECORDING_FPS
+        next_at = time.monotonic() + interval
+        while not stop_event.wait(max(0.0, next_at - time.monotonic())):
+            self.write_recording_frame()
+            next_at += interval
+            now = time.monotonic()
+            if next_at < now:
+                # Encoding fell behind the target rate. Resynchronise rather
+                # than spinning to catch up on a stale frame.
+                next_at = now + interval
 
     def write_recording_frame(self) -> None:
         """Append one JPEG per recording camera. Appending JPEGs is what makes the
@@ -303,26 +316,32 @@ class CameraPair:
                 return {"status": "failed", "reason": "camera.notRecording"}
             sides = self.recording_sides
             started_at = self.recording_started_at
+            # Read under the same lock that installed them, so a start racing
+            # this stop can neither have its writer adopted here nor left
+            # behind with nothing holding its Event.
+            stop_timer = self._stop_timer
+            stop_event = self._recording_stop
+            writer = self._recording_thread
             self.recording_id = None
             self.recording_started_at = None
             self.recording_sides = {"front": None, "rear": None}
             self._recording_dir = None
             self._recording_gallery = None
-
-        if self._stop_timer is not None:
-            self._stop_timer.cancel()
             self._stop_timer = None
+            self._recording_thread = None
+
+        if stop_timer is not None:
+            stop_timer.cancel()
 
         # Stop the writer before the manifest is written, so the segment the
         # manifest describes is not still growing after the fact.
-        self._recording_stop.set()
-        if self._recording_thread is not None:
+        stop_event.set()
+        if writer is not None:
             # The low-space stop runs *on* the writer thread. Joining a thread
             # from itself raises, which would abandon the manifest mid-update
             # and leave the clip flagged as still recording.
-            if self._recording_thread is not threading.current_thread():
-                self._recording_thread.join(timeout=2.0)
-            self._recording_thread = None
+            if writer is not threading.current_thread():
+                writer.join(timeout=2.0)
 
         # Wall clock, not frames ÷ fps: the writer measurably falls behind the
         # nominal rate, and the truth about a clip is how long it recorded.

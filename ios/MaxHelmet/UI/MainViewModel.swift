@@ -1042,6 +1042,9 @@ final class MainViewModel: ObservableObject {
         dispatchPrecondition(condition: .onQueue(.main))
         guard ownsCompanionGeneration(owner), companionAccountTeardownActive else { return }
         companionAccountTeardownActive = false
+        // This path publishes .signedOut directly (its own completion), bypassing
+        // handleCommittedCompanionState's funnel — clear the flag here too.
+        isAwaitingHelmetConfirm = false
 
         finalizePendingLogout()
         if sessionTokenTransitionActive {

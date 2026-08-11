@@ -95,6 +95,21 @@ final class CompanionViewModelTests: XCTestCase {
         XCTAssertNil(MainViewModel.companionErrorCopy(code: "connection"))
     }
 
+    func testPairDiscoverWaitingStateClearsOnAccountTeardown() {
+        let harness = Harness()
+        let token = String(repeating: "a", count: 32)
+        harness.viewModel.pairDiscoveredHelmet(token: token)
+        XCTAssertTrue(harness.viewModel.isAwaitingHelmetConfirm)
+
+        harness.viewModel.logout()
+
+        XCTAssertFalse(
+            harness.viewModel.isAwaitingHelmetConfirm,
+            "logout's account teardown publishes .signedOut through its own completion, bypassing the normal status/error funnel"
+        )
+        XCTAssertEqual(harness.viewModel.companionState, .signedOut)
+    }
+
     func testStartOrdersConnectStartAndForegroundLocationThenForwardsImmediateAndNewestTimedFix() throws {
         let harness = Harness()
         harness.stream.startResults = [true]

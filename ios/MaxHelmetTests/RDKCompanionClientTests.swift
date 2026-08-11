@@ -947,6 +947,8 @@ final class RDKCompanionClientTests: XCTestCase {
         XCTAssertEqual(harness.sockets[7].pendingReceiveCount, 1)
     }
 
+    // The inverse of the deferral tests below: with no bind attempt in flight an
+    // `unpaired` status is a displacement and must retire the transport.
     func testServerTerminalArrivesOnMainAndStopsTheReceiveLoop() {
         let harness = ClientHarness(socketCount: 1)
         var states: [CompanionConnectionState] = []
@@ -966,6 +968,112 @@ final class RDKCompanionClientTests: XCTestCase {
         XCTAssertEqual(mainFlags, [true, true])
         XCTAssertEqual(harness.sockets[0].pendingReceiveCount, 0)
         XCTAssertEqual(harness.sockets[0].cancelCount, 1)
+    }
+
+    func testPendingBindDefersTheAttachTimeUnpairedSyncThenAppliesTheNextStatus() {
+        let attempts: [(name: String, send: (RDKCompanionClient) -> Void)] = [
+            ("pairDiscover", { $0.pairDiscover(token: String(repeating: "a", count: 32)) }),
+            ("pair", { $0.pair(code: "S8NM5R") })
+        ]
+
+        for attempt in attempts {
+            let harness = ClientHarness(socketCount: 1)
+            var states: [CompanionConnectionState] = []
+            harness.client.onState = { states.append($0) }
+            harness.connect()
+            attempt.send(harness.client)
+
+            // The relay's FIRST frame on every /companion attach for an account
+            // with no binding — the attach-time sync, not a displacement.
+            harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"unpaired\"}"))
+
+            XCTAssertEqual(
+                harness.sockets[0].cancelCount,
+                0,
+                "\(attempt.name): the helmet confirm window lives on this socket"
+            )
+            XCTAssertEqual(
+                harness.sockets[0].pendingReceiveCount,
+                1,
+                "\(attempt.name): the receive loop must stay armed for the answer"
+            )
+            XCTAssertEqual(states, [.connecting], "\(attempt.name): the sync is deferred, not applied")
+            XCTAssertEqual(harness.scheduled.map(\.delay), [45], "\(attempt.name): bounded deferral")
+
+            // The rider says 确认 at the helmet: the relay binds and syncs.
+            harness.sockets[0].deliver(
+                .string("{\"type\":\"companion.status\",\"state\":\"ready\",\"deviceId\":\"rdk-1\",\"deviceLabel\":\"Helmet\"}")
+            )
+
+            XCTAssertEqual(
+                states,
+                [.connecting, .ready(deviceId: "rdk-1", label: "Helmet")],
+                "\(attempt.name): the answer is received and applied"
+            )
+            XCTAssertEqual(harness.sockets[0].cancelCount, 0, "\(attempt.name): a bound account keeps its socket")
+            XCTAssertEqual(harness.sockets[0].pendingReceiveCount, 1)
+
+            harness.runScheduled(at: 0)
+            XCTAssertEqual(harness.sockets[0].cancelCount, 0, "\(attempt.name): a resolved deferral disowns its timeout")
+
+            // The deferral does not outlive its bind attempt: a later unpaired
+            // is a displacement and retires the transport as usual.
+            harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"unpaired\"}"))
+
+            XCTAssertEqual(states.last, .unpaired, "\(attempt.name): displacement stays terminal")
+            XCTAssertEqual(harness.sockets[0].cancelCount, 1)
+            XCTAssertEqual(harness.sockets[0].pendingReceiveCount, 0)
+        }
+    }
+
+    func testDeferredUnpairedSyncRetiresTheTransportWhenTheBindAttemptFails() {
+        let harness = ClientHarness(socketCount: 2)
+        var states: [CompanionConnectionState] = []
+        harness.client.onState = { states.append($0) }
+        harness.connect()
+        harness.client.pairDiscover(token: String(repeating: "b", count: 32))
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"unpaired\"}"))
+        XCTAssertEqual(harness.sockets[0].cancelCount, 0)
+
+        harness.sockets[0].deliver(
+            .string("{\"type\":\"companion.error\",\"code\":\"pair.timeout\",\"detail\":\"Pairing confirmation timed out\"}")
+        )
+
+        XCTAssertEqual(states.last, .failed(code: "pair.timeout", detail: "Pairing confirmation timed out"))
+        XCTAssertEqual(
+            harness.sockets[0].cancelCount,
+            1,
+            "a failed bind attempt applies the terminal retirement that was held back"
+        )
+        XCTAssertEqual(harness.sockets[0].pendingReceiveCount, 0)
+
+        harness.client.startRide()
+        XCTAssertEqual(harness.requests.count, 1, "the retired account configuration requires an explicit connect")
+    }
+
+    func testDeferredUnpairedSyncTimesOutIntoPairTimeoutAndRetiresTheTransport() {
+        let harness = ClientHarness(socketCount: 2)
+        var states: [CompanionConnectionState] = []
+        harness.client.onState = { states.append($0) }
+        harness.connect()
+        harness.client.pairDiscover(token: String(repeating: "c", count: 32))
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"unpaired\"}"))
+        XCTAssertEqual(harness.scheduled.map(\.delay), [45])
+
+        harness.runScheduled(at: 0)
+
+        XCTAssertEqual(states.last, .failed(code: "pair.timeout", detail: "Pairing confirmation timed out."))
+        XCTAssertEqual(harness.sockets[0].cancelCount, 1, "a silent relay cannot hold the deferral open forever")
+
+        harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"ready\"}"))
+        XCTAssertEqual(states.count, 2, "the retired socket's outstanding receive is disowned")
+        XCTAssertEqual(harness.sockets[0].pendingReceiveCount, 0, "and never rearmed")
+
+        harness.runScheduled(at: 0)
+        XCTAssertEqual(harness.sockets[0].cancelCount, 1, "the timeout fires at most once")
+        XCTAssertEqual(states.count, 2)
+        harness.client.startRide()
+        XCTAssertEqual(harness.requests.count, 1, "the retired account configuration requires an explicit connect")
     }
 
     func testBackgroundReceivePublishesStateOnMainThread() {

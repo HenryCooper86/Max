@@ -364,3 +364,43 @@ def test_open_reaps_exactly_once_before_the_first_camera(monkeypatch):
     # One reap, before any camera starts — the per-camera reap is what made
     # the rear camera SIGKILL the front one's just-started mipi_cam.
     assert calls == ["reap", "start-front", "start-rear"]
+
+
+def test_a_stop_racing_a_start_cannot_leak_a_writer_thread(pair, gallery, monkeypatch):
+    """A stop landing between "recording_id is set" and "the writer's stop
+    Event exists" used to set the *previous* Event, find no thread to join, and
+    return — leaving start to install a fresh Event and launch a writer nothing
+    would ever stop. That thread spins at 10 Hz for the life of the process,
+    writing nothing, because the stop already cleared _recording_dir.
+    """
+    import camera as camera_module
+
+    real_event = threading.Event
+    racing = []
+
+    def event_that_races_a_stop():
+        # Fires once, on the first Event start_recording builds after releasing
+        # the lock — the exact instant the window used to open. The slot is
+        # claimed before constructing anything, because Thread.__init__ builds
+        # an Event of its own and would otherwise re-enter this forever.
+        if not racing:
+            racing.append(None)
+            thread = threading.Thread(target=lambda: pair.stop_recording(gallery), name="racing-stop")
+            racing[0] = thread
+            thread.start()
+            time.sleep(0.05)  # long enough for it to reach the lock
+        return real_event()
+
+    monkeypatch.setattr(camera_module.threading, "Event", event_that_races_a_stop)
+    pair.start_recording(gallery)
+    monkeypatch.setattr(camera_module.threading, "Event", real_event)
+
+    racing[0].join(timeout=5.0)
+    assert not racing[0].is_alive()
+
+    # Whoever won, nothing may be left writing. A leaked writer is named
+    # record-<pair id> and is a daemon, so only this assertion catches it.
+    pair.stop_recording(gallery)
+    time.sleep(0.2)
+    leaked = [t.name for t in threading.enumerate() if t.name.startswith("record-") and t.is_alive()]
+    assert leaked == []

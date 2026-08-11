@@ -26,18 +26,43 @@ class Gallery:
         self.root = root
         self.min_free_mb = min_free_mb
         Path(self.root).mkdir(parents=True, exist_ok=True)
-        self._counter = 0
+        #: Ids handed out for the second currently being stamped. Only that
+        #: second can collide, so nothing older is worth remembering.
+        self._issued_second: str | None = None
+        self._issued: set[str] = set()
 
     def has_space(self) -> bool:
         free_mb = shutil.disk_usage(self.root).free / (1024 * 1024)
         return free_mb >= self.min_free_mb
 
     def new_pair_id(self, now: datetime) -> str:
-        """Sortable identifier. A monotonic suffix is appended after the first
-        capture in a given second, so two fast captures cannot collide."""
+        """Sortable identifier, unique against this process and against the disk.
+
+        A suffix is added only when the bare timestamp is already taken, by an
+        id handed out earlier in this same second or by a directory already in
+        the gallery. Both halves are load-bearing:
+
+        - In-process, because a caller receives the id before it creates the
+          directory, so the disk cannot yet answer for it.
+        - On disk, because the counter this used to rely on resets with the
+          process. The first capture after a restart took the bare id back and
+          reused whatever directory already had it: a photo overwritten, or —
+          since a segment is opened with "ab" — a new clip appended onto the
+          old one under a manifest describing only the new. This board has no
+          RTC, so every boot before NTP steps the clock stamps from the same
+          fake epoch, which is exactly when two runs report the same second.
+        """
         base = f"pair-{now:%Y%m%d-%H%M%S}"
-        self._counter += 1
-        return base if self._counter == 1 else f"{base}-{self._counter}"
+        if base != self._issued_second:
+            self._issued_second = base
+            self._issued = set()
+        candidate = base
+        suffix = 1
+        while candidate in self._issued or self.pair_dir(candidate).exists():
+            suffix += 1
+            candidate = f"{base}-{suffix}"
+        self._issued.add(candidate)
+        return candidate
 
     def pair_dir(self, pair_id: str) -> Path:
         return Path(self.root) / pair_id

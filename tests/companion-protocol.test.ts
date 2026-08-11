@@ -98,13 +98,13 @@ describe("companion.pairDiscover parsing", () => {
     ["empty", ""]
   ])("rejects a %s token", (_label, token) => {
     expect(() => parseCompanionClientEvent(JSON.stringify({ type: "companion.pairDiscover", token }))).toThrow(
-      /pairDiscover/
+      "Invalid companion.pairDiscover token"
     );
   });
 
   it("rejects extra fields", () => {
     expect(() =>
       parseCompanionClientEvent(JSON.stringify({ type: "companion.pairDiscover", token: TOKEN, extra: 1 }))
-    ).toThrow(/pairDiscover/);
+    ).toThrow("Invalid companion.pairDiscover token");
   });
 });

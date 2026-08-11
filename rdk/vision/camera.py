@@ -92,6 +92,14 @@ class CameraPair:
                     f"[vision] {attr} camera unavailable on channel {channel}: {error}",
                     flush=True,
                 )
+            except BaseException:
+                # SIGTERM during acquisition, which raises SystemExit and so
+                # misses the branch above. This camera never became ours, so
+                # nothing downstream will stop it — and leaving its spin thread
+                # and mipi_cam child running is what turned a stop 8 s into
+                # startup into an abort (status=6/signal) rather than an exit.
+                camera.stop()
+                raise
         self.opened = self.front is not None or self.rear is not None
 
     def _grab(self, camera, max_age_ms: float | None = None) -> bytes | None:

@@ -404,3 +404,39 @@ def test_a_stop_racing_a_start_cannot_leak_a_writer_thread(pair, gallery, monkey
     time.sleep(0.2)
     leaked = [t.name for t in threading.enumerate() if t.name.startswith("record-") and t.is_alive()]
     assert leaked == []
+
+
+def test_a_camera_interrupted_mid_open_is_released_before_unwinding(monkeypatch):
+    """SIGTERM during acquisition raises SystemExit out of camera.start().
+
+    SystemExit is not an Exception, so the retryable-miss branch below does not
+    see it — and without an explicit release that half-started camera keeps its
+    spin thread and its mipi_cam child, which holds the ISP. Measured on the
+    board: stopping 8 s into the ~19 s acquisition aborted the process
+    (status=6/signal) instead of exiting.
+    """
+    import mipi_camera
+    import sensors
+
+    stopped = []
+
+    class FakeMipi:
+        def __init__(self, channel, sensor, camera, width, height):
+            self.camera = camera
+
+        def start(self):
+            raise SystemExit(0)
+
+        def stop(self):
+            stopped.append(self.camera)
+
+    monkeypatch.setattr(mipi_camera, "reap_orphans", lambda: None)
+    monkeypatch.setattr(mipi_camera, "MipiCamera", FakeMipi)
+    monkeypatch.setattr(sensors, "discover", lambda: {0: "OV5647", 2: "IMX219"})
+
+    pair = CameraPair(front_channel=0, rear_channel=2)
+    with pytest.raises(SystemExit):
+        pair.open()
+    # Released, and the shutdown still gets to unwind.
+    assert stopped == ["front"]
+    assert pair.front is None

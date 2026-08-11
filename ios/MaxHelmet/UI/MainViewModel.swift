@@ -109,6 +109,7 @@ final class MainViewModel: ObservableObject {
     private let persistSecret: (String, String) -> Void
     private let companionClient: CompanionClientControlling
     private let locationStream: CompanionLocationStreaming
+    private let helmetDiscovery: HelmetDiscovering
     private let monotonicNow: () -> TimeInterval
     private let wallClock: () -> Date
     private let schedule: (@escaping () -> Void, TimeInterval) -> Void
@@ -248,6 +249,9 @@ final class MainViewModel: ObservableObject {
     /// True while a discovery-pair token has been sent and the rider is
     /// waiting on the helmet's spoken 确认 (or a pair.* error/timeout).
     @Published private(set) var isAwaitingHelmetConfirm = false
+    /// Helmets currently visible on the local network, refreshed by
+    /// `helmetDiscovery` while the pairing section is on screen.
+    @Published private(set) var discoveredHelmets: [DiscoveredHelmet] = []
 
     var helmetRideOwned: Bool { rideOwned }
 
@@ -371,6 +375,7 @@ final class MainViewModel: ObservableObject {
             initialCrashContactNumber: SecureTokenStore.read(account: Keys.crashContact) ?? "",
             companionClient: RDKCompanionClient(),
             locationStream: CompanionLocationStream(),
+            helmetDiscovery: BonjourHelmetDiscovery(),
             authClient: authClient,
             authLogout: { relayURL, token, allowSelfSigned in
                 authClient.logout(relayURL: relayURL, token: token, allowSelfSignedTls: allowSelfSigned)
@@ -397,6 +402,7 @@ final class MainViewModel: ObservableObject {
         initialCrashContactNumber: String = "",
         companionClient: CompanionClientControlling,
         locationStream: CompanionLocationStreaming,
+        helmetDiscovery: HelmetDiscovering = BonjourHelmetDiscovery(),
         authClient: AuthClient? = nil,
         authLogout: @escaping (String, String, Bool) -> Void,
         persistSecret: @escaping (String, String) -> Void,
@@ -411,6 +417,7 @@ final class MainViewModel: ObservableObject {
         self.persistSecret = persistSecret
         self.companionClient = companionClient
         self.locationStream = locationStream
+        self.helmetDiscovery = helmetDiscovery
         self.monotonicNow = monotonicNow
         self.wallClock = wallClock
         self.schedule = schedule
@@ -441,6 +448,10 @@ final class MainViewModel: ObservableObject {
 
         bindCompanionState(owner: companionGeneration)
 
+        self.helmetDiscovery.onUpdate = { [weak self] helmets in
+            self?.onMain { [weak self] in self?.discoveredHelmets = helmets }
+        }
+
         session.crashSettingsProvider = { [weak self] in
             guard let self else { return CrashSettings(contactNumber: nil, relayOptIn: false, callTarget: "120", logOnly: false) }
             let number = self.crashContactNumber.trimmingCharacters(in: .whitespaces)
@@ -461,6 +472,19 @@ final class MainViewModel: ObservableObject {
     /// than the six-digit HUD code — same lifecycle action, different message.
     func pairDiscoveredHelmet(token: String) {
         onMain { [weak self] in self?.performPairDiscoverHelmet(token: token) }
+    }
+
+    /// Starts the local-network scan for nearby helmet beacons. Owned by the
+    /// pairing section's lifetime — call from `onAppear`; never runs in the
+    /// background.
+    func startHelmetDiscovery() {
+        onMain { [weak self] in self?.helmetDiscovery.start() }
+    }
+
+    /// Stops the scan and clears `discoveredHelmets` (via the discovery's own
+    /// `onUpdate([])` on stop). Call from the pairing section's `onDisappear`.
+    func stopHelmetDiscovery() {
+        onMain { [weak self] in self?.helmetDiscovery.stop() }
     }
 
     /// Rider-facing copy for `companion.error` codes introduced by discovery

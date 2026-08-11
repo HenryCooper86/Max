@@ -14,7 +14,12 @@ import type {
 import { MOCK_ROUTE } from "../shared/nav-fixtures";
 import { parseCompanionClientEvent, type CompanionServerEvent } from "../shared/companion";
 import { createCompanionBindingStore } from "../server/companion-store";
-import { createCompanionRegistry, PAIR_CONFIRM_PROMPT, type CompanionConnection } from "../server/companion-registry";
+import {
+  createCompanionRegistry,
+  PAIR_CONFIRM_PROMPT,
+  PAIR_CONFIRM_OK_SPEECH,
+  type CompanionConnection
+} from "../server/companion-registry";
 import { metrics } from "../server/metrics";
 import { parseClientEvent } from "../server/session-controller";
 import { resetUserMemoryForTests, userConversationMemory } from "../server/user-memory";
@@ -492,6 +497,7 @@ describe("phone relay to RDK navigation end-to-end", () => {
     h.registry.handleRiderUtterance(DEVICE_ID, "确认");
     await vi.waitFor(() => expect(h.store.bindingForAccount(ACCOUNT_ID)?.deviceId).toBe(DEVICE_ID));
 
+    expect(h.helmetSpoken.at(-1)).toBe(PAIR_CONFIRM_OK_SPEECH);
     expect(h.helmetFrames.filter((event) => event.type === "companion.pairing").at(-1)).toMatchObject({
       paired: true
     });

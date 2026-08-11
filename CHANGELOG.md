@@ -12,6 +12,17 @@
   are aggregate-only, and neither relay nor iOS persists fixes. Added deterministic real-component
   end-to-end/privacy coverage plus a PENDING-until-observed physical/deployment evidence template.
 
+- **Companion discovery pairing (iOS, Phase 1)** — unpaired boards broadcast a
+  rotating, secret-free discovery token via mDNS under `_maxhelmet._tcp`
+  (TXT record `dt=<token>`). The iOS app scans Bonjour on the pairing screen,
+  lists nearby helmets by discovery beacon, and pairing completes with a spoken
+  prompt ("检测到配对请求，请说"确认"。" — rider confirms by saying 确认). The HUD's
+  配对广播 status line shows discovery transport liveness; `discovery: off` while
+  unpaired means both transports failed — check journal for `[discovery]` lines.
+  The six-digit code path (HDMI HUD / SSH forward) remains unchanged as fallback,
+  useful when Bonjour is blocked or after network loss. Phase 2 (BLE) and Phase 3
+  (Android) are separate.
+
 - **Crash detection & emergency escalation (iOS)** — during a hands-free session
   the phone's IMU watches for a crash signature (≥4.5 g sustained pulse or ≥6 rad/s
   tumble, then stillness; speed-gated below 10 km/h). A pure, trace-tested

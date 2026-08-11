@@ -992,6 +992,10 @@ With `npm run dev:server` running on the LAN host:
 3. Interrupt a reply mid-sentence; speech must stop within ~120 ms.
 4. Unplug and replug the headset; the service recovers without a restart.
 
+**iPhone companion pairing — discovery and fallback paths**
+
+Unpaired boards broadcast a rotating, secret-free discovery token via mDNS under `_maxhelmet._tcp` (TXT record `dt=<token>`). The iOS app scans Bonjour on the pairing screen, lists nearby helmets by discovery beacon, and pairing completes with a spoken prompt at the helmet ("检测到配对请求，请说"确认"。" — a rider confirms by saying 确认). The HUD's 配对广播 status line shows whether discovery is live; a `discovery: off` line while unpaired means both transports failed — check the journal for `[discovery]` lines. The six-digit code path (HDMI HUD / SSH forward) remains unchanged as fallback, useful when Bonjour is blocked or after network loss.
+
 **iPhone companion navigation**
 
 1. With Helmet Ride stopped, read the six-digit code from the board-local Chromium/HDMI HUD. For

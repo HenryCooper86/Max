@@ -567,9 +567,18 @@ describe("companion discovery session wiring", () => {
       }
     );
     await controller.handleMessage(startEvent({ deviceId: "rdk-11111111-1111-4111-8111-111111111111" }), false);
-    serverEventTap?.({ type: "transcript", turnId: "t1", deliveryId: "d1", speaker: "rider", text: "确认", final: true }, 10);
-    serverEventTap?.({ type: "transcript", turnId: "t1", deliveryId: "d2", speaker: "rider", text: "确", final: false }, 10);
-    serverEventTap?.({ type: "transcript", turnId: "t2", deliveryId: "d3", speaker: "agent", text: "确认", final: true }, 10);
+    serverEventTap?.(
+      { type: "transcript", turnId: "t1", deliveryId: "d1", speaker: "rider", text: "确认", final: true },
+      10
+    );
+    serverEventTap?.(
+      { type: "transcript", turnId: "t1", deliveryId: "d2", speaker: "rider", text: "确", final: false },
+      10
+    );
+    serverEventTap?.(
+      { type: "transcript", turnId: "t2", deliveryId: "d3", speaker: "agent", text: "确认", final: true },
+      10
+    );
     expect(utterances).toEqual([{ deviceId: "rdk-11111111-1111-4111-8111-111111111111", text: "确认" }]);
   });
 });

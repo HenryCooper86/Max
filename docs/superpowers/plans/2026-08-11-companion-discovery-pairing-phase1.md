@@ -29,11 +29,13 @@
 ### Task 1: Protocol — `companion.discovery` agent event
 
 **Files:**
+
 - Modify: `protocol/agent-events.schema.json` (AgentEvent `oneOf`, next to the `CompanionPairing` entry at ~line 550)
 - Modify: `shared/agent.ts` (type + union, next to `CompanionPairingEvent` at ~line 382)
 - Regenerate: `shared/generated/agent-protocol.ts`, `ios/MaxHelmet/Agent/GeneratedAgentProtocol.swift`, `android/app/src/main/java/com/horizon/maxhelmet/agent/GeneratedAgentProtocol.kt` via `npm run generate:protocol`
 
 **Interfaces:**
+
 - Produces: `CompanionDiscoveryEvent = { type: "companion.discovery"; token: string | null; expiresAt?: number }`, exported from `shared/agent.ts` and part of `AgentEvent`. Every later task imports this exact shape.
 
 - [ ] **Step 1: Add the schema entry**
@@ -102,10 +104,12 @@ git commit -m "feat(protocol): add companion.discovery agent event"
 ### Task 2: Companion protocol — `companion.pairDiscover` message
 
 **Files:**
+
 - Modify: `shared/companion.ts` (`CompanionClientEvent` union + `parseCompanionClientEvent`)
 - Test: `tests/companion-protocol.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing new.
 - Produces: `{ type: "companion.pairDiscover"; token: string }` in `CompanionClientEvent`; `parseCompanionClientEvent` accepts exactly `{type, token}` where token matches `/^[0-9a-f]{32}$/`.
 
@@ -160,16 +164,16 @@ In `shared/companion.ts`: add to the union
 and in `parseCompanionClientEvent`, after the `companion.pair` block:
 
 ```ts
-  if (value.type === "companion.pairDiscover") {
-    if (
-      !hasOnlyFields(value, ["type", "token"]) ||
-      typeof value.token !== "string" ||
-      !/^[0-9a-f]{32}$/.test(value.token)
-    ) {
-      throw new Error("Invalid companion.pairDiscover token");
-    }
-    return { type: "companion.pairDiscover", token: value.token };
+if (value.type === "companion.pairDiscover") {
+  if (
+    !hasOnlyFields(value, ["type", "token"]) ||
+    typeof value.token !== "string" ||
+    !/^[0-9a-f]{32}$/.test(value.token)
+  ) {
+    throw new Error("Invalid companion.pairDiscover token");
   }
+  return { type: "companion.pairDiscover", token: value.token };
+}
 ```
 
 - [ ] **Step 4: Run to verify pass**
@@ -189,10 +193,12 @@ git commit -m "feat(companion): parse companion.pairDiscover"
 ### Task 3: Grammar — `matchPairConfirmReply`
 
 **Files:**
+
 - Modify: `server/device-actions.ts`
 - Test: `tests/device-actions.test.ts`
 
 **Interfaces:**
+
 - Produces: `export function matchPairConfirmReply(text: string): "accept" | "decline" | undefined`. Pure, dependency-free (this file's contract). Task 5 imports it into the registry.
 
 - [ ] **Step 1: Write the failing tests**
@@ -212,12 +218,9 @@ describe("matchPairConfirmReply", () => {
     expect(matchPairConfirmReply(text)).toBe(expected);
   });
 
-  it.each(["帮我导航到外滩", "确", "好的", "不要", "把音量调大", ""])(
-    "leaves %s unmatched",
-    (text) => {
-      expect(matchPairConfirmReply(text)).toBeUndefined();
-    }
-  );
+  it.each(["帮我导航到外滩", "确", "好的", "不要", "把音量调大", ""])("leaves %s unmatched", (text) => {
+    expect(matchPairConfirmReply(text)).toBeUndefined();
+  });
 
   it("prefers decline when both words appear", () => {
     // 取消确认 means "cancel the confirmation" — never bind on it.
@@ -266,10 +269,12 @@ git commit -m "feat(device-actions): match pairing confirm replies"
 ### Task 4: Registry — discovery-token lifecycle
 
 **Files:**
+
 - Modify: `server/companion-registry.ts`
 - Test: `tests/companion-registry.test.ts`
 
 **Interfaces:**
+
 - Consumes: `CompanionDiscoveryEvent` (Task 1).
 - Produces (later tasks rely on these exact names):
   - `HelmetPeer.send` union widened to include `CompanionDiscoveryEvent`.
@@ -283,6 +288,7 @@ git commit -m "feat(device-actions): match pairing confirm replies"
 - [ ] **Step 1: Update the harness**
 
 In `tests/companion-registry.test.ts`:
+
 - Widen `HelmetEvent` to include the new event: `type HelmetEvent = CompanionPairingEvent | CompanionDiscoveryEvent | PhoneLocationEvent | PhoneLocationStatusEvent;` (import `CompanionDiscoveryEvent` from `../shared/agent`).
 - Add `tokens?: string[]` to harness options; pass `randomToken: () => tokens.shift() ?? "ffffffffffffffffffffffffffffffff"` with default queue `["aaaa...", "bbbb...", "cccc..."]` (use full 32-hex literals: `"a".repeat(32)` is fine).
 - Extend `helmet()` to capture speech: `helmet(deviceId, deviceLabel?)` returns `{ events, spoken: string[], detach }` with `speak: (text) => spoken.push(text)` in the peer.
@@ -380,7 +386,7 @@ In `server/companion-registry.ts`:
 
 ```ts
 import { randomBytes, randomInt } from "node:crypto";
-import type { CompanionDiscoveryEvent, /* existing imports */ } from "../shared/agent";
+import type { CompanionDiscoveryEvent /* existing imports */ } from "../shared/agent";
 
 export type HelmetPeer = {
   deviceId: string;
@@ -401,95 +407,96 @@ function defaultRandomToken(): string {
 Inside `createCompanionRegistry` (new option `randomToken`, validated like `randomCode` — throw unless `/^[0-9a-f]{32}$/`):
 
 ```ts
-  const randomToken = options.randomToken ?? defaultRandomToken;
-  const discoveryTokens = new Map<string, DiscoveryToken>();
-  const tokenByDevice = new Map<string, string>();
-  const refreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const randomToken = options.randomToken ?? defaultRandomToken;
+const discoveryTokens = new Map<string, DiscoveryToken>();
+const tokenByDevice = new Map<string, string>();
+const refreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-  function cancelRefresh(deviceId: string): void {
-    const timer = refreshTimers.get(deviceId);
-    if (timer !== undefined) clearTimer(timer);
-    refreshTimers.delete(deviceId);
-  }
+function cancelRefresh(deviceId: string): void {
+  const timer = refreshTimers.get(deviceId);
+  if (timer !== undefined) clearTimer(timer);
+  refreshTimers.delete(deviceId);
+}
 
-  function deleteDeviceToken(deviceId: string): void {
-    const token = tokenByDevice.get(deviceId);
-    if (token !== undefined) discoveryTokens.delete(token);
-    tokenByDevice.delete(deviceId);
-    cancelRefresh(deviceId);
-  }
+function deleteDeviceToken(deviceId: string): void {
+  const token = tokenByDevice.get(deviceId);
+  if (token !== undefined) discoveryTokens.delete(token);
+  tokenByDevice.delete(deviceId);
+  cancelRefresh(deviceId);
+}
 
-  function expireDiscoveryTokens(at: number): void {
-    for (const [token, entry] of discoveryTokens) {
-      if (at >= entry.expiresAt) {
-        discoveryTokens.delete(token);
-        if (tokenByDevice.get(entry.deviceId) === token) tokenByDevice.delete(entry.deviceId);
-      }
+function expireDiscoveryTokens(at: number): void {
+  for (const [token, entry] of discoveryTokens) {
+    if (at >= entry.expiresAt) {
+      discoveryTokens.delete(token);
+      if (tokenByDevice.get(entry.deviceId) === token) tokenByDevice.delete(entry.deviceId);
     }
   }
+}
 
-  function issueDiscoveryToken(deviceId: string, helmet: HelmetSession, reuseUnexpired: boolean): DiscoveryToken {
-    const at = clock();
-    expireDiscoveryTokens(at);
-    const currentToken = tokenByDevice.get(deviceId);
-    const current = currentToken === undefined ? undefined : discoveryTokens.get(currentToken);
-    if (reuseUnexpired && current && at < current.expiresAt) {
-      const replacement = { ...current, helmet };
-      discoveryTokens.set(current.token, replacement);
-      return replacement;
-    }
-    deleteDeviceToken(deviceId);
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      const token = randomToken();
-      if (!/^[0-9a-f]{32}$/.test(token)) throw new Error("Companion discovery token source must return 32 hex chars");
-      if (discoveryTokens.has(token)) continue;
-      const entry = { token, deviceId, expiresAt: at + pairLifetimeMs, helmet };
-      discoveryTokens.set(token, entry);
-      tokenByDevice.set(deviceId, token);
-      return entry;
-    }
-    throw new Error("Unable to allocate a unique companion discovery token");
+function issueDiscoveryToken(deviceId: string, helmet: HelmetSession, reuseUnexpired: boolean): DiscoveryToken {
+  const at = clock();
+  expireDiscoveryTokens(at);
+  const currentToken = tokenByDevice.get(deviceId);
+  const current = currentToken === undefined ? undefined : discoveryTokens.get(currentToken);
+  if (reuseUnexpired && current && at < current.expiresAt) {
+    const replacement = { ...current, helmet };
+    discoveryTokens.set(current.token, replacement);
+    return replacement;
   }
+  deleteDeviceToken(deviceId);
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const token = randomToken();
+    if (!/^[0-9a-f]{32}$/.test(token)) throw new Error("Companion discovery token source must return 32 hex chars");
+    if (discoveryTokens.has(token)) continue;
+    const entry = { token, deviceId, expiresAt: at + pairLifetimeMs, helmet };
+    discoveryTokens.set(token, entry);
+    tokenByDevice.set(deviceId, token);
+    return entry;
+  }
+  throw new Error("Unable to allocate a unique companion discovery token");
+}
 
-  function scheduleDiscoveryRefresh(entry: DiscoveryToken): void {
-    cancelRefresh(entry.deviceId);
-    const delay = Math.max(0, entry.expiresAt - DISCOVERY_REFRESH_LEAD_MS - clock());
-    refreshTimers.set(
-      entry.deviceId,
-      setTimer(() => {
-        refreshTimers.delete(entry.deviceId);
-        const helmet = helmets.get(entry.deviceId);
-        if (!helmet || helmet !== entry.helmet) return;
-        if (options.store.bindingForDevice(entry.deviceId)) return;
-        if (tokenByDevice.get(entry.deviceId) !== entry.token) return;
-        startDiscovery(entry.deviceId, helmet, false);
-      }, delay)
-    );
-  }
+function scheduleDiscoveryRefresh(entry: DiscoveryToken): void {
+  cancelRefresh(entry.deviceId);
+  const delay = Math.max(0, entry.expiresAt - DISCOVERY_REFRESH_LEAD_MS - clock());
+  refreshTimers.set(
+    entry.deviceId,
+    setTimer(() => {
+      refreshTimers.delete(entry.deviceId);
+      const helmet = helmets.get(entry.deviceId);
+      if (!helmet || helmet !== entry.helmet) return;
+      if (options.store.bindingForDevice(entry.deviceId)) return;
+      if (tokenByDevice.get(entry.deviceId) !== entry.token) return;
+      startDiscovery(entry.deviceId, helmet, false);
+    }, delay)
+  );
+}
 
-  function sendDiscovery(helmet: HelmetSession, entry: DiscoveryToken | null): boolean {
-    return sendHelmetEvent(
-      helmet,
-      entry === null
-        ? { type: "companion.discovery", token: null }
-        : { type: "companion.discovery", token: entry.token, expiresAt: entry.expiresAt }
-    );
-  }
+function sendDiscovery(helmet: HelmetSession, entry: DiscoveryToken | null): boolean {
+  return sendHelmetEvent(
+    helmet,
+    entry === null
+      ? { type: "companion.discovery", token: null }
+      : { type: "companion.discovery", token: entry.token, expiresAt: entry.expiresAt }
+  );
+}
 
-  function startDiscovery(deviceId: string, helmet: HelmetSession, reuseUnexpired: boolean): void {
-    const entry = issueDiscoveryToken(deviceId, helmet, reuseUnexpired);
-    if (!sendDiscovery(helmet, entry)) return;
-    scheduleDiscoveryRefresh(entry);
-  }
+function startDiscovery(deviceId: string, helmet: HelmetSession, reuseUnexpired: boolean): void {
+  const entry = issueDiscoveryToken(deviceId, helmet, reuseUnexpired);
+  if (!sendDiscovery(helmet, entry)) return;
+  scheduleDiscoveryRefresh(entry);
+}
 
-  function stopDiscovery(deviceId: string): void {
-    deleteDeviceToken(deviceId);
-    const helmet = helmets.get(deviceId);
-    if (helmet) sendDiscovery(helmet, null);
-  }
+function stopDiscovery(deviceId: string): void {
+  deleteDeviceToken(deviceId);
+  const helmet = helmets.get(deviceId);
+  if (helmet) sendDiscovery(helmet, null);
+}
 ```
 
 Wire the lifecycle:
+
 - `attachHelmet`, after the existing `sendPairing(helmet, entry, Boolean(binding))`: `if (binding) { deleteDeviceToken(peer.deviceId); sendDiscovery(helmet, null); } else { startDiscovery(peer.deviceId, helmet, !existingBinding); }`
 - `attachHelmet`'s detach closure and `markHelmetBroken`: add `cancelRefresh(peer.deviceId)` (token entry survives for reuse; also add `expireDiscoveryTokens(clock())` beside the existing `expireCodes` call in the no-binding branch).
 - `handlePair`, right after `deleteCode(code); pendingPairCodes.delete(code);`: `stopDiscovery(entry.deviceId);`
@@ -513,10 +520,12 @@ git commit -m "feat(companion): issue rotating discovery tokens to unpaired helm
 ### Task 5: Registry — `pairDiscover`, confirm slot, and voice resolution
 
 **Files:**
+
 - Modify: `server/companion-registry.ts`
 - Test: `tests/companion-registry.test.ts`
 
 **Interfaces:**
+
 - Consumes: Task 4's token table and `stopDiscovery`; Task 3's `matchPairConfirmReply` (import from `./device-actions`); Task 2's `companion.pairDiscover` client event.
 - Produces:
   - `CompanionRegistry` gains `handleRiderUtterance(deviceId: string, text: string): void` (Task 6 wires it).
@@ -664,97 +673,97 @@ type PendingConfirm = { accountId: string; expiresAt: number; timer: ReturnType<
 Inside the factory:
 
 ```ts
-  const confirmLifetimeMs = options.confirmLifetimeMs ?? DEFAULT_CONFIRM_LIFETIME_MS;
-  const pendingConfirms = new Map<string, PendingConfirm>();
+const confirmLifetimeMs = options.confirmLifetimeMs ?? DEFAULT_CONFIRM_LIFETIME_MS;
+const pendingConfirms = new Map<string, PendingConfirm>();
 
-  function speakHelmet(helmet: HelmetSession, text: string): boolean {
-    if (closed || helmets.get(helmet.peer.deviceId) !== helmet) return false;
-    try {
-      helmet.peer.speak(text);
-      return true;
-    } catch {
-      markHelmetBroken(helmet);
-      options.log?.warn("companion helmet speech failed", { deviceId: helmet.peer.deviceId });
-      return false;
-    }
+function speakHelmet(helmet: HelmetSession, text: string): boolean {
+  if (closed || helmets.get(helmet.peer.deviceId) !== helmet) return false;
+  try {
+    helmet.peer.speak(text);
+    return true;
+  } catch {
+    markHelmetBroken(helmet);
+    options.log?.warn("companion helmet speech failed", { deviceId: helmet.peer.deviceId });
+    return false;
   }
+}
 
-  function clearPendingConfirm(deviceId: string, notify?: { code: string; detail: string }): void {
-    const pending = pendingConfirms.get(deviceId);
-    if (!pending) return;
-    pendingConfirms.delete(deviceId);
-    clearTimer(pending.timer);
-    if (!notify) return;
-    const phone = companions.get(pending.accountId);
-    if (phone) sendError(phone, notify.code, notify.detail);
-  }
+function clearPendingConfirm(deviceId: string, notify?: { code: string; detail: string }): void {
+  const pending = pendingConfirms.get(deviceId);
+  if (!pending) return;
+  pendingConfirms.delete(deviceId);
+  clearTimer(pending.timer);
+  if (!notify) return;
+  const phone = companions.get(pending.accountId);
+  if (phone) sendError(phone, notify.code, notify.detail);
+}
 
-  async function completeBind(session: CompanionSession, deviceId: string, at: number): Promise<void> {
-    let result: Awaited<ReturnType<CompanionBindingStore["bind"]>>;
-    try {
-      result = await options.store.bind(session.peer.accountId, deviceId, at);
-    } catch {
-      reconcileAccount(session.peer.accountId);
-      sendError(session, "pair.persistence", "Pairing could not be persisted");
-      return;
-    }
-    clearPairFailures(session);
-    const currentPhone = companions.get(session.peer.accountId);
-    if (currentPhone) {
-      currentPhone.sharing = false;
-      currentPhone.stopped = false;
-      cancelStale(currentPhone);
-    }
-    notifyDisplaced(result.displaced, session.peer.accountId, deviceId);
-    const helmet = helmets.get(deviceId);
-    const currentCode = codeByDevice.get(deviceId);
-    const codeEntry = currentCode ? pairCodes.get(currentCode) : undefined;
-    if (helmet && codeEntry) sendPairing(helmet, codeEntry, true);
-    stopDiscovery(deviceId);
+async function completeBind(session: CompanionSession, deviceId: string, at: number): Promise<void> {
+  let result: Awaited<ReturnType<CompanionBindingStore["bind"]>>;
+  try {
+    result = await options.store.bind(session.peer.accountId, deviceId, at);
+  } catch {
     reconcileAccount(session.peer.accountId);
-    options.log?.info("companion pairing changed", {
-      accountId: session.peer.accountId,
-      deviceId,
-      displaced: result.displaced.length
-    });
+    sendError(session, "pair.persistence", "Pairing could not be persisted");
+    return;
   }
+  clearPairFailures(session);
+  const currentPhone = companions.get(session.peer.accountId);
+  if (currentPhone) {
+    currentPhone.sharing = false;
+    currentPhone.stopped = false;
+    cancelStale(currentPhone);
+  }
+  notifyDisplaced(result.displaced, session.peer.accountId, deviceId);
+  const helmet = helmets.get(deviceId);
+  const currentCode = codeByDevice.get(deviceId);
+  const codeEntry = currentCode ? pairCodes.get(currentCode) : undefined;
+  if (helmet && codeEntry) sendPairing(helmet, codeEntry, true);
+  stopDiscovery(deviceId);
+  reconcileAccount(session.peer.accountId);
+  options.log?.info("companion pairing changed", {
+    accountId: session.peer.accountId,
+    deviceId,
+    displaced: result.displaced.length
+  });
+}
 
-  async function handlePairDiscover(session: CompanionSession, token: string): Promise<void> {
-    const at = clock();
-    if (pairingBlocked(session, at)) {
-      sendError(session, "pair.attempts", "Too many pairing attempts");
-      return;
-    }
-    expireDiscoveryTokens(at);
-    const entry = discoveryTokens.get(token);
-    if (!entry || at >= entry.expiresAt) {
-      recordPairFailure(session, at);
-      sendError(session, "pair.code", "Discovery token is invalid or expired");
-      return;
-    }
-    const helmet = helmets.get(entry.deviceId);
-    if (!helmet || helmet !== entry.helmet) {
-      sendError(session, "pair.helmetOffline", "Helmet is temporarily offline");
-      return;
-    }
-    const pending = pendingConfirms.get(entry.deviceId);
-    if (pending && pending.accountId !== session.peer.accountId) {
-      sendError(session, "pair.busy", "Another phone is pairing with this helmet");
-      return;
-    }
-    if (pending) {
-      speakHelmet(helmet, PAIR_CONFIRM_PROMPT);
-      return;
-    }
-    const deviceId = entry.deviceId;
-    const timer = setTimer(() => {
-      clearPendingConfirm(deviceId, { code: "pair.timeout", detail: "Pairing confirmation timed out" });
-    }, confirmLifetimeMs);
-    pendingConfirms.set(deviceId, { accountId: session.peer.accountId, expiresAt: at + confirmLifetimeMs, timer });
-    if (!speakHelmet(helmet, PAIR_CONFIRM_PROMPT)) {
-      clearPendingConfirm(deviceId, { code: "pair.helmetOffline", detail: "Helmet is temporarily offline" });
-    }
+async function handlePairDiscover(session: CompanionSession, token: string): Promise<void> {
+  const at = clock();
+  if (pairingBlocked(session, at)) {
+    sendError(session, "pair.attempts", "Too many pairing attempts");
+    return;
   }
+  expireDiscoveryTokens(at);
+  const entry = discoveryTokens.get(token);
+  if (!entry || at >= entry.expiresAt) {
+    recordPairFailure(session, at);
+    sendError(session, "pair.code", "Discovery token is invalid or expired");
+    return;
+  }
+  const helmet = helmets.get(entry.deviceId);
+  if (!helmet || helmet !== entry.helmet) {
+    sendError(session, "pair.helmetOffline", "Helmet is temporarily offline");
+    return;
+  }
+  const pending = pendingConfirms.get(entry.deviceId);
+  if (pending && pending.accountId !== session.peer.accountId) {
+    sendError(session, "pair.busy", "Another phone is pairing with this helmet");
+    return;
+  }
+  if (pending) {
+    speakHelmet(helmet, PAIR_CONFIRM_PROMPT);
+    return;
+  }
+  const deviceId = entry.deviceId;
+  const timer = setTimer(() => {
+    clearPendingConfirm(deviceId, { code: "pair.timeout", detail: "Pairing confirmation timed out" });
+  }, confirmLifetimeMs);
+  pendingConfirms.set(deviceId, { accountId: session.peer.accountId, expiresAt: at + confirmLifetimeMs, timer });
+  if (!speakHelmet(helmet, PAIR_CONFIRM_PROMPT)) {
+    clearPendingConfirm(deviceId, { code: "pair.helmetOffline", detail: "Helmet is temporarily offline" });
+  }
+}
 ```
 
 Registry method (added to the `registry` object and the `CompanionRegistry` type):
@@ -785,6 +794,7 @@ Registry method (added to the `registry` object and the `CompanionRegistry` type
 ```
 
 Wire the cleanup paths:
+
 - `connection.handle` switch: add `case "companion.pairDiscover": await handlePairDiscover(session, event.token); return;` and include it in the `lifecycleEvent` check alongside `companion.pair`/`companion.unpair`.
 - `handlePair` (code path): keep as-is — a code pair while a discovery confirm is pending on the same device also calls `stopDiscovery`; additionally call `clearPendingConfirm(entry.deviceId)` beside it.
 - `attachHelmet` detach closure and `markHelmetBroken`: `clearPendingConfirm(deviceId, { code: "pair.helmetOffline", detail: "Helmet is temporarily offline" })`.
@@ -809,11 +819,13 @@ git commit -m "feat(companion): pairDiscover with spoken confirm at the helmet"
 ### Task 6: Relay wiring — helmet speech and rider-utterance tap
 
 **Files:**
+
 - Modify: `server/session-controller.ts` (hooks type ~line 29, registration ~line 687, `serverEvent` callback ~line 538)
 - Modify: `server/index.ts` (hooks construction ~line 781)
 - Test: `tests/session.test.ts`
 
 **Interfaces:**
+
 - Consumes: `HelmetPeer.speak` (Task 4), `registry.handleRiderUtterance` (Task 5).
 - Produces: `AgentSessionHooks` gains `onRiderUtterance?(deviceId: string, text: string): void`.
 
@@ -854,15 +866,32 @@ describe("companion discovery session wiring", () => {
       serverEventTap = telemetry.serverEvent;
       return makeProvider();
     };
-    const controller = new AgentSessionController(fakeClient(), factory, undefined, "203.0.113.5", undefined, undefined, {
-      deviceRegistrationAuthorized: true,
-      onDeviceRegistered: () => () => undefined,
-      onRiderUtterance: (deviceId, text) => void utterances.push({ deviceId, text })
-    });
+    const controller = new AgentSessionController(
+      fakeClient(),
+      factory,
+      undefined,
+      "203.0.113.5",
+      undefined,
+      undefined,
+      {
+        deviceRegistrationAuthorized: true,
+        onDeviceRegistered: () => () => undefined,
+        onRiderUtterance: (deviceId, text) => void utterances.push({ deviceId, text })
+      }
+    );
     await controller.handleMessage(startEvent({ deviceId: "rdk-11111111-1111-4111-8111-111111111111" }), false);
-    serverEventTap?.({ type: "transcript", turnId: "t1", deliveryId: "d1", speaker: "rider", text: "确认", final: true }, 10);
-    serverEventTap?.({ type: "transcript", turnId: "t1", deliveryId: "d2", speaker: "rider", text: "确", final: false }, 10);
-    serverEventTap?.({ type: "transcript", turnId: "t2", deliveryId: "d3", speaker: "agent", text: "确认", final: true }, 10);
+    serverEventTap?.(
+      { type: "transcript", turnId: "t1", deliveryId: "d1", speaker: "rider", text: "确认", final: true },
+      10
+    );
+    serverEventTap?.(
+      { type: "transcript", turnId: "t1", deliveryId: "d2", speaker: "rider", text: "确", final: false },
+      10
+    );
+    serverEventTap?.(
+      { type: "transcript", turnId: "t2", deliveryId: "d3", speaker: "agent", text: "确认", final: true },
+      10
+    );
     expect(utterances).toEqual([{ deviceId: "rdk-11111111-1111-4111-8111-111111111111", text: "确认" }]);
   });
 });
@@ -884,22 +913,22 @@ In `server/session-controller.ts`:
 - Registration block (~line 687): set `this.registeredDeviceId = event.deviceId;` and extend the peer:
 
 ```ts
-            this.detachHelmet = this.hooks?.onDeviceRegistered?.({
-              deviceId: event.deviceId,
-              deviceLabel: event.deviceLabel?.trim() || "RDK X5",
-              send: (payload) => this.sendEphemeral(payload),
-              speak: (text) => {
-                if (this.acceptingMessages) this.provider.speakNavLine?.(text);
-              }
-            });
+this.detachHelmet = this.hooks?.onDeviceRegistered?.({
+  deviceId: event.deviceId,
+  deviceLabel: event.deviceLabel?.trim() || "RDK X5",
+  send: (payload) => this.sendEphemeral(payload),
+  speak: (text) => {
+    if (this.acceptingMessages) this.provider.speakNavLine?.(text);
+  }
+});
 ```
 
 - `serverEvent` callback (~line 538), after the existing telemetry lines:
 
 ```ts
-        if (this.registeredDeviceId && isFinalRiderTranscript(payload)) {
-          this.hooks?.onRiderUtterance?.(this.registeredDeviceId, payload.text);
-        }
+if (this.registeredDeviceId && isFinalRiderTranscript(payload)) {
+  this.hooks?.onRiderUtterance?.(this.registeredDeviceId, payload.text);
+}
 ```
 
 with a module-level guard beside the file's other payload guards:
@@ -908,7 +937,9 @@ with a module-level guard beside the file's other payload guards:
 function isFinalRiderTranscript(payload: unknown): payload is { text: string } {
   if (!payload || typeof payload !== "object") return false;
   const event = payload as { type?: unknown; speaker?: unknown; final?: unknown; text?: unknown };
-  return event.type === "transcript" && event.speaker === "rider" && event.final === true && typeof event.text === "string";
+  return (
+    event.type === "transcript" && event.speaker === "rider" && event.final === true && typeof event.text === "string"
+  );
 }
 ```
 
@@ -936,10 +967,12 @@ git commit -m "feat(relay): wire helmet speech and rider utterances to the compa
 ### Task 7: Board — discovery advertiser core
 
 **Files:**
+
 - Create: `rdk/agent/src/discovery/advertiser.ts`
 - Test: `tests/rdk-discovery-advertiser.test.ts`
 
 **Interfaces:**
+
 - Produces (Task 8 consumes):
 
 ```ts
@@ -966,10 +999,7 @@ export function createDiscoveryAdvertiser(options: {
 
 ```ts
 import { describe, expect, it } from "vitest";
-import {
-  createDiscoveryAdvertiser,
-  type DiscoveryTransport
-} from "../rdk/agent/src/discovery/advertiser";
+import { createDiscoveryAdvertiser, type DiscoveryTransport } from "../rdk/agent/src/discovery/advertiser";
 
 type FakeTransport = DiscoveryTransport & {
   calls: string[];
@@ -1138,10 +1168,13 @@ export function createDiscoveryAdvertiser(options: {
   const queues = new Map<string, Promise<void>>();
 
   function publishStatus(): void {
-    const status = active.size === 0 ? "off" : options.transports
-      .map((transport) => transport.name)
-      .filter((name) => active.has(name))
-      .join("+");
+    const status =
+      active.size === 0
+        ? "off"
+        : options.transports
+            .map((transport) => transport.name)
+            .filter((name) => active.has(name))
+            .join("+");
     if (status === lastStatus) return;
     lastStatus = status;
     options.onStatus?.(status);
@@ -1170,7 +1203,10 @@ export function createDiscoveryAdvertiser(options: {
       publishStatus();
       if ((closed ? null : desired) !== applied.get(transport.name)) reconcile(transport);
     });
-    queues.set(transport.name, next.catch(() => undefined));
+    queues.set(
+      transport.name,
+      next.catch(() => undefined)
+    );
   }
 
   return {
@@ -1211,6 +1247,7 @@ git commit -m "feat(rdk): discovery advertiser with interrupt-safe transport lif
 ### Task 8: Board — mDNS transport, main wiring, HUD status
 
 **Files:**
+
 - Create: `rdk/agent/src/discovery/mdns.ts`
 - Modify: `rdk/agent/src/main.ts` (relay `onEvent` ~line 388, `onClosed` ~line 412, shutdown ~line 483, advertiser construction near `createHudServer` ~line 270)
 - Modify: `rdk/agent/src/hud/state.ts` (HudState + HudEvent + reducer), `rdk/agent/src/hud/index.html` (status row)
@@ -1218,6 +1255,7 @@ git commit -m "feat(rdk): discovery advertiser with interrupt-safe transport lif
 - Test: `tests/rdk-discovery-mdns.test.ts`, extend `tests/rdk-hud-state.test.ts`
 
 **Interfaces:**
+
 - Consumes: `DiscoveryTransport`, `createDiscoveryAdvertiser` (Task 7); `CompanionDiscoveryEvent` (Task 1).
 - Produces: `createMdnsTransport(options: { port: number; mdnsFactory?: () => MdnsLike; log?: (line: string) => void }): DiscoveryTransport` where
 
@@ -1233,7 +1271,7 @@ export type MdnsAnswer =
   | { name: string; type: "TXT"; ttl: number; data: string[] };
 ```
 
-  HudState gains `discovery: string` (initial `"off"`); HudEvent gains `{ type: "rdk.discovery"; discovery: string }`.
+HudState gains `discovery: string` (initial `"off"`); HudEvent gains `{ type: "rdk.discovery"; discovery: string }`.
 
 - [ ] **Step 1: Install the dependency**
 
@@ -1438,18 +1476,18 @@ import { createMdnsTransport } from "./discovery/mdns";
 Near HUD construction (~line 270):
 
 ```ts
-  const advertiser = createDiscoveryAdvertiser({
-    transports: [createMdnsTransport({ port: config.hudPort })],
-    onStatus: (status) => publishHud({ type: "rdk.discovery", discovery: status })
-  });
+const advertiser = createDiscoveryAdvertiser({
+  transports: [createMdnsTransport({ port: config.hudPort })],
+  onStatus: (status) => publishHud({ type: "rdk.discovery", discovery: status })
+});
 ```
 
 In relay `onEvent` (~line 388), beside the navigation routing:
 
 ```ts
-      if (event.type === "companion.discovery") {
-        advertiser.setToken(event.token);
-      }
+if (event.type === "companion.discovery") {
+  advertiser.setToken(event.token);
+}
 ```
 
 In `onClosed` (~line 412), beside `closeNavigationSession()`: `advertiser.setToken(null);`
@@ -1472,9 +1510,11 @@ git commit -m "feat(rdk): broadcast the discovery token over mDNS with HUD statu
 ### Task 9: E2E — discovery arm in the companion navigation test
 
 **Files:**
+
 - Test: `tests/rdk-companion-navigation-e2e.test.ts`
 
 **Interfaces:**
+
 - Consumes: everything relay-side (Tasks 1–5). Proves discover → confirm → bind → location → nav route flow with the same fixtures the code-pair arm uses.
 
 - [ ] **Step 1: Write the failing test**
@@ -1520,12 +1560,14 @@ git commit -m "test(companion): discovery pairing end-to-end through nav route f
 ### Task 10: iOS — pairDiscover protocol, client action, view-model state
 
 **Files:**
+
 - Modify: `ios/MaxHelmet/Companion/RDKCompanionProtocol.swift`
 - Modify: `ios/MaxHelmet/Companion/RDKCompanionClient.swift` (~line 181, beside `pair(code:)`)
 - Modify: `ios/MaxHelmet/UI/MainViewModel.swift` (client protocol ~line 8, pairing flow ~line 452)
 - Test: `ios/MaxHelmetTests/CompanionViewModelTests.swift`, `ios/MaxHelmetTests/CompanionSettingsTests.swift`
 
 **Interfaces:**
+
 - Consumes: relay accepts `companion.pairDiscover` (Task 2/5) and answers `companion.status`/`companion.error` with the new codes.
 - Produces (Task 11 consumes): `MainViewModel.pairDiscoveredHelmet(token: String)`; view-model published pairing phase includes a waiting-for-confirm state; error-code → copy mapping for `pair.busy` / `pair.declined` / `pair.timeout`.
 
@@ -1598,6 +1640,7 @@ Expected: FAIL — `pairDiscoveredHelmet`/`pairDiscover` unresolved.
 ```
 
 `MainViewModel.swift`:
+
 - Client protocol (line ~8): add `func pairDiscover(token: String)`.
 - Add `@Published private(set) var isAwaitingHelmetConfirm = false`.
 - `pairDiscoveredHelmet(token:)` mirrors `pairHelmet()`'s guard chain (`performPairHelmet` ~line 471) minus the six-digit code check, with a token guard reusing the protocol validator (`RDKCompanionProtocol.pairDiscoverMessage(token:) != nil`); on success set `isAwaitingHelmetConfirm = true` and call `companionClient.pairDiscover(token: token)`.
@@ -1621,6 +1664,7 @@ git commit -m "feat(ios-companion): pairDiscover action with awaiting-confirm st
 ### Task 11: iOS — Bonjour discovery and pairing UI
 
 **Files:**
+
 - Create: `ios/MaxHelmet/Companion/Discovery/HelmetDiscovery.swift`
 - Create: `ios/MaxHelmet/Companion/Discovery/BonjourHelmetDiscovery.swift`
 - Modify: `ios/MaxHelmet/UI/MainViewModel.swift`, `ios/MaxHelmet/UI/AgentSettingsPanel.swift` (companion section, ~lines 180–280)
@@ -1628,6 +1672,7 @@ git commit -m "feat(ios-companion): pairDiscover action with awaiting-confirm st
 - Test: `ios/MaxHelmetTests/HelmetDiscoveryTests.swift` (new)
 
 **Interfaces:**
+
 - Consumes: `MainViewModel.pairDiscoveredHelmet(token:)`, `isAwaitingHelmetConfirm` (Task 10).
 - Produces:
 
@@ -1738,6 +1783,7 @@ final class BonjourHelmetDiscovery: HelmetDiscovering {
 - [ ] **Step 3: Wire the view model and panel**
 
 `MainViewModel.swift`:
+
 - `@Published private(set) var discoveredHelmets: [DiscoveredHelmet] = []`
 - Own a `HelmetDiscovering` (default `BonjourHelmetDiscovery()`, injectable for tests) with `onUpdate` assigning `discoveredHelmets` on main.
 - `func startHelmetDiscovery()` / `func stopHelmetDiscovery()` delegating to it — call from the settings panel's pairing section `onAppear`/`onDisappear`.
@@ -1792,6 +1838,7 @@ git commit -m "feat(ios-companion): discover nearby helmets over Bonjour"
 ### Task 12: Docs and the full gate
 
 **Files:**
+
 - Modify: `rdk/README.md` (pairing section)
 - Modify: `CHANGELOG.md` (follow its existing entry format)
 

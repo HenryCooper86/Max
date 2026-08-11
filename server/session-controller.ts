@@ -85,7 +85,9 @@ function hasDeviceRegistrationClaim(data: RawData): boolean {
 function isFinalRiderTranscript(payload: unknown): payload is { text: string } {
   if (!payload || typeof payload !== "object") return false;
   const event = payload as { type?: unknown; speaker?: unknown; final?: unknown; text?: unknown };
-  return event.type === "transcript" && event.speaker === "rider" && event.final === true && typeof event.text === "string";
+  return (
+    event.type === "transcript" && event.speaker === "rider" && event.final === true && typeof event.text === "string"
+  );
 }
 
 function assertOptionalEnum(value: unknown, allowed: Set<string>, field: string) {

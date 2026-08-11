@@ -500,7 +500,8 @@ export function createCompanionRegistry(options: {
     // (and been swept by expireCodes on some other helmet's attach) would
     // otherwise skip the companion.pairing event entirely. Mint a fresh one,
     // same as attachHelmet does for an already-paired helmet.
-    const codeEntry = (currentCode ? pairCodes.get(currentCode) : undefined) ?? (helmet ? issuePairCode(deviceId, helmet) : undefined);
+    const codeEntry =
+      (currentCode ? pairCodes.get(currentCode) : undefined) ?? (helmet ? issuePairCode(deviceId, helmet) : undefined);
     if (helmet && codeEntry) sendPairing(helmet, codeEntry, true);
     stopDiscovery(deviceId);
     clearPendingConfirm(deviceId);

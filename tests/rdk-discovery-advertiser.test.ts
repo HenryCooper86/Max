@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  createDiscoveryAdvertiser,
-  type DiscoveryTransport
-} from "../rdk/agent/src/discovery/advertiser";
+import { createDiscoveryAdvertiser, type DiscoveryTransport } from "../rdk/agent/src/discovery/advertiser";
 
 type FakeTransport = DiscoveryTransport & {
   calls: string[];

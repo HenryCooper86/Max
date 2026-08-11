@@ -73,7 +73,10 @@ export function createDiscoveryAdvertiser(options: {
       publishStatus();
     });
     // A failed job must not break the chain for whatever is enqueued next.
-    queues.set(transport.name, next.catch(() => undefined));
+    queues.set(
+      transport.name,
+      next.catch(() => undefined)
+    );
   }
 
   return {

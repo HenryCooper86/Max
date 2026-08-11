@@ -748,12 +748,9 @@ describe("matchPairConfirmReply", () => {
     expect(matchPairConfirmReply(text)).toBe(expected);
   });
 
-  it.each(["帮我导航到外滩", "确", "好的", "不要", "把音量调大", ""])(
-    "leaves %s unmatched",
-    (text) => {
-      expect(matchPairConfirmReply(text)).toBeUndefined();
-    }
-  );
+  it.each(["帮我导航到外滩", "确", "好的", "不要", "把音量调大", ""])("leaves %s unmatched", (text) => {
+    expect(matchPairConfirmReply(text)).toBeUndefined();
+  });
 
   it("prefers decline when both words appear", () => {
     // 取消确认 means "cancel the confirmation" — never bind on it.

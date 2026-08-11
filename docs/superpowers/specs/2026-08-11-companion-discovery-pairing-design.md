@@ -4,7 +4,7 @@
 
 Replace "read a code off a screen you don't have" with radio discovery plus a
 spoken confirmation. An unpaired helmet broadcasts a rotating, secret-free
-*discovery token* over mDNS and BLE. The signed-in Max app scans, shows
+_discovery token_ over mDNS and BLE. The signed-in Max app scans, shows
 附近的头盔, and on a tap asks the relay to pair with that token. The relay makes
 the helmet ask aloud 检测到配对请求，请说"确认"; the rider's spoken 确认 at the
 helmet microphone completes the binding through the existing companion bind
@@ -48,7 +48,7 @@ installed but inactive and stays that way (we do not adopt system avahi).
    `/agent`, the relay issues a discovery token: 16 random bytes, hex-encoded,
    five-minute lifetime, delivered in a new `companion.discovery` agent event.
    The pairing-code reuse rule applies identically: an unpaired helmet
-   reconnecting inside the window receives the *same* token, so relay-socket
+   reconnecting inside the window receives the _same_ token, so relay-socket
    flapping (the known no-pong churn) does not churn the beacon. Unlike pairing
    codes, discovery tokens are refreshed proactively: the relay pushes a fresh
    token one minute before expiry while the helmet stays connected and
@@ -76,7 +76,7 @@ installed but inactive and stays that way (we do not adopt system avahi).
    times out.
 5. **Bind.** Acceptance runs the exact existing bind path: persistent store
    write, displacement notification to any displaced phone, `companion.status
-   ready` to the pairing phone, `companion.pairing { paired: true }` to the
+ready` to the pairing phone, `companion.pairing { paired: true }` to the
    helmet, a spoken 已配对。, and `companion.discovery { token: null }` to stop
    the beacon. Decline and timeout send `pair.declined` / `pair.timeout` to the
    phone, speak nothing further, and leave the beacon up.
@@ -107,9 +107,9 @@ The registry owns the entire state machine and stays speech-ignorant:
   pre-expiry refresh (injected `setTimer`, as the stale-timer already does).
 - **Confirm slot**: at most one pending confirm per device,
   `{ accountId, expiresAt }`, 30-second lifetime on the injected clock. A
-  `pairDiscover` from a *different* account while occupied answers
+  `pairDiscover` from a _different_ account while occupied answers
   `pair.busy` — a spoken 确认 cannot disambiguate two candidates, so two are
-  never allowed. A re-tap from the *same* account is idempotent: the slot and
+  never allowed. A re-tap from the _same_ account is idempotent: the slot and
   its deadline are unchanged and the helmet re-speaks the prompt. The slot
   clears on resolve, timeout, helmet detach, or phone disconnect.
 - **Narrow session-layer interface.** The session layer provides
@@ -168,7 +168,7 @@ needs no redaction if surfaced in future — it is broadcast by design.
 - The beacon carries a rotating random token and nothing else: no device ID,
   no serial, no stable name. Paired helmets are radio-silent. A parked helmet
   cannot be tracked across sessions by its beacon.
-- Knowing the token grants an *authenticated, rate-limited* account exactly one
+- Knowing the token grants an _authenticated, rate-limited_ account exactly one
   ability: triggering a confirm prompt on a helmet within earshot. The binding
   requires the rider's voice at the helmet microphone — a stronger possession
   proof than reading the bench screen, and identical in kind to the spec's
@@ -182,16 +182,16 @@ needs no redaction if surfaced in future — it is broadcast by design.
 
 ## Error handling and edge cases
 
-| Case | Behavior |
-| --- | --- |
-| Two phones tap the same helmet | First holds the confirm slot; second gets `pair.busy`. |
-| Helmet detaches mid-confirm | Slot cleared; phone gets `pair.helmetOffline`. |
-| Rider says 取消 / says nothing for 30 s | `pair.declined` / `pair.timeout`; beacon stays up; rider can re-tap. |
-| Token expires between scan and tap | `pair.code` error; app rescans (fresh token is already on the air from the pre-expiry refresh). |
-| Relay socket flaps mid-window | Same token re-issued (reuse rule); beacon stable. |
-| Bluetooth dead on board | mDNS carries on; HUD shows `discovery: mdns`; loud log. |
-| Phone and helmet on different networks with BT off | Discovery finds nothing; manual code fallback. |
-| Paired helmet | No token, no beacon, `pairDiscover` for any stale token fails as `pair.code`. |
+| Case                                               | Behavior                                                                                        |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Two phones tap the same helmet                     | First holds the confirm slot; second gets `pair.busy`.                                          |
+| Helmet detaches mid-confirm                        | Slot cleared; phone gets `pair.helmetOffline`.                                                  |
+| Rider says 取消 / says nothing for 30 s            | `pair.declined` / `pair.timeout`; beacon stays up; rider can re-tap.                            |
+| Token expires between scan and tap                 | `pair.code` error; app rescans (fresh token is already on the air from the pre-expiry refresh). |
+| Relay socket flaps mid-window                      | Same token re-issued (reuse rule); beacon stable.                                               |
+| Bluetooth dead on board                            | mDNS carries on; HUD shows `discovery: mdns`; loud log.                                         |
+| Phone and helmet on different networks with BT off | Discovery finds nothing; manual code fallback.                                                  |
+| Paired helmet                                      | No token, no beacon, `pairDiscover` for any stale token fails as `pair.code`.                   |
 
 ## Testing
 

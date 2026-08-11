@@ -995,10 +995,22 @@ With `npm run dev:server` running on the LAN host:
 **iPhone companion navigation**
 
 1. With Helmet Ride stopped, read the six-digit code from the board-local Chromium/HDMI HUD. For
-   remote administration, make an authenticated SSH local forward with
-   `ssh -N -L 18080:127.0.0.1:8080 <board>` and open `http://127.0.0.1:18080`; do not put the code
-   in a terminal command, journal, screenshot, or acceptance document. A direct LAN browser at
-   `http://<board>:8080` intentionally cannot see the code or its expiry.
+   remote administration, make an authenticated SSH local forward and open `http://127.0.0.1:8080`:
+
+   ```bash
+   ssh -N -L 8080:127.0.0.1:8080 -L 8081:127.0.0.1:8081 root@<board>
+   ```
+
+   **Forward both ports, onto the same numbers.** The page asks the browser for `<host>:8081`, so
+   the earlier `-L 18080:127.0.0.1:8080` gave you the HUD with dead camera and gallery panels —
+   the browser went looking for `127.0.0.1:8081` and found nothing. Verified 2026-08-11.
+
+   The forward needs no bench token, because it arrives on the board as loopback, and it is the
+   _only_ route that shows the code: redaction keys off the peer address, so a direct LAN browser
+   at `http://<board>:8080/?t=<token>` is admitted and still intentionally cannot see the code or
+   its expiry. Do not put the code in a terminal command, journal, screenshot, or acceptance
+   document.
+
 2. Pair from the signed-in iOS app and confirm the HUD reports ready before starting the ride.
 3. Run the locked-screen navigation, loss/resume, ADAS-preemption, second-route, and privacy
    checks in [`../docs/rdk-ios-companion-acceptance.md`](../docs/rdk-ios-companion-acceptance.md).

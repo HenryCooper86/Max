@@ -176,6 +176,22 @@ describe("RDK HUD bench-token boundary", () => {
     expect(page.body).not.toContain(TOKEN);
   });
 
+  it("tells a refused peer how to get in, since a browser hits this with no other clue", async () => {
+    const port = await unusedPort();
+    const server = createHudServer(port, 8081, TOKEN);
+    openServers.add(server);
+    const page = await fetchPage(`http://${nonLoopbackIPv4()}:${port}/`);
+    expect(page.status).toBe(401);
+    // Both routes, because they suit different jobs: the query parameter for
+    // an ordinary bench look, the forward for reading a pairing code (which
+    // redaction withholds from any non-loopback peer, token or not).
+    expect(page.body).toContain("?t=");
+    expect(page.body).toContain("MAX_VISION_TOKEN");
+    expect(page.body).toContain("ssh -N -L 8080:127.0.0.1:8080");
+    // ...and never the answer itself.
+    expect(page.body).not.toContain(TOKEN);
+  });
+
   it("serves a non-loopback peer that presents the token", async () => {
     const port = await unusedPort();
     const server = createHudServer(port, 8081, TOKEN);

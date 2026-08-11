@@ -44,6 +44,33 @@ export function hudRequestAllowed(request: IncomingMessage, token: string): bool
   return tokenMatches(supplied, token);
 }
 
+/**
+ * What a refused peer is told.
+ *
+ * "bench token required" alone is true and useless: whoever reads it is in a
+ * browser address bar with no other clue, and the two ways in suit different
+ * jobs. The query parameter is the ordinary bench look. The forward matters
+ * because loopback is exempt *and* because pairing-code redaction keys off the
+ * peer address — a direct-LAN browser never sees a code however good its token.
+ *
+ * Both ports say this, in the same words, so it does not matter which one you
+ * happen to hit first.
+ */
+export const REFUSAL_TEXT = `bench token required.
+
+Append the board's token to the URL:
+  ?t=<MAX_VISION_TOKEN>
+
+Or reach the board over an SSH local forward, which is exempt from the token
+and is the only route that shows pairing codes:
+  ssh -N -L 8080:127.0.0.1:8080 -L 8081:127.0.0.1:8081 root@<board>
+  then open http://127.0.0.1:8080
+
+Both ports must map to the same numbers: the HUD page asks the browser for
+<host>:8081, so a forward on any other local port leaves its camera and
+gallery panels dead. See rdk/README.md "Bench access — MAX_VISION_TOKEN".
+`;
+
 function remoteHudSnapshot(state: HudState): HudState {
   const companion = { ...state.companion };
   delete companion.pairingCode;
@@ -78,7 +105,7 @@ export function createHudServer(
   const http = createServer((request, response) => {
     if (!hudRequestAllowed(request, visionToken)) {
       response.writeHead(401, { "Content-Type": "text/plain; charset=utf-8" });
-      response.end("bench token required\n");
+      response.end(REFUSAL_TEXT);
       return;
     }
     response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });

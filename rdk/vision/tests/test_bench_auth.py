@@ -152,6 +152,29 @@ def test_a_lan_peer_without_a_token_is_refused(tmp_path, path):
     assert status(f"http://{address}:{port}{path}") == 401
 
 
+def body_of(url: str) -> str:
+    try:
+        with urllib.request.urlopen(url, timeout=5) as response:
+            return response.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as error:
+        return error.read().decode("utf-8", "replace")
+
+
+def test_a_refused_peer_is_told_how_to_get_in(tmp_path):
+    address = lan_ipv4()
+    if address is None:
+        pytest.skip("no non-loopback IPv4 on this host")
+    port, _ = running(tmp_path)
+    text = body_of(f"http://{address}:{port}/gallery")
+    # A bare "bench token required" is true and useless: the person reading it
+    # is in a browser with no other clue what to do.
+    assert "?t=" in text
+    assert "MAX_VISION_TOKEN" in text
+    assert "ssh -N -L 8080:127.0.0.1:8080" in text
+    # Never the answer itself.
+    assert TOKEN not in text
+
+
 def test_a_lan_peer_with_the_token_is_served(tmp_path):
     address = lan_ipv4()
     if address is None:

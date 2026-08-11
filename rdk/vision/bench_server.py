@@ -200,6 +200,28 @@ def safe_path(root, relative: str):
 TOKEN_PARAM = "t"
 
 
+#: What a refused peer is told.
+#:
+#: "bench token required" alone is true and useless: whoever reads it is in a
+#: browser address bar with no other clue, and the two ways in suit different
+#: jobs. The query parameter is the ordinary bench look; the forward is exempt
+#: from the token and is the only route that shows pairing codes, because
+#: redaction keys off the peer address rather than the token. Kept word-for-word
+#: in sync with hud/server.ts's REFUSAL_TEXT, so it does not matter which port
+#: you hit first.
+REFUSAL_TEXT = """Append the board's token to the URL:
+  ?t=<MAX_VISION_TOKEN>
+
+Or reach the board over an SSH local forward, which is exempt from the token
+and is the only route that shows pairing codes:
+  ssh -N -L 8080:127.0.0.1:8080 -L 8081:127.0.0.1:8081 root@<board>
+  then open http://127.0.0.1:8080
+
+Both ports must map to the same numbers: the HUD page asks the browser for
+<host>:8081, so a forward on any other local port leaves its camera and
+gallery panels dead. See rdk/README.md "Bench access - MAX_VISION_TOKEN"."""
+
+
 def peer_is_local(address: str) -> bool:
     """Is this peer the board itself?
 
@@ -296,7 +318,7 @@ def serve(pair, gallery, port: int, share_frames: bool = False, token: str = "")
                 return True
             # 401 rather than 404: that this port serves something is not the
             # secret — the frames and the gallery behind it are.
-            self.send_error(401, "bench token required")
+            self.send_error(401, "bench token required", REFUSAL_TEXT)
             return False
 
         def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API

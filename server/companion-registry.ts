@@ -495,7 +495,12 @@ export function createCompanionRegistry(options: {
     notifyDisplaced(result.displaced, session.peer.accountId, deviceId);
     const helmet = helmets.get(deviceId);
     const currentCode = codeByDevice.get(deviceId);
-    const codeEntry = currentCode ? pairCodes.get(currentCode) : undefined;
+    // A pair code lives 5 minutes and is never renewed while the helmet stays
+    // attached, so a discovery confirm that lands after the code has expired
+    // (and been swept by expireCodes on some other helmet's attach) would
+    // otherwise skip the companion.pairing event entirely. Mint a fresh one,
+    // same as attachHelmet does for an already-paired helmet.
+    const codeEntry = (currentCode ? pairCodes.get(currentCode) : undefined) ?? (helmet ? issuePairCode(deviceId, helmet) : undefined);
     if (helmet && codeEntry) sendPairing(helmet, codeEntry, true);
     stopDiscovery(deviceId);
     clearPendingConfirm(deviceId);

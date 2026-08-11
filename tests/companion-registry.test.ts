@@ -1117,4 +1117,28 @@ describe("companion discovery pairing confirm", () => {
       paired: true
     });
   });
+
+  it("issues a fresh pairing code when the confirmed device's code already expired", async () => {
+    vi.useFakeTimers();
+    const TOKEN_B = "b".repeat(32);
+    const h = harness({ tokens: [TOKEN_A, TOKEN_B] });
+    const helmet = h.helmet("rdk-a");
+    const phone = h.phone("acct-a");
+    // Past the pair code's 5-minute lifetime. The discovery beacon auto-rotates
+    // (to TOKEN_B) well before that lead, so it's still valid at this point —
+    // only the pairing code goes stale, since nothing renews it on a timer.
+    h.advance(5 * 60_000 + 1);
+    // Any helmet attach sweeps rdk-a's now-expired code out of the pairCodes
+    // table globally, so codeByDevice no longer has an entry for it either.
+    h.helmet("rdk-b");
+    await phone.connection.handle({ type: "companion.pairDiscover", token: TOKEN_B });
+    h.registry.handleRiderUtterance("rdk-a", "确认");
+    await vi.waitFor(() => expect(h.store.bindingForAccount("acct-a")?.deviceId).toBe("rdk-a"));
+    expect(latest(phone.events, "companion.status")).toMatchObject({ state: "ready" });
+    const pairing = latest(helmet.events, "companion.pairing");
+    expect(pairing).toMatchObject({ paired: true });
+    expect(pairing && "expiresAt" in pairing ? pairing.expiresAt : 0).toBeGreaterThan(h.now());
+    expect(latest(helmet.events, "companion.discovery")).toEqual({ type: "companion.discovery", token: null });
+    expect(helmet.spoken.at(-1)).toBe("已配对。");
+  });
 });

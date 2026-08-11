@@ -69,6 +69,19 @@ describe("createArkVisionProvider (single frame, migrated from createDescriber)"
     expect(parts.find((p: { type: string }) => p.type === "text").text).toMatch(/描述/);
   });
 
+  it("turns the model's reasoning off, because a thinking model blows the timeout", async () => {
+    const { describe: run, fetchImpl } = describer();
+    await run("AAAA");
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    // Measured 2026-08-11 against the live endpoint with a real 640px helmet
+    // frame, doubao-seed-evolving: reasoning on took 13.6 s / 15.1 s / 36.3 s
+    // (415–1200 reasoning tokens) against this provider's 10 s timeout, so
+    // describe() aborted and the rider heard "我看不清" on a working key.
+    // Off: 2.2 s / 3.1 s, zero reasoning tokens, same quality of answer.
+    expect(body.thinking).toEqual({ type: "disabled" });
+  });
+
   it("returns null without a key and never calls out (missing key)", async () => {
     const fetchImpl = vi.fn();
     const provider = createArkVisionProvider({ model: "m", fetchImpl: fetchImpl as unknown as typeof fetch });

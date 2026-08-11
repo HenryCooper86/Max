@@ -1008,3 +1008,113 @@ describe("companion discovery tokens", () => {
     expect(h.outstandingTimers()).toBe(0);
   });
 });
+
+describe("companion discovery pairing confirm", () => {
+  const TOKEN_A = "a".repeat(32);
+
+  async function discover(h: Harness, accountId = "acct-a") {
+    const helmet = h.helmet("rdk-a");
+    const phone = h.phone(accountId);
+    await phone.connection.handle({ type: "companion.pairDiscover", token: TOKEN_A });
+    return { helmet, phone };
+  }
+
+  it("binds after the rider speaks 确认", async () => {
+    const h = harness({ tokens: [TOKEN_A] });
+    const { helmet, phone } = await discover(h);
+    expect(helmet.spoken).toEqual(['检测到配对请求，请说"确认"。']);
+
+    h.registry.handleRiderUtterance("rdk-a", "确认");
+    await vi.waitFor(() => expect(h.store.bindingForAccount("acct-a")?.deviceId).toBe("rdk-a"));
+    expect(latest(phone.events, "companion.status")).toMatchObject({ state: "ready" });
+    expect(latest(helmet.events, "companion.pairing")).toMatchObject({ paired: true });
+    expect(latest(helmet.events, "companion.discovery")).toEqual({ type: "companion.discovery", token: null });
+    expect(helmet.spoken.at(-1)).toBe("已配对。");
+  });
+
+  it("declines on 取消", async () => {
+    const h = harness({ tokens: [TOKEN_A] });
+    const { phone } = await discover(h);
+    h.registry.handleRiderUtterance("rdk-a", "取消");
+    expect(latest(phone.events, "companion.error")).toMatchObject({ code: "pair.declined" });
+    expect(h.store.bindingForAccount("acct-a")).toBeUndefined();
+  });
+
+  it("times out after 30 seconds of silence", async () => {
+    vi.useFakeTimers();
+    const h = harness({ tokens: [TOKEN_A] });
+    const { phone } = await discover(h);
+    h.advance(30_000);
+    expect(latest(phone.events, "companion.error")).toMatchObject({ code: "pair.timeout" });
+    h.registry.handleRiderUtterance("rdk-a", "确认");
+    expect(h.store.bindingForAccount("acct-a")).toBeUndefined();
+  });
+
+  it("answers pair.busy to a second account and stays bound to the first", async () => {
+    const h = harness({ tokens: [TOKEN_A] });
+    const { helmet } = await discover(h, "acct-a");
+    const rival = h.phone("acct-b", "203.0.113.99");
+    await rival.connection.handle({ type: "companion.pairDiscover", token: TOKEN_A });
+    expect(latest(rival.events, "companion.error")).toMatchObject({ code: "pair.busy" });
+    h.registry.handleRiderUtterance("rdk-a", "确认");
+    await vi.waitFor(() => expect(h.store.bindingForAccount("acct-a")?.deviceId).toBe("rdk-a"));
+    expect(h.store.bindingForAccount("acct-b")).toBeUndefined();
+    expect(helmet.spoken.filter((line) => line.includes("配对请求")).length).toBe(1);
+  });
+
+  it("re-speaks the prompt for a same-account re-tap without resetting the deadline", async () => {
+    vi.useFakeTimers();
+    const h = harness({ tokens: [TOKEN_A] });
+    const { helmet, phone } = await discover(h);
+    h.advance(20_000);
+    await phone.connection.handle({ type: "companion.pairDiscover", token: TOKEN_A });
+    expect(helmet.spoken).toEqual(['检测到配对请求，请说"确认"。', '检测到配对请求，请说"确认"。']);
+    h.advance(10_000); // original deadline passes
+    expect(latest(phone.events, "companion.error")).toMatchObject({ code: "pair.timeout" });
+  });
+
+  it("rejects an unknown token as pair.code and rate-limits", async () => {
+    const h = harness({ tokens: [TOKEN_A] });
+    h.helmet("rdk-a");
+    const phone = h.phone("acct-a");
+    for (let i = 0; i < 5; i += 1) {
+      await phone.connection.handle({ type: "companion.pairDiscover", token: "f".repeat(32) });
+    }
+    expect(latest(phone.events, "companion.error")).toMatchObject({ code: "pair.code" });
+    await phone.connection.handle({ type: "companion.pairDiscover", token: TOKEN_A });
+    expect(latest(phone.events, "companion.error")).toMatchObject({ code: "pair.attempts" });
+  });
+
+  it("reports pair.helmetOffline when the helmet detaches mid-confirm", async () => {
+    const h = harness({ tokens: [TOKEN_A] });
+    const { helmet, phone } = await discover(h);
+    helmet.detach();
+    expect(latest(phone.events, "companion.error")).toMatchObject({ code: "pair.helmetOffline" });
+    h.registry.handleRiderUtterance("rdk-a", "确认");
+    expect(h.store.bindingForAccount("acct-a")).toBeUndefined();
+  });
+
+  it("ignores 确认 when nothing is pending", () => {
+    const h = harness({ tokens: [TOKEN_A] });
+    const helmet = h.helmet("rdk-a");
+    h.registry.handleRiderUtterance("rdk-a", "确认");
+    expect(helmet.spoken).toEqual([]);
+    expect(h.store.bindingForDevice("rdk-a")).toBeUndefined();
+  });
+
+  it("displaces an existing binding through a discovery pair", async () => {
+    const h = harness({ tokens: [TOKEN_A, "b".repeat(32)] });
+    const helmet = h.helmet("rdk-a");
+    const first = h.phone("acct-a");
+    await first.connection.handle({ type: "companion.pair", code: "123456" });
+    // Paired → beacon stopped; unpair to restart discovery for the second phone.
+    await first.connection.handle({ type: "companion.unpair" });
+    const second = h.phone("acct-b", "203.0.113.99");
+    await second.connection.handle({ type: "companion.pairDiscover", token: "b".repeat(32) });
+    h.registry.handleRiderUtterance("rdk-a", "确认");
+    await vi.waitFor(() => expect(h.store.bindingForAccount("acct-b")?.deviceId).toBe("rdk-a"));
+    expect(helmet.events.filter((event) => event.type === "companion.pairing").at(-1)).toMatchObject({
+      paired: true
+    });
+  });
+});

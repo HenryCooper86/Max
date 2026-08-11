@@ -1,5 +1,10 @@
-import { randomInt } from "node:crypto";
-import type { CompanionPairingEvent, PhoneLocationEvent, PhoneLocationStatusEvent } from "../shared/agent";
+import { randomBytes, randomInt } from "node:crypto";
+import type {
+  CompanionDiscoveryEvent,
+  CompanionPairingEvent,
+  PhoneLocationEvent,
+  PhoneLocationStatusEvent
+} from "../shared/agent";
 import type { CompanionClientEvent, CompanionServerEvent } from "../shared/companion";
 import type { CompanionBinding, CompanionBindingStore } from "./companion-store";
 import type { Logger } from "./logger";
@@ -13,7 +18,8 @@ type CompanionPeer = {
 export type HelmetPeer = {
   deviceId: string;
   deviceLabel: string;
-  send(event: CompanionPairingEvent | PhoneLocationEvent | PhoneLocationStatusEvent): void;
+  send(event: CompanionPairingEvent | CompanionDiscoveryEvent | PhoneLocationEvent | PhoneLocationStatusEvent): void;
+  speak(text: string): void;
 };
 
 export type CompanionConnection = {
@@ -29,6 +35,13 @@ export type CompanionRegistry = {
 
 type PairCode = {
   code: string;
+  deviceId: string;
+  expiresAt: number;
+  helmet: HelmetSession;
+};
+
+type DiscoveryToken = {
+  token: string;
   deviceId: string;
   expiresAt: number;
   helmet: HelmetSession;
@@ -59,9 +72,14 @@ const MAX_PAIR_FAILURES = 5;
 const FIX_STALE_MS = 10_000;
 const MAX_FUTURE_FIX_MS = 2_000;
 const MAX_HORIZONTAL_ACCURACY_METERS = 50;
+const DISCOVERY_REFRESH_LEAD_MS = 60_000;
 
 function defaultRandomCode(): string {
   return String(randomInt(0, 1_000_000)).padStart(6, "0");
+}
+
+function defaultRandomToken(): string {
+  return randomBytes(16).toString("hex");
 }
 
 function validIdentity(value: string): boolean {
@@ -76,6 +94,7 @@ export function createCompanionRegistry(options: {
   store: CompanionBindingStore;
   now?: () => number;
   randomCode?: () => string;
+  randomToken?: () => string;
   pairLifetimeMs?: number;
   minFixIntervalMs?: number;
   setTimer?: typeof setTimeout;
@@ -84,6 +103,7 @@ export function createCompanionRegistry(options: {
 }): CompanionRegistry {
   const clock = options.now ?? Date.now;
   const randomCode = options.randomCode ?? defaultRandomCode;
+  const randomToken = options.randomToken ?? defaultRandomToken;
   const pairLifetimeMs = options.pairLifetimeMs ?? DEFAULT_PAIR_LIFETIME_MS;
   const minFixIntervalMs = options.minFixIntervalMs ?? DEFAULT_MIN_FIX_INTERVAL_MS;
   const setTimer = options.setTimer ?? setTimeout;
@@ -93,6 +113,9 @@ export function createCompanionRegistry(options: {
   const pairCodes = new Map<string, PairCode>();
   const codeByDevice = new Map<string, string>();
   const pendingPairCodes = new Set<string>();
+  const discoveryTokens = new Map<string, DiscoveryToken>();
+  const tokenByDevice = new Map<string, string>();
+  const refreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const accountAttempts = new Map<string, AttemptBucket>();
   const addressAttempts = new Map<string, AttemptBucket>();
   const accountQueues = new Map<string, Promise<void>>();
@@ -117,6 +140,7 @@ export function createCompanionRegistry(options: {
     if (helmets.get(helmet.peer.deviceId) !== helmet) return;
     helmets.delete(helmet.peer.deviceId);
     deleteDeviceCode(helmet.peer.deviceId);
+    cancelRefresh(helmet.peer.deviceId);
     const binding = options.store.bindingForDevice(helmet.peer.deviceId);
     const phone = binding && companions.get(binding.accountId);
     if (phone) cancelStale(phone);
@@ -136,7 +160,7 @@ export function createCompanionRegistry(options: {
 
   function sendHelmetEvent(
     helmet: HelmetSession,
-    event: CompanionPairingEvent | PhoneLocationEvent | PhoneLocationStatusEvent
+    event: CompanionPairingEvent | CompanionDiscoveryEvent | PhoneLocationEvent | PhoneLocationStatusEvent
   ): boolean {
     if (closed || helmets.get(helmet.peer.deviceId) !== helmet) return false;
     try {
@@ -208,6 +232,88 @@ export function createCompanionRegistry(options: {
       expiresAt: entry.expiresAt,
       paired
     });
+  }
+
+  function cancelRefresh(deviceId: string): void {
+    const timer = refreshTimers.get(deviceId);
+    if (timer !== undefined) clearTimer(timer);
+    refreshTimers.delete(deviceId);
+  }
+
+  function deleteDeviceToken(deviceId: string): void {
+    const token = tokenByDevice.get(deviceId);
+    if (token !== undefined) discoveryTokens.delete(token);
+    tokenByDevice.delete(deviceId);
+    cancelRefresh(deviceId);
+  }
+
+  function expireDiscoveryTokens(at: number): void {
+    for (const [token, entry] of discoveryTokens) {
+      if (at >= entry.expiresAt) {
+        discoveryTokens.delete(token);
+        if (tokenByDevice.get(entry.deviceId) === token) tokenByDevice.delete(entry.deviceId);
+      }
+    }
+  }
+
+  function issueDiscoveryToken(deviceId: string, helmet: HelmetSession, reuseUnexpired: boolean): DiscoveryToken {
+    const at = clock();
+    expireDiscoveryTokens(at);
+    const currentToken = tokenByDevice.get(deviceId);
+    const current = currentToken === undefined ? undefined : discoveryTokens.get(currentToken);
+    if (reuseUnexpired && current && at < current.expiresAt) {
+      const replacement = { ...current, helmet };
+      discoveryTokens.set(current.token, replacement);
+      return replacement;
+    }
+    deleteDeviceToken(deviceId);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const token = randomToken();
+      if (!/^[0-9a-f]{32}$/.test(token)) throw new Error("Companion discovery token source must return 32 hex chars");
+      if (discoveryTokens.has(token)) continue;
+      const entry = { token, deviceId, expiresAt: at + pairLifetimeMs, helmet };
+      discoveryTokens.set(token, entry);
+      tokenByDevice.set(deviceId, token);
+      return entry;
+    }
+    throw new Error("Unable to allocate a unique companion discovery token");
+  }
+
+  function scheduleDiscoveryRefresh(entry: DiscoveryToken): void {
+    cancelRefresh(entry.deviceId);
+    const delay = Math.max(0, entry.expiresAt - DISCOVERY_REFRESH_LEAD_MS - clock());
+    refreshTimers.set(
+      entry.deviceId,
+      setTimer(() => {
+        refreshTimers.delete(entry.deviceId);
+        const helmet = helmets.get(entry.deviceId);
+        if (!helmet || helmet !== entry.helmet) return;
+        if (options.store.bindingForDevice(entry.deviceId)) return;
+        if (tokenByDevice.get(entry.deviceId) !== entry.token) return;
+        startDiscovery(entry.deviceId, helmet, false);
+      }, delay)
+    );
+  }
+
+  function sendDiscovery(helmet: HelmetSession, entry: DiscoveryToken | null): boolean {
+    return sendHelmetEvent(
+      helmet,
+      entry === null
+        ? { type: "companion.discovery", token: null }
+        : { type: "companion.discovery", token: entry.token, expiresAt: entry.expiresAt }
+    );
+  }
+
+  function startDiscovery(deviceId: string, helmet: HelmetSession, reuseUnexpired: boolean): void {
+    const entry = issueDiscoveryToken(deviceId, helmet, reuseUnexpired);
+    if (!sendDiscovery(helmet, entry)) return;
+    scheduleDiscoveryRefresh(entry);
+  }
+
+  function stopDiscovery(deviceId: string): void {
+    deleteDeviceToken(deviceId);
+    const helmet = helmets.get(deviceId);
+    if (helmet) sendDiscovery(helmet, null);
   }
 
   function sendCompanionState(
@@ -312,6 +418,7 @@ export function createCompanionRegistry(options: {
     if (!sendHelmetState(helmet, "unpaired")) return;
     const entry = issuePairCode(deviceId, helmet);
     sendPairing(helmet, entry, false);
+    startDiscovery(deviceId, helmet, false);
   }
 
   function notifyDisplaced(displaced: CompanionBinding[], nextAccountId: string, nextDeviceId: string): void {
@@ -370,6 +477,7 @@ export function createCompanionRegistry(options: {
 
     deleteCode(code);
     pendingPairCodes.delete(code);
+    stopDiscovery(entry.deviceId);
     clearPairFailures(session);
     const currentPhone = companions.get(session.peer.accountId);
     if (currentPhone) {
@@ -558,6 +666,12 @@ export function createCompanionRegistry(options: {
       const binding = options.store.bindingForDevice(peer.deviceId);
       sendPairing(helmet, entry, Boolean(binding));
       if (binding) {
+        deleteDeviceToken(peer.deviceId);
+        sendDiscovery(helmet, null);
+      } else {
+        startDiscovery(peer.deviceId, helmet, !existingBinding);
+      }
+      if (binding) {
         const phone = companions.get(binding.accountId);
         if (phone) syncCompanion(phone);
       }
@@ -566,9 +680,11 @@ export function createCompanionRegistry(options: {
       return () => {
         if (helmets.get(peer.deviceId) !== helmet) return;
         helmets.delete(peer.deviceId);
+        cancelRefresh(peer.deviceId);
         const currentBinding = options.store.bindingForDevice(peer.deviceId);
         if (!currentBinding) {
           expireCodes(clock());
+          expireDiscoveryTokens(clock());
           return;
         }
         deleteDeviceCode(peer.deviceId);
@@ -643,6 +759,10 @@ export function createCompanionRegistry(options: {
       pairCodes.clear();
       codeByDevice.clear();
       pendingPairCodes.clear();
+      discoveryTokens.clear();
+      tokenByDevice.clear();
+      for (const timer of refreshTimers.values()) clearTimer(timer);
+      refreshTimers.clear();
       accountAttempts.clear();
       addressAttempts.clear();
       closePromise = (async () => {

@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CompanionClientEvent, CompanionServerEvent } from "../shared/companion";
-import type { CompanionPairingEvent, PhoneLocationEvent, PhoneLocationStatusEvent } from "../shared/agent";
+import type {
+  CompanionDiscoveryEvent,
+  CompanionPairingEvent,
+  PhoneLocationEvent,
+  PhoneLocationStatusEvent
+} from "../shared/agent";
 import { createCompanionBindingStore, type CompanionBindingStore } from "../server/companion-store";
 import {
   createCompanionRegistry,
@@ -8,7 +13,7 @@ import {
   type CompanionRegistry
 } from "../server/companion-registry";
 
-type HelmetEvent = CompanionPairingEvent | PhoneLocationEvent | PhoneLocationStatusEvent;
+type HelmetEvent = CompanionPairingEvent | CompanionDiscoveryEvent | PhoneLocationEvent | PhoneLocationStatusEvent;
 
 type Deferred = {
   promise: Promise<void>;
@@ -58,7 +63,7 @@ type Harness = {
   logs: string[];
   now(): number;
   advance(milliseconds: number): void;
-  helmet(deviceId: string, deviceLabel?: string): { events: HelmetEvent[]; detach(): void };
+  helmet(deviceId: string, deviceLabel?: string): { events: HelmetEvent[]; spoken: string[]; detach(): void };
   phone(accountId: string, address?: string): { events: CompanionServerEvent[]; connection: CompanionConnection };
 };
 
@@ -68,18 +73,21 @@ function harness(
   options: {
     store?: CompanionBindingStore;
     codes?: string[];
+    tokens?: string[];
     now?: number;
     minFixIntervalMs?: number;
   } = {}
 ): Harness {
   let currentTime = options.now ?? 1_000_000;
   const codes = [...(options.codes ?? ["123456", "234567", "345678", "456789", "567890", "678901"])];
+  const tokens = [...(options.tokens ?? ["a".repeat(32), "b".repeat(32), "c".repeat(32)])];
   const store = options.store ?? createCompanionBindingStore({ filePath: null, now: () => currentTime });
   const logs: string[] = [];
   const registry = createCompanionRegistry({
     store,
     now: () => currentTime,
     randomCode: () => codes.shift() ?? "999999",
+    randomToken: () => tokens.shift() ?? "ffffffffffffffffffffffffffffffff",
     minFixIntervalMs: options.minFixIntervalMs ?? 1_000,
     log: {
       info: (message, fields) => logs.push(`${message} ${JSON.stringify(fields ?? {})}`),
@@ -99,8 +107,14 @@ function harness(
     },
     helmet(deviceId, deviceLabel = `Helmet ${deviceId}`) {
       const events: HelmetEvent[] = [];
-      const detach = registry.attachHelmet({ deviceId, deviceLabel, send: (event) => events.push(event) });
-      return { events, detach };
+      const spoken: string[] = [];
+      const detach = registry.attachHelmet({
+        deviceId,
+        deviceLabel,
+        send: (event) => events.push(event),
+        speak: (text) => spoken.push(text)
+      });
+      return { events, spoken, detach };
     },
     phone(accountId, address = "203.0.113.10") {
       const events: CompanionServerEvent[] = [];
@@ -716,7 +730,8 @@ describe("companion registry throwing transport isolation", () => {
       send(event) {
         if (event.type === "companion.pairing" && event.paired) throw new Error("helmet transport closed");
         helmetEvents.push(event);
-      }
+      },
+      speak() {}
     });
     const phone = h.phone("acct-a");
 
@@ -731,7 +746,7 @@ describe("companion registry throwing transport isolation", () => {
       state: "helmetOffline",
       deviceId: "rdk-a"
     });
-    expect(helmetEvents).toHaveLength(1);
+    expect(helmetEvents.filter((event) => event.type === "companion.pairing")).toHaveLength(1);
   });
 
   it("continues helmet reconciliation when the phone throws after a successful bind", async () => {
@@ -772,7 +787,8 @@ describe("companion registry throwing transport isolation", () => {
         if (event.type === "phone.location.status" && event.state === "unpaired") {
           throw new Error("old helmet transport closed");
         }
-      }
+      },
+      speak() {}
     });
     const targetHelmet = h.helmet("rdk-b");
     const phoneA = h.phone("acct-a", "203.0.113.10");
@@ -833,7 +849,8 @@ describe("companion registry throwing transport isolation", () => {
         if (event.type === "phone.location.status" && event.state === "stale") {
           throw new Error("helmet transport closed");
         }
-      }
+      },
+      speak() {}
     });
     const phone = h.phone("acct-a");
     await phone.connection.handle({ type: "companion.pair", code: "123456" });
@@ -856,7 +873,8 @@ describe("companion registry throwing transport isolation", () => {
         deviceLabel: "Throwing helmet",
         send() {
           throw new Error("helmet transport closed");
-        }
+        },
+        speak() {}
       })
     ).not.toThrow();
     expect(() =>
@@ -868,5 +886,83 @@ describe("companion registry throwing transport isolation", () => {
         }
       })
     ).not.toThrow();
+  });
+});
+
+describe("companion discovery tokens", () => {
+  const TOKEN_A = "a".repeat(32);
+  const TOKEN_B = "b".repeat(32);
+
+  it("issues a discovery token to an unpaired helmet on attach", () => {
+    const h = harness({ tokens: [TOKEN_A] });
+    const helmet = h.helmet("rdk-a");
+    expect(latest(helmet.events, "companion.discovery")).toEqual({
+      type: "companion.discovery",
+      token: TOKEN_A,
+      expiresAt: 1_300_000
+    });
+  });
+
+  it("reuses an unexpired token when the unpaired helmet reconnects", () => {
+    vi.useFakeTimers();
+    const h = harness({ tokens: [TOKEN_A, TOKEN_B] });
+    h.helmet("rdk-a");
+    h.advance(30_000);
+    const replacement = h.helmet("rdk-a");
+    expect(latest(replacement.events, "companion.discovery")).toMatchObject({ token: TOKEN_A });
+  });
+
+  it("rotates to a fresh token one minute before expiry", () => {
+    vi.useFakeTimers();
+    const h = harness({ tokens: [TOKEN_A, TOKEN_B] });
+    const helmet = h.helmet("rdk-a");
+    h.advance(4 * 60_000); // lifetime 5 min − 60 s lead
+    expect(latest(helmet.events, "companion.discovery")).toEqual({
+      type: "companion.discovery",
+      token: TOKEN_B,
+      expiresAt: h.now() + 5 * 60_000
+    });
+  });
+
+  it("sends token null to a paired helmet on attach", async () => {
+    const h = harness({ tokens: [TOKEN_A, TOKEN_B] });
+    h.helmet("rdk-a");
+    const phone = h.phone("acct-a");
+    await phone.connection.handle({ type: "companion.pair", code: "123456" });
+    const reattached = h.helmet("rdk-a");
+    expect(latest(reattached.events, "companion.discovery")).toEqual({
+      type: "companion.discovery",
+      token: null
+    });
+  });
+
+  it("stops the beacon when a code pair succeeds", async () => {
+    const h = harness({ tokens: [TOKEN_A] });
+    const helmet = h.helmet("rdk-a");
+    const phone = h.phone("acct-a");
+    await phone.connection.handle({ type: "companion.pair", code: "123456" });
+    expect(latest(helmet.events, "companion.discovery")).toEqual({
+      type: "companion.discovery",
+      token: null
+    });
+  });
+
+  it("does not rotate after detach", () => {
+    vi.useFakeTimers();
+    const h = harness({ tokens: [TOKEN_A, TOKEN_B] });
+    const helmet = h.helmet("rdk-a");
+    helmet.detach();
+    const sent = helmet.events.length;
+    h.advance(10 * 60_000);
+    expect(helmet.events.length).toBe(sent);
+  });
+
+  it("issues a fresh discovery token on unpair", async () => {
+    const h = harness({ tokens: [TOKEN_A, TOKEN_B] });
+    const helmet = h.helmet("rdk-a");
+    const phone = h.phone("acct-a");
+    await phone.connection.handle({ type: "companion.pair", code: "123456" });
+    await phone.connection.handle({ type: "companion.unpair" });
+    expect(latest(helmet.events, "companion.discovery")).toMatchObject({ token: TOKEN_B });
   });
 });

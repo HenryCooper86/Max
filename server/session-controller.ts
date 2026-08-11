@@ -687,7 +687,8 @@ export class AgentSessionController {
             this.detachHelmet = this.hooks?.onDeviceRegistered?.({
               deviceId: event.deviceId,
               deviceLabel: event.deviceLabel?.trim() || "RDK X5",
-              send: (payload) => this.sendEphemeral(payload)
+              send: (payload) => this.sendEphemeral(payload),
+              speak: (text) => this.provider.speakNavLine?.(text)
             });
           } catch (error) {
             const message = error instanceof Error ? error.message : "Device registration failed";

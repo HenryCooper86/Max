@@ -470,7 +470,12 @@ describe("relay process integration", () => {
       items: Array<{ serverEvents: number; controlDownBytes: number }>;
     };
     expect(sessions.items).toHaveLength(1);
-    const recordedTypes = new Set(["companion.pairing", "phone.location", "phone.location.status"]);
+    const recordedTypes = new Set([
+      "companion.pairing",
+      "companion.discovery",
+      "phone.location",
+      "phone.location.status"
+    ]);
     const ordinaryEvents = agentEvents.filter(
       (event) => event.type !== "connection" && !recordedTypes.has(String(event.type))
     );

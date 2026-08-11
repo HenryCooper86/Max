@@ -278,7 +278,12 @@
   document.getElementById("front").src = sidecar("/preview/front");
   document.getElementById("rear").src = sidecar("/preview/rear");
 
-  const socket = new WebSocket(`ws://${location.host}`);
+  // The token rides here too. `location.host` is host:port with no query, so
+  // this URL does not inherit the ?t= that loaded the page — and the upgrade is
+  // gated exactly like the page is. Missed once: the cameras and gallery kept
+  // working (they go through sidecar()) while connection/turn/latency/error sat
+  // at "—", because this one socket was being refused 401 on its own.
+  const socket = new WebSocket(`ws://${location.host}/${VISION_TOKEN ? `?t=${encodeURIComponent(VISION_TOKEN)}` : ""}`);
   const navigationCardEl = document.getElementById("navigation-card");
   const phoneStatusEl = document.getElementById("phone-status");
   const navInstructionEl = document.getElementById("nav-instruction");

@@ -125,4 +125,31 @@ describe("discovery advertiser", () => {
     expect(mdns.calls).toEqual([`start:${TOKEN}`, "stop"]);
     expect(advertiser.status()).toBe("off");
   });
+
+  it("rapid back-to-back setToken calls with no settle between them still converge to the final token, in order", async () => {
+    const mdns = fakeTransport("mdns");
+    const advertiser = createDiscoveryAdvertiser({ transports: [mdns] });
+    const NEW_TOKEN = "b".repeat(32);
+    advertiser.setToken(TOKEN);
+    advertiser.setToken(NEW_TOKEN); // no await/settled() between these two calls
+    await settled();
+    expect(mdns.calls).toEqual([`start:${TOKEN}`, `start:${NEW_TOKEN}`]);
+    expect(advertiser.status()).toBe("mdns");
+    await advertiser.close();
+  });
+
+  it("rejoins status() once a later setToken succeeds after an earlier failure", async () => {
+    const flaky = fakeTransport("flaky");
+    flaky.failNextStart("dbus unavailable");
+    const advertiser = createDiscoveryAdvertiser({ transports: [flaky] });
+    advertiser.setToken(TOKEN);
+    await settled();
+    expect(advertiser.status()).toBe("off");
+    const NEW_TOKEN = "b".repeat(32);
+    advertiser.setToken(NEW_TOKEN);
+    await settled();
+    expect(advertiser.status()).toBe("flaky");
+    expect(flaky.calls).toEqual([`start:${TOKEN}`, `start:${NEW_TOKEN}`]);
+    await advertiser.close();
+  });
 });

@@ -14,6 +14,8 @@ the listen backlog filled with clients nobody would accept.
 
 from __future__ import annotations
 
+import hmac
+import ipaddress
 import json
 import shutil
 import time
@@ -189,6 +191,53 @@ def safe_path(root, relative: str):
     return candidate
 
 
+#: Query parameter carrying the bench token.
+#:
+#: A parameter rather than a header because the HUD reaches ``/preview`` and
+#: the gallery thumbnails through ``<img src>``, which cannot set one. The
+#: cost is the token appearing in URLs; ``log_message`` below is already a
+#: no-op, so it is not written to the journal.
+TOKEN_PARAM = "t"
+
+
+def peer_is_local(address: str) -> bool:
+    """Is this peer the board itself?
+
+    IPv4-mapped IPv6 (``::ffff:127.0.0.1``) counts: a dual-stack listener
+    reports v4 peers that way, and missing it would make the agent's own
+    ``camera.look`` fetch look like a stranger.
+    """
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    return ip.is_loopback
+
+
+def authorized(peer: str, query: str, token: str) -> bool:
+    """Whether a request from ``peer`` may be served.
+
+    Loopback is exempt. The agent fetches ``/frame/front`` over 127.0.0.1 for
+    every ``camera.look``, and a board talking to itself is not the exposure
+    this guards — a stranger on the LAN is.
+
+    With no token configured, nothing off-box is served at all. That is the
+    fail-closed direction on purpose: the alternative is a helmet camera and a
+    ride's worth of footage open to whatever network the bike is near, because
+    someone forgot an env var. A dark HUD is a visible, fixable symptom.
+    """
+    if peer_is_local(peer):
+        return True
+    if not token:
+        return False
+    supplied = parse_qs(query).get(TOKEN_PARAM, [""])[0]
+    # Constant-time: the token is short and an attacker can retry freely.
+    return hmac.compare_digest(supplied, token)
+
+
 def listing(gallery) -> dict:
     """Every capture, newest first, with the byte size of each side.
 
@@ -238,24 +287,41 @@ def downscale(jpeg: bytes, width: int) -> bytes | None:
     return buf.tobytes() if ok else None
 
 
-def serve(pair, gallery, port: int, share_frames: bool = False) -> None:
+def serve(pair, gallery, port: int, share_frames: bool = False, token: str = "") -> None:
     """Serve preview and gallery on one port. Blocks forever."""
 
     class BenchHandler(BaseHTTPRequestHandler):
+        def _allowed(self, query: str) -> bool:
+            if authorized(self.client_address[0], query, token):
+                return True
+            # 401 rather than 404: that this port serves something is not the
+            # secret — the frames and the gallery behind it are.
+            self.send_error(401, "bench token required")
+            return False
+
         def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-            if self.path.startswith("/preview/"):
-                self._preview()
-            elif self.path == "/gallery":
+            # Parsed once, and dispatched on the path alone: with a token in
+            # the query string, `self.path` is "/gallery?t=…" and every
+            # startswith/endswith/== against the raw path silently stops
+            # matching.
+            parsed = urlparse(self.path)
+            if not self._allowed(parsed.query):
+                return
+            if parsed.path.startswith("/preview/"):
+                self._preview(parsed)
+            elif parsed.path == "/gallery":
                 self._listing()
-            elif self.path.startswith("/gallery/"):
-                self._capture()
-            elif self.path.startswith("/frame/"):
-                self._frame()
+            elif parsed.path.startswith("/gallery/"):
+                self._capture(parsed)
+            elif parsed.path.startswith("/frame/"):
+                self._frame(parsed)
             else:
                 self.send_error(404)
 
         def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
             parsed = urlparse(self.path)
+            if not self._allowed(parsed.query):
+                return
             if parsed.path.startswith("/gallery/") and parsed.path.endswith("/delete"):
                 self._delete(unquote(parsed.path[len("/gallery/") : -len("/delete")]))
             else:
@@ -334,8 +400,7 @@ def serve(pair, gallery, port: int, share_frames: bool = False) -> None:
             except (BrokenPipeError, ConnectionResetError):
                 return  # the viewer was closed mid-clip; ordinary
 
-        def _capture(self) -> None:
-            parsed = urlparse(self.path)
+        def _capture(self, parsed) -> None:
             relative = unquote(parsed.path[len("/gallery/") :])
             thumb = relative.endswith("/thumb")
             play = relative.endswith("/play")
@@ -400,8 +465,16 @@ def serve(pair, gallery, port: int, share_frames: bool = False) -> None:
         def _listing(self) -> None:
             self._json(200, listing(gallery))
 
-        def _preview(self) -> None:
-            camera = pair.front if self.path.endswith("front") else pair.rear
+        def _preview(self, parsed) -> None:
+            # The same consent rule /frame has always obeyed. A continuous
+            # MJPEG stream of the helmet camera to a LAN peer is an image
+            # leaving the board, so "sharing off means no image leaves" has to
+            # cover it too — it is the larger leak of the two, not the smaller.
+            if not share_frames:
+                self.send_error(403, "frame sharing is off")
+                return
+
+            camera = pair.front if parsed.path.endswith("front") else pair.rear
             if camera is None:
                 # Answer, rather than holding the connection open forever
                 # writing nothing — which is what a blank panel used to mean,
@@ -430,14 +503,13 @@ def serve(pair, gallery, port: int, share_frames: bool = False) -> None:
                 # journal on every page reload.
                 return
 
-        def _frame(self) -> None:
+        def _frame(self, parsed) -> None:
             # Consent, not capability: with sharing off no image leaves the
             # board at all, whatever the relay is configured to do.
             if not share_frames:
                 self.send_error(403, "frame sharing is off")
                 return
 
-            parsed = urlparse(self.path)
             raw_width = parse_qs(parsed.query).get("w", [str(DEFAULT_FRAME_WIDTH)])[0]
             try:
                 width = int(raw_width)

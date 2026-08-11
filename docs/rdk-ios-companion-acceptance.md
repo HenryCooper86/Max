@@ -274,9 +274,15 @@ REMOTE
 The first successful Pair happens only after relay, signed iOS, and RDK rollout. Keep identity values
 private: record only whether the signed-in account paired to the intended RDK and whether the HUD
 reported ready. Read the pairing code only from the board-local HDMI HUD or through an authenticated
-SSH local forward to `127.0.0.1:8080`; a direct `http://<board>:8080` LAN browser intentionally gets
-the non-secret HUD without the code or expiry. Then complete the final-file evidence the pre-pair
-probe deliberately left PENDING:
+SSH local forward to `127.0.0.1:8080`.
+
+A direct LAN browser now needs the bench token (`http://<board>:8080/?t=<token>`, see rdk/README.md
+"Bench access — `MAX_VISION_TOKEN`"); without it the page and the WebSocket both answer `401`. The
+token is admission, not locality: a token-bearing LAN browser still intentionally gets the non-secret
+HUD **without** the code or expiry, because redaction keys off the peer address. Keep the token out
+of this document — it is a credential, like the pairing code.
+
+Then complete the final-file evidence the pre-pair probe deliberately left PENDING:
 
 | Evidence                                                               | Value   | Result  |
 | ---------------------------------------------------------------------- | ------- | ------- |
@@ -368,19 +374,20 @@ curl --fail --silent --show-error https://relay.example.com/ready
 
 ## Physical ride acceptance
 
-| Step                                                                                           | Observation | Result  |
-| ---------------------------------------------------------------------------------------------- | ----------- | ------- |
-| Before Pair, verify direct-LAN WebSocket omits code/expiry while board-local HUD displays them | PENDING     | PENDING |
-| Start Helmet Ride, lock phone for at least 10 continuous minutes, confirm forwarding/indicator | PENDING     | PENDING |
-| Request a real Amap destination; verify RDK HUD and speech far → near → now                    | PENDING     | PENDING |
-| Force an off-route condition; verify one reroute and replacement route                         | PENDING     | PENDING |
-| Remove/restore network; verify truthful pause then fresh-fix resume                            | PENDING     | PENDING |
-| Disable/restore precise location; verify truthful pause then precise-fix resume                | PENDING     | PENDING |
-| Trigger an armed test ADAS alert during a nav prompt; verify priority/preemption               | PENDING     | PENDING |
-| Verify arrival once, then stop navigation                                                      | PENDING     | PENDING |
-| Start a second route without unlocking; verify route and guidance                              | PENDING     | PENDING |
-| Stop Helmet Ride; verify location forwarding and indicator stop                                | PENDING     | PENDING |
-| Unpair and logout; verify no background forwarding/reconnect                                   | PENDING     | PENDING |
+| Step                                                                                                         | Observation | Result  |
+| ------------------------------------------------------------------------------------------------------------ | ----------- | ------- |
+| Before Pair, verify a tokenless direct-LAN browser gets 401 on both page and WebSocket                       | PENDING     | PENDING |
+| Before Pair, verify token-bearing direct-LAN WebSocket omits code/expiry while board-local HUD displays them | PENDING     | PENDING |
+| Start Helmet Ride, lock phone for at least 10 continuous minutes, confirm forwarding/indicator               | PENDING     | PENDING |
+| Request a real Amap destination; verify RDK HUD and speech far → near → now                                  | PENDING     | PENDING |
+| Force an off-route condition; verify one reroute and replacement route                                       | PENDING     | PENDING |
+| Remove/restore network; verify truthful pause then fresh-fix resume                                          | PENDING     | PENDING |
+| Disable/restore precise location; verify truthful pause then precise-fix resume                              | PENDING     | PENDING |
+| Trigger an armed test ADAS alert during a nav prompt; verify priority/preemption                             | PENDING     | PENDING |
+| Verify arrival once, then stop navigation                                                                    | PENDING     | PENDING |
+| Start a second route without unlocking; verify route and guidance                                            | PENDING     | PENDING |
+| Stop Helmet Ride; verify location forwarding and indicator stop                                              | PENDING     | PENDING |
+| Unpair and logout; verify no background forwarding/reconnect                                                 | PENDING     | PENDING |
 
 Record the route/destination only at the level needed to repeat the test; do not record raw fixes.
 ADAS audio must already be explicitly armed under its own safety gate—do not enable it merely to

@@ -33,6 +33,8 @@ const livePairingState: HudState = {
   }
 };
 
+const TOKEN = "s3cret-bench-token";
+
 const openSockets = new Set<WebSocket>();
 const openServers = new Set<HudServer>();
 
@@ -148,24 +150,92 @@ afterEach(async () => {
   openServers.clear();
 });
 
+describe("RDK HUD bench-token boundary", () => {
+  async function fetchPage(url: string): Promise<{ status: number; body: string }> {
+    const response = await fetch(url);
+    return { status: response.status, body: await response.text() };
+  }
+
+  it("serves the page to the board itself with no token in the URL", async () => {
+    const port = await unusedPort();
+    const server = createHudServer(port, 8081, TOKEN);
+    openServers.add(server);
+    const page = await fetchPage(`http://127.0.0.1:${port}/`);
+    expect(page.status).toBe(200);
+    // The sidecar refuses non-loopback peers, so the page has to carry the
+    // token for the browser's fetches to 8081 to work at all.
+    expect(page.body).toContain(TOKEN);
+  });
+
+  it("refuses a non-loopback peer that brings no token, so the page cannot leak it", async () => {
+    const port = await unusedPort();
+    const server = createHudServer(port, 8081, TOKEN);
+    openServers.add(server);
+    const page = await fetchPage(`http://${nonLoopbackIPv4()}:${port}/`);
+    expect(page.status).toBe(401);
+    expect(page.body).not.toContain(TOKEN);
+  });
+
+  it("serves a non-loopback peer that presents the token", async () => {
+    const port = await unusedPort();
+    const server = createHudServer(port, 8081, TOKEN);
+    openServers.add(server);
+    const page = await fetchPage(`http://${nonLoopbackIPv4()}:${port}/?t=${TOKEN}`);
+    expect(page.status).toBe(200);
+    expect(page.body).toContain(TOKEN);
+  });
+
+  it("refuses a non-loopback peer presenting the wrong token", async () => {
+    const port = await unusedPort();
+    const server = createHudServer(port, 8081, TOKEN);
+    openServers.add(server);
+    expect((await fetchPage(`http://${nonLoopbackIPv4()}:${port}/?t=nope`)).status).toBe(401);
+  });
+
+  it("refuses every non-loopback peer when no token is configured", async () => {
+    const port = await unusedPort();
+    const server = createHudServer(port, 8081, "");
+    openServers.add(server);
+    // Fail closed, matching the sidecar: a forgotten env var must not publish
+    // the rider's transcript and destination to the network.
+    expect((await fetchPage(`http://${nonLoopbackIPv4()}:${port}/?t=anything`)).status).toBe(401);
+    expect((await fetchPage(`http://127.0.0.1:${port}/`)).status).toBe(200);
+  });
+
+  it("refuses a non-loopback websocket upgrade that brings no token", async () => {
+    const port = await unusedPort();
+    const server = createHudServer(port, 8081, TOKEN);
+    openServers.add(server);
+    await expect(connect(`ws://${nonLoopbackIPv4()}:${port}`)).rejects.toThrow();
+    const socket = await connect(`ws://${nonLoopbackIPv4()}:${port}/?t=${TOKEN}`);
+    expect(socket.readyState).toBe(WebSocket.OPEN);
+  });
+});
+
 describe("RDK HUD pairing-secret transport boundary", () => {
   it("redacts pairing secrets from a non-loopback peer's initial replay and later broadcasts despite HTTP spoofing", async () => {
     const port = await unusedPort();
-    const server = createHudServer(port, 8081);
+    const server = createHudServer(port, 8081, TOKEN);
     openServers.add(server);
     const source = cloneState(livePairingState);
     const sourceBeforePublish = cloneState(source);
     server.publish(source);
 
-    const remoteConnection = await connectWithInitial(`ws://${nonLoopbackIPv4()}:${port}/?host=127.0.0.1&local=true`, {
-      origin: "http://127.0.0.1:8080",
-      headers: {
-        host: "127.0.0.1:8080",
-        forwarded: "for=127.0.0.1;host=localhost",
-        "x-forwarded-for": "127.0.0.1, ::1",
-        "x-real-ip": "::ffff:127.0.0.1"
+    // Holding the bench token gets this peer in; it does not make it local.
+    // Redaction keys off the peer address, so a token-bearing stranger still
+    // never receives the pairing code.
+    const remoteConnection = await connectWithInitial(
+      `ws://${nonLoopbackIPv4()}:${port}/?host=127.0.0.1&local=true&t=${TOKEN}`,
+      {
+        origin: "http://127.0.0.1:8080",
+        headers: {
+          host: "127.0.0.1:8080",
+          forwarded: "for=127.0.0.1;host=localhost",
+          "x-forwarded-for": "127.0.0.1, ::1",
+          "x-real-ip": "::ffff:127.0.0.1"
+        }
       }
-    });
+    );
     const { socket: remote, initial } = remoteConnection;
 
     expect(initial.companion).toEqual({

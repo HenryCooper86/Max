@@ -636,12 +636,45 @@ bench 2026-07-28: `403` with sharing off, `200` with a real 640×360 JPEG
 black or garbage) with `MAX_VISION_SHARE=1`, then `403` again once it was set
 back to `0` and the sidecar restarted.
 
-This is **not** the only route that puts image bytes on the wire. The
-pre-existing `/preview/*` MJPEG route (used by the dev HUD) is unauthenticated
-and streams to anyone on the LAN regardless of this setting — it predates the
-gate and is not covered by it. `MAX_VISION_SHARE` only governs frames the
-sidecar hands to the relay's vision call, not every way a frame can leave the
-board.
+`/preview/*` obeys the same gate as of 2026-08-11. It used to be exempt — a
+continuous MJPEG stream of the helmet camera to anyone on the LAN, regardless
+of this setting — which made "sharing off means no image leaves the board" true
+only of the smaller leak. With sharing off, `/preview/front` and
+`/preview/rear` now answer `403` exactly as `/frame/*` does.
+
+**The dev HUD's camera panels therefore need `MAX_VISION_SHARE=1`.** That is
+the intended trade: a bench instrument showing live camera is a frame leaving
+the board, and the gate is the one control that must not have exceptions.
+
+### Bench access — `MAX_VISION_TOKEN`
+
+The sidecar's HTTP surface (port 8081) and the agent's HUD (port 8080) both
+bind `0.0.0.0`, and the sidecar runs as root. Before 2026-08-11 neither was
+authenticated: any peer on the network could stream the cameras, list and
+download every recorded clip, read the rider's live transcript and destination,
+and `POST /gallery/<id>/delete` to destroy a capture — the last of which a
+plain cross-origin form POST from any page the rider happened to visit could
+trigger.
+
+Both ports now require a shared token from any peer that is not the board
+itself:
+
+```bash
+MAX_VISION_TOKEN=$(head -c 24 /dev/urandom | base64 | tr -d '/+=')
+```
+
+- **Loopback is exempt.** `camera.look` fetches `/frame/front` over
+  `127.0.0.1`, and a board talking to itself is not the exposure being closed.
+- **Off-board peers send `?t=<token>`.** Open the HUD as
+  `http://<board>:8080/?t=<token>`; the agent templates the token into the page
+  so the browser's own fetches to 8081 carry it. There is nothing to type twice.
+- **No token configured means nothing off-board is served at all** — both
+  ports answer `401` to every non-loopback peer. That is the fail-closed
+  direction on purpose: a forgotten env var must not publish the helmet camera,
+  and a dark HUD is a visible, fixable symptom. Both services say so on start.
+
+Keep the token out of shell history and out of the acceptance record; it is a
+credential, not a setting.
 
 If the vision model call fails or times out for any reason — no credential,
 rejected auth, a bad response shape, a timeout — the relay does not guess.
@@ -664,6 +697,7 @@ MAX_GALLERY_DIR=/var/lib/max/gallery
 MAX_GALLERY_MIN_FREE_MB=1024
 MAX_HUD_PORT=8080
 MAX_VISION_PREVIEW_PORT=8081
+MAX_VISION_TOKEN=                          # REQUIRED to reach 8080/8081 from anywhere but the board
 MAX_VISION_SOCKET=/run/max/vision.sock
 RDK_CAMERA_FRONT=0                         # MIPI channel; CAM1 connector
 RDK_CAMERA_REAR=2                          # MIPI channel; the other connector
@@ -971,8 +1005,10 @@ With `npm run dev:server` running on the LAN host:
 
 **Cameras**
 
-1. `systemctl start max-vision`, then open `http://<board>:8081/preview/front`
-   and `/preview/rear` — both show live video.
+1. `systemctl start max-vision` with `MAX_VISION_SHARE=1`, then open
+   `http://<board>:8081/preview/front?t=<token>` and `/preview/rear?t=<token>`
+   — both show live video. Without the token: `401`. With
+   `MAX_VISION_SHARE=0`: `403`, and the HUD's camera panels stay dark.
 2. Say "拍照" — a `pair-*` directory appears under `/var/lib/max/gallery` with
    two JPEGs and a manifest.
 3. Say "开始录像", wait, then "停止录像" — two `.mjpeg` segments and a manifest
@@ -986,13 +1022,18 @@ With `npm run dev:server` running on the LAN host:
 
 **Dev HUD**
 
-Open `http://<board>:8080` from a laptop, or Chromium kiosk on the board's HDMI. Start a session and
-confirm turn state, transcript, navigation, latency, captures, and both previews update live. The
-unauthenticated direct-LAN WebSocket is deliberately a redacted status surface: it receives those
-non-secret fields but never `pairingCode` or `pairingExpiresAt`. Only a TCP peer accepted from the
-board's IPv4/IPv6 loopback—such as the local kiosk or an authenticated SSH local forward—receives
-the full pairing state. `Origin`, `Host`, forwarding headers, URL parameters, and WebSocket client
-messages do not change that decision.
+Open `http://<board>:8080/?t=<token>` from a laptop, or Chromium kiosk on the board's HDMI (which is
+loopback and needs no token). Start a session and confirm turn state, transcript, navigation,
+latency, captures, and both previews update live.
+
+Two independent boundaries apply, and they answer different questions. The **token** decides whether
+a peer is served at all: without it a non-loopback browser gets `401` on both the page and the
+WebSocket upgrade. **Peer address** decides how much a served client sees: the direct-LAN WebSocket
+is deliberately a redacted status surface, receiving the non-secret fields but never `pairingCode` or
+`pairingExpiresAt`. Holding the token gets a stranger in; it does not make them local. Only a TCP
+peer accepted from the board's IPv4/IPv6 loopback—such as the local kiosk or an authenticated SSH
+local forward—receives the full pairing state. `Origin`, `Host`, forwarding headers, URL parameters,
+and WebSocket client messages do not change that second decision.
 
 ## Known gap
 
@@ -1354,17 +1395,24 @@ earlier version of this section kept the page read-only because the surface is
 unauthenticated on `0.0.0.0`, and clearing space meant `rm` over SSH. That
 traded the wrong way: a ten-minute clip is ~1.7 GB against a 1 GB floor, so
 deletion is routine, and the one client with the gallery in front of it could
-not do it. A token would be theater rather than auth — the page embedding it
-is served unauthenticated on the same LAN, to anyone who asks. What the route
-does guarantee: the unit is the whole pair directory (deleting one side would
-leave a manifest claiming media that is gone — the broken-tile state
-`reconcile()` exists to repair), only a directory holding a manifest directly
-under the gallery root can be named (the same resolved-path rule as reads), a
-live recording is refused with `409` until it is stopped, and a capture is the
-_only_ thing the route can remove. Preview has always streamed frames to
-anyone on the LAN; delete extends that same trust from reading captures to
-removing them. If the board ever leaves trusted LANs, authentication has to
-arrive for the whole bench surface at once, not for this route alone.
+not do it.
+
+This route used to be unauthenticated, on the reasoning that a token would be
+theater: the page embedding it was itself served to anyone on the LAN who
+asked, so the token was never a secret. That reasoning ended with its premise —
+**as of 2026-08-11 the whole bench surface authenticates at once**, the page
+included, which is exactly the condition the old note said would be required
+(see "Bench access — `MAX_VISION_TOKEN`"). Without the token a delete is a
+`401` and nothing is removed; that closes the drive-by case, where a plain
+cross-origin `POST` from any page the rider visited on the same network needed
+no token, no header, and no reply it could read in order to destroy a capture.
+
+What the route guarantees beyond that: the unit is the whole pair directory
+(deleting one side would leave a manifest claiming media that is gone — the
+broken-tile state `reconcile()` exists to repair), only a directory holding a
+manifest directly under the gallery root can be named (the same resolved-path
+rule as reads), a live recording is refused with `409` until it is stopped, and
+a capture is the _only_ thing the route can remove.
 
 Any path resolving outside the gallery root is a `404`. The sidecar runs as
 root, so that check is a security boundary, not tidiness — see
@@ -1373,8 +1421,11 @@ root, so that check is a security boundary, not tidiness — see
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" --path-as-is \
-  "http://<board>:8081/gallery/../../../etc/shadow"     # must be 404
+  "http://<board>:8081/gallery/../../../etc/shadow?t=<token>"   # must be 404
 ```
+
+Run it _with_ the token: without one the answer is `401`, which proves the
+token gate and says nothing about `safe_path`. Two boundaries, two checks.
 
 **The page and the sidecar deploy separately.** The grid lives in
 `rdk/agent/src/hud/index.html` and ships with the agent, which runs from source

@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from adas.launcher import start_adas
 from adas.rebase import RebasedSource
 from adas.runtime import RuntimeConfig
 from adas.tuning import DEFAULT
@@ -137,8 +138,6 @@ class RideSession:
         return self.ride_id
 
     def _start_adas_threads(self) -> None:
-        from service import start_adas  # noqa: PLC0415 - service imports this module
-
         assert self.ride_id is not None
         ride_dir = self.corpus_dir / self.ride_id
         for name, camera in self.cameras.items():

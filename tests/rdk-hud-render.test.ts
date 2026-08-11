@@ -1,8 +1,11 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import { renderHudPage } from "../rdk/agent/src/hud/server";
 import type { HudState } from "../rdk/agent/src/hud/state";
 
-const page = readFileSync(new URL("../rdk/agent/src/hud/index.html", import.meta.url), "utf8");
+// Substituted the way createHudServer substitutes, so this exercises the page
+// as served rather than the template.
+const page = renderHudPage(readFileSync(new URL("../rdk/agent/src/hud/index.html", import.meta.url), "utf8"), 8081, "");
 
 class FakeClassList {
   constructor(private readonly element: FakeElement) {}
@@ -425,5 +428,34 @@ describe("RDK HUD navigation card", () => {
 
   it("keeps the HUD card-only with no map or remote Amap surface", () => {
     expect(page).not.toMatch(/<iframe|<canvas|webapi\.amap|restapi\.amap|amap\.com/i);
+  });
+});
+
+describe("RDK HUD sidecar URLs", () => {
+  const source = readFileSync(new URL("../rdk/agent/src/hud/index.html", import.meta.url), "utf8");
+
+  function previewSrc(token: string): string {
+    const rendered = renderHudPage(source, 8081, token);
+    const script = /<script>([\s\S]*?)<\/script>/.exec(rendered)![1]!;
+    const build = new Function(
+      "location",
+      `${script.slice(0, script.indexOf('document.getElementById("front")'))} return sidecar("/preview/front");`
+    );
+    return build({ hostname: "rdk.local", host: "rdk.local:8080" }) as string;
+  }
+
+  it("carries the bench token to the sidecar so the browser is admitted", () => {
+    expect(previewSrc("s3cret")).toBe("http://rdk.local:8081/preview/front?t=s3cret");
+  });
+
+  it("sends no token when the board has none, keeping the loopback-only case clean", () => {
+    expect(previewSrc("")).toBe("http://rdk.local:8081/preview/front");
+  });
+
+  it("uses a distinct replay cache-buster so it cannot overwrite the token", () => {
+    // `t` was the cache-buster on /play before it became the token parameter;
+    // reusing it would have made every replay an unauthenticated request.
+    expect(page).not.toMatch(/[?&]t=\$\{\+\+streamNonce\}/);
+    expect(page).toContain("n: ++streamNonce");
   });
 });

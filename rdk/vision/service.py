@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import contextlib
 import os
+import queue
 import signal
+import socket
 import socketserver
 import sys
 import threading
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Mapping
 
 from camera import CameraPair
@@ -30,6 +31,10 @@ class VisionConfig:
     share_frames: bool = False
     front_channel: int = 0
     rear_channel: int = 2
+    #: Shared secret for the bench HTTP surface. Empty means nothing off-box is
+    #: served at all — see bench_server.authorized. The agent reads the same
+    #: variable so the HUD page it serves can carry the token.
+    vision_token: str = ""
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "VisionConfig":
@@ -44,6 +49,7 @@ class VisionConfig:
             share_frames=values.get("MAX_VISION_SHARE", "0") == "1",
             front_channel=int(values.get("RDK_CAMERA_FRONT", "0")),
             rear_channel=int(values.get("RDK_CAMERA_REAR", "2")),
+            vision_token=values.get("MAX_VISION_TOKEN", "").strip(),
         )
 
 
@@ -101,20 +107,88 @@ def build_runtime(config: VisionConfig) -> VisionRuntime:
     )
 
 
+#: How many unwritten lines one control connection may bank.
+#:
+#: Deep enough to ride out a brief stall in the agent, shallow enough that a
+#: client which stopped reading cannot pin megabytes of base64 watch frames in
+#: RAM on a 4 GB board.
+EVENT_QUEUE_DEPTH = 32
+
+#: How long a broadcast may wait for room before its client is written off.
+#:
+#: This is a wedge detector, not a rate limit. A connected agent that is
+#: reading drains continuously, so a producer waits microseconds and no event
+#: is ever lost — which is the property test_concurrent_writes_do_not_interleave
+#: pins. A client that has stopped reading blocks exactly one producer for this
+#: long, once, and is then dropped from the event registry; every later
+#: broadcast returns immediately.
+EVENT_ENQUEUE_TIMEOUT_S = 2.0
+
+#: How long a *response* may wait for room before this connection is given up
+#: on. A client not draining its own answers is not a client; dropping it lets
+#: the agent's reconnect loop start a working one.
+RESPONSE_ENQUEUE_TIMEOUT_S = 5.0
+
+
 class ControlHandler(socketserver.StreamRequestHandler):
     def handle(self) -> None:
         runtime = self.server.runtime
-        # RPC responses (this thread) and hazard broadcasts (ADAS threads)
-        # share one wfile; unsynchronised, they interleave bytes mid-line on a
-        # channel whose whole contract is one JSON message per line.
-        write_lock = threading.Lock()
+        # One writer owns the wfile. RPC responses (this thread) and hazard
+        # broadcasts (ADAS threads) used to share it under a lock, which kept
+        # lines whole but made the socket's backpressure the *producer's*
+        # problem: once both buffers filled, an ADAS thread reporting a
+        # collision sat inside broadcast() until the agent drained a watch
+        # frame queued seconds earlier. Detection stopped because a bench
+        # instrument was slow.
+        #
+        # A bounded queue plus a single writer keeps lines whole for the same
+        # reason the lock did, and keeps a slow reader's cost local to its own
+        # connection.
+        outbox: "queue.Queue[str | None]" = queue.Queue(maxsize=EVENT_QUEUE_DEPTH)
 
-        def write(line: str) -> None:
-            with write_lock:
-                self.wfile.write(line.encode("utf-8"))
-                self.wfile.flush()
+        def pump() -> None:
+            while True:
+                line = outbox.get()
+                if line is None:
+                    return
+                try:
+                    self.wfile.write(line.encode("utf-8"))
+                    self.wfile.flush()
+                except OSError:
+                    # The client is gone. handle() learns the same thing from
+                    # its own read returning empty, and cleans up there.
+                    return
 
-        runtime.events.register(write)
+        writer = threading.Thread(target=pump, name="control-writer", daemon=True)
+        writer.start()
+
+        def write_event(line: str) -> None:
+            """Enqueue a broadcast, or give up on this client.
+
+            Raising is deliberate: EventBus drops a client whose write raises,
+            so one wedged connection costs one bounded wait rather than every
+            later hazard the ADAS threads try to report.
+            """
+            if not writer.is_alive():
+                raise OSError("control writer stopped")
+            try:
+                outbox.put(line, timeout=EVENT_ENQUEUE_TIMEOUT_S)
+            except queue.Full:
+                print(
+                    "[vision] control client stopped reading; dropping it from the event registry",
+                    flush=True,
+                )
+                raise OSError("control client is not draining events") from None
+
+        def write_response(line: str) -> str | None:
+            """Enqueue an answer. Bounded, and only ever blocks this thread."""
+            try:
+                outbox.put(line, timeout=RESPONSE_ENQUEUE_TIMEOUT_S)
+            except queue.Full:
+                return "response"
+            return None
+
+        runtime.events.register(write_event)
         try:
             buffer = ""
             while True:
@@ -125,16 +199,28 @@ class ControlHandler(socketserver.StreamRequestHandler):
                 messages, buffer = decode_lines(buffer)
                 for message in messages:
                     line = dispatch(message, runtime.handlers)
-                    if line:
-                        write(line)
+                    if line and write_response(line) is not None:
+                        print(
+                            "[vision] control client never made room for its own response; "
+                            "closing the connection",
+                            flush=True,
+                        )
+                        return
         finally:
             # ThreadingUnixStreamServer gives each connection its own thread, so
             # a client that goes away leaves a closure behind unless we say so.
-            runtime.events.unregister(write)
+            runtime.events.unregister(write_event)
             # Watching dies with the connection: the agent is the only control
             # client in production, so any disconnect — clean or not — must
             # stop the sampler rather than leave it broadcasting to no one.
             runtime.watcher.set_enabled(False)
+            # Unblock a writer parked in sendall() on a client that stopped
+            # reading, so this connection's thread does not outlive its handler.
+            with contextlib.suppress(OSError):
+                self.connection.shutdown(socket.SHUT_WR)
+            with contextlib.suppress(queue.Full):
+                outbox.put_nowait(None)
+            writer.join(timeout=2.0)
 
 
 class ControlServer(socketserver.ThreadingUnixStreamServer):
@@ -241,17 +327,24 @@ def main() -> None:
 
     from bench_server import serve as serve_bench  # noqa: PLC0415
 
+    if not config.vision_token:
+        print(
+            "[vision] MAX_VISION_TOKEN is unset; the bench HTTP surface serves "
+            "127.0.0.1 only and refuses every other peer",
+            flush=True,
+        )
     threading.Thread(
         target=serve_bench,
         args=(runtime.cameras, runtime.gallery, config.preview_port),
-        kwargs={"share_frames": config.share_frames},
+        kwargs={"share_frames": config.share_frames, "token": config.vision_token},
         daemon=True,
     ).start()
 
     ride = None
     if config.adas_shadow:
-        # Imported here, not at module scope: ride.py imports start_adas from
-        # this module, and a top-level import would be circular.
+        # Still function-local, but no longer to break a cycle: ride.py pulls in
+        # the recorder and the ADAS stack (numpy, cv2), which only exist on the
+        # board, and a camera-less bench run must still import this module.
         from ride import RideSession  # noqa: PLC0415
 
         open_cameras = {
@@ -287,30 +380,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-def start_adas(config: "RuntimeConfig", shadow_path, emit, source_factory) -> threading.Thread:
-    """Run one camera's ADAS loop on a daemon thread.
-
-    Exceptions are caught and logged rather than raised. ADAS failing must cost
-    hazard detection and nothing else: the sidecar keeps serving preview and
-    gallery, and voice is a different process that this cannot reach.
-
-    RecordingRequired arrives here too. It is a deliberate stop rather than a
-    bug — shadow mode without a recorder produces a false-alarm rate nobody can
-    review — and it is contained the same way.
-    """
-    from adas.runtime import run_camera
-    from adas.shadow import ShadowLog
-
-    def body() -> None:
-        try:
-            with ShadowLog(Path(shadow_path), tuning=config.tuning) as shadow:
-                fired = run_camera(source_factory(), config, shadow, emit)
-                print(f"[adas] {config.camera}: {fired} alerts", flush=True)
-        except Exception as error:  # noqa: BLE001 — see the docstring
-            print(f"[adas] {config.camera} stopped: {error}", flush=True)
-
-    thread = threading.Thread(target=body, name=f"adas-{config.camera}", daemon=True)
-    thread.start()
-    return thread

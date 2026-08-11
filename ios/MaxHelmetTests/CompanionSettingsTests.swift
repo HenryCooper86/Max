@@ -105,6 +105,38 @@ final class CompanionSettingsTests: XCTestCase {
         XCTAssertFalse(busy.isPrimaryActionEnabled)
     }
 
+    func testDiscoveryPairGateDropsTheExactCodeRequirementButSharesEveryOtherGuardWithManualPair() {
+        let shortManualCode = CompanionSettingsPresentation.make(
+            isLoggedIn: true,
+            pairCode: "12",
+            connectionState: .unpaired,
+            rideOwned: false,
+            permission: .notDetermined,
+            lastForwardedAt: nil,
+            now: Date()
+        )
+        XCTAssertFalse(shortManualCode.isPairEnabled, "a non-six-digit manual code must not enable manual pairing")
+        XCTAssertTrue(
+            shortManualCode.isPairEnabledForDiscovery,
+            "a discovered helmet's token stands in for the code, so the manual field's contents must not gate it"
+        )
+
+        let rideAlreadyOwned = CompanionSettingsPresentation.make(
+            isLoggedIn: true,
+            pairCode: "123456",
+            connectionState: .unpaired,
+            rideOwned: true,
+            permission: .notDetermined,
+            lastForwardedAt: nil,
+            now: Date()
+        )
+        XCTAssertFalse(rideAlreadyOwned.isPairEnabled)
+        XCTAssertFalse(
+            rideAlreadyOwned.isPairEnabledForDiscovery,
+            "a shared gate (an owned ride) must disable both pairing paths identically"
+        )
+    }
+
     func testForwardedAgeIsDeterministicBoundedAndAbsentCopyIsExplicit() {
         let now = Date(timeIntervalSince1970: 1_000)
         let absent = CompanionSettingsPresentation.make(

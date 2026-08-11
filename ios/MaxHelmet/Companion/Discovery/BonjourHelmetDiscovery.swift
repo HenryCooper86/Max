@@ -22,7 +22,13 @@ final class BonjourHelmetDiscovery: HelmetDiscovering {
         stop()
         let descriptor = NWBrowser.Descriptor.bonjourWithTXTRecord(type: "_maxhelmet._tcp", domain: nil)
         let browser = NWBrowser(for: descriptor, using: .tcp)
-        browser.browseResultsChangedHandler = { [weak self] results, _ in
+        // NWBrowser.cancel() tears down asynchronously — a results callback
+        // already queued at cancel time (or from a since-replaced browser)
+        // can still land afterward. Compare identity against the currently
+        // owned browser so a stale or superseded callback is dropped instead
+        // of resurrecting cleared/old results.
+        browser.browseResultsChangedHandler = { [weak self, weak browser] results, _ in
+            guard let browser, self?.browser === browser else { return }
             let helmets = results.compactMap { result -> DiscoveredHelmet? in
                 guard case let .bonjour(record) = result.metadata,
                       let token = Self.token(fromTxt: record.dictionary) else {

@@ -496,6 +496,84 @@ describe("stable RDK session registration", () => {
   });
 });
 
+describe("companion discovery session wiring", () => {
+  it("supplies a speak callback that routes through provider.speakNavLine", async () => {
+    const spoken: string[] = [];
+    let peer: HelmetPeer | undefined;
+    const provider = makeProvider({ speakNavLine: (text: string) => void spoken.push(text) });
+    const controller = new AgentSessionController(
+      { readyState: 1, OPEN: 1, send: vi.fn(), close: vi.fn() } as never,
+      () => provider,
+      undefined,
+      "203.0.113.5",
+      undefined,
+      undefined,
+      {
+        deviceRegistrationAuthorized: true,
+        onDeviceRegistered: (registered) => {
+          peer = registered;
+          return () => undefined;
+        }
+      }
+    );
+    await controller.handleMessage(startEvent({ deviceId: "rdk-11111111-1111-4111-8111-111111111111" }), false);
+    peer?.speak("检测到配对请求");
+    expect(spoken).toEqual(["检测到配对请求"]);
+  });
+
+  it("stops routing speak through the provider once the session has closed", async () => {
+    const spoken: string[] = [];
+    let peer: HelmetPeer | undefined;
+    const provider = makeProvider({ speakNavLine: (text: string) => void spoken.push(text) });
+    const controller = new AgentSessionController(
+      { readyState: 1, OPEN: 1, send: vi.fn(), close: vi.fn() } as never,
+      () => provider,
+      undefined,
+      "203.0.113.5",
+      undefined,
+      undefined,
+      {
+        deviceRegistrationAuthorized: true,
+        onDeviceRegistered: (registered) => {
+          peer = registered;
+          return () => undefined;
+        }
+      }
+    );
+    await controller.handleMessage(startEvent({ deviceId: "rdk-22222222-2222-4222-8222-222222222222" }), false);
+    await controller.close();
+    peer?.speak("检测到配对请求");
+    expect(spoken).toEqual([]);
+  });
+
+  it("forwards final rider transcripts to onRiderUtterance with the registered deviceId", async () => {
+    const utterances: Array<{ deviceId: string; text: string }> = [];
+    let serverEventTap: ((payload: unknown, bytes: number) => void) | undefined;
+    const factory: ProviderFactory = (_client, telemetry) => {
+      serverEventTap = telemetry.serverEvent;
+      return makeProvider();
+    };
+    const controller = new AgentSessionController(
+      { readyState: 1, OPEN: 1, send: vi.fn(), close: vi.fn() } as never,
+      factory,
+      undefined,
+      "203.0.113.5",
+      undefined,
+      undefined,
+      {
+        deviceRegistrationAuthorized: true,
+        onDeviceRegistered: () => () => undefined,
+        onRiderUtterance: (deviceId, text) => void utterances.push({ deviceId, text })
+      }
+    );
+    await controller.handleMessage(startEvent({ deviceId: "rdk-11111111-1111-4111-8111-111111111111" }), false);
+    serverEventTap?.({ type: "transcript", turnId: "t1", deliveryId: "d1", speaker: "rider", text: "确认", final: true }, 10);
+    serverEventTap?.({ type: "transcript", turnId: "t1", deliveryId: "d2", speaker: "rider", text: "确", final: false }, 10);
+    serverEventTap?.({ type: "transcript", turnId: "t2", deliveryId: "d3", speaker: "agent", text: "确认", final: true }, 10);
+    expect(utterances).toEqual([{ deviceId: "rdk-11111111-1111-4111-8111-111111111111", text: "确认" }]);
+  });
+});
+
 describe("session memory and safety policy", () => {
   it("detects emergency intent and escalates response mode", () => {
     expect(inferIntent("I crashed and need help")).toBe("emergency");

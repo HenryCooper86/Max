@@ -294,6 +294,42 @@ class _OrderTrackingWatcher:
         self.order.append("watcher")
 
 
+class _OrderTrackingMonitor:
+    def __init__(self, order: list[str]):
+        self.order = order
+
+    def stop(self):
+        self.order.append("monitor")
+
+
+def test_finalize_stops_the_frame_monitor_before_the_cameras():
+    """A clean stop used to exit 1/FAILURE.
+
+    finalize() stops the cameras, and the frame monitor — which had no off
+    switch — then woke, judged those cameras stale, and called os._exit(1) on a
+    shutdown that was going perfectly well. It has to be silenced first, before
+    the thing it watches is torn down.
+    """
+    order: list[str] = []
+    pair = FakeRecordingPair()
+    pair.front = _OrderTrackingCamera("front", order)
+    pair.rear = _OrderTrackingCamera("rear", order)
+    watcher = _OrderTrackingWatcher(order)
+    monitor = _OrderTrackingMonitor(order)
+    service.finalize(pair, object(), None, watcher, monitor)
+    assert order == ["monitor", "watcher", "front", "rear"]
+
+
+def test_finalize_without_a_monitor_still_tears_down():
+    # A camera-less bench run never starts one.
+    order: list[str] = []
+    pair = FakeRecordingPair()
+    pair.front = _OrderTrackingCamera("front", order)
+    watcher = _OrderTrackingWatcher(order)
+    service.finalize(pair, object(), None, watcher, None)
+    assert order == ["watcher", "front"]
+
+
 def test_finalize_stops_the_watcher_before_the_cameras():
     # The watcher reads through front_jpeg_for_watch() same as ride's ADAS
     # threads read the cameras directly -- stopping the cameras first would

@@ -236,7 +236,7 @@ class ControlServer(socketserver.ThreadingUnixStreamServer):
         super().__init__(socket_path, handler)
 
 
-def finalize(cameras, gallery, ride, watcher) -> None:
+def finalize(cameras, gallery, ride, watcher, monitor=None) -> None:
     """Shutdown: finish a live recording, stop the ride, release the cameras.
 
     An ordinary `systemctl stop` should produce a finished manifest itself
@@ -244,6 +244,13 @@ def finalize(cameras, gallery, ride, watcher) -> None:
     """
     if cameras.recording_id is not None:
         cameras.stop_recording(gallery)
+    # Before anything it watches. The frame monitor's whole job is to call
+    # os._exit(1) when frames stop arriving, and stopping the cameras below is
+    # the most reliable way to stop frames arriving — so left running it turned
+    # every clean shutdown into `1/FAILURE` in the journal. `None` is a real
+    # state: a camera-less bench run never starts one.
+    if monitor is not None:
+        monitor.stop()
     # Ride and the watcher both read from the cameras (ride's ADAS threads
     # directly, the watcher through front_jpeg_for_watch), so both must stop
     # before the cameras do or their next grab raises on the way down.
@@ -323,7 +330,7 @@ def main() -> None:
         print(f"[vision] camera frames stale: {', '.join(stale)}; exiting for systemd to restart", flush=True)
         os._exit(1)
 
-    start_monitor(runtime.cameras, notify=sd_notify, on_stale=exit_stale)
+    monitor = start_monitor(runtime.cameras, notify=sd_notify, on_stale=exit_stale)
 
     from bench_server import serve as serve_bench  # noqa: PLC0415
 
@@ -373,7 +380,7 @@ def main() -> None:
         try:
             server.serve_forever()
         finally:
-            finalize(runtime.cameras, runtime.gallery, ride, runtime.watcher)
+            finalize(runtime.cameras, runtime.gallery, ride, runtime.watcher, monitor)
             with contextlib.suppress(OSError):
                 os.unlink(config.socket_path)
 

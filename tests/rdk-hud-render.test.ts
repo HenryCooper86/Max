@@ -60,14 +60,16 @@ type RenderHarness = {
   elements: Map<string, FakeElement>;
   render(state: HudState): void;
   runTimeouts(): void;
+  /** Every URL the page handed to `new WebSocket`. */
+  socketUrls: string[];
 };
 
-function renderHarness(): RenderHarness {
-  const ids = new Set([...page.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]!));
+function renderHarness(src: string = page): RenderHarness {
+  const ids = new Set([...src.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]!));
   for (const id of ["navigation-card", "phone-status", "nav-instruction", "nav-distance", "nav-summary", "nav-paused"])
     ids.add(id);
   const elements = new Map([...ids].map((id) => [id, new FakeElement(id)]));
-  for (const match of page.matchAll(/<[^>]+\bid="([^"]+)"[^>]*>/g)) {
+  for (const match of src.matchAll(/<[^>]+\bid="([^"]+)"[^>]*>/g)) {
     const tag = match[0];
     const element = elements.get(match[1]!)!;
     element.className = /\bclass="([^"]*)"/.exec(tag)?.[1] ?? "";
@@ -79,17 +81,18 @@ function renderHarness(): RenderHarness {
     addEventListener: () => undefined
   };
   const sockets: Array<{ onmessage?: (message: { data: string }) => void }> = [];
+  const socketUrls: string[] = [];
   let nextTimerId = 1;
   const timers = new Map<number, () => void>();
   class FakeWebSocket {
     onmessage?: (message: { data: string }) => void;
 
     constructor(url: string) {
-      void url;
+      socketUrls.push(url);
       sockets.push(this);
     }
   }
-  const scripts = [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+  const scripts = [...src.matchAll(/<script>([\s\S]*?)<\/script>/g)];
   expect(scripts).toHaveLength(1);
   const run = new Function(
     "document",
@@ -122,6 +125,7 @@ function renderHarness(): RenderHarness {
   expect(socket?.onmessage).toBeTypeOf("function");
   return {
     elements,
+    socketUrls,
     render(state): void {
       socket!.onmessage!({ data: JSON.stringify(state) });
     },
@@ -450,6 +454,22 @@ describe("RDK HUD sidecar URLs", () => {
 
   it("sends no token when the board has none, keeping the loopback-only case clean", () => {
     expect(previewSrc("")).toBe("http://rdk.local:8081/preview/front");
+  });
+
+  it("gives the status WebSocket the token too, or the panel starves while the cameras work", () => {
+    // Observed on the board: cameras and gallery live, connection/turn/latency
+    // /error all "—". Those four come from the socket, and the socket is the
+    // one URL `sidecar()` does not build. `location.host` is host:port with no
+    // query, so the token never reached the upgrade and it was refused 401
+    // while every tokenised fetch beside it succeeded.
+    const harness = renderHarness(renderHudPage(source, 8081, "s3cret"));
+    expect(harness.socketUrls).toHaveLength(1);
+    expect(harness.socketUrls[0]).toContain("t=s3cret");
+  });
+
+  it("opens a bare socket when the board has no token, keeping the loopback case clean", () => {
+    const harness = renderHarness(renderHudPage(source, 8081, ""));
+    expect(harness.socketUrls[0]).not.toContain("t=");
   });
 
   it("uses a distinct replay cache-buster so it cannot overwrite the token", () => {

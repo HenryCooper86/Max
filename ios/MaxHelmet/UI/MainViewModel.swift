@@ -780,9 +780,9 @@ final class MainViewModel: ObservableObject {
 
     private func handleCommittedCompanionState(_ state: CompanionConnectionState) {
         dispatchPrecondition(condition: .onQueue(.main))
-        // The pairing action (code or discovery) has resolved one way or
-        // another — a new status, a pair.* error, or any other companion.error.
-        isAwaitingHelmetConfirm = false
+        if resolvesPairingAction(state) {
+            isAwaitingHelmetConfirm = false
+        }
 
         let terminalState = isCompanionTerminal(state)
         if interruptsCompanionAction(state) {
@@ -1256,6 +1256,24 @@ final class MainViewModel: ObservableObject {
         if state == .unpaired { return true }
         if case .failed = state { return true }
         return false
+    }
+
+    /// States and errors that RESOLVE a pairing action (code or discovery) one
+    /// way or another, so the 等待头盔确认 row may stop waiting.
+    ///
+    /// `.connecting` and `.unpaired` are not resolutions: after a discovery tap
+    /// the wire order is the transport's own `.connecting` and then the relay's
+    /// attach-time `unpaired` sync for the still-unbound account — both land
+    /// about a second into the helmet's 30 s confirm window. (The client defers
+    /// that sync while a bind attempt is pending, so it normally never commits
+    /// here at all; this funnel stays honest either way.)
+    private func resolvesPairingAction(_ state: CompanionConnectionState) -> Bool {
+        switch state {
+        case .connecting, .unpaired:
+            return false
+        case .signedOut, .paired, .helmetOffline, .ready, .sharing, .failed:
+            return true
+        }
     }
 
     private func isCompanionTerminal(_ state: CompanionConnectionState) -> Bool {

@@ -87,6 +87,43 @@ final class CompanionViewModelTests: XCTestCase {
         XCTAssertEqual(harness.viewModel.companionState, .failed(code: "pair.busy", detail: "busy"))
     }
 
+    func testPairDiscoverWaitingStateSurvivesConnectTimeStatesUntilAResolvingOne() {
+        let harness = Harness()
+        let token = String(repeating: "a", count: 32)
+        harness.viewModel.pairDiscoveredHelmet(token: token)
+
+        // The realistic wire order about a second into the helmet's 30 s confirm
+        // window: the transport's own .connecting, then the relay's attach-time
+        // unpaired sync for the still-unbound account. Neither answers the tap.
+        harness.client.publish(.connecting)
+        XCTAssertTrue(
+            harness.viewModel.isAwaitingHelmetConfirm,
+            "opening the transport is not an answer from the helmet"
+        )
+        harness.client.publish(.unpaired)
+        XCTAssertTrue(
+            harness.viewModel.isAwaitingHelmetConfirm,
+            "the relay's attach-time sync must not close the confirm window"
+        )
+        XCTAssertEqual(harness.viewModel.companionState, .unpaired)
+
+        // Terminal authority makes .unpaired the last state that connection can
+        // publish, so the resolving error runs on its own attempt — which is
+        // also the only order the fixed client can produce on the wire.
+        let resolved = Harness()
+        resolved.viewModel.pairDiscoveredHelmet(token: token)
+        resolved.client.publish(.connecting)
+        XCTAssertTrue(resolved.viewModel.isAwaitingHelmetConfirm)
+
+        resolved.client.publish(.failed(code: "pair.timeout", detail: "Pairing confirmation timed out."))
+
+        XCTAssertFalse(resolved.viewModel.isAwaitingHelmetConfirm)
+        XCTAssertEqual(
+            resolved.viewModel.companionState,
+            .failed(code: "pair.timeout", detail: "Pairing confirmation timed out.")
+        )
+    }
+
     func testDiscoveryErrorCodesMapToReadableCopyAndOtherCodesFallThrough() {
         XCTAssertEqual(MainViewModel.companionErrorCopy(code: "pair.busy"), "头盔正忙，请稍后再试")
         XCTAssertEqual(MainViewModel.companionErrorCopy(code: "pair.declined"), "头盔侧已取消配对")

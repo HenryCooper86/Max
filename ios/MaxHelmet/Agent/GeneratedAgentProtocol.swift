@@ -36,11 +36,12 @@ enum ServerEventTypes {
     static let crashAck = "crash.ack"
     static let crashSimulate = "crash.simulate"
     static let companionPairing = "companion.pairing"
+    static let companionDiscovery = "companion.discovery"
     static let phoneLocation = "phone.location"
     static let phoneLocationStatus = "phone.location.status"
     static let navRoute = "nav.route"
     static let navError = "nav.error"
-    static let all: Set<String> = [sessionStarted, connection, status, transcript, metric, weather, rideContext, sessionMemory, telemetry, hazardAlert, deviceCommand, error, crashAck, crashSimulate, companionPairing, phoneLocation, phoneLocationStatus, navRoute, navError]
+    static let all: Set<String> = [sessionStarted, connection, status, transcript, metric, weather, rideContext, sessionMemory, telemetry, hazardAlert, deviceCommand, error, crashAck, crashSimulate, companionPairing, companionDiscovery, phoneLocation, phoneLocationStatus, navRoute, navError]
 }
 
 let serverEventRequiredFields: [String: Set<String>] = [
@@ -59,6 +60,7 @@ let serverEventRequiredFields: [String: Set<String>] = [
     "crash.ack": ["type", "incidentId", "status"],
     "crash.simulate": ["type"],
     "companion.pairing": ["type", "code", "expiresAt", "paired"],
+    "companion.discovery": ["type", "token"],
     "phone.location": ["type", "sequence", "lat", "lon", "horizontalAccuracyMeters", "timestamp"],
     "phone.location.status": ["type", "state"],
     "nav.route": ["type", "commandId", "destinationName", "destination", "distanceMeters", "etaSeconds", "polyline", "steps"],

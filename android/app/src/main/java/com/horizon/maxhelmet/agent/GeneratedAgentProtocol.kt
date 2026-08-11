@@ -36,11 +36,12 @@ object ServerEventTypes {
     const val CRASH_ACK = "crash.ack"
     const val CRASH_SIMULATE = "crash.simulate"
     const val COMPANION_PAIRING = "companion.pairing"
+    const val COMPANION_DISCOVERY = "companion.discovery"
     const val PHONE_LOCATION = "phone.location"
     const val PHONE_LOCATION_STATUS = "phone.location.status"
     const val NAV_ROUTE = "nav.route"
     const val NAV_ERROR = "nav.error"
-    val all: Set<String> = setOf(SESSION_STARTED, CONNECTION, STATUS, TRANSCRIPT, METRIC, WEATHER, RIDE_CONTEXT, SESSION_MEMORY, TELEMETRY, HAZARD_ALERT, DEVICE_COMMAND, ERROR, CRASH_ACK, CRASH_SIMULATE, COMPANION_PAIRING, PHONE_LOCATION, PHONE_LOCATION_STATUS, NAV_ROUTE, NAV_ERROR)
+    val all: Set<String> = setOf(SESSION_STARTED, CONNECTION, STATUS, TRANSCRIPT, METRIC, WEATHER, RIDE_CONTEXT, SESSION_MEMORY, TELEMETRY, HAZARD_ALERT, DEVICE_COMMAND, ERROR, CRASH_ACK, CRASH_SIMULATE, COMPANION_PAIRING, COMPANION_DISCOVERY, PHONE_LOCATION, PHONE_LOCATION_STATUS, NAV_ROUTE, NAV_ERROR)
 }
 
 val SERVER_EVENT_REQUIRED_FIELDS: Map<String, Set<String>> = mapOf(
@@ -59,6 +60,7 @@ val SERVER_EVENT_REQUIRED_FIELDS: Map<String, Set<String>> = mapOf(
         "crash.ack" to setOf("type", "incidentId", "status"),
         "crash.simulate" to setOf("type"),
         "companion.pairing" to setOf("type", "code", "expiresAt", "paired"),
+        "companion.discovery" to setOf("type", "token"),
         "phone.location" to setOf("type", "sequence", "lat", "lon", "horizontalAccuracyMeters", "timestamp"),
         "phone.location.status" to setOf("type", "state"),
         "nav.route" to setOf("type", "commandId", "destinationName", "destination", "distanceMeters", "etaSeconds", "polyline", "steps"),

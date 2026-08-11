@@ -558,6 +558,16 @@
           "required": ["type", "code", "expiresAt", "paired"]
         },
         {
+          "title": "CompanionDiscovery",
+          "type": "object",
+          "properties": {
+            "type": { "const": "companion.discovery" },
+            "token": { "type": ["string", "null"] },
+            "expiresAt": { "type": "number" }
+          },
+          "required": ["type", "token"]
+        },
+        {
           "title": "PhoneLocation",
           "type": "object",
           "properties": {

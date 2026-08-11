@@ -133,6 +133,7 @@ function buildHarness() {
   const loggerCalls: LoggerCall[] = [];
   const timeline: string[] = [];
   const helmetFrames: HelmetEvent[] = [];
+  const helmetSpoken: string[] = [];
   const companionFrames: CompanionServerEvent[] = [];
   const agentTransportFrames: string[] = [];
   const providerVisibleInputs: NavPromptEvent[] = [];
@@ -250,7 +251,8 @@ function buildHarness() {
           return;
         }
         source.acceptLocation(event);
-      }
+      },
+      speak: (text) => helmetSpoken.push(text)
     });
 
   const attachPhone = (): CompanionConnection =>

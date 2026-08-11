@@ -269,10 +269,12 @@ describe("stable RDK session registration", () => {
     const codes = ["123456", "234567"];
     const registry = createCompanionRegistry({ store, randomCode: () => codes.shift() ?? "999999" });
     const liveHelmetEvents: Array<Record<string, unknown>> = [];
+    const liveHelmetSpoken: string[] = [];
     const detachLiveHelmet = registry.attachHelmet({
       deviceId: "rdk-cccccccc-cccc-4ccc-8ccc-cccccccccccc",
       deviceLabel: "Live helmet",
-      send: (event) => liveHelmetEvents.push(event)
+      send: (event) => liveHelmetEvents.push(event),
+      speak: (text) => liveHelmetSpoken.push(text)
     });
     const providerStartEntered = deferred();
     const releaseProviderStart = deferred();

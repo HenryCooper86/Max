@@ -63,6 +63,7 @@ type Harness = {
   logs: string[];
   now(): number;
   advance(milliseconds: number): void;
+  outstandingTimers(): number;
   helmet(deviceId: string, deviceLabel?: string): { events: HelmetEvent[]; spoken: string[]; detach(): void };
   phone(accountId: string, address?: string): { events: CompanionServerEvent[]; connection: CompanionConnection };
 };
@@ -83,12 +84,34 @@ function harness(
   const tokens = [...(options.tokens ?? ["a".repeat(32), "b".repeat(32), "c".repeat(32)])];
   const store = options.store ?? createCompanionBindingStore({ filePath: null, now: () => currentTime });
   const logs: string[] = [];
+
+  // Counting fakes that wrap whichever setTimeout/clearTimeout is ambient at
+  // call time (real, or vi's fake timers once vi.useFakeTimers() is active)
+  // so `advance()` keeps driving real timer firing while every scheduled
+  // handle the registry hands out is tracked — proving cancellation actually
+  // happened, not merely that no *visible* effect followed.
+  const outstandingHandles = new Set<ReturnType<typeof setTimeout>>();
+  function countingSetTimer(handler: () => void, delay?: number): ReturnType<typeof setTimeout> {
+    const handle = setTimeout(() => {
+      outstandingHandles.delete(handle);
+      handler();
+    }, delay);
+    outstandingHandles.add(handle);
+    return handle;
+  }
+  function countingClearTimer(handle: ReturnType<typeof setTimeout>): void {
+    outstandingHandles.delete(handle);
+    clearTimeout(handle);
+  }
+
   const registry = createCompanionRegistry({
     store,
     now: () => currentTime,
     randomCode: () => codes.shift() ?? "999999",
     randomToken: () => tokens.shift() ?? "ffffffffffffffffffffffffffffffff",
     minFixIntervalMs: options.minFixIntervalMs ?? 1_000,
+    setTimer: countingSetTimer,
+    clearTimer: countingClearTimer,
     log: {
       info: (message, fields) => logs.push(`${message} ${JSON.stringify(fields ?? {})}`),
       warn: (message, fields) => logs.push(`${message} ${JSON.stringify(fields ?? {})}`)
@@ -101,6 +124,7 @@ function harness(
     store,
     logs,
     now: () => currentTime,
+    outstandingTimers: () => outstandingHandles.size,
     advance(milliseconds) {
       currentTime += milliseconds;
       vi.advanceTimersByTime(milliseconds);
@@ -939,22 +963,31 @@ describe("companion discovery tokens", () => {
   it("stops the beacon when a code pair succeeds", async () => {
     const h = harness({ tokens: [TOKEN_A] });
     const helmet = h.helmet("rdk-a");
+    expect(h.outstandingTimers()).toBe(1); // the refresh timer scheduled on attach
     const phone = h.phone("acct-a");
     await phone.connection.handle({ type: "companion.pair", code: "123456" });
     expect(latest(helmet.events, "companion.discovery")).toEqual({
       type: "companion.discovery",
       token: null
     });
+    // stopDiscovery must have actually cleared the device's refresh timer,
+    // not merely stopped observing its effect.
+    expect(h.outstandingTimers()).toBe(0);
   });
 
   it("does not rotate after detach", () => {
     vi.useFakeTimers();
     const h = harness({ tokens: [TOKEN_A, TOKEN_B] });
     const helmet = h.helmet("rdk-a");
+    expect(h.outstandingTimers()).toBe(1);
     helmet.detach();
+    // Proves the timer was cleared on detach, not merely that its callback
+    // no-ops when it later fires against a detached helmet.
+    expect(h.outstandingTimers()).toBe(0);
     const sent = helmet.events.length;
     h.advance(10 * 60_000);
     expect(helmet.events.length).toBe(sent);
+    expect(h.outstandingTimers()).toBe(0);
   });
 
   it("issues a fresh discovery token on unpair", async () => {
@@ -964,5 +997,14 @@ describe("companion discovery tokens", () => {
     await phone.connection.handle({ type: "companion.pair", code: "123456" });
     await phone.connection.handle({ type: "companion.unpair" });
     expect(latest(helmet.events, "companion.discovery")).toMatchObject({ token: TOKEN_B });
+  });
+
+  it("leaves no discovery refresh timers outstanding after close", async () => {
+    vi.useFakeTimers();
+    const h = harness({ tokens: [TOKEN_A] });
+    h.helmet("rdk-a");
+    expect(h.outstandingTimers()).toBe(1);
+    await h.registry.close();
+    expect(h.outstandingTimers()).toBe(0);
   });
 });

@@ -913,6 +913,38 @@ describe("RDK route guidance and rerouting", () => {
     expect(h.events.filter((event) => event.type === "nav.request")).toHaveLength(2);
   });
 
+  it("abandons an unanswered reroute instead of wedging the session in rerouting", async () => {
+    const h = await startGuiding();
+    h.events.length = 0;
+    h.controller.handleFix(fix(2, 31.232, 121.471));
+    expect(h.events.filter((event) => event.type === "nav.request")).toHaveLength(1);
+    expect(h.states.at(-1)?.phase).toBe("rerouting");
+
+    // The relay answers with neither nav.route nor nav.error — a dropped
+    // reply, not a routing failure. The rider stays on the old route, but the
+    // session must stop claiming a reroute is in flight.
+    await vi.advanceTimersByTimeAsync(7_000);
+    expect(h.states.at(-1)).toMatchObject({ phase: "guiding", offRoute: true });
+
+    // And a later off-route fix, past the cooldown, may ask again.
+    await vi.advanceTimersByTimeAsync(20_000);
+    h.controller.handleFix(fix(3, 31.232, 121.471));
+    expect(h.events.filter((event) => event.type === "nav.request")).toHaveLength(2);
+  });
+
+  it("keeps a reroute answer that lands inside the timeout window", async () => {
+    const h = await startGuiding();
+    h.events.length = 0;
+    h.controller.handleFix(fix(2, 31.232, 121.471));
+    await vi.advanceTimersByTimeAsync(6_999);
+    h.controller.handleRoute(route("prompt-2", { destinationName: "新路线" }));
+    expect(h.states.at(-1)).toMatchObject({ phase: "guiding", destinationName: "新路线" });
+
+    // The abandon timer must not fire against the route it already answered.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(h.states.at(-1)).toMatchObject({ phase: "guiding", destinationName: "新路线" });
+  });
+
   it("installs a reroute answer paused when the source no longer has a current fix", async () => {
     let current: PhoneFix | undefined = ORIGIN_FIX;
     const h = await startGuiding(harness({ latest: () => current }));

@@ -255,6 +255,39 @@ describe("defaultSocketOptions", () => {
     expect(opts.handshakeTimeout).toBe(15_000);
     expect(opts.rejectUnauthorized).toBe(true);
   });
+
+  it("hands connect() the same options the real constructor gets, not a subset", () => {
+    const socket = fakeSocket();
+    const seen: Array<{ rejectUnauthorized: boolean; handshakeTimeout?: number }> = [];
+    const client = createRelayClient(CONFIG, DEVICE_ID, HANDLERS, {
+      wsFactory: (_url, options) => {
+        seen.push(options);
+        return socket;
+      },
+      log: () => {}
+    });
+    client.connect();
+    // The call site used to build its own {rejectUnauthorized} object while the
+    // default factory quietly ignored the argument and called
+    // defaultSocketOptions itself. Production was fine; every injected factory
+    // saw a socket with no handshake bound, so nothing could pin the timeout
+    // through the path that actually constructs the socket.
+    expect(seen).toEqual([defaultSocketOptions(CONFIG)]);
+  });
+
+  it("carries the insecure-TLS escape hatch through to the constructor options", () => {
+    const socket = fakeSocket();
+    const seen: Array<{ rejectUnauthorized: boolean }> = [];
+    const client = createRelayClient({ ...CONFIG, insecureTls: true } as RdkConfig, DEVICE_ID, HANDLERS, {
+      wsFactory: (_url, options) => {
+        seen.push(options);
+        return socket;
+      },
+      log: () => {}
+    });
+    client.connect();
+    expect(seen[0]?.rejectUnauthorized).toBe(false);
+  });
 });
 
 describe("relay liveness", () => {

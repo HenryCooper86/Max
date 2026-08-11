@@ -38,11 +38,50 @@ export type AlertPlayerOptions = {
   now?: () => number;
 };
 
+/**
+ * Reads a clip, or throws describing what is wrong with it.
+ *
+ * The chunk list is walked rather than read at the canonical offsets 22/24/34
+ * and 44. Those offsets are only right for a WAV with nothing between `fmt `
+ * and `data`, which is true of `tools/render_alerts.py` today and of nothing
+ * else in particular: an encoder that stamps a LIST/INFO chunk shifts the
+ * payload, and every fixed offset then lands inside metadata. Measured against
+ * a 480-sample clip carrying a 64-byte LIST, the old parse returned 516
+ * "samples" of chunk header — noise the rider would have been taught to read
+ * as a collision warning. Refusing a file we cannot parse is the same ruling
+ * as `play()`'s: silence beats a sound that does not mean what it should.
+ */
 export function readWavMono24k(path: string): Int16Array {
   const buffer = readFileSync(path);
-  const channels = buffer.readUInt16LE(22);
-  const rate = buffer.readUInt32LE(24);
-  const bits = buffer.readUInt16LE(34);
+  if (buffer.length < 12 || buffer.toString("ascii", 0, 4) !== "RIFF" || buffer.toString("ascii", 8, 12) !== "WAVE") {
+    throw new Error(`${path}: not a RIFF/WAVE file`);
+  }
+
+  let channels: number | undefined;
+  let rate: number | undefined;
+  let bits: number | undefined;
+  let data: Buffer | undefined;
+  for (let at = 12; at + 8 <= buffer.length;) {
+    const id = buffer.toString("ascii", at, at + 4);
+    const size = buffer.readUInt32LE(at + 4);
+    const body = at + 8;
+    // A size past the end of the file is a truncated or lying chunk. Stop
+    // rather than reading whatever memory the subarray would cover.
+    if (size > buffer.length - body) break;
+    if (id === "fmt " && size >= 16) {
+      channels = buffer.readUInt16LE(body + 2);
+      rate = buffer.readUInt32LE(body + 4);
+      bits = buffer.readUInt16LE(body + 14);
+    } else if (id === "data") {
+      data = buffer.subarray(body, body + size);
+    }
+    // RIFF chunks are word-aligned: an odd size carries a pad byte.
+    at = body + size + (size % 2);
+  }
+
+  if (rate === undefined || channels === undefined || bits === undefined) {
+    throw new Error(`${path}: no fmt chunk`);
+  }
   if (rate !== ALERT_RATE) {
     throw new Error(`${path}: expected ${ALERT_RATE} Hz, got ${rate}`);
   }
@@ -52,9 +91,12 @@ export function readWavMono24k(path: string): Int16Array {
   if (bits !== 16) {
     throw new Error(`${path}: expected 16-bit, got ${bits}-bit`);
   }
-  const bytes = buffer.subarray(44);
-  const samples = new Int16Array(bytes.length >> 1);
-  for (let i = 0; i < samples.length; i += 1) samples[i] = bytes.readInt16LE(i * 2);
+  if (data === undefined) {
+    throw new Error(`${path}: no data chunk`);
+  }
+
+  const samples = new Int16Array(data.length >> 1);
+  for (let i = 0; i < samples.length; i += 1) samples[i] = data.readInt16LE(i * 2);
   return samples;
 }
 

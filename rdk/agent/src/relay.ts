@@ -123,8 +123,10 @@ export function createRelayClient(
   let intentional = false;
 
   const log = options.log ?? ((line: string) => console.log(line));
+  // The factory uses the options it is handed rather than rebuilding them, so
+  // an injected socket sees exactly what the real WebSocket constructor does.
   const wsFactory =
-    options.wsFactory ?? ((url) => new WebSocket(url, defaultSocketOptions(config)) as unknown as SocketLike);
+    options.wsFactory ?? ((url, socketOptions) => new WebSocket(url, socketOptions) as unknown as SocketLike);
 
   function open(): void {
     if (socket && (socket.readyState === SOCKET_CONNECTING || socket.readyState === SOCKET_OPEN)) {
@@ -133,9 +135,7 @@ export function createRelayClient(
     }
     ready = false;
     intentional = false;
-    const current = wsFactory(authorizedRelayUrl(config.relayUrl, config.relayToken), {
-      rejectUnauthorized: !config.insecureTls
-    });
+    const current = wsFactory(authorizedRelayUrl(config.relayUrl, config.relayToken), defaultSocketOptions(config));
     socket = current;
     current.binaryType = "nodebuffer";
 

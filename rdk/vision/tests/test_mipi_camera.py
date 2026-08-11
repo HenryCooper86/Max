@@ -4,7 +4,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from mipi_camera import FrameBuffer, MipiCamera, _signal_group, launch_command, reap_orphans
+from mipi_camera import (
+    FrameBuffer,
+    MipiCamera,
+    _signal_group,
+    init_ros,
+    launch_command,
+    reap_orphans,
+)
 
 
 def counting_encoder():
@@ -234,3 +241,63 @@ def test_default_keeps_exact_frame_semantics():
     buffer.put(b"\x01" * 24, t_ms=42)
     buffer.jpeg()  # no max_age_ms: must re-encode despite zero elapsed time
     assert len(encodes) == 2
+
+
+class FakeRclpy:
+    """The slice of rclpy that init_ros touches."""
+
+    def __init__(self, running=False, reject_keyword=False):
+        self.running = running
+        self.reject_keyword = reject_keyword
+        self.calls = []
+
+    def ok(self):
+        return self.running
+
+    def init(self, **kwargs):
+        if self.reject_keyword and kwargs:
+            raise TypeError("init() got an unexpected keyword argument")
+        self.calls.append(kwargs)
+        self.running = True
+
+
+class FakeSignalOptions:
+    NO = "NO"
+    ALL = "ALL"
+
+
+def test_ros_init_asks_rclpy_not_to_take_the_signal_handlers():
+    """rclpy.init() installs its own SIGTERM handler by default.
+
+    That is what made `systemctl stop max-vision` during camera acquisition
+    look like a crash: our handler was replaced, rclpy shut its context down
+    instead of exiting, the mipi_cam children died with the cgroup, and the
+    open then failed its way to require_cameras' exit 1 — a deliberate stop
+    reported as a failure.
+    """
+    rclpy = FakeRclpy()
+    init_ros(rclpy, signal_options=FakeSignalOptions)
+    assert rclpy.calls == [{"signal_handler_options": "NO"}]
+
+
+def test_ros_init_leaves_a_running_context_alone():
+    # The second camera must not re-init: "Context.init() must only be called
+    # once" is what the rear camera reported once the front one had already
+    # brought the context up.
+    rclpy = FakeRclpy(running=True)
+    init_ros(rclpy, signal_options=FakeSignalOptions)
+    assert rclpy.calls == []
+
+
+def test_ros_init_falls_back_when_the_option_does_not_exist():
+    # Older rclpy has no SignalHandlerOptions. Starting with the pre-existing
+    # behaviour beats refusing to open the cameras at all.
+    rclpy = FakeRclpy()
+    init_ros(rclpy, signal_options=None)
+    assert rclpy.calls == [{}]
+
+
+def test_ros_init_falls_back_when_rclpy_rejects_the_keyword():
+    rclpy = FakeRclpy(reject_keyword=True)
+    init_ros(rclpy, signal_options=FakeSignalOptions)
+    assert rclpy.calls == [{}]

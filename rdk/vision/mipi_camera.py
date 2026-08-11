@@ -154,6 +154,43 @@ def reap_orphans(holders=_isp_holders, kill=os.kill, sleep=time.sleep) -> list[i
     return pids
 
 
+def init_ros(rclpy, signal_options="auto") -> None:
+    """Bring the ROS context up without letting it take our signal handlers.
+
+    ``rclpy.init()`` installs its own SIGINT/SIGTERM handlers by default, and
+    that is what made a `systemctl stop max-vision` during camera acquisition
+    look like a crash. Measured on the board 2026-08-11: the stop replaced
+    service.py's handler, so instead of exiting, rclpy shut its context down;
+    the mipi_cam children died with the cgroup, the front camera's open failed
+    ("mipi_cam exited early"), the rear camera's own init failed ("Context.init()
+    must only be called once"), and ``require_cameras`` then exited 1 —
+    a deliberate stop reported in the journal as a failure, twice over.
+
+    Camera acquisition takes ~19 s on this board, so that window is wide enough
+    to hit by hand. Keeping our handler installed for the whole run is what
+    makes a stop during it exit 0.
+
+    An rclpy too old to know the option gets a plain init: the pre-existing
+    behaviour for that window beats refusing to open the cameras at all.
+    """
+    if rclpy.ok():
+        return
+    if signal_options == "auto":
+        try:
+            from rclpy.signals import SignalHandlerOptions  # noqa: PLC0415 - board-only
+
+            signal_options = SignalHandlerOptions
+        except ImportError:
+            signal_options = None
+    if signal_options is None:
+        rclpy.init()
+        return
+    try:
+        rclpy.init(signal_handler_options=signal_options.NO)
+    except TypeError:
+        rclpy.init()
+
+
 def launch_command(
     sensor: str, channel: int, width: int, height: int, topic: str, node_name: str
 ) -> list[str]:
@@ -244,8 +281,7 @@ class MipiCamera:
                 bytes(msg.data), int(stamp.sec * 1000 + stamp.nanosec // 1_000_000)
             )
 
-        if not rclpy.ok():
-            rclpy.init()
+        init_ros(rclpy)
         self._node = rclpy.create_node(f"max_vision_ch{self.channel}")
         self._node.create_subscription(Image, self.topic, on_image, 10)
 

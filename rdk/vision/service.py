@@ -322,6 +322,19 @@ def require_cameras(cameras) -> None:
 
 def main() -> None:
     config = VisionConfig.from_env()
+
+    # First, before anything slow. systemd stops us with SIGTERM, and without a
+    # handler the interpreter tears down while the ROS executor thread is
+    # mid-spin, so an ordinary stop prints a traceback and the cameras never
+    # get stop()ped.
+    #
+    # Installed here rather than after startup because camera acquisition takes
+    # ~19 s on this board, and a stop inside that window used to be reported as
+    # a failure: the default disposition never got the chance to be ours.
+    # `mipi_camera.init_ros` is the other half — rclpy would otherwise replace
+    # this handler the moment the first camera comes up.
+    signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(0))
+
     runtime = build_runtime(config)
 
     if os.path.exists(config.socket_path):
@@ -385,9 +398,10 @@ def main() -> None:
     else:
         print("[vision] MAX_ADAS_SHADOW is not 1; no ride, no ADAS", flush=True)
 
-    # systemd stops us with SIGTERM. Without a handler the interpreter tears
-    # down while the ROS executor thread is mid-spin, so an ordinary stop prints
-    # a traceback and the cameras never get stop()ped.
+    # Re-asserted after the cameras are up. init_ros asks rclpy not to take the
+    # handlers, but an rclpy too old to know that option falls back to a plain
+    # init and takes them anyway; this puts ours back for the long steady state,
+    # leaving only the acquisition window exposed on such a build.
     signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(0))
 
     with ControlServer(config.socket_path, ControlHandler, runtime) as server:

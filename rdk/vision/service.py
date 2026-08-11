@@ -348,9 +348,32 @@ def main() -> None:
     if repaired:
         print(f"[vision] recovered {len(repaired)} interrupted capture(s): {', '.join(repaired)}", flush=True)
 
-    runtime.cameras.open()
-    require_cameras(runtime.cameras)
+    # One teardown for every exit path, including a stop that lands mid-
+    # acquisition. Before this, an exit during the ~19 s camera open unwound
+    # straight past the ControlServer block, finalize() never ran, and the
+    # interpreter tore down with a ROS spin thread still live — which aborts
+    # (status=6/signal) rather than exits.
+    started = _Started()
+    try:
+        runtime.cameras.open()
+        require_cameras(runtime.cameras)
+        _run(config, runtime, started)
+    finally:
+        finalize(runtime.cameras, runtime.gallery, started.ride, runtime.watcher, started.monitor)
+        with contextlib.suppress(OSError):
+            os.unlink(config.socket_path)
 
+
+@dataclass
+class _Started:
+    """What startup has brought up so far, so the one `finally` in main() can
+    take it back down from whatever point a SIGTERM interrupted."""
+
+    monitor: object | None = None
+    ride: object | None = None
+
+
+def _run(config: VisionConfig, runtime: VisionRuntime, started: "_Started") -> None:
     from monitor import start_monitor  # noqa: PLC0415
     from notify import sd_notify  # noqa: PLC0415
 
@@ -358,7 +381,7 @@ def main() -> None:
         print(f"[vision] camera frames stale: {', '.join(stale)}; exiting for systemd to restart", flush=True)
         os._exit(1)
 
-    monitor = start_monitor(runtime.cameras, notify=sd_notify, on_stale=exit_stale)
+    started.monitor = start_monitor(runtime.cameras, notify=sd_notify, on_stale=exit_stale)
 
     from bench_server import serve as serve_bench  # noqa: PLC0415
 
@@ -375,7 +398,6 @@ def main() -> None:
         daemon=True,
     ).start()
 
-    ride = None
     if config.adas_shadow:
         # Still function-local, but no longer to break a cycle: ride.py pulls in
         # the recorder and the ADAS stack (numpy, cv2), which only exist on the
@@ -393,25 +415,19 @@ def main() -> None:
             min_free_mb=config.min_free_mb,
             broadcast=runtime.events.broadcast,
         )
-        if ride.start() is None:
-            ride = None
+        started.ride = ride if ride.start() is not None else None
     else:
         print("[vision] MAX_ADAS_SHADOW is not 1; no ride, no ADAS", flush=True)
 
     # Re-asserted after the cameras are up. init_ros asks rclpy not to take the
     # handlers, but an rclpy too old to know that option falls back to a plain
     # init and takes them anyway; this puts ours back for the long steady state,
-    # leaving only the acquisition window exposed on such a build.
+    # leaving only that build's acquisition window exposed.
     signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(0))
 
     with ControlServer(config.socket_path, ControlHandler, runtime) as server:
         os.chmod(config.socket_path, 0o660)
-        try:
-            server.serve_forever()
-        finally:
-            finalize(runtime.cameras, runtime.gallery, ride, runtime.watcher, monitor)
-            with contextlib.suppress(OSError):
-                os.unlink(config.socket_path)
+        server.serve_forever()
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 export type CompanionClientEvent =
   | { type: "companion.pair"; code: string }
+  | { type: "companion.pairDiscover"; token: string }
   | { type: "companion.start" }
   | { type: "companion.stop" }
   | { type: "companion.unpair" }
@@ -57,6 +58,17 @@ export function parseCompanionClientEvent(input: Buffer | string): CompanionClie
       throw new Error("Invalid companion.pair code");
     }
     return { type: "companion.pair", code: value.code };
+  }
+
+  if (value.type === "companion.pairDiscover") {
+    if (
+      !hasOnlyFields(value, ["type", "token"]) ||
+      typeof value.token !== "string" ||
+      !/^[0-9a-f]{32}$/.test(value.token)
+    ) {
+      throw new Error("Invalid companion.pairDiscover token");
+    }
+    return { type: "companion.pairDiscover", token: value.token };
   }
 
   if (value.type === "companion.start" || value.type === "companion.stop" || value.type === "companion.unpair") {

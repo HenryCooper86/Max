@@ -79,3 +79,32 @@ describe("parseCompanionClientEvent", () => {
     );
   });
 });
+
+describe("companion.pairDiscover parsing", () => {
+  const TOKEN = "0123456789abcdef0123456789abcdef";
+
+  it("accepts a canonical 32-hex token", () => {
+    expect(parseCompanionClientEvent(JSON.stringify({ type: "companion.pairDiscover", token: TOKEN }))).toEqual({
+      type: "companion.pairDiscover",
+      token: TOKEN
+    });
+  });
+
+  it.each([
+    ["uppercase", "0123456789ABCDEF0123456789ABCDEF"],
+    ["short", "0123456789abcdef"],
+    ["long", `${"0123456789abcdef".repeat(2)}00`],
+    ["non-hex", "zz23456789abcdef0123456789abcdef"],
+    ["empty", ""]
+  ])("rejects a %s token", (_label, token) => {
+    expect(() => parseCompanionClientEvent(JSON.stringify({ type: "companion.pairDiscover", token }))).toThrow(
+      /pairDiscover/
+    );
+  });
+
+  it("rejects extra fields", () => {
+    expect(() =>
+      parseCompanionClientEvent(JSON.stringify({ type: "companion.pairDiscover", token: TOKEN, extra: 1 }))
+    ).toThrow(/pairDiscover/);
+  });
+});

@@ -26,12 +26,14 @@ export type HudState = {
   lastError: string | null;
   companion: HudCompanion;
   navigation: RdkNavigationSnapshot | null;
+  discovery: string;
 };
 
 export type HudEvent =
   | AgentEvent
   | { type: "rdk.companion"; companion: HudCompanion }
-  | { type: "rdk.navigation"; navigation: RdkNavigationSnapshot | null };
+  | { type: "rdk.navigation"; navigation: RdkNavigationSnapshot | null }
+  | { type: "rdk.discovery"; discovery: string };
 
 /**
  * How many turns the bench HUD keeps.
@@ -56,7 +58,8 @@ export function initialHudState(): HudState {
     latencyMs: null,
     lastError: null,
     companion: { paired: false, locationState: "unpaired" },
-    navigation: null
+    navigation: null,
+    discovery: "off"
   };
 }
 
@@ -136,6 +139,8 @@ export function reduceHud(state: HudState, event: HudEvent): HudState {
         ...state,
         navigation: event.navigation === null ? null : copyNavigation(event.navigation)
       };
+    case "rdk.discovery":
+      return { ...state, discovery: event.discovery };
     case "transcript": {
       const turn: HudTurn = {
         speaker: event.speaker,

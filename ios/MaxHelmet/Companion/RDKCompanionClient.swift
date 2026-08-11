@@ -71,7 +71,33 @@ final class RDKCompanionClient {
         var isConsumed = false
     }
 
+    /// A bind attempt (`companion.pair` / `companion.pairDiscover`) the relay has
+    /// not answered yet.
+    ///
+    /// The relay's FIRST frame on every `/companion` attach for an account with
+    /// no binding is `companion.status {state:"unpaired"}` — the attach-time
+    /// sync, not a displacement. Retiring the transport on it would drop the
+    /// socket the relay's pending-confirm slot lives on, so the rider's spoken
+    /// 确认 at the helmet would match nothing. While a bind attempt is pending
+    /// that status is therefore deferred, not applied.
+    ///
+    /// `unpair()` shares the `.pairing` family but is deliberately not a bind
+    /// attempt: for it `unpaired` is the expected answer and must stay terminal.
+    private struct PendingBind: Equatable {
+        let generation: Int
+        let epoch: Int
+        /// The deferred attach-time sync arrived and is still the last server
+        /// state, so a failing resolution must apply the terminal retirement.
+        var holdsDeferredUnpaired: Bool
+    }
+
     private static let reconnectDelays: [TimeInterval] = [1, 2, 4, 8, 16, 30]
+
+    /// Safety net for a bind attempt whose deferred `unpaired` is never resolved
+    /// by the relay (its own confirm window is 30 s and ends in a
+    /// `companion.error pair.timeout`), so a silent relay cannot hold a retired
+    /// account's transport open forever.
+    private static let deferredUnpairedTimeout: TimeInterval = 45
 
     private let socketFactory: SocketFactory
     private let schedule: Scheduler
@@ -94,6 +120,7 @@ final class RDKCompanionClient {
     private var stopActionEpoch = 0
     private var nextActionIdentifier = 0
     private var activeActions: [ActionFamily: ActionReservation] = [:]
+    private var pendingBind: PendingBind?
     private var nextOpenAttemptIdentifier = 0
     private var openAttempt: OpenAttemptReservation?
     private var openRecoveryOwner = 0
@@ -185,6 +212,19 @@ final class RDKCompanionClient {
                 return
             }
             self.advanceActionEpoch(.pairing)
+            self.beginPendingBind()
+            self.sendAction(message, family: .pairing)
+        }
+    }
+
+    func pairDiscover(token: String) {
+        onMain { [weak self] in
+            guard let self,
+                  let message = RDKCompanionProtocol.pairDiscoverMessage(token: token) else {
+                return
+            }
+            self.advanceActionEpoch(.pairing)
+            self.beginPendingBind()
             self.sendAction(message, family: .pairing)
         }
     }
@@ -474,6 +514,11 @@ final class RDKCompanionClient {
             reconnectAttempts = 0
         }
 
+        if deferAttachSyncUnpaired(state, on: receivingSocket, generation: expectedGeneration) {
+            return
+        }
+        resolvePendingBind(with: state, on: receivingSocket, generation: expectedGeneration)
+
         if isAuthoritativeTerminal(state) {
             retireAuthoritativeTerminalTransport(
                 receivingSocket,
@@ -602,7 +647,9 @@ final class RDKCompanionClient {
 
     private func advanceActionEpoch(_ family: ActionFamily) {
         switch family {
-        case .pairing: pairingActionEpoch &+= 1
+        case .pairing:
+            pairingActionEpoch &+= 1
+            pendingBind = nil
         case .ride: rideActionEpoch &+= 1
         case .stop: stopActionEpoch &+= 1
         }
@@ -614,6 +661,91 @@ final class RDKCompanionClient {
         rideActionEpoch &+= 1
         stopActionEpoch &+= 1
         activeActions.removeAll()
+        pendingBind = nil
+    }
+
+    private func beginPendingBind() {
+        assert(Thread.isMainThread)
+        guard socket != nil else { return }
+        pendingBind = PendingBind(
+            generation: generation,
+            epoch: pairingActionEpoch,
+            holdsDeferredUnpaired: false
+        )
+    }
+
+    private func ownedPendingBind(generation expectedGeneration: Int) -> PendingBind? {
+        guard let pendingBind,
+              pendingBind.generation == generation,
+              pendingBind.generation == expectedGeneration,
+              pendingBind.epoch == pairingActionEpoch else {
+            return nil
+        }
+        return pendingBind
+    }
+
+    /// Holds the relay's attach-time `unpaired` sync while a bind attempt is in
+    /// flight: the transport stays open (and the receive loop armed) so the
+    /// helmet-side confirm window survives. Returns `true` when the state was
+    /// absorbed and must neither retire nor publish.
+    private func deferAttachSyncUnpaired(
+        _ state: CompanionConnectionState,
+        on receivingSocket: CompanionSocketTask,
+        generation expectedGeneration: Int
+    ) -> Bool {
+        assert(Thread.isMainThread)
+        guard state == .unpaired,
+              var bind = ownedPendingBind(generation: expectedGeneration),
+              isCurrent(receivingSocket, generation: expectedGeneration) else {
+            return false
+        }
+        guard !bind.holdsDeferredUnpaired else { return true }
+        bind.holdsDeferredUnpaired = true
+        pendingBind = bind
+        scheduleDeferredUnpairedTimeout(bind, on: receivingSocket, generation: expectedGeneration)
+        return true
+    }
+
+    /// Any other server frame answers the bind attempt. A failing answer
+    /// (`companion.error`) while the deferred `unpaired` is still the last
+    /// server state applies the retirement that was held back, so displacement
+    /// semantics survive the deferral.
+    private func resolvePendingBind(
+        with state: CompanionConnectionState,
+        on receivingSocket: CompanionSocketTask,
+        generation expectedGeneration: Int
+    ) {
+        assert(Thread.isMainThread)
+        guard let bind = ownedPendingBind(generation: expectedGeneration) else { return }
+        pendingBind = nil
+        guard bind.holdsDeferredUnpaired, case .failed = state else { return }
+        retireAuthoritativeTerminalTransport(receivingSocket, generation: expectedGeneration)
+    }
+
+    private func scheduleDeferredUnpairedTimeout(
+        _ bind: PendingBind,
+        on deferringSocket: CompanionSocketTask,
+        generation expectedGeneration: Int
+    ) {
+        assert(Thread.isMainThread)
+        schedule({ [weak self, weak deferringSocket] in
+            self?.onMain { [weak self, weak deferringSocket] in
+                guard let self,
+                      let deferringSocket,
+                      self.ownedPendingBind(generation: expectedGeneration) == bind,
+                      self.isCurrent(deferringSocket, generation: expectedGeneration) else {
+                    return
+                }
+                self.pendingBind = nil
+                self.retireAuthoritativeTerminalTransport(
+                    deferringSocket,
+                    generation: expectedGeneration
+                )
+                self.publish(
+                    .failed(code: "pair.timeout", detail: "Pairing confirmation timed out.")
+                )
+            }
+        }, Self.deferredUnpairedTimeout)
     }
 
     private func isAuthoritativeTerminal(_ state: CompanionConnectionState) -> Bool {

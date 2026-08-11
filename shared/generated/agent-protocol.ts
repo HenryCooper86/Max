@@ -34,6 +34,7 @@ export const SERVER_EVENT_TYPES = [
   "crash.ack",
   "crash.simulate",
   "companion.pairing",
+  "companion.discovery",
   "phone.location",
   "phone.location.status",
   "nav.route",
@@ -121,6 +122,10 @@ export const SERVER_EVENT_REQUIRED_FIELDS = {
     "code",
     "expiresAt",
     "paired"
+  ],
+  "companion.discovery": [
+    "type",
+    "token"
   ],
   "phone.location": [
     "type",

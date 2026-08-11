@@ -83,6 +83,13 @@ struct CompanionSettingsPresentation: Equatable {
     let isPrimaryActionEnabled: Bool
     let showsUnpair: Bool
     let isUnpairEnabled: Bool
+    /// Helmets currently visible via Bonjour discovery (Task 11).
+    let discoveredHelmets: [DiscoveredHelmet]
+    let isAwaitingHelmetConfirm: Bool
+    /// Same gates as `isPairEnabled` minus `exactCode` — a discovered helmet's
+    /// token stands in for the six-digit code, so the manual field's contents
+    /// don't matter here.
+    let isPairEnabledForDiscovery: Bool
 
     var renderedStrings: [String] {
         [statusText, permissionText, forwardingText, primaryActionTitle]
@@ -99,7 +106,9 @@ struct CompanionSettingsPresentation: Equatable {
         rideOwned: Bool,
         permission: CompanionLocationPermission,
         lastForwardedAt: Date?,
-        now: Date
+        now: Date,
+        discoveredHelmets: [DiscoveredHelmet] = [],
+        isAwaitingHelmetConfirm: Bool = false
     ) -> CompanionSettingsPresentation {
         let statusText: String
         switch connectionState {
@@ -188,7 +197,10 @@ struct CompanionSettingsPresentation: Equatable {
             isPairEnabled: isLoggedIn && exactCode && pairingState && !rideOwned && !busy,
             isPrimaryActionEnabled: rideOwned || (isLoggedIn && startable && !busy),
             showsUnpair: paired,
-            isUnpairEnabled: paired && !rideOwned && !busy
+            isUnpairEnabled: paired && !rideOwned && !busy,
+            discoveredHelmets: discoveredHelmets,
+            isAwaitingHelmetConfirm: isAwaitingHelmetConfirm,
+            isPairEnabledForDiscovery: isLoggedIn && pairingState && !rideOwned && !busy
         )
     }
 }
@@ -232,7 +244,9 @@ struct SettingsPanel: View {
             rideOwned: viewModel.helmetRideOwned,
             permission: viewModel.companionPermission,
             lastForwardedAt: viewModel.lastForwardedAt,
-            now: Date()
+            now: Date(),
+            discoveredHelmets: viewModel.discoveredHelmets,
+            isAwaitingHelmetConfirm: viewModel.isAwaitingHelmetConfirm
         )
         SectionCard(title: "RDK 头盔") {
             Text(companion.statusText)
@@ -249,8 +263,35 @@ struct SettingsPanel: View {
                 .foregroundColor(HudColors.muted)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
+            // Nearby helmets found via Bonjour (Task 11) — a discovered
+            // beacon's token stands in for the six-digit code below.
+            if !companion.discoveredHelmets.isEmpty {
+                Text("附近的头盔")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(HudColors.muted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                ForEach(companion.discoveredHelmets) { helmet in
+                    HStack {
+                        Text("Max 头盔")
+                            .font(.system(size: 13))
+                            .foregroundColor(HudColors.text)
+                        Spacer()
+                        Button("配对") { viewModel.pairDiscoveredHelmet(token: helmet.token) }
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(HudColors.accent)
+                            .disabled(!companion.isPairEnabledForDiscovery)
+                    }
+                }
+            }
+            if companion.isAwaitingHelmetConfirm {
+                Text("等待头盔确认…请对头盔说\u{201C}确认\u{201D}")
+                    .font(.system(size: 12))
+                    .foregroundColor(HudColors.accent)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             TextField(
-                "六位配对码",
+                "手动输入配对码",
                 text: Binding(
                     get: { viewModel.pairCode },
                     set: { viewModel.pairCode = CompanionSettingsPresentation.filteredPairCode($0) }
@@ -297,6 +338,11 @@ struct SettingsPanel: View {
                     }
             }
         }
+        // Scanning is scoped to this section's on-screen lifetime — starts
+        // when the settings sheet (and thus this card) appears, stops when
+        // it's dismissed. No background radio use.
+        .onAppear { viewModel.startHelmetDiscovery() }
+        .onDisappear { viewModel.stopHelmetDiscovery() }
 
         // Rider voice preferences.
         SectionCard(title: "语音") {

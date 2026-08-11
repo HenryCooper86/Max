@@ -14,7 +14,12 @@ import type {
 import { MOCK_ROUTE } from "../shared/nav-fixtures";
 import { parseCompanionClientEvent, type CompanionServerEvent } from "../shared/companion";
 import { createCompanionBindingStore } from "../server/companion-store";
-import { createCompanionRegistry, type CompanionConnection } from "../server/companion-registry";
+import {
+  createCompanionRegistry,
+  PAIR_CONFIRM_PROMPT,
+  PAIR_CONFIRM_OK_SPEECH,
+  type CompanionConnection
+} from "../server/companion-registry";
 import { metrics } from "../server/metrics";
 import { parseClientEvent } from "../server/session-controller";
 import { resetUserMemoryForTests, userConversationMemory } from "../server/user-memory";
@@ -120,7 +125,7 @@ function allFiles(directory: string): string[] {
   });
 }
 
-function buildHarness() {
+function buildHarness(options: { randomToken?: () => string } = {}) {
   vi.useFakeTimers();
   metrics.reset();
   resetUserMemoryForTests();
@@ -133,6 +138,7 @@ function buildHarness() {
   const loggerCalls: LoggerCall[] = [];
   const timeline: string[] = [];
   const helmetFrames: HelmetEvent[] = [];
+  const helmetSpoken: string[] = [];
   const companionFrames: CompanionServerEvent[] = [];
   const agentTransportFrames: string[] = [];
   const providerVisibleInputs: NavPromptEvent[] = [];
@@ -149,6 +155,7 @@ function buildHarness() {
     store,
     now: () => now,
     randomCode: () => PAIR_CODE,
+    ...(options.randomToken ? { randomToken: options.randomToken } : {}),
     minFixIntervalMs: 1_000,
     log: {
       info(message, fields) {
@@ -250,7 +257,8 @@ function buildHarness() {
           return;
         }
         source.acceptLocation(event);
-      }
+      },
+      speak: (text) => helmetSpoken.push(text)
     });
 
   const attachPhone = (): CompanionConnection =>
@@ -312,6 +320,7 @@ function buildHarness() {
     loggerCalls,
     timeline,
     helmetFrames,
+    helmetSpoken,
     companionFrames,
     agentTransportFrames,
     providerVisibleInputs,
@@ -468,6 +477,78 @@ describe("phone relay to RDK navigation end-to-end", () => {
       providerVisibleInputs: h.providerVisibleInputs.length,
       timeline: h.timeline.length
     }).toEqual(observableBeforeClose);
+  });
+
+  it("pairs by discovery + voice confirm, then rides the same nav flow", async () => {
+    const DISCOVERY_TOKEN = "a".repeat(32);
+    const h = buildHarness({ randomToken: () => DISCOVERY_TOKEN });
+    h.attachHelmet();
+    const phone = h.attachPhone();
+
+    expect(h.helmetFrames.filter((event) => event.type === "companion.discovery")).toHaveLength(1);
+    expect(h.helmetFrames.find((event) => event.type === "companion.discovery")).toMatchObject({
+      type: "companion.discovery",
+      token: DISCOVERY_TOKEN
+    });
+
+    await h.companionSend(phone, { type: "companion.pairDiscover", token: DISCOVERY_TOKEN });
+    expect(h.helmetSpoken.at(-1)).toBe(PAIR_CONFIRM_PROMPT);
+
+    h.registry.handleRiderUtterance(DEVICE_ID, "确认");
+    await vi.waitFor(() => expect(h.store.bindingForAccount(ACCOUNT_ID)?.deviceId).toBe(DEVICE_ID));
+
+    expect(h.helmetSpoken.at(-1)).toBe(PAIR_CONFIRM_OK_SPEECH);
+    expect(h.helmetFrames.filter((event) => event.type === "companion.pairing").at(-1)).toMatchObject({
+      paired: true
+    });
+    expect(h.helmetFrames.filter((event) => event.type === "companion.discovery").at(-1)).toEqual({
+      type: "companion.discovery",
+      token: null
+    });
+
+    await h.companionSend(phone, { type: "companion.start" });
+
+    let startSettled = false;
+    const start = h.controller
+      .handleCommand({
+        commandId: "device-navigation-start-discovery",
+        action: "navigation.start",
+        args: { query: "人民广场" }
+      })
+      .then((value) => {
+        startSettled = true;
+        return value;
+      });
+    await flush();
+    expect(startSettled).toBe(false);
+    expect(h.outgoingRequests).toEqual([]);
+
+    await h.location(phone, 1, WGS_FIXES.start);
+    await flush();
+    expect(h.outgoingRequests).toHaveLength(1);
+    const initialRequest = h.outgoingRequests[0]!;
+    expect(initialRequest).toMatchObject({
+      type: "nav.request",
+      commandId: "e2e-id-1",
+      reason: "start",
+      query: "人民广场"
+    });
+    const initialRoute = h.relayRoute(initialRequest);
+    await expect(start).resolves.toEqual({
+      type: "device.result",
+      commandId: "device-navigation-start-discovery",
+      status: "ok"
+    } satisfies DeviceResultEvent);
+    expect(initialRoute.commandId).toBe(initialRequest.commandId);
+
+    await h.advance(1_000);
+    await h.location(phone, 2, WGS_FIXES.far);
+
+    expect(h.timeline).toEqual(["paired", "sharing", "navigation.start.pending", "nav.route", "prompt.far"]);
+
+    h.controller.close();
+    h.source.close();
+    await h.registry.close();
   });
 
   it("keeps private fix and pairing sentinels only in the protocol transport that needs them", async () => {

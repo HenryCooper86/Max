@@ -778,7 +778,8 @@ wss.on("connection", (client, request) => {
     authenticatedUser,
     {
       deviceRegistrationAuthorized: relayTokenPresented(request) || (!config.relayAuthToken && !authActive()),
-      onDeviceRegistered: (peer) => companionRegistry.attachHelmet(peer)
+      onDeviceRegistered: (peer) => companionRegistry.attachHelmet(peer),
+      onRiderUtterance: (deviceId, text) => companionRegistry.handleRiderUtterance(deviceId, text)
     }
   );
   activeSessions.set(client, session);

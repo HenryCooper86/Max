@@ -13,6 +13,8 @@ import { createDeviceDispatcher, type DeviceCommand } from "./device/dispatch";
 import { loadOrCreateDeviceId } from "./device/identity";
 import { createPoweroffController } from "./device/poweroff";
 import { writeCue } from "./audio/cues";
+import { createDiscoveryAdvertiser } from "./discovery/advertiser";
+import { createMdnsTransport } from "./discovery/mdns";
 import { createHudServer } from "./hud/server";
 import { initialHudState, reduceHud, type HudCompanion, type HudEvent } from "./hud/state";
 import { createHazardHandler } from "./hazard";
@@ -278,6 +280,11 @@ function start(): void {
     hud.publish(hudState);
   }
 
+  const advertiser = createDiscoveryAdvertiser({
+    transports: [createMdnsTransport({ port: config.hudPort })],
+    onStatus: (status) => publishHud({ type: "rdk.discovery", discovery: status })
+  });
+
   function companionForLocation(state: PhoneLocationState): HudCompanion {
     const current = hudState.companion;
     return {
@@ -389,6 +396,9 @@ function start(): void {
     onEvent: (event) => {
       publishHud(event);
       routeAgentNavigationEvent(event, navigationSession.location, navigationSession.navigation);
+      if (event.type === "companion.discovery") {
+        advertiser.setToken(event.token);
+      }
       if (event.type === "status" && event.state === "hearing") {
         // Barge-in: the rider started talking, so drop the queued reply — but
         // only if our own echo-cancelled mic heard them too. Doubao's VAD runs
@@ -411,6 +421,7 @@ function start(): void {
     },
     onClosed: (idle) => {
       closeNavigationSession();
+      advertiser.setToken(null);
       playback.flush();
       // Watching dies with the session: a reconnecting rider must explicitly
       // re-enable it rather than resume from a stale toggle left on from
@@ -481,6 +492,7 @@ function start(): void {
 
   const shutdown = (): void => {
     shuttingDown = true;
+    void advertiser.close();
     closeNavigationSession();
     capture.stop();
     playback.stop();

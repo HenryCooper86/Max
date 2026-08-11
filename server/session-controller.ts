@@ -27,6 +27,7 @@ export type ProviderFactory = (client: WebSocket, telemetry: ProviderTelemetry) 
 
 export type AgentSessionHooks = {
   onDeviceRegistered?(peer: HelmetPeer): () => void;
+  onRiderUtterance?(deviceId: string, text: string): void;
   deviceRegistrationAuthorized: boolean;
 };
 
@@ -79,6 +80,14 @@ function hasDeviceRegistrationClaim(data: RawData): boolean {
   } catch {
     return false;
   }
+}
+
+function isFinalRiderTranscript(payload: unknown): payload is { text: string } {
+  if (!payload || typeof payload !== "object") return false;
+  const event = payload as { type?: unknown; speaker?: unknown; final?: unknown; text?: unknown };
+  return (
+    event.type === "transcript" && event.speaker === "rider" && event.final === true && typeof event.text === "string"
+  );
 }
 
 function assertOptionalEnum(value: unknown, allowed: Set<string>, field: string) {
@@ -522,6 +531,7 @@ export class AgentSessionController {
   private audioActive = false;
   private acceptingMessages = true;
   private detachHelmet?: () => void;
+  private registeredDeviceId?: string;
   private cleanupPromise?: Promise<void>;
   private messageQueue: Promise<void> = Promise.resolve();
 
@@ -539,6 +549,9 @@ export class AgentSessionController {
         metrics.serverEvent(bytes);
         recordTesterServerEvent(this.relaySessionId, payload, bytes);
         if (this.authenticatedUser) recordUserMemoryEvent(this.authenticatedUser.id, payload);
+        if (this.registeredDeviceId && isFinalRiderTranscript(payload)) {
+          this.hooks?.onRiderUtterance?.(this.registeredDeviceId, payload.text);
+        }
       },
       serverAudio: (bytes) => {
         metrics.serverAudio(bytes);
@@ -684,10 +697,14 @@ export class AgentSessionController {
         if (!this.acceptingMessages) return;
         if (event.deviceId) {
           try {
+            this.registeredDeviceId = event.deviceId;
             this.detachHelmet = this.hooks?.onDeviceRegistered?.({
               deviceId: event.deviceId,
               deviceLabel: event.deviceLabel?.trim() || "RDK X5",
-              send: (payload) => this.sendEphemeral(payload)
+              send: (payload) => this.sendEphemeral(payload),
+              speak: (text) => {
+                if (this.acceptingMessages) this.provider.speakNavLine?.(text);
+              }
             });
           } catch (error) {
             const message = error instanceof Error ? error.message : "Device registration failed";

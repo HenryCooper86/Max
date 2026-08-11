@@ -45,6 +45,108 @@ final class CompanionViewModelTests: XCTestCase {
         XCTAssertTrue(signedOut.events.isEmpty, "the manual voice/operator token must never authenticate /companion")
     }
 
+    func testPairDiscoverSendsTokenThroughClientAndEntersWaitingStateUntilStatusArrives() {
+        let harness = Harness()
+        let token = String(repeating: "a", count: 32)
+
+        harness.viewModel.pairDiscoveredHelmet(token: token)
+
+        XCTAssertEqual(harness.events, [
+            "companion.connect:ws://relay.example/agent:account-session-token:false",
+            "companion.pairDiscover:\(token)"
+        ])
+        XCTAssertEqual(harness.client.pairDiscoverTokens, [token])
+        XCTAssertTrue(harness.viewModel.isAwaitingHelmetConfirm)
+
+        harness.client.publish(.paired(deviceId: "rdk-x", label: "Helmet"))
+
+        XCTAssertFalse(harness.viewModel.isAwaitingHelmetConfirm)
+    }
+
+    func testPairDiscoverRejectsMalformedToken() {
+        let harness = Harness()
+
+        for invalid in ["not-a-token", String(repeating: "a", count: 31), String(repeating: "A", count: 32), ""] {
+            harness.viewModel.pairDiscoveredHelmet(token: invalid)
+        }
+
+        XCTAssertEqual(harness.client.pairDiscoverTokens, [])
+        XCTAssertTrue(harness.events.isEmpty)
+        XCTAssertFalse(harness.viewModel.isAwaitingHelmetConfirm)
+    }
+
+    func testPairDiscoverWaitingStateClearsOnDiscoveryErrorCode() {
+        let harness = Harness()
+        let token = String(repeating: "a", count: 32)
+        harness.viewModel.pairDiscoveredHelmet(token: token)
+        XCTAssertTrue(harness.viewModel.isAwaitingHelmetConfirm)
+
+        harness.client.publish(.failed(code: "pair.busy", detail: "busy"))
+
+        XCTAssertFalse(harness.viewModel.isAwaitingHelmetConfirm)
+        XCTAssertEqual(harness.viewModel.companionState, .failed(code: "pair.busy", detail: "busy"))
+    }
+
+    func testPairDiscoverWaitingStateSurvivesConnectTimeStatesUntilAResolvingOne() {
+        let harness = Harness()
+        let token = String(repeating: "a", count: 32)
+        harness.viewModel.pairDiscoveredHelmet(token: token)
+
+        // The realistic wire order about a second into the helmet's 30 s confirm
+        // window: the transport's own .connecting, then the relay's attach-time
+        // unpaired sync for the still-unbound account. Neither answers the tap.
+        harness.client.publish(.connecting)
+        XCTAssertTrue(
+            harness.viewModel.isAwaitingHelmetConfirm,
+            "opening the transport is not an answer from the helmet"
+        )
+        harness.client.publish(.unpaired)
+        XCTAssertTrue(
+            harness.viewModel.isAwaitingHelmetConfirm,
+            "the relay's attach-time sync must not close the confirm window"
+        )
+        XCTAssertEqual(harness.viewModel.companionState, .unpaired)
+
+        // Terminal authority makes .unpaired the last state that connection can
+        // publish, so the resolving error runs on its own attempt — which is
+        // also the only order the fixed client can produce on the wire.
+        let resolved = Harness()
+        resolved.viewModel.pairDiscoveredHelmet(token: token)
+        resolved.client.publish(.connecting)
+        XCTAssertTrue(resolved.viewModel.isAwaitingHelmetConfirm)
+
+        resolved.client.publish(.failed(code: "pair.timeout", detail: "Pairing confirmation timed out."))
+
+        XCTAssertFalse(resolved.viewModel.isAwaitingHelmetConfirm)
+        XCTAssertEqual(
+            resolved.viewModel.companionState,
+            .failed(code: "pair.timeout", detail: "Pairing confirmation timed out.")
+        )
+    }
+
+    func testDiscoveryErrorCodesMapToReadableCopyAndOtherCodesFallThrough() {
+        XCTAssertEqual(MainViewModel.companionErrorCopy(code: "pair.busy"), "头盔正忙，请稍后再试")
+        XCTAssertEqual(MainViewModel.companionErrorCopy(code: "pair.declined"), "头盔侧已取消配对")
+        XCTAssertEqual(MainViewModel.companionErrorCopy(code: "pair.timeout"), "确认超时，请重试")
+        XCTAssertNil(MainViewModel.companionErrorCopy(code: "auth"))
+        XCTAssertNil(MainViewModel.companionErrorCopy(code: "connection"))
+    }
+
+    func testPairDiscoverWaitingStateClearsOnAccountTeardown() {
+        let harness = Harness()
+        let token = String(repeating: "a", count: 32)
+        harness.viewModel.pairDiscoveredHelmet(token: token)
+        XCTAssertTrue(harness.viewModel.isAwaitingHelmetConfirm)
+
+        harness.viewModel.logout()
+
+        XCTAssertFalse(
+            harness.viewModel.isAwaitingHelmetConfirm,
+            "logout's account teardown publishes .signedOut through its own completion, bypassing the normal status/error funnel"
+        )
+        XCTAssertEqual(harness.viewModel.companionState, .signedOut)
+    }
+
     func testStartOrdersConnectStartAndForegroundLocationThenForwardsImmediateAndNewestTimedFix() throws {
         let harness = Harness()
         harness.stream.startResults = [true]
@@ -2723,6 +2825,7 @@ private final class ObservedCompanionClient: CompanionClientControlling {
     }
 
     func pair(code: String) { base.pair(code: code) }
+    func pairDiscover(token: String) { base.pairDiscover(token: token) }
     func startRide() {
         startCount += 1
         base.startRide()
@@ -2828,6 +2931,7 @@ private final class FakeCompanionClient: CompanionClientControlling {
     var onSend: (() -> Void)?
     var onDisconnect: (() -> Void)?
     var pairCodes: [String] = []
+    var pairDiscoverTokens: [String] = []
     var fixes: [CompanionFix] = []
     var startCount = 0
     var stopCount = 0
@@ -2844,6 +2948,11 @@ private final class FakeCompanionClient: CompanionClientControlling {
     func pair(code: String) {
         pairCodes.append(code)
         eventSink?("companion.pair:\(code)")
+    }
+
+    func pairDiscover(token: String) {
+        pairDiscoverTokens.append(token)
+        eventSink?("companion.pairDiscover:\(token)")
     }
 
     func startRide() {

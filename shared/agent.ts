@@ -386,6 +386,15 @@ export type CompanionPairingEvent = {
   paired: boolean;
 };
 
+/** Server → RDK: the discovery token the board should broadcast, or null to
+ *  stop broadcasting (paired, or beacon retired). Carries no secret: the
+ *  token's whole purpose is to be public on the air. */
+export type CompanionDiscoveryEvent = {
+  type: "companion.discovery";
+  token: string | null;
+  expiresAt?: number;
+};
+
 export type PhoneLocationEvent = {
   type: "phone.location";
   sequence: number;
@@ -495,6 +504,7 @@ export type AgentEvent =
       type: "crash.simulate";
     }
   | CompanionPairingEvent
+  | CompanionDiscoveryEvent
   | PhoneLocationEvent
   | PhoneLocationStatusEvent
   | NavRouteEvent

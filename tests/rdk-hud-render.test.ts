@@ -159,6 +159,7 @@ function state(overrides: Partial<HudState> = {}): HudState {
       remainingSeconds: 720,
       offRoute: false
     },
+    discovery: "off",
     ...overrides
   };
 }
@@ -176,6 +177,24 @@ describe("RDK HUD navigation card", () => {
     expect(page.slice(cardStart, page.indexOf("</section>", cardStart) + 10)).toContain(
       '<div id="phone-status" class="muted"></div>\n  <div id="nav-instruction"></div>\n  <div id="nav-distance"></div>\n  <div id="nav-summary" class="muted"></div>\n  <div id="nav-paused" class="warning" hidden>手机定位已断开 · 导航暂停</div>'
     );
+  });
+
+  it("shows the mdns broadcast status beside the companion pairing row", () => {
+    const harness = renderHarness();
+    harness.render(state({ discovery: "mdns" }));
+
+    expect(element(harness, "discovery-status").textContent).toBe("配对广播 mdns");
+  });
+
+  it("clears the broadcast status along with the rest of the card when it hides", () => {
+    const harness = renderHarness();
+    harness.render(state({ discovery: "mdns" }));
+    harness.render(
+      state({ navigation: null, discovery: "off", companion: { paired: true, locationState: "connected" } })
+    );
+
+    expect(element(harness, "navigation-card").hidden).toBe(true);
+    expect(element(harness, "discovery-status").textContent).toBe("");
   });
 
   it("renders turn-first guidance, GPS quality, destination, remaining distance, and ETA", () => {

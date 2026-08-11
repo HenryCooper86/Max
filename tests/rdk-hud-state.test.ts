@@ -31,7 +31,8 @@ describe("reduceHud", () => {
       latencyMs: null,
       lastError: null,
       companion: { paired: false, locationState: "unpaired" },
-      navigation: null
+      navigation: null,
+      discovery: "off"
     });
   });
 
@@ -247,5 +248,11 @@ describe("reduceHud", () => {
     expect(before).toEqual(initialHudState());
     expect(after).not.toBe(before);
     expect(after.navigation).not.toBe(event.navigation);
+  });
+
+  it("tracks discovery transport status", () => {
+    const state = reduceHud(initialHudState(), { type: "rdk.discovery", discovery: "mdns" });
+    expect(state.discovery).toBe("mdns");
+    expect(initialHudState().discovery).toBe("off");
   });
 });

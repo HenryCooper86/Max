@@ -226,6 +226,21 @@ class ControlHandler(socketserver.StreamRequestHandler):
 class ControlServer(socketserver.ThreadingUnixStreamServer):
     allow_reuse_address = True
 
+    # A connection handler parks in readline() until its client speaks or
+    # leaves, and the agent's control connection does neither for minutes at a
+    # time. socketserver's defaults — daemon_threads False, block_on_close True
+    # — make server_close() join every one of those threads, so an ordinary
+    # `systemctl stop max-vision` hung until TimeoutStopSec and systemd
+    # SIGKILLed it: measured on the board as status=9/KILL, Result=timeout, and
+    # only ever with a client connected. bench_server made the same call for
+    # its MJPEG streams, which never return either.
+    #
+    # Losing a handler mid-flight at shutdown costs nothing here: finalize()
+    # already stops the watcher explicitly rather than relying on the `finally`
+    # in ControlHandler.handle(), for exactly this reason.
+    daemon_threads = True
+    block_on_close = False
+
     def __init__(
         self,
         socket_path: str,

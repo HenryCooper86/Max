@@ -97,6 +97,24 @@ export function createArkVisionProvider(options: {
           headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
           body: JSON.stringify({
             model,
+            // Ark's seed models reason by default, and reasoning is what makes
+            // this call miss its own deadline. Measured 2026-08-11 against the
+            // live endpoint with a real 640px helmet frame on
+            // doubao-seed-evolving: three describe calls took 13.6 s, 15.1 s
+            // and 36.3 s (415, 488 and 1200 reasoning tokens) against the 10 s
+            // timeout above — so a *valid* key still produced "我看不清" two
+            // times in three. With reasoning off the same calls took 2.2 s and
+            // 3.1 s, zero reasoning tokens, and returned descriptions at least
+            // as concrete.
+            //
+            // A rider asking "看看前面" is inside a budget the whole chain
+            // agrees on: 3 s for the board's frame fetch, 8 s for the relay's
+            // device-result window. There is no version of this feature where
+            // thirteen seconds of deliberation is the right trade.
+            //
+            // A model that rejects this field would surface as `rejected —
+            // http 400` through onFailure; drop the line if one ever does.
+            thinking: { type: "disabled" },
             messages: [
               {
                 role: "user",

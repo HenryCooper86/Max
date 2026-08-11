@@ -688,3 +688,15 @@ function matchCall(raw: string): DeviceCommand | null {
   }
   return null;
 }
+
+/**
+ * Companion pairing voice confirm. Deliberately narrow — the registry calls
+ * this ONLY while a pairing confirm is pending on the device, so ordinary
+ * conversation can never bind a phone. Decline wins over accept so 取消确认
+ * ("cancel the confirmation") cannot pair.
+ */
+export function matchPairConfirmReply(text: string): "accept" | "decline" | undefined {
+  if (/取消/.test(text)) return "decline";
+  if (/确认/.test(text)) return "accept";
+  return undefined;
+}

@@ -7,6 +7,7 @@ import {
   deviceSuccessSpeech,
   extractDeviceCommand,
   extractDeviceCommandForPlatform,
+  matchPairConfirmReply,
   navRouteOkSpeech
 } from "../server/device-actions";
 import { parseClientEvent } from "../server/session-controller";
@@ -732,5 +733,30 @@ describe("vision.watch", () => {
     const pending = new PendingDeviceCommands();
     const issued = pending.issue("vision.watch", "已开启环境观察。", Date.now(), undefined, true);
     expect(pending.peek(issued.commandId)?.watchOn).toBe(true);
+  });
+});
+
+describe("matchPairConfirmReply", () => {
+  it.each([
+    ["确认", "accept"],
+    ["确认。", "accept"],
+    ["好，确认", "accept"],
+    ["取消", "decline"],
+    ["取消配对", "decline"],
+    ["算了，取消吧", "decline"]
+  ] as const)("matches %s as %s", (text, expected) => {
+    expect(matchPairConfirmReply(text)).toBe(expected);
+  });
+
+  it.each(["帮我导航到外滩", "确", "好的", "不要", "把音量调大", ""])(
+    "leaves %s unmatched",
+    (text) => {
+      expect(matchPairConfirmReply(text)).toBeUndefined();
+    }
+  );
+
+  it("prefers decline when both words appear", () => {
+    // 取消确认 means "cancel the confirmation" — never bind on it.
+    expect(matchPairConfirmReply("取消确认")).toBe("decline");
   });
 });

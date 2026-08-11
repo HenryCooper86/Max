@@ -205,6 +205,61 @@ def test_a_client_that_stops_reading_cannot_block_broadcasts(tmp_path):
         shutil.rmtree(socket_dir)
 
 
+def test_closing_the_server_does_not_wait_for_a_parked_client(tmp_path):
+    """A handler parks in readline() until its client speaks or leaves, and the
+    agent's control connection does neither for minutes at a time.
+
+    With socketserver's defaults (daemon_threads False, block_on_close True)
+    server_close() joins every one of those threads, so `systemctl stop
+    max-vision` blocked until TimeoutStopSec and systemd SIGKILLed it —
+    measured on the board as status=9/KILL, Result=timeout, and only with a
+    client connected. bench_server already made the opposite call for its MJPEG
+    streams, which never return either.
+    """
+    socket_dir = make_socket_dir()
+    sock_path = str(socket_dir / "ctl.sock")
+    runtime = make_runtime(tmp_path)
+    registered = threading.Event()
+    register = runtime.events.register
+
+    def register_and_signal(write):
+        register(write)
+        registered.set()
+
+    runtime.events.register = register_and_signal
+    server = service.ControlServer(sock_path, service.ControlHandler, runtime)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    client = None
+    closer = None
+    try:
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.connect(sock_path)
+        assert registered.wait(timeout=5.0)
+
+        # The client stays connected and says nothing, so its handler sits in
+        # readline() — the state the agent's connection is in almost always.
+        closed = threading.Event()
+
+        def close_it():
+            server.shutdown()
+            server.server_close()
+            closed.set()
+
+        closer = threading.Thread(target=close_it, daemon=True)
+        closer.start()
+        assert closed.wait(timeout=5.0), "server_close() blocked on a parked handler thread"
+    finally:
+        if client is not None:
+            with contextlib.suppress(OSError):
+                client.shutdown(socket.SHUT_RDWR)
+            client.close()
+        if closer is not None:
+            closer.join(timeout=5.0)
+        server_thread.join(timeout=5.0)
+        shutil.rmtree(socket_dir, ignore_errors=True)
+
+
 def test_control_servers_own_separate_runtime_state(tmp_path):
     first_runtime = make_runtime(tmp_path, "first")
     second_runtime = make_runtime(tmp_path, "second")

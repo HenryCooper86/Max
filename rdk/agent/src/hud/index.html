@@ -223,6 +223,7 @@
 </style>
 <h1>Max · RDK X5 bench</h1>
 <section id="navigation-card" class="card nav" hidden>
+  <div id="discovery-status" class="muted"></div>
   <div id="phone-status" class="muted"></div>
   <div id="nav-instruction"></div>
   <div id="nav-distance"></div>
@@ -285,6 +286,7 @@
   // at "—", because this one socket was being refused 401 on its own.
   const socket = new WebSocket(`ws://${location.host}/${VISION_TOKEN ? `?t=${encodeURIComponent(VISION_TOKEN)}` : ""}`);
   const navigationCardEl = document.getElementById("navigation-card");
+  const discoveryStatusEl = document.getElementById("discovery-status");
   const phoneStatusEl = document.getElementById("phone-status");
   const navInstructionEl = document.getElementById("nav-instruction");
   const navDistanceEl = document.getElementById("nav-distance");
@@ -338,6 +340,7 @@
     navigationCardEl.classList.toggle("paused", false);
     navigationCardEl.classList.toggle("rerouting", false);
     navigationCardEl.classList.toggle("off-route", false);
+    discoveryStatusEl.textContent = "";
     phoneStatusEl.textContent = "";
     navInstructionEl.textContent = "";
     navDistanceEl.textContent = "";
@@ -366,6 +369,7 @@
     navigationCardEl.classList.toggle("paused", paused);
     navigationCardEl.classList.toggle("rerouting", rerouting);
     navigationCardEl.classList.toggle("off-route", offRoute);
+    discoveryStatusEl.textContent = `配对广播 ${state.discovery}`;
     phoneStatusEl.textContent = phoneStatus(state.companion, renderedAt);
     if (pairingVisible) {
       pairingExpiryTimer = setTimeout(

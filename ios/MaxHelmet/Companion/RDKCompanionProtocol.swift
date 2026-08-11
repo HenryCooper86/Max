@@ -73,6 +73,13 @@ enum RDKCompanionProtocol {
         return encode(["type": "companion.pair", "code": trimmed])
     }
 
+    static func pairDiscoverMessage(token: String) -> String? {
+        guard token.count == 32, token.allSatisfy({ $0.isHexDigit && ($0.isNumber || $0.isLowercase) }) else {
+            return nil
+        }
+        return encode(["type": "companion.pairDiscover", "token": token])
+    }
+
     static func startMessage() -> String {
         #"{"type":"companion.start"}"#
     }

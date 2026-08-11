@@ -6,6 +6,7 @@ protocol CompanionClientControlling: AnyObject {
     var onState: ((CompanionConnectionState) -> Void)? { get set }
     func connect(relayURL: String, sessionToken: String, allowSelfSignedTLS: Bool)
     func pair(code: String)
+    func pairDiscover(token: String)
     func startRide()
     func stopRide()
     func stopRide(completion: @escaping (CompanionActionResult) -> Void)
@@ -244,6 +245,9 @@ final class MainViewModel: ObservableObject {
     @Published private(set) var companionPermission: CompanionLocationPermission = .notDetermined
     @Published private(set) var lastForwardedAt: Date?
     @Published var pairCode = ""
+    /// True while a discovery-pair token has been sent and the rider is
+    /// waiting on the helmet's spoken 确认 (or a pair.* error/timeout).
+    @Published private(set) var isAwaitingHelmetConfirm = false
 
     var helmetRideOwned: Bool { rideOwned }
 
@@ -453,6 +457,24 @@ final class MainViewModel: ObservableObject {
         onMain { [weak self] in self?.performPairHelmet() }
     }
 
+    /// Pairs via a discovered helmet's beacon token (Bonjour, Task 11) rather
+    /// than the six-digit HUD code — same lifecycle action, different message.
+    func pairDiscoveredHelmet(token: String) {
+        onMain { [weak self] in self?.performPairDiscoverHelmet(token: token) }
+    }
+
+    /// Rider-facing copy for `companion.error` codes introduced by discovery
+    /// pairing; `nil` for codes the existing status/error paths already cover
+    /// (e.g. "auth", "connection") so callers can fall back to their copy.
+    static func companionErrorCopy(code: String) -> String? {
+        switch code {
+        case "pair.busy": return "头盔正忙，请稍后再试"
+        case "pair.declined": return "头盔侧已取消配对"
+        case "pair.timeout": return "确认超时，请重试"
+        default: return nil
+        }
+    }
+
     func startHelmetRide() {
         onMain { [weak self] in self?.performStartHelmetRide() }
     }
@@ -490,6 +512,31 @@ final class MainViewModel: ObservableObject {
         )
         guard ownsCompanionGeneration(owner), hasAccountSession, !rideOwned else { return }
         companionClient.pair(code: code)
+    }
+
+    private func performPairDiscoverHelmet(token: String) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard !sessionTokenTransitionActive,
+              !companionAccountTeardownActive,
+              pendingUnpairOwner == nil,
+              hasAccountSession,
+              RDKCompanionProtocol.pairDiscoverMessage(token: token) != nil,
+              !rideOwned,
+              canPair(from: authoritativeCompanionState) else {
+            return
+        }
+
+        let owner = advanceCompanionGeneration()
+        advanceCompanionStatePublicationEpoch()
+        bindCompanionState(owner: owner)
+        companionClient.connect(
+            relayURL: relayURL.trimmingCharacters(in: .whitespacesAndNewlines),
+            sessionToken: sessionToken.trimmingCharacters(in: .whitespacesAndNewlines),
+            allowSelfSignedTLS: allowSelfSigned
+        )
+        guard ownsCompanionGeneration(owner), hasAccountSession, !rideOwned else { return }
+        isAwaitingHelmetConfirm = true
+        companionClient.pairDiscover(token: token)
     }
 
     private func performStartHelmetRide() {
@@ -709,6 +756,9 @@ final class MainViewModel: ObservableObject {
 
     private func handleCommittedCompanionState(_ state: CompanionConnectionState) {
         dispatchPrecondition(condition: .onQueue(.main))
+        // The pairing action (code or discovery) has resolved one way or
+        // another — a new status, a pair.* error, or any other companion.error.
+        isAwaitingHelmetConfirm = false
 
         let terminalState = isCompanionTerminal(state)
         if interruptsCompanionAction(state) {

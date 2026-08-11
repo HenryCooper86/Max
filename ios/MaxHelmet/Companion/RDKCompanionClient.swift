@@ -189,6 +189,17 @@ final class RDKCompanionClient {
         }
     }
 
+    func pairDiscover(token: String) {
+        onMain { [weak self] in
+            guard let self,
+                  let message = RDKCompanionProtocol.pairDiscoverMessage(token: token) else {
+                return
+            }
+            self.advanceActionEpoch(.pairing)
+            self.sendAction(message, family: .pairing)
+        }
+    }
+
     func startRide() {
         onMain { [weak self] in
             guard let self, self.configuration != nil else { return }

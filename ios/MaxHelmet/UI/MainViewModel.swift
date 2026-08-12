@@ -474,10 +474,10 @@ final class MainViewModel: ObservableObject {
     /// Ask the relay what it knows, when the app knows nothing.
     ///
     /// Companion state is not persisted, so a relaunched app starts at
-    /// `.signedOut` while the relay may still hold a binding — and a paired
-    /// board deliberately stops broadcasting discovery and stops showing a
-    /// pairing code, so there is nothing for the rider to pair to. Connecting
-    /// is enough: the relay syncs the binding on attach.
+    /// `.signedOut` while the relay may still hold a binding, leaving the
+    /// rider with nothing to pair to (see the spec for the board's discovery
+    /// behaviour once paired). Connecting is enough: the relay syncs the
+    /// binding on attach.
     func syncCompanionStateIfNeeded() {
         onMain { [weak self] in self?.performSyncCompanionState() }
     }
@@ -575,9 +575,13 @@ final class MainViewModel: ObservableObject {
             sessionToken: sessionToken.trimmingCharacters(in: .whitespacesAndNewlines),
             allowSelfSignedTLS: allowSelfSigned
         )
-        // Nothing follows the connect. `closePairOnlySocketIfIdle` closes this
-        // socket once the relay's status lands, so the transport stays
-        // ride-scoped.
+        // Nothing follows the connect. The relay answers with `ready`,
+        // `helmetOffline`, or `unpaired` — never `paired` — so an `unpaired`
+        // answer retires the transport, but a bound answer (`ready` /
+        // `helmetOffline`) leaves this socket open: `closePairOnlySocketIfIdle`
+        // only fires on a `paired` transport state, which this path can never
+        // reach. Closing it properly is a known follow-up that touches the
+        // shared pair-only path (see the spec).
     }
 
     private func performPairDiscoverHelmet(token: String) {

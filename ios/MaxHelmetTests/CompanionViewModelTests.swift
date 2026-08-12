@@ -2822,9 +2822,19 @@ final class CompanionViewModelTests: XCTestCase {
         let harness = Harness()
         harness.viewModel.syncCompanionStateIfNeeded()
 
-        harness.client.publish(.paired(deviceId: "rdk-1", label: "Helmet"))
+        // Proves the connect actually happened, not just that a publish
+        // reached the view model — `MainViewModel` binds `companionClient.onState`
+        // in its initializer, so `harness.client.publish(...)` below would
+        // reach `companionState` even if `performSyncCompanionState`'s body
+        // were empty and never called `connect()`.
+        XCTAssertEqual(harness.events.filter { $0.hasPrefix("companion.connect:") }.count, 1)
 
-        XCTAssertEqual(harness.viewModel.companionState, .paired(deviceId: "rdk-1", label: "Helmet"))
+        // This relay never sends `paired` (see the design doc); a bound
+        // account is answered with `ready` (board online) or `helmetOffline`
+        // (board powered down).
+        harness.client.publish(.ready(deviceId: "rdk-1", label: "Helmet"))
+
+        XCTAssertEqual(harness.viewModel.companionState, .ready(deviceId: "rdk-1", label: "Helmet"))
         let model = CompanionSettingsPresentation.make(
             isLoggedIn: true,
             pairCode: "",
@@ -2838,10 +2848,34 @@ final class CompanionViewModelTests: XCTestCase {
         XCTAssertTrue(model.isPrimaryActionEnabled, "开始 Helmet Ride is no longer dead")
     }
 
+    func testTheRelaysHelmetOfflineAnswerRestoresUnpairWithStartCorrectlyDisabled() {
+        let harness = Harness()
+        harness.viewModel.syncCompanionStateIfNeeded()
+
+        harness.client.publish(.helmetOffline(deviceId: "rdk-1", label: "Helmet"))
+
+        XCTAssertEqual(harness.viewModel.companionState, .helmetOffline(deviceId: "rdk-1", label: "Helmet"))
+        let model = CompanionSettingsPresentation.make(
+            isLoggedIn: true,
+            pairCode: "",
+            connectionState: harness.viewModel.companionState,
+            rideOwned: false,
+            permission: .precise,
+            lastForwardedAt: nil,
+            now: Date()
+        )
+        XCTAssertTrue(model.showsUnpair, "the rider can unpair a bound-but-offline helmet")
+        XCTAssertFalse(model.isPrimaryActionEnabled, "Start correctly stays disabled while the board is offline")
+    }
+
     func testASyncIsNotAttemptedFromAnyStateTheRelayAlreadySupplied() {
         let states: [CompanionConnectionState] = [
+            // `.paired` is kept even though this relay never emits it (see the
+            // design doc) — the guard must still exclude it if it were ever
+            // reached by some other relay implementation.
             .paired(deviceId: "rdk-1", label: nil),
             .ready(deviceId: "rdk-1", label: nil),
+            .helmetOffline(deviceId: "rdk-1", label: nil),
             .sharing(deviceId: "rdk-1", label: nil),
             .unpaired,
             .connecting,

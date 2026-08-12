@@ -347,8 +347,12 @@ function start(): void {
     activeNavigationGeneration += 1;
     navigationSession.navigation.close();
     navigationSession.location.close();
-    publishHud({ type: "rdk.navigation", navigation: null });
+    // Route first, matching the controller's own teardown (`clearRouteState`
+    // emits `route: null` last, after the snapshot has already gone idle).
+    // The other order publishes an intermediate frame holding a live route
+    // with no rider dot, so the card blinks a dotless polyline before it goes.
     publishHud({ type: "rdk.route", route: null });
+    publishHud({ type: "rdk.navigation", navigation: null });
   }
 
   function ensureNavigationSession(): void {

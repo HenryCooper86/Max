@@ -366,6 +366,9 @@
       minLat,
       maxLat,
       minLon,
+      // `project` never reads maxLon, but the web app's SchematicBounds carries
+      // it and the comment above promises these two are the same shape.
+      maxLon,
       scale,
       xOffset: VIEW_PADDING + (innerWidth - lonSpan * scale) / 2,
       yOffset: VIEW_PADDING + (innerHeight - latSpan * scale) / 2
@@ -397,6 +400,7 @@
       parts.push(`<polyline class="line" points="${points}" />`);
     }
     for (const maneuver of Array.isArray(route.steps) ? route.steps : []) {
+      if (!maneuver || !Number.isFinite(maneuver.lat) || !Number.isFinite(maneuver.lon)) continue;
       const projected = project(bounds, maneuver);
       parts.push(`<circle class="maneuver" cx="${projected.x}" cy="${projected.y}" r="4" />`);
     }

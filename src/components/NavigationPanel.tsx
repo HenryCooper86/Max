@@ -188,6 +188,14 @@ const VIEW_WIDTH = 280;
 const VIEW_HEIGHT = 160;
 const VIEW_PADDING = 18;
 
+/** `SchematicBounds`, `computeBounds`, and `project` are exported for one
+ *  reason, and it is not a caller in `src/`: the RDK board's bench HUD
+ *  (`rdk/agent/src/hud/index.html`) reimplements this projection inline —
+ *  that page is assembled by string substitution and cannot import shared
+ *  code — and `tests/rdk-hud-render.test.ts` pins the two against a single
+ *  fixture so they cannot drift apart silently. A cleanup pass that sees no
+ *  caller outside `tests/` and un-exports these deletes the only thing
+ *  catching board-vs-web drift. */
 export type SchematicBounds = {
   minLat: number;
   maxLat: number;
@@ -198,8 +206,6 @@ export type SchematicBounds = {
   yOffset: number;
 };
 
-/** Exported so tests can pin the RDK HUD's inline copy of this projection
- *  against it; the board page cannot import shared code. */
 export function computeBounds(polyline: readonly GeoPoint[]): SchematicBounds {
   const lats = polyline.map((p) => p.lat);
   const lons = polyline.map((p) => p.lon);

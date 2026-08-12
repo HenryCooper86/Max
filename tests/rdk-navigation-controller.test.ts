@@ -1088,7 +1088,9 @@ describe("RDK route guidance and rerouting", () => {
 
       expect(h.states.at(-1)?.position).toEqual({ lat: 31.23, lon: 121.47 });
 
-      // Location becomes unavailable; latest() now throws
+      // The source stops holding a fix, so latest() returns undefined. (A
+      // latest() that *throws* is a different test — see the throwing
+      // location-source case above.)
       current = undefined;
       h.controller.handleLocationState({ connection: "stale", usable: false, reason: "stale" });
 

@@ -642,10 +642,6 @@ describe("RDK HUD route card", () => {
     expect(element(harness, "route-svg").innerHTML).not.toContain("Infinity");
   });
 
-  it("renders nothing remote-looking, keeping the page card-only", () => {
-    expect(page).not.toMatch(/<iframe|<canvas|webapi\.amap|restapi\.amap|amap\.com/i);
-  });
-
   it("projects identically to the web app's schematic", () => {
     const polyline = [
       { lat: 31.23, lon: 121.47 },

@@ -93,6 +93,20 @@ final class RDKCompanionClient {
 
     private static let reconnectDelays: [TimeInterval] = [1, 2, 4, 8, 16, 30]
 
+    /// Relay validation failures that reject only the current fix. In
+    /// particular, `location.state` and `location.binding` are deliberately
+    /// absent because they report a companion-session mismatch, not bad sample
+    /// data.
+    private static let recoverableLocationErrorCodes: Set<String> = [
+        "location.sequence",
+        "location.rate",
+        "location.timestamp",
+        "location.coordinates",
+        "location.accuracy",
+        "location.course",
+        "location.speed"
+    ]
+
     /// Safety net for a bind attempt whose deferred `unpaired` is never resolved
     /// by the relay (its own confirm window is 30 s and ends in a
     /// `companion.error pair.timeout`), so a silent relay cannot hold a retired
@@ -503,6 +517,24 @@ final class RDKCompanionClient {
         generation expectedGeneration: Int
     ) {
         assert(Thread.isMainThread)
+
+        // `location.*` errors reject one fix; they do not change the relay's
+        // companion session state. Publishing one as `.failed` used to replace
+        // our authoritative `.sharing` state and close the location gate, so a
+        // single rate/timestamp rejection permanently stopped every later fix
+        // until the rider restarted the session. Keep the last status and let
+        // the next fresh fix recover naturally.
+        if case let .failed(code, _) = state, Self.recoverableLocationErrorCodes.contains(code) {
+            switch transportState {
+            case .ready, .sharing:
+                canSendLocation = desiredRide
+            default:
+                canSendLocation = false
+            }
+            drainLatestFix()
+            return
+        }
+
         let isStatus: Bool
         switch state {
         case .failed:

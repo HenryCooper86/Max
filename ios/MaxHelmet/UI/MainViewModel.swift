@@ -1085,8 +1085,13 @@ final class MainViewModel: ObservableObject {
         guard ownsCompanionGeneration(owner), companionAccountTeardownActive else { return }
         companionAccountTeardownActive = false
         // This path publishes .signedOut directly (its own completion), bypassing
-        // handleCommittedCompanionState's funnel — clear the flag here too.
+        // handleCommittedCompanionState's funnel — clear both pairing-action
+        // flags here too. `pairingSubmissionActive` matters as much as its
+        // sibling: left set, it survives the teardown into an unrelated session,
+        // where the next resolving-and-bound state consumes whatever code is in
+        // the field by then.
         isAwaitingHelmetConfirm = false
+        pairingSubmissionActive = false
 
         finalizePendingLogout()
         if sessionTokenTransitionActive {

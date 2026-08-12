@@ -950,6 +950,26 @@ final class CompanionViewModelTests: XCTestCase {
         )
     }
 
+    // The other half of that guard, and the rider-facing one. A wrong or
+    // expired code comes back as `companion.error` code `pair.code`, which
+    // *resolves* the pairing action just like a success does — so only the
+    // `isBound` check keeps the typed code in the field. Without this test a
+    // refactor that drops or inverts that check makes a rider who mistyped one
+    // digit lose all six and retype from scratch, on a bike, in gloves.
+    func testARejectedPairKeepsTheTypedCodeSoItCanBeCorrected() {
+        let harness = Harness()
+        harness.viewModel.pairCode = "123456"
+        harness.viewModel.pairHelmet()
+
+        harness.client.publish(.failed(code: "pair.code", detail: "配对码无效"))
+
+        XCTAssertEqual(
+            harness.viewModel.pairCode,
+            "123456",
+            "a rejected code must stay put to be corrected, not be wiped"
+        )
+    }
+
     // Losing the transport mid-unpair is the common bench accident (screen
     // lock, board reboot, relay restart). The send's completion then reaches
     // guards that no longer recognize it and is discarded, so the pending

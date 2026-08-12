@@ -1306,6 +1306,13 @@ final class MainViewModel: ObservableObject {
         switch state {
         case .paired, .ready:
             return true
+        // Recovering from a dropped transport (board reboot, relay restart,
+        // network blip). `connect()` reopens the socket and the relay replays
+        // the authoritative binding, so `canContinueStart` still refuses if the
+        // helmet turns out to be genuinely unpaired. An auth failure stays
+        // terminal — only a fresh login clears it.
+        case let .failed(code, _):
+            return code != "auth"
         default:
             return false
         }

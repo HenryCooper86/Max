@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { renderHudPage } from "../rdk/agent/src/hud/server";
 import type { HudState } from "../rdk/agent/src/hud/state";
+import { computeBounds, project } from "../src/components/NavigationPanel";
 
 // Substituted the way createHudServer substitutes, so this exercises the page
 // as served rather than the template.
@@ -643,5 +644,27 @@ describe("RDK HUD route card", () => {
 
   it("renders nothing remote-looking, keeping the page card-only", () => {
     expect(page).not.toMatch(/<iframe|<canvas|webapi\.amap|restapi\.amap|amap\.com/i);
+  });
+
+  it("projects identically to the web app's schematic", () => {
+    const polyline = [
+      { lat: 31.23, lon: 121.47 },
+      { lat: 31.2355, lon: 121.4788 },
+      { lat: 31.24, lon: 121.48 }
+    ];
+    const rider = { lat: 31.2355, lon: 121.4788 };
+    const bounds = computeBounds(polyline);
+    const expected = project(bounds, rider);
+
+    const harness = renderHarness();
+    harness.render(
+      state({
+        route: { polyline, steps: [] },
+        navigation: { ...state().navigation!, position: rider }
+      })
+    );
+
+    const svg = element(harness, "route-svg").innerHTML;
+    expect(svg).toContain(`cx="${expected.x}" cy="${expected.y}"`);
   });
 });

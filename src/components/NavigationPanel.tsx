@@ -188,7 +188,7 @@ const VIEW_WIDTH = 280;
 const VIEW_HEIGHT = 160;
 const VIEW_PADDING = 18;
 
-type SchematicBounds = {
+export type SchematicBounds = {
   minLat: number;
   maxLat: number;
   minLon: number;
@@ -198,7 +198,9 @@ type SchematicBounds = {
   yOffset: number;
 };
 
-function computeBounds(polyline: readonly GeoPoint[]): SchematicBounds {
+/** Exported so tests can pin the RDK HUD's inline copy of this projection
+ *  against it; the board page cannot import shared code. */
+export function computeBounds(polyline: readonly GeoPoint[]): SchematicBounds {
   const lats = polyline.map((p) => p.lat);
   const lons = polyline.map((p) => p.lon);
   const minLat = lats.length ? Math.min(...lats) : 0;
@@ -217,7 +219,7 @@ function computeBounds(polyline: readonly GeoPoint[]): SchematicBounds {
   return { minLat, maxLat, minLon, maxLon, scale, xOffset, yOffset };
 }
 
-function project(bounds: SchematicBounds, point: GeoPoint): { x: number; y: number } {
+export function project(bounds: SchematicBounds, point: GeoPoint): { x: number; y: number } {
   return {
     x: bounds.xOffset + (point.lon - bounds.minLon) * bounds.scale,
     // SVG y grows downward; north (higher latitude) must render toward the top.

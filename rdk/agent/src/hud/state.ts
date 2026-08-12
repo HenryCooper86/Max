@@ -111,7 +111,10 @@ function copyNavigation(navigation: RdkNavigationSnapshot): RdkNavigationSnapsho
     ...(navigation.remainingMeters === undefined ? {} : { remainingMeters: navigation.remainingMeters }),
     ...(navigation.remainingSeconds === undefined ? {} : { remainingSeconds: navigation.remainingSeconds }),
     ...(navigation.offRoute === undefined ? {} : { offRoute: navigation.offRoute }),
-    ...(navigation.location === undefined ? {} : { location: copyLocation(navigation.location) })
+    ...(navigation.location === undefined ? {} : { location: copyLocation(navigation.location) }),
+    ...(navigation.position === undefined
+      ? {}
+      : { position: { lat: navigation.position.lat, lon: navigation.position.lon } })
   };
 }
 

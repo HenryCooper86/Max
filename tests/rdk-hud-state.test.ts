@@ -241,6 +241,28 @@ describe("reduceHud", () => {
     expect(reduceHud(active, { type: "rdk.navigation", navigation: null }).navigation).toBeNull();
   });
 
+  it("carries rider position when present in navigation snapshot", () => {
+    const snapshot = navigation({ position: { lat: 31.2304, lon: 121.4737 } });
+    const state = reduceHud(initialHudState(), { type: "rdk.navigation", navigation: snapshot });
+    expect(state.navigation?.position).toEqual({ lat: 31.2304, lon: 121.4737 });
+  });
+
+  it("defensively copies rider position to prevent caller mutations from affecting stored state", () => {
+    const position = { lat: 31.2304, lon: 121.4737 };
+    const snapshot = navigation({ position });
+    const state = reduceHud(initialHudState(), { type: "rdk.navigation", navigation: snapshot });
+    position.lat = 0;
+    position.lon = 0;
+
+    expect(state.navigation?.position).toEqual({ lat: 31.2304, lon: 121.4737 });
+  });
+
+  it("omits position field when not supplied, keeping it optional", () => {
+    const snapshot = navigation();
+    const state = reduceHud(initialHudState(), { type: "rdk.navigation", navigation: snapshot });
+    expect(state.navigation).not.toHaveProperty("position");
+  });
+
   it("does not mutate previous state or reuse caller-owned synthetic objects", () => {
     const before = initialHudState();
     const event: HudEvent = { type: "rdk.navigation", navigation: navigation() };

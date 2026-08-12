@@ -182,7 +182,12 @@ struct CompanionSettingsPresentation: Equatable {
             busy = false
         case let .failed(code, _):
             paired = false
-            startable = false
+            // A non-auth failure is a dead transport, not a lost binding: the
+            // companion socket is ride-scoped and never reconnects on its own,
+            // so starting a ride is exactly how a rider recovers. Leaving this
+            // false is what made "请重试" a lie. An auth failure is different —
+            // only logging in again fixes it.
+            startable = code != "auth"
             pairingState = code != "auth"
             busy = false
         }
@@ -284,7 +289,11 @@ struct SettingsPanel: View {
                 }
             }
             if companion.isAwaitingHelmetConfirm {
-                Text("等待头盔确认…请对头盔说\u{201C}确认\u{201D}")
+                // Must stay in step with PAIR_CONFIRM_PROMPT in
+                // server/companion-registry.ts: a bare 确认 is too short for the
+                // ASR to finalize, and riders reach for this phone's Max button
+                // unless told the confirmation is spoken at the helmet.
+                Text("等待头盔确认…请对头盔说\u{201C}确认配对\u{201D}，无需按键")
                     .font(.system(size: 12))
                     .foregroundColor(HudColors.accent)
                     .frame(maxWidth: .infinity, alignment: .leading)

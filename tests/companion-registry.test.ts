@@ -9,9 +9,11 @@ import type {
 import { createCompanionBindingStore, type CompanionBindingStore } from "../server/companion-store";
 import {
   createCompanionRegistry,
+  PAIR_CONFIRM_PROMPT,
   type CompanionConnection,
   type CompanionRegistry
 } from "../server/companion-registry";
+import { matchPairConfirmReply } from "../server/device-actions";
 
 type HelmetEvent = CompanionPairingEvent | CompanionDiscoveryEvent | PhoneLocationEvent | PhoneLocationStatusEvent;
 
@@ -1019,10 +1021,38 @@ describe("companion discovery pairing confirm", () => {
     return { helmet, phone };
   }
 
+  // Bench 2026-08-12: riders read this prompt, said a bare 确认, and the ASR
+  // usually never finalized an utterance that short — pairing looked broken
+  // while the grammar was fine. They also reached for the PHONE's Max button,
+  // because nothing told them the confirmation is spoken to the helmet.
+  it("asks for a phrase the grammar actually accepts", () => {
+    const asked = /[“"]([^”"]+)[”"]/.exec(PAIR_CONFIRM_PROMPT)?.[1];
+    expect(asked).toBeDefined();
+    expect(matchPairConfirmReply(asked!)).toBe("accept");
+  });
+
+  it("asks for an utterance long enough for the ASR to finalize", () => {
+    const asked = /[“"]([^”"]+)[”"]/.exec(PAIR_CONFIRM_PROMPT)?.[1];
+    expect(asked!.length).toBeGreaterThan(2);
+  });
+
+  it("tells the rider to speak to the helmet instead of pressing a button", () => {
+    expect(PAIR_CONFIRM_PROMPT).toContain("无需按键");
+  });
+
+  it("binds after the rider speaks the prompted 确认配对", async () => {
+    const h = harness({ tokens: [TOKEN_A] });
+    const { phone } = await discover(h);
+
+    h.registry.handleRiderUtterance("rdk-a", "确认配对");
+    await vi.waitFor(() => expect(h.store.bindingForAccount("acct-a")?.deviceId).toBe("rdk-a"));
+    expect(latest(phone.events, "companion.status")).toMatchObject({ state: "ready" });
+  });
+
   it("binds after the rider speaks 确认", async () => {
     const h = harness({ tokens: [TOKEN_A] });
     const { helmet, phone } = await discover(h);
-    expect(helmet.spoken).toEqual(['检测到配对请求，请说"确认"。']);
+    expect(helmet.spoken).toEqual([PAIR_CONFIRM_PROMPT]);
 
     h.registry.handleRiderUtterance("rdk-a", "确认");
     await vi.waitFor(() => expect(h.store.bindingForAccount("acct-a")?.deviceId).toBe("rdk-a"));
@@ -1068,7 +1098,7 @@ describe("companion discovery pairing confirm", () => {
     const { helmet, phone } = await discover(h);
     h.advance(20_000);
     await phone.connection.handle({ type: "companion.pairDiscover", token: TOKEN_A });
-    expect(helmet.spoken).toEqual(['检测到配对请求，请说"确认"。', '检测到配对请求，请说"确认"。']);
+    expect(helmet.spoken).toEqual([PAIR_CONFIRM_PROMPT, PAIR_CONFIRM_PROMPT]);
     h.advance(10_000); // original deadline passes
     expect(latest(phone.events, "companion.error")).toMatchObject({ code: "pair.timeout" });
   });

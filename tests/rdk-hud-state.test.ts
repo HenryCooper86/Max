@@ -32,6 +32,7 @@ describe("reduceHud", () => {
       lastError: null,
       companion: { paired: false, locationState: "unpaired" },
       navigation: null,
+      route: null,
       discovery: "off"
     });
   });
@@ -254,5 +255,47 @@ describe("reduceHud", () => {
     const state = reduceHud(initialHudState(), { type: "rdk.discovery", discovery: "mdns" });
     expect(state.discovery).toBe("mdns");
     expect(initialHudState().discovery).toBe("off");
+  });
+
+  describe("rdk.route", () => {
+    const geometry = () => ({
+      destinationName: "人民广场",
+      polyline: [
+        { lat: 31.23, lon: 121.47 },
+        { lat: 31.235, lon: 121.47 },
+        { lat: 31.24, lon: 121.47 }
+      ],
+      steps: [{ lat: 31.235, lon: 121.47 }]
+    });
+
+    it("starts with no route", () => {
+      expect(initialHudState().route).toBeNull();
+    });
+
+    it("holds the route and deep-copies its geometry from the caller", () => {
+      const route = geometry();
+      const state = reduceHud(initialHudState(), { type: "rdk.route", route });
+      route.polyline[0]!.lat = 0;
+      route.steps[0]!.lon = 0;
+      route.destinationName = "changed";
+
+      expect(state.route).toEqual(geometry());
+    });
+
+    it("clears the route when navigation ends", () => {
+      const active = reduceHud(initialHudState(), { type: "rdk.route", route: geometry() });
+
+      expect(reduceHud(active, { type: "rdk.route", route: null }).route).toBeNull();
+    });
+
+    it("replaces geometry wholesale on a reroute rather than merging", () => {
+      const active = reduceHud(initialHudState(), { type: "rdk.route", route: geometry() });
+      const rerouted = reduceHud(active, {
+        type: "rdk.route",
+        route: { polyline: [{ lat: 31.3, lon: 121.5 }], steps: [] }
+      });
+
+      expect(rerouted.route).toEqual({ polyline: [{ lat: 31.3, lon: 121.5 }], steps: [] });
+    });
   });
 });

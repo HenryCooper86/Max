@@ -140,9 +140,10 @@ export function createRdkNavigationController(options: {
   function publish(next: RdkNavigationSnapshot, expectedRevision = revision): boolean {
     if (revision !== expectedRevision) return false;
     const position = latestPosition();
-    const { position: _stale, ...rest } = next;
+    const nextFiltered = { ...next };
+    delete nextFiltered.position; // Strip any inherited stale position before stamping fresh one
     snapshot = {
-      ...rest,
+      ...nextFiltered,
       ...(position === undefined ? {} : { position }),
       ...(next.location === undefined ? {} : { location: copyLocation(next.location) })
     };

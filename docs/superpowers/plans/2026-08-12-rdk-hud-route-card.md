@@ -224,14 +224,39 @@ Replace the assignment inside `publish` so it stamps the position:
   function publish(next: RdkNavigationSnapshot, expectedRevision = revision): boolean {
     if (revision !== expectedRevision) return false;
     const position = latestPosition();
+    // `next` is frequently `{ ...snapshot, … }` (abandonReroute, and both
+    // handleLocationState branches), so it can arrive carrying a stale
+    // `position` as an own key. The conditional spread below can ADD a
+    // position but never REMOVE one — drop any inherited key first, or a lost
+    // fix leaves the rider dot frozen at its last location instead of
+    // clearing. A frozen-but-plausible dot is worse than no dot.
+    const { position: _stale, ...rest } = next;
     snapshot = {
-      ...next,
+      ...rest,
       ...(position === undefined ? {} : { position }),
       ...(next.location === undefined ? {} : { location: copyLocation(next.location) })
     };
 ```
 
 The rest of `publish` is unchanged.
+
+Cover the present-then-lost transition explicitly — the three tests above only
+exercise "updates to a newer fix" and "never had one", so neither would catch a
+stale key surviving:
+
+```ts
+  it("clears a stamped position when the fix is later lost", async () => {
+    let current: PhoneFix | undefined = ORIGIN_FIX;
+    const h = harness({ latest: () => current });
+    await startGuiding(h);
+    expect(h.states.at(-1)?.position).toEqual({ lat: 31.23, lon: 121.47 });
+
+    current = undefined;
+    h.controller.handleLocationState({ connection: "stopped", usable: false, reason: "stopped" });
+
+    expect(h.states.at(-1)).not.toHaveProperty("position");
+  });
+```
 
 - [ ] **Step 4: Run the tests to verify they pass**
 

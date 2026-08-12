@@ -21,10 +21,12 @@
 ### Task 1: HUD state carries a route
 
 **Files:**
+
 - Modify: `rdk/agent/src/hud/state.ts`
 - Test: `tests/rdk-hud-state.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces: `RdkHudRoute` (exported type), `HudState.route: RdkHudRoute | null`, and the `{ type: "rdk.route"; route: RdkHudRoute | null }` HUD event. Tasks 4, 5 and 6 all depend on these names.
 
@@ -142,10 +144,12 @@ git commit -m "feat(rdk-hud): carry route geometry in HUD state"
 ### Task 2: The navigation snapshot carries the rider position
 
 **Files:**
+
 - Modify: `rdk/agent/src/navigation/controller.ts`
 - Test: `tests/rdk-navigation-controller.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces: `RdkNavigationSnapshot.position?: { lat: number; lon: number }`. Tasks 5 and 6 depend on this field name.
 
@@ -206,16 +210,16 @@ In `rdk/agent/src/navigation/controller.ts`, add to `RdkNavigationSnapshot` afte
 Inside `createRdkNavigationController`, add above `function publish`:
 
 ```ts
-  /** The freshest fix, for the HUD's rider dot. Never allowed to break a
-   *  publish: a closed or throwing source simply means "no dot yet". */
-  function latestPosition(): { lat: number; lon: number } | undefined {
-    try {
-      const fix = options.location.latest();
-      return fix === undefined ? undefined : { lat: fix.position.lat, lon: fix.position.lon };
-    } catch {
-      return undefined;
-    }
+/** The freshest fix, for the HUD's rider dot. Never allowed to break a
+ *  publish: a closed or throwing source simply means "no dot yet". */
+function latestPosition(): { lat: number; lon: number } | undefined {
+  try {
+    const fix = options.location.latest();
+    return fix === undefined ? undefined : { lat: fix.position.lat, lon: fix.position.lon };
+  } catch {
+    return undefined;
   }
+}
 ```
 
 Replace the assignment inside `publish` so it stamps the position:
@@ -250,17 +254,17 @@ exercise "updates to a newer fix" and "never had one", so neither would catch a
 stale key surviving:
 
 ```ts
-  it("clears a stamped position when the fix is later lost", async () => {
-    let current: PhoneFix | undefined = ORIGIN_FIX;
-    const h = harness({ latest: () => current });
-    await startGuiding(h);
-    expect(h.states.at(-1)?.position).toEqual({ lat: 31.23, lon: 121.47 });
+it("clears a stamped position when the fix is later lost", async () => {
+  let current: PhoneFix | undefined = ORIGIN_FIX;
+  const h = harness({ latest: () => current });
+  await startGuiding(h);
+  expect(h.states.at(-1)?.position).toEqual({ lat: 31.23, lon: 121.47 });
 
-    current = undefined;
-    h.controller.handleLocationState({ connection: "stopped", usable: false, reason: "stopped" });
+  current = undefined;
+  h.controller.handleLocationState({ connection: "stopped", usable: false, reason: "stopped" });
 
-    expect(h.states.at(-1)).not.toHaveProperty("position");
-  });
+  expect(h.states.at(-1)).not.toHaveProperty("position");
+});
 ```
 
 - [ ] **Step 4: Run the tests to verify they pass**
@@ -280,10 +284,12 @@ git commit -m "feat(rdk-nav): stamp published snapshots with the rider position"
 ### Task 3: The controller emits route geometry
 
 **Files:**
+
 - Modify: `rdk/agent/src/navigation/controller.ts`
 - Test: `tests/rdk-navigation-controller.test.ts`
 
 **Interfaces:**
+
 - Consumes: `RdkHudRoute` from Task 1 — but do **not** import it here. The controller stays independent of the HUD; it emits a structurally identical shape and `main.ts` passes it through.
 - Produces: the optional controller option
   `onRoute?: (route: { destinationName?: string; polyline: Array<{ lat: number; lon: number }>; steps: Array<{ lat: number; lon: number }> } | null) => void`.
@@ -302,13 +308,17 @@ First extend the harness. In `HarnessOptions` add:
 Add this import alongside the existing controller import:
 
 ```ts
-import { createRdkNavigationController, type RdkNavigationSnapshot, type RdkRouteGeometry } from "../rdk/agent/src/navigation/controller";
+import {
+  createRdkNavigationController,
+  type RdkNavigationSnapshot,
+  type RdkRouteGeometry
+} from "../rdk/agent/src/navigation/controller";
 ```
 
 In `harness()`, add a collector before `const controller = ...`:
 
 ```ts
-  const routes: Array<RdkRouteGeometry | null> = [];
+const routes: Array<RdkRouteGeometry | null> = [];
 ```
 
 Add to the `createRdkNavigationController({...})` argument object:
@@ -400,35 +410,35 @@ Add to the options object of `createRdkNavigationController`, after `interruptOr
 Add near `latestPosition`:
 
 ```ts
-  function emitRoute(route: NavRouteEvent | undefined): void {
-    if (options.onRoute === undefined) return;
-    const geometry: RdkRouteGeometry | null =
-      route === undefined
-        ? null
-        : {
-            ...(route.destinationName === undefined ? {} : { destinationName: route.destinationName }),
-            polyline: route.polyline.map((point) => ({ lat: point.lat, lon: point.lon })),
-            steps: route.steps.map((maneuver) => ({ lat: maneuver.lat, lon: maneuver.lon }))
-          };
-    try {
-      options.onRoute(geometry);
-    } catch {
-      // A HUD observer cannot own or interrupt the navigation lifecycle,
-      // matching how `publish` treats `onState`.
-    }
+function emitRoute(route: NavRouteEvent | undefined): void {
+  if (options.onRoute === undefined) return;
+  const geometry: RdkRouteGeometry | null =
+    route === undefined
+      ? null
+      : {
+          ...(route.destinationName === undefined ? {} : { destinationName: route.destinationName }),
+          polyline: route.polyline.map((point) => ({ lat: point.lat, lon: point.lon })),
+          steps: route.steps.map((maneuver) => ({ lat: maneuver.lat, lon: maneuver.lon }))
+        };
+  try {
+    options.onRoute(geometry);
+  } catch {
+    // A HUD observer cannot own or interrupt the navigation lifecycle,
+    // matching how `publish` treats `onState`.
   }
+}
 ```
 
 In `clearRouteState()`, add as the last statement:
 
 ```ts
-    emitRoute(undefined);
+emitRoute(undefined);
 ```
 
 In `installRoute()`, immediately after `activeRoute = copyRoute(event);`, add:
 
 ```ts
-    emitRoute(activeRoute);
+emitRoute(activeRoute);
 ```
 
 Placing it after `copyRoute` is what makes the caller's arrays un-retained.
@@ -450,9 +460,11 @@ git commit -m "feat(rdk-nav): emit route geometry for the bench HUD"
 ### Task 4: Publish the route to the HUD
 
 **Files:**
+
 - Modify: `rdk/agent/src/main.ts:325-347`
 
 **Interfaces:**
+
 - Consumes: `onRoute` (Task 3), the `rdk.route` HUD event (Task 1).
 - Produces: nothing new.
 
@@ -472,7 +484,7 @@ In `rdk/agent/src/main.ts`, inside `createNavigationSession()`, add to the `crea
 In `closeNavigationSession()`, after the existing `publishHud({ type: "rdk.navigation", navigation: null });`, add:
 
 ```ts
-    publishHud({ type: "rdk.route", route: null });
+publishHud({ type: "rdk.route", route: null });
 ```
 
 - [ ] **Step 2: Typecheck and run the board suite**
@@ -481,6 +493,7 @@ In `closeNavigationSession()`, after the existing `publishHud({ type: "rdk.navig
 npm run check
 npx vitest run tests/rdk-navigation-wiring.test.ts tests/rdk-hud-state.test.ts tests/rdk-companion-navigation-e2e.test.ts
 ```
+
 Expected: both pass. The typecheck is the real gate here — it proves the controller's `RdkRouteGeometry` satisfies the HUD event's `RdkHudRoute` without either importing the other.
 
 - [ ] **Step 3: Commit**
@@ -495,10 +508,12 @@ git commit -m "feat(rdk-hud): publish route geometry from the navigation session
 ### Task 5: Redact route and rider position from non-loopback viewers
 
 **Files:**
+
 - Modify: `rdk/agent/src/hud/server.ts:74-79`
 - Test: `tests/rdk-hud-server-security.test.ts`
 
 **Interfaces:**
+
 - Consumes: `HudState.route` (Task 1), `RdkNavigationSnapshot.position` (Task 2).
 - Produces: nothing new.
 
@@ -632,10 +647,12 @@ git commit -m "fix(rdk-hud): keep route and rider position loopback-only"
 ### Task 6: Draw the route card
 
 **Files:**
+
 - Modify: `rdk/agent/src/hud/index.html`
 - Test: `tests/rdk-hud-render.test.ts`
 
 **Interfaces:**
+
 - Consumes: `state.route` (Task 1), `state.navigation.position` (Task 2).
 - Produces: DOM ids `route-card`, `route-svg` for the render tests.
 
@@ -719,25 +736,25 @@ Expected: FAIL — `route-card` is undefined, so reading `.hidden` throws.
 In `rdk/agent/src/hud/index.html`, add to the `<style>` block next to `#companion-card`:
 
 ```css
-  #route-card {
-    margin-bottom: 16px;
-  }
-  #route-svg {
-    width: 100%;
-    height: 180px;
-    display: block;
-  }
-  #route-svg .line {
-    stroke: #79c0ff;
-    stroke-width: 3;
-    fill: none;
-  }
-  #route-svg .maneuver {
-    fill: #d29922;
-  }
-  #route-svg .rider {
-    fill: #3fb950;
-  }
+#route-card {
+  margin-bottom: 16px;
+}
+#route-svg {
+  width: 100%;
+  height: 180px;
+  display: block;
+}
+#route-svg .line {
+  stroke: #79c0ff;
+  stroke-width: 3;
+  fill: none;
+}
+#route-svg .maneuver {
+  fill: #d29922;
+}
+#route-svg .rider {
+  fill: #3fb950;
+}
 ```
 
 Add the section immediately after the `</section>` that closes `#navigation-card`:
@@ -753,78 +770,78 @@ Add the section immediately after the `</section>` that closes `#navigation-card
 In the page's `<script>`, add near `formatDistance`:
 
 ```js
-  const routeCardEl = document.getElementById("route-card");
-  const routeSvgEl = document.getElementById("route-svg");
+const routeCardEl = document.getElementById("route-card");
+const routeSvgEl = document.getElementById("route-svg");
 
-  // Kept deliberately identical to RouteSchematic in
-  // src/components/NavigationPanel.tsx — this page is a single dependency-free
-  // file assembled by string substitution and cannot import shared code, the
-  // same reason formatDistance is duplicated here. tests/rdk-hud-render.test.ts
-  // pins the two against one fixture so they cannot drift.
-  const VIEW_WIDTH = 280;
-  const VIEW_HEIGHT = 160;
-  const VIEW_PADDING = 18;
+// Kept deliberately identical to RouteSchematic in
+// src/components/NavigationPanel.tsx — this page is a single dependency-free
+// file assembled by string substitution and cannot import shared code, the
+// same reason formatDistance is duplicated here. tests/rdk-hud-render.test.ts
+// pins the two against one fixture so they cannot drift.
+const VIEW_WIDTH = 280;
+const VIEW_HEIGHT = 160;
+const VIEW_PADDING = 18;
 
-  const computeBounds = (polyline) => {
-    const lats = polyline.map((p) => p.lat);
-    const lons = polyline.map((p) => p.lon);
-    const minLat = lats.length ? Math.min(...lats) : 0;
-    const maxLat = lats.length ? Math.max(...lats) : 0;
-    const minLon = lons.length ? Math.min(...lons) : 0;
-    const maxLon = lons.length ? Math.max(...lons) : 0;
-    // A degenerate route falls back to a 1-unit span so the scale stays finite
-    // instead of dividing by zero.
-    const latSpan = maxLat - minLat || 1;
-    const lonSpan = maxLon - minLon || 1;
-    const innerWidth = VIEW_WIDTH - VIEW_PADDING * 2;
-    const innerHeight = VIEW_HEIGHT - VIEW_PADDING * 2;
-    const scale = Math.min(innerWidth / lonSpan, innerHeight / latSpan);
-    return {
-      minLat,
-      maxLat,
-      minLon,
-      scale,
-      xOffset: VIEW_PADDING + (innerWidth - lonSpan * scale) / 2,
-      yOffset: VIEW_PADDING + (innerHeight - latSpan * scale) / 2
-    };
+const computeBounds = (polyline) => {
+  const lats = polyline.map((p) => p.lat);
+  const lons = polyline.map((p) => p.lon);
+  const minLat = lats.length ? Math.min(...lats) : 0;
+  const maxLat = lats.length ? Math.max(...lats) : 0;
+  const minLon = lons.length ? Math.min(...lons) : 0;
+  const maxLon = lons.length ? Math.max(...lons) : 0;
+  // A degenerate route falls back to a 1-unit span so the scale stays finite
+  // instead of dividing by zero.
+  const latSpan = maxLat - minLat || 1;
+  const lonSpan = maxLon - minLon || 1;
+  const innerWidth = VIEW_WIDTH - VIEW_PADDING * 2;
+  const innerHeight = VIEW_HEIGHT - VIEW_PADDING * 2;
+  const scale = Math.min(innerWidth / lonSpan, innerHeight / latSpan);
+  return {
+    minLat,
+    maxLat,
+    minLon,
+    scale,
+    xOffset: VIEW_PADDING + (innerWidth - lonSpan * scale) / 2,
+    yOffset: VIEW_PADDING + (innerHeight - latSpan * scale) / 2
   };
+};
 
-  const project = (bounds, point) => ({
-    x: bounds.xOffset + (point.lon - bounds.minLon) * bounds.scale,
-    // SVG y grows downward; north must render toward the top.
-    y: bounds.yOffset + (bounds.maxLat - point.lat) * bounds.scale
-  });
+const project = (bounds, point) => ({
+  x: bounds.xOffset + (point.lon - bounds.minLon) * bounds.scale,
+  // SVG y grows downward; north must render toward the top.
+  y: bounds.yOffset + (bounds.maxLat - point.lat) * bounds.scale
+});
 
-  const renderRoute = (state) => {
-    const route = state.route !== null && typeof state.route === "object" ? state.route : null;
-    if (route === null || !Array.isArray(route.polyline)) {
-      routeCardEl.hidden = true;
-      routeSvgEl.innerHTML = "";
-      return;
-    }
-    const bounds = computeBounds(route.polyline);
-    const parts = [];
-    if (route.polyline.length > 1) {
-      const points = route.polyline
-        .map((point) => {
-          const projected = project(bounds, point);
-          return `${projected.x},${projected.y}`;
-        })
-        .join(" ");
-      parts.push(`<polyline class="line" points="${points}" />`);
-    }
-    for (const maneuver of Array.isArray(route.steps) ? route.steps : []) {
-      const projected = project(bounds, maneuver);
-      parts.push(`<circle class="maneuver" cx="${projected.x}" cy="${projected.y}" r="4" />`);
-    }
-    const position = state.navigation === null ? undefined : state.navigation.position;
-    if (position && Number.isFinite(position.lat) && Number.isFinite(position.lon)) {
-      const projected = project(bounds, position);
-      parts.push(`<circle class="rider" cx="${projected.x}" cy="${projected.y}" r="5" />`);
-    }
-    routeSvgEl.innerHTML = parts.join("");
-    routeCardEl.hidden = false;
-  };
+const renderRoute = (state) => {
+  const route = state.route !== null && typeof state.route === "object" ? state.route : null;
+  if (route === null || !Array.isArray(route.polyline)) {
+    routeCardEl.hidden = true;
+    routeSvgEl.innerHTML = "";
+    return;
+  }
+  const bounds = computeBounds(route.polyline);
+  const parts = [];
+  if (route.polyline.length > 1) {
+    const points = route.polyline
+      .map((point) => {
+        const projected = project(bounds, point);
+        return `${projected.x},${projected.y}`;
+      })
+      .join(" ");
+    parts.push(`<polyline class="line" points="${points}" />`);
+  }
+  for (const maneuver of Array.isArray(route.steps) ? route.steps : []) {
+    const projected = project(bounds, maneuver);
+    parts.push(`<circle class="maneuver" cx="${projected.x}" cy="${projected.y}" r="4" />`);
+  }
+  const position = state.navigation === null ? undefined : state.navigation.position;
+  if (position && Number.isFinite(position.lat) && Number.isFinite(position.lon)) {
+    const projected = project(bounds, position);
+    parts.push(`<circle class="rider" cx="${projected.x}" cy="${projected.y}" r="5" />`);
+  }
+  routeSvgEl.innerHTML = parts.join("");
+  routeCardEl.hidden = false;
+};
 ```
 
 Every value written into that markup is a number computed from `Number` inputs, so no caller-supplied string reaches the DOM — `destinationName` is deliberately not rendered here; the navigation card already shows it.
@@ -832,7 +849,7 @@ Every value written into that markup is a number computed from `Number` inputs, 
 Call it from `socket.onmessage`, immediately after `renderNavigation(state);`:
 
 ```js
-    renderRoute(state);
+renderRoute(state);
 ```
 
 - [ ] **Step 5: Run the tests to verify they pass**
@@ -852,10 +869,12 @@ git commit -m "feat(rdk-hud): draw the bench route schematic"
 ### Task 7: Pin the schematic against the web app's projection
 
 **Files:**
+
 - Modify: `src/components/NavigationPanel.tsx` (export two existing pure functions)
 - Test: `tests/rdk-hud-render.test.ts`
 
 **Interfaces:**
+
 - Consumes: the page's inline `computeBounds`/`project` (Task 6).
 - Produces: exported `computeBounds` and `project` from `NavigationPanel.tsx`.
 
@@ -866,27 +885,27 @@ Duplicated math is only safe while something proves the copies agree.
 Append to the route-card `describe` in `tests/rdk-hud-render.test.ts`:
 
 ```ts
-  it("projects identically to the web app's schematic", () => {
-    const polyline = [
-      { lat: 31.23, lon: 121.47 },
-      { lat: 31.2355, lon: 121.4788 },
-      { lat: 31.24, lon: 121.48 }
-    ];
-    const rider = { lat: 31.2355, lon: 121.4788 };
-    const bounds = computeBounds(polyline);
-    const expected = project(bounds, rider);
+it("projects identically to the web app's schematic", () => {
+  const polyline = [
+    { lat: 31.23, lon: 121.47 },
+    { lat: 31.2355, lon: 121.4788 },
+    { lat: 31.24, lon: 121.48 }
+  ];
+  const rider = { lat: 31.2355, lon: 121.4788 };
+  const bounds = computeBounds(polyline);
+  const expected = project(bounds, rider);
 
-    const harness = renderHarness();
-    harness.render(
-      state({
-        route: { polyline, steps: [] },
-        navigation: { ...state().navigation!, position: rider }
-      })
-    );
+  const harness = renderHarness();
+  harness.render(
+    state({
+      route: { polyline, steps: [] },
+      navigation: { ...state().navigation!, position: rider }
+    })
+  );
 
-    const svg = element(harness, "route-svg").innerHTML;
-    expect(svg).toContain(`cx="${expected.x}" cy="${expected.y}"`);
-  });
+  const svg = element(harness, "route-svg").innerHTML;
+  expect(svg).toContain(`cx="${expected.x}" cy="${expected.y}"`);
+});
 ```
 
 Add the import at the top of the test file:
@@ -932,6 +951,7 @@ npx vitest run
 npm run lint
 npm run check
 ```
+
 Expected: all pass. `npm run check:dead-code` may flag the newly exported symbols if they are only used by tests — if so, follow the repo's existing knip configuration rather than un-exporting.
 
 - [ ] **Step 6: Commit**

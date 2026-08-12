@@ -2093,9 +2093,20 @@ final class CompanionViewModelTests: XCTestCase {
 
                     harness.viewModel.startHelmetRide()
 
+                    // Was unconditionally 1. Start eligibility must still AGREE
+                    // with the published failure — that contract is unchanged —
+                    // but the agreed value flipped for non-auth failures: the
+                    // companion socket is ride-scoped and never self-heals, so
+                    // refusing here is what stranded a paired rider behind a
+                    // "请重试" that nothing could retry. auth/unpaired still refuse.
+                    let retriable: Bool
+                    switch state {
+                    case let .failed(code, _): retriable = code != "auth"
+                    default: retriable = false
+                    }
                     XCTAssertEqual(
                         harness.events.filter { $0.hasPrefix("companion.connect:") }.count,
-                        1,
+                        retriable ? 2 : 1,
                         "the published failure must agree with Start eligibility"
                     )
                     let staleCallback = harness.client.onState

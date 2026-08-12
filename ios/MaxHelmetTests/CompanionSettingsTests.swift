@@ -51,6 +51,38 @@ final class CompanionSettingsTests: XCTestCase {
         }
     }
 
+    // Bench 2026-08-12: a board power-cut left a paired phone in
+    // .failed(code: "connection") — the companion socket is ride-scoped, so it
+    // never retries on its own. The panel then said "请重试" while disabling the
+    // only control that retries, leaving re-pairing as the sole way forward.
+    func testConnectionFailureLeavesTheRideRetryable() {
+        let failed = CompanionSettingsPresentation.make(
+            isLoggedIn: true,
+            pairCode: "123456",
+            connectionState: .failed(code: "connection", detail: "Companion connection closed."),
+            rideOwned: false,
+            permission: .precise,
+            lastForwardedAt: nil,
+            now: Date()
+        )
+        XCTAssertEqual(failed.statusText, "RDK 头盔连接失败，请重试")
+        XCTAssertTrue(failed.isPrimaryActionEnabled, "‘请重试’ needs a control that actually retries")
+        XCTAssertEqual(failed.primaryActionTitle, "开始 Helmet Ride")
+    }
+
+    func testAuthFailureStillOffersNoRideRetry() {
+        let failed = CompanionSettingsPresentation.make(
+            isLoggedIn: true,
+            pairCode: "123456",
+            connectionState: .failed(code: "auth", detail: "expired"),
+            rideOwned: false,
+            permission: .precise,
+            lastForwardedAt: nil,
+            now: Date()
+        )
+        XCTAssertFalse(failed.isPrimaryActionEnabled, "a dead account session must be fixed by logging in")
+    }
+
     func testPrimaryActionPairingAndUnpairAvailabilityAreTruthful() {
         let paired = CompanionSettingsPresentation.make(
             isLoggedIn: true,

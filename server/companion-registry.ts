@@ -79,7 +79,13 @@ const MAX_HORIZONTAL_ACCURACY_METERS = 50;
 const DISCOVERY_REFRESH_LEAD_MS = 60_000;
 const DEFAULT_CONFIRM_LIFETIME_MS = 30_000;
 
-export const PAIR_CONFIRM_PROMPT = '检测到配对请求，请说"确认"。';
+// Asks for 确认配对 rather than a bare 确认: a two-character utterance usually
+// never reaches a final ASR transcript, so riders on the bench confirmed into
+// silence while `matchPairConfirmReply` sat there working fine. 确认配对 still
+// matches it (the grammar tests substring 确认). The 无需按键 half is here
+// because riders reached for the phone's Max button — the confirmation is
+// spoken to the helmet.
+export const PAIR_CONFIRM_PROMPT = '检测到配对请求，请直接对头盔说"确认配对"，无需按键。';
 export const PAIR_CONFIRM_OK_SPEECH = "已配对。";
 
 function defaultRandomCode(): string {

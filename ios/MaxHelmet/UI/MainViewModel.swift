@@ -471,6 +471,17 @@ final class MainViewModel: ObservableObject {
         onMain { [weak self] in self?.performPairHelmet() }
     }
 
+    /// Ask the relay what it knows, when the app knows nothing.
+    ///
+    /// Companion state is not persisted, so a relaunched app starts at
+    /// `.signedOut` while the relay may still hold a binding — and a paired
+    /// board deliberately stops broadcasting discovery and stops showing a
+    /// pairing code, so there is nothing for the rider to pair to. Connecting
+    /// is enough: the relay syncs the binding on attach.
+    func syncCompanionStateIfNeeded() {
+        onMain { [weak self] in self?.performSyncCompanionState() }
+    }
+
     /// Pairs via a discovered helmet's beacon token (Bonjour, Task 11) rather
     /// than the six-digit HUD code — same lifecycle action, different message.
     func pairDiscoveredHelmet(token: String) {
@@ -540,6 +551,33 @@ final class MainViewModel: ObservableObject {
         guard ownsCompanionGeneration(owner), hasAccountSession, !rideOwned else { return }
         pairingSubmissionActive = true
         companionClient.pair(code: code)
+    }
+
+    private func performSyncCompanionState() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        // `.signedOut` is the only state that cannot have come from the relay.
+        // Anything else was pushed by it and is either correct or a failure the
+        // rider can already act on, so re-syncing would reconnect for nothing.
+        guard !sessionTokenTransitionActive,
+              !companionAccountTeardownActive,
+              pendingUnpairOwner == nil,
+              hasAccountSession,
+              !rideOwned,
+              authoritativeCompanionState == .signedOut else {
+            return
+        }
+
+        let owner = advanceCompanionGeneration()
+        advanceCompanionStatePublicationEpoch()
+        bindCompanionState(owner: owner)
+        companionClient.connect(
+            relayURL: relayURL.trimmingCharacters(in: .whitespacesAndNewlines),
+            sessionToken: sessionToken.trimmingCharacters(in: .whitespacesAndNewlines),
+            allowSelfSignedTLS: allowSelfSigned
+        )
+        // Nothing follows the connect. `closePairOnlySocketIfIdle` closes this
+        // socket once the relay's status lands, so the transport stays
+        // ride-scoped.
     }
 
     private func performPairDiscoverHelmet(token: String) {

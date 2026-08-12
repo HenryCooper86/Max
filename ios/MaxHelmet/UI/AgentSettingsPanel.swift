@@ -350,7 +350,10 @@ struct SettingsPanel: View {
         // Scanning is scoped to this section's on-screen lifetime — starts
         // when the settings sheet (and thus this card) appears, stops when
         // it's dismissed. No background radio use.
-        .onAppear { viewModel.startHelmetDiscovery() }
+        .onAppear {
+            viewModel.syncCompanionStateIfNeeded()
+            viewModel.startHelmetDiscovery()
+        }
         .onDisappear { viewModel.stopHelmetDiscovery() }
 
         // Rider voice preferences.

@@ -30,15 +30,20 @@ Two facts shape the design:
   `location` — and `location` is a `PhoneLocationState`
   (`connection`/`usable`/`accuracy`/`ageMs`), which holds **no coordinates**.
   Only `PhoneFix` has `position`.
-- **The snapshot re-broadcasts at roughly 1 Hz while guiding.** Every accepted
-  fix republishes it. A multi-kilometre Amap polyline is thousands of points, so
-  geometry must not ride in that frame.
+- **Every HUD frame carries the whole `HudState`.** `createHudServer`'s
+  `publish` (`rdk/agent/src/hud/server.ts`) serialises the entire state to every
+  connected socket, and `publishHud` runs on every relay agent event — streaming
+  transcript partials included — not only on navigation ones. So anything stored
+  on `HudState` crosses the socket on every frame no matter which event
+  delivered it, and the page re-renders the schematic from each message. A
+  full-resolution Amap polyline is thousands of points, which is more than that
+  budget can carry.
 
 ## Design
 
-Split the two payloads by how often they change.
+Split the two payloads by what they are, and bound the larger one.
 
-### Route geometry — `rdk.route`, once per route
+### Route geometry — `rdk.route`
 
 The controller gains an `onRoute` option, called with the active route's
 geometry when a route installs (including reroutes) and with `null` when
@@ -58,7 +63,18 @@ type RdkHudRoute = {
 
 `HudState` gains `route: RdkHudRoute | null`, defaulting to `null` in
 `initialHudState()`, with a reducer case that deep-copies like the existing
-ones. Geometry crosses the socket once per route rather than once per second.
+ones.
+
+The separate event does **not** mean the geometry crosses the socket once per
+route. It rides every frame, like everything else on `HudState`; the split buys
+a clean snapshot type, not a smaller wire. **Decimation is what bounds the
+cost.** `emitRoute` caps the emitted polyline at `HUD_POLYLINE_MAX_POINTS`
+(150), always keeping the first and last point and sampling the interior at a
+uniform stride — the card is 280×160, so a denser line draws sub-pixel detail
+nobody can see. Capping at the emit boundary bounds the wire payload and the
+page's SVG rebuild in one place, and keeps `computeBounds`' `Math.min(...lats)`
+off a multi-thousand-element spread. `steps` is never decimated: the markers
+are few, and each one is a turn.
 
 `steps` is reduced to bare coordinates at the boundary. The HUD needs marker
 positions, not maneuver semantics, and the narrower type keeps instruction text
@@ -68,7 +84,8 @@ out of a second place.
 
 `RdkNavigationSnapshot` gains `position?: { lat: number; lon: number }`, taken
 from the fix the controller already reads via `options.location.latest()`. Two
-numbers per publish is the right cost for a 1 Hz frame.
+numbers is a cost the frame carries without help, whatever the frame rate turns
+out to be — which is precisely why the polyline needs the cap and this does not.
 
 It is optional throughout: before the first fix there is a route but no dot.
 
@@ -149,6 +166,11 @@ isolation and the `null` clear.
 
 Board-side wiring (`onRoute` firing on install, reroute, and close) is covered
 in the navigation controller's existing tests.
+
+`tests/rdk-navigation-controller.test.ts` also pins decimation: a polyline at or
+under the cap passes through unchanged, one over it is reduced to at most the
+cap, the first and last points survive exactly, and `steps` is never thinned
+however long the route.
 
 ## Out of scope
 

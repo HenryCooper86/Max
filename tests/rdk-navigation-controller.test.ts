@@ -1377,3 +1377,68 @@ describe("route geometry for the HUD", () => {
     expect(h.routes.at(-1)?.polyline[0]).toEqual({ lat: 31.23, lon: 121.47 });
   });
 });
+
+// The whole `HudState` — route included — is re-serialised to every socket on
+// every publish, and the page re-renders the schematic from scratch on every
+// message. A full-resolution Amap polyline is thousands of points, so the
+// board pays for all of them on every frame unless the geometry is thinned
+// once, at the boundary that emits it.
+describe("route polyline decimation for the HUD", () => {
+  // Deliberately not imported from the controller: the cap is a promise to the
+  // wire and the DOM, so the test states the number independently.
+  const CAP = 150;
+
+  function line(count: number): Array<{ lat: number; lon: number }> {
+    return Array.from({ length: count }, (_, index) => ({
+      lat: 31.23 + index * 0.0001,
+      lon: 121.47 + index * 0.0002
+    }));
+  }
+
+  async function installPolyline(overrides: Partial<NavRouteEvent>) {
+    const h = harness();
+    const result = h.controller.handleCommand({
+      commandId: "device-1",
+      action: "navigation.start",
+      args: { query: "人民广场" }
+    });
+    await flush();
+    h.controller.handleRoute(route("nav-1", overrides));
+    await result;
+    return h;
+  }
+
+  it("emits a polyline at or under the cap unchanged", async () => {
+    const polyline = line(CAP);
+    const h = await installPolyline({ polyline });
+
+    expect(h.routes.at(-1)?.polyline).toEqual(polyline);
+  });
+
+  it("reduces a polyline over the cap to at most the cap", async () => {
+    const h = await installPolyline({ polyline: line(4_000) });
+
+    expect(h.routes.at(-1)?.polyline.length).toBeLessThanOrEqual(CAP);
+  });
+
+  it("keeps the exact first and last points of a decimated polyline", async () => {
+    const polyline = line(4_000);
+    const h = await installPolyline({ polyline });
+    const emitted = h.routes.at(-1)!.polyline;
+
+    expect(emitted.at(0)).toEqual(polyline.at(0));
+    expect(emitted.at(-1)).toEqual(polyline.at(-1));
+  });
+
+  it("keeps every maneuver marker, however long the route", async () => {
+    const steps = Array.from({ length: CAP * 2 }, (_, index) => ({
+      instruction: `右转 ${index}`,
+      lat: 31.23 + index * 0.0001,
+      lon: 121.47 + index * 0.0002,
+      alongRouteMeters: index * 10
+    }));
+    const h = await installPolyline({ polyline: line(4_000), steps });
+
+    expect(h.routes.at(-1)?.steps).toEqual(steps.map((maneuver) => ({ lat: maneuver.lat, lon: maneuver.lon })));
+  });
+});

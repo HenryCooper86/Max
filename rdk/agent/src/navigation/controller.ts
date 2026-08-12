@@ -18,6 +18,21 @@ import type { PhoneFix, PhoneLocationSource, PhoneLocationState } from "./phone-
 const DEFAULT_ROUTE_TIMEOUT_MS = 7_000;
 const REROUTE_COOLDOWN_MS = 20_000;
 
+/**
+ * Most points the HUD's route polyline may carry.
+ *
+ * The bench card is a 280×160 viewBox, so a route drawn with more than ~150
+ * points spends the extra ones sub-pixel: nothing a developer can see. Amap
+ * returns every shape point of every step, which is thousands for a
+ * multi-kilometre route, and the cost is paid far more often than once:
+ * `createHudServer`'s `publish` re-serialises the entire `HudState` — route
+ * included — to every socket on every frame, and the page rebuilds the whole
+ * SVG subtree from each message. Capping here is what keeps both bounded on a
+ * 3 GB aarch64 board. It also keeps `computeBounds`' `Math.min(...lats)` off a
+ * multi-thousand-element spread.
+ */
+const HUD_POLYLINE_MAX_POINTS = 150;
+
 type Timer = ReturnType<typeof setTimeout>;
 
 export type RdkNavigationSnapshot = {
@@ -97,6 +112,28 @@ function copyRoute(route: NavRouteEvent): NavRouteEvent {
   };
 }
 
+/**
+ * Thin an over-long polyline to `HUD_POLYLINE_MAX_POINTS` by uniform stride.
+ *
+ * The first and last points are always kept exactly — the route has to start
+ * and end where it really does — and a polyline already within the cap is
+ * returned untouched. A uniform stride is deliberate: the card is an overview,
+ * not a map, so shape-preserving simplification (Douglas-Peucker) would cost
+ * more than the difference is worth at this size. Only the polyline is ever
+ * thinned; maneuver markers are few and each one marks a turn.
+ */
+function decimatePolyline<T>(polyline: readonly T[]): T[] {
+  if (polyline.length <= HUD_POLYLINE_MAX_POINTS) return [...polyline];
+  const lastIndex = polyline.length - 1;
+  const stride = lastIndex / (HUD_POLYLINE_MAX_POINTS - 1);
+  const thinned: T[] = [];
+  for (let slot = 0; slot < HUD_POLYLINE_MAX_POINTS - 1; slot += 1) {
+    thinned.push(polyline[Math.round(slot * stride)]!);
+  }
+  thinned.push(polyline[lastIndex]!);
+  return thinned;
+}
+
 function result(commandId: string, status: DeviceResultEvent["status"], reason?: string): DeviceResultEvent {
   return {
     type: "device.result",
@@ -154,7 +191,7 @@ export function createRdkNavigationController(options: {
         ? null
         : {
             ...(route.destinationName === undefined ? {} : { destinationName: route.destinationName }),
-            polyline: route.polyline.map((point) => ({ lat: point.lat, lon: point.lon })),
+            polyline: decimatePolyline(route.polyline).map((point) => ({ lat: point.lat, lon: point.lon })),
             steps: route.steps.map((maneuver) => ({ lat: maneuver.lat, lon: maneuver.lon }))
           };
     try {

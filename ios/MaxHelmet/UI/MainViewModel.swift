@@ -868,9 +868,26 @@ final class MainViewModel: ObservableObject {
         }
     }
 
+    /// How old a fix may be before the phone stops bothering to send it.
+    ///
+    /// The relay drops anything past its own staleness window with
+    /// `location.timestamp`, so forwarding a stale fix spends the rider's
+    /// per-second rate budget on a rejection. Kept well inside that window so
+    /// transit time can never push an otherwise-good fix over the line, and
+    /// far above the ~1 s cadence of live updates so only genuinely cached
+    /// samples are caught.
+    private static let maximumFixAge: TimeInterval = 5
+
     private func handleLocation(_ location: CLLocation, owner: Int) {
         dispatchPrecondition(condition: .onQueue(.main))
         guard ownsRide(owner), helmetRideActive, companionPermission == .precise else { return }
+
+        // CoreLocation's first callbacks after a cold start routinely deliver a
+        // CACHED fix minutes old — on the 2026-08-12 bench that was two sends,
+        // two relay rejections, and then nothing. A negative age (a fix stamped
+        // ahead of this clock) is left to the relay, which owns that boundary.
+        let age = wallClock().timeIntervalSince(location.timestamp)
+        guard age.isFinite, age <= Self.maximumFixAge else { return }
 
         let now = monotonicNow()
         guard ownsRide(owner) else { return }

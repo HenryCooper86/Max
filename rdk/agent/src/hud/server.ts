@@ -5,7 +5,7 @@ import { BlockList, isIP } from "node:net";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { WebSocketServer } from "ws";
-import type { HudState } from "./state";
+import type { HudState, RdkHudRoute } from "./state";
 
 const localHudPeers = new BlockList();
 localHudPeers.addSubnet("127.0.0.0", 8, "ipv4");
@@ -73,17 +73,52 @@ gallery panels dead. See rdk/README.md "Bench access — MAX_VISION_TOKEN".
 
 /**
  * What a served-but-not-local peer sees. The token got them in; it does not
- * make them local. Pairing secrets stay loopback-only, and so does anything
- * that would turn this page into a rider-tracking surface: the route the rider
- * is following and where they are on it.
+ * make them local. Pairing secrets and the rider's position stay loopback-only.
+ * The route is reduced to a translation- and scale-free schematic: enough for
+ * the authenticated bench browser to draw the card, but not the raw Amap
+ * coordinates carried by the board's navigation session.
  */
+function remoteRouteSchematic(route: RdkHudRoute): RdkHudRoute {
+  const boundsPoints = route.polyline.length > 0 ? route.polyline : route.steps;
+  if (boundsPoints.length === 0) {
+    return {
+      ...(route.destinationName === undefined ? {} : { destinationName: route.destinationName }),
+      polyline: [],
+      steps: []
+    };
+  }
+
+  const minLat = Math.min(...boundsPoints.map((point) => point.lat));
+  const maxLat = Math.max(...boundsPoints.map((point) => point.lat));
+  const minLon = Math.min(...boundsPoints.map((point) => point.lon));
+  const maxLon = Math.max(...boundsPoints.map((point) => point.lon));
+  // One shared span preserves the route's aspect ratio. Rounding makes the
+  // topology payload deterministic without retaining meaningless precision.
+  const span = Math.max(maxLat - minLat, maxLon - minLon) || 1;
+  const normalize = (value: number, minimum: number): number => {
+    const rounded = Math.round(((value - minimum) / span) * 1_000_000) / 1_000_000;
+    return Object.is(rounded, -0) ? 0 : rounded;
+  };
+  const point = ({ lat, lon }: { lat: number; lon: number }): { lat: number; lon: number } => ({
+    lat: normalize(lat, minLat),
+    lon: normalize(lon, minLon)
+  });
+
+  return {
+    ...(route.destinationName === undefined ? {} : { destinationName: route.destinationName }),
+    polyline: route.polyline.map(point),
+    steps: route.steps.map(point)
+  };
+}
+
 function remoteHudSnapshot(state: HudState): HudState {
   const companion = { ...state.companion };
   delete companion.pairingCode;
   delete companion.pairingExpiresAt;
   const navigation = state.navigation === null ? null : { ...state.navigation };
   if (navigation !== null) delete navigation.position;
-  return { ...state, companion, navigation, route: null };
+  const route = state.route === null ? null : remoteRouteSchematic(state.route);
+  return { ...state, companion, navigation, route };
 }
 
 /**

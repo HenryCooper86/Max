@@ -36,10 +36,19 @@ const livePairingState: HudState = {
     destinationName: "人民广场",
     polyline: [
       { lat: 31.23, lon: 121.47 },
-      { lat: 31.24, lon: 121.47 }
+      { lat: 31.24, lon: 121.475 }
     ],
-    steps: [{ lat: 31.235, lon: 121.47 }]
+    steps: [{ lat: 31.235, lon: 121.4725 }]
   }
+};
+
+const normalizedFixtureRoute = {
+  destinationName: "人民广场",
+  polyline: [
+    { lat: 0, lon: 0 },
+    { lat: 1, lon: 0.5 }
+  ],
+  steps: [{ lat: 0.5, lon: 0.25 }]
 };
 
 const TOKEN = "s3cret-bench-token";
@@ -53,16 +62,18 @@ function cloneState(state: HudState): HudState {
 
 /**
  * What this test expects a non-loopback peer's view of `state` to look like:
- * everything except the rider's route and position, which the dedicated
- * "RDK HUD rider-location transport boundary" describe block below verifies
- * directly against literal values. Used here only to keep this test's
- * *other* assertions (about pairing-secret redaction) valid now that the
- * shared fixture carries route/position too.
+ * everything except the rider's raw route and position. The route itself is
+ * retained as a translation- and scale-free schematic so a direct-LAN bench
+ * browser can render the card without becoming a raw location feed.
  */
-function withoutRiderLocation(state: HudState): HudState {
+function withoutRawRiderLocation(state: HudState): HudState {
   const navigation = state.navigation === null ? null : { ...state.navigation };
   if (navigation !== null) delete navigation.position;
-  return { ...state, navigation, route: null };
+  return {
+    ...state,
+    navigation,
+    route: state.route === null ? null : structuredClone(normalizedFixtureRoute)
+  };
 }
 
 async function unusedPort(): Promise<number> {
@@ -284,8 +295,8 @@ describe("RDK HUD pairing-secret transport boundary", () => {
       lastFixAgeMs: 600
     });
     expect(initial.transcript).toEqual(livePairingState.transcript);
-    expect(initial.navigation).toEqual(withoutRiderLocation(livePairingState).navigation);
-    expect(initial.route).toBeNull();
+    expect(initial.navigation).toEqual(withoutRawRiderLocation(livePairingState).navigation);
+    expect(initial.route).toEqual(normalizedFixtureRoute);
     expect(initial.connection).toBe("ready");
 
     remote.send(
@@ -307,7 +318,7 @@ describe("RDK HUD pairing-secret transport boundary", () => {
     server.publish(update);
 
     expect(await remoteUpdate).toEqual({
-      ...withoutRiderLocation(update),
+      ...withoutRawRiderLocation(update),
       companion: {
         paired: false,
         locationState: "connected",
@@ -349,7 +360,7 @@ describe("RDK HUD pairing-secret transport boundary", () => {
     const localCleared = nextState(local.socket);
     server.publish(noSecret);
     await expect(Promise.all([remoteCleared, localCleared])).resolves.toEqual([
-      withoutRiderLocation(noSecret),
+      withoutRawRiderLocation(noSecret),
       noSecret
     ]);
   });
@@ -405,7 +416,7 @@ describe("RDK HUD pairing-secret transport boundary", () => {
 });
 
 describe("RDK HUD rider-location transport boundary", () => {
-  it("sends no route geometry and no rider position to a token-bearing non-loopback peer", async () => {
+  it("sends schematic route geometry but no raw route or rider position to a token-bearing non-loopback peer", async () => {
     const port = await unusedPort();
     const server = createHudServer(port, 8081, TOKEN);
     openServers.add(server);
@@ -413,7 +424,7 @@ describe("RDK HUD rider-location transport boundary", () => {
 
     const { initial } = await connectWithInitial(`ws://${nonLoopbackIPv4()}:${port}/?t=${TOKEN}`);
 
-    expect(initial.route).toBeNull();
+    expect(initial.route).toEqual(normalizedFixtureRoute);
     expect(initial.navigation).not.toHaveProperty("position");
     // The whole frame, not just the fields we remembered to name: a rider's
     // coordinates must not survive anywhere in it.
@@ -434,7 +445,7 @@ describe("RDK HUD rider-location transport boundary", () => {
     expect(initial.navigation?.position).toEqual({ lat: 31.2304, lon: 121.4737 });
   });
 
-  it("keeps redacting the rider position on later broadcasts, not just the initial replay", async () => {
+  it("keeps normalizing the route and redacting the rider position on later broadcasts", async () => {
     const port = await unusedPort();
     const server = createHudServer(port, 8081, TOKEN);
     openServers.add(server);
@@ -449,7 +460,7 @@ describe("RDK HUD rider-location transport boundary", () => {
     server.publish(cloneState(livePairingState));
 
     const received = await update;
-    expect(received.route).toBeNull();
+    expect(received.route).toEqual(normalizedFixtureRoute);
     expect(received.navigation).not.toHaveProperty("position");
   });
 

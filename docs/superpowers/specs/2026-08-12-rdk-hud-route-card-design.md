@@ -130,13 +130,19 @@ both implementations against one fixture so they cannot drift silently.
 
 `remoteHudSnapshot` (`rdk/agent/src/hud/server.ts`) already strips
 `pairingCode` and `pairingExpiresAt` for any peer that is not the board's own
-loopback. Route geometry and rider position join them.
+loopback. Rider position joins them. Exact route coordinates also remain
+loopback-only, but an authenticated direct-LAN peer receives a normalized
+schematic: the minimum latitude/longitude are translated to zero and one shared
+span scales both axes. This preserves route shape and maneuver placement while
+removing the route's location and absolute scale. Values are rounded to six
+decimal places for a deterministic topology-only payload.
 
 This preserves the existing distinction, which the token does not blur: the
 **token** decides whether a peer is served at all; the **peer address** decides
-how much a served peer sees. Without this, a token-bearing LAN browser becomes a
-rider-tracking surface. Both routes actually used at the bench — the HDMI kiosk
-and the SSH local forward — are loopback and lose nothing.
+how much a served peer sees. A token-bearing LAN browser can verify that a route
+arrived and render its shape, but it cannot read the rider position or raw Amap
+coordinates. The HDMI kiosk and SSH local forward remain loopback and receive
+the full route plus rider dot.
 
 ## Error handling and edge cases
 
@@ -148,8 +154,9 @@ and the SSH local forward — are loopback and lose nothing.
   merging, so an abandoned excursion cannot persist.
 - **Navigation ends / controller closes** — `rdk.route` with `null`, alongside
   the existing `rdk.navigation` null.
-- **Non-loopback viewer** — no `route`, no `position`; the card stays hidden
-  rather than rendering an empty frame.
+- **Authenticated non-loopback viewer** — normalized route schematic, but no
+  rider `position` or raw route coordinates; the card renders without becoming
+  a raw location feed.
 
 ## Testing
 
@@ -168,8 +175,9 @@ DOM fake. New cases:
 `tests/rdk-hud-state.test.ts`: the `rdk.route` reducer case, including deep-copy
 isolation and the `null` clear.
 
-`tests/rdk-hud-server-security.test.ts`: a non-loopback snapshot carries neither
-`route` nor `navigation.position`, while a loopback snapshot carries both.
+`tests/rdk-hud-server-security.test.ts`: a non-loopback snapshot carries a
+normalized route but neither raw geometry nor `navigation.position`, while a
+loopback snapshot carries the full route and position.
 
 Board-side wiring (`onRoute` firing on install, reroute, and close) is covered
 in the navigation controller's existing tests.

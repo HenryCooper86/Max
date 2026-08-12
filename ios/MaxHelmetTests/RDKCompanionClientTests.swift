@@ -1703,6 +1703,42 @@ final class RDKCompanionClientTests: XCTestCase {
         XCTAssertEqual(harness.sockets[0].sentMessages.count, 2)
     }
 
+    func testRejectedLocationFixDoesNotEndSharingOrBlockTheNextFix() throws {
+        let perFixErrors = [
+            "location.sequence",
+            "location.rate",
+            "location.timestamp",
+            "location.coordinates",
+            "location.accuracy",
+            "location.course",
+            "location.speed"
+        ]
+        for code in perFixErrors {
+            let harness = ClientHarness(socketCount: 1)
+            var states: [CompanionConnectionState] = []
+            harness.client.onState = { states.append($0) }
+            harness.connect()
+            harness.client.startRide()
+            harness.sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"sharing\"}"))
+
+            harness.client.sendLatest(fix(sequence: 1))
+            harness.sockets[0].completeSend(at: 0)
+            harness.sockets[0].deliver(
+                .string("{\"type\":\"companion.error\",\"code\":\"\(code)\",\"detail\":\"Rejected one fix\"}")
+            )
+            harness.client.sendLatest(fix(sequence: 2))
+
+            XCTAssertEqual(
+                try locationSequences(harness.sockets[0].sentMessages),
+                [1, 2],
+                "\(code) is per-fix feedback; a fresh fix must recover the stream"
+            )
+            XCTAssertEqual(states, [.connecting, .sharing(deviceId: nil, label: nil)])
+            XCTAssertEqual(harness.sockets[0].pendingReceiveCount, 1)
+            XCTAssertEqual(harness.sockets[0].cancelCount, 0)
+        }
+    }
+
     func testSendFailureRetainsOnlyNewestFixAcrossReconnectReady() throws {
         let harness = ClientHarness(socketCount: 2)
         harness.connect()

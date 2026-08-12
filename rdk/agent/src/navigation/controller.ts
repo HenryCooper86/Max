@@ -33,6 +33,15 @@ export type RdkNavigationSnapshot = {
   location?: PhoneLocationState;
 };
 
+/** What the bench HUD needs to draw a route: the line, and where the turns
+ *  are. Deliberately not `NavRouteEvent` — instruction text and
+ *  `alongRouteMeters` already reach the HUD through the snapshot. */
+export type RdkRouteGeometry = {
+  destinationName?: string;
+  polyline: Array<{ lat: number; lon: number }>;
+  steps: Array<{ lat: number; lon: number }>;
+};
+
 export type RdkNavigationController = {
   handleCommand(command: DeviceCommand): Promise<DeviceResultEvent>;
   handleRoute(event: NavRouteEvent): void;
@@ -103,6 +112,7 @@ export function createRdkNavigationController(options: {
   onState: (state: RdkNavigationSnapshot) => void;
   canPrompt: () => boolean;
   interruptOrdinaryPlayback: () => void;
+  onRoute?: (route: RdkRouteGeometry | null) => void;
   now?: () => number;
   randomId?: () => string;
   routeTimeoutMs?: number;
@@ -134,6 +144,24 @@ export function createRdkNavigationController(options: {
       return fix === undefined ? undefined : { lat: fix.position.lat, lon: fix.position.lon };
     } catch {
       return undefined;
+    }
+  }
+
+  function emitRoute(route: NavRouteEvent | undefined): void {
+    if (options.onRoute === undefined) return;
+    const geometry: RdkRouteGeometry | null =
+      route === undefined
+        ? null
+        : {
+            ...(route.destinationName === undefined ? {} : { destinationName: route.destinationName }),
+            polyline: route.polyline.map((point) => ({ lat: point.lat, lon: point.lon })),
+            steps: route.steps.map((maneuver) => ({ lat: maneuver.lat, lon: maneuver.lon }))
+          };
+    try {
+      options.onRoute(geometry);
+    } catch {
+      // A HUD observer cannot own or interrupt the navigation lifecycle,
+      // matching how `publish` treats `onState`.
     }
   }
 
@@ -183,6 +211,7 @@ export function createRdkNavigationController(options: {
     locationLostPrompt = eligibleOneShot();
     locationUsableForGuidance = false;
     finishing = undefined;
+    emitRoute(undefined);
   }
 
   function clearPendingTimer(pending: PendingStart): void {
@@ -490,6 +519,7 @@ export function createRdkNavigationController(options: {
 
   function installRoute(event: NavRouteEvent, expectedRevision: number): void {
     activeRoute = copyRoute(event);
+    emitRoute(activeRoute);
     progress = { ...INITIAL_PROGRESS, firedThresholds: [] };
     clearReroute();
     offRoutePrompt = eligibleOneShot();

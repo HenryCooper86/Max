@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NavPromptEvent, NavRequestEvent, NavRouteEvent } from "../shared/agent";
-import { createRdkNavigationController, type RdkNavigationSnapshot } from "../rdk/agent/src/navigation/controller";
+import {
+  createRdkNavigationController,
+  type RdkNavigationSnapshot,
+  type RdkRouteGeometry
+} from "../rdk/agent/src/navigation/controller";
 import {
   createPhoneLocationSource,
   type PhoneFix,
@@ -68,6 +72,7 @@ type HarnessOptions = {
   canPrompt?: boolean;
   sendEvent?: (event: NavRequestEvent | NavPromptEvent) => void;
   onState?: (state: RdkNavigationSnapshot) => void;
+  onRoute?: (route: RdkRouteGeometry | null) => void;
   interrupt?: () => void;
   now?: () => number;
   canPromptHook?: () => void;
@@ -78,6 +83,7 @@ type HarnessOptions = {
 function harness(options: HarnessOptions = {}) {
   const events: Array<NavRequestEvent | NavPromptEvent> = [];
   const states: RdkNavigationSnapshot[] = [];
+  const routes: Array<RdkRouteGeometry | null> = [];
   const order: string[] = [];
   const ids = ["nav-1", "prompt-1", "prompt-2", "prompt-3", "reroute-1", "prompt-4", "prompt-5"];
   let randomIdIndex = 0;
@@ -100,6 +106,10 @@ function harness(options: HarnessOptions = {}) {
       states.push({ ...state, ...(state.location === undefined ? {} : { location: { ...state.location } }) });
       options.onState?.(state);
     },
+    onRoute: (route) => {
+      routes.push(route);
+      options.onRoute?.(route);
+    },
     canPrompt: () => {
       options.canPromptHook?.();
       return canPrompt;
@@ -119,6 +129,7 @@ function harness(options: HarnessOptions = {}) {
     controller,
     events,
     states,
+    routes,
     order,
     waitForUsableFix,
     setCanPrompt: (value: boolean) => {
@@ -1313,5 +1324,56 @@ describe("RDK location pause and resume", () => {
     h.controller.handleLocationState({ connection: "stopped", usable: false, reason: "stopped" });
     expect(seen.at(-1)?.location).toEqual({ connection: "stopped", usable: false, reason: "unpaired" });
     expect(h.states.at(-1)?.location).toEqual({ connection: "stopped", usable: false, reason: "stopped" });
+  });
+});
+
+describe("route geometry for the HUD", () => {
+  it("emits the installed route's polyline and maneuver coordinates", async () => {
+    const h = harness();
+    await startGuiding(h);
+
+    expect(h.routes.at(-1)).toEqual({
+      destinationName: "人民广场",
+      polyline: [
+        { lat: 31.23, lon: 121.47 },
+        { lat: 31.235, lon: 121.47 },
+        { lat: 31.24, lon: 121.47 }
+      ],
+      steps: [
+        { lat: 31.235, lon: 121.47 },
+        { lat: 31.24, lon: 121.47 }
+      ]
+    });
+  });
+
+  it("drops maneuver instructions rather than forwarding them twice", async () => {
+    const h = harness();
+    await startGuiding(h);
+
+    expect(JSON.stringify(h.routes.at(-1))).not.toContain("右转");
+  });
+
+  it("emits null when navigation closes", async () => {
+    const h = harness();
+    await startGuiding(h);
+    h.controller.close();
+
+    expect(h.routes.at(-1)).toBeNull();
+  });
+
+  it("does not retain the caller's arrays", async () => {
+    const event = route("nav-1");
+    const h = harness();
+    // handleRoute only installs a route once it matches a pending start (or
+    // an active reroute) — a bare handleRoute call on a fresh controller is
+    // a no-op, so the started state has to exist first to actually reach
+    // installRoute and give this test something to check.
+    h.controller.handleCommand({ commandId: "device-1", action: "navigation.start", args: { query: "人民广场" } });
+    await flush();
+    h.controller.handleRoute(event);
+    await flush();
+    event.polyline[0]!.lat = 0;
+
+    expect(h.routes.at(-1)?.polyline[0]).toEqual({ lat: 31.23, lon: 121.47 });
   });
 });

@@ -70,8 +70,15 @@ route. It rides every frame, like everything else on `HudState`; the split buys
 a clean snapshot type, not a smaller wire. **Decimation is what bounds the
 cost.** `emitRoute` caps the emitted polyline at `HUD_POLYLINE_MAX_POINTS`
 (150), always keeping the first and last point and sampling the interior at a
-uniform stride — the card is 280×160, so a denser line draws sub-pixel detail
-nobody can see. Capping at the emit boundary bounds the wire payload and the
+uniform stride over the point _index_. **This is lossy**: at 280×160 the
+average discarded point is sub-pixel, but the stride follows Amap's shape-point
+density rather than screen distance, so a hairpin falling between two sampled
+indices draws as a chord. That is an acceptable trade for a bench instrument
+confirming a route arrived and the rider tracks along it, and an unacceptable
+one for a rider-facing map — which this card must not become without revisiting
+this decision. Guidance never sees the thinned line: `activeRoute` keeps the
+full-resolution polyline, so off-route detection and maneuver distances are
+unaffected. Capping at the emit boundary bounds the wire payload and the
 page's SVG rebuild in one place, and keeps `computeBounds`' `Math.min(...lats)`
 off a multi-thousand-element spread. `steps` is never decimated: the markers
 are few, and each one is a turn.

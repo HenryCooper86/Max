@@ -147,6 +147,46 @@ final class CompanionViewModelTests: XCTestCase {
         XCTAssertEqual(harness.viewModel.companionState, .signedOut)
     }
 
+    // Bench 2026-08-12: the rider started a ride indoors, the app reported
+    // "GPS sharing", and exactly two fixes ever left the phone — both rejected
+    // by the relay (`location.rate`, then `location.timestamp`), after which
+    // nothing arrived for fourteen minutes. CoreLocation's first callbacks
+    // routinely deliver a CACHED fix minutes old; the relay drops anything
+    // past its staleness window, so forwarding one spends the rider's rate
+    // budget on a fix that cannot be accepted. Drop it on the phone instead.
+    func testACachedFixTooOldForTheRelayNeverLeavesThePhone() throws {
+        let harness = Harness()
+        harness.stream.startResults = [true]
+        harness.stream.permissionOnStart = .precise
+        harness.client.publish(.paired(deviceId: "rdk-1", label: "Helmet"))
+        harness.viewModel.startHelmetRide()
+
+        harness.monotonicNow = 10
+        // The helper stamps fixes at 1_700_000_000; stand the wall clock 30 s
+        // past it so the fix is unambiguously stale.
+        harness.wallNow = Date(timeIntervalSince1970: 1_700_000_030)
+        harness.stream.publishFix(location(latitude: 31.1))
+
+        XCTAssertTrue(harness.client.fixes.isEmpty, "a fix the relay is guaranteed to reject must not be sent")
+        XCTAssertNil(harness.viewModel.lastForwardedAt)
+    }
+
+    func testAFreshFixStillForwardsAfterTheStalenessGate() throws {
+        let harness = Harness()
+        harness.stream.startResults = [true]
+        harness.stream.permissionOnStart = .precise
+        harness.client.publish(.paired(deviceId: "rdk-1", label: "Helmet"))
+        harness.viewModel.startHelmetRide()
+
+        harness.monotonicNow = 10
+        // Two seconds old — well inside both the phone's gate and the relay's.
+        harness.wallNow = Date(timeIntervalSince1970: 1_700_000_002)
+        harness.stream.publishFix(location(latitude: 31.1))
+
+        XCTAssertEqual(harness.client.fixes.map(\.latitude), [31.1])
+        XCTAssertEqual(harness.viewModel.lastForwardedAt, Date(timeIntervalSince1970: 1_700_000_002))
+    }
+
     func testStartOrdersConnectStartAndForegroundLocationThenForwardsImmediateAndNewestTimedFix() throws {
         let harness = Harness()
         harness.stream.startResults = [true]

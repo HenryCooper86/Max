@@ -2800,6 +2800,152 @@ final class CompanionViewModelTests: XCTestCase {
         XCTAssertEqual(harness.secretWrites.map(\.value), [""])
     }
 
+    // Bench 2026-08-12: every app install put the rider in a deadlock — the relay
+    // held the binding, the board had gone quiet because it was paired, and the
+    // app believed it was signed out. No helmet in the list, no six-digit code on
+    // the HUD, no 解除配对 button, and 开始 Helmet Ride silently no-oped. The only
+    // escape was typing a deliberately WRONG code, because pairHelmet() connects
+    // before it validates.
+    func testAppearingWithNoCompanionStateConnectsSoTheRelayCanTellTheTruth() {
+        let harness = Harness()
+        harness.events.removeAll()
+
+        harness.viewModel.syncCompanionStateIfNeeded()
+
+        XCTAssertEqual(harness.events, ["companion.connect:ws://relay.example/agent:account-session-token:false"])
+        XCTAssertEqual(harness.client.startCount, 0, "a state sync must not start a ride")
+        XCTAssertTrue(harness.client.pairCodes.isEmpty, "a state sync must not attempt a pairing")
+        XCTAssertTrue(harness.client.pairDiscoverTokens.isEmpty, "nor a discovery pairing")
+    }
+
+    func testTheRelaysAnswerRestoresTheControlsTheDeadlockDisabled() {
+        let harness = Harness()
+        harness.viewModel.syncCompanionStateIfNeeded()
+
+        // Proves the connect actually happened, not just that a publish
+        // reached the view model — `MainViewModel` binds `companionClient.onState`
+        // in its initializer, so `harness.client.publish(...)` below would
+        // reach `companionState` even if `performSyncCompanionState`'s body
+        // were empty and never called `connect()`.
+        XCTAssertEqual(harness.events.filter { $0.hasPrefix("companion.connect:") }.count, 1)
+
+        // This relay never sends `paired` (see the design doc); a bound
+        // account is answered with `ready` (board online) or `helmetOffline`
+        // (board powered down).
+        harness.client.publish(.ready(deviceId: "rdk-1", label: "Helmet"))
+
+        XCTAssertEqual(harness.viewModel.companionState, .ready(deviceId: "rdk-1", label: "Helmet"))
+        let model = CompanionSettingsPresentation.make(
+            isLoggedIn: true,
+            pairCode: "",
+            connectionState: harness.viewModel.companionState,
+            rideOwned: false,
+            permission: .precise,
+            lastForwardedAt: nil,
+            now: Date()
+        )
+        XCTAssertTrue(model.showsUnpair, "the rider can unpair again")
+        XCTAssertTrue(model.isPrimaryActionEnabled, "开始 Helmet Ride is no longer dead")
+    }
+
+    func testTheRelaysHelmetOfflineAnswerRestoresUnpairWithStartCorrectlyDisabled() {
+        let harness = Harness()
+        harness.viewModel.syncCompanionStateIfNeeded()
+
+        harness.client.publish(.helmetOffline(deviceId: "rdk-1", label: "Helmet"))
+
+        XCTAssertEqual(harness.viewModel.companionState, .helmetOffline(deviceId: "rdk-1", label: "Helmet"))
+        let model = CompanionSettingsPresentation.make(
+            isLoggedIn: true,
+            pairCode: "",
+            connectionState: harness.viewModel.companionState,
+            rideOwned: false,
+            permission: .precise,
+            lastForwardedAt: nil,
+            now: Date()
+        )
+        XCTAssertTrue(model.showsUnpair, "the rider can unpair a bound-but-offline helmet")
+        XCTAssertFalse(model.isPrimaryActionEnabled, "Start correctly stays disabled while the board is offline")
+    }
+
+    func testASyncIsNotAttemptedFromAnyStateTheRelayAlreadySupplied() {
+        let states: [CompanionConnectionState] = [
+            // `.paired` is kept even though this relay never emits it (see the
+            // design doc) — the guard must still exclude it if it were ever
+            // reached by some other relay implementation.
+            .paired(deviceId: "rdk-1", label: nil),
+            .ready(deviceId: "rdk-1", label: nil),
+            .helmetOffline(deviceId: "rdk-1", label: nil),
+            .sharing(deviceId: "rdk-1", label: nil),
+            .unpaired,
+            .connecting,
+            .failed(code: "connection", detail: "Companion connection closed."),
+            .failed(code: "auth", detail: "expired")
+        ]
+
+        for state in states {
+            let harness = Harness()
+            harness.client.publish(state)
+            harness.events.removeAll()
+
+            harness.viewModel.syncCompanionStateIfNeeded()
+
+            XCTAssertTrue(
+                harness.events.filter { $0.hasPrefix("companion.connect:") }.isEmpty,
+                "state \(state) came from the relay; re-syncing it would reconnect for nothing"
+            )
+        }
+    }
+
+    func testASignedOutRiderIsNotConnectedOnTheirBehalf() {
+        let harness = Harness(accountToken: "")
+        harness.events.removeAll()
+
+        harness.viewModel.syncCompanionStateIfNeeded()
+
+        XCTAssertTrue(harness.events.filter { $0.hasPrefix("companion.connect:") }.isEmpty)
+    }
+
+    func testASecondAppearanceWhileASyncIsInFlightOpensNoSecondSocket() {
+        let harness = Harness()
+        harness.events.removeAll()
+
+        harness.viewModel.syncCompanionStateIfNeeded()
+        // The real client publishes `.connecting` synchronously from `connect()`;
+        // FakeCompanionClient does not, so drive it explicitly — this is the state
+        // a second appearance actually finds in production. Without this the test
+        // would only measure the fake and pass no matter what the guard does.
+        harness.client.publish(.connecting)
+        harness.viewModel.syncCompanionStateIfNeeded()
+
+        XCTAssertEqual(
+            harness.events.filter { $0.hasPrefix("companion.connect:") }.count,
+            1,
+            "a sync already in flight must not be restarted by another appearance"
+        )
+        XCTAssertEqual(harness.client.startCount, 0)
+        XCTAssertTrue(harness.client.pairCodes.isEmpty)
+    }
+
+    func testAFailedSyncLeavesStartAsAWorkingRetry() {
+        let harness = Harness()
+        harness.client.onConnect = { harness.client.publish(.failed(code: "connection", detail: "Companion connection closed.")) }
+
+        harness.viewModel.syncCompanionStateIfNeeded()
+
+        XCTAssertEqual(harness.viewModel.companionState, .failed(code: "connection", detail: "Companion connection closed."))
+        let model = CompanionSettingsPresentation.make(
+            isLoggedIn: true,
+            pairCode: "",
+            connectionState: harness.viewModel.companionState,
+            rideOwned: false,
+            permission: .precise,
+            lastForwardedAt: nil,
+            now: Date()
+        )
+        XCTAssertTrue(model.isPrimaryActionEnabled, "a failed sync must not re-create the dead end")
+    }
+
     private func location(latitude: Double) -> CLLocation {
         CLLocation(
             coordinate: CLLocationCoordinate2D(latitude: latitude, longitude: 121.4),

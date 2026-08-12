@@ -66,15 +66,37 @@ companion generation, bind the state observer, and `companionClient.connect(...)
 No `companion.pair`, no `companion.pairDiscover`, no `companion.start`, and no
 new protocol event.
 
-### Why the socket does not linger
+### What actually happens to the socket
 
-`closePairOnlySocketIfIdle` (`RDKCompanionClient.swift`) already closes a socket
-that has no desired ride and no outstanding action once the transport reaches
-`paired`. A sync connect satisfies all three conditions the moment the relay's
-status lands, so the socket closes itself.
+A bare connect reaches the relay's attach-time sync (`syncCompanion`, called
+from `attachCompanion` in `server/companion-registry.ts`), which answers with
+exactly one of `unpaired`, `ready`, or `helmetOffline` — the relay never sends
+`paired`; nothing in `sendCompanionState`'s six call sites passes that value,
+even though it remains in the type union.
 
-This is the existing pair-only socket lifecycle reached through a different
-door. The companion socket stays ride-scoped; nothing about that changes.
+An `unpaired` answer retires the transport (`RDKCompanionClient`'s
+authoritative-terminal handling), so the no-binding case cleans up after
+itself correctly.
+
+A bound answer (`ready` or `helmetOffline`) does not. `closePairOnlySocketIfIdle`
+only fires `case .paired = transportState`, a state this relay never produces,
+so the socket this sync opens stays open. Nothing on the iOS side closes it —
+`.onDisappear` only stops discovery — so it sits idle until something else
+kills the transport.
+
+The consequences of that are real but bounded:
+
+- Opening the settings sheet begins a phone-location lifecycle on the board's
+  HUD with no ride active. This is display-only on the board — no speech.
+- When the idle socket eventually dies (backgrounding, network change), the
+  client publishes `.failed(code: "connection")` with no auto-reconnect, so
+  the rider sees `RDK 头盔连接失败，请重试` from a connect they never asked
+  for. `开始 Helmet Ride` still works as a retry, so this is not a re-created
+  deadlock — just an unprompted error the rider has to dismiss or retry past.
+
+Closing the socket properly belongs in a follow-up: it touches the same
+pair-only path that `performPairHelmet`'s and `performUnpairHelmet`'s sockets
+share, and that is unrelated risk for this fix.
 
 ### Deliberately out of scope
 
@@ -113,9 +135,11 @@ door. The companion socket stays ride-scoped; nothing about that changes.
 
 - signed in and `.signedOut`, `syncCompanionStateIfNeeded()` → exactly one `companion.connect:`
   event, and **no** `companion.pair` / `companion.pairDiscover` / `companion.start`
-- a relay `paired` push after that connect → `showsUnpair` true and
-  `isPrimaryActionEnabled` true (the deadlock's two dead controls come back)
-- called in `.paired`, `.ready`, `.sharing`, or `.failed` → no connect
+- a relay `ready` push after that connect → `showsUnpair` true and
+  `isPrimaryActionEnabled` true (the deadlock's two dead controls come back);
+  a `helmetOffline` push restores `showsUnpair` with `isPrimaryActionEnabled`
+  correctly still false
+- called in `.paired`, `.ready`, `.helmetOffline`, `.sharing`, or `.failed` → no connect
 - not signed in → no connect
 - called twice in a row → still one live socket, no stacking
 - a failed sync → `.failed(code: "connection")`, with Start still enabled
@@ -129,3 +153,6 @@ mapping; no change needed there.
 - The `pairHelmet()` connect-before-validate ordering.
 - Persisting companion state across launches.
 - Android, which has no companion pairing UI.
+- Closing the sync socket after a bound answer (`ready` / `helmetOffline`).
+  `closePairOnlySocketIfIdle` cannot fire for it — see "What actually happens
+  to the socket" above — and fixing that is deferred to a follow-up.

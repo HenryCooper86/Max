@@ -230,9 +230,14 @@ Replace the assignment inside `publish` so it stamps the position:
     // position but never REMOVE one — drop any inherited key first, or a lost
     // fix leaves the rider dot frozen at its last location instead of
     // clearing. A frozen-but-plausible dot is worse than no dot.
-    const { position: _stale, ...rest } = next;
+    // A rest-destructure (`const { position: _stale, ...rest } = next`) reads
+    // well but leaves an unused binding, and this repo's eslint config enables
+    // no-unused-vars as an error without ignoreRestSiblings — so it fails
+    // `npm run lint`, which `npm run check` and both CI workflows run.
+    const nextFiltered = { ...next };
+    delete nextFiltered.position;
     snapshot = {
-      ...rest,
+      ...nextFiltered,
       ...(position === undefined ? {} : { position }),
       ...(next.location === undefined ? {} : { location: copyLocation(next.location) })
     };

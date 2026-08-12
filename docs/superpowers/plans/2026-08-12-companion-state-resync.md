@@ -278,11 +278,11 @@ git commit -m "fix(ios-companion): re-sync pairing state when the companion UI a
 
 The unit tests cannot prove the deadlock is gone, because the deadlock needs a real relay holding a binding the app has forgotten. Reproduce it exactly as it occurred:
 
-1. Pair the phone to the board and confirm `已配对，等待开始骑行`.
+1. Pair the phone to the board and confirm `RDK 头盔已连接`.
 2. Reinstall the app (`xcrun devicectl device install app …`) — this kills the process and wipes companion state while the relay keeps the binding.
 3. Open the app and go to the companion section.
 4. **Before this change:** `尚未连接 RDK 头盔`, no helmet listed, no 解除配对, dead 开始 Helmet Ride.
-   **After:** the section resolves to `已配对，等待开始骑行` on its own, with 解除配对 present and Start enabled — no six-digit code typed.
+   **After:** the section resolves on its own — `RDK 头盔已连接` with 解除配对 present and Start enabled if the board is powered on, or `已配对，头盔离线` with 解除配对 present and Start correctly disabled if the board is powered down. Either is correct; no six-digit code typed.
 5. Confirm on the relay that exactly one `companion phone attached` line appears for that appearance, and **no** `companion request rejected` line:
    `ssh -i ~/Desktop/LightsailDefaultKey-ap-northeast-2.pem ubuntu@3.35.135.136 'grep -iE "companion" ~/.pm2/logs/horizon-out.log | tail -5'`
 6. Leave the screen and return to it; confirm no further connects once the state is known.

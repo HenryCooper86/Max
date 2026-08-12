@@ -29,7 +29,16 @@ const livePairingState: HudState = {
     remainingMeters: 2_400,
     remainingSeconds: 480,
     offRoute: false,
+    position: { lat: 31.2304, lon: 121.4737 },
     location: { connection: "sharing", usable: true, horizontalAccuracyMeters: 8, ageMs: 600 }
+  },
+  route: {
+    destinationName: "人民广场",
+    polyline: [
+      { lat: 31.23, lon: 121.47 },
+      { lat: 31.24, lon: 121.47 }
+    ],
+    steps: [{ lat: 31.235, lon: 121.47 }]
   }
 };
 
@@ -40,6 +49,20 @@ const openServers = new Set<HudServer>();
 
 function cloneState(state: HudState): HudState {
   return structuredClone(state);
+}
+
+/**
+ * What this test expects a non-loopback peer's view of `state` to look like:
+ * everything except the rider's route and position, which the dedicated
+ * "RDK HUD rider-location transport boundary" describe block below verifies
+ * directly against literal values. Used here only to keep this test's
+ * *other* assertions (about pairing-secret redaction) valid now that the
+ * shared fixture carries route/position too.
+ */
+function withoutRiderLocation(state: HudState): HudState {
+  const navigation = state.navigation === null ? null : { ...state.navigation };
+  if (navigation !== null) delete navigation.position;
+  return { ...state, navigation, route: null };
 }
 
 async function unusedPort(): Promise<number> {
@@ -261,7 +284,8 @@ describe("RDK HUD pairing-secret transport boundary", () => {
       lastFixAgeMs: 600
     });
     expect(initial.transcript).toEqual(livePairingState.transcript);
-    expect(initial.navigation).toEqual(livePairingState.navigation);
+    expect(initial.navigation).toEqual(withoutRiderLocation(livePairingState).navigation);
+    expect(initial.route).toBeNull();
     expect(initial.connection).toBe("ready");
 
     remote.send(
@@ -283,7 +307,7 @@ describe("RDK HUD pairing-secret transport boundary", () => {
     server.publish(update);
 
     expect(await remoteUpdate).toEqual({
-      ...update,
+      ...withoutRiderLocation(update),
       companion: {
         paired: false,
         locationState: "connected",
@@ -324,7 +348,10 @@ describe("RDK HUD pairing-secret transport boundary", () => {
     const remoteCleared = nextState(remote);
     const localCleared = nextState(local.socket);
     server.publish(noSecret);
-    await expect(Promise.all([remoteCleared, localCleared])).resolves.toEqual([noSecret, noSecret]);
+    await expect(Promise.all([remoteCleared, localCleared])).resolves.toEqual([
+      withoutRiderLocation(noSecret),
+      noSecret
+    ]);
   });
 
   it("keeps full initial and broadcast frames for IPv4, IPv6, and IPv4-mapped loopback peers", async () => {
@@ -374,5 +401,70 @@ describe("RDK HUD pairing-secret transport boundary", () => {
     openServers.delete(server);
 
     await expect(connect(`ws://127.0.0.1:${port}/`)).rejects.toThrow();
+  });
+});
+
+describe("RDK HUD rider-location transport boundary", () => {
+  it("sends no route geometry and no rider position to a token-bearing non-loopback peer", async () => {
+    const port = await unusedPort();
+    const server = createHudServer(port, 8081, TOKEN);
+    openServers.add(server);
+    server.publish(cloneState(livePairingState));
+
+    const { initial } = await connectWithInitial(`ws://${nonLoopbackIPv4()}:${port}/?t=${TOKEN}`);
+
+    expect(initial.route).toBeNull();
+    expect(initial.navigation).not.toHaveProperty("position");
+    // The whole frame, not just the fields we remembered to name: a rider's
+    // coordinates must not survive anywhere in it.
+    expect(JSON.stringify(initial)).not.toContain("31.2304");
+    expect(JSON.stringify(initial)).not.toContain("121.4737");
+    expect(JSON.stringify(initial)).not.toContain("121.47");
+  });
+
+  it("gives a loopback peer the full route and rider position", async () => {
+    const port = await unusedPort();
+    const server = createHudServer(port, 8081, TOKEN);
+    openServers.add(server);
+    server.publish(cloneState(livePairingState));
+
+    const { initial } = await connectWithInitial(`ws://127.0.0.1:${port}/`);
+
+    expect(initial.route?.polyline).toHaveLength(2);
+    expect(initial.navigation?.position).toEqual({ lat: 31.2304, lon: 121.4737 });
+  });
+
+  it("keeps redacting the rider position on later broadcasts, not just the initial replay", async () => {
+    const port = await unusedPort();
+    const server = createHudServer(port, 8081, TOKEN);
+    openServers.add(server);
+    // No prior publish, so `connectWithInitial` would block forever waiting on
+    // a connect-time reply that never comes (the server only sends one if
+    // state already exists). This test cares about the broadcast, not the
+    // initial replay, so `connect` — which doesn't wait on a first message —
+    // is the right tool here.
+    const socket = await connect(`ws://${nonLoopbackIPv4()}:${port}/?t=${TOKEN}`);
+
+    const update = nextState(socket);
+    server.publish(cloneState(livePairingState));
+
+    const received = await update;
+    expect(received.route).toBeNull();
+    expect(received.navigation).not.toHaveProperty("position");
+  });
+
+  it("does not mutate the caller's state while redacting", async () => {
+    const port = await unusedPort();
+    const server = createHudServer(port, 8081, TOKEN);
+    openServers.add(server);
+    const source = cloneState(livePairingState);
+    // Same reasoning as above: connect before any publish exists, so use
+    // `connect` rather than `connectWithInitial`.
+    await connect(`ws://${nonLoopbackIPv4()}:${port}/?t=${TOKEN}`);
+
+    server.publish(source);
+
+    expect(source.route?.polyline).toHaveLength(2);
+    expect(source.navigation?.position).toEqual({ lat: 31.2304, lon: 121.4737 });
   });
 });

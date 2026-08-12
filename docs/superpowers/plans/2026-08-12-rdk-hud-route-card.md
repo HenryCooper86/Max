@@ -155,6 +155,16 @@ git commit -m "feat(rdk-hud): carry route geometry in HUD state"
 
 Populate it inside `publish()`, the single choke point every snapshot passes through, so the dot is never a frame behind the fix that triggered the publish.
 
+**Adding the field to the snapshot is only half the job.** `copyNavigation` in
+`rdk/agent/src/hud/state.ts` enumerates fields explicitly, so a snapshot field it
+does not name is silently dropped by the reducer — and every test in this task
+passes anyway, because they exercise the controller, not the reducer. Task 6's
+rider dot then never renders in production with nothing failing anywhere. Add
+`...(navigation.position === undefined ? {} : { position: { lat: navigation.position.lat, lon: navigation.position.lon } })`
+to `copyNavigation` (deep-copied, like every other nested value there), and cover
+it in `tests/rdk-hud-state.test.ts` with a survives-the-reducer test, a
+caller-mutation test, and an omitted-when-absent test.
+
 - [ ] **Step 1: Write the failing test**
 
 Append inside the existing top-level `describe` in `tests/rdk-navigation-controller.test.ts`:

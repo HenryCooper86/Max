@@ -826,6 +826,24 @@ const stopWatchdog = startWatchdog({
   log
 });
 
+// The phone's /companion link gets liveness but DELIBERATELY no idle timeout.
+// Liveness, because nothing else closes these sockets — `rejectLocation` only
+// sends an error, and the sweep above walks `wss.clients`, not this server — so
+// an idle link (a GPS dropout is enough) can be reaped by carrier NAT with
+// neither end noticing until the next write fails. Observed 2026-08-12: five
+// reattaches in four minutes with the app foregrounded.
+//
+// No idle timeout, because that one exists to free leaked Doubao upstream
+// slots, which a companion socket does not hold. A paired-but-idle phone is a
+// legitimate state — `syncCompanionStateIfNeeded` opens a socket that may sit
+// idle by design — and closing those would recreate the disconnect this fixes.
+const stopCompanionWatchdog = startWatchdog({
+  clients: () => companionSockets.clients(),
+  heartbeatMs: config.heartbeatMs,
+  idleTimeoutMs: 0,
+  log
+});
+
 // WebSocket authorization is checked at upgrade time, but sessions can expire
 // or be revoked while a helmet remains connected. Revalidate at a low cadence
 // so a stale socket cannot outlive its login indefinitely.
@@ -854,6 +872,7 @@ function shutdown(signal: NodeJS.Signals): Promise<void> {
     log.info("graceful shutdown started", { signal, activeSessions: activeSessions.size });
     stopMetricsHistory();
     stopWatchdog();
+    stopCompanionWatchdog();
     clearInterval(authSessionSweepTimer);
     const serverClosed = new Promise<void>((resolve) => {
       server.close((error) => {

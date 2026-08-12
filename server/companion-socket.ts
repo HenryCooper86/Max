@@ -8,6 +8,7 @@ import type { CompanionRegistry } from "./companion-registry";
 import type { Logger } from "./logger";
 import { metrics } from "./metrics";
 import { registerAuthenticatedConnection, unregisterAuthenticatedConnection } from "./authenticated-connections";
+import { trackClient } from "./watchdog";
 
 const DEFAULT_MAX_PAYLOAD_BYTES = 8 * 1024;
 // Leave enough room for the application layer to return companion.error/1008
@@ -78,6 +79,10 @@ export function createCompanionSocketServer(options: {
     });
     clientsByAccount.set(session.user.id, client);
     registerAuthenticatedConnection(client, { userId: session.user.id, token: session.token });
+    // Ping/pong liveness only — see the companion watchdog in index.ts. Without
+    // it an idle link (a GPS dropout is enough) can be reaped by carrier NAT
+    // with neither end noticing until the next write fails.
+    trackClient(client);
 
     client.on("message", (data, isBinary) => {
       if (rejectingClients.has(client)) return;

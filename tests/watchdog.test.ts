@@ -78,3 +78,64 @@ describe("relay session watchdog", () => {
     expect(client.close).not.toHaveBeenCalled();
   });
 });
+
+// Companion sockets (the phone's /companion link) had no keepalive at all,
+// while the /agent socket has had one since the beginning. On the 2026-08-12
+// bench the phone reattached five times in four minutes with the app in the
+// foreground and the screen on: nothing on the relay closes those sockets
+// (`rejectLocation` only sends an error, and the agent watchdog sweeps
+// `wss.clients`, not the companion server), so an idle link — a GPS dropout is
+// enough — can be reaped by carrier NAT with neither end noticing until the
+// next write fails.
+//
+// They get ping/pong liveness and DELIBERATELY NOT the idle timeout: that
+// timeout exists to free leaked Doubao upstream slots, which a companion
+// socket does not hold, and a paired-but-idle phone is a legitimate state —
+// especially since syncCompanionStateIfNeeded opens a socket that may sit idle
+// by design. Idle-closing those would recreate the disconnect being fixed.
+describe("companion socket liveness", () => {
+  it("terminates a companion socket that missed a pong", () => {
+    const client = fakeClient();
+    trackClient(asSocket(client), 0);
+
+    expect(sweepClients([asSocket(client)], { idleTimeoutMs: 0, pingEnabled: true }, 0)).toEqual({
+      pinged: 1,
+      terminated: 0,
+      idled: 0
+    });
+
+    // No pong arrived before the next sweep.
+    expect(sweepClients([asSocket(client)], { idleTimeoutMs: 0, pingEnabled: true }, 30_000).terminated).toBe(1);
+    expect(client.terminate).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a companion socket that pongs", () => {
+    const client = fakeClient();
+    trackClient(asSocket(client), 0);
+    sweepClients([asSocket(client)], { idleTimeoutMs: 0, pingEnabled: true }, 0);
+
+    client.pongHandler?.();
+
+    expect(sweepClients([asSocket(client)], { idleTimeoutMs: 0, pingEnabled: true }, 30_000)).toEqual({
+      pinged: 1,
+      terminated: 0,
+      idled: 0
+    });
+    expect(client.terminate).not.toHaveBeenCalled();
+  });
+
+  it("never idle-closes a silent companion socket, however long it sits", () => {
+    const client = fakeClient();
+    trackClient(asSocket(client), 0);
+
+    // A full day of silence, ponging each round: still open.
+    for (let sweep = 1; sweep <= 8; sweep += 1) {
+      const result = sweepClients([asSocket(client)], { idleTimeoutMs: 0, pingEnabled: true }, sweep * 3 * 3_600_000);
+      expect(result.idled).toBe(0);
+      expect(result.terminated).toBe(0);
+      client.pongHandler?.();
+    }
+    expect(client.close).not.toHaveBeenCalled();
+    expect(client.send).not.toHaveBeenCalled();
+  });
+});

@@ -329,6 +329,10 @@ function start(): void {
         if (!ownsCallbacks()) return;
         publishHud({ type: "rdk.navigation", navigation: state.phase === "idle" ? null : state });
       },
+      onRoute: (route) => {
+        if (!ownsCallbacks()) return;
+        publishHud({ type: "rdk.route", route });
+      },
       canPrompt: () => playback.priorityRank() === 0,
       interruptOrdinaryPlayback: () => playback.flush()
     });
@@ -344,6 +348,7 @@ function start(): void {
     navigationSession.navigation.close();
     navigationSession.location.close();
     publishHud({ type: "rdk.navigation", navigation: null });
+    publishHud({ type: "rdk.route", route: null });
   }
 
   function ensureNavigationSession(): void {

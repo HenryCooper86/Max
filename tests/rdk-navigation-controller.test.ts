@@ -195,7 +195,7 @@ describe("RDK navigation command lifecycle", () => {
     ]);
     h.controller.handleRoute(route("nav-1"));
     await expect(result).resolves.toEqual({ type: "device.result", commandId: "device-1", status: "ok" });
-    expect(h.states.at(-1)).toEqual({
+    expect(h.states.at(-1)).toMatchObject({
       phase: "guiding",
       destinationName: "人民广场",
       instruction: "右转",
@@ -219,7 +219,7 @@ describe("RDK navigation command lifecycle", () => {
     await flush();
     h.controller.handleError({ type: "nav.error", commandId: "nav-1", code });
     await expect(result).resolves.toEqual({ type: "device.result", commandId: "device-1", status: "failed", reason });
-    expect(h.states.at(-1)).toEqual({ phase: "idle" });
+    expect(h.states.at(-1)).toMatchObject({ phase: "idle" });
   });
 
   it("fails a start after the default seven-second route deadline", async () => {
@@ -297,7 +297,7 @@ describe("RDK navigation command lifecycle", () => {
     pendingFix.resolve(ORIGIN_FIX);
     h.controller.handleRoute(route("nav-1"));
     await flush();
-    expect(h.states.at(-1)).toEqual({ phase: "idle" });
+    expect(h.states.at(-1)).toMatchObject({ phase: "idle" });
   });
 
   it("reports navigation.notActive only when truly idle", async () => {
@@ -348,7 +348,7 @@ describe("RDK navigation command lifecycle", () => {
       routeCommandId: "nav-1",
       kind: "locationLost"
     });
-    expect(h.states.at(-1)).toEqual({
+    expect(h.states.at(-1)).toMatchObject({
       phase: "paused",
       destinationName: "人民广场",
       instruction: "右转",
@@ -485,7 +485,7 @@ describe("RDK navigation command lifecycle", () => {
     });
     await expect(stop).resolves.toEqual({ type: "device.result", commandId: "device-stop", status: "ok" });
     expect(h.events).toEqual([]);
-    expect(h.states.at(-1)).toEqual({ phase: "idle" });
+    expect(h.states.at(-1)).toMatchObject({ phase: "idle" });
   });
 });
 
@@ -647,7 +647,7 @@ describe("RDK route guidance and rerouting", () => {
     h.controller.handleFix(fix(2, 31.2398));
     expect(h.events).toEqual([{ type: "nav.prompt", promptId: "prompt-1", routeCommandId: "nav-1", kind: "arrived" }]);
     expect(h.states.filter((state) => state.phase === "idle")).toHaveLength(1);
-    expect(h.states.at(-1)).toEqual({ phase: "idle" });
+    expect(h.states.at(-1)).toMatchObject({ phase: "idle" });
   });
 
   it("consumes reroute failure before prompt delivery so a synchronous replay emits and clears once", async () => {
@@ -670,7 +670,7 @@ describe("RDK route guidance and rerouting", () => {
       { type: "nav.prompt", promptId: "prompt-3", routeCommandId: "nav-1", kind: "rerouteFailed" }
     ]);
     expect(h.states.filter((state) => state.phase === "idle")).toHaveLength(1);
-    expect(h.states.at(-1)).toEqual({ phase: "idle" });
+    expect(h.states.at(-1)).toMatchObject({ phase: "idle" });
   });
 
   it.each(["canPrompt", "randomId", "sendEvent"] as const)(
@@ -700,7 +700,7 @@ describe("RDK route guidance and rerouting", () => {
       h.controller.handleFix(fix(2, 31.2398));
       expect(h.events.filter((event) => event.type === "nav.prompt" && event.kind === "arrived")).toHaveLength(1);
       expect(h.events.filter((event) => event.type === "nav.prompt" && event.kind === "locationLost")).toHaveLength(0);
-      expect(h.states.at(-1)).toEqual({ phase: "idle", location: USABLE_LOCATION });
+      expect(h.states.at(-1)).toMatchObject({ phase: "idle", location: USABLE_LOCATION });
     }
   );
 
@@ -732,7 +732,7 @@ describe("RDK route guidance and rerouting", () => {
       h.controller.handleError({ type: "nav.error", commandId: "prompt-2", code: "route.unavailable" });
       expect(h.events.filter((event) => event.type === "nav.prompt" && event.kind === "rerouteFailed")).toHaveLength(1);
       expect(h.events.filter((event) => event.type === "nav.prompt" && event.kind === "locationLost")).toHaveLength(0);
-      expect(h.states.at(-1)).toEqual({ phase: "idle", location: USABLE_LOCATION });
+      expect(h.states.at(-1)).toMatchObject({ phase: "idle", location: USABLE_LOCATION });
     }
   );
 
@@ -862,7 +862,7 @@ describe("RDK route guidance and rerouting", () => {
       h.controller.handleError({ type: "nav.error", commandId: "prompt-2", code: "route.unavailable" });
     }
     expect(h.events.filter((event) => event.type === "nav.prompt")).toHaveLength(0);
-    expect(h.states.at(-1)).toEqual({ phase: "idle" });
+    expect(h.states.at(-1)).toMatchObject({ phase: "idle" });
   });
 
   it("retains consumed progress while prompt transport is unavailable", async () => {
@@ -972,7 +972,7 @@ describe("RDK route guidance and rerouting", () => {
       routeCommandId: "nav-1",
       kind: "rerouteFailed"
     });
-    expect(h.states.at(-1)).toEqual({ phase: "idle" });
+    expect(h.states.at(-1)).toMatchObject({ phase: "idle" });
   });
 
   it("sends arrived before clearing the route", async () => {
@@ -980,7 +980,7 @@ describe("RDK route guidance and rerouting", () => {
     h.events.length = 0;
     h.controller.handleFix(fix(2, 31.2398));
     expect(h.events).toEqual([{ type: "nav.prompt", promptId: "prompt-1", routeCommandId: "nav-1", kind: "arrived" }]);
-    expect(h.states.at(-1)).toEqual({ phase: "idle" });
+    expect(h.states.at(-1)).toMatchObject({ phase: "idle" });
   });
 
   it("synchronous stop reentrancy from prompt sending cannot send a reroute or resurrect state", async () => {
@@ -999,7 +999,7 @@ describe("RDK route guidance and rerouting", () => {
     events.length = 0;
     h.controller.handleFix(fix(2, 31.232, 121.471));
     expect(events).toEqual([{ type: "nav.prompt", promptId: "prompt-1", routeCommandId: "nav-1", kind: "offRoute" }]);
-    expect(h.states.at(-1)).toEqual({ phase: "idle" });
+    expect(h.states.at(-1)).toMatchObject({ phase: "idle" });
   });
 
   it("synchronous stop reentrancy from the now interrupt prevents the stale prompt send", async () => {
@@ -1018,7 +1018,7 @@ describe("RDK route guidance and rerouting", () => {
     h.controller.handleFix(fix(4, 31.2348));
     expect(h.events).toEqual([]);
     await expect(stop).resolves.toEqual({ type: "device.result", commandId: "device-stop", status: "ok" });
-    expect(h.states.at(-1)).toEqual({ phase: "idle" });
+    expect(h.states.at(-1)).toMatchObject({ phase: "idle" });
   });
 
   it("a throwing clock callback cannot abort guidance after consuming the off-route one-shot", async () => {
@@ -1033,6 +1033,38 @@ describe("RDK route guidance and rerouting", () => {
     expect(() => h.controller.handleFix(fix(2, 31.232, 121.471))).not.toThrow();
     expect(h.events).toEqual([{ type: "nav.prompt", promptId: "prompt-1", routeCommandId: "nav-1", kind: "offRoute" }]);
     expect(h.states.at(-1)).toMatchObject({ phase: "guiding", offRoute: true });
+  });
+
+  describe("rider position on the snapshot", () => {
+    it("stamps every published snapshot with the newest fix", async () => {
+      let current: PhoneFix | undefined = ORIGIN_FIX;
+      const h = harness({ latest: () => current });
+      await startGuiding(h);
+
+      current = fix(2, 31.238);
+      h.controller.handleFix(fix(2, 31.238));
+
+      expect(h.states.at(-1)?.position).toEqual({ lat: 31.238, lon: 121.47 });
+    });
+
+    it("omits the position entirely when there is no fix", async () => {
+      const h = harness({ latest: () => undefined, waitForFix: () => Promise.resolve(ORIGIN_FIX) });
+      await startGuiding(h);
+
+      expect(h.states.at(-1)).not.toHaveProperty("position");
+    });
+
+    it("survives a throwing location source rather than failing the publish", async () => {
+      const h = harness({
+        latest: () => {
+          throw new Error("location source closed");
+        },
+        waitForFix: () => Promise.resolve(ORIGIN_FIX)
+      });
+
+      await expect(startGuiding(h)).resolves.toBeDefined();
+      expect(h.states.at(-1)).not.toHaveProperty("position");
+    });
   });
 });
 
@@ -1106,7 +1138,7 @@ describe("RDK location pause and resume", () => {
     h.controller.handleFix(fix(5, 31.2398));
     h.controller.handleLocationState(state);
 
-    expect(h.states.at(-1)).toEqual(paused);
+    expect(h.states.at(-1)).toMatchObject(paused);
     expect(h.events).toEqual([]);
     expect(h.order).toEqual([]);
 

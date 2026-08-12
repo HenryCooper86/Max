@@ -28,6 +28,8 @@ export type RdkNavigationSnapshot = {
   remainingMeters?: number;
   remainingSeconds?: number;
   offRoute?: boolean;
+  /** GCJ-02, like every other coordinate here. Present only once a fix exists. */
+  position?: { lat: number; lon: number };
   location?: PhoneLocationState;
 };
 
@@ -124,10 +126,23 @@ export function createRdkNavigationController(options: {
   let finishing: FinishingNavigation | undefined;
   let snapshot: RdkNavigationSnapshot = { phase: "idle" };
 
+  /** The freshest fix, for the HUD's rider dot. Never allowed to break a
+   *  publish: a closed or throwing source simply means "no dot yet". */
+  function latestPosition(): { lat: number; lon: number } | undefined {
+    try {
+      const fix = options.location.latest();
+      return fix === undefined ? undefined : { lat: fix.position.lat, lon: fix.position.lon };
+    } catch {
+      return undefined;
+    }
+  }
+
   function publish(next: RdkNavigationSnapshot, expectedRevision = revision): boolean {
     if (revision !== expectedRevision) return false;
+    const position = latestPosition();
     snapshot = {
       ...next,
+      ...(position === undefined ? {} : { position }),
       ...(next.location === undefined ? {} : { location: copyLocation(next.location) })
     };
     try {

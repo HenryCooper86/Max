@@ -329,6 +329,10 @@ function start(): void {
         if (!ownsCallbacks()) return;
         publishHud({ type: "rdk.navigation", navigation: state.phase === "idle" ? null : state });
       },
+      onRoute: (route) => {
+        if (!ownsCallbacks()) return;
+        publishHud({ type: "rdk.route", route });
+      },
       canPrompt: () => playback.priorityRank() === 0,
       interruptOrdinaryPlayback: () => playback.flush()
     });
@@ -343,6 +347,14 @@ function start(): void {
     activeNavigationGeneration += 1;
     navigationSession.navigation.close();
     navigationSession.location.close();
+    // Route first, matching the controller's own teardown wire order:
+    // `clearRouteState` emits `route: null` as its last statement, and every
+    // caller publishes the idle snapshot afterwards — so on the wire the route
+    // clears before the snapshot goes idle. The other order publishes an
+    // intermediate frame holding a live route with no rider dot, so the card
+    // blinks a dotless polyline before it goes. Nothing tests this ordering;
+    // this comment is its only guard.
+    publishHud({ type: "rdk.route", route: null });
     publishHud({ type: "rdk.navigation", navigation: null });
   }
 

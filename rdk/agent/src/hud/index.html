@@ -81,6 +81,25 @@
     margin-bottom: 16px;
     overflow-wrap: anywhere;
   }
+  #route-card {
+    margin-bottom: 16px;
+  }
+  #route-svg {
+    width: 100%;
+    height: 180px;
+    display: block;
+  }
+  #route-svg .line {
+    stroke: #79c0ff;
+    stroke-width: 3;
+    fill: none;
+  }
+  #route-svg .maneuver {
+    fill: #d29922;
+  }
+  #route-svg .rider {
+    fill: #3fb950;
+  }
   #navigation-card {
     margin-bottom: 16px;
     border-left: 4px solid #79c0ff;
@@ -236,6 +255,9 @@
   <div id="nav-summary" class="muted"></div>
   <div id="nav-paused" class="warning" hidden>手机定位已断开 · 导航暂停</div>
 </section>
+<section id="route-card" class="card" hidden>
+  <svg id="route-svg" viewBox="0 0 280 160" role="img" aria-label="路线示意图"></svg>
+</section>
 <div class="row">
   <div class="card">
     <dl>
@@ -298,6 +320,8 @@
   const navDistanceEl = document.getElementById("nav-distance");
   const navSummaryEl = document.getElementById("nav-summary");
   const navPausedEl = document.getElementById("nav-paused");
+  const routeCardEl = document.getElementById("route-card");
+  const routeSvgEl = document.getElementById("route-svg");
   let pairingExpiryTimer;
   let latestHudState;
 
@@ -314,6 +338,81 @@
     const remainder = minutes % 60;
     return `${hours} 小时${remainder === 0 ? "" : ` ${remainder} 分钟`}`;
   };
+
+  // Kept deliberately identical to RouteSchematic in
+  // src/components/NavigationPanel.tsx — this page is a single dependency-free
+  // file assembled by string substitution and cannot import shared code, the
+  // same reason formatDistance is duplicated here. tests/rdk-hud-render.test.ts
+  // pins the two against one fixture so they cannot drift.
+  const VIEW_WIDTH = 280;
+  const VIEW_HEIGHT = 160;
+  const VIEW_PADDING = 18;
+
+  const computeBounds = (polyline) => {
+    const lats = polyline.map((p) => p.lat);
+    const lons = polyline.map((p) => p.lon);
+    const minLat = lats.length ? Math.min(...lats) : 0;
+    const maxLat = lats.length ? Math.max(...lats) : 0;
+    const minLon = lons.length ? Math.min(...lons) : 0;
+    const maxLon = lons.length ? Math.max(...lons) : 0;
+    // A degenerate route falls back to a 1-unit span so the scale stays finite
+    // instead of dividing by zero.
+    const latSpan = maxLat - minLat || 1;
+    const lonSpan = maxLon - minLon || 1;
+    const innerWidth = VIEW_WIDTH - VIEW_PADDING * 2;
+    const innerHeight = VIEW_HEIGHT - VIEW_PADDING * 2;
+    const scale = Math.min(innerWidth / lonSpan, innerHeight / latSpan);
+    return {
+      minLat,
+      maxLat,
+      minLon,
+      // `project` never reads maxLon, but the web app's SchematicBounds carries
+      // it and the comment above promises these two are the same shape.
+      maxLon,
+      scale,
+      xOffset: VIEW_PADDING + (innerWidth - lonSpan * scale) / 2,
+      yOffset: VIEW_PADDING + (innerHeight - latSpan * scale) / 2
+    };
+  };
+
+  const project = (bounds, point) => ({
+    x: bounds.xOffset + (point.lon - bounds.minLon) * bounds.scale,
+    // SVG y grows downward; north must render toward the top.
+    y: bounds.yOffset + (bounds.maxLat - point.lat) * bounds.scale
+  });
+
+  const renderRoute = (state) => {
+    const route = state.route !== null && typeof state.route === "object" ? state.route : null;
+    if (route === null || !Array.isArray(route.polyline)) {
+      routeCardEl.hidden = true;
+      routeSvgEl.innerHTML = "";
+      return;
+    }
+    const bounds = computeBounds(route.polyline);
+    const parts = [];
+    if (route.polyline.length > 1) {
+      const points = route.polyline
+        .map((point) => {
+          const projected = project(bounds, point);
+          return `${projected.x},${projected.y}`;
+        })
+        .join(" ");
+      parts.push(`<polyline class="line" points="${points}" />`);
+    }
+    for (const maneuver of Array.isArray(route.steps) ? route.steps : []) {
+      if (!maneuver || !Number.isFinite(maneuver.lat) || !Number.isFinite(maneuver.lon)) continue;
+      const projected = project(bounds, maneuver);
+      parts.push(`<circle class="maneuver" cx="${projected.x}" cy="${projected.y}" r="4" />`);
+    }
+    const position = state.navigation === null ? undefined : state.navigation.position;
+    if (position && Number.isFinite(position.lat) && Number.isFinite(position.lon)) {
+      const projected = project(bounds, position);
+      parts.push(`<circle class="rider" cx="${projected.x}" cy="${projected.y}" r="5" />`);
+    }
+    routeSvgEl.innerHTML = parts.join("");
+    routeCardEl.hidden = false;
+  };
+
   const hasVisiblePairing = (companion, now) =>
     !companion.paired &&
     typeof companion.pairingCode === "string" &&
@@ -423,6 +522,7 @@
     document.getElementById("latency").textContent = state.latencyMs === null ? "–" : `${state.latencyMs} ms`;
     document.getElementById("error").textContent = state.lastError ?? "–";
     renderNavigation(state);
+    renderRoute(state);
     document.getElementById("transcript").innerHTML = state.transcript
       .map((turn) => `<div class="${turn.speaker} ${turn.final ? "" : "partial"}">${turn.speaker}: ${turn.text}</div>`)
       .join("");

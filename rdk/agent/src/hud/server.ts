@@ -71,11 +71,19 @@ Both ports must map to the same numbers: the HUD page asks the browser for
 gallery panels dead. See rdk/README.md "Bench access — MAX_VISION_TOKEN".
 `;
 
+/**
+ * What a served-but-not-local peer sees. The token got them in; it does not
+ * make them local. Pairing secrets stay loopback-only, and so does anything
+ * that would turn this page into a rider-tracking surface: the route the rider
+ * is following and where they are on it.
+ */
 function remoteHudSnapshot(state: HudState): HudState {
   const companion = { ...state.companion };
   delete companion.pairingCode;
   delete companion.pairingExpiresAt;
-  return { ...state, companion };
+  const navigation = state.navigation === null ? null : { ...state.navigation };
+  if (navigation !== null) delete navigation.position;
+  return { ...state, companion, navigation, route: null };
 }
 
 /**

@@ -188,7 +188,15 @@ const VIEW_WIDTH = 280;
 const VIEW_HEIGHT = 160;
 const VIEW_PADDING = 18;
 
-type SchematicBounds = {
+/** `SchematicBounds`, `computeBounds`, and `project` are exported for one
+ *  reason, and it is not a caller in `src/`: the RDK board's bench HUD
+ *  (`rdk/agent/src/hud/index.html`) reimplements this projection inline —
+ *  that page is assembled by string substitution and cannot import shared
+ *  code — and `tests/rdk-hud-render.test.ts` pins the two against a single
+ *  fixture so they cannot drift apart silently. A cleanup pass that sees no
+ *  caller outside `tests/` and un-exports these deletes the only thing
+ *  catching board-vs-web drift. */
+export type SchematicBounds = {
   minLat: number;
   maxLat: number;
   minLon: number;
@@ -198,7 +206,7 @@ type SchematicBounds = {
   yOffset: number;
 };
 
-function computeBounds(polyline: readonly GeoPoint[]): SchematicBounds {
+export function computeBounds(polyline: readonly GeoPoint[]): SchematicBounds {
   const lats = polyline.map((p) => p.lat);
   const lons = polyline.map((p) => p.lon);
   const minLat = lats.length ? Math.min(...lats) : 0;
@@ -217,7 +225,7 @@ function computeBounds(polyline: readonly GeoPoint[]): SchematicBounds {
   return { minLat, maxLat, minLon, maxLon, scale, xOffset, yOffset };
 }
 
-function project(bounds: SchematicBounds, point: GeoPoint): { x: number; y: number } {
+export function project(bounds: SchematicBounds, point: GeoPoint): { x: number; y: number } {
   return {
     x: bounds.xOffset + (point.lon - bounds.minLon) * bounds.scale,
     // SVG y grows downward; north (higher latitude) must render toward the top.

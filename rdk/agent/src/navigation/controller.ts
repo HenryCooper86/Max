@@ -18,6 +18,21 @@ import type { PhoneFix, PhoneLocationSource, PhoneLocationState } from "./phone-
 const DEFAULT_ROUTE_TIMEOUT_MS = 7_000;
 const REROUTE_COOLDOWN_MS = 20_000;
 
+/**
+ * Most points the HUD's route polyline may carry.
+ *
+ * The bench card is a 280×160 viewBox, so a route drawn with more than ~150
+ * points spends the extra ones sub-pixel: nothing a developer can see. Amap
+ * returns every shape point of every step, which is thousands for a
+ * multi-kilometre route, and the cost is paid far more often than once:
+ * `createHudServer`'s `publish` re-serialises the entire `HudState` — route
+ * included — to every socket on every frame, and the page rebuilds the whole
+ * SVG subtree from each message. Capping here is what keeps both bounded on a
+ * 3 GB aarch64 board. It also keeps `computeBounds`' `Math.min(...lats)` off a
+ * multi-thousand-element spread.
+ */
+const HUD_POLYLINE_MAX_POINTS = 150;
+
 type Timer = ReturnType<typeof setTimeout>;
 
 export type RdkNavigationSnapshot = {
@@ -28,7 +43,18 @@ export type RdkNavigationSnapshot = {
   remainingMeters?: number;
   remainingSeconds?: number;
   offRoute?: boolean;
+  /** GCJ-02, like every other coordinate here. Present only once a fix exists. */
+  position?: { lat: number; lon: number };
   location?: PhoneLocationState;
+};
+
+/** What the bench HUD needs to draw a route: the line, and where the turns
+ *  are. Deliberately not `NavRouteEvent` — instruction text and
+ *  `alongRouteMeters` already reach the HUD through the snapshot. */
+export type RdkRouteGeometry = {
+  destinationName?: string;
+  polyline: Array<{ lat: number; lon: number }>;
+  steps: Array<{ lat: number; lon: number }>;
 };
 
 export type RdkNavigationController = {
@@ -86,6 +112,28 @@ function copyRoute(route: NavRouteEvent): NavRouteEvent {
   };
 }
 
+/**
+ * Thin an over-long polyline to `HUD_POLYLINE_MAX_POINTS` by uniform stride.
+ *
+ * The first and last points are always kept exactly — the route has to start
+ * and end where it really does — and a polyline already within the cap is
+ * returned untouched. A uniform stride is deliberate: the card is an overview,
+ * not a map, so shape-preserving simplification (Douglas-Peucker) would cost
+ * more than the difference is worth at this size. Only the polyline is ever
+ * thinned; maneuver markers are few and each one marks a turn.
+ */
+function decimatePolyline<T>(polyline: readonly T[]): T[] {
+  if (polyline.length <= HUD_POLYLINE_MAX_POINTS) return [...polyline];
+  const lastIndex = polyline.length - 1;
+  const stride = lastIndex / (HUD_POLYLINE_MAX_POINTS - 1);
+  const thinned: T[] = [];
+  for (let slot = 0; slot < HUD_POLYLINE_MAX_POINTS - 1; slot += 1) {
+    thinned.push(polyline[Math.round(slot * stride)]!);
+  }
+  thinned.push(polyline[lastIndex]!);
+  return thinned;
+}
+
 function result(commandId: string, status: DeviceResultEvent["status"], reason?: string): DeviceResultEvent {
   return {
     type: "device.result",
@@ -101,6 +149,7 @@ export function createRdkNavigationController(options: {
   onState: (state: RdkNavigationSnapshot) => void;
   canPrompt: () => boolean;
   interruptOrdinaryPlayback: () => void;
+  onRoute?: (route: RdkRouteGeometry | null) => void;
   now?: () => number;
   randomId?: () => string;
   routeTimeoutMs?: number;
@@ -124,10 +173,43 @@ export function createRdkNavigationController(options: {
   let finishing: FinishingNavigation | undefined;
   let snapshot: RdkNavigationSnapshot = { phase: "idle" };
 
+  /** The freshest fix, for the HUD's rider dot. Never allowed to break a
+   *  publish: a closed or throwing source simply means "no dot yet". */
+  function latestPosition(): { lat: number; lon: number } | undefined {
+    try {
+      const fix = options.location.latest();
+      return fix === undefined ? undefined : { lat: fix.position.lat, lon: fix.position.lon };
+    } catch {
+      return undefined;
+    }
+  }
+
+  function emitRoute(route: NavRouteEvent | undefined): void {
+    if (options.onRoute === undefined) return;
+    const geometry: RdkRouteGeometry | null =
+      route === undefined
+        ? null
+        : {
+            ...(route.destinationName === undefined ? {} : { destinationName: route.destinationName }),
+            polyline: decimatePolyline(route.polyline).map((point) => ({ lat: point.lat, lon: point.lon })),
+            steps: route.steps.map((maneuver) => ({ lat: maneuver.lat, lon: maneuver.lon }))
+          };
+    try {
+      options.onRoute(geometry);
+    } catch {
+      // A HUD observer cannot own or interrupt the navigation lifecycle,
+      // matching how `publish` treats `onState`.
+    }
+  }
+
   function publish(next: RdkNavigationSnapshot, expectedRevision = revision): boolean {
     if (revision !== expectedRevision) return false;
+    const position = latestPosition();
+    const nextFiltered = { ...next };
+    delete nextFiltered.position; // Strip any inherited stale position before stamping fresh one
     snapshot = {
-      ...next,
+      ...nextFiltered,
+      ...(position === undefined ? {} : { position }),
       ...(next.location === undefined ? {} : { location: copyLocation(next.location) })
     };
     try {
@@ -166,6 +248,7 @@ export function createRdkNavigationController(options: {
     locationLostPrompt = eligibleOneShot();
     locationUsableForGuidance = false;
     finishing = undefined;
+    emitRoute(undefined);
   }
 
   function clearPendingTimer(pending: PendingStart): void {
@@ -473,6 +556,7 @@ export function createRdkNavigationController(options: {
 
   function installRoute(event: NavRouteEvent, expectedRevision: number): void {
     activeRoute = copyRoute(event);
+    emitRoute(activeRoute);
     progress = { ...INITIAL_PROGRESS, firedThresholds: [] };
     clearReroute();
     offRoutePrompt = eligibleOneShot();

@@ -134,6 +134,9 @@ final class MainViewModel: ObservableObject {
     private var logoutRequestRelayURL = ""
     private var logoutRequestToken = ""
     private var logoutRequestAllowsSelfSigned = false
+    /// A rider-initiated pair (manual code or discovery tap) is awaiting its
+    /// outcome; used to consume the typed code only on a real binding.
+    private var pairingSubmissionActive = false
     private var pendingUnpairOwner: Int?
     private var pendingUnpairSendOwner: Int?
     private var pendingUnpairPhase: PendingUnpairPhase?
@@ -535,6 +538,7 @@ final class MainViewModel: ObservableObject {
             allowSelfSignedTLS: allowSelfSigned
         )
         guard ownsCompanionGeneration(owner), hasAccountSession, !rideOwned else { return }
+        pairingSubmissionActive = true
         companionClient.pair(code: code)
     }
 
@@ -560,6 +564,7 @@ final class MainViewModel: ObservableObject {
         )
         guard ownsCompanionGeneration(owner), hasAccountSession, !rideOwned else { return }
         isAwaitingHelmetConfirm = true
+        pairingSubmissionActive = true
         companionClient.pairDiscover(token: token)
     }
 
@@ -782,6 +787,19 @@ final class MainViewModel: ObservableObject {
         dispatchPrecondition(condition: .onQueue(.main))
         if resolvesPairingAction(state) {
             isAwaitingHelmetConfirm = false
+            // A rider-initiated pairing that reached a binding consumes the
+            // typed code. Leaving it in the field arms a replay: a
+            // disconnected app is not `.paired`, so the pairing controls
+            // re-enable, and each tap re-pairs an already-bound helmet with a
+            // stale code — the relay answers `pair.code` and the client drops
+            // the socket (bench 2026-08-12: five such cycles in 54 s).
+            // Scoped to an in-flight submission so an ordinary status resync
+            // never wipes what the rider is typing, and to a bound outcome so
+            // a rejected code stays put to be corrected.
+            if pairingSubmissionActive {
+                pairingSubmissionActive = false
+                if isBound(state) { pairCode = "" }
+            }
         }
 
         let terminalState = isCompanionTerminal(state)
@@ -1067,8 +1085,13 @@ final class MainViewModel: ObservableObject {
         guard ownsCompanionGeneration(owner), companionAccountTeardownActive else { return }
         companionAccountTeardownActive = false
         // This path publishes .signedOut directly (its own completion), bypassing
-        // handleCommittedCompanionState's funnel — clear the flag here too.
+        // handleCommittedCompanionState's funnel — clear both pairing-action
+        // flags here too. `pairingSubmissionActive` matters as much as its
+        // sibling: left set, it survives the teardown into an unrelated session,
+        // where the next resolving-and-bound state consumes whatever code is in
+        // the field by then.
         isAwaitingHelmetConfirm = false
+        pairingSubmissionActive = false
 
         finalizePendingLogout()
         if sessionTokenTransitionActive {
@@ -1273,6 +1296,16 @@ final class MainViewModel: ObservableObject {
             return false
         case .signedOut, .paired, .helmetOffline, .ready, .sharing, .failed:
             return true
+        }
+    }
+
+    /// The helmet is bound as far as the relay is concerned.
+    private func isBound(_ state: CompanionConnectionState) -> Bool {
+        switch state {
+        case .paired, .helmetOffline, .ready, .sharing:
+            return true
+        case .signedOut, .connecting, .unpaired, .failed:
+            return false
         }
     }
 

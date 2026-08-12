@@ -18,6 +18,15 @@ export type HudCompanion = {
   lastFixAgeMs?: number;
 };
 
+/** Route geometry for the bench schematic. Maneuvers are reduced to bare
+ *  coordinates: the card needs marker positions, not maneuver semantics, and
+ *  the narrower type keeps instruction text out of a second place. */
+export type RdkHudRoute = {
+  destinationName?: string;
+  polyline: Array<{ lat: number; lon: number }>;
+  steps: Array<{ lat: number; lon: number }>;
+};
+
 export type HudState = {
   connection: string;
   turnState: string;
@@ -26,6 +35,7 @@ export type HudState = {
   lastError: string | null;
   companion: HudCompanion;
   navigation: RdkNavigationSnapshot | null;
+  route: RdkHudRoute | null;
   discovery: string;
 };
 
@@ -33,6 +43,7 @@ export type HudEvent =
   | AgentEvent
   | { type: "rdk.companion"; companion: HudCompanion }
   | { type: "rdk.navigation"; navigation: RdkNavigationSnapshot | null }
+  | { type: "rdk.route"; route: RdkHudRoute | null }
   | { type: "rdk.discovery"; discovery: string };
 
 /**
@@ -59,6 +70,7 @@ export function initialHudState(): HudState {
     lastError: null,
     companion: { paired: false, locationState: "unpaired" },
     navigation: null,
+    route: null,
     discovery: "off"
   };
 }
@@ -99,7 +111,18 @@ function copyNavigation(navigation: RdkNavigationSnapshot): RdkNavigationSnapsho
     ...(navigation.remainingMeters === undefined ? {} : { remainingMeters: navigation.remainingMeters }),
     ...(navigation.remainingSeconds === undefined ? {} : { remainingSeconds: navigation.remainingSeconds }),
     ...(navigation.offRoute === undefined ? {} : { offRoute: navigation.offRoute }),
-    ...(navigation.location === undefined ? {} : { location: copyLocation(navigation.location) })
+    ...(navigation.location === undefined ? {} : { location: copyLocation(navigation.location) }),
+    ...(navigation.position === undefined
+      ? {}
+      : { position: { lat: navigation.position.lat, lon: navigation.position.lon } })
+  };
+}
+
+function copyRoute(route: RdkHudRoute): RdkHudRoute {
+  return {
+    ...(route.destinationName === undefined ? {} : { destinationName: route.destinationName }),
+    polyline: route.polyline.map((point) => ({ lat: point.lat, lon: point.lon })),
+    steps: route.steps.map((point) => ({ lat: point.lat, lon: point.lon }))
   };
 }
 
@@ -139,6 +162,8 @@ export function reduceHud(state: HudState, event: HudEvent): HudState {
         ...state,
         navigation: event.navigation === null ? null : copyNavigation(event.navigation)
       };
+    case "rdk.route":
+      return { ...state, route: event.route === null ? null : copyRoute(event.route) };
     case "rdk.discovery":
       return { ...state, discovery: event.discovery };
     case "transcript": {

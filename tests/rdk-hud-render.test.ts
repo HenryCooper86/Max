@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { renderHudPage } from "../rdk/agent/src/hud/server";
 import type { HudState } from "../rdk/agent/src/hud/state";
+import { computeBounds, project } from "../src/components/NavigationPanel";
 
 // Substituted the way createHudServer substitutes, so this exercises the page
 // as served rather than the template.
@@ -159,6 +160,7 @@ function state(overrides: Partial<HudState> = {}): HudState {
       remainingSeconds: 720,
       offRoute: false
     },
+    route: null,
     discovery: "off",
     ...overrides
   };
@@ -580,5 +582,85 @@ describe("RDK HUD sidecar URLs", () => {
     // reusing it would have made every replay an unauthenticated request.
     expect(page).not.toMatch(/[?&]t=\$\{\+\+streamNonce\}/);
     expect(page).toContain("n: ++streamNonce");
+  });
+});
+
+describe("RDK HUD route card", () => {
+  const geometry = {
+    destinationName: "人民广场",
+    polyline: [
+      { lat: 31.23, lon: 121.47 },
+      { lat: 31.24, lon: 121.48 }
+    ],
+    steps: [{ lat: 31.235, lon: 121.475 }]
+  };
+
+  it("stays hidden until a route exists", () => {
+    const harness = renderHarness();
+    harness.render(state({ route: null }));
+
+    expect(element(harness, "route-card").hidden).toBe(true);
+  });
+
+  it("draws the route line, one marker per maneuver, and the rider dot", () => {
+    const harness = renderHarness();
+    harness.render(
+      state({ route: geometry, navigation: { ...state().navigation!, position: { lat: 31.235, lon: 121.475 } } })
+    );
+
+    const svg = element(harness, "route-svg").innerHTML;
+    expect(element(harness, "route-card").hidden).toBe(false);
+    expect(svg).toContain("<polyline");
+    expect((svg.match(/class="maneuver"/g) ?? []).length).toBe(1);
+    expect(svg).toContain('class="rider"');
+  });
+
+  it("draws the route with no rider dot before the first fix", () => {
+    const harness = renderHarness();
+    const navigation = { ...state().navigation! };
+    delete (navigation as { position?: unknown }).position;
+    harness.render(state({ route: geometry, navigation }));
+
+    expect(element(harness, "route-svg").innerHTML).toContain("<polyline");
+    expect(element(harness, "route-svg").innerHTML).not.toContain('class="rider"');
+  });
+
+  it("hides and empties the card when the route clears", () => {
+    const harness = renderHarness();
+    harness.render(state({ route: geometry }));
+    harness.render(state({ route: null }));
+
+    expect(element(harness, "route-card").hidden).toBe(true);
+    expect(element(harness, "route-svg").innerHTML).toBe("");
+  });
+
+  it("emits finite coordinates for a degenerate single-point route", () => {
+    const harness = renderHarness();
+    harness.render(state({ route: { polyline: [{ lat: 31.23, lon: 121.47 }], steps: [] } }));
+
+    expect(element(harness, "route-svg").innerHTML).not.toContain("NaN");
+    expect(element(harness, "route-svg").innerHTML).not.toContain("Infinity");
+  });
+
+  it("projects identically to the web app's schematic", () => {
+    const polyline = [
+      { lat: 31.23, lon: 121.47 },
+      { lat: 31.2355, lon: 121.4788 },
+      { lat: 31.24, lon: 121.48 }
+    ];
+    const rider = { lat: 31.2355, lon: 121.4788 };
+    const bounds = computeBounds(polyline);
+    const expected = project(bounds, rider);
+
+    const harness = renderHarness();
+    harness.render(
+      state({
+        route: { polyline, steps: [] },
+        navigation: { ...state().navigation!, position: rider }
+      })
+    );
+
+    const svg = element(harness, "route-svg").innerHTML;
+    expect(svg).toContain(`cx="${expected.x}" cy="${expected.y}"`);
   });
 });

@@ -875,6 +875,9 @@ final class CompanionViewModelTests: XCTestCase {
         viewModel.pairCode = "123456"
         viewModel.pairHelmet()
         socket.deliver(.string("{\"type\":\"companion.status\",\"state\":\"paired\",\"deviceId\":\"rdk\"}"))
+        // The binding consumed the submitted code; the rider has typed a
+        // fresh one before attempting the unpair this test pins.
+        viewModel.pairCode = "123456"
         viewModel.relayURL = "not a relay url"
 
         viewModel.unpairHelmet()
@@ -916,6 +919,9 @@ final class CompanionViewModelTests: XCTestCase {
         viewModel.pairCode = "123456"
         viewModel.pairHelmet()
         pairSocket.deliver(.string("{\"type\":\"companion.status\",\"state\":\"paired\",\"deviceId\":\"rdk\"}"))
+        // The binding consumed the submitted code; the rider has typed a
+        // fresh one before attempting the unpair this test pins.
+        viewModel.pairCode = "123456"
 
         viewModel.unpairHelmet()
 
@@ -923,6 +929,119 @@ final class CompanionViewModelTests: XCTestCase {
         XCTAssertTrue(failedReconnectSocket.sentMessages.isEmpty)
         XCTAssertEqual(viewModel.pairCode, "123456")
         XCTAssertEqual(viewModel.companionState, .failed(code: "connection", detail: "Companion connection closed."))
+    }
+
+    // Bench 2026-08-12: a code left in the field after a successful pair kept
+    // 配对头盔 live, because a disconnected app is not in `.paired` and so
+    // re-enables the pairing controls. Every tap then re-paired an already-bound
+    // helmet with a stale code; the relay answered `pair.code` and the client
+    // dropped the socket — five reconnect/disconnect cycles in 54 seconds.
+    func testASuccessfulPairClearsTheTypedCodeSoItCannotBeReplayed() {
+        let harness = Harness()
+        harness.viewModel.pairCode = "123456"
+        harness.viewModel.pairHelmet()
+
+        harness.client.publish(.paired(deviceId: "rdk", label: nil))
+
+        XCTAssertEqual(
+            harness.viewModel.pairCode,
+            "",
+            "a bound helmet must not leave a replayable code in the field"
+        )
+    }
+
+    // The other half of that guard, and the rider-facing one. A wrong or
+    // expired code comes back as `companion.error` code `pair.code`, which
+    // *resolves* the pairing action just like a success does — so only the
+    // `isBound` check keeps the typed code in the field. Without this test a
+    // refactor that drops or inverts that check makes a rider who mistyped one
+    // digit lose all six and retype from scratch, on a bike, in gloves.
+    func testARejectedPairKeepsTheTypedCodeSoItCanBeCorrected() {
+        let harness = Harness()
+        harness.viewModel.pairCode = "123456"
+        harness.viewModel.pairHelmet()
+
+        harness.client.publish(.failed(code: "pair.code", detail: "配对码无效"))
+
+        XCTAssertEqual(
+            harness.viewModel.pairCode,
+            "123456",
+            "a rejected code must stay put to be corrected, not be wiped"
+        )
+    }
+
+    // Losing the transport mid-unpair is the common bench accident (screen
+    // lock, board reboot, relay restart). The send's completion then reaches
+    // guards that no longer recognize it and is discarded, so the pending
+    // unpair is reconciled by the state change instead. What must survive is
+    // the rider's way out: Start has to reopen a transport. Before non-auth
+    // failures became start-eligible this stayed stuck, with the panel saying
+    // 请重试 over a dead button.
+    func testTransportDeathDuringUnpairStillLeavesStartAsAWayOut() throws {
+        var requests: [URLRequest] = []
+        let pairSocket = ViewModelRecordingSocket()
+        let unpairSocket = ViewModelRecordingSocket()
+        // The unpair is handed to the transport and never acknowledged.
+        unpairSocket.automaticallyCompletesSends = false
+        let rideSocket = ViewModelRecordingSocket()
+        let sockets = [pairSocket, unpairSocket, rideSocket]
+        let client = RDKCompanionClient(
+            socketFactory: { request, _ in
+                let socket = sockets[requests.count]
+                requests.append(request)
+                return socket
+            },
+            schedule: { _, _ in }
+        )
+        let stream = FakeLocationStream()
+        stream.startResults = [true]
+        stream.permissionOnStart = .precise
+        let viewModel = MainViewModel(
+            defaults: companionDefaults(),
+            initialAuthToken: "manual-operator-token",
+            initialSessionToken: "account-session-token",
+            companionClient: client,
+            locationStream: stream,
+            authLogout: { _, _, _ in XCTFail("Unpair must not log out") },
+            persistSecret: { _, _ in },
+            monotonicNow: { 0 },
+            wallClock: { .distantPast },
+            schedule: { _, _ in },
+            voiceActions: .init(
+                acknowledgeAuthRequired: {},
+                selectTranscriptOwner: { _ in },
+                isHandsFree: { false },
+                stop: {}
+            )
+        )
+
+        viewModel.pairCode = "123456"
+        viewModel.pairHelmet()
+        pairSocket.deliver(.string("{\"type\":\"companion.status\",\"state\":\"paired\",\"deviceId\":\"rdk\"}"))
+
+        viewModel.unpairHelmet()
+        XCTAssertEqual(requests.count, 2, "the pair-only socket reopens to carry the unpair")
+
+        // The transport dies while the unpair is still in flight — screen lock,
+        // board reboot, relay restart. `handleTransportFailure` clears action
+        // ownership, so the send's completion arrives to guards that no longer
+        // recognize it and is discarded.
+        unpairSocket.failReceive(ViewModelTestError.transport)
+        unpairSocket.completeSend(at: 0, error: ViewModelTestError.transport)
+        XCTAssertEqual(
+            viewModel.companionState,
+            .failed(code: "connection", detail: "Companion connection closed.")
+        )
+
+        // Rider taps Start to recover (allowed for a non-auth failure). This
+        // must reach the transport rather than being swallowed by a stuck flag.
+        viewModel.startHelmetRide()
+
+        XCTAssertEqual(
+            requests.count,
+            3,
+            "an unacknowledged unpair must not silently swallow every later companion action"
+        )
     }
 
     func testActiveRideStopFailureBeforeUnpairRetainsCodeAndDoesNotSendUnpair() {
@@ -2808,6 +2927,11 @@ private final class RealCompanionViewModelHarness {
         viewModel.pairCode = "123456"
         viewModel.pairHelmet()
         sockets[0].deliver(.string("{\"type\":\"companion.status\",\"state\":\"paired\",\"deviceId\":\"rdk\"}"))
+        // The binding consumes the code the rider submitted, so a rider about
+        // to attempt an unpair has typed a fresh one. Retention through a
+        // *failed* unpair is what these tests pin, and it stays meaningful
+        // only with a code in the field to retain.
+        viewModel.pairCode = "123456"
     }
 }
 

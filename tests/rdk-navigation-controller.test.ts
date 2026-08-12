@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NavPromptEvent, NavRequestEvent, NavRouteEvent } from "../shared/agent";
-import { createRdkNavigationController, type RdkNavigationSnapshot } from "../rdk/agent/src/navigation/controller";
+import {
+  createRdkNavigationController,
+  type RdkNavigationSnapshot,
+  type RdkRouteGeometry
+} from "../rdk/agent/src/navigation/controller";
 import {
   createPhoneLocationSource,
   type PhoneFix,
@@ -21,6 +25,8 @@ const USABLE_LOCATION: PhoneLocationState = {
   horizontalAccuracyMeters: 5,
   ageMs: 0
 };
+
+const ORIGIN_POSITION = { lat: 31.23, lon: 121.47 };
 
 const ROUTE_BASE = {
   type: "nav.route" as const,
@@ -66,6 +72,7 @@ type HarnessOptions = {
   canPrompt?: boolean;
   sendEvent?: (event: NavRequestEvent | NavPromptEvent) => void;
   onState?: (state: RdkNavigationSnapshot) => void;
+  onRoute?: (route: RdkRouteGeometry | null) => void;
   interrupt?: () => void;
   now?: () => number;
   canPromptHook?: () => void;
@@ -76,6 +83,7 @@ type HarnessOptions = {
 function harness(options: HarnessOptions = {}) {
   const events: Array<NavRequestEvent | NavPromptEvent> = [];
   const states: RdkNavigationSnapshot[] = [];
+  const routes: Array<RdkRouteGeometry | null> = [];
   const order: string[] = [];
   const ids = ["nav-1", "prompt-1", "prompt-2", "prompt-3", "reroute-1", "prompt-4", "prompt-5"];
   let randomIdIndex = 0;
@@ -98,6 +106,10 @@ function harness(options: HarnessOptions = {}) {
       states.push({ ...state, ...(state.location === undefined ? {} : { location: { ...state.location } }) });
       options.onState?.(state);
     },
+    onRoute: (route) => {
+      routes.push(route);
+      options.onRoute?.(route);
+    },
     canPrompt: () => {
       options.canPromptHook?.();
       return canPrompt;
@@ -117,6 +129,7 @@ function harness(options: HarnessOptions = {}) {
     controller,
     events,
     states,
+    routes,
     order,
     waitForUsableFix,
     setCanPrompt: (value: boolean) => {
@@ -202,7 +215,8 @@ describe("RDK navigation command lifecycle", () => {
       distanceToManeuverMeters: 555,
       remainingMeters: 1_109,
       remainingSeconds: 240,
-      offRoute: false
+      offRoute: false,
+      position: ORIGIN_POSITION
     });
   });
 
@@ -219,7 +233,7 @@ describe("RDK navigation command lifecycle", () => {
     await flush();
     h.controller.handleError({ type: "nav.error", commandId: "nav-1", code });
     await expect(result).resolves.toEqual({ type: "device.result", commandId: "device-1", status: "failed", reason });
-    expect(h.states.at(-1)).toEqual({ phase: "idle" });
+    expect(h.states.at(-1)).toEqual({ phase: "idle", position: ORIGIN_POSITION });
   });
 
   it("fails a start after the default seven-second route deadline", async () => {
@@ -297,7 +311,7 @@ describe("RDK navigation command lifecycle", () => {
     pendingFix.resolve(ORIGIN_FIX);
     h.controller.handleRoute(route("nav-1"));
     await flush();
-    expect(h.states.at(-1)).toEqual({ phase: "idle" });
+    expect(h.states.at(-1)).toEqual({ phase: "idle", position: ORIGIN_POSITION });
   });
 
   it("reports navigation.notActive only when truly idle", async () => {
@@ -356,6 +370,7 @@ describe("RDK navigation command lifecycle", () => {
       remainingMeters: 1_109,
       remainingSeconds: 240,
       offRoute: false,
+      position: ORIGIN_POSITION,
       location: { connection: "stale", usable: false, reason: "stale" }
     });
   });
@@ -485,7 +500,7 @@ describe("RDK navigation command lifecycle", () => {
     });
     await expect(stop).resolves.toEqual({ type: "device.result", commandId: "device-stop", status: "ok" });
     expect(h.events).toEqual([]);
-    expect(h.states.at(-1)).toEqual({ phase: "idle" });
+    expect(h.states.at(-1)).toEqual({ phase: "idle", position: ORIGIN_POSITION });
   });
 });
 
@@ -647,7 +662,7 @@ describe("RDK route guidance and rerouting", () => {
     h.controller.handleFix(fix(2, 31.2398));
     expect(h.events).toEqual([{ type: "nav.prompt", promptId: "prompt-1", routeCommandId: "nav-1", kind: "arrived" }]);
     expect(h.states.filter((state) => state.phase === "idle")).toHaveLength(1);
-    expect(h.states.at(-1)).toEqual({ phase: "idle" });
+    expect(h.states.at(-1)).toEqual({ phase: "idle", position: ORIGIN_POSITION });
   });
 
   it("consumes reroute failure before prompt delivery so a synchronous replay emits and clears once", async () => {
@@ -670,7 +685,7 @@ describe("RDK route guidance and rerouting", () => {
       { type: "nav.prompt", promptId: "prompt-3", routeCommandId: "nav-1", kind: "rerouteFailed" }
     ]);
     expect(h.states.filter((state) => state.phase === "idle")).toHaveLength(1);
-    expect(h.states.at(-1)).toEqual({ phase: "idle" });
+    expect(h.states.at(-1)).toEqual({ phase: "idle", position: ORIGIN_POSITION });
   });
 
   it.each(["canPrompt", "randomId", "sendEvent"] as const)(
@@ -700,7 +715,7 @@ describe("RDK route guidance and rerouting", () => {
       h.controller.handleFix(fix(2, 31.2398));
       expect(h.events.filter((event) => event.type === "nav.prompt" && event.kind === "arrived")).toHaveLength(1);
       expect(h.events.filter((event) => event.type === "nav.prompt" && event.kind === "locationLost")).toHaveLength(0);
-      expect(h.states.at(-1)).toEqual({ phase: "idle", location: USABLE_LOCATION });
+      expect(h.states.at(-1)).toEqual({ phase: "idle", location: USABLE_LOCATION, position: ORIGIN_POSITION });
     }
   );
 
@@ -732,7 +747,7 @@ describe("RDK route guidance and rerouting", () => {
       h.controller.handleError({ type: "nav.error", commandId: "prompt-2", code: "route.unavailable" });
       expect(h.events.filter((event) => event.type === "nav.prompt" && event.kind === "rerouteFailed")).toHaveLength(1);
       expect(h.events.filter((event) => event.type === "nav.prompt" && event.kind === "locationLost")).toHaveLength(0);
-      expect(h.states.at(-1)).toEqual({ phase: "idle", location: USABLE_LOCATION });
+      expect(h.states.at(-1)).toEqual({ phase: "idle", location: USABLE_LOCATION, position: ORIGIN_POSITION });
     }
   );
 
@@ -862,7 +877,7 @@ describe("RDK route guidance and rerouting", () => {
       h.controller.handleError({ type: "nav.error", commandId: "prompt-2", code: "route.unavailable" });
     }
     expect(h.events.filter((event) => event.type === "nav.prompt")).toHaveLength(0);
-    expect(h.states.at(-1)).toEqual({ phase: "idle" });
+    expect(h.states.at(-1)).toEqual({ phase: "idle", position: ORIGIN_POSITION });
   });
 
   it("retains consumed progress while prompt transport is unavailable", async () => {
@@ -972,7 +987,7 @@ describe("RDK route guidance and rerouting", () => {
       routeCommandId: "nav-1",
       kind: "rerouteFailed"
     });
-    expect(h.states.at(-1)).toEqual({ phase: "idle" });
+    expect(h.states.at(-1)).toEqual({ phase: "idle", position: ORIGIN_POSITION });
   });
 
   it("sends arrived before clearing the route", async () => {
@@ -980,7 +995,7 @@ describe("RDK route guidance and rerouting", () => {
     h.events.length = 0;
     h.controller.handleFix(fix(2, 31.2398));
     expect(h.events).toEqual([{ type: "nav.prompt", promptId: "prompt-1", routeCommandId: "nav-1", kind: "arrived" }]);
-    expect(h.states.at(-1)).toEqual({ phase: "idle" });
+    expect(h.states.at(-1)).toEqual({ phase: "idle", position: ORIGIN_POSITION });
   });
 
   it("synchronous stop reentrancy from prompt sending cannot send a reroute or resurrect state", async () => {
@@ -999,7 +1014,7 @@ describe("RDK route guidance and rerouting", () => {
     events.length = 0;
     h.controller.handleFix(fix(2, 31.232, 121.471));
     expect(events).toEqual([{ type: "nav.prompt", promptId: "prompt-1", routeCommandId: "nav-1", kind: "offRoute" }]);
-    expect(h.states.at(-1)).toEqual({ phase: "idle" });
+    expect(h.states.at(-1)).toEqual({ phase: "idle", position: ORIGIN_POSITION });
   });
 
   it("synchronous stop reentrancy from the now interrupt prevents the stale prompt send", async () => {
@@ -1018,7 +1033,7 @@ describe("RDK route guidance and rerouting", () => {
     h.controller.handleFix(fix(4, 31.2348));
     expect(h.events).toEqual([]);
     await expect(stop).resolves.toEqual({ type: "device.result", commandId: "device-stop", status: "ok" });
-    expect(h.states.at(-1)).toEqual({ phase: "idle" });
+    expect(h.states.at(-1)).toEqual({ phase: "idle", position: ORIGIN_POSITION });
   });
 
   it("a throwing clock callback cannot abort guidance after consuming the off-route one-shot", async () => {
@@ -1033,6 +1048,56 @@ describe("RDK route guidance and rerouting", () => {
     expect(() => h.controller.handleFix(fix(2, 31.232, 121.471))).not.toThrow();
     expect(h.events).toEqual([{ type: "nav.prompt", promptId: "prompt-1", routeCommandId: "nav-1", kind: "offRoute" }]);
     expect(h.states.at(-1)).toMatchObject({ phase: "guiding", offRoute: true });
+  });
+
+  describe("rider position on the snapshot", () => {
+    it("stamps every published snapshot with the newest fix", async () => {
+      let current: PhoneFix | undefined = ORIGIN_FIX;
+      const h = harness({ latest: () => current });
+      await startGuiding(h);
+
+      current = fix(2, 31.238);
+      h.controller.handleFix(fix(2, 31.238));
+
+      expect(h.states.at(-1)?.position).toEqual({ lat: 31.238, lon: 121.47 });
+    });
+
+    it("omits the position entirely when there is no fix", async () => {
+      const h = harness({ latest: () => undefined, waitForFix: () => Promise.resolve(ORIGIN_FIX) });
+      await startGuiding(h);
+
+      expect(h.states.at(-1)).not.toHaveProperty("position");
+    });
+
+    it("survives a throwing location source rather than failing the publish", async () => {
+      const h = harness({
+        latest: () => {
+          throw new Error("location source closed");
+        },
+        waitForFix: () => Promise.resolve(ORIGIN_FIX)
+      });
+
+      await expect(startGuiding(h)).resolves.toBeDefined();
+      expect(h.states.at(-1)).not.toHaveProperty("position");
+    });
+
+    it("clears the position when location becomes unavailable via location state change", async () => {
+      let current: PhoneFix | undefined = ORIGIN_FIX;
+      const h = harness({ latest: () => current });
+      await startGuiding(h);
+
+      expect(h.states.at(-1)?.position).toEqual({ lat: 31.23, lon: 121.47 });
+
+      // The source stops holding a fix, so latest() returns undefined. (A
+      // latest() that *throws* is a different test — see the throwing
+      // location-source case above.)
+      current = undefined;
+      h.controller.handleLocationState({ connection: "stale", usable: false, reason: "stale" });
+
+      // Position should be cleared, not frozen
+      expect(h.states.at(-1)).not.toHaveProperty("position");
+      expect(h.states.at(-1)).toMatchObject({ phase: "paused", location: { usable: false, reason: "stale" } });
+    });
   });
 });
 
@@ -1261,5 +1326,121 @@ describe("RDK location pause and resume", () => {
     h.controller.handleLocationState({ connection: "stopped", usable: false, reason: "stopped" });
     expect(seen.at(-1)?.location).toEqual({ connection: "stopped", usable: false, reason: "unpaired" });
     expect(h.states.at(-1)?.location).toEqual({ connection: "stopped", usable: false, reason: "stopped" });
+  });
+});
+
+describe("route geometry for the HUD", () => {
+  it("emits the installed route's polyline and maneuver coordinates", async () => {
+    const h = harness();
+    await startGuiding(h);
+
+    expect(h.routes.at(-1)).toEqual({
+      destinationName: "人民广场",
+      polyline: [
+        { lat: 31.23, lon: 121.47 },
+        { lat: 31.235, lon: 121.47 },
+        { lat: 31.24, lon: 121.47 }
+      ],
+      steps: [
+        { lat: 31.235, lon: 121.47 },
+        { lat: 31.24, lon: 121.47 }
+      ]
+    });
+  });
+
+  it("drops maneuver instructions rather than forwarding them twice", async () => {
+    const h = harness();
+    await startGuiding(h);
+
+    expect(JSON.stringify(h.routes.at(-1))).not.toContain("右转");
+  });
+
+  it("emits null when navigation closes", async () => {
+    const h = harness();
+    await startGuiding(h);
+    h.controller.close();
+
+    expect(h.routes.at(-1)).toBeNull();
+  });
+
+  it("does not retain the caller's arrays", async () => {
+    const event = route("nav-1");
+    const h = harness();
+    // handleRoute only installs a route once it matches a pending start (or
+    // an active reroute) — a bare handleRoute call on a fresh controller is
+    // a no-op, so the started state has to exist first to actually reach
+    // installRoute and give this test something to check.
+    h.controller.handleCommand({ commandId: "device-1", action: "navigation.start", args: { query: "人民广场" } });
+    await flush();
+    h.controller.handleRoute(event);
+    await flush();
+    event.polyline[0]!.lat = 0;
+
+    expect(h.routes.at(-1)?.polyline[0]).toEqual({ lat: 31.23, lon: 121.47 });
+  });
+});
+
+// The whole `HudState` — route included — is re-serialised to every socket on
+// every publish, and the page re-renders the schematic from scratch on every
+// message. A full-resolution Amap polyline is thousands of points, so the
+// board pays for all of them on every frame unless the geometry is thinned
+// once, at the boundary that emits it.
+describe("route polyline decimation for the HUD", () => {
+  // Deliberately not imported from the controller: the cap is a promise to the
+  // wire and the DOM, so the test states the number independently.
+  const CAP = 150;
+
+  function line(count: number): Array<{ lat: number; lon: number }> {
+    return Array.from({ length: count }, (_, index) => ({
+      lat: 31.23 + index * 0.0001,
+      lon: 121.47 + index * 0.0002
+    }));
+  }
+
+  async function installPolyline(overrides: Partial<NavRouteEvent>) {
+    const h = harness();
+    const result = h.controller.handleCommand({
+      commandId: "device-1",
+      action: "navigation.start",
+      args: { query: "人民广场" }
+    });
+    await flush();
+    h.controller.handleRoute(route("nav-1", overrides));
+    await result;
+    return h;
+  }
+
+  it("emits a polyline at or under the cap unchanged", async () => {
+    const polyline = line(CAP);
+    const h = await installPolyline({ polyline });
+
+    expect(h.routes.at(-1)?.polyline).toEqual(polyline);
+  });
+
+  it("reduces a polyline over the cap to at most the cap", async () => {
+    const h = await installPolyline({ polyline: line(4_000) });
+
+    expect(h.routes.at(-1)?.polyline.length).toBeLessThanOrEqual(CAP);
+  });
+
+  it("keeps the exact first and last points of a decimated polyline", async () => {
+    const polyline = line(4_000);
+    const h = await installPolyline({ polyline });
+    const emitted = h.routes.at(-1)!.polyline;
+
+    expect(emitted.at(0)).toEqual(polyline.at(0));
+    expect(emitted.at(-1)).toEqual(polyline.at(-1));
+  });
+
+  it("keeps every maneuver marker, however long the route", async () => {
+    const steps = Array.from({ length: CAP * 2 }, (_, index) => ({
+      instruction: `右转 ${index}`,
+      lat: 31.23 + index * 0.0001,
+      lon: 121.47 + index * 0.0002,
+      alongRouteMeters: index * 10
+    }));
+    const h = await installPolyline({ polyline: line(4_000), steps });
+
+    expect(h.routes.at(-1)?.steps).toEqual(steps.map((maneuver) => ({ lat: maneuver.lat, lon: maneuver.lon })));
   });
 });

@@ -77,6 +77,10 @@
   .muted {
     color: #7d8590;
   }
+  #companion-card {
+    margin-bottom: 16px;
+    overflow-wrap: anywhere;
+  }
   #navigation-card {
     margin-bottom: 16px;
     border-left: 4px solid #79c0ff;
@@ -222,9 +226,11 @@
   }
 </style>
 <h1>Max · RDK X5 bench</h1>
-<section id="navigation-card" class="card nav" hidden>
+<section id="companion-card" class="card">
   <div id="discovery-status" class="muted"></div>
   <div id="phone-status" class="muted"></div>
+</section>
+<section id="navigation-card" class="card nav" hidden>
   <div id="nav-instruction"></div>
   <div id="nav-distance"></div>
   <div id="nav-summary" class="muted"></div>
@@ -324,7 +330,10 @@
       sharing: "手机 GPS 共享中",
       stopped: "手机 GPS 已停止",
       stale: "手机 GPS 信号过期",
-      unpaired: "手机未配对"
+      // The board reports `unpaired` until the phone streams its first fix, so
+      // a paired helmet sits here between pairing and Helmet Ride. Saying
+      // 手机未配对 there reads as a broken binding; it is not.
+      unpaired: companion.paired ? "手机已配对 · 未共享定位" : "手机未配对"
     };
     const parts = [labels[companion.locationState] ?? "手机 GPS 状态未知"];
     if (finiteNonNegative(companion.horizontalAccuracyMeters)) {
@@ -335,13 +344,14 @@
     }
     return parts.join(" · ");
   };
+  // Only the navigation half. The companion status card is never hidden: a
+  // paired, idle board must still show whether it is broadcasting and whether
+  // the phone is sharing location.
   const clearNavigation = () => {
     navigationCardEl.hidden = true;
     navigationCardEl.classList.toggle("paused", false);
     navigationCardEl.classList.toggle("rerouting", false);
     navigationCardEl.classList.toggle("off-route", false);
-    discoveryStatusEl.textContent = "";
-    phoneStatusEl.textContent = "";
     navInstructionEl.textContent = "";
     navDistanceEl.textContent = "";
     navSummaryEl.textContent = "";
@@ -358,20 +368,12 @@
     const renderedAt = Date.now();
     const navigation = state.navigation !== null && typeof state.navigation === "object" ? state.navigation : null;
     const pairingVisible = hasVisiblePairing(state.companion, renderedAt);
-    if (navigation === null && !pairingVisible) {
-      clearNavigation();
-      return;
-    }
-    const paused = navigation?.phase === "paused";
-    const rerouting = navigation?.phase === "rerouting";
-    const offRoute = navigation?.offRoute === true;
-    navigationCardEl.hidden = false;
-    navigationCardEl.classList.toggle("paused", paused);
-    navigationCardEl.classList.toggle("rerouting", rerouting);
-    navigationCardEl.classList.toggle("off-route", offRoute);
+    // Companion status renders on every frame, route or no route.
     discoveryStatusEl.textContent = `配对广播 ${state.discovery}`;
     phoneStatusEl.textContent = phoneStatus(state.companion, renderedAt);
     if (pairingVisible) {
+      // Re-render exactly when the code expires so the row falls back to live
+      // status without waiting for another socket frame.
       pairingExpiryTimer = setTimeout(
         () => {
           pairingExpiryTimer = undefined;
@@ -381,12 +383,16 @@
       );
     }
     if (navigation === null) {
-      navInstructionEl.textContent = "";
-      navDistanceEl.textContent = "";
-      navSummaryEl.textContent = "";
-      navPausedEl.hidden = true;
+      clearNavigation();
       return;
     }
+    const paused = navigation.phase === "paused";
+    const rerouting = navigation.phase === "rerouting";
+    const offRoute = navigation.offRoute === true;
+    navigationCardEl.hidden = false;
+    navigationCardEl.classList.toggle("paused", paused);
+    navigationCardEl.classList.toggle("rerouting", rerouting);
+    navigationCardEl.classList.toggle("off-route", offRoute);
     navInstructionEl.textContent =
       typeof navigation.instruction === "string"
         ? navigation.instruction

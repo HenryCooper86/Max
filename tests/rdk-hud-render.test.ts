@@ -169,13 +169,18 @@ function element(harness: RenderHarness, id: string): FakeElement {
 }
 
 describe("RDK HUD navigation card", () => {
-  it("places the exact hidden card before the existing camera row", () => {
+  it("places the always-visible status card, then the hidden nav card, before the camera row", () => {
+    const statusStart = page.indexOf('<section id="companion-card" class="card">');
     const cardStart = page.indexOf('<section id="navigation-card" class="card nav" hidden>');
     const cameraRow = page.indexOf('<div class="row">');
-    expect(cardStart).toBeGreaterThan(-1);
+    expect(statusStart).toBeGreaterThan(-1);
+    expect(cardStart).toBeGreaterThan(statusStart);
     expect(cameraRow).toBeGreaterThan(cardStart);
+    expect(page.slice(statusStart, page.indexOf("</section>", statusStart) + 10)).toContain(
+      '<div id="discovery-status" class="muted"></div>\n  <div id="phone-status" class="muted"></div>'
+    );
     expect(page.slice(cardStart, page.indexOf("</section>", cardStart) + 10)).toContain(
-      '<div id="phone-status" class="muted"></div>\n  <div id="nav-instruction"></div>\n  <div id="nav-distance"></div>\n  <div id="nav-summary" class="muted"></div>\n  <div id="nav-paused" class="warning" hidden>手机定位已断开 · 导航暂停</div>'
+      '<div id="nav-instruction"></div>\n  <div id="nav-distance"></div>\n  <div id="nav-summary" class="muted"></div>\n  <div id="nav-paused" class="warning" hidden>手机定位已断开 · 导航暂停</div>'
     );
   });
 
@@ -186,7 +191,10 @@ describe("RDK HUD navigation card", () => {
     expect(element(harness, "discovery-status").textContent).toBe("配对广播 mdns");
   });
 
-  it("clears the broadcast status along with the rest of the card when it hides", () => {
+  // Was: "clears the broadcast status along with the rest of the card". The
+  // no-stale-value intent survives — the row must track the new value — but
+  // hiding it with the nav card is what blanked the resting HUD.
+  it("keeps the broadcast status current when the nav card hides", () => {
     const harness = renderHarness();
     harness.render(state({ discovery: "mdns" }));
     harness.render(
@@ -194,7 +202,7 @@ describe("RDK HUD navigation card", () => {
     );
 
     expect(element(harness, "navigation-card").hidden).toBe(true);
-    expect(element(harness, "discovery-status").textContent).toBe("");
+    expect(element(harness, "discovery-status").textContent).toBe("配对广播 off");
   });
 
   it("renders turn-first guidance, GPS quality, destination, remaining distance, and ETA", () => {
@@ -245,7 +253,8 @@ describe("RDK HUD navigation card", () => {
       })
     );
 
-    expect(element(harness, "navigation-card").hidden).toBe(false);
+    expect(element(harness, "companion-card").hidden).toBe(false);
+    expect(element(harness, "navigation-card").hidden).toBe(true);
     expect(element(harness, "phone-status").textContent).toBe("配对码 123456 · 1 分钟内有效");
     expect(element(harness, "nav-instruction").textContent).toBe("");
     expect(element(harness, "nav-distance").textContent).toBe("");
@@ -254,7 +263,7 @@ describe("RDK HUD navigation card", () => {
     now.mockRestore();
   });
 
-  it("hides and clears a pairing-only card at the exact expiry boundary without another socket frame", () => {
+  it("drops the code at the exact expiry boundary without another socket frame", () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(20_000);
     const harness = renderHarness();
     harness.render(
@@ -268,16 +277,17 @@ describe("RDK HUD navigation card", () => {
         navigation: null
       })
     );
-    expect(element(harness, "navigation-card").hidden).toBe(false);
+    expect(element(harness, "phone-status").textContent).toContain("123456");
 
     now.mockReturnValue(20_001);
     harness.runTimeouts();
     expect(element(harness, "navigation-card").hidden).toBe(true);
-    expect(element(harness, "phone-status").textContent).toBe("");
+    expect(element(harness, "companion-card").hidden).toBe(false);
+    expect(element(harness, "phone-status").textContent).toBe("手机未配对");
     now.mockRestore();
   });
 
-  it("hides a pairing-only card when pairing succeeds", () => {
+  it("replaces the code with live status when pairing succeeds", () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(20_000);
     const harness = renderHarness();
     harness.render(
@@ -299,7 +309,8 @@ describe("RDK HUD navigation card", () => {
     );
 
     expect(element(harness, "navigation-card").hidden).toBe(true);
-    expect(element(harness, "phone-status").textContent).toBe("");
+    expect(element(harness, "companion-card").hidden).toBe(false);
+    expect(element(harness, "phone-status").textContent).toBe("手机 GPS 已连接");
     harness.runTimeouts();
     expect(element(harness, "navigation-card").hidden).toBe(true);
     now.mockRestore();
@@ -313,13 +324,14 @@ describe("RDK HUD navigation card", () => {
       locationState: "unpaired" as const
     },
     { paired: false, locationState: "unpaired" as const }
-  ])("hides an expired or missing-code unpaired card when navigation is null", (companion) => {
+  ])("shows no code but keeps status for an expired or missing-code unpaired board", (companion) => {
     const now = vi.spyOn(Date, "now").mockReturnValue(20_000);
     const harness = renderHarness();
     harness.render(state({ companion, navigation: null }));
 
     expect(element(harness, "navigation-card").hidden).toBe(true);
-    expect(element(harness, "phone-status").textContent).toBe("");
+    expect(element(harness, "companion-card").hidden).toBe(false);
+    expect(element(harness, "phone-status").textContent).toBe("手机未配对");
     now.mockRestore();
   });
 
@@ -389,13 +401,15 @@ describe("RDK HUD navigation card", () => {
     expect(element(harness, "nav-summary").textContent).toContain("剩余 1.6 km · 预计 6 分钟");
   });
 
-  it("clears every dynamic navigation field and hides the full card for null navigation", () => {
+  it("clears every dynamic navigation field and hides the nav card for null navigation", () => {
     const harness = renderHarness();
     harness.render(state());
     harness.render(state({ navigation: null }));
 
     expect(element(harness, "navigation-card").hidden).toBe(true);
-    expect(element(harness, "phone-status").textContent).toBe("");
+    // Companion status is deliberately NOT cleared here — that is the whole
+    // point of the split card.
+    expect(element(harness, "phone-status").textContent).toBe("手机 GPS 共享中 · 精度 ±8 m · 2 秒前");
     expect(element(harness, "nav-instruction").textContent).toBe("");
     expect(element(harness, "nav-distance").textContent).toBe("");
     expect(element(harness, "nav-summary").textContent).toBe("");
@@ -451,6 +465,76 @@ describe("RDK HUD navigation card", () => {
 
   it("keeps the HUD card-only with no map or remote Amap surface", () => {
     expect(page).not.toMatch(/<iframe|<canvas|webapi\.amap|restapi\.amap|amap\.com/i);
+  });
+});
+
+// A paired board that is not navigating is the resting state of every bench
+// session, and it used to render a completely blank HUD: the broadcast and
+// phone rows lived inside the navigation card, which hides itself whenever
+// there is no route and no displayable pairing code. Companion status is the
+// one thing a rider checks *before* navigating, so it gets its own card that
+// never hides.
+describe("RDK HUD companion status card", () => {
+  it("keeps companion status visible on a paired board with no active navigation", () => {
+    const harness = renderHarness();
+    harness.render(
+      state({ navigation: null, discovery: "mdns", companion: { paired: true, locationState: "connected" } })
+    );
+
+    expect(element(harness, "companion-card").hidden).toBe(false);
+    expect(element(harness, "discovery-status").textContent).toBe("配对广播 mdns");
+    expect(element(harness, "phone-status").textContent).toContain("手机 GPS 已连接");
+  });
+
+  it("hides only the navigation card when navigation ends, never the status card", () => {
+    const harness = renderHarness();
+    harness.render(state());
+    harness.render(state({ navigation: null }));
+
+    expect(element(harness, "navigation-card").hidden).toBe(true);
+    expect(element(harness, "companion-card").hidden).toBe(false);
+    expect(element(harness, "discovery-status").textContent).not.toBe("");
+    expect(element(harness, "phone-status").textContent).not.toBe("");
+  });
+
+  // The board reports `locationState: "unpaired"` until the phone streams a
+  // fix, so a freshly booted *paired* board rendered 手机未配对 — which reads
+  // as "pairing is broken" when the binding is in fact fine.
+  it("does not call a paired helmet unpaired when the phone is merely not sharing location", () => {
+    const harness = renderHarness();
+    harness.render(state({ navigation: null, companion: { paired: true, locationState: "unpaired" } }));
+
+    const text = element(harness, "phone-status").textContent;
+    expect(text).toContain("手机已配对");
+    expect(text).not.toContain("手机未配对");
+  });
+
+  it("still reports a genuinely unpaired helmet as unpaired", () => {
+    const harness = renderHarness();
+    harness.render(state({ navigation: null, companion: { paired: false, locationState: "unpaired" } }));
+
+    expect(element(harness, "phone-status").textContent).toBe("手机未配对");
+  });
+
+  it("falls back from an expired code to live status instead of blanking the row", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(20_000);
+    const harness = renderHarness();
+    const companion = {
+      paired: false,
+      pairingCode: "123456",
+      pairingExpiresAt: 20_001,
+      locationState: "unpaired" as const
+    };
+
+    harness.render(state({ companion, navigation: null }));
+    expect(element(harness, "phone-status").textContent).toContain("配对码 123456");
+
+    now.mockReturnValue(20_001);
+    harness.runTimeouts();
+
+    expect(element(harness, "companion-card").hidden).toBe(false);
+    expect(element(harness, "phone-status").textContent).toBe("手机未配对");
+    now.mockRestore();
   });
 });
 

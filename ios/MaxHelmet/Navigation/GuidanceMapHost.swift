@@ -1,5 +1,39 @@
 import SwiftUI
 
+enum GuidanceMapHostViewState: Equatable {
+    case consentRequired
+    case notEnabled
+    case unavailable
+    case nativeMap(AMapAcceptedConsent)
+}
+
+func guidanceMapHostViewState(
+    decision: AMapConsentDecision,
+    hasAPIKey: Bool,
+    hasGeometry: Bool,
+    loadFailed: Bool,
+    requiresDevice: Bool
+) -> GuidanceMapHostViewState {
+    switch amapMapPresentation(
+        decision: decision,
+        hasAPIKey: hasAPIKey,
+        hasGeometry: hasGeometry,
+        loadFailed: loadFailed
+    ) {
+    case .consentRequired:
+        return .consentRequired
+    case .notEnabled:
+        return .notEnabled
+    case .unavailable:
+        return .unavailable
+    case .map:
+        guard !requiresDevice, let consent = AMapAcceptedConsent(decision: decision) else {
+            return .unavailable
+        }
+        return .nativeMap(consent)
+    }
+}
+
 struct GuidanceMapHost: View {
     let guidance: GuidanceState
 
@@ -11,26 +45,35 @@ struct GuidanceMapHost: View {
         AMapRouteDisplayModel.make(guidance: guidance)
     }
 
-    private var presentation: AMapMapPresentation {
-        amapMapPresentation(
+    private var viewState: GuidanceMapHostViewState {
+        guidanceMapHostViewState(
             decision: consent.decision,
             hasAPIKey: configuration.hasAPIKey,
             hasGeometry: model != nil,
-            loadFailed: loadFailed
+            loadFailed: loadFailed,
+            requiresDevice: requiresDevice
         )
+    }
+
+    private var requiresDevice: Bool {
+        #if targetEnvironment(simulator)
+        true
+        #else
+        false
+        #endif
     }
 
     var body: some View {
         Group {
-            switch presentation {
+            switch viewState {
             case .consentRequired:
                 placeholder(title: "等待启用高德地图", actionTitle: nil, action: nil)
             case .notEnabled:
                 placeholder(title: "地图未启用", actionTitle: "启用地图", action: consent.reconsider)
             case .unavailable:
                 placeholder(title: "地图暂不可用", actionTitle: nil, action: nil)
-            case .map:
-                map
+            case let .nativeMap(acceptedConsent):
+                map(consent: acceptedConsent)
             }
         }
         .onAppear { consent.requestIfNeeded() }
@@ -40,23 +83,18 @@ struct GuidanceMapHost: View {
     }
 
     @ViewBuilder
-    private var map: some View {
-        #if targetEnvironment(simulator)
-        placeholder(title: "地图暂不可用", actionTitle: nil, action: nil)
-        #else
+    private func map(consent: AMapAcceptedConsent) -> some View {
         if let model,
-           let apiKey = configuration.apiKey,
-           let acceptedConsent = AMapAcceptedConsent(decision: consent.decision) {
+           let apiKey = configuration.apiKey {
             AMapRouteMap(
                 model: model,
-                consent: acceptedConsent,
+                consent: consent,
                 apiKey: apiKey,
                 loadFailed: $loadFailed
             )
         } else {
             placeholder(title: "地图暂不可用", actionTitle: nil, action: nil)
         }
-        #endif
     }
 
     @ViewBuilder

@@ -17,6 +17,23 @@ struct GuidanceCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            guidanceSummary
+
+            routeMap
+                .frame(height: 120)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .padding(14)
+        .background(HudColors.panelElevated, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(HudColors.border, lineWidth: 1)
+        )
+        .frame(maxWidth: 420)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var guidanceSummary: some View {
+        VStack(alignment: .leading, spacing: 10) {
             if guidance.offRoute {
                 Text("重新规划中…")
                     .font(.headline)
@@ -40,22 +57,21 @@ struct GuidanceCard: View {
             Text(etaText)
                 .font(.subheadline)
                 .foregroundStyle(HudColors.hudDim)
-
-            routeMap
-                .frame(height: 120)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
-        .padding(14)
-        .background(HudColors.panelElevated, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(HudColors.border, lineWidth: 1)
-        )
-        .frame(maxWidth: 420)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("导航 \(guidance.destinationName)，\(guidance.maneuverInstruction ?? "")，\(distanceText)")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(guidanceCardAccessibilitySummary(guidance))
+        .accessibilityAddTraits(.isStaticText)
     }
 
     private var routeMap: some View {
         GuidanceMapHost(guidance: guidance)
     }
+}
+
+func guidanceCardAccessibilitySummary(_ guidance: GuidanceState) -> String {
+    let distance = guidance.distanceToManeuverMeters >= 1000
+        ? String(format: "%.1f 公里", guidance.distanceToManeuverMeters / 1000)
+        : "\(Int(guidance.distanceToManeuverMeters)) 米"
+    let eta = "\(Int((guidance.remainingSeconds / 60).rounded())) 分钟 · \(String(format: "%.1f", guidance.remainingDistanceMeters / 1000)) 公里"
+    return "导航 \(guidance.destinationName)，\(guidance.maneuverInstruction ?? "")，\(distance)，\(eta)"
 }

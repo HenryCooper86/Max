@@ -124,6 +124,92 @@ export function extractDeviceCommandForPlatform(text: string, platform: string |
   return command;
 }
 
+export type DeviceActivityIntent = {
+  target: "recording" | "navigation";
+  active: boolean;
+};
+
+const CONTEXTUAL_CANCEL_ZH =
+  /^(?:(?:max|马克斯|麦克斯)[\s,，]*)?(?:(?:那?好(?:的)?|嗯|行|可以)[\s,，]*)*(?:请|麻烦)?(?:帮我)?(?:取消|停(?:止|一下)?|关掉|关闭)(?:它|这个|一下)?$/i;
+const CONTEXTUAL_CANCEL_EN =
+  /^(?:max[\s,]*)?(?:(?:okay|ok|sure)[\s,]*)?(?:please\s+)?(?:cancel(?:\s+(?:it|that))?|stop(?:\s+(?:it|that))?|turn\s+(?:it|that)\s+off)(?:\s+please)?$/i;
+
+/**
+ * Resolves short follow-ups such as “帮我取消” against device state that the
+ * relay learned from real device results. A bare cancel with no active target
+ * remains ordinary conversation; guessing a start/stop target would be worse
+ * than asking the rider to name it.
+ *
+ * A start is considered a candidate as soon as it is dispatched so an
+ * immediate cancel can still stop hardware whose success response is delayed
+ * or lost. Failure reconciliation removes that candidate, except for the
+ * honest “already recording” result, which proves the target is active.
+ */
+export class DeviceActivityContext {
+  private readonly active: Record<DeviceActivityIntent["target"], boolean> = {
+    recording: false,
+    navigation: false
+  };
+  private recent: DeviceActivityIntent["target"][] = [];
+
+  commandFor(text: string, platform: string | undefined): DeviceCommand | null {
+    const direct = extractDeviceCommandForPlatform(text, platform);
+    if (direct) return direct;
+
+    const normalized = text.trim().replace(/[。！!？?]+$/g, "");
+    if (!CONTEXTUAL_CANCEL_ZH.test(normalized) && !CONTEXTUAL_CANCEL_EN.test(normalized)) return null;
+
+    const target = [...this.recent].reverse().find((candidate) => this.active[candidate]);
+    if (target === "recording") return { action: "camera.record", args: { start: false } };
+    if (target === "navigation") return { action: "navigation.stop", args: {} };
+    return null;
+  }
+
+  track(command: DeviceCommand): DeviceActivityIntent | undefined {
+    const intent: DeviceActivityIntent | undefined =
+      command.action === "camera.record"
+        ? { target: "recording", active: command.args.start }
+        : command.action === "navigation.start"
+          ? { target: "navigation", active: true }
+          : command.action === "navigation.stop"
+            ? { target: "navigation", active: false }
+            : undefined;
+    if (!intent) return undefined;
+
+    this.touch(intent.target);
+    if (intent.active) this.active[intent.target] = true;
+    return intent;
+  }
+
+  reconcile(intent: DeviceActivityIntent | undefined, result: { status: DeviceActionStatus; reason?: string }): void {
+    if (!intent) return;
+    if (result.status === "ok") {
+      this.setActive(intent.target, intent.active);
+      return;
+    }
+
+    if (intent.active) {
+      const provenActive = intent.target === "recording" && result.reason === "camera.recording";
+      this.setActive(intent.target, provenActive);
+      return;
+    }
+
+    if (result.reason === "camera.notRecording" || result.reason === "navigation.notActive") {
+      this.setActive(intent.target, false);
+    }
+  }
+
+  private touch(target: DeviceActivityIntent["target"]): void {
+    this.recent = [...this.recent.filter((candidate) => candidate !== target), target];
+  }
+
+  private setActive(target: DeviceActivityIntent["target"], active: boolean): void {
+    this.active[target] = active;
+    if (active) this.touch(target);
+    else this.recent = this.recent.filter((candidate) => candidate !== target);
+  }
+}
+
 /** Players we cannot drive. MPMusicPlayerController reaches only Apple Music and
  *  the local library; naming any of these must produce an honest refusal rather
  *  than silently controlling the wrong player. */
@@ -530,6 +616,8 @@ export function deviceSuccessSpeech(command: DeviceCommand): string | undefined 
       return "拍好了。";
     case "camera.record":
       return command.args.start ? "开始录像。" : "已停止录像。";
+    case "navigation.stop":
+      return "已取消导航。";
     case "system.shutdown":
       // The board's countdown tones are the ground truth; this line matches
       // them rather than promising an instant poweroff.
@@ -596,6 +684,8 @@ export type IssuedDeviceCommand = {
   /** The requested vision.watch toggle state. Task 3 flips the embedded
    *  watch governor on the matching device.result "ok". */
   watchOn?: boolean;
+  /** Stateful follow-up target captured when the command was issued. */
+  activity?: DeviceActivityIntent;
 };
 
 /** Tracks dispatched commands so no command can be left pending forever. */
@@ -607,7 +697,8 @@ export class PendingDeviceCommands {
     okSpeech?: string,
     now: number = Date.now(),
     question?: string,
-    watchOn?: boolean
+    watchOn?: boolean,
+    activity?: DeviceActivityIntent
   ): IssuedDeviceCommand {
     const expiresAt = now + (action === "navigation.start" ? NAVIGATION_RESULT_TIMEOUT_MS : DEVICE_RESULT_TIMEOUT_MS);
     const issued: IssuedDeviceCommand = {
@@ -617,7 +708,8 @@ export class PendingDeviceCommands {
       expiresAt,
       okSpeech,
       question,
-      watchOn
+      watchOn,
+      ...(activity === undefined ? {} : { activity })
     };
     this.pending.set(issued.commandId, issued);
     return issued;

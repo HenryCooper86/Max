@@ -341,6 +341,41 @@ function buildHarness(options: { randomToken?: () => string } = {}) {
 }
 
 describe("phone relay to RDK navigation end-to-end", () => {
+  it("keeps guidance live across the iPhone's fifteen-second stationary fix cadence", async () => {
+    const h = buildHarness();
+    h.attachHelmet();
+    const phone = h.attachPhone();
+
+    await h.companionSend(phone, { type: "companion.pair", code: PAIR_CODE });
+    await h.companionSend(phone, { type: "companion.start" });
+
+    const start = h.controller.handleCommand({
+      commandId: "device-navigation-stationary",
+      action: "navigation.start",
+      args: { query: "人民广场" }
+    });
+    await h.location(phone, 1, WGS_FIXES.start, { speedMps: 0 });
+    const request = h.outgoingRequests[0]!;
+    h.relayRoute(request);
+    await expect(start).resolves.toMatchObject({ status: "ok" });
+
+    await h.advance(15_000);
+    expect(h.navigationStates.at(-1)).toMatchObject({
+      phase: "guiding",
+      location: { connection: "sharing", usable: true }
+    });
+
+    await h.location(phone, 2, WGS_FIXES.start, { speedMps: 0 });
+    await h.advance(15_000);
+    expect(h.navigationStates.at(-1)).toMatchObject({
+      phase: "guiding",
+      location: { connection: "sharing", usable: true }
+    });
+    expect(
+      h.helmetFrames.filter((event) => event.type === "phone.location.status" && event.state === "stale")
+    ).toHaveLength(0);
+  });
+
   it("pairs, shares, guides, reroutes, pauses, resumes, arrives, and tears down in semantic order", async () => {
     const h = buildHarness();
     const detachHelmet = h.attachHelmet();
@@ -385,7 +420,7 @@ describe("phone relay to RDK navigation end-to-end", () => {
     await h.advance(1_000);
     await h.location(phone, 1, WGS_FIXES.far);
     await h.advance(1_000);
-    await h.location(phone, 2, WGS_FIXES.far, { timestamp: h.now() - 10_001 });
+    await h.location(phone, 2, WGS_FIXES.far, { timestamp: h.now() - 20_001 });
     expect(h.helmetFrames.filter((event) => event.type === "phone.location")).toHaveLength(1);
 
     await h.location(phone, 2, WGS_FIXES.far);
@@ -407,7 +442,7 @@ describe("phone relay to RDK navigation end-to-end", () => {
     const replacementRoute = h.relayRoute(rerouteRequest);
     expect(replacementRoute.commandId).toBe(rerouteRequest.commandId);
 
-    await h.advance(10_000);
+    await h.advance(20_000);
     expect(h.navigationStates.at(-1)).toMatchObject({
       phase: "paused",
       location: { connection: "stale", usable: false, reason: "stale" }

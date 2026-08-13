@@ -328,6 +328,7 @@ describe("RDK navigation command lifecycle", () => {
     await expect(
       h.controller.handleCommand({ commandId: "device-stop-2", action: "navigation.stop", args: {} })
     ).resolves.toEqual({ type: "device.result", commandId: "device-stop-2", status: "ok" });
+    expect(h.routes.at(-1)).toBeNull();
   });
 
   it("ignores stale and cached route/error answers until the current identity answers", async () => {
@@ -1263,7 +1264,7 @@ describe("RDK location pause and resume", () => {
     );
     await expect(start).resolves.toMatchObject({ status: "ok" });
 
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(20_000);
     expect(states.at(-1)).toMatchObject({ phase: "paused", location: { usable: false, reason: "stale" } });
     source.acceptLocation({
       type: "phone.location",

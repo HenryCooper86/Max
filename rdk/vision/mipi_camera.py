@@ -62,11 +62,17 @@ class FrameBuffer:
         self._encode = encode or _encode_jpeg
         self._clock = clock
         self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)
         self._frame: Frame | None = None
         self._jpeg: bytes | None = None
         self._received_at: float | None = None
         self._last_jpeg: bytes | None = None
         self._last_jpeg_at: float | None = None
+        # Preview, manual recording and camera.look can ask for the same frame
+        # concurrently. Only one of them should pay the 1080p cv2 encode; the
+        # others wait without holding the frame lock, so the ROS subscriber can
+        # continue installing fresh NV12 frames.
+        self._encoding = False
 
     def put(self, nv12: bytes, t_ms: int) -> None:
         with self._lock:
@@ -85,32 +91,47 @@ class FrameBuffer:
             return self._frame
 
     def jpeg(self, max_age_ms: float | None = None) -> bytes | None:
-        with self._lock:
-            if self._jpeg is not None:
-                return self._jpeg  # current frame's encode — exact, as always
-            if (
-                max_age_ms is not None
-                and self._last_jpeg is not None
-                and self._last_jpeg_at is not None
-                and (self._clock() - self._last_jpeg_at) * 1000.0 <= max_age_ms
-            ):
-                # A newer frame exists but the last encode is younger than the
-                # caller's staleness budget. Serving it is what turns thirty
-                # encodes a second into ten.
-                return self._last_jpeg
-            frame = self._frame
-        if frame is None:
-            return None
+        with self._condition:
+            while True:
+                if self._jpeg is not None:
+                    return self._jpeg  # current frame's encode — exact, as always
+                if (
+                    max_age_ms is not None
+                    and self._last_jpeg is not None
+                    and self._last_jpeg_at is not None
+                    and (self._clock() - self._last_jpeg_at) * 1000.0 <= max_age_ms
+                ):
+                    # A newer frame exists but the last encode is younger than the
+                    # caller's staleness budget. Serving it is what turns thirty
+                    # encodes a second into ten.
+                    return self._last_jpeg
+                frame = self._frame
+                if frame is None:
+                    return None
+                if not self._encoding:
+                    self._encoding = True
+                    break
+                # Another consumer owns the encoder. Condition.wait releases
+                # the lock, so put() keeps draining the camera while we wait.
+                self._condition.wait()
 
         # Encode outside the lock: a 3 MB frame takes long enough that holding
         # it would stall the subscriber thread and drop frames.
-        data = self._encode(frame.nv12, frame.width, frame.height)
-        with self._lock:
+        try:
+            data = self._encode(frame.nv12, frame.width, frame.height)
+        except BaseException:
+            with self._condition:
+                self._encoding = False
+                self._condition.notify_all()
+            raise
+        with self._condition:
             if self._frame is frame:
                 self._jpeg = data
             if data is not None:
                 self._last_jpeg = data
                 self._last_jpeg_at = self._clock()
+            self._encoding = False
+            self._condition.notify_all()
         return data
 
     def age_seconds(self) -> float | None:

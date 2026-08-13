@@ -310,6 +310,19 @@ describe("reduceHud", () => {
       expect(reduceHud(active, { type: "rdk.route", route: null }).route).toBeNull();
     });
 
+    it("cannot retain route geometry once the navigation snapshot is cleared", () => {
+      const withRoute = reduceHud(initialHudState(), { type: "rdk.route", route: geometry() });
+      const active = reduceHud(withRoute, {
+        type: "rdk.navigation",
+        navigation: { phase: "guiding", destinationName: "人民广场" }
+      });
+
+      expect(reduceHud(active, { type: "rdk.navigation", navigation: null })).toMatchObject({
+        navigation: null,
+        route: null
+      });
+    });
+
     it("replaces geometry wholesale on a reroute rather than merging", () => {
       const active = reduceHud(initialHudState(), { type: "rdk.route", route: geometry() });
       const rerouted = reduceHud(active, {

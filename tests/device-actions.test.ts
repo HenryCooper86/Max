@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEVICE_ACTION_TIERS,
   DEVICE_RESULT_TIMEOUT_MS,
+  DeviceActivityContext,
   PendingDeviceCommands,
   deviceFailureSpeech,
   deviceSuccessSpeech,
@@ -196,11 +197,59 @@ describe("deviceSuccessSpeech", () => {
     expect(deviceSuccessSpeech({ action: "camera.record", args: { start: false } })).toBe("已停止录像。");
     expect(deviceSuccessSpeech({ action: "torch.set", args: { on: true } })).toBe("手电筒开了。");
     expect(deviceSuccessSpeech({ action: "torch.set", args: { on: false } })).toBe("手电筒关了。");
+    expect(deviceSuccessSpeech({ action: "navigation.stop", args: {} })).toBe("已取消导航。");
   });
 
   it("leaves navigation and dialing to their own confirmation path", () => {
     expect(deviceSuccessSpeech({ action: "navigation.start", args: { query: "x" } })).toBeUndefined();
     expect(deviceSuccessSpeech({ action: "call.dial", args: { number: "110" } })).toBeUndefined();
+  });
+});
+
+describe("DeviceActivityContext", () => {
+  it("turns the exact live-session follow-up into a real recording stop only while recording is active", () => {
+    const context = new DeviceActivityContext();
+
+    expect(context.commandFor("那好的，帮我取消。", "embedded")).toBeNull();
+
+    const started = context.track({ action: "camera.record", args: { start: true } });
+    context.reconcile(started, { status: "ok" });
+    expect(context.commandFor("那好的，帮我取消。", "embedded")).toEqual({
+      action: "camera.record",
+      args: { start: false }
+    });
+
+    const stopped = context.track({ action: "camera.record", args: { start: false } });
+    context.reconcile(stopped, { status: "ok" });
+    expect(context.commandFor("帮我取消", "embedded")).toBeNull();
+  });
+
+  it("cancels active navigation and chooses the most recently activated operation when both are live", () => {
+    const context = new DeviceActivityContext();
+    const navigation = context.track({ action: "navigation.start", args: { query: "外滩" } });
+    context.reconcile(navigation, { status: "ok" });
+    expect(context.commandFor("Max, cancel it", "embedded")).toEqual({ action: "navigation.stop", args: {} });
+
+    const recording = context.track({ action: "camera.record", args: { start: true } });
+    context.reconcile(recording, { status: "ok" });
+    expect(context.commandFor("stop it", "embedded")).toEqual({
+      action: "camera.record",
+      args: { start: false }
+    });
+  });
+
+  it("does not leave failed starts active, while already-recording remains safely cancellable", () => {
+    const context = new DeviceActivityContext();
+    const failed = context.track({ action: "navigation.start", args: { query: "外滩" } });
+    context.reconcile(failed, { status: "failed", reason: "route.unavailable" });
+    expect(context.commandFor("取消", "embedded")).toBeNull();
+
+    const alreadyRecording = context.track({ action: "camera.record", args: { start: true } });
+    context.reconcile(alreadyRecording, { status: "failed", reason: "camera.recording" });
+    expect(context.commandFor("cancel it", "embedded")).toEqual({
+      action: "camera.record",
+      args: { start: false }
+    });
   });
 });
 

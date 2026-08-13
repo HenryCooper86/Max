@@ -12,6 +12,11 @@ final class AgentScreenLayoutTests: XCTestCase {
     private let phoneSEPortrait = CGSize(width: 375, height: 647)
     private let phoneSELandscape = CGSize(width: 667, height: 355)
 
+    func testRemovingTheDockReclaimsItsPortraitAndLandscapeReservations() {
+        XCTAssertEqual(HudMetrics.portraitChrome, 218)
+        XCTAssertEqual(HudMetrics.landscapeChrome, 118)
+    }
+
     func testCompactVerticalSpaceSelectsLandscape() {
         XCTAssertEqual(hudLayout(verticalSizeClassIsCompact: true), .landscape)
         XCTAssertEqual(hudLayout(verticalSizeClassIsCompact: false), .portrait)
@@ -70,7 +75,7 @@ final class AgentScreenLayoutTests: XCTestCase {
     func testHelmetShrinksRatherThanStayingFixedWhenCaptionsOpen() {
         let plain = helmetDiameter(layout: .portrait, available: phoneSEPortrait)
         let withCaptions = helmetDiameter(layout: .portrait, available: phoneSEPortrait, captionsVisible: true)
-        XCTAssertLessThan(withCaptions, plain, "captions must cost the helmet height, not the mic dock")
+        XCTAssertLessThan(withCaptions, plain, "captions must cost the helmet height, not secondary controls")
     }
 
     // MARK: - captions give way before the controls do

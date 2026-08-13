@@ -34,6 +34,12 @@ struct MainViewModelVoiceActions {
     let stop: () -> Void
 }
 
+/// A hands-free session is considered active as soon as its start begins, so a
+/// second helmet tap stops a live session or cancels a connection attempt.
+func shouldStopHandsFreeSession(handsFree: Bool) -> Bool {
+    handsFree
+}
+
 /// Bridges the process-wide AgentSession and rider preferences to the SwiftUI HUD.
 /// The iOS counterpart of android/.../ui/MainViewModel.kt.
 final class MainViewModel: ObservableObject {
@@ -1462,7 +1468,7 @@ final class MainViewModel: ObservableObject {
     /// (and best-effort location) permission prompts are surfaced by the system on
     /// first use; background audio keeps the session alive when backgrounded.
     func toggleHandsFree() {
-        if session.state.handsFree {
+        if shouldStopHandsFreeSession(handsFree: session.state.handsFree) {
             session.stop()
         } else {
             pendingHandsFreeRetry = false

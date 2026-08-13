@@ -2,6 +2,11 @@ import XCTest
 @testable import MaxHelmet
 
 final class SessionLifecycleTests: XCTestCase {
+    func testSecondHandsFreeToggleStopsAnActiveOrConnectingSession() {
+        XCTAssertFalse(shouldStopHandsFreeSession(handsFree: false))
+        XCTAssertTrue(shouldStopHandsFreeSession(handsFree: true))
+    }
+
     func testStopInvalidatesDelayedStartupCallbacks() throws {
         var lifecycle = SessionLifecycle()
         let generation = try XCTUnwrap(lifecycle.begin())

@@ -137,6 +137,18 @@ private func orbCaption(_ state: AgentSession.State) -> String {
     }
 }
 
+func helmetToggleAccessibilityLabel(handsFree: Bool) -> String {
+    handsFree ? "结束免提" : "开启免提"
+}
+
+func helmetToggleAccessibilityHint(handsFree: Bool) -> String {
+    handsFree ? "结束免提会话，或取消正在进行的连接" : "开启免提会话"
+}
+
+func helmetToggleAccessibilityValue(handsFree: Bool) -> String {
+    handsFree ? "免提已开启" : "免提未开启"
+}
+
 /// Pure voice-mode main screen, in the spirit of ChatGPT's voice mode: a dark
 /// glow with the helmet centerpiece breathing and glowing with the conversation,
 /// a single status caption, and minimal controls. The safety-critical ADAS hazard
@@ -162,8 +174,8 @@ struct AgentScreen: View {
             GeometryReader { proxy in
                 // Sizes come from the space actually on offer rather than from
                 // constants: a 300pt helmet and a 190pt caption card fit a
-                // portrait iPhone 15 and nothing else, which is how the mic dock
-                // ended up off-screen in landscape and with captions open.
+                // portrait iPhone 15 and nothing else, which is how captions and
+                // secondary controls ended up competing for safe-area space.
                 let available = proxy.size
                 let hazardVisible = state.hazardAlert != nil
                 let guidanceVisible = state.guidance != nil
@@ -279,6 +291,7 @@ struct AgentScreen: View {
             dimmed: state.micMuted,
             hazard: hazard,
             gauge: gaugeMode(state),
+            handsFree: state.handsFree,
             diameter: size,
             onTap: viewModel.toggleHandsFree
         )
@@ -312,7 +325,6 @@ struct AgentScreen: View {
             if let captions { captionsCard(height: captions) }
 
             SecondaryControls(state: state, viewModel: viewModel)
-            VoiceMicDock(state: state, action: viewModel.toggleHandsFree)
         }
     }
 
@@ -335,7 +347,6 @@ struct AgentScreen: View {
                     if let captions { captionsCard(height: captions) }
                     Spacer(minLength: 0)
                     SecondaryControls(state: state, viewModel: viewModel)
-                    VoiceMicDock(state: state, action: viewModel.toggleHandsFree)
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -473,6 +484,8 @@ private struct HelmetVisual: View {
     let hazard: HazardLevel
     /// Which arc the instrument bezel lights (mirrors the web gauge).
     let gauge: GaugeMode
+    /// Whether a hands-free session is active, including a connection attempt.
+    let handsFree: Bool
     /// Sized by the screen, not by a constant — see AgentScreenLayout.
     var diameter: CGFloat = HudMetrics.helmetMaxDiameter
     var onTap: () -> Void
@@ -498,38 +511,40 @@ private struct HelmetVisual: View {
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { timeline in
-            let t = helmetMotionTime(
-                elapsed: timeline.date.timeIntervalSinceReferenceDate,
-                reduceMotion: reduceMotion
-            )
-            let level = Double(max(0, min(1, voiceLevel)))
-            let breathe = 0.5 + 0.5 * sin(t * breatheSpeed)
-            let pulse = pulseAmplitude * breathe + 0.06 * level
-            // Critical hazard: a subtle ~0.9s opacity pulse so the danger tint
-            // visibly throbs without competing with the hazard banner.
-            let hazardPulse = hazard == .critical
-                ? 0.86 + 0.14 * (0.5 + 0.5 * sin(t * (2 * .pi / 0.9)))
-                : 1.0
-
-            Canvas { context, size in
-                drawGauge(in: &context, size: size, color: color, mode: gauge, level: level, t: t)
-                drawHelmet(
-                    in: &context, size: size, color: color, level: level,
-                    breathe: breathe, pulse: pulse,
-                    listening: turnState == .listening || turnState == .hearing,
-                    speaking: turnState == .speaking
+        Button(action: onTap) {
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { timeline in
+                let t = helmetMotionTime(
+                    elapsed: timeline.date.timeIntervalSinceReferenceDate,
+                    reduceMotion: reduceMotion
                 )
+                let level = Double(max(0, min(1, voiceLevel)))
+                let breathe = 0.5 + 0.5 * sin(t * breatheSpeed)
+                let pulse = pulseAmplitude * breathe + 0.06 * level
+                // Critical hazard: a subtle ~0.9s opacity pulse so the danger tint
+                // visibly throbs without competing with the hazard banner.
+                let hazardPulse = hazard == .critical
+                    ? 0.86 + 0.14 * (0.5 + 0.5 * sin(t * (2 * .pi / 0.9)))
+                    : 1.0
+
+                Canvas { context, size in
+                    drawGauge(in: &context, size: size, color: color, mode: gauge, level: level, t: t)
+                    drawHelmet(
+                        in: &context, size: size, color: color, level: level,
+                        breathe: breathe, pulse: pulse,
+                        listening: turnState == .listening || turnState == .hearing,
+                        speaking: turnState == .speaking
+                    )
+                }
+                .opacity(hazardPulse)
             }
-            .opacity(hazardPulse)
         }
+        .buttonStyle(.plain)
         .frame(width: diameter, height: diameter)
         .opacity(dimmed ? 0.55 : 1)
         .contentShape(Rectangle())
-        .onTapGesture { onTap() }
-        .accessibilityElement()
-        .accessibilityAddTraits(.isButton)
-        .accessibilityLabel(turnState == .idle ? "开启免提" : "结束免提")
+        .accessibilityLabel(helmetToggleAccessibilityLabel(handsFree: handsFree))
+        .accessibilityHint(helmetToggleAccessibilityHint(handsFree: handsFree))
+        .accessibilityValue(helmetToggleAccessibilityValue(handsFree: handsFree))
     }
 }
 
@@ -807,8 +822,8 @@ private struct StateReadout: View {
 
 private struct CaptionsOverlay: View {
     let items: [TranscriptItem]
-    /// The card's list height, chosen against the screen. Fixed at 190 it was
-    /// the difference between the mic dock being on screen and off it.
+    /// The card's list height is chosen against the screen so captions and
+    /// secondary controls remain within the available safe-area height.
     var listHeight: CGFloat = 190
     let canFlag: (TranscriptItem) -> Bool
     let onFlag: (TranscriptItem, String) -> Void

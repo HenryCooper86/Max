@@ -22,9 +22,12 @@ enum HudMetrics {
     static let helmetMinDiameter: CGFloat = 116
 
     /// Portrait furniture above and below the helmet: top bar, state readout,
-    /// secondary controls, mic dock, the VStack spacings and the screen
-    /// padding. Measured against the constants in AgentScreen.swift.
-    static let portraitChrome: CGFloat = 296
+    /// secondary controls, the VStack spacings and the screen padding.
+    /// Measured against the constants in AgentScreen.swift.
+    static let portraitChrome: CGFloat = 218
+    /// Landscape furniture in the readout column: state readout, secondary
+    /// controls, spacing, and screen padding.
+    static let landscapeChrome: CGFloat = 118
     /// A hazard banner is two lines of text plus its padding.
     static let hazardBanner: CGFloat = 100
     /// The recording pill.
@@ -93,7 +96,7 @@ func helmetDiameter(
         unbounded = available.height - chrome
     case .landscape:
         // Whichever axis runs out first, so the helmet never overlaps the
-        // column beside it and never overflows the row above the dock.
+        // column beside it or overflows the top bar and alerts.
         var height = available.height - HudMetrics.hazardBanner * (hazardVisible ? 1 : 0)
         height -= HudMetrics.hazardBanner * (crashVisible ? 1 : 0)
         height -= 44  // top bar + spacing
@@ -103,8 +106,8 @@ func helmetDiameter(
 }
 
 /// Height for the caption card, or nil when there is not enough room to show
-/// one honestly. Never fixed at 190: that is what pushed the mic dock — the one
-/// control a rider must be able to hit — off the bottom of the screen.
+/// one honestly. The reservation keeps the helmet, captions, and secondary
+/// controls within the available safe-area height.
 func captionsHeight(
     layout: HudLayout,
     available: CGSize,
@@ -126,9 +129,9 @@ func captionsHeight(
             ) + HudMetrics.helmetMinDiameter
     case .landscape:
         // The helmet sits beside the captions, so it costs no height here —
-        // only the readout, controls, dock, top bar and any banner do.
+        // only the readout, secondary controls, top bar, and any banner do.
         reserved =
-            190 + (hazardVisible ? HudMetrics.hazardBanner : 0)
+            HudMetrics.landscapeChrome + (hazardVisible ? HudMetrics.hazardBanner : 0)
             + (guidanceVisible ? HudMetrics.guidanceCard : 0)
             + (crashVisible ? HudMetrics.hazardBanner : 0)
     }

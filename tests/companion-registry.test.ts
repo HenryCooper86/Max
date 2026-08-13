@@ -523,6 +523,34 @@ describe("companion registry sharing lifecycle", () => {
     expect(h.logs.join(" ")).not.toContain("121.4737");
   });
 
+  it("forwards a low-accuracy iOS fix as a connection heartbeat and refreshes its stale deadline", async () => {
+    vi.useFakeTimers();
+    const h = harness();
+    const { helmet, phone } = await pairAndStart(h);
+
+    await phone.connection.handle(location(1, h.now(), { horizontalAccuracyMeters: 7 }));
+    h.advance(30_000);
+    await phone.connection.handle(location(2, h.now(), { horizontalAccuracyMeters: 80 }));
+
+    expect(helmet.events.at(-1)).toMatchObject({
+      type: "phone.location",
+      sequence: 2,
+      horizontalAccuracyMeters: 80
+    });
+    expect(phone.events.at(-1)).not.toMatchObject({ type: "companion.error", code: "location.accuracy" });
+
+    h.advance(44_999);
+    expect(latest(helmet.events, "phone.location.status")).not.toEqual({
+      type: "phone.location.status",
+      state: "stale"
+    });
+    h.advance(1);
+    expect(latest(helmet.events, "phone.location.status")).toEqual({
+      type: "phone.location.status",
+      state: "stale"
+    });
+  });
+
   it("rejects fixes outside sharing, sequence, rate, timestamp, coordinate, accuracy, course, and speed gates", async () => {
     vi.useFakeTimers();
     const h = harness();
@@ -544,11 +572,11 @@ describe("companion registry sharing lifecycle", () => {
     expect(phone.events.at(-1)).toMatchObject({ type: "companion.error", code: "location.sequence" });
 
     const rejected: Array<[CompanionClientEvent, string]> = [
-      [location(2, h.now() - 20_001), "location.timestamp"],
+      [location(2, h.now() - 45_001), "location.timestamp"],
       [location(2, h.now() + 2_001), "location.timestamp"],
       [location(2, h.now(), { lat: 90.1 }), "location.coordinates"],
       [location(2, h.now(), { lon: -180.1 }), "location.coordinates"],
-      [location(2, h.now(), { horizontalAccuracyMeters: 50.1 }), "location.accuracy"],
+      [location(2, h.now(), { horizontalAccuracyMeters: 10_000.1 }), "location.accuracy"],
       [location(2, h.now(), { courseDegrees: 360.1 }), "location.course"],
       [location(2, h.now(), { speedMps: -0.1 }), "location.speed"]
     ];
@@ -577,13 +605,13 @@ describe("companion registry sharing lifecycle", () => {
     expect(phone.events.at(-1)).toMatchObject({ type: "companion.status", state: "sharing" });
   });
 
-  it("emits stale exactly twenty seconds after the accepted fix timestamp, not receipt", async () => {
+  it("emits stale exactly forty-five seconds after the accepted fix timestamp, not receipt", async () => {
     vi.useFakeTimers();
     const h = harness();
     const { helmet, phone } = await pairAndStart(h);
 
     await phone.connection.handle(location(1, h.now() - 4_000));
-    h.advance(15_999);
+    h.advance(40_999);
     expect(
       helmet.events.filter((event) => event.type === "phone.location.status" && event.state === "stale")
     ).toHaveLength(0);
@@ -883,7 +911,7 @@ describe("companion registry throwing transport isolation", () => {
     await phone.connection.handle({ type: "companion.start" });
     await phone.connection.handle(location(1, h.now()));
 
-    expect(() => h.advance(20_000)).not.toThrow();
+    expect(() => h.advance(45_000)).not.toThrow();
     expect(phone.events.at(-1)).toMatchObject({
       type: "companion.status",
       state: "helmetOffline",

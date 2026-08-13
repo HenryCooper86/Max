@@ -73,9 +73,12 @@ type AttemptBucket = {
 const DEFAULT_PAIR_LIFETIME_MS = 5 * 60_000;
 const DEFAULT_MIN_FIX_INTERVAL_MS = 1_000;
 const MAX_PAIR_FAILURES = 5;
-const FIX_STALE_MS = 20_000;
+const FIX_STALE_MS = 45_000;
 const MAX_FUTURE_FIX_MS = 2_000;
-const MAX_HORIZONTAL_ACCURACY_METERS = 50;
+// Accuracy is a navigation-quality signal, not proof that the phone stopped
+// sharing. Forward coarse but structurally sane iOS fixes so they refresh the
+// connection heartbeat; RDK applies the stricter steering-quality threshold.
+const MAX_REPORTED_HORIZONTAL_ACCURACY_METERS = 10_000;
 const DISCOVERY_REFRESH_LEAD_MS = 60_000;
 const DEFAULT_CONFIRM_LIFETIME_MS = 30_000;
 
@@ -674,7 +677,7 @@ export function createCompanionRegistry(options: {
       rejectLocation(session, "location.coordinates", "Location coordinates are outside their accepted ranges");
       return;
     }
-    if (!finiteRange(event.horizontalAccuracyMeters, 0, MAX_HORIZONTAL_ACCURACY_METERS)) {
+    if (!finiteRange(event.horizontalAccuracyMeters, 0, MAX_REPORTED_HORIZONTAL_ACCURACY_METERS)) {
       rejectLocation(session, "location.accuracy", "Location accuracy is outside its accepted range");
       return;
     }

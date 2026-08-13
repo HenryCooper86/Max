@@ -190,6 +190,30 @@ describe("createDoubaoProvider — cumulative ASR partials", () => {
 
     await provider.close();
   });
+
+  it("reconnects the realtime voice session when Doubao never ends an ASR turn", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    stubWeatherFetch();
+    const { client, send } = makeClient();
+    const { provider, upstream } = await startLiveSession(client);
+
+    await upstream.emit("message", jsonFrame(ASR_INFO, {}));
+    await upstream.emit("message", jsonFrame(ASR_RESPONSE, { results: [{ text: "Max 帮我导航" }] }));
+
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(upstream.readyState).toBe(MockWebSocket.OPEN);
+    expect(upstreamInstances).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(upstream.readyState).toBe(MockWebSocket.CLOSED);
+    expect(clientEvents(send)).toContainEqual(expect.objectContaining({ type: "status", state: "connecting" }));
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(upstreamInstances).toHaveLength(2);
+
+    await provider.close();
+  });
 });
 
 describe("createDoubaoProvider — wake-word gating", () => {

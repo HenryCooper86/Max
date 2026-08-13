@@ -2,7 +2,7 @@ import type { PhoneLocationEvent, PhoneLocationStatusEvent } from "../../../../s
 import { wgs84ToGcj02 } from "../../../../shared/geo";
 
 const MAX_ACCURACY_METERS = 50;
-const MAX_AGE_MS = 20_000;
+const MAX_AGE_MS = 45_000;
 const MAX_FUTURE_MS = 2_000;
 const DEFAULT_WAIT_TIMEOUT_MS = 3_000;
 
@@ -115,12 +115,12 @@ export function createPhoneLocationSource(options: {
     waiters.clear();
   }
 
-  function scheduleStale(fix: PhoneFix): void {
+  function scheduleStale(observation: Pick<PhoneLocationEvent, "sequence" | "timestamp">): void {
     cancelStaleTimer();
     const generation = staleGeneration;
-    const delay = Math.max(0, fix.timestamp + MAX_AGE_MS - now());
+    const delay = Math.max(0, observation.timestamp + MAX_AGE_MS - now());
     staleTimer = setTimer(() => {
-      if (closed || generation !== staleGeneration || !usable || storedAcceptedFix?.sequence !== fix.sequence) return;
+      if (closed || generation !== staleGeneration || !lifecycleActive || lastSequence !== observation.sequence) return;
       staleTimer = undefined;
       lifecycleActive = false;
       usable = false;
@@ -182,7 +182,11 @@ export function createPhoneLocationSource(options: {
       if (restoresStale) lifecycleActive = true;
       lastSequence = event.sequence;
       if (event.horizontalAccuracyMeters > MAX_ACCURACY_METERS) {
-        cancelStaleTimer();
+        // A coarse fix cannot steer the rider, but it proves the iOS sharing
+        // stream is alive. Keep a heartbeat deadline instead of turning a
+        // temporary accuracy dip into an immediate/disconnected expiry.
+        scheduleStale(event);
+        storedAcceptedFix = undefined;
         usable = false;
         publish({
           connection: "sharing",

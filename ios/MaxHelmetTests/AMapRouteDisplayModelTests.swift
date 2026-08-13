@@ -26,10 +26,26 @@ final class AMapRouteDisplayModelTests: XCTestCase {
         let original = input
 
         let model = try XCTUnwrap(AMapRouteDisplayModel.make(guidance: input))
+        let expectedRoute = input.polyline.map(CoordinateDatum.wgs84ToGcj02)
 
-        XCTAssertTrue(coordinatesEqual(model.polyline[0], CoordinateDatum.wgs84ToGcj02(start)))
-        XCTAssertTrue(coordinatesEqual(try XCTUnwrap(model.currentLocation), CoordinateDatum.wgs84ToGcj02(start)))
-        XCTAssertEqual(input, original)
+        XCTAssertEqual(model.polyline.count, expectedRoute.count)
+        for (actual, expected) in zip(model.polyline, expectedRoute) {
+            XCTAssertEqual(actual.latitude, expected.latitude)
+            XCTAssertEqual(actual.longitude, expected.longitude)
+        }
+
+        let expectedCurrent = CoordinateDatum.wgs84ToGcj02(start)
+        let actualCurrent = try XCTUnwrap(model.currentLocation)
+        XCTAssertEqual(actualCurrent.latitude, expectedCurrent.latitude)
+        XCTAssertEqual(actualCurrent.longitude, expectedCurrent.longitude)
+
+        XCTAssertEqual(input.polyline.count, original.polyline.count)
+        for (before, after) in zip(original.polyline, input.polyline) {
+            XCTAssertEqual(after.latitude, before.latitude)
+            XCTAssertEqual(after.longitude, before.longitude)
+        }
+        XCTAssertEqual(input.currentLocation?.latitude, original.currentLocation?.latitude)
+        XCTAssertEqual(input.currentLocation?.longitude, original.currentLocation?.longitude)
     }
 
     func testRejectsShortOrNonFiniteGeometry() {

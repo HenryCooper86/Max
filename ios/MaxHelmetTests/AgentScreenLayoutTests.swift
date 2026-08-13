@@ -24,9 +24,12 @@ final class AgentScreenLayoutTests: XCTestCase {
 
     // MARK: - deterministic safe-area allocation
 
-    func testAllAlertContentHeightsUseTheSameBoundedPortraitAllocation() {
-        let inputs = HudLayoutInputs(
-            alertsVisible: true,
+    func testAllVisibleAlertSourcesUseTheSameBoundedPortraitAllocation() {
+        let inputs = hudLayoutInputs(
+            hazardVisible: true,
+            crashCheckInVisible: true,
+            guidanceVisible: true,
+            recordingVisible: true,
             captionsRequested: true,
             handsFreeActive: true
         )
@@ -37,21 +40,12 @@ final class AgentScreenLayoutTests: XCTestCase {
             captionsVisible: true
         )
 
-        // 232 is a regular guidance card, while 320/500 represent wrapped
-        // instructions at larger Dynamic Type. They are deliberately not
-        // allocator inputs: every value must get this same bounded viewport.
-        for conceptualAlertContentHeight in [CGFloat(0), 232, 320, 500] {
-            let allocation = hudDeterministicAllocation(
-                layout: .portrait,
-                available: phone15Portrait,
-                inputs: inputs
-            )
-            XCTAssertEqual(
-                allocation,
-                expected,
-                "intrinsic alert height \(conceptualAlertContentHeight) must scroll, not change HUD geometry"
-            )
-        }
+        let allocation = hudDeterministicAllocation(
+            layout: .portrait,
+            available: phone15Portrait,
+            inputs: inputs
+        )
+        XCTAssertEqual(allocation, expected)
     }
 
     func testPortraitSEAllAlertsDropsCaptionsBeforeTheHelmetOrControls() {
@@ -142,14 +136,18 @@ final class AgentScreenLayoutTests: XCTestCase {
                         for guidance in [false, true] {
                             for recording in [false, true] {
                                 for handsFreeActive in [false, true] {
+                                    let inputs = hudLayoutInputs(
+                                        hazardVisible: hazard,
+                                        crashCheckInVisible: crash,
+                                        guidanceVisible: guidance,
+                                        recordingVisible: recording,
+                                        captionsRequested: captionsRequested,
+                                        handsFreeActive: handsFreeActive
+                                    )
                                     let allocation = hudDeterministicAllocation(
                                         layout: layout,
                                         available: size,
-                                        inputs: HudLayoutInputs(
-                                            alertsVisible: hazard || crash || guidance || recording,
-                                            captionsRequested: captionsRequested,
-                                            handsFreeActive: handsFreeActive
-                                        )
+                                        inputs: inputs
                                     )
                                     XCTAssertGreaterThanOrEqual(allocation.helmetDiameter, 116)
                                     XCTAssertGreaterThanOrEqual(allocation.utilityViewportHeight, 0)

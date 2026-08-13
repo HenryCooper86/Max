@@ -124,6 +124,7 @@ struct GuidanceMapHost: View {
             if let actionTitle, let action {
                 Button(actionTitle, action: action)
                     .buttonStyle(.bordered)
+                    .accessibilityIdentifier(HudAccessibilityID.guidanceMapAction)
             }
         }
         .foregroundStyle(HudColors.hudDim)

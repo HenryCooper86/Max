@@ -24,5 +24,6 @@ struct MuteUtilityPill: View {
         .frame(minHeight: muteUtilityMinimumHitHeight)
         .contentShape(Rectangle())
         .accessibilityLabel(muted ? "取消静音" : "静音")
+        .accessibilityIdentifier(HudAccessibilityID.muteUtility)
     }
 }

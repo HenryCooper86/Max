@@ -172,42 +172,35 @@ struct AgentScreen: View {
             BackgroundGlow(color: color)
 
             GeometryReader { proxy in
-                let available = proxy.size
                 let crashVisible: Bool = {
                     if case .checkIn = state.crashPhase { return true }
                     return false
                 }()
-                let inputs = HudLayoutInputs(
-                    alertsVisible: state.hazardAlert != nil || crashVisible || state.guidance != nil || state.recording,
+                let inputs = hudLayoutInputs(
+                    hazardVisible: state.hazardAlert != nil,
+                    crashCheckInVisible: crashVisible,
+                    guidanceVisible: state.guidance != nil,
+                    recordingVisible: state.recording,
                     captionsRequested: viewModel.showCaptions,
                     handsFreeActive: state.handsFree
                 )
-                let allocation = hudDeterministicAllocation(
+                HudRegionLayout(
                     layout: layout,
-                    available: available,
-                    inputs: inputs
+                    inputs: inputs,
+                    alertContent: {
+                        VStack(alignment: .leading, spacing: 8) {
+                            TopBar(state: state)
+                            alertContent()
+                        }
+                    },
+                    helmetContent: { diameter in
+                        helmet(color: color, hazard: presentedHazard, size: diameter)
+                    },
+                    utilityContent: { captionsVisible in
+                        utilityContent(captionsVisible: captionsVisible)
+                    },
+                    utilityScrollTarget: state.transcript.last?.id
                 )
-                let policy = hudRenderingPolicy(layout: layout, inputs: inputs, allocation: allocation)
-
-                Group {
-                    switch layout {
-                    case .portrait:
-                        portraitStack(
-                            color: color,
-                            hazard: presentedHazard,
-                            allocation: allocation,
-                            policy: policy
-                        )
-                    case .landscape:
-                        landscapeStack(
-                            color: color,
-                            hazard: presentedHazard,
-                            allocation: allocation,
-                            policy: policy
-                        )
-                    }
-                }
-                .frame(width: available.width, height: available.height)
             }
             .padding(.horizontal, layout == .landscape ? 16 : 20)
             .padding(.top, 10)
@@ -283,27 +276,6 @@ struct AgentScreen: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// The top bar and ordered alerts have one finite scroll owner. Guidance may
-    /// grow at Dynamic Type, but its map and enable button remain reachable by
-    /// scrolling rather than changing the helmet's first-frame allocation.
-    private func alertsViewport(height: CGFloat, policy: HudRenderingPolicy) -> some View {
-        ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 8) {
-                TopBar(state: state)
-                alertContent()
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .scrollDisabled(!policy.alertViewportScrolls)
-        .scrollIndicators(.automatic)
-        .frame(height: height)
-        // Keep every banner, the guidance summary, and the embedded map/enable
-        // control as separate reachable elements while the container scrolls.
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("状态、安全和导航提醒")
-        .accessibilityHint(policy.alertChildrenRemainAccessible ? "上下滑动可查看全部提醒" : "")
-    }
-
     @ViewBuilder private func helmet(color: Color, hazard: HazardLevel, size: CGFloat) -> some View {
         HelmetVisual(
             color: color,
@@ -327,88 +299,12 @@ struct AgentScreen: View {
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
-    /// All vertically growing utility content shares this one scroll owner.
-    /// Captions no longer nest a second vertical ScrollView inside the utility
-    /// region, so mute/settings remain reachable after a Dynamic Type change.
-    private func utilityViewport(
-        height: CGFloat,
-        captionsVisible: Bool,
-        policy: HudRenderingPolicy
-    ) -> some View {
-        ScrollViewReader { proxy in
-            ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 12) {
-                    StateReadout(caption: orbCaption(state), telltale: stateTelltale(state), color: orbColor(state))
-                    if captionsVisible { captionsCard() }
-                    SecondaryControls(state: state, viewModel: viewModel)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .scrollDisabled(!policy.utilityViewportScrolls)
-            .scrollIndicators(.automatic)
-            .onChange(of: state.transcript.count) { _, _ in
-                if let last = state.transcript.last {
-                    withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
-                }
-            }
-        }
-        .frame(height: height)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("会话状态和工具")
-        .accessibilityHint("上下滑动可查看字幕和工具")
-    }
-
     @ViewBuilder
-    private func portraitStack(
-        color: Color,
-        hazard: HazardLevel,
-        allocation: HudDeterministicAllocation,
-        policy: HudRenderingPolicy
-    )
-        -> some View
-    {
-        VStack(spacing: 0) {
-            alertsViewport(height: allocation.alertViewportHeight, policy: policy)
-            Spacer(minLength: 0).frame(height: HudMetrics.portraitStackGaps / 2)
-            helmet(color: color, hazard: hazard, size: allocation.helmetDiameter)
-            Spacer(minLength: 0).frame(height: HudMetrics.portraitStackGaps / 2)
-            utilityViewport(
-                height: allocation.utilityViewportHeight,
-                captionsVisible: allocation.captionsVisible,
-                policy: policy
-            )
-        }
-    }
-
-    /// Helmet on one side, everything that is words or controls on the other.
-    /// Stacked vertically there is simply not enough height on a sideways phone.
-    @ViewBuilder
-    private func landscapeStack(
-        color: Color,
-        hazard: HazardLevel,
-        allocation: HudDeterministicAllocation,
-        policy: HudRenderingPolicy
-    )
-        -> some View
-    {
-        VStack(spacing: 0) {
-            alertsViewport(height: allocation.alertViewportHeight, policy: policy)
-            Spacer(minLength: 0).frame(height: HudMetrics.landscapeStackGap)
-            HStack(spacing: 18) {
-                helmet(color: color, hazard: hazard, size: allocation.helmetDiameter)
-                    .frame(
-                        width: allocation.helmetDiameter,
-                        height: allocation.utilityViewportHeight,
-                        alignment: .center
-                    )
-                utilityViewport(
-                    height: allocation.utilityViewportHeight,
-                    captionsVisible: allocation.captionsVisible,
-                    policy: policy
-                )
-                .frame(maxWidth: .infinity)
-            }
-            .frame(height: allocation.utilityViewportHeight)
+    private func utilityContent(captionsVisible: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            StateReadout(caption: orbCaption(state), telltale: stateTelltale(state), color: orbColor(state))
+            if captionsVisible { captionsCard() }
+            SecondaryControls(state: state, viewModel: viewModel)
         }
     }
 }
@@ -965,7 +861,7 @@ private struct SecondaryControls: View {
                 viewModel.showGallery = true
             }
 
-            PillToggle(icon: "gearshape.fill", label: "设置", on: false) {
+            PillToggle(icon: "gearshape.fill", label: "设置", on: false, accessibilityIdentifier: HudAccessibilityID.secondaryAction) {
                 viewModel.showPreferences = true
             }
         }
@@ -989,7 +885,7 @@ private struct SecondaryControls: View {
                     viewModel.galleryModel.refresh()
                     viewModel.showGallery = true
                 }
-                PillToggle(icon: "gearshape.fill", label: "设置", on: false) {
+                PillToggle(icon: "gearshape.fill", label: "设置", on: false, accessibilityIdentifier: HudAccessibilityID.secondaryAction) {
                     viewModel.showPreferences = true
                 }
             }
@@ -1001,6 +897,7 @@ private struct PillToggle: View {
     let icon: String
     let label: String
     let on: Bool
+    var accessibilityIdentifier = ""
     let action: () -> Void
 
     var body: some View {
@@ -1017,6 +914,7 @@ private struct PillToggle: View {
             )
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier(accessibilityIdentifier)
     }
 }
 

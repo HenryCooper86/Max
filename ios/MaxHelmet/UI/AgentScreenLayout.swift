@@ -1,4 +1,5 @@
 import CoreGraphics
+import SwiftUI
 
 /// How the HUD arranges itself for the space it has.
 enum HudLayout {
@@ -34,15 +35,90 @@ enum HudMetrics {
     static let landscapeStackGap: CGFloat = 8
     /// Share of width reserved for the helmet in landscape.
     static let landscapeHelmetColumn: CGFloat = 0.42
+
+    /// AgentScreen applies this padding outside its layout GeometryReader.
+    /// The pure allocation therefore receives this smaller proposal, not an
+    /// outer safe-area/window size.
+    static func contentPadding(for layout: HudLayout) -> EdgeInsets {
+        switch layout {
+        case .portrait:
+            return EdgeInsets(top: 10, leading: 20, bottom: 18, trailing: 20)
+        case .landscape:
+            return EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16)
+        }
+    }
 }
 
 /// Inputs that may select visibility, but deliberately contain no intrinsic
 /// alert, captions, or readout measurement. Those views scroll within their
 /// allocated regions instead of feeding geometry back to the parent.
 struct HudLayoutInputs: Equatable {
-    let alertsVisible: Bool
+    let hazardVisible: Bool
+    let crashCheckInVisible: Bool
+    let guidanceVisible: Bool
+    let recordingVisible: Bool
     let captionsRequested: Bool
     let handsFreeActive: Bool
+
+    var alertsVisible: Bool {
+        hazardVisible || crashCheckInVisible || guidanceVisible || recordingVisible
+    }
+
+    /// The mute utility is distinct from the session Button and only exists
+    /// for a real active session. It alters the minimum utility space because
+    /// its reachable 44-point target must fit in the scroll region.
+    var muteUtilityVisible: Bool { handsFreeActive }
+
+    /// Compatibility initializer for callers that only know whether any alert
+    /// is visible. AgentScreen itself uses `hudLayoutInputs(...)` so every
+    /// source remains independently observable at the production boundary.
+    init(alertsVisible: Bool, captionsRequested: Bool, handsFreeActive: Bool) {
+        self.init(
+            hazardVisible: alertsVisible,
+            crashCheckInVisible: false,
+            guidanceVisible: false,
+            recordingVisible: false,
+            captionsRequested: captionsRequested,
+            handsFreeActive: handsFreeActive
+        )
+    }
+
+    init(
+        hazardVisible: Bool,
+        crashCheckInVisible: Bool,
+        guidanceVisible: Bool,
+        recordingVisible: Bool,
+        captionsRequested: Bool,
+        handsFreeActive: Bool
+    ) {
+        self.hazardVisible = hazardVisible
+        self.crashCheckInVisible = crashCheckInVisible
+        self.guidanceVisible = guidanceVisible
+        self.recordingVisible = recordingVisible
+        self.captionsRequested = captionsRequested
+        self.handsFreeActive = handsFreeActive
+    }
+}
+
+/// Maps the exact visible sources used by AgentScreen into independent HUD
+/// inputs. Keeping them separate makes a new safety source observable without
+/// reintroducing intrinsic-height measurement state.
+func hudLayoutInputs(
+    hazardVisible: Bool,
+    crashCheckInVisible: Bool,
+    guidanceVisible: Bool,
+    recordingVisible: Bool,
+    captionsRequested: Bool,
+    handsFreeActive: Bool
+) -> HudLayoutInputs {
+    HudLayoutInputs(
+        hazardVisible: hazardVisible,
+        crashCheckInVisible: crashCheckInVisible,
+        guidanceVisible: guidanceVisible,
+        recordingVisible: recordingVisible,
+        captionsRequested: captionsRequested,
+        handsFreeActive: handsFreeActive
+    )
 }
 
 /// The complete, deterministic set of frames that AgentScreen applies.
@@ -82,6 +158,22 @@ func hudLayout(verticalSizeClassIsCompact: Bool) -> HudLayout {
     verticalSizeClassIsCompact ? .landscape : .portrait
 }
 
+/// Converts the real outer HUD size to the `GeometryReader` proposal after the
+/// exact padding AgentScreen applies around that reader. This is deliberately
+/// the only place the outer device/safe-area dimensions are converted.
+func hudGeometryProposal(outerSize: CGSize, layout: HudLayout) -> CGSize {
+    let padding = HudMetrics.contentPadding(for: layout)
+    return CGSize(
+        width: max(0, outerSize.width - padding.leading - padding.trailing),
+        height: max(0, outerSize.height - padding.top - padding.bottom)
+    )
+}
+
+/// The fixed minimum that leaves active mute's 44-point target reachable.
+func hudUtilityViewportMinimum(for inputs: HudLayoutInputs) -> CGFloat {
+    inputs.muteUtilityVisible ? HudMetrics.utilityViewportMinimum : 0
+}
+
 /// Allocates safe HUD regions without asking SwiftUI to measure any text.
 ///
 /// Alerts and utility content may be arbitrarily tall at Dynamic Type sizes;
@@ -96,10 +188,11 @@ func hudDeterministicAllocation(
 
     switch layout {
     case .portrait:
+        let utilityMinimum = hudUtilityViewportMinimum(for: inputs)
         let maximumHeader = max(
             0,
             height - HudMetrics.helmetMinDiameter
-                - HudMetrics.utilityViewportMinimum
+                - utilityMinimum
                 - HudMetrics.portraitStackGaps
         )
         let desiredHeader = inputs.alertsVisible
@@ -109,11 +202,11 @@ func hudDeterministicAllocation(
         let remainingAfterHeader = max(0, height - header - HudMetrics.portraitStackGaps)
         let helmet = min(
             HudMetrics.helmetMaxDiameter,
-            max(HudMetrics.helmetMinDiameter, remainingAfterHeader - HudMetrics.utilityViewportMinimum)
+            max(HudMetrics.helmetMinDiameter, remainingAfterHeader - utilityMinimum)
         )
         let utility = max(0, remainingAfterHeader - helmet)
         let captionsVisible = inputs.captionsRequested
-            && utility >= HudMetrics.utilityViewportMinimum + HudMetrics.captionsMinimumRoom
+            && utility >= utilityMinimum + HudMetrics.captionsMinimumRoom
 
         return HudDeterministicAllocation(
             alertViewportHeight: header,
@@ -138,7 +231,7 @@ func hudDeterministicAllocation(
             max(HudMetrics.helmetMinDiameter, min(rowHeight, horizontalHelmetCap))
         )
         let captionsVisible = inputs.captionsRequested
-            && rowHeight >= HudMetrics.utilityViewportMinimum + HudMetrics.captionsMinimumRoom
+            && rowHeight >= hudUtilityViewportMinimum(for: inputs) + HudMetrics.captionsMinimumRoom
 
         return HudDeterministicAllocation(
             alertViewportHeight: header,
@@ -174,4 +267,117 @@ func helmetCanvasDiameter(_ diameter: CGFloat) -> CGFloat? {
           diameter <= HudMetrics.helmetMaxDiameter
     else { return nil }
     return diameter
+}
+
+enum HudAccessibilityID {
+    static let alertViewport = "hud.alertViewport"
+    static let utilityViewport = "hud.utilityViewport"
+    static let helmetButton = "hud.helmetButton"
+    static let guidanceMapAction = "hud.guidanceMapAction"
+    static let muteUtility = "hud.muteUtility"
+    static let secondaryAction = "hud.secondaryAction"
+}
+
+/// The production layout boundary: its actual `ScrollView`s, helmet frame, and
+/// accessibility regions are shared by AgentScreen and renderer tests. Content
+/// can grow without feeding intrinsic geometry into the allocation.
+struct HudRegionLayout<AlertContent: View, HelmetContent: View, UtilityContent: View>: View {
+    let layout: HudLayout
+    let inputs: HudLayoutInputs
+    @ViewBuilder let alertContent: () -> AlertContent
+    @ViewBuilder let helmetContent: (_ diameter: CGFloat) -> HelmetContent
+    @ViewBuilder let utilityContent: (_ captionsVisible: Bool) -> UtilityContent
+    var utilityScrollTarget: AnyHashable? = nil
+
+    var body: some View {
+        GeometryReader { proxy in
+            // AgentScreen owns the outer padding. This is the exact proposal
+            // SwiftUI gives a GeometryReader after that padding is applied.
+            let available = proxy.size
+            let allocation = hudDeterministicAllocation(
+                layout: layout,
+                available: available,
+                inputs: inputs
+            )
+            let policy = hudRenderingPolicy(layout: layout, inputs: inputs, allocation: allocation)
+
+            Group {
+                switch layout {
+                case .portrait:
+                    VStack(spacing: 0) {
+                        alertViewport(height: allocation.alertViewportHeight, policy: policy)
+                        Spacer(minLength: 0).frame(height: HudMetrics.portraitStackGaps / 2)
+                        helmetContent(allocation.helmetDiameter)
+                            .frame(width: allocation.helmetDiameter, height: allocation.helmetDiameter)
+                            .accessibilityIdentifier(HudAccessibilityID.helmetButton)
+                        Spacer(minLength: 0).frame(height: HudMetrics.portraitStackGaps / 2)
+                        utilityViewport(
+                            height: allocation.utilityViewportHeight,
+                            captionsVisible: allocation.captionsVisible,
+                            policy: policy
+                        )
+                    }
+                case .landscape:
+                    VStack(spacing: 0) {
+                        alertViewport(height: allocation.alertViewportHeight, policy: policy)
+                        Spacer(minLength: 0).frame(height: HudMetrics.landscapeStackGap)
+                        HStack(spacing: 18) {
+                            helmetContent(allocation.helmetDiameter)
+                            .frame(
+                                width: allocation.helmetDiameter,
+                                height: allocation.utilityViewportHeight,
+                                alignment: .center
+                            )
+                            .accessibilityIdentifier(HudAccessibilityID.helmetButton)
+                            utilityViewport(
+                                height: allocation.utilityViewportHeight,
+                                captionsVisible: allocation.captionsVisible,
+                                policy: policy
+                            )
+                            .frame(maxWidth: .infinity)
+                        }
+                        .frame(height: allocation.utilityViewportHeight)
+                    }
+                }
+            }
+            .frame(width: available.width, height: available.height)
+        }
+    }
+
+    private func alertViewport(height: CGFloat, policy: HudRenderingPolicy) -> some View {
+        ScrollView(.vertical) {
+            alertContent()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .scrollDisabled(!policy.alertViewportScrolls)
+        .scrollIndicators(.automatic)
+        .frame(height: height)
+        .accessibilityIdentifier(HudAccessibilityID.alertViewport)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("状态、安全和导航提醒")
+        .accessibilityHint(policy.alertChildrenRemainAccessible ? "上下滑动可查看全部提醒" : "")
+    }
+
+    private func utilityViewport(
+        height: CGFloat,
+        captionsVisible: Bool,
+        policy: HudRenderingPolicy
+    ) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                utilityContent(captionsVisible)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollDisabled(!policy.utilityViewportScrolls)
+            .scrollIndicators(.automatic)
+            .onChange(of: utilityScrollTarget) { _, target in
+                if let target { withAnimation { proxy.scrollTo(target, anchor: .bottom) } }
+            }
+        }
+        .frame(height: height)
+        .accessibilityIdentifier(HudAccessibilityID.utilityViewport)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("会话状态和工具")
+        .accessibilityHint("上下滑动可查看字幕和工具")
+    }
 }

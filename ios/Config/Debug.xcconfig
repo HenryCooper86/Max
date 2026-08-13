@@ -1,0 +1,3 @@
+AMAP_IOS_KEY =
+#include? "../Pods/Target Support Files/Pods-MaxHelmet/Pods-MaxHelmet.debug.xcconfig"
+#include? "Secrets.xcconfig"

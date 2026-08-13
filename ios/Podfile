@@ -1,0 +1,10 @@
+platform :ios, "17.0"
+project "MaxHelmet.xcodeproj"
+
+target "MaxHelmet" do
+  pod "AMap3DMap-NO-IDFA", "~> 11.2"
+
+  target "MaxHelmetTests" do
+    inherit! :search_paths
+  end
+end

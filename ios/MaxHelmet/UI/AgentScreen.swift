@@ -10,6 +10,14 @@ private let turnCaptions: [TurnState: String] = [
     .speaking: "Max 回答中"
 ]
 
+private struct AlertContentHeightPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 private func ringColor(connected: Bool, turnState: TurnState) -> Color {
     guard connected else { return HudColors.danger2 }
     switch turnState {
@@ -160,6 +168,7 @@ struct AgentScreen: View {
     /// Compact vertical space means the phone is sideways. Info.plist has always
     /// permitted that; the layout never accounted for it.
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @State private var measuredAlertContentHeight: CGFloat?
 
     private var state: AgentSession.State { session.state }
 
@@ -183,35 +192,48 @@ struct AgentScreen: View {
                     if case .checkIn = state.crashPhase { return true }
                     return false
                 }()
-                let captions =
-                    viewModel.showCaptions
-                    ? captionsHeight(
-                        layout: layout,
-                        available: available,
-                        hazardVisible: hazardVisible,
-                        recordingVisible: state.recording,
-                        guidanceVisible: guidanceVisible,
-                        crashVisible: crashVisible
-                    ) : nil
-                let helmet = helmetDiameter(
+                let alertsVisible = hazardVisible || guidanceVisible || crashVisible || state.recording
+                // Before SwiftUI has measured a newly-presented alert stack,
+                // reserve its maximum safe viewport. Once the preference
+                // arrives, the viewport shrinks to the real content height.
+                let alertContentHeight = alertsVisible
+                    ? (measuredAlertContentHeight ?? available.height)
+                    : 0
+                let allocation = hudAllocation(
                     layout: layout,
                     available: available,
-                    captionsVisible: captions != nil,
-                    hazardVisible: hazardVisible,
-                    recordingVisible: state.recording,
-                    guidanceVisible: guidanceVisible,
-                    crashVisible: crashVisible
+                    alertContentHeight: alertContentHeight,
+                    captionsRequested: viewModel.showCaptions
                 )
 
                 Group {
                     switch layout {
                     case .portrait:
-                        portraitStack(color: color, hazard: presentedHazard, helmet: helmet, captions: captions)
+                        portraitStack(
+                            color: color,
+                            hazard: presentedHazard,
+                            helmet: allocation.helmetDiameter,
+                            captions: allocation.captionsHeight,
+                            alertsVisible: alertsVisible,
+                            alertViewportHeight: allocation.alertViewportHeight,
+                            alertsAreScrollable: allocation.alertsAreScrollable
+                        )
                     case .landscape:
-                        landscapeStack(color: color, hazard: presentedHazard, helmet: helmet, captions: captions)
+                        landscapeStack(
+                            color: color,
+                            hazard: presentedHazard,
+                            helmet: allocation.helmetDiameter,
+                            captions: allocation.captionsHeight,
+                            alertsVisible: alertsVisible,
+                            alertViewportHeight: allocation.alertViewportHeight,
+                            alertsAreScrollable: allocation.alertsAreScrollable
+                        )
                     }
                 }
                 .frame(width: available.width, height: available.height)
+                .onPreferenceChange(AlertContentHeightPreferenceKey.self) { height in
+                    measuredAlertContentHeight = height > 0 ? height : nil
+                }
             }
             .padding(.horizontal, layout == .landscape ? 16 : 20)
             .padding(.top, 10)
@@ -233,6 +255,12 @@ struct AgentScreen: View {
         .background(HudColors.void.ignoresSafeArea())
         .animation(.easeInOut(duration: 0.25), value: viewModel.showCaptions)
         .animation(.easeInOut(duration: 0.25), value: state.micMuted)
+        .onChange(of: state.hazardAlert != nil || state.guidance != nil || state.recording || {
+            if case .checkIn = state.crashPhase { return true }
+            return false
+        }()) { _, visible in
+            if !visible { measuredAlertContentHeight = nil }
+        }
         // The relay requires a login (HTTP 401): open the settings sheet on the
         // 账号 section so the rider can sign in right where the fix is.
         .onChange(of: state.authRequired) { _, required in
@@ -264,23 +292,47 @@ struct AgentScreen: View {
     // MARK: - the two arrangements
 
     /// Safety-critical banners and the navigation card, shared by both layouts.
-    @ViewBuilder private var alerts: some View {
-        if let alert = state.hazardAlert {
-            HazardBanner(alert: alert).padding(.horizontal, 4)
+    /// Their ordering is also their scroll and VoiceOver reading order.
+    private var alertContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let alert = state.hazardAlert {
+                HazardBanner(alert: alert).padding(.horizontal, 4)
+            }
+            if case let .checkIn(sinceT) = state.crashPhase {
+                CrashCheckInBanner(sinceT: sinceT, onCancel: { session.crashController.riderTapCancelled() })
+                    .padding(.horizontal, 4)
+            }
+            if let guidance = state.guidance {
+                GuidanceCard(guidance: guidance)
+                    .padding(.horizontal, 4)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+            if state.recording {
+                RecordingIndicator(startedAt: state.recordingStartedAt)
+                    .padding(.horizontal, 4)
+            }
         }
-        if case let .checkIn(sinceT) = state.crashPhase {
-            CrashCheckInBanner(sinceT: sinceT, onCancel: { session.crashController.riderTapCancelled() })
-                .padding(.horizontal, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(key: AlertContentHeightPreferenceKey.self, value: proxy.size.height)
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func alertsViewport(height: CGFloat, scrollable: Bool) -> some View {
+        ScrollView(.vertical) {
+            alertContent
         }
-        if let guidance = state.guidance {
-            GuidanceCard(guidance: guidance)
-                .padding(.horizontal, 4)
-                .transition(.move(edge: .top).combined(with: .opacity))
-        }
-        if state.recording {
-            RecordingIndicator(startedAt: state.recordingStartedAt)
-                .padding(.horizontal, 4)
-        }
+        .scrollDisabled(!scrollable)
+        .scrollIndicators(.automatic)
+        .frame(height: height)
+        // Keep every banner, the guidance summary, and the embedded map/enable
+        // control as separate reachable elements while the container scrolls.
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("安全和导航提醒")
+        .accessibilityHint(scrollable ? "上下滑动可查看全部提醒" : "")
     }
 
     @ViewBuilder private func helmet(color: Color, hazard: HazardLevel, size: CGFloat) -> some View {
@@ -308,12 +360,22 @@ struct AgentScreen: View {
     }
 
     @ViewBuilder
-    private func portraitStack(color: Color, hazard: HazardLevel, helmet size: CGFloat, captions: CGFloat?)
+    private func portraitStack(
+        color: Color,
+        hazard: HazardLevel,
+        helmet size: CGFloat,
+        captions: CGFloat?,
+        alertsVisible: Bool,
+        alertViewportHeight: CGFloat,
+        alertsAreScrollable: Bool
+    )
         -> some View
     {
         VStack(spacing: 14) {
             TopBar(state: state)
-            alerts
+            if alertsVisible {
+                alertsViewport(height: alertViewportHeight, scrollable: alertsAreScrollable)
+            }
 
             Spacer(minLength: 4)
 
@@ -331,12 +393,22 @@ struct AgentScreen: View {
     /// Helmet on one side, everything that is words or controls on the other.
     /// Stacked vertically there is simply not enough height on a sideways phone.
     @ViewBuilder
-    private func landscapeStack(color: Color, hazard: HazardLevel, helmet size: CGFloat, captions: CGFloat?)
+    private func landscapeStack(
+        color: Color,
+        hazard: HazardLevel,
+        helmet size: CGFloat,
+        captions: CGFloat?,
+        alertsVisible: Bool,
+        alertViewportHeight: CGFloat,
+        alertsAreScrollable: Bool
+    )
         -> some View
     {
         VStack(spacing: 8) {
             TopBar(state: state)
-            alerts
+            if alertsVisible {
+                alertsViewport(height: alertViewportHeight, scrollable: alertsAreScrollable)
+            }
 
             HStack(spacing: 18) {
                 helmet(color: color, hazard: hazard, size: size)
@@ -510,36 +582,51 @@ private struct HelmetVisual: View {
         }
     }
 
+    /// The layout always supplies a valid diameter. Keep an accessible button
+    /// target even if a future direct caller does not, but do not draw Canvas
+    /// into an invalid zero or non-finite coordinate system.
+    private var buttonDiameter: CGFloat {
+        guard diameter.isFinite else { return HudMetrics.helmetMinDiameter }
+        return min(
+            HudMetrics.helmetMaxDiameter,
+            max(HudMetrics.helmetMinDiameter, diameter)
+        )
+    }
+
     var body: some View {
         Button(action: onTap) {
-            TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { timeline in
-                let t = helmetMotionTime(
-                    elapsed: timeline.date.timeIntervalSinceReferenceDate,
-                    reduceMotion: reduceMotion
-                )
-                let level = Double(max(0, min(1, voiceLevel)))
-                let breathe = 0.5 + 0.5 * sin(t * breatheSpeed)
-                let pulse = pulseAmplitude * breathe + 0.06 * level
-                // Critical hazard: a subtle ~0.9s opacity pulse so the danger tint
-                // visibly throbs without competing with the hazard banner.
-                let hazardPulse = hazard == .critical
-                    ? 0.86 + 0.14 * (0.5 + 0.5 * sin(t * (2 * .pi / 0.9)))
-                    : 1.0
-
-                Canvas { context, size in
-                    drawGauge(in: &context, size: size, color: color, mode: gauge, level: level, t: t)
-                    drawHelmet(
-                        in: &context, size: size, color: color, level: level,
-                        breathe: breathe, pulse: pulse,
-                        listening: turnState == .listening || turnState == .hearing,
-                        speaking: turnState == .speaking
+            if helmetCanvasDiameter(diameter) != nil {
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { timeline in
+                    let t = helmetMotionTime(
+                        elapsed: timeline.date.timeIntervalSinceReferenceDate,
+                        reduceMotion: reduceMotion
                     )
+                    let level = Double(max(0, min(1, voiceLevel)))
+                    let breathe = 0.5 + 0.5 * sin(t * breatheSpeed)
+                    let pulse = pulseAmplitude * breathe + 0.06 * level
+                    // Critical hazard: a subtle ~0.9s opacity pulse so the danger tint
+                    // visibly throbs without competing with the hazard banner.
+                    let hazardPulse = hazard == .critical
+                        ? 0.86 + 0.14 * (0.5 + 0.5 * sin(t * (2 * .pi / 0.9)))
+                        : 1.0
+
+                    Canvas { context, size in
+                        drawGauge(in: &context, size: size, color: color, mode: gauge, level: level, t: t)
+                        drawHelmet(
+                            in: &context, size: size, color: color, level: level,
+                            breathe: breathe, pulse: pulse,
+                            listening: turnState == .listening || turnState == .hearing,
+                            speaking: turnState == .speaking
+                        )
+                    }
+                    .opacity(hazardPulse)
                 }
-                .opacity(hazardPulse)
+            } else {
+                Color.clear
             }
         }
         .buttonStyle(.plain)
-        .frame(width: diameter, height: diameter)
+        .frame(width: buttonDiameter, height: buttonDiameter)
         .opacity(dimmed ? 0.55 : 1)
         .contentShape(Rectangle())
         .accessibilityLabel(helmetToggleAccessibilityLabel(handsFree: handsFree))

@@ -17,22 +17,23 @@ enum HudLayout {
 enum HudMetrics {
     /// The helmet's design size; it never grows past this.
     static let helmetMaxDiameter: CGFloat = 300
-    /// Captions require this much helmet space before they may appear. If the
-    /// visible alerts consume more space, captions yield first and the helmet
-    /// uses the remaining nonnegative height instead of overlapping them.
+    /// The minimum visible and tappable diameter for the sole session control.
+    /// Captions and alert scrolling yield before this Button does.
     static let helmetMinDiameter: CGFloat = 116
 
     /// Portrait furniture above and below the helmet: top bar, state readout,
     /// secondary controls, the VStack spacings and the screen padding.
     /// Measured against the constants in AgentScreen.swift.
     static let portraitChrome: CGFloat = 218
-    /// Landscape furniture in the readout column: state readout, secondary
-    /// controls, spacing, and screen padding.
+    /// Landscape furniture in the readout column plus the top strip. Kept for
+    /// the original dock-removal regression test; allocation uses the two
+    /// separate regions below because they sit beside rather than below one
+    /// another.
     static let landscapeChrome: CGFloat = 118
-    /// A hazard banner is two lines of text plus its padding.
-    static let hazardBanner: CGFloat = 100
-    /// The recording pill.
-    static let recordingIndicator: CGFloat = 46
+    /// Top bar, its stack spacing, and vertical screen padding in landscape.
+    static let landscapeTopChrome: CGFloat = 44
+    /// The remaining landscape chrome in the readout column.
+    static let landscapeReadoutChrome: CGFloat = 74
     /// Captions at their design height, plus the card padding.
     static let captionsMax: CGFloat = 218
     /// Under this the caption list shows less than two turns, at which point
@@ -51,94 +52,86 @@ func hudLayout(verticalSizeClassIsCompact: Bool) -> HudLayout {
     verticalSizeClassIsCompact ? .landscape : .portrait
 }
 
-/// Everything in the portrait column that is not the helmet.
-func portraitChromeHeight(
-    captionsVisible: Bool,
-    hazardVisible: Bool,
-    recordingVisible: Bool,
-    guidanceVisible: Bool = false,
-    crashVisible: Bool = false
-) -> CGFloat {
-    var height = HudMetrics.portraitChrome
-    if hazardVisible { height += HudMetrics.hazardBanner }
-    if recordingVisible { height += HudMetrics.recordingIndicator }
-    if guidanceVisible { height += guidanceCardReservedHeight }
-    if crashVisible { height += HudMetrics.hazardBanner }
-    if captionsVisible { height += HudMetrics.captionsMax }
-    return height
+/// The vertical allocation AgentScreen applies to its measured alerts,
+/// semantic helmet Button, and optional captions.
+struct HudAllocation: Equatable {
+    let alertViewportHeight: CGFloat
+    let helmetDiameter: CGFloat
+    let captionsHeight: CGFloat?
+    let alertsAreScrollable: Bool
 }
 
-/// The helmet's on-screen diameter for the space available.
+/// Allocates a bounded alert viewport separately from alert content.
 ///
-/// Portrait takes what the column has left; landscape is bounded by its own
-/// column on one axis and the full height on the other, so the bezel stays a
-/// circle rather than being squashed into the short side.
-func helmetDiameter(
+/// Guidance can grow for wrapping or Dynamic Type, but it may only use the
+/// viewport left after fixed chrome and the 116pt helmet target. Captions take
+/// the remaining optional space and never reduce that target.
+func hudAllocation(
     layout: HudLayout,
     available: CGSize,
-    captionsVisible: Bool = false,
-    hazardVisible: Bool = false,
-    recordingVisible: Bool = false,
-    guidanceVisible: Bool = false,
-    crashVisible: Bool = false
-) -> CGFloat {
-    let unbounded: CGFloat
+    alertContentHeight: CGFloat,
+    captionsRequested: Bool
+) -> HudAllocation {
+    let contentHeight = max(0, alertContentHeight)
+    let alertViewportHeight: CGFloat
+    let captionsHeight: CGFloat?
+    let helmetDiameter: CGFloat
+
     switch layout {
     case .portrait:
-        let chrome = portraitChromeHeight(
-            captionsVisible: captionsVisible,
-            hazardVisible: hazardVisible,
-            recordingVisible: recordingVisible,
-            guidanceVisible: guidanceVisible,
-            crashVisible: crashVisible
+        let viewportCapacity = max(
+            0,
+            available.height - HudMetrics.portraitChrome - HudMetrics.helmetMinDiameter
         )
-        unbounded = available.height - chrome
+        alertViewportHeight = min(contentHeight, viewportCapacity)
+
+        let captionRoom = available.height - HudMetrics.portraitChrome
+            - alertViewportHeight - HudMetrics.helmetMinDiameter
+        captionsHeight = captionsRequested && captionRoom >= HudMetrics.captionsMin
+            ? min(HudMetrics.captionsMax, captionRoom)
+            : nil
+
+        let remainingHeight = available.height - HudMetrics.portraitChrome
+            - alertViewportHeight - (captionsHeight ?? 0)
+        helmetDiameter = min(HudMetrics.helmetMaxDiameter, max(HudMetrics.helmetMinDiameter, remainingHeight))
+
     case .landscape:
-        // Whichever axis runs out first, so the helmet never overlaps the
-        // column beside it or overflows the top bar and alerts. Every alert
-        // rendered above this row must reduce the helmet's vertical budget.
-        var height = available.height - HudMetrics.hazardBanner * (hazardVisible ? 1 : 0)
-        height -= HudMetrics.hazardBanner * (crashVisible ? 1 : 0)
-        height -= 44  // top bar + spacing
-        height -= guidanceCardReservedHeight * (guidanceVisible ? 1 : 0)
-        height -= HudMetrics.recordingIndicator * (recordingVisible ? 1 : 0)
-        unbounded = min(height, available.width * HudMetrics.landscapeHelmetColumn)
+        let viewportCapacity = max(
+            0,
+            available.height - HudMetrics.landscapeTopChrome - HudMetrics.helmetMinDiameter
+        )
+        alertViewportHeight = min(contentHeight, viewportCapacity)
+
+        let captionRoom = available.height - HudMetrics.landscapeTopChrome
+            - alertViewportHeight - HudMetrics.landscapeReadoutChrome
+        captionsHeight = captionsRequested && captionRoom >= HudMetrics.captionsMin
+            ? min(HudMetrics.captionsMax, captionRoom)
+            : nil
+
+        let heightForHelmet = available.height - HudMetrics.landscapeTopChrome - alertViewportHeight
+        helmetDiameter = min(
+            HudMetrics.helmetMaxDiameter,
+            max(
+                HudMetrics.helmetMinDiameter,
+                min(heightForHelmet, available.width * HudMetrics.landscapeHelmetColumn)
+            )
+        )
     }
-    return max(0, min(HudMetrics.helmetMaxDiameter, unbounded))
+
+    return HudAllocation(
+        alertViewportHeight: alertViewportHeight,
+        helmetDiameter: helmetDiameter,
+        captionsHeight: captionsHeight,
+        alertsAreScrollable: contentHeight > alertViewportHeight
+    )
 }
 
-/// Height for the caption card, or nil when there is not enough room to show
-/// one honestly. The reservation keeps the helmet, captions, and secondary
-/// controls within the available safe-area height.
-func captionsHeight(
-    layout: HudLayout,
-    available: CGSize,
-    hazardVisible: Bool,
-    recordingVisible: Bool,
-    guidanceVisible: Bool = false,
-    crashVisible: Bool = false
-) -> CGFloat? {
-    let reserved: CGFloat
-    switch layout {
-    case .portrait:
-        reserved =
-            portraitChromeHeight(
-                captionsVisible: false,
-                hazardVisible: hazardVisible,
-                recordingVisible: recordingVisible,
-                guidanceVisible: guidanceVisible,
-                crashVisible: crashVisible
-            ) + HudMetrics.helmetMinDiameter
-    case .landscape:
-        // The helmet sits beside the captions, so it costs no height here —
-        // only the readout, secondary controls, top bar, and any banner do.
-        reserved =
-            HudMetrics.landscapeChrome + (hazardVisible ? HudMetrics.hazardBanner : 0)
-            + (recordingVisible ? HudMetrics.recordingIndicator : 0)
-            + (guidanceVisible ? guidanceCardReservedHeight : 0)
-            + (crashVisible ? HudMetrics.hazardBanner : 0)
-    }
-    let room = available.height - reserved
-    guard room >= HudMetrics.captionsMin else { return nil }
-    return min(HudMetrics.captionsMax, room)
+/// The Canvas never receives a degenerate size. Layout provides a valid value;
+/// this guard is defense in depth for any future direct HelmetVisual caller.
+func helmetCanvasDiameter(_ diameter: CGFloat) -> CGFloat? {
+    guard diameter.isFinite,
+          diameter >= HudMetrics.helmetMinDiameter,
+          diameter <= HudMetrics.helmetMaxDiameter
+    else { return nil }
+    return diameter
 }

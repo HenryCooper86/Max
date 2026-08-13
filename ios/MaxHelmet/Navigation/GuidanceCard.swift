@@ -20,13 +20,7 @@ let guidanceCardAccessibilityContract = GuidanceCardAccessibilityContract(
     navigationSummaryChildren: .ignore
 )
 
-/// The smallest regular guidance card: its 120pt map, a two-line maneuver
-/// summary, the stack gap, and the card's vertical padding. AgentScreenLayout
-/// uses this same contract before it places the helmet below the alerts stack.
-let guidanceCardReservedHeight: CGFloat = 232
-
 private let guidanceCardMapHeight: CGFloat = 120
-private let guidanceCardSummaryReservedHeight: CGFloat = 74
 private let guidanceCardStackSpacing: CGFloat = 10
 private let guidanceCardVerticalPadding: CGFloat = 14
 
@@ -64,7 +58,6 @@ struct GuidanceCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: guidanceCardStackSpacing) {
             guidanceSummary
-                .frame(minHeight: guidanceCardSummaryReservedHeight, alignment: .top)
 
             routeMap
                 .frame(height: guidanceCardMapHeight)
@@ -77,7 +70,6 @@ struct GuidanceCard: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(HudColors.border, lineWidth: 1)
         )
         .frame(maxWidth: 420)
-        .frame(minHeight: guidanceCardReservedHeight, alignment: .top)
         .applyingGuidanceCardAccessibilityPolicy(
             guidanceCardAccessibilityContract.enclosingCardChildren
         )

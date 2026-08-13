@@ -371,12 +371,14 @@ function matchCamera(raw: string): DeviceCommand | null {
   // Stop is checked before start so "停止录像" is never read as "录像", and its
   // grammar is deliberately more generous than start's: an over-matched stop
   // fails honestly as "现在没有在录像", while an under-matched one leaves the
-  // camera rolling behind a narrated save that never happened — a live session
-  // said "帮我停一下录视频", fell through to the start grammar's bare 录视频,
-  // and got "已经在录了" plus that fiction. (?!车) keeps 停车 (parking) from
-  // reading as a stop verb; the gap covers filler like 一下 / 刚才的.
+  // camera rolling behind a narrated save that never happened — live sessions
+  // said "帮我停一下录视频" and "停止我们的拍视频", fell through to a
+  // start grammar, and got a confirmation plus that fiction. (?!车) keeps 停车
+  // (parking) from reading as a stop verb; the gap covers filler like 一下 /
+  // 刚才的 / 我们的. 录音 is accepted on stop because this product has no
+  // audio-only recorder, while Doubao ASR commonly substitutes it for 录像.
   if (
-    /(停止|结束|暂停|关闭|关掉|停一下|停下|停)(?!车).{0,3}(录像|录制|录影|摄像|视频|拍摄)/.test(raw) ||
+    /(停止|结束|暂停|关闭|关掉|停一下|停下|停)(?!车).{0,3}(录像|录制|录影|录音|摄像|拍视频|视频|拍摄)/.test(raw) ||
     /(stop|end|finish|pause)\s+(the\s+|this\s+)?(video|recording|filming|record)/i.test(raw)
   ) {
     return { action: "camera.record", args: { start: false } };

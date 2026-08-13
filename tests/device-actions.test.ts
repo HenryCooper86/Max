@@ -414,6 +414,17 @@ describe("extractDeviceCommand — camera", () => {
     expect(extractDeviceCommand("Max 停止刚才的录像")).toEqual({ action: "camera.record", args: { start: false } });
   });
 
+  it("never turns the observed ASR stop phrases into silence or another recording start", () => {
+    expect(extractDeviceCommand("Max 帮我停止录音。")).toEqual({
+      action: "camera.record",
+      args: { start: false }
+    });
+    expect(extractDeviceCommand("Max，帮我取消要么，停止我们的拍视频。")).toEqual({
+      action: "camera.record",
+      args: { start: false }
+    });
+  });
+
   it("treats a negated 录 as a stop command, like the negated 关机 — not noise", () => {
     expect(extractDeviceCommand("Max 别录了")).toEqual({ action: "camera.record", args: { start: false } });
     expect(extractDeviceCommand("Max 不要录了")).toEqual({ action: "camera.record", args: { start: false } });

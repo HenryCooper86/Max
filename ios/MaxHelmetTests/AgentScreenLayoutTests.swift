@@ -60,15 +60,15 @@ final class AgentScreenLayoutTests: XCTestCase {
         }
     }
 
-    func testHelmetNeverCollapsesBelowTheReadableFloor() {
+    func testHelmetNeverBecomesNegativeWhenVisibleChromeConsumesTheSpace() {
         let cramped = CGSize(width: 320, height: 200)
         XCTAssertEqual(
             helmetDiameter(layout: .portrait, available: cramped, captionsVisible: true, hazardVisible: true),
-            HudMetrics.helmetMinDiameter
+            0
         )
         XCTAssertEqual(
             helmetDiameter(layout: .landscape, available: cramped, hazardVisible: true),
-            HudMetrics.helmetMinDiameter
+            56
         )
     }
 
@@ -113,30 +113,198 @@ final class AgentScreenLayoutTests: XCTestCase {
         XCTAssertNotNil(landscape)
     }
 
+    func testGuidanceReservationLeavesRoomForTheHelmetOnTheSmallestPortraitPhone() {
+        let captions = captionsHeight(
+            layout: .portrait,
+            available: phoneSEPortrait,
+            hazardVisible: false,
+            recordingVisible: true,
+            guidanceVisible: true
+        )
+        let helmet = helmetDiameter(
+            layout: .portrait,
+            available: phoneSEPortrait,
+            captionsVisible: captions != nil,
+            hazardVisible: false,
+            recordingVisible: true,
+            guidanceVisible: true
+        )
+
+        // 647pt available minus the 218pt fixed portrait furniture, the
+        // 232pt guidance card (120pt map + 74pt summary + 10pt gap + 28pt
+        // padding), and the 46pt recording indicator leaves 151pt.
+        XCTAssertNil(captions)
+        XCTAssertEqual(helmet, 151)
+    }
+
+    func testGuidanceCrashHazardAndRecordingDropCaptionsBeforeTheyOverlapTheHelmet() {
+        let captions = captionsHeight(
+            layout: .portrait,
+            available: phone15Portrait,
+            hazardVisible: true,
+            recordingVisible: true,
+            guidanceVisible: true,
+            crashVisible: true
+        )
+        let helmet = helmetDiameter(
+            layout: .portrait,
+            available: phone15Portrait,
+            captionsVisible: captions != nil,
+            hazardVisible: true,
+            recordingVisible: true,
+            guidanceVisible: true,
+            crashVisible: true
+        )
+
+        // 751pt available minus portrait furniture (218), hazard (100),
+        // recording (46), guidance (232), and crash check-in (100) leaves a
+        // positive 55pt helmet target. Captions must be absent because the
+        // same stack needs a 116pt helmet before any caption may appear.
+        XCTAssertNil(captions)
+        XCTAssertEqual(helmet, 55)
+    }
+
+    func testLandscapeGuidanceAndRecordingBothConsumeTheHelmetHeightBudget() {
+        let guidanceOnly = helmetDiameter(
+            layout: .landscape,
+            available: phone15Landscape,
+            guidanceVisible: true
+        )
+        let constrained = helmetDiameter(
+            layout: .landscape,
+            available: phone15Landscape,
+            hazardVisible: true,
+            recordingVisible: true,
+            guidanceVisible: true,
+            crashVisible: true
+        )
+
+        // The landscape top strip occupies 44pt. A 232pt guidance card leaves
+        // 66pt of a 342pt iPhone 15 landscape safe area. Adding 100pt hazard,
+        // 46pt recording, and 100pt crash check-in leaves no helmet height;
+        // the sizing API must clamp that impossible stack to zero rather than
+        // report a negative or overlapping size.
+        XCTAssertEqual(guidanceOnly, 66)
+        XCTAssertEqual(constrained, 0)
+    }
+
+    func testLandscapeCaptionsReserveTheActiveSessionRecordingIndicator() {
+        let captions = captionsHeight(
+            layout: .landscape,
+            available: phoneSELandscape,
+            hazardVisible: false,
+            recordingVisible: true
+        )
+
+        // A 355pt landscape safe area has 191pt left after the 118pt
+        // landscape furniture and the 46pt active-session recording pill.
+        XCTAssertEqual(captions, 191)
+    }
+
     // MARK: - the whole column has to add up
 
     func testPortraitStackFitsEveryPhoneAndState() {
         for size in [phone15Portrait, phoneSEPortrait] {
             for hazard in [false, true] {
                 for recording in [false, true] {
-                    let captions = captionsHeight(
-                        layout: .portrait, available: size, hazardVisible: hazard, recordingVisible: recording
-                    )
-                    let helmet = helmetDiameter(
-                        layout: .portrait,
-                        available: size,
-                        captionsVisible: captions != nil,
-                        hazardVisible: hazard,
-                        recordingVisible: recording
-                    )
-                    let chrome = portraitChromeHeight(
-                        captionsVisible: false, hazardVisible: hazard, recordingVisible: recording
-                    )
-                    let total = chrome + helmet + (captions ?? 0)
-                    XCTAssertLessThanOrEqual(
-                        total, size.height + 0.5,
-                        "portrait stack overflows at \(size) hazard=\(hazard) recording=\(recording): \(total)"
-                    )
+                    for guidance in [false, true] {
+                        for crash in [false, true] {
+                            let captions = captionsHeight(
+                                layout: .portrait,
+                                available: size,
+                                hazardVisible: hazard,
+                                recordingVisible: recording,
+                                guidanceVisible: guidance,
+                                crashVisible: crash
+                            )
+                            let helmet = helmetDiameter(
+                                layout: .portrait,
+                                available: size,
+                                captionsVisible: captions != nil,
+                                hazardVisible: hazard,
+                                recordingVisible: recording,
+                                guidanceVisible: guidance,
+                                crashVisible: crash
+                            )
+                            let fixedChrome: CGFloat = 218
+                                + (hazard ? 100 : 0)
+                                + (recording ? 46 : 0)
+                                + (guidance ? 232 : 0)
+                                + (crash ? 100 : 0)
+                            XCTAssertGreaterThanOrEqual(
+                                helmet,
+                                0,
+                                "helmet became negative at \(size) hazard=\(hazard) recording=\(recording) guidance=\(guidance) crash=\(crash)"
+                            )
+                            if fixedChrome + 116 <= size.height {
+                                XCTAssertLessThanOrEqual(
+                                    fixedChrome + helmet + (captions ?? 0),
+                                    size.height + 0.5,
+                                    "portrait stack overflows at \(size) hazard=\(hazard) recording=\(recording) guidance=\(guidance) crash=\(crash)"
+                                )
+                            } else {
+                                XCTAssertNil(captions)
+                                XCTAssertEqual(helmet, max(.zero, size.height - fixedChrome))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    func testLandscapeStackFitsEveryPhoneAndState() {
+        for size in [phone15Landscape, phoneSELandscape] {
+            for hazard in [false, true] {
+                for recording in [false, true] {
+                    for guidance in [false, true] {
+                        for crash in [false, true] {
+                            let captions = captionsHeight(
+                                layout: .landscape,
+                                available: size,
+                                hazardVisible: hazard,
+                                recordingVisible: recording,
+                                guidanceVisible: guidance,
+                                crashVisible: crash
+                            )
+                            let helmet = helmetDiameter(
+                                layout: .landscape,
+                                available: size,
+                                captionsVisible: captions != nil,
+                                hazardVisible: hazard,
+                                recordingVisible: recording,
+                                guidanceVisible: guidance,
+                                crashVisible: crash
+                            )
+                            let alerts: CGFloat =
+                                (hazard ? 100 : 0)
+                                + (recording ? 46 : 0)
+                                + (guidance ? 232 : 0)
+                                + (crash ? 100 : 0)
+                            let topRowTotal = 44 + alerts + helmet
+                            let readoutFixedChrome = 118 + alerts
+
+                            XCTAssertGreaterThanOrEqual(helmet, 0)
+                            if 44 + alerts <= size.height {
+                                XCTAssertLessThanOrEqual(
+                                    topRowTotal,
+                                    size.height + 0.5,
+                                    "landscape helmet overlaps alerts at \(size) hazard=\(hazard) recording=\(recording) guidance=\(guidance) crash=\(crash)"
+                                )
+                            } else {
+                                XCTAssertEqual(helmet, 0)
+                            }
+                            if readoutFixedChrome + 96 <= size.height {
+                                XCTAssertLessThanOrEqual(
+                                    readoutFixedChrome + (captions ?? 0),
+                                    size.height + 0.5,
+                                    "landscape captions overlap alerts at \(size) hazard=\(hazard) recording=\(recording) guidance=\(guidance) crash=\(crash)"
+                                )
+                            } else {
+                                XCTAssertNil(captions)
+                            }
+                        }
+                    }
                 }
             }
         }

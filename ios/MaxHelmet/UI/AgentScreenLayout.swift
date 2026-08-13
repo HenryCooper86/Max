@@ -17,8 +17,9 @@ enum HudLayout {
 enum HudMetrics {
     /// The helmet's design size; it never grows past this.
     static let helmetMaxDiameter: CGFloat = 300
-    /// Below this the gauge ticks stop being readable, so the layout would
-    /// rather scroll the captions than shrink the helmet further.
+    /// Captions require this much helmet space before they may appear. If the
+    /// visible alerts consume more space, captions yield first and the helmet
+    /// uses the remaining nonnegative height instead of overlapping them.
     static let helmetMinDiameter: CGFloat = 116
 
     /// Portrait furniture above and below the helmet: top bar, state readout,
@@ -32,8 +33,6 @@ enum HudMetrics {
     static let hazardBanner: CGFloat = 100
     /// The recording pill.
     static let recordingIndicator: CGFloat = 46
-    /// The turn-by-turn guidance card, when navigation is running.
-    static let guidanceCard: CGFloat = 92
     /// Captions at their design height, plus the card padding.
     static let captionsMax: CGFloat = 218
     /// Under this the caption list shows less than two turns, at which point
@@ -63,7 +62,7 @@ func portraitChromeHeight(
     var height = HudMetrics.portraitChrome
     if hazardVisible { height += HudMetrics.hazardBanner }
     if recordingVisible { height += HudMetrics.recordingIndicator }
-    if guidanceVisible { height += HudMetrics.guidanceCard }
+    if guidanceVisible { height += guidanceCardReservedHeight }
     if crashVisible { height += HudMetrics.hazardBanner }
     if captionsVisible { height += HudMetrics.captionsMax }
     return height
@@ -96,13 +95,16 @@ func helmetDiameter(
         unbounded = available.height - chrome
     case .landscape:
         // Whichever axis runs out first, so the helmet never overlaps the
-        // column beside it or overflows the top bar and alerts.
+        // column beside it or overflows the top bar and alerts. Every alert
+        // rendered above this row must reduce the helmet's vertical budget.
         var height = available.height - HudMetrics.hazardBanner * (hazardVisible ? 1 : 0)
         height -= HudMetrics.hazardBanner * (crashVisible ? 1 : 0)
         height -= 44  // top bar + spacing
+        height -= guidanceCardReservedHeight * (guidanceVisible ? 1 : 0)
+        height -= HudMetrics.recordingIndicator * (recordingVisible ? 1 : 0)
         unbounded = min(height, available.width * HudMetrics.landscapeHelmetColumn)
     }
-    return max(HudMetrics.helmetMinDiameter, min(HudMetrics.helmetMaxDiameter, unbounded))
+    return max(0, min(HudMetrics.helmetMaxDiameter, unbounded))
 }
 
 /// Height for the caption card, or nil when there is not enough room to show
@@ -132,7 +134,8 @@ func captionsHeight(
         // only the readout, secondary controls, top bar, and any banner do.
         reserved =
             HudMetrics.landscapeChrome + (hazardVisible ? HudMetrics.hazardBanner : 0)
-            + (guidanceVisible ? HudMetrics.guidanceCard : 0)
+            + (recordingVisible ? HudMetrics.recordingIndicator : 0)
+            + (guidanceVisible ? guidanceCardReservedHeight : 0)
             + (crashVisible ? HudMetrics.hazardBanner : 0)
     }
     let room = available.height - reserved

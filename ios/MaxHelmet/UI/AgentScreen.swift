@@ -10,68 +10,6 @@ private let turnCaptions: [TurnState: String] = [
     .speaking: "Max 回答中"
 ]
 
-private struct AlertContentMeasurementPreferenceKey: PreferenceKey {
-    static let defaultValue: AlertContentMeasurement? = nil
-
-    static func reduce(value: inout AlertContentMeasurement?, nextValue: () -> AlertContentMeasurement?) {
-        value = nextValue() ?? value
-    }
-}
-
-private struct LandscapeColumnMetricsPreferenceKey: PreferenceKey {
-    static let defaultValue: LandscapeColumnMeasurement? = nil
-
-    static func reduce(
-        value: inout LandscapeColumnMeasurement?,
-        nextValue: () -> LandscapeColumnMeasurement?
-    ) {
-        guard let next = nextValue() else { return }
-        guard let current = value, current.signature == next.signature else {
-            value = next
-            return
-        }
-        value = LandscapeColumnMeasurement(
-            signature: next.signature,
-            metrics: LandscapeColumnMetrics(
-                readoutHeight: max(current.metrics.readoutHeight, next.metrics.readoutHeight),
-                controlsHeight: max(current.metrics.controlsHeight, next.metrics.controlsHeight)
-            )
-        )
-    }
-}
-
-func alertContentSignature(
-    hazardAlert: HazardAlert?,
-    crashPhase: CrashUIPhase,
-    guidance: GuidanceState?,
-    recording: Bool
-) -> AlertContentSignature {
-    let hazardToken = hazardAlert.map {
-        [
-            $0.threat, $0.direction, String(describing: $0.severity), $0.label,
-            $0.message, $0.advice, String($0.ttcSeconds), String($0.interrupt),
-        ].joined(separator: "|")
-    }
-    let crashCheckInToken: String?
-    if case let .checkIn(sinceT) = crashPhase {
-        crashCheckInToken = String(sinceT)
-    } else {
-        crashCheckInToken = nil
-    }
-    let guidanceToken = guidance.map {
-        [
-            $0.destinationName, $0.maneuverInstruction ?? "", String($0.distanceToManeuverMeters),
-            String($0.remainingDistanceMeters), String($0.remainingSeconds), String($0.offRoute),
-        ].joined(separator: "|")
-    }
-    return AlertContentSignature(
-        hazardToken: hazardToken,
-        crashCheckInToken: crashCheckInToken,
-        guidanceToken: guidanceToken,
-        recording: recording
-    )
-}
-
 private func ringColor(connected: Bool, turnState: TurnState) -> Color {
     guard connected else { return HudColors.danger2 }
     switch turnState {
@@ -222,9 +160,6 @@ struct AgentScreen: View {
     /// Compact vertical space means the phone is sideways. Info.plist has always
     /// permitted that; the layout never accounted for it.
     @Environment(\.verticalSizeClass) private var verticalSizeClass
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @State private var measuredAlertContent: AlertContentMeasurement?
-    @State private var measuredLandscapeColumn: LandscapeColumnMeasurement?
 
     private var state: AgentSession.State { session.state }
 
@@ -237,48 +172,22 @@ struct AgentScreen: View {
             BackgroundGlow(color: color)
 
             GeometryReader { proxy in
-                // Sizes come from the space actually on offer rather than from
-                // constants: a 300pt helmet and a 190pt caption card fit a
-                // portrait iPhone 15 and nothing else, which is how captions and
-                // secondary controls ended up competing for safe-area space.
                 let available = proxy.size
-                let hazardVisible = state.hazardAlert != nil
-                let guidanceVisible = state.guidance != nil
                 let crashVisible: Bool = {
                     if case .checkIn = state.crashPhase { return true }
                     return false
                 }()
-                let alertSignature = alertContentSignature(
-                    hazardAlert: state.hazardAlert,
-                    crashPhase: state.crashPhase,
-                    guidance: state.guidance,
-                    recording: state.recording
+                let inputs = HudLayoutInputs(
+                    alertsVisible: state.hazardAlert != nil || crashVisible || state.guidance != nil || state.recording,
+                    captionsRequested: viewModel.showCaptions,
+                    handsFreeActive: state.handsFree
                 )
-                let alertsVisible = alertSignature.isVisible
-                let alertContentHeight = alertContentHeightForLayout(
-                    alertsVisible: alertsVisible,
-                    signature: alertSignature,
-                    measurement: measuredAlertContent,
-                    availableHeight: available.height
-                )
-                let landscapeColumnSignature = LandscapeColumnSignature(
-                    token: [
-                        orbCaption(state), stateTelltale(state), String(state.handsFree), String(state.micMuted),
-                        String(viewModel.showCaptions), String(describing: available.width), String(describing: dynamicTypeSize),
-                    ].joined(separator: "|")
-                )
-                let allocation = hudAllocation(
+                let allocation = hudDeterministicAllocation(
                     layout: layout,
                     available: available,
-                    alertContentHeight: alertContentHeight,
-                    captionsRequested: viewModel.showCaptions,
-                    landscapeColumn: layout == .landscape
-                        ? landscapeColumnForLayout(
-                            signature: landscapeColumnSignature,
-                            measurement: measuredLandscapeColumn
-                        )
-                        : nil
+                    inputs: inputs
                 )
+                let policy = hudRenderingPolicy(layout: layout, inputs: inputs, allocation: allocation)
 
                 Group {
                     switch layout {
@@ -286,45 +195,19 @@ struct AgentScreen: View {
                         portraitStack(
                             color: color,
                             hazard: presentedHazard,
-                            helmet: allocation.helmetDiameter,
-                            captions: allocation.captionsHeight,
-                            alertsVisible: alertsVisible,
-                            alertViewportHeight: allocation.alertViewportHeight,
-                            alertsAreScrollable: allocation.alertsAreScrollable,
-                            alertSignature: alertSignature
+                            allocation: allocation,
+                            policy: policy
                         )
                     case .landscape:
                         landscapeStack(
                             color: color,
                             hazard: presentedHazard,
-                            helmet: allocation.helmetDiameter,
-                            captions: allocation.captionsHeight,
-                            alertsVisible: alertsVisible,
-                            alertViewportHeight: allocation.alertViewportHeight,
-                            alertsAreScrollable: allocation.alertsAreScrollable,
-                            alertSignature: alertSignature,
-                            landscapeColumnSignature: landscapeColumnSignature
+                            allocation: allocation,
+                            policy: policy
                         )
                     }
                 }
                 .frame(width: available.width, height: available.height)
-                .onPreferenceChange(AlertContentMeasurementPreferenceKey.self) { measurement in
-                    guard let measurement,
-                          measurement.signature == alertSignature,
-                          measurement.height > 0,
-                          measuredAlertContent != measurement
-                    else { return }
-                    measuredAlertContent = measurement
-                }
-                .onPreferenceChange(LandscapeColumnMetricsPreferenceKey.self) { measurement in
-                    guard let measurement,
-                          measurement.signature == landscapeColumnSignature,
-                          measurement.metrics.readoutHeight > 0,
-                          measurement.metrics.controlsHeight > 0,
-                          measuredLandscapeColumn != measurement
-                    else { return }
-                    measuredLandscapeColumn = measurement
-                }
             }
             .padding(.horizontal, layout == .landscape ? 16 : 20)
             .padding(.top, 10)
@@ -378,7 +261,7 @@ struct AgentScreen: View {
 
     /// Safety-critical banners and the navigation card, shared by both layouts.
     /// Their ordering is also their scroll and VoiceOver reading order.
-    private func alertContent(signature: AlertContentSignature) -> some View {
+    private func alertContent() -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if let alert = state.hazardAlert {
                 HazardBanner(alert: alert).padding(.horizontal, 4)
@@ -398,33 +281,27 @@ struct AgentScreen: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            GeometryReader { proxy in
-                Color.clear.preference(
-                    key: AlertContentMeasurementPreferenceKey.self,
-                    value: AlertContentMeasurement(signature: signature, height: proxy.size.height)
-                )
-            }
-        )
     }
 
-    @ViewBuilder
-    private func alertsViewport(
-        height: CGFloat,
-        scrollable: Bool,
-        signature: AlertContentSignature
-    ) -> some View {
+    /// The top bar and ordered alerts have one finite scroll owner. Guidance may
+    /// grow at Dynamic Type, but its map and enable button remain reachable by
+    /// scrolling rather than changing the helmet's first-frame allocation.
+    private func alertsViewport(height: CGFloat, policy: HudRenderingPolicy) -> some View {
         ScrollView(.vertical) {
-            alertContent(signature: signature)
+            VStack(alignment: .leading, spacing: 8) {
+                TopBar(state: state)
+                alertContent()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .scrollDisabled(!scrollable)
+        .scrollDisabled(!policy.alertViewportScrolls)
         .scrollIndicators(.automatic)
         .frame(height: height)
         // Keep every banner, the guidance summary, and the embedded map/enable
         // control as separate reachable elements while the container scrolls.
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("安全和导航提醒")
-        .accessibilityHint(scrollable ? "上下滑动可查看全部提醒" : "")
+        .accessibilityLabel("状态、安全和导航提醒")
+        .accessibilityHint(policy.alertChildrenRemainAccessible ? "上下滑动可查看全部提醒" : "")
     }
 
     @ViewBuilder private func helmet(color: Color, hazard: HazardLevel, size: CGFloat) -> some View {
@@ -441,49 +318,65 @@ struct AgentScreen: View {
         )
     }
 
-    @ViewBuilder private func captionsCard(height: CGFloat) -> some View {
+    @ViewBuilder private func captionsCard() -> some View {
         CaptionsOverlay(
             items: state.transcript,
-            listHeight: height,
             canFlag: { state.canFlagTurn($0) },
             onFlag: { item, reason in viewModel.flagTurn(item, reason: reason) }
         )
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
+    /// All vertically growing utility content shares this one scroll owner.
+    /// Captions no longer nest a second vertical ScrollView inside the utility
+    /// region, so mute/settings remain reachable after a Dynamic Type change.
+    private func utilityViewport(
+        height: CGFloat,
+        captionsVisible: Bool,
+        policy: HudRenderingPolicy
+    ) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 12) {
+                    StateReadout(caption: orbCaption(state), telltale: stateTelltale(state), color: orbColor(state))
+                    if captionsVisible { captionsCard() }
+                    SecondaryControls(state: state, viewModel: viewModel)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollDisabled(!policy.utilityViewportScrolls)
+            .scrollIndicators(.automatic)
+            .onChange(of: state.transcript.count) { _, _ in
+                if let last = state.transcript.last {
+                    withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                }
+            }
+        }
+        .frame(height: height)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("会话状态和工具")
+        .accessibilityHint("上下滑动可查看字幕和工具")
+    }
+
     @ViewBuilder
     private func portraitStack(
         color: Color,
         hazard: HazardLevel,
-        helmet size: CGFloat,
-        captions: CGFloat?,
-        alertsVisible: Bool,
-        alertViewportHeight: CGFloat,
-        alertsAreScrollable: Bool,
-        alertSignature: AlertContentSignature
+        allocation: HudDeterministicAllocation,
+        policy: HudRenderingPolicy
     )
         -> some View
     {
-        VStack(spacing: 14) {
-            TopBar(state: state)
-            if alertsVisible {
-                alertsViewport(
-                    height: alertViewportHeight,
-                    scrollable: alertsAreScrollable,
-                    signature: alertSignature
-                )
-            }
-
-            Spacer(minLength: 4)
-
-            helmet(color: color, hazard: hazard, size: size)
-            StateReadout(caption: orbCaption(state), telltale: stateTelltale(state), color: color)
-
-            Spacer(minLength: 4)
-
-            if let captions { captionsCard(height: captions) }
-
-            SecondaryControls(state: state, viewModel: viewModel)
+        VStack(spacing: 0) {
+            alertsViewport(height: allocation.alertViewportHeight, policy: policy)
+            Spacer(minLength: 0).frame(height: HudMetrics.portraitStackGaps / 2)
+            helmet(color: color, hazard: hazard, size: allocation.helmetDiameter)
+            Spacer(minLength: 0).frame(height: HudMetrics.portraitStackGaps / 2)
+            utilityViewport(
+                height: allocation.utilityViewportHeight,
+                captionsVisible: allocation.captionsVisible,
+                policy: policy
+            )
         }
     }
 
@@ -493,66 +386,29 @@ struct AgentScreen: View {
     private func landscapeStack(
         color: Color,
         hazard: HazardLevel,
-        helmet size: CGFloat,
-        captions: CGFloat?,
-        alertsVisible: Bool,
-        alertViewportHeight: CGFloat,
-        alertsAreScrollable: Bool,
-        alertSignature: AlertContentSignature,
-        landscapeColumnSignature: LandscapeColumnSignature
+        allocation: HudDeterministicAllocation,
+        policy: HudRenderingPolicy
     )
         -> some View
     {
-        VStack(spacing: 8) {
-            TopBar(state: state)
-            if alertsVisible {
-                alertsViewport(
-                    height: alertViewportHeight,
-                    scrollable: alertsAreScrollable,
-                    signature: alertSignature
-                )
-            }
-
+        VStack(spacing: 0) {
+            alertsViewport(height: allocation.alertViewportHeight, policy: policy)
+            Spacer(minLength: 0).frame(height: HudMetrics.landscapeStackGap)
             HStack(spacing: 18) {
-                helmet(color: color, hazard: hazard, size: size)
-                    .frame(maxWidth: .infinity)
-
-                VStack(spacing: 8) {
-                    StateReadout(caption: orbCaption(state), telltale: stateTelltale(state), color: color)
-                        .background(
-                            GeometryReader { proxy in
-                                Color.clear.preference(
-                                    key: LandscapeColumnMetricsPreferenceKey.self,
-                                    value: LandscapeColumnMeasurement(
-                                        signature: landscapeColumnSignature,
-                                        metrics: LandscapeColumnMetrics(
-                                            readoutHeight: proxy.size.height,
-                                            controlsHeight: 0
-                                        )
-                                    )
-                                )
-                            }
-                        )
-                    if let captions { captionsCard(height: captions) }
-                    Spacer(minLength: 0)
-                    SecondaryControls(state: state, viewModel: viewModel)
-                        .background(
-                            GeometryReader { proxy in
-                                Color.clear.preference(
-                                    key: LandscapeColumnMetricsPreferenceKey.self,
-                                    value: LandscapeColumnMeasurement(
-                                        signature: landscapeColumnSignature,
-                                        metrics: LandscapeColumnMetrics(
-                                            readoutHeight: 0,
-                                            controlsHeight: proxy.size.height
-                                        )
-                                    )
-                                )
-                            }
-                        )
-                }
+                helmet(color: color, hazard: hazard, size: allocation.helmetDiameter)
+                    .frame(
+                        width: allocation.helmetDiameter,
+                        height: allocation.utilityViewportHeight,
+                        alignment: .center
+                    )
+                utilityViewport(
+                    height: allocation.utilityViewportHeight,
+                    captionsVisible: allocation.captionsVisible,
+                    policy: policy
+                )
                 .frame(maxWidth: .infinity)
             }
+            .frame(height: allocation.utilityViewportHeight)
         }
     }
 }
@@ -1040,9 +896,6 @@ private struct StateReadout: View {
 
 private struct CaptionsOverlay: View {
     let items: [TranscriptItem]
-    /// The card's list height is chosen against the screen so captions and
-    /// secondary controls remain within the available safe-area height.
-    var listHeight: CGFloat = 190
     let canFlag: (TranscriptItem) -> Bool
     let onFlag: (TranscriptItem, String) -> Void
 
@@ -1061,29 +914,18 @@ private struct CaptionsOverlay: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 18)
             } else {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(spacing: 8) {
-                            ForEach(items) { item in
-                                ChatBubble(
-                                    item: item,
-                                    time: timeFormatter.string(from: item.at),
-                                    flaggable: canFlag(item),
-                                    onFlag: { reason in onFlag(item, reason) }
-                                )
-                                .id(item.id)
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                    .frame(height: max(0, listHeight - 28))  // minus the card padding
-                    .scrollIndicators(.hidden)
-                    .onChange(of: items.count) { _, _ in
-                        if let last = items.last {
-                            withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
-                        }
+                VStack(spacing: 8) {
+                    ForEach(items) { item in
+                        ChatBubble(
+                            item: item,
+                            time: timeFormatter.string(from: item.at),
+                            flaggable: canFlag(item),
+                            onFlag: { reason in onFlag(item, reason) }
+                        )
+                        .id(item.id)
                     }
                 }
+                .frame(maxWidth: .infinity)
             }
         }
         .padding(14)
@@ -1099,6 +941,13 @@ private struct SecondaryControls: View {
     @ObservedObject var viewModel: MainViewModel
 
     var body: some View {
+        ViewThatFits(in: .horizontal) {
+            controlsRow
+            controlsGrid
+        }
+    }
+
+    private var controlsRow: some View {
         HStack {
             PillToggle(icon: "text.bubble", label: "字幕", on: viewModel.showCaptions) {
                 viewModel.showCaptions.toggle()
@@ -1118,6 +967,31 @@ private struct SecondaryControls: View {
 
             PillToggle(icon: "gearshape.fill", label: "设置", on: false) {
                 viewModel.showPreferences = true
+            }
+        }
+    }
+
+    /// When the landscape utility column becomes narrow at Dynamic Type, the
+    /// outer utility ScrollView owns the added vertical height. Every action
+    /// stays reachable instead of compressing or clipping horizontally.
+    private var controlsGrid: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                PillToggle(icon: "text.bubble", label: "字幕", on: viewModel.showCaptions) {
+                    viewModel.showCaptions.toggle()
+                }
+                if state.handsFree {
+                    MuteUtilityPill(muted: state.micMuted, action: viewModel.toggleMute)
+                }
+            }
+            HStack(spacing: 8) {
+                PillToggle(icon: "photo.stack", label: "相册", on: false) {
+                    viewModel.galleryModel.refresh()
+                    viewModel.showGallery = true
+                }
+                PillToggle(icon: "gearshape.fill", label: "设置", on: false) {
+                    viewModel.showPreferences = true
+                }
             }
         }
     }

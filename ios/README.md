@@ -38,9 +38,19 @@ every setting lives in the 设置 sheet.
 
 ## Build & run
 
-Open `MaxHelmet.xcodeproj` in Xcode and press Run — no extra tooling, CocoaPods, or SPM
-packages. The project has no third-party dependencies; it uses only `SwiftUI`, `AVFoundation`,
-`CoreLocation`, and `Combine`.
+Bootstrap CocoaPods and create the ignored local key configuration from the repo root:
+
+```bash
+cd ios
+bundle config set --local path vendor/bundle
+bundle install
+bundle exec pod install --repo-update
+cp Config/Secrets.xcconfig.example Config/Secrets.xcconfig
+```
+
+Set `AMAP_IOS_KEY` only in the ignored `Config/Secrets.xcconfig`; never commit that file. Then
+open `MaxHelmet.xcworkspace` in Xcode and press Run. The app uses `SwiftUI`, `AVFoundation`,
+`CoreLocation`, `Combine`, and the native AMap iOS 3D Map SDK provided by CocoaPods.
 
 On a physical device, select your team under **Signing & Capabilities** first (the bundle ID is
 `com.horizon.maxhelmet`; change it if it collides).
@@ -53,7 +63,7 @@ Command-line simulator build from the repo root:
 ```bash
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild \
-  -project ios/MaxHelmet.xcodeproj \
+  -workspace ios/MaxHelmet.xcworkspace \
   -scheme MaxHelmet \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
   HORIZON_GIT_COMMIT=$(git rev-parse --short=12 HEAD) build
@@ -81,7 +91,7 @@ On a physical device `localhost` is the phone itself, so a Debug build defaults 
 Lightsail test relay and turns the self-signed trust toggle on for that first connection.
 Point it back at a Mac relay by typing the LAN URL (and toggling self-signed off for `ws://`).
 
-3. Tap 开启免提. The app asks for microphone (required) and location (optional, used for live
+3. Tap the helmet. The app asks for microphone (required) and location (optional, used for live
    weather). With `VOICE_PROVIDER=mock` you get the scripted demo session; with
    `VOICE_PROVIDER=doubao` you get real speech-to-speech.
 
@@ -127,7 +137,7 @@ npm run dev:server
 DEVICE="iPhone 17 Pro"
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild \
-  -project ios/MaxHelmet.xcodeproj \
+  -workspace ios/MaxHelmet.xcworkspace \
   -scheme MaxHelmet \
   -destination "platform=iOS Simulator,name=$DEVICE" build
 
@@ -155,7 +165,7 @@ UDID=<your-device-udid>
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 
 # Build, install, and launch on the device
-xcodebuild -project ios/MaxHelmet.xcodeproj -scheme MaxHelmet \
+xcodebuild -workspace ios/MaxHelmet.xcworkspace -scheme MaxHelmet \
   -destination "id=$UDID" -configuration Debug \
   -derivedDataPath /tmp/MaxHelmetBuild -allowProvisioningUpdates build
 xcrun devicectl device install app --device "$UDID" \
@@ -194,8 +204,8 @@ hide the toggle, use the hardened `Info.plist`, and require a trusted certificat
 
 ## What's implemented
 
-- Hands-free toggle: the 开始/结束 button **or tapping the helmet** starts/stops mic streaming and the relay session.
-- Web-parity microphone dock — the native 300 × 64 start/end control mirrors the web HUD; its three-bar meter, key, and lume glow react only to live rider input, while Mute remains a separate utility action.
+- Helmet-only session toggle: tap the helmet once to start mic streaming and the relay session, then tap it again to stop. Mute is a separate, 44-point utility available only while the session is active.
+- Native AMap route card: the first route shows a one-time Chinese disclosure before any AMap API use. Choosing **暂不启用** preserves maneuver text, ETA, prompts, rerouting, and stop-navigation while showing **地图未启用**; **启用地图** lets the rider reconsider. After acceptance, a configured key and valid geometry show the native AMap iOS 3D Map SDK; a missing key, invalid geometry, map load failure, or simulator shows an honest unavailable state instead. The app does not use the AMap Location SDK and has no MapKit fallback.
 - SwiftUI turn-state HUD with the same captions, colors, controls, and ride cards as Android/web.
 - Voice gender, personality, ride mode, and demo scenario selectors.
 - 16 kHz PCM16 mono microphone streaming through `AVAudioEngine`.
@@ -291,7 +301,7 @@ CI/parity checks should run on a Mac runner with full Xcode installed:
 ```bash
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild \
-  -project ios/MaxHelmet.xcodeproj \
+  -workspace ios/MaxHelmet.xcworkspace \
   -scheme MaxHelmet \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
   HORIZON_GIT_COMMIT=$(git rev-parse --short=12 HEAD) build

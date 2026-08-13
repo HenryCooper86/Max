@@ -568,7 +568,7 @@ Native releases must carry the actual commit:
 
 ```bash
 HORIZON_GIT_COMMIT=$(git rev-parse --short=12 HEAD) ./android/gradlew -p android assembleRelease
-xcodebuild -project ios/MaxHelmet.xcodeproj -scheme MaxHelmet \
+xcodebuild -workspace ios/MaxHelmet.xcworkspace -scheme MaxHelmet \
   HORIZON_GIT_COMMIT=$(git rev-parse --short=12 HEAD) build
 ```
 

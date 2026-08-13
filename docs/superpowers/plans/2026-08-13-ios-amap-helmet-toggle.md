@@ -341,7 +341,10 @@ git add .gitignore ios/Gemfile ios/Gemfile.lock ios/Podfile ios/Podfile.lock \
   ios/MaxHelmet/Info-Debug.plist ios/MaxHelmet/Navigation/AMapConfiguration.swift \
   ios/MaxHelmetTests/AMapConfigurationTests.swift
 git diff --cached --check
-git diff --cached | rg -n 'AMAP_IOS_KEY = .+' && exit 1 || true
+if git diff --cached | rg -n 'AMAP_IOS_KEY = .+'; then
+  echo "Refusing to commit a non-empty AMap key assignment" >&2
+  exit 1
+fi
 git commit -m "build(ios): add AMap map SDK configuration"
 ```
 

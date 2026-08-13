@@ -25,15 +25,11 @@ enum HudMetrics {
     /// secondary controls, the VStack spacings and the screen padding.
     /// Measured against the constants in AgentScreen.swift.
     static let portraitChrome: CGFloat = 218
-    /// Landscape furniture in the readout column plus the top strip. Kept for
-    /// the original dock-removal regression test; allocation uses the two
-    /// separate regions below because they sit beside rather than below one
-    /// another.
+    /// Kept for the dock-removal regression test. Landscape allocation now
+    /// measures the actual readout/control column instead of guessing it.
     static let landscapeChrome: CGFloat = 118
     /// Top bar, its stack spacing, and vertical screen padding in landscape.
     static let landscapeTopChrome: CGFloat = 44
-    /// The remaining landscape chrome in the readout column.
-    static let landscapeReadoutChrome: CGFloat = 74
     /// Captions at their design height, plus the card padding.
     static let captionsMax: CGFloat = 218
     /// Under this the caption list shows less than two turns, at which point
@@ -43,6 +39,77 @@ enum HudMetrics {
     /// Share of the width the helmet column takes in landscape. The rest is the
     /// readout, captions and controls, which need the wider half for text.
     static let landscapeHelmetColumn: CGFloat = 0.42
+}
+
+/// Intrinsic heights measured from the two fixed children in landscape's right
+/// column. `fixedHeight` adds the actual VStack gaps that appear with or
+/// without a captions card; this avoids treating a wrapped readout as a 74pt
+/// constant.
+struct LandscapeColumnMetrics: Equatable {
+    let readoutHeight: CGFloat
+    let controlsHeight: CGFloat
+
+    static let unmeasured = LandscapeColumnMetrics(readoutHeight: 0, controlsHeight: 0)
+
+    func fixedHeight(captionsVisible: Bool) -> CGFloat {
+        let gaps: CGFloat = captionsVisible ? 24 : 16
+        return max(0, readoutHeight) + max(0, controlsHeight) + gaps
+    }
+}
+
+struct LandscapeColumnSignature: Equatable {
+    let token: String
+}
+
+struct LandscapeColumnMeasurement: Equatable {
+    let signature: LandscapeColumnSignature
+    let metrics: LandscapeColumnMetrics
+}
+
+/// A metric is only safe for the right column content and width that measured
+/// it. On any mismatch, captions wait one layout pass for a fresh preference.
+func landscapeColumnForLayout(
+    signature: LandscapeColumnSignature,
+    measurement: LandscapeColumnMeasurement?
+) -> LandscapeColumnMetrics? {
+    guard let measurement, measurement.signature == signature else { return nil }
+    return measurement.metrics
+}
+
+/// Alert inputs that can alter intrinsic alert height. A height preference is
+/// only valid for the exact signature that produced it.
+struct AlertContentSignature: Equatable {
+    let hazardToken: String?
+    let crashCheckInToken: String?
+    let guidanceToken: String?
+    let recording: Bool
+
+    var isVisible: Bool {
+        hazardToken != nil || crashCheckInToken != nil || guidanceToken != nil || recording
+    }
+}
+
+struct AlertContentMeasurement: Equatable {
+    let signature: AlertContentSignature
+    let height: CGFloat
+}
+
+/// Rejects stale preference measurements on the same render pass that a new
+/// alert arrives or expands. The caller then reserves the conservative safe
+/// viewport until SwiftUI publishes a matching measurement.
+func alertContentHeightForLayout(
+    alertsVisible: Bool,
+    signature: AlertContentSignature,
+    measurement: AlertContentMeasurement?,
+    availableHeight: CGFloat
+) -> CGFloat {
+    guard alertsVisible,
+          let measurement,
+          measurement.signature == signature
+    else {
+        return alertsVisible ? max(0, availableHeight) : 0
+    }
+    return max(0, measurement.height)
 }
 
 /// Landscape whenever the vertical space is compact — the same signal
@@ -70,7 +137,8 @@ func hudAllocation(
     layout: HudLayout,
     available: CGSize,
     alertContentHeight: CGFloat,
-    captionsRequested: Bool
+    captionsRequested: Bool,
+    landscapeColumn: LandscapeColumnMetrics? = nil
 ) -> HudAllocation {
     let contentHeight = max(0, alertContentHeight)
     let alertViewportHeight: CGFloat
@@ -96,14 +164,22 @@ func hudAllocation(
         helmetDiameter = min(HudMetrics.helmetMaxDiameter, max(HudMetrics.helmetMinDiameter, remainingHeight))
 
     case .landscape:
+        // Until the fixed column measures, suppress optional captions rather
+        // than risk them covering the mute/secondary controls for one pass.
+        let captionsRequested = captionsRequested && landscapeColumn != nil
+        let column = landscapeColumn ?? .unmeasured
+        let minimumRowHeight = max(
+            HudMetrics.helmetMinDiameter,
+            column.fixedHeight(captionsVisible: false)
+        )
         let viewportCapacity = max(
             0,
-            available.height - HudMetrics.landscapeTopChrome - HudMetrics.helmetMinDiameter
+            available.height - HudMetrics.landscapeTopChrome - minimumRowHeight
         )
         alertViewportHeight = min(contentHeight, viewportCapacity)
 
         let captionRoom = available.height - HudMetrics.landscapeTopChrome
-            - alertViewportHeight - HudMetrics.landscapeReadoutChrome
+            - alertViewportHeight - column.fixedHeight(captionsVisible: true)
         captionsHeight = captionsRequested && captionRoom >= HudMetrics.captionsMin
             ? min(HudMetrics.captionsMax, captionRoom)
             : nil

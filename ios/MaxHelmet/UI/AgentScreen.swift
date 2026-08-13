@@ -10,12 +10,66 @@ private let turnCaptions: [TurnState: String] = [
     .speaking: "Max 回答中"
 ]
 
-private struct AlertContentHeightPreferenceKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
+private struct AlertContentMeasurementPreferenceKey: PreferenceKey {
+    static let defaultValue: AlertContentMeasurement? = nil
 
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
+    static func reduce(value: inout AlertContentMeasurement?, nextValue: () -> AlertContentMeasurement?) {
+        value = nextValue() ?? value
     }
+}
+
+private struct LandscapeColumnMetricsPreferenceKey: PreferenceKey {
+    static let defaultValue: LandscapeColumnMeasurement? = nil
+
+    static func reduce(
+        value: inout LandscapeColumnMeasurement?,
+        nextValue: () -> LandscapeColumnMeasurement?
+    ) {
+        guard let next = nextValue() else { return }
+        guard let current = value, current.signature == next.signature else {
+            value = next
+            return
+        }
+        value = LandscapeColumnMeasurement(
+            signature: next.signature,
+            metrics: LandscapeColumnMetrics(
+                readoutHeight: max(current.metrics.readoutHeight, next.metrics.readoutHeight),
+                controlsHeight: max(current.metrics.controlsHeight, next.metrics.controlsHeight)
+            )
+        )
+    }
+}
+
+func alertContentSignature(
+    hazardAlert: HazardAlert?,
+    crashPhase: CrashUIPhase,
+    guidance: GuidanceState?,
+    recording: Bool
+) -> AlertContentSignature {
+    let hazardToken = hazardAlert.map {
+        [
+            $0.threat, $0.direction, String(describing: $0.severity), $0.label,
+            $0.message, $0.advice, String($0.ttcSeconds), String($0.interrupt),
+        ].joined(separator: "|")
+    }
+    let crashCheckInToken: String?
+    if case let .checkIn(sinceT) = crashPhase {
+        crashCheckInToken = String(sinceT)
+    } else {
+        crashCheckInToken = nil
+    }
+    let guidanceToken = guidance.map {
+        [
+            $0.destinationName, $0.maneuverInstruction ?? "", String($0.distanceToManeuverMeters),
+            String($0.remainingDistanceMeters), String($0.remainingSeconds), String($0.offRoute),
+        ].joined(separator: "|")
+    }
+    return AlertContentSignature(
+        hazardToken: hazardToken,
+        crashCheckInToken: crashCheckInToken,
+        guidanceToken: guidanceToken,
+        recording: recording
+    )
 }
 
 private func ringColor(connected: Bool, turnState: TurnState) -> Color {
@@ -168,7 +222,9 @@ struct AgentScreen: View {
     /// Compact vertical space means the phone is sideways. Info.plist has always
     /// permitted that; the layout never accounted for it.
     @Environment(\.verticalSizeClass) private var verticalSizeClass
-    @State private var measuredAlertContentHeight: CGFloat?
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var measuredAlertContent: AlertContentMeasurement?
+    @State private var measuredLandscapeColumn: LandscapeColumnMeasurement?
 
     private var state: AgentSession.State { session.state }
 
@@ -192,18 +248,36 @@ struct AgentScreen: View {
                     if case .checkIn = state.crashPhase { return true }
                     return false
                 }()
-                let alertsVisible = hazardVisible || guidanceVisible || crashVisible || state.recording
-                // Before SwiftUI has measured a newly-presented alert stack,
-                // reserve its maximum safe viewport. Once the preference
-                // arrives, the viewport shrinks to the real content height.
-                let alertContentHeight = alertsVisible
-                    ? (measuredAlertContentHeight ?? available.height)
-                    : 0
+                let alertSignature = alertContentSignature(
+                    hazardAlert: state.hazardAlert,
+                    crashPhase: state.crashPhase,
+                    guidance: state.guidance,
+                    recording: state.recording
+                )
+                let alertsVisible = alertSignature.isVisible
+                let alertContentHeight = alertContentHeightForLayout(
+                    alertsVisible: alertsVisible,
+                    signature: alertSignature,
+                    measurement: measuredAlertContent,
+                    availableHeight: available.height
+                )
+                let landscapeColumnSignature = LandscapeColumnSignature(
+                    token: [
+                        orbCaption(state), stateTelltale(state), String(state.handsFree), String(state.micMuted),
+                        String(viewModel.showCaptions), String(describing: available.width), String(describing: dynamicTypeSize),
+                    ].joined(separator: "|")
+                )
                 let allocation = hudAllocation(
                     layout: layout,
                     available: available,
                     alertContentHeight: alertContentHeight,
-                    captionsRequested: viewModel.showCaptions
+                    captionsRequested: viewModel.showCaptions,
+                    landscapeColumn: layout == .landscape
+                        ? landscapeColumnForLayout(
+                            signature: landscapeColumnSignature,
+                            measurement: measuredLandscapeColumn
+                        )
+                        : nil
                 )
 
                 Group {
@@ -216,7 +290,8 @@ struct AgentScreen: View {
                             captions: allocation.captionsHeight,
                             alertsVisible: alertsVisible,
                             alertViewportHeight: allocation.alertViewportHeight,
-                            alertsAreScrollable: allocation.alertsAreScrollable
+                            alertsAreScrollable: allocation.alertsAreScrollable,
+                            alertSignature: alertSignature
                         )
                     case .landscape:
                         landscapeStack(
@@ -226,13 +301,29 @@ struct AgentScreen: View {
                             captions: allocation.captionsHeight,
                             alertsVisible: alertsVisible,
                             alertViewportHeight: allocation.alertViewportHeight,
-                            alertsAreScrollable: allocation.alertsAreScrollable
+                            alertsAreScrollable: allocation.alertsAreScrollable,
+                            alertSignature: alertSignature,
+                            landscapeColumnSignature: landscapeColumnSignature
                         )
                     }
                 }
                 .frame(width: available.width, height: available.height)
-                .onPreferenceChange(AlertContentHeightPreferenceKey.self) { height in
-                    measuredAlertContentHeight = height > 0 ? height : nil
+                .onPreferenceChange(AlertContentMeasurementPreferenceKey.self) { measurement in
+                    guard let measurement,
+                          measurement.signature == alertSignature,
+                          measurement.height > 0,
+                          measuredAlertContent != measurement
+                    else { return }
+                    measuredAlertContent = measurement
+                }
+                .onPreferenceChange(LandscapeColumnMetricsPreferenceKey.self) { measurement in
+                    guard let measurement,
+                          measurement.signature == landscapeColumnSignature,
+                          measurement.metrics.readoutHeight > 0,
+                          measurement.metrics.controlsHeight > 0,
+                          measuredLandscapeColumn != measurement
+                    else { return }
+                    measuredLandscapeColumn = measurement
                 }
             }
             .padding(.horizontal, layout == .landscape ? 16 : 20)
@@ -255,12 +346,6 @@ struct AgentScreen: View {
         .background(HudColors.void.ignoresSafeArea())
         .animation(.easeInOut(duration: 0.25), value: viewModel.showCaptions)
         .animation(.easeInOut(duration: 0.25), value: state.micMuted)
-        .onChange(of: state.hazardAlert != nil || state.guidance != nil || state.recording || {
-            if case .checkIn = state.crashPhase { return true }
-            return false
-        }()) { _, visible in
-            if !visible { measuredAlertContentHeight = nil }
-        }
         // The relay requires a login (HTTP 401): open the settings sheet on the
         // 账号 section so the rider can sign in right where the fix is.
         .onChange(of: state.authRequired) { _, required in
@@ -293,7 +378,7 @@ struct AgentScreen: View {
 
     /// Safety-critical banners and the navigation card, shared by both layouts.
     /// Their ordering is also their scroll and VoiceOver reading order.
-    private var alertContent: some View {
+    private func alertContent(signature: AlertContentSignature) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if let alert = state.hazardAlert {
                 HazardBanner(alert: alert).padding(.horizontal, 4)
@@ -315,15 +400,22 @@ struct AgentScreen: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             GeometryReader { proxy in
-                Color.clear.preference(key: AlertContentHeightPreferenceKey.self, value: proxy.size.height)
+                Color.clear.preference(
+                    key: AlertContentMeasurementPreferenceKey.self,
+                    value: AlertContentMeasurement(signature: signature, height: proxy.size.height)
+                )
             }
         )
     }
 
     @ViewBuilder
-    private func alertsViewport(height: CGFloat, scrollable: Bool) -> some View {
+    private func alertsViewport(
+        height: CGFloat,
+        scrollable: Bool,
+        signature: AlertContentSignature
+    ) -> some View {
         ScrollView(.vertical) {
-            alertContent
+            alertContent(signature: signature)
         }
         .scrollDisabled(!scrollable)
         .scrollIndicators(.automatic)
@@ -367,14 +459,19 @@ struct AgentScreen: View {
         captions: CGFloat?,
         alertsVisible: Bool,
         alertViewportHeight: CGFloat,
-        alertsAreScrollable: Bool
+        alertsAreScrollable: Bool,
+        alertSignature: AlertContentSignature
     )
         -> some View
     {
         VStack(spacing: 14) {
             TopBar(state: state)
             if alertsVisible {
-                alertsViewport(height: alertViewportHeight, scrollable: alertsAreScrollable)
+                alertsViewport(
+                    height: alertViewportHeight,
+                    scrollable: alertsAreScrollable,
+                    signature: alertSignature
+                )
             }
 
             Spacer(minLength: 4)
@@ -400,14 +497,20 @@ struct AgentScreen: View {
         captions: CGFloat?,
         alertsVisible: Bool,
         alertViewportHeight: CGFloat,
-        alertsAreScrollable: Bool
+        alertsAreScrollable: Bool,
+        alertSignature: AlertContentSignature,
+        landscapeColumnSignature: LandscapeColumnSignature
     )
         -> some View
     {
         VStack(spacing: 8) {
             TopBar(state: state)
             if alertsVisible {
-                alertsViewport(height: alertViewportHeight, scrollable: alertsAreScrollable)
+                alertsViewport(
+                    height: alertViewportHeight,
+                    scrollable: alertsAreScrollable,
+                    signature: alertSignature
+                )
             }
 
             HStack(spacing: 18) {
@@ -416,9 +519,37 @@ struct AgentScreen: View {
 
                 VStack(spacing: 8) {
                     StateReadout(caption: orbCaption(state), telltale: stateTelltale(state), color: color)
+                        .background(
+                            GeometryReader { proxy in
+                                Color.clear.preference(
+                                    key: LandscapeColumnMetricsPreferenceKey.self,
+                                    value: LandscapeColumnMeasurement(
+                                        signature: landscapeColumnSignature,
+                                        metrics: LandscapeColumnMetrics(
+                                            readoutHeight: proxy.size.height,
+                                            controlsHeight: 0
+                                        )
+                                    )
+                                )
+                            }
+                        )
                     if let captions { captionsCard(height: captions) }
                     Spacer(minLength: 0)
                     SecondaryControls(state: state, viewModel: viewModel)
+                        .background(
+                            GeometryReader { proxy in
+                                Color.clear.preference(
+                                    key: LandscapeColumnMetricsPreferenceKey.self,
+                                    value: LandscapeColumnMeasurement(
+                                        signature: landscapeColumnSignature,
+                                        metrics: LandscapeColumnMetrics(
+                                            readoutHeight: 0,
+                                            controlsHeight: proxy.size.height
+                                        )
+                                    )
+                                )
+                            }
+                        )
                 }
                 .frame(maxWidth: .infinity)
             }

@@ -137,15 +137,186 @@ final class AgentScreenLayoutTests: XCTestCase {
         XCTAssertTrue(allocation.alertsAreScrollable)
     }
 
-    func testEveryAlertCombinationFitsSupportedPhonesAndKeepsTheSoleToggleReachable() {
-        let fixtures: [(HudLayout, CGSize, CGFloat, CGFloat)] = [
-            (.portrait, phone15Portrait, 218, 0),
-            (.portrait, phoneSEPortrait, 218, 0),
-            (.landscape, phone15Landscape, 44, 74),
-            (.landscape, phoneSELandscape, 44, 74),
+    func testLandscapeMeasuredReadoutAndActiveControlsCapCaptionsWithinBothPhoneRows() {
+        let activeColumn = LandscapeColumnMetrics(readoutHeight: 43, controlsHeight: 44)
+        let fixtures: [(CGSize, CGFloat, CGFloat)] = [
+            (phone15Landscape, 298, 187),
+            (phoneSELandscape, 280.14, 200),
         ]
 
-        for (layout, size, fixedChrome, readoutColumn) in fixtures {
+        // StateReadout (43) + active MuteUtilityPill/controls (44) + the
+        // three 8pt VStack gaps around a visible caption is 111pt. The old
+        // 74pt reservation allowed these captions to overlap controls.
+        XCTAssertEqual(activeColumn.fixedHeight(captionsVisible: true), 111)
+        for (size, expectedHelmet, expectedCaptions) in fixtures {
+            let allocation = hudAllocation(
+                layout: .landscape,
+                available: size,
+                alertContentHeight: 0,
+                captionsRequested: true,
+                landscapeColumn: activeColumn
+            )
+
+            XCTAssertEqual(allocation.helmetDiameter, expectedHelmet, accuracy: 0.01)
+            XCTAssertEqual(allocation.captionsHeight ?? -1, expectedCaptions, accuracy: 0.01)
+            XCTAssertLessThanOrEqual(
+                44 + max(
+                    allocation.helmetDiameter,
+                    activeColumn.fixedHeight(captionsVisible: true) + (allocation.captionsHeight ?? 0)
+                ),
+                size.height + 0.5
+            )
+        }
+    }
+
+    func testLandscapeExpandedReadoutDropsCaptionsBeforeItCanCoverActiveControls() {
+        // A wrapped Dynamic-Type readout can be 92pt. With the active controls
+        // and caption gaps, the true fixed caption column is 160pt.
+        let expandedColumn = LandscapeColumnMetrics(readoutHeight: 92, controlsHeight: 44)
+        let allocation = hudAllocation(
+            layout: .landscape,
+            available: phone15Landscape,
+            alertContentHeight: 100,
+            captionsRequested: true,
+            landscapeColumn: expandedColumn
+        )
+
+        XCTAssertEqual(expandedColumn.fixedHeight(captionsVisible: true), 160)
+        XCTAssertEqual(allocation.alertViewportHeight, 100)
+        XCTAssertEqual(allocation.helmetDiameter, 198)
+        XCTAssertNil(allocation.captionsHeight)
+        XCTAssertLessThanOrEqual(
+            44 + allocation.alertViewportHeight
+                + max(allocation.helmetDiameter, expandedColumn.fixedHeight(captionsVisible: false)),
+            phone15Landscape.height + 0.5
+        )
+    }
+
+    func testLandscapeHelmetStaysWithinItsWidthColumnOnBothPhonesForEveryAlertState() {
+        let activeColumn = LandscapeColumnMetrics(readoutHeight: 43, controlsHeight: 44)
+
+        for size in [phone15Landscape, phoneSELandscape] {
+            for alertContentHeight in [CGFloat(0), 100, 500] {
+                let allocation = hudAllocation(
+                    layout: .landscape,
+                    available: size,
+                    alertContentHeight: alertContentHeight,
+                    captionsRequested: true,
+                    landscapeColumn: activeColumn
+                )
+
+                XCTAssertLessThanOrEqual(
+                    allocation.helmetDiameter,
+                    size.width * 0.42 + 0.01,
+                    "helmet exceeded its landscape column at \(size), alerts=\(alertContentHeight)"
+                )
+            }
+        }
+    }
+
+    func testChangedAlertSignatureRejectsThePreviousMeasurementUntilTheNextOneArrives() {
+        let oldSignature = AlertContentSignature(
+            hazardToken: "front-car-brief",
+            crashCheckInToken: nil,
+            guidanceToken: "turn-short",
+            recording: false
+        )
+        let expandedSignature = AlertContentSignature(
+            hazardToken: "front-car-detailed",
+            crashCheckInToken: nil,
+            guidanceToken: "turn-long-wrapped",
+            recording: true
+        )
+        let oldMeasurement = AlertContentMeasurement(signature: oldSignature, height: 152)
+        let availableHeight: CGFloat = 342
+
+        // A new safety/guidance stack must reserve the full safe viewport for
+        // its first frame, not reuse 152pt and clip before SwiftUI reports the
+        // new intrinsic height. A matching next preference may then tighten it.
+        XCTAssertEqual(
+            alertContentHeightForLayout(
+                alertsVisible: true,
+                signature: expandedSignature,
+                measurement: oldMeasurement,
+                availableHeight: availableHeight
+            ),
+            342
+        )
+        XCTAssertEqual(
+            alertContentHeightForLayout(
+                alertsVisible: true,
+                signature: expandedSignature,
+                measurement: AlertContentMeasurement(signature: expandedSignature, height: 320),
+                availableHeight: availableHeight
+            ),
+            320
+        )
+    }
+
+    func testProductionAlertSignatureChangesWhenGuidanceOrRecordingChangesItsHeight() {
+        let compactGuidance = GuidanceState(
+            destinationName: "人民广场",
+            polyline: [],
+            currentLocation: nil,
+            maneuverInstruction: "右转",
+            distanceToManeuverMeters: 120,
+            remainingDistanceMeters: 1200,
+            remainingSeconds: 300,
+            offRoute: false
+        )
+        var expandedGuidance = compactGuidance
+        expandedGuidance.maneuverInstruction = "请在下一个复杂交叉路口沿辅路连续右转，然后在第三个出口驶离环岛"
+
+        let compact = alertContentSignature(
+            hazardAlert: nil,
+            crashPhase: .hidden,
+            guidance: compactGuidance,
+            recording: false
+        )
+        let expanded = alertContentSignature(
+            hazardAlert: nil,
+            crashPhase: .hidden,
+            guidance: expandedGuidance,
+            recording: true
+        )
+
+        XCTAssertNotEqual(compact, expanded)
+    }
+
+    func testChangedLandscapeColumnSignatureWaitsForTheNewMeasurementBeforeAdmittingCaptions() {
+        let oldSignature = LandscapeColumnSignature(token: "regular-734-active")
+        let expandedSignature = LandscapeColumnSignature(token: "accessibility-734-active")
+        let oldMeasurement = LandscapeColumnMeasurement(
+            signature: oldSignature,
+            metrics: LandscapeColumnMetrics(readoutHeight: 43, controlsHeight: 44)
+        )
+
+        XCTAssertNil(
+            landscapeColumnForLayout(signature: expandedSignature, measurement: oldMeasurement),
+            "a wrapped readout must not inherit the previous caption budget"
+        )
+        XCTAssertEqual(
+            landscapeColumnForLayout(
+                signature: expandedSignature,
+                measurement: LandscapeColumnMeasurement(
+                    signature: expandedSignature,
+                    metrics: LandscapeColumnMetrics(readoutHeight: 92, controlsHeight: 44)
+                )
+            ),
+            LandscapeColumnMetrics(readoutHeight: 92, controlsHeight: 44)
+        )
+    }
+
+    func testEveryAlertCombinationFitsSupportedPhonesAndKeepsTheSoleToggleReachable() {
+        let activeLandscapeColumn = LandscapeColumnMetrics(readoutHeight: 43, controlsHeight: 44)
+        let fixtures: [(HudLayout, CGSize, CGFloat)] = [
+            (.portrait, phone15Portrait, 218),
+            (.portrait, phoneSEPortrait, 218),
+            (.landscape, phone15Landscape, 44),
+            (.landscape, phoneSELandscape, 44),
+        ]
+
+        for (layout, size, fixedChrome) in fixtures {
             for captionsRequested in [false, true] {
                 for hazard in [false, true] {
                     for crash in [false, true] {
@@ -164,7 +335,8 @@ final class AgentScreenLayoutTests: XCTestCase {
                                     layout: layout,
                                     available: size,
                                     alertContentHeight: content,
-                                    captionsRequested: captionsRequested
+                                    captionsRequested: captionsRequested,
+                                    landscapeColumn: layout == .landscape ? activeLandscapeColumn : nil
                                 )
 
                                 XCTAssertGreaterThanOrEqual(allocation.helmetDiameter, 116)
@@ -176,9 +348,12 @@ final class AgentScreenLayoutTests: XCTestCase {
                                         size.height + 0.5
                                     )
                                 case .landscape:
+                                    let fixedColumn = activeLandscapeColumn.fixedHeight(
+                                        captionsVisible: allocation.captionsHeight != nil
+                                    )
                                     XCTAssertLessThanOrEqual(
                                         fixedChrome + allocation.alertViewportHeight
-                                            + max(allocation.helmetDiameter, readoutColumn + (allocation.captionsHeight ?? 0)),
+                                            + max(allocation.helmetDiameter, fixedColumn + (allocation.captionsHeight ?? 0)),
                                         size.height + 0.5
                                     )
                                 }

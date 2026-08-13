@@ -11,6 +11,15 @@ final class AMapMapPresentationTests: XCTestCase {
         )
     }
 
+    func testUnknownStillShowsDisclosureBeforeMissingKeyFailure() {
+        XCTAssertEqual(
+            amapMapPresentation(
+                decision: .unknown, hasAPIKey: false, hasGeometry: true, loadFailed: false
+            ),
+            .consentRequired
+        )
+    }
+
     func testDeclineWinsWithoutConstructingAMap() {
         XCTAssertEqual(
             amapMapPresentation(

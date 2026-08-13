@@ -1,4 +1,3 @@
-import MapKit
 import SwiftUI
 
 /// The live guidance surface, glanceable-first: the next maneuver and its
@@ -45,7 +44,6 @@ struct GuidanceCard: View {
             routeMap
                 .frame(height: 120)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .allowsHitTesting(false)
         }
         .padding(14)
         .background(HudColors.panelElevated, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -58,14 +56,6 @@ struct GuidanceCard: View {
     }
 
     private var routeMap: some View {
-        Map {
-            if guidance.polyline.count >= 2 {
-                MapPolyline(coordinates: guidance.polyline)
-                    .stroke(HudColors.lume, lineWidth: 5)
-            }
-            if let here = guidance.currentLocation {
-                Marker("我", coordinate: here).tint(HudColors.ember)
-            }
-        }
+        GuidanceMapHost(guidance: guidance)
     }
 }

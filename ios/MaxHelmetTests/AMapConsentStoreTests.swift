@@ -55,4 +55,11 @@ final class AMapConsentStoreTests: XCTestCase {
         XCTAssertEqual(store.decision, .accepted)
         XCTAssertFalse(store.isPromptPresented)
     }
+
+    func testAcceptedStoreDoesNotPromptAgainOnLaterRoutes() {
+        let store = AMapConsentStore(defaults: defaults)
+        store.accept()
+        store.requestIfNeeded()
+        XCTAssertFalse(store.isPromptPresented)
+    }
 }

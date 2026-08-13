@@ -1,5 +1,4 @@
 AMAP_IOS_KEY =
 #include? "../Pods/Target Support Files/Pods-MaxHelmet/Pods-MaxHelmet.release.xcconfig"
 EXCLUDED_ARCHS[sdk=iphonesimulator*] =
-OTHER_LDFLAGS[sdk=iphonesimulator*] = -ObjC -l"c++" -l"z" -framework "CoreGraphics" -framework "CoreLocation" -framework "CoreTelephony" -framework "CoreText" -framework "GLKit" -framework "OpenGLES" -framework "QuartzCore" -framework "Security" -framework "SystemConfiguration"
 #include? "Secrets.xcconfig"

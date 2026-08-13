@@ -1500,20 +1500,22 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 
 Expected: both builds succeed; the second exercises the compiled no-key path.
 
-- [ ] **Step 7: Perform simulator interaction verification**
+- [ ] **Step 7: Perform simulator and physical-device interaction verification**
 
-Install and launch the configured build on `iPhone 17 Pro`, connect to the relay, and verify:
+Install and launch the no-key build on the `iPhone 17 Pro` simulator, connect to the relay, and verify:
 
 1. The HUD has no microphone dock in portrait or landscape.
 2. Helmet tap starts hands-free; the next helmet tap stops it.
 3. Mute appears only while active and does not end the session.
 4. The first route presents the Chinese AMap disclosure before any map appears.
 5. “暂不启用” leaves maneuver text, ETA, prompts, rerouting, and stop-navigation operational and shows “地图未启用”.
-6. “启用地图” reopens the disclosure; acceptance shows AMap tiles, lume route, ember rider marker, and visible AMap attribution.
+6. “启用地图” reopens the disclosure; acceptance shows the explicit real-device-required AMap surface.
 7. A later route does not reprompt.
 8. Captions, navigation, hazard, recording, and crash UI do not overlap in either orientation.
 
-Record any inability to obtain live AMap tiles as an external verification limitation; do not substitute MapKit or weaken the automated acceptance gates.
+The vendor SDK is deliberately not linked on this simulator because its arm64 slice is device-only. Then install and launch the configured build on a connected physical iPhone and repeat consent steps 4–7. On the physical device, acceptance must show AMap tiles, the lume route, ember rider marker, and visible AMap attribution.
+
+Record any inability to install/sign the physical-device build or obtain live AMap tiles as an external verification limitation; do not substitute MapKit or weaken the automated acceptance gates.
 
 - [ ] **Step 8: Commit documentation and final verification state**
 

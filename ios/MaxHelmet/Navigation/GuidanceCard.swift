@@ -1,5 +1,41 @@
 import SwiftUI
 
+enum GuidanceCardAccessibilityChildPolicy: Equatable {
+    case contain
+    case ignore
+    case combine
+}
+
+struct GuidanceCardAccessibilityContract: Equatable {
+    let enclosingCardChildren: GuidanceCardAccessibilityChildPolicy
+    let navigationSummaryChildren: GuidanceCardAccessibilityChildPolicy
+
+    var keepsMapControlsSeparate: Bool {
+        enclosingCardChildren == .contain && navigationSummaryChildren == .ignore
+    }
+}
+
+let guidanceCardAccessibilityContract = GuidanceCardAccessibilityContract(
+    enclosingCardChildren: .contain,
+    navigationSummaryChildren: .ignore
+)
+
+private extension View {
+    @ViewBuilder
+    func applyingGuidanceCardAccessibilityPolicy(
+        _ policy: GuidanceCardAccessibilityChildPolicy
+    ) -> some View {
+        switch policy {
+        case .contain:
+            accessibilityElement(children: .contain)
+        case .ignore:
+            accessibilityElement(children: .ignore)
+        case .combine:
+            accessibilityElement(children: .combine)
+        }
+    }
+}
+
 /// The live guidance surface, glanceable-first: the next maneuver and its
 /// distance dominate; ETA and remaining distance sit below; the route map is
 /// secondary. Replaces Spec 1's DestinationCard.
@@ -29,7 +65,9 @@ struct GuidanceCard: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(HudColors.border, lineWidth: 1)
         )
         .frame(maxWidth: 420)
-        .accessibilityElement(children: .contain)
+        .applyingGuidanceCardAccessibilityPolicy(
+            guidanceCardAccessibilityContract.enclosingCardChildren
+        )
     }
 
     private var guidanceSummary: some View {
@@ -58,7 +96,9 @@ struct GuidanceCard: View {
                 .font(.subheadline)
                 .foregroundStyle(HudColors.hudDim)
         }
-        .accessibilityElement(children: .ignore)
+        .applyingGuidanceCardAccessibilityPolicy(
+            guidanceCardAccessibilityContract.navigationSummaryChildren
+        )
         .accessibilityLabel(guidanceCardAccessibilitySummary(guidance))
         .accessibilityAddTraits(.isStaticText)
     }

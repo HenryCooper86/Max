@@ -34,9 +34,24 @@ final class GuidanceMapHostPresentationTests: XCTestCase {
         )
         XCTAssertFalse(store.isPromptPresented)
 
-        store.requestIfNeeded()
+        handleGuidanceMapHostLifecycle(.appeared, consent: store)
 
         XCTAssertTrue(store.isPromptPresented)
+    }
+
+    func testHostAppearanceDoesNotRepromptAcceptedOrDeclinedConsent() {
+        let accepted = AMapConsentStore(defaults: defaults)
+        accepted.accept()
+        handleGuidanceMapHostLifecycle(.appeared, consent: accepted)
+        XCTAssertFalse(accepted.isPromptPresented)
+
+        let declinedSuiteName = "GuidanceMapHostPresentationTests.\(UUID().uuidString)"
+        let declinedDefaults = UserDefaults(suiteName: declinedSuiteName)!
+        defer { declinedDefaults.removePersistentDomain(forName: declinedSuiteName) }
+        let declined = AMapConsentStore(defaults: declinedDefaults)
+        declined.decline()
+        handleGuidanceMapHostLifecycle(.appeared, consent: declined)
+        XCTAssertFalse(declined.isPromptPresented)
     }
 
     func testDeclinedRouteUsesNotEnabledPlaceholderAndExplicitReconsideration() {

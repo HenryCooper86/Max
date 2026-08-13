@@ -3,6 +3,14 @@ import XCTest
 @testable import MaxHelmet
 
 final class GuidanceCardAccessibilityTests: XCTestCase {
+    func testAccessibilityContractKeepsNavigationSummaryAndMapControlsSeparate() {
+        let contract = guidanceCardAccessibilityContract
+
+        XCTAssertEqual(contract.enclosingCardChildren, .contain)
+        XCTAssertEqual(contract.navigationSummaryChildren, .ignore)
+        XCTAssertTrue(contract.keepsMapControlsSeparate)
+    }
+
     func testNavigationSummaryIncludesManeuverDistanceAndETAWithoutMapControl() {
         let guidance = GuidanceState(
             destinationName: "人民广场",

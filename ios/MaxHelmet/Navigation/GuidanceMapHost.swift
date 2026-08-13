@@ -7,6 +7,21 @@ enum GuidanceMapHostViewState: Equatable {
     case nativeMap(AMapAcceptedConsent)
 }
 
+enum GuidanceMapHostLifecycleEvent {
+    case appeared
+}
+
+@MainActor
+func handleGuidanceMapHostLifecycle(
+    _ event: GuidanceMapHostLifecycleEvent,
+    consent: AMapConsentStore
+) {
+    switch event {
+    case .appeared:
+        consent.requestIfNeeded()
+    }
+}
+
 func guidanceMapHostViewState(
     decision: AMapConsentDecision,
     hasAPIKey: Bool,
@@ -76,7 +91,7 @@ struct GuidanceMapHost: View {
                 map(consent: acceptedConsent)
             }
         }
-        .onAppear { consent.requestIfNeeded() }
+        .onAppear { handleGuidanceMapHostLifecycle(.appeared, consent: consent) }
         .sheet(isPresented: $consent.isPromptPresented) {
             AMapConsentSheet(onAccept: consent.accept, onDecline: consent.decline)
         }

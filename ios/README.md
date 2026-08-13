@@ -58,7 +58,8 @@ On a physical device, select your team under **Signing & Capabilities** first (t
 > New Swift files dropped into `MaxHelmet/` are picked up automatically — the target uses a
 > synchronized group, so there is no "add to target" step.
 
-Command-line simulator build from the repo root:
+Return to the repository root before using the command-line examples below (`cd ..` if you are
+continuing from the bootstrap shell). Command-line simulator build:
 
 ```bash
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
@@ -129,11 +130,13 @@ RDK。安装后先登录、配对并确认头盔 HUD 为 ready，再开始 Helme
 
 ### Simulator quick start
 
+Run both terminals from the repository root:
+
 ```bash
-# Terminal 1 — relay
+# Terminal 1 — relay (repository root)
 npm run dev:server
 
-# Terminal 2 — build, install, and launch
+# Terminal 2 — build, install, and launch (repository root)
 DEVICE="iPhone 17 Pro"
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild \
@@ -156,6 +159,7 @@ Running on a real iPhone needs a signing team. With a **free** Apple ID, add it 
 **Xcode ▸ Settings ▸ Accounts**, then select your **(Personal Team)** under the MaxHelmet target's
 **Signing & Capabilities** so Xcode provisions an _Apple Development_ certificate. The repo already
 pins `DEVELOPMENT_TEAM = V487HQQLC6`; change it to your own team if you are not on that account.
+Run the following commands from the repository root.
 
 ```bash
 # Find your connected device's UDID

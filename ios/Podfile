@@ -72,8 +72,23 @@ post_integrate do |installer|
     pods_target = installer.pods_project.targets.find do |target|
       target.name == aggregate_target.label
     end
-    product_reference = pods_target&.product_reference
-    next unless product_reference&.path&.end_with?(".a")
+    unless pods_target
+      raise Pod::Informative,
+            "Expected CocoaPods native target #{aggregate_target.label} for AMap simulator linkage cleanup."
+    end
+
+    product_reference = pods_target.product_reference
+    unless product_reference
+      raise Pod::Informative,
+            "Expected product reference for AMap aggregate #{aggregate_target.label}; " \
+            "cannot establish simulator-safe cleanup."
+    end
+
+    unless product_reference.path&.end_with?(".a")
+      raise Pod::Informative,
+            "Unexpected AMap aggregate product #{product_reference.path.inspect} for #{aggregate_target.label}; " \
+            "only a redundant static archive is known to be simulator-safe to remove."
+    end
 
     removed_count = 0
     aggregate_target.user_targets.each do |user_target|

@@ -160,7 +160,12 @@ export function reduceHud(state: HudState, event: HudEvent): HudState {
     case "rdk.navigation":
       return {
         ...state,
-        navigation: event.navigation === null ? null : copyNavigation(event.navigation)
+        navigation: event.navigation === null ? null : copyNavigation(event.navigation),
+        // Navigation and its geometry are one HUD invariant. The controller
+        // normally emits route:null immediately before the idle snapshot, but
+        // a missed/re-entrant observer callback must not leave a cancelled
+        // route painted forever after navigation itself is gone.
+        ...(event.navigation === null ? { route: null } : {})
       };
     case "rdk.route":
       return { ...state, route: event.route === null ? null : copyRoute(event.route) };

@@ -450,6 +450,52 @@ describe("doubao navigation command deadline", () => {
   });
 });
 
+describe("doubao contextual cancellation", () => {
+  it("turns the observed generic cancel follow-up into a real stop command and speaks only its result", async () => {
+    stubWeatherFetch();
+    const { controller, send, upstream } = await startSession("embedded");
+
+    await riderTurn(upstream, "Max 帮我录视频");
+    const startId = captureDeviceCommandId(send, "camera.record");
+    await controller.handleMessage(
+      Buffer.from(JSON.stringify({ type: "device.result", commandId: startId, status: "ok" })),
+      false
+    );
+
+    await riderTurn(upstream, "那好的，帮我取消。");
+    const recordingCommands = clientEvents(send).filter(
+      (event) => event.type === "device.command" && event.action === "camera.record"
+    );
+    expect(recordingCommands).toHaveLength(2);
+    expect(recordingCommands[1]).toMatchObject({ args: { start: false } });
+
+    await controller.handleMessage(
+      Buffer.from(JSON.stringify({ type: "device.result", commandId: recordingCommands[1]!.commandId, status: "ok" })),
+      false
+    );
+    expect(clientEvents(send).filter((event) => event.text === "已停止录像。")).toHaveLength(1);
+    await controller.close();
+  });
+
+  it("turns the same generic cancel into navigation.stop when a route is the active operation", async () => {
+    stubWeatherFetch();
+    const { controller, send, upstream } = await startSession("embedded");
+
+    await riderTurn(upstream, "Max 导航去外滩");
+    const startId = captureDeviceCommandId(send, "navigation.start");
+    await controller.handleMessage(
+      Buffer.from(JSON.stringify({ type: "device.result", commandId: startId, status: "ok" })),
+      false
+    );
+
+    await riderTurn(upstream, "Max cancel it");
+    expect(
+      clientEvents(send).filter((event) => event.type === "device.command" && event.action === "navigation.stop")
+    ).toHaveLength(1);
+    await controller.close();
+  });
+});
+
 describe("session navigation prompt wiring", () => {
   it("routes one prompt through the session-owned route and mock provider as one transcript line", async () => {
     // This is a relay-wiring test, not an Amap integration test. Keep its route

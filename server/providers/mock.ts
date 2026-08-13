@@ -19,9 +19,9 @@ import {
 import { type AdasSeverity } from "../../shared/adas";
 import {
   DEVICE_ACTION_TIERS,
+  DeviceActivityContext,
   PendingDeviceCommands,
   deviceSuccessSpeech,
-  extractDeviceCommandForPlatform,
   reconcileDeviceResult,
   type DeviceActionName,
   type DeviceActionStatus
@@ -268,6 +268,7 @@ export function createMockProvider(
   };
   let memory: SessionMemory = createSessionMemory("navigation");
   const pendingDeviceCommands = new PendingDeviceCommands();
+  const deviceActivity = new DeviceActivityContext();
 
   // Companion to pendingDeviceCommands, scoped to gallery.describe frame
   // sets — same reasoning as server/providers/doubao.ts's twin: vision.frames
@@ -315,16 +316,18 @@ export function createMockProvider(
    *  extractor runs over the script. This is what lets the whole device-action
    *  feature be demonstrated and QA'd with no Doubao credentials. Gated by
    *  sessionPlatform the same way server/providers/doubao.ts is — see
-   *  extractDeviceCommandForPlatform's doc comment. */
+   *  DeviceActivityContext.commandFor's platform gate. */
   function dispatchDeviceCommand(text: string): void {
-    const command = extractDeviceCommandForPlatform(text, sessionPlatform);
+    const command = deviceActivity.commandFor(text, sessionPlatform);
     if (!command) return;
+    const activity = deviceActivity.track(command);
     const issued = pendingDeviceCommands.issue(
       command.action,
       deviceSuccessSpeech(command),
       Date.now(),
       command.action === "camera.look" || command.action === "gallery.describe" ? command.args.question : undefined,
-      command.action === "vision.watch" ? command.args.on : undefined
+      command.action === "vision.watch" ? command.args.on : undefined,
+      activity
     );
     send({
       type: "device.command",
@@ -582,9 +585,11 @@ export function createMockProvider(
       const receivedAt = Date.now();
       const issued = pendingDeviceCommands.resolve(event.commandId, receivedAt);
       for (const expired of pendingDeviceCommands.expire(receivedAt)) {
+        deviceActivity.reconcile(expired.activity, { status: "failed", reason: "timeout" });
         applyDeviceReconciliation(expired.action, { status: "failed", reason: "timeout" });
       }
       if (!issued) return;
+      deviceActivity.reconcile(issued.activity, event);
       if (issued.action === "vision.watch" && event.status === "ok") {
         visionGovernor.setEnabled(issued.watchOn === true);
       }

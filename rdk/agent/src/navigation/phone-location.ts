@@ -2,7 +2,7 @@ import type { PhoneLocationEvent, PhoneLocationStatusEvent } from "../../../../s
 import { wgs84ToGcj02 } from "../../../../shared/geo";
 
 const MAX_ACCURACY_METERS = 50;
-const MAX_AGE_MS = 10_000;
+const MAX_AGE_MS = 20_000;
 const MAX_FUTURE_MS = 2_000;
 const DEFAULT_WAIT_TIMEOUT_MS = 3_000;
 

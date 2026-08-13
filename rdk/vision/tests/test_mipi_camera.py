@@ -1,5 +1,7 @@
 import signal
 import sys
+import threading
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -51,6 +53,43 @@ def test_jpeg_encodes_on_demand_and_caches_per_frame():
     # Encoding a 3 MB frame nobody asked for is pure waste: preview pulls at
     # 10 fps while ADAS pulls nv12, so most frames are never encoded at all.
     assert len(calls) == 1
+
+
+def test_concurrent_preview_and_recording_share_one_inflight_encode():
+    """The HUD preview and recorder request the same frame at the same time.
+
+    Without single-flight coordination both calls leave the lock and run a
+    separate 1080p cv2 encode. Two cameras plus two preview streams made that
+    duplication the measured recording-time load spike on the board.
+    """
+    entered = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def encode(nv12: bytes, width: int, height: int):
+        calls.append((nv12, width, height))
+        entered.set()
+        assert release.wait(timeout=1.0)
+        return b"jpeg"
+
+    buffer = FrameBuffer("front", 4, 2, encode=encode)
+    buffer.put(b"abcdefghijkl", t_ms=1)
+    results = []
+    first = threading.Thread(target=lambda: results.append(buffer.jpeg(max_age_ms=100)))
+    second = threading.Thread(target=lambda: results.append(buffer.jpeg(max_age_ms=100)))
+
+    first.start()
+    assert entered.wait(timeout=1.0)
+    second.start()
+    time.sleep(0.05)
+    release.set()
+    first.join(timeout=1.0)
+    second.join(timeout=1.0)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert calls == [(b"abcdefghijkl", 4, 2)]
+    assert results == [b"jpeg", b"jpeg"]
 
 
 def test_a_new_frame_invalidates_the_cached_jpeg():

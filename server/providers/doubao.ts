@@ -12,9 +12,9 @@ import {
 import { config as appConfig } from "../config";
 import {
   DEVICE_ACTION_TIERS,
+  DeviceActivityContext,
   PendingDeviceCommands,
   deviceSuccessSpeech,
-  extractDeviceCommandForPlatform,
   reconcileDeviceResult,
   type DeviceActionName,
   type DeviceActionStatus
@@ -153,7 +153,8 @@ export function buildToolGroundingPrompt(): string {
     "天气和骑行情报由系统注入，可以当作实时事实。" +
     "除此之外没有工具：没有实时交通、附近地点搜索、车辆控制或诊断、小队消息、第三方音乐应用。" +
     "拨号和短信必须由骑手在手机上确认，你只说正在准备，不要说已经拨通或已经发送。" +
-    "任何动作只有在系统明确返回成功之后才可以说已完成；系统没有回应之前，不要描述结果。"
+    "任何动作只有在系统明确返回成功之后才可以说已完成；系统没有回应之前，不要描述结果。" +
+    "骑手在录像或导航后说‘取消’、‘停一下’或 cancel it 时，系统会根据当前动作处理；你必须等待系统结果，不能自行声称已经停止。"
   );
 }
 
@@ -618,6 +619,7 @@ export function createDoubaoProvider(
   let agentDelivery = createTranscriptDelivery();
   let agentFinalDelivered = false;
   const pendingDeviceCommands = new PendingDeviceCommands();
+  const deviceActivity = new DeviceActivityContext();
   let deviceExpiryTimer: NodeJS.Timeout | undefined;
   const ordinarySpeechWaiters = new Set<() => void>();
   let rideContext: RideContext = { mode: "ride", scenario: "commute" };
@@ -788,17 +790,20 @@ export function createDoubaoProvider(
    *  Gated by sessionPlatform (set in start(), read here at call time — see
    *  hazardInjector below for the same "declared later in this closure, read
    *  only after start() has run" shape): only the embedded board implements
-   *  camera.look, so extractDeviceCommandForPlatform suppresses it for every
-   *  other client rather than dispatching a command no one will answer. */
+   *  camera.look, so DeviceActivityContext.commandFor applies the shared
+   *  platform gate and suppresses it for every other client rather than
+   *  dispatching a command no one will answer. */
   function dispatchDeviceCommand(text: string): void {
-    const command = extractDeviceCommandForPlatform(text, sessionPlatform);
+    const command = deviceActivity.commandFor(text, sessionPlatform);
     if (!command) return;
+    const activity = deviceActivity.track(command);
     const issued = pendingDeviceCommands.issue(
       command.action,
       deviceSuccessSpeech(command),
       Date.now(),
       command.action === "camera.look" || command.action === "gallery.describe" ? command.args.question : undefined,
-      command.action === "vision.watch" ? command.args.on : undefined
+      command.action === "vision.watch" ? command.args.on : undefined,
+      activity
     );
     sendClient({
       type: "device.command",
@@ -830,6 +835,7 @@ export function createDoubaoProvider(
 
   function applyExpiredDeviceCommands(now: number): void {
     for (const expired of pendingDeviceCommands.expire(now)) {
+      deviceActivity.reconcile(expired.activity, { status: "failed", reason: "timeout" });
       // A gallery.describe whose frame set is still assembling under the
       // frame assembler's OWN (longer, 10 s) timeout must not also get the
       // generic 8 s device-result-timeout failure spoken here — that would
@@ -1948,6 +1954,7 @@ export function createDoubaoProvider(
       applyExpiredDeviceCommands(receivedAt);
       scheduleDeviceExpiry();
       if (!issued) return;
+      deviceActivity.reconcile(issued.activity, event);
       if (issued.action === "vision.watch" && event.status === "ok") {
         visionGovernor.setEnabled(issued.watchOn === true);
       }

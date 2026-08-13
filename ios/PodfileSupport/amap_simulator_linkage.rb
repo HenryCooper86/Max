@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require "cocoapods"
-require "shellwords"
 require "xcodeproj"
 
 module AMapSimulatorLinkage
@@ -10,14 +9,15 @@ module AMapSimulatorLinkage
   SIMULATOR_SDK = "sdk=iphonesimulator*"
   DEVICE_SDK = "sdk=iphoneos*"
   PLATFORM_OTHER_LDFLAGS = "AMAP_PLATFORM_OTHER_LDFLAGS"
+  RawFlagToken = Struct.new(:leading, :raw, :value, keyword_init: true)
+  ProviderPlan = Struct.new(:pods_project, :dependencies, keyword_init: true)
+  XcconfigPlan = Struct.new(:path, :content, keyword_init: true)
 
   module_function
 
   def apply(installer)
-    pod_projects_to_save = {}
-    xcconfigs_to_save = {}
-    amap_provider_count = 0
-    configured_provider_labels = {}
+    provider_targets = {}
+    config_targets = {}
 
     installer.aggregate_targets.each do |aggregate_target|
       related_targets = transitive_search_path_targets(aggregate_target)
@@ -26,43 +26,178 @@ module AMapSimulatorLinkage
       end
       next if amap_provider_targets.empty?
 
-      amap_provider_count += amap_provider_targets.count
       amap_provider_targets.each do |provider_target|
-        next if configured_provider_labels[provider_target.label]
-
-        configure_provider!(provider_target, installer.pods_project, pod_projects_to_save)
-        configured_provider_labels[provider_target.label] = true
+        provider_targets[provider_target.label] ||= provider_target
       end
 
       related_targets.each do |target|
-        configure_simulator_xcconfigs!(target, xcconfigs_to_save)
+        entry = config_targets[target.label] ||= { target: target, requires_amap: false }
+        entry[:requires_amap] ||= contains_amap_pod?(target.pod_targets)
       end
     end
 
-    if amap_provider_count.zero?
+    if provider_targets.empty?
       raise Pod::Informative,
             "No CocoaPods aggregate target contains AMap; simulator linkage cleanup was not applied."
     end
 
-    xcconfigs_to_save.each do |path, xcconfig|
-      xcconfig.save_as(path)
+    # Phase one: every provider/product/topology/configuration must validate
+    # before a dependency or generated xcconfig is changed on disk.
+    provider_plans = provider_targets.values.map do |provider_target|
+      build_provider_plan(provider_target, installer.pods_project)
     end
-    pod_projects_to_save.each_value(&:save)
+    xcconfig_plans = config_targets.values.flat_map do |entry|
+      build_xcconfig_plans(entry.fetch(:target), requires_amap: entry.fetch(:requires_amap))
+    end
+
+    # Phase two: apply only the fully prepared plan.
+    xcconfig_plans.each { |plan| File.binwrite(plan.path, plan.content) }
+    provider_plans.each do |plan|
+      plan.dependencies.each(&:remove_from_project)
+      plan.pods_project.save
+    end
   end
 
-  def filter_amap_framework_flags(flags)
-    tokens = flags.is_a?(String) ? Shellwords.shellsplit(flags) : flags.dup
-    filtered = []
+  # Filters only the exact AMap `-framework NAME` token pairs. Every retained
+  # lexeme is copied from the input rather than re-serialized, so quoting,
+  # escapes, and Xcode build-setting macros retain their original spelling.
+  def filter_amap_framework_pairs_raw(flags)
+    tokens = lex_raw_linker_flags(flags)
+    output = +""
     index = 0
     while index < tokens.length
-      if tokens[index] == "-framework" && AMAP_FRAMEWORKS.include?(tokens[index + 1])
-        index += 2
+      token = tokens[index]
+      if token.value == "-framework"
+        framework_name = tokens[index + 1]&.value
+        unless framework_name && !framework_name.empty?
+          raise Pod::Informative, "Malformed OTHER_LDFLAGS: -framework has no framework name."
+        end
+        if AMAP_FRAMEWORKS.include?(framework_name)
+          index += 2
+          next
+        end
+      end
+
+      output << token.leading
+      output << token.raw
+      index += 1
+    end
+    output
+  end
+
+  def lex_raw_linker_flags(flags)
+    tokens = []
+    index = 0
+    while index < flags.length
+      leading_start = index
+      index += 1 while index < flags.length && flags[index].match?(/\s/)
+      leading = flags[leading_start...index]
+      break if index == flags.length
+
+      raw_start = index
+      value = +""
+      quote = nil
+      until index == flags.length || (!quote && flags[index].match?(/\s/))
+        character = flags[index]
+        if character == "\\"
+          raise Pod::Informative, "Malformed OTHER_LDFLAGS: dangling escape." if index + 1 == flags.length
+
+          value << flags[index + 1]
+          index += 2
+        elsif quote
+          if character == quote
+            quote = nil
+          else
+            value << character
+          end
+          index += 1
+        elsif character == '"' || character == "'"
+          quote = character
+          index += 1
+        else
+          value << character
+          index += 1
+        end
+      end
+      raise Pod::Informative, "Malformed OTHER_LDFLAGS: unterminated quote." if quote
+
+      tokens << RawFlagToken.new(leading: leading, raw: flags[raw_start...index], value: value)
+    end
+    tokens
+  end
+
+  # Rewrites only linkage settings inside a generated CocoaPods xcconfig. The
+  # device value is copied as raw text and the simulator value is derived by
+  # removing exact AMap framework-pair lexemes. All unrelated xcconfig lines
+  # and all retained linker lexemes are left byte-for-byte intact.
+  def transform_xcconfig_for_platform_linkage(content)
+    line_ending = content.include?("\r\n") ? "\r\n" : "\n"
+    relevant_keys = platform_linkage_keys
+    settings = platform_linkage_settings(content)
+    device_flags = device_flags_from_platform_linkage_settings(settings)
+    unless device_flags
+      raise Pod::Informative, "Expected OTHER_LDFLAGS in generated xcconfig; refusing simulator cleanup."
+    end
+    simulator_flags = filter_amap_framework_pairs_raw(device_flags)
+    replacement = [
+      "#{PLATFORM_OTHER_LDFLAGS}[#{DEVICE_SDK}] = #{device_flags}",
+      "#{PLATFORM_OTHER_LDFLAGS}[#{SIMULATOR_SDK}] = #{simulator_flags}",
+      "OTHER_LDFLAGS = $(#{PLATFORM_OTHER_LDFLAGS}) $(inherited)",
+      "EXCLUDED_ARCHS[#{SIMULATOR_SDK}] = "
+    ].join(line_ending) + line_ending
+
+    output = +""
+    inserted = false
+    content.lines.each do |line|
+      key, = raw_xcconfig_setting(line)
+      if relevant_keys.include?(key)
+        unless inserted
+          output << replacement
+          inserted = true
+        end
       else
-        filtered << tokens[index]
-        index += 1
+        output << line
       end
     end
-    filtered
+    output << replacement unless inserted
+    output
+  end
+
+  def raw_xcconfig_setting(line)
+    match = line.match(/\A\s*([A-Za-z0-9_]+(?:\[[^\]]+\])?)\s*=\s*(.*?)(?:\r?\n)?\z/)
+    return [] unless match
+
+    [match[1], match[2]]
+  end
+
+  def platform_linkage_keys
+    [
+      "OTHER_LDFLAGS",
+      "#{PLATFORM_OTHER_LDFLAGS}[#{DEVICE_SDK}]",
+      "#{PLATFORM_OTHER_LDFLAGS}[#{SIMULATOR_SDK}]",
+      "EXCLUDED_ARCHS[#{SIMULATOR_SDK}]"
+    ]
+  end
+
+  def platform_linkage_settings(content)
+    settings = content.lines.filter_map do |line|
+      key, value = raw_xcconfig_setting(line)
+      [key, value] if platform_linkage_keys.include?(key)
+    end
+    platform_linkage_keys.each do |key|
+      occurrences = settings.count { |setting_key, _| setting_key == key }
+      if occurrences > 1
+        raise Pod::Informative, "Ambiguous generated xcconfig: #{key} is declared more than once."
+      end
+    end
+    settings.to_h
+  end
+
+  def device_flags_from_platform_linkage_settings(settings)
+    device_flags = settings["#{PLATFORM_OTHER_LDFLAGS}[#{DEVICE_SDK}]"] || settings["OTHER_LDFLAGS"]
+    return device_flags if device_flags
+
+    raise Pod::Informative, "Expected OTHER_LDFLAGS in generated xcconfig; refusing simulator cleanup."
   end
 
   def validate_aggregate_product!(aggregate_target, pods_project)
@@ -111,75 +246,124 @@ module AMapSimulatorLinkage
     end
   end
 
-  def configure_provider!(aggregate_target, pods_project, projects_to_save)
+  def build_provider_plan(aggregate_target, pods_project)
     aggregate_native_target = validate_aggregate_product!(aggregate_target, pods_project)
     amap_labels = amap_pod_target_labels(aggregate_target)
-    dependencies_by_name = aggregate_native_target.dependencies.group_by(&:display_name)
-    missing_dependencies = amap_labels.reject { |label| dependencies_by_name.key?(label) }
-    unless missing_dependencies.empty?
+    if amap_labels.empty?
       raise Pod::Informative,
-            "Expected AMap target dependencies #{missing_dependencies.join(", ")} on #{aggregate_target.label}; " \
-            "found #{aggregate_native_target.dependencies.map(&:display_name).join(", ").inspect}; " \
-            "Pods targets #{pods_project.targets.map(&:name).grep(/AMap/).join(", ").inspect}; " \
-            "cannot establish simulator-safe cleanup."
+            "Expected AMap pod targets on #{aggregate_target.label}; cannot establish simulator-safe cleanup."
     end
 
-    aggregate_native_target.dependencies.dup.each do |dependency|
-      dependency.remove_from_project if amap_labels.include?(dependency.display_name)
+    provider_native_targets = amap_labels.to_h do |label|
+      native_target = pods_project.targets.find { |target| target.name == label }
+      unless native_target
+        raise Pod::Informative,
+              "Expected AMap provider target #{label} in the Pods project; cannot establish simulator-safe cleanup."
+      end
+      [label, native_target]
     end
-    projects_to_save[pods_project.path] = pods_project
+    provider_pod_targets = amap_pod_targets(aggregate_target)
+    provider_pod_targets.each do |pod_target|
+      validate_noop_provider_target!(pod_target, provider_native_targets.fetch(pod_target.label), amap_labels)
+    end
+
+    direct_dependencies = aggregate_native_target.dependencies.select do |dependency|
+      amap_labels.include?(dependency.display_name)
+    end
+    missing_dependencies = amap_labels - direct_dependencies.map(&:display_name)
+    unless missing_dependencies.empty?
+      raise Pod::Informative,
+            "Expected direct AMap target dependencies #{missing_dependencies.join(", ")} on #{aggregate_target.label}; " \
+            "found #{aggregate_native_target.dependencies.map(&:display_name).join(", ").inspect}; " \
+            "cannot establish simulator-safe cleanup."
+    end
+    direct_dependencies.each do |dependency|
+      unless dependency.target && dependency.target.name == dependency.display_name
+        raise Pod::Informative,
+              "Expected resolved AMap dependency #{dependency.display_name} on #{aggregate_target.label}; " \
+              "cannot establish simulator-safe cleanup."
+      end
+    end
+
+    ProviderPlan.new(pods_project: pods_project, dependencies: direct_dependencies)
   end
 
   def amap_pod_target_labels(aggregate_target)
-    aggregate_target.pod_targets.flat_map do |pod_target|
-      ([pod_target] + pod_target.recursive_dependent_targets)
-    end.select { |pod_target| AMAP_POD_NAMES.include?(pod_target.pod_name) }.map(&:label).uniq
+    amap_pod_targets(aggregate_target).map(&:label)
   end
 
-  def configure_simulator_xcconfigs!(aggregate_target, xcconfigs_to_save)
-    aggregate_target.xcconfigs.each do |configuration_name, xcconfig|
-      # On a repeated `pod install`, the normal setting deliberately contains
-      # only our platform macro.  Its persisted iPhoneOS value is therefore
-      # the source of truth for the direct-link safety check and the next
-      # simulator derivation.  Before the first rewrite, fall back to the
-      # CocoaPods-generated unqualified linker flags.
-      device_flags = xcconfig.attributes.fetch(
-        "#{PLATFORM_OTHER_LDFLAGS}[#{DEVICE_SDK}]",
-        xcconfig.to_hash.fetch("OTHER_LDFLAGS", "")
-      )
-      if contains_amap_pod?(aggregate_target.pod_targets)
-        missing_frameworks = AMAP_FRAMEWORKS.reject do |framework|
-          Shellwords.shellsplit(device_flags).each_cons(2).any? do |pair|
-            pair == ["-framework", framework]
-          end
-        end
-        unless missing_frameworks.empty?
-          raise Pod::Informative,
-                "Expected direct iPhoneOS AMap framework linker settings #{missing_frameworks.join(", ")} " \
-                "for #{aggregate_target.label}; found #{device_flags.inspect}; refusing simulator cleanup."
-        end
-      end
+  def amap_pod_targets(aggregate_target)
+    aggregate_target.pod_targets.flat_map do |pod_target|
+      [pod_target, *pod_target.recursive_dependent_targets]
+    end.select { |pod_target| AMAP_POD_NAMES.include?(pod_target.pod_name) }.uniq(&:label)
+  end
 
-      # Xcodeproj parses OTHER_LDFLAGS into a dedicated collection and uses
-      # that collection when serializing.  Mutating `attributes` alone would
-      # leave the original (unqualified) AMap flags in the saved xcconfig.
-      # Keep the normal setting limited to the platform switch, then retain
-      # the resolved device flags and their exact simulator-filtered sequence
-      # in conditional settings below.
-      xcconfig.other_linker_flags.each_value(&:clear)
-      xcconfig.other_linker_flags[:simple] << "$(inherited)"
-      xcconfig.other_linker_flags[:simple] << "$(#{PLATFORM_OTHER_LDFLAGS})"
-      xcconfig.attributes["#{PLATFORM_OTHER_LDFLAGS}[#{DEVICE_SDK}]"] = without_inherited_flag(device_flags).join(" ")
-      xcconfig.attributes["#{PLATFORM_OTHER_LDFLAGS}[#{SIMULATOR_SDK}]"] =
-        without_inherited_flag(filter_amap_framework_flags(device_flags)).join(" ")
-      xcconfig.attributes["EXCLUDED_ARCHS[#{SIMULATOR_SDK}]"] = ""
-      path = aggregate_target.client_root + aggregate_target.xcconfig_relative_path(configuration_name)
-      xcconfigs_to_save[path] = xcconfig
+  def validate_noop_provider_target!(pod_target, native_target, amap_labels)
+    aggregate_class = Xcodeproj::Project::Object::PBXAggregateTarget
+    unless native_target.instance_of?(aggregate_class)
+      raise Pod::Informative,
+            "AMap provider #{pod_target.label} is #{native_target.class}, not a known no-op PBXAggregateTarget."
+    end
+    if native_target.respond_to?(:product_reference) && native_target.product_reference
+      raise Pod::Informative,
+            "AMap provider #{pod_target.label} has a product reference; refusing to remove executable linkage."
+    end
+
+    phase_methods = %i[build_phases copy_files_build_phases shell_script_build_phases]
+    phase_methods.each do |method|
+      next unless native_target.respond_to?(method)
+      next if native_target.public_send(method).empty?
+
+      raise Pod::Informative,
+            "AMap provider #{pod_target.label} has #{method}; it is not a no-op target."
+    end
+
+    expected_dependencies = pod_target.dependent_targets
+                                      .select { |target| AMAP_POD_NAMES.include?(target.pod_name) }
+                                      .map(&:label)
+                                      .sort
+    actual_dependencies = native_target.dependencies.map do |dependency|
+      target = dependency.target
+      unless target && amap_labels.include?(target.name)
+        raise Pod::Informative,
+              "AMap provider #{pod_target.label} has an unknown or non-AMap dependency #{dependency.display_name.inspect}."
+      end
+      target.name
+    end.sort
+    unless actual_dependencies == expected_dependencies
+      raise Pod::Informative,
+            "AMap provider #{pod_target.label} dependency topology changed: expected #{expected_dependencies.inspect}, " \
+            "found #{actual_dependencies.inspect}."
     end
   end
 
-  def without_inherited_flag(flags)
-    tokens = flags.is_a?(String) ? Shellwords.shellsplit(flags) : flags.dup
-    tokens.reject { |token| ["$(inherited)", "${inherited}"].include?(token) }
+  def build_xcconfig_plans(aggregate_target, requires_amap:)
+    aggregate_target.xcconfigs.map do |configuration_name, _|
+      path = aggregate_target.client_root + aggregate_target.xcconfig_relative_path(configuration_name)
+      content = File.binread(path)
+      device_flags = device_flags_from_platform_linkage_settings(platform_linkage_settings(content))
+      validate_direct_amap_frameworks!(device_flags, aggregate_target.label) if requires_amap
+      XcconfigPlan.new(path: path, content: transform_xcconfig_for_platform_linkage(content))
+    end
+  end
+
+  def validate_direct_amap_frameworks!(device_flags, aggregate_label)
+    tokens = lex_raw_linker_flags(device_flags)
+    framework_names = []
+    tokens.each_with_index do |token, index|
+      next unless token.value == "-framework"
+
+      framework_name = tokens[index + 1]&.value
+      unless framework_name && !framework_name.empty?
+        raise Pod::Informative, "Malformed OTHER_LDFLAGS: -framework has no framework name."
+      end
+      framework_names << framework_name
+    end
+    missing_frameworks = AMAP_FRAMEWORKS - framework_names
+    return if missing_frameworks.empty?
+
+    raise Pod::Informative,
+          "Expected direct iPhoneOS AMap framework linker settings #{missing_frameworks.join(", ")} " \
+          "for #{aggregate_label}; refusing simulator cleanup."
   end
 end

@@ -30,9 +30,14 @@ final class AMapConsentStoreTests: XCTestCase {
     func testAcceptanceAndDeclinePersistWithoutAutomaticReprompt() {
         let accepted = AMapConsentStore(defaults: defaults)
         accepted.accept()
-        XCTAssertEqual(AMapConsentStore(defaults: defaults).decision, .accepted)
+        let acceptedRelaunched = AMapConsentStore(defaults: defaults)
+        XCTAssertEqual(acceptedRelaunched.decision, .accepted)
+        acceptedRelaunched.requestIfNeeded()
+        XCTAssertFalse(acceptedRelaunched.isPromptPresented)
 
-        let secondDefaults = UserDefaults(suiteName: "AMapConsentStoreTests.\(UUID().uuidString)")!
+        let secondSuiteName = "AMapConsentStoreTests.\(UUID().uuidString)"
+        let secondDefaults = UserDefaults(suiteName: secondSuiteName)!
+        defer { secondDefaults.removePersistentDomain(forName: secondSuiteName) }
         let declined = AMapConsentStore(defaults: secondDefaults)
         declined.decline()
         let relaunched = AMapConsentStore(defaults: secondDefaults)

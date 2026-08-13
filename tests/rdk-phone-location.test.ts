@@ -109,7 +109,7 @@ describe("createPhoneLocationSource", () => {
       fix(h.clock, 2, { lon: 180.0001 }),
       fix(h.clock, 2, { horizontalAccuracyMeters: Number.POSITIVE_INFINITY }),
       fix(h.clock, 2, { timestamp: Number.NaN }),
-      fix(h.clock, 2, { timestamp: h.clock.now() - 20_001 }),
+      fix(h.clock, 2, { timestamp: h.clock.now() - 45_001 }),
       fix(h.clock, 2, { timestamp: h.clock.now() + 2_001 }),
       fix(h.clock, 2, { courseDegrees: Number.NaN }),
       fix(h.clock, 2, { courseDegrees: 360.1 }),
@@ -126,7 +126,7 @@ describe("createPhoneLocationSource", () => {
 
   it("accepts timestamps exactly at the freshness boundaries", () => {
     const h = sharingSource();
-    expect(h.source.acceptLocation(fix(h.clock, 1, { timestamp: h.clock.now() - 20_000 }))).toBe(true);
+    expect(h.source.acceptLocation(fix(h.clock, 1, { timestamp: h.clock.now() - 45_000 }))).toBe(true);
     expect(h.source.acceptLocation(fix(h.clock, 2, { timestamp: h.clock.now() + 2_000 }))).toBe(true);
   });
 
@@ -144,6 +144,18 @@ describe("createPhoneLocationSource", () => {
     expect(h.source.acceptLocation(fix(h.clock, 3))).toBe(true);
     expect(h.source.latest()).toMatchObject({ sequence: 3 });
     expect(h.source.latest()).not.toEqual(accepted);
+  });
+
+  it("treats inaccurate fixes as live connection heartbeats and only expires after forty-five seconds", () => {
+    const h = sharingSource();
+
+    expect(h.source.acceptLocation(fix(h.clock, 1, { horizontalAccuracyMeters: 80 }))).toBe(false);
+    expect(h.states.at(-1)).toMatchObject({ connection: "sharing", usable: false, reason: "inaccurate" });
+
+    h.clock.advance(44_999);
+    expect(h.states.at(-1)).toMatchObject({ connection: "sharing", reason: "inaccurate" });
+    h.clock.advance(1);
+    expect(h.states.at(-1)).toMatchObject({ connection: "stale", usable: false, reason: "stale" });
   });
 
   it("resets sequence only after a new connected or sharing lifecycle", () => {
@@ -165,7 +177,7 @@ describe("createPhoneLocationSource", () => {
       if (stale === "received") {
         h.source.acceptStatus({ type: "phone.location.status", state: "stale" });
       } else {
-        h.clock.advance(20_000);
+        h.clock.advance(45_000);
       }
 
       h.source.acceptStatus({ type: "phone.location.status", state: "connected" });
@@ -229,7 +241,7 @@ describe("createPhoneLocationSource", () => {
   it("recovers directly from stale only with a higher continuing sequence", () => {
     const h = sharingSource();
     expect(h.source.acceptLocation(fix(h.clock, 4))).toBe(true);
-    h.clock.advance(20_000);
+    h.clock.advance(45_000);
     expect(h.source.acceptLocation(fix(h.clock, 4))).toBe(false);
     expect(h.source.acceptLocation(fix(h.clock, 5))).toBe(true);
     expect(h.source.latest()).toMatchObject({ sequence: 5 });
@@ -302,10 +314,10 @@ describe("createPhoneLocationSource", () => {
     await expect(waiting).resolves.toBeUndefined();
   });
 
-  it("makes a source timestamp stale exactly twenty seconds later and clears a stale status", () => {
+  it("makes a source timestamp stale exactly forty-five seconds later and clears a stale status", () => {
     const h = sharingSource();
     expect(h.source.acceptLocation(fix(h.clock, 1, { timestamp: h.clock.now() - 500 }))).toBe(true);
-    h.clock.advance(19_499);
+    h.clock.advance(44_499);
     expect(h.source.latest()).toMatchObject({ sequence: 1 });
     h.clock.advance(1);
     expect(h.source.latest()).toBeUndefined();

@@ -17,6 +17,7 @@ import type { PhoneFix, PhoneLocationSource, PhoneLocationState } from "./phone-
 
 const DEFAULT_ROUTE_TIMEOUT_MS = 7_000;
 const REROUTE_COOLDOWN_MS = 20_000;
+const LOCATION_LOST_PROMPT_COOLDOWN_MS = 60_000;
 
 /**
  * Most points the HUD's route polyline may carry.
@@ -170,6 +171,7 @@ export function createRdkNavigationController(options: {
   let locationUsableForGuidance = false;
   let offRoutePrompt = eligibleOneShot();
   let locationLostPrompt = eligibleOneShot();
+  let lastLocationLostPromptAt: number | undefined;
   let finishing: FinishingNavigation | undefined;
   let snapshot: RdkNavigationSnapshot = { phase: "idle" };
 
@@ -246,6 +248,7 @@ export function createRdkNavigationController(options: {
     lastRerouteSentAt = undefined;
     offRoutePrompt = eligibleOneShot();
     locationLostPrompt = eligibleOneShot();
+    lastLocationLostPromptAt = undefined;
     locationUsableForGuidance = false;
     finishing = undefined;
     emitRoute(undefined);
@@ -561,6 +564,7 @@ export function createRdkNavigationController(options: {
     clearReroute();
     offRoutePrompt = eligibleOneShot();
     locationLostPrompt = eligibleOneShot();
+    lastLocationLostPromptAt = undefined;
     locationUsableForGuidance = false;
     finishing = undefined;
     const route = activeRoute;
@@ -725,9 +729,27 @@ export function createRdkNavigationController(options: {
         return;
       }
       const expectedGeneration = generation;
-      if (locationLostPrompt.status === "eligible") {
+      // A coarse iOS coordinate is still a live phone heartbeat. Pause route
+      // guidance for safety, but do not tell the rider the phone disconnected.
+      if (state.reason !== "inaccurate" && locationLostPrompt.status === "eligible") {
         const owner = locationLostPrompt;
-        if (!emitOneShotPrompt("locationLost", owner, route, expectedGeneration, expectedRevision)) return;
+        let promptAt: number | undefined;
+        try {
+          promptAt = now();
+        } catch {
+          // A clock failure must not abort the navigation state transition.
+        }
+        if (revision !== expectedRevision || !ownsRoute(expectedGeneration, route)) return;
+        if (
+          promptAt !== undefined &&
+          lastLocationLostPromptAt !== undefined &&
+          promptAt - lastLocationLostPromptAt < LOCATION_LOST_PROMPT_COOLDOWN_MS
+        ) {
+          owner.status = "suppressed";
+        } else {
+          if (!emitOneShotPrompt("locationLost", owner, route, expectedGeneration, expectedRevision)) return;
+          if (owner.status === "delivered" && promptAt !== undefined) lastLocationLostPromptAt = promptAt;
+        }
       }
       if (revision !== expectedRevision || !ownsRoute(expectedGeneration, route)) return;
       publish({ ...snapshot, phase: "paused", location: copyLocation(state) }, expectedRevision);

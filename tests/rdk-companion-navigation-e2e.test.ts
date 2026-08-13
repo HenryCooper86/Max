@@ -420,7 +420,7 @@ describe("phone relay to RDK navigation end-to-end", () => {
     await h.advance(1_000);
     await h.location(phone, 1, WGS_FIXES.far);
     await h.advance(1_000);
-    await h.location(phone, 2, WGS_FIXES.far, { timestamp: h.now() - 20_001 });
+    await h.location(phone, 2, WGS_FIXES.far, { timestamp: h.now() - 45_001 });
     expect(h.helmetFrames.filter((event) => event.type === "phone.location")).toHaveLength(1);
 
     await h.location(phone, 2, WGS_FIXES.far);
@@ -442,7 +442,7 @@ describe("phone relay to RDK navigation end-to-end", () => {
     const replacementRoute = h.relayRoute(rerouteRequest);
     expect(replacementRoute.commandId).toBe(rerouteRequest.commandId);
 
-    await h.advance(20_000);
+    await h.advance(45_000);
     expect(h.navigationStates.at(-1)).toMatchObject({
       phase: "paused",
       location: { connection: "stale", usable: false, reason: "stale" }

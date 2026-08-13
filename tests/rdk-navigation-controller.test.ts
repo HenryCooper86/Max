@@ -1132,6 +1132,36 @@ describe("RDK location pause and resume", () => {
     ]);
   });
 
+  it("does not call an inaccurate heartbeat disconnected and rate-limits repeated loss announcements", async () => {
+    let time = 10_000;
+    const h = await startGuiding(harness({ now: () => time }));
+    h.events.length = 0;
+
+    h.controller.handleLocationState({
+      connection: "sharing",
+      usable: false,
+      horizontalAccuracyMeters: 80,
+      ageMs: 0,
+      reason: "inaccurate"
+    });
+    expect(h.events.filter((event) => event.type === "nav.prompt" && event.kind === "locationLost")).toHaveLength(0);
+
+    h.controller.handleLocationState({ connection: "stale", usable: false, reason: "stale" });
+    expect(h.events.filter((event) => event.type === "nav.prompt" && event.kind === "locationLost")).toHaveLength(1);
+
+    h.controller.handleLocationState(USABLE_LOCATION);
+    h.controller.handleFix(fix(2, 31.231));
+    time += 30_000;
+    h.controller.handleLocationState({ connection: "stale", usable: false, reason: "stale" });
+    expect(h.events.filter((event) => event.type === "nav.prompt" && event.kind === "locationLost")).toHaveLength(1);
+
+    h.controller.handleLocationState(USABLE_LOCATION);
+    h.controller.handleFix(fix(3, 31.232));
+    time += 30_001;
+    h.controller.handleLocationState({ connection: "stale", usable: false, reason: "stale" });
+    expect(h.events.filter((event) => event.type === "nav.prompt" && event.kind === "locationLost")).toHaveLength(2);
+  });
+
   it.each([
     {
       label: "inaccurate",
@@ -1264,7 +1294,7 @@ describe("RDK location pause and resume", () => {
     );
     await expect(start).resolves.toMatchObject({ status: "ok" });
 
-    await vi.advanceTimersByTimeAsync(20_000);
+    await vi.advanceTimersByTimeAsync(45_000);
     expect(states.at(-1)).toMatchObject({ phase: "paused", location: { usable: false, reason: "stale" } });
     source.acceptLocation({
       type: "phone.location",

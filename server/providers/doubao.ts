@@ -594,6 +594,7 @@ export function createDoubaoProvider(
   // Whether the current rider turn's transcript was already closed with a
   // final event (AsrEnded can repeat without new speech in between).
   let riderTurnFinalized = false;
+  let asrTurnTimer: NodeJS.Timeout | undefined;
   // True from AsrEnded (once a turn is decided addressed) until the reply is
   // fully resolved — TtsEnded's real-completion branch, or the TTS-fallback
   // timer taking over. Closes the gap isSpeechOpen (further below) would
@@ -669,6 +670,7 @@ export function createDoubaoProvider(
   const MAX_UPSTREAM_BUFFERED_BYTES = 1024 * 1024;
   const CONNECTION_TIMEOUT_MS = boundedEnvInt("DOUBAO_CONNECTION_TIMEOUT_MS", 8_000, 1_000, 30_000);
   const SESSION_TIMEOUT_MS = boundedEnvInt("DOUBAO_SESSION_TIMEOUT_MS", 10_000, 1_000, 30_000);
+  const ASR_TURN_TIMEOUT_MS = boundedEnvInt("DOUBAO_ASR_TURN_TIMEOUT_MS", 30_000, 5_000, 60_000);
   // A session that stayed up at least this long before dropping counts as
   // recovered and earns a fresh in-place reconnect budget.
   const UPSTREAM_STABILITY_RESET_MS = 60_000;
@@ -679,6 +681,24 @@ export function createDoubaoProvider(
       telemetry?.serverEvent(payload, Buffer.byteLength(encoded));
       client.send(encoded);
     }
+  }
+
+  function clearAsrTurnTimer(): void {
+    if (asrTurnTimer) clearTimeout(asrTurnTimer);
+    asrTurnTimer = undefined;
+  }
+
+  function armAsrTurnTimer(socket: WebSocket): void {
+    clearAsrTurnTimer();
+    asrTurnTimer = setTimeout(() => {
+      asrTurnTimer = undefined;
+      if (closedByProvider || upstream !== socket || riderTurnFinalized || socket.readyState !== WebSocket.OPEN) return;
+      metrics.upstreamFailure();
+      log.warn("doubao ASR turn timed out — reconnecting upstream", { timeoutMs: ASR_TURN_TIMEOUT_MS });
+      sendClient({ type: "status", state: "connecting", detail: "语音识别停滞，正在自动恢复…" });
+      sessionReady = false;
+      socket.close(1011, "doubao asr turn timeout");
+    }, ASR_TURN_TIMEOUT_MS);
   }
 
   function sendUpstreamControl(event: EventSend, metadata: unknown = {}): boolean {
@@ -1458,6 +1478,7 @@ export function createDoubaoProvider(
           fallbackSpoke = false;
           riderTurnText = "";
           riderTurnFinalized = false;
+          armAsrTurnTimer(socket);
           // A new rider turn (barge-in) supersedes whatever the previous
           // turn's reply was doing — truncateInterruptedReply()/the flush
           // above already handled the interrupted reply itself, so the gate
@@ -1615,6 +1636,7 @@ export function createDoubaoProvider(
         }
 
         if (frame.event === EventReceive.AsrEnded) {
+          clearAsrTurnTimer();
           // Only now is an unaddressed classification final. Chat/TTS events
           // may have arrived between cumulative ASR hypotheses, so deciding
           // earlier could suppress a turn whose later hypothesis contains Max.
@@ -1701,6 +1723,7 @@ export function createDoubaoProvider(
     socket.on("close", () => {
       if (upstream !== socket) return;
       clearStateTimers();
+      clearAsrTurnTimer();
       clearPendingAudioFlush();
       sessionReady = false;
       log.info("doubao upstream closed");
@@ -2051,6 +2074,7 @@ export function createDoubaoProvider(
       audioActive = false;
       hazardInjector.stop();
       clearTtsFallbackTimer();
+      clearAsrTurnTimer();
       clearPendingAudioFlush();
       // A closed session must not fire a reconciliation into a dead socket.
       if (deviceExpiryTimer) {

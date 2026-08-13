@@ -1,6 +1,17 @@
 import Foundation
 
-struct AMapSDKPrivacyConfiguration {
+/// A capability produced only from an accepted map-consent decision.
+struct AMapAcceptedConsent: Equatable {
+    init?(decision: AMapConsentDecision) {
+        guard decision == .accepted else { return nil }
+    }
+}
+
+protocol AMapSDKConfigurationApplying {
+    func apply(apiKey: String)
+}
+
+struct AMapSDKPrivacyConfiguration: AMapSDKConfigurationApplying {
     let showPrivacy: () -> Void
     let agreePrivacy: () -> Void
     let enableHTTPS: () -> Void
@@ -20,7 +31,13 @@ final class AMapSDKBootstrapper {
     private let lock = NSLock()
     private var prepared = false
 
-    func prepare(apiKey: String, apply: (String) -> Void) -> Bool {
+    func prepare(
+        consent: AMapAcceptedConsent?,
+        apiKey: String,
+        configuration: some AMapSDKConfigurationApplying
+    ) -> Bool {
+        guard consent != nil else { return false }
+
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return false }
 
@@ -28,14 +45,14 @@ final class AMapSDKBootstrapper {
         defer { lock.unlock() }
 
         guard !prepared else { return true }
-        apply(key)
+        configuration.apply(apiKey: key)
         prepared = true
         return true
     }
 }
 
 #if !targetEnvironment(simulator)
-func applyLiveAMapConfiguration(apiKey: String) {
+func liveAMapSDKPrivacyConfiguration() -> AMapSDKPrivacyConfiguration {
     AMapSDKPrivacyConfiguration(
         showPrivacy: {
             MAMapView.updatePrivacyShow(.didShow, privacyInfo: .didContain)
@@ -49,6 +66,6 @@ func applyLiveAMapConfiguration(apiKey: String) {
         assignAPIKey: { key in
             AMapServices.shared()!.apiKey = key
         }
-    ).apply(apiKey: apiKey)
+    )
 }
 #endif

@@ -6,6 +6,7 @@ import UIKit
 
 struct AMapRouteMap: UIViewRepresentable {
     let model: AMapRouteDisplayModel
+    let consent: AMapAcceptedConsent
     let apiKey: String
     @Binding var loadFailed: Bool
     var bootstrapper = AMapSDKBootstrapper.shared
@@ -16,16 +17,22 @@ struct AMapRouteMap: UIViewRepresentable {
 
     func makeUIView(context: Context) -> MAMapView {
         precondition(
-            bootstrapper.prepare(apiKey: apiKey, apply: applyLiveAMapConfiguration),
-            "AMapRouteMap requires a configured key"
+            bootstrapper.prepare(
+                consent: consent,
+                apiKey: apiKey,
+                configuration: liveAMapSDKPrivacyConfiguration()
+            ),
+            "AMapRouteMap requires accepted consent and a configured key"
         )
 
         let mapView = MAMapView(frame: .zero)
         mapView.delegate = context.coordinator
+        mapView.isUserInteractionEnabled = false
         mapView.isZoomEnabled = false
         mapView.isScrollEnabled = false
         mapView.isRotateEnabled = false
         mapView.isRotateCameraEnabled = false
+        mapView.touchPOIEnabled = false
         mapView.showsUserLocation = false
         context.coordinator.render(model, on: mapView)
         return mapView
@@ -160,6 +167,7 @@ private func sameOptionalCoordinate(
 #else
 struct AMapRouteMap: View {
     let model: AMapRouteDisplayModel
+    let consent: AMapAcceptedConsent
     let apiKey: String
     @Binding var loadFailed: Bool
 

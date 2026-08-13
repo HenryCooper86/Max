@@ -2,31 +2,71 @@ import XCTest
 @testable import MaxHelmet
 
 final class AMapSDKBootstrapperTests: XCTestCase {
-    func testEmptyKeyNeverInvokesSDKConfiguration() {
+    func testDeclinedConsentAndMissingKeyNeverInvokeSDKConfiguration() {
         let bootstrapper = AMapSDKBootstrapper()
         var calls = 0
+        let configuration = AMapSDKPrivacyConfiguration(
+            showPrivacy: { calls += 1 },
+            agreePrivacy: { calls += 1 },
+            enableHTTPS: { calls += 1 },
+            assignAPIKey: { _ in calls += 1 }
+        )
+        let acceptedConsent = AMapAcceptedConsent(decision: .accepted)
 
-        XCTAssertFalse(bootstrapper.prepare(apiKey: "   ") { _ in calls += 1 })
+        XCTAssertNil(AMapAcceptedConsent(decision: .declined))
+        XCTAssertFalse(
+            bootstrapper.prepare(
+                consent: AMapAcceptedConsent(decision: .declined),
+                apiKey: "configured-value",
+                configuration: configuration
+            )
+        )
+        XCTAssertFalse(
+            bootstrapper.prepare(
+                consent: acceptedConsent,
+                apiKey: "   ",
+                configuration: configuration
+            )
+        )
 
         XCTAssertEqual(calls, 0)
     }
 
-    func testValidKeyConfiguresExactlyOnceWithoutExposingIt() {
+    func testValidKeyConfiguresExactlyOnceWithoutExposingIt() throws {
         let bootstrapper = AMapSDKBootstrapper()
         var calls = 0
-        let apply: (String) -> Void = { value in
-            XCTAssertFalse(value.isEmpty)
-            calls += 1
-        }
+        let configuration = AMapSDKPrivacyConfiguration(
+            showPrivacy: { calls += 1 },
+            agreePrivacy: { calls += 1 },
+            enableHTTPS: { calls += 1 },
+            assignAPIKey: { value in
+                XCTAssertFalse(value.isEmpty)
+                calls += 1
+            }
+        )
+        let consent = try XCTUnwrap(AMapAcceptedConsent(decision: .accepted))
 
-        XCTAssertTrue(bootstrapper.prepare(apiKey: "configured-value", apply: apply))
-        XCTAssertTrue(bootstrapper.prepare(apiKey: "configured-value", apply: apply))
+        XCTAssertTrue(
+            bootstrapper.prepare(
+                consent: consent,
+                apiKey: "configured-value",
+                configuration: configuration
+            )
+        )
+        XCTAssertTrue(
+            bootstrapper.prepare(
+                consent: consent,
+                apiKey: "configured-value",
+                configuration: configuration
+            )
+        )
 
-        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(calls, 4)
         XCTAssertFalse(String(describing: bootstrapper).contains("configured-value"))
     }
 
-    func testPrivacyIsShownAndAcceptedBeforeKeyAssignment() {
+    func testPrepareUsesPrivacyConfigurationSeamInRequiredOrder() throws {
+        let bootstrapper = AMapSDKBootstrapper()
         var calls: [String] = []
         let configuration = AMapSDKPrivacyConfiguration(
             showPrivacy: { calls.append("show") },
@@ -35,8 +75,62 @@ final class AMapSDKBootstrapperTests: XCTestCase {
             assignAPIKey: { _ in calls.append("key") }
         )
 
-        configuration.apply(apiKey: "configured-value")
+        XCTAssertTrue(
+            bootstrapper.prepare(
+                consent: try XCTUnwrap(AMapAcceptedConsent(decision: .accepted)),
+                apiKey: "configured-value",
+                configuration: configuration
+            )
+        )
 
         XCTAssertEqual(calls, ["show", "agree", "https", "key"])
+    }
+
+    func testConcurrentAcceptedPreparationConfiguresExactlyOnce() throws {
+        let bootstrapper = AMapSDKBootstrapper()
+        let consent = try XCTUnwrap(AMapAcceptedConsent(decision: .accepted))
+        let lock = NSLock()
+        var calls = 0
+        let configuration = AMapSDKPrivacyConfiguration(
+            showPrivacy: {
+                lock.lock()
+                calls += 1
+                lock.unlock()
+            },
+            agreePrivacy: {
+                lock.lock()
+                calls += 1
+                lock.unlock()
+            },
+            enableHTTPS: {
+                lock.lock()
+                calls += 1
+                lock.unlock()
+            },
+            assignAPIKey: { _ in
+                lock.lock()
+                calls += 1
+                lock.unlock()
+            }
+        )
+        let group = DispatchGroup()
+        let queue = DispatchQueue(label: "AMapSDKBootstrapperTests", attributes: .concurrent)
+
+        for _ in 0 ..< 100 {
+            group.enter()
+            queue.async {
+                XCTAssertTrue(
+                    bootstrapper.prepare(
+                        consent: consent,
+                        apiKey: "configured-value",
+                        configuration: configuration
+                    )
+                )
+                group.leave()
+            }
+        }
+
+        XCTAssertEqual(group.wait(timeout: .now() + 2), .success)
+        XCTAssertEqual(calls, 4)
     }
 }

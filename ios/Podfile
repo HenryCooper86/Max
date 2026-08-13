@@ -13,20 +13,50 @@ post_integrate do |installer|
   # AMap has no usable arm64-simulator binary. The app xcconfigs keep the
   # device framework flags while overriding simulator flags to system-only
   # dependencies. CocoaPods' aggregate static libraries would still be linked
-  # by the user targets on simulator, so remove those redundant references
-  # after every integration. The generated xcconfigs remain the source of the
-  # device framework linkage.
-  installer.aggregate_targets.each do |aggregate_target|
-    aggregate_target.user_project.native_targets.each do |user_target|
-      next unless ["MaxHelmet", "MaxHelmetTests"].include?(user_target.name)
+  # by affected user targets on simulator, so remove just those redundant
+  # aggregate-product references after every integration. The generated
+  # xcconfigs remain the source of the device framework linkage.
+  projects_to_save = {}
+  removed_products = []
 
-      user_target.frameworks_build_phase.files.each do |build_file|
-        file_ref = build_file.file_ref
-        next unless file_ref && ["libPods-MaxHelmet.a", "libPods-MaxHelmetTests.a"].include?(file_ref.path)
+  installer.aggregate_targets.each do |aggregate_target|
+    pods_target = installer.pods_project.targets.find do |target|
+      target.name == aggregate_target.label
+    end
+    product_reference = pods_target&.product_reference
+    next unless product_reference&.path&.end_with?(".a")
+
+    removed_count = 0
+    aggregate_target.user_targets.each do |user_target|
+      user_target.frameworks_build_phase.files.dup.each do |build_file|
+        file_reference = build_file.file_ref
+        next unless file_reference&.source_tree == "BUILT_PRODUCTS_DIR"
+        next unless file_reference.path == product_reference.path
 
         build_file.remove_from_project
+        removed_count += 1
       end
+
+      projects_to_save[user_target.project.path] = user_target.project
     end
-    aggregate_target.user_project.save
+
+    if removed_count.zero?
+      raise Pod::Informative,
+            "Expected #{product_reference.path} to be linked by #{aggregate_target.label}'s user target; " \
+            "CocoaPods integration changed and simulator safety cannot be verified."
+    end
+
+    removed_products << product_reference.path
   end
+
+  if removed_products.empty?
+    raise Pod::Informative,
+          "No AMap-related aggregate product links were found; simulator linkage cleanup was not applied."
+  end
+
+  projects_to_save.each_value(&:save)
+  Pod::UI.puts [
+    "Removed simulator-incompatible aggregate links",
+    removed_products.join(", ")
+  ].join(": ")
 end

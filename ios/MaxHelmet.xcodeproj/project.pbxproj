@@ -6,11 +6,6 @@
 	objectVersion = 70;
 	objects = {
 
-/* Begin PBXBuildFile section */
-		BE7687692DE5BB55DFB2F52C /* libPods-MaxHelmetTests.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 2F9132B37F26E145EFE9F2B6 /* libPods-MaxHelmetTests.a */; };
-		EAC6BD8C6EA79B5AF890D78E /* libPods-MaxHelmet.a in Frameworks */ = {isa = PBXBuildFile; fileRef = D631D8D5385B6D66B2F05C13 /* libPods-MaxHelmet.a */; };
-/* End PBXBuildFile section */
-
 /* Begin PBXContainerItemProxy section */
 		7C0000000000000000000011 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -76,7 +71,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				EAC6BD8C6EA79B5AF890D78E /* libPods-MaxHelmet.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -84,7 +78,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				BE7687692DE5BB55DFB2F52C /* libPods-MaxHelmetTests.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

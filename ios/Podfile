@@ -8,3 +8,25 @@ target "MaxHelmet" do
     inherit! :search_paths
   end
 end
+
+post_integrate do |installer|
+  # AMap has no usable arm64-simulator binary. The app xcconfigs keep the
+  # device framework flags while overriding simulator flags to system-only
+  # dependencies. CocoaPods' aggregate static libraries would still be linked
+  # by the user targets on simulator, so remove those redundant references
+  # after every integration. The generated xcconfigs remain the source of the
+  # device framework linkage.
+  installer.aggregate_targets.each do |aggregate_target|
+    aggregate_target.user_project.native_targets.each do |user_target|
+      next unless ["MaxHelmet", "MaxHelmetTests"].include?(user_target.name)
+
+      user_target.frameworks_build_phase.files.each do |build_file|
+        file_ref = build_file.file_ref
+        next unless file_ref && ["libPods-MaxHelmet.a", "libPods-MaxHelmetTests.a"].include?(file_ref.path)
+
+        build_file.remove_from_project
+      end
+    end
+    aggregate_target.user_project.save
+  end
+end

@@ -16,10 +16,59 @@ post_integrate do |installer|
   # by affected user targets on simulator, so remove just those redundant
   # aggregate-product references after every integration. The generated
   # xcconfigs remain the source of the device framework linkage.
+  amap_pod_names = ["AMap3DMap-NO-IDFA", "AMapFoundation-NO-IDFA"]
+  amap_framework_names = ["AMapFoundationKit", "MAMapKit"]
   projects_to_save = {}
   removed_products = []
+  amap_aggregate_count = 0
 
   installer.aggregate_targets.each do |aggregate_target|
+    related_targets = []
+    pending_targets = [aggregate_target]
+    seen_labels = {}
+    until pending_targets.empty?
+      target = pending_targets.shift
+      next if seen_labels[target.label]
+
+      seen_labels[target.label] = true
+      related_targets << target
+      pending_targets.concat(target.search_paths_aggregate_targets)
+    end
+
+    contains_amap = lambda do |pod_targets|
+      pod_targets.any? do |pod_target|
+        ([pod_target] + pod_target.recursive_dependent_targets).any? do |candidate|
+          amap_pod_names.include?(candidate.pod_name)
+        end
+      end
+    end
+    directly_contains_amap = contains_amap.call(aggregate_target.pod_targets)
+    depends_on_amap = contains_amap.call(related_targets.flat_map(&:pod_targets))
+    next unless depends_on_amap
+
+    amap_provider_targets = related_targets.select do |target|
+      contains_amap.call(target.pod_targets)
+    end
+    amap_provider_targets.each do |provider_target|
+      direct_link_settings = provider_target.xcconfigs.values.map do |xcconfig|
+        xcconfig.to_hash.fetch("OTHER_LDFLAGS", "")
+      end
+      unless direct_link_settings.all? do |linker_flags|
+        amap_framework_names.all? { |framework| linker_flags.include?("-framework \"#{framework}\"") }
+      end
+        raise Pod::Informative,
+              "Expected direct iPhoneOS AMap framework linker settings for #{provider_target.label}; " \
+              "refusing to remove its redundant aggregate product link."
+      end
+    end
+
+    # A target that only inherits AMap search paths has no pod sources of its
+    # own, so its aggregate product is redundant too. Leave an aggregate that
+    # owns unrelated pod targets untouched.
+    next unless directly_contains_amap || aggregate_target.pod_targets.empty?
+
+    amap_aggregate_count += 1
+
     pods_target = installer.pods_project.targets.find do |target|
       target.name == aggregate_target.label
     end
@@ -40,23 +89,23 @@ post_integrate do |installer|
       projects_to_save[user_target.project.path] = user_target.project
     end
 
-    if removed_count.zero?
-      raise Pod::Informative,
-            "Expected #{product_reference.path} to be linked by #{aggregate_target.label}'s user target; " \
-            "CocoaPods integration changed and simulator safety cannot be verified."
+    if removed_count.positive?
+      removed_products << product_reference.path
+    else
+      Pod::UI.puts "AMap aggregate product link already absent: #{product_reference.path}"
     end
-
-    removed_products << product_reference.path
   end
 
-  if removed_products.empty?
+  if amap_aggregate_count.zero?
     raise Pod::Informative,
-          "No AMap-related aggregate product links were found; simulator linkage cleanup was not applied."
+          "No CocoaPods aggregate target contains AMap; simulator linkage cleanup was not applied."
   end
 
   projects_to_save.each_value(&:save)
-  Pod::UI.puts [
-    "Removed simulator-incompatible aggregate links",
-    removed_products.join(", ")
-  ].join(": ")
+  unless removed_products.empty?
+    Pod::UI.puts [
+      "Removed simulator-incompatible AMap aggregate links",
+      removed_products.join(", ")
+    ].join(": ")
+  end
 end

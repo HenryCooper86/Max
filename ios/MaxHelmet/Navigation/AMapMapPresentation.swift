@@ -8,8 +8,7 @@ enum AMapMapPresentation: Equatable {
 func amapMapPresentation(
     decision: AMapConsentDecision,
     hasAPIKey: Bool,
-    hasGeometry: Bool,
-    loadFailed: Bool
+    hasGeometry: Bool
 ) -> AMapMapPresentation {
     switch decision {
     case .unknown:
@@ -17,6 +16,6 @@ func amapMapPresentation(
     case .declined:
         return .notEnabled
     case .accepted:
-        return hasAPIKey && hasGeometry && !loadFailed ? .map : .unavailable
+        return hasAPIKey && hasGeometry ? .map : .unavailable
     }
 }

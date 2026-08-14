@@ -27,7 +27,6 @@ final class GuidanceMapHostPresentationTests: XCTestCase {
                 decision: store.decision,
                 hasAPIKey: false,
                 hasGeometry: true,
-                loadFailed: false,
                 requiresDevice: false
             ),
             .consentRequired
@@ -63,7 +62,6 @@ final class GuidanceMapHostPresentationTests: XCTestCase {
                 decision: store.decision,
                 hasAPIKey: true,
                 hasGeometry: true,
-                loadFailed: false,
                 requiresDevice: false
             ),
             .notEnabled
@@ -82,27 +80,24 @@ final class GuidanceMapHostPresentationTests: XCTestCase {
                 decision: .accepted,
                 hasAPIKey: true,
                 hasGeometry: true,
-                loadFailed: false,
                 requiresDevice: false
             ),
             .nativeMap(acceptedConsent)
         )
     }
 
-    func testMissingKeyInvalidGeometryLoadFailureAndSimulatorYieldUnavailableMapSurface() {
+    func testMissingKeyInvalidGeometryAndSimulatorYieldUnavailableMapSurface() {
         for inputs in [
-            (false, true, false, false),
-            (true, false, false, false),
-            (true, true, true, false),
-            (true, true, false, true)
+            (false, true, false),
+            (true, false, false),
+            (true, true, true)
         ] {
             XCTAssertEqual(
                 guidanceMapHostViewState(
                     decision: .accepted,
                     hasAPIKey: inputs.0,
                     hasGeometry: inputs.1,
-                    loadFailed: inputs.2,
-                    requiresDevice: inputs.3
+                    requiresDevice: inputs.2
                 ),
                 .unavailable
             )
@@ -115,7 +110,6 @@ final class GuidanceMapHostPresentationTests: XCTestCase {
                 decision: .unknown,
                 hasAPIKey: true,
                 hasGeometry: true,
-                loadFailed: false,
                 requiresDevice: false
             ),
             .consentRequired
@@ -125,10 +119,72 @@ final class GuidanceMapHostPresentationTests: XCTestCase {
                 decision: .declined,
                 hasAPIKey: true,
                 hasGeometry: true,
-                loadFailed: false,
                 requiresDevice: false
             ),
             .notEnabled
         )
+    }
+
+    func testAcceptedMapStaysStructuralNativeThroughRepeatedFailuresAndRecovery() throws {
+        let accepted = try XCTUnwrap(AMapAcceptedConsent(decision: .accepted))
+
+        let healthy = guidanceMapHostPresentation(
+            decision: .accepted,
+            hasAPIKey: true,
+            hasGeometry: true,
+            loadFailed: false,
+            requiresDevice: false
+        )
+        let failures = (0..<10).map { _ in
+            guidanceMapHostPresentation(
+                decision: .accepted,
+                hasAPIKey: true,
+                hasGeometry: true,
+                loadFailed: true,
+                requiresDevice: false
+            )
+        }
+        let recovered = guidanceMapHostPresentation(
+            decision: .accepted,
+            hasAPIKey: true,
+            hasGeometry: true,
+            loadFailed: false,
+            requiresDevice: false
+        )
+
+        XCTAssertEqual(healthy, .init(viewState: .nativeMap(accepted), showsUnavailableOverlay: false))
+        XCTAssertTrue(failures.allSatisfy {
+            $0 == .init(viewState: .nativeMap(accepted), showsUnavailableOverlay: true)
+        })
+        XCTAssertEqual(recovered, .init(viewState: .nativeMap(accepted), showsUnavailableOverlay: false))
+    }
+
+    func testStatesWithoutNativeMapNeverShowLoadFailureOverlay() {
+        let cases: [(
+            decision: AMapConsentDecision,
+            hasAPIKey: Bool,
+            hasGeometry: Bool,
+            requiresDevice: Bool,
+            expected: GuidanceMapHostViewState
+        )] = [
+            (.unknown, true, true, false, .consentRequired),
+            (.declined, true, true, false, .notEnabled),
+            (.accepted, false, true, false, .unavailable),
+            (.accepted, true, false, false, .unavailable),
+            (.accepted, true, true, true, .unavailable),
+        ]
+
+        for item in cases {
+            let presentation = guidanceMapHostPresentation(
+                decision: item.decision,
+                hasAPIKey: item.hasAPIKey,
+                hasGeometry: item.hasGeometry,
+                loadFailed: true,
+                requiresDevice: item.requiresDevice
+            )
+
+            XCTAssertEqual(presentation.viewState, item.expected)
+            XCTAssertFalse(presentation.showsUnavailableOverlay)
+        }
     }
 }

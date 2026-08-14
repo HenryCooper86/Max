@@ -26,14 +26,12 @@ func guidanceMapHostViewState(
     decision: AMapConsentDecision,
     hasAPIKey: Bool,
     hasGeometry: Bool,
-    loadFailed: Bool,
     requiresDevice: Bool
 ) -> GuidanceMapHostViewState {
     switch amapMapPresentation(
         decision: decision,
         hasAPIKey: hasAPIKey,
-        hasGeometry: hasGeometry,
-        loadFailed: loadFailed
+        hasGeometry: hasGeometry
     ) {
     case .consentRequired:
         return .consentRequired
@@ -49,6 +47,61 @@ func guidanceMapHostViewState(
     }
 }
 
+struct GuidanceMapHostPresentation: Equatable {
+    let viewState: GuidanceMapHostViewState
+    let showsUnavailableOverlay: Bool
+}
+
+func guidanceMapHostPresentation(
+    decision: AMapConsentDecision,
+    hasAPIKey: Bool,
+    hasGeometry: Bool,
+    loadFailed: Bool,
+    requiresDevice: Bool
+) -> GuidanceMapHostPresentation {
+    let viewState = guidanceMapHostViewState(
+        decision: decision,
+        hasAPIKey: hasAPIKey,
+        hasGeometry: hasGeometry,
+        requiresDevice: requiresDevice
+    )
+    let hasNativeMap: Bool
+    if case .nativeMap = viewState {
+        hasNativeMap = true
+    } else {
+        hasNativeMap = false
+    }
+    return GuidanceMapHostPresentation(
+        viewState: viewState,
+        showsUnavailableOverlay: hasNativeMap && loadFailed
+    )
+}
+
+struct GuidanceMapLoadContainer<MapContent: View, FailureOverlay: View>: View {
+    let showsUnavailableOverlay: Bool
+    private let mapContent: MapContent
+    private let failureOverlay: FailureOverlay
+
+    init(
+        showsUnavailableOverlay: Bool,
+        @ViewBuilder mapContent: () -> MapContent,
+        @ViewBuilder failureOverlay: () -> FailureOverlay
+    ) {
+        self.showsUnavailableOverlay = showsUnavailableOverlay
+        self.mapContent = mapContent()
+        self.failureOverlay = failureOverlay()
+    }
+
+    var body: some View {
+        ZStack {
+            mapContent
+            if showsUnavailableOverlay {
+                failureOverlay
+            }
+        }
+    }
+}
+
 struct GuidanceMapHost: View {
     let guidance: GuidanceState
 
@@ -60,8 +113,8 @@ struct GuidanceMapHost: View {
         AMapRouteDisplayModel.make(guidance: guidance)
     }
 
-    private var viewState: GuidanceMapHostViewState {
-        guidanceMapHostViewState(
+    private var presentation: GuidanceMapHostPresentation {
+        guidanceMapHostPresentation(
             decision: consent.decision,
             hasAPIKey: configuration.hasAPIKey,
             hasGeometry: model != nil,
@@ -80,7 +133,7 @@ struct GuidanceMapHost: View {
 
     var body: some View {
         Group {
-            switch viewState {
+            switch presentation.viewState {
             case .consentRequired:
                 placeholder(title: "等待启用高德地图", actionTitle: nil, action: nil)
             case .notEnabled:
@@ -101,11 +154,19 @@ struct GuidanceMapHost: View {
     private func map(consent: AMapAcceptedConsent) -> some View {
         if let model,
            let apiKey = configuration.apiKey {
-            AMapRouteMap(
-                model: model,
-                consent: consent,
-                apiKey: apiKey,
-                loadFailed: $loadFailed
+            GuidanceMapLoadContainer(
+                showsUnavailableOverlay: presentation.showsUnavailableOverlay,
+                mapContent: {
+                    AMapRouteMap(
+                        model: model,
+                        consent: consent,
+                        apiKey: apiKey,
+                        loadFailed: $loadFailed
+                    )
+                },
+                failureOverlay: {
+                    placeholder(title: "地图暂不可用", actionTitle: nil, action: nil)
+                }
             )
         } else {
             placeholder(title: "地图暂不可用", actionTitle: nil, action: nil)

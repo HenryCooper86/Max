@@ -5,7 +5,7 @@ final class AMapMapPresentationTests: XCTestCase {
     func testUnknownAlwaysRequiresConsentBeforeAnyMapState() {
         XCTAssertEqual(
             amapMapPresentation(
-                decision: .unknown, hasAPIKey: true, hasGeometry: true, loadFailed: false
+                decision: .unknown, hasAPIKey: true, hasGeometry: true
             ),
             .consentRequired
         )
@@ -14,7 +14,7 @@ final class AMapMapPresentationTests: XCTestCase {
     func testUnknownStillShowsDisclosureBeforeMissingKeyFailure() {
         XCTAssertEqual(
             amapMapPresentation(
-                decision: .unknown, hasAPIKey: false, hasGeometry: true, loadFailed: false
+                decision: .unknown, hasAPIKey: false, hasGeometry: true
             ),
             .consentRequired
         )
@@ -23,26 +23,27 @@ final class AMapMapPresentationTests: XCTestCase {
     func testDeclineWinsWithoutConstructingAMap() {
         XCTAssertEqual(
             amapMapPresentation(
-                decision: .declined, hasAPIKey: true, hasGeometry: true, loadFailed: false
+                decision: .declined, hasAPIKey: true, hasGeometry: true
             ),
             .notEnabled
         )
     }
 
-    func testAcceptedRequiresKeyGeometryAndHealthyLoad() {
+    func testAcceptedRequiresOnlyKeyAndGeometryForStructuralMapEligibility() {
         XCTAssertEqual(
             amapMapPresentation(
-                decision: .accepted, hasAPIKey: true, hasGeometry: true, loadFailed: false
+                decision: .accepted,
+                hasAPIKey: true,
+                hasGeometry: true
             ),
             .map
         )
-        for inputs in [(false, true, false), (true, false, false), (true, true, true)] {
+        for inputs in [(false, true), (true, false), (false, false)] {
             XCTAssertEqual(
                 amapMapPresentation(
                     decision: .accepted,
                     hasAPIKey: inputs.0,
-                    hasGeometry: inputs.1,
-                    loadFailed: inputs.2
+                    hasGeometry: inputs.1
                 ),
                 .unavailable
             )

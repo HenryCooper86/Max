@@ -93,6 +93,12 @@ final class AgentSession: NSObject, ObservableObject {
 
     @Published private(set) var state = State()
 
+    #if DEBUG
+    func installAMapDeviceValidationGuidance(_ guidance: GuidanceState) {
+        update { $0.guidance = guidance }
+    }
+    #endif
+
     private var urlSession: URLSession!
     private var allowSelfSigned = false
 

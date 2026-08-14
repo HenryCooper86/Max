@@ -35,18 +35,31 @@ every setting lives in the 设置 sheet.
 - Xcode 16 or newer; Xcode 17 / iOS 26.5 simulator was used for the latest screenshots.
 - iOS 17+ device or simulator
 - An Apple Developer signing team for running on a physical device (Simulator needs none)
+- Homebrew Ruby 3.2 through 4.x (Ruby 4.0.6 is verified); Apple's `/usr/bin/ruby` is too old.
+- Bundler 4.0.16. The lockfile keeps CocoaPods on the reviewed 1.16.x minor (currently 1.16.2).
 
 ## Build & run
 
-Bootstrap CocoaPods and create the ignored local key configuration from the repo root:
+Bootstrap CocoaPods and create the ignored local key configuration from the repository root. Use
+Homebrew Ruby explicitly because a default macOS shell may otherwise select Apple's unsupported
+Ruby and Bundler:
 
 ```bash
+brew install ruby
+export PATH="$(brew --prefix ruby)/bin:$PATH"
+gem install bundler -v 4.0.16
+
 cd ios
-bundle config set --local path vendor/bundle
-bundle install
-bundle exec pod install --repo-update
-cp Config/Secrets.xcconfig.example Config/Secrets.xcconfig
+bundle _4.0.16_ config set --local path vendor/bundle
+bundle _4.0.16_ install
+bundle _4.0.16_ exec pod install --repo-update
+./scripts/verify-bootstrap.sh
+test -e Config/Secrets.xcconfig || \
+  cp Config/Secrets.xcconfig.example Config/Secrets.xcconfig
 ```
+
+The verification script executes the selected Ruby, Bundler, installed dependency set, and
+CocoaPods binary. It must report Ruby 3.2–4.x, Bundler 4.0.16, and CocoaPods 1.16.x before building.
 
 Set `AMAP_IOS_KEY` only in the ignored `Config/Secrets.xcconfig`; never commit that file. Then
 open `MaxHelmet.xcworkspace` in Xcode and press Run. The app uses `SwiftUI`, `AVFoundation`,

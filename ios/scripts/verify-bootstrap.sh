@@ -14,15 +14,15 @@ ruby -e '
   abort "Ruby #{current} is unsupported; use Homebrew Ruby 3.2 through 4.x." unless supported
 '
 
-bundler_version=$(bundle --version | awk '{ print $NF }')
+bundler_version=$(BUNDLE_GEMFILE="$ios_dir/Gemfile" bundle --version | awk '{ print $NF }')
 if [ "$bundler_version" != "4.0.16" ]; then
   echo "Bundler $bundler_version is unsupported; install and invoke Bundler 4.0.16." >&2
   exit 1
 fi
 
-bundle check
+BUNDLE_GEMFILE="$ios_dir/Gemfile" bundle check
 
-cocoapods_version=$(bundle exec pod --version)
+cocoapods_version=$(BUNDLE_GEMFILE="$ios_dir/Gemfile" bundle exec pod --version)
 case "$cocoapods_version" in
   1.16.*) ;;
   *)

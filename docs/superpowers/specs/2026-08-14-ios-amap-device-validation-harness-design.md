@@ -65,13 +65,15 @@ Debug launch.
 Add an opt-in XCTest that compiles only for a physical iOS target and runs only
 when `RUN_AMAP_DEVICE_INTEGRATION=1` is supplied. The test:
 
-1. obtains the configured key from the app test host without logging its value;
-2. constructs an accepted-consent capability inside the test process;
-3. hosts the production `AMapRouteMap` with the deterministic display model;
-4. waits for the real SDK map-load completion rather than sleeping;
-5. verifies one route overlay, one rider annotation, a fitted finite region,
+1. requires the production disclosure to have persisted an accepted decision in
+   the app test host and fails before SDK construction otherwise;
+2. obtains the configured key from the app test host without logging its value;
+3. derives the accepted-consent capability from that persisted decision;
+4. hosts the production `AMapRouteMap` with the deterministic display model;
+5. waits for the real SDK map-load completion rather than sleeping;
+6. verifies one route overlay, one rider annotation, a fitted finite region,
    disabled map interaction, and the AMap attribution surface; and
-6. requests a completed map snapshot to prove that the native renderer produced
+7. requests a completed map snapshot to prove that the native renderer produced
    content.
 
 Simulator and ordinary test runs skip this opt-in test without touching the
@@ -82,7 +84,8 @@ signing change.
 ## Manual Validation
 
 Build and install the configured Debug app on the paired iPhone, then launch it
-with both arguments. Validate this sequence through the visible device UI:
+with both arguments. Complete this visible consent sequence before running the
+opt-in native renderer test:
 
 1. The route appears in the normal HUD and the existing Chinese disclosure is
    presented just in time.

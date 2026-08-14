@@ -345,8 +345,14 @@ import UIKit
 @MainActor
 final class AMapPhysicalDeviceIntegrationTests: XCTestCase {
     func testConfiguredDeviceLoadsNativeRouteMap() throws {
+        let decision = AMapConsentStore().decision
+        XCTAssertEqual(
+            decision,
+            .accepted,
+            "Accept the production AMap disclosure in the Debug route harness before this test."
+        )
+        let consent = try XCTUnwrap(AMapAcceptedConsent(decision: decision))
         let key = try XCTUnwrap(AMapConfiguration().apiKey, "The configured device test requires the ignored local key.")
-        let consent = try XCTUnwrap(AMapAcceptedConsent(decision: .accepted))
         let model = try XCTUnwrap(
             AMapRouteDisplayModel.make(guidance: AMapDeviceValidationHarness.guidanceFixture)
         )
@@ -457,7 +463,16 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 
 Expected: one skipped test, zero failures, and no AMap/MAMap undefined symbol in the simulator product.
 
-- [ ] **Step 3: Run the opt-in test on the paired iPhone**
+- [ ] **Step 3: Record acceptance through the production disclosure**
+
+Build, install, and launch the configured Debug app on the paired iPhone with
+both harness arguments. Through the visible device UI, first choose
+**暂不启用**, then **启用地图**, then **同意并启用**. Confirm the native map appears.
+This production UI action must persist `.accepted` before the test process may
+construct `AMapRouteMap`; do not write the consent default from a command or
+test helper.
+
+- [ ] **Step 4: Run the opt-in test on the paired iPhone**
 
 Resolve the already paired physical iPhone and existing app team without printing the configured key or committing either identifier:
 
@@ -493,7 +508,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 
 Expected: exactly one executed test passes rather than skips. A skipped result does not satisfy this step.
 
-- [ ] **Step 4: Mutate the production renderer and prove the device test is meaningful**
+- [ ] **Step 5: Mutate the production renderer and prove the device test is meaningful**
 
 Perform one mutation at a time and restore it immediately:
 
@@ -501,9 +516,13 @@ Perform one mutation at a time and restore it immediately:
 2. Temporarily set `mapView.isUserInteractionEnabled = true`; the device test must fail the interaction assertion.
 3. Temporarily skip the AMap map-load completion callback assignment; the device test must time out rather than pass from its initial value.
 
-After restoring all mutations, rerun the opt-in device test and simulator skip test.
+Before the renderer mutations, temporarily remove the persisted accepted
+decision through the Debug reset argument and verify the device test fails its
+consent assertion before SDK construction. Re-accept through the production
+sheet, then perform the three renderer mutations. After restoring all
+mutations, rerun the opt-in device test and simulator skip test.
 
-- [ ] **Step 5: Commit Task 2**
+- [ ] **Step 6: Commit Task 2**
 
 ```bash
 git add ios/MaxHelmetTests/AMapPhysicalDeviceIntegrationTests.swift

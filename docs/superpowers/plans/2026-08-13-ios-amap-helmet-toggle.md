@@ -82,6 +82,7 @@
 ### Task 1: CocoaPods, Workspace, and Sanitized Key Plumbing
 
 **Files:**
+
 - Create: `ios/Gemfile`
 - Create: `ios/Gemfile.lock` (generated)
 - Create: `ios/Podfile`
@@ -99,6 +100,7 @@
 - Modify: `ios/MaxHelmet/Info-Debug.plist`
 
 **Interfaces:**
+
 - Produces: `AMapConfiguration.init(infoDictionary: [String: Any])`
 - Produces: `AMapConfiguration.apiKey: String?`
 - Produces: `AMapConfiguration.hasAPIKey: Bool`
@@ -355,12 +357,14 @@ Expected: the staged-key scan finds no non-empty assignment.
 ### Task 2: Persisted Consent and the Pure Map Gate
 
 **Files:**
+
 - Create: `ios/MaxHelmet/Navigation/AMapConsentStore.swift`
 - Create: `ios/MaxHelmet/Navigation/AMapMapPresentation.swift`
 - Create: `ios/MaxHelmetTests/AMapConsentStoreTests.swift`
 - Create: `ios/MaxHelmetTests/AMapMapPresentationTests.swift`
 
 **Interfaces:**
+
 - Consumes: `AMapConfiguration.hasAPIKey`
 - Produces: `AMapConsentDecision { unknown, accepted, declined }`
 - Produces: `AMapConsentStore.requestIfNeeded()`, `accept()`, `decline()`, `reconsider()`
@@ -589,10 +593,12 @@ git commit -m "feat(ios): add AMap consent gate"
 ### Task 3: Validated GCJ-02 Display Geometry
 
 **Files:**
+
 - Create: `ios/MaxHelmet/Navigation/AMapRouteDisplayModel.swift`
 - Create: `ios/MaxHelmetTests/AMapRouteDisplayModelTests.swift`
 
 **Interfaces:**
+
 - Consumes: `GuidanceState`
 - Consumes: `CoordinateDatum.wgs84ToGcj02(_:)`
 - Produces: `AMapCoordinateBounds`
@@ -763,11 +769,13 @@ git commit -m "feat(ios): model AMap route display geometry"
 ### Task 4: Privacy-First Native AMap Bridge
 
 **Files:**
+
 - Create: `ios/MaxHelmet/Navigation/AMapSDKBootstrapper.swift`
 - Create: `ios/MaxHelmet/Navigation/AMapRouteMap.swift`
 - Create: `ios/MaxHelmetTests/AMapSDKBootstrapperTests.swift`
 
 **Interfaces:**
+
 - Consumes: non-empty `AMapConfiguration.apiKey`
 - Consumes: `AMapRouteDisplayModel`
 - Produces: `AMapSDKBootstrapper.prepare(apiKey:apply:) -> Bool`
@@ -1036,6 +1044,7 @@ git commit -m "feat(ios): render routes with native AMap"
 ### Task 5: Just-in-Time Consent UI and Guidance Card Integration
 
 **Files:**
+
 - Create: `ios/MaxHelmet/Navigation/AMapConsentSheet.swift`
 - Create: `ios/MaxHelmet/Navigation/GuidanceMapHost.swift`
 - Modify: `ios/MaxHelmet/Navigation/GuidanceCard.swift`
@@ -1043,6 +1052,7 @@ git commit -m "feat(ios): render routes with native AMap"
 - Test: `ios/MaxHelmetTests/AMapMapPresentationTests.swift`
 
 **Interfaces:**
+
 - Consumes: `AMapConsentStore`, `AMapConfiguration`, `AMapRouteDisplayModel`, `AMapRouteMap`
 - Produces: `GuidanceMapHost(guidance:)`
 - Produces: `AMapConsentSheet(onAccept:onDecline:)`
@@ -1239,6 +1249,7 @@ git commit -m "feat(ios): gate AMap guidance behind consent"
 ### Task 6: Remove the Microphone Dock and Preserve Helmet/Mute Semantics
 
 **Files:**
+
 - Create: `ios/MaxHelmet/UI/VoiceUtilityPill.swift`
 - Create: `ios/MaxHelmetTests/VoiceUtilityPillTests.swift`
 - Modify: `ios/MaxHelmet/UI/AgentScreen.swift`
@@ -1250,6 +1261,7 @@ git commit -m "feat(ios): gate AMap guidance behind consent"
 - Delete: `ios/MaxHelmetTests/VoiceMicDockTests.swift`
 
 **Interfaces:**
+
 - Produces: `helmetToggleAccessibilityLabel(handsFree: Bool) -> String`
 - Preserves: `viewModel.toggleHandsFree` as `HelmetVisual.onTap`
 - Preserves: `MuteUtilityPill(muted:action:)`
@@ -1403,12 +1415,14 @@ git commit -m "refactor(ios): make helmet the sole session toggle"
 ### Task 7: Documentation, Security Scan, and Full Verification
 
 **Files:**
+
 - Modify: `README.md`
 - Modify: `ios/README.md`
 - Modify: `docs/live-agent-testing.md`
 - Verify only: all implementation and test files from Tasks 1–6.
 
 **Interfaces:**
+
 - Documents: workspace-only build path, dependency bootstrap, local key injection, consent behavior, native AMap display, no-key behavior, and helmet-only start/stop.
 
 - [ ] **Step 1: Update root capability documentation**

@@ -13,7 +13,16 @@ struct MaxHelmetApp: App {
         WindowGroup {
             AgentScreen(viewModel: viewModel, session: session)
                 .preferredColorScheme(.dark)
-                .onAppear { updateIdleTimer() }
+                .onAppear {
+                    #if DEBUG
+                    AMapDeviceValidationHarness.apply(
+                        arguments: ProcessInfo.processInfo.arguments,
+                        defaults: .standard,
+                        installGuidance: session.installAMapDeviceValidationGuidance
+                    )
+                    #endif
+                    updateIdleTimer()
+                }
                 .onChange(of: scenePhase) { _, _ in updateIdleTimer() }
                 .onChange(of: session.state.handsFree) { _, _ in updateIdleTimer() }
         }

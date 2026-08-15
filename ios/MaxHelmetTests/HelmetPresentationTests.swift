@@ -2,6 +2,15 @@ import XCTest
 @testable import MaxHelmet
 
 final class HelmetPresentationTests: XCTestCase {
+    func testHelmetToggleAccessibilityUsesSessionStateNotTurnState() {
+        XCTAssertEqual(helmetToggleAccessibilityLabel(handsFree: false), "开启免提")
+        XCTAssertEqual(helmetToggleAccessibilityLabel(handsFree: true), "结束免提")
+        XCTAssertEqual(helmetToggleAccessibilityHint(handsFree: false), "开启免提会话")
+        XCTAssertEqual(helmetToggleAccessibilityHint(handsFree: true), "结束免提会话，或取消正在进行的连接")
+        XCTAssertEqual(helmetToggleAccessibilityValue(handsFree: false), "免提未开启")
+        XCTAssertEqual(helmetToggleAccessibilityValue(handsFree: true), "免提已开启")
+    }
+
     private func hazardState(handsFree: Bool, connection: ConnectionState) -> AgentSession.State {
         var state = AgentSession.State()
         state.handsFree = handsFree

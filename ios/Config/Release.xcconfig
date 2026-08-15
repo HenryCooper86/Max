@@ -1,0 +1,4 @@
+AMAP_IOS_KEY =
+#include? "../Pods/Target Support Files/Pods-MaxHelmet/Pods-MaxHelmet.release.xcconfig"
+EXCLUDED_ARCHS[sdk=iphonesimulator*] =
+#include? "Secrets.xcconfig"

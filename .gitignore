@@ -22,6 +22,12 @@ ios/build/
 **/xcuserdata/
 *.xcuserstate
 
+# iOS dependency output and local AMap credential
+ios/Pods/
+ios/vendor/bundle/
+ios/.bundle/
+ios/Config/Secrets.xcconfig
+
 # Python tooling state (rdk/vision test suite)
 .venv/
 __pycache__/

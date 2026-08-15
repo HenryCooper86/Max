@@ -137,6 +137,18 @@ private func orbCaption(_ state: AgentSession.State) -> String {
     }
 }
 
+func helmetToggleAccessibilityLabel(handsFree: Bool) -> String {
+    handsFree ? "结束免提" : "开启免提"
+}
+
+func helmetToggleAccessibilityHint(handsFree: Bool) -> String {
+    handsFree ? "结束免提会话，或取消正在进行的连接" : "开启免提会话"
+}
+
+func helmetToggleAccessibilityValue(handsFree: Bool) -> String {
+    handsFree ? "免提已开启" : "免提未开启"
+}
+
 /// Pure voice-mode main screen, in the spirit of ChatGPT's voice mode: a dark
 /// glow with the helmet centerpiece breathing and glowing with the conversation,
 /// a single status caption, and minimal controls. The safety-critical ADAS hazard
@@ -160,46 +172,35 @@ struct AgentScreen: View {
             BackgroundGlow(color: color)
 
             GeometryReader { proxy in
-                // Sizes come from the space actually on offer rather than from
-                // constants: a 300pt helmet and a 190pt caption card fit a
-                // portrait iPhone 15 and nothing else, which is how the mic dock
-                // ended up off-screen in landscape and with captions open.
-                let available = proxy.size
-                let hazardVisible = state.hazardAlert != nil
-                let guidanceVisible = state.guidance != nil
                 let crashVisible: Bool = {
                     if case .checkIn = state.crashPhase { return true }
                     return false
                 }()
-                let captions =
-                    viewModel.showCaptions
-                    ? captionsHeight(
-                        layout: layout,
-                        available: available,
-                        hazardVisible: hazardVisible,
-                        recordingVisible: state.recording,
-                        guidanceVisible: guidanceVisible,
-                        crashVisible: crashVisible
-                    ) : nil
-                let helmet = helmetDiameter(
-                    layout: layout,
-                    available: available,
-                    captionsVisible: captions != nil,
-                    hazardVisible: hazardVisible,
+                let inputs = hudLayoutInputs(
+                    hazardVisible: state.hazardAlert != nil,
+                    crashCheckInVisible: crashVisible,
+                    guidanceVisible: state.guidance != nil,
                     recordingVisible: state.recording,
-                    guidanceVisible: guidanceVisible,
-                    crashVisible: crashVisible
+                    captionsRequested: viewModel.showCaptions,
+                    handsFreeActive: state.handsFree
                 )
-
-                Group {
-                    switch layout {
-                    case .portrait:
-                        portraitStack(color: color, hazard: presentedHazard, helmet: helmet, captions: captions)
-                    case .landscape:
-                        landscapeStack(color: color, hazard: presentedHazard, helmet: helmet, captions: captions)
-                    }
-                }
-                .frame(width: available.width, height: available.height)
+                HudRegionLayout(
+                    layout: layout,
+                    inputs: inputs,
+                    alertContent: {
+                        VStack(alignment: .leading, spacing: 8) {
+                            TopBar(state: state)
+                            alertContent()
+                        }
+                    },
+                    helmetContent: { diameter in
+                        helmet(color: color, hazard: presentedHazard, size: diameter)
+                    },
+                    utilityContent: { captionsVisible in
+                        utilityContent(captionsVisible: captionsVisible)
+                    },
+                    utilityScrollTarget: state.transcript.last?.id
+                )
             }
             .padding(.horizontal, layout == .landscape ? 16 : 20)
             .padding(.top, 10)
@@ -252,23 +253,27 @@ struct AgentScreen: View {
     // MARK: - the two arrangements
 
     /// Safety-critical banners and the navigation card, shared by both layouts.
-    @ViewBuilder private var alerts: some View {
-        if let alert = state.hazardAlert {
-            HazardBanner(alert: alert).padding(.horizontal, 4)
+    /// Their ordering is also their scroll and VoiceOver reading order.
+    private func alertContent() -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let alert = state.hazardAlert {
+                HazardBanner(alert: alert).padding(.horizontal, 4)
+            }
+            if case let .checkIn(sinceT) = state.crashPhase {
+                CrashCheckInBanner(sinceT: sinceT, onCancel: { session.crashController.riderTapCancelled() })
+                    .padding(.horizontal, 4)
+            }
+            if let guidance = state.guidance {
+                GuidanceCard(guidance: guidance)
+                    .padding(.horizontal, 4)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+            if state.recording {
+                RecordingIndicator(startedAt: state.recordingStartedAt)
+                    .padding(.horizontal, 4)
+            }
         }
-        if case let .checkIn(sinceT) = state.crashPhase {
-            CrashCheckInBanner(sinceT: sinceT, onCancel: { session.crashController.riderTapCancelled() })
-                .padding(.horizontal, 4)
-        }
-        if let guidance = state.guidance {
-            GuidanceCard(guidance: guidance)
-                .padding(.horizontal, 4)
-                .transition(.move(edge: .top).combined(with: .opacity))
-        }
-        if state.recording {
-            RecordingIndicator(startedAt: state.recordingStartedAt)
-                .padding(.horizontal, 4)
-        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder private func helmet(color: Color, hazard: HazardLevel, size: CGFloat) -> some View {
@@ -279,15 +284,15 @@ struct AgentScreen: View {
             dimmed: state.micMuted,
             hazard: hazard,
             gauge: gaugeMode(state),
+            handsFree: state.handsFree,
             diameter: size,
             onTap: viewModel.toggleHandsFree
         )
     }
 
-    @ViewBuilder private func captionsCard(height: CGFloat) -> some View {
+    @ViewBuilder private func captionsCard() -> some View {
         CaptionsOverlay(
             items: state.transcript,
-            listHeight: height,
             canFlag: { state.canFlagTurn($0) },
             onFlag: { item, reason in viewModel.flagTurn(item, reason: reason) }
         )
@@ -295,50 +300,11 @@ struct AgentScreen: View {
     }
 
     @ViewBuilder
-    private func portraitStack(color: Color, hazard: HazardLevel, helmet size: CGFloat, captions: CGFloat?)
-        -> some View
-    {
-        VStack(spacing: 14) {
-            TopBar(state: state)
-            alerts
-
-            Spacer(minLength: 4)
-
-            helmet(color: color, hazard: hazard, size: size)
-            StateReadout(caption: orbCaption(state), telltale: stateTelltale(state), color: color)
-
-            Spacer(minLength: 4)
-
-            if let captions { captionsCard(height: captions) }
-
+    private func utilityContent(captionsVisible: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            StateReadout(caption: orbCaption(state), telltale: stateTelltale(state), color: orbColor(state))
+            if captionsVisible { captionsCard() }
             SecondaryControls(state: state, viewModel: viewModel)
-            VoiceMicDock(state: state, action: viewModel.toggleHandsFree)
-        }
-    }
-
-    /// Helmet on one side, everything that is words or controls on the other.
-    /// Stacked vertically there is simply not enough height on a sideways phone.
-    @ViewBuilder
-    private func landscapeStack(color: Color, hazard: HazardLevel, helmet size: CGFloat, captions: CGFloat?)
-        -> some View
-    {
-        VStack(spacing: 8) {
-            TopBar(state: state)
-            alerts
-
-            HStack(spacing: 18) {
-                helmet(color: color, hazard: hazard, size: size)
-                    .frame(maxWidth: .infinity)
-
-                VStack(spacing: 8) {
-                    StateReadout(caption: orbCaption(state), telltale: stateTelltale(state), color: color)
-                    if let captions { captionsCard(height: captions) }
-                    Spacer(minLength: 0)
-                    SecondaryControls(state: state, viewModel: viewModel)
-                    VoiceMicDock(state: state, action: viewModel.toggleHandsFree)
-                }
-                .frame(maxWidth: .infinity)
-            }
         }
     }
 }
@@ -473,6 +439,8 @@ private struct HelmetVisual: View {
     let hazard: HazardLevel
     /// Which arc the instrument bezel lights (mirrors the web gauge).
     let gauge: GaugeMode
+    /// Whether a hands-free session is active, including a connection attempt.
+    let handsFree: Bool
     /// Sized by the screen, not by a constant — see AgentScreenLayout.
     var diameter: CGFloat = HudMetrics.helmetMaxDiameter
     var onTap: () -> Void
@@ -497,39 +465,56 @@ private struct HelmetVisual: View {
         }
     }
 
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { timeline in
-            let t = helmetMotionTime(
-                elapsed: timeline.date.timeIntervalSinceReferenceDate,
-                reduceMotion: reduceMotion
-            )
-            let level = Double(max(0, min(1, voiceLevel)))
-            let breathe = 0.5 + 0.5 * sin(t * breatheSpeed)
-            let pulse = pulseAmplitude * breathe + 0.06 * level
-            // Critical hazard: a subtle ~0.9s opacity pulse so the danger tint
-            // visibly throbs without competing with the hazard banner.
-            let hazardPulse = hazard == .critical
-                ? 0.86 + 0.14 * (0.5 + 0.5 * sin(t * (2 * .pi / 0.9)))
-                : 1.0
+    /// The layout always supplies a valid diameter. Keep an accessible button
+    /// target even if a future direct caller does not, but do not draw Canvas
+    /// into an invalid zero or non-finite coordinate system.
+    private var buttonDiameter: CGFloat {
+        guard diameter.isFinite else { return HudMetrics.helmetMinDiameter }
+        return min(
+            HudMetrics.helmetMaxDiameter,
+            max(HudMetrics.helmetMinDiameter, diameter)
+        )
+    }
 
-            Canvas { context, size in
-                drawGauge(in: &context, size: size, color: color, mode: gauge, level: level, t: t)
-                drawHelmet(
-                    in: &context, size: size, color: color, level: level,
-                    breathe: breathe, pulse: pulse,
-                    listening: turnState == .listening || turnState == .hearing,
-                    speaking: turnState == .speaking
-                )
+    var body: some View {
+        Button(action: onTap) {
+            if helmetCanvasDiameter(diameter) != nil {
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { timeline in
+                    let t = helmetMotionTime(
+                        elapsed: timeline.date.timeIntervalSinceReferenceDate,
+                        reduceMotion: reduceMotion
+                    )
+                    let level = Double(max(0, min(1, voiceLevel)))
+                    let breathe = 0.5 + 0.5 * sin(t * breatheSpeed)
+                    let pulse = pulseAmplitude * breathe + 0.06 * level
+                    // Critical hazard: a subtle ~0.9s opacity pulse so the danger tint
+                    // visibly throbs without competing with the hazard banner.
+                    let hazardPulse = hazard == .critical
+                        ? 0.86 + 0.14 * (0.5 + 0.5 * sin(t * (2 * .pi / 0.9)))
+                        : 1.0
+
+                    Canvas { context, size in
+                        drawGauge(in: &context, size: size, color: color, mode: gauge, level: level, t: t)
+                        drawHelmet(
+                            in: &context, size: size, color: color, level: level,
+                            breathe: breathe, pulse: pulse,
+                            listening: turnState == .listening || turnState == .hearing,
+                            speaking: turnState == .speaking
+                        )
+                    }
+                    .opacity(hazardPulse)
+                }
+            } else {
+                Color.clear
             }
-            .opacity(hazardPulse)
         }
-        .frame(width: diameter, height: diameter)
+        .buttonStyle(.plain)
+        .frame(width: buttonDiameter, height: buttonDiameter)
         .opacity(dimmed ? 0.55 : 1)
         .contentShape(Rectangle())
-        .onTapGesture { onTap() }
-        .accessibilityElement()
-        .accessibilityAddTraits(.isButton)
-        .accessibilityLabel(turnState == .idle ? "开启免提" : "结束免提")
+        .accessibilityLabel(helmetToggleAccessibilityLabel(handsFree: handsFree))
+        .accessibilityHint(helmetToggleAccessibilityHint(handsFree: handsFree))
+        .accessibilityValue(helmetToggleAccessibilityValue(handsFree: handsFree))
     }
 }
 
@@ -807,9 +792,6 @@ private struct StateReadout: View {
 
 private struct CaptionsOverlay: View {
     let items: [TranscriptItem]
-    /// The card's list height, chosen against the screen. Fixed at 190 it was
-    /// the difference between the mic dock being on screen and off it.
-    var listHeight: CGFloat = 190
     let canFlag: (TranscriptItem) -> Bool
     let onFlag: (TranscriptItem, String) -> Void
 
@@ -828,29 +810,18 @@ private struct CaptionsOverlay: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 18)
             } else {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(spacing: 8) {
-                            ForEach(items) { item in
-                                ChatBubble(
-                                    item: item,
-                                    time: timeFormatter.string(from: item.at),
-                                    flaggable: canFlag(item),
-                                    onFlag: { reason in onFlag(item, reason) }
-                                )
-                                .id(item.id)
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                    .frame(height: max(0, listHeight - 28))  // minus the card padding
-                    .scrollIndicators(.hidden)
-                    .onChange(of: items.count) { _, _ in
-                        if let last = items.last {
-                            withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
-                        }
+                VStack(spacing: 8) {
+                    ForEach(items) { item in
+                        ChatBubble(
+                            item: item,
+                            time: timeFormatter.string(from: item.at),
+                            flaggable: canFlag(item),
+                            onFlag: { reason in onFlag(item, reason) }
+                        )
+                        .id(item.id)
                     }
                 }
+                .frame(maxWidth: .infinity)
             }
         }
         .padding(14)
@@ -866,6 +837,13 @@ private struct SecondaryControls: View {
     @ObservedObject var viewModel: MainViewModel
 
     var body: some View {
+        ViewThatFits(in: .horizontal) {
+            controlsRow
+            controlsGrid
+        }
+    }
+
+    private var controlsRow: some View {
         HStack {
             PillToggle(icon: "text.bubble", label: "字幕", on: viewModel.showCaptions) {
                 viewModel.showCaptions.toggle()
@@ -883,8 +861,33 @@ private struct SecondaryControls: View {
                 viewModel.showGallery = true
             }
 
-            PillToggle(icon: "gearshape.fill", label: "设置", on: false) {
+            PillToggle(icon: "gearshape.fill", label: "设置", on: false, accessibilityIdentifier: HudAccessibilityID.secondaryAction) {
                 viewModel.showPreferences = true
+            }
+        }
+    }
+
+    /// When the landscape utility column becomes narrow at Dynamic Type, the
+    /// outer utility ScrollView owns the added vertical height. Every action
+    /// stays reachable instead of compressing or clipping horizontally.
+    private var controlsGrid: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                PillToggle(icon: "text.bubble", label: "字幕", on: viewModel.showCaptions) {
+                    viewModel.showCaptions.toggle()
+                }
+                if state.handsFree {
+                    MuteUtilityPill(muted: state.micMuted, action: viewModel.toggleMute)
+                }
+            }
+            HStack(spacing: 8) {
+                PillToggle(icon: "photo.stack", label: "相册", on: false) {
+                    viewModel.galleryModel.refresh()
+                    viewModel.showGallery = true
+                }
+                PillToggle(icon: "gearshape.fill", label: "设置", on: false, accessibilityIdentifier: HudAccessibilityID.secondaryAction) {
+                    viewModel.showPreferences = true
+                }
             }
         }
     }
@@ -894,6 +897,7 @@ private struct PillToggle: View {
     let icon: String
     let label: String
     let on: Bool
+    var accessibilityIdentifier = ""
     let action: () -> Void
 
     var body: some View {
@@ -910,6 +914,7 @@ private struct PillToggle: View {
             )
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier(accessibilityIdentifier)
     }
 }
 

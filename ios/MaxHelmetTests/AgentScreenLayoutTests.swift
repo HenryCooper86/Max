@@ -1,151 +1,190 @@
 import XCTest
 @testable import MaxHelmet
 
-/// The HUD was a single portrait column with a hard-coded 300×300 helmet and a
-/// 190pt caption card. Info.plist allows landscape, where an iPhone leaves about
-/// 390pt of height for a stack that wants ~600 — so it overflowed and its parts
-/// drew over each other. These pin the arithmetic that stops that.
+/// The HUD is deliberately allocated from safe-area dimensions and fixed
+/// control regions. Intrinsic alert/readout text belongs inside scroll views,
+/// never in the arithmetic that protects the sole session Button.
 final class AgentScreenLayoutTests: XCTestCase {
-    // Usable space after safe areas, for the phones this ships on.
+    // Usable space after safe areas for the smallest supported phone and the
+    // regular reference phone in each orientation.
     private let phone15Portrait = CGSize(width: 390, height: 751)
     private let phone15Landscape = CGSize(width: 734, height: 342)
     private let phoneSEPortrait = CGSize(width: 375, height: 647)
     private let phoneSELandscape = CGSize(width: 667, height: 355)
+
+    func testRemovingTheDockReclaimsItsPortraitAndLandscapeReservations() {
+        XCTAssertEqual(HudMetrics.portraitChrome, 218)
+        XCTAssertEqual(HudMetrics.landscapeChrome, 118)
+    }
 
     func testCompactVerticalSpaceSelectsLandscape() {
         XCTAssertEqual(hudLayout(verticalSizeClassIsCompact: true), .landscape)
         XCTAssertEqual(hudLayout(verticalSizeClassIsCompact: false), .portrait)
     }
 
-    // MARK: - the helmet always fits the space it is given
+    // MARK: - deterministic safe-area allocation
 
-    func testPortraitHelmetKeepsItsDesignSizeWhenThereIsRoom() {
-        XCTAssertEqual(helmetDiameter(layout: .portrait, available: phone15Portrait), HudMetrics.helmetMaxDiameter)
+    func testAllVisibleAlertSourcesUseTheSameBoundedPortraitAllocation() {
+        let inputs = hudLayoutInputs(
+            hazardVisible: true,
+            crashCheckInVisible: true,
+            guidanceVisible: true,
+            recordingVisible: true,
+            captionsRequested: true,
+            handsFreeActive: true
+        )
+        let expected = HudDeterministicAllocation(
+            alertViewportHeight: 220,
+            helmetDiameter: 300,
+            utilityViewportHeight: 207,
+            captionsVisible: true
+        )
+
+        let allocation = hudDeterministicAllocation(
+            layout: .portrait,
+            available: phone15Portrait,
+            inputs: inputs
+        )
+        XCTAssertEqual(allocation, expected)
     }
 
-    func testPortraitHelmetNeverExceedsTheSpaceLeftByTheChrome() {
-        for size in [phone15Portrait, phoneSEPortrait] {
-            for captions in [false, true] {
-                for hazard in [false, true] {
-                    let diameter = helmetDiameter(
-                        layout: .portrait, available: size, captionsVisible: captions, hazardVisible: hazard
-                    )
-                    let chrome = portraitChromeHeight(
-                        captionsVisible: captions, hazardVisible: hazard, recordingVisible: false
-                    )
-                    XCTAssertLessThanOrEqual(
-                        diameter, max(HudMetrics.helmetMinDiameter, size.height - chrome) + 0.5,
-                        "helmet outgrew its column at \(size) captions=\(captions) hazard=\(hazard)"
-                    )
-                }
+    func testPortraitSEAllAlertsDropsCaptionsBeforeTheHelmetOrControls() {
+        let allocation = hudDeterministicAllocation(
+            layout: .portrait,
+            available: phoneSEPortrait,
+            inputs: HudLayoutInputs(alertsVisible: true, captionsRequested: true, handsFreeActive: true)
+        )
+
+        // 220 alert viewport + 300 helmet + 103 utility viewport + 24 points
+        // of stack gaps exactly fills the 647-point safe height. Captions need
+        // 96 points beyond the 52-point active mute/control minimum, so they
+        // yield on the smallest portrait instead of hiding either control.
+        XCTAssertEqual(allocation.alertViewportHeight, 220)
+        XCTAssertEqual(allocation.helmetDiameter, 300)
+        XCTAssertEqual(allocation.utilityViewportHeight, 103)
+        XCTAssertFalse(allocation.captionsVisible)
+        XCTAssertLessThanOrEqual(allocation.occupiedHeight(for: .portrait), phoneSEPortrait.height)
+    }
+
+    func testLandscapeUsesFixedAlertViewportAndPreservesHelmetFloorForAllAlertHeights() {
+        let inputs = HudLayoutInputs(alertsVisible: true, captionsRequested: true, handsFreeActive: true)
+
+        for (name, size, expectedHelmet, expectedUtility) in [
+            ("iPhone 15", phone15Landscape, CGFloat(174), CGFloat(174)),
+            ("iPhone SE", phoneSELandscape, CGFloat(187), CGFloat(187)),
+        ] {
+            for conceptualAlertContentHeight in [CGFloat(0), 232, 320, 500] {
+                let allocation = hudDeterministicAllocation(layout: .landscape, available: size, inputs: inputs)
+
+                XCTAssertEqual(allocation.alertViewportHeight, 160, "\(name), content=\(conceptualAlertContentHeight)")
+                XCTAssertEqual(allocation.helmetDiameter, expectedHelmet, "\(name), content=\(conceptualAlertContentHeight)")
+                XCTAssertEqual(allocation.utilityViewportHeight, expectedUtility, "\(name), content=\(conceptualAlertContentHeight)")
+                XCTAssertTrue(allocation.captionsVisible)
+                XCTAssertGreaterThanOrEqual(allocation.helmetDiameter, HudMetrics.helmetMinDiameter)
+                XCTAssertLessThanOrEqual(allocation.occupiedHeight(for: .landscape), size.height)
             }
         }
     }
 
-    func testLandscapeHelmetFitsBothAxes() {
+    func testLandscapeHelmetStaysWithinItsWidthColumnOnBothSupportedPhones() {
         for size in [phone15Landscape, phoneSELandscape] {
-            for hazard in [false, true] {
-                let diameter = helmetDiameter(layout: .landscape, available: size, hazardVisible: hazard)
-                XCTAssertLessThanOrEqual(diameter, size.height, "helmet taller than the screen at \(size)")
+            for alertsVisible in [false, true] {
+                let allocation = hudDeterministicAllocation(
+                    layout: .landscape,
+                    available: size,
+                    inputs: HudLayoutInputs(
+                        alertsVisible: alertsVisible,
+                        captionsRequested: true,
+                        handsFreeActive: true
+                    )
+                )
                 XCTAssertLessThanOrEqual(
-                    diameter, size.width * HudMetrics.landscapeHelmetColumn + 0.5,
-                    "helmet wider than its column at \(size)"
+                    allocation.helmetDiameter,
+                    size.width * 0.42 + 0.01,
+                    "helmet exceeded the 0.42 landscape column at \(size), alerts=\(alertsVisible)"
                 )
             }
         }
     }
 
-    func testHelmetNeverCollapsesBelowTheReadableFloor() {
-        let cramped = CGSize(width: 320, height: 200)
-        XCTAssertEqual(
-            helmetDiameter(layout: .portrait, available: cramped, captionsVisible: true, hazardVisible: true),
-            HudMetrics.helmetMinDiameter
+    func testNarrowLandscapePrioritizesTheAccessibleHelmetFloorOverTheWidthCap() {
+        let allocation = hudDeterministicAllocation(
+            layout: .landscape,
+            available: CGSize(width: 200, height: 355),
+            inputs: HudLayoutInputs(alertsVisible: false, captionsRequested: true, handsFreeActive: true)
         )
-        XCTAssertEqual(
-            helmetDiameter(layout: .landscape, available: cramped, hazardVisible: true),
-            HudMetrics.helmetMinDiameter
-        )
+
+        // 200 × 0.42 is only 84 points, but the physical HUD can still fit a
+        // 116-point helmet. The semantic session control takes precedence over
+        // the usual landscape width proportion on a constrained future device.
+        XCTAssertEqual(allocation.helmetDiameter, 116)
+        XCTAssertLessThanOrEqual(allocation.occupiedHeight(for: .landscape), 355)
     }
 
-    func testHelmetShrinksRatherThanStayingFixedWhenCaptionsOpen() {
-        let plain = helmetDiameter(layout: .portrait, available: phoneSEPortrait)
-        let withCaptions = helmetDiameter(layout: .portrait, available: phoneSEPortrait, captionsVisible: true)
-        XCTAssertLessThan(withCaptions, plain, "captions must cost the helmet height, not the mic dock")
-    }
+    func testEveryAlertStateAndActiveMuteCombinationFitsSupportedPhones() {
+        let fixtures: [(HudLayout, CGSize)] = [
+            (.portrait, phone15Portrait),
+            (.portrait, phoneSEPortrait),
+            (.landscape, phone15Landscape),
+            (.landscape, phoneSELandscape),
+        ]
 
-    // MARK: - captions give way before the controls do
-
-    func testCaptionsFitTheirDesignHeightOnATallPhone() {
-        XCTAssertEqual(
-            captionsHeight(layout: .portrait, available: phone15Portrait, hazardVisible: false, recordingVisible: false),
-            HudMetrics.captionsMax
-        )
-    }
-
-    func testCaptionsShrinkOnAShortPhone() {
-        let height = captionsHeight(
-            layout: .portrait, available: phoneSEPortrait, hazardVisible: true, recordingVisible: false
-        )
-        if let height {
-            XCTAssertLessThan(height, HudMetrics.captionsMax)
-            XCTAssertGreaterThanOrEqual(height, HudMetrics.captionsMin)
-        }
-    }
-
-    func testCaptionsAreDroppedRatherThanShownAsASliver() {
-        let noRoom = CGSize(width: 375, height: 330)
-        XCTAssertNil(
-            captionsHeight(layout: .portrait, available: noRoom, hazardVisible: true, recordingVisible: true)
-        )
-    }
-
-    func testLandscapeCaptionsDoNotPayForTheHelmet() {
-        // The helmet is in the other column, so captions get more room in
-        // landscape than the same height would allow in portrait.
-        let landscape = captionsHeight(
-            layout: .landscape, available: phone15Landscape, hazardVisible: false, recordingVisible: false
-        )
-        XCTAssertNotNil(landscape)
-    }
-
-    // MARK: - the whole column has to add up
-
-    func testPortraitStackFitsEveryPhoneAndState() {
-        for size in [phone15Portrait, phoneSEPortrait] {
-            for hazard in [false, true] {
-                for recording in [false, true] {
-                    let captions = captionsHeight(
-                        layout: .portrait, available: size, hazardVisible: hazard, recordingVisible: recording
-                    )
-                    let helmet = helmetDiameter(
-                        layout: .portrait,
-                        available: size,
-                        captionsVisible: captions != nil,
-                        hazardVisible: hazard,
-                        recordingVisible: recording
-                    )
-                    let chrome = portraitChromeHeight(
-                        captionsVisible: false, hazardVisible: hazard, recordingVisible: recording
-                    )
-                    let total = chrome + helmet + (captions ?? 0)
-                    XCTAssertLessThanOrEqual(
-                        total, size.height + 0.5,
-                        "portrait stack overflows at \(size) hazard=\(hazard) recording=\(recording): \(total)"
-                    )
+        for (layout, size) in fixtures {
+            for captionsRequested in [false, true] {
+                for hazard in [false, true] {
+                    for crash in [false, true] {
+                        for guidance in [false, true] {
+                            for recording in [false, true] {
+                                for handsFreeActive in [false, true] {
+                                    let inputs = hudLayoutInputs(
+                                        hazardVisible: hazard,
+                                        crashCheckInVisible: crash,
+                                        guidanceVisible: guidance,
+                                        recordingVisible: recording,
+                                        captionsRequested: captionsRequested,
+                                        handsFreeActive: handsFreeActive
+                                    )
+                                    let allocation = hudDeterministicAllocation(
+                                        layout: layout,
+                                        available: size,
+                                        inputs: inputs
+                                    )
+                                    XCTAssertGreaterThanOrEqual(allocation.helmetDiameter, 116)
+                                    XCTAssertGreaterThanOrEqual(allocation.utilityViewportHeight, 0)
+                                    XCTAssertLessThanOrEqual(allocation.occupiedHeight(for: layout), size.height + 0.01)
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
     }
 
-    // MARK: - the crash check-in banner reserves chrome like a hazard banner
+    func testRenderingPolicyUsesBoundedScrollableRegionsWithoutMeasurementState() {
+        for layout in [HudLayout.portrait, .landscape] {
+            let inputs = HudLayoutInputs(alertsVisible: true, captionsRequested: true, handsFreeActive: true)
+            let allocation = hudDeterministicAllocation(
+                layout: layout,
+                available: layout == .portrait ? phoneSEPortrait : phoneSELandscape,
+                inputs: inputs
+            )
+            let policy = hudRenderingPolicy(layout: layout, inputs: inputs, allocation: allocation)
 
-    func testCrashBannerReservesChromeLikeAHazardBanner() {
-        let without = portraitChromeHeight(captionsVisible: false, hazardVisible: false, recordingVisible: false)
-        let with = portraitChromeHeight(
-            captionsVisible: false, hazardVisible: false, recordingVisible: false, crashVisible: true
-        )
-        XCTAssertEqual(with - without, HudMetrics.hazardBanner,
-                       "the check-in banner reserves the same vertical space as a hazard banner")
+            XCTAssertTrue(policy.alertViewportScrolls, "ordered safety alerts must remain reachable")
+            XCTAssertTrue(policy.utilityViewportScrolls, "readout, captions, mute, and controls share one scroll owner")
+            XCTAssertTrue(policy.alertChildrenRemainAccessible, "guidance map/enable control remains reachable by VoiceOver")
+            XCTAssertFalse(policy.requiresRuntimeMeasurement, "first-frame layout must not depend on preferences")
+            XCTAssertGreaterThan(policy.alertViewportHeightCap, 0)
+            XCTAssertGreaterThanOrEqual(policy.helmetButtonDiameter, 116)
+        }
+    }
+
+    func testCanvasGuardRejectsImpossibleHelmetSizesInsteadOfDrawingThem() {
+        XCTAssertEqual(helmetCanvasDiameter(116), 116)
+        XCTAssertNil(helmetCanvasDiameter(115))
+        XCTAssertNil(helmetCanvasDiameter(-1))
+        XCTAssertNil(helmetCanvasDiameter(.infinity))
     }
 
     // MARK: - crash countdown arithmetic (uptime clock, never wall-clock)

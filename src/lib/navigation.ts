@@ -109,18 +109,26 @@ export function createNavigationController(deps: {
   }
 
   function isActive(): boolean {
-    return pendingCommandId !== null || activeRoute !== null;
+    return pendingCommandId !== null || activeRoute !== null || awaitingFix !== null;
   }
 
   /** Resolves a still-held navigation.start's device.result before it would
-   *  otherwise be silently dropped by a state reset (superseding start, or
-   *  stop while requesting). "Exactly one device.result per command; silence
-   *  is a bug" — leaving it unresolved would let the relay's own ~8s
-   *  silence-timeout speak an unrelated generic failure instead of the truth.
-   *  `detail` is what the relay actually speaks (reconciliation prefers
-   *  `result.detail` over the FAILURE_SPEECH map), so no server-side change
-   *  is needed for this to be heard correctly. No-op when nothing is held. */
+   *  otherwise be silently dropped by a state reset (superseding start, a
+   *  start still awaiting its first fix, or stop while requesting/awaiting).
+   *  "Exactly one device.result per command; silence is a bug" — leaving it
+   *  unresolved would let the relay's own ~8s silence-timeout speak an
+   *  unrelated generic failure instead of the truth. `detail` is what the
+   *  relay actually speaks (reconciliation prefers `result.detail` over the
+   *  FAILURE_SPEECH map), so no server-side change is needed for this to be
+   *  heard correctly. `awaitingFix` and `pendingCommandId` are never both
+   *  set at once, so at most one branch below fires. No-op when nothing is
+   *  held. */
   function cancelHeldStart(): void {
+    if (awaitingFix) {
+      const commandId = awaitingFix.commandId;
+      clearFixWait();
+      sendResult(commandId, "failed", "navigation.cancelled", "已取消导航请求。");
+    }
     if (pendingCommandId === null) return;
     sendResult(pendingCommandId, "failed", "navigation.cancelled", "已取消导航请求。");
   }
@@ -141,8 +149,10 @@ export function createNavigationController(deps: {
     if (!lastFix) {
       // Not a permission fault: permission may be granted and the fix merely
       // slow, which is the common case indoors. Wait, say so, and only then
-      // fail with copy that names the cause.
-      clearFixWait();
+      // fail with copy that names the cause. A previous still-waiting start
+      // is resolved FIRST (failed, "navigation.cancelled") — same rule as
+      // startWithFix's own supersede — so it is never silently dropped.
+      cancelHeldStart();
       awaitingFix = {
         commandId,
         query,
@@ -188,9 +198,10 @@ export function createNavigationController(deps: {
       sendResult(commandId, "failed", "navigation.notActive");
       return;
     }
-    // A held start (stop arriving while still "requesting") is resolved
-    // BEFORE the stop's own ok, so the spoken sequence is the cancellation
-    // followed by the stop confirmation, not the reverse.
+    // A held start (stop arriving while still "requesting", or while still
+    // awaiting its first fix) is resolved BEFORE the stop's own ok, so the
+    // spoken sequence is the cancellation followed by the stop confirmation,
+    // not the reverse.
     cancelHeldStart();
     resetNavigationState();
     sendResult(commandId, "ok");

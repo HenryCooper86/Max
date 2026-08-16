@@ -281,4 +281,76 @@ describe("navigation.start before a fix has arrived", () => {
 
     expect(spoken).not.toContain("正在定位…");
   });
+
+  it("navigation.stop while awaiting a fix cancels the wait for good", () => {
+    const sent: Record<string, unknown>[] = [];
+    const spoken: string[] = [];
+    const timers = fakeScheduler();
+    const nav = createNavigationController({
+      sendJson: (p) => sent.push(p as Record<string, unknown>),
+      speak: (t) => spoken.push(t),
+      onState: () => {},
+      schedule: timers.schedule
+    });
+
+    nav.handleDeviceCommand({ commandId: "c1", action: "navigation.start", args: { query: "外滩" } } as never);
+    nav.handleDeviceCommand({ commandId: "s1", action: "navigation.stop", args: {} } as never);
+
+    // The stop must see the awaiting start as active, resolve it (not
+    // navigation.notActive), then ack itself.
+    expect(sent).toEqual([
+      {
+        type: "device.result",
+        commandId: "c1",
+        status: "failed",
+        reason: "navigation.cancelled",
+        detail: "已取消导航请求。"
+      },
+      { type: "device.result", commandId: "s1", status: "ok" }
+    ]);
+
+    // The interim line must never be heard after a stop, and a fix that
+    // lands later must not resurrect the stopped start.
+    timers.advance(8_000);
+    nav.updatePosition({ lat: 31.2304, lon: 121.4737 });
+
+    expect(spoken).not.toContain("正在定位…");
+    expect(sent.some((p) => p.type === "nav.request")).toBe(false);
+    expect(sent.length).toBe(2);
+  });
+
+  it("a second start while awaiting a fix resolves the first command instead of dropping it", () => {
+    const sent: Record<string, unknown>[] = [];
+    const timers = fakeScheduler();
+    const nav = createNavigationController({
+      sendJson: (p) => sent.push(p as Record<string, unknown>),
+      speak: () => {},
+      onState: () => {},
+      schedule: timers.schedule
+    });
+
+    nav.handleDeviceCommand({ commandId: "c1", action: "navigation.start", args: { query: "外滩" } } as never);
+    nav.handleDeviceCommand({
+      commandId: "c2",
+      action: "navigation.start",
+      args: { query: "人民广场" }
+    } as never);
+
+    // c1 must get its result now, not silence.
+    expect(sent).toEqual([
+      {
+        type: "device.result",
+        commandId: "c1",
+        status: "failed",
+        reason: "navigation.cancelled",
+        detail: "已取消导航请求。"
+      }
+    ]);
+
+    // Only c2's wait should still be live.
+    nav.updatePosition({ lat: 31.2304, lon: 121.4737 });
+
+    expect(sent.some((p) => p.type === "nav.request" && p.commandId === "c2")).toBe(true);
+    expect(sent.filter((p) => p.type === "device.result" && p.commandId === "c1").length).toBe(1);
+  });
 });

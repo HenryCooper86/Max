@@ -3,6 +3,7 @@ import {
   DownloadSimple,
   Flask,
   Gauge,
+  MapTrifold,
   Pulse,
   SlidersHorizontal,
   Trash,
@@ -13,6 +14,7 @@ import { useEffect, useRef } from "react";
 import { combineHazardLevels, scenarioLabel } from "../../shared/ride";
 import { LanguageToggle, useLanguage } from "./LanguageToggle";
 import { localized } from "../lib/i18n";
+import type { AmapConsentControls } from "../hooks/useAmapConsent";
 import type { HelmetAgent } from "../hooks/useHelmetAgent";
 import {
   CONNECTION_LABELS,
@@ -40,11 +42,12 @@ import { audioProcessingLabel, exportTranscriptLog } from "../lib/utils";
 
 type Props = {
   agent: HelmetAgent;
+  amapConsent: AmapConsentControls;
   onOpenAdmin: () => void;
   onClose: () => void;
 };
 
-export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
+export function WebSettingsSheet({ agent, amapConsent, onOpenAdmin, onClose }: Props) {
   const { language, t } = useLanguage();
   const fusedHazard = combineHazardLevels(agent.rideContext.hazardLevel, agent.weather?.riskLevel ?? "normal");
   const latencyTone = agent.latencyMs < 140 ? "good" : agent.latencyMs < 280 ? "warn" : "alert";
@@ -280,6 +283,48 @@ export function WebSettingsSheet({ agent, onOpenAdmin, onClose }: Props) {
                 {localized(language, "开启免提后接入定位天气。", "Turn on hands-free to load location weather.")}
               </p>
             )}
+          </section>
+
+          <section className="settingsCard">
+            <div className="settingsCardTitle">
+              <MapTrifold size={22} aria-hidden="true" />
+              <div>
+                <h2>{localized(language, "高德地图与隐私", "Amap and privacy")}</h2>
+                <p>
+                  {localized(
+                    language,
+                    "导航卡片可使用高德地图显示路线底图。",
+                    "The navigation card can show an Amap base map."
+                  )}
+                </p>
+              </div>
+              <span className={`settingsStatus ${amapConsent.decision === "accepted" ? "online" : ""}`}>
+                {amapConsent.decision === "accepted"
+                  ? localized(language, "已启用", "On")
+                  : localized(language, "未启用", "Off")}
+              </span>
+            </div>
+            <p className="settingsEmpty">
+              {localized(
+                language,
+                "启用后，路线和当前位置会提供给高德地图用于地图显示，高德还会接收加载地图所需的网络请求。未启用时只显示本地路线示意图，不会向高德发出任何请求。",
+                "Once enabled, your route and current position are shared with Amap to draw the map, and Amap receives the network requests needed to load it. While it is off, only the local route schematic is drawn and no request reaches Amap."
+              )}
+            </p>
+            <a href="https://lbs.amap.com/pages/privacy/" target="_blank" rel="noreferrer noopener">
+              {localized(language, "查看高德地图隐私政策", "Read the Amap privacy policy")}
+            </a>
+            <div className="settingsActions">
+              {amapConsent.decision === "accepted" ? (
+                <button type="button" onClick={amapConsent.decline}>
+                  {localized(language, "停用地图", "Turn the map off")}
+                </button>
+              ) : (
+                <button type="button" onClick={amapConsent.accept}>
+                  {localized(language, "同意并启用", "Agree and enable")}
+                </button>
+              )}
+            </div>
           </section>
 
           <section className="settingsCard">

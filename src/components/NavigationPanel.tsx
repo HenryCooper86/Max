@@ -17,6 +17,8 @@ import { useEffect, useRef, useState } from "react";
 import type { GeoPoint } from "../../shared/geo";
 import { amapCameraPlan, applyAmapCameraPlan } from "../lib/amap-camera";
 import type { AmapLatLng as AMapLatLng } from "../lib/amap-camera";
+import { shouldMountAmapMap } from "../lib/amap-consent";
+import type { AmapConsentDecision } from "../lib/amap-consent";
 import type { NavPhase } from "../lib/navigation";
 
 // Minimal surface of the Amap JS API 2.0 this component actually calls. The
@@ -152,9 +154,8 @@ function AmapTileMap({
       mapRef.current?.destroy();
       mapRef.current = null;
     };
-    // Intentionally only re-runs when the SDK becomes ready; the map's own
-    // center/overlays update via the effects below instead of a full re-init.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Only re-runs when the SDK becomes ready: the map's camera and overlays
+    // are updated by the effects below rather than by a full re-init.
   }, [ready]);
 
   // Keep the route polyline in sync with the current route, then point the
@@ -204,6 +205,20 @@ function AmapTileMap({
   // it is without the map, matching the schematic-only behavior above.
   if (!ready) return null;
   return <div ref={containerRef} className="navigationMap" aria-hidden="true" />;
+}
+
+/** Sits where the map would be, so the offer is discoverable without a modal
+ *  interrupting a rider mid-navigation — the panel only exists while guiding.
+ *  The full disclosure lives in the settings sheet; this is the doorway. */
+function AmapConsentPrompt({ onEnable }: { onEnable: () => void }) {
+  return (
+    <div className="navigationMapConsent">
+      <p>高德地图可显示路线底图。启用后，路线与当前位置会提供给高德用于地图显示。</p>
+      <button type="button" onClick={onEnable}>
+        启用地图
+      </button>
+    </div>
+  );
 }
 
 const VIEW_WIDTH = 280;
@@ -287,12 +302,26 @@ function RouteSchematic({
   );
 }
 
-export function NavigationPanel({ state }: { state: NavPhase }) {
+export function NavigationPanel({
+  state,
+  mapConsent = "unknown",
+  onEnableMap
+}: {
+  state: NavPhase;
+  /** Defaults to "unknown" so a caller that knows nothing about consent can
+   *  never accidentally load the SDK. */
+  mapConsent?: AmapConsentDecision;
+  onEnableMap?: () => void;
+}) {
   // Called unconditionally, before either early return, per the Rules of
   // Hooks — Node-side/test renders (no window) always resolve to null, so
   // the tile map never mounts there and the schematic-only tests are
   // unaffected.
   const amapKey = useAmapJsKey();
+  // Gates the SDK, not the element: mounting AmapTileMap is what injects the
+  // webapi.amap.com script and hands Amap the route.
+  const mapAllowed = shouldMountAmapMap(amapKey, mapConsent);
+  const mapOffered = Boolean(amapKey) && mapConsent === "unknown" && Boolean(onEnableMap);
 
   if (state.phase === "idle") return null;
 
@@ -306,7 +335,8 @@ export function NavigationPanel({ state }: { state: NavPhase }) {
           <p className="navigationInstruction">{state.query}</p>
         </div>
         <RouteSchematic polyline={[]} maneuvers={[]} rider={null} />
-        {amapKey ? <AmapTileMap mapKey={amapKey} polyline={[]} rider={null} /> : null}
+        {mapAllowed && amapKey ? <AmapTileMap mapKey={amapKey} polyline={[]} rider={null} /> : null}
+        {mapOffered ? <AmapConsentPrompt onEnable={onEnableMap!} /> : null}
       </section>
     );
   }
@@ -334,7 +364,8 @@ export function NavigationPanel({ state }: { state: NavPhase }) {
         ) : null}
       </div>
       <RouteSchematic polyline={route.polyline} maneuvers={route.steps} rider={position} />
-      {amapKey ? <AmapTileMap mapKey={amapKey} polyline={route.polyline} rider={position} /> : null}
+      {mapAllowed && amapKey ? <AmapTileMap mapKey={amapKey} polyline={route.polyline} rider={position} /> : null}
+      {mapOffered ? <AmapConsentPrompt onEnable={onEnableMap!} /> : null}
     </section>
   );
 }

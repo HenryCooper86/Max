@@ -38,6 +38,8 @@ export function createNavigationController(deps: {
   speak: (text: string) => void;
   onState: (state: NavPhase) => void;
   now?: () => number;
+  /** Injected so tests stay deterministic. Returns a cancel function. */
+  schedule?: (ms: number, fn: () => void) => () => void;
 }): {
   handleDeviceCommand(command: DeviceCommand): boolean;
   handleAgentEvent(event: AgentEvent): void;
@@ -45,8 +47,21 @@ export function createNavigationController(deps: {
   reset(): void;
 } {
   const now = deps.now ?? (() => Date.now());
+  const schedule =
+    deps.schedule ??
+    ((ms: number, fn: () => void) => {
+      const id = setTimeout(fn, ms);
+      return () => clearTimeout(id);
+    });
+
+  const FIRST_FIX_ANNOUNCE_MS = 1_500;
+  const FIRST_FIX_TIMEOUT_MS = 8_000;
+  const LOCATING_SPOKEN = "正在定位…";
+  const NO_FIX_DETAIL = "还没定位到，到室外或空旷处再说一次。";
 
   let lastFix: GeoPoint | null = null;
+  // Set only while a start is waiting for its first fix.
+  let awaitingFix: { commandId: string; query: string; cancels: (() => void)[] } | null = null;
   // Set only while a navigation.start's device.result is held, awaiting the
   // matching nav.route/nav.error. Never set at the same time as activeRoute.
   let pendingCommandId: string | null = null;
@@ -62,6 +77,11 @@ export function createNavigationController(deps: {
   let rerouteSequence = 0;
   // First-off-route-detection-per-excursion latch; cleared once back on route.
   let offRouteAnnounced = false;
+
+  function clearFixWait(): void {
+    awaitingFix?.cancels.forEach((cancel) => cancel());
+    awaitingFix = null;
+  }
 
   function sendResult(commandId: string, status: "ok" | "failed" | "denied", reason?: string, detail?: string): void {
     const payload: Record<string, unknown> = { type: "device.result", commandId, status };
@@ -117,11 +137,33 @@ export function createNavigationController(deps: {
   }
 
   function handleNavigationStart(commandId: string, args: Record<string, unknown>): void {
+    const query = typeof args.query === "string" ? args.query : "";
     if (!lastFix) {
-      sendResult(commandId, "denied", "permission.location");
+      // Not a permission fault: permission may be granted and the fix merely
+      // slow, which is the common case indoors. Wait, say so, and only then
+      // fail with copy that names the cause.
+      clearFixWait();
+      awaitingFix = {
+        commandId,
+        query,
+        cancels: [
+          schedule(FIRST_FIX_ANNOUNCE_MS, () => {
+            if (awaitingFix?.commandId === commandId) deps.speak(LOCATING_SPOKEN);
+          }),
+          schedule(FIRST_FIX_TIMEOUT_MS, () => {
+            if (awaitingFix?.commandId !== commandId) return;
+            clearFixWait();
+            sendResult(commandId, "failed", "route.unavailable", NO_FIX_DETAIL);
+          })
+        ]
+      };
       return;
     }
-    const query = typeof args.query === "string" ? args.query : "";
+    startWithFix(commandId, query);
+  }
+
+  function startWithFix(commandId: string, query: string): void {
+    if (!lastFix) return;
     // navigation.start while a previous request/route is still active
     // supersedes it outright. A still-held previous start is resolved FIRST
     // (failed, "navigation.cancelled") — sent before this start's own
@@ -242,6 +284,11 @@ export function createNavigationController(deps: {
 
   function updatePosition(wgs: GeoPoint): void {
     lastFix = wgs;
+    if (awaitingFix) {
+      const { commandId, query } = awaitingFix;
+      clearFixWait();
+      startWithFix(commandId, query);
+    }
     if (!activeRoute) return;
 
     const position = wgs84ToGcj02(wgs);
@@ -278,6 +325,7 @@ export function createNavigationController(deps: {
 
   function reset(): void {
     lastFix = null;
+    clearFixWait();
     resetNavigationState();
   }
 

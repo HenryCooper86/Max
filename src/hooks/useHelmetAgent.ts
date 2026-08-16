@@ -178,6 +178,13 @@ export function useHelmetAgent() {
   const testingRunIdRef = useRef(storedSettings.testingRunId ?? "");
   const testingAssignmentIdRef = useRef(storedSettings.testingAssignmentId ?? "");
   const locationRef = useRef<RiderLocation | null>(null);
+  // Mirrors `locationPermission` state for `navController`'s
+  // `hasLocationPermission` closure, captured once at controller creation
+  // (see the `useState(() => createNavigationController(...))` below) — a
+  // plain read of the state variable there would close over its
+  // first-render value ("unknown") forever. Kept current at every site that
+  // sets `locationPermission`.
+  const locationPermissionRef = useRef<PermissionStateLabel>("unknown");
   const rideModeRef = useRef<RideMode>(DEFAULT_RIDE_CONTEXT.mode);
   const scenarioRef = useRef<DemoScenario>(DEFAULT_RIDE_CONTEXT.scenario);
   const transcriptTurnRef = useRef(0);
@@ -219,7 +226,12 @@ export function useHelmetAgent() {
         if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
       },
       speak,
-      onState: setNavState
+      onState: setNavState,
+      // Only a KNOWN denial blocks the start — "prompt"/"unknown" (location
+      // never yet requested this session) must not be treated as a denial,
+      // or the very first hands-free nav command of a session would wrongly
+      // fail before geolocation ever got a chance to prompt.
+      hasLocationPermission: () => locationPermissionRef.current !== "denied"
     })
   );
 
@@ -402,7 +414,10 @@ export function useHelmetAgent() {
       }
     };
     void trackPermission("microphone" as PermissionName, setMicPermission);
-    void trackPermission("geolocation", setLocationPermission);
+    void trackPermission("geolocation", (state) => {
+      locationPermissionRef.current = state;
+      setLocationPermission(state);
+    });
     return () => {
       active = false;
       for (const cleanup of cleanups) cleanup();
@@ -1014,6 +1029,7 @@ export function useHelmetAgent() {
         const locationLookup = getRiderLocation().then((location) => {
           if (location) {
             locationRef.current = location;
+            locationPermissionRef.current = "granted";
             setLocationPermission("granted");
           }
           // On null (denied/timeout) we leave the label to the navigator.permissions

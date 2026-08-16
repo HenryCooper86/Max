@@ -37,6 +37,14 @@ export function createNavigationController(deps: {
   sendJson: (payload: unknown) => void;
   speak: (text: string) => void;
   onState: (state: NavPhase) => void;
+  /** True unless location permission is KNOWN to be denied. Mirrors
+   *  iOS's `stream.authorization() == .denied` / Android's
+   *  `hasLocationPermission()`: checked before the first-fix wait even
+   *  starts, so a genuine denial still fails fast with `permission.location`
+   *  instead of waiting 8s to tell a rider to go outside. Optional —
+   *  defaults to "never denied" so callers (and every existing test) that
+   *  don't track permission state keep today's wait-for-fix behavior. */
+  hasLocationPermission?: () => boolean;
   now?: () => number;
   /** Injected so tests stay deterministic. Returns a cancel function. */
   schedule?: (ms: number, fn: () => void) => () => void;
@@ -47,6 +55,7 @@ export function createNavigationController(deps: {
   reset(): void;
 } {
   const now = deps.now ?? (() => Date.now());
+  const hasLocationPermission = deps.hasLocationPermission ?? (() => true);
   const schedule =
     deps.schedule ??
     ((ms: number, fn: () => void) => {
@@ -146,6 +155,15 @@ export function createNavigationController(deps: {
 
   function handleNavigationStart(commandId: string, args: Record<string, unknown>): void {
     const query = typeof args.query === "string" ? args.query : "";
+    // Checked before anything else, same as iOS/Android: a genuine denial is
+    // not "the fix is merely slow" and must not wait 8s only to arrive at
+    // the same conclusion. Mirrors the platforms' own early-return — it does
+    // not cancel any unrelated start already held, exactly as neither of
+    // theirs does.
+    if (!hasLocationPermission()) {
+      sendResult(commandId, "denied", "permission.location");
+      return;
+    }
     if (!lastFix) {
       // Not a permission fault: permission may be granted and the fix merely
       // slow, which is the common case indoors. Wait, say so, and only then

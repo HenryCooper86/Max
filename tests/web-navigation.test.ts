@@ -319,6 +319,54 @@ describe("navigation.start before a fix has arrived", () => {
     expect(sent.length).toBe(2);
   });
 
+  it("a genuinely denied permission fails immediately, without waiting for a fix", () => {
+    const sent: Record<string, unknown>[] = [];
+    const spoken: string[] = [];
+    const timers = fakeScheduler();
+    const nav = createNavigationController({
+      sendJson: (p) => sent.push(p as Record<string, unknown>),
+      speak: (t) => spoken.push(t),
+      onState: () => {},
+      schedule: timers.schedule,
+      hasLocationPermission: () => false
+    });
+
+    nav.handleDeviceCommand({ commandId: "c1", action: "navigation.start", args: { query: "外滩" } } as never);
+
+    // Immediate — no 8s wait, no interim "正在定位…" line, and the unchanged
+    // permission-denial reason (spec: "If permission is genuinely denied →
+    // denied(permission.location) (unchanged)").
+    expect(sent).toEqual([{ type: "device.result", commandId: "c1", status: "denied", reason: "permission.location" }]);
+    expect(spoken).toEqual([]);
+
+    // Advancing the clock (and a fix arriving late) must not retroactively
+    // start anything — the denial was terminal, not a wait.
+    timers.advance(8_000);
+    nav.updatePosition({ lat: 31.2304, lon: 121.4737 });
+    expect(sent.length).toBe(1);
+    expect(spoken).toEqual([]);
+  });
+
+  it("no permission signal at all preserves today's wait-for-fix behavior", () => {
+    // Every other test in this file omits `hasLocationPermission` entirely —
+    // this pins the default so a future change to it can't silently regress
+    // every one of them from "waits for a fix" to "denies instantly".
+    const sent: Record<string, unknown>[] = [];
+    const timers = fakeScheduler();
+    const nav = createNavigationController({
+      sendJson: (p) => sent.push(p as Record<string, unknown>),
+      speak: () => {},
+      onState: () => {},
+      schedule: timers.schedule
+    });
+
+    nav.handleDeviceCommand({ commandId: "c1", action: "navigation.start", args: { query: "外滩" } } as never);
+    expect(sent).toEqual([]); // waiting, not an instant denial
+
+    nav.updatePosition({ lat: 31.2304, lon: 121.4737 });
+    expect(sent.some((p) => p.type === "nav.request")).toBe(true);
+  });
+
   it("a second start while awaiting a fix resolves the first command instead of dropping it", () => {
     const sent: Record<string, unknown>[] = [];
     const timers = fakeScheduler();

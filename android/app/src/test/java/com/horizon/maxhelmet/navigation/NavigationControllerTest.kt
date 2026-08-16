@@ -95,6 +95,7 @@ class NavigationControllerTest {
 
     private class Harness(
         firstFixTimeoutMillis: Long = 3_000,
+        firstFixAnnounceMillis: Long = 1_500,
         hasPermission: () -> Boolean = { true },
         // Nav-fast-follow Task 4: overridable so the hoist test can inject a
         // short-but-generous relay timeout — bounding how long a pre-hoist
@@ -118,7 +119,8 @@ class NavigationControllerTest {
             onGuidance = { guidanceUpdates.add(it) },
             hasLocationPermission = hasPermission,
             now = { clockMillis },
-            firstFixTimeoutMillis = firstFixTimeoutMillis
+            firstFixTimeoutMillis = firstFixTimeoutMillis,
+            firstFixAnnounceMillis = firstFixAnnounceMillis
         )
     }
 
@@ -254,8 +256,117 @@ class NavigationControllerTest {
         val result = JSONObject(h.results[0])
         assertEquals("unsupported", result.getString("status"))
         assertEquals("route.unavailable", result.getString("reason"))
+        // The payload now carries a location-specific detail (nav-first-fix-
+        // retry Task 3) — pinned here so a regression that drops it again is
+        // caught, rather than this test silently keeping passing under it.
+        assertEquals(noFixDetail, result.getString("detail"))
         assertTrue(h.sent.isEmpty())
         assertFalse(h.locationSource.started)
+    }
+
+    private val locatingSpoken = "正在定位…"
+    private val noFixDetail = "还没定位到，到室外或空旷处再说一次。"
+
+    // Nav-first-fix-retry Task 3 (Android parity with iOS commit af85730): a
+    // fix that is merely slow must not sound like a routing failure — the
+    // rider hears 正在定位… and navigation still starts once the fix lands.
+    @Test
+    fun `a slow fix announces locating and still starts`() = runBlocking {
+        val h = Harness(firstFixTimeoutMillis = 8_000, firstFixAnnounceMillis = 100)
+
+        val job = launch(Dispatchers.Default) {
+            h.controller.handleCommand("cmd-locating", "navigation.start", "人民广场")
+        }
+        awaitCondition(description = "locating announcement") {
+            h.speaker.spoken.any { it.first == locatingSpoken }
+        }
+        h.locationSource.fix(31.2304, 121.4737)
+
+        awaitCondition(description = "nav.request sent") { h.sent.isNotEmpty() }
+        job.cancel()
+    }
+
+    // The common case must stay silent: a fix already in hand means the
+    // rider never hears the locating announcement at all.
+    //
+    // Delivers via feedFixUntil rather than a single-shot fix() (the brief's
+    // literal snippet, and iOS's equivalent — where FakeStream auto-delivers
+    // its fix synchronously from inside stream.start()): a bare, one-shot
+    // h.locationSource.fix() call here races the launched job's own
+    // coroutine actually reaching handleStart's locationSource.start(::onFix)
+    // registration on Dispatchers.Default. On this machine that race is not
+    // occasional — the launching thread reliably reaches fix() before the
+    // dispatched coroutine's registration runs, so the single-shot delivery
+    // is silently dropped every time and the test times out waiting for
+    // "nav.request sent" instead of proving the announcement stays silent.
+    // feedFixUntil is this file's own established idiom for exactly this
+    // race (see its doc comment on FakeLocationSource above).
+    @Test
+    fun `a prompt fix never announces locating`() = runBlocking {
+        val h = Harness(firstFixAnnounceMillis = 100)
+
+        val job = launch(Dispatchers.Default) {
+            h.controller.handleCommand("cmd-prompt", "navigation.start", "人民广场")
+        }
+        feedFixUntil(h, LatLon(31.2304, 121.4737), description = "nav.request sent") { h.sent.isNotEmpty() }
+        Thread.sleep(200)
+
+        assertFalse(h.speaker.spoken.any { it.first == locatingSpoken })
+        job.cancel()
+    }
+
+    // No fix at all: the failure must name the cause instead of blaming
+    // route planning, which is what shipped.
+    @Test
+    fun `no fix fails with the location detail rather than a routing failure`() = runBlocking {
+        val h = Harness(firstFixTimeoutMillis = 150, firstFixAnnounceMillis = 50)
+
+        h.controller.handleCommand("cmd-nofix", "navigation.start", "人民广场")
+
+        awaitCondition(description = "one device.result") { h.results.size == 1 }
+        val result = JSONObject(h.results[0])
+        assertEquals("route.unavailable", result.getString("reason"))
+        assertEquals(noFixDetail, result.getString("detail"))
+        assertTrue(h.speaker.spoken.any { it.first == locatingSpoken })
+    }
+
+    // A relay that answers with no route is a different failure and must
+    // keep its own (detail-less) speech: the fix arrived, so the location
+    // copy would be a lie.
+    @Test
+    fun `search failure keeps route-unavailable without a location detail`() = runBlocking {
+        val h = Harness()
+
+        val job = launch(Dispatchers.Default) {
+            h.controller.handleCommand("cmd-search-fail", "navigation.start", "人民广场")
+        }
+        feedFixUntil(h, neutralWgsFix, description = "nav.request sent") { h.sent.isNotEmpty() }
+        val commandId = JSONObject(h.sent.last()).getString("commandId")
+        h.relay.handleNavError(commandId, "route.unavailable")
+        job.join()
+
+        assertEquals(1, h.results.size)
+        val result = JSONObject(h.results[0])
+        assertEquals("unsupported", result.getString("status"))
+        assertEquals("route.unavailable", result.getString("reason"))
+        assertFalse("a search failure must not carry the location detail", result.has("detail"))
+    }
+
+    // An explicit stop while the fix is still pending must cancel the
+    // pending announcement, not let it arrive afterwards as a non-sequitur.
+    @Test
+    fun `a stop before the fix suppresses the announcement`() = runBlocking {
+        val h = Harness(firstFixTimeoutMillis = 8_000, firstFixAnnounceMillis = 250)
+
+        val job = launch(Dispatchers.Default) {
+            h.controller.handleCommand("cmd-stopped", "navigation.start", "人民广场")
+        }
+        Thread.sleep(50)
+        h.controller.handleCommand("cmd-stop", "navigation.stop", "")
+        Thread.sleep(400)
+
+        assertFalse(h.speaker.spoken.any { it.first == locatingSpoken })
+        job.cancel()
     }
 
     // ---- navigation.stop -------------------------------------------------

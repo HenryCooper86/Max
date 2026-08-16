@@ -569,15 +569,18 @@ fun buildNavRequest(
 
 /**
  * Client → server device.result: the outcome of one device.command, echoing
- * its commandId (shared/agent.ts DeviceResultEvent). `reason` is omitted when
- * null.
+ * its commandId (shared/agent.ts DeviceResultEvent). `reason` and `detail`
+ * are each omitted when null — mirrors iOS's `DeviceActionResult` (a
+ * user-facing elaboration on `reason`, e.g. nav-first-fix-retry's
+ * "还没定位到，到室外或空旷处再说一次。" alongside "route.unavailable").
  */
-fun buildDeviceResult(commandId: String, status: String, reason: String? = null): String =
+fun buildDeviceResult(commandId: String, status: String, reason: String? = null, detail: String? = null): String =
     JSONObject().apply {
         put("type", ClientEventTypes.DEVICE_RESULT)
         put("commandId", commandId)
         put("status", status)
         if (reason != null) put("reason", reason)
+        if (detail != null) put("detail", detail)
     }.toString()
 
 const val AUDIO_START_EVENT = """{"type":"audio.start"}"""

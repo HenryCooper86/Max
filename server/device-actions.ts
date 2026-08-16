@@ -474,8 +474,13 @@ export const DEVICE_RESULT_TIMEOUT_MS = 8_000;
 /** Navigation's own deadline. It must outlast the slowest honest client
  *  attempt — 8 s waiting for a first GPS fix plus 7 s of route search — or the
  *  relay speaks a failure while the phone is still working. The 3 s margin is
- *  deliberate; `tests/navigation-timeout-budget.test.ts` fails if a client
- *  bound is raised without raising this. */
+ *  deliberate. `tests/navigation-timeout-budget.test.ts` checks this value
+ *  against the client bounds — but that test hardcodes its own copy of them
+ *  in TypeScript; it is a documented mirror, not a real tripwire, and only
+ *  fails if someone edits its constants too. Raising a client bound
+ *  (`firstFixTimeoutSeconds`/`firstFixTimeoutMillis`/the search timeout) on
+ *  its own trips nothing — update this value AND that test's constants by
+ *  hand together. */
 export const NAVIGATION_RESULT_TIMEOUT_MS = 18_000;
 
 const FAILURE_SPEECH: Record<string, string> = {

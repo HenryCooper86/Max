@@ -7,8 +7,12 @@ import { DEVICE_RESULT_TIMEOUT_MS, NAVIGATION_RESULT_TIMEOUT_MS } from "../serve
 // device attempt, or the relay speaks a failure while the phone is still
 // working — which is what made a slow GPS fix sound like a routing failure.
 //
-// These mirror the client bounds. Raising either without raising the relay
-// deadline must fail here rather than in the field:
+// These are a documented, hand-maintained MIRROR of the client bounds below —
+// not a live read of them (this is a TypeScript file; it cannot import
+// Swift/Kotlin constants). Raising one of those bounds trips NOTHING here by
+// itself: this test only fails if someone also forgets to raise
+// NAVIGATION_RESULT_TIMEOUT_MS while leaving these constants unchanged. When
+// you change a client bound, update BOTH sides by hand:
 //   ios/MaxHelmet/Navigation/NavigationController.swift  firstFixTimeoutSeconds
 //   android/.../navigation/NavigationController.kt        firstFixTimeoutMillis
 //   ios/MaxHelmet/Navigation/RelayNavigationSearch.swift  timeoutSeconds

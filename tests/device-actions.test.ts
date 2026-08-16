@@ -276,7 +276,7 @@ describe("PendingDeviceCommands", () => {
   it("assigns ordinary and navigation-specific deadlines", () => {
     const pending = new PendingDeviceCommands();
     expect(pending.issue("camera.photo", undefined, 100).expiresAt).toBe(8_100);
-    expect(pending.issue("navigation.start", undefined, 100).expiresAt).toBe(12_100);
+    expect(pending.issue("navigation.start", undefined, 100).expiresAt).toBe(18_100);
   });
 
   it("returns the next live deadline after an earlier command expires", () => {
@@ -285,7 +285,7 @@ describe("PendingDeviceCommands", () => {
     pending.issue("navigation.start", undefined, 200);
     expect(pending.nextExpiryAt()).toBe(8_100);
     pending.expire(8_100);
-    expect(pending.nextExpiryAt()).toBe(12_200);
+    expect(pending.nextExpiryAt()).toBe(18_200);
   });
 
   it("resolves a result just before its deadline", () => {
@@ -304,8 +304,8 @@ describe("PendingDeviceCommands", () => {
   it("rejects a result after its deadline and leaves it for the timeout outcome", () => {
     const pending = new PendingDeviceCommands();
     const issued = pending.issue("navigation.start", undefined, 100);
-    expect(pending.resolve(issued.commandId, 12_101)).toBeUndefined();
-    expect(pending.expire(12_101)).toEqual([issued]);
+    expect(pending.resolve(issued.commandId, 18_101)).toBeUndefined();
+    expect(pending.expire(18_101)).toEqual([issued]);
   });
 
   it("keeps mixed ordinary and navigation deadlines independent", () => {
@@ -322,9 +322,9 @@ describe("PendingDeviceCommands", () => {
   it("does not authorize expired peeks or attach speech to expired commands", () => {
     const pending = new PendingDeviceCommands();
     const issued = pending.issue("navigation.start", undefined, 100);
-    expect(pending.peek(issued.commandId, 12_100)).toBeUndefined();
-    pending.attachOkSpeech("navigation.start", "不应附加。", 12_100);
-    expect(pending.expire(12_100)[0]?.okSpeech).toBeUndefined();
+    expect(pending.peek(issued.commandId, 18_100)).toBeUndefined();
+    pending.attachOkSpeech("navigation.start", "不应附加。", 18_100);
+    expect(pending.expire(18_100)[0]?.okSpeech).toBeUndefined();
   });
 
   it("peek finds a pending command without consuming it", () => {

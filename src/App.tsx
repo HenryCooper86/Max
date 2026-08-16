@@ -13,6 +13,7 @@ import { useAmapConsent } from "./hooks/useAmapConsent";
 import { useHelmetAgent } from "./hooks/useHelmetAgent";
 import { fetchCurrentUser, type AuthUser } from "./lib/auth";
 import { localized } from "./lib/i18n";
+import { voiceFaceClassName } from "./lib/voice-shell";
 
 const AdminWorkspace = lazy(() =>
   import("./components/admin/AdminWorkspace").then((module) => ({ default: module.AdminWorkspace }))
@@ -178,7 +179,10 @@ function AppContent() {
 
   return (
     <main className="voiceShell">
-      <section className={`voiceFace ${captionsOpen ? "captionsVisible" : ""}`} aria-label="Max 头盔语音助手">
+      <section
+        className={voiceFaceClassName({ captionsOpen, navigationVisible: agent.navState.phase !== "idle" })}
+        aria-label="Max 头盔语音助手"
+      >
         <header className={`voiceTopbar ${agent.connected ? "online" : "offline"}`}>
           <div className="voiceBrand">
             <span className="voiceBrandDot" aria-hidden="true" />

@@ -3844,6 +3844,18 @@ button.opsCard:disabled {
   place-items: center;
 }
 
+/* Navigating: the guidance card is the tallest thing the column carries, and
+   every other item is fixed furniture that must not shrink, so without this
+   the card pushed the utilities and the hands-free button off the bottom of
+   the viewport — measured 38px of overflow before the consent row existed and
+   120px after. The helmet is the one decorative element that can yield, so it
+   does, for exactly as long as a route is showing. Mirrors the iOS HUD, where
+   navigation likewise reproportions the screen. */
+.voiceFace.navVisible .voiceHero {
+  min-height: min(180px, 20dvh);
+  max-height: 30dvh;
+}
+
 /* Square stage in the voice view so the tick bezel reads as a true circle. */
 .voiceHero .helmetStage {
   width: min(84vw, 440px);
@@ -4297,6 +4309,11 @@ button.opsCard:disabled {
   width: 100%;
   height: auto;
   aspect-ratio: 280 / 160;
+  /* The schematic is the overview, not the instruction: the maneuver and its
+     distance sit above it and must never be what yields. At 280/160 across a
+     wide panel it grew past 390px and pushed the hands-free button off the
+     bottom, so it is capped and lets the viewBox letterbox instead. */
+  max-height: min(20dvh, 220px);
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.03);
 }
@@ -4336,9 +4353,11 @@ button.opsCard:disabled {
 .navigationMapConsent {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   margin-top: 8px;
-  padding: 12px 14px;
+  /* Deliberately compact: the panel is already the tallest thing in the
+     column, and the full disclosure lives in the settings sheet. */
+  padding: 8px 12px;
   border: 1px solid rgba(166, 183, 177, 0.16);
   border-radius: 14px;
   background: rgba(11, 16, 14, 0.6);
@@ -4348,13 +4367,13 @@ button.opsCard:disabled {
   flex: 1;
   margin: 0;
   color: rgba(214, 226, 221, 0.72);
-  font-size: 13px;
-  line-height: 1.45;
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .navigationMapConsent button {
   flex-shrink: 0;
-  padding: 8px 14px;
+  padding: 6px 12px;
   border: 1px solid rgba(79, 209, 197, 0.4);
   border-radius: 999px;
   background: rgba(79, 209, 197, 0.12);
@@ -5658,10 +5677,14 @@ button.opsCard:disabled {
     align-items: stretch;
   }
 
-  /* With captions closed the flexible row is empty, which left the readout
-     stranded at the top of a 158px gap. Hand that space to the readout so the
-     right-hand column reads as one centred stack. */
-  .voiceFace:not(.captionsVisible) {
+  /* With that row genuinely empty, the readout was stranded at the top of a
+     158px gap; hand the space to the readout so the right-hand column reads as
+     one centred stack. `navVisible` is what makes "genuinely" true: the
+     navigation panel shares `grid-area: captions`, so collapsing this row
+     whenever captions are merely closed laid the guidance card into a
+     zero-height row and drew it over the utilities below. CSS cannot ask
+     whether a grid area is occupied — see src/lib/voice-shell.ts. */
+  .voiceFace:not(.captionsVisible):not(.navVisible) {
     grid-template-rows: auto auto minmax(0, 1fr) 0 auto auto;
   }
 

@@ -231,6 +231,21 @@ final class AgentSession: NSObject, ObservableObject {
         send: { [weak self] json in self?.webSocket?.send(.string(json)) { _ in } }
     )
 
+    /// Held as its own typed property (rather than reached for only through
+    /// `deviceRouter`'s handler dictionary) so `stop()` can call its
+    /// `teardown()` directly — `DeviceActionHandler` has no such method, and
+    /// the dictionary's values are erased to that protocol.
+    private lazy var navigationController = NavigationController(
+        search: relayNavigationSearch,
+        stream: SystemLocationStream(),
+        onGuidance: { [weak self] guidance in
+            self?.update { $0.guidance = guidance }
+        },
+        speak: { [weak self] line in self?.speak(line) },
+        interruptPlayback: { [weak self] in self?.player.stopPlayback() },
+        now: { ProcessInfo.processInfo.systemUptime }
+    )
+
     /// Routes relay-issued device commands to one handler each. Built lazily so
     /// `player` (the volume handler's gain target) is available. The message
     /// presenter is main-actor isolated, so it is created on demand inside its
@@ -249,16 +264,7 @@ final class AgentSession: NSObject, ObservableObject {
                 resolver: SystemContactResolver()
             ),
             .call: CallDialer(),
-            .navigation: NavigationController(
-                search: relayNavigationSearch,
-                stream: SystemLocationStream(),
-                onGuidance: { [weak self] guidance in
-                    self?.update { $0.guidance = guidance }
-                },
-                speak: { [weak self] line in self?.speak(line) },
-                interruptPlayback: { [weak self] in self?.player.stopPlayback() },
-                now: { ProcessInfo.processInfo.systemUptime }
-            ),
+            .navigation: navigationController,
             .camera: CameraController(
                 session: AVFoundationCaptureSession(),
                 store: captureStore,
@@ -444,6 +450,21 @@ final class AgentSession: NSObject, ObservableObject {
         // now rather than leaving NavigationController's perform() — and the
         // device slot it holds — suspended until its own 7 s watchdog fires.
         relayNavigationSearch.failPending()
+        // The session is ending: resolve any pending first-fix wait too, and
+        // silently — without this, an in-flight `awaitFirstFix` (a nav
+        // command with no fix yet, stopped hands-free before 1.5s/8s) would
+        // still speak 正在定位… or fail route.unavailable into a session
+        // nobody is listening to anymore. Mirrors Android's
+        // `navController.teardown()` call right beside its own
+        // `navSearch.failPending()` in `stop()`.
+        //
+        // `teardown()` is synchronous and `@MainActor`-isolated (unlike
+        // `perform()`, which is `async` and so needs no isolation proof at
+        // its call site — Swift just hops actors). `stop()` is one of the
+        // touch points documented above `crashController` as already always
+        // running on the main thread, so this asserts that isolation the
+        // same way `onCrash` does rather than restructuring the class.
+        MainActor.assumeIsolated { navigationController.teardown() }
         synthesizer.stopSpeaking(at: .immediate)
         // An incident past check-in owns the shared engine until it resolves:
         // the siren renders through the same AVAudioEngine as agent speech

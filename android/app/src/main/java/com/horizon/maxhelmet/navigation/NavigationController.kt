@@ -80,7 +80,8 @@ class NavigationController(
     private val onGuidance: (NavGuidanceState?) -> Unit,
     private val hasLocationPermission: () -> Boolean,
     private val now: () -> Long = { android.os.SystemClock.elapsedRealtime() },
-    private val firstFixTimeoutMillis: Long = 3_000
+    private val firstFixTimeoutMillis: Long = 8_000,
+    private val firstFixAnnounceMillis: Long = 1_500
 ) {
     private companion object {
         const val REROUTE_COOLDOWN_MILLIS = 20_000L
@@ -88,6 +89,13 @@ class NavigationController(
         const val ARRIVED_SPOKEN = "已到达目的地。"
         const val REROUTE_SENDING_SPOKEN = "已偏离路线，正在重新规划。"
         const val REROUTE_FAILED_SPOKEN = "无法重新规划路线，已停止导航。"
+        // Nav-first-fix-retry Task 3 (Android parity with iOS commit
+        // af85730): a fix that is merely slow must not sound like a routing
+        // failure. LOCATING_SPOKEN covers the wait; NO_FIX_DETAIL names the
+        // cause on the rare timeout that still happens — see awaitFirstFix
+        // and handleStart's first no-route exit.
+        const val LOCATING_SPOKEN = "正在定位…"
+        const val NO_FIX_DETAIL = "还没定位到，到室外或空旷处再说一次。"
         // "Never rerouted" without risking overflow when the cooldown check
         // computes `now() - lastRerouteAt`.
         const val NO_PRIOR_REROUTE = Long.MIN_VALUE / 2
@@ -111,6 +119,10 @@ class NavigationController(
      *  second `wgs84ToGcj02` application. */
     private var firstFixContinuation: CompletableDeferred<LatLon?>? = null
     private var firstFixWatchdog: Job? = null
+    /** Speaks [LOCATING_SPOKEN] once the fix has been pending for
+     *  [firstFixAnnounceMillis] — see [awaitFirstFix] for its registration
+     *  and [takePendingFirstFixLocked] for its single teardown point. */
+    private var firstFixAnnounce: Job? = null
 
     /** True from the generation bump inside [handleStart] until that SAME
      *  generation's own terminal exit (first-fix timeout, an unresolved
@@ -234,7 +246,10 @@ class NavigationController(
             val origin = awaitFirstFix()
             if (origin == null) {
                 stopSourceIfOrphaned(generation)
-                sendResult(startFailureResult(commandId, generation))
+                // Locates the cause: a genuinely no-fix timeout is not a
+                // routing failure, so it gets its own detail — the search
+                // exit just below deliberately does not (see startFailureResult).
+                sendResult(startFailureResult(commandId, generation, NO_FIX_DETAIL))
                 return
             }
 
@@ -280,11 +295,17 @@ class NavigationController(
      *  generation is still the current one (a genuine failure — no fix, or
      *  no route, while nothing else touched navigation state in the
      *  meantime), or "navigation.cancelled" when a newer start, an explicit
-     *  stop, or a reroute failure already superseded it while it waited. */
-    private fun startFailureResult(commandId: String, generation: Int): String {
+     *  stop, or a reroute failure already superseded it while it waited.
+     *
+     *  [detail] is only ever [NO_FIX_DETAIL], passed by the no-fix exit; the
+     *  search-failure exit leaves it null since the fix DID land there — a
+     *  location-specific detail would be a lie once the relay is the one
+     *  that failed. Meaningless (and never passed) on the
+     *  "navigation.cancelled" branch, which isn't a route failure at all. */
+    private fun startFailureResult(commandId: String, generation: Int, detail: String? = null): String {
         val current = synchronized(lock) { navigationGeneration }
         return if (generation == current) {
-            buildDeviceResult(commandId, "unsupported", "route.unavailable")
+            buildDeviceResult(commandId, "unsupported", "route.unavailable", detail)
         } else {
             buildDeviceResult(commandId, "failed", "navigation.cancelled")
         }
@@ -555,6 +576,31 @@ class NavigationController(
         val preempted = synchronized(lock) {
             val previous = takePendingFirstFixLocked()
             firstFixContinuation = deferred
+            // Spoken once, and only while THIS wait is still pending: a fix
+            // that lands first (or an explicit stop/teardown) tears this down
+            // via takePendingFirstFixLocked before it ever fires, so the
+            // rider never hears "locating" after guidance has already begun
+            // — same deferred-identity guard the watchdog just below uses,
+            // for the same reason (see its own doc comment). Unlike the
+            // watchdog, the identity check and the resulting action
+            // (`speaker.speak`) must both run INSIDE the same synchronized
+            // block, not just the check: the watchdog's post-lock
+            // `.complete()` is safe on its own because `takePendingFirstFixLocked`
+            // already exclusively claimed the continuation before the lock
+            // was released, but a `speaker.speak` gated on a bare read-then-
+            // act outside the lock would leave a window between "still
+            // pending" and "spoken" where a concurrent stop/fix/supersession
+            // could invalidate the wait and this would fire anyway — the
+            // narrow race review caught in fix round 1. `NavSpeaker.speak` is
+            // a plain, non-suspend call, so holding the lock across it is
+            // safe and matches this file's existing convention (see the
+            // class doc; e.g. STOP_SPOKEN in handleStop).
+            firstFixAnnounce = scope.launch {
+                delay(firstFixAnnounceMillis)
+                synchronized(lock) {
+                    if (firstFixContinuation === deferred) speaker.speak(LOCATING_SPOKEN, interrupt = false)
+                }
+            }
             firstFixWatchdog = scope.launch {
                 delay(firstFixTimeoutMillis)
                 val timedOut = synchronized(lock) {
@@ -584,6 +630,10 @@ class NavigationController(
         firstFixContinuation = null
         firstFixWatchdog?.cancel()
         firstFixWatchdog = null
+        // Cancelled with the watchdog: a fix landing just before the deadline
+        // must not still announce "locating" afterwards.
+        firstFixAnnounce?.cancel()
+        firstFixAnnounce = null
         return pending
     }
 

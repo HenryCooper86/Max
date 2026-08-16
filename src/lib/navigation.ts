@@ -37,7 +37,17 @@ export function createNavigationController(deps: {
   sendJson: (payload: unknown) => void;
   speak: (text: string) => void;
   onState: (state: NavPhase) => void;
+  /** True unless location permission is KNOWN to be denied. Mirrors
+   *  iOS's `stream.authorization() == .denied` / Android's
+   *  `hasLocationPermission()`: checked before the first-fix wait even
+   *  starts, so a genuine denial still fails fast with `permission.location`
+   *  instead of waiting 8s to tell a rider to go outside. Optional —
+   *  defaults to "never denied" so callers (and every existing test) that
+   *  don't track permission state keep today's wait-for-fix behavior. */
+  hasLocationPermission?: () => boolean;
   now?: () => number;
+  /** Injected so tests stay deterministic. Returns a cancel function. */
+  schedule?: (ms: number, fn: () => void) => () => void;
 }): {
   handleDeviceCommand(command: DeviceCommand): boolean;
   handleAgentEvent(event: AgentEvent): void;
@@ -45,8 +55,22 @@ export function createNavigationController(deps: {
   reset(): void;
 } {
   const now = deps.now ?? (() => Date.now());
+  const hasLocationPermission = deps.hasLocationPermission ?? (() => true);
+  const schedule =
+    deps.schedule ??
+    ((ms: number, fn: () => void) => {
+      const id = setTimeout(fn, ms);
+      return () => clearTimeout(id);
+    });
+
+  const FIRST_FIX_ANNOUNCE_MS = 1_500;
+  const FIRST_FIX_TIMEOUT_MS = 8_000;
+  const LOCATING_SPOKEN = "正在定位…";
+  const NO_FIX_DETAIL = "还没定位到，到室外或空旷处再说一次。";
 
   let lastFix: GeoPoint | null = null;
+  // Set only while a start is waiting for its first fix.
+  let awaitingFix: { commandId: string; query: string; cancels: (() => void)[] } | null = null;
   // Set only while a navigation.start's device.result is held, awaiting the
   // matching nav.route/nav.error. Never set at the same time as activeRoute.
   let pendingCommandId: string | null = null;
@@ -62,6 +86,11 @@ export function createNavigationController(deps: {
   let rerouteSequence = 0;
   // First-off-route-detection-per-excursion latch; cleared once back on route.
   let offRouteAnnounced = false;
+
+  function clearFixWait(): void {
+    awaitingFix?.cancels.forEach((cancel) => cancel());
+    awaitingFix = null;
+  }
 
   function sendResult(commandId: string, status: "ok" | "failed" | "denied", reason?: string, detail?: string): void {
     const payload: Record<string, unknown> = { type: "device.result", commandId, status };
@@ -89,18 +118,26 @@ export function createNavigationController(deps: {
   }
 
   function isActive(): boolean {
-    return pendingCommandId !== null || activeRoute !== null;
+    return pendingCommandId !== null || activeRoute !== null || awaitingFix !== null;
   }
 
   /** Resolves a still-held navigation.start's device.result before it would
-   *  otherwise be silently dropped by a state reset (superseding start, or
-   *  stop while requesting). "Exactly one device.result per command; silence
-   *  is a bug" — leaving it unresolved would let the relay's own ~8s
-   *  silence-timeout speak an unrelated generic failure instead of the truth.
-   *  `detail` is what the relay actually speaks (reconciliation prefers
-   *  `result.detail` over the FAILURE_SPEECH map), so no server-side change
-   *  is needed for this to be heard correctly. No-op when nothing is held. */
+   *  otherwise be silently dropped by a state reset (superseding start, a
+   *  start still awaiting its first fix, or stop while requesting/awaiting).
+   *  "Exactly one device.result per command; silence is a bug" — leaving it
+   *  unresolved would let the relay's own ~8s silence-timeout speak an
+   *  unrelated generic failure instead of the truth. `detail` is what the
+   *  relay actually speaks (reconciliation prefers `result.detail` over the
+   *  FAILURE_SPEECH map), so no server-side change is needed for this to be
+   *  heard correctly. `awaitingFix` and `pendingCommandId` are never both
+   *  set at once, so at most one branch below fires. No-op when nothing is
+   *  held. */
   function cancelHeldStart(): void {
+    if (awaitingFix) {
+      const commandId = awaitingFix.commandId;
+      clearFixWait();
+      sendResult(commandId, "failed", "navigation.cancelled", "已取消导航请求。");
+    }
     if (pendingCommandId === null) return;
     sendResult(pendingCommandId, "failed", "navigation.cancelled", "已取消导航请求。");
   }
@@ -117,11 +154,44 @@ export function createNavigationController(deps: {
   }
 
   function handleNavigationStart(commandId: string, args: Record<string, unknown>): void {
-    if (!lastFix) {
+    const query = typeof args.query === "string" ? args.query : "";
+    // Checked before anything else, same as iOS/Android: a genuine denial is
+    // not "the fix is merely slow" and must not wait 8s only to arrive at
+    // the same conclusion. Mirrors the platforms' own early-return — it does
+    // not cancel any unrelated start already held, exactly as neither of
+    // theirs does.
+    if (!hasLocationPermission()) {
       sendResult(commandId, "denied", "permission.location");
       return;
     }
-    const query = typeof args.query === "string" ? args.query : "";
+    if (!lastFix) {
+      // Not a permission fault: permission may be granted and the fix merely
+      // slow, which is the common case indoors. Wait, say so, and only then
+      // fail with copy that names the cause. A previous still-waiting start
+      // is resolved FIRST (failed, "navigation.cancelled") — same rule as
+      // startWithFix's own supersede — so it is never silently dropped.
+      cancelHeldStart();
+      awaitingFix = {
+        commandId,
+        query,
+        cancels: [
+          schedule(FIRST_FIX_ANNOUNCE_MS, () => {
+            if (awaitingFix?.commandId === commandId) deps.speak(LOCATING_SPOKEN);
+          }),
+          schedule(FIRST_FIX_TIMEOUT_MS, () => {
+            if (awaitingFix?.commandId !== commandId) return;
+            clearFixWait();
+            sendResult(commandId, "failed", "route.unavailable", NO_FIX_DETAIL);
+          })
+        ]
+      };
+      return;
+    }
+    startWithFix(commandId, query);
+  }
+
+  function startWithFix(commandId: string, query: string): void {
+    if (!lastFix) return;
     // navigation.start while a previous request/route is still active
     // supersedes it outright. A still-held previous start is resolved FIRST
     // (failed, "navigation.cancelled") — sent before this start's own
@@ -146,9 +216,10 @@ export function createNavigationController(deps: {
       sendResult(commandId, "failed", "navigation.notActive");
       return;
     }
-    // A held start (stop arriving while still "requesting") is resolved
-    // BEFORE the stop's own ok, so the spoken sequence is the cancellation
-    // followed by the stop confirmation, not the reverse.
+    // A held start (stop arriving while still "requesting", or while still
+    // awaiting its first fix) is resolved BEFORE the stop's own ok, so the
+    // spoken sequence is the cancellation followed by the stop confirmation,
+    // not the reverse.
     cancelHeldStart();
     resetNavigationState();
     sendResult(commandId, "ok");
@@ -242,6 +313,11 @@ export function createNavigationController(deps: {
 
   function updatePosition(wgs: GeoPoint): void {
     lastFix = wgs;
+    if (awaitingFix) {
+      const { commandId, query } = awaitingFix;
+      clearFixWait();
+      startWithFix(commandId, query);
+    }
     if (!activeRoute) return;
 
     const position = wgs84ToGcj02(wgs);
@@ -278,6 +354,7 @@ export function createNavigationController(deps: {
 
   function reset(): void {
     lastFix = null;
+    clearFixWait();
     resetNavigationState();
   }
 

@@ -29,7 +29,7 @@ function harness(nowRef = { t: 0 }) {
 }
 
 describe("createNavigationController", () => {
-  it("denies navigation.start without a position fix", () => {
+  it("consumes navigation.start without a position fix, without denying it instantly", () => {
     const { controller, sent } = harness();
     const consumed = controller.handleDeviceCommand({
       commandId: "c1",
@@ -37,7 +37,10 @@ describe("createNavigationController", () => {
       args: { query: "外滩" }
     });
     expect(consumed).toBe(true);
-    expect(sent[0]).toMatchObject({ type: "device.result", status: "denied", reason: "permission.location" });
+    // No fix yet: the command waits rather than blaming a permission that
+    // may well be granted. See the "before a fix has arrived" describe block
+    // below for the wait/announce/timeout behavior.
+    expect(sent).toEqual([]);
   });
 
   it("requests, then acks ok only after nav.route arrives", () => {
@@ -196,5 +199,206 @@ describe("createNavigationController", () => {
     // Should announce off-route only; relay speaks the reroute confirmation
     expect(spoken).toEqual(["已偏离路线，正在重新规划"]);
     expect(states.at(-1)).toBe("guiding");
+  });
+});
+
+describe("navigation.start before a fix has arrived", () => {
+  function fakeScheduler() {
+    const pending: { at: number; fn: () => void }[] = [];
+    let clock = 0;
+    return {
+      schedule: (ms: number, fn: () => void) => {
+        const entry = { at: clock + ms, fn };
+        pending.push(entry);
+        return () => {
+          const i = pending.indexOf(entry);
+          if (i >= 0) pending.splice(i, 1);
+        };
+      },
+      advance(ms: number) {
+        clock += ms;
+        for (const entry of [...pending]) {
+          if (entry.at <= clock) {
+            pending.splice(pending.indexOf(entry), 1);
+            entry.fn();
+          }
+        }
+      }
+    };
+  }
+
+  it("announces 正在定位 and starts once a fix arrives", () => {
+    const sent: unknown[] = [];
+    const spoken: string[] = [];
+    const timers = fakeScheduler();
+    const nav = createNavigationController({
+      sendJson: (p) => sent.push(p),
+      speak: (t) => spoken.push(t),
+      onState: () => {},
+      schedule: timers.schedule
+    });
+
+    nav.handleDeviceCommand({ action: "navigation.start", args: { query: "外滩" } } as never);
+    timers.advance(1_500);
+    nav.updatePosition({ lat: 31.2304, lon: 121.4737 });
+
+    expect(spoken).toContain("正在定位…");
+    expect(sent.some((p) => (p as { type?: string }).type === "nav.request")).toBe(true);
+  });
+
+  it("no longer blames a permission that was granted", () => {
+    const sent: Record<string, unknown>[] = [];
+    const timers = fakeScheduler();
+    const nav = createNavigationController({
+      sendJson: (p) => sent.push(p as Record<string, unknown>),
+      speak: () => {},
+      onState: () => {},
+      schedule: timers.schedule
+    });
+
+    nav.handleDeviceCommand({ action: "navigation.start", args: { query: "外滩" } } as never);
+    timers.advance(8_000);
+
+    const result = sent.find((p) => p.type === "device.result");
+    expect(result?.reason).toBe("route.unavailable");
+    expect(result?.detail).toBe("还没定位到，到室外或空旷处再说一次。");
+    expect(result?.reason).not.toBe("permission.location");
+  });
+
+  it("stays silent when a fix is already in hand", () => {
+    const spoken: string[] = [];
+    const timers = fakeScheduler();
+    const nav = createNavigationController({
+      sendJson: () => {},
+      speak: (t) => spoken.push(t),
+      onState: () => {},
+      schedule: timers.schedule
+    });
+
+    nav.updatePosition({ lat: 31.2304, lon: 121.4737 });
+    nav.handleDeviceCommand({ action: "navigation.start", args: { query: "外滩" } } as never);
+    timers.advance(5_000);
+
+    expect(spoken).not.toContain("正在定位…");
+  });
+
+  it("navigation.stop while awaiting a fix cancels the wait for good", () => {
+    const sent: Record<string, unknown>[] = [];
+    const spoken: string[] = [];
+    const timers = fakeScheduler();
+    const nav = createNavigationController({
+      sendJson: (p) => sent.push(p as Record<string, unknown>),
+      speak: (t) => spoken.push(t),
+      onState: () => {},
+      schedule: timers.schedule
+    });
+
+    nav.handleDeviceCommand({ commandId: "c1", action: "navigation.start", args: { query: "外滩" } } as never);
+    nav.handleDeviceCommand({ commandId: "s1", action: "navigation.stop", args: {} } as never);
+
+    // The stop must see the awaiting start as active, resolve it (not
+    // navigation.notActive), then ack itself.
+    expect(sent).toEqual([
+      {
+        type: "device.result",
+        commandId: "c1",
+        status: "failed",
+        reason: "navigation.cancelled",
+        detail: "已取消导航请求。"
+      },
+      { type: "device.result", commandId: "s1", status: "ok" }
+    ]);
+
+    // The interim line must never be heard after a stop, and a fix that
+    // lands later must not resurrect the stopped start.
+    timers.advance(8_000);
+    nav.updatePosition({ lat: 31.2304, lon: 121.4737 });
+
+    expect(spoken).not.toContain("正在定位…");
+    expect(sent.some((p) => p.type === "nav.request")).toBe(false);
+    expect(sent.length).toBe(2);
+  });
+
+  it("a genuinely denied permission fails immediately, without waiting for a fix", () => {
+    const sent: Record<string, unknown>[] = [];
+    const spoken: string[] = [];
+    const timers = fakeScheduler();
+    const nav = createNavigationController({
+      sendJson: (p) => sent.push(p as Record<string, unknown>),
+      speak: (t) => spoken.push(t),
+      onState: () => {},
+      schedule: timers.schedule,
+      hasLocationPermission: () => false
+    });
+
+    nav.handleDeviceCommand({ commandId: "c1", action: "navigation.start", args: { query: "外滩" } } as never);
+
+    // Immediate — no 8s wait, no interim "正在定位…" line, and the unchanged
+    // permission-denial reason (spec: "If permission is genuinely denied →
+    // denied(permission.location) (unchanged)").
+    expect(sent).toEqual([{ type: "device.result", commandId: "c1", status: "denied", reason: "permission.location" }]);
+    expect(spoken).toEqual([]);
+
+    // Advancing the clock (and a fix arriving late) must not retroactively
+    // start anything — the denial was terminal, not a wait.
+    timers.advance(8_000);
+    nav.updatePosition({ lat: 31.2304, lon: 121.4737 });
+    expect(sent.length).toBe(1);
+    expect(spoken).toEqual([]);
+  });
+
+  it("no permission signal at all preserves today's wait-for-fix behavior", () => {
+    // Every other test in this file omits `hasLocationPermission` entirely —
+    // this pins the default so a future change to it can't silently regress
+    // every one of them from "waits for a fix" to "denies instantly".
+    const sent: Record<string, unknown>[] = [];
+    const timers = fakeScheduler();
+    const nav = createNavigationController({
+      sendJson: (p) => sent.push(p as Record<string, unknown>),
+      speak: () => {},
+      onState: () => {},
+      schedule: timers.schedule
+    });
+
+    nav.handleDeviceCommand({ commandId: "c1", action: "navigation.start", args: { query: "外滩" } } as never);
+    expect(sent).toEqual([]); // waiting, not an instant denial
+
+    nav.updatePosition({ lat: 31.2304, lon: 121.4737 });
+    expect(sent.some((p) => p.type === "nav.request")).toBe(true);
+  });
+
+  it("a second start while awaiting a fix resolves the first command instead of dropping it", () => {
+    const sent: Record<string, unknown>[] = [];
+    const timers = fakeScheduler();
+    const nav = createNavigationController({
+      sendJson: (p) => sent.push(p as Record<string, unknown>),
+      speak: () => {},
+      onState: () => {},
+      schedule: timers.schedule
+    });
+
+    nav.handleDeviceCommand({ commandId: "c1", action: "navigation.start", args: { query: "外滩" } } as never);
+    nav.handleDeviceCommand({
+      commandId: "c2",
+      action: "navigation.start",
+      args: { query: "人民广场" }
+    } as never);
+
+    // c1 must get its result now, not silence.
+    expect(sent).toEqual([
+      {
+        type: "device.result",
+        commandId: "c1",
+        status: "failed",
+        reason: "navigation.cancelled",
+        detail: "已取消导航请求。"
+      }
+    ]);
+
+    // Only c2's wait should still be live.
+    nav.updatePosition({ lat: 31.2304, lon: 121.4737 });
+
+    expect(sent.some((p) => p.type === "nav.request" && p.commandId === "c2")).toBe(true);
+    expect(sent.filter((p) => p.type === "device.result" && p.commandId === "c1").length).toBe(1);
   });
 });

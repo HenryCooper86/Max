@@ -15,15 +15,21 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { GeoPoint } from "../../shared/geo";
+import { amapCameraPlan, applyAmapCameraPlan } from "../lib/amap-camera";
+import type { AmapLatLng as AMapLatLng } from "../lib/amap-camera";
 import type { NavPhase } from "../lib/navigation";
 
 // Minimal surface of the Amap JS API 2.0 this component actually calls. The
 // SDK is never bundled (it loads at runtime from webapi.amap.com), so there
 // are no upstream types to import — this is deliberately narrow rather than
 // `any`, matching the rest of this codebase's avoidance of `any`.
-type AMapLatLng = [number, number]; // [lon, lat] — Amap's own coordinate order
-
-type AMapMapInstance = { destroy: () => void };
+type AMapMapInstance = {
+  destroy: () => void;
+  // The camera is driven from the current route/rider on every change rather
+  // than only at construction — see src/lib/amap-camera.ts.
+  setFitView: (overlays: readonly unknown[]) => void;
+  setCenter: (position: AMapLatLng) => void;
+};
 type AMapOverlay = { setMap: (map: AMapMapInstance | null) => void };
 type AMapMarker = AMapOverlay & { setPosition: (position: AMapLatLng) => void };
 type AMapNamespace = {
@@ -38,6 +44,11 @@ declare global {
     _AMapSecurityConfig?: { serviceHost: string };
   }
 }
+
+// The Amap constructor requires a centre before any route or fix is known.
+// It is never meaningfully visible: the camera effect points the map at the
+// real route or rider on the same commit that creates it.
+const PLACEHOLDER_CENTER: AMapLatLng = [116.397428, 39.90923];
 
 // Module-level (not component-level) so every NavigationPanel mount across
 // the app's lifetime reuses the same script tag/promise instead of injecting
@@ -128,11 +139,15 @@ function AmapTileMap({
   }, [mapKey]);
 
   // Create the map instance once the SDK is ready, and destroy it on unmount.
+  // The constructor demands some centre, but nothing depends on this one: the
+  // camera effect below runs on the same commit and points it at whatever is
+  // actually known. A route arriving later moves it again.
   useEffect(() => {
     if (!ready || typeof window === "undefined" || !window.AMap || !containerRef.current) return;
-    const first = polyline[0];
-    const center: AMapLatLng = rider ? [rider.lon, rider.lat] : first ? [first.lon, first.lat] : [116.397428, 39.90923]; // Beijing — only ever shown for an instant before route data arrives
-    mapRef.current = new window.AMap.Map(containerRef.current, { zoom: 15, center });
+    mapRef.current = new window.AMap.Map(containerRef.current, {
+      zoom: 15,
+      center: PLACEHOLDER_CENTER
+    });
     return () => {
       mapRef.current?.destroy();
       mapRef.current = null;
@@ -142,7 +157,10 @@ function AmapTileMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready]);
 
-  // Keep the route polyline in sync with the current route.
+  // Keep the route polyline in sync with the current route, then point the
+  // camera at it. These are deliberately one effect: the overlay is what
+  // `setFitView` measures, so drawing it and framing it cannot be allowed to
+  // drift apart — separating them is exactly how the camera got stranded.
   useEffect(() => {
     if (!ready || typeof window === "undefined" || !window.AMap || !mapRef.current) return;
     polylineRef.current?.setMap(null);
@@ -156,6 +174,10 @@ function AmapTileMap({
       overlay.setMap(mapRef.current);
       polylineRef.current = overlay;
     }
+    applyAmapCameraPlan(mapRef.current, amapCameraPlan(polyline, rider), polylineRef.current);
+    // `rider` only seeds the camera until a route exists; once one does the
+    // plan ignores it, and the marker effect below tracks the rider instead.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, polyline]);
 
   // Keep the rider marker in sync with the current position.

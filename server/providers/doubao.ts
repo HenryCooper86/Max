@@ -1410,6 +1410,14 @@ export function createDoubaoProvider(
         }
 
         if (frame.event === EventReceive.TtsResponse) {
+          // TEMPORARY (Task 2): resolve whether sentence text precedes its audio.
+          if (process.env.DOUBAO_LOG_FRAME_ORDER === "1") {
+            log.info("frame order", {
+              event: String(frame.event),
+              replyId: currentReplyId,
+              at: Math.round(performance.now())
+            });
+          }
           if (fallbackSpoke) return;
           // ASR and TTS may overlap. Hold a short bounded prefix until the wake
           // decision is final; otherwise background speech can leak audible Max
@@ -1559,6 +1567,14 @@ export function createDoubaoProvider(
         if (frame.event === EventReceive.TtsSentenceStart || frame.event === EventReceive.TtsSentenceEnd) {
           currentQuestionId = stringField(payload, "question_id") ?? currentQuestionId;
           currentReplyId = stringField(payload, "reply_id") ?? stringField(payload, "item_id") ?? currentReplyId;
+          // TEMPORARY (Task 2): resolve whether sentence text precedes its audio.
+          if (process.env.DOUBAO_LOG_FRAME_ORDER === "1") {
+            log.info("frame order", {
+              event: String(frame.event),
+              replyId: currentReplyId,
+              at: Math.round(performance.now())
+            });
+          }
           const text = extractChatText(payload);
           if (text && text !== lastTtsSentence) {
             ttsText += text;

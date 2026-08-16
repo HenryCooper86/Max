@@ -151,7 +151,8 @@ final class NavigationControllerTests: XCTestCase {
     private func make(
         _ stream: FakeStream, _ search: FakeSearch,
         clock: @escaping () -> TimeInterval = { 0 },
-        firstFixTimeoutSeconds: TimeInterval = 3
+        firstFixTimeoutSeconds: TimeInterval = 3,
+        firstFixAnnounceSeconds: TimeInterval = 1.5
     ) -> (NavigationController, Box) {
         let box = Box()
         let controller = NavigationController(
@@ -160,9 +161,97 @@ final class NavigationControllerTests: XCTestCase {
             speak: { box.spoken.append($0) },
             interruptPlayback: { box.interrupts += 1 },
             now: clock,
-            firstFixTimeoutSeconds: firstFixTimeoutSeconds
+            firstFixTimeoutSeconds: firstFixTimeoutSeconds,
+            firstFixAnnounceSeconds: firstFixAnnounceSeconds
         )
         return (controller, box)
+    }
+
+    // A fix that is merely slow must not sound like a routing failure: the
+    // rider hears 正在定位…, the search still runs, and navigation starts.
+    func testSlowFixAnnouncesLocatingAndStillStarts() async {
+        let stream = FakeStream(), search = FakeSearch()
+        stream.fixOnStart = nil
+        search.route = straightRoute()
+        let (controller, box) = make(
+            stream, search,
+            firstFixTimeoutSeconds: 8,
+            firstFixAnnounceSeconds: 0.05
+        )
+
+        async let result = controller.perform(.navigationStart(query: "外滩"))
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        stream.feed(CLLocationCoordinate2D(latitude: 39.90, longitude: 116.40))
+
+        let outcome = await result
+        XCTAssertEqual(outcome, .ok)
+        XCTAssertEqual(box.spoken, ["正在定位…"])
+        XCTAssertNotNil(box.guidance)
+    }
+
+    // The common case must stay silent: a fix already in hand means the rider
+    // hears only the relay's own start summary.
+    func testPromptFixNeverAnnouncesLocating() async {
+        let stream = FakeStream(), search = FakeSearch()
+        search.route = straightRoute()
+        let (controller, box) = make(stream, search, firstFixAnnounceSeconds: 0.05)
+
+        let result = await controller.perform(.navigationStart(query: "外滩"))
+
+        XCTAssertEqual(result, .ok)
+        XCTAssertFalse(box.spoken.contains("正在定位…"))
+    }
+
+    // No fix at all: the failure must name the cause instead of blaming route
+    // planning, which is what shipped.
+    func testNoFixFailsWithLocationDetailRatherThanRouteFailure() async {
+        let stream = FakeStream(), search = FakeSearch()
+        stream.fixOnStart = nil
+        let (controller, box) = make(
+            stream, search,
+            firstFixTimeoutSeconds: 0.1,
+            firstFixAnnounceSeconds: 0.05
+        )
+
+        let result = await controller.perform(.navigationStart(query: "外滩"))
+
+        XCTAssertEqual(
+            result,
+            .unsupported("route.unavailable", "还没定位到，到室外或空旷处再说一次。")
+        )
+        XCTAssertEqual(box.spoken, ["正在定位…"])
+    }
+
+    // A relay that answers with no route is a different failure and must keep
+    // its own speech: the fix arrived, so the location copy would be a lie.
+    func testSearchFailureKeepsTheRoutePlanningSpeech() async {
+        let stream = FakeStream(), search = FakeSearch()
+        search.route = nil
+        let (controller, _) = make(stream, search)
+
+        let result = await controller.perform(.navigationStart(query: "外滩"))
+
+        XCTAssertEqual(result, .unsupported("route.unavailable", nil))
+    }
+
+    // An explicit stop while the fix is still pending must cancel the pending
+    // announcement, not let it arrive afterwards as a non-sequitur.
+    func testStopBeforeTheFixSuppressesTheAnnouncement() async {
+        let stream = FakeStream(), search = FakeSearch()
+        stream.fixOnStart = nil
+        let (controller, box) = make(
+            stream, search,
+            firstFixTimeoutSeconds: 8,
+            firstFixAnnounceSeconds: 0.1
+        )
+
+        async let result = controller.perform(.navigationStart(query: "外滩"))
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        _ = await controller.perform(.navigationStop)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        _ = await result
+        XCTAssertFalse(box.spoken.contains("正在定位…"))
     }
 
     func testStartResolvesAndStreamsWithoutSpeakingLocally() async {

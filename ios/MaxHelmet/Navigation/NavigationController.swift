@@ -26,6 +26,8 @@ final class NavigationController: DeviceActionHandler {
     // Mirrors the web client's REROUTE_COOLDOWN_MS (src/lib/navigation.ts):
     // 20 s from send time. Was 15 s here pre-Task-4 — aligned to match.
     private static let rerouteCooldownSeconds: TimeInterval = 20
+    private static let locatingSpoken = "正在定位…"
+    private static let noFixDetail = "还没定位到，到室外或空旷处再说一次。"
 
     private let search: NavigationRouteSearching
     private let stream: LocationStreaming
@@ -34,6 +36,7 @@ final class NavigationController: DeviceActionHandler {
     private let interruptPlayback: () -> Void
     private let now: () -> TimeInterval
     private let firstFixTimeoutSeconds: TimeInterval
+    private let firstFixAnnounceSeconds: TimeInterval
 
     private var route: NavigationRoute?
     private var progress = GuidanceProgress(maneuverIndex: 0, firedThresholds: [], arrived: false)
@@ -41,6 +44,7 @@ final class NavigationController: DeviceActionHandler {
     private var lastRerouteAt: TimeInterval = -.greatestFiniteMagnitude
     private var firstFixContinuation: CheckedContinuation<CLLocationCoordinate2D?, Never>?
     private var firstFixWatchdog: Task<Void, Never>?
+    private var firstFixAnnounce: Task<Void, Never>?
     /// True from the generation bump inside `start(_:)` until that SAME
     /// generation's own terminal exit (first-fix timeout, an unresolved
     /// search, the stale-generation guard, or a successful commit — see
@@ -76,7 +80,8 @@ final class NavigationController: DeviceActionHandler {
         speak: @escaping (String) -> Void,
         interruptPlayback: @escaping () -> Void,
         now: @escaping () -> TimeInterval,
-        firstFixTimeoutSeconds: TimeInterval = 3
+        firstFixTimeoutSeconds: TimeInterval = 8,
+        firstFixAnnounceSeconds: TimeInterval = 1.5
     ) {
         self.search = search
         self.stream = stream
@@ -85,6 +90,7 @@ final class NavigationController: DeviceActionHandler {
         self.interruptPlayback = interruptPlayback
         self.now = now
         self.firstFixTimeoutSeconds = firstFixTimeoutSeconds
+        self.firstFixAnnounceSeconds = firstFixAnnounceSeconds
         self.stream.onUpdate = { [weak self] coord in
             Task { @MainActor in self?.handleFix(coord) }
         }
@@ -135,7 +141,7 @@ final class NavigationController: DeviceActionHandler {
             // (Important #2), or a newer generation that superseded this one
             // and is still in flight (Important #1), must keep it running.
             if generation == navigationGeneration, route == nil { stream.stop() }
-            return startFailureResult(generation: generation)
+            return startFailureResult(generation: generation, detail: Self.noFixDetail)
         }
         guard let resolved = await search.route(to: query, from: origin) else {
             if generation == navigationGeneration, route == nil { stream.stop() }
@@ -171,9 +177,9 @@ final class NavigationController: DeviceActionHandler {
     /// no route, while nothing else touched navigation state in the
     /// meantime), or "navigation.cancelled" when a newer start or an
     /// explicit stop already superseded it while it waited.
-    private func startFailureResult(generation: Int) -> DeviceActionResult {
+    private func startFailureResult(generation: Int, detail: String? = nil) -> DeviceActionResult {
         generation == navigationGeneration
-            ? .unsupported("route.unavailable")
+            ? .unsupported("route.unavailable", detail)
             : .failed("navigation.cancelled")
     }
 
@@ -194,8 +200,18 @@ final class NavigationController: DeviceActionHandler {
         resolveFirstFix(nil)
         return await withCheckedContinuation { (continuation: CheckedContinuation<CLLocationCoordinate2D?, Never>) in
             firstFixContinuation = continuation
+            // Spoken once, and only while this same wait is still pending: a
+            // fix that lands first cancels this in `resolveFirstFix`, so the
+            // rider never hears "locating" after guidance has begun.
+            firstFixAnnounce = Task { @MainActor [weak self] in
+                guard let self else { return }
+                try? await Task.sleep(nanoseconds: UInt64(self.firstFixAnnounceSeconds * 1_000_000_000))
+                guard generation == self.navigationGeneration,
+                      self.firstFixContinuation != nil else { return }
+                self.speak(Self.locatingSpoken)
+            }
             firstFixWatchdog = Task { @MainActor [weak self] in
-                let timeout = self?.firstFixTimeoutSeconds ?? 3
+                let timeout = self?.firstFixTimeoutSeconds ?? 8
                 try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
                 guard let self, generation == self.navigationGeneration else { return }
                 self.resolveFirstFix(nil)
@@ -208,6 +224,11 @@ final class NavigationController: DeviceActionHandler {
         firstFixContinuation = nil
         firstFixWatchdog?.cancel()
         firstFixWatchdog = nil
+        // Cancelled here rather than merely guarded at fire time: a fix landing
+        // a moment before the deadline would otherwise queue the announcement
+        // behind this resolution on the main actor and speak it anyway.
+        firstFixAnnounce?.cancel()
+        firstFixAnnounce = nil
         continuation.resume(returning: coordinate)
     }
 

@@ -27,7 +27,12 @@ const ALLOWED = [
   "今天有雨，注意路面湿滑",
   "我没找到这个地方",
   "路线规划失败。",
-  "已停止导航。"
+  "已停止导航。",
+  // Adversarial false positives found in review: same lexical shapes as real
+  // guidance (distance + 后 + verb, "预计 N 分钟"), but not navigation at all.
+  "建议每5000公里后到店保养一次",
+  "预计10分钟后有阵雨，建议减速慢行",
+  "油箱还有5公里的续航，建议尽快加油"
 ];
 
 describe("assertsNavigation", () => {

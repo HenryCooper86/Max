@@ -25,6 +25,16 @@ enum HudMetrics {
     /// so one finite region owns the ordered alert stack.
     static let portraitAlertViewportCap: CGFloat = 220
     static let landscapeAlertViewportCap: CGFloat = 160
+    /// Vertical gap between the top bar and the alert stack beneath it.
+    static let alertStackSpacing: CGFloat = 8
+    /// A live route is showing. The viewport is a bounded scroll region, so the
+    /// ordinary caps clip the guidance card rather than shrinking it — half the
+    /// route map in portrait, a sliver in landscape. While navigating the
+    /// viewport asks for the whole card instead; the helmet-floor clamp below
+    /// still wins on screens too short to grant it, and `guidanceMapHeight`
+    /// shrinks the map to whatever is actually granted.
+    static let guidanceAlertViewportCap: CGFloat =
+        topBarHeight + alertStackSpacing + guidanceCardNominalHeight
     /// Active mute is at least 44 points; this adds its normal breathing room.
     static let utilityViewportMinimum: CGFloat = 52
     /// A useful captions card needs at least two turns beyond utility controls.
@@ -174,6 +184,22 @@ func hudUtilityViewportMinimum(for inputs: HudLayoutInputs) -> CGFloat {
     inputs.muteUtilityVisible ? HudMetrics.utilityViewportMinimum : 0
 }
 
+/// What the alert viewport asks for before the helmet-floor clamp applies.
+/// A live route asks for the whole guidance card; every other alert keeps the
+/// ordinary per-orientation cap, so the map costs the HUD nothing outside
+/// navigation.
+func hudDesiredAlertViewportHeight(
+    layout: HudLayout,
+    inputs: HudLayoutInputs
+) -> CGFloat {
+    if inputs.guidanceVisible { return HudMetrics.guidanceAlertViewportCap }
+    guard inputs.alertsVisible else { return HudMetrics.topBarHeight }
+    switch layout {
+    case .portrait: return HudMetrics.portraitAlertViewportCap
+    case .landscape: return HudMetrics.landscapeAlertViewportCap
+    }
+}
+
 /// Allocates safe HUD regions without asking SwiftUI to measure any text.
 ///
 /// Alerts and utility content may be arbitrarily tall at Dynamic Type sizes;
@@ -195,9 +221,7 @@ func hudDeterministicAllocation(
                 - utilityMinimum
                 - HudMetrics.portraitStackGaps
         )
-        let desiredHeader = inputs.alertsVisible
-            ? HudMetrics.portraitAlertViewportCap
-            : HudMetrics.topBarHeight
+        let desiredHeader = hudDesiredAlertViewportHeight(layout: .portrait, inputs: inputs)
         let header = min(desiredHeader, maximumHeader)
         let remainingAfterHeader = max(0, height - header - HudMetrics.portraitStackGaps)
         let helmet = min(
@@ -217,9 +241,7 @@ func hudDeterministicAllocation(
 
     case .landscape:
         let maximumHeader = max(0, height - HudMetrics.helmetMinDiameter - HudMetrics.landscapeStackGap)
-        let desiredHeader = inputs.alertsVisible
-            ? HudMetrics.landscapeAlertViewportCap
-            : HudMetrics.topBarHeight
+        let desiredHeader = hudDesiredAlertViewportHeight(layout: .landscape, inputs: inputs)
         let header = min(desiredHeader, maximumHeader)
         let rowHeight = max(0, height - header - HudMetrics.landscapeStackGap)
         let widthCap = available.width * HudMetrics.landscapeHelmetColumn
@@ -284,7 +306,9 @@ enum HudAccessibilityID {
 struct HudRegionLayout<AlertContent: View, HelmetContent: View, UtilityContent: View>: View {
     let layout: HudLayout
     let inputs: HudLayoutInputs
-    @ViewBuilder let alertContent: () -> AlertContent
+    /// Receives the viewport height it was granted so tall alert content (the
+    /// guidance card's route map) can size itself to fit rather than clip.
+    @ViewBuilder let alertContent: (_ viewportHeight: CGFloat) -> AlertContent
     @ViewBuilder let helmetContent: (_ diameter: CGFloat) -> HelmetContent
     @ViewBuilder let utilityContent: (_ captionsVisible: Bool) -> UtilityContent
     var utilityScrollTarget: AnyHashable? = nil
@@ -346,7 +370,7 @@ struct HudRegionLayout<AlertContent: View, HelmetContent: View, UtilityContent: 
 
     private func alertViewport(height: CGFloat, policy: HudRenderingPolicy) -> some View {
         ScrollView(.vertical) {
-            alertContent()
+            alertContent(height)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollDisabled(!policy.alertViewportScrolls)
@@ -367,6 +391,11 @@ struct HudRegionLayout<AlertContent: View, HelmetContent: View, UtilityContent: 
             ScrollView(.vertical) {
                 utilityContent(captionsVisible)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    // Offer the whole region, so content that wants to sit at
+                    // the bottom can reach it instead of being top-aligned with
+                    // a dead band beneath. Taller content still grows and
+                    // scrolls, since this is a minimum rather than a fixed size.
+                    .frame(minHeight: height, alignment: .top)
             }
             .scrollDisabled(!policy.utilityViewportScrolls)
             .scrollIndicators(.automatic)

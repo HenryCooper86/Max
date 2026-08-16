@@ -43,8 +43,11 @@ final class HudRegionLayoutRenderingTests: XCTestCase {
             alertContentHeights.append(alertViewport.contentSize.height)
             XCTAssertGreaterThanOrEqual(helmet.accessibilityFrameInContainer.height, 116)
             XCTAssertEqual(helmet.accessibilityFrameInContainer.height, 300, accuracy: 0.5)
-            XCTAssertEqual(alertViewport.bounds.height, 220, accuracy: 0.5)
-            XCTAssertEqual(utilityViewport.bounds.height, 179, accuracy: 0.5)
+            // Navigating: the viewport takes the whole guidance card (284) so
+            // the route map is not clipped, and the utility row keeps what is
+            // left after the helmet holds its full 300.
+            XCTAssertEqual(alertViewport.bounds.height, 284, accuracy: 0.5)
+            XCTAssertEqual(utilityViewport.bounds.height, 115, accuracy: 0.5)
             XCTAssertTrue(alertViewport.isScrollEnabled)
             XCTAssertTrue(utilityViewport.isScrollEnabled)
             XCTAssertNotNil(findAccessibilityElement(HudAccessibilityID.guidanceMapAction, in: rendered.controller.view))
@@ -79,10 +82,14 @@ final class HudRegionLayoutRenderingTests: XCTestCase {
             handsFreeActive: true
         )
         let fixtures: [(String, HudLayout, CGSize, CGSize, CGFloat, CGFloat)] = [
-            ("iPhone 15 portrait", .portrait, phone15Portrait, CGSize(width: 350, height: 723), 300, 220),
-            ("iPhone SE portrait", .portrait, phoneSEPortrait, CGSize(width: 335, height: 619), 300, 220),
-            ("iPhone 15 landscape", .landscape, phone15Landscape, CGSize(width: 702, height: 322), 154, 160),
-            ("iPhone SE landscape", .landscape, phoneSELandscape, CGSize(width: 635, height: 335), 167, 160),
+            // Navigating, so the alert viewport asks for the whole 284-point
+            // guidance card. Portrait grants it outright. Landscape cannot:
+            // the helmet's 116-point floor and its 8-point gap cap the header
+            // at 198/211, and the helmet falls to that floor to pay for it.
+            ("iPhone 15 portrait", .portrait, phone15Portrait, CGSize(width: 350, height: 723), 300, 284),
+            ("iPhone SE portrait", .portrait, phoneSEPortrait, CGSize(width: 335, height: 619), 259, 284),
+            ("iPhone 15 landscape", .landscape, phone15Landscape, CGSize(width: 702, height: 322), 116, 198),
+            ("iPhone SE landscape", .landscape, phoneSELandscape, CGSize(width: 635, height: 335), 116, 211),
         ]
 
         for (name, layout, outerSize, expectedProposal, expectedHelmet, expectedAlertViewport) in fixtures {
@@ -160,7 +167,7 @@ final class HudRegionLayoutRenderingTests: XCTestCase {
             HudRegionLayout(
                 layout: layout,
                 inputs: inputs,
-                alertContent: {
+                alertContent: { _ in
                     VStack(alignment: .leading, spacing: 8) {
                         Text("安全和导航提醒")
                         Button("启用地图") {}

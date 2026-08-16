@@ -33,11 +33,15 @@ final class AgentScreenLayoutTests: XCTestCase {
             captionsRequested: true,
             handsFreeActive: true
         )
+        // A live route asks for the whole guidance card (44 top bar + 8 spacing
+        // + 232 card) instead of the 220 cap that clipped it. The helmet keeps
+        // its full size; captions are the documented first thing to yield, and
+        // they do here — 143 points is under their 52 + 96 requirement.
         let expected = HudDeterministicAllocation(
-            alertViewportHeight: 220,
+            alertViewportHeight: 284,
             helmetDiameter: 300,
-            utilityViewportHeight: 207,
-            captionsVisible: true
+            utilityViewportHeight: 143,
+            captionsVisible: false
         )
 
         let allocation = hudDeterministicAllocation(

@@ -54,18 +54,36 @@ struct AMapRouteMap: UIViewRepresentable {
         private var riderAnnotation: MAPointAnnotation?
         private var lastPolyline: [CLLocationCoordinate2D] = []
         private var lastRider: CLLocationCoordinate2D?
+        /// Only ever set when a region was applied to a map view that had real
+        /// bounds. The first render runs at `.zero`, where `setRegion` cannot
+        /// take, so recording that pass would strand the camera on the SDK's
+        /// default city.
+        private var lastAppliedBounds: AMapCoordinateBounds?
+        private var latestModel: AMapRouteDisplayModel?
 
         init(loadFailed: Binding<Bool>) {
             self.loadFailed = loadFailed
         }
 
         func render(_ model: AMapRouteDisplayModel, on mapView: MAMapView) {
+            latestModel = model
             if !sameCoordinates(lastPolyline, model.polyline) {
                 if let routeOverlay { mapView.remove(routeOverlay) }
 
                 var coordinates = model.polyline
                 let overlay = MAPolyline(coordinates: &coordinates, count: UInt(coordinates.count))!
                 mapView.add(overlay)
+                routeOverlay = overlay
+                lastPolyline = model.polyline
+            }
+
+            // Deliberately not folded into the branch above: the overlay only
+            // has to be added once, but the camera has to wait for real bounds.
+            if shouldApplyAMapCamera(
+                lastApplied: lastAppliedBounds,
+                bounds: model.bounds,
+                viewportSize: mapView.bounds.size
+            ) {
                 mapView.setRegion(
                     MACoordinateRegion(
                         center: model.bounds.center,
@@ -76,8 +94,7 @@ struct AMapRouteMap: UIViewRepresentable {
                     ),
                     animated: false
                 )
-                routeOverlay = overlay
-                lastPolyline = model.polyline
+                lastAppliedBounds = model.bounds
             }
 
             if !sameOptionalCoordinate(lastRider, model.currentLocation) {
@@ -99,6 +116,8 @@ struct AMapRouteMap: UIViewRepresentable {
             riderAnnotation = nil
             lastPolyline = []
             lastRider = nil
+            lastAppliedBounds = nil
+            latestModel = nil
         }
 
         func mapView(
@@ -139,6 +158,12 @@ struct AMapRouteMap: UIViewRepresentable {
 
         func mapViewDidFinishLoadingMap(_ mapView: MAMapView!) {
             DispatchQueue.main.async { self.loadFailed.wrappedValue = false }
+            // By now the view is laid out, so a camera withheld during the
+            // zero-frame pass can finally be applied. SwiftUI does not promise
+            // an updateUIView after layout, so this is the reliable hook.
+            if let latestModel, let mapView {
+                render(latestModel, on: mapView)
+            }
         }
 
         func mapViewDidFailLoadingMap(_ mapView: MAMapView!, withError error: Error!) {

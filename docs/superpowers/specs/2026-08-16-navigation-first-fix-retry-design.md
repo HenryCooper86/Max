@@ -1,6 +1,6 @@
 # Navigation first-fix retry (正在定位)
 
-Status: design, awaiting review
+Status: implemented 2026-08-16 (relay, iOS, Android, web)
 Date: 2026-08-16
 
 ## Problem
@@ -61,6 +61,11 @@ spends the new budget on the fix, which is where the failure is.
    a best-effort one-shot for weather and Helmet Ride is deliberately a
    separate opt-in flow. Continuous location for every voice session is a
    privacy change, not a timing fix. Out of scope; raise separately.
+5. **`route.unavailable` keeps two voices.** The reason code covers both "no
+   fix" and "no route from the relay". Only the no-fix path carries the new
+   detail; a search failure still speaks 路线规划失败。 Attaching the location
+   copy to both would tell a rider to go outside when the relay simply could
+   not find a route.
 
 ## Speech
 

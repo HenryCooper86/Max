@@ -68,13 +68,33 @@ already has hold-and-decide audio machinery built for the wake-word gate:
 
 The guard adds a second reason to discard, alongside "not addressed to Max".
 
-**Two tiers, because detection can land at either moment:**
+**Correction to an earlier draft of this section:** that buffer is NOT a
+general hold. `doubao.ts:1416-1419` buffers only while
+`wakeWordEnabled && !replyIsAddressed()` — i.e. during the wake-word decision.
+Once the reply is addressed (the normal case), `:1420-1421` flushes and
+forwards every chunk immediately. Reusing it as-is would therefore protect
+only a narrow window, not the common path.
 
-1. **Audio still buffered** — `clearUndecidedTtsAudio()`. The rider never
-   hears a syllable. This is the common case, since text leads audio.
-2. **Audio already flushed** — `truncateInterruptedReply()`. The rider hears a
-   clipped fragment. Worse, but bounded, and strictly better than the whole
-   fabricated route.
+**Two tiers, and which one dominates is an open empirical question:**
+
+1. **Audio not yet forwarded** — discard it; the rider hears nothing. This
+   requires the sentence's text to reach us before its audio. Doubao sends
+   `TtsSentenceStart` (text) and `TtsResponse` (audio) as separate frames, and
+   **their relative order is unverified**. The existing buffer's own comment
+   ("ASR and TTS may overlap") is evidence that audio can arrive early.
+2. **Audio already forwarded** — `truncateInterruptedReply()`. The rider hears
+   a clipped fragment. Bounded, and far better than a whole fabricated route.
+
+If text reliably leads audio, a per-sentence hold gives tier 1 on the common
+path — but that is a **new** hold on the audio path, not a reuse of the
+wake-word one, and it adds latency to every reply, which must be measured
+before it is accepted. If audio leads text, tier 2 is the only achievable
+behaviour and the guard is a fast interrupt rather than a silencer.
+
+**The implementation plan must therefore establish the real frame ordering
+first, and choose the tier from measurement rather than from this document.**
+Tier 2 alone already fixes the reported danger; tier 1 is an improvement to
+pursue only if the ordering supports it.
 
 **After suppression**, in order:
 

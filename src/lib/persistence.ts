@@ -98,11 +98,21 @@ function writeJson(key: string, value: unknown) {
   }
 }
 
-function transcriptKey(userId: string): string | null {
-  const normalized = userId.trim().toLowerCase();
+/**
+ * Scopes a storage key to an account UUID, or null when there is no account
+ * to attribute it to. Exported so everything account-scoped shares one
+ * definition of "a usable account id" — a second such store (Amap consent)
+ * would otherwise reimplement this validation and drift from it.
+ */
+export function accountScopedKey(prefix: string, userId: string | null): string | null {
+  const normalized = (userId ?? "").trim().toLowerCase();
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(normalized)
-    ? `${TRANSCRIPT_KEY_PREFIX}${normalized}`
+    ? `${prefix}${normalized}`
     : null;
+}
+
+function transcriptKey(userId: string): string | null {
+  return accountScopedKey(TRANSCRIPT_KEY_PREFIX, userId);
 }
 
 function discardLegacyTranscript() {

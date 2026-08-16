@@ -9,6 +9,7 @@ import { VoiceTranscript } from "./components/VoiceTranscript";
 import { WebSettingsSheet } from "./components/WebSettingsSheet";
 import { LanguageProvider, useLanguage } from "./components/LanguageToggle";
 import { surfaceAfterAuthentication, type AppSurface } from "./components/admin/admin-model";
+import { useAmapConsent } from "./hooks/useAmapConsent";
 import { useHelmetAgent } from "./hooks/useHelmetAgent";
 import { fetchCurrentUser, type AuthUser } from "./lib/auth";
 import { localized } from "./lib/i18n";
@@ -36,6 +37,9 @@ function AppContent() {
   // face stays hidden behind authentication. The relay enforces this too.
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
+  // One decision shared by the panel's prompt and the settings sheet, keyed by
+  // account so a shared browser never reuses another rider's answer.
+  const amapConsent = useAmapConsent(authUser?.id ?? null);
   const { setTesterId, selectTranscriptOwner, refreshHealth, disconnect } = agent;
 
   useEffect(() => {
@@ -211,7 +215,9 @@ function AppContent() {
 
         <VoiceStateReadout connected={agent.connected} turnState={agent.turnState} hazardLevel={fusedHazard} />
 
-        {agent.navState.phase !== "idle" ? <NavigationPanel state={agent.navState} /> : null}
+        {agent.navState.phase !== "idle" ? (
+          <NavigationPanel state={agent.navState} mapConsent={amapConsent.decision} onEnableMap={amapConsent.accept} />
+        ) : null}
 
         {captionsOpen ? <VoiceTranscript agent={agent} /> : null}
 
@@ -265,7 +271,7 @@ function AppContent() {
       </section>
 
       {surface === "settings" ? (
-        <WebSettingsSheet agent={agent} onOpenAdmin={openAdmin} onClose={closeSettings} />
+        <WebSettingsSheet agent={agent} amapConsent={amapConsent} onOpenAdmin={openAdmin} onClose={closeSettings} />
       ) : null}
     </main>
   );

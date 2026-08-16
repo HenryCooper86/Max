@@ -4331,6 +4331,43 @@ button.opsCard:disabled {
   overflow: hidden;
 }
 
+/* Sits where the map would be, offering it without a modal over a riding
+   HUD. Deliberately short: the full disclosure lives in the settings sheet. */
+.navigationMapConsent {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 12px 14px;
+  border: 1px solid rgba(166, 183, 177, 0.16);
+  border-radius: 14px;
+  background: rgba(11, 16, 14, 0.6);
+}
+
+.navigationMapConsent p {
+  flex: 1;
+  margin: 0;
+  color: rgba(214, 226, 221, 0.72);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.navigationMapConsent button {
+  flex-shrink: 0;
+  padding: 8px 14px;
+  border: 1px solid rgba(79, 209, 197, 0.4);
+  border-radius: 999px;
+  background: rgba(79, 209, 197, 0.12);
+  color: #7ff0e2;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.navigationMapConsent button:hover {
+  background: rgba(79, 209, 197, 0.2);
+}
+
 /* Settings mirrors the iOS sheet: one calm surface, grouped controls, and the
    full testing console tucked into the final advanced section. */
 .settingsBackdrop {

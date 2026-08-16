@@ -187,10 +187,10 @@ struct AgentScreen: View {
                 HudRegionLayout(
                     layout: layout,
                     inputs: inputs,
-                    alertContent: {
-                        VStack(alignment: .leading, spacing: 8) {
+                    alertContent: { viewportHeight in
+                        VStack(alignment: .leading, spacing: HudMetrics.alertStackSpacing) {
                             TopBar(state: state)
-                            alertContent()
+                            alertContent(viewportHeight: viewportHeight, layout: layout)
                         }
                     },
                     helmetContent: { diameter in
@@ -254,7 +254,7 @@ struct AgentScreen: View {
 
     /// Safety-critical banners and the navigation card, shared by both layouts.
     /// Their ordering is also their scroll and VoiceOver reading order.
-    private func alertContent() -> some View {
+    private func alertContent(viewportHeight: CGFloat, layout: HudLayout) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if let alert = state.hazardAlert {
                 HazardBanner(alert: alert).padding(.horizontal, 4)
@@ -264,7 +264,11 @@ struct AgentScreen: View {
                     .padding(.horizontal, 4)
             }
             if let guidance = state.guidance {
-                GuidanceCard(guidance: guidance)
+                GuidanceCard(
+                    guidance: guidance,
+                    mapHeight: guidanceMapHeight(forAlertViewport: viewportHeight, layout: layout),
+                    arrangement: guidanceCardArrangement(for: layout)
+                )
                     .padding(.horizontal, 4)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
@@ -304,6 +308,9 @@ struct AgentScreen: View {
         VStack(alignment: .leading, spacing: 12) {
             StateReadout(caption: orbCaption(state), telltale: stateTelltale(state), color: orbColor(state))
             if captionsVisible { captionsCard() }
+            // The readout belongs with the helmet above it; 字幕 / 相册 / 设置
+            // settle against the bottom edge rather than floating mid-region.
+            Spacer(minLength: 0)
             SecondaryControls(state: state, viewModel: viewModel)
         }
     }

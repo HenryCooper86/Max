@@ -581,11 +581,25 @@ class NavigationController(
             // via takePendingFirstFixLocked before it ever fires, so the
             // rider never hears "locating" after guidance has already begun
             // — same deferred-identity guard the watchdog just below uses,
-            // for the same reason (see its own doc comment).
+            // for the same reason (see its own doc comment). Unlike the
+            // watchdog, the identity check and the resulting action
+            // (`speaker.speak`) must both run INSIDE the same synchronized
+            // block, not just the check: the watchdog's post-lock
+            // `.complete()` is safe on its own because `takePendingFirstFixLocked`
+            // already exclusively claimed the continuation before the lock
+            // was released, but a `speaker.speak` gated on a bare read-then-
+            // act outside the lock would leave a window between "still
+            // pending" and "spoken" where a concurrent stop/fix/supersession
+            // could invalidate the wait and this would fire anyway — the
+            // narrow race review caught in fix round 1. `NavSpeaker.speak` is
+            // a plain, non-suspend call, so holding the lock across it is
+            // safe and matches this file's existing convention (see the
+            // class doc; e.g. STOP_SPOKEN in handleStop).
             firstFixAnnounce = scope.launch {
                 delay(firstFixAnnounceMillis)
-                val stillPending = synchronized(lock) { firstFixContinuation === deferred }
-                if (stillPending) speaker.speak(LOCATING_SPOKEN, interrupt = false)
+                synchronized(lock) {
+                    if (firstFixContinuation === deferred) speaker.speak(LOCATING_SPOKEN, interrupt = false)
+                }
             }
             firstFixWatchdog = scope.launch {
                 delay(firstFixTimeoutMillis)

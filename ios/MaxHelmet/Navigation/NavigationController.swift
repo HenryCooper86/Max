@@ -290,6 +290,33 @@ final class NavigationController: DeviceActionHandler {
         return .ok
     }
 
+    /// Session teardown: retire any pending first-fix wait and any active
+    /// route silently — no speech, no result — for when the session itself
+    /// ends (hands-free `stop()`) and there is no rider-facing turn left to
+    /// answer or speak it to. Mirrors Android's `NavigationController.teardown()`:
+    /// bumps the generation (so a first-fix wait or search already in flight
+    /// can never later commit a route onto a session nothing can still
+    /// stop), clears `starting` (a fourth generation-bump site, alongside
+    /// `start(_:)`, `stopGuidance`, and `attemptReroute`'s failure branch —
+    /// see `starting`'s doc), and resolves any pending first-fix
+    /// continuation so `start(_:)` always gets its one `device.result`
+    /// (silently dropped by the caller — the socket is already gone)
+    /// instead of hanging forever, or — the bug this fixes — its announce
+    /// timer firing 正在定位… after nobody is listening.
+    ///
+    /// Deliberately does NOT call `search.failPending()`: AgentSession calls
+    /// that itself, right beside this, exactly as it always has.
+    func teardown() {
+        navigationGeneration += 1
+        starting = false
+        resolveFirstFix(nil)
+        route = nil
+        rerouting = false
+        lastRerouteAt = -.greatestFiniteMagnitude
+        stream.stop()
+        onGuidance(nil)
+    }
+
     private func handleFix(_ location: CLLocationCoordinate2D) {
         resolveFirstFix(location)
         guard let route else { return }

@@ -938,6 +938,67 @@ final class NavigationControllerTests: XCTestCase {
         XCTAssertFalse(box.spoken.last?.contains("现在") ?? true)
     }
 
+    // Final whole-branch review, Important #1: nothing tore down an
+    // in-flight first-fix wait when the SESSION itself ends (as opposed to
+    // an explicit 停止导航), so the announce timer could still fire 正在
+    // 定位… — or the watchdog still fail route.unavailable — into a session
+    // nobody is listening to. `teardown()` is AgentSession's answer to
+    // "the session ends" from the spec's Suppression list; these two tests
+    // exercise it directly, the way `testStopBeforeTheFixSuppressesTheAnnouncement`
+    // and `testStopMidFirstFixCancelsTheInFlightStart` already do for stop().
+
+    func testTeardownBeforeTheFixSuppressesTheAnnouncementAndResolvesTheStart() async {
+        executionTimeAllowance = 5
+        let stream = FakeStream(), search = FakeSearch()
+        stream.fixOnStart = nil // GPS never reports a fix — stays parked awaiting one
+        let (controller, box) = make(
+            stream, search,
+            firstFixTimeoutSeconds: 8,
+            firstFixAnnounceSeconds: 0.1
+        )
+
+        let startTask = Task { await controller.perform(.navigationStart(query: "外滩")) }
+        try? await Task.sleep(nanoseconds: 20_000_000) // let it reach the first-fix wait
+
+        controller.teardown()
+
+        let result = await startTask.value
+        XCTAssertEqual(result.status, .failed)
+        XCTAssertEqual(result.reason, "navigation.cancelled", "the session ending superseded it, not a genuine route failure")
+
+        // Prove the announce timer was actually cancelled, not merely raced:
+        // wait past its 0.1 s fire time and confirm it never spoke.
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertFalse(box.spoken.contains("正在定位…"), "teardown must suppress the interim line, same as an explicit stop")
+        XCTAssertFalse(stream.started, "the stream is stopped")
+        XCTAssertNil(box.guidance)
+    }
+
+    func testTeardownWithActiveRouteEndsGuidanceSilently() async {
+        let stream = FakeStream(), search = FakeSearch()
+        search.route = straightRoute()
+        let (controller, box) = make(stream, search)
+
+        let first = await controller.perform(.navigationStart(query: "终点"))
+        XCTAssertEqual(first, .ok)
+        XCTAssertTrue(stream.started)
+
+        controller.teardown()
+
+        // Silent — unlike stopGuidance's "已停止导航。": there is no
+        // rider-facing turn left to speak it to once the session is gone.
+        XCTAssertFalse(box.spoken.contains("已停止导航。"))
+        XCTAssertFalse(stream.started)
+        XCTAssertNil(box.guidance)
+
+        // The controller itself is reusable across session cycles (mirrors
+        // Android's teardown() doc): a fresh start after teardown must work
+        // normally, not find itself permanently wedged.
+        let second = await controller.perform(.navigationStart(query: "终点"))
+        XCTAssertEqual(second, .ok)
+        XCTAssertTrue(stream.started)
+    }
+
     func testActionMismatchIsRejected() async {
         let (controller, _) = make(FakeStream(), FakeSearch())
         let result = await controller.perform(.torchSet(on: true))

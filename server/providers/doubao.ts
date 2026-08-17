@@ -49,6 +49,7 @@ import {
   type SessionMemory
 } from "../../shared/session";
 import { buildPreviousConversationPrompt } from "../user-memory";
+import { navFabricationGuard } from "../nav-fabrication-guard";
 
 // The "Max" persona prompt. Overridable per deployment with DOUBAO_SYSTEM_ROLE;
 // keep it consistent with the DOUBAO_SYSTEM_ROLE default in .env.example.
@@ -574,6 +575,13 @@ export function createDoubaoProvider(
   // One "thinking" status per agent turn; per-token statuses only re-send the
   // same state and waste the rider's cellular link.
   let sentThinkingStatus = false;
+  // True once the fabrication guard has flagged any sentence of the CURRENT
+  // reply. Read by pendingReplyText() below so every downstream flush path
+  // (final transcript, TTS-fallback browser speech, barge-in salvage, socket
+  // close) stops surfacing this reply's text — not just the triggering
+  // sentence's own partial caption, which the guard's early return already
+  // covers. Reset with sentThinkingStatus at the next rider turn.
+  let fabricationSuppressed = false;
   let receivedTtsAudio = false;
   let ttsFallbackTimer: NodeJS.Timeout | undefined;
   // Measured end-of-ASR→first-audio latency of the previous turn; the TTS
@@ -622,6 +630,21 @@ export function createDoubaoProvider(
   let agentFinalDelivered = false;
   const pendingDeviceCommands = new PendingDeviceCommands();
   const deviceActivity = new DeviceActivityContext();
+  // Enforces that navigation truth may originate only from the relay's own
+  // nav.* speech (speakNavLine/speakNavPrompt — session-controller.ts), never
+  // from the model's own TTS stream. Wired into the TtsSentenceStart/End
+  // handler below; speakFabricationGuardLine and the truncate/clear helpers it
+  // calls are declared later in this closure as hoisted function declarations,
+  // so referencing them here (before their declarations run) is safe — none of
+  // these callbacks execute until a real TTS event arrives, long after this
+  // whole function body has finished setting up the session.
+  const fabricationGuard = navFabricationGuard({
+    routeActive: () => deviceActivity.isActive("navigation"),
+    truncateReply: () => truncateInterruptedReply(),
+    clearPendingAudio: () => clearUndecidedTtsAudio(),
+    speakHonestLine: (text) => speakFabricationGuardLine(text),
+    suppressItem: (itemId) => suppressedItemIds.add(itemId)
+  });
   let deviceExpiryTimer: NodeJS.Timeout | undefined;
   const ordinarySpeechWaiters = new Set<() => void>();
   let rideContext: RideContext = { mode: "ride", scenario: "commute" };
@@ -963,8 +986,15 @@ export function createDoubaoProvider(
     return replyAddressed;
   }
 
-  /** The reply text to show: the spoken (TTS) text if any, else the raw chat text. */
+  /** The reply text to show: the spoken (TTS) text if any, else the raw chat text.
+   *  Empty once the fabrication guard has flagged this reply — every flush call
+   *  site below reads through this one function, so gating it here is the single
+   *  choke point that keeps a fabricated reply's text (and any legitimate text
+   *  that happens to follow it in the same reply) off the transcript and out of
+   *  the TTS-fallback browser-speech path, rather than requiring each call site
+   *  to remember to check separately. */
   function pendingReplyText(): string {
+    if (fabricationSuppressed) return "";
     return (ttsText || chatText).trim();
   }
 
@@ -1080,6 +1110,19 @@ export function createDoubaoProvider(
     return speaker.speak(text, options).finally(() => {
       speakerActive -= 1;
     });
+  }
+
+  /** The fabrication guard's honest-correction line: fresh delivery id, forced
+   *  client speech, and the embedded relay's own synthesizer — the same shape
+   *  as speakNavLine below. Deliberately not routed through speakNavPrompt:
+   *  that method's non-interrupt branch queues behind ordinary speech
+   *  (waitForOrdinarySpeech), but the correction is replacing speech that was
+   *  just truncated and must not wait. */
+  function speakFabricationGuardLine(text: string): void {
+    if (closedByProvider) return;
+    const delivery = createTranscriptDelivery();
+    sendClient(transcriptEvent(delivery, "agent", text, { final: true, useBrowserSpeech: true }));
+    void speakEmbedded(text).catch(() => {});
   }
 
   function ordinarySpeechOpen(): boolean {
@@ -1476,6 +1519,8 @@ export function createDoubaoProvider(
           downstreamAudioAbandoned = false;
           ttsEndedBeforeWakeDecision = false;
           sentThinkingStatus = false;
+          fabricationSuppressed = false;
+          fabricationGuard.beginReply();
           fallbackSpoke = false;
           riderTurnText = "";
           riderTurnFinalized = false;
@@ -1563,6 +1608,19 @@ export function createDoubaoProvider(
           if (text && text !== lastTtsSentence) {
             ttsText += text;
             lastTtsSentence = text;
+            // Navigation truth may come only from the relay's own nav.*
+            // speech, never from the model's own words — real turn-by-turn
+            // never reaches this handler at all (see speakNavLine/
+            // speakNavPrompt in session-controller.ts). Every sentence of a
+            // fabricated reply is suppressed upstream and locally; returning
+            // early here also keeps it off the live caption below, and
+            // fabricationSuppressed keeps it off every later flush of this
+            // reply (pendingReplyText(), further down this file).
+            if (fabricationGuard.inspectSentence(text, currentReplyId)) {
+              fabricationSuppressed = true;
+              deleteSuppressedTurns();
+              return;
+            }
             if (!sentThinkingStatus && replyIsAddressed()) {
               sentThinkingStatus = true;
               sendClient({ type: "status", state: "thinking", detail: "豆包已生成语音文本" });
@@ -1571,7 +1629,12 @@ export function createDoubaoProvider(
             // agent transcript. Clients merge non-final items in place and the
             // TtsEnded flush finalizes the entry, so nothing is duplicated.
             // No useBrowserSpeech on partials — final !== false gates client TTS.
-            if (replyIsAddressed() && !fallbackSpoke && ttsText.trim()) {
+            // !fabricationSuppressed also covers a legitimate sentence that
+            // follows an earlier fabricated one in the same reply — the guard
+            // itself only vetoes sentences that assert navigation, but once
+            // any sentence in a reply has been flagged, none of that reply's
+            // captions should reach the rider.
+            if (replyIsAddressed() && !fallbackSpoke && !fabricationSuppressed && ttsText.trim()) {
               sendClient(transcriptEvent(agentDelivery, "agent", ttsText.trim(), { final: false }));
             }
           }

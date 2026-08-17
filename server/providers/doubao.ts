@@ -636,12 +636,21 @@ export function createDoubaoProvider(
   // only reflects navigation.start/stop commands THIS session dispatched by
   // voice, so it reads stale-true after a route is stopped by any other means
   // and resets on every reconnect regardless of whether a route is still
-  // running. session-controller.ts's navHandler.activeRoute() is the same
+  // running. session-controller.ts's navHandler.activeRoute() (the same
   // signal createNavPromptHandler already trusts to decide whether a relay
-  // nav prompt should speak at all (session-controller.ts), so it is the
-  // authoritative source here too. Defaults to "no route" (the safe
-  // direction — see NO_ROUTE_LINE/ROUTE_ACTIVE_LINE below) if start() is ever
-  // called without it.
+  // nav prompt should speak at all) is a better source but NOT an
+  // authoritative one: it is cleared by a fresh "start" request and, since
+  // this branch, by navigation-prompts.ts on an "arrived"/"rerouteFailed"
+  // nav.prompt, but neither covers every way a route actually ends —
+  // NavRequestEvent's reason is "start" | "reroute" only (no "stop"), a
+  // paused-not-ended route ("locationLost") does not clear it, and a client
+  // that goes away without reporting either (app killed, connectivity lost)
+  // leaves it stale-true. This can therefore still read "route active" after
+  // the rider has, in fact, stopped navigating — the guard's ROUTE_ACTIVE_LINE
+  // will then promise a nav prompt that never comes. See routing.ts's
+  // `lastRoute` for the fuller staleness accounting. Defaults to "no route"
+  // (the safe direction — see NO_ROUTE_LINE/ROUTE_ACTIVE_LINE below) if
+  // start() is ever called without it.
   let routeActiveFromContext: (() => boolean) | undefined;
   // Enforces that navigation truth may originate only from the relay's own
   // nav.* speech (speakNavLine/speakNavPrompt — session-controller.ts), never
@@ -674,6 +683,19 @@ export function createDoubaoProvider(
   let asrEndedAt = 0;
   let currentQuestionId: string | undefined;
   let currentReplyId: string | undefined;
+  // The reply id AsrInfo just superseded (the id currentReplyId held right
+  // before this turn's reset), so a frame for it that lands AFTER the reset
+  // — Doubao keeps delivering an in-flight reply's queued frames even after
+  // the relay has moved on to the next rider turn — can be dropped instead of
+  // being read as this NEW turn's own state. Without this, such a frame
+  // reassigns currentReplyId back to the stale id and, if its text asserts
+  // navigation, calls inspectForFabrication for the wrong reply: fabricationSuppressed
+  // then latches true for the turn that is actually in progress, silently
+  // muting a legitimate reply that has nothing to do with the fabrication.
+  // Never cleared explicitly — each AsrInfo simply overwrites it with the
+  // now-previous turn's id, and reply ids are never reused, so comparing
+  // against just the most recent one is sufficient.
+  let supersededReplyId: string | undefined;
   const suppressedItemIds = new Set<string>();
   let forwardedReplyBytes = 0;
   let firstForwardedReplyAt: number | undefined;
@@ -1149,9 +1171,13 @@ export function createDoubaoProvider(
   /** The fabrication guard's honest-correction line: fresh delivery id, forced
    *  client speech, and the embedded relay's own synthesizer — the same shape
    *  as speakNavLine below. Deliberately not routed through speakNavPrompt:
-   *  that method's non-interrupt branch queues behind ordinary speech
-   *  (waitForOrdinarySpeech), but the correction is replacing speech that was
-   *  just truncated and must not wait. */
+   *  that method's non-interrupt branch waits on waitForOrdinarySpeech before
+   *  it will even start, but the correction is replacing speech that was just
+   *  truncated and must not wait to begin. It is still serialized against
+   *  other embedded speech, just not by anything in this file — speakEmbedded
+   *  (below) goes through createSpeaker's own shared `tail` promise chain
+   *  (server/speech.ts), which is what actually queues every speak() call on
+   *  the embedded audio channel, this one included. */
   function speakFabricationGuardLine(text: string): void {
     if (closedByProvider) return;
     const delivery = createTranscriptDelivery();
@@ -1558,6 +1584,26 @@ export function createDoubaoProvider(
         }
 
         const payload = parseJsonPayload(frame);
+        // A per-reply frame that arrived after AsrInfo already superseded the
+        // reply it belongs to. This is NOT the replyDecided/!replyAddressed
+        // gate just below: right after AsrInfo the new turn is undecided
+        // (replyDecided is false), so that gate does not fire yet, and
+        // without this check the stale frame would fall through to the
+        // ordinary handlers, reassign currentReplyId back to the superseded
+        // reply, and — if its text asserts navigation — trip
+        // inspectForFabrication for a reply that is not the one actually in
+        // progress. See supersededReplyId's own doc comment.
+        if (
+          supersededReplyId !== undefined &&
+          (frame.event === EventReceive.ChatResponse ||
+            frame.event === EventReceive.TtsSentenceStart ||
+            frame.event === EventReceive.TtsSentenceEnd ||
+            frame.event === EventReceive.ChatEnded ||
+            frame.event === EventReceive.TtsEnded) &&
+          (stringField(payload, "reply_id") ?? stringField(payload, "item_id")) === supersededReplyId
+        ) {
+          return;
+        }
         if (
           wakeWordEnabled &&
           (frame.event === EventReceive.ChatResponse ||
@@ -1602,6 +1648,11 @@ export function createDoubaoProvider(
           firstAudioAt = 0;
           asrEndedAt = 0;
           currentQuestionId = stringField(payload, "question_id") ?? stringField(payload, "item_id");
+          // Stamp whatever reply was in flight as superseded BEFORE clearing
+          // currentReplyId below, so a frame that belongs to it and arrives
+          // late (after this reset) can be recognized and dropped instead of
+          // contaminating the new turn — see supersededReplyId's doc comment.
+          supersededReplyId = currentReplyId;
           currentReplyId = undefined;
           forwardedReplyBytes = 0;
           firstForwardedReplyAt = undefined;

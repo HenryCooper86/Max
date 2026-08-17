@@ -589,3 +589,51 @@ describe("doubao provider — at most one upstream delete per suppressed turn", 
     expect(deleteFrames).toHaveLength(1);
   });
 });
+
+describe("doubao provider — a superseded reply's late frame must not contaminate the next turn", () => {
+  // Whole-branch-review finding: the replyDecided/!replyAddressed stale-frame
+  // gate only fires once the NEW turn has itself been decided. Right after
+  // AsrInfo the new turn is undecided (replyDecided is false), so a frame
+  // belonging to the PREVIOUS (already-suppressed) reply that Doubao still
+  // delivers after the barge-in fell through to the ordinary handlers,
+  // reassigned currentReplyId back to the stale id, and — because its text
+  // still asserts navigation — tripped inspectForFabrication again. That set
+  // fabricationSuppressed for the reply actually in progress, muting the
+  // rider's next, entirely legitimate turn and speaking a second,
+  // unwarranted honest line on top of it.
+  it("does not mute the next turn's legitimate reply when a stale frame from a suppressed prior reply arrives after AsrInfo", async () => {
+    stubWeatherFetch();
+    const { client, send } = makeClient();
+    const { upstream } = await startLiveSession(client);
+
+    // Turn A: addressed, and fabricates — suppressed and deleted as normal.
+    await riderTurn(upstream, "Max 帮我导航到人民广场");
+    await upstream.emit("message", jsonFrame(TTS_SENTENCE_START, { reply_id: "reply-A", text: "前方800米后左转" }));
+    await upstream.emit("message", jsonFrame(TTS_ENDED, {}));
+
+    // Turn B begins — the rider speaks again, superseding turn A.
+    await upstream.emit("message", jsonFrame(ASR_INFO, {}));
+
+    // A late frame for turn A's now-superseded reply lands AFTER turn B's
+    // AsrInfo (Doubao keeps delivering queued frames for a reply the relay
+    // has already moved past). Same reply_id, a second fabricated sentence.
+    await upstream.emit("message", jsonFrame(TTS_SENTENCE_START, { reply_id: "reply-A", text: "然后右转进入中山路" }));
+
+    // Turn B resolves as an ordinary addressed turn with a legitimate reply.
+    await upstream.emit("message", jsonFrame(ASR_RESPONSE, { results: [{ text: "Max 现在几点" }] }));
+    await upstream.emit("message", jsonFrame(ASR_ENDED, {}));
+    await upstream.emit("message", jsonFrame(TTS_SENTENCE_START, { reply_id: "reply-B", text: "现在下午三点" }));
+    await upstream.emit("message", audioFrame(Buffer.from([1, 2, 3, 4])));
+    await upstream.emit("message", jsonFrame(TTS_ENDED, {}));
+
+    // Turn B's real audio and caption must reach the rider, unmuted.
+    expect(forwardedAudio(send)).toHaveLength(1);
+    expect(clientEvents(send).some((event) => event.type === "transcript" && event.text === "现在下午三点")).toBe(true);
+    // Exactly one honest line for the whole sequence (turn A's), never a
+    // second, unwarranted one for turn B's legitimate reply.
+    const honestLines = clientEvents(send).filter(
+      (event) => event.type === "transcript" && (event.text === NO_ROUTE_LINE || event.text === ROUTE_ACTIVE_LINE)
+    );
+    expect(honestLines).toHaveLength(1);
+  });
+});

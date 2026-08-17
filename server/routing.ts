@@ -20,6 +20,12 @@ import type { Logger } from "./logger";
 
 export type NavHandler = ((event: NavRequestEvent) => Promise<void>) & {
   activeRoute(): NavRouteEvent | undefined;
+  /** Drop the cached route without waiting for a new "start" request. Called
+   *  by navigation-prompts.ts when the client reports a genuine end of route
+   *  (`nav.prompt` kind "arrived"/"rerouteFailed") — see activeRoute's own
+   *  staleness caveat below for why this exists and what it still cannot
+   *  cover. */
+  clearRoute(): void;
 };
 
 export type NavPromptSpeech = {
@@ -237,6 +243,16 @@ export function createNavHandler(options: {
     onRouteAnnounced,
     onRerouteAnnounced
   } = options;
+  // Cleared by a new "start" request (below) and by clearRoute() — the latter
+  // called from navigation-prompts.ts on a genuine end of route reported by
+  // the client. Neither is exhaustive: NavRequestEvent's reason is only
+  // "start" | "reroute" (no "stop"), and clearRoute only fires for the two
+  // nav.prompt kinds ("arrived"/"rerouteFailed") that unambiguously mean the
+  // route is over — a paused route ("locationLost"), a route the client
+  // abandons without ever reporting arrival, or a client that goes away
+  // entirely (app killed, connectivity lost) never clears this. activeRoute()
+  // can therefore still read stale-true after the rider has, in fact,
+  // stopped navigating.
   let lastRoute: NavRouteEvent | undefined;
   let lastRerouteAt: number | undefined;
   // Bumped at every "start" request, so an in-flight provider round trip can
@@ -344,5 +360,9 @@ export function createNavHandler(options: {
     onRerouteAnnounced?.(REROUTE_OK_SPEECH);
   };
   handleNavRequest.activeRoute = () => lastRoute;
+  handleNavRequest.clearRoute = () => {
+    lastRoute = undefined;
+    lastRerouteAt = undefined;
+  };
   return handleNavRequest;
 }

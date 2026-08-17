@@ -18,11 +18,12 @@ the deployed relay (`fbca3ac`):
 
 The absent map was correct. The voice was not.
 
-This was recorded as a MUST-FIX on 2026-08-12 and is still unfixed. The
-grounding prompt (`server/providers/doubao.ts:56`, plus the hands-free
-override at `:152`) instructs the model to help with 导航 and never to refuse
-navigation requests. Nothing anywhere forbids it from _narrating_ navigation
-it does not have. A repo-wide search finds no guard.
+This was recorded as a MUST-FIX on 2026-08-12 and stayed unfixed until this
+branch (see Status above). At the time, the grounding prompt
+(`server/providers/doubao.ts:56`, plus the hands-free override at `:152`)
+instructed the model to help with 导航 and never to refuse navigation
+requests, and nothing anywhere forbade it from _narrating_ navigation it did
+not have — a repo-wide search found no guard.
 
 A rider following invented directions at speed is worse off than one told
 "navigation failed": the honest failure is safe, the fabrication is not. It
@@ -60,36 +61,31 @@ enforces, and a **prompt rule** that reduces how often the gate must fire.
 The relay already sees the model's words before the rider hears them, and
 already has hold-and-decide audio machinery built for the wake-word gate:
 
-- Incremental `ChatResponse` text arrives at `server/providers/doubao.ts:1574`
-- Audio accumulates in `pendingUndecidedAudio` (`:771`)
-- `flushUndecidedTtsAudio()` (`:775`) releases it; `clearUndecidedTtsAudio()`
-  (`:782`) discards it
-- `truncateInterruptedReply()` (`:787`) cuts off a reply already speaking
+- Incremental `ChatResponse` text arrives at `server/providers/doubao.ts:1740`
+- Audio accumulates in `pendingUndecidedAudio` (`:702`)
+- `flushUndecidedTtsAudio()` (`:842`) releases it; `clearUndecidedTtsAudio()`
+  (`:849`) discards it
+- `truncateInterruptedReply()` (`:854`) cuts off a reply already speaking
 
 The guard adds a second reason to discard, alongside "not addressed to Max".
 
 **Correction to an earlier draft of this section:** that buffer is NOT a
-general hold. `doubao.ts:1416-1419` buffers only while
+general hold. `bufferUndecidedTtsAudio()` (`:1572`) buffers only while
 `wakeWordEnabled && !replyIsAddressed()` — i.e. during the wake-word decision.
-Once the reply is addressed (the normal case), `:1420-1421` flushes and
-forwards every chunk immediately. Reusing it as-is would therefore protect
-only a narrow window, not the common path.
+Once the reply is addressed (the normal case), `flushUndecidedTtsAudio()`
+(`:1575`) forwards every chunk immediately. Reusing it as-is would therefore
+protect only a narrow window, not the common path.
 
-**Two tiers, and which one dominates is an open empirical question:**
-
-1. **Audio not yet forwarded** — discard it; the rider hears nothing. This
-   requires the sentence's text to reach us before its audio. Doubao sends
-   `TtsSentenceStart` (text) and `TtsResponse` (audio) as separate frames, and
-   **their relative order is unverified**. The existing buffer's own comment
-   ("ASR and TTS may overlap") is evidence that audio can arrive early.
-2. **Audio already forwarded** — `truncateInterruptedReply()`. The rider hears
-   a clipped fragment. Bounded, and far better than a whole fabricated route.
-
-If text reliably leads audio, a per-sentence hold gives tier 1 on the common
-path — but that is a **new** hold on the audio path, not a reuse of the
-wake-word one, and it adds latency to every reply, which must be measured
-before it is accepted. If audio leads text, tier 2 is the only achievable
-behaviour and the guard is a fast interrupt rather than a silencer.
+**Superseded — the "two tiers" question below was answered; kept for
+history, not as current guidance.** An earlier draft treated "does the
+guard need a new per-sentence audio hold, or is the truncate-after-forward
+fallback the only achievable behaviour" as an open, frame-ordering-dependent
+question. It is not: the shipped implementation gates on a single boolean
+(`fabricationSuppressed`, set the instant a sentence is flagged) checked at
+every audio-forwarding call site, which covers both "not yet forwarded" and
+"already forwarded" with no dependency on which frame — text or audio —
+arrives first. See the paragraph below this one for what that means for the
+frame-ordering measurement itself.
 
 **The frame ordering was never measured; the probe deploy was blocked by a
 permission gate.** It turned out not to matter: the implementation suppresses
@@ -101,11 +97,17 @@ hear before detection lands — a UX question, not a safety one.
 
 **After suppression**, in order:
 
-1. Speak one honest line through `speakNavPrompt` (authoritative channel,
-   `interrupt: true`).
-2. Inject a correction into the model's conversation context, so it stops
-   re-attempting for the rest of the session. Without this the model simply
-   tries again on the next turn and the rider hears repeated clipping.
+1. Speak one honest line through `speakFabricationGuardLine`
+   (`server/providers/doubao.ts` — its own dedicated function, deliberately
+   NOT `speakNavPrompt`: that method's non-interrupt branch waits on
+   `waitForOrdinarySpeech` before it will even start, which the correction
+   must not do, since it is replacing speech that was just truncated).
+2. **Delete**, not inject — the fabricated item is removed from the upstream
+   conversation via `EventSend.ConversationDelete`
+   (`deleteSuppressedTurns()`, `server/providers/doubao.ts:960`, and
+   `markCurrentTurnSuppressed()`, `:982`), so the model does not build on its
+   own fabrication on the next turn. No text is ever added to its context;
+   the fabricated turn is simply gone from the history it sees.
 
 Relay-spoken `nav.*` lines are exempt by construction: they never travel
 through the model's `ChatResponse` stream.
@@ -142,10 +144,19 @@ negative is found.
 | Suppressed, no route active | 导航还没启动，我没法给你指路。 |
 | Suppressed, route active    | 请以导航提示为准。             |
 
-Route state comes from `DeviceActivityContext`, which the provider already
-owns (`doubao.ts:623`) and which tracks `navigation` active/inactive from real
-device results. Its `active` map is currently private; the guard needs a
-narrow public accessor rather than a parallel state machine.
+Route state comes from `session-controller.ts`'s `navHandler.activeRoute()`
+(the `createNavHandler` closure in `server/routing.ts`), passed down as
+`ProviderSessionContext.routeActive` (`server/providers/types.ts`) — a live
+accessor evaluated on every guard fire, not a snapshot. `DeviceActivityContext`
+(which the provider already owns for other purposes, `doubao.ts:633`) was
+tried first: it gained a narrow `isActive()` accessor and the guard read
+`deviceActivity.isActive("navigation")`. That was rejected and the accessor
+removed — `DeviceActivityContext` only reflects `navigation.start`/`stop`
+commands THIS session dispatched by voice, so it read stale-true after a
+route was stopped by any other means and reset on every reconnect regardless
+of whether a route was still running. `navHandler.activeRoute()` is a better
+source, but still not a fully authoritative one — see its own doc comment in
+`doubao.ts` for the staleness this still cannot cover.
 
 ## Provider parity
 
@@ -162,12 +173,15 @@ and any future one, are held to the same rule rather than each re-deriving it.
   still pending calls `clearUndecidedTtsAudio()` and never forwards a chunk.
 - **Already-speaking path**: the same assertion arriving after flush calls
   `truncateInterruptedReply()`.
-- **Honest line**: suppression is followed by exactly one `speakNavPrompt`,
-  and the line matches route state.
+- **Honest line**: suppression is followed by exactly one
+  `speakFabricationGuardLine` call, and the line matches route state.
 - **Exemption**: a relay `nav.*` line is never suppressed, including when its
   text contains maneuver words — the regression that would make the guard
   silence real navigation.
-- **Model context**: a correction is injected once, not once per chunk.
+- **Upstream deletion**: the fabricated item is deleted via
+  `ConversationDelete` once per suppressed reply, not once per chunk, and not
+  a second time for the same QA pair (`markCurrentTurnSuppressed`'s own doc
+  comment).
 
 ## Limitations, stated deliberately
 
@@ -176,26 +190,37 @@ still reaches the rider; this reduces risk rather than eliminating it, and the
 prompt half covers the long tail. Claiming otherwise would be the same
 overclaiming this codebase has already been bitten by.
 
-The embedded/RDK speech path (`speakEmbedded`) is a separate surface and is
-out of scope here; it needs its own assessment.
+**Correction to an earlier draft of this section:** the embedded/RDK speech
+path was originally planned as out of scope. It is not — the honest line
+routes through `speakFabricationGuardLine` → `speakEmbedded` on every
+platform including embedded, and RDK's own barge-in path
+(`rdk/agent/src/main.ts`) was changed to route the guard's client-clear
+signal (matched by `NAV_FABRICATION_CLEAR_DETAIL`,
+`shared/nav-fabrication.ts`) to an unconditional playback flush instead of
+its normal mic-corroborated barge-in path, since a fabrication event has no
+rider speech to corroborate.
 
-The guard's client-side audibility — that the honest line is actually heard,
-and no fabricated audio plays — is verified by server-side unit tests and code
-tracing only. There is no automated end-to-end audio test. RDK in particular
-has no test harness at all, so its flush path was verified by typecheck and
-reading the code.
+What remains genuinely out of scope is full automated verification of that
+path: the guard's client-side audibility — that the honest line is actually
+heard, and no fabricated audio plays — is verified by server-side unit tests
+and code tracing only. There is no automated end-to-end audio test. RDK in
+particular has no test harness at all, so its flush-routing change was
+verified by typecheck (`npm run check:rdk`) and reading the code, not by a
+running test.
 
 ## Out of scope
 
-- The RDK/embedded speech path
+- Full automated end-to-end audio verification, RDK's own test harness
+  (RDK has none — see Limitations above)
 - Any change to how routes are requested or to the first-fix retry
 - Non-navigation fabrication (weather, hazards) — same class, different rule
 
-## Open question for review
+## Review notes
 
-Injecting a correction into the model's context is the part most likely to
-behave unexpectedly, since it changes what the model believes mid-session. If
-it proves to make replies worse, the fallback is suppression plus the honest
-line alone, accepting repeated clipping. Worth deciding whether to ship both
-halves at once or gate the context injection behind a flag for the first
-bench.
+An earlier draft of this design planned to INJECT a correction into the
+model's conversation context. The shipped implementation does not inject
+anything — it DELETES the fabricated item from the upstream conversation
+(`ConversationDelete`, see "After suppression" above), so there is no new
+text for the model to react to and no question of it "believing" something
+different mid-session. The deletion-vs-injection choice was made during
+implementation, not left open for this review.

@@ -20,10 +20,17 @@ function validId(value: unknown): value is string {
 export function createNavPromptHandler(options: {
   activeRoute: () => NavRouteEvent | undefined;
   speak: (speech: NavPromptSpeech) => void;
+  /** Drop the cached route now that the client has reported it is over.
+   *  Called only for "arrived"/"rerouteFailed" (below) — the two prompt
+   *  kinds that unambiguously mean no further guidance is coming for this
+   *  route; "offRoute" is mid-recovery and "locationLost" is a pause, not an
+   *  end. Optional so callers with no route-cache owner to notify (tests,
+   *  future non-relay embedders) can omit it. */
+  clearRoute?: () => void;
   now?: () => number;
   maxPerMinute?: number;
 }): (event: NavPromptEvent) => void {
-  const { activeRoute, speak, now = Date.now, maxPerMinute = DEFAULT_MAX_PER_MINUTE } = options;
+  const { activeRoute, speak, clearRoute, now = Date.now, maxPerMinute = DEFAULT_MAX_PER_MINUTE } = options;
   const seenPromptIds = new Set<string>();
   const acceptedAt: number[] = [];
   let accountingRouteCommandId: string | undefined;
@@ -86,6 +93,9 @@ export function createNavPromptHandler(options: {
       const oldest = seenPromptIds.values().next().value;
       if (oldest !== undefined) seenPromptIds.delete(oldest);
     }
+    // The only two prompt kinds that mean the route itself is over, not just
+    // paused or being recovered from — see clearRoute's own doc comment.
+    if (event.kind === "arrived" || event.kind === "rerouteFailed") clearRoute?.();
     speak(speech);
   };
 }

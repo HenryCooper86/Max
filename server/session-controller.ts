@@ -573,7 +573,8 @@ export class AgentSessionController {
     });
     this.navPromptHandler = createNavPromptHandler({
       activeRoute: this.navHandler.activeRoute,
-      speak: (speech) => this.provider.speakNavPrompt?.(speech)
+      speak: (speech) => this.provider.speakNavPrompt?.(speech),
+      clearRoute: this.navHandler.clearRoute
     });
     this.send({ type: "connection", state: "relay", detail: "语音中继 WebSocket 已连接" });
   }

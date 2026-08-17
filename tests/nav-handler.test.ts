@@ -142,6 +142,39 @@ describe("createNavHandler", () => {
     expect(sent[2]).toMatchObject({ type: "nav.route", commandId: "r1" });
   });
 
+  it("clearRoute() drops the cached route so a subsequent reroute for the same destination replans instead of hitting the cache", async () => {
+    let clock = 0;
+    let planCalls = 0;
+    const mock = createMockRouteProvider();
+    const counting = {
+      ...mock,
+      planRoute: (...args: Parameters<typeof mock.planRoute>) => {
+        planCalls += 1;
+        return mock.planRoute(...args);
+      }
+    };
+    const { sent, send } = collector();
+    const handle = createNavHandler({ provider: counting, send, now: () => clock, minRerouteIntervalMs: 10_000 });
+    await handle(start); // plan call 1, caches a route to 外滩's destination
+    const routed = sent[0] as NavRouteEvent;
+    expect(handle.activeRoute()).toBe(routed);
+
+    clock = 1_000; // still inside the reroute-cache interval
+    handle.clearRoute();
+    expect(handle.activeRoute()).toBeUndefined();
+
+    await handle({
+      type: "nav.request",
+      commandId: "r1",
+      reason: "reroute",
+      origin,
+      destination: routed.destination,
+      destinationName: routed.destinationName
+    });
+    expect(planCalls).toBe(2); // the clear forced a fresh plan instead of the cache fast path
+    expect(sent[1]).toMatchObject({ type: "nav.route", commandId: "r1" });
+  });
+
   it("a guarded reroute for a different destination replans instead of serving the cache", async () => {
     let clock = 0;
     let planCalls = 0;

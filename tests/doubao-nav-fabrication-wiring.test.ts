@@ -26,6 +26,18 @@ import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 //   6. Important: the guard ran before replyIsAddressed(), so an unaddressed
 //      reply could get an unprompted honest-line correction instead of
 //      staying silently dropped.
+// Round 3 finding, on the fix for #6 — gating the WHOLE guard call on
+// replyIsAddressed() (as round 2 did) let fabrication detected during the
+// wake-undecided window (riderTurnAddressed false, riderTurnFinalized false)
+// escape suppression entirely: inspectForFabrication was skipped, so
+// fabricationSuppressed was never set, and the moment a later ASR hypothesis
+// added the wake phrase, flushUndecidedTtsAudio() forwarded the buffered
+// fabricated audio through forwardTtsAudio with no gate left to stop it.
+// server/nav-fabrication-guard.ts now splits detection/suppression
+// (inspectSentence — never gated on being addressed) from the audible
+// correction (announceIfDetected — called once the caller confirms
+// addressed, from every place in doubao.ts a reply's wake decision can
+// resolve). See that file's own doc comment for the full invariant.
 // Same MockWebSocket/frame-injection harness idiom as doubao-wake.test.ts and
 // doubao-nav-speech.test.ts.
 
@@ -429,16 +441,16 @@ describe("doubao provider — honest-line selection reads the supplied route sta
   });
 });
 
-describe("doubao provider — fabrication guard defers to replyIsAddressed()", () => {
+describe("doubao provider — fabrication guard announces only once addressed", () => {
   // Both cases inject the fabricated text WHILE the wake-word decision is
-  // still undecided (before ASR_ENDED) — Doubao can answer before the rider's
-  // turn is finalized as unaddressed. At that point replyIsAddressed()
-  // returns false WITHOUT latching replyDecided, so the pre-existing
-  // "replyDecided && !replyAddressed" early-return earlier in the same
-  // handler does not intercept it either; only the guard's own
-  // replyIsAddressed() check (added this round) does. Before that fix, the
-  // guard ran unconditionally and spoke an unprompted correction the rider
-  // never asked for, on a reply that used to be silently dropped.
+  // still undecided (before ASR_ENDED), then let it resolve NOT addressed.
+  // Suppression (inspectForFabrication) still runs unconditionally here — the
+  // assertion is that no ANNOUNCEMENT (honest-line transcript) ever fires,
+  // because announceIfDetected() is only ever called from a place in
+  // doubao.ts where the reply has just resolved (or already was) addressed,
+  // and this turn never resolves that way. See the "wake-undecided window"
+  // describe block below for the companion property: suppression itself does
+  // NOT wait for this same resolution.
   it("stays silent on an unaddressed reply via the TtsSentence path — no unprompted correction", async () => {
     stubWeatherFetch();
     const { client, send } = makeClient();
@@ -474,5 +486,56 @@ describe("doubao provider — fabrication guard defers to replyIsAddressed()", (
         (event) => event.type === "transcript" && (event.text === NO_ROUTE_LINE || event.text === ROUTE_ACTIVE_LINE)
       )
     ).toBe(false);
+  });
+});
+
+describe("doubao provider — suppression does not wait on the wake decision", () => {
+  // The Critical regression this round closes: gating the WHOLE guard call
+  // on replyIsAddressed() (round 2's fix) let a fabricated sentence detected
+  // during the undecided window escape suppression entirely — its audio,
+  // buffered by bufferUndecidedTtsAudio, was then forwarded uncaught the
+  // moment a later ASR hypothesis added the wake phrase and
+  // flushUndecidedTtsAudio() ran, because fabricationSuppressed had never
+  // been set. This drives that exact sequence end to end.
+  it("suppresses a sentence detected while undecided, then still announces once the decision latches addressed", async () => {
+    stubWeatherFetch();
+    const { client, send } = makeClient();
+    const { upstream } = await startLiveSession(client);
+
+    await upstream.emit("message", jsonFrame(ASR_INFO, {}));
+    // First hypothesis has not said "Max" yet — riderTurnAddressed is still
+    // false and riderTurnFinalized is still false: genuinely undecided, not
+    // yet-resolved-unaddressed.
+    await upstream.emit("message", jsonFrame(ASR_RESPONSE, { results: [{ text: "帮我导航到人民广场" }] }));
+
+    // Doubao answers — and fabricates — before the wake decision settles.
+    await upstream.emit(
+      "message",
+      jsonFrame(TTS_SENTENCE_START, { reply_id: "reply-undecided", text: "前方800米后左转" })
+    );
+    // Its audio arrives while still undecided: bufferUndecidedTtsAudio holds
+    // it rather than forwarding it.
+    await upstream.emit("message", audioFrame(Buffer.from([9, 9, 9, 9])));
+    expect(forwardedAudio(send)).toHaveLength(0);
+
+    // A later cumulative ASR hypothesis adds the wake phrase — the decision
+    // latches addressed, and flushUndecidedTtsAudio() reaches the buffered
+    // chunk from above.
+    await upstream.emit("message", jsonFrame(ASR_RESPONSE, { results: [{ text: "Max 帮我导航到人民广场" }] }));
+    await upstream.emit("message", jsonFrame(ASR_ENDED, {}));
+
+    // The fabricated audio must never reach the client, even after the latch
+    // — forwardTtsAudio's fabricationSuppressed gate was already set the
+    // instant the sentence was inspected, before the decision resolved.
+    expect(forwardedAudio(send)).toHaveLength(0);
+    // Nor its text, as a caption or a later flush.
+    expect(clientEvents(send).some((event) => event.type === "transcript" && event.text === "前方800米后左转")).toBe(
+      false
+    );
+    // But the honest correction — deferred until the decision resolved
+    // addressed, since there is no further TtsSentence delta to re-trigger
+    // detection — must still reach the rider once it does.
+    const honestLine = clientEvents(send).find((event) => event.type === "transcript" && event.text === NO_ROUTE_LINE);
+    expect(honestLine).toMatchObject({ final: true, useBrowserSpeech: true });
   });
 });

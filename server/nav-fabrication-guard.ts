@@ -27,30 +27,68 @@ export type NavFabricationGuardDeps = {
   suppressItem: (itemId: string) => void;
 };
 
+/**
+ * Deliberately two-phase. A rider's turn is not always known to be addressed
+ * to Max the moment a fabricated sentence arrives — the wake-word decision
+ * can still be undecided (Doubao can answer before the rider's ASR hypothesis
+ * has settled), and it can later resolve either way. Suppression
+ * (inspectSentence) must never wait on that decision: the caller is expected
+ * to call it unconditionally, the instant fabricated text is seen, so the
+ * audio and text are never forwarded regardless of what the wake decision
+ * turns out to be. The audible correction (announceIfDetected) is the
+ * opposite: it must NOT fire until the caller has confirmed the reply is
+ * actually addressed, since an unprompted correction on a reply the rider
+ * never spoke to would itself be a new, unasked-for interruption. Collapsing
+ * these into one call (as an earlier version of this guard did) forces a
+ * false choice: gate everything on "addressed" and let undecided-window
+ * fabrication escape suppression entirely, or announce everything
+ * immediately and risk announcing on a turn that resolves unaddressed.
+ */
 export function navFabricationGuard(deps: NavFabricationGuardDeps) {
-  let firedThisReply = false;
+  let detectedThisReply = false;
+  let announcedThisReply = false;
 
   return {
     /** Call at the start of each agent reply. */
     beginReply(): void {
-      firedThisReply = false;
+      detectedThisReply = false;
+      announcedThisReply = false;
     },
 
-    /** Returns true when this sentence was suppressed. */
+    /** Detects and suppresses fabricated navigation. Call unconditionally,
+     *  regardless of whether the reply is known to be addressed yet — this is
+     *  the half of the guard that must never wait on the wake decision.
+     *  Returns true when this sentence was suppressed. */
     inspectSentence(text: string, itemId: string | undefined): boolean {
       if (!assertsNavigation(text)) return false;
       // Every sentence of a fabricated reply is suppressed, but the rider
-      // hears the correction once — not once per sentence.
-      if (!firedThisReply) {
-        firedThisReply = true;
+      // hears the correction once — not once per sentence, and not until
+      // announceIfDetected() below confirms the reply is addressed.
+      if (!detectedThisReply) {
+        detectedThisReply = true;
         deps.clearPendingAudio();
         deps.truncateReply();
-        // Ordering is load-bearing here — see clearClientPlayback's doc comment.
-        deps.clearClientPlayback();
-        deps.speakHonestLine(deps.routeActive() ? ROUTE_ACTIVE_LINE : NO_ROUTE_LINE);
       }
       if (itemId) deps.suppressItem(itemId);
       return true;
+    },
+
+    /** Speaks the honest correction — but only if this reply had fabrication
+     *  detected (inspectSentence returned true at least once since the last
+     *  beginReply), and only once per reply. Call it whenever the caller
+     *  learns (or already knows) the reply is addressed: right after a
+     *  same-call inspectSentence hit on an already-addressed reply, AND
+     *  separately wherever an undecided reply's wake decision resolves to
+     *  addressed — a reply can have no further TtsSentence/ChatResponse
+     *  delta after that point, so the announcement cannot always wait for
+     *  the next inspectSentence call. Safe to call speculatively and
+     *  repeatedly; a no-op once nothing is pending or it already spoke. */
+    announceIfDetected(): void {
+      if (!detectedThisReply || announcedThisReply) return;
+      announcedThisReply = true;
+      // Ordering is load-bearing here — see clearClientPlayback's doc comment.
+      deps.clearClientPlayback();
+      deps.speakHonestLine(deps.routeActive() ? ROUTE_ACTIVE_LINE : NO_ROUTE_LINE);
     }
   };
 }

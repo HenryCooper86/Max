@@ -1174,14 +1174,26 @@ export function createDoubaoProvider(
    *  arrive at all (the same gap the TTS-fallback browser-speech path exists
    *  to cover) must still be caught from its raw text. Returns true when this
    *  call suppressed — the caller must stop processing this event and skip
-   *  its own caption/status send. Callers must gate on replyIsAddressed()
-   *  themselves before calling this: an unaddressed reply must stay silently
-   *  dropped, exactly as it was before this guard existed, not get an
-   *  unprompted honest-line correction the rider never asked for. */
+   *  its own caption/status send.
+   *
+   *  Callers must NOT gate this call on replyIsAddressed(): suppression must
+   *  apply even while the wake decision is still undecided (Doubao can answer
+   *  before the rider's ASR hypothesis has settled), or fabricated audio
+   *  already buffered by the undecided-TTS path (bufferUndecidedTtsAudio)
+   *  escapes uncaught the moment the decision later latches addressed and
+   *  flushUndecidedTtsAudio() forwards it. Only the AUDIBLE correction is
+   *  conditional on being addressed — handled here by calling
+   *  fabricationGuard.announceIfDetected() when replyIsAddressed() is
+   *  already true, and separately at every point in this file where an
+   *  undecided reply's wake decision resolves to addressed (see
+   *  flushUndecidedTtsAudio's call sites), since a reply can have no further
+   *  TtsSentence/ChatResponse delta after that point for this function to
+   *  catch it on. */
   function inspectForFabrication(text: string): boolean {
     if (!fabricationGuard.inspectSentence(text, currentReplyId)) return false;
     fabricationSuppressed = true;
     deleteSuppressedTurns();
+    if (replyIsAddressed()) fabricationGuard.announceIfDetected();
     return true;
   }
 
@@ -1522,6 +1534,12 @@ export function createDoubaoProvider(
             return;
           }
           flushUndecidedTtsAudio();
+          // Reaching here means addressed (or wake gating is off) — if a
+          // fabricated sentence was already suppressed earlier this reply
+          // while the wake decision was still undecided, the honest line may
+          // not have been announced yet. See inspectForFabrication's doc
+          // comment; announceIfDetected() is a no-op otherwise.
+          fabricationGuard.announceIfDetected();
           forwardTtsAudio(frame.payload);
           return;
         }
@@ -1639,6 +1657,15 @@ export function createDoubaoProvider(
             // the cumulative hypothesis is safe to display as a live caption.
             if (!wakeWordEnabled || riderTurnAddressed) {
               flushUndecidedTtsAudio();
+              // The exact point an undecided reply's wake decision can first
+              // resolve to addressed — a cumulative ASR hypothesis just added
+              // the wake phrase. If a fabricated sentence arrived earlier this
+              // reply while still undecided, its suppression already applied
+              // (inspectForFabrication is never gated on being addressed) but
+              // the honest line may still be waiting on exactly this moment,
+              // since no further TtsSentence/ChatResponse delta is guaranteed
+              // to arrive after this to trigger it otherwise.
+              fabricationGuard.announceIfDetected();
               sendClient({ type: "status", state: "asr", detail: `豆包听到：${text}` });
               sendClient(transcriptEvent(riderDelivery, "rider", text, { final: false }));
             }
@@ -1660,10 +1687,11 @@ export function createDoubaoProvider(
             // Checked against the full accumulation so far, not just this
             // chunk's own delta: ChatResponse deltas are raw, often
             // sub-sentence LLM tokens with no reliable per-chunk boundary to
-            // check individually. Gated on replyIsAddressed(): an unaddressed
-            // reply must stay silently dropped, as it always was, not get an
-            // unprompted honest-line correction the rider never asked for.
-            if (replyIsAddressed() && inspectForFabrication(chatText)) return;
+            // check individually. NOT gated on replyIsAddressed() — see
+            // inspectForFabrication's doc comment for why suppression must
+            // not wait on the wake decision, only the honest line's own
+            // audibility (handled inside inspectForFabrication) does.
+            if (inspectForFabrication(chatText)) return;
             if (!sentThinkingStatus && replyIsAddressed()) {
               sentThinkingStatus = true;
               sendClient({ type: "status", state: "thinking", detail: "豆包已生成回复文本" });
@@ -1686,11 +1714,12 @@ export function createDoubaoProvider(
             // fabricated reply is suppressed upstream and locally; returning
             // early here also keeps it off the live caption below, and
             // fabricationSuppressed keeps it off every later flush of this
-            // reply (pendingReplyText(), further down this file). Gated on
-            // replyIsAddressed(): an unaddressed reply must stay silently
-            // dropped, as it always was, not get an unprompted honest-line
-            // correction the rider never asked for.
-            if (replyIsAddressed() && inspectForFabrication(text)) return;
+            // reply (pendingReplyText(), further down this file). NOT gated
+            // on replyIsAddressed() — see inspectForFabrication's doc comment
+            // for why suppression must not wait on the wake decision, only
+            // the honest line's own audibility (handled inside
+            // inspectForFabrication) does.
+            if (inspectForFabrication(text)) return;
             if (!sentThinkingStatus && replyIsAddressed()) {
               sentThinkingStatus = true;
               sendClient({ type: "status", state: "thinking", detail: "豆包已生成语音文本" });
@@ -1794,6 +1823,15 @@ export function createDoubaoProvider(
               emitMemory();
             }
             flushUndecidedTtsAudio();
+            // Defensive, same reasoning as the AsrResponse call site above.
+            // `addressed` here is only ever true when riderTurnAddressed was
+            // already set (the AsrResponse handler is the only place that
+            // happens), so in practice that earlier call already announced —
+            // this is a no-op safety net, matching this file's existing
+            // pattern of calling flushUndecidedTtsAudio() at more than one
+            // resolution point rather than relying on exactly one being
+            // reachable.
+            fabricationGuard.announceIfDetected();
             sendClient({ type: "status", state: "ready", detail: "豆包语音识别完成" });
             if (ttsEndedBeforeWakeDecision) {
               if (pendingReplyText()) flushPendingAgentText(!receivedTtsAudio);

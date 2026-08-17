@@ -116,11 +116,11 @@ through the model's `ChatResponse` stream.
 
 Three families, matched lexically — not free-text judgement:
 
-| Family               | Examples that must be suppressed               |
-| -------------------- | ---------------------------------------------- |
-| Maneuver instruction | 前方左转 / 右转进入中山东一路 / 掉头 / 沿…直行 |
-| Distance to maneuver | 前方800米后左转 / 再走300米 / 1.2公里后到达    |
-| Position claim       | 你当前在朝阳路与和平西街交叉口 / 你在滨河路上  |
+| Family               | Examples that must be suppressed                  |
+| -------------------- | ------------------------------------------------- |
+| Maneuver instruction | 前方左转 / 右转进入中山东一路 / 掉头 / 沿…直行    |
+| Distance to maneuver | 前方800米后左转 / 再走300米后掉头 / 1.2公里后到达 |
+| Position claim       | 你当前在朝阳路与和平西街交叉口 / 你在滨河路上     |
 
 Explicitly allowed, and covered by must-not-suppress fixtures:
 

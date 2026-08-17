@@ -43,7 +43,12 @@ const ALLOWED = [
   "经过5公里的隧道时记得开灯",
   // Same review: MANEUVER_IN_CONTEXT's "然后...直行" shape matched "直行车道"
   // (a lane name), not just the maneuver verb "直行" on its own.
-  "前方有减速带，然后注意直行车道的积水"
+  "前方有减速带，然后注意直行车道的积水",
+  // Follow-up review: DISTANCE_TO_MANEUVER's "直行" branch had the same gap
+  // MANEUVER_IN_CONTEXT was fixed for, still matching the lane/zone name
+  // "直行车道" and muting these hazard warnings.
+  "3公里后直行车道封闭，请提前变道",
+  "前方2公里后直行车道有事故"
 ];
 
 describe("assertsNavigation", () => {

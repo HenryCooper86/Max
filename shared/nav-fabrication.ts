@@ -18,6 +18,12 @@
 //     only Arabic-numeral distances are recognized.
 //   - "靠左行驶进入辅路" — a paraphrase with no literal turn token (左转/右转/
 //     掉头/直行/驶入-road) that MANEUVER_IN_CONTEXT looks for.
+//   - "前方800米进入匝道" / "再走500米到达目的地" / "前方300米靠右行驶" — a bare
+//     leading distance with no maneuver/arrival token immediately after "后"
+//     is deliberately allowed (see DISTANCE_TO_MANEUVER below), so these slip
+//     through along with the hazard/weather warnings the allowance exists to
+//     protect. Not chased for the same reason: catching them would re-mute
+//     the sentences in tests/nav-fabrication.test.ts's ALLOWED fixtures.
 
 // Note there is deliberately no bare-maneuver-verb pattern: 左转/直行 alone are
 // not guidance ("进入导航模式", "直行区间测速"), so every rule below requires a
@@ -48,7 +54,7 @@
  * navigation on its own.
  */
 const DISTANCE_TO_MANEUVER =
-  /(?:(?:前方|再走|经过)\s*)?\d+(?:\.\d+)?\s*(?:米|公里|千米)\s*后\s*(?:到达|左转|右转|掉头|直行)/;
+  /(?:(?:前方|再走|经过)\s*)?\d+(?:\.\d+)?\s*(?:米|公里|千米)\s*后\s*(?:到达|左转|右转|掉头|直行(?!车道|区间))/;
 
 /** A claim about where the rider currently is. */
 const POSITION_CLAIM = /(?:你|您)(?:现在|当前)?(?:在|位于)[^，。！？]{0,24}(?:路|街|大道|巷|桥|口|交叉|附近)/;

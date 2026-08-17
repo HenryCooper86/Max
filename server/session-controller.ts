@@ -648,8 +648,14 @@ export class AgentSessionController {
         // disabled, retain the original client-echoed restart behaviour.
         const providerEvent =
           this.authenticatedUser && userMemoryEnabled() ? { ...event, memory: durableMemory?.session } : event;
-        const providerContext: ProviderSessionContext | undefined =
-          durableMemory && (durableMemory.turns.length || durableMemory.facts.length)
+        const providerContext: ProviderSessionContext = {
+          // Live accessor, not a snapshot — see ProviderSessionContext's doc
+          // comment. this.navHandler is already assigned by the time any
+          // provider could actually call this (start() runs after the
+          // constructor has finished), regardless of the two properties'
+          // relative construction order above.
+          routeActive: () => this.navHandler.activeRoute() !== undefined,
+          ...(durableMemory && (durableMemory.turns.length || durableMemory.facts.length)
             ? {
                 previousConversation: {
                   updatedAt: durableMemory.updatedAt,
@@ -657,7 +663,8 @@ export class AgentSessionController {
                   facts: durableMemory.facts
                 }
               }
-            : undefined;
+            : {})
+        };
         beginTesterSession(this.relaySessionId, {
           // Logged-in users cannot claim another tester's evidence row. The
           // operator relay-token path has no account identity and keeps the

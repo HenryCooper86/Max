@@ -23,6 +23,14 @@ export type ProviderSessionContext = {
     turns: UserMemoryTurn[];
     facts: UserMemoryFact[];
   };
+  /** Live read of whether the relay currently has a route planned — backed by
+   *  server/routing.ts's createNavHandler().activeRoute(), the same signal
+   *  createNavPromptHandler already trusts to gate relay nav prompts. Not a
+   *  snapshot: call it fresh each time, since the underlying route can start
+   *  or clear over the life of the session. A provider with no fabrication
+   *  guard (or any other reason to know route state) omits reading it;
+   *  session-controller.ts passes it unconditionally. */
+  routeActive?: () => boolean;
 };
 
 export type AgentProvider = {

@@ -630,16 +630,29 @@ export function createDoubaoProvider(
   let agentFinalDelivered = false;
   const pendingDeviceCommands = new PendingDeviceCommands();
   const deviceActivity = new DeviceActivityContext();
+  // Set from provider.start()'s context, once the caller has provided it.
+  // deviceActivity.isActive("navigation") was tried first and rejected: it
+  // only reflects navigation.start/stop commands THIS session dispatched by
+  // voice, so it reads stale-true after a route is stopped by any other means
+  // and resets on every reconnect regardless of whether a route is still
+  // running. session-controller.ts's navHandler.activeRoute() is the same
+  // signal createNavPromptHandler already trusts to decide whether a relay
+  // nav prompt should speak at all (session-controller.ts), so it is the
+  // authoritative source here too. Defaults to "no route" (the safe
+  // direction — see NO_ROUTE_LINE/ROUTE_ACTIVE_LINE below) if start() is ever
+  // called without it.
+  let routeActiveFromContext: (() => boolean) | undefined;
   // Enforces that navigation truth may originate only from the relay's own
   // nav.* speech (speakNavLine/speakNavPrompt — session-controller.ts), never
-  // from the model's own TTS stream. Wired into the TtsSentenceStart/End
-  // handler below; speakFabricationGuardLine and the truncate/clear helpers it
-  // calls are declared later in this closure as hoisted function declarations,
-  // so referencing them here (before their declarations run) is safe — none of
-  // these callbacks execute until a real TTS event arrives, long after this
-  // whole function body has finished setting up the session.
+  // from the model's own TTS stream. Wired into the TtsSentenceStart/End and
+  // ChatResponse handlers below; speakFabricationGuardLine and the
+  // truncate/clear helpers it calls are declared later in this closure as
+  // hoisted function declarations, so referencing them here (before their
+  // declarations run) is safe — none of these callbacks execute until a real
+  // event arrives, long after this whole function body has finished setting
+  // up the session.
   const fabricationGuard = navFabricationGuard({
-    routeActive: () => deviceActivity.isActive("navigation"),
+    routeActive: () => routeActiveFromContext?.() ?? false,
     truncateReply: () => truncateInterruptedReply(),
     clearPendingAudio: () => clearUndecidedTtsAudio(),
     speakHonestLine: (text) => speakFabricationGuardLine(text),
@@ -769,7 +782,13 @@ export function createDoubaoProvider(
   }
 
   function forwardTtsAudio(chunk: Buffer): void {
-    if (fallbackSpoke || downstreamAudioAbandoned) return;
+    // The fabrication guard runs on TEXT (TtsSentence/ChatResponse), which can
+    // arrive before or after the AUDIO bytes for the same stretch of speech —
+    // this relay has no way to measure Doubao's own frame ordering. Whichever
+    // order applies, this gate stops every audio chunk not already forwarded
+    // by the time text confirms fabrication; inspectForFabrication's own
+    // client-side "hearing" status handles whatever was already forwarded.
+    if (fallbackSpoke || downstreamAudioAbandoned || fabricationSuppressed) return;
     if (client.readyState !== client.OPEN) return;
     if (client.bufferedAmount >= MAX_CLIENT_BUFFERED_BYTES) {
       downstreamAudioAbandoned = true;
@@ -1123,6 +1142,34 @@ export function createDoubaoProvider(
     const delivery = createTranscriptDelivery();
     sendClient(transcriptEvent(delivery, "agent", text, { final: true, useBrowserSpeech: true }));
     void speakEmbedded(text).catch(() => {});
+  }
+
+  /** Shared by the ChatResponse (raw token) and TtsSentenceStart/End
+   *  (properly-spaced spoken) handlers below — either can be the first to
+   *  reveal a fabricated reply, since ChatResponse text typically streams
+   *  ahead of TTS segmentation, but a reply for which TtsSentence events never
+   *  arrive at all (the same gap the TTS-fallback browser-speech path exists
+   *  to cover) must still be caught from its raw text. Returns true when this
+   *  call suppressed — the caller must stop processing this event and skip
+   *  its own caption/status send. */
+  function inspectForFabrication(text: string): boolean {
+    if (!fabricationGuard.inspectSentence(text, currentReplyId)) return false;
+    if (!fabricationSuppressed) {
+      // Audio can lead text, so bytes for this reply may already be forwarded
+      // and playing (or queued) on the client by the time text confirms
+      // fabrication — forwardTtsAudio's own fabricationSuppressed gate (set
+      // right below) stops anything NOT yet forwarded, but cannot recall what
+      // already left the wire. Reuse the exact signal barge-in sends
+      // (session-controller.ts's own comment calls it "an immediate,
+      // privacy-safe signal to clear queued playback") so every client — web,
+      // iOS, RDK — flushes whatever it already has queued before the honest
+      // correction's own audio arrives. Sent once per reply, not once per
+      // suppressed sentence.
+      sendClient({ type: "status", state: "hearing", detail: "豆包检测到导航虚构内容，已拦截" });
+    }
+    fabricationSuppressed = true;
+    deleteSuppressedTurns();
+    return true;
   }
 
   function ordinarySpeechOpen(): boolean {
@@ -1593,6 +1640,15 @@ export function createDoubaoProvider(
           const text = extractChatText(payload);
           if (text) {
             chatText += text;
+            // Backstop for a reply whose TtsSentenceStart/End never arrives at
+            // all (the same gap the TTS-fallback browser-speech path exists to
+            // cover) — chatText is the only accumulator pendingReplyText()
+            // then has left to fall back to, so it must be checked here too.
+            // Checked against the full accumulation so far, not just this
+            // chunk's own delta: ChatResponse deltas are raw, often
+            // sub-sentence LLM tokens with no reliable per-chunk boundary to
+            // check individually.
+            if (inspectForFabrication(chatText)) return;
             if (!sentThinkingStatus && replyIsAddressed()) {
               sentThinkingStatus = true;
               sendClient({ type: "status", state: "thinking", detail: "豆包已生成回复文本" });
@@ -1616,11 +1672,7 @@ export function createDoubaoProvider(
             // early here also keeps it off the live caption below, and
             // fabricationSuppressed keeps it off every later flush of this
             // reply (pendingReplyText(), further down this file).
-            if (fabricationGuard.inspectSentence(text, currentReplyId)) {
-              fabricationSuppressed = true;
-              deleteSuppressedTurns();
-              return;
-            }
+            if (inspectForFabrication(text)) return;
             if (!sentThinkingStatus && replyIsAddressed()) {
               sentThinkingStatus = true;
               sendClient({ type: "status", state: "thinking", detail: "豆包已生成语音文本" });
@@ -1886,6 +1938,7 @@ export function createDoubaoProvider(
       if (started) return;
       sessionPlatform = event.platform;
       started = true;
+      routeActiveFromContext = context?.routeActive;
 
       let systemRole = process.env.DOUBAO_SYSTEM_ROLE ?? DEFAULT_AGENT_SYSTEM_PROMPT;
       const scenario: DemoScenario = event.scenario ?? "commute";

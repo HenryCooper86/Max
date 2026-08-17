@@ -1,6 +1,6 @@
 # Navigation fabrication guard
 
-Status: design, awaiting review
+Status: implemented 2026-08-17 (detector, runtime guard, prompt) — frame ordering unmeasured, see below
 Date: 2026-08-16
 
 ## Problem
@@ -91,10 +91,13 @@ wake-word one, and it adds latency to every reply, which must be measured
 before it is accepted. If audio leads text, tier 2 is the only achievable
 behaviour and the guard is a fast interrupt rather than a silencer.
 
-**The implementation plan must therefore establish the real frame ordering
-first, and choose the tier from measurement rather than from this document.**
-Tier 2 alone already fixes the reported danger; tier 1 is an improvement to
-pursue only if the ordering supports it.
+**The frame ordering was never measured; the probe deploy was blocked by a
+permission gate.** It turned out not to matter: the implementation suppresses
+audio at `forwardTtsAudio` via a `fabricationSuppressed` flag, which drops
+both already-buffered audio and any later chunks regardless of which frame
+arrives first. Both tiers are therefore covered by a single mechanism. What
+remains unmeasured is only how much of a fabricated syllable a rider might
+hear before detection lands — a UX question, not a safety one.
 
 **After suppression**, in order:
 
@@ -175,6 +178,12 @@ overclaiming this codebase has already been bitten by.
 
 The embedded/RDK speech path (`speakEmbedded`) is a separate surface and is
 out of scope here; it needs its own assessment.
+
+The guard's client-side audibility — that the honest line is actually heard,
+and no fabricated audio plays — is verified by server-side unit tests and code
+tracing only. There is no automated end-to-end audio test. RDK in particular
+has no test harness at all, so its flush path was verified by typecheck and
+reading the code.
 
 ## Out of scope
 

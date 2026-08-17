@@ -7,6 +7,7 @@ function guard(routeActive = false) {
   const calls = {
     truncate: vi.fn(),
     clearAudio: vi.fn(),
+    clearClientPlayback: vi.fn(),
     speak: vi.fn(),
     suppressItem: vi.fn()
   };
@@ -16,6 +17,7 @@ function guard(routeActive = false) {
       routeActive: () => routeActive,
       truncateReply: calls.truncate,
       clearPendingAudio: calls.clearAudio,
+      clearClientPlayback: calls.clearClientPlayback,
       speakHonestLine: calls.speak,
       suppressItem: calls.suppressItem
     })
@@ -35,6 +37,21 @@ describe("navFabricationGuard", () => {
     expect(g.inspectSentence("前方800米后左转", "item-2")).toBe(true);
     expect(calls.speak).toHaveBeenCalledWith(NO_ROUTE_LINE);
     expect(calls.suppressItem).toHaveBeenCalledWith("item-2");
+  });
+
+  // Regression: every real client aborts in-flight speech-synthesis playback
+  // on the SAME signal clearClientPlayback triggers (web speechSynthesis.
+  // cancel(), iOS stopSpeaking(.immediate), Android tts.stop()). Calling it
+  // after speakHonestLine had already started the correction would cancel
+  // the correction's own utterance the instant it began.
+  it("clears client playback BEFORE speaking the honest line, not after", () => {
+    const { g, calls } = guard();
+    g.inspectSentence("前方800米后左转", "item-order");
+    expect(calls.clearClientPlayback).toHaveBeenCalledTimes(1);
+    expect(calls.speak).toHaveBeenCalledTimes(1);
+    expect(calls.clearClientPlayback.mock.invocationCallOrder[0]).toBeLessThan(
+      calls.speak.mock.invocationCallOrder[0]!
+    );
   });
 
   it("speaks the route-active line when a route is running", () => {

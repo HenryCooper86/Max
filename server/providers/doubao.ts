@@ -50,6 +50,7 @@ import {
 } from "../../shared/session";
 import { buildPreviousConversationPrompt } from "../user-memory";
 import { navFabricationGuard } from "../nav-fabrication-guard";
+import { NAV_FABRICATION_CLEAR_DETAIL } from "../../shared/nav-fabrication";
 
 // The "Max" persona prompt. Overridable per deployment with DOUBAO_SYSTEM_ROLE;
 // keep it consistent with the DOUBAO_SYSTEM_ROLE default in .env.example.
@@ -655,6 +656,7 @@ export function createDoubaoProvider(
     routeActive: () => routeActiveFromContext?.() ?? false,
     truncateReply: () => truncateInterruptedReply(),
     clearPendingAudio: () => clearUndecidedTtsAudio(),
+    clearClientPlayback: () => clearClientPlaybackForFabrication(),
     speakHonestLine: (text) => speakFabricationGuardLine(text),
     suppressItem: (itemId) => suppressedItemIds.add(itemId)
   });
@@ -1144,6 +1146,27 @@ export function createDoubaoProvider(
     void speakEmbedded(text).catch(() => {});
   }
 
+  /** The fabrication guard's clearClientPlayback dep — server/nav-fabrication-
+   *  guard.ts calls this BEFORE speakFabricationGuardLine, and that ordering is
+   *  load-bearing: every real client's speech stack (web speechSynthesis.
+   *  cancel(), iOS stopSpeaking(.immediate), Android tts.stop()) aborts
+   *  in-flight playback on receipt of this same signal, so sending it after
+   *  the honest line had already started speaking would cancel the
+   *  correction itself. Audio can also lead text, so bytes for this reply may
+   *  already be forwarded and playing (or queued) on the client by the time
+   *  text confirms fabrication — forwardTtsAudio's own fabricationSuppressed
+   *  gate stops anything NOT yet forwarded, but cannot recall what already
+   *  left the wire. Reuses the exact signal AsrInfo's barge-in handling
+   *  sends (session-controller.ts's own comment calls it "an immediate,
+   *  privacy-safe signal to clear queued playback"), tagged with a distinct
+   *  detail string so RDK — whose barge-in path normally waits for mic
+   *  corroboration before flushing, which a fabrication event (no rider
+   *  speech) can never provide — routes this one to an unconditional flush
+   *  instead (see rdk/agent/src/main.ts). */
+  function clearClientPlaybackForFabrication(): void {
+    sendClient({ type: "status", state: "hearing", detail: NAV_FABRICATION_CLEAR_DETAIL });
+  }
+
   /** Shared by the ChatResponse (raw token) and TtsSentenceStart/End
    *  (properly-spaced spoken) handlers below — either can be the first to
    *  reveal a fabricated reply, since ChatResponse text typically streams
@@ -1151,22 +1174,12 @@ export function createDoubaoProvider(
    *  arrive at all (the same gap the TTS-fallback browser-speech path exists
    *  to cover) must still be caught from its raw text. Returns true when this
    *  call suppressed — the caller must stop processing this event and skip
-   *  its own caption/status send. */
+   *  its own caption/status send. Callers must gate on replyIsAddressed()
+   *  themselves before calling this: an unaddressed reply must stay silently
+   *  dropped, exactly as it was before this guard existed, not get an
+   *  unprompted honest-line correction the rider never asked for. */
   function inspectForFabrication(text: string): boolean {
     if (!fabricationGuard.inspectSentence(text, currentReplyId)) return false;
-    if (!fabricationSuppressed) {
-      // Audio can lead text, so bytes for this reply may already be forwarded
-      // and playing (or queued) on the client by the time text confirms
-      // fabrication — forwardTtsAudio's own fabricationSuppressed gate (set
-      // right below) stops anything NOT yet forwarded, but cannot recall what
-      // already left the wire. Reuse the exact signal barge-in sends
-      // (session-controller.ts's own comment calls it "an immediate,
-      // privacy-safe signal to clear queued playback") so every client — web,
-      // iOS, RDK — flushes whatever it already has queued before the honest
-      // correction's own audio arrives. Sent once per reply, not once per
-      // suppressed sentence.
-      sendClient({ type: "status", state: "hearing", detail: "豆包检测到导航虚构内容，已拦截" });
-    }
     fabricationSuppressed = true;
     deleteSuppressedTurns();
     return true;
@@ -1647,8 +1660,10 @@ export function createDoubaoProvider(
             // Checked against the full accumulation so far, not just this
             // chunk's own delta: ChatResponse deltas are raw, often
             // sub-sentence LLM tokens with no reliable per-chunk boundary to
-            // check individually.
-            if (inspectForFabrication(chatText)) return;
+            // check individually. Gated on replyIsAddressed(): an unaddressed
+            // reply must stay silently dropped, as it always was, not get an
+            // unprompted honest-line correction the rider never asked for.
+            if (replyIsAddressed() && inspectForFabrication(chatText)) return;
             if (!sentThinkingStatus && replyIsAddressed()) {
               sentThinkingStatus = true;
               sendClient({ type: "status", state: "thinking", detail: "豆包已生成回复文本" });
@@ -1671,8 +1686,11 @@ export function createDoubaoProvider(
             // fabricated reply is suppressed upstream and locally; returning
             // early here also keeps it off the live caption below, and
             // fabricationSuppressed keeps it off every later flush of this
-            // reply (pendingReplyText(), further down this file).
-            if (inspectForFabrication(text)) return;
+            // reply (pendingReplyText(), further down this file). Gated on
+            // replyIsAddressed(): an unaddressed reply must stay silently
+            // dropped, as it always was, not get an unprompted honest-line
+            // correction the rider never asked for.
+            if (replyIsAddressed() && inspectForFabrication(text)) return;
             if (!sentThinkingStatus && replyIsAddressed()) {
               sentThinkingStatus = true;
               sendClient({ type: "status", state: "thinking", detail: "豆包已生成语音文本" });

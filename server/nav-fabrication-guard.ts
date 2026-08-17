@@ -13,6 +13,14 @@ export type NavFabricationGuardDeps = {
   truncateReply: () => void;
   /** Drop audio not yet forwarded. No-op when nothing is held. */
   clearPendingAudio: () => void;
+  /** Tell the client to flush whatever audio it already has queued or
+   *  playing. MUST be called, and MUST complete, before speakHonestLine:
+   *  every real client's speech stack (web speechSynthesis.cancel(), iOS
+   *  stopSpeaking(.immediate), Android tts.stop()) treats this same signal
+   *  as "abort in-flight utterance" — calling it after speakHonestLine has
+   *  already started the correction cancels the correction itself the
+   *  instant it begins. */
+  clearClientPlayback: () => void;
   speakHonestLine: (text: string) => void;
   /** Mark the upstream conversation item for deletion so the model does not
    *  build on its own fabrication. */
@@ -37,6 +45,8 @@ export function navFabricationGuard(deps: NavFabricationGuardDeps) {
         firedThisReply = true;
         deps.clearPendingAudio();
         deps.truncateReply();
+        // Ordering is load-bearing here — see clearClientPlayback's doc comment.
+        deps.clearClientPlayback();
         deps.speakHonestLine(deps.routeActive() ? ROUTE_ACTIVE_LINE : NO_ROUTE_LINE);
       }
       if (itemId) deps.suppressItem(itemId);

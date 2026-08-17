@@ -152,12 +152,6 @@ export class DeviceActivityContext {
   };
   private recent: DeviceActivityIntent["target"][] = [];
 
-  /** Whether a tracked activity is currently running, for callers that must
-   *  not keep a parallel copy of this state. */
-  isActive(target: DeviceActivityIntent["target"]): boolean {
-    return this.active[target];
-  }
-
   commandFor(text: string, platform: string | undefined): DeviceCommand | null {
     const direct = extractDeviceCommandForPlatform(text, platform);
     if (direct) return direct;

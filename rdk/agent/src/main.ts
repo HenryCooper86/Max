@@ -28,6 +28,7 @@ import { createRelayClient, nextBackoffMs } from "./relay";
 import { createVisionClient, type VisionClient, type VisionEvent } from "./vision-client";
 import { startHeartbeat } from "./watchdog";
 import type { AgentEvent, DeviceResultEvent } from "../../../shared/agent";
+import { NAV_FABRICATION_CLEAR_DETAIL } from "../../../shared/nav-fabrication";
 
 const VISION_RECONNECT_MS = 2_000;
 
@@ -412,14 +413,24 @@ function start(): void {
         advertiser.setToken(event.token);
       }
       if (event.type === "status" && event.state === "hearing") {
-        // Barge-in: the rider started talking, so drop the queued reply — but
-        // only if our own echo-cancelled mic heard them too. Doubao's VAD runs
-        // on the uplink, so residual echo trips it while Max is speaking, and
-        // acting on that is what made the loop self-sustaining.
-        bargeIn.request(() => {
-          console.log("[audio] barge-in confirmed by the mic; cutting the reply");
+        if (event.detail === NAV_FABRICATION_CLEAR_DETAIL) {
+          // The relay caught the model fabricating navigation — not rider
+          // speech, so there is no mic signal to corroborate and never will
+          // be. Flush unconditionally: whatever fabricated audio is already
+          // queued or playing must stop now, the same way a confirmed
+          // barge-in below does.
           playback.flush();
-        });
+        } else {
+          // Barge-in: the rider started talking, so drop the queued reply —
+          // but only if our own echo-cancelled mic heard them too. Doubao's
+          // VAD runs on the uplink, so residual echo trips it while Max is
+          // speaking, and acting on that is what made the loop
+          // self-sustaining.
+          bargeIn.request(() => {
+            console.log("[audio] barge-in confirmed by the mic; cutting the reply");
+            playback.flush();
+          });
+        }
       }
       if (event.type === "hazard.alert" && event.interrupt) {
         playback.flush();

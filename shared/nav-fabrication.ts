@@ -67,3 +67,15 @@ export function assertsNavigation(text: string): boolean {
   // guidance on its own ("进入导航模式", "直行区间测速").
   return false;
 }
+
+/**
+ * The `detail` string the relay sends on the fabrication guard's client-clear
+ * `status`/`hearing` event (server/providers/doubao.ts's
+ * clearClientPlayback). A shared constant, not two independently hand-typed
+ * literals, because RDK (rdk/agent/src/main.ts) must match it exactly to
+ * route this specific signal to an unconditional playback flush instead of
+ * its normal mic-corroborated barge-in path: a fabrication event has no
+ * rider speech to corroborate, so the mic-gated path would silently let the
+ * fabricated audio already queued play out in full.
+ */
+export const NAV_FABRICATION_CLEAR_DETAIL = "豆包检测到导航虚构内容，已拦截";

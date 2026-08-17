@@ -3,8 +3,7 @@ import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 // Regression coverage for the fabrication-guard PROVIDER wiring in
 // server/providers/doubao.ts. tests/nav-fabrication-guard.test.ts covers the
 // pure decision function (server/nav-fabrication-guard.ts) in isolation; this
-// file drives the real socket-facing wiring for the three gaps a review round
-// found in that wiring:
+// file drives the real socket-facing wiring. Round 1 findings:
 //   1. Critical: fabricated AUDIO was never muted locally — only the caption
 //      was suppressed, so the rider still heard the fabricated reply.
 //   2. Important: the ChatResponse/chatText fallback-to-browser-speech path
@@ -15,6 +14,18 @@ import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 //      (DeviceActivityContext) instead of the relay's actual route state, and
 //      could go stale-true — the dangerous direction, since it promises a nav
 //      prompt that will never come.
+// Round 2 findings, on the fixes for the above:
+//   4. Critical: the client-clear "hearing" status was sent AFTER the honest
+//      line's own transcript, not before — every real client's speech stack
+//      cancels in-flight playback on that same signal, so it cancelled the
+//      correction it was meant to protect.
+//   5. Critical (RDK only): the clear signal routed through the mic-gated
+//      barge-in path, which a fabrication event (no rider speech) can never
+//      corroborate — covered by rdk/agent tsc, not vitest, since RDK has no
+//      test suite of its own.
+//   6. Important: the guard ran before replyIsAddressed(), so an unaddressed
+//      reply could get an unprompted honest-line correction instead of
+//      staying silently dropped.
 // Same MockWebSocket/frame-injection harness idiom as doubao-wake.test.ts and
 // doubao-nav-speech.test.ts.
 
@@ -69,6 +80,7 @@ import type { AgentProvider, ProviderSessionContext, SessionStartEvent } from ".
 import { createMockRouteProvider } from "../server/routing";
 import { AgentSessionController, type ProviderFactory } from "../server/session-controller";
 import { NO_ROUTE_LINE, ROUTE_ACTIVE_LINE } from "../server/nav-fabrication-guard";
+import { NAV_FABRICATION_CLEAR_DETAIL } from "../shared/nav-fabrication";
 
 // Doubao server-response event codes (EventReceive is a non-exported const enum).
 const CONNECTION_STARTED = 50;
@@ -192,9 +204,41 @@ describe("doubao provider — fabrication guard mutes audio, not just the captio
 
     // Reuses the exact signal barge-in sends (session-controller.ts's own
     // comment: "an immediate, privacy-safe signal to clear queued playback"),
-    // so every client flushes whatever it already has queued before the
-    // honest correction's own audio arrives.
-    expect(clientEvents(send)).toContainEqual(expect.objectContaining({ type: "status", state: "hearing" }));
+    // tagged with the detail string RDK matches to route it to an
+    // unconditional flush (rdk/agent/src/main.ts) rather than its normal
+    // mic-corroborated barge-in path.
+    expect(clientEvents(send)).toContainEqual(
+      expect.objectContaining({ type: "status", state: "hearing", detail: NAV_FABRICATION_CLEAR_DETAIL })
+    );
+    await upstream.emit("message", jsonFrame(TTS_ENDED, {}));
+  });
+
+  // Regression: every real client's speech stack (web speechSynthesis.
+  // cancel(), iOS stopSpeaking(.immediate), Android tts.stop()) aborts
+  // in-flight playback on receipt of the SAME "hearing" signal the honest
+  // line's own transcript/audio rides behind. Sending the clear signal AFTER
+  // the honest line started speaking cancelled the correction itself.
+  it("sends the client playback-clear signal BEFORE the honest-line transcript, not after", async () => {
+    stubWeatherFetch();
+    const { client, send } = makeClient();
+    const { upstream } = await startLiveSession(client);
+
+    await riderTurn(upstream, "Max 现在几点");
+    await upstream.emit("message", jsonFrame(TTS_SENTENCE_START, { reply_id: "reply-fab", text: "前方800米后左转" }));
+
+    const events = clientEvents(send);
+    // Matched on the specific detail, not just state === "hearing" — AsrInfo's
+    // own ordinary barge-in reset (riderTurn's ASR_INFO frame, above) sends an
+    // earlier "hearing" status of its own with a different detail, which
+    // would otherwise make this assertion pass regardless of the fabrication
+    // guard's own signal's real position.
+    const clearIndex = events.findIndex(
+      (event) => event.type === "status" && event.state === "hearing" && event.detail === NAV_FABRICATION_CLEAR_DETAIL
+    );
+    const honestLineIndex = events.findIndex((event) => event.type === "transcript" && event.text === NO_ROUTE_LINE);
+    expect(clearIndex).toBeGreaterThanOrEqual(0);
+    expect(honestLineIndex).toBeGreaterThanOrEqual(0);
+    expect(clearIndex).toBeLessThan(honestLineIndex);
     await upstream.emit("message", jsonFrame(TTS_ENDED, {}));
   });
 
@@ -382,5 +426,53 @@ describe("doubao provider — honest-line selection reads the supplied route sta
       true
     );
     await controller.close();
+  });
+});
+
+describe("doubao provider — fabrication guard defers to replyIsAddressed()", () => {
+  // Both cases inject the fabricated text WHILE the wake-word decision is
+  // still undecided (before ASR_ENDED) — Doubao can answer before the rider's
+  // turn is finalized as unaddressed. At that point replyIsAddressed()
+  // returns false WITHOUT latching replyDecided, so the pre-existing
+  // "replyDecided && !replyAddressed" early-return earlier in the same
+  // handler does not intercept it either; only the guard's own
+  // replyIsAddressed() check (added this round) does. Before that fix, the
+  // guard ran unconditionally and spoke an unprompted correction the rider
+  // never asked for, on a reply that used to be silently dropped.
+  it("stays silent on an unaddressed reply via the TtsSentence path — no unprompted correction", async () => {
+    stubWeatherFetch();
+    const { client, send } = makeClient();
+    const { upstream } = await startLiveSession(client);
+
+    await upstream.emit("message", jsonFrame(ASR_INFO, {}));
+    await upstream.emit("message", jsonFrame(ASR_RESPONSE, { results: [{ text: "今天天气怎么样" }] }));
+    await upstream.emit(
+      "message",
+      jsonFrame(TTS_SENTENCE_START, { reply_id: "reply-unaddressed", text: "前方800米后左转" })
+    );
+    await upstream.emit("message", jsonFrame(ASR_ENDED, {}));
+
+    expect(
+      clientEvents(send).some(
+        (event) => event.type === "transcript" && (event.text === NO_ROUTE_LINE || event.text === ROUTE_ACTIVE_LINE)
+      )
+    ).toBe(false);
+  });
+
+  it("stays silent on an unaddressed reply via the chatText path — no unprompted correction", async () => {
+    stubWeatherFetch();
+    const { client, send } = makeClient();
+    const { upstream } = await startLiveSession(client);
+
+    await upstream.emit("message", jsonFrame(ASR_INFO, {}));
+    await upstream.emit("message", jsonFrame(ASR_RESPONSE, { results: [{ text: "今天天气怎么样" }] }));
+    await upstream.emit("message", jsonFrame(CHAT_RESPONSE, { content: "前方800米后左转" }));
+    await upstream.emit("message", jsonFrame(ASR_ENDED, {}));
+
+    expect(
+      clientEvents(send).some(
+        (event) => event.type === "transcript" && (event.text === NO_ROUTE_LINE || event.text === ROUTE_ACTIVE_LINE)
+      )
+    ).toBe(false);
   });
 });

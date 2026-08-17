@@ -41,6 +41,20 @@ describe("buildToolGroundingPrompt", () => {
     expect(prompt).toContain("系统");
     expect(prompt).toContain("成功");
   });
+
+  it("forbids the model from narrating navigation it was not given", () => {
+    // The same block tells the model never to refuse a navigation request. That
+    // must not read as licence to invent one when the pipeline fails — which is
+    // exactly what happened on h2o on 2026-08-16.
+    expect(prompt).toContain("不要自己编造");
+    expect(prompt).toContain("导航提示");
+  });
+
+  it("keeps the anti-fabrication rule where a deployment override cannot drop it", () => {
+    // DEFAULT_AGENT_SYSTEM_PROMPT is replaceable via DOUBAO_SYSTEM_ROLE; this
+    // block is always appended, so the rule must live here and not there.
+    expect(buildToolGroundingPrompt()).toContain("不要自己编造");
+  });
 });
 
 describe("redactContactNames", () => {

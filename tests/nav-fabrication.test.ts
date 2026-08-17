@@ -32,7 +32,23 @@ const ALLOWED = [
   // guidance (distance + 后 + verb, "预计 N 分钟"), but not navigation at all.
   "建议每5000公里后到店保养一次",
   "预计10分钟后有阵雨，建议减速慢行",
-  "油箱还有5公里的续航，建议尽快加油"
+  "油箱还有5公里的续航，建议尽快加油",
+  // Whole-branch-review regression: DISTANCE_TO_MANEUVER's lead-in-word
+  // alternative used to match on a bare distance with no maneuver/arrival
+  // token, muting hazard and weather warnings that happen to start with
+  // "前方<distance>" or "经过<distance>".
+  "前方3公里有强降雨，建议减速慢行。",
+  "前方200米有事故，注意避让。",
+  "前方500米有加油站",
+  "经过5公里的隧道时记得开灯",
+  // Same review: MANEUVER_IN_CONTEXT's "然后...直行" shape matched "直行车道"
+  // (a lane name), not just the maneuver verb "直行" on its own.
+  "前方有减速带，然后注意直行车道的积水",
+  // Follow-up review: DISTANCE_TO_MANEUVER's "直行" branch had the same gap
+  // MANEUVER_IN_CONTEXT was fixed for, still matching the lane/zone name
+  // "直行车道" and muting these hazard warnings.
+  "3公里后直行车道封闭，请提前变道",
+  "前方2公里后直行车道有事故"
 ];
 
 describe("assertsNavigation", () => {

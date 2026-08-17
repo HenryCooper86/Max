@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createNavPromptHandler, type NavPromptSpeech } from "../server/navigation-prompts";
 import type { NavPromptEvent, NavRouteEvent } from "../shared/agent";
 
@@ -23,6 +23,7 @@ function harness(
   overrides: {
     route?: NavRouteEvent;
     activeRoute?: () => NavRouteEvent | undefined;
+    clearRoute?: () => void;
     now?: () => number;
     maxPerMinute?: number;
   } = {}
@@ -32,6 +33,7 @@ function harness(
   const handle = createNavPromptHandler({
     activeRoute: overrides.activeRoute ?? (() => active),
     speak: (speech) => spoken.push(speech),
+    clearRoute: overrides.clearRoute,
     now: overrides.now,
     maxPerMinute: overrides.maxPerMinute
   });
@@ -245,5 +247,52 @@ describe("createNavPromptHandler", () => {
     }
     handle({ type: "nav.prompt", promptId: "p-0", routeCommandId: "nav-7", kind: "arrived" });
     expect(spoken).toHaveLength(258);
+  });
+
+  describe("clearRoute", () => {
+    // Whole-branch-review finding: routeActive() (server/routing.ts's
+    // lastRoute) was cleared only by a fresh "start" request, so it read
+    // stale-true for the rest of the session after any route that ended by
+    // arrival or by giving up — the fabrication guard's honest line would
+    // then promise a nav prompt that was never coming again.
+    it("clears the route on arrived", () => {
+      const cleared = vi.fn();
+      const { handle } = harness({ clearRoute: cleared });
+      handle({ type: "nav.prompt", promptId: "p-1", routeCommandId: "nav-7", kind: "arrived" });
+      expect(cleared).toHaveBeenCalledTimes(1);
+    });
+
+    it("clears the route on rerouteFailed", () => {
+      const cleared = vi.fn();
+      const { handle } = harness({ clearRoute: cleared });
+      handle({ type: "nav.prompt", promptId: "p-1", routeCommandId: "nav-7", kind: "rerouteFailed" });
+      expect(cleared).toHaveBeenCalledTimes(1);
+    });
+
+    it("does NOT clear the route on offRoute, locationLost, or a maneuver prompt", () => {
+      const cleared = vi.fn();
+      const { handle } = harness({ clearRoute: cleared });
+      handle({ type: "nav.prompt", promptId: "p-1", routeCommandId: "nav-7", kind: "offRoute" });
+      handle({ type: "nav.prompt", promptId: "p-2", routeCommandId: "nav-7", kind: "locationLost" });
+      handle(maneuver({ promptId: "p-3" }));
+      expect(cleared).not.toHaveBeenCalled();
+    });
+
+    it("does not clear the route for a stale or invalid arrived event", () => {
+      const cleared = vi.fn();
+      const stale = harness({ clearRoute: cleared });
+      stale.handle({ type: "nav.prompt", promptId: "p-1", routeCommandId: "nav-old", kind: "arrived" });
+      expect(cleared).not.toHaveBeenCalled();
+
+      const invalidId = harness({ clearRoute: cleared });
+      invalidId.handle({ type: "nav.prompt", promptId: " ", routeCommandId: "nav-7", kind: "arrived" });
+      expect(cleared).not.toHaveBeenCalled();
+    });
+
+    it("omitting clearRoute changes nothing about an arrived prompt still being spoken", () => {
+      const { handle, spoken } = harness();
+      handle({ type: "nav.prompt", promptId: "p-1", routeCommandId: "nav-7", kind: "arrived" });
+      expect(spoken).toEqual([{ text: "已到达目的地。", interrupt: false }]);
+    });
   });
 });

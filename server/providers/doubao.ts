@@ -945,7 +945,20 @@ export function createDoubaoProvider(
 
   // Deleting either side removes the complete QA pair upstream. Prefer the
   // rider item so one suppressed turn never generates two delete requests.
+  //
+  // Skipped once fabricationSuppressed is set: inspectForFabrication (via the
+  // guard's suppressItem dep) has already queued — and, via its own
+  // deleteSuppressedTurns() call, already attempted — a delete for this
+  // reply's own item the instant fabrication was detected, independent of
+  // whether the turn later resolves addressed or not. That already removes
+  // the whole QA pair, so adding the question-side item here too would be
+  // exactly the second delete request this function's own invariant forbids.
+  // Every caller of this function still calls deleteSuppressedTurns()
+  // unconditionally right after, so a reply-item delete that failed on its
+  // first attempt still gets retried — this only prevents queuing a second,
+  // different item that was never needed.
   function markCurrentTurnSuppressed(): void {
+    if (fabricationSuppressed) return;
     const itemId = currentQuestionId ?? currentReplyId;
     if (itemId) suppressedItemIds.add(itemId);
   }

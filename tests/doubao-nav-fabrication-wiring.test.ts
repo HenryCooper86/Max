@@ -107,6 +107,8 @@ const CHAT_RESPONSE = 550;
 const CHAT_ENDED = 559;
 const FULL_SERVER_RESPONSE = 0b1001;
 const AUDIO_ONLY_RESPONSE = 0b1011;
+// Client-request event code (EventSend is a non-exported const enum).
+const CONVERSATION_DELETE = 514;
 
 function uint32(value: number) {
   const buffer = Buffer.alloc(4);
@@ -125,6 +127,13 @@ function audioFrame(pcm: Buffer, sessionId = "s") {
   const header = Buffer.from([0x11, (AUDIO_ONLY_RESPONSE << 4) | 0b0100, 0x00, 0x00]);
   const session = Buffer.from(sessionId);
   return Buffer.concat([header, uint32(TTS_RESPONSE), uint32(session.length), session, uint32(pcm.length), pcm]);
+}
+
+/** The event code of a binary frame the provider sent TO the upstream socket
+ *  (upstream.sent) — buildFullClientRequest's own header shape, same offset
+ *  doubao-nav-speech.test.ts's identically-named helper reads. */
+function clientFrameEvent(frame: unknown): number | undefined {
+  return Buffer.isBuffer(frame) && frame.length >= 8 ? frame.readUInt32BE(4) : undefined;
 }
 
 const silentLog = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
@@ -537,5 +546,46 @@ describe("doubao provider — suppression does not wait on the wake decision", (
     // detection — must still reach the rider once it does.
     const honestLine = clientEvents(send).find((event) => event.type === "transcript" && event.text === NO_ROUTE_LINE);
     expect(honestLine).toMatchObject({ final: true, useBrowserSpeech: true });
+  });
+});
+
+describe("doubao provider — at most one upstream delete per suppressed turn", () => {
+  // Regression: the guard's own suppressItem (the reply's own item id) and
+  // markCurrentTurnSuppressed (the rider's question item id) both queue a
+  // delete for the same QA pair — deleting either side removes the whole
+  // pair upstream (see markCurrentTurnSuppressed's own doc comment), so
+  // sending both is exactly the second, redundant delete request that
+  // comment says a suppressed turn must never generate. Doubao answering a
+  // delete of an already-removed item with ErrorInformation is treated as
+  // terminal a few lines below (frame.event === EventReceive.ConnectionFailed
+  // et al.) and closes the socket — so this is not merely a wasted frame.
+  it("sends exactly one ConversationDelete for a turn fabricated while undecided that resolves unaddressed", async () => {
+    stubWeatherFetch();
+    const { client } = makeClient();
+    const { upstream } = await startLiveSession(client);
+
+    // A real, distinct question_id so markCurrentTurnSuppressed (were it not
+    // skipped) would queue a DIFFERENT item than the guard's own reply-id —
+    // the exact shape of the reported duplicate, not two deletes of the same id.
+    await upstream.emit("message", jsonFrame(ASR_INFO, { question_id: "question-dup-delete" }));
+    // Never says "Max" at all — this turn resolves unaddressed.
+    await upstream.emit("message", jsonFrame(ASR_RESPONSE, { results: [{ text: "帮我导航到人民广场" }] }));
+
+    // Doubao answers — and fabricates — before the wake decision is final.
+    // inspectForFabrication runs unconditionally (see the describe block
+    // above) and queues+sends its own delete for reply-dup-delete right here.
+    await upstream.emit(
+      "message",
+      jsonFrame(TTS_SENTENCE_START, { reply_id: "reply-dup-delete", text: "前方800米后左转" })
+    );
+
+    // The turn finalizes with no wake phrase ever having arrived — AsrEnded's
+    // unaddressed branch calls markCurrentTurnSuppressed(), which must now
+    // skip (fabricationSuppressed is already set) rather than queuing
+    // question-dup-delete as a second delete for the same pair.
+    await upstream.emit("message", jsonFrame(ASR_ENDED, {}));
+
+    const deleteFrames = upstream.sent.filter((frame) => clientFrameEvent(frame) === CONVERSATION_DELETE);
+    expect(deleteFrames).toHaveLength(1);
   });
 });

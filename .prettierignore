@@ -1,0 +1,7 @@
+dist
+node_modules
+package-lock.json
+shared/generated
+__pycache__
+.pytest_cache
+.superpowers

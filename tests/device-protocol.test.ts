@@ -1,0 +1,174 @@
+import { describe, expect, it } from "vitest";
+import { parseClientEvent } from "../server/session-controller";
+import { CLIENT_EVENT_TYPES, SERVER_EVENT_TYPES } from "../shared/generated/agent-protocol";
+
+const encode = (value: unknown) => Buffer.from(JSON.stringify(value));
+
+describe("generated protocol", () => {
+  it("includes the device events", () => {
+    expect(SERVER_EVENT_TYPES).toContain("device.command");
+    expect(CLIENT_EVENT_TYPES).toContain("device.result");
+  });
+});
+
+describe("parseClientEvent — device.result", () => {
+  it("accepts a minimal ok result", () => {
+    expect(parseClientEvent(encode({ type: "device.result", commandId: "c1", status: "ok" }))).toEqual({
+      type: "device.result",
+      commandId: "c1",
+      status: "ok",
+      reason: undefined,
+      detail: undefined
+    });
+  });
+
+  it("accepts a failure with reason and detail", () => {
+    expect(
+      parseClientEvent(
+        encode({ type: "device.result", commandId: "c2", status: "denied", reason: "unsafe.speed", detail: "骑行中" })
+      )
+    ).toEqual({
+      type: "device.result",
+      commandId: "c2",
+      status: "denied",
+      reason: "unsafe.speed",
+      detail: "骑行中"
+    });
+  });
+
+  it("rejects an unknown status", () => {
+    expect(() => parseClientEvent(encode({ type: "device.result", commandId: "c3", status: "maybe" }))).toThrow(
+      "Invalid device.result status"
+    );
+  });
+
+  it("rejects a missing or oversized commandId", () => {
+    expect(() => parseClientEvent(encode({ type: "device.result", status: "ok" }))).toThrow(
+      "Invalid device.result commandId"
+    );
+    expect(() => parseClientEvent(encode({ type: "device.result", commandId: "x".repeat(121), status: "ok" }))).toThrow(
+      "Invalid device.result commandId"
+    );
+  });
+
+  it("rejects an oversized detail", () => {
+    expect(() =>
+      parseClientEvent(encode({ type: "device.result", commandId: "c4", status: "failed", detail: "x".repeat(501) }))
+    ).toThrow("Invalid device.result detail");
+  });
+});
+
+describe("parseClientEvent — hazard.report", () => {
+  it("is a client event, so real alerts can reach the transcript", () => {
+    expect(CLIENT_EVENT_TYPES).toContain("hazard.report");
+  });
+
+  it("accepts a report from the board", () => {
+    const event = parseClientEvent(
+      encode({
+        type: "hazard.report",
+        threat: "forward_collision",
+        direction: "front",
+        severity: "critical",
+        label: "前车急刹",
+        message: "前车急刹，注意保持车距！",
+        advice: "立即收油，平稳减速。",
+        ttcSeconds: 1.4,
+        handoverMs: 180
+      })
+    );
+    expect(event).toMatchObject({
+      type: "hazard.report",
+      threat: "forward_collision",
+      severity: "critical",
+      ttcSeconds: 1.4,
+      handoverMs: 180
+    });
+  });
+
+  it("accepts a shadow-era report with no measured latency", () => {
+    const event = parseClientEvent(
+      encode({
+        type: "hazard.report",
+        threat: "tailgating",
+        direction: "rear",
+        severity: "caution",
+        label: "后车跟车过近",
+        message: "后车跟车过近，注意保持车距。",
+        advice: "保持匀速，不要急刹。"
+      })
+    );
+    expect(event).toMatchObject({ type: "hazard.report", threat: "tailgating" });
+  });
+
+  it("rejects a report with no threat", () => {
+    expect(() =>
+      parseClientEvent(
+        encode({
+          type: "hazard.report",
+          direction: "front",
+          severity: "critical",
+          label: "x",
+          message: "y",
+          advice: "z"
+        })
+      )
+    ).toThrow(/threat/);
+  });
+
+  it("rejects an unknown severity rather than passing it through", () => {
+    // The transcript and QA record key off severity; an unrecognised value
+    // would render as neither caution nor critical.
+    expect(() =>
+      parseClientEvent(
+        encode({
+          type: "hazard.report",
+          threat: "forward_collision",
+          direction: "front",
+          severity: "catastrophic",
+          label: "x",
+          message: "y",
+          advice: "z"
+        })
+      )
+    ).toThrow(/severity/);
+  });
+});
+
+describe("parseClientEvent — camera.frame", () => {
+  it("is a client event, so a board-captured frame can reach the relay", () => {
+    expect(CLIENT_EVENT_TYPES).toContain("camera.frame");
+  });
+
+  it("accepts a camera frame", () => {
+    const event = parseClientEvent(encode({ type: "camera.frame", commandId: "c1", image: "AAAA" }));
+    expect(event).toMatchObject({ type: "camera.frame", commandId: "c1" });
+  });
+
+  it("rejects a frame with no commandId", () => {
+    expect(() => parseClientEvent(encode({ type: "camera.frame", image: "AAAA" }))).toThrow(
+      "Invalid camera.frame commandId"
+    );
+  });
+
+  it("rejects an oversized frame", () => {
+    // A 640px JPEG is ~40 KB, ~55 KB base64. The cap stops a client pushing
+    // megabytes through the control plane. This particular size (400,000
+    // chars) is big enough to also trip the generic client-event size gate
+    // (MAX_CLIENT_JSON_BYTES) before reaching the camera.frame-specific
+    // check below — see the next test for one that isolates that check.
+    const huge = "A".repeat(400_000);
+    expect(() => parseClientEvent(encode({ type: "camera.frame", commandId: "c1", image: huge }))).toThrow();
+  });
+
+  it("rejects an image over the camera.frame cap specifically, not via the generic size gate", () => {
+    // 210,000 chars clears the field-specific cap (200,000) but stays well
+    // under MAX_CLIENT_JSON_BYTES (256 KiB, ~262,144 bytes total for this
+    // payload), so this exercises the camera.frame image check itself rather
+    // than the generic "Client event is too large" gate above it.
+    const overCap = "A".repeat(210_000);
+    expect(() => parseClientEvent(encode({ type: "camera.frame", commandId: "c1", image: overCap }))).toThrow(
+      "Invalid camera.frame image"
+    );
+  });
+});

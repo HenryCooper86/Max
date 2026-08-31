@@ -1,0 +1,369 @@
+"""Front and rear cameras on the RDK X5, driven through ``mipi_cam``.
+
+Both cameras stay open for the life of the service. The relay's
+DEVICE_RESULT_TIMEOUT_MS is 8 s, and cold-starting the pipeline inside a capture
+could exceed it — which would have Max tell the rider the capture failed when it
+had not. Keeping the cameras streaming reduces a capture to a frame grab.
+
+The pair owns the only camera handles in the process, because the board permits
+exactly one holder of the ISP. Photo, preview, recording and ADAS all read the
+frame those handles already have; none of them opens hardware.
+
+``MipiCamera`` pulls in ROS and OpenCV, which exist only on the board, so it is
+imported lazily: the policy tests run anywhere, and only ``open()`` needs real
+hardware.
+"""
+
+from __future__ import annotations
+
+import threading
+import time
+from datetime import datetime
+from pathlib import Path
+
+from gallery import MAX_RECORDING_SECONDS, Gallery
+from mipi_camera import JPEG_MAX_AGE_MS
+
+WIDTH = 1920
+HEIGHT = 1080
+#: Recording sample rate. Well under the sensor's ~24 fps, because a segment is
+#: concatenated JPEG and the disk, not the camera, is the limit here.
+RECORDING_FPS = 10.0
+
+
+class CameraPair:
+    def __init__(self, front_channel: int, rear_channel: int) -> None:
+        self.front_channel = front_channel
+        self.rear_channel = rear_channel
+        self.front = None
+        self.rear = None
+        self.opened = False
+        #: Cameras i2c saw but whose open failed — a boot race, not an empty
+        #: connector. The service exits on these so systemd retries the open.
+        self.failed: list[str] = []
+        self.recording_id: str | None = None
+        self.recording_started_at: float | None = None
+        self.recording_sides: dict[str, str | None] = {"front": None, "rear": None}
+        self._recording_dir: Path | None = None
+        #: Held for the life of a recording so the writer can re-check free
+        #: space; the disk is the only thing that can end a clip early.
+        self._recording_gallery: Gallery | None = None
+        self._recording_frames = 0
+        #: Frames actually written per side, for the manifest's achieved fps.
+        #: The nominal RECORDING_FPS is a target the encoder measurably misses.
+        self._recording_written = {"front": 0, "rear": 0}
+        self._recording_stop = threading.Event()
+        self._recording_thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+        self._stop_timer: threading.Timer | None = None
+
+    def open(self) -> None:
+        from mipi_camera import MipiCamera, reap_orphans  # noqa: PLC0415 - board-only
+        from sensors import discover  # noqa: PLC0415
+
+        # Once for the pair, before the first open — a per-camera reap would
+        # SIGKILL the front camera's mipi_cam while starting the rear one.
+        reap_orphans()
+
+        # Never hardcode a sensor: an assumed IMX219 is why the OV5647 in CAM1
+        # could not be opened, and the binding path cannot open either one.
+        attached = discover()
+        self.failed = []
+        for attr, channel in (("front", self.front_channel), ("rear", self.rear_channel)):
+            sensor = attached.get(channel)
+            if sensor is None:
+                print(f"[vision] no camera on channel {channel} ({attr})", flush=True)
+                continue
+            camera = MipiCamera(
+                channel=channel, sensor=sensor, camera=attr, width=WIDTH, height=HEIGHT
+            )
+            try:
+                camera.start()
+                setattr(self, attr, camera)
+                print(f"[vision] {attr}: {sensor} on channel {channel}", flush=True)
+            except Exception as error:  # noqa: BLE001 - the caller decides what a miss means
+                camera.stop()
+                # i2c answered but the stream never came — the documented
+                # OV5647 ISP stall, seen again at the 2026-08-01 boot. Record
+                # it: "detected but failed" is a retryable race, where an empty
+                # connector is a configuration.
+                self.failed.append(attr)
+                print(
+                    f"[vision] {attr} camera unavailable on channel {channel}: {error}",
+                    flush=True,
+                )
+            except BaseException:
+                # SIGTERM during acquisition, which raises SystemExit and so
+                # misses the branch above. This camera never became ours, so
+                # nothing downstream will stop it — and leaving its spin thread
+                # and mipi_cam child running is what turned a stop 8 s into
+                # startup into an abort (status=6/signal) rather than an exit.
+                camera.stop()
+                raise
+        self.opened = self.front is not None or self.rear is not None
+
+    def _grab(self, camera, max_age_ms: float | None = None) -> bytes | None:
+        """Latest frame as JPEG, or None if this camera is absent or has no frame.
+
+        ``max_age_ms`` is a pass-through to the camera's own staleness budget
+        (see ``FrameBuffer.jpeg``); bare calls (photo, the recording probe)
+        keep the exact-frame semantics unchanged.
+        """
+        if camera is None:
+            return None
+        try:
+            return camera.jpeg(max_age_ms)
+        except Exception:  # noqa: BLE001 - one dead camera must not fail the pair
+            return None
+
+    def front_jpeg_for_watch(self, max_age_ms: float | None = JPEG_MAX_AGE_MS) -> bytes | None:
+        """The vision.watch sampler's frame grab.
+
+        Mirrors bench_server's ``/frame/front`` route exactly -- ``_grab``
+        then ``downscale`` to the same target width -- but in-process rather
+        than over HTTP: the sampler lives inside this service already, so
+        there is no socket to cross for a frame the process already holds.
+
+        Both imports are function-local, not the usual board-only cv2/numpy
+        kind: bench_server imports ``RECORDING_FPS`` from this module, so a
+        module-level import of ``downscale`` here would be a cycle; watch.tuning
+        is kept local alongside it rather than singled out as the one eager one.
+        """
+        from bench_server import downscale  # noqa: PLC0415 - see docstring
+        from watch.tuning import DEFAULT as watch_default  # noqa: PLC0415
+
+        data = self._grab(self.front, max_age_ms=max_age_ms)
+        if data is None:
+            return None
+        return downscale(data, watch_default.frame_width)
+
+    def capture_photo(self, gallery: Gallery) -> dict:
+        if not gallery.has_space():
+            return {"status": "failed", "reason": "storage.full"}
+
+        pair_id = gallery.new_pair_id(datetime.now())
+        directory = gallery.pair_dir(pair_id)
+        directory.mkdir(parents=True, exist_ok=True)
+
+        front_name = None
+        rear_name = None
+        for name, sensor in (("front.jpg", self.front), ("rear.jpg", self.rear)):
+            data = self._grab(sensor)
+            if data is None:
+                continue
+            (directory / name).write_bytes(data)
+            if name.startswith("front"):
+                front_name = name
+            else:
+                rear_name = name
+
+        if front_name is None and rear_name is None:
+            return {"status": "failed", "reason": "capture.failed"}
+
+        gallery.write_manifest(pair_id, front_name, rear_name, "photo")
+        degraded = front_name is None or rear_name is None
+        return {"status": "ok", "detail": f"{pair_id}{' degraded' if degraded else ''}"}
+
+    def start_recording(self, gallery: Gallery, drive: bool = True) -> dict:
+        with self._lock:
+            if self.recording_id is not None:
+                return {"status": "failed", "reason": "camera.recording"}
+            if not gallery.has_space():
+                return {"status": "failed", "reason": "storage.full"}
+
+            # Probe each camera now so the manifest can name only the files that
+            # will actually exist. Claiming a rear clip that was never written
+            # would be the same class of lie as a false success.
+            sides: dict[str, str | None] = {
+                "front": "front.mjpeg" if self._grab(self.front) is not None else None,
+                "rear": "rear.mjpeg" if self._grab(self.rear) is not None else None,
+            }
+            if sides["front"] is None and sides["rear"] is None:
+                return {"status": "failed", "reason": "capture.failed"}
+
+            pair_id = gallery.new_pair_id(datetime.now())
+            gallery.pair_dir(pair_id).mkdir(parents=True, exist_ok=True)
+            # Describe the clip before a single frame is written, not at the
+            # stop. A manifest that only appeared on a clean stop is why an
+            # 835 MB clip measured on the board was invisible in the gallery:
+            # the board lost power mid-ride, and list_pairs() skips a directory
+            # with no manifest. Now an interrupted clip is still a clip.
+            gallery.write_manifest(pair_id, sides["front"], sides["rear"], "video", recording=True)
+            self.recording_id = pair_id
+            self.recording_started_at = time.monotonic()
+            self.recording_sides = sides
+            self._recording_dir = gallery.pair_dir(pair_id)
+            self._recording_gallery = gallery
+            self._recording_frames = 0
+            self._recording_written = {"front": 0, "rear": 0}
+
+            # Under the same lock as recording_id, not after it. Assigned in the
+            # gap, a stop landing between the two set the *previous* Event and
+            # found no thread to join, so it returned having stopped nothing —
+            # and the writer started below then owned an Event nobody would ever
+            # set, spinning at 10 Hz for the life of the process against a
+            # _recording_dir the stop had already cleared.
+            self._stop_timer = threading.Timer(MAX_RECORDING_SECONDS, lambda: self.stop_recording(gallery))
+            self._stop_timer.daemon = True
+            self._stop_timer.start()
+
+            # drive=False lets a test own the clock and call write_recording_frame
+            # itself; counting frames against a live thread would flake.
+            if drive:
+                stop_event = threading.Event()
+                self._recording_stop = stop_event
+                self._recording_thread = threading.Thread(
+                    target=self._write_loop, args=(stop_event,), name=f"record-{pair_id}", daemon=True
+                )
+                self._recording_thread.start()
+
+        return {"status": "ok", "detail": pair_id}
+
+    def _write_loop(self, stop_event: threading.Event) -> None:
+        """Append frames until told to stop.
+
+        The Event arrives as an argument rather than being read back off ``self``
+        on every iteration: a later recording installs a fresh one, and an old
+        loop reading ``self._recording_stop`` would start waiting on the new
+        recording's Event and never exit its own. Same rule, for the same
+        reason, as watch/sampler.py's captured epoch.
+        """
+        # Pace on absolute deadlines. Sleeping a fixed interval *between* writes
+        # adds the encode time to every period — measured at 6.2 fps for a
+        # nominal 10, because a 1080p NV12->JPEG costs ~60 ms.
+        interval = 1.0 / RECORDING_FPS
+        next_at = time.monotonic() + interval
+        while not stop_event.wait(max(0.0, next_at - time.monotonic())):
+            self.write_recording_frame()
+            next_at += interval
+            now = time.monotonic()
+            if next_at < now:
+                # Encoding fell behind the target rate. Resynchronise rather
+                # than spinning to catch up on a stale frame.
+                next_at = now + interval
+
+    def write_recording_frame(self) -> None:
+        """Append one JPEG per recording camera. Appending JPEGs is what makes the
+        segment an .mjpeg, which corpus/library.py already reads."""
+        with self._lock:
+            directory = self._recording_dir
+            sides = dict(self.recording_sides)
+            gallery = self._recording_gallery
+            frame = self._recording_frames
+            self._recording_frames = frame + 1
+        if directory is None:
+            return
+
+        # Free space was checked when the clip started and never again, so a
+        # recording could write straight through the floor and fill the disk:
+        # measured at 2.84 MB/s, the ten-minute cap is ~1.7 GB against a 1 GB
+        # MAX_GALLERY_MIN_FREE_MB. Stop cleanly instead, so the clip keeps the
+        # frames it did get and the manifest describes a finished video.
+        if gallery is not None and frame % Gallery.SPACE_CHECK_FRAMES == 0 and not gallery.has_space():
+            print("[vision] stopping the recording: free space is below the floor", flush=True)
+            self.stop_recording(gallery)
+            return
+
+        entries = [(side, filename) for side, filename in sides.items() if filename is not None]
+        if not entries:
+            return
+        directory.mkdir(parents=True, exist_ok=True)
+        errors: list[OSError] = []
+
+        def write_side(side: str, filename: str) -> None:
+            data = self._grab(
+                self.front if side == "front" else self.rear, max_age_ms=JPEG_MAX_AGE_MS
+            )
+            if data is None:
+                return
+            try:
+                self._append_frame(directory / filename, data)
+            except OSError as error:
+                # ENOSPC or a dying card. The thread dying here is what left
+                # manifests stuck at "recording": true; collect it so the tick
+                # stops the recording cleanly, keeping the frames already on
+                # disk. A truncated final JPEG is fine — every reader scans
+                # for SOI markers.
+                errors.append(error)
+                return
+            with self._lock:
+                self._recording_written[side] += 1
+
+        if len(entries) == 1:
+            write_side(*entries[0])
+        else:
+            # One thread per side. Sequentially, two ~60-100 ms 1080p encodes
+            # blew the 100 ms budget every tick — dual recording measured
+            # 4-7 fps against a front-only 9.98. cv2 releases the GIL, so
+            # parallel sides cost max() rather than sum().
+            threads = [
+                threading.Thread(target=write_side, args=entry, name=f"encode-{entry[0]}")
+                for entry in entries
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+        if errors:
+            print(
+                f"[vision] recording write failed ({errors[0]}); stopping with the frames on disk",
+                flush=True,
+            )
+            if gallery is not None:
+                self.stop_recording(gallery)
+
+    def _append_frame(self, path: Path, data: bytes) -> None:
+        with path.open("ab") as handle:
+            handle.write(data)
+
+    def stop_recording(self, gallery: Gallery) -> dict:
+        with self._lock:
+            pair_id = self.recording_id
+            if pair_id is None:
+                return {"status": "failed", "reason": "camera.notRecording"}
+            sides = self.recording_sides
+            started_at = self.recording_started_at
+            # Read under the same lock that installed them, so a start racing
+            # this stop can neither have its writer adopted here nor left
+            # behind with nothing holding its Event.
+            stop_timer = self._stop_timer
+            stop_event = self._recording_stop
+            writer = self._recording_thread
+            self.recording_id = None
+            self.recording_started_at = None
+            self.recording_sides = {"front": None, "rear": None}
+            self._recording_dir = None
+            self._recording_gallery = None
+            self._stop_timer = None
+            self._recording_thread = None
+
+        if stop_timer is not None:
+            stop_timer.cancel()
+
+        # Stop the writer before the manifest is written, so the segment the
+        # manifest describes is not still growing after the fact.
+        stop_event.set()
+        if writer is not None:
+            # The low-space stop runs *on* the writer thread. Joining a thread
+            # from itself raises, which would abandon the manifest mid-update
+            # and leave the clip flagged as still recording.
+            if writer is not threading.current_thread():
+                writer.join(timeout=2.0)
+
+        # Wall clock, not frames ÷ fps: the writer measurably falls behind the
+        # nominal rate, and the truth about a clip is how long it recorded.
+        duration = round(time.monotonic() - started_at, 1) if started_at is not None else None
+        # Stamp the rate the writer achieved (3.65 fps measured against 10
+        # nominal on 2026-08-01), so playback can pace the clip truthfully.
+        # Read after the join, so a write that was in flight at the stop is
+        # counted iff it reached the file; from the stored duration, not the
+        # raw delta, so frames ÷ fps round-trips to the length named here.
+        frames = max(self._recording_written.values())
+        fps = round(frames / duration, 2) if duration and frames else None
+        gallery.write_manifest(
+            pair_id, sides["front"], sides["rear"], "video",
+            recording=False, duration_s=duration, fps=fps,
+        )
+        degraded = sides["front"] is None or sides["rear"] is None
+        return {"status": "ok", "detail": f"{pair_id}{' degraded' if degraded else ''}"}

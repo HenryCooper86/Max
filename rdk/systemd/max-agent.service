@@ -1,0 +1,31 @@
+[Unit]
+Description=Max helmet agent (RDK X5)
+After=network-online.target max-vision.service
+Wants=network-online.target
+# Five fast failures inside systemd's default 10 s window would otherwise put
+# the unit in permanent `failed` — a silent helmet until someone SSHes in. A
+# broken unit should restart visibly forever instead.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/max/agent.env
+WorkingDirectory=/opt/max
+# Durable helmet pairing identity lives here; systemd creates it before the
+# agent starts, with no world-readable state directory.
+StateDirectory=max
+StateDirectoryMode=0700
+ExecStart=/opt/max/node_modules/.bin/tsx /opt/max/rdk/agent/src/main.ts
+Restart=always
+RestartSec=2
+# The agent sends WATCHDOG=1 while mic frames flow (src/watchdog.ts). A
+# wedged-but-alive process misses the deadline and gets restarted.
+WatchdogSec=30
+# Heartbeats arrive from short-lived systemd-notify children, not the main PID.
+NotifyAccess=all
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

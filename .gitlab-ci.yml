@@ -1,0 +1,57 @@
+# All jobs run on the OrbStack ci-runner VM (shell executor, Ubuntu 22.04
+# arm64): Node 22, Python 3.10, ffmpeg, JDK 17, the Android SDK, and the
+# AEC build deps are installed on the runner host. iOS is deliberately not
+# in CI: xcodebuild requires macOS, and this project runs Linux-only runners.
+
+stages:
+  - test
+
+web:check:
+  stage: test
+  cache:
+    key:
+      files:
+        - package-lock.json
+    paths:
+      - node_modules/
+  script:
+    - npm ci
+    - npm run check
+
+rdk:vision-gate:
+  stage: test
+  cache:
+    key:
+      files:
+        - rdk/vision/requirements-dev.txt
+    paths:
+      - .venv/
+  script:
+    - python3.10 -m venv .venv
+    - .venv/bin/python -m pip install --quiet --upgrade pip
+    - .venv/bin/python -m pip install --quiet -r rdk/vision/requirements-dev.txt
+    - PATH="$PWD/.venv/bin:$PATH" npm run test:rdk-vision
+
+# Same aarch64 as the X5 board, so this binary is board-deployable.
+rdk:aec-build:
+  stage: test
+  script:
+    - make -C rdk/aec
+  artifacts:
+    paths:
+      - rdk/aec/max-aec
+    expire_in: 1 week
+
+# aapt2 is x86_64-only; the runner VM has amd64 multiarch libs so it runs
+# under Rosetta. The SDK licenses/platform live in the runner's ANDROID_HOME.
+android:build:
+  stage: test
+  script:
+    - cd android
+    - JAVA_HOME=/usr/lib/jvm/java-17-openjdk-arm64
+      ANDROID_HOME=/home/gitlab-runner/android-sdk
+      ./gradlew --no-daemon assembleDebug
+  artifacts:
+    paths:
+      - android/app/build/outputs/apk/debug/app-debug.apk
+    expire_in: 1 week

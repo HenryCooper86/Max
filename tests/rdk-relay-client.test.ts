@@ -1,0 +1,338 @@
+import { describe, expect, it, vi } from "vitest";
+import {
+  buildSessionStart,
+  createRelayClient,
+  defaultSocketOptions,
+  HANDSHAKE_TIMEOUT_MS,
+  type SocketLike
+} from "../rdk/agent/src/relay";
+import type { RdkConfig } from "../rdk/agent/src/config";
+
+const CONFIG = {
+  relayUrl: "wss://relay.example/agent",
+  relayToken: "tok",
+  insecureTls: false
+} as RdkConfig;
+
+function fakeSocket() {
+  const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+  const socket: SocketLike & { emit(event: string, ...args: unknown[]): void; sent: unknown[] } = {
+    binaryType: "",
+    readyState: 0, // CONNECTING
+    sent: [],
+    send(data: unknown) {
+      this.sent.push(data);
+    },
+    close: vi.fn() as unknown as () => void,
+    terminate: vi.fn() as unknown as () => void,
+    ping: vi.fn() as unknown as () => void,
+    on(event: string, listener: (...args: unknown[]) => void) {
+      listeners.set(event, [...(listeners.get(event) ?? []), listener]);
+    },
+    emit(event: string, ...args: unknown[]) {
+      for (const listener of listeners.get(event) ?? []) listener(...args);
+    }
+  };
+  return socket;
+}
+
+const HANDLERS = { onEvent: () => {}, onVoice: () => {}, onReady: () => {}, onClosed: () => {} };
+const DEVICE_ID = "rdk-123e4567-e89b-42d3-a456-426614174000";
+
+describe("buildSessionStart", () => {
+  it("includes the already-loaded RDK identity", () => {
+    expect(buildSessionStart(CONFIG, DEVICE_ID).deviceId).toBe(DEVICE_ID);
+  });
+});
+
+describe("createRelayClient lifecycle", () => {
+  it("reuses the loaded identity in every reconnect handshake", () => {
+    const sockets: ReturnType<typeof fakeSocket>[] = [];
+    const client = createRelayClient(CONFIG, DEVICE_ID, HANDLERS, {
+      wsFactory: () => {
+        const socket = fakeSocket();
+        sockets.push(socket);
+        return socket;
+      }
+    });
+
+    client.connect();
+    sockets[0]!.readyState = 1;
+    sockets[0]!.emit("open");
+    sockets[0]!.emit("close", 1006, Buffer.alloc(0));
+    client.connect();
+    sockets[1]!.readyState = 1;
+    sockets[1]!.emit("open");
+
+    expect(sockets.map((socket) => JSON.parse(socket.sent[0] as string).deviceId)).toEqual([DEVICE_ID, DEVICE_ID]);
+  });
+
+  it("connect() while a socket is open or connecting is a no-op", () => {
+    const sockets: ReturnType<typeof fakeSocket>[] = [];
+    const lines: string[] = [];
+    const client = createRelayClient(CONFIG, DEVICE_ID, HANDLERS, {
+      wsFactory: () => {
+        const socket = fakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      log: (line) => lines.push(line)
+    });
+    client.connect();
+    client.connect(); // still CONNECTING
+    expect(sockets.length).toBe(1);
+    expect(lines).toContain("[relay] connect ignored; socket already open");
+  });
+
+  it("logs the close code and reason", () => {
+    const lines: string[] = [];
+    const socket = fakeSocket();
+    const client = createRelayClient(CONFIG, DEVICE_ID, HANDLERS, {
+      wsFactory: () => socket,
+      log: (line) => lines.push(line)
+    });
+    client.connect();
+    socket.emit("close", 4001, Buffer.from("idle"));
+    expect(lines.some((line) => line.includes("closed code=4001") && line.includes("idle"))).toBe(true);
+  });
+
+  it("logs socket errors with their message", () => {
+    const lines: string[] = [];
+    const socket = fakeSocket();
+    const client = createRelayClient(CONFIG, DEVICE_ID, HANDLERS, {
+      wsFactory: () => socket,
+      log: (line) => lines.push(line)
+    });
+    client.connect();
+    socket.emit("error", new Error("Unexpected server response: 401"));
+    expect(lines.some((line) => line.includes("401"))).toBe(true);
+  });
+
+  it("reconnect after a close creates a fresh socket", () => {
+    const sockets: ReturnType<typeof fakeSocket>[] = [];
+    const client = createRelayClient(CONFIG, DEVICE_ID, HANDLERS, {
+      wsFactory: () => {
+        const socket = fakeSocket();
+        sockets.push(socket);
+        return socket;
+      }
+    });
+    client.connect();
+    sockets[0]!.emit("close", 1006, Buffer.alloc(0));
+    client.connect();
+    expect(sockets.length).toBe(2);
+  });
+
+  it("a stale socket's late close does not stomp the live socket's ready flag", () => {
+    const sockets: ReturnType<typeof fakeSocket>[] = [];
+    const closedCalls: boolean[] = [];
+    const client = createRelayClient(
+      CONFIG,
+      DEVICE_ID,
+      { ...HANDLERS, onClosed: (idle) => closedCalls.push(idle) },
+      {
+        wsFactory: () => {
+          const socket = fakeSocket();
+          sockets.push(socket);
+          return socket;
+        },
+        log: () => {}
+      }
+    );
+    client.connect();
+    sockets[0]!.readyState = 2; // CLOSING — guard lets a new connect through
+    client.connect();
+    expect(sockets.length).toBe(2);
+    sockets[1]!.readyState = 1;
+    sockets[1]!.emit("open");
+    sockets[1]!.emit("message", Buffer.from(JSON.stringify({ type: "session.started" })), false);
+    sockets[0]!.emit("close", 1006, Buffer.alloc(0)); // stale close lands late
+    // the stale close must not touch live state: no onClosed, no flush upstream.
+    expect(closedCalls.length).toBe(0);
+    client.sendFrame(new Int16Array(320));
+    // ready must still be true on the live socket: the frame goes out.
+    expect(sockets[1]!.sent.some((item) => Buffer.isBuffer(item))).toBe(true);
+    // the live socket's own close must still drive reconnection normally.
+    sockets[1]!.emit("close", 1000, Buffer.alloc(0));
+    expect(closedCalls).toEqual([false]);
+  });
+
+  it("an intentional disconnect still delivers onClosed(true) when the close lands", () => {
+    // disconnect() used to null the socket synchronously, so its own close —
+    // which ws delivers asynchronously — failed the stale-socket guard and
+    // onClosed(true) never fired. Unobservable while shutdown() exits the
+    // process immediately, and a trap for any later graceful-shutdown work.
+    const socket = fakeSocket();
+    const closedCalls: boolean[] = [];
+    const client = createRelayClient(
+      CONFIG,
+      DEVICE_ID,
+      { ...HANDLERS, onClosed: (idle) => closedCalls.push(idle) },
+      { wsFactory: () => socket, log: () => {} }
+    );
+    client.connect();
+    socket.readyState = 1;
+    socket.emit("open");
+    client.disconnect();
+    expect(socket.close).toHaveBeenCalled();
+    // The close event arrives after disconnect() has already returned.
+    socket.readyState = 3;
+    socket.emit("close", 1000, Buffer.alloc(0));
+    expect(closedCalls).toEqual([true]);
+  });
+
+  it("a reconnect between disconnect and its late close keeps the old close stale", () => {
+    // The guard disconnect() was wrongly tripping still has a job: once a
+    // fresh socket replaces the closing one, the old close must not fire
+    // onClosed or clobber the live socket's ready state.
+    const sockets: ReturnType<typeof fakeSocket>[] = [];
+    const closedCalls: boolean[] = [];
+    const client = createRelayClient(
+      CONFIG,
+      DEVICE_ID,
+      { ...HANDLERS, onClosed: (idle) => closedCalls.push(idle) },
+      {
+        wsFactory: () => {
+          const socket = fakeSocket();
+          sockets.push(socket);
+          return socket;
+        },
+        log: () => {}
+      }
+    );
+    client.connect();
+    sockets[0]!.readyState = 1;
+    sockets[0]!.emit("open");
+    client.disconnect();
+    sockets[0]!.readyState = 2; // CLOSING — the already-open guard lets connect through
+    client.connect();
+    expect(sockets.length).toBe(2);
+    sockets[1]!.readyState = 1;
+    sockets[1]!.emit("open");
+    sockets[1]!.emit("message", Buffer.from(JSON.stringify({ type: "session.started" })), false);
+    sockets[0]!.emit("close", 1000, Buffer.alloc(0)); // the old close lands late
+    expect(closedCalls).toEqual([]);
+    client.sendFrame(new Int16Array(320));
+    expect(sockets[1]!.sent.some((item) => Buffer.isBuffer(item))).toBe(true);
+  });
+
+  it("a handshake that dies before open still reaches the close path and can reconnect", () => {
+    const sockets: ReturnType<typeof fakeSocket>[] = [];
+    const lines: string[] = [];
+    const closedCalls: boolean[] = [];
+    const client = createRelayClient(
+      CONFIG,
+      DEVICE_ID,
+      { ...HANDLERS, onClosed: (idle) => closedCalls.push(idle) },
+      {
+        wsFactory: () => {
+          const socket = fakeSocket();
+          sockets.push(socket);
+          return socket;
+        },
+        log: (line) => lines.push(line)
+      }
+    );
+    client.connect();
+    // This is what ws does on a handshake timeout: `error` then `close(1006)`,
+    // `open` never fires.
+    sockets[0]!.emit("error", new Error("Opening handshake has timed out"));
+    sockets[0]!.emit("close", 1006, Buffer.alloc(0));
+    expect(lines.some((line) => line.includes("Opening handshake has timed out"))).toBe(true);
+    expect(lines.some((line) => line.includes("closed code=1006"))).toBe(true);
+    expect(closedCalls).toEqual([false]);
+    // The already-open guard must not still be blocking: the wedged socket's
+    // close nulled it out, so a fresh connect() creates a new socket.
+    client.connect();
+    expect(sockets.length).toBe(2);
+  });
+});
+
+describe("defaultSocketOptions", () => {
+  it("gives the real WebSocket constructor a bounded handshake alongside TLS policy", () => {
+    const opts = defaultSocketOptions(CONFIG);
+    expect(opts.handshakeTimeout).toBe(HANDSHAKE_TIMEOUT_MS);
+    expect(opts.handshakeTimeout).toBe(15_000);
+    expect(opts.rejectUnauthorized).toBe(true);
+  });
+
+  it("hands connect() the same options the real constructor gets, not a subset", () => {
+    const socket = fakeSocket();
+    const seen: Array<{ rejectUnauthorized: boolean; handshakeTimeout?: number }> = [];
+    const client = createRelayClient(CONFIG, DEVICE_ID, HANDLERS, {
+      wsFactory: (_url, options) => {
+        seen.push(options);
+        return socket;
+      },
+      log: () => {}
+    });
+    client.connect();
+    // The call site used to build its own {rejectUnauthorized} object while the
+    // default factory quietly ignored the argument and called
+    // defaultSocketOptions itself. Production was fine; every injected factory
+    // saw a socket with no handshake bound, so nothing could pin the timeout
+    // through the path that actually constructs the socket.
+    expect(seen).toEqual([defaultSocketOptions(CONFIG)]);
+  });
+
+  it("carries the insecure-TLS escape hatch through to the constructor options", () => {
+    const socket = fakeSocket();
+    const seen: Array<{ rejectUnauthorized: boolean }> = [];
+    const client = createRelayClient({ ...CONFIG, insecureTls: true } as RdkConfig, DEVICE_ID, HANDLERS, {
+      wsFactory: (_url, options) => {
+        seen.push(options);
+        return socket;
+      },
+      log: () => {}
+    });
+    client.connect();
+    expect(seen[0]?.rejectUnauthorized).toBe(false);
+  });
+});
+
+describe("relay liveness", () => {
+  function liveClient() {
+    const socket = fakeSocket();
+    const ticks: Array<() => void> = [];
+    const cleared: unknown[] = [];
+    const client = createRelayClient(CONFIG, DEVICE_ID, HANDLERS, {
+      wsFactory: () => socket,
+      pingIntervalMs: 15_000,
+      setInterval: ((fn: () => void) => {
+        ticks.push(fn);
+        return ticks.length as unknown as NodeJS.Timeout;
+      }) as typeof globalThis.setInterval,
+      clearInterval: ((id: unknown) => {
+        cleared.push(id);
+      }) as typeof globalThis.clearInterval,
+      log: () => {}
+    });
+    client.connect();
+    socket.readyState = 1;
+    socket.emit("open");
+    return { socket, ticks, cleared };
+  }
+
+  it("pings on each interval while the pong keeps coming", () => {
+    const { socket, ticks } = liveClient();
+    ticks[0]!(); // ping 1
+    socket.emit("pong");
+    ticks[0]!(); // ping 2
+    expect(socket.ping).toHaveBeenCalledTimes(2);
+    expect(socket.terminate).not.toHaveBeenCalled();
+  });
+
+  it("terminates a socket whose ping goes unanswered", () => {
+    const { socket, ticks } = liveClient();
+    ticks[0]!(); // ping, no pong
+    ticks[0]!(); // deadline passed
+    expect(socket.terminate).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops the liveness timer when the socket closes", () => {
+    const { socket, ticks, cleared } = liveClient();
+    ticks[0]!();
+    socket.emit("close", 1006, Buffer.alloc(0));
+    expect(cleared.length).toBe(1);
+  });
+});

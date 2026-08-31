@@ -1,0 +1,35 @@
+.env
+.env.local
+dist
+node_modules
+
+# Deploy-time build stamp (written by deploy-lightsail.command)
+build-info.json
+
+# Agent/local workflow notes
+AGENTS.md
+MR_DESCRIPTION.md
+.superpowers/
+.worktrees/
+
+# Generated native build output
+android/**/build/
+ios/build/
+
+# Xcode user-local state
+**/xcuserdata/
+*.xcuserstate
+
+# iOS dependency output and local AMap credential
+ios/Pods/
+ios/vendor/bundle/
+ios/.bundle/
+ios/Config/Secrets.xcconfig
+
+# Python tooling state (rdk/vision test suite)
+.venv/
+__pycache__/
+.pytest_cache/
+
+# macOS folder metadata
+.DS_Store

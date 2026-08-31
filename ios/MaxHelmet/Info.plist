@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Max 头盔助手</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>HorizonGitCommit</key>
+	<string>$(HORIZON_GIT_COMMIT)</string>
+	<key>HorizonAMapKey</key>
+	<string>$(AMAP_IOS_KEY)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>location</string>
+	</array>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Max 需要使用麦克风进行免提语音对话。</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Max 会在显式开始 Helmet Ride 后使用精确位置，为 RDK 头盔导航提供前台及锁屏期间的位置转发。</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Max 需要读取通讯录，才能在你说出名字时拨打电话或发送短信。</string>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>Max 需要访问音乐库，才能在骑行时控制播放。</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Max 需要使用相机，才能在你说出指令时拍照和录像。</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Max 需要把你导出的拍摄内容保存到系统相册。</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Max 需要访问本地网络以连接同一 Wi-Fi 下的语音中继服务器，并发现附近的 Max 头盔以便配对。</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_maxhelmet._tcp</string>
+	</array>
+	<key>NSMotionUsageDescription</key>
+	<string>检测摔车事故需要读取运动传感器。</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+</dict>
+</plist>

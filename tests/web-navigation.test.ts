@@ -1,5 +1,5 @@
 // tests/web-navigation.test.ts
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createNavigationController } from "../src/lib/navigation";
 import { MOCK_ROUTE } from "../shared/nav-fixtures";
 import type { NavRouteEvent } from "../shared/agent";
@@ -17,15 +17,13 @@ const routeEvent: NavRouteEvent = {
 
 function harness(nowRef = { t: 0 }) {
   const sent: Array<Record<string, unknown>> = [];
-  const spoken: string[] = [];
   const states: string[] = [];
   const controller = createNavigationController({
     sendJson: (p) => sent.push(p as Record<string, unknown>),
-    speak: (t) => spoken.push(t),
     onState: (s) => states.push(s.phase),
     now: () => nowRef.t
   });
-  return { controller, sent, spoken, states };
+  return { controller, sent, states };
 }
 
 describe("createNavigationController", () => {
@@ -123,7 +121,7 @@ describe("createNavigationController", () => {
 
   it("stops cleanly with a spoken line when a reroute fails, instead of retrying on the stale route", () => {
     const nowRef = { t: 0 };
-    const { controller, sent, spoken, states } = harness(nowRef);
+    const { controller, sent, states } = harness(nowRef);
     controller.updatePosition({ lat: 31.2304, lon: 121.4737 });
     controller.handleDeviceCommand({ commandId: "c1", action: "navigation.start", args: { query: "外滩" } });
     controller.handleAgentEvent(routeEvent as never);
@@ -139,14 +137,14 @@ describe("createNavigationController", () => {
       code: "route.unavailable"
     } as never);
 
-    expect(spoken).toEqual(["已偏离路线，正在重新规划", "无法重新规划路线，已停止导航"]);
+    expect(sent.filter((p) => p.type === "nav.prompt").map((p) => p.kind)).toEqual(["offRoute", "rerouteFailed"]);
     expect(states.at(-1)).toBe("idle");
 
     const requestCountAfterFailure = sent.filter((p) => p.type === "nav.request").length;
-    const spokenCountAfterFailure = spoken.length;
+    const promptsAfterFailure = sent.filter((p) => p.type === "nav.prompt").length;
     controller.updatePosition(off);
     expect(sent.filter((p) => p.type === "nav.request").length).toBe(requestCountAfterFailure);
-    expect(spoken.length).toBe(spokenCountAfterFailure);
+    expect(sent.filter((p) => p.type === "nav.prompt")).toHaveLength(promptsAfterFailure);
   });
 
   it("stop during requesting resolves the held start then acks the stop", () => {
@@ -174,7 +172,7 @@ describe("createNavigationController", () => {
 
   it("reroute success announces off-route only (relay speaks the reroute confirmation)", () => {
     const nowRef = { t: 0 };
-    const { controller, sent, spoken, states } = harness(nowRef);
+    const { controller, sent, states } = harness(nowRef);
     controller.updatePosition({ lat: 31.2304, lon: 121.4737 });
     controller.handleDeviceCommand({ commandId: "c1", action: "navigation.start", args: { query: "外滩" } });
     controller.handleAgentEvent(routeEvent as never);
@@ -197,7 +195,7 @@ describe("createNavigationController", () => {
     } as never);
 
     // Should announce off-route only; relay speaks the reroute confirmation
-    expect(spoken).toEqual(["已偏离路线，正在重新规划"]);
+    expect(sent.filter((p) => p.type === "nav.prompt").map((p) => p.kind)).toEqual(["offRoute"]);
     expect(states.at(-1)).toBe("guiding");
   });
 });
@@ -227,22 +225,21 @@ describe("navigation.start before a fix has arrived", () => {
     };
   }
 
-  it("announces 正在定位 and starts once a fix arrives", () => {
+  it("shows locating state and starts once a fix arrives", () => {
+    const onState = vi.fn();
     const sent: unknown[] = [];
-    const spoken: string[] = [];
     const timers = fakeScheduler();
     const nav = createNavigationController({
       sendJson: (p) => sent.push(p),
-      speak: (t) => spoken.push(t),
-      onState: () => {},
+      onState,
       schedule: timers.schedule
     });
 
     nav.handleDeviceCommand({ action: "navigation.start", args: { query: "外滩" } } as never);
     timers.advance(1_500);
+    expect(onState).toHaveBeenCalledWith({ phase: "requesting", query: "外滩" });
     nav.updatePosition({ lat: 31.2304, lon: 121.4737 });
 
-    expect(spoken).toContain("正在定位…");
     expect(sent.some((p) => (p as { type?: string }).type === "nav.request")).toBe(true);
   });
 
@@ -251,7 +248,6 @@ describe("navigation.start before a fix has arrived", () => {
     const timers = fakeScheduler();
     const nav = createNavigationController({
       sendJson: (p) => sent.push(p as Record<string, unknown>),
-      speak: () => {},
       onState: () => {},
       schedule: timers.schedule
     });
@@ -265,30 +261,11 @@ describe("navigation.start before a fix has arrived", () => {
     expect(result?.reason).not.toBe("permission.location");
   });
 
-  it("stays silent when a fix is already in hand", () => {
-    const spoken: string[] = [];
-    const timers = fakeScheduler();
-    const nav = createNavigationController({
-      sendJson: () => {},
-      speak: (t) => spoken.push(t),
-      onState: () => {},
-      schedule: timers.schedule
-    });
-
-    nav.updatePosition({ lat: 31.2304, lon: 121.4737 });
-    nav.handleDeviceCommand({ action: "navigation.start", args: { query: "外滩" } } as never);
-    timers.advance(5_000);
-
-    expect(spoken).not.toContain("正在定位…");
-  });
-
   it("navigation.stop while awaiting a fix cancels the wait for good", () => {
     const sent: Record<string, unknown>[] = [];
-    const spoken: string[] = [];
     const timers = fakeScheduler();
     const nav = createNavigationController({
       sendJson: (p) => sent.push(p as Record<string, unknown>),
-      speak: (t) => spoken.push(t),
       onState: () => {},
       schedule: timers.schedule
     });
@@ -314,18 +291,15 @@ describe("navigation.start before a fix has arrived", () => {
     timers.advance(8_000);
     nav.updatePosition({ lat: 31.2304, lon: 121.4737 });
 
-    expect(spoken).not.toContain("正在定位…");
     expect(sent.some((p) => p.type === "nav.request")).toBe(false);
     expect(sent.length).toBe(2);
   });
 
   it("a genuinely denied permission fails immediately, without waiting for a fix", () => {
     const sent: Record<string, unknown>[] = [];
-    const spoken: string[] = [];
     const timers = fakeScheduler();
     const nav = createNavigationController({
       sendJson: (p) => sent.push(p as Record<string, unknown>),
-      speak: (t) => spoken.push(t),
       onState: () => {},
       schedule: timers.schedule,
       hasLocationPermission: () => false
@@ -337,14 +311,12 @@ describe("navigation.start before a fix has arrived", () => {
     // permission-denial reason (spec: "If permission is genuinely denied →
     // denied(permission.location) (unchanged)").
     expect(sent).toEqual([{ type: "device.result", commandId: "c1", status: "denied", reason: "permission.location" }]);
-    expect(spoken).toEqual([]);
 
     // Advancing the clock (and a fix arriving late) must not retroactively
     // start anything — the denial was terminal, not a wait.
     timers.advance(8_000);
     nav.updatePosition({ lat: 31.2304, lon: 121.4737 });
     expect(sent.length).toBe(1);
-    expect(spoken).toEqual([]);
   });
 
   it("no permission signal at all preserves today's wait-for-fix behavior", () => {
@@ -355,7 +327,6 @@ describe("navigation.start before a fix has arrived", () => {
     const timers = fakeScheduler();
     const nav = createNavigationController({
       sendJson: (p) => sent.push(p as Record<string, unknown>),
-      speak: () => {},
       onState: () => {},
       schedule: timers.schedule
     });
@@ -372,7 +343,6 @@ describe("navigation.start before a fix has arrived", () => {
     const timers = fakeScheduler();
     const nav = createNavigationController({
       sendJson: (p) => sent.push(p as Record<string, unknown>),
-      speak: () => {},
       onState: () => {},
       schedule: timers.schedule
     });
@@ -400,5 +370,61 @@ describe("navigation.start before a fix has arrived", () => {
 
     expect(sent.some((p) => p.type === "nav.request" && p.commandId === "c2")).toBe(true);
     expect(sent.filter((p) => p.type === "device.result" && p.commandId === "c1").length).toBe(1);
+  });
+});
+
+describe("web navigation uses MAX relay prompts", () => {
+  const origin = { lat: 0, lon: 0 };
+  const route: NavRouteEvent = {
+    type: "nav.route",
+    commandId: "route",
+    destinationName: "Finish",
+    destination: { lat: 0, lon: 0.01 },
+    distanceMeters: 1112,
+    etaSeconds: 300,
+    polyline: [origin, { lat: 0, lon: 0.01 }],
+    steps: [
+      { instruction: "Turn right", lat: 0, lon: 0.00018, alongRouteMeters: 20 },
+      { instruction: "Continue", lat: 0, lon: 0.01, alongRouteMeters: 1112 }
+    ]
+  };
+  function start() {
+    const h = harness();
+    h.controller.updatePosition(origin);
+    h.controller.handleDeviceCommand({ commandId: "route", action: "navigation.start", args: { query: "Finish" } });
+    h.controller.handleAgentEvent(route as never);
+    return h;
+  }
+  it("does not consume the first instruction silently and preserves the pre-advance maneuver index", () => {
+    const { controller, sent } = start();
+    controller.updatePosition(origin);
+    expect(sent.filter((p) => p.type === "nav.prompt")).toEqual([
+      expect.objectContaining({
+        kind: "maneuver",
+        routeCommandId: "route",
+        maneuverIndex: 0,
+        threshold: "now",
+        distanceMeters: 20
+      })
+    ]);
+    controller.updatePosition(origin);
+    expect(sent.filter((p) => p.type === "nav.prompt")).toHaveLength(1);
+  });
+  it("arrival emits exactly one prompt and clears navigation", () => {
+    const { controller, sent, states } = start();
+    controller.updatePosition(route.destination);
+    controller.updatePosition(route.destination);
+    expect(sent.filter((p) => p.type === "nav.prompt")).toEqual([
+      expect.objectContaining({ kind: "arrived", routeCommandId: "route" })
+    ]);
+    expect(states.at(-1)).toBe("idle");
+  });
+  it("ignores stale route and error responses while waiting for a reroute", () => {
+    const { controller, sent, states } = start();
+    controller.updatePosition({ lat: 0.01, lon: 0 });
+    controller.handleAgentEvent({ ...route, commandId: "stale" } as never);
+    controller.handleAgentEvent({ type: "nav.error", commandId: "stale", code: "route.unavailable" });
+    expect(states.at(-1)).toBe("guiding");
+    expect(sent.filter((p) => p.type === "nav.prompt").map((p) => p.kind)).toEqual(["offRoute"]);
   });
 });

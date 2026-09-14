@@ -814,11 +814,15 @@ export function createDoubaoProvider(
       deliveryId?: string;
       detail?: string;
     };
-    if (sessionPlatform === "web" && event.type === "status" && event.detail?.includes("浏览器")) {
+    if (
+      (sessionPlatform === "web" || sessionPlatform === "ios" || sessionPlatform === "android") &&
+      event.type === "status" &&
+      event.detail?.includes("浏览器")
+    ) {
       payload = { ...event, detail: "MAX 语音暂不可用，文字提示仍可用。" };
     }
     if (
-      sessionPlatform === "web" &&
+      (sessionPlatform === "web" || sessionPlatform === "ios" || sessionPlatform === "android") &&
       event.type === "transcript" &&
       event.speaker === "agent" &&
       event.useBrowserSpeech &&
@@ -1038,7 +1042,7 @@ export function createDoubaoProvider(
     const decision = reconcileDeviceResult(action, result, okSpeech);
     if (!decision.truncate) return;
     truncateInterruptedReply();
-    if (sessionPlatform === "web") {
+    if (sessionPlatform === "web" || sessionPlatform === "ios" || sessionPlatform === "android") {
       fallbackSpoke = true;
       clearTtsFallbackTimer();
       resetPendingReply();
@@ -2460,7 +2464,7 @@ export function createDoubaoProvider(
     },
     speakNavPrompt(speech) {
       if (closedByProvider) return;
-      if (sessionPlatform === "web") {
+      if (sessionPlatform === "web" || sessionPlatform === "ios" || sessionPlatform === "android") {
         if (speech.interrupt) {
           cancelMaxSpeech();
           truncateInterruptedReply();

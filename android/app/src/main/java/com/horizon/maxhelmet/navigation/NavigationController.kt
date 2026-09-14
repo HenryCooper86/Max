@@ -1,6 +1,9 @@
 package com.horizon.maxhelmet.navigation
 
 import com.horizon.maxhelmet.agent.buildDeviceResult
+import org.json.JSONObject
+import java.util.UUID
+import java.util.Locale
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -37,6 +40,7 @@ data class NavGuidanceState(
  *  suspend call returns, without re-touching controller state before the
  *  post-answer generation check. */
 private data class RerouteAttempt(
+    val attemptId: Long,
     val generation: Int,
     val destination: LatLon,
     val destinationName: String,
@@ -81,7 +85,8 @@ class NavigationController(
     private val hasLocationPermission: () -> Boolean,
     private val now: () -> Long = { android.os.SystemClock.elapsedRealtime() },
     private val firstFixTimeoutMillis: Long = 8_000,
-    private val firstFixAnnounceMillis: Long = 1_500
+    private val firstFixAnnounceMillis: Long = 1_500,
+    private val sendRelayPrompt: ((String) -> Unit)? = null
 ) {
     private companion object {
         const val REROUTE_COOLDOWN_MILLIS = 20_000L
@@ -114,6 +119,7 @@ class NavigationController(
     private var route: NavigationRoute? = null
     private var progress = GuidanceProgress()
     private var rerouting = false
+    private var rerouteAttemptId = 0L
     private var lastRerouteAt = NO_PRIOR_REROUTE
     /** Resolves with the GCJ-02 value [onFix] already converted — never a
      *  second `wgs84ToGcj02` application. */
@@ -352,7 +358,7 @@ class NavigationController(
                 lastRerouteAt = NO_PRIOR_REROUTE
                 locationSource.stop()
                 onGuidance(null)
-                speaker.speak(STOP_SPOKEN, interrupt = false)
+                if (sendRelayPrompt == null) speaker.speak(STOP_SPOKEN, interrupt = false)
             } else {
                 // No route yet, but a start was genuinely in flight, and
                 // nothing else needs the source anymore. Silent here: the
@@ -423,13 +429,18 @@ class NavigationController(
 
         val reroute = synchronized(lock) {
             val currentRoute = route ?: return
+            val maneuverIndex = progress.maneuverIndex
             val update = GuidanceEngine.step(fix, currentRoute, progress)
             progress = update.progress
 
-            if (update.firedThreshold != null) {
+            if (!update.arrived && update.firedThreshold != null) {
                 val prompt = update.spokenPrompt
                 if (prompt != null && !speaker.hazardActive) {
-                    speaker.speak(prompt, interrupt = update.firedThreshold == PromptThreshold.NOW)
+                    val alongRoute = currentRoute.distanceMeters - update.remainingMeters
+                    val distance = (currentRoute.steps[maneuverIndex].alongRouteMeters - alongRoute).coerceAtLeast(0.0)
+                    if (!relayPrompt(currentRoute, "maneuver", maneuverIndex, update.firedThreshold.name.lowercase(Locale.ROOT), distance)) {
+                        speaker.speak(prompt, interrupt = update.firedThreshold == PromptThreshold.NOW)
+                    }
                 }
                 // hazardActive: the prompt is DROPPED, not queued or ever
                 // re-spoken — `progress` above already recorded the
@@ -444,7 +455,7 @@ class NavigationController(
                 // after this cleanup is never streamless. (A reroute already
                 // in flight for THIS SAME route is a different story — see
                 // performReroute's route-null guard below.)
-                speaker.speak(ARRIVED_SPOKEN, interrupt = false)
+                if (!relayPrompt(currentRoute, "arrived")) speaker.speak(ARRIVED_SPOKEN, interrupt = false)
                 route = null
                 onGuidance(null)
                 locationSource.stop()
@@ -455,9 +466,11 @@ class NavigationController(
 
             if (update.offRoute && !rerouting && now() - lastRerouteAt >= REROUTE_COOLDOWN_MILLIS) {
                 rerouting = true
+                rerouteAttemptId += 1
                 lastRerouteAt = now()
-                speaker.speak(REROUTE_SENDING_SPOKEN, interrupt = false)
+                if (!relayPrompt(currentRoute, "offRoute")) speaker.speak(REROUTE_SENDING_SPOKEN, interrupt = false)
                 RerouteAttempt(
+                    attemptId = rerouteAttemptId,
                     generation = navigationGeneration,
                     destination = currentRoute.destination,
                     destinationName = currentRoute.destinationName,
@@ -517,18 +530,16 @@ class NavigationController(
                     // wrongly answer `ok`.
                     navigationGeneration += 1
                     starting = false
+                    route?.let { if (!relayPrompt(it, "rerouteFailed")) speaker.speak(REROUTE_FAILED_SPOKEN, interrupt = false) }
                     route = null
+                    rerouting = false
                     onGuidance(null)
                     locationSource.stop()
-                    speaker.speak(REROUTE_FAILED_SPOKEN, interrupt = false)
                 }
             }
         } finally {
-            // Clears on every exit path — including the stale-generation
-            // guard above — so a reroute attempt that gets preempted (e.g.
-            // by a concurrent start winning RelayNavigationSearch's single
-            // outstanding slot) never leaves the latch stuck true.
-            synchronized(lock) { rerouting = false }
+            // An older completion must not clear a newer route's reroute latch.
+            synchronized(lock) { if (attempt.attemptId == rerouteAttemptId) rerouting = false }
         }
     }
 
@@ -646,6 +657,23 @@ class NavigationController(
                 locationSource.stop()
             }
         }
+    }
+
+    private fun relayPrompt(route: NavigationRoute, kind: String, maneuverIndex: Int? = null,
+                            threshold: String? = null, distanceMeters: Double? = null): Boolean {
+        val send = sendRelayPrompt ?: return false
+        val commandId = route.relayCommandId ?: return true
+        val payload = JSONObject().apply {
+            put("type", "nav.prompt")
+            put("promptId", UUID.randomUUID().toString())
+            put("routeCommandId", commandId)
+            put("kind", kind)
+            if (maneuverIndex != null) put("maneuverIndex", maneuverIndex)
+            if (threshold != null) put("threshold", threshold)
+            if (distanceMeters != null) put("distanceMeters", distanceMeters)
+        }
+        send(payload.toString())
+        return true
     }
 
     private fun publishedState(route: NavigationRoute, update: GuidanceUpdate): NavGuidanceState = NavGuidanceState(

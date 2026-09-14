@@ -192,7 +192,7 @@ describe("gallery.describe frame sets thread the question and speak the answer",
           event.type === "transcript" &&
           event.speaker === "agent" &&
           event.final === true &&
-          event.useBrowserSpeech === true &&
+          event.useBrowserSpeech === false &&
           event.text === "前方有一段畅通的道路，路边停着两辆车。"
       )
     ).toBe(true);

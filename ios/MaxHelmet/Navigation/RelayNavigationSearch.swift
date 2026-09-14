@@ -82,7 +82,7 @@ final class RelayNavigationSearch: NavigationRouteSearching {
     func handleNavRoute(_ data: NavRouteData) {
         guard let (continuation, watchdogTask) = takePending(matching: data.commandId) else { return }
         watchdogTask?.cancel()
-        let route = makeNavigationRoute(
+        var route = makeNavigationRoute(
             name: data.destinationName,
             destination: CoordinateDatum.gcj02ToWgs84(data.destination),
             polyline: data.polyline.map(CoordinateDatum.gcj02ToWgs84),
@@ -97,6 +97,7 @@ final class RelayNavigationSearch: NavigationRouteSearching {
             totalEtaSeconds: data.etaSeconds
         )
         lock.lock()
+        route.relayCommandId = data.commandId
         lastDestinationName = data.destinationName
         lock.unlock()
         continuation.resume(returning: route)

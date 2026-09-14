@@ -1,6 +1,6 @@
 // tests/web-navigation.test.ts
 import { describe, expect, it, vi } from "vitest";
-import { createNavigationController } from "../src/lib/navigation";
+import { createNavigationController, type NavPhase } from "../src/lib/navigation";
 import { MOCK_ROUTE } from "../shared/nav-fixtures";
 import type { NavRouteEvent } from "../shared/agent";
 
@@ -138,7 +138,7 @@ describe("createNavigationController", () => {
     } as never);
 
     expect(sent.filter((p) => p.type === "nav.prompt").map((p) => p.kind)).toEqual(["offRoute", "rerouteFailed"]);
-    expect(states.at(-1)).toBe("idle");
+    expect(states.at(-1)).toBe("unavailable");
 
     const requestCountAfterFailure = sent.filter((p) => p.type === "nav.request").length;
     const promptsAfterFailure = sent.filter((p) => p.type === "nav.prompt").length;
@@ -237,7 +237,7 @@ describe("navigation.start before a fix has arrived", () => {
 
     nav.handleDeviceCommand({ action: "navigation.start", args: { query: "外滩" } } as never);
     timers.advance(1_500);
-    expect(onState).toHaveBeenCalledWith({ phase: "requesting", query: "外滩" });
+    expect(onState).toHaveBeenCalledWith({ phase: "locating", query: "外滩" });
     nav.updatePosition({ lat: 31.2304, lon: 121.4737 });
 
     expect(sent.some((p) => (p as { type?: string }).type === "nav.request")).toBe(true);
@@ -447,22 +447,23 @@ describe("GPS quality and freshness", () => {
     try {
       vi.setSystemTime(20_000);
       const sent: Array<Record<string, unknown>> = [];
-      const states: string[] = [];
+      const states: NavPhase[] = [];
       const controller = createNavigationController({
         sendJson: (p) => sent.push(p as Record<string, unknown>),
-        onState: (s) => states.push(s.phase)
+        onState: (s) => states.push(s)
       });
       const fix = { lat: 31.2304, lon: 121.4737, accuracy: 10 };
       controller.updatePosition(fix);
       controller.handleDeviceCommand({ commandId: "c1", action: "navigation.start", args: { query: "外滩" } });
       controller.handleAgentEvent(routeEvent as never);
       vi.advanceTimersByTime(10_000);
-      expect(states.at(-1)).toBe("locating");
+      expect(states.at(-1)).toMatchObject({ phase: "guiding", locationStale: true, route: routeEvent });
       expect(sent.filter((p) => p.kind === "locationLost")).toHaveLength(1);
       expect(controller.updatePosition({ ...fix, accuracy: 200 })).toBe(false);
-      expect(states.at(-1)).toBe("locating");
+      expect(states.at(-1)).toMatchObject({ phase: "guiding", locationStale: true, route: routeEvent });
       expect(controller.updatePosition(fix)).toBe(true);
-      expect(states.at(-1)).toBe("guiding");
+      expect(states.at(-1)).toMatchObject({ phase: "guiding" });
+      expect(states.at(-1)).not.toHaveProperty("locationStale", true);
       controller.reset();
       vi.advanceTimersByTime(10_000);
       expect(sent.filter((p) => p.kind === "locationLost")).toHaveLength(1);
@@ -482,4 +483,20 @@ describe("GPS quality and freshness", () => {
     expect(sent[0]).toMatchObject({ type: "nav.request", commandId: "c1" });
     controller.reset();
   });
+});
+
+it("leaves a useful GPS failure visible after the first-fix timeout", () => {
+  vi.useFakeTimers();
+  try {
+    const states: NavPhase[] = [];
+    const sent: unknown[] = [];
+    const controller = createNavigationController({ sendJson: (p) => sent.push(p), onState: (s) => states.push(s) });
+    controller.handleDeviceCommand({ commandId: "gps", action: "navigation.start", args: { query: "外滩" } });
+    vi.advanceTimersByTime(8000);
+    expect(states.at(-1)).toMatchObject({ phase: "unavailable", message: expect.stringContaining("定位") });
+    expect(sent).toEqual([expect.objectContaining({ type: "device.result", commandId: "gps", status: "failed" })]);
+    controller.reset();
+  } finally {
+    vi.useRealTimers();
+  }
 });

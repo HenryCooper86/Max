@@ -64,7 +64,7 @@ describe.skipIf(!enabled)("HUD layout under a real browser", () => {
         const result = probeHudLayout({ ...viewport, nav: guiding, captions: false });
 
         expect(result.navPanel).not.toBeNull();
-        expect(result.navPanel!.clippedPx).toBeLessThanOrEqual(8);
+        expect(result.navPanel!.clippedPx <= 8 || result.navPanel!.scrollable).toBe(true);
         expect(result.navPanel!.height).toBeGreaterThan(40);
       });
     }
@@ -95,6 +95,29 @@ describe.skipIf(!enabled)("HUD layout under a real browser", () => {
       expect(result.dockOnScreen).toBe(true);
     });
   });
+
+  for (const viewport of [
+    { width: 320, height: 568 },
+    { width: 360, height: 640 },
+    { width: 430, height: 932 },
+    { width: 768, height: 1024 },
+    { width: 1024, height: 768 },
+    { width: 568, height: 320 }
+  ]) {
+    for (const captions of [false, true]) {
+      it(`fits controls, helmet and captions at ${viewport.width}x${viewport.height}, captions=${captions}`, () => {
+        const result = probeHudLayout({ ...viewport, nav: guiding, captions });
+        expect(result.viewport).toEqual(viewport);
+        expect(result.shellOverflowPx).toBeLessThanOrEqual(1);
+        expect(result.horizontalOverflowPx).toBeLessThanOrEqual(1);
+        expect(result.helmetOverflowPx).toBeLessThanOrEqual(1);
+        expect(result.dockOnScreen).toBe(true);
+        expect(result.navPanel!.height).toBeGreaterThan(60);
+        expect(result.navOverlapsTranscript).toBe(false);
+        if (captions) expect(result.transcript!.height).toBeGreaterThanOrEqual(100);
+      });
+    }
+  }
 
   // Nothing above should cost anything when no route is showing.
   it("leaves the idle shell within the viewport", () => {

@@ -83,9 +83,22 @@ const HAZARD_TELLTALE: Record<Exclude<HazardLevel, "normal">, string> = {
 export function VoiceStateReadout({
   connected,
   turnState,
-  hazardLevel = "normal"
-}: Pick<Props, "connected" | "turnState" | "hazardLevel">) {
+  hazardLevel = "normal",
+  sessionState
+}: Pick<Props, "connected" | "turnState" | "hazardLevel"> & { sessionState?: "inactive" | "starting" }) {
   const { t } = useLanguage();
+  if (!connected && sessionState) {
+    return (
+      <div className="voiceReadout sessionGuidance" aria-live="polite">
+        <div className="voiceReadoutState">
+          {sessionState === "starting" ? t("voice.connecting") : t("voice.welcome")}
+        </div>
+        <div className="voiceReadoutHint">
+          {sessionState === "starting" ? t("voice.setupHint") : t("voice.startHint")}
+        </div>
+      </div>
+    );
+  }
   const hazard = connected && hazardLevel !== "normal" ? hazardLevel : null;
   const stateCaption = t(
     `voice.state.${turnState}` as

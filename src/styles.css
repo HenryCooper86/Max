@@ -5975,3 +5975,35 @@ button.opsCard:disabled {
     grid-template-columns: 46px minmax(0, 1fr);
   }
 }
+
+/* Keep translated settings controls usable on narrow phones. */
+.settingsHeader {
+  gap: 12px;
+}
+
+.settingsHeader h1,
+.settingsHeaderActions {
+  flex-shrink: 0;
+}
+
+.settingsHeader h1 {
+  white-space: nowrap;
+}
+
+@media (max-width: 420px) {
+  .settingsDoneLabel,
+  .settingsAdminActionLabel {
+    display: none;
+  }
+
+  .settingsHeaderActions > button {
+    width: 44px;
+    min-height: 44px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .settingsAdminAction {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+}

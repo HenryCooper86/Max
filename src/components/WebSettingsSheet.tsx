@@ -25,6 +25,7 @@ import {
   HAZARD_LABELS,
   HAZARD_LABELS_EN,
   NETWORK_LABELS,
+  NETWORK_LABELS_EN,
   PERMISSION_LABELS,
   PERMISSION_LABELS_EN,
   PERSONALITY_LABELS,
@@ -111,7 +112,7 @@ export function WebSettingsSheet({ agent, amapConsent, onOpenAdmin, onClose }: P
             <LanguageToggle />
             <button ref={closeButtonRef} type="button" onClick={onClose} aria-label={t("settings.doneAria")}>
               <X size={24} weight="bold" aria-hidden="true" />
-              {t("settings.done")}
+              <span className="settingsDoneLabel">{t("settings.done")}</span>
             </button>
           </div>
         </header>
@@ -249,7 +250,7 @@ export function WebSettingsSheet({ agent, amapConsent, onOpenAdmin, onClose }: P
               <dl>
                 <div>
                   <dt>{localized(language, "网络", "Network")}</dt>
-                  <dd>{NETWORK_LABELS[agent.rideContext.network]}</dd>
+                  <dd>{(language === "en-US" ? NETWORK_LABELS_EN : NETWORK_LABELS)[agent.rideContext.network]}</dd>
                 </div>
                 <div>
                   <dt>{localized(language, "电量", "Battery")}</dt>
@@ -386,11 +387,11 @@ export function WebSettingsSheet({ agent, amapConsent, onOpenAdmin, onClose }: P
               </div>
               <div>
                 <dt>{localized(language, "降噪", "Noise reduction")}</dt>
-                <dd>{audioProcessingLabel(agent.audioProcessing.noiseSuppression)}</dd>
+                <dd>{audioProcessingLabel(agent.audioProcessing.noiseSuppression, language)}</dd>
               </div>
               <div>
                 <dt>{localized(language, "回声消除", "Echo cancellation")}</dt>
-                <dd>{audioProcessingLabel(agent.audioProcessing.echoCancellation)}</dd>
+                <dd>{audioProcessingLabel(agent.audioProcessing.echoCancellation, language)}</dd>
               </div>
               <div>
                 <dt>{localized(language, "采样", "Sample rate")}</dt>

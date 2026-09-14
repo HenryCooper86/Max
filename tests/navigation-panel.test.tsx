@@ -49,3 +49,15 @@ describe("NavigationPanel", () => {
     expect(tree!.toJSON()).toBeNull();
   });
 });
+
+it("replaces stale maneuver and map with an accessible GPS pause message", () => {
+  let tree: ReturnType<typeof create> | undefined;
+  act(() => {
+    tree = create(<NavigationPanel state={{ phase: "locating" }} />);
+  });
+  const text = JSON.stringify(tree!.toJSON());
+  expect(text).toContain("导航已暂停");
+  expect(text).toContain('"role":"status"');
+  expect(text).not.toContain("svg");
+  act(() => tree!.unmount());
+});

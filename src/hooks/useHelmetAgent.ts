@@ -1154,10 +1154,13 @@ export function useHelmetAgent() {
       (position) => {
         const next = { lat: position.coords.latitude, lon: position.coords.longitude };
         // Future session.starts (settings-change restarts) carry fresh coords too.
-        locationRef.current = next;
         // Every real fix feeds guidance, independent of the throttled
         // location.update send below (which exists only to refetch weather).
-        navController.updatePosition(next);
+        if (
+          !navController.updatePosition({ ...next, timestamp: position.timestamp, accuracy: position.coords.accuracy })
+        )
+          return;
+        locationRef.current = next;
         const now = Date.now();
         if (now - lastSentAt < LOCATION_UPDATE_MIN_INTERVAL_MS) return;
         if (lastSent && approxDistanceKm(lastSent, next) < LOCATION_UPDATE_MIN_MOVE_KM) return;
@@ -1171,7 +1174,7 @@ export function useHelmetAgent() {
       () => {
         /* denied/unavailable — session-start coordinates (or the server default) stay in effect */
       },
-      { enableHighAccuracy: false, maximumAge: 30_000 }
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 10_000 }
     );
 
     return () => navigator.geolocation.clearWatch(watchId);

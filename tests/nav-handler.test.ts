@@ -534,3 +534,40 @@ describe("createNavHandler", () => {
     });
   });
 });
+
+it("reports provider outages as unavailable and ignores superseded failures", async () => {
+  const { sent, send } = collector();
+  const failed = createNavHandler({
+    provider: {
+      ...createMockRouteProvider(),
+      resolveDestination: async () => {
+        throw new Error("upstream down");
+      }
+    },
+    send
+  });
+  await failed(start);
+  expect(sent).toEqual([{ type: "nav.error", commandId: "c1", code: "route.unavailable" }]);
+  sent.length = 0;
+  const gate = defer<void>();
+  const provider = createMockRouteProvider();
+  const handle = createNavHandler({
+    provider: {
+      ...provider,
+      resolveDestination: async (query, near) => {
+        if (query === "old") {
+          await gate.promise;
+          throw new Error("late failure");
+        }
+        return provider.resolveDestination(query, near);
+      }
+    },
+    send
+  });
+  const old = handle({ ...start, query: "old" });
+  await handle({ ...start, commandId: "c2", query: "new" });
+  gate.resolve();
+  await old;
+  expect(sent).toHaveLength(1);
+  expect(sent[0]).toMatchObject({ type: "nav.route", commandId: "c2" });
+});

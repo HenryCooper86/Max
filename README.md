@@ -471,6 +471,28 @@ The wake phrase and the 12 s follow-up window live in `shared/wake.ts`. The mock
 
 ## API Routes
 
+### MAX navigation reliability
+
+Web guidance accepts browser fixes under 10 seconds old and with reported accuracy
+of 50 metres or better. Stale fixes pause the HUD and request MAX's location-loss
+announcement; the next accurate fix resumes the route. No maneuver or reroute is
+advanced from a rejected fix. Real rides still require outdoor device verification.
+
+Amap transport, response, credential, quota, and IP errors produce `route.unavailable`;
+only a successful empty place search produces `destination.notFound`. Relay logs
+retain sanitized `api.<infocode>` diagnostics without keys or query URLs. For
+`api.10005` (`INVALID_USER_IP`), verify the deployed server's outbound IP in the
+Amap Web Service key's IP whitelist; this deployment uses `3.35.135.136`.
+
+`/health` includes cumulative and trailing-window `maxSpeechRequested`,
+`maxSpeechDelivered`, `maxSpeechFailed`, `maxSpeechCancelled`, `maxSpeechExpired`,
+`maxSpeechCongested`, and `maxSpeechLatencyMsTotal`. Divide latency total by
+completed deliveries (when nonzero) for mean queue-to-audio-delivery latency in
+milliseconds. Delivery measures PCM handed to the socket, not audible playback.
+Compare interval deltas for failure/congestion rates; cancellations and expired
+maneuvers are intentional suppression, not successful speech. Generated PCM also
+contributes to the existing downstream audio byte counter.
+
 ### `GET /health`
 
 Returns public backend liveness, selected provider, build identity, and relay

@@ -28,6 +28,7 @@ const REROUTE_COOLDOWN_MS = 20_000;
 export type NavPhase =
   | { phase: "idle" }
   | { phase: "requesting"; query: string }
+  | { phase: "locating" }
   | { phase: "guiding"; route: NavRouteEvent; update: GuidanceUpdate; position: GeoPoint };
 
 type DeviceCommand = { commandId: string; action: string; args: Record<string, unknown> };
@@ -51,7 +52,7 @@ export function createNavigationController(deps: {
 }): {
   handleDeviceCommand(command: DeviceCommand): boolean;
   handleAgentEvent(event: AgentEvent): void;
-  updatePosition(wgs: GeoPoint): void;
+  updatePosition(wgs: GeoPoint & { timestamp?: number; accuracy?: number }): boolean;
   reset(): void;
 } {
   const now = deps.now ?? (() => Date.now());
@@ -69,6 +70,17 @@ export function createNavigationController(deps: {
   const NO_FIX_DETAIL = "还没定位到，到室外或空旷处再说一次。";
 
   let lastFix: GeoPoint | null = null;
+  let lastFixAt = 0;
+  let cancelFixExpiry: (() => void) | undefined;
+  const FIX_MAX_AGE_MS = 10_000;
+  function freshFix() {
+    return lastFix !== null && now() - lastFixAt < FIX_MAX_AGE_MS;
+  }
+  function pauseGuidance() {
+    if (!activeRoute) return;
+    prompt("locationLost");
+    deps.onState({ phase: "locating" });
+  }
   // Set only while a start is waiting for its first fix.
   let awaitingFix: { commandId: string; query: string; cancels: (() => void)[] } | null = null;
   // Set only while a navigation.start's device.result is held, awaiting the
@@ -85,7 +97,7 @@ export function createNavigationController(deps: {
   let promptSequence = 0;
   let rerouteCommandId: string | null = null;
 
-  function prompt(kind: "offRoute" | "rerouteFailed" | "arrived") {
+  function prompt(kind: "offRoute" | "rerouteFailed" | "arrived" | "locationLost") {
     if (!activeRoute) return;
     deps.sendJson({
       type: "nav.prompt",
@@ -158,6 +170,10 @@ export function createNavigationController(deps: {
    *  both require a prior fix by construction). */
   function stepAndEmit(): void {
     if (!activeRoute || !lastFix) return;
+    if (!freshFix()) {
+      pauseGuidance();
+      return;
+    }
     const position = wgs84ToGcj02(lastFix);
     const update = step(position, activeRoute, progress);
     // Preview the HUD without consuming a prompt that has not been sent.
@@ -175,13 +191,14 @@ export function createNavigationController(deps: {
       sendResult(commandId, "denied", "permission.location");
       return;
     }
-    if (!lastFix) {
+    if (!freshFix()) {
       // Not a permission fault: permission may be granted and the fix merely
       // slow, which is the common case indoors. Wait, say so, and only then
       // fail with copy that names the cause. A previous still-waiting start
       // is resolved FIRST (failed, "navigation.cancelled") — same rule as
       // startWithFix's own supersede — so it is never silently dropped.
       cancelHeldStart();
+      resetNavigationState();
       awaitingFix = {
         commandId,
         query,
@@ -192,6 +209,7 @@ export function createNavigationController(deps: {
           schedule(FIRST_FIX_TIMEOUT_MS, () => {
             if (awaitingFix?.commandId !== commandId) return;
             clearFixWait();
+            emitIdle();
             sendResult(commandId, "failed", "route.unavailable", NO_FIX_DETAIL);
           })
         ]
@@ -323,14 +341,30 @@ export function createNavigationController(deps: {
     });
   }
 
-  function updatePosition(wgs: GeoPoint): void {
+  function updatePosition(wgs: GeoPoint & { timestamp?: number; accuracy?: number }): boolean {
+    const timestamp = wgs.timestamp ?? now();
+    if (
+      !Number.isFinite(wgs.lat) ||
+      !Number.isFinite(wgs.lon) ||
+      Math.abs(wgs.lat) > 90 ||
+      Math.abs(wgs.lon) > 180 ||
+      !Number.isFinite(timestamp) ||
+      now() - timestamp >= FIX_MAX_AGE_MS ||
+      timestamp > now() + 1000 ||
+      (lastFix !== null && timestamp < lastFixAt) ||
+      (wgs.accuracy !== undefined && (!Number.isFinite(wgs.accuracy) || wgs.accuracy < 0 || wgs.accuracy > 50))
+    )
+      return false;
     lastFix = wgs;
+    lastFixAt = timestamp;
+    cancelFixExpiry?.();
+    cancelFixExpiry = schedule(Math.max(1, FIX_MAX_AGE_MS - (now() - timestamp)), pauseGuidance);
     if (awaitingFix) {
       const { commandId, query } = awaitingFix;
       clearFixWait();
       startWithFix(commandId, query);
     }
-    if (!activeRoute) return;
+    if (!activeRoute) return true;
 
     const position = wgs84ToGcj02(wgs);
     const maneuverIndex = progress.maneuverIndex;
@@ -360,7 +394,7 @@ export function createNavigationController(deps: {
       prompt("arrived");
       resetNavigationState();
       emitIdle();
-      return;
+      return true;
     }
 
     if (update.offRoute) {
@@ -370,14 +404,17 @@ export function createNavigationController(deps: {
       }
       maybeSendReroute(position);
       emitGuiding(update, position);
-      return;
+      return true;
     }
 
     offRouteAnnounced = false;
     emitGuiding(update, position);
+    return true;
   }
 
   function reset(): void {
+    cancelFixExpiry?.();
+    cancelFixExpiry = undefined;
     lastFix = null;
     clearFixWait();
     resetNavigationState();

@@ -324,6 +324,12 @@ export function NavigationPanel({
   const mapOffered = Boolean(amapKey) && mapConsent === "unknown" && Boolean(onEnableMap);
 
   if (state.phase === "idle") return null;
+  if (state.phase === "locating")
+    return (
+      <section className="navigationPanel" aria-label="导航">
+        <p role="status">定位信号较弱，导航已暂停。正在等待准确定位…</p>
+      </section>
+    );
 
   if (state.phase === "requesting") {
     return (

@@ -428,3 +428,58 @@ describe("web navigation uses MAX relay prompts", () => {
     expect(sent.filter((p) => p.type === "nav.prompt").map((p) => p.kind)).toEqual(["offRoute"]);
   });
 });
+
+describe("GPS quality and freshness", () => {
+  it("rejects stale, inaccurate, malformed and out-of-order fixes", () => {
+    const clock = { t: 20_000 };
+    const { controller } = harness(clock);
+    const fix = { lat: 31.2304, lon: 121.4737, timestamp: 20_000, accuracy: 10 };
+    expect(controller.updatePosition({ ...fix, timestamp: 10_000 })).toBe(false);
+    expect(controller.updatePosition({ ...fix, accuracy: 100 })).toBe(false);
+    expect(controller.updatePosition({ ...fix, lat: NaN })).toBe(false);
+    expect(controller.updatePosition(fix)).toBe(true);
+    expect(controller.updatePosition({ ...fix, timestamp: 19_000 })).toBe(false);
+    controller.reset();
+  });
+
+  it("pauses without advancing guidance, then resumes with an accurate fix", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(20_000);
+      const sent: Array<Record<string, unknown>> = [];
+      const states: string[] = [];
+      const controller = createNavigationController({
+        sendJson: (p) => sent.push(p as Record<string, unknown>),
+        onState: (s) => states.push(s.phase)
+      });
+      const fix = { lat: 31.2304, lon: 121.4737, accuracy: 10 };
+      controller.updatePosition(fix);
+      controller.handleDeviceCommand({ commandId: "c1", action: "navigation.start", args: { query: "外滩" } });
+      controller.handleAgentEvent(routeEvent as never);
+      vi.advanceTimersByTime(10_000);
+      expect(states.at(-1)).toBe("locating");
+      expect(sent.filter((p) => p.kind === "locationLost")).toHaveLength(1);
+      expect(controller.updatePosition({ ...fix, accuracy: 200 })).toBe(false);
+      expect(states.at(-1)).toBe("locating");
+      expect(controller.updatePosition(fix)).toBe(true);
+      expect(states.at(-1)).toBe("guiding");
+      controller.reset();
+      vi.advanceTimersByTime(10_000);
+      expect(sent.filter((p) => p.kind === "locationLost")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for a new fix instead of starting from an old cached position", () => {
+    const clock = { t: 0 };
+    const { controller, sent } = harness(clock);
+    controller.updatePosition({ lat: 31.2304, lon: 121.4737 });
+    clock.t = 10_000;
+    controller.handleDeviceCommand({ commandId: "c1", action: "navigation.start", args: { query: "外滩" } });
+    expect(sent).toEqual([]);
+    controller.updatePosition({ lat: 31.2304, lon: 121.4737 });
+    expect(sent[0]).toMatchObject({ type: "nav.request", commandId: "c1" });
+    controller.reset();
+  });
+});

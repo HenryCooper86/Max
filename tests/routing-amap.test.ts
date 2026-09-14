@@ -36,16 +36,20 @@ describe("AmapRouteProvider.resolveDestination", () => {
     expect(resolved).toEqual({ name: "人民广场", location: { lat: 31.228917, lon: 121.475097 } });
   });
 
-  it("returns null on empty pois, bad status, and HTTP error", async () => {
-    for (const body of [
-      JSON.stringify({ status: "1", pois: [] }),
-      JSON.stringify({ status: "0", info: "INVALID_USER_KEY" })
-    ]) {
-      const provider = createAmapRouteProvider({ apiKey: "k", fetchImpl: fetchReturning(body) });
-      expect(await provider.resolveDestination("x", origin)).toBeNull();
+  it("distinguishes empty search from service failures", async () => {
+    const empty = createAmapRouteProvider({
+      apiKey: "k",
+      fetchImpl: fetchReturning(JSON.stringify({ status: "1", pois: [] }))
+    });
+    expect(await empty.resolveDestination("x", origin)).toBeNull();
+    for (const [body, status] of [
+      [JSON.stringify({ status: "0", infocode: "10005" }), 200],
+      ["oops", 500],
+      ["null", 200]
+    ] as const) {
+      const provider = createAmapRouteProvider({ apiKey: "k", fetchImpl: fetchReturning(body, status) });
+      await expect(provider.resolveDestination("x", origin)).rejects.toThrow("Amap failure:");
     }
-    const provider = createAmapRouteProvider({ apiKey: "k", fetchImpl: fetchReturning("oops", 500) });
-    expect(await provider.resolveDestination("x", origin)).toBeNull();
   });
 });
 
@@ -93,7 +97,7 @@ describe("AmapRouteProvider.planRoute", () => {
     }
   });
 
-  it("returns null on malformed numbers and reports the failure", async () => {
+  it("rejects malformed numbers and reports the failure", async () => {
     const bad = JSON.stringify({ status: "1", route: { paths: [{ distance: "abc", cost: {}, steps: [] }] } });
     const reasons: string[] = [];
     const provider = createAmapRouteProvider({
@@ -101,16 +105,16 @@ describe("AmapRouteProvider.planRoute", () => {
       fetchImpl: fetchReturning(bad),
       onFailure: (r) => reasons.push(r)
     });
-    expect(await provider.planRoute(origin, destination)).toBeNull();
+    await expect(provider.planRoute(origin, destination)).rejects.toThrow("Amap failure:");
     expect(reasons.length).toBe(1);
   });
 
-  it("returns null on timeout", async () => {
+  it("rejects on timeout", async () => {
     const never: typeof fetch = ((_url: unknown, init?: RequestInit) =>
       new Promise((_resolve, reject) => {
         init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
       })) as typeof fetch;
     const provider = createAmapRouteProvider({ apiKey: "k", fetchImpl: never, timeoutMs: 10 });
-    expect(await provider.planRoute(origin, destination)).toBeNull();
+    await expect(provider.planRoute(origin, destination)).rejects.toThrow("Amap failure:");
   });
 });

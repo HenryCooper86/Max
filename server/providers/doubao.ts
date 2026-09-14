@@ -748,15 +748,16 @@ export function createDoubaoProvider(
 
   function queueMaxSpeech(text: string, expiresAt?: number) {
     const signal = maxSpeechAbort.signal;
+    const requestedAt = Date.now();
+    let outcome: "Delivered" | "Failed" | "Cancelled" | "Expired" | "Congested" = "Cancelled";
+    metrics.maxSpeechRequested();
     maxSpeechTail = maxSpeechTail
       .then(async () => {
-        if (
-          signal.aborted ||
-          closedByProvider ||
-          !connectConfig ||
-          (expiresAt !== undefined && Date.now() >= expiresAt)
-        )
+        if (signal.aborted || closedByProvider || !connectConfig) return;
+        if (expiresAt !== undefined && Date.now() >= expiresAt) {
+          outcome = "Expired";
           return;
+        }
         const pcm = await synthesizeMaxSpeech({
           text,
           url: process.env.DOUBAO_AGENT_WS_URL ?? "wss://openspeech.bytedance.com/api/v3/realtime/dialogue",
@@ -772,28 +773,36 @@ export function createDoubaoProvider(
         });
         if (signal.aborted || closedByProvider) return;
         if (!pcm) {
+          outcome = "Failed";
           sendClient({ type: "status", state: "degraded", detail: "MAX 语音暂不可用，请查看文字提示。" });
           return;
         }
         await waitForOrdinarySpeech();
-        if (
-          signal.aborted ||
-          closedByProvider ||
-          client.readyState !== client.OPEN ||
-          (expiresAt !== undefined && Date.now() >= expiresAt)
-        )
+        if (signal.aborted || closedByProvider || client.readyState !== client.OPEN) return;
+        if (expiresAt !== undefined && Date.now() >= expiresAt) {
+          outcome = "Expired";
           return;
+        }
         // One synchronous delivery through the shared PCM channel: no second
         // browser speech engine, and no interleaving with live reply chunks.
         for (let offset = 0; offset < pcm.length; offset += 960) {
-          if (client.bufferedAmount >= MAX_CLIENT_BUFFERED_BYTES) break;
-          client.send(pcm.subarray(offset, offset + 960), { binary: true });
+          if (client.bufferedAmount >= MAX_CLIENT_BUFFERED_BYTES) {
+            outcome = "Congested";
+            return;
+          }
+          const chunk = pcm.subarray(offset, offset + 960);
+          client.send(chunk, { binary: true });
+          telemetry?.serverAudio(chunk.byteLength);
         }
+        outcome = "Delivered";
       })
       .catch(() => {
-        if (!signal.aborted && !closedByProvider)
+        if (!signal.aborted && !closedByProvider) {
+          outcome = "Failed";
           sendClient({ type: "status", state: "degraded", detail: "MAX 语音暂不可用，请查看文字提示。" });
-      });
+        }
+      })
+      .finally(() => metrics.maxSpeechCompleted(outcome, Date.now() - requestedAt));
   }
 
   function sendClient(payload: unknown) {

@@ -650,11 +650,14 @@ describe("web MAX voice", () => {
       { content: "已重新规划路线。" }
     ]);
     expect(clientEvents(send).find((e) => e.text === "已重新规划路线。")).toMatchObject({ useBrowserSpeech: false });
+    const before = metrics.snapshot();
     const pcm = Buffer.alloc(1920, 1);
     socket.emit("message", speechFrame(352, pcm));
     socket.emit("message", jsonFrame(TTS_ENDED, {}));
     await vi.waitFor(() => expect(send.mock.calls.filter(([d]) => Buffer.isBuffer(d))).toHaveLength(2));
     expect(Buffer.concat(send.mock.calls.filter(([d]) => Buffer.isBuffer(d)).map(([d]) => d))).toEqual(pcm);
+    await vi.waitFor(() => expect(metrics.snapshot().maxSpeechDelivered).toBe(before.maxSpeechDelivered + 1));
+    expect(metrics.snapshot().audioDownBytes).toBe(before.audioDownBytes + pcm.length);
     await controller.close();
   });
 
@@ -675,10 +678,12 @@ describe("web MAX voice", () => {
   it("reports synthesis failure without switching to another voice", async () => {
     stubWeatherFetch();
     const { controller, send, provider } = await startSession("web");
+    const before = metrics.snapshot();
     provider.speakNavLine!("已重新规划路线。");
     const socket = await openMaxSpeech();
     socket.emit("error", new Error("unavailable"));
     await vi.waitFor(() => expect(clientEvents(send).some((e) => e.state === "degraded")).toBe(true));
+    await vi.waitFor(() => expect(metrics.snapshot().maxSpeechFailed).toBe(before.maxSpeechFailed + 1));
     expect(clientEvents(send).some((e) => e.useBrowserSpeech === true)).toBe(false);
     expect(send.mock.calls.filter(([d]) => Buffer.isBuffer(d))).toHaveLength(0);
     await controller.close();

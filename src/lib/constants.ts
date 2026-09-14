@@ -149,6 +149,12 @@ export const NETWORK_LABELS: Record<RideHudContext["network"], string> = {
   offline: "离线"
 };
 
+export const NETWORK_LABELS_EN: Record<RideHudContext["network"], string> = {
+  online: "Online",
+  degraded: "Weak connection",
+  offline: "Offline"
+};
+
 export const PERMISSION_LABELS: Record<PermissionStateLabel, string> = {
   granted: "已授权",
   prompt: "待授权",

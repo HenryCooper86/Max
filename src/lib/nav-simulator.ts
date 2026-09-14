@@ -71,6 +71,10 @@ export function createRideSimulator(options: {
   const speedMps = options.speedMps ?? DEFAULT_SPEED_MPS;
   const { route, onPosition } = options;
 
+  const routeLength = route.polyline
+    .slice(1)
+    .reduce((total, point, index) => total + haversineMeters(route.polyline[index]!, point), 0);
+
   let timer: ReturnType<typeof setInterval> | null = null;
   let tickCount = 0;
 
@@ -78,10 +82,13 @@ export function createRideSimulator(options: {
     tickCount += 1;
     const distanceMeters = tickCount * speedMps * (tickMs / 1000);
     const target = pointAtDistance(route.polyline, distanceMeters);
+    const arrived = distanceMeters >= routeLength;
     const shifted =
-      detour && tickCount >= DETOUR_FIRST_TICK && tickCount <= DETOUR_LAST_TICK
+      !arrived && detour && tickCount >= DETOUR_FIRST_TICK && tickCount <= DETOUR_LAST_TICK
         ? { lat: target.lat, lon: target.lon + DETOUR_OFFSET_LON_DEG }
         : target;
+    // Stop before invoking the consumer, which may start a new simulation.
+    if (arrived) stop();
     onPosition(wgsEquivalentOf(shifted));
   }
 
@@ -95,6 +102,7 @@ export function createRideSimulator(options: {
   function start(detour: boolean): void {
     stop();
     tickCount = 0;
+    if (route.polyline.length === 0) return;
     timer = setInterval(() => emitTick(detour), tickMs);
   }
 

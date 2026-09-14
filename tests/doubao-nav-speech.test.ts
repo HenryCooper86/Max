@@ -162,7 +162,7 @@ function captureDeviceCommandId(send: ReturnType<typeof vi.fn>, action: string):
  *  providerFactory closure — AgentSessionController keeps its own provider
  *  reference private, and speakNavLine has no client-event path of its own
  *  for a test to drive it through. */
-async function startSession(platform: string) {
+async function startSession(platform: string, voiceGender: "male" | "female" = "female") {
   const send = vi.fn();
   const client = { readyState: 1, OPEN: 1, send, close: vi.fn() } as never;
   let capturedProvider!: AgentProvider;
@@ -173,7 +173,7 @@ async function startSession(platform: string) {
   const controller = new AgentSessionController(client, providerFactory, silentLog);
 
   await controller.handleMessage(
-    Buffer.from(JSON.stringify({ type: "session.start", sampleRate: 16000, channels: 1, platform })),
+    Buffer.from(JSON.stringify({ type: "session.start", sampleRate: 16000, channels: 1, platform, voiceGender })),
     false
   );
   const upstream = upstreamInstances[upstreamInstances.length - 1];
@@ -609,4 +609,122 @@ describe("session navigation prompt wiring", () => {
     expect(send.mock.calls.filter(([data]) => Buffer.isBuffer(data))).toHaveLength(binaryBeforeRelease);
     expect(synthesizedText).not.toContain("已重新规划路线。");
   });
+});
+
+function speechFrame(event: number, payload: Buffer) {
+  return Buffer.concat([
+    Buffer.from([0x11, 0xb4, 0, 0]),
+    uint32(event),
+    uint32(1),
+    Buffer.from("s"),
+    uint32(payload.length),
+    payload
+  ]);
+}
+
+function requestPayload(frame: unknown) {
+  const data = frame as Buffer;
+  const sessionLength = data.readUInt32BE(8);
+  return JSON.parse(data.subarray(16 + sessionLength).toString());
+}
+
+async function openMaxSpeech() {
+  await vi.waitFor(() => expect(upstreamInstances).toHaveLength(2));
+  const socket = upstreamInstances[1]!;
+  socket.emit("open");
+  await socket.emit("message", jsonFrame(CONNECTION_STARTED, {}));
+  await socket.emit("message", jsonFrame(SESSION_STARTED, {}));
+  return socket;
+}
+
+describe("web MAX voice", () => {
+  it.each(["male", "female"] as const)("uses MAX’s %s voice for route text without browser speech", async (gender) => {
+    stubWeatherFetch();
+    const { controller, send, upstream, provider } = await startSession("web", gender);
+    provider.speakNavLine!("已重新规划路线。");
+    const socket = await openMaxSpeech();
+    const liveConfig = requestPayload(upstream.sent.find((f) => clientFrameEvent(f) === 100));
+    const speechConfig = requestPayload(socket.sent.find((f) => clientFrameEvent(f) === 100));
+    expect(speechConfig.tts).toEqual(liveConfig.tts);
+    expect(socket.sent.filter((f) => clientFrameEvent(f) === 300).map(requestPayload)).toEqual([
+      { content: "已重新规划路线。" }
+    ]);
+    expect(clientEvents(send).find((e) => e.text === "已重新规划路线。")).toMatchObject({ useBrowserSpeech: false });
+    const pcm = Buffer.alloc(1920, 1);
+    socket.emit("message", speechFrame(352, pcm));
+    socket.emit("message", jsonFrame(TTS_ENDED, {}));
+    await vi.waitFor(() => expect(send.mock.calls.filter(([d]) => Buffer.isBuffer(d))).toHaveLength(2));
+    expect(Buffer.concat(send.mock.calls.filter(([d]) => Buffer.isBuffer(d)).map(([d]) => d))).toEqual(pcm);
+    await controller.close();
+  });
+
+  it("drops synthesized speech after rider interruption", async () => {
+    stubWeatherFetch();
+    const { controller, send, upstream, provider } = await startSession("web");
+    provider.speakNavLine!("已重新规划路线。");
+    const socket = await openMaxSpeech();
+    await upstream.emit("message", jsonFrame(ASR_INFO, {}));
+    socket.emit("message", speechFrame(352, Buffer.alloc(960)));
+    socket.emit("message", jsonFrame(TTS_ENDED, {}));
+    await Promise.resolve();
+    expect(send.mock.calls.filter(([d]) => Buffer.isBuffer(d))).toHaveLength(0);
+    expect(socket.readyState).toBe(MockWebSocket.CLOSED);
+    await controller.close();
+  });
+
+  it("reports synthesis failure without switching to another voice", async () => {
+    stubWeatherFetch();
+    const { controller, send, provider } = await startSession("web");
+    provider.speakNavLine!("已重新规划路线。");
+    const socket = await openMaxSpeech();
+    socket.emit("error", new Error("unavailable"));
+    await vi.waitFor(() => expect(clientEvents(send).some((e) => e.state === "degraded")).toBe(true));
+    expect(clientEvents(send).some((e) => e.useBrowserSpeech === true)).toBe(false);
+    expect(send.mock.calls.filter(([d]) => Buffer.isBuffer(d))).toHaveLength(0);
+    await controller.close();
+  });
+});
+
+describe("web MAX prompt lifecycle", () => {
+  it("discards a maneuver that expires while speech is synthesizing", async () => {
+    stubWeatherFetch();
+    const now = vi.spyOn(Date, "now").mockReturnValue(1000);
+    const { controller, send, provider } = await startSession("web");
+    provider.speakNavPrompt!({ text: "前方150米，右转", interrupt: false, expiresAt: 4000 });
+    const socket = await openMaxSpeech();
+    now.mockReturnValue(4001);
+    socket.emit("message", speechFrame(352, Buffer.alloc(960)));
+    socket.emit("message", jsonFrame(TTS_ENDED, {}));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(send.mock.calls.filter(([d]) => Buffer.isBuffer(d))).toHaveLength(0);
+    await controller.close();
+  });
+
+  it("closing the provider aborts synthesis and prevents late audio", async () => {
+    stubWeatherFetch();
+    const { controller, send, provider } = await startSession("web");
+    provider.speakNavLine!("已重新规划路线。");
+    const socket = await openMaxSpeech();
+    await controller.close();
+    socket.emit("message", speechFrame(352, Buffer.alloc(960)));
+    socket.emit("message", jsonFrame(TTS_ENDED, {}));
+    await Promise.resolve();
+    expect(socket.readyState).toBe(MockWebSocket.CLOSED);
+    expect(send.mock.calls.filter(([d]) => Buffer.isBuffer(d))).toHaveLength(0);
+  });
+});
+
+it("web speech times out without leaving an open synthesis connection", async () => {
+  vi.useFakeTimers();
+  stubWeatherFetch();
+  const { controller, send, provider } = await startSession("web");
+  provider.speakNavLine!("已重新规划路线。");
+  await vi.advanceTimersByTimeAsync(1);
+  const socket = upstreamInstances[1]!;
+  expect(socket).toBeDefined();
+  await vi.advanceTimersByTimeAsync(8_000);
+  expect(socket.readyState).toBe(MockWebSocket.CLOSED);
+  expect(clientEvents(send).some((e) => e.state === "degraded")).toBe(true);
+  expect(clientEvents(send).some((e) => e.useBrowserSpeech === true)).toBe(false);
+  await controller.close();
 });

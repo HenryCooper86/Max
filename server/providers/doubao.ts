@@ -1,5 +1,6 @@
 import { WebSocket, type RawData } from "ws";
 import { randomUUID } from "node:crypto";
+import { synthesizeMaxSpeech } from "../max-speech";
 import type { AgentProvider, ProviderSessionContext, ProviderTelemetry, SessionStartEvent, VoiceGender } from "./types";
 import { DOUBAO_CAPABILITIES } from "../../shared/agent";
 import { type AdasSeverity } from "../../shared/adas";
@@ -736,7 +737,91 @@ export function createDoubaoProvider(
   // recovered and earns a fresh in-place reconnect budget.
   const UPSTREAM_STABILITY_RESET_MS = 60_000;
 
+  let maxSpeechAbort = new AbortController();
+  let maxSpeechTail = Promise.resolve();
+  const maxSpeechDeliveries = new Set<string>();
+
+  function cancelMaxSpeech() {
+    maxSpeechAbort.abort();
+    maxSpeechAbort = new AbortController();
+  }
+
+  function queueMaxSpeech(text: string, expiresAt?: number) {
+    const signal = maxSpeechAbort.signal;
+    maxSpeechTail = maxSpeechTail
+      .then(async () => {
+        if (
+          signal.aborted ||
+          closedByProvider ||
+          !connectConfig ||
+          (expiresAt !== undefined && Date.now() >= expiresAt)
+        )
+          return;
+        const pcm = await synthesizeMaxSpeech({
+          text,
+          url: process.env.DOUBAO_AGENT_WS_URL ?? "wss://openspeech.bytedance.com/api/v3/realtime/dialogue",
+          headers: buildDoubaoHeaders(),
+          config: buildDoubaoSessionConfig({
+            ...connectConfig,
+            systemRole: DEFAULT_AGENT_SYSTEM_PROMPT,
+            dialogContext: []
+          }),
+          pack: buildFullClientRequest,
+          parse: parseDoubaoFrame,
+          signal
+        });
+        if (signal.aborted || closedByProvider) return;
+        if (!pcm) {
+          sendClient({ type: "status", state: "degraded", detail: "MAX 语音暂不可用，请查看文字提示。" });
+          return;
+        }
+        await waitForOrdinarySpeech();
+        if (
+          signal.aborted ||
+          closedByProvider ||
+          client.readyState !== client.OPEN ||
+          (expiresAt !== undefined && Date.now() >= expiresAt)
+        )
+          return;
+        // One synchronous delivery through the shared PCM channel: no second
+        // browser speech engine, and no interleaving with live reply chunks.
+        for (let offset = 0; offset < pcm.length; offset += 960) {
+          if (client.bufferedAmount >= MAX_CLIENT_BUFFERED_BYTES) break;
+          client.send(pcm.subarray(offset, offset + 960), { binary: true });
+        }
+      })
+      .catch(() => {
+        if (!signal.aborted && !closedByProvider)
+          sendClient({ type: "status", state: "degraded", detail: "MAX 语音暂不可用，请查看文字提示。" });
+      });
+  }
+
   function sendClient(payload: unknown) {
+    const event = payload as {
+      type?: string;
+      speaker?: string;
+      useBrowserSpeech?: boolean;
+      text?: string;
+      deliveryId?: string;
+      detail?: string;
+    };
+    if (sessionPlatform === "web" && event.type === "status" && event.detail?.includes("浏览器")) {
+      payload = { ...event, detail: "MAX 语音暂不可用，文字提示仍可用。" };
+    }
+    if (
+      sessionPlatform === "web" &&
+      event.type === "transcript" &&
+      event.speaker === "agent" &&
+      event.useBrowserSpeech &&
+      event.text
+    ) {
+      payload = { ...event, useBrowserSpeech: false };
+      if (!event.deliveryId || !maxSpeechDeliveries.has(event.deliveryId)) {
+        if (event.deliveryId) maxSpeechDeliveries.add(event.deliveryId);
+        if (maxSpeechDeliveries.size > 256) maxSpeechDeliveries.delete(maxSpeechDeliveries.values().next().value!);
+        queueMaxSpeech(event.text);
+      }
+    }
     if (client.readyState === client.OPEN) {
       const encoded = JSON.stringify(payload);
       telemetry?.serverEvent(payload, Buffer.byteLength(encoded));
@@ -944,6 +1029,15 @@ export function createDoubaoProvider(
     const decision = reconcileDeviceResult(action, result, okSpeech);
     if (!decision.truncate) return;
     truncateInterruptedReply();
+    if (sessionPlatform === "web") {
+      fallbackSpoke = true;
+      clearTtsFallbackTimer();
+      resetPendingReply();
+      awaitingReply = false;
+      receivedTtsAudio = false;
+      sendClient({ type: "status", state: "hearing", detail: "MAX 正在播报操作结果" });
+      releaseOrdinarySpeechWaiters();
+    }
     if (decision.speech) {
       sendClient(transcriptEvent(agentDelivery, "agent", decision.speech, { final: true, useBrowserSpeech: true }));
       // Deliberately not awaited: the reconciliation is synchronous and must
@@ -1619,6 +1713,7 @@ export function createDoubaoProvider(
           return;
         }
         if (frame.event === EventReceive.AsrInfo) {
+          cancelMaxSpeech();
           // A new rider utterance means the currently playing reply was
           // interrupted. Tell the provider how much was plausibly heard so its
           // next turn does not rely on text that never reached the rider.
@@ -2307,6 +2402,7 @@ export function createDoubaoProvider(
       sendClient({ type: "status", state: "ready", detail: "麦克风已静音" });
     },
     async close() {
+      cancelMaxSpeech();
       closedByProvider = true;
       audioActive = false;
       hazardInjector.stop();
@@ -2355,6 +2451,23 @@ export function createDoubaoProvider(
     },
     speakNavPrompt(speech) {
       if (closedByProvider) return;
+      if (sessionPlatform === "web") {
+        if (speech.interrupt) {
+          cancelMaxSpeech();
+          truncateInterruptedReply();
+          fallbackSpoke = true;
+          clearTtsFallbackTimer();
+          resetPendingReply();
+          awaitingReply = false;
+          receivedTtsAudio = false;
+          sendClient({ type: "status", state: "hearing", detail: "MAX 正在播报转向提示" });
+          releaseOrdinarySpeechWaiters();
+        }
+        const delivery = createTranscriptDelivery();
+        sendClient(transcriptEvent(delivery, "agent", speech.text, { final: true, useBrowserSpeech: false }));
+        queueMaxSpeech(speech.text, speech.expiresAt);
+        return;
+      }
       const deliverTranscript = () => {
         const delivery = createTranscriptDelivery();
         sendClient(transcriptEvent(delivery, "agent", speech.text, { final: true, useBrowserSpeech: true }));

@@ -35,7 +35,7 @@ type AgentEvent = { type: string } & Record<string, unknown>;
 
 export function createNavigationController(deps: {
   sendJson: (payload: unknown) => void;
-  speak: (text: string) => void;
+
   onState: (state: NavPhase) => void;
   /** True unless location permission is KNOWN to be denied. Mirrors
    *  iOS's `stream.authorization() == .denied` / Android's
@@ -65,7 +65,7 @@ export function createNavigationController(deps: {
 
   const FIRST_FIX_ANNOUNCE_MS = 1_500;
   const FIRST_FIX_TIMEOUT_MS = 8_000;
-  const LOCATING_SPOKEN = "正在定位…";
+
   const NO_FIX_DETAIL = "还没定位到，到室外或空旷处再说一次。";
 
   let lastFix: GeoPoint | null = null;
@@ -77,13 +77,23 @@ export function createNavigationController(deps: {
   let activeRoute: NavRouteEvent | null = null;
   let progress: GuidanceProgress = INITIAL_PROGRESS;
   // True while exactly one reroute nav.request is outstanding. The client
-  // never has two reroutes in flight at once (this flag itself prevents
-  // sending a second), so the next nav.route/nav.error received while guiding
-  // and this flag is set is unambiguously that reroute's answer — matched by
-  // the flag rather than by re-deriving/storing its commandId.
+  // never has two reroutes in flight at once. Also match its command id so
+  // a delayed response from a superseded start cannot replace the route.
   let rerouteInFlight = false;
   let lastRerouteSentAt: number | null = null;
   let rerouteSequence = 0;
+  let promptSequence = 0;
+  let rerouteCommandId: string | null = null;
+
+  function prompt(kind: "offRoute" | "rerouteFailed" | "arrived") {
+    if (!activeRoute) return;
+    deps.sendJson({
+      type: "nav.prompt",
+      promptId: `web-${++promptSequence}`,
+      routeCommandId: activeRoute.commandId,
+      kind
+    });
+  }
   // First-off-route-detection-per-excursion latch; cleared once back on route.
   let offRouteAnnounced = false;
 
@@ -113,6 +123,7 @@ export function createNavigationController(deps: {
     activeRoute = null;
     progress = INITIAL_PROGRESS;
     rerouteInFlight = false;
+    rerouteCommandId = null;
     lastRerouteSentAt = null;
     offRouteAnnounced = false;
   }
@@ -149,7 +160,7 @@ export function createNavigationController(deps: {
     if (!activeRoute || !lastFix) return;
     const position = wgs84ToGcj02(lastFix);
     const update = step(position, activeRoute, progress);
-    progress = update.progress;
+    // Preview the HUD without consuming a prompt that has not been sent.
     emitGuiding(update, position);
   }
 
@@ -176,7 +187,7 @@ export function createNavigationController(deps: {
         query,
         cancels: [
           schedule(FIRST_FIX_ANNOUNCE_MS, () => {
-            if (awaitingFix?.commandId === commandId) deps.speak(LOCATING_SPOKEN);
+            if (awaitingFix?.commandId === commandId) deps.onState({ phase: "requesting", query });
           }),
           schedule(FIRST_FIX_TIMEOUT_MS, () => {
             if (awaitingFix?.commandId !== commandId) return;
@@ -249,7 +260,7 @@ export function createNavigationController(deps: {
       stepAndEmit();
       return;
     }
-    if (activeRoute && rerouteInFlight) {
+    if (activeRoute && rerouteInFlight && event.commandId === rerouteCommandId) {
       // Reroute answer: swap the route in, restart progress; relay speaks the confirmation.
       activeRoute = event;
       progress = INITIAL_PROGRESS;
@@ -271,13 +282,13 @@ export function createNavigationController(deps: {
       emitIdle();
       return;
     }
-    if (activeRoute && rerouteInFlight) {
+    if (activeRoute && rerouteInFlight && event.commandId === rerouteCommandId) {
       // Spec rule (2026-08-06): a reroute failure mid-ride stops cleanly with
       // a spoken explanation, never leaves the rider guided on a route the
       // engine can no longer correct — matching iOS's and Android's
       // NavigationController, which speak this same line on this same case.
+      prompt("rerouteFailed");
       resetNavigationState();
-      deps.speak("无法重新规划路线，已停止导航");
       emitIdle();
       return;
     }
@@ -301,9 +312,10 @@ export function createNavigationController(deps: {
     rerouteInFlight = true;
     lastRerouteSentAt = now();
     rerouteSequence += 1;
+    rerouteCommandId = `reroute-${lastRerouteSentAt}-${rerouteSequence}`;
     deps.sendJson({
       type: "nav.request",
-      commandId: `reroute-${lastRerouteSentAt}-${rerouteSequence}`,
+      commandId: rerouteCommandId,
       reason: "reroute",
       origin: position,
       destination: activeRoute.destination,
@@ -321,10 +333,23 @@ export function createNavigationController(deps: {
     if (!activeRoute) return;
 
     const position = wgs84ToGcj02(wgs);
+    const maneuverIndex = progress.maneuverIndex;
     const update = step(position, activeRoute, progress);
     progress = update.progress;
 
-    if (update.spokenPrompt) deps.speak(update.spokenPrompt);
+    if (!update.arrived && update.firedThreshold) {
+      const maneuver = activeRoute.steps[maneuverIndex];
+      const alongRouteMeters = activeRoute.distanceMeters - update.remainingMeters;
+      deps.sendJson({
+        type: "nav.prompt",
+        promptId: `web-${++promptSequence}`,
+        routeCommandId: activeRoute.commandId,
+        kind: "maneuver",
+        maneuverIndex,
+        threshold: update.firedThreshold,
+        distanceMeters: Math.max(0, (maneuver?.alongRouteMeters ?? alongRouteMeters) - alongRouteMeters)
+      });
+    }
 
     // Arrival takes priority over off-route bookkeeping: the engine derives
     // `arrived` independently of `offRoute` (pure distance-to-destination),
@@ -332,7 +357,7 @@ export function createNavigationController(deps: {
     // radius should be told they've arrived, not sent through a pointless
     // reroute.
     if (update.arrived) {
-      deps.speak("已到达目的地");
+      prompt("arrived");
       resetNavigationState();
       emitIdle();
       return;
@@ -341,7 +366,7 @@ export function createNavigationController(deps: {
     if (update.offRoute) {
       if (!offRouteAnnounced) {
         offRouteAnnounced = true;
-        deps.speak("已偏离路线，正在重新规划");
+        prompt("offRoute");
       }
       maybeSendReroute(position);
       emitGuiding(update, position);

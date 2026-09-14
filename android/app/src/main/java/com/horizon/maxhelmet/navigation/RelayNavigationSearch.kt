@@ -93,7 +93,8 @@ class RelayNavigationSearch(
                 polyline = data.polyline,
                 steps = data.steps,
                 distanceMeters = data.distanceMeters,
-                etaSeconds = data.etaSeconds
+                etaSeconds = data.etaSeconds,
+                relayCommandId = data.commandId
             )
         )
     }

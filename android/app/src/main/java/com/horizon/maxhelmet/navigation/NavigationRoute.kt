@@ -17,5 +17,6 @@ data class NavigationRoute(
     val polyline: List<LatLon>,
     val steps: List<ManeuverStep>,
     val distanceMeters: Double,
-    val etaSeconds: Double
+    val etaSeconds: Double,
+    val relayCommandId: String? = null
 )

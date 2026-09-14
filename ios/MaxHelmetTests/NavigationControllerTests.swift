@@ -92,6 +92,12 @@ private final class FakeSearch: NavigationRouteSearching, @unchecked Sendable {
         holdContinuation = nil
     }
 
+    func detachHeldReroute() -> (NavigationRoute?) -> Void {
+        let continuation = holdRerouteContinuation
+        holdRerouteContinuation = nil
+        return { continuation?.resume(returning: $0) }
+    }
+
     func resolveHeldReroute(with result: NavigationRoute?) {
         holdRerouteContinuation?.resume(returning: result)
         holdRerouteContinuation = nil
@@ -146,13 +152,14 @@ final class NavigationControllerTests: XCTestCase {
         )
     }
 
-    final class Box { var guidance: GuidanceState?; var spoken: [String] = []; var interrupts = 0 }
+    final class Box { var guidance: GuidanceState?; var spoken: [String] = []; var interrupts = 0; var prompts: [String] = [] }
 
     private func make(
         _ stream: FakeStream, _ search: FakeSearch,
         clock: @escaping () -> TimeInterval = { 0 },
         firstFixTimeoutSeconds: TimeInterval = 3,
-        firstFixAnnounceSeconds: TimeInterval = 1.5
+        firstFixAnnounceSeconds: TimeInterval = 1.5,
+        relaySpeech: Bool = false
     ) -> (NavigationController, Box) {
         let box = Box()
         let controller = NavigationController(
@@ -162,9 +169,73 @@ final class NavigationControllerTests: XCTestCase {
             interruptPlayback: { box.interrupts += 1 },
             now: clock,
             firstFixTimeoutSeconds: firstFixTimeoutSeconds,
-            firstFixAnnounceSeconds: firstFixAnnounceSeconds
+            firstFixAnnounceSeconds: firstFixAnnounceSeconds,
+            sendRelayPrompt: relaySpeech ? { box.prompts.append($0) } : nil
         )
         return (controller, box)
+    }
+
+    func testOldRerouteCompletionCannotUnlockNewReroute() async throws {
+        let stream = FakeStream(), search = FakeSearch(), clock = FakeClock()
+        search.route = straightRoute()
+        search.holdReroute = true
+        let (controller, _) = make(stream, search, clock: { clock.value })
+        _ = await controller.perform(.navigationStart(query: "first"))
+        let off = CLLocationCoordinate2D(latitude: 39.9060, longitude: 116.4020)
+        stream.feed(off)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(search.rerouteCalls, 1)
+        let finishOld = search.detachHeldReroute()
+        _ = await controller.perform(.navigationStart(query: "second"))
+        stream.feed(off)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(search.rerouteCalls, 2)
+        finishOld(nil)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        clock.value = 30
+        stream.feed(off)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(search.rerouteCalls, 2, "the new reroute remains in flight even after cooldown")
+        search.resolveHeldReroute(with: straightRoute())
+        try await Task.sleep(nanoseconds: 50_000_000)
+        _ = await controller.perform(.navigationStop)
+    }
+
+    func testConnectedNavigationUsesRelayVoiceAndSilentStop() async throws {
+        let stream = FakeStream(), search = FakeSearch()
+        var route = routeWithTurn()
+        route.relayCommandId = "relay-route"
+        search.route = route
+        let (controller, box) = make(stream, search, relaySpeech: true)
+        let result = await controller.perform(.navigationStart(query: "终点"))
+        XCTAssertEqual(result, .ok)
+        stream.feed(CLLocationCoordinate2D(latitude: 39.9088, longitude: 116.40))
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(box.prompts.count, 1)
+        let prompt = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(try XCTUnwrap(box.prompts.first).utf8)) as? [String: Any])
+        XCTAssertEqual(prompt["routeCommandId"] as? String, "relay-route")
+        XCTAssertEqual(prompt["kind"] as? String, "maneuver")
+        XCTAssertEqual(prompt["maneuverIndex"] as? Int, 0)
+        XCTAssertEqual(prompt["threshold"] as? String, "now")
+        XCTAssertNil(prompt["text"])
+        _ = await controller.perform(.navigationStop)
+        XCTAssertTrue(box.spoken.isEmpty)
+        XCTAssertEqual(box.interrupts, 0)
+    }
+
+    func testConnectedArrivalDoesNotAlsoSpeakTurn() async throws {
+        let stream = FakeStream(), search = FakeSearch()
+        var route = straightRoute()
+        route.relayCommandId = "relay-route"
+        search.route = route
+        let (controller, box) = make(stream, search, relaySpeech: true)
+        _ = await controller.perform(.navigationStart(query: "终点"))
+        stream.feed(route.destinationCoordinate)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(box.prompts.count, 1)
+        let prompt = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(try XCTUnwrap(box.prompts.first).utf8)) as? [String: Any])
+        XCTAssertEqual(prompt["kind"] as? String, "arrived")
+        XCTAssertTrue(box.spoken.isEmpty)
     }
 
     // A fix that is merely slow must not sound like a routing failure: the

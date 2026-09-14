@@ -238,7 +238,7 @@ describe("doubao provider speakNavLine — reroute-line delivery identity", () =
       speaker: "agent",
       text: "已重新规划路线。",
       final: true,
-      useBrowserSpeech: true
+      useBrowserSpeech: false
     });
     // The regression this pins: reusing agentDelivery would make this equal
     // the already-consumed deliveryId, and every client (web/iOS/Android)
@@ -637,10 +637,10 @@ async function openMaxSpeech() {
   return socket;
 }
 
-describe("web MAX voice", () => {
+describe.each(["web", "ios", "android"])("%s MAX voice", (platform) => {
   it.each(["male", "female"] as const)("uses MAX’s %s voice for route text without browser speech", async (gender) => {
     stubWeatherFetch();
-    const { controller, send, upstream, provider } = await startSession("web", gender);
+    const { controller, send, upstream, provider } = await startSession(platform, gender);
     provider.speakNavLine!("已重新规划路线。");
     const socket = await openMaxSpeech();
     const liveConfig = requestPayload(upstream.sent.find((f) => clientFrameEvent(f) === 100));
@@ -663,7 +663,7 @@ describe("web MAX voice", () => {
 
   it("drops synthesized speech after rider interruption", async () => {
     stubWeatherFetch();
-    const { controller, send, upstream, provider } = await startSession("web");
+    const { controller, send, upstream, provider } = await startSession(platform);
     provider.speakNavLine!("已重新规划路线。");
     const socket = await openMaxSpeech();
     await upstream.emit("message", jsonFrame(ASR_INFO, {}));
@@ -677,7 +677,7 @@ describe("web MAX voice", () => {
 
   it("reports synthesis failure without switching to another voice", async () => {
     stubWeatherFetch();
-    const { controller, send, provider } = await startSession("web");
+    const { controller, send, provider } = await startSession(platform);
     const before = metrics.snapshot();
     provider.speakNavLine!("已重新规划路线。");
     const socket = await openMaxSpeech();

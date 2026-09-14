@@ -473,6 +473,15 @@ The wake phrase and the 12 s follow-up window live in `shared/wake.ts`. The mock
 
 ### MAX navigation reliability
 
+Web, iOS, and Android send route-bound `nav.prompt` events to the relay. With
+Doubao selected, the relay speaks navigation and generated confirmations using
+MAX's selected live-session voice; native navigation does not invoke phone TTS.
+Arrival suppresses any turn prompt fired by the same fix, and stop confirmation
+comes from the relay. Before a route exists, native locating feedback is shown
+as status text. A MAX synthesis failure keeps the text visible without switching
+voices. New native builds must be installed on phones to receive these changes;
+a server deployment alone does not update installed apps.
+
 Web guidance accepts browser fixes under 10 seconds old and with reported accuracy
 of 50 metres or better. Stale fixes pause the HUD and request MAX's location-loss
 announcement; the next accurate fix resumes the route. No maneuver or reroute is

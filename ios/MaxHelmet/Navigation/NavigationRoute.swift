@@ -30,6 +30,7 @@ struct NavigationRoute: Equatable {
     let steps: [ManeuverStep]
     let totalDistanceMeters: Double
     let totalEtaSeconds: Double
+    var relayCommandId: String? = nil
 
     static func == (lhs: NavigationRoute, rhs: NavigationRoute) -> Bool {
         lhs.destinationName == rhs.destinationName

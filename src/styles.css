@@ -6007,3 +6007,44 @@ button.opsCard:disabled {
     grid-template-columns: auto minmax(0, 1fr);
   }
 }
+
+/* Clear session entry and native controls that belong to the dark voice UI. */
+.voiceShell {
+  color-scheme: dark;
+}
+
+.voiceTopbar.inactive .voiceRelayDot {
+  background: #99aaa2;
+  box-shadow: none;
+}
+
+.voiceRelay {
+  font-family: var(--font-cjk);
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  color: #a9b8b0;
+}
+
+.voiceReadoutHint {
+  max-width: 360px;
+  margin: 8px auto 0;
+  color: #a9b8b0;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  text-wrap: balance;
+}
+
+.voiceUtilities button {
+  min-height: 44px;
+  color: #a9b8b0;
+}
+
+.voiceTranscriptList {
+  max-height: none;
+  scrollbar-width: thin;
+  scrollbar-color: #52675c #101713;
+}
+
+.voiceTranscriptHead small {
+  color: #a9b8b0;
+}

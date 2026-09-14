@@ -151,6 +151,7 @@ function AppContent() {
   }, [authUser, surface, toggleHandsFreeSession]);
 
   const fusedHazard = combineHazardLevels(agent.rideContext.hazardLevel, agent.weather?.riskLevel ?? "normal");
+  const sessionInactive = !agent.connected && !listening && !starting;
   const authKnown = agent.health !== null;
   const authEnabled = agent.health?.auth?.enabled ?? false;
   const registrationOpen = agent.health?.auth?.registrationOpen ?? true;
@@ -181,16 +182,22 @@ function AppContent() {
     <main className="voiceShell">
       <section
         className={voiceFaceClassName({ captionsOpen, navigationVisible: agent.navState.phase !== "idle" })}
-        aria-label="Max 头盔语音助手"
+        aria-label={localized(language, "MAX 头盔语音助手", "MAX helmet voice assistant")}
       >
-        <header className={`voiceTopbar ${agent.connected ? "online" : "offline"}`}>
+        <header className={`voiceTopbar ${agent.connected ? "online" : sessionInactive ? "inactive" : "offline"}`}>
           <div className="voiceBrand">
             <span className="voiceBrandDot" aria-hidden="true" />
             <span className="voiceWordmark">MAX</span>
           </div>
           <div className="voiceRelay">
             <span className="voiceRelayDot" aria-hidden="true" />
-            {agent.connected ? "RELAY ONLINE" : "RELAY OFFLINE"}
+            {agent.connected
+              ? t("voice.sessionConnected")
+              : starting
+                ? t("voice.connectingShort")
+                : sessionInactive
+                  ? t("voice.sessionInactive")
+                  : t("voice.offline")}
           </div>
         </header>
 
@@ -217,7 +224,12 @@ function AppContent() {
           />
         </div>
 
-        <VoiceStateReadout connected={agent.connected} turnState={agent.turnState} hazardLevel={fusedHazard} />
+        <VoiceStateReadout
+          connected={agent.connected}
+          turnState={agent.turnState}
+          hazardLevel={fusedHazard}
+          sessionState={starting ? "starting" : sessionInactive ? "inactive" : undefined}
+        />
 
         {agent.navState.phase !== "idle" ? (
           <NavigationPanel state={agent.navState} mapConsent={amapConsent.decision} onEnableMap={amapConsent.accept} />

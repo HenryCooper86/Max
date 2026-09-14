@@ -14,7 +14,9 @@ export function VoiceTranscript({ agent }: { agent: HelmetAgent }) {
   const visibleItems = agent.transcript.slice(-8);
 
   useEffect(() => {
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
+    if (visibleItems.length > 0) {
+      listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
+    }
   }, [visibleItems.length]);
 
   const flagTurn = (item: TranscriptItem, reason: string) => {

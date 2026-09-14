@@ -37,6 +37,11 @@ const DICTIONARIES = {
     "voice.connectingShort": "连接中",
     "voice.spaceKey": "空格键",
     "voice.offline": "离线",
+    "voice.sessionConnected": "语音已连接",
+    "voice.sessionInactive": "会话未开启",
+    "voice.welcome": "你好，我是 MAX",
+    "voice.startHint": "开启免提，问天气、查路线或开始骑行。",
+    "voice.setupHint": "正在准备麦克风与语音连接，可再次点击取消。",
     "voice.state.idle": "待机",
     "voice.state.listening": "免提待命 · 请讲话",
     "voice.state.hearing": "正在聆听…",
@@ -92,7 +97,7 @@ const DICTIONARIES = {
     "transcript.live": "实时",
     "transcript.flag": "标记这条对话",
     "transcript.feedbackReasons": "反馈原因",
-    "transcript.greeting": "你好，我是 Max。",
+    "transcript.greeting": "对话字幕会显示在这里",
     "transcript.help": "开启免提后直接讲话。我可以帮你查看天气、路线和骑行状态。"
   },
   "en-US": {
@@ -128,6 +133,11 @@ const DICTIONARIES = {
     "voice.connectingShort": "Connecting",
     "voice.spaceKey": "Space",
     "voice.offline": "Offline",
+    "voice.sessionConnected": "Voice connected",
+    "voice.sessionInactive": "Session not started",
+    "voice.welcome": "Hi, I'm MAX",
+    "voice.startHint": "Start hands-free for weather, routes, and your ride.",
+    "voice.setupHint": "Preparing your microphone and voice connection. Tap again to cancel.",
     "voice.state.idle": "Standby",
     "voice.state.listening": "Hands-free ready · speak now",
     "voice.state.hearing": "Listening…",
@@ -185,7 +195,7 @@ const DICTIONARIES = {
     "transcript.live": "Live",
     "transcript.flag": "Flag this conversation",
     "transcript.feedbackReasons": "Feedback reasons",
-    "transcript.greeting": "Hi, I'm Max.",
+    "transcript.greeting": "Your conversation appears here",
     "transcript.help": "Turn on hands-free and speak naturally. I can help with weather, routes, and ride status."
   }
 } as const;

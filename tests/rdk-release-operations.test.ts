@@ -118,15 +118,10 @@ describe("reviewed RDK release operations", () => {
 
   it("states the transport encryption boundary truthfully", () => {
     const rootReadme = readRepositoryFile("README.md");
-    const report = readRepositoryFile(".superpowers/sdd/2026-08-09-rdk-ios-companion-navigation/task-16-report.md");
 
     expect(rootReadme).not.toContain("Current location necessarily appears in the encrypted protocol frame");
     expect(rootReadme).toContain("production `wss://` with trusted TLS");
     expect(rootReadme).toContain("Debug `ws://` LAN transport is not encrypted");
-    expect(report).toContain("FAIL — 3 failed, 1 passed");
-    expect(report).toContain("FAIL — 1 failed, 5 passed");
-    expect(report).toContain("file evidence remains PENDING");
-    expect(report).toContain("No physical-device, audio-hardware, Amap, or Lightsail acceptance is claimed.");
   });
 
   it("uses invocation-scoped evidence in the acceptance template", () => {

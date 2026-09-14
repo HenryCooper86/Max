@@ -50,14 +50,34 @@ describe("NavigationPanel", () => {
   });
 });
 
-it("replaces stale maneuver and map with an accessible GPS pause message", () => {
+it("keeps the route mounted through GPS loss and recovery, hiding the stale rider", () => {
+  const position = MOCK_ROUTE.polyline[0];
+  const update = step(position, route, INITIAL_PROGRESS);
+  const state = { phase: "guiding" as const, route, update, position };
   let tree: ReturnType<typeof create> | undefined;
   act(() => {
-    tree = create(<NavigationPanel state={{ phase: "locating" }} />);
+    tree = create(<NavigationPanel state={state} />);
   });
-  const text = JSON.stringify(tree!.toJSON());
-  expect(text).toContain("导航已暂停");
-  expect(text).toContain('"role":"status"');
-  expect(text).not.toContain("svg");
+  const schematic = tree!.root.findByType("svg");
+  act(() => {
+    tree!.update(<NavigationPanel state={{ ...state, locationStale: true }} />);
+  });
+  expect(tree!.root.findByType("svg")).toBe(schematic);
+  expect(JSON.stringify(tree!.toJSON())).toContain("导航已暂停");
+  expect(tree!.root.findAllByProps({ className: "navigationRider" })).toHaveLength(0);
+  act(() => {
+    tree!.update(<NavigationPanel state={state} />);
+  });
+  expect(tree!.root.findByType("svg")).toBe(schematic);
+  expect(tree!.root.findAllByProps({ className: "navigationRider" })).toHaveLength(1);
+  act(() => tree!.unmount());
+});
+
+it("shows actionable failure instead of removing the navigation panel", () => {
+  let tree: ReturnType<typeof create> | undefined;
+  act(() => {
+    tree = create(<NavigationPanel state={{ phase: "unavailable", message: "地图服务暂不可用" }} />);
+  });
+  expect(tree!.root.findByProps({ role: "status" }).children).toContain("地图服务暂不可用");
   act(() => tree!.unmount());
 });

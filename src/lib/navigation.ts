@@ -28,8 +28,9 @@ const REROUTE_COOLDOWN_MS = 20_000;
 export type NavPhase =
   | { phase: "idle" }
   | { phase: "requesting"; query: string }
-  | { phase: "locating" }
-  | { phase: "guiding"; route: NavRouteEvent; update: GuidanceUpdate; position: GeoPoint };
+  | { phase: "locating"; query: string }
+  | { phase: "unavailable"; message: string }
+  | { phase: "guiding"; route: NavRouteEvent; update: GuidanceUpdate; position: GeoPoint; locationStale?: boolean };
 
 type DeviceCommand = { commandId: string; action: string; args: Record<string, unknown> };
 type AgentEvent = { type: string } & Record<string, unknown>;
@@ -76,10 +77,15 @@ export function createNavigationController(deps: {
   function freshFix() {
     return lastFix !== null && now() - lastFixAt < FIX_MAX_AGE_MS;
   }
+  let lastGuidance: Extract<NavPhase, { phase: "guiding" }> | undefined;
+  let guidancePaused = false;
   function pauseGuidance() {
-    if (!activeRoute) return;
+    if (!activeRoute || guidancePaused) return;
+    guidancePaused = true;
     prompt("locationLost");
-    deps.onState({ phase: "locating" });
+    const position = wgs84ToGcj02(lastFix!);
+    const update = lastGuidance?.route === activeRoute ? lastGuidance.update : step(position, activeRoute, progress);
+    deps.onState({ phase: "guiding", route: activeRoute, update, position, locationStale: true });
   }
   // Set only while a start is waiting for its first fix.
   let awaitingFix: { commandId: string; query: string; cancels: (() => void)[] } | null = null;
@@ -127,10 +133,14 @@ export function createNavigationController(deps: {
 
   function emitGuiding(update: GuidanceUpdate, position: GeoPoint): void {
     if (!activeRoute) return;
-    deps.onState({ phase: "guiding", route: activeRoute, update, position });
+    guidancePaused = false;
+    lastGuidance = { phase: "guiding", route: activeRoute, update, position };
+    deps.onState(lastGuidance);
   }
 
   function resetNavigationState(): void {
+    lastGuidance = undefined;
+    guidancePaused = false;
     pendingCommandId = null;
     activeRoute = null;
     progress = INITIAL_PROGRESS;
@@ -189,6 +199,7 @@ export function createNavigationController(deps: {
     // theirs does.
     if (!hasLocationPermission()) {
       sendResult(commandId, "denied", "permission.location");
+      if (!isActive()) deps.onState({ phase: "unavailable", message: "请在浏览器设置中允许定位，再重新发起导航。" });
       return;
     }
     if (!freshFix()) {
@@ -204,12 +215,12 @@ export function createNavigationController(deps: {
         query,
         cancels: [
           schedule(FIRST_FIX_ANNOUNCE_MS, () => {
-            if (awaitingFix?.commandId === commandId) deps.onState({ phase: "requesting", query });
+            if (awaitingFix?.commandId === commandId) deps.onState({ phase: "locating", query });
           }),
           schedule(FIRST_FIX_TIMEOUT_MS, () => {
             if (awaitingFix?.commandId !== commandId) return;
             clearFixWait();
-            emitIdle();
+            deps.onState({ phase: "unavailable", message: NO_FIX_DETAIL });
             sendResult(commandId, "failed", "route.unavailable", NO_FIX_DETAIL);
           })
         ]
@@ -297,7 +308,13 @@ export function createNavigationController(deps: {
       const commandId = pendingCommandId;
       resetNavigationState();
       sendResult(commandId, "failed", event.code);
-      emitIdle();
+      deps.onState({
+        phase: "unavailable",
+        message:
+          event.code === "destination.notFound"
+            ? "没有找到目的地，请换一个名称重新导航。"
+            : "地图服务暂不可用，请稍后重新发起导航。"
+      });
       return;
     }
     if (activeRoute && rerouteInFlight && event.commandId === rerouteCommandId) {
@@ -307,7 +324,7 @@ export function createNavigationController(deps: {
       // NavigationController, which speak this same line on this same case.
       prompt("rerouteFailed");
       resetNavigationState();
-      emitIdle();
+      deps.onState({ phase: "unavailable", message: "重新规划失败，导航已停止。请稍后重新发起导航。" });
       return;
     }
     // Stale/unknown commandId: nothing active it could belong to. Ignore.

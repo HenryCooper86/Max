@@ -3,6 +3,7 @@
 import type { AgentHealth, TesterSessionSummary, TestingStats } from "../../shared/agent";
 import type { TurnState } from "../components/HelmetVisual";
 import type { AudioProcessingState, RiderLocation, TranscriptItem } from "../types";
+import type { Language } from "./i18n";
 import { authToken } from "./auth";
 import { AUDIO_PROCESSING_LABELS } from "./constants";
 import { relayAuthToken } from "./persistence";
@@ -53,7 +54,8 @@ export function getRiderLocation(): Promise<RiderLocation | null> {
   });
 }
 
-export function audioProcessingLabel(value: AudioProcessingState["echoCancellation"]) {
+export function audioProcessingLabel(value: AudioProcessingState["echoCancellation"], language: Language = "zh-CN") {
+  if (language === "en-US") return value === true ? "On" : value === false ? "Off" : "Unknown";
   return AUDIO_PROCESSING_LABELS[String(value) as "true" | "false" | "unknown"];
 }
 

@@ -1,3 +1,5 @@
+import { audioProcessingLabel } from "../src/lib/utils";
+import { NETWORK_LABELS_EN } from "../src/lib/constants";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_LANGUAGE,
@@ -42,5 +44,13 @@ describe("UI language core", () => {
     expect(localized("zh-CN", "质量", "Quality")).toBe("质量");
     expect(localized("en-US", "质量", "Quality")).toBe("Quality");
     expect(localized("en-US", "用户输入", "User input")).toBe("User input");
+  });
+  it("localizes network and audio diagnostics without changing unknown into off", () => {
+    expect(NETWORK_LABELS_EN.offline).toBe("Offline");
+    expect(NETWORK_LABELS_EN.degraded).toBe("Weak connection");
+    expect(audioProcessingLabel(true, "en-US")).toBe("On");
+    expect(audioProcessingLabel(false, "en-US")).toBe("Off");
+    expect(audioProcessingLabel("unknown", "en-US")).toBe("Unknown");
+    expect(audioProcessingLabel("unknown", "zh-CN")).toBe("未知");
   });
 });

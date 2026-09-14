@@ -214,9 +214,9 @@ export function useHelmetAgent() {
 
   // Created once for the hook's lifetime (not per socket connection/reconnect
   // — a fresh controller on every reconnect would silently drop an in-flight
-  // "requesting"/"guiding" session). `sendJson` and `speak` both resolve
-  // against the live socket/voice settings at call time (socketRef.current,
-  // voiceGenderRef inside `speak`), so a single instance stays correct across
+  // "requesting"/"guiding" session). `sendJson` resolves
+  // against the live socket at call time; the relay owns MAX’s voice for
+  // navigation prompts, so a single instance stays correct across
   // reconnects and settings changes; only navController.reset() + setNavState
   // below reset its navigation-specific state, on socket close.
   const [navController] = useState(() =>
@@ -225,7 +225,6 @@ export function useHelmetAgent() {
         const socket = socketRef.current;
         if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
       },
-      speak,
       onState: setNavState,
       // Only a KNOWN denial blocks the start — "prompt"/"unknown" (location
       // never yet requested this session) must not be treated as a denial,
@@ -1155,10 +1154,13 @@ export function useHelmetAgent() {
       (position) => {
         const next = { lat: position.coords.latitude, lon: position.coords.longitude };
         // Future session.starts (settings-change restarts) carry fresh coords too.
-        locationRef.current = next;
         // Every real fix feeds guidance, independent of the throttled
         // location.update send below (which exists only to refetch weather).
-        navController.updatePosition(next);
+        if (
+          !navController.updatePosition({ ...next, timestamp: position.timestamp, accuracy: position.coords.accuracy })
+        )
+          return;
+        locationRef.current = next;
         const now = Date.now();
         if (now - lastSentAt < LOCATION_UPDATE_MIN_INTERVAL_MS) return;
         if (lastSent && approxDistanceKm(lastSent, next) < LOCATION_UPDATE_MIN_MOVE_KM) return;
@@ -1172,7 +1174,7 @@ export function useHelmetAgent() {
       () => {
         /* denied/unavailable — session-start coordinates (or the server default) stay in effect */
       },
-      { enableHighAccuracy: false, maximumAge: 30_000 }
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 10_000 }
     );
 
     return () => navigator.geolocation.clearWatch(watchId);

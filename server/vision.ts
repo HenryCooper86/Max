@@ -35,7 +35,7 @@ export const WATCH_PROMPT =
 
 function parseArkContent(body: unknown): string | null {
   // UNVERIFIED response shape. `choices[0].message.content` is the
-  // documented message shape for Ark's chat-completions endpoint,
+  // documented OpenAI-compatible shape for Ark's chat-completions endpoint,
   // and matches what this parser assumes — but no successful call has ever
   // been made from this project. Task 1's probe (see
   // .superpowers/sdd/2026-07-28-vision-describe/task-1-report.md) never got

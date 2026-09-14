@@ -39,7 +39,8 @@ class RelayNavigationSearchTest {
             polyline = data.polyline,
             steps = data.steps,
             distanceMeters = data.distanceMeters,
-            etaSeconds = data.etaSeconds
+            etaSeconds = data.etaSeconds,
+            relayCommandId = commandId
         )
     }
 
@@ -174,12 +175,6 @@ class RelayNavigationSearchTest {
         // predetermined by the test.
         val sent = CopyOnWriteArrayList<String>()
         val relay = RelayNavigationSearch(send = { sent.add(it) }, timeoutMillis = 5_000)
-        // NavigationRoute carries no commandId, so the assembled route is
-        // byte-for-byte identical regardless of which of the two commandIds
-        // it was built from — one fixed expectation covers whichever call
-        // turns out to be the survivor.
-        val expected = expectedRoute("nav-irrelevant-content-identical-either-way")
-
         val startedAt = System.currentTimeMillis()
         val firstResultDeferred = async(Dispatchers.Default) { relay.route("第一目的地", origin) }
         val secondResultDeferred = async(Dispatchers.Default) { relay.route("第二目的地", origin) }
@@ -207,7 +202,9 @@ class RelayNavigationSearchTest {
         val results = listOf(firstResult, secondResult)
         assertEquals("exactly one call must be preempted to null", 1, results.count { it == null })
         assertEquals("exactly one call must receive the routed answer", 1, results.count { it != null })
-        assertEquals(expected, results.single { it != null })
+        val winner = results.filterNotNull().single()
+        assertTrue(sent.any { JSONObject(it).getString("commandId") == winner.relayCommandId })
+        assertEquals(expectedRoute(winner.relayCommandId!!), winner)
     }
 
     @Test

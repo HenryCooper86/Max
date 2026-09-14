@@ -3,6 +3,13 @@
 // health metrics remain small, reviewable, and reusable.
 
 export type RelayMetrics = {
+  maxSpeechRequested: number;
+  maxSpeechDelivered: number;
+  maxSpeechFailed: number;
+  maxSpeechCancelled: number;
+  maxSpeechExpired: number;
+  maxSpeechCongested: number;
+  maxSpeechLatencyMsTotal: number;
   activeSessions: number;
   totalSessions: number;
   rejectedUpgrades: number;
@@ -17,6 +24,13 @@ export type RelayMetrics = {
 };
 
 const counters: RelayMetrics = {
+  maxSpeechRequested: 0,
+  maxSpeechDelivered: 0,
+  maxSpeechFailed: 0,
+  maxSpeechCancelled: 0,
+  maxSpeechExpired: 0,
+  maxSpeechCongested: 0,
+  maxSpeechLatencyMsTotal: 0,
   activeSessions: 0,
   totalSessions: 0,
   rejectedUpgrades: 0,
@@ -31,6 +45,13 @@ const counters: RelayMetrics = {
 };
 
 export const relayMetrics = {
+  maxSpeechRequested() {
+    counters.maxSpeechRequested += 1;
+  },
+  maxSpeechCompleted(outcome: "Delivered" | "Failed" | "Cancelled" | "Expired" | "Congested", latencyMs: number) {
+    counters[`maxSpeech${outcome}`] += 1;
+    if (outcome === "Delivered") counters.maxSpeechLatencyMsTotal += Math.max(0, latencyMs);
+  },
   sessionOpened() {
     counters.activeSessions += 1;
     counters.totalSessions += 1;
@@ -90,6 +111,13 @@ export function recordMetricsSnapshot(now = Date.now()) {
 }
 
 export type MetricsWindow = {
+  maxSpeechRequested: number;
+  maxSpeechDelivered: number;
+  maxSpeechFailed: number;
+  maxSpeechCancelled: number;
+  maxSpeechExpired: number;
+  maxSpeechCongested: number;
+  maxSpeechLatencyMsTotal: number;
   minutes: number;
   sessionsStarted: number;
   rejectedUpgrades: number;
@@ -116,6 +144,13 @@ export function metricsWindow(now = Date.now()): MetricsWindow {
   const delta = (key: keyof RelayMetrics) => current[key] - (base?.[key] ?? 0);
 
   return {
+    maxSpeechRequested: delta("maxSpeechRequested"),
+    maxSpeechDelivered: delta("maxSpeechDelivered"),
+    maxSpeechFailed: delta("maxSpeechFailed"),
+    maxSpeechCancelled: delta("maxSpeechCancelled"),
+    maxSpeechExpired: delta("maxSpeechExpired"),
+    maxSpeechCongested: delta("maxSpeechCongested"),
+    maxSpeechLatencyMsTotal: delta("maxSpeechLatencyMsTotal"),
     minutes: Math.min(METRICS_WINDOW_MINUTES, Math.max(1, Math.round((now - baseAt) / 60_000))),
     sessionsStarted: delta("totalSessions"),
     rejectedUpgrades: delta("rejectedUpgrades"),

@@ -28,14 +28,16 @@ const REROUTE_COOLDOWN_MS = 20_000;
 export type NavPhase =
   | { phase: "idle" }
   | { phase: "requesting"; query: string }
-  | { phase: "guiding"; route: NavRouteEvent; update: GuidanceUpdate; position: GeoPoint };
+  | { phase: "locating"; query: string }
+  | { phase: "unavailable"; message: string }
+  | { phase: "guiding"; route: NavRouteEvent; update: GuidanceUpdate; position: GeoPoint; locationStale?: boolean };
 
 type DeviceCommand = { commandId: string; action: string; args: Record<string, unknown> };
 type AgentEvent = { type: string } & Record<string, unknown>;
 
 export function createNavigationController(deps: {
   sendJson: (payload: unknown) => void;
-  speak: (text: string) => void;
+
   onState: (state: NavPhase) => void;
   /** True unless location permission is KNOWN to be denied. Mirrors
    *  iOS's `stream.authorization() == .denied` / Android's
@@ -51,7 +53,7 @@ export function createNavigationController(deps: {
 }): {
   handleDeviceCommand(command: DeviceCommand): boolean;
   handleAgentEvent(event: AgentEvent): void;
-  updatePosition(wgs: GeoPoint): void;
+  updatePosition(wgs: GeoPoint & { timestamp?: number; accuracy?: number }): boolean;
   reset(): void;
 } {
   const now = deps.now ?? (() => Date.now());
@@ -65,10 +67,26 @@ export function createNavigationController(deps: {
 
   const FIRST_FIX_ANNOUNCE_MS = 1_500;
   const FIRST_FIX_TIMEOUT_MS = 8_000;
-  const LOCATING_SPOKEN = "正在定位…";
+
   const NO_FIX_DETAIL = "还没定位到，到室外或空旷处再说一次。";
 
   let lastFix: GeoPoint | null = null;
+  let lastFixAt = 0;
+  let cancelFixExpiry: (() => void) | undefined;
+  const FIX_MAX_AGE_MS = 10_000;
+  function freshFix() {
+    return lastFix !== null && now() - lastFixAt < FIX_MAX_AGE_MS;
+  }
+  let lastGuidance: Extract<NavPhase, { phase: "guiding" }> | undefined;
+  let guidancePaused = false;
+  function pauseGuidance() {
+    if (!activeRoute || guidancePaused) return;
+    guidancePaused = true;
+    prompt("locationLost");
+    const position = wgs84ToGcj02(lastFix!);
+    const update = lastGuidance?.route === activeRoute ? lastGuidance.update : step(position, activeRoute, progress);
+    deps.onState({ phase: "guiding", route: activeRoute, update, position, locationStale: true });
+  }
   // Set only while a start is waiting for its first fix.
   let awaitingFix: { commandId: string; query: string; cancels: (() => void)[] } | null = null;
   // Set only while a navigation.start's device.result is held, awaiting the
@@ -77,13 +95,23 @@ export function createNavigationController(deps: {
   let activeRoute: NavRouteEvent | null = null;
   let progress: GuidanceProgress = INITIAL_PROGRESS;
   // True while exactly one reroute nav.request is outstanding. The client
-  // never has two reroutes in flight at once (this flag itself prevents
-  // sending a second), so the next nav.route/nav.error received while guiding
-  // and this flag is set is unambiguously that reroute's answer — matched by
-  // the flag rather than by re-deriving/storing its commandId.
+  // never has two reroutes in flight at once. Also match its command id so
+  // a delayed response from a superseded start cannot replace the route.
   let rerouteInFlight = false;
   let lastRerouteSentAt: number | null = null;
   let rerouteSequence = 0;
+  let promptSequence = 0;
+  let rerouteCommandId: string | null = null;
+
+  function prompt(kind: "offRoute" | "rerouteFailed" | "arrived" | "locationLost") {
+    if (!activeRoute) return;
+    deps.sendJson({
+      type: "nav.prompt",
+      promptId: `web-${++promptSequence}`,
+      routeCommandId: activeRoute.commandId,
+      kind
+    });
+  }
   // First-off-route-detection-per-excursion latch; cleared once back on route.
   let offRouteAnnounced = false;
 
@@ -105,14 +133,19 @@ export function createNavigationController(deps: {
 
   function emitGuiding(update: GuidanceUpdate, position: GeoPoint): void {
     if (!activeRoute) return;
-    deps.onState({ phase: "guiding", route: activeRoute, update, position });
+    guidancePaused = false;
+    lastGuidance = { phase: "guiding", route: activeRoute, update, position };
+    deps.onState(lastGuidance);
   }
 
   function resetNavigationState(): void {
+    lastGuidance = undefined;
+    guidancePaused = false;
     pendingCommandId = null;
     activeRoute = null;
     progress = INITIAL_PROGRESS;
     rerouteInFlight = false;
+    rerouteCommandId = null;
     lastRerouteSentAt = null;
     offRouteAnnounced = false;
   }
@@ -147,9 +180,13 @@ export function createNavigationController(deps: {
    *  both require a prior fix by construction). */
   function stepAndEmit(): void {
     if (!activeRoute || !lastFix) return;
+    if (!freshFix()) {
+      pauseGuidance();
+      return;
+    }
     const position = wgs84ToGcj02(lastFix);
     const update = step(position, activeRoute, progress);
-    progress = update.progress;
+    // Preview the HUD without consuming a prompt that has not been sent.
     emitGuiding(update, position);
   }
 
@@ -162,25 +199,28 @@ export function createNavigationController(deps: {
     // theirs does.
     if (!hasLocationPermission()) {
       sendResult(commandId, "denied", "permission.location");
+      if (!isActive()) deps.onState({ phase: "unavailable", message: "请在浏览器设置中允许定位，再重新发起导航。" });
       return;
     }
-    if (!lastFix) {
+    if (!freshFix()) {
       // Not a permission fault: permission may be granted and the fix merely
       // slow, which is the common case indoors. Wait, say so, and only then
       // fail with copy that names the cause. A previous still-waiting start
       // is resolved FIRST (failed, "navigation.cancelled") — same rule as
       // startWithFix's own supersede — so it is never silently dropped.
       cancelHeldStart();
+      resetNavigationState();
       awaitingFix = {
         commandId,
         query,
         cancels: [
           schedule(FIRST_FIX_ANNOUNCE_MS, () => {
-            if (awaitingFix?.commandId === commandId) deps.speak(LOCATING_SPOKEN);
+            if (awaitingFix?.commandId === commandId) deps.onState({ phase: "locating", query });
           }),
           schedule(FIRST_FIX_TIMEOUT_MS, () => {
             if (awaitingFix?.commandId !== commandId) return;
             clearFixWait();
+            deps.onState({ phase: "unavailable", message: NO_FIX_DETAIL });
             sendResult(commandId, "failed", "route.unavailable", NO_FIX_DETAIL);
           })
         ]
@@ -249,7 +289,7 @@ export function createNavigationController(deps: {
       stepAndEmit();
       return;
     }
-    if (activeRoute && rerouteInFlight) {
+    if (activeRoute && rerouteInFlight && event.commandId === rerouteCommandId) {
       // Reroute answer: swap the route in, restart progress; relay speaks the confirmation.
       activeRoute = event;
       progress = INITIAL_PROGRESS;
@@ -268,17 +308,23 @@ export function createNavigationController(deps: {
       const commandId = pendingCommandId;
       resetNavigationState();
       sendResult(commandId, "failed", event.code);
-      emitIdle();
+      deps.onState({
+        phase: "unavailable",
+        message:
+          event.code === "destination.notFound"
+            ? "没有找到目的地，请换一个名称重新导航。"
+            : "地图服务暂不可用，请稍后重新发起导航。"
+      });
       return;
     }
-    if (activeRoute && rerouteInFlight) {
+    if (activeRoute && rerouteInFlight && event.commandId === rerouteCommandId) {
       // Spec rule (2026-08-06): a reroute failure mid-ride stops cleanly with
       // a spoken explanation, never leaves the rider guided on a route the
       // engine can no longer correct — matching iOS's and Android's
       // NavigationController, which speak this same line on this same case.
+      prompt("rerouteFailed");
       resetNavigationState();
-      deps.speak("无法重新规划路线，已停止导航");
-      emitIdle();
+      deps.onState({ phase: "unavailable", message: "重新规划失败，导航已停止。请稍后重新发起导航。" });
       return;
     }
     // Stale/unknown commandId: nothing active it could belong to. Ignore.
@@ -301,9 +347,10 @@ export function createNavigationController(deps: {
     rerouteInFlight = true;
     lastRerouteSentAt = now();
     rerouteSequence += 1;
+    rerouteCommandId = `reroute-${lastRerouteSentAt}-${rerouteSequence}`;
     deps.sendJson({
       type: "nav.request",
-      commandId: `reroute-${lastRerouteSentAt}-${rerouteSequence}`,
+      commandId: rerouteCommandId,
       reason: "reroute",
       origin: position,
       destination: activeRoute.destination,
@@ -311,20 +358,49 @@ export function createNavigationController(deps: {
     });
   }
 
-  function updatePosition(wgs: GeoPoint): void {
+  function updatePosition(wgs: GeoPoint & { timestamp?: number; accuracy?: number }): boolean {
+    const timestamp = wgs.timestamp ?? now();
+    if (
+      !Number.isFinite(wgs.lat) ||
+      !Number.isFinite(wgs.lon) ||
+      Math.abs(wgs.lat) > 90 ||
+      Math.abs(wgs.lon) > 180 ||
+      !Number.isFinite(timestamp) ||
+      now() - timestamp >= FIX_MAX_AGE_MS ||
+      timestamp > now() + 1000 ||
+      (lastFix !== null && timestamp < lastFixAt) ||
+      (wgs.accuracy !== undefined && (!Number.isFinite(wgs.accuracy) || wgs.accuracy < 0 || wgs.accuracy > 50))
+    )
+      return false;
     lastFix = wgs;
+    lastFixAt = timestamp;
+    cancelFixExpiry?.();
+    cancelFixExpiry = schedule(Math.max(1, FIX_MAX_AGE_MS - (now() - timestamp)), pauseGuidance);
     if (awaitingFix) {
       const { commandId, query } = awaitingFix;
       clearFixWait();
       startWithFix(commandId, query);
     }
-    if (!activeRoute) return;
+    if (!activeRoute) return true;
 
     const position = wgs84ToGcj02(wgs);
+    const maneuverIndex = progress.maneuverIndex;
     const update = step(position, activeRoute, progress);
     progress = update.progress;
 
-    if (update.spokenPrompt) deps.speak(update.spokenPrompt);
+    if (!update.arrived && update.firedThreshold) {
+      const maneuver = activeRoute.steps[maneuverIndex];
+      const alongRouteMeters = activeRoute.distanceMeters - update.remainingMeters;
+      deps.sendJson({
+        type: "nav.prompt",
+        promptId: `web-${++promptSequence}`,
+        routeCommandId: activeRoute.commandId,
+        kind: "maneuver",
+        maneuverIndex,
+        threshold: update.firedThreshold,
+        distanceMeters: Math.max(0, (maneuver?.alongRouteMeters ?? alongRouteMeters) - alongRouteMeters)
+      });
+    }
 
     // Arrival takes priority over off-route bookkeeping: the engine derives
     // `arrived` independently of `offRoute` (pure distance-to-destination),
@@ -332,27 +408,30 @@ export function createNavigationController(deps: {
     // radius should be told they've arrived, not sent through a pointless
     // reroute.
     if (update.arrived) {
-      deps.speak("已到达目的地");
+      prompt("arrived");
       resetNavigationState();
       emitIdle();
-      return;
+      return true;
     }
 
     if (update.offRoute) {
       if (!offRouteAnnounced) {
         offRouteAnnounced = true;
-        deps.speak("已偏离路线，正在重新规划");
+        prompt("offRoute");
       }
       maybeSendReroute(position);
       emitGuiding(update, position);
-      return;
+      return true;
     }
 
     offRouteAnnounced = false;
     emitGuiding(update, position);
+    return true;
   }
 
   function reset(): void {
+    cancelFixExpiry?.();
+    cancelFixExpiry = undefined;
     lastFix = null;
     clearFixWait();
     resetNavigationState();

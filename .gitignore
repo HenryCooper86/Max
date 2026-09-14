@@ -8,7 +8,9 @@ build-info.json
 
 # Agent/local workflow notes
 AGENTS.md
+CLAUDE.md
 MR_DESCRIPTION.md
+.claude/
 .superpowers/
 .worktrees/
 

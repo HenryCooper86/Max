@@ -2,7 +2,7 @@
 
 **Source visual truth**
 
-- `docs/assets/frontend-screenshot.png`
+- `/Users/admin/.codex/generated_images/019f8283-6546-74b0-9f13-0981c58d4f3f/exec-9126938d-3a12-4077-a437-9a48cd731554.png`
 
 **Implementation**
 

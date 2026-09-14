@@ -261,7 +261,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Captions overlay under the orb. Off by default for the clean voice-mode
-     * look; toggled by the 字幕 button when the rider wants more detail.
+     * look; toggled by the 字幕 button (like ChatGPT's optional captions).
      */
     var showCaptions by mutableStateOf(false)
         private set

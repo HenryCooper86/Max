@@ -192,7 +192,7 @@ internal fun orbCaption(state: AgentSession.State): String {
 }
 
 /**
- * Pure voice-mode main screen: a dark glow
+ * Pure voice-mode main screen, in the spirit of ChatGPT's voice mode: a dark glow
  * with the brand helmet centerpiece breathing and glowing with the conversation,
  * a single status caption, and minimal controls. The safety-critical ADAS hazard
  * banner pins to the top. All rider + test settings live in the gear sheet;

@@ -22,7 +22,7 @@ final class AgentSession: NSObject, ObservableObject {
         var capabilities = ProviderCapabilities()
         var turnState: TurnState = .idle
         /// Mic muted mid-session: the relay stays open and Max can keep speaking,
-        /// but rider audio frames are withheld (voice-assistant-style mute).
+        /// but rider audio frames are withheld (ChatGPT-style mute).
         var micMuted = false
         var voiceGender: VoiceGender = .female
         var voicePersonality: VoicePersonality = .concise
@@ -241,9 +241,10 @@ final class AgentSession: NSObject, ObservableObject {
         onGuidance: { [weak self] guidance in
             self?.update { $0.guidance = guidance }
         },
-        speak: { [weak self] line in self?.speak(line) },
+        speak: { [weak self] line in self?.update { $0.statusText = line } },
         interruptPlayback: { [weak self] in self?.player.stopPlayback() },
-        now: { ProcessInfo.processInfo.systemUptime }
+        now: { ProcessInfo.processInfo.systemUptime },
+        sendRelayPrompt: { [weak self] json in self?.webSocket?.send(.string(json)) { _ in } }
     )
 
     /// Routes relay-issued device commands to one handler each. Built lazily so

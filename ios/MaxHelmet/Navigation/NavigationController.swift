@@ -33,6 +33,7 @@ final class NavigationController: DeviceActionHandler {
     private let stream: LocationStreaming
     private let onGuidance: (GuidanceState?) -> Void
     private let speak: (String) -> Void
+    private let sendRelayPrompt: ((String) -> Void)?
     private let interruptPlayback: () -> Void
     private let now: () -> TimeInterval
     private let firstFixTimeoutSeconds: TimeInterval
@@ -41,6 +42,7 @@ final class NavigationController: DeviceActionHandler {
     private var route: NavigationRoute?
     private var progress = GuidanceProgress(maneuverIndex: 0, firedThresholds: [], arrived: false)
     private var rerouting = false
+    private var rerouteAttemptId = 0
     private var lastRerouteAt: TimeInterval = -.greatestFiniteMagnitude
     private var firstFixContinuation: CheckedContinuation<CLLocationCoordinate2D?, Never>?
     private var firstFixWatchdog: Task<Void, Never>?
@@ -81,12 +83,14 @@ final class NavigationController: DeviceActionHandler {
         interruptPlayback: @escaping () -> Void,
         now: @escaping () -> TimeInterval,
         firstFixTimeoutSeconds: TimeInterval = 8,
-        firstFixAnnounceSeconds: TimeInterval = 1.5
+        firstFixAnnounceSeconds: TimeInterval = 1.5,
+        sendRelayPrompt: ((String) -> Void)? = nil
     ) {
         self.search = search
         self.stream = stream
         self.onGuidance = onGuidance
         self.speak = speak
+        self.sendRelayPrompt = sendRelayPrompt
         self.interruptPlayback = interruptPlayback
         self.now = now
         self.firstFixTimeoutSeconds = firstFixTimeoutSeconds
@@ -278,7 +282,7 @@ final class NavigationController: DeviceActionHandler {
             lastRerouteAt = -.greatestFiniteMagnitude
             stream.stop()
             onGuidance(nil)
-            speak("已停止导航。")
+            if sendRelayPrompt == nil { speak("已停止导航。") }
         } else {
             // No route yet, but a start was genuinely in flight, and
             // nothing else needs the stream anymore. Silent here: the
@@ -320,16 +324,21 @@ final class NavigationController: DeviceActionHandler {
     private func handleFix(_ location: CLLocationCoordinate2D) {
         resolveFirstFix(location)
         guard let route else { return }
+        let maneuverIndex = progress.maneuverIndex
         let update = GuidanceEngine.step(position: location, route: route, progress: progress)
         progress = update.progress
 
-        // Keyed on threshold IDENTITY, never on prompt text: the TS-ported
-        // "now" template is the bare instruction with no "现在" marker left to
-        // grep for, so a substring check here would silently swallow the
-        // safety-critical interrupt.
-        if update.firedThreshold == .now { interruptPlayback() }
-        if let prompt = update.spokenPrompt { speak(prompt) }
-        if update.arrived { speak("已到达目的地。") }
+        if update.arrived {
+            if !relayPrompt(route, kind: "arrived") { speak("已到达目的地。") }
+        } else if let threshold = update.firedThreshold, let prompt = update.spokenPrompt {
+            let alongRoute = route.totalDistanceMeters - update.remainingMeters
+            let distance = max(0, route.steps[maneuverIndex].alongRouteMeters - alongRoute)
+            if !relayPrompt(route, kind: "maneuver", maneuverIndex: maneuverIndex,
+                            threshold: String(describing: threshold), distanceMeters: distance) {
+                if threshold == .now { interruptPlayback() }
+                speak(prompt)
+            }
+        }
 
         publish(location: location, update: update)
 
@@ -355,9 +364,11 @@ final class NavigationController: DeviceActionHandler {
         rerouting = true
         lastRerouteAt = now()
         let generation = navigationGeneration
-        speak("已偏离路线，正在重新规划。")
+        rerouteAttemptId += 1
+        let attemptId = rerouteAttemptId
+        if let route, !relayPrompt(route, kind: "offRoute") { speak("已偏离路线，正在重新规划。") }
         Task { @MainActor in
-            defer { rerouting = false }
+            defer { if attemptId == rerouteAttemptId { rerouting = false } }
             let fresh = await search.reroute(to: destination, from: origin)
             // Guarded BEFORE either branch, on TWO conditions:
             //
@@ -404,12 +415,30 @@ final class NavigationController: DeviceActionHandler {
                 // genuinely-idle stop would wrongly answer `.ok`.
                 navigationGeneration += 1
                 starting = false
+                if let route, !relayPrompt(route, kind: "rerouteFailed") { speak("无法重新规划路线，已停止导航。") }
                 route = nil
+                rerouting = false
                 stream.stop()
                 onGuidance(nil)
-                speak("无法重新规划路线，已停止导航。")
             }
         }
+    }
+
+    /// Relay chooses and speaks trusted route text in MAX's selected voice.
+    /// A missing route identity must never fall back to a second voice.
+    private func relayPrompt(_ route: NavigationRoute, kind: String, maneuverIndex: Int? = nil,
+                             threshold: String? = nil, distanceMeters: Double? = nil) -> Bool {
+        guard let sendRelayPrompt else { return false }
+        guard let commandId = route.relayCommandId else { return true }
+        var payload: [String: Any] = ["type": "nav.prompt", "promptId": UUID().uuidString,
+                                      "routeCommandId": commandId, "kind": kind]
+        if let maneuverIndex { payload["maneuverIndex"] = maneuverIndex }
+        if let threshold { payload["threshold"] = threshold }
+        if let distanceMeters { payload["distanceMeters"] = distanceMeters }
+        if let data = try? JSONSerialization.data(withJSONObject: payload), let json = String(data: data, encoding: .utf8) {
+            sendRelayPrompt(json)
+        }
+        return true
     }
 
     private func publish(location: CLLocationCoordinate2D?, update: GuidanceUpdate? = nil) {

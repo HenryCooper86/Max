@@ -66,7 +66,7 @@ This lists variable **names only** — do not print values.
 
 - [ ] **Step 3: Probe the endpoint with the real frame**
 
-Volcano Ark's chat-completions endpoint uses a standard message shape and takes an image as a
+Volcano Ark's chat-completions endpoint is OpenAI-shaped and takes an image as a
 data URL. Confirm the exact model id available to this account before trusting
 any of the following — it is the value most likely to differ.
 

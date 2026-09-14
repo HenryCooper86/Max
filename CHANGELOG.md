@@ -104,8 +104,8 @@ constructor gets.
 
 Repo hygiene, both found while checking the above: the RDK agent's TypeScript
 was type-checked by nothing (`rdk/agent/tsconfig.json` was referenced by no
-script or CI job) and is now part of `npm run check`; and a stale nested
-worktree was supplying 923 of the 2231 test cases a local `npm test`
+script or CI job) and is now part of `npm run check`; and a stale git worktree
+under `.claude/` was supplying 923 of the 2231 test cases a local `npm test`
 collected, so 41% of every run re-tested an abandoned branch.
 
 ## 2026-08-01 — Helmet board: dual cameras that tell the truth
@@ -1182,7 +1182,7 @@ the abstract orb, and every setting lives in one place again.
 ## 2026-06-10 — Voice mode
 
 A ground-up redesign of the iOS and Android main screens into a "pure voice
-mode": a dark, state-tinted glow with one
+mode" in the spirit of ChatGPT's voice mode: a dark, state-tinted glow with one
 big animated orb at the center, a single status caption, and minimal controls.
 
 ### Changed
@@ -1195,7 +1195,7 @@ big animated orb at the center, a single status caption, and minimal controls.
   while live. (`ios/.../UI/AgentScreen.swift`, `android/.../ui/AgentScreen.kt`)
 - **Optional captions (字幕)** — the conversation transcript is hidden by default
   for the clean look and revealed on demand as a rolling overlay under the orb,
-  preserving the minimal interface until the rider asks for more detail.
+  matching ChatGPT's optional captions.
 - **Settings as sheets** — rider preferences (gear) and the developer panel
   (wrench, shown only in developer mode) now open as bottom sheets / detents
   instead of inline cards, keeping the main screen empty. Developer mode is still

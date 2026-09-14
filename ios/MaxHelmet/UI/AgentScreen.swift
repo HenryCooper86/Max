@@ -149,7 +149,7 @@ func helmetToggleAccessibilityValue(handsFree: Bool) -> String {
     handsFree ? "免提已开启" : "免提未开启"
 }
 
-/// Pure voice-mode main screen: a dark
+/// Pure voice-mode main screen, in the spirit of ChatGPT's voice mode: a dark
 /// glow with the helmet centerpiece breathing and glowing with the conversation,
 /// a single status caption, and minimal controls. The safety-critical ADAS hazard
 /// banner pins to the top. All rider + test settings live in the gear sheet;

@@ -65,7 +65,7 @@ class AgentSession(
         val turnState: TurnState = TurnState.IDLE,
         /**
          * Mic muted mid-session: the relay stays open and Max can keep speaking,
-         * but rider audio frames are withheld (voice-assistant-style mute).
+         * but rider audio frames are withheld (ChatGPT-style mute).
          */
         val micMuted: Boolean = false,
         val voiceGender: VoiceGender = VoiceGender.FEMALE,
@@ -240,7 +240,8 @@ class AgentSession(
         speaker = this,
         sendResult = { webSocket?.send(it) },
         onGuidance = { guidance -> _state.update { it.copy(navGuidance = guidance) } },
-        hasLocationPermission = ::hasFineLocationPermission
+        hasLocationPermission = ::hasFineLocationPermission,
+        sendRelayPrompt = { webSocket?.send(it) }
     )
 
     // Device-TTS fallback, the counterpart of the browser speechSynthesis path:
@@ -958,13 +959,10 @@ class AgentSession(
     override val hazardActive: Boolean
         get() = _state.value.hazardAlert != null
 
-    /** NOW-identity prompts (interrupt = true) cut whatever the agent is
-     *  currently saying first; far/near prompts (interrupt = false) queue
-     *  behind it instead. Strictly speech emission — never touches
-     *  navController. */
+    /** Pre-route locating feedback is visible in the UI. Route prompts use
+     *  sendRelayPrompt so only MAX's selected relay voice reaches playback. */
     override fun speak(text: String, interrupt: Boolean) {
-        if (interrupt) stopAgentSpeech()
-        ttsSpeak(text, flush = interrupt)
+        _state.update { it.copy(statusText = text) }
     }
 
     // ---- location ----------------------------------------------------------

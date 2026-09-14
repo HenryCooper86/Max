@@ -102,10 +102,12 @@ class NavigationControllerTest {
         // regression would take to resolve on its own, without the whole
         // suite riding out the real default (~7 s, under the relay's own 8 s
         // device backstop).
-        relayTimeoutMillis: Long = 7_000
+        relayTimeoutMillis: Long = 7_000,
+        relaySpeech: Boolean = false
     ) {
         var clockMillis: Long = 0L
         val sent = CopyOnWriteArrayList<String>()
+        val prompts = CopyOnWriteArrayList<String>()
         val results = CopyOnWriteArrayList<String>()
         val guidanceUpdates = CopyOnWriteArrayList<NavGuidanceState?>()
         val locationSource = FakeLocationSource()
@@ -120,7 +122,8 @@ class NavigationControllerTest {
             hasLocationPermission = hasPermission,
             now = { clockMillis },
             firstFixTimeoutMillis = firstFixTimeoutMillis,
-            firstFixAnnounceMillis = firstFixAnnounceMillis
+            firstFixAnnounceMillis = firstFixAnnounceMillis,
+            sendRelayPrompt = if (relaySpeech) ({ prompts.add(it); Unit }) else null
         )
     }
 
@@ -192,6 +195,33 @@ class NavigationControllerTest {
         val reqCommandId = JSONObject(h.sent.last()).getString("commandId")
         h.relay.handleNavRoute(sampleRouteData(reqCommandId))
         job.join()
+    }
+
+    @Test
+    fun `connected navigation sends trusted prompt metadata and never local speech`() = runBlocking {
+        val h = Harness(relaySpeech = true)
+        commitRoute(h)
+        h.locationSource.fix(31.2349, 121.47)
+        val prompt = JSONObject(h.prompts.single())
+        assertEquals("nav.prompt", prompt.getString("type"))
+        assertEquals(JSONObject(h.sent.last()).getString("commandId"), prompt.getString("routeCommandId"))
+        assertEquals("maneuver", prompt.getString("kind"))
+        assertEquals(0, prompt.getInt("maneuverIndex"))
+        assertEquals("now", prompt.getString("threshold"))
+        assertFalse(prompt.has("text"))
+        h.controller.handleCommand("stop", "navigation.stop", null)
+        assertTrue(h.speaker.spoken.isEmpty())
+    }
+
+    @Test
+    fun `connected arrival emits only arrival even when a turn threshold also fires`() = runBlocking {
+        val h = Harness(relaySpeech = true)
+        commitRoute(h)
+        h.locationSource.fix(wgsDestination.lat, wgsDestination.lon)
+        assertEquals("arrived", JSONObject(h.prompts.single()).getString("kind"))
+        h.locationSource.fix(wgsDestination.lat, wgsDestination.lon)
+        assertEquals(1, h.prompts.size)
+        assertTrue(h.speaker.spoken.isEmpty())
     }
 
     // ---- navigation.start ---------------------------------------------

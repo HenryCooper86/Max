@@ -324,6 +324,20 @@ export function NavigationPanel({
   const mapOffered = Boolean(amapKey) && mapConsent === "unknown" && Boolean(onEnableMap);
 
   if (state.phase === "idle") return null;
+  if (state.phase === "locating")
+    return (
+      <section className="navigationPanel" aria-label="导航">
+        <p role="status">正在获取准确定位…请保持页面打开，并到室外或空旷处。</p>
+        <p>{state.query}</p>
+      </section>
+    );
+
+  if (state.phase === "unavailable")
+    return (
+      <section className="navigationPanel" aria-label="导航">
+        <p role="status">{state.message}</p>
+      </section>
+    );
 
   if (state.phase === "requesting") {
     return (
@@ -341,7 +355,8 @@ export function NavigationPanel({
     );
   }
 
-  const { route, update, position } = state;
+  const { route, update, position, locationStale } = state;
+  const rider = locationStale ? null : position;
   const distanceRounded = Math.round(update.distanceToManeuverMeters / 10) * 10;
   const remainingKm = (update.remainingMeters / 1000).toFixed(1);
   const etaMinutes = Math.max(0, Math.round(update.remainingSeconds / 60));
@@ -351,20 +366,24 @@ export function NavigationPanel({
       <div className="navigationCard">
         <div className="navigationCardHead">
           <strong>{route.destinationName}</strong>
-          <span className="navigationEta">
+          <span className="navigationEta" hidden={locationStale}>
             {remainingKm} 公里 · 约 {etaMinutes} 分钟
           </span>
         </div>
-        <p className="navigationInstruction">{update.currentInstruction}</p>
-        <p className="navigationDistance">{distanceRounded} 米</p>
-        {update.offRoute ? (
+        <p className="navigationInstruction" role={locationStale ? "status" : undefined}>
+          {locationStale ? "定位信号较弱，导航已暂停。定位恢复后将自动继续。" : update.currentInstruction}
+        </p>
+        <p className="navigationDistance" hidden={locationStale}>
+          {distanceRounded} 米
+        </p>
+        {!locationStale && update.offRoute ? (
           <p className="navigationOffRoute" role="status">
             已偏离路线，重新规划中…
           </p>
         ) : null}
       </div>
-      <RouteSchematic polyline={route.polyline} maneuvers={route.steps} rider={position} />
-      {mapAllowed && amapKey ? <AmapTileMap mapKey={amapKey} polyline={route.polyline} rider={position} /> : null}
+      <RouteSchematic polyline={route.polyline} maneuvers={route.steps} rider={rider} />
+      {mapAllowed && amapKey ? <AmapTileMap mapKey={amapKey} polyline={route.polyline} rider={rider} /> : null}
       {mapOffered ? <AmapConsentPrompt onEnable={onEnableMap!} /> : null}
     </section>
   );

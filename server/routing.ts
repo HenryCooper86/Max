@@ -2,9 +2,8 @@
  * Query the Amap v5 REST API to resolve destinations and plan driving routes.
  * Supports place search (resolveDestination) and turn-by-turn directions (planRoute).
  *
- * Returns null on every failure rather than throwing: the caller can speak a
- * fallback message like "我找不到这个地点" instead of crashing if the service
- * is down, the network times out, or the response is malformed.
+ * Empty searches return null; service failures throw and become route.unavailable
+ * at the session boundary, so outages never masquerade as missing destinations.
  *
  * Credentials: `AMAP_API_KEY` (Amap public cloud), not `DOUBAO_API_KEY` /
  * `ARK_API_KEY` — those authenticate the speech socket and vision respectively.
@@ -75,14 +74,23 @@ export function createAmapRouteProvider(options: {
   const { apiKey, fetchImpl = fetch, timeoutMs = DEFAULT_TIMEOUT_MS, onFailure } = options;
   const fail = (reason: string) => {
     onFailure?.(reason);
-    return null;
+    throw new Error(`Amap failure: ${reason}`);
   };
   async function getJson(url: string): Promise<Record<string, unknown> | null> {
     try {
       const response = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
       if (!response.ok) return fail(`http.${response.status}`);
-      return (await response.json()) as Record<string, unknown>;
-    } catch {
+      const body: unknown = await response.json();
+      if (!body || typeof body !== "object" || Array.isArray(body)) return fail("response.shape");
+      const record = body as Record<string, unknown>;
+      if (record.status !== "1") {
+        const code =
+          typeof record.infocode === "string" && /^\d{5}$/.test(record.infocode) ? record.infocode : "unknown";
+        return fail(`api.${code}`);
+      }
+      return record;
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("Amap failure:")) throw error;
       return fail("network");
     }
   }
@@ -95,6 +103,7 @@ export function createAmapRouteProvider(options: {
       const body = await getJson(url);
       if (!body) return null;
       if (body.status !== "1" || !Array.isArray(body.pois)) return fail("place.status");
+      if (body.pois.length === 0) return null;
       const poi = body.pois[0] as { name?: unknown; location?: unknown } | undefined;
       if (!poi || typeof poi.name !== "string" || typeof poi.location !== "string") return fail("place.empty");
       const location = parseLonLat(poi.location);
@@ -176,7 +185,10 @@ let warnedMissingKey = false;
 
 export function selectRouteProvider(amapApiKey: string, log?: Pick<Logger, "warn">): RouteProvider {
   if (amapApiKey) {
-    return createAmapRouteProvider({ apiKey: amapApiKey });
+    return createAmapRouteProvider({
+      apiKey: amapApiKey,
+      onFailure: (reason) => log?.warn(`Amap navigation failed: ${reason}`)
+    });
   }
   if (!warnedMissingKey) {
     warnedMissingKey = true;
@@ -272,92 +284,96 @@ export function createNavHandler(options: {
   let startEpoch = 0;
 
   const handleNavRequest = async (event: NavRequestEvent): Promise<void> => {
-    if (event.reason === "start") {
-      const epoch = ++startEpoch;
-      // A new navigation session must never inherit the previous cache —
-      // success or failure — or a reroute that lands seconds later (still
-      // inside the guard window) could silently resend turn-by-turn for the
-      // stale, now-irrelevant destination. Unconditional (not epoch-gated):
-      // this runs synchronously in the newest start's own call, before any
-      // await, so it can never race a stale completion — see the epoch
-      // field's comment above for what DOES need gating.
-      lastRoute = undefined;
-      lastRerouteAt = undefined;
-      const resolved = await provider.resolveDestination(event.query ?? "", event.origin);
-      // Superseded by a later start while awaiting the provider — drop this
-      // completion entirely, including its nav.error case just below: an
-      // error reply for a destination the rider already abandoned is exactly
-      // as misleading as a stale route would be, and the client is waiting
-      // on the newer request's own answer instead.
-      if (epoch !== startEpoch) return;
-      if (!resolved) {
-        send({ type: "nav.error", commandId: event.commandId, code: "destination.notFound" });
+    const epoch = event.reason === "start" ? ++startEpoch : startEpoch;
+    try {
+      if (event.reason === "start") {
+        // A new navigation session must never inherit the previous cache —
+        // success or failure — or a reroute that lands seconds later (still
+        // inside the guard window) could silently resend turn-by-turn for the
+        // stale, now-irrelevant destination. Unconditional (not epoch-gated):
+        // this runs synchronously in the newest start's own call, before any
+        // await, so it can never race a stale completion — see the epoch
+        // field's comment above for what DOES need gating.
+        lastRoute = undefined;
+        lastRerouteAt = undefined;
+        const resolved = await provider.resolveDestination(event.query ?? "", event.origin);
+        // Superseded by a later start while awaiting the provider — drop this
+        // completion entirely, including its nav.error case just below: an
+        // error reply for a destination the rider already abandoned is exactly
+        // as misleading as a stale route would be, and the client is waiting
+        // on the newer request's own answer instead.
+        if (epoch !== startEpoch) return;
+        if (!resolved) {
+          send({ type: "nav.error", commandId: event.commandId, code: "destination.notFound" });
+          return;
+        }
+        const planned = await provider.planRoute(event.origin, resolved.location);
+        if (epoch !== startEpoch) return; // superseded during the second provider call
+        if (!planned) {
+          send({ type: "nav.error", commandId: event.commandId, code: "route.unavailable" });
+          return;
+        }
+        lastRoute = toNavRouteEvent(event.commandId, resolved.name, resolved.location, planned);
+        lastRerouteAt = now();
+        send(lastRoute);
+        onRouteAnnounced?.(navRouteOkSpeech(resolved.name, planned.distanceMeters, planned.etaSeconds));
         return;
       }
-      const planned = await provider.planRoute(event.origin, resolved.location);
-      if (epoch !== startEpoch) return; // superseded during the second provider call
+
+      // reason: "reroute" — inside the quota-guard window, resend the cached
+      // route unchanged (with the new commandId) instead of calling the
+      // provider again. Only when the request targets the SAME destination as
+      // the cache: the client echoes nav.route's destination verbatim, so an
+      // exact match means "still routing to what we already answered" and a
+      // mismatch means the rider (or app) asked for somewhere new, which must
+      // always get a fresh plan rather than the old destination's turn-by-turn.
+      if (
+        lastRoute &&
+        lastRerouteAt !== undefined &&
+        now() - lastRerouteAt < minRerouteIntervalMs &&
+        event.destination &&
+        event.destination.lat === lastRoute.destination.lat &&
+        event.destination.lon === lastRoute.destination.lon
+      ) {
+        lastRoute = { ...lastRoute, commandId: event.commandId };
+        send(lastRoute);
+        return;
+      }
+
+      const destination = event.destination;
+      if (!destination) {
+        send({ type: "nav.error", commandId: event.commandId, code: "route.unavailable" });
+        return;
+      }
+      // Epoch guard, mirroring the start path's above exactly: capture before
+      // the await, re-check after. Deliberately reuses the SAME startEpoch
+      // counter rather than a separate rerouteEpoch — a "start" landing while
+      // this reroute's planRoute is still in flight (the rider asked for
+      // somewhere new mid-reroute) must supersede it, and bumping startEpoch
+      // already gives that for free. This does NOT guard reroute against an
+      // overlapping reroute: the client (session-controller.ts's per-session
+      // nav.request dispatch) is single-outstanding, so two reroutes racing
+      // each other should never occur in practice — a rerouteEpoch bumped here
+      // would only defend against a scenario that should be unreachable. If
+      // that assumption ever changes, add one, bumped at this same point,
+      // exactly like startEpoch's own comment above documents for "start".
+      const rerouteEpoch = startEpoch;
+      const planned = await provider.planRoute(event.origin, destination);
+      // Superseded by a start while awaiting the provider — drop this
+      // completion entirely, including its nav.error case just below, same
+      // reasoning as the start path's own superseded-completion comment.
+      if (rerouteEpoch !== startEpoch) return;
       if (!planned) {
         send({ type: "nav.error", commandId: event.commandId, code: "route.unavailable" });
         return;
       }
-      lastRoute = toNavRouteEvent(event.commandId, resolved.name, resolved.location, planned);
+      lastRoute = toNavRouteEvent(event.commandId, event.destinationName ?? "", destination, planned);
       lastRerouteAt = now();
       send(lastRoute);
-      onRouteAnnounced?.(navRouteOkSpeech(resolved.name, planned.distanceMeters, planned.etaSeconds));
-      return;
+      onRerouteAnnounced?.(REROUTE_OK_SPEECH);
+    } catch {
+      if (epoch === startEpoch) send({ type: "nav.error", commandId: event.commandId, code: "route.unavailable" });
     }
-
-    // reason: "reroute" — inside the quota-guard window, resend the cached
-    // route unchanged (with the new commandId) instead of calling the
-    // provider again. Only when the request targets the SAME destination as
-    // the cache: the client echoes nav.route's destination verbatim, so an
-    // exact match means "still routing to what we already answered" and a
-    // mismatch means the rider (or app) asked for somewhere new, which must
-    // always get a fresh plan rather than the old destination's turn-by-turn.
-    if (
-      lastRoute &&
-      lastRerouteAt !== undefined &&
-      now() - lastRerouteAt < minRerouteIntervalMs &&
-      event.destination &&
-      event.destination.lat === lastRoute.destination.lat &&
-      event.destination.lon === lastRoute.destination.lon
-    ) {
-      lastRoute = { ...lastRoute, commandId: event.commandId };
-      send(lastRoute);
-      return;
-    }
-
-    const destination = event.destination;
-    if (!destination) {
-      send({ type: "nav.error", commandId: event.commandId, code: "route.unavailable" });
-      return;
-    }
-    // Epoch guard, mirroring the start path's above exactly: capture before
-    // the await, re-check after. Deliberately reuses the SAME startEpoch
-    // counter rather than a separate rerouteEpoch — a "start" landing while
-    // this reroute's planRoute is still in flight (the rider asked for
-    // somewhere new mid-reroute) must supersede it, and bumping startEpoch
-    // already gives that for free. This does NOT guard reroute against an
-    // overlapping reroute: the client (session-controller.ts's per-session
-    // nav.request dispatch) is single-outstanding, so two reroutes racing
-    // each other should never occur in practice — a rerouteEpoch bumped here
-    // would only defend against a scenario that should be unreachable. If
-    // that assumption ever changes, add one, bumped at this same point,
-    // exactly like startEpoch's own comment above documents for "start".
-    const rerouteEpoch = startEpoch;
-    const planned = await provider.planRoute(event.origin, destination);
-    // Superseded by a start while awaiting the provider — drop this
-    // completion entirely, including its nav.error case just below, same
-    // reasoning as the start path's own superseded-completion comment.
-    if (rerouteEpoch !== startEpoch) return;
-    if (!planned) {
-      send({ type: "nav.error", commandId: event.commandId, code: "route.unavailable" });
-      return;
-    }
-    lastRoute = toNavRouteEvent(event.commandId, event.destinationName ?? "", destination, planned);
-    lastRerouteAt = now();
-    send(lastRoute);
-    onRerouteAnnounced?.(REROUTE_OK_SPEECH);
   };
   handleNavRequest.activeRoute = () => lastRoute;
   handleNavRequest.clearRoute = () => {

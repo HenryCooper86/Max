@@ -471,6 +471,37 @@ The wake phrase and the 12 s follow-up window live in `shared/wake.ts`. The mock
 
 ## API Routes
 
+### MAX navigation reliability
+
+Web, iOS, and Android send route-bound `nav.prompt` events to the relay. With
+Doubao selected, the relay speaks navigation and generated confirmations using
+MAX's selected live-session voice; native navigation does not invoke phone TTS.
+Arrival suppresses any turn prompt fired by the same fix, and stop confirmation
+comes from the relay. Before a route exists, native locating feedback is shown
+as status text. A MAX synthesis failure keeps the text visible without switching
+voices. New native builds must be installed on phones to receive these changes;
+a server deployment alone does not update installed apps.
+
+Web guidance accepts browser fixes under 10 seconds old and with reported accuracy
+of 50 metres or better. Stale fixes pause the HUD and request MAX's location-loss
+announcement; the next accurate fix resumes the route. No maneuver or reroute is
+advanced from a rejected fix. Real rides still require outdoor device verification.
+
+Amap transport, response, credential, quota, and IP errors produce `route.unavailable`;
+only a successful empty place search produces `destination.notFound`. Relay logs
+retain sanitized `api.<infocode>` diagnostics without keys or query URLs. For
+`api.10005` (`INVALID_USER_IP`), verify the deployed server's outbound IP in the
+Amap Web Service key's IP whitelist; this deployment uses `3.35.135.136`.
+
+`/health` includes cumulative and trailing-window `maxSpeechRequested`,
+`maxSpeechDelivered`, `maxSpeechFailed`, `maxSpeechCancelled`, `maxSpeechExpired`,
+`maxSpeechCongested`, and `maxSpeechLatencyMsTotal`. Divide latency total by
+completed deliveries (when nonzero) for mean queue-to-audio-delivery latency in
+milliseconds. Delivery measures PCM handed to the socket, not audible playback.
+Compare interval deltas for failure/congestion rates; cancellations and expired
+maneuvers are intentional suppression, not successful speech. Generated PCM also
+contributes to the existing downstream audio byte counter.
+
 ### `GET /health`
 
 Returns public backend liveness, selected provider, build identity, and relay
@@ -821,16 +852,16 @@ MRs but cannot push it directly:
 ```bash
 git switch -c improve/short-description
 # edit + npm run check
-git push -u origin improve/short-description
+git push -u gitlab improve/short-description
 # open MR, record local verification, complete review, merge in GitLab
 git switch main
-git pull --ff-only origin main
+git pull --ff-only gitlab main
 ```
 
 Then run the deploy from the project root. The server keeps its own `.env`;
 credentials are never copied from a developer machine. The deploy command
 refuses a dirty tree, a non-`main` branch, or a commit that does not exactly
-match `origin/main`. It archives and stamps that reviewed commit, builds it
+match `gitlab/main`. It archives and stamps that reviewed commit, builds it
 locally, copies `dist/`, installs runtime-only packages remotely, activates the
 prepared release with directory renames, restarts PM2, and polls both liveness
 and readiness until they report the expected SHA. If activation, health, or
@@ -876,10 +907,10 @@ in [`docs/rdk-ios-companion-acceptance.md`](docs/rdk-ios-companion-acceptance.md
 
 Roll out one reviewed SHA in this order: **relay first**, then the signed iOS build, then the RDK
 board. `deploy-lightsail.command` refuses a dirty tree, the wrong branch, or a local `HEAD` that
-differs from `origin/main`; it archives and stamps that exact SHA, restarts the expected PM2
+differs from `gitlab/main`; it archives and stamps that exact SHA, restarts the expected PM2
 service `horizon`, and accepts the release only when both `/health` and `/ready` report the stamp.
 The script's `LIGHTSAIL_KEY`, `LIGHTSAIL_HOST`, `LIGHTSAIL_APP_DIR`,
-`LIGHTSAIL_HEALTH_URL`, and `LIGHTSAIL_READY_URL` inputs identify the deployment without placing
+`LIGHTSAIL_HEALTH_URL`, `LIGHTSAIL_READY_URL`, and `LIGHTSAIL_DEPLOY_REMOTE` inputs identify the deployment without placing
 secret values in logs or documentation. Do not use the non-main override for production.
 
 If a stage fails, stop there. The relay deploy automatically restores the previous release after

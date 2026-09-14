@@ -118,6 +118,7 @@ final class RelayNavigationSearchTests: XCTestCase {
         let route = await task.value
 
         guard let route else { return XCTFail("expected a route") }
+        XCTAssertEqual(route.relayCommandId, commandId)
         XCTAssertEqual(route.destinationName, "天安门")
         XCTAssertEqual(route.destinationCoordinate.latitude, knownDestination.latitude, accuracy: 1e-5)
         XCTAssertEqual(route.destinationCoordinate.longitude, knownDestination.longitude, accuracy: 1e-5)

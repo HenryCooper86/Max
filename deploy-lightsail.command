@@ -10,6 +10,7 @@ REMOTE_APP_DIR="${LIGHTSAIL_APP_DIR:-/home/ubuntu/app}"
 HEALTH_URL="${LIGHTSAIL_HEALTH_URL:-https://3.35.135.136/health}"
 READY_URL="${LIGHTSAIL_READY_URL:-https://3.35.135.136/ready}"
 DEPLOY_BRANCH="${LIGHTSAIL_DEPLOY_BRANCH:-main}"
+DEPLOY_REMOTE="${LIGHTSAIL_DEPLOY_REMOTE:-gitlab}"
 ALLOW_NON_MAIN="${LIGHTSAIL_ALLOW_NON_MAIN:-off}"
 
 if [[ ! -f "$KEY" ]]; then
@@ -37,9 +38,9 @@ if [[ "$ALLOW_NON_MAIN" != "on" && "$CURRENT_BRANCH" != "$DEPLOY_BRANCH" ]]; the
   exit 1
 fi
 LOCAL_COMMIT="$(git rev-parse HEAD)"
-REMOTE_COMMIT="$(git ls-remote origin "refs/heads/$DEPLOY_BRANCH" | awk '{print $1}')"
+REMOTE_COMMIT="$(git ls-remote "$DEPLOY_REMOTE" "refs/heads/$DEPLOY_BRANCH" | awk '{print $1}')"
 if [[ "$ALLOW_NON_MAIN" != "on" && ( -z "$REMOTE_COMMIT" || "$LOCAL_COMMIT" != "$REMOTE_COMMIT" ) ]]; then
-  echo "Refusing to deploy: local HEAD does not match origin/$DEPLOY_BRANCH." >&2
+  echo "Refusing to deploy: local HEAD does not match $DEPLOY_REMOTE/$DEPLOY_BRANCH." >&2
   echo "local:  $LOCAL_COMMIT" >&2
   echo "remote: ${REMOTE_COMMIT:-missing}" >&2
   exit 1
@@ -96,7 +97,7 @@ ssh -i "$KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$HOST" \
   "rm -rf '$REMOTE_NEXT_DIR' && mkdir -p '$REMOTE_NEXT_DIR'"
 rsync -azc --delete \
   --exclude='.git' --exclude='.env' --exclude='node_modules' \
-  --exclude='.DS_Store' \
+  --exclude='.DS_Store' --exclude='.claude' \
   --exclude='android/.gradle' --exclude='android/.idea' \
   --exclude='android/.kotlin' --exclude='android/local.properties' \
   --exclude='android/app/build' --exclude='ios/build' \

@@ -54,11 +54,11 @@ export default defineConfig({
     setupFiles: ["./tests/setup.ts"],
     // Git worktrees are full checkouts of another branch sitting inside this
     // one. Vitest walks them, so their copy of tests/ ran alongside the real
-    // suite: measured 2026-08-11, a nested worktree supplied
+    // suite: measured 2026-08-11, .claude/worktrees/nav-ios-plan-b supplied
     // 923 of the 2231 collected cases — 41% of a local run spent re-testing
     // an abandoned branch, and a failure there would read as a failure here.
     // Both directories are gitignored, so this only ever affects local runs.
-    exclude: [...configDefaults.exclude, "**/.worktrees/**"]
+    exclude: [...configDefaults.exclude, "**/.claude/**", "**/.worktrees/**"]
   },
   define: {
     "import.meta.env.VITE_APP_VERSION": JSON.stringify(resolveAppVersion()),

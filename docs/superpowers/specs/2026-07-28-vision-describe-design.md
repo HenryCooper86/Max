@@ -137,7 +137,7 @@ run on the relay host itself so the key never left it. Full evidence is in
 `.superpowers/sdd/2026-07-28-vision-describe/task-1-report.md`.
 
 **Endpoint:** `https://ark.cn-beijing.volces.com/api/v3/chat/completions` —
-`ARK_BASE_URL` + `/chat/completions`. This is Volcano Ark's message-based
+`ARK_BASE_URL` + `/chat/completions`. This is Volcano Ark's OpenAI-shaped
 chat-completions endpoint, confirmed reachable (it returns Ark's own JSON error
 envelope with a request id, not a network/DNS/TLS failure).
 
@@ -173,7 +173,7 @@ could not confirm the response JSON path, and could not measure real inference
 latency:
 
 - **JSON path to the description text:** unconfirmed.
-  `choices[0].message.content` (the response-shape assumption in this doc's
+  `choices[0].message.content` (the OpenAI-shaped assumption in this doc's
   earlier draft) is **not empirically verified**. A later task must not
   hardcode it as settled.
 

@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { LanguageProvider } from "../../src/components/LanguageToggle";
+import { HelmetVisual, VoiceStateReadout } from "../../src/components/HelmetVisual";
 import { NavigationPanel } from "../../src/components/NavigationPanel";
 import { VoiceTranscript } from "../../src/components/VoiceTranscript";
 import { voiceFaceClassName } from "../../src/lib/voice-shell";
@@ -45,8 +46,10 @@ type Box = { top: number; bottom: number; left: number; right: number; height: n
 export type ProbeResult = {
   viewport: { width: number; height: number };
   shellOverflowPx: number;
+  horizontalOverflowPx: number;
+  helmetOverflowPx: number;
   dockOnScreen: boolean;
-  navPanel: (Box & { clippedPx: number }) | null;
+  navPanel: (Box & { clippedPx: number; scrollable: boolean }) | null;
   transcript: (Box & { clippedPx: number }) | null;
   navOverlapsTranscript: boolean;
 };
@@ -72,12 +75,12 @@ function markup(node: Parameters<typeof renderToStaticMarkup>[0]): string {
 
 function harnessHtml(css: string, options: ProbeOptions): string {
   const navHtml = options.nav
-    ? markup(createElement(NavigationPanel, { state: options.nav, mapConsent: "unknown" }))
+    ? markup(createElement(NavigationPanel, { state: options.nav, mapConsent: "unknown", onEnableMap: () => {} }))
     : "";
   const transcriptHtml = options.captions ? markup(createElement(VoiceTranscript, { agent: transcriptAgent() })) : "";
 
   return `<!doctype html>
-<html lang="zh"><head><meta charset="utf-8" />
+<html lang="zh"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <style>${css}</style></head>
 <body>
 <main class="voiceShell">
@@ -87,12 +90,12 @@ function harnessHtml(css: string, options: ProbeOptions): string {
       <div class="voiceBrand"><span class="voiceBrandDot"></span><span class="voiceWordmark">MAX</span></div>
       <div class="voiceRelay"><span class="voiceRelayDot"></span>RELAY OFFLINE</div>
     </header>
-    <div class="voiceHero"><div class="helmetStage"><div style="width:100%;height:100%"></div></div></div>
-    <div class="voiceReadout"><strong>点按头盔，开始对话</strong><span>STANDBY</span></div>
+    <div class="voiceHero">${markup(createElement(HelmetVisual, { connected: false, listening: false, voiceLevel: 0, turnState: "idle" }))}</div>
+    ${markup(createElement(VoiceStateReadout, { connected: false, turnState: "idle" }))}
     ${navHtml}
     ${transcriptHtml}
     <nav class="voiceUtilities"><button type="button">字幕</button><button type="button">相册</button><button type="button">设置</button></nav>
-    <div class="voicePrimaryControls"><button type="button" class="voicePrimaryButton">开启免提</button></div>
+    <div class="voicePrimaryControls"><button type="button" class="voiceMicButton"><span class="voiceMicKey">◉</span><span class="voiceMicLabel">开启免提</span><kbd>空格</kbd></button></div>
   </section>
 </main>
 <pre id="probe-result"></pre>
@@ -102,8 +105,14 @@ function harnessHtml(css: string, options: ProbeOptions): string {
       if (!el) return null;
       const r = el.getBoundingClientRect();
       return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, height: r.height,
-               clippedPx: el.scrollHeight - el.clientHeight };
+               scrollable: getComputedStyle(el).overflowY === "auto", clippedPx: el.scrollHeight - el.clientHeight };
     };
+    const hero = document.querySelector(".voiceHero").getBoundingClientRect();
+    const helmet = document.querySelector(".helmetStage").getBoundingClientRect();
+    const horizontalOverflow = Math.max(0, ...Array.from(document.querySelectorAll(".voiceTopbar, .voiceUtilities, .voicePrimaryControls, .navigationPanel, .voiceTranscript")).map(el => {
+      const r = el.getBoundingClientRect();
+      return Math.max(-r.left, r.right - innerWidth, el.scrollWidth - el.clientWidth);
+    }));
     const face = document.querySelector(".voiceFace");
     const faceRect = face.getBoundingClientRect();
     const contentBottom = faceRect.bottom - parseFloat(getComputedStyle(face).paddingBottom);
@@ -118,6 +127,8 @@ function harnessHtml(css: string, options: ProbeOptions): string {
     document.querySelector("#probe-result").textContent = JSON.stringify({
       viewport: { width: innerWidth, height: innerHeight },
       shellOverflowPx: Math.round(last.bottom - contentBottom),
+      horizontalOverflowPx: Math.round(horizontalOverflow),
+      helmetOverflowPx: hero.height === 0 ? 0 : Math.round(Math.max(0, hero.left - helmet.left, helmet.right - hero.right, hero.top - helmet.top, helmet.bottom - hero.bottom)),
       dockOnScreen: dock.bottom <= innerHeight + 0.5,
       navPanel: nav, transcript: tr, navOverlapsTranscript: overlaps
     });
@@ -145,7 +156,23 @@ function readFileSyncUtf8(path: string): string {
 export function probeHudLayout(options: ProbeOptions): ProbeResult {
   const dir = mkdtempSync(join(tmpdir(), "hud-layout-"));
   const page = join(dir, "harness.html");
-  writeFileSync(page, harnessHtml(stylesheet(), options), "utf8");
+  // A browser window includes browser chrome and may enforce a minimum width.
+  // An iframe gives the document the exact requested CSS viewport on every host.
+  const content = harnessHtml(stylesheet(), options)
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  writeFileSync(
+    page,
+    `<!doctype html><html><body>
+    <iframe width="${options.width}" height="${options.height}" style="border:0" srcdoc="${content}"></iframe>
+    <pre id="probe-result"></pre>
+    <script>addEventListener("load", () => {
+      document.querySelector("#probe-result").textContent = document.querySelector("iframe").contentDocument.querySelector("#probe-result").textContent;
+    });</script></body></html>`,
+    "utf8"
+  );
 
   const chrome = spawnSync(
     CHROME,

@@ -1,4 +1,5 @@
 import {
+  CaretDown,
   CloudSun,
   DownloadSimple,
   Flask,
@@ -196,48 +197,6 @@ export function WebSettingsSheet({ agent, amapConsent, onOpenAdmin, onClose }: P
                 ))}
               </div>
             </div>
-            <div className="settingsGroup settingsScenarioGroup">
-              <span>{localized(language, "演示场景", "Demo scenario")}</span>
-              <div
-                className="settingsScenarioGrid"
-                role="group"
-                aria-label={localized(language, "演示场景", "Demo scenario")}
-              >
-                {SCENARIOS.map((scenario) => (
-                  <button
-                    type="button"
-                    key={scenario}
-                    className={agent.rideContext.scenario === scenario ? "active" : ""}
-                    aria-pressed={agent.rideContext.scenario === scenario}
-                    onClick={() => agent.setScenario(scenario)}
-                  >
-                    {language === "en-US"
-                      ? {
-                          commute: "Commute",
-                          wind: "Wind",
-                          fuel: "Fuel",
-                          group: "Group",
-                          emergency: "Emergency",
-                          adas: "ADAS",
-                          crash: "Crash"
-                        }[scenario]
-                      : scenarioLabel(scenario)}
-                  </button>
-                ))}
-                {agent.provider === "mock" ? (
-                  <button
-                    type="button"
-                    className={agent.guidedDemo ? "active" : ""}
-                    aria-pressed={agent.guidedDemo}
-                    onClick={() => agent.setGuidedDemo(!agent.guidedDemo)}
-                  >
-                    {agent.guidedDemo
-                      ? localized(language, "停止巡游", "Stop patrol")
-                      : localized(language, "自动巡游", "Auto patrol")}
-                  </button>
-                ) : null}
-              </div>
-            </div>
             <div className={`settingsRideSummary ${fusedHazard}`}>
               <div>
                 <strong>{agent.rideContext.speedKmh}</strong>
@@ -359,70 +318,150 @@ export function WebSettingsSheet({ agent, amapConsent, onOpenAdmin, onClose }: P
             </dl>
           </section>
 
-          <section className="settingsCard">
-            <div className="settingsCardTitle">
-              <Pulse size={22} aria-hidden="true" />
-              <div>
-                <h2>{localized(language, "诊断", "Diagnostics")}</h2>
-                <p>{localized(language, "语音链路和实时性能", "Voice path and real-time performance")}</p>
-              </div>
-              <strong className={`settingsLatency ${latencyTone}`}>{agent.latencyMs} ms</strong>
+          <details className="settingsAdvanced">
+            <summary>
+              <Flask size={22} aria-hidden="true" />
+              <span>
+                <strong>{localized(language, "测试与诊断", "Testing & diagnostics")}</strong>
+                <small>
+                  {localized(
+                    language,
+                    "演示场景、语音性能和对话记录",
+                    "Demo scenarios, voice performance, and conversation logs"
+                  )}
+                </small>
+                {agent.provider === "mock" && agent.guidedDemo ? (
+                  <em>{localized(language, "自动巡游运行中", "Auto patrol is running")}</em>
+                ) : null}
+              </span>
+              <CaretDown className="settingsAdvancedCaret" size={20} aria-hidden="true" />
+            </summary>
+            <div className="settingsAdvancedContent">
+              <section className="settingsCard">
+                <div className="settingsCardTitle">
+                  <Flask size={22} aria-hidden="true" />
+                  <div>
+                    <h2>{localized(language, "演示场景", "Demo scenarios")}</h2>
+                    <p>
+                      {localized(
+                        language,
+                        "用于测试模拟骑行状态。选择场景会改变当前骑行情境。",
+                        "Simulate ride conditions for testing. Selecting a scenario changes the current ride context."
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <div className="settingsGroup settingsScenarioGroup">
+                  <span>{localized(language, "演示场景", "Demo scenario")}</span>
+                  <div
+                    className="settingsScenarioGrid"
+                    role="group"
+                    aria-label={localized(language, "演示场景", "Demo scenario")}
+                  >
+                    {SCENARIOS.map((scenario) => (
+                      <button
+                        type="button"
+                        key={scenario}
+                        className={agent.rideContext.scenario === scenario ? "active" : ""}
+                        aria-pressed={agent.rideContext.scenario === scenario}
+                        onClick={() => agent.setScenario(scenario)}
+                      >
+                        {language === "en-US"
+                          ? {
+                              commute: "Commute",
+                              wind: "Wind",
+                              fuel: "Fuel",
+                              group: "Group",
+                              emergency: "Emergency",
+                              adas: "ADAS",
+                              crash: "Crash"
+                            }[scenario]
+                          : scenarioLabel(scenario)}
+                      </button>
+                    ))}
+                    {agent.provider === "mock" ? (
+                      <button
+                        type="button"
+                        className={agent.guidedDemo ? "active" : ""}
+                        aria-pressed={agent.guidedDemo}
+                        onClick={() => agent.setGuidedDemo(!agent.guidedDemo)}
+                      >
+                        {agent.guidedDemo
+                          ? localized(language, "停止巡游", "Stop patrol")
+                          : localized(language, "自动巡游", "Auto patrol")}
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              </section>
+              <section className="settingsCard">
+                <div className="settingsCardTitle">
+                  <Pulse size={22} aria-hidden="true" />
+                  <div>
+                    <h2>{localized(language, "诊断", "Diagnostics")}</h2>
+                    <p>{localized(language, "语音链路和实时性能", "Voice path and real-time performance")}</p>
+                  </div>
+                  <strong className={`settingsLatency ${latencyTone}`}>{agent.latencyMs} ms</strong>
+                </div>
+                <dl className="settingsMetrics compact">
+                  <div>
+                    <dt>ASR</dt>
+                    <dd>{agent.telemetry.asrMs} ms</dd>
+                  </div>
+                  <div>
+                    <dt>{localized(language, "思考", "Thinking")}</dt>
+                    <dd>{agent.telemetry.thinkMs} ms</dd>
+                  </div>
+                  <div>
+                    <dt>{localized(language, "首音", "First audio")}</dt>
+                    <dd>{agent.telemetry.firstAudioMs} ms</dd>
+                  </div>
+                  <div>
+                    <dt>{localized(language, "总计", "Total")}</dt>
+                    <dd>{agent.telemetry.totalMs} ms</dd>
+                  </div>
+                  <div>
+                    <dt>{localized(language, "降噪", "Noise reduction")}</dt>
+                    <dd>{audioProcessingLabel(agent.audioProcessing.noiseSuppression, language)}</dd>
+                  </div>
+                  <div>
+                    <dt>{localized(language, "回声消除", "Echo cancellation")}</dt>
+                    <dd>{audioProcessingLabel(agent.audioProcessing.echoCancellation, language)}</dd>
+                  </div>
+                  <div>
+                    <dt>{localized(language, "采样", "Sample rate")}</dt>
+                    <dd>{agent.audioProcessing.sampleRate ?? SAMPLE_RATE} Hz</dd>
+                  </div>
+                  <div>
+                    <dt>{localized(language, "响应", "Response")}</dt>
+                    <dd>
+                      {
+                        (language === "en-US" ? RESPONSE_MODE_LABELS_EN : RESPONSE_MODE_LABELS)[
+                          agent.sessionMemory.responseMode
+                        ]
+                      }
+                    </dd>
+                  </div>
+                </dl>
+                <div className="settingsActions">
+                  <button
+                    type="button"
+                    disabled={!agent.transcript.length}
+                    onClick={() =>
+                      exportTranscriptLog(agent.transcript, agent.health, agent.testerId, agent.testerRegion)
+                    }
+                  >
+                    <DownloadSimple size={18} aria-hidden="true" />
+                    {t("settings.export")}
+                  </button>
+                  <button type="button" disabled={!agent.transcript.length} onClick={agent.clearTranscript}>
+                    <Trash size={18} aria-hidden="true" />
+                    {t("settings.clear")}
+                  </button>
+                </div>
+              </section>
             </div>
-            <dl className="settingsMetrics compact">
-              <div>
-                <dt>ASR</dt>
-                <dd>{agent.telemetry.asrMs} ms</dd>
-              </div>
-              <div>
-                <dt>{localized(language, "思考", "Thinking")}</dt>
-                <dd>{agent.telemetry.thinkMs} ms</dd>
-              </div>
-              <div>
-                <dt>{localized(language, "首音", "First audio")}</dt>
-                <dd>{agent.telemetry.firstAudioMs} ms</dd>
-              </div>
-              <div>
-                <dt>{localized(language, "总计", "Total")}</dt>
-                <dd>{agent.telemetry.totalMs} ms</dd>
-              </div>
-              <div>
-                <dt>{localized(language, "降噪", "Noise reduction")}</dt>
-                <dd>{audioProcessingLabel(agent.audioProcessing.noiseSuppression, language)}</dd>
-              </div>
-              <div>
-                <dt>{localized(language, "回声消除", "Echo cancellation")}</dt>
-                <dd>{audioProcessingLabel(agent.audioProcessing.echoCancellation, language)}</dd>
-              </div>
-              <div>
-                <dt>{localized(language, "采样", "Sample rate")}</dt>
-                <dd>{agent.audioProcessing.sampleRate ?? SAMPLE_RATE} Hz</dd>
-              </div>
-              <div>
-                <dt>{localized(language, "响应", "Response")}</dt>
-                <dd>
-                  {
-                    (language === "en-US" ? RESPONSE_MODE_LABELS_EN : RESPONSE_MODE_LABELS)[
-                      agent.sessionMemory.responseMode
-                    ]
-                  }
-                </dd>
-              </div>
-            </dl>
-            <div className="settingsActions">
-              <button
-                type="button"
-                disabled={!agent.transcript.length}
-                onClick={() => exportTranscriptLog(agent.transcript, agent.health, agent.testerId, agent.testerRegion)}
-              >
-                <DownloadSimple size={18} aria-hidden="true" />
-                {t("settings.export")}
-              </button>
-              <button type="button" disabled={!agent.transcript.length} onClick={agent.clearTranscript}>
-                <Trash size={18} aria-hidden="true" />
-                {t("settings.clear")}
-              </button>
-            </div>
-          </section>
+          </details>
         </div>
         <footer className="settingsAdminFooter">
           <button type="button" className="settingsAdminAction" onClick={onOpenAdmin}>

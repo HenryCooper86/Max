@@ -6048,3 +6048,86 @@ button.opsCard:disabled {
 .voiceTranscriptHead small {
   color: #a9b8b0;
 }
+
+/* Optional testing tools stay outside the everyday riding settings. */
+.settingsAdvanced {
+  border: 1px solid rgba(166, 183, 177, 0.16);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.settingsAdvanced > summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  padding: 18px 20px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.settingsAdvanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.settingsAdvanced > summary > svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.settingsAdvanced > summary > span {
+  flex: 1;
+  min-width: 0;
+}
+
+.settingsAdvanced strong,
+.settingsAdvanced small,
+.settingsAdvanced em {
+  display: block;
+}
+
+.settingsAdvanced small {
+  margin-top: 4px;
+  color: #a9b8b0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.settingsAdvanced em {
+  margin-top: 6px;
+  color: var(--accent);
+  font-size: 0.8rem;
+  font-style: normal;
+}
+
+.settingsAdvanced[open] > summary .settingsAdvancedCaret {
+  transform: rotate(180deg);
+}
+
+.settingsAdvancedContent {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  padding: 0 12px 12px;
+}
+
+.settingsAdvanced > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 20px;
+}
+
+.settingsAdvancedContent > .settingsCard {
+  min-width: 0;
+}
+
+.settingsAdvanced .settingsLatency {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+@media (max-width: 420px) {
+  .settingsAdvancedContent > .settingsCard {
+    padding: 12px;
+  }
+}

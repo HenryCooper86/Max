@@ -16,23 +16,9 @@ iPhone (this app)                       Mac / test server
 └─────────────────────────┘            └──────────────────────┘
 ```
 
-## Screenshots
-
-Voice mode: the brand helmet breathes and glows with the conversation, with a
-single caption and minimal controls. The ADAS hazard banner pins to the top, and
-every setting lives in the 设置 sheet.
-
-| 待机 — 点按头盔                                          | 免提会话 + ADAS 提示                                                   |
-| -------------------------------------------------------- | ---------------------------------------------------------------------- |
-| ![iOS voice mode, idle](../docs/assets/ios-hud-idle.png) | ![iOS live session with ADAS alert](../docs/assets/ios-hud-active.png) |
-
-| 字幕（对话记录）                                         | 设置（语音 · 连接 · 场景 · 诊断）                      |
-| -------------------------------------------------------- | ------------------------------------------------------ |
-| ![iOS captions overlay](../docs/assets/ios-captions.png) | ![iOS settings sheet](../docs/assets/ios-settings.png) |
-
 ## Requirements
 
-- Xcode 16 or newer; Xcode 17 / iOS 26.5 simulator was used for the latest screenshots.
+- Xcode 16 or newer.
 - iOS 17+ device or simulator
 - An Apple Developer signing team for running on a physical device (Simulator needs none)
 - Homebrew Ruby 3.2 through 4.x (Ruby 4.0.6 is verified); Apple's `/usr/bin/ruby` is too old.

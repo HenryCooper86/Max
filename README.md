@@ -4,30 +4,11 @@
 
 Production-oriented AI voice testing framework for the Max motorcycle helmet assistant. Max keeps the same name and motorcycle helmet assistant role, speaks Chinese by default, can also use English, and refuses other languages. The framework combines the hands-free web HUD, iOS and Android clients, a secure realtime relay, mock/live providers, scenario injection, telemetry, and per-tester QA statistics for validating helmet voice behavior before field release. Realtime Doubao voice defaults to the working female Chinese voice.
 
-## Frontend Preview
-
-![Max Motorcycle Helmet AI frontend](docs/assets/frontend-screenshot.png)
-
-## Android App Preview
+## Android App
 
 The native Android client (`android/`, Kotlin + Jetpack Compose) speaks the same `/agent` relay
 protocol as the web HUD, so the Node server, Doubao integration, weather, and ride intelligence
 all work unchanged. See [android/README.md](android/README.md) for build and setup.
-
-Voice mode: the brand helmet breathes and glows with the conversation, with a
-single status caption and minimal controls.
-
-**待机 — 点按头盔** · voice mode at rest
-
-![Android voice mode — idle](docs/assets/android-voice-idle.png)
-
-**免提会话（已就绪）** · live hands-free session, helmet listening
-
-![Android voice mode — live session](docs/assets/android-voice-active.png)
-
-**设置 — 语音 · 连接 · 场景 · 诊断** · the unified settings sheet (server address, voice, scenarios, diagnostics)
-
-![Android settings sheet](docs/assets/android-settings.png)
 
 ## iOS App
 
@@ -36,22 +17,6 @@ the web HUD and Android app. It mirrors the hands-free HUD, mic streaming, 24 kH
 barge-in, reconnect handling, live weather, transcript export, and TTS fallback while using
 iOS-native audio routing and background audio. See [ios/README.md](ios/README.md) for Xcode,
 relay URL, and self-signed test-server setup.
-
-Voice mode: the brand helmet breathes and glows with the conversation, with a
-single status caption and minimal controls.
-
-**待机 — 点按头盔** · voice mode at rest
-
-![iOS voice mode — idle](docs/assets/ios-hud-idle.png)
-
-**免提会话 + ADAS 提示** · live hands-free session with an ADAS hazard alert pinned on top
-
-![iOS live session with ADAS alert](docs/assets/ios-hud-active.png)
-
-**字幕 + 设置** · optional captions overlay, and the unified settings sheet (server address, voice, scenarios, diagnostics)
-
-![iOS captions overlay](docs/assets/ios-captions.png)
-![iOS settings sheet](docs/assets/ios-settings.png)
 
 ## Current Capabilities
 

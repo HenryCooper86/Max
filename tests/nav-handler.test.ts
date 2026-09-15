@@ -571,3 +571,30 @@ it("reports provider outages as unavailable and ignores superseded failures", as
   expect(sent).toHaveLength(1);
   expect(sent[0]).toMatchObject({ type: "nav.route", commandId: "c2" });
 });
+
+it.each(["start", "reroute"] as const)("clearRoute invalidates an in-flight %s", async (reason) => {
+  const gate = defer<void>();
+  const mock = createMockRouteProvider();
+  const { sent, send } = collector();
+  const spoken: string[] = [];
+  const handle = createNavHandler({
+    provider: {
+      ...mock,
+      planRoute: async (...args) => {
+        await gate.promise;
+        return mock.planRoute(...args);
+      }
+    },
+    send,
+    onRouteAnnounced: (line) => spoken.push(line),
+    onRerouteAnnounced: (line) => spoken.push(line)
+  });
+  const pending = handle({ ...start, reason, destination: origin });
+  await Promise.resolve();
+  handle.clearRoute();
+  gate.resolve();
+  await pending;
+  expect(sent).toEqual([]);
+  expect(spoken).toEqual([]);
+  expect(handle.activeRoute()).toBeUndefined();
+});

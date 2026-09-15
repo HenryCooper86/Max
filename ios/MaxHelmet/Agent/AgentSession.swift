@@ -235,7 +235,7 @@ final class AgentSession: NSObject, ObservableObject {
     /// `deviceRouter`'s handler dictionary) so `stop()` can call its
     /// `teardown()` directly — `DeviceActionHandler` has no such method, and
     /// the dictionary's values are erased to that protocol.
-    private lazy var navigationController = NavigationController(
+    @MainActor private lazy var navigationController = NavigationController(
         search: relayNavigationSearch,
         stream: SystemLocationStream(),
         onGuidance: { [weak self] guidance in
@@ -251,7 +251,7 @@ final class AgentSession: NSObject, ObservableObject {
     /// `player` (the volume handler's gain target) is available. The message
     /// presenter is main-actor isolated, so it is created on demand inside its
     /// own handler rather than here.
-    private lazy var deviceRouter = DeviceActionRouter(
+    @MainActor private lazy var deviceRouter = DeviceActionRouter(
         handlers: [
             .torch: TorchController(),
             .volume: PlaybackVolumeController(gain: player),

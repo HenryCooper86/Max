@@ -118,3 +118,45 @@ describe("AmapRouteProvider.planRoute", () => {
     await expect(provider.planRoute(origin, destination)).rejects.toThrow("Amap failure:");
   });
 });
+
+describe("Amap malformed upstream data", () => {
+  it.each([",", " ,31", "121,", "181,31", "121,91"])("rejects invalid POI coordinate %s", async (location) => {
+    const provider = createAmapRouteProvider({
+      apiKey: "k",
+      fetchImpl: fetchReturning(
+        JSON.stringify({
+          status: "1",
+          pois: [{ name: "destination", location }]
+        })
+      )
+    });
+    await expect(provider.resolveDestination("x", origin)).rejects.toThrow("place.location");
+  });
+
+  it.each([null, "", " ", -1, true, []])("rejects invalid route duration %j", async (duration) => {
+    const body = JSON.parse(DRIVING_OK);
+    body.route.paths[0].cost.duration = duration;
+    const provider = createAmapRouteProvider({ apiKey: "k", fetchImpl: fetchReturning(JSON.stringify(body)) });
+    await expect(provider.planRoute(origin, destination)).rejects.toThrow("driving.shape");
+  });
+
+  it("reports malformed null steps through the failure callback", async () => {
+    const body = JSON.parse(DRIVING_OK);
+    body.route.paths[0].steps = [null];
+    const reasons: string[] = [];
+    const provider = createAmapRouteProvider({
+      apiKey: "k",
+      fetchImpl: fetchReturning(JSON.stringify(body)),
+      onFailure: (reason) => reasons.push(reason)
+    });
+    await expect(provider.planRoute(origin, destination)).rejects.toThrow("driving.step");
+    expect(reasons).toEqual(["driving.step"]);
+  });
+
+  it("rejects a route with no traversable geometry", async () => {
+    const body = JSON.parse(DRIVING_OK);
+    body.route.paths[0].steps = [{ instruction: "arrive", step_distance: "0", polyline: "121,31;121,31" }];
+    const provider = createAmapRouteProvider({ apiKey: "k", fetchImpl: fetchReturning(JSON.stringify(body)) });
+    await expect(provider.planRoute(origin, destination)).rejects.toThrow("driving.polyline");
+  });
+});

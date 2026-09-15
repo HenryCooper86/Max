@@ -58,11 +58,18 @@ export type RouteProvider = {
 
 function parseLonLat(pair: string): GeoPoint | null {
   const parts = pair.split(",");
-  if (parts.length !== 2) return null;
+  if (parts.length !== 2 || parts.some((part) => !part.trim())) return null;
   const lon = Number(parts[0]);
   const lat = Number(parts[1]);
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
   return { lat, lon };
+}
+
+function nonnegativeNumber(value: unknown): number | null {
+  if (typeof value !== "number" && typeof value !== "string") return null;
+  if (typeof value === "string" && !value.trim()) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
 export function createAmapRouteProvider(options: {
@@ -76,7 +83,7 @@ export function createAmapRouteProvider(options: {
     onFailure?.(reason);
     throw new Error(`Amap failure: ${reason}`);
   };
-  async function getJson(url: string): Promise<Record<string, unknown> | null> {
+  async function getJson(url: string): Promise<Record<string, unknown>> {
     try {
       const response = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
       if (!response.ok) return fail(`http.${response.status}`);
@@ -101,8 +108,7 @@ export function createAmapRouteProvider(options: {
         `${PLACE_ENDPOINT}?keywords=${encodeURIComponent(query)}` +
         `&location=${near.lon},${near.lat}&page_size=1&key=${apiKey}`;
       const body = await getJson(url);
-      if (!body) return null;
-      if (body.status !== "1" || !Array.isArray(body.pois)) return fail("place.status");
+      if (!Array.isArray(body.pois)) return fail("place.status");
       if (body.pois.length === 0) return null;
       const poi = body.pois[0] as { name?: unknown; location?: unknown } | undefined;
       if (!poi || typeof poi.name !== "string" || typeof poi.location !== "string") return fail("place.empty");
@@ -115,11 +121,10 @@ export function createAmapRouteProvider(options: {
         `${DRIVING_ENDPOINT}?origin=${origin.lon},${origin.lat}` +
         `&destination=${destination.lon},${destination.lat}&show_fields=cost,polyline&key=${apiKey}`;
       const body = await getJson(url);
-      if (!body) return null;
       const route = body.route as { paths?: unknown } | undefined;
       const path = Array.isArray(route?.paths) ? (route.paths[0] as Record<string, unknown> | undefined) : undefined;
-      if (body.status !== "1" || !path) return fail("driving.status");
-      const etaSeconds = Number((path.cost as { duration?: unknown } | undefined)?.duration);
+      if (!path) return fail("driving.status");
+      const etaSeconds = nonnegativeNumber((path.cost as { duration?: unknown } | undefined)?.duration);
       const rawSteps = Array.isArray(path.steps) ? (path.steps as Array<Record<string, unknown>>) : [];
       // path.distance is validated as a sanity check but deliberately NOT used:
       // every distance the route reports is derived from the polyline instead
@@ -128,7 +133,7 @@ export function createAmapRouteProvider(options: {
       // sums drift from the polyline's haversine length by >100 m on real
       // routes (126 m measured on a 2.8 km ride), which advanced maneuvers and
       // fired the "now" prompt that far early.
-      if (!Number.isFinite(Number(path.distance)) || !Number.isFinite(etaSeconds) || !rawSteps.length) {
+      if (nonnegativeNumber(path.distance) === null || etaSeconds === null || !rawSteps.length) {
         return fail("driving.shape");
       }
       const polyline: GeoPoint[] = [];
@@ -136,9 +141,11 @@ export function createAmapRouteProvider(options: {
       let cumulativeMeters = 0;
       for (const rawStep of rawSteps) {
         if (
+          !rawStep ||
+          typeof rawStep !== "object" ||
           typeof rawStep.instruction !== "string" ||
           typeof rawStep.polyline !== "string" ||
-          !Number.isFinite(Number(rawStep.step_distance))
+          nonnegativeNumber(rawStep.step_distance) === null
         ) {
           return fail("driving.step");
         }
@@ -159,6 +166,7 @@ export function createAmapRouteProvider(options: {
           alongRouteMeters: Math.round(cumulativeMeters)
         });
       }
+      if (polyline.length < 2 || cumulativeMeters <= 0) return fail("driving.polyline");
       return { distanceMeters: Math.round(cumulativeMeters), etaSeconds, polyline, steps };
     }
   };
@@ -377,6 +385,8 @@ export function createNavHandler(options: {
   };
   handleNavRequest.activeRoute = () => lastRoute;
   handleNavRequest.clearRoute = () => {
+    // Retire provider calls still in flight so a late answer cannot revive the route.
+    startEpoch += 1;
     lastRoute = undefined;
     lastRerouteAt = undefined;
   };

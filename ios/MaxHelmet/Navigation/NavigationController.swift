@@ -10,6 +10,7 @@ enum LocationAuthorization {
 /// The location stream behind a protocol so the controller is testable with
 /// synthetic coordinates. The real one is a CLLocationManager configured for
 /// driving; it never runs unless navigating.
+@MainActor
 protocol LocationStreaming: AnyObject {
     var onUpdate: ((CLLocationCoordinate2D) -> Void)? { get set }
     func authorization() -> LocationAuthorization
@@ -72,10 +73,7 @@ final class NavigationController: DeviceActionHandler {
     /// answers may still act once a newer generation owns navigation state.
     private var navigationGeneration = 0
 
-    /// Nonisolated so a non-`@MainActor` owner (AgentSession's router) can build
-    /// it in a stored/lazy property. It only wires collaborators; all navigation
-    /// state is mutated on the main actor.
-    nonisolated init(
+    init(
         search: NavigationRouteSearching,
         stream: LocationStreaming,
         onGuidance: @escaping (GuidanceState?) -> Void,
@@ -118,23 +116,26 @@ final class NavigationController: DeviceActionHandler {
     }
 
     private func start(_ query: String) async -> DeviceActionResult {
+        // Permission prompts are part of the attempt: stop, teardown, or a
+        // newer destination must invalidate it before permission returns.
+        navigationGeneration += 1
+        let generation = navigationGeneration
+        starting = true
+        resolveFirstFix(nil)
+        defer { if generation == navigationGeneration { starting = false } }
+
         switch stream.authorization() {
         case .denied:
             return .denied("permission.location")
         case .notDetermined:
             let granted = await stream.requestAccess()
+            guard generation == navigationGeneration else {
+                return .failed("navigation.cancelled")
+            }
             if !granted { return .denied("permission.location") }
         case .authorized:
             break
         }
-        // Each attempt gets its own generation so a superseded attempt — at
-        // any stage (first fix, search, or an in-flight reroute racing a
-        // fresh start; see `attemptReroute`) — can tell it is no longer the
-        // one responsible for `route`/the stream before touching either.
-        navigationGeneration += 1
-        let generation = navigationGeneration
-        starting = true
-        defer { if generation == navigationGeneration { starting = false } }
 
         // The first fix must be in hand BEFORE searching: the relay routes
         // FROM the rider's position, so there is no query to send without it.
@@ -454,52 +455,5 @@ final class NavigationController: DeviceActionHandler {
             remainingSeconds: update?.remainingSeconds ?? route.totalEtaSeconds,
             offRoute: update?.offRoute ?? false
         ))
-    }
-}
-
-/// Production `LocationStreaming`, a CLLocationManager configured for driving.
-/// Runs only while navigating; the app's idle-timer-disabled hands-free session
-/// keeps it foregrounded, so WhenInUse authorization is sufficient.
-final class SystemLocationStream: NSObject, LocationStreaming, CLLocationManagerDelegate {
-    var onUpdate: ((CLLocationCoordinate2D) -> Void)?
-    private let manager = CLLocationManager()
-    private var accessContinuation: CheckedContinuation<Bool, Never>?
-
-    override init() {
-        super.init()
-        manager.delegate = self
-        manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
-        manager.activityType = .automotiveNavigation
-        manager.distanceFilter = 10
-    }
-
-    func authorization() -> LocationAuthorization {
-        switch manager.authorizationStatus {
-        case .authorizedWhenInUse, .authorizedAlways: return .authorized
-        case .notDetermined: return .notDetermined
-        default: return .denied
-        }
-    }
-
-    func requestAccess() async -> Bool {
-        await withCheckedContinuation { continuation in
-            accessContinuation = continuation
-            manager.requestWhenInUseAuthorization()
-        }
-    }
-
-    func start() { manager.startUpdatingLocation() }
-    func stop() { manager.stopUpdatingLocation() }
-
-    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        if let coord = locations.last?.coordinate { onUpdate?(coord) }
-    }
-
-    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {}
-
-    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        guard let continuation = accessContinuation else { return }
-        accessContinuation = nil
-        continuation.resume(returning: authorization() == .authorized)
     }
 }

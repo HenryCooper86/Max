@@ -12,7 +12,18 @@ private final class FakeStream: LocationStreaming, @unchecked Sendable {
     /// GPS for the bounded first-fix wait.
     var fixOnStart: CLLocationCoordinate2D? = CLLocationCoordinate2D(latitude: 39.90, longitude: 116.40)
     func authorization() -> LocationAuthorization { auth }
-    func requestAccess() async -> Bool { granted }
+    var holdAccess = false
+    var accessWaiters: [CheckedContinuation<Bool, Never>] = []
+    func requestAccess() async -> Bool {
+        if !holdAccess { return granted }
+        return await withCheckedContinuation { accessWaiters.append($0) }
+    }
+    func resolveAccess() {
+        auth = granted ? .authorized : .denied
+        let waiters = accessWaiters
+        accessWaiters = []
+        waiters.forEach { $0.resume(returning: granted) }
+    }
     func start() {
         started = true
         if let fixOnStart { onUpdate?(fixOnStart) }
@@ -173,6 +184,40 @@ final class NavigationControllerTests: XCTestCase {
             sendRelayPrompt: relaySpeech ? { box.prompts.append($0) } : nil
         )
         return (controller, box)
+    }
+
+    func testStopDuringPermissionPromptCannotStartNavigationAfterGrant() async {
+        let stream = FakeStream(), search = FakeSearch()
+        stream.auth = .notDetermined
+        stream.holdAccess = true
+        search.route = straightRoute()
+        let (controller, box) = make(stream, search)
+        let start = Task { await controller.perform(.navigationStart(query: "终点")) }
+        while stream.accessWaiters.isEmpty { await Task.yield() }
+        let stopped = await controller.perform(.navigationStop)
+        stream.resolveAccess()
+        let result = await start.value
+        XCTAssertEqual(stopped, .ok)
+        XCTAssertEqual(result, .failed("navigation.cancelled"))
+        XCTAssertFalse(stream.started)
+        XCTAssertNil(search.routeOrigin)
+        XCTAssertNil(box.guidance)
+    }
+
+    func testTeardownDuringPermissionPromptCannotReviveNavigation() async {
+        let stream = FakeStream(), search = FakeSearch()
+        stream.auth = .notDetermined
+        stream.holdAccess = true
+        search.route = straightRoute()
+        let (controller, box) = make(stream, search)
+        let start = Task { await controller.perform(.navigationStart(query: "终点")) }
+        while stream.accessWaiters.isEmpty { await Task.yield() }
+        controller.teardown()
+        stream.resolveAccess()
+        let result = await start.value
+        XCTAssertEqual(result, .failed("navigation.cancelled"))
+        XCTAssertFalse(stream.started)
+        XCTAssertNil(box.guidance)
     }
 
     func testOldRerouteCompletionCannotUnlockNewReroute() async throws {

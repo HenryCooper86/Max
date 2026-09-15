@@ -514,8 +514,8 @@ func parseAgentEvent(_ text: String) -> AgentEvent {
 
     case ServerEventTypes.crashAck:
         let detail = str("detail")
-        return .crashAck(incidentId: str("incidentId") ?? "",
-                         status: CrashAckStatus.fromWire(str("status") ?? ""),
+        return .crashAck(incidentId: str("incidentId"),
+                         status: CrashAckStatus.fromWire(str("status")),
                          detail: detail.isEmpty ? nil : detail)
 
     case ServerEventTypes.crashSimulate:

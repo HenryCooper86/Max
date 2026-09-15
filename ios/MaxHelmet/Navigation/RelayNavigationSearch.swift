@@ -16,12 +16,6 @@ import Foundation
 final class RelayNavigationSearch: NavigationRouteSearching {
     private let sendJson: (String) -> Void
     private let timeoutSeconds: Double
-    /// Not read by the watchdog itself (`Task.sleep` needs no clock) — kept
-    /// for parity with the injectable-clock shape used across this module
-    /// (`NavigationController`, `CrashController`) and so a future
-    /// deterministic-timeout scheme doesn't need a signature change.
-    private let now: () -> TimeInterval
-
     /// Guards every field below. Production calls into `route`/`reroute`/
     /// `handleNavRoute`/`handleNavError`/`failPending` all arrive from the
     /// main thread (`NavigationController` is `@MainActor`; `AgentSession`
@@ -39,11 +33,9 @@ final class RelayNavigationSearch: NavigationRouteSearching {
     private var lastDestinationName: String?
 
     init(send: @escaping (String) -> Void,
-         timeoutSeconds: Double = 7, // under the relay's 8 s device backstop
-         now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+         timeoutSeconds: Double = 7) { // under the relay's 8 s device backstop
         self.sendJson = send
         self.timeoutSeconds = timeoutSeconds
-        self.now = now
     }
 
     func route(to query: String, from origin: CLLocationCoordinate2D) async -> NavigationRoute? {
@@ -61,9 +53,7 @@ final class RelayNavigationSearch: NavigationRouteSearching {
         let commandId = "nav-" + UUID().uuidString
         let gcjOrigin = CoordinateDatum.wgs84ToGcj02(origin)
         let gcjDestination = CoordinateDatum.wgs84ToGcj02(destination)
-        lock.lock()
-        let echoedName = lastDestinationName
-        lock.unlock()
+        let echoedName = lock.withLock { lastDestinationName }
         let request = buildNavRequest(
             commandId: commandId, reason: "reroute",
             originLat: gcjOrigin.latitude, originLon: gcjOrigin.longitude,

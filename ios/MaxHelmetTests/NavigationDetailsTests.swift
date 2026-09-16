@@ -54,12 +54,24 @@ final class NavigationDetailsTests: XCTestCase {
         try await captureLayout(size: CGSize(width: 375, height: 667), name: "riding-map-small-phone")
     }
 
-    private func captureLayout(size: CGSize, name: String) async throws {
+    func testExpandedStepsPortraitSnapshot() async throws {
+        try await captureLayout(size: CGSize(width: 402, height: 874), name: "expanded-steps-portrait", expanded: true)
+    }
+
+    func testExpandedStepsLandscapeSnapshot() async throws {
+        try await captureLayout(size: CGSize(width: 874, height: 402), name: "expanded-steps-landscape", expanded: true)
+    }
+
+    func testExpandedStepsSmallPhoneSnapshot() async throws {
+        try await captureLayout(size: CGSize(width: 375, height: 667), name: "expanded-steps-small-phone", expanded: true)
+    }
+
+    private func captureLayout(size: CGSize, name: String, expanded: Bool = false) async throws {
         let previous = UserDefaults.standard.object(forKey: AMapConsentStore.defaultsKey)
         UserDefaults.standard.set("accepted", forKey: AMapConsentStore.defaultsKey)
         defer { UserDefaults.standard.set(previous, forKey: AMapConsentStore.defaultsKey) }
         let music = MusicPlaybackModel(player: NavigationPreviewMusicDriver(), requestAuthorization: { .authorized })
-        let controller = UIHostingController(rootView: NavigationDetailsView(guidance: guidance(), music: music))
+        let controller = UIHostingController(rootView: NavigationDetailsView(guidance: guidance(), music: music, initiallyShowsSteps: expanded))
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(origin: .zero, size: size)

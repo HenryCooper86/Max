@@ -104,6 +104,8 @@ struct GuidanceCard: View {
     var arrangement: GuidanceCardArrangement = .stacked
     @State private var showingDetails = false
     var onConfirm: (UUID, Bool) -> Void = { _, _ in }
+    var music: MusicPlaybackModel? = nil
+    var onDetailsPresentationChanged: (Bool) -> Void = { _ in }
 
     private var distanceText: String {
         let m = guidance.distanceToManeuverMeters
@@ -131,8 +133,10 @@ struct GuidanceCard: View {
                 if old != nil && new == nil { showingDetails = true }
                 if new != nil { showingDetails = false }
             }
+            .onChange(of: showingDetails) { _, presented in onDetailsPresentationChanged(presented) }
+            .onDisappear { onDetailsPresentationChanged(false) }
             .sheet(isPresented: $showingDetails) {
-                NavigationDetailsView(guidance: guidance).presentationDetents([.large])
+                NavigationDetailsView(guidance: guidance, music: music).presentationDetents([.large])
             }
     }
 

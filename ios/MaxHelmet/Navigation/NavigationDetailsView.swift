@@ -15,6 +15,7 @@ func navigationDistance(_ meters: Double) -> String {
 
 struct NavigationDetailsView: View {
     let guidance: GuidanceState
+    var music: MusicPlaybackModel? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var followsRider = true
 
@@ -68,7 +69,36 @@ struct NavigationDetailsView: View {
             }
             .navigationTitle("详细导航")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("收起") { dismiss() } } }
+            .safeAreaInset(edge: .bottom) {
+                if let music { NavigationMusicPanel(model: music) }
+            }
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    if let music {
+                        Button { Task { await music.chooseMusic() } } label: {
+                            Label("音乐", systemImage: "music.note")
+                        }
+                        .accessibilityIdentifier("navigationChooseMusic")
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) { Button("收起") { dismiss() } }
+            }
+        }
+    }
+}
+
+
+/// Observe the same player as the main HUD so voice requests appear immediately
+/// above the map sheet, and the library picker presents from this visible sheet.
+private struct NavigationMusicPanel: View {
+    @ObservedObject var model: MusicPlaybackModel
+
+    var body: some View {
+        if model.visible {
+            MusicPlaybackCard(model: model)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial)
         }
     }
 }

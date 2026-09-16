@@ -550,7 +550,9 @@ final class NavigationController: DeviceActionHandler {
             remainingDistanceMeters: update?.remainingMeters ?? route.totalDistanceMeters,
             remainingSeconds: update?.remainingSeconds ?? route.totalEtaSeconds,
             offRoute: update?.offRoute ?? false,
-            confirmationID: confirmationID
+            confirmationID: confirmationID,
+            upcomingSteps: navigationStepDetails(route: route, index: progress.maneuverIndex,
+                remainingMeters: update?.remainingMeters ?? route.totalDistanceMeters)
         ))
     }
 }

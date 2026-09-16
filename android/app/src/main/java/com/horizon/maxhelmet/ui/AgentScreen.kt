@@ -862,6 +862,14 @@ private fun HazardBanner(alert: AgentEvent.HazardAlert) {
  */
 @Composable
 private fun GuidanceCard(guidance: NavGuidanceState, onConfirm: (String, Boolean) -> Unit) {
+    var showingDetails by remember { mutableStateOf(guidance.confirmationId == null) }
+    var awaitingApproval by remember { mutableStateOf(guidance.confirmationId != null) }
+    LaunchedEffect(guidance.confirmationId) {
+        if (awaitingApproval && guidance.confirmationId == null) showingDetails = true
+        awaitingApproval = guidance.confirmationId != null
+        if (awaitingApproval) showingDetails = false
+    }
+    if (showingDetails) NavigationDetailsDialog(guidance) { showingDetails = false }
     HudCard(borderColor = if (guidance.offRoute) HudColors.Amber else Color.Transparent) {
         Row(verticalAlignment = Alignment.Top) {
             Column(modifier = Modifier.weight(1f)) {
@@ -904,6 +912,9 @@ private fun GuidanceCard(guidance: NavGuidanceState, onConfirm: (String, Boolean
                 TextButton(onClick = { onConfirm(id, false) }) { Text("取消") }
                 Button(onClick = { onConfirm(id, true) }) { Text("确认导航") }
             }
+        }
+        if (guidance.confirmationId == null) {
+            TextButton(onClick = { showingDetails = true }) { Text("打开详细导航") }
         }
         GuidanceRouteMap(guidance)
     }

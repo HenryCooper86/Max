@@ -4,11 +4,17 @@ import SwiftUI
 #if !targetEnvironment(simulator)
 import UIKit
 
+private final class RouteMapAnnotation: MAPointAnnotation {
+    var kind = "rider"
+}
+
 struct AMapRouteMap: UIViewRepresentable {
     let model: AMapRouteDisplayModel
     let consent: AMapAcceptedConsent
     let apiKey: String
     @Binding var loadFailed: Bool
+    var interactive = false
+    var followsRider = false
     var bootstrapper = AMapSDKBootstrapper.shared
 
     func makeCoordinator() -> Coordinator {
@@ -27,19 +33,23 @@ struct AMapRouteMap: UIViewRepresentable {
 
         let mapView = MAMapView(frame: .zero)
         mapView.delegate = context.coordinator
-        mapView.isUserInteractionEnabled = false
-        mapView.isZoomEnabled = false
-        mapView.isScrollEnabled = false
+        mapView.isUserInteractionEnabled = interactive
+        mapView.isZoomEnabled = interactive
+        mapView.isScrollEnabled = interactive
         mapView.isRotateEnabled = false
         mapView.isRotateCameraEnabled = false
         mapView.touchPOIEnabled = false
         mapView.showsUserLocation = false
+        mapView.isShowsLabels = true
+        mapView.showsScale = interactive
+        context.coordinator.configure(interactive: interactive, followsRider: followsRider)
         context.coordinator.render(model, on: mapView)
         return mapView
     }
 
     func updateUIView(_ mapView: MAMapView, context: Context) {
         context.coordinator.loadFailed = $loadFailed
+        context.coordinator.configure(interactive: interactive, followsRider: followsRider)
         context.coordinator.render(model, on: mapView)
     }
 
@@ -52,6 +62,16 @@ struct AMapRouteMap: UIViewRepresentable {
         var loadFailed: Binding<Bool>
         private var routeOverlay: MAPolyline?
         private var riderAnnotation: MAPointAnnotation?
+        private var destinationAnnotation: MAPointAnnotation?
+        private var turnAnnotation: MAPointAnnotation?
+        private var interactive = false
+        private var followsRider = false
+
+        func configure(interactive: Bool, followsRider: Bool) {
+            if self.followsRider != followsRider { lastAppliedBounds = nil }
+            self.interactive = interactive
+            self.followsRider = followsRider
+        }
         private var lastPolyline: [CLLocationCoordinate2D] = []
         private var lastRider: CLLocationCoordinate2D?
         /// Only ever set when a region was applied to a map view that had real
@@ -75,11 +95,12 @@ struct AMapRouteMap: UIViewRepresentable {
                 mapView.add(overlay)
                 routeOverlay = overlay
                 lastPolyline = model.polyline
+                lastAppliedBounds = nil
             }
 
             // Deliberately not folded into the branch above: the overlay only
             // has to be added once, but the camera has to wait for real bounds.
-            if shouldApplyAMapCamera(
+            if (lastAppliedBounds == nil || !interactive || followsRider), shouldApplyAMapCamera(
                 lastApplied: lastAppliedBounds,
                 bounds: model.bounds,
                 viewportSize: mapView.bounds.size
@@ -102,16 +123,41 @@ struct AMapRouteMap: UIViewRepresentable {
                 riderAnnotation = model.currentLocation.map { coordinate in
                     let annotation = MAPointAnnotation()
                     annotation.coordinate = coordinate
+                    annotation.title = "当前位置"
                     mapView.addAnnotation(annotation)
                     return annotation
                 }
                 lastRider = model.currentLocation
             }
+            destinationAnnotation = updateMarker(destinationAnnotation, coordinate: model.polyline.last, title: model.destinationName, kind: "destination", on: mapView)
+            turnAnnotation = updateMarker(turnAnnotation, coordinate: model.nextTurn, title: model.nextTurnInstruction ?? "下一路口", kind: "turn", on: mapView)
+        }
+
+        private func updateMarker(_ marker: MAPointAnnotation?, coordinate: CLLocationCoordinate2D?, title: String, kind: String, on map: MAMapView) -> MAPointAnnotation? {
+            guard let coordinate else {
+                if let marker { map.removeAnnotation(marker) }
+                return nil
+            }
+            if let marker, marker.title == title {
+                marker.coordinate = coordinate
+                return marker
+            }
+            if let marker { map.removeAnnotation(marker) }
+            let point = RouteMapAnnotation()
+            point.kind = kind
+            point.coordinate = coordinate
+            point.title = title
+            map.addAnnotation(point)
+            return point
         }
 
         func clear(on mapView: MAMapView) {
             if let routeOverlay { mapView.remove(routeOverlay) }
             if let riderAnnotation { mapView.removeAnnotation(riderAnnotation) }
+            if let destinationAnnotation { mapView.removeAnnotation(destinationAnnotation) }
+            if let turnAnnotation { mapView.removeAnnotation(turnAnnotation) }
+            destinationAnnotation = nil
+            turnAnnotation = nil
             routeOverlay = nil
             riderAnnotation = nil
             lastPolyline = []
@@ -142,17 +188,18 @@ struct AMapRouteMap: UIViewRepresentable {
             _ mapView: MAMapView!,
             viewFor annotation: MAAnnotation!
         ) -> MAAnnotationView! {
-            guard annotation is MAPointAnnotation else { return nil }
-
-            let identifier = "max-rider"
+            guard let point = annotation as? MAPointAnnotation else { return nil }
+            let isDestination = (point as? RouteMapAnnotation)?.kind == "destination"
+            let isTurn = (point as? RouteMapAnnotation)?.kind == "turn"
+            let identifier = isDestination ? "max-destination" : isTurn ? "max-turn" : "max-rider"
             let view = mapView.dequeueReusableAnnotationView(withIdentifier: identifier)
                 ?? MAAnnotationView(annotation: annotation, reuseIdentifier: identifier)
             view?.annotation = annotation
-            view?.image = UIImage(systemName: "location.fill")?.withTintColor(
+            view?.image = UIImage(systemName: isDestination ? "flag.checkered.circle.fill" : isTurn ? navigationManeuverSymbol(point.title ?? "") : "location.circle.fill")?.withConfiguration(UIImage.SymbolConfiguration(pointSize: 28, weight: .bold)).withTintColor(
                 UIColor(red: 1, green: 106 / 255, blue: 61 / 255, alpha: 1),
                 renderingMode: .alwaysOriginal
             )
-            view?.canShowCallout = false
+            view?.canShowCallout = interactive
             return view
         }
 
@@ -195,6 +242,8 @@ struct AMapRouteMap: View {
     let consent: AMapAcceptedConsent
     let apiKey: String
     @Binding var loadFailed: Bool
+    var interactive = false
+    var followsRider = false
 
     var body: some View {
         Text("AMap requires a real device")

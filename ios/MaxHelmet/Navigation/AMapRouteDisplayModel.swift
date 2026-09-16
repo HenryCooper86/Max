@@ -16,8 +16,11 @@ struct AMapRouteDisplayModel: Equatable {
     let polyline: [CLLocationCoordinate2D]
     let currentLocation: CLLocationCoordinate2D?
     let bounds: AMapCoordinateBounds
+    var destinationName: String = ""
+    var nextTurn: CLLocationCoordinate2D? = nil
+    var nextTurnInstruction: String? = nil
 
-    static func make(guidance: GuidanceState) -> Self? {
+    static func make(guidance: GuidanceState, followsRider: Bool = false) -> Self? {
         guard guidance.polyline.count >= 2,
               guidance.polyline.allSatisfy(isValidCoordinate),
               guidance.currentLocation.map(isValidCoordinate) ?? true else {
@@ -34,7 +37,12 @@ struct AMapRouteDisplayModel: Equatable {
         return Self(
             polyline: route,
             currentLocation: rider,
-            bounds: makeBounds(route: route, currentLocation: rider)
+            bounds: followsRider && rider != nil
+                ? AMapCoordinateBounds(center: rider!, latitudeSpan: 0.006, longitudeSpan: 0.008)
+                : makeBounds(route: route, currentLocation: rider),
+            destinationName: guidance.destinationName,
+            nextTurn: guidance.upcomingSteps.first.map { CoordinateDatum.wgs84ToGcj02($0.step.coordinate) },
+            nextTurnInstruction: guidance.upcomingSteps.first?.step.instruction
         )
     }
 
@@ -43,6 +51,9 @@ struct AMapRouteDisplayModel: Equatable {
             && zip(lhs.polyline, rhs.polyline).allSatisfy(coordinatesEqual)
             && optionalDisplayCoordinatesEqual(lhs.currentLocation, rhs.currentLocation)
             && lhs.bounds == rhs.bounds
+            && lhs.destinationName == rhs.destinationName
+            && optionalDisplayCoordinatesEqual(lhs.nextTurn, rhs.nextTurn)
+            && lhs.nextTurnInstruction == rhs.nextTurnInstruction
     }
 }
 

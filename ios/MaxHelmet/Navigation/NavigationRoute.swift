@@ -54,6 +54,7 @@ struct GuidanceState: Equatable {
     var remainingSeconds: Double
     var offRoute: Bool
     var confirmationID: UUID? = nil
+    var upcomingSteps: [NavigationStepDetail] = []
 
     static func == (lhs: GuidanceState, rhs: GuidanceState) -> Bool {
         lhs.destinationName == rhs.destinationName
@@ -66,6 +67,7 @@ struct GuidanceState: Equatable {
             && lhs.remainingSeconds == rhs.remainingSeconds
             && lhs.offRoute == rhs.offRoute
             && lhs.confirmationID == rhs.confirmationID
+            && lhs.upcomingSteps == rhs.upcomingSteps
     }
 }
 
@@ -74,5 +76,18 @@ private func optionalCoordinatesEqual(_ a: CLLocationCoordinate2D?, _ b: CLLocat
     case (nil, nil): return true
     case let (l?, r?): return coordinatesEqual(l, r)
     default: return false
+    }
+}
+
+struct NavigationStepDetail: Equatable, Identifiable {
+    let id: Int
+    let step: ManeuverStep
+    let distanceMeters: Double
+}
+
+func navigationStepDetails(route: NavigationRoute, index: Int, remainingMeters: Double) -> [NavigationStepDetail] {
+    let traveled = max(0, route.totalDistanceMeters - remainingMeters)
+    return route.steps.enumerated().dropFirst(max(0, index)).map { index, step in
+        NavigationStepDetail(id: index, step: step, distanceMeters: max(0, step.alongRouteMeters - traveled))
     }
 }

@@ -30,11 +30,13 @@ final class GuidanceCardMapHeightTests: XCTestCase {
         ).height
     }
 
-    func testDroppingTheMapShortensTheCardByTheMapAndItsSpacing() {
+    func testDroppingTheMapKeepsTheAccessibleDetailsButton() {
         let withMap = height(mapHeight: 120)
         let withoutMap = height(mapHeight: 0)
 
-        XCTAssertEqual(withMap - withoutMap, 130, accuracy: 1)
+        // A map-free active route keeps a 44-point button to reopen detailed
+        // navigation. Both variants retain the same stack spacing.
+        XCTAssertEqual(withMap - withoutMap, 120 - 44, accuracy: 1)
     }
 
     func testAShorterGrantProducesAShorterCard() {

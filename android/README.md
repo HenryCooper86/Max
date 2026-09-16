@@ -79,17 +79,17 @@ same candidate identity.
 
 The manifest requests only the permissions needed for the prototype:
 
-| Permission                          | Why it is needed                                                    |
-| ----------------------------------- | ------------------------------------------------------------------- |
-| `INTERNET`                          | Connect to the local or test `/agent` WebSocket relay.              |
-| `RECORD_AUDIO`                      | Stream the rider's microphone as 16 kHz PCM16 frames.               |
-| `ACCESS_COARSE/FINE_LOCATION`       | Send coordinates to the relay for live weather and risk advice.     |
-| `FOREGROUND_SERVICE_MICROPHONE`     | Keep the hands-free mic session alive when the app is backgrounded. |
-| `POST_NOTIFICATIONS`                | Show the foreground-service notification on newer Android versions. |
-| `BLUETOOTH_CONNECT`                 | Route audio to an in-helmet Bluetooth headset on Android 12+.       |
-| `MODIFY_AUDIO_SETTINGS`             | Start/stop headset routing and speaker/mic mode adjustments.        |
-| `CAMERA`                            | Requested only for photo/video or torch commands.                   |
-| `READ_CONTACTS`                     | Requested only when resolving a spoken contact name.                |
+| Permission                      | Why it is needed                                                    |
+| ------------------------------- | ------------------------------------------------------------------- |
+| `INTERNET`                      | Connect to the local or test `/agent` WebSocket relay.              |
+| `RECORD_AUDIO`                  | Stream the rider's microphone as 16 kHz PCM16 frames.               |
+| `ACCESS_COARSE/FINE_LOCATION`   | Send coordinates to the relay for live weather and risk advice.     |
+| `FOREGROUND_SERVICE_MICROPHONE` | Keep the hands-free mic session alive when the app is backgrounded. |
+| `POST_NOTIFICATIONS`            | Show the foreground-service notification on newer Android versions. |
+| `BLUETOOTH_CONNECT`             | Route audio to an in-helmet Bluetooth headset on Android 12+.       |
+| `MODIFY_AUDIO_SETTINGS`         | Start/stop headset routing and speaker/mic mode adjustments.        |
+| `CAMERA`                        | Requested only for photo/video or torch commands.                   |
+| `READ_CONTACTS`                 | Requested only when resolving a spoken contact name.                |
 
 Location is optional. If the rider denies it, the relay can still use server-side fallback
 weather coordinates.

@@ -486,12 +486,13 @@ describe("createDoubaoProvider — mid-ride location updates", () => {
     const fetchMock = stubWeatherFetch();
     const { client } = makeClient();
     const { provider, upstream } = await startLiveSession(client);
-    const initialFetches = fetchMock.mock.calls.length;
+    const weatherCalls = () => fetchMock.mock.calls.filter(([url]) => String(url).includes("api.open-meteo.com"));
+    const initialFetches = weatherCalls().length;
     expect(initialFetches).toBe(1); // session-start weather
 
     // ~1.5 km of drift: coordinates update, but no immediate refetch.
     await provider.updateLocation?.(1.01, 2.01);
-    expect(fetchMock.mock.calls.length).toBe(initialFetches);
+    expect(weatherCalls().length).toBe(initialFetches);
     const update = upstream.sent.filter((frame) => clientFrameEvent(frame) === 201).at(-1);
     expect(clientFramePayload(update)).toMatchObject({
       dialog: {
@@ -502,8 +503,8 @@ describe("createDoubaoProvider — mid-ride location updates", () => {
 
     // A genuinely different area (>20 km): refetch right away with new coords.
     await provider.updateLocation?.(2.5, 3.5);
-    expect(fetchMock.mock.calls.length).toBe(initialFetches + 1);
-    expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain("latitude=2.5");
+    expect(weatherCalls().length).toBe(initialFetches + 1);
+    expect(String(weatherCalls().at(-1)?.[0])).toContain("latitude=2.5");
 
     await provider.close();
   });

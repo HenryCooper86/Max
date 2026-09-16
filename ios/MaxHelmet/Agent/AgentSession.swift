@@ -156,6 +156,8 @@ final class AgentSession: NSObject, ObservableObject {
     /// Bumped on each hazard alert so a stale auto-clear can't dismiss a newer one.
     private var hazardAlertGeneration = 0
     private var location: CLLocationCoordinate2D?
+    private var lastLocationFixAt: TimeInterval = -.infinity
+    private var lastLocationSentAt: TimeInterval = -.infinity
 
     /// One AVAudioEngine shared by mic capture and agent playback. iOS only
     /// cancels echo across a single engine (see MicStreamer/PcmPlayer), so this
@@ -382,6 +384,19 @@ final class AgentSession: NSObject, ObservableObject {
         }
         onCrash { $0.arm() }
 
+        lastLocationSentAt = -.infinity
+        locationProvider.onUpdate = { [weak self] coordinate in
+            guard let self, self.lifecycle.accepts(generation) else { return }
+            self.location = coordinate
+            let now = ProcessInfo.processInfo.systemUptime
+            self.lastLocationFixAt = now
+            guard self.state.value.connection == .ready, now - self.lastLocationSentAt >= 10 else { return }
+            self.lastLocationSentAt = now
+            let event: [String: Any] = ["type": "location.update", "lat": coordinate.latitude, "lon": coordinate.longitude]
+            if let data = try? JSONSerialization.data(withJSONObject: event), let json = String(data: data, encoding: .utf8) {
+                self.webSocket?.send(.string(json)) { _ in }
+            }
+        }
         locationProvider.resolve { [weak self] coordinate in
             guard let self else { return }
             guard self.lifecycle.accepts(generation) else { return }
@@ -435,6 +450,8 @@ final class AgentSession: NSObject, ObservableObject {
     /// Deactivates hands-free: stop the mic, restore routing, close the relay.
     func stop() {
         guard lifecycle.stop() else { return }
+        locationProvider.stop()
+        location = nil
         withTransportLock {
             transmitting = false
             micMuted = false
@@ -765,8 +782,8 @@ final class AgentSession: NSObject, ObservableObject {
             voicePersonality: current.voicePersonality,
             rideMode: current.rideContext.mode,
             scenario: current.rideContext.scenario,
-            lat: location?.latitude,
-            lon: location?.longitude,
+            lat: ProcessInfo.processInfo.systemUptime - lastLocationFixAt <= 15 ? location?.latitude : nil,
+            lon: ProcessInfo.processInfo.systemUptime - lastLocationFixAt <= 15 ? location?.longitude : nil,
             testerId: testerId.isEmpty ? "ios-native" : testerId,
             testerRegion: TimeZone.current.identifier,
             testingCampaignId: testingCampaignId,
@@ -1261,71 +1278,83 @@ extension AgentSession: URLSessionDelegate {
     }
 }
 
-// MARK: - best-effort one-shot location for the weather context
+// MARK: - session location
 
-/// Last-known location is good enough — the server falls back to its demo
-/// location when this is nil. Mirrors resolveLocation in AgentSession.kt.
-private final class LocationProvider: NSObject, CLLocationManagerDelegate {
+/// The startup callback is bounded, but fresh fixes continue throughout the
+/// hands-free session. A slow first fix must not become a permanently missing location.
+final class LocationProvider: NSObject, CLLocationManagerDelegate {
     private let manager = CLLocationManager()
+    var onUpdate: ((CLLocationCoordinate2D) -> Void)?
     private var completion: ((CLLocationCoordinate2D?) -> Void)?
-    private var finished = false
+    private var generation = 0
+    private var tracking = false
 
     override init() {
         super.init()
         manager.delegate = self
+        manager.desiredAccuracy = kCLLocationAccuracyBest
+        manager.distanceFilter = kCLDistanceFilterNone
     }
 
     func resolve(_ completion: @escaping (CLLocationCoordinate2D?) -> Void) {
+        generation += 1
+        let owner = generation
         self.completion = completion
-        self.finished = false
-
-        let status = manager.authorizationStatus
-        switch status {
-        case .notDetermined:
-            manager.requestWhenInUseAuthorization()
-        case .authorizedWhenInUse, .authorizedAlways:
-            requestCurrentLocation()
-        case .denied, .restricted:
-            finish(nil)
-        @unknown default:
-            finish(nil)
+        tracking = true
+        switch manager.authorizationStatus {
+        case .notDetermined: manager.requestWhenInUseAuthorization()
+        case .authorizedWhenInUse, .authorizedAlways: requestCurrentLocation()
+        default: finish(nil)
         }
-        // Never block the session on a slow fix.
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
-            self?.finish(self?.manager.location?.coordinate)
+            guard let self, self.generation == owner else { return }
+            self.finish(nil)
         }
+    }
+
+    func stop() {
+        generation += 1
+        tracking = false
+        completion = nil
+        onUpdate = nil
+        manager.stopUpdatingLocation()
+    }
+
+    static func isFresh(_ location: CLLocation, now: Date = Date()) -> Bool {
+        let age = now.timeIntervalSince(location.timestamp)
+        return age >= -5 && age <= 15 && location.horizontalAccuracy.isFinite
+            && location.horizontalAccuracy >= 0 && location.horizontalAccuracy <= 100
+            && CLLocationCoordinate2DIsValid(location.coordinate)
     }
 
     private func requestCurrentLocation() {
-        if let cached = manager.location?.coordinate {
-            finish(cached)
-            return
-        }
-        manager.requestLocation()
+        guard tracking else { return }
+        manager.startUpdatingLocation()
+        if let cached = manager.location, Self.isFresh(cached) { accept(cached) }
+    }
+
+    private func accept(_ location: CLLocation) {
+        guard tracking, Self.isFresh(location) else { return }
+        onUpdate?(location.coordinate)
+        finish(location.coordinate)
     }
 
     private func finish(_ coordinate: CLLocationCoordinate2D?) {
-        guard !finished else { return }
-        finished = true
-        let block = completion
+        let callback = completion
         completion = nil
-        DispatchQueue.main.async { block?(coordinate) }
+        callback?(coordinate)
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        finish(locations.last?.coordinate)
+        if let fix = locations.last(where: { Self.isFresh($0) }) { accept(fix) }
     }
-
-    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        finish(nil)
-    }
-
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) { finish(nil) }
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        let status = manager.authorizationStatus
-        if status == .authorizedWhenInUse || status == .authorizedAlways {
-            requestCurrentLocation()
-        } else if status == .denied || status == .restricted {
-            finish(nil)
+        guard tracking else { return }
+        switch manager.authorizationStatus {
+        case .authorizedWhenInUse, .authorizedAlways: requestCurrentLocation()
+        case .denied, .restricted: manager.stopUpdatingLocation(); finish(nil)
+        default: break
         }
     }
 }

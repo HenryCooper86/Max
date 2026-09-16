@@ -1,5 +1,6 @@
 import { WebSocket, type RawData } from "ws";
 import { randomUUID } from "node:crypto";
+import { RiderLocationContext, asksCurrentLocation } from "../rider-location";
 import { synthesizeMaxSpeech } from "../max-speech";
 import type { AgentProvider, ProviderSessionContext, ProviderTelemetry, SessionStartEvent, VoiceGender } from "./types";
 import { DOUBAO_CAPABILITIES } from "../../shared/agent";
@@ -157,7 +158,7 @@ export function buildToolGroundingPrompt(): string {
     "除此之外没有工具：没有实时交通、附近地点搜索、车辆控制或诊断、小队消息、第三方音乐应用。" +
     "拨号和短信必须由骑手在手机上确认，你只说正在准备，不要说已经拨通或已经发送。" +
     "任何动作只有在系统明确返回成功之后才可以说已完成；系统没有回应之前，不要描述结果。" +
-    "导航的路线、路名、转弯方向、距离和骑手当前位置只能来自系统的导航提示，不能由你自己说出。没有系统导航提示时，不要自己编造路线、路名、转弯、距离、预计时间或骑手位置；如实说明导航还没启动或定位失败即可。" +
+    "导航路线、路名、转弯方向和距离只能来自系统导航提示，不要自己编造。骑手当前位置可来自系统的手机实时定位，无需启动导航；没有最新定位时如实说明，不得把默认或演示天气地点当作骑手位置。" +
     "骑手在录像或导航后说‘取消’、‘停一下’或 cancel it 时，系统会根据当前动作处理；你必须等待系统结果，不能自行声称已经停止。"
   );
 }
@@ -592,6 +593,7 @@ export function createDoubaoProvider(
   let lastFirstAudioLatencyMs = 0;
   let weatherRefreshTimer: NodeJS.Timeout | undefined;
   let currentWeatherRole = "";
+  const riderLocation = new RiderLocationContext(appConfig.amapApiKey);
   // Where the rider is, for weather. Seeded at session.start, then kept fresh
   // by mid-ride location.update events so a long ride's weather doesn't stay
   // pinned to the start point.
@@ -667,7 +669,9 @@ export function createDoubaoProvider(
     truncateReply: () => truncateInterruptedReply(),
     clearPendingAudio: () => clearUndecidedTtsAudio(),
     clearClientPlayback: () => clearClientPlaybackForFabrication(),
-    speakHonestLine: (text) => speakFabricationGuardLine(text),
+    speakHonestLine: (text) => {
+      if (!asksCurrentLocation(riderTurnText)) speakFabricationGuardLine(text);
+    },
     suppressItem: (itemId) => suppressedItemIds.add(itemId)
   });
   let deviceExpiryTimer: NodeJS.Timeout | undefined;
@@ -871,7 +875,8 @@ export function createDoubaoProvider(
     systemRole: string,
     includeHistory: boolean
   ): DoubaoSessionConfig {
-    const location = weatherLocation ? { latitude: weatherLocation.lat, longitude: weatherLocation.lon } : undefined;
+    const fix = riderLocation.coordinates();
+    const location = fix ? { latitude: fix.lat, longitude: fix.lon } : undefined;
     return {
       sampleRate: config.sampleRate,
       channels: config.channels,
@@ -891,7 +896,7 @@ export function createDoubaoProvider(
     const config = connectConfig;
     if (!config || !sessionReady) return;
     const full = buildDoubaoSessionConfig(
-      currentDoubaoConfig(config, config.baseSystemRole + currentWeatherRole, false)
+      currentDoubaoConfig(config, config.baseSystemRole + currentWeatherRole + riderLocation.role(), false)
     );
     sendUpstreamControl(EventSend.UpdateConfig, { dialog: full.dialog, tts: full.tts });
   }
@@ -979,6 +984,27 @@ export function createDoubaoProvider(
    *  platform gate and suppresses it for every other client rather than
    *  dispatching a command no one will answer. */
   function dispatchDeviceCommand(text: string): void {
+    if (asksCurrentLocation(text)) {
+      truncateInterruptedReply();
+      clearUndecidedTtsAudio();
+      fallbackSpoke = true;
+      clearTtsFallbackTimer();
+      resetPendingReply();
+      awaitingReply = false;
+      receivedTtsAudio = false;
+      releaseOrdinarySpeechWaiters();
+      const answer = riderLocation.answer();
+      sendClient({ type: "status", state: "hearing", detail: "MAX 正在播报手机位置" });
+      const delivery = createTranscriptDelivery();
+      if (sessionPlatform === "embedded") {
+        sendClient(transcriptEvent(delivery, "agent", answer, { final: true, useBrowserSpeech: true }));
+        void speakEmbedded(answer).catch(() => {});
+      } else {
+        sendClient(transcriptEvent(delivery, "agent", answer, { final: true, useBrowserSpeech: false }));
+        queueMaxSpeech(answer);
+      }
+      return;
+    }
     const command = deviceActivity.commandFor(text, sessionPlatform);
     if (!command) return;
     const activity = deviceActivity.track(command);
@@ -1617,7 +1643,7 @@ export function createDoubaoProvider(
           // then start the session. Doubao sends nothing until StartSession, so
           // awaiting here only defers our own next send.
           currentWeatherRole = await config.weatherRolePromise;
-          let systemRole = config.baseSystemRole + currentWeatherRole;
+          let systemRole = config.baseSystemRole + currentWeatherRole + riderLocation.role();
           if (resumedSession) {
             // Context replay for an in-place upstream reconnect: same ride, same
             // conversation — carry the live session memory forward and stop the
@@ -1846,6 +1872,7 @@ export function createDoubaoProvider(
         }
 
         if (frame.event === EventReceive.ChatResponse) {
+          if (fallbackSpoke && asksCurrentLocation(riderTurnText)) return;
           currentQuestionId = stringField(payload, "question_id") ?? currentQuestionId;
           currentReplyId = stringField(payload, "reply_id") ?? stringField(payload, "item_id") ?? currentReplyId;
           if (!chatStartedAt) chatStartedAt = Date.now();
@@ -1873,6 +1900,7 @@ export function createDoubaoProvider(
         }
 
         if (frame.event === EventReceive.TtsSentenceStart || frame.event === EventReceive.TtsSentenceEnd) {
+          if (fallbackSpoke && asksCurrentLocation(riderTurnText)) return;
           currentQuestionId = stringField(payload, "question_id") ?? currentQuestionId;
           currentReplyId = stringField(payload, "reply_id") ?? stringField(payload, "item_id") ?? currentReplyId;
           const text = extractChatText(payload);
@@ -1980,6 +2008,7 @@ export function createDoubaoProvider(
           asrEndedAt = Date.now();
           recordFirstAudioLatency();
           const addressed = replyIsAddressed();
+          updateProviderConfig(); // Re-evaluate location freshness at each rider turn.
           if (addressed) {
             // A reply is now expected — the "thinking" window starts here,
             // before any ChatResponse/TtsSentence has even arrived. Cleared
@@ -2003,7 +2032,7 @@ export function createDoubaoProvider(
             // pattern of calling flushUndecidedTtsAudio() at more than one
             // resolution point rather than relying on exactly one being
             // reachable.
-            fabricationGuard.announceIfDetected();
+            if (!asksCurrentLocation(riderTurnText)) fabricationGuard.announceIfDetected();
             sendClient({ type: "status", state: "ready", detail: "豆包语音识别完成" });
             if (ttsEndedBeforeWakeDecision) {
               if (pendingReplyText()) flushPendingAgentText(!receivedTtsAudio);
@@ -2208,6 +2237,9 @@ export function createDoubaoProvider(
         typeof event.lat === "number" && typeof event.lon === "number"
           ? { lat: event.lat, lon: event.lon, source: "rider" as const }
           : appConfig.defaultWeatherLocation;
+      if (weatherLocation.source === "rider") {
+        void riderLocation.update(weatherLocation.lat, weatherLocation.lon).then(() => updateProviderConfig());
+      }
       const initialLocation = weatherLocation;
 
       // Kick the weather fetch off WITHOUT awaiting it here: it now runs
@@ -2306,6 +2338,11 @@ export function createDoubaoProvider(
       if (sessionReady && socket?.readyState === WebSocket.OPEN) startPendingAudioFlush();
     },
     async updateLocation(lat: number, lon: number) {
+      const locationUpdate = riderLocation.update(lat, lon);
+      updateProviderConfig();
+      void locationUpdate.then(() => {
+        if (!closedByProvider) updateProviderConfig();
+      });
       const previous = weatherLocation;
       weatherLocation = { lat, lon, source: "rider" };
       updateProviderConfig();

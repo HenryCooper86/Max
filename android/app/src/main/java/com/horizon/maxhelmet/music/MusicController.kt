@@ -32,6 +32,7 @@ class MusicController(private val context: Context, private val scope: Coroutine
     private val sessions = context.getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
     private val component = ComponentName(context, MusicSessionListener::class.java)
     private var remote: MediaController? = null
+    private var remoteOperation: Pair<MediaController, RemotePlaybackSnapshot>? = null
     private var local: MediaPlayer? = null
     private var playlist = emptyList<Uri>()
     private var index = 0
@@ -214,10 +215,37 @@ class MusicController(private val context: Context, private val scope: Coroutine
     /** A relay confirmation waits for local preparation instead of announcing
      * success while a file is still loading or failing. */
     suspend fun execute(action: String, app: String? = null): DeviceResult {
+        remoteOperation = null
         val result = control(action, app)
-        if (result.status != "ok" || !state.value.busy) return result
+        if (result.status != "ok") return result
+        val operation = remoteOperation
+        if (operation != null) {
+            mutableState.update { it.copy(busy = true, message = null) }
+            try {
+                val (controller, before) = operation
+                repeat(30) {
+                    if (remote?.sessionToken != controller.sessionToken) return DeviceResult.failed("music.playerUnavailable")
+                    if (remoteControlCompleted(action, before, snapshot(controller))) return DeviceResult.OK
+                    delay(100)
+                }
+                if (remoteControlCompleted(action, before, snapshot(controller))) return DeviceResult.OK
+                mutableState.update { it.copy(message = "音乐应用没有完成操作，请检查播放队列或在音乐应用中重试。") }
+                return DeviceResult.failed("music.controlUnavailable")
+            } finally { mutableState.update { it.copy(busy = false) } }
+        }
+        if (!state.value.busy) return result
         val settled = withTimeoutOrNull(7000) { state.first { !it.busy } }
         return if (settled?.playing == true) DeviceResult.OK else DeviceResult.failed("music.unavailable")
+    }
+
+    private fun snapshot(controller: MediaController): RemotePlaybackSnapshot {
+        val metadata = controller.metadata
+        val queueId = controller.playbackState?.activeQueueItemId?.takeIf { it != MediaSession.QueueItem.UNKNOWN_ID.toLong() }
+        return RemotePlaybackSnapshot(
+            metadata?.getString(MediaMetadata.METADATA_KEY_MEDIA_ID), queueId,
+            metadata?.getString(MediaMetadata.METADATA_KEY_TITLE), metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST),
+            controller.playbackState?.state == PlaybackState.STATE_PLAYING
+        )
     }
 
     fun control(control: String, app: String? = null): DeviceResult {
@@ -252,7 +280,7 @@ class MusicController(private val context: Context, private val scope: Coroutine
                         audio.abandonAudioFocusRequest(focus); MusicPlaybackService.stop(context)
                     }
                     "next" -> if (index + 1 < playlist.size) { index++; prepareLocal() } else return DeviceResult.failed("music.queueEnd")
-                    "previous" -> if (index > 0) { index--; prepareLocal() } else player.seekTo(0)
+                    "previous" -> if (index > 0) { index--; prepareLocal() } else return DeviceResult.failed("music.queueEnd")
                 }
                 DeviceResult.OK
             }.getOrElse { DeviceResult.failed("music.unavailable") }
@@ -268,6 +296,7 @@ class MusicController(private val context: Context, private val scope: Coroutine
             else -> PlaybackState.ACTION_SKIP_TO_PREVIOUS
         }
         if ((controller.playbackState?.actions ?: 0L) and requiredAction == 0L) return DeviceResult.unsupported("music.controlUnavailable")
+        remoteOperation = controller to snapshot(controller)
         return runCatching {
             when (control) {
                 "play" -> controller.transportControls.play()

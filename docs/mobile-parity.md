@@ -81,3 +81,11 @@ Complete physical-device acceptance for RDK discovery/confirmation, Bluetooth vo
 
 - [Android motion sensors](https://developer.android.com/develop/sensors-and-location/sensors/sensors_motion) defines linear acceleration and gyroscope units.
 - [Foreground service launch requirements](https://developer.android.com/develop/background-work/services/fgs/launch) govern the explicit visible-activity start of helmet location sharing.
+
+### Navigation confirmation and playback verification
+
+Both mobile apps preview the resolved destination, route, distance, and current phone position before guidance begins. The rider confirms with the card or a final “确认导航” / “confirm” voice reply; cancellation, timeout, a replacement destination, or session teardown retires the preview. The relay voices the confirmation question using the resolved route, and acknowledges navigation only after acceptance. GPS acquisition allows 30 seconds, route lookup 7 seconds, and confirmation 60 seconds; the relay deadline is 105 seconds. Ship the relay before these mobile builds because the route-bound `nav.prompt` kind `confirm` is new.
+
+The initial location fix remains visible on the map. Android accepts fresh accurate fixes from enabled GPS/network providers, including a synchronous cached fix. iOS requests continuous updates, rejects stale/inaccurate fixes, and surfaces permanent location errors. These changes use the phone's own location; RDK forwarding remains optional and separate.
+
+Music commands recognize common skip phrases and wait for a changed media/queue identity before reporting success. A playing queue must also resume playback on the new item. The picker asks for multiple songs or a playlist; a one-song queue cannot provide another track. Hardware acceptance still requires actual Apple Music playback and an outdoor navigation trip; synthetic location and playback tests do not substitute for those checks.

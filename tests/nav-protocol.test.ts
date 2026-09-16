@@ -29,14 +29,17 @@ describe("parseClientEvent nav.prompt", () => {
     expect(parseClientEvent(encode(maneuver))).toEqual(maneuver);
   });
 
-  it.each(["offRoute", "rerouteFailed", "arrived", "locationLost"] as const)("accepts the %s status prompt", (kind) => {
-    expect(parseClientEvent(encode({ type: "nav.prompt", promptId: "p-2", routeCommandId: "nav-1", kind }))).toEqual({
-      type: "nav.prompt",
-      promptId: "p-2",
-      routeCommandId: "nav-1",
-      kind
-    });
-  });
+  it.each(["confirm", "offRoute", "rerouteFailed", "arrived", "locationLost"] as const)(
+    "accepts the %s status prompt",
+    (kind) => {
+      expect(parseClientEvent(encode({ type: "nav.prompt", promptId: "p-2", routeCommandId: "nav-1", kind }))).toEqual({
+        type: "nav.prompt",
+        promptId: "p-2",
+        routeCommandId: "nav-1",
+        kind
+      });
+    }
+  );
 
   it("cannot carry arbitrary navigation speech", () => {
     expect(() =>

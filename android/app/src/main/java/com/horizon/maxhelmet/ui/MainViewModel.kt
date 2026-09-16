@@ -63,6 +63,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val authClient = AuthClient()
     private var loginGeneration = 0L
 
+    fun confirmNavigation(id: String, accepted: Boolean) { session.confirmNavigation(id, accepted) }
+
     val sessionState: StateFlow<AgentSession.State> = session.state
     val crash = session.crash
     val companion = CompanionHolder.get(application)

@@ -103,7 +103,8 @@ class NavigationControllerTest {
         // suite riding out the real default (~7 s, under the relay's own 8 s
         // device backstop).
         relayTimeoutMillis: Long = 7_000,
-        relaySpeech: Boolean = false
+        relaySpeech: Boolean = false,
+        requiresConfirmation: Boolean = false
     ) {
         var clockMillis: Long = 0L
         val sent = CopyOnWriteArrayList<String>()
@@ -114,6 +115,7 @@ class NavigationControllerTest {
         val speaker = FakeSpeaker()
         val relay = RelayNavigationSearch(send = { sent.add(it) }, timeoutMillis = relayTimeoutMillis)
         val controller = NavigationController(
+            requiresDestinationConfirmation = requiresConfirmation,
             search = relay,
             locationSource = locationSource,
             speaker = speaker,
@@ -195,6 +197,41 @@ class NavigationControllerTest {
         val reqCommandId = JSONObject(h.sent.last()).getString("commandId")
         h.relay.handleNavRoute(sampleRouteData(reqCommandId))
         job.join()
+    }
+
+    @Test
+    fun `preview retains GPS and does not navigate before confirmation`() = runBlocking {
+        val h = Harness(relaySpeech = true, requiresConfirmation = true)
+        val start = launch(Dispatchers.Default) { h.controller.handleCommand("start", "navigation.start", "终点") }
+        feedFixUntil(h, neutralWgsFix, description = "route request") { h.sent.isNotEmpty() }
+        h.relay.handleNavRoute(sampleRouteData(JSONObject(h.sent.last()).getString("commandId")))
+        awaitCondition(description = "preview") { h.guidanceUpdates.lastOrNull()?.confirmationId != null }
+        val preview = h.guidanceUpdates.last()!!
+        assertNotNull(preview.riderCoordinate)
+        assertTrue(h.results.isEmpty())
+        h.controller.handleConfirmationReply("不要确认导航")
+        assertTrue(h.results.isEmpty())
+        h.controller.confirmDestination("stale", true)
+        assertTrue(h.results.isEmpty())
+        h.controller.confirmDestination(preview.confirmationId!!, true)
+        withTimeout(2_000) { start.join() }
+        assertEquals("ok", JSONObject(h.results.single()).getString("status"))
+        assertEquals(null, h.guidanceUpdates.last()?.confirmationId)
+        h.controller.teardown()
+    }
+
+    @Test
+    fun `cancel preview stops GPS without navigation success`() = runBlocking {
+        val h = Harness(requiresConfirmation = true)
+        val start = launch(Dispatchers.Default) { h.controller.handleCommand("start", "navigation.start", "终点") }
+        feedFixUntil(h, neutralWgsFix, description = "route request") { h.sent.isNotEmpty() }
+        h.relay.handleNavRoute(sampleRouteData(JSONObject(h.sent.last()).getString("commandId")))
+        awaitCondition(description = "preview") { h.guidanceUpdates.lastOrNull()?.confirmationId != null }
+        h.controller.handleConfirmationReply("cancel")
+        withTimeout(2_000) { start.join() }
+        assertEquals("navigation.cancelled", JSONObject(h.results.single()).getString("reason"))
+        assertEquals(null, h.guidanceUpdates.last())
+        h.controller.teardown()
     }
 
     @Test
@@ -295,7 +332,7 @@ class NavigationControllerTest {
     }
 
     private val locatingSpoken = "正在定位…"
-    private val noFixDetail = "还没定位到，到室外或空旷处再说一次。"
+    private val noFixDetail = "还没获取到精确位置。请检查 Max 的定位和精确位置权限，并到室外或空旷处重试。"
 
     // Nav-first-fix-retry Task 3 (Android parity with iOS commit af85730): a
     // fix that is merely slow must not sound like a routing failure — the
@@ -542,32 +579,7 @@ class NavigationControllerTest {
         )
     }
 
-    // Nav-fast-follow Task 4 item 2 (deferred-identity watchdog pin),
-    // corrected in fix round 1. An earlier version of this file argued this
-    // scenario was unconstructible, on the premise that "start B bumps the
-    // generation" and "B registers its own first-fix continuation" are one
-    // atomic event — so any fix delivered late enough to carry B's
-    // generation into a reroute would necessarily already find B registered
-    // and resolve it. That premise is false: they are TWO separate
-    // `synchronized(lock)` acquisitions with a real gap between them (see
-    // `handleStart`), and `locationSource.start(::onFix)` — a
-    // caller-supplied collaborator — runs INSIDE that gap: after the
-    // generation bump and the `generation` snapshot, but before
-    // `awaitFirstFix()`'s registration. A `LocationSource` fake that
-    // reenters the controller synchronously from inside its own `start()`
-    // (the same idiom `a teardown reentering from within
-    // locationSource-start...` below already uses, just re-purposed) can
-    // deliver an off-route fix for A from exactly inside that gap: the
-    // resulting `RerouteAttempt` captures B's already-bumped generation
-    // (since `onFix` reads `navigationGeneration` live), while
-    // `resolveFirstFix` inside that same `onFix` call is a no-op (B hasn't
-    // registered yet). By the time B's own `awaitFirstFix()` registration
-    // runs afterward, the reroute is already in flight against B's
-    // generation — so when it later fails, `performReroute`'s guard
-    // (`attempt.generation == navigationGeneration && route != null`)
-    // matches, and its failure branch's OWN bump leaves B on a now-stale
-    // generation, parked, deferred untouched. Only the identity guard
-    // (not a hypothetical generation one) can still resolve it.
+    // Delivers a fix synchronously from start(), as a recent cached location does.
     private class ReentrantRerouteTriggerSource : LocationSource {
         lateinit var controller: NavigationController
 
@@ -600,71 +612,30 @@ class NavigationControllerTest {
     }
 
     @Test
-    fun `a reroute failure captured at start B's generation bumps it stale while B still sits untouched at first-fix, and B's identity watchdog resolves it`() =
-        runBlocking {
-            val sent = CopyOnWriteArrayList<String>()
-            val results = CopyOnWriteArrayList<String>()
-            val speaker = FakeSpeaker()
-            val source = ReentrantRerouteTriggerSource()
-            // Short: nobody ever answers this reroute (it's captured on a
-            // generation nothing will ever match with an explicit
-            // handleNavError) — RelayNavigationSearch's own watchdog is
-            // what resolves it null, race-free.
-            val relay = RelayNavigationSearch(send = { sent.add(it) }, timeoutMillis = 300)
-            val controller = NavigationController(
-                search = relay,
-                locationSource = source,
-                speaker = speaker,
-                sendResult = { results.add(it) },
-                onGuidance = {},
-                hasLocationPermission = { true },
-                now = { 0L },
-                firstFixTimeoutMillis = 1_500 // comfortably after the reroute's 300 ms failure
-            )
-            source.controller = controller
-
-            // ---- route A: committed and active -------------------------
-            val jobA = launch(Dispatchers.Default) { controller.handleCommand("cmd-A", "navigation.start", "第一目的地") }
-            awaitCondition(description = "A's nav.request sent") {
-                source.fix(neutralWgsFix)
-                sent.size == 1
-            }
-            relay.handleNavRoute(sampleRouteData(JSONObject(sent[0]).getString("commandId")))
-            jobA.join()
-            assertEquals(
-                "ok",
-                JSONObject(results.single { JSONObject(it).getString("commandId") == "cmd-A" }).getString("status")
-            )
-
-            // ---- start B: bumps the generation, then — from inside its
-            // OWN locationSource.start, still holding the lock, still
-            // BEFORE its own first-fix registration — delivers the
-            // off-route fix that launches route A's reroute, captured at
-            // B's generation.
-            source.armed = true
-            val jobB = launch(Dispatchers.Default) { controller.handleCommand("cmd-B", "navigation.start", "第二目的地") }
-
-            awaitCondition(description = "the reroute nav.request went out") {
-                sent.size == 2 && JSONObject(sent[1]).getString("reason") == "reroute"
-            }
-            // No answer ever comes: the relay's own 300 ms timeout resolves
-            // it null, and performReroute's failure branch runs its OWN
-            // generation bump (generation still matches — B's start is what
-            // stamped it — and route A is still non-null).
-            awaitCondition(timeoutMs = 3_000, description = "the reroute genuinely failed and tore down route A") {
-                speaker.spoken.contains(REROUTE_FAILED_TEXT to false)
-            }
-            assertTrue("B never sent a nav.request — it is still parked at first-fix", sent.size == 2)
-
-            // ---- B is parked, untouched, on a now-stale generation. Only
-            // its identity-guarded watchdog can resolve it — a
-            // generation-guarded one would hang here forever (verified via
-            // a temporary revert; see the task report).
-            withTimeout(4_000) { jobB.join() }
-            val resultB = JSONObject(results.single { JSONObject(it).getString("commandId") == "cmd-B" })
-            assertEquals("failed", resultB.getString("status"))
-            assertEquals("navigation.cancelled", resultB.getString("reason"))
-        }
+    fun `cached fix starts replacement route without another GPS update or competing reroute`() = runBlocking {
+        val sent = CopyOnWriteArrayList<String>()
+        val results = CopyOnWriteArrayList<String>()
+        val source = ReentrantRerouteTriggerSource()
+        val relay = RelayNavigationSearch(send = { sent.add(it) })
+        val controller = NavigationController(
+            requiresDestinationConfirmation = false,
+            search = relay, locationSource = source, speaker = FakeSpeaker(),
+            sendResult = { results.add(it) }, onGuidance = {}, hasLocationPermission = { true }
+        )
+        source.controller = controller
+        val first = launch(Dispatchers.Default) { controller.handleCommand("A", "navigation.start", "第一目的地") }
+        awaitCondition { source.fix(neutralWgsFix); sent.isNotEmpty() }
+        relay.handleNavRoute(sampleRouteData(JSONObject(sent.last()).getString("commandId")))
+        first.join()
+        source.armed = true
+        val second = launch(Dispatchers.Default) { controller.handleCommand("B", "navigation.start", "第二目的地") }
+        awaitCondition { sent.size == 2 }
+        assertEquals("start", JSONObject(sent.last()).getString("reason"))
+        relay.handleNavRoute(sampleRouteData(JSONObject(sent.last()).getString("commandId")))
+        withTimeout(2_000) { second.join() }
+        assertEquals("ok", JSONObject(results.last()).getString("status"))
+        controller.teardown()
+    }
 
     // ---- concurrency -------------------------------------------------
 
@@ -769,6 +740,7 @@ class NavigationControllerTest {
         val probe = ExclusionProbeLocationSource()
         val results = CopyOnWriteArrayList<String>()
         val controller = NavigationController(
+            requiresDestinationConfirmation = false,
             search = RelayNavigationSearch(send = {}),
             locationSource = probe,
             speaker = FakeSpeaker(),
@@ -869,6 +841,7 @@ class NavigationControllerTest {
             }
             val results = CopyOnWriteArrayList<String>()
             val controller = NavigationController(
+            requiresDestinationConfirmation = false,
                 search = RelayNavigationSearch(send = {}),
                 locationSource = locationSource,
                 speaker = FakeSpeaker(),

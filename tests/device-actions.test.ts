@@ -13,6 +13,18 @@ import {
 } from "../server/device-actions";
 import { parseClientEvent } from "../server/session-controller";
 
+describe("music skip requests", () => {
+  it.each(["skip to another song", "skip this song", "change the song", "play another song", "换一首歌", "切歌"])(
+    "dispatches %s",
+    (text) => {
+      expect(extractDeviceCommand(text)).toEqual({ action: "music.control", args: { control: "next" } });
+    }
+  );
+  it.each(["don't skip this song", "不要换一首歌", "skip this video"])("does not dispatch %s", (text) => {
+    expect(extractDeviceCommand(text)?.action).not.toBe("music.control");
+  });
+});
+
 describe("extractDeviceCommand — torch", () => {
   it("turns the torch on in Chinese and English", () => {
     expect(extractDeviceCommand("Max 打开手电筒")).toEqual({ action: "torch.set", args: { on: true } });
@@ -282,7 +294,7 @@ describe("PendingDeviceCommands", () => {
   it("assigns ordinary and navigation-specific deadlines", () => {
     const pending = new PendingDeviceCommands();
     expect(pending.issue("camera.photo", undefined, 100).expiresAt).toBe(8_100);
-    expect(pending.issue("navigation.start", undefined, 100).expiresAt).toBe(18_100);
+    expect(pending.issue("navigation.start", undefined, 100).expiresAt).toBe(105_100);
   });
 
   it("returns the next live deadline after an earlier command expires", () => {
@@ -291,7 +303,7 @@ describe("PendingDeviceCommands", () => {
     pending.issue("navigation.start", undefined, 200);
     expect(pending.nextExpiryAt()).toBe(8_100);
     pending.expire(8_100);
-    expect(pending.nextExpiryAt()).toBe(18_200);
+    expect(pending.nextExpiryAt()).toBe(105_200);
   });
 
   it("resolves a result just before its deadline", () => {
@@ -310,8 +322,8 @@ describe("PendingDeviceCommands", () => {
   it("rejects a result after its deadline and leaves it for the timeout outcome", () => {
     const pending = new PendingDeviceCommands();
     const issued = pending.issue("navigation.start", undefined, 100);
-    expect(pending.resolve(issued.commandId, 18_101)).toBeUndefined();
-    expect(pending.expire(18_101)).toEqual([issued]);
+    expect(pending.resolve(issued.commandId, 105_101)).toBeUndefined();
+    expect(pending.expire(105_101)).toEqual([issued]);
   });
 
   it("keeps mixed ordinary and navigation deadlines independent", () => {
@@ -328,9 +340,9 @@ describe("PendingDeviceCommands", () => {
   it("does not authorize expired peeks or attach speech to expired commands", () => {
     const pending = new PendingDeviceCommands();
     const issued = pending.issue("navigation.start", undefined, 100);
-    expect(pending.peek(issued.commandId, 18_100)).toBeUndefined();
-    pending.attachOkSpeech("navigation.start", "不应附加。", 18_100);
-    expect(pending.expire(18_100)[0]?.okSpeech).toBeUndefined();
+    expect(pending.peek(issued.commandId, 105_100)).toBeUndefined();
+    pending.attachOkSpeech("navigation.start", "不应附加。", 105_100);
+    expect(pending.expire(105_100)[0]?.okSpeech).toBeUndefined();
   });
 
   it("peek finds a pending command without consuming it", () => {

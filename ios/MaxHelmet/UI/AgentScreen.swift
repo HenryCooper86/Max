@@ -267,7 +267,8 @@ struct AgentScreen: View {
                 GuidanceCard(
                     guidance: guidance,
                     mapHeight: guidanceMapHeight(forAlertViewport: viewportHeight, layout: layout),
-                    arrangement: guidanceCardArrangement(for: layout)
+                    arrangement: guidanceCardArrangement(for: layout),
+                    onConfirm: { id, accepted in session.confirmNavigation(id: id, accepted: accepted) }
                 )
                     .padding(.horizontal, 4)
                     .transition(.move(edge: .top).combined(with: .opacity))

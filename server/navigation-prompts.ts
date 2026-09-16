@@ -70,6 +70,11 @@ export function createNavPromptHandler(options: {
           expiresAt: receivedAt + 3_000
         };
       }
+    } else if (event.kind === "confirm") {
+      speech = {
+        text: `请确认目的地：${route.destinationName}。请说“确认导航”或点击确认，确认后开始逐向导航。`,
+        interrupt: false
+      };
     } else {
       if (
         event.kind !== "offRoute" &&

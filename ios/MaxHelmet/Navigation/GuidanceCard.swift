@@ -102,6 +102,7 @@ struct GuidanceCard: View {
     /// the card into the viewport below it.
     var mapHeight: CGFloat = guidanceCardMapHeight
     var arrangement: GuidanceCardArrangement = .stacked
+    var onConfirm: (UUID, Bool) -> Void = { _, _ in }
 
     private var distanceText: String {
         let m = guidance.distanceToManeuverMeters
@@ -131,16 +132,30 @@ struct GuidanceCard: View {
         switch arrangement {
         case .stacked:
             VStack(alignment: .leading, spacing: guidanceCardStackSpacing) {
-                guidanceSummary
+                summaryWithConfirmation
                 map
             }
         case .sideBySide:
             HStack(alignment: .center, spacing: guidanceCardStackSpacing) {
-                guidanceSummary
+                summaryWithConfirmation
                     .frame(maxWidth: .infinity, alignment: .leading)
                 map
                     .frame(width: guidanceCardSideMapWidth)
             }
+        }
+    }
+
+    private var summaryWithConfirmation: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let id = guidance.confirmationID {
+                Text("确认目的地：\(guidance.destinationName)").font(.headline)
+                Text(etaText).font(.subheadline)
+                HStack {
+                    Button("取消") { onConfirm(id, false) }.frame(minHeight: 44)
+                    Spacer()
+                    Button("确认导航") { onConfirm(id, true) }.frame(minHeight: 44)
+                }
+            } else { guidanceSummary }
         }
     }
 

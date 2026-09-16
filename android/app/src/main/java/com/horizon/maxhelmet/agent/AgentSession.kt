@@ -267,6 +267,8 @@ class AgentSession(
         sendRelayPrompt = { webSocket?.send(it) }
     )
 
+    fun confirmNavigation(id: String, accepted: Boolean) { navController.confirmDestination(id, accepted) }
+
     // Device-TTS fallback, the counterpart of the browser speechSynthesis path:
     // speaks agent reply text when there is no synthesized audio (always the
     // case for the mock provider).
@@ -843,7 +845,7 @@ class AgentSession(
             is AgentEvent.CrashAck -> deviceScope.launch { if (sourceSocket === webSocket) crash.controller.ack(event.incidentId, event.status, event.detail) }
             AgentEvent.CrashSimulate -> deviceScope.launch { if (sourceSocket === webSocket && BuildConfig.DEBUG) crash.controller.simulate() }
             is AgentEvent.Transcript -> {
-                if (event.speaker == Speaker.RIDER && event.final) deviceScope.launch { if (sourceSocket === webSocket) crash.controller.transcript(event.text) }
+                if (event.speaker == Speaker.RIDER && event.final) deviceScope.launch { if (sourceSocket === webSocket) { crash.controller.transcript(event.text); navController.handleConfirmationReply(event.text) } }
                 // Barge-in: the rider talking always silences the agent.
                 if (event.speaker == Speaker.RIDER) {
                     stopAgentSpeech()

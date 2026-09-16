@@ -46,6 +46,8 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.Button
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
@@ -255,7 +257,7 @@ fun AgentScreen(
             LaunchedEffect(galleryRequest) { if (galleryRequest > 0) viewModel.showGallery = true }
             val alerts: @Composable () -> Unit = {
                 state.hazardAlert?.let { HazardBanner(it) }
-                if (isNavPresentationActive(state)) state.navGuidance?.let { GuidanceCard(it) }
+                if (isNavPresentationActive(state)) state.navGuidance?.let { GuidanceCard(it, viewModel::confirmNavigation) }
                 if (recording) Text("● 正在录像（无声）· 说“停止录像”结束", color = HudColors.Amber)
             }
             val utilities: @Composable () -> Unit = {
@@ -859,14 +861,14 @@ private fun HazardBanner(alert: AgentEvent.HazardAlert) {
  * NavGuidanceState's doc), so there is no arrived branch to render.
  */
 @Composable
-private fun GuidanceCard(guidance: NavGuidanceState) {
+private fun GuidanceCard(guidance: NavGuidanceState, onConfirm: (String, Boolean) -> Unit) {
     HudCard(borderColor = if (guidance.offRoute) HudColors.Amber else Color.Transparent) {
         Row(verticalAlignment = Alignment.Top) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(guidance.destinationName, color = HudColors.Muted, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    text = guidance.currentInstruction ?: guidance.destinationName,
+                    text = if (guidance.confirmationId != null) "请确认目的地" else guidance.currentInstruction ?: guidance.destinationName,
                     color = HudColors.Text,
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold
@@ -897,6 +899,12 @@ private fun GuidanceCard(guidance: NavGuidanceState) {
             }
         }
         Spacer(Modifier.height(8.dp))
+        guidance.confirmationId?.let { id ->
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                TextButton(onClick = { onConfirm(id, false) }) { Text("取消") }
+                Button(onClick = { onConfirm(id, true) }) { Text("确认导航") }
+            }
+        }
         GuidanceRouteMap(guidance)
     }
 }

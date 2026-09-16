@@ -3,6 +3,7 @@ import XCTest
 @testable import MaxHelmet
 
 private final class FakeStream: LocationStreaming, @unchecked Sendable {
+    var onFailure: ((String) -> Void)?
     var onUpdate: ((CLLocationCoordinate2D) -> Void)?
     var auth: LocationAuthorization = .authorized
     var granted = true
@@ -136,10 +137,10 @@ private final class FakeClock: @unchecked Sendable {
 @MainActor
 final class NavigationControllerTests: XCTestCase {
 
-    private func straightRoute() -> NavigationRoute {
+    private func straightRoute(name: String = "终点") -> NavigationRoute {
         let dest = CLLocationCoordinate2D(latitude: 39.9180, longitude: 116.40)
         return NavigationRoute(
-            destinationName: "终点", destinationCoordinate: dest,
+            destinationName: name, destinationCoordinate: dest,
             polyline: [CLLocationCoordinate2D(latitude: 39.90, longitude: 116.40), dest],
             steps: [ManeuverStep(instruction: "到达终点", coordinate: dest, alongRouteMeters: 2000)],
             totalDistanceMeters: 2000, totalEtaSeconds: 400
@@ -170,7 +171,9 @@ final class NavigationControllerTests: XCTestCase {
         clock: @escaping () -> TimeInterval = { 0 },
         firstFixTimeoutSeconds: TimeInterval = 3,
         firstFixAnnounceSeconds: TimeInterval = 1.5,
-        relaySpeech: Bool = false
+        relaySpeech: Bool = false,
+        requiresConfirmation: Bool = false,
+        confirmationTimeoutSeconds: TimeInterval = 60
     ) -> (NavigationController, Box) {
         let box = Box()
         let controller = NavigationController(
@@ -181,9 +184,68 @@ final class NavigationControllerTests: XCTestCase {
             now: clock,
             firstFixTimeoutSeconds: firstFixTimeoutSeconds,
             firstFixAnnounceSeconds: firstFixAnnounceSeconds,
-            sendRelayPrompt: relaySpeech ? { box.prompts.append($0) } : nil
+            sendRelayPrompt: relaySpeech ? { box.prompts.append($0) } : nil,
+            requiresDestinationConfirmation: requiresConfirmation,
+            confirmationTimeoutSeconds: confirmationTimeoutSeconds
         )
         return (controller, box)
+    }
+
+    func testDestinationPreviewKeepsGPSAndWaitsForConfirmation() async {
+        let stream = FakeStream(), search = FakeSearch()
+        search.route = straightRoute()
+        let (controller, box) = make(stream, search, requiresConfirmation: true)
+        let start = Task { await controller.perform(.navigationStart(query: "终点")) }
+        while box.guidance?.confirmationID == nil { await Task.yield() }
+        XCTAssertNotNil(box.guidance?.currentLocation)
+        XCTAssertEqual(box.spoken.count, 1)
+        stream.feed(search.route!.destinationCoordinate)
+        await Task.yield()
+        XCTAssertNotNil(box.guidance?.confirmationID, "Preview must not arrive or start guidance")
+        controller.handleConfirmationReply("不要确认导航")
+        XCTAssertNotNil(box.guidance?.confirmationID)
+        let id = box.guidance!.confirmationID!
+        controller.confirmDestination(id: UUID(), accepted: true)
+        XCTAssertEqual(box.guidance?.confirmationID, id)
+        controller.confirmDestination(id: id, accepted: true)
+        let result = await start.value
+        XCTAssertEqual(result, .ok)
+        XCTAssertNil(box.guidance?.confirmationID)
+    }
+
+    func testCancelPreviewNeverStartsGuidance() async {
+        let stream = FakeStream(), search = FakeSearch()
+        search.route = straightRoute()
+        let (controller, box) = make(stream, search, requiresConfirmation: true)
+        let start = Task { await controller.perform(.navigationStart(query: "终点")) }
+        while box.guidance?.confirmationID == nil { await Task.yield() }
+        controller.handleConfirmationReply("取消导航")
+        let result = await start.value
+        XCTAssertEqual(result.reason, "navigation.cancelled")
+        XCTAssertNil(box.guidance)
+        XCTAssertFalse(stream.started)
+    }
+
+    func testUnconfirmedPreviewExpiresAndStopsGPS() async {
+        let stream = FakeStream(), search = FakeSearch()
+        search.route = straightRoute()
+        let (controller, box) = make(stream, search, requiresConfirmation: true, confirmationTimeoutSeconds: 0.01)
+        let result = await controller.perform(.navigationStart(query: "终点"))
+        XCTAssertEqual(result.reason, "navigation.cancelled")
+        XCTAssertNil(box.guidance)
+        XCTAssertFalse(stream.started)
+    }
+
+    func testLocationFailureReturnsActionableDetailWithoutWaitingForTimeout() async {
+        let stream = FakeStream(), search = FakeSearch()
+        stream.fixOnStart = nil
+        let (controller, _) = make(stream, search)
+        let start = Task { await controller.perform(.navigationStart(query: "终点")) }
+        while !stream.started { await Task.yield() }
+        stream.onFailure?("请开启精确位置")
+        let result = await start.value
+        XCTAssertEqual(result.detail, "请开启精确位置")
+        XCTAssertFalse(stream.started)
     }
 
     func testStopDuringPermissionPromptCannotStartNavigationAfterGrant() async {
@@ -333,7 +395,7 @@ final class NavigationControllerTests: XCTestCase {
 
         XCTAssertEqual(
             result,
-            .unsupported("route.unavailable", "还没定位到，到室外或空旷处再说一次。")
+            .unsupported("route.unavailable", "还没获取到精确位置。请检查 Max 的定位和精确位置权限，并到室外或空旷处重试。")
         )
         XCTAssertEqual(box.spoken, ["正在定位…"])
     }
@@ -718,52 +780,25 @@ final class NavigationControllerTests: XCTestCase {
         XCTAssertEqual(idleStop.reason, "navigation.notActive", "the cancelled start must not leave `starting` stuck true")
     }
 
-    func testStaleRerouteFailureBumpClearsTheStartingLatch() async {
-        // Fix-round-1 Important #1: the reroute-failure branch is a THIRD
-        // generation-bump site (alongside start(_:) and stopGuidance) and
-        // must clear `starting` too — otherwise a start superseded by a
-        // reroute failure (rather than by a newer start or an explicit
-        // stop) strands the latch true forever, and a later genuinely-idle
-        // stop wrongly answers `.ok` instead of `navigation.notActive`.
+    func testReplacementDestinationDoesNotRaceOldRoutesReroute() async {
         let stream = FakeStream(), search = FakeSearch()
-        let routeA = straightRoute()
-        search.route = routeA
-        let (controller, box) = make(stream, search, clock: { 0 })
-
-        let first = await controller.perform(.navigationStart(query: "终点"))
-        XCTAssertEqual(first, .ok)
-
-        // A second start supersedes generation-wise but is held mid-search
-        // — its OWN eventual exit will correctly decline to clear
-        // `starting` once stale, so nothing but the reroute-failure bump
-        // below can clear it.
+        search.route = straightRoute()
+        let (controller, box) = make(stream, search)
+        _ = await controller.perform(.navigationStart(query: "终点"))
         search.holdRoute = true
-        let secondTask = Task { await controller.perform(.navigationStart(query: "新终点")) }
-        try? await Task.sleep(nanoseconds: 50_000_000) // let it reach the held search
-
-        // A drifts off-route: the reroute captures the CURRENT generation
-        // (the second start's, since it already bumped it), then fails.
-        search.rerouteResult = nil
-        let off = CLLocationCoordinate2D(latitude: 39.9060, longitude: 116.4020)
-        stream.feed(off)
+        let replacement = Task { await controller.perform(.navigationStart(query: "新终点")) }
         try? await Task.sleep(nanoseconds: 50_000_000)
-        XCTAssertEqual(search.rerouteCalls, 1)
-        XCTAssertFalse(stream.started, "the reroute failure tore down route A")
-        XCTAssertNil(box.guidance)
-
-        // Nothing is genuinely actionable now: route is nil, and the
-        // superseded second start can never land (its generation is
-        // permanently stale). An explicit stop here must report
-        // notActive, not silently succeed because `starting` was left
-        // stuck true by the reroute-failure bump.
+        stream.feed(CLLocationCoordinate2D(latitude: 39.9060, longitude: 116.4020))
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(search.rerouteCalls, 0, "The replacement owns the route-search slot")
+        XCTAssertTrue(stream.started)
+        search.resolveHeld(with: straightRoute(name: "新终点"))
+        let result = await replacement.value
+        XCTAssertEqual(result, .ok)
+        XCTAssertEqual(box.guidance?.destinationName, "新终点")
+        _ = await controller.perform(.navigationStop)
         let idleStop = await controller.perform(.navigationStop)
-        XCTAssertEqual(idleStop.status, .failed)
-        XCTAssertEqual(idleStop.reason, "navigation.notActive", "the reroute-failure bump must clear `starting` too")
-
-        // Let the superseded second start resolve so its continuation isn't
-        // leaked past the test.
-        search.resolveHeld(with: nil)
-        _ = await secondTask.value
+        XCTAssertEqual(idleStop.reason, "navigation.notActive")
     }
 
     func testStopWhileAwaitingFirstFixForANewStartResolvesImmediately() async {

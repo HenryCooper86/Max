@@ -14,11 +14,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.horizon.maxhelmet.music.MusicController
+import kotlinx.coroutines.launch
 
 @Composable
 fun MusicPlaybackCard(controller: MusicController) {
     val state by controller.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var showAccess by remember { mutableStateOf(false) }
     var actionError by remember { mutableStateOf<String?>(null) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -36,11 +38,13 @@ fun MusicPlaybackCard(controller: MusicController) {
                 Triple(if (state.playing) "pause" else "play", if (state.playing) "暂停" else "播放", if (state.playing) Icons.Default.Pause else Icons.Default.PlayArrow),
                 Triple("next", "下一首", Icons.Default.SkipNext)).forEach { (action, label, icon) ->
                 IconButton(enabled = !state.busy, onClick = {
-                    val result = controller.control(action)
-                    actionError = if (result.status == "ok") null else when (result.reason) {
-                        "music.queueEnd" -> "已到播放队列末尾"
-                        "music.controlUnavailable" -> "当前音乐应用不支持此操作"
-                        else -> "暂时无法控制播放，请选择音乐或检查播放应用。"
+                    scope.launch {
+                        val result = controller.execute(action)
+                        actionError = if (result.status == "ok") null else when (result.reason) {
+                            "music.queueEnd" -> "已到播放队列末尾"
+                            "music.controlUnavailable" -> "音乐应用没有完成操作，请检查播放队列。"
+                            else -> "暂时无法控制播放，请选择音乐或检查播放应用。"
+                        }
                     }
                 }, modifier = Modifier.size(48.dp)) { Icon(icon, label) }
             }

@@ -337,7 +337,7 @@ export type NavPromptEvent =
       type: "nav.prompt";
       promptId: string;
       routeCommandId: string;
-      kind: "offRoute" | "rerouteFailed" | "arrived" | "locationLost";
+      kind: "confirm" | "offRoute" | "rerouteFailed" | "arrived" | "locationLost";
     };
 
 /** Client → server: one chunk of a multi-frame gallery understanding request,

@@ -61,7 +61,7 @@ private struct MusicLibraryPicker: UIViewControllerRepresentable {
         let picker = MPMediaPickerController(mediaTypes: .music)
         picker.allowsPickingMultipleItems = true
         picker.showsCloudItems = true
-        picker.prompt = "选择要在 Max 中播放的音乐"
+        picker.prompt = "选择多首歌曲或歌单，以便切换上一首和下一首"
         picker.delegate = context.coordinator
         return picker
     }

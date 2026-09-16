@@ -16,9 +16,9 @@ import { DEVICE_RESULT_TIMEOUT_MS, NAVIGATION_RESULT_TIMEOUT_MS } from "../serve
 //   ios/MaxHelmet/Navigation/NavigationController.swift  firstFixTimeoutSeconds
 //   android/.../navigation/NavigationController.kt        firstFixTimeoutMillis
 //   ios/MaxHelmet/Navigation/RelayNavigationSearch.swift  timeoutSeconds
-const CLIENT_FIRST_FIX_MS = 8_000;
+const CLIENT_FIRST_FIX_MS = 30_000;
 const CLIENT_SEARCH_MS = 7_000;
-const CLIENT_WORST_CASE_MS = CLIENT_FIRST_FIX_MS + CLIENT_SEARCH_MS;
+const CLIENT_WORST_CASE_MS = CLIENT_FIRST_FIX_MS + CLIENT_SEARCH_MS + 60_000;
 
 describe("navigation device-result deadline", () => {
   it("outlasts the slowest honest client attempt", () => {

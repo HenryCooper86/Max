@@ -38,4 +38,116 @@ final class MusicPlaybackModelTests: XCTestCase {
         _ = await first.value
         XCTAssertFalse(model.busy)
     }
+
+    @MainActor func testResumeExistingQueueDoesNotPrepareItAgain() async {
+        let driver = PlaybackDriver()
+        driver.starts = true
+        let model = makeModel(driver)
+        let result = await model.perform(.play)
+        XCTAssertEqual(result.status, .ok)
+        XCTAssertEqual(driver.prepares, 0)
+        XCTAssertEqual(driver.plays, 1)
+        XCTAssertTrue(model.isPlaying)
+    }
+
+    @MainActor func testSilentPlayFailureDoesNotReportSuccess() async {
+        let driver = PlaybackDriver()
+        let model = makeModel(driver)
+        let result = await model.perform(.play)
+        XCTAssertEqual(result.status, .failed)
+        XCTAssertEqual(result.reason, "music.unavailable")
+        XCTAssertFalse(model.isPlaying)
+        XCTAssertNotNil(model.message)
+        XCTAssertFalse(model.busy)
+    }
+
+    @MainActor func testDelayedPlaybackIsConfirmed() async {
+        let driver = PlaybackDriver()
+        var waits = 0
+        let model = MusicPlaybackModel(player: driver, playbackAttempts: 3,
+            waitForPlayback: { waits += 1; if waits == 2 { driver.isPlaying = true } },
+            requestAuthorization: { .authorized })
+        let result = await model.perform(.play)
+        XCTAssertEqual(result.status, .ok)
+        XCTAssertEqual(waits, 2)
+    }
+
+    @MainActor func testEmptyQueueDoesNotPrepareOrPlay() async {
+        let driver = PlaybackDriver(); driver.hasItem = false
+        let model = makeModel(driver)
+        let result = await model.perform(.play)
+        XCTAssertEqual(result.reason, "music.emptyQueue")
+        XCTAssertEqual(driver.prepares, 0)
+        XCTAssertEqual(driver.plays, 0)
+    }
+
+    @MainActor func testNewSelectionPreparesOnceAndResumeDoesNotReprepare() async {
+        let driver = PlaybackDriver(); driver.starts = true
+        let model = makeModel(driver)
+        await model.select(MPMediaItemCollection(items: [MPMediaItem()]))
+        XCTAssertEqual(driver.prepares, 1)
+        XCTAssertTrue(model.isPlaying)
+        _ = await model.perform(.pause)
+        _ = await model.perform(.play)
+        XCTAssertEqual(driver.prepares, 1)
+        XCTAssertTrue(model.isPlaying)
+    }
+
+    @MainActor func testPreparationErrorPreservesDiagnosticAndCanRetry() async {
+        let driver = PlaybackDriver()
+        driver.error = NSError(domain: "PlaybackTest", code: 42)
+        let model = makeModel(driver)
+        await model.select(MPMediaItemCollection(items: [MPMediaItem()]))
+        XCTAssertTrue(model.message?.contains("PlaybackTest / 42") == true)
+        XCTAssertEqual(driver.plays, 0)
+        driver.error = nil; driver.starts = true
+        let result = await model.perform(.play)
+        XCTAssertEqual(result.status, .ok)
+        XCTAssertEqual(driver.prepares, 2)
+        XCTAssertNil(model.message)
+    }
+
+    @MainActor func testMissingPreparationCallbackTimesOutAndLateCallbackIsIgnored() async {
+        let driver = PlaybackDriver(); driver.holdPreparation = true
+        let model = MusicPlaybackModel(player: driver, preparationTimeoutNanoseconds: 1_000_000,
+            playbackAttempts: 1, waitForPlayback: {}, requestAuthorization: { .authorized })
+        await model.select(MPMediaItemCollection(items: [MPMediaItem()]))
+        XCTAssertFalse(model.busy)
+        XCTAssertTrue(model.message?.contains("MaxMusic / 1") == true)
+        driver.pending?(nil)
+        await Task.yield()
+        XCTAssertEqual(driver.plays, 0)
+        XCTAssertFalse(model.isPlaying)
+    }
+
+    @MainActor private func makeModel(_ driver: PlaybackDriver) -> MusicPlaybackModel {
+        MusicPlaybackModel(player: driver, playbackAttempts: 2, waitForPlayback: {}, requestAuthorization: { .authorized })
+    }
+}
+
+
+@MainActor
+private final class PlaybackDriver: MusicPlaybackDriving {
+    var title: String? = "Test song"
+    var artist: String? = "Test artist"
+    var hasItem = true
+    var isPlaying = false
+    var notificationObject: AnyObject { self }
+    var prepares = 0
+    var plays = 0
+    var starts = false
+    var error: Error?
+    var holdPreparation = false
+    var pending: (@Sendable (Error?) -> Void)?
+    func beginObserving() {}
+    func endObserving() {}
+    func setQueue(_ collection: MPMediaItemCollection) { isPlaying = false }
+    func prepare(_ completion: @escaping @Sendable (Error?) -> Void) {
+        prepares += 1
+        if holdPreparation { pending = completion } else { completion(error) }
+    }
+    func play() { plays += 1; isPlaying = starts }
+    func pause() { isPlaying = false }
+    func next() {}
+    func previous() {}
 }

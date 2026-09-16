@@ -2,6 +2,54 @@ import Combine
 import MediaPlayer
 import UIKit
 
+@MainActor
+protocol MusicPlaybackDriving: AnyObject {
+    var title: String? { get }
+    var artist: String? { get }
+    var hasItem: Bool { get }
+    var isPlaying: Bool { get }
+    var notificationObject: AnyObject { get }
+    func beginObserving()
+    func endObserving()
+    func setQueue(_ collection: MPMediaItemCollection)
+    func prepare(_ completion: @escaping @Sendable (Error?) -> Void)
+    func play()
+    func pause()
+    func next()
+    func previous()
+}
+
+@MainActor
+private final class SystemMusicPlaybackDriver: MusicPlaybackDriving {
+    private let player = MPMusicPlayerController.systemMusicPlayer
+    var title: String? { player.nowPlayingItem?.title }
+    var artist: String? { player.nowPlayingItem?.artist }
+    var hasItem: Bool { player.nowPlayingItem != nil }
+    var isPlaying: Bool { player.playbackState == .playing }
+    var notificationObject: AnyObject { player }
+    func beginObserving() { player.beginGeneratingPlaybackNotifications() }
+    func endObserving() { player.endGeneratingPlaybackNotifications() }
+    func setQueue(_ collection: MPMediaItemCollection) { player.setQueue(with: collection) }
+    func prepare(_ completion: @escaping @Sendable (Error?) -> Void) { player.prepareToPlay(completionHandler: completion) }
+    func play() { player.play() }
+    func pause() { player.pause() }
+    func next() { player.skipToNextItem() }
+    func previous() { player.skipToPreviousItem() }
+}
+
+/// Resolves exactly once even if MediaPlayer never replies or replies after timeout.
+@MainActor
+private final class MusicPreparation {
+    var continuation: CheckedContinuation<Error?, Never>?
+    var timeout: Task<Void, Never>?
+    func finish(_ error: Error?) {
+        guard let continuation else { return }
+        self.continuation = nil
+        timeout?.cancel(); timeout = nil
+        continuation.resume(returning: error)
+    }
+}
+
 /// Shared by voice commands and the HUD. The system queue stays available to
 /// lock-screen/headset controls without navigating away from Max.
 @MainActor
@@ -14,15 +62,27 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
     @Published private(set) var message: String?
     @Published var showingPicker = false
 
-    private let player = MPMusicPlayerController.systemMusicPlayer
+    private let player: MusicPlaybackDriving
+    private var needsPreparation = false
+    private let preparationTimeoutNanoseconds: UInt64
+    private let playbackAttempts: Int
+    private let waitForPlayback: () async -> Void
     private var observing = false
     private let requestAuthorization: () async -> MPMediaLibraryAuthorizationStatus
 
-    init(requestAuthorization: @escaping () async -> MPMediaLibraryAuthorizationStatus = {
+    init(player: MusicPlaybackDriving? = nil,
+         preparationTimeoutNanoseconds: UInt64 = 8_000_000_000,
+         playbackAttempts: Int = 30,
+         waitForPlayback: @escaping () async -> Void = { try? await Task.sleep(nanoseconds: 100_000_000) },
+         requestAuthorization: @escaping () async -> MPMediaLibraryAuthorizationStatus = {
         await withCheckedContinuation { continuation in
             MPMediaLibrary.requestAuthorization { continuation.resume(returning: $0) }
         }
     }) {
+        self.player = player ?? SystemMusicPlaybackDriver()
+        self.preparationTimeoutNanoseconds = preparationTimeoutNanoseconds
+        self.playbackAttempts = playbackAttempts
+        self.waitForPlayback = waitForPlayback
         self.requestAuthorization = requestAuthorization
         super.init()
     }
@@ -32,17 +92,20 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
         observing = true
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(playbackChanged),
-                           name: .MPMusicPlayerControllerPlaybackStateDidChange, object: player)
+                           name: .MPMusicPlayerControllerPlaybackStateDidChange, object: player.notificationObject)
         center.addObserver(self, selector: #selector(playbackChanged),
-                           name: .MPMusicPlayerControllerNowPlayingItemDidChange, object: player)
+                           name: .MPMusicPlayerControllerNowPlayingItemDidChange, object: player.notificationObject)
         center.addObserver(self, selector: #selector(playbackChanged),
                            name: UIApplication.didBecomeActiveNotification, object: nil)
-        player.beginGeneratingPlaybackNotifications()
+        player.beginObserving()
     }
 
     deinit {
         NotificationCenter.default.removeObserver(self)
-        if observing { player.endGeneratingPlaybackNotifications() }
+        if observing {
+            let driver = player
+            Task { @MainActor in driver.endObserving() }
+        }
     }
 
     @objc private nonisolated func playbackChanged() {
@@ -50,9 +113,10 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
     }
 
     private func refresh() {
-        title = player.nowPlayingItem?.title ?? "Apple Music"
-        artist = player.nowPlayingItem?.artist ?? ""
-        isPlaying = player.playbackState == .playing
+        title = player.title ?? "Apple Music"
+        artist = player.artist ?? ""
+        isPlaying = player.isPlaying
+        if isPlaying { message = nil }
     }
 
     private func authorize() async -> Bool {
@@ -77,9 +141,12 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
 
     func select(_ collection: MPMediaItemCollection) async {
         guard !busy, !collection.items.isEmpty else { return }
+        visible = true
         busy = true
         defer { busy = false }
-        player.setQueue(with: collection)
+        guard await authorize() else { return }
+        player.setQueue(collection)
+        needsPreparation = true
         _ = await startPlayback()
     }
 
@@ -91,33 +158,55 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
         guard await authorize() else { return .denied("permission.music", message) }
         message = nil
         if control == .play { return await startPlayback() }
-        guard player.nowPlayingItem != nil else { return emptyQueue() }
+        guard player.hasItem else { return emptyQueue() }
         switch control {
         case .play: break
         case .pause: player.pause()
-        case .next: player.skipToNextItem()
-        case .previous: player.skipToPreviousItem()
+        case .next: player.next()
+        case .previous: player.previous()
         }
         refresh()
         return .ok
     }
 
     private func startPlayback() async -> DeviceActionResult {
-        // prepareToPlay resolves the Music app's existing queue or the queue
-        // selected in our picker. Failures must reach the relay as failures.
-        let error: Error? = await withCheckedContinuation { continuation in
-            player.prepareToPlay { continuation.resume(returning: $0) }
+        // Resume Music's existing queue directly. Preparing it again can fail
+        // even though Music has a valid current item. Only a new picker queue
+        // needs preparation, and a missing callback must not freeze the card.
+        if needsPreparation {
+            let operation = MusicPreparation()
+            let error: Error? = await withCheckedContinuation { continuation in
+                operation.continuation = continuation
+                operation.timeout = Task { [preparationTimeoutNanoseconds] in
+                    do { try await Task.sleep(nanoseconds: preparationTimeoutNanoseconds) }
+                    catch { return }
+                    operation.finish(NSError(domain: "MaxMusic", code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "准备音乐超时，请重试或重新选择歌曲。"] ))
+                }
+                player.prepare { error in
+                    Task { @MainActor in operation.finish(error) }
+                }
+            }
+            if let error {
+                refresh()
+                let failure = error as NSError
+                message = "音乐准备失败：\(failure.localizedDescription)（\(failure.domain) / \(failure.code)）"
+                return .failed("music.unavailable", message)
+            }
+            needsPreparation = false
         }
-        if let error {
-            message = "音乐无法播放，请选择音乐并检查 Apple Music 是否可用。"
-            refresh()
-            return .failed("music.unavailable", error.localizedDescription)
-        }
-        guard player.nowPlayingItem != nil else { return emptyQueue() }
-        message = nil
+        guard player.hasItem else { return emptyQueue() }
         player.play()
+        for _ in 0..<playbackAttempts {
+            refresh()
+            if isPlaying { return .ok }
+            if Task.isCancelled { return .failed("music.unavailable", "播放请求已取消。") }
+            await waitForPlayback()
+        }
         refresh()
-        return .ok
+        if isPlaying { return .ok }
+        message = "Apple Music 未开始播放。请重新选择歌曲；若在 Apple Music 中也无法播放，请检查网络、账号或歌曲是否可用。"
+        return .failed("music.unavailable", message)
     }
 
     private func emptyQueue() -> DeviceActionResult {

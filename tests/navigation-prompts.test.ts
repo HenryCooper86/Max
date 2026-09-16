@@ -54,6 +54,16 @@ function maneuver(overrides: Partial<Extract<NavPromptEvent, { kind: "maneuver" 
 }
 
 describe("createNavPromptHandler", () => {
+  it("asks confirmation using the resolved destination and rejects stale routes", () => {
+    const { handle, spoken } = harness();
+    handle({ type: "nav.prompt", promptId: "confirm-old", routeCommandId: "old", kind: "confirm" });
+    expect(spoken).toHaveLength(0);
+    handle({ type: "nav.prompt", promptId: "confirm", routeCommandId: "nav-7", kind: "confirm" });
+    expect(spoken).toHaveLength(1);
+    expect(spoken[0]?.text).toContain("请确认目的地：外滩");
+    expect(spoken[0]?.text).toContain("确认后");
+  });
+
   it("composes far and near prompts only from the relay-owned maneuver instruction", () => {
     const now = 10_000;
     const { handle, spoken } = harness({ now: () => now });

@@ -53,6 +53,7 @@ struct GuidanceState: Equatable {
     var remainingDistanceMeters: Double
     var remainingSeconds: Double
     var offRoute: Bool
+    var confirmationID: UUID? = nil
 
     static func == (lhs: GuidanceState, rhs: GuidanceState) -> Bool {
         lhs.destinationName == rhs.destinationName
@@ -64,6 +65,7 @@ struct GuidanceState: Equatable {
             && lhs.remainingDistanceMeters == rhs.remainingDistanceMeters
             && lhs.remainingSeconds == rhs.remainingSeconds
             && lhs.offRoute == rhs.offRoute
+            && lhs.confirmationID == rhs.confirmationID
     }
 }
 

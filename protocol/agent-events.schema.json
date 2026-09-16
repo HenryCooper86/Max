@@ -234,7 +234,7 @@
             "type": { "const": "nav.prompt" },
             "promptId": { "type": "string", "minLength": 1 },
             "routeCommandId": { "type": "string", "minLength": 1 },
-            "kind": { "enum": ["maneuver", "offRoute", "rerouteFailed", "arrived", "locationLost"] },
+            "kind": { "enum": ["confirm", "maneuver", "offRoute", "rerouteFailed", "arrived", "locationLost"] },
             "maneuverIndex": { "type": "number" },
             "threshold": { "enum": ["far", "near", "now"] },
             "distanceMeters": { "type": "number" }

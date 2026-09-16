@@ -13,10 +13,15 @@ enum LocationAuthorization {
 @MainActor
 protocol LocationStreaming: AnyObject {
     var onUpdate: ((CLLocationCoordinate2D) -> Void)? { get set }
+    var onFailure: ((String) -> Void)? { get set }
     func authorization() -> LocationAuthorization
     func requestAccess() async -> Bool
     func start()
     func stop()
+}
+
+extension LocationStreaming {
+    var onFailure: ((String) -> Void)? { get { nil } set {} }
 }
 
 /// Owns the active route, the location stream, and the reroute/arrival
@@ -28,7 +33,7 @@ final class NavigationController: DeviceActionHandler {
     // 20 s from send time. Was 15 s here pre-Task-4 — aligned to match.
     private static let rerouteCooldownSeconds: TimeInterval = 20
     private static let locatingSpoken = "正在定位…"
-    private static let noFixDetail = "还没定位到，到室外或空旷处再说一次。"
+    private static let noFixDetail = "还没获取到精确位置。请检查 Max 的定位和精确位置权限，并到室外或空旷处重试。"
 
     private let search: NavigationRouteSearching
     private let stream: LocationStreaming
@@ -40,6 +45,14 @@ final class NavigationController: DeviceActionHandler {
     private let firstFixTimeoutSeconds: TimeInterval
     private let firstFixAnnounceSeconds: TimeInterval
 
+    private var confirmation: CheckedContinuation<Bool, Never>?
+    private var confirmationTimeout: Task<Void, Never>?
+    private var awaitingDestinationConfirmation = false
+    private var confirmationID: UUID?
+    private var locationFailure: String?
+    private var latestLocation: CLLocationCoordinate2D?
+    private let requiresDestinationConfirmation: Bool
+    private let confirmationTimeoutSeconds: TimeInterval
     private var route: NavigationRoute?
     private var progress = GuidanceProgress(maneuverIndex: 0, firedThresholds: [], arrived: false)
     private var rerouting = false
@@ -80,10 +93,14 @@ final class NavigationController: DeviceActionHandler {
         speak: @escaping (String) -> Void,
         interruptPlayback: @escaping () -> Void,
         now: @escaping () -> TimeInterval,
-        firstFixTimeoutSeconds: TimeInterval = 8,
+        firstFixTimeoutSeconds: TimeInterval = 30,
         firstFixAnnounceSeconds: TimeInterval = 1.5,
-        sendRelayPrompt: ((String) -> Void)? = nil
+        sendRelayPrompt: ((String) -> Void)? = nil,
+        requiresDestinationConfirmation: Bool = true,
+        confirmationTimeoutSeconds: TimeInterval = 60
     ) {
+        self.requiresDestinationConfirmation = requiresDestinationConfirmation
+        self.confirmationTimeoutSeconds = confirmationTimeoutSeconds
         self.search = search
         self.stream = stream
         self.onGuidance = onGuidance
@@ -93,6 +110,21 @@ final class NavigationController: DeviceActionHandler {
         self.now = now
         self.firstFixTimeoutSeconds = firstFixTimeoutSeconds
         self.firstFixAnnounceSeconds = firstFixAnnounceSeconds
+        self.stream.onFailure = { [weak self] detail in
+            Task { @MainActor in
+                guard let self else { return }
+                self.locationFailure = detail
+                self.resolveFirstFix(nil)
+                self.search.failPending()
+                if let route = self.route {
+                    _ = self.relayPrompt(route, kind: "locationLost")
+                    self.resolveConfirmation(false)
+                    self.route = nil
+                    self.stream.stop()
+                    self.onGuidance(nil)
+                }
+            }
+        }
         self.stream.onUpdate = { [weak self] coord in
             Task { @MainActor in self?.handleFix(coord) }
         }
@@ -118,9 +150,14 @@ final class NavigationController: DeviceActionHandler {
     private func start(_ query: String) async -> DeviceActionResult {
         // Permission prompts are part of the attempt: stop, teardown, or a
         // newer destination must invalidate it before permission returns.
+        if awaitingDestinationConfirmation { route = nil; onGuidance(nil) }
+        resolveConfirmation(false)
+        awaitingDestinationConfirmation = false
         navigationGeneration += 1
         let generation = navigationGeneration
         starting = true
+        latestLocation = nil
+        locationFailure = nil
         resolveFirstFix(nil)
         defer { if generation == navigationGeneration { starting = false } }
 
@@ -139,14 +176,13 @@ final class NavigationController: DeviceActionHandler {
 
         // The first fix must be in hand BEFORE searching: the relay routes
         // FROM the rider's position, so there is no query to send without it.
-        stream.start()
         guard let origin = await awaitFirstFix(generation: generation) else {
             // Only stop the stream if nothing else is relying on it: a
             // still-active route from an earlier, already-succeeded start
             // (Important #2), or a newer generation that superseded this one
             // and is still in flight (Important #1), must keep it running.
             if generation == navigationGeneration, route == nil { stream.stop() }
-            return startFailureResult(generation: generation, detail: Self.noFixDetail)
+            return startFailureResult(generation: generation, detail: locationFailure ?? Self.noFixDetail)
         }
         guard let resolved = await search.route(to: query, from: origin) else {
             if generation == navigationGeneration, route == nil { stream.stop() }
@@ -158,6 +194,7 @@ final class NavigationController: DeviceActionHandler {
             // generation now owns `route`/the stream; do not stomp on it.
             return startFailureResult(generation: generation)
         }
+        if let locationFailure { return .unsupported("route.unavailable", locationFailure) }
         // Re-assert: a teardown elsewhere (e.g. arrival on the route this
         // request supersedes) may have stopped the stream since the
         // stream.start() call above ran — a route about to commit must
@@ -169,7 +206,34 @@ final class NavigationController: DeviceActionHandler {
         // generation superseded's reroute cooldown or in-flight latch.
         rerouting = false
         lastRerouteAt = -.greatestFiniteMagnitude
-        publish(location: nil)
+        latestLocation = latestLocation ?? origin
+        if requiresDestinationConfirmation {
+            let accepted = await withCheckedContinuation { continuation in
+                confirmation = continuation
+                awaitingDestinationConfirmation = true
+                confirmationID = UUID()
+                publish(location: latestLocation ?? origin)
+                if !relayPrompt(resolved, kind: "confirm") {
+                    speak("请确认目的地：\(resolved.destinationName)。确认后开始导航。")
+                }
+                confirmationTimeout = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    do { try await Task.sleep(nanoseconds: UInt64(confirmationTimeoutSeconds * 1_000_000_000)) }
+                    catch { return }
+                    resolveConfirmation(false)
+                }
+            }
+            guard generation == navigationGeneration else { return .failed("navigation.cancelled") }
+            awaitingDestinationConfirmation = false
+            if let locationFailure { return .unsupported("route.unavailable", locationFailure) }
+            guard accepted else {
+                route = nil
+                stream.stop()
+                onGuidance(nil)
+                return .failed("navigation.cancelled")
+            }
+        }
+        publish(location: latestLocation ?? origin)
         // Deliberately silent on success: the relay speaks the confirmation
         // itself (its okSpeech, attached once the real route is known)
         // rather than this client re-announcing a summary it can only
@@ -184,7 +248,7 @@ final class NavigationController: DeviceActionHandler {
     /// explicit stop already superseded it while it waited.
     private func startFailureResult(generation: Int, detail: String? = nil) -> DeviceActionResult {
         generation == navigationGeneration
-            ? .unsupported("route.unavailable", detail)
+            ? .unsupported("route.unavailable", detail ?? locationFailure)
             : .failed("navigation.cancelled")
     }
 
@@ -205,6 +269,7 @@ final class NavigationController: DeviceActionHandler {
         resolveFirstFix(nil)
         return await withCheckedContinuation { (continuation: CheckedContinuation<CLLocationCoordinate2D?, Never>) in
             firstFixContinuation = continuation
+            stream.start()
             // Spoken once, and only while this same wait is still pending: a
             // fix that lands first cancels this in `resolveFirstFix`, so the
             // rider never hears "locating" after guidance has begun.
@@ -252,6 +317,8 @@ final class NavigationController: DeviceActionHandler {
         // its OWN generation is still current, which — once superseded by
         // this very bump — it never is again, so leaving it to that alone
         // would strand `starting` true forever.
+        resolveConfirmation(false)
+        awaitingDestinationConfirmation = false
         navigationGeneration += 1
         starting = false
         // A concurrent start() awaiting its first fix must not hang forever
@@ -312,6 +379,8 @@ final class NavigationController: DeviceActionHandler {
     /// Deliberately does NOT call `search.failPending()`: AgentSession calls
     /// that itself, right beside this, exactly as it always has.
     func teardown() {
+        resolveConfirmation(false)
+        awaitingDestinationConfirmation = false
         navigationGeneration += 1
         starting = false
         resolveFirstFix(nil)
@@ -322,8 +391,34 @@ final class NavigationController: DeviceActionHandler {
         onGuidance(nil)
     }
 
+    func confirmDestination(id: UUID, accepted: Bool) {
+        guard confirmationID == id else { return }
+        resolveConfirmation(accepted)
+    }
+
+    func handleConfirmationReply(_ text: String) {
+        guard let id = confirmationID else { return }
+        let reply = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        if ["确认", "确认导航", "开始导航", "是的", "yes", "confirm", "start navigation"].contains(reply) {
+            confirmDestination(id: id, accepted: true)
+        } else if ["取消", "取消导航", "不是", "no", "cancel", "cancel navigation"].contains(reply) {
+            confirmDestination(id: id, accepted: false)
+        }
+    }
+
+    private func resolveConfirmation(_ accepted: Bool) {
+        let pending = confirmation
+        confirmation = nil
+        confirmationID = nil
+        confirmationTimeout?.cancel()
+        confirmationTimeout = nil
+        pending?.resume(returning: accepted)
+    }
+
     private func handleFix(_ location: CLLocationCoordinate2D) {
+        latestLocation = location
         resolveFirstFix(location)
+        if awaitingDestinationConfirmation { publish(location: location); return }
         guard let route else { return }
         let maneuverIndex = progress.maneuverIndex
         let update = GuidanceEngine.step(position: location, route: route, progress: progress)
@@ -357,7 +452,7 @@ final class NavigationController: DeviceActionHandler {
             onGuidance(nil)
             return
         }
-        if update.offRoute { attemptReroute(from: location, to: route.destinationCoordinate) }
+        if update.offRoute && !starting { attemptReroute(from: location, to: route.destinationCoordinate) }
     }
 
     private func attemptReroute(from origin: CLLocationCoordinate2D, to destination: CLLocationCoordinate2D) {
@@ -414,6 +509,7 @@ final class NavigationController: DeviceActionHandler {
                 // via its own exit once stale, so leaving it to that alone
                 // would strand `starting` true forever, and a later
                 // genuinely-idle stop would wrongly answer `.ok`.
+                resolveConfirmation(false)
                 navigationGeneration += 1
                 starting = false
                 if let route, !relayPrompt(route, kind: "rerouteFailed") { speak("无法重新规划路线，已停止导航。") }
@@ -450,10 +546,11 @@ final class NavigationController: DeviceActionHandler {
             polyline: route.polyline,
             currentLocation: location,
             maneuverInstruction: maneuver,
-            distanceToManeuverMeters: update?.distanceToManeuverMeters ?? route.totalDistanceMeters,
+            distanceToManeuverMeters: update?.distanceToManeuverMeters ?? route.steps.first?.alongRouteMeters ?? route.totalDistanceMeters,
             remainingDistanceMeters: update?.remainingMeters ?? route.totalDistanceMeters,
             remainingSeconds: update?.remainingSeconds ?? route.totalEtaSeconds,
-            offRoute: update?.offRoute ?? false
+            offRoute: update?.offRoute ?? false,
+            confirmationID: confirmationID
         ))
     }
 }

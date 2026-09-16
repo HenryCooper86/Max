@@ -407,7 +407,7 @@ describe("doubao provider speakNavPrompt", () => {
 });
 
 describe("doubao navigation command deadline", () => {
-  it("reschedules after an ordinary timeout and keeps navigation.start pending for eighteen seconds", async () => {
+  it("reschedules after an ordinary timeout and keeps navigation.start pending through GPS acquisition and destination confirmation", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
     stubWeatherFetch();
@@ -422,7 +422,7 @@ describe("doubao navigation command deadline", () => {
     expect(clientEvents(send).filter((event) => event.text === "手电筒操作没成功。")).toHaveLength(1);
     expect(clientEvents(send).some((event) => event.text === "导航操作没成功。")).toBe(false);
 
-    await vi.advanceTimersByTimeAsync(9_999);
+    await vi.advanceTimersByTimeAsync(96_999);
     expect(clientEvents(send).some((event) => event.text === "导航操作没成功。")).toBe(false);
 
     await vi.advanceTimersByTimeAsync(1);

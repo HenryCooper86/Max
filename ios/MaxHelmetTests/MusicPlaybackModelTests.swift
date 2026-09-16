@@ -120,6 +120,35 @@ final class MusicPlaybackModelTests: XCTestCase {
         XCTAssertFalse(model.isPlaying)
     }
 
+    @MainActor func testSilentSkipDoesNotClaimSuccess() async {
+        let driver = PlaybackDriver()
+        driver.isPlaying = true
+        let model = makeModel(driver)
+        let result = await model.perform(.next)
+        XCTAssertEqual(result.status, .failed)
+        XCTAssertEqual(result.reason, "music.controlUnavailable")
+        XCTAssertNotNil(model.message)
+    }
+
+    @MainActor func testDelayedSkipWaitsForNewItemAndPlayback() async {
+        let driver = PlaybackDriver()
+        driver.isPlaying = true
+        var waits = 0
+        let model = MusicPlaybackModel(player: driver, playbackAttempts: 4, waitForPlayback: {
+            waits += 1
+            if waits == 1 { driver.itemIdentity = "two"; driver.isPlaying = false }
+            if waits == 2 { driver.isPlaying = true }
+        }, requestAuthorization: { .authorized })
+        let result = await model.perform(.next)
+        XCTAssertEqual(result.status, .ok)
+        XCTAssertEqual(waits, 2)
+    }
+
+    @MainActor func testPreviousRestartingSameSongIsNotAnotherTrack() async {
+        let result = await makeModel(PlaybackDriver()).perform(.previous)
+        XCTAssertEqual(result.status, .failed)
+    }
+
     @MainActor private func makeModel(_ driver: PlaybackDriver) -> MusicPlaybackModel {
         MusicPlaybackModel(player: driver, playbackAttempts: 2, waitForPlayback: {}, requestAuthorization: { .authorized })
     }
@@ -131,6 +160,7 @@ private final class PlaybackDriver: MusicPlaybackDriving {
     var title: String? = "Test song"
     var artist: String? = "Test artist"
     var hasItem = true
+    var itemIdentity: String? = "one"
     var isPlaying = false
     var notificationObject: AnyObject { self }
     var prepares = 0

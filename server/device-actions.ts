@@ -425,7 +425,13 @@ function matchCamera(raw: string): DeviceCommand | null {
 
 function matchMusic(raw: string): DeviceCommand | null {
   let control: "play" | "pause" | "next" | "previous" | undefined;
-  if (/(下一首|下一曲|next (track|song))/i.test(raw)) control = "next";
+  if (
+    /(下一首|下一曲|换一?首(?:歌)?|切歌|next\s+(track|song))/i.test(raw) ||
+    /\bskip\s+(?:(?:to\s+)?(?:another|the\s+next|a\s+different)|this|that|the|current)\s+(song|track)\b/i.test(raw) ||
+    /\b(?:play|put\s+on)\s+(?:another|a\s+different)\s+(song|track)\b/i.test(raw) ||
+    /\bchange\s+(?:the|this|current)\s+(song|track)\b/i.test(raw)
+  )
+    control = "next";
   else if (/(上一首|上一曲|previous (track|song))/i.test(raw)) control = "previous";
   else if (/(暂停|停一下|pause)/i.test(raw) && /(音乐|歌|music|song)/i.test(raw)) control = "pause";
   else if (/(放歌|播放音乐|放音乐|来点音乐|play (some )?music)/i.test(raw)) control = "play";
@@ -471,17 +477,9 @@ function matchNavigation(raw: string): DeviceCommand | null {
 /** Ordinary device-result deadline. Navigation gets longer below because route
  *  planning includes the phone/RDK handoff before the result returns. */
 export const DEVICE_RESULT_TIMEOUT_MS = 8_000;
-/** Navigation's own deadline. It must outlast the slowest honest client
- *  attempt — 8 s waiting for a first GPS fix plus 7 s of route search — or the
- *  relay speaks a failure while the phone is still working. The 3 s margin is
- *  deliberate. `tests/navigation-timeout-budget.test.ts` checks this value
- *  against the client bounds — but that test hardcodes its own copy of them
- *  in TypeScript; it is a documented mirror, not a real tripwire, and only
- *  fails if someone edits its constants too. Raising a client bound
- *  (`firstFixTimeoutSeconds`/`firstFixTimeoutMillis`/the search timeout) on
- *  its own trips nothing — update this value AND that test's constants by
- *  hand together. */
-export const NAVIGATION_RESULT_TIMEOUT_MS = 18_000;
+/** Includes a 30-second GPS acquisition, 7-second route lookup, and a
+ *  60-second destination confirmation window, plus a transport margin. */
+export const NAVIGATION_RESULT_TIMEOUT_MS = 105_000;
 
 const FAILURE_SPEECH: Record<string, string> = {
   "permission.contacts": "我没有通讯录权限，去设置里开启后我再帮你拨号。",

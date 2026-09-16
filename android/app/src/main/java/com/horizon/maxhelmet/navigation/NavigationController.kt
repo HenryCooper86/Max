@@ -11,6 +11,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Task 6 implements this on AgentSession. `hazardActive` gates prompt
  *  DROPPING (spec: a suppressed maneuver prompt is dropped, not queued);
@@ -34,7 +35,8 @@ data class NavGuidanceState(
     val offRoute: Boolean,
     val arrived: Boolean,
     val route: NavigationRoute? = null,
-    val riderCoordinate: LatLon? = null
+    val riderCoordinate: LatLon? = null,
+    val confirmationId: String? = null
 )
 
 /** One in-flight reroute attempt's captured inputs — everything
@@ -86,9 +88,11 @@ class NavigationController(
     private val onGuidance: (NavGuidanceState?) -> Unit,
     private val hasLocationPermission: () -> Boolean,
     private val now: () -> Long = { android.os.SystemClock.elapsedRealtime() },
-    private val firstFixTimeoutMillis: Long = 8_000,
+    private val firstFixTimeoutMillis: Long = 30_000,
     private val firstFixAnnounceMillis: Long = 1_500,
-    private val sendRelayPrompt: ((String) -> Unit)? = null
+    private val sendRelayPrompt: ((String) -> Unit)? = null,
+    private val requiresDestinationConfirmation: Boolean = true,
+    private val confirmationTimeoutMillis: Long = 60_000
 ) {
     private companion object {
         const val REROUTE_COOLDOWN_MILLIS = 20_000L
@@ -102,7 +106,7 @@ class NavigationController(
         // cause on the rare timeout that still happens — see awaitFirstFix
         // and handleStart's first no-route exit.
         const val LOCATING_SPOKEN = "正在定位…"
-        const val NO_FIX_DETAIL = "还没定位到，到室外或空旷处再说一次。"
+        const val NO_FIX_DETAIL = "还没获取到精确位置。请检查 Max 的定位和精确位置权限，并到室外或空旷处重试。"
         // "Never rerouted" without risking overflow when the cooldown check
         // computes `now() - lastRerouteAt`.
         const val NO_PRIOR_REROUTE = Long.MIN_VALUE / 2
@@ -118,6 +122,9 @@ class NavigationController(
      *  what may never (anything `suspend`). */
     private val lock = Any()
 
+    private var confirmation: CompletableDeferred<Boolean>? = null
+    private var confirmationId: String? = null
+    private var latestFix: LatLon? = null
     private var route: NavigationRoute? = null
     private var progress = GuidanceProgress()
     private var rerouting = false
@@ -211,6 +218,9 @@ class NavigationController(
         // `locationSource.start` is a plain non-suspending call, so holding
         // the lock across it is safe (see the class doc).
         val generation = synchronized(lock) {
+            if (confirmation != null) { route = null; onGuidance(null) }
+            resolveConfirmationLocked(false)
+            latestFix = null
             navigationGeneration += 1
             starting = true
             // Captured BEFORE `locationSource.start` below, not after —
@@ -251,7 +261,7 @@ class NavigationController(
             // converting it again here would silently corrupt the origin;
             // onFix (THE datum edge) is the only place this fix is ever
             // converted.
-            val origin = awaitFirstFix()
+            val origin = awaitFirstFix(generation)
             if (origin == null) {
                 stopSourceIfOrphaned(generation)
                 // Locates the cause: a genuinely no-fix timeout is not a
@@ -274,6 +284,10 @@ class NavigationController(
                     // generation now owns `route`/the stream; do not stomp on it.
                     return@synchronized false
                 }
+                if (requiresDestinationConfirmation) {
+                    confirmation = CompletableDeferred()
+                    confirmationId = UUID.randomUUID().toString()
+                }
                 commitRouteLocked(resolved)
                 // Parity-backlog fix (see class doc): a fresh route must not
                 // inherit a stale cooldown from whatever this generation
@@ -282,13 +296,37 @@ class NavigationController(
                 lastRerouteAt = NO_PRIOR_REROUTE
                 true
             }
-            sendResult(
-                if (committed) {
-                    buildDeviceResult(commandId, "ok")
-                } else {
-                    startFailureResult(commandId, generation)
+            if (committed && requiresDestinationConfirmation) {
+                val pending = synchronized(lock) {
+                    if (generation != navigationGeneration) return@synchronized null
+                    confirmation?.also {
+                        if (!relayPrompt(resolved, "confirm")) speaker.speak("请确认目的地：${resolved.destinationName}。确认后开始导航。", false)
+                    }
                 }
-            )
+                val accepted = pending?.let { withTimeoutOrNull(confirmationTimeoutMillis) { it.await() } } == true
+                synchronized(lock) {
+                    if (generation != navigationGeneration) {
+                        sendResult(buildDeviceResult(commandId, "failed", "navigation.cancelled"))
+                        return
+                    }
+                    resolveConfirmationLocked(accepted)
+                    if (!accepted) {
+                        route = null; locationSource.stop(); onGuidance(null)
+                        sendResult(buildDeviceResult(commandId, "failed", "navigation.cancelled"))
+                        return
+                    }
+                    onGuidance(initialState(resolved))
+                }
+            }
+            synchronized(lock) {
+                sendResult(
+                    if (committed && generation == navigationGeneration && route != null) {
+                        buildDeviceResult(commandId, "ok")
+                    } else {
+                        startFailureResult(commandId, generation)
+                    }
+                )
+            }
         } finally {
             // Only THIS generation's own exit clears the latch — a stale
             // attempt (superseded by a newer start, an explicit stop, or a
@@ -333,6 +371,7 @@ class NavigationController(
             // An explicit stop is a deliberate "cancel everything": any
             // start or reroute already in flight must never revive
             // navigation once its answer arrives late.
+            resolveConfirmationLocked(false)
             navigationGeneration += 1
             starting = false
             val pendingFix = takePendingFirstFixLocked()
@@ -403,6 +442,7 @@ class NavigationController(
      *  any one `teardown()` call. */
     fun teardown() {
         synchronized(lock) {
+            resolveConfirmationLocked(false)
             navigationGeneration += 1
             // A fourth generation-bump site (alongside handleStart,
             // handleStop, and performReroute's failure branch) — must clear
@@ -425,12 +465,33 @@ class NavigationController(
     /** Feed one raw WGS-84 fix (the location callback and tests both enter
      *  here). Synchronous — never suspends, never blocks on I/O; the one
      *  suspending consequence (a reroute search) is dispatched onto [scope]. */
+    fun confirmDestination(id: String, accepted: Boolean) = synchronized(lock) {
+        if (confirmationId == id) confirmation?.complete(accepted)
+    }
+
+    fun handleConfirmationReply(text: String) = synchronized(lock) {
+        val id = confirmationId ?: return@synchronized
+        val reply = text.trim().trimEnd('.', '!', '?', '。', '！', '？').lowercase(Locale.ROOT)
+        when (reply) {
+            "确认", "确认导航", "开始导航", "是的", "yes", "confirm", "start navigation" -> confirmDestination(id, true)
+            "取消", "取消导航", "不是", "no", "cancel", "cancel navigation" -> confirmDestination(id, false)
+        }
+    }
+
+    private fun resolveConfirmationLocked(accepted: Boolean) {
+        confirmation?.complete(accepted)
+        confirmation = null
+        confirmationId = null
+    }
+
     fun onFix(wgsFix: LatLon) {
         val fix = CoordinateDatum.wgs84ToGcj02(wgsFix)
+        synchronized(lock) { latestFix = fix }
         resolveFirstFix(fix)
 
         val reroute = synchronized(lock) {
             val currentRoute = route ?: return
+            if (confirmation != null) { onGuidance(initialState(currentRoute)); return }
             val maneuverIndex = progress.maneuverIndex
             val update = GuidanceEngine.step(fix, currentRoute, progress)
             progress = update.progress
@@ -466,7 +527,7 @@ class NavigationController(
 
             onGuidance(publishedState(currentRoute, update).copy(riderCoordinate = fix))
 
-            if (update.offRoute && !rerouting && now() - lastRerouteAt >= REROUTE_COOLDOWN_MILLIS) {
+            if (update.offRoute && !starting && !rerouting && now() - lastRerouteAt >= REROUTE_COOLDOWN_MILLIS) {
                 rerouting = true
                 rerouteAttemptId += 1
                 lastRerouteAt = now()
@@ -530,6 +591,7 @@ class NavigationController(
                     // leaving it to that alone would strand `starting` true
                     // forever, and a later genuinely-idle stop would
                     // wrongly answer `ok`.
+                    resolveConfirmationLocked(false)
                     navigationGeneration += 1
                     starting = false
                     route?.let { if (!relayPrompt(it, "rerouteFailed")) speaker.speak(REROUTE_FAILED_SPOKEN, interrupt = false) }
@@ -584,10 +646,12 @@ class NavigationController(
      *  registration installed, and THIS watchdog's own `deferred` stays the
      *  one pending exactly until something legitimately consumes it — a
      *  real fix, an explicit stop/teardown, or this watchdog itself. */
-    private suspend fun awaitFirstFix(): LatLon? {
+    private suspend fun awaitFirstFix(generation: Int): LatLon? {
         val deferred = CompletableDeferred<LatLon?>()
         val preempted = synchronized(lock) {
+            if (generation != navigationGeneration) { deferred.complete(null); return@synchronized null }
             val previous = takePendingFirstFixLocked()
+            latestFix?.let { deferred.complete(it); return@synchronized previous }
             firstFixContinuation = deferred
             // Spoken once, and only while THIS wait is still pending: a fix
             // that lands first (or an explicit stop/teardown) tears this down
@@ -686,17 +750,21 @@ class NavigationController(
         remainingSeconds = update.remainingSeconds,
         offRoute = update.offRoute,
         arrived = update.arrived,
-        route = route
+        route = route,
+        riderCoordinate = latestFix,
+        confirmationId = confirmationId
     )
 
     private fun initialState(route: NavigationRoute): NavGuidanceState = NavGuidanceState(
         destinationName = route.destinationName,
         currentInstruction = route.steps.firstOrNull()?.instruction,
-        distanceToManeuverMeters = route.distanceMeters,
+        distanceToManeuverMeters = route.steps.firstOrNull()?.alongRouteMeters ?: route.distanceMeters,
         remainingMeters = route.distanceMeters,
         remainingSeconds = route.etaSeconds,
         offRoute = false,
         arrived = false,
-        route = route
+        route = route,
+        riderCoordinate = latestFix,
+        confirmationId = confirmationId
     )
 }

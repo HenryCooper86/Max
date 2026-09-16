@@ -413,7 +413,8 @@ export function parseClientEvent(data: RawData): ClientEvent {
       };
     }
     if (
-      (value.kind !== "offRoute" &&
+      (value.kind !== "confirm" &&
+        value.kind !== "offRoute" &&
         value.kind !== "rerouteFailed" &&
         value.kind !== "arrived" &&
         value.kind !== "locationLost") ||
@@ -425,7 +426,7 @@ export function parseClientEvent(data: RawData): ClientEvent {
       type: "nav.prompt",
       promptId: value.promptId as string,
       routeCommandId: value.routeCommandId as string,
-      kind: value.kind as "offRoute" | "rerouteFailed" | "arrived" | "locationLost"
+      kind: value.kind as "confirm" | "offRoute" | "rerouteFailed" | "arrived" | "locationLost"
     };
   }
 

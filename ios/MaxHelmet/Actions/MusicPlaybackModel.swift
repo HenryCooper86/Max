@@ -7,6 +7,7 @@ protocol MusicPlaybackDriving: AnyObject {
     var title: String? { get }
     var artist: String? { get }
     var hasItem: Bool { get }
+    var itemIdentity: String? { get }
     var isPlaying: Bool { get }
     var notificationObject: AnyObject { get }
     func beginObserving()
@@ -25,6 +26,10 @@ private final class SystemMusicPlaybackDriver: MusicPlaybackDriving {
     var title: String? { player.nowPlayingItem?.title }
     var artist: String? { player.nowPlayingItem?.artist }
     var hasItem: Bool { player.nowPlayingItem != nil }
+    var itemIdentity: String? {
+        guard let item = player.nowPlayingItem else { return nil }
+        return "\(item.persistentID):\(item.playbackStoreID):\(player.indexOfNowPlayingItem)"
+    }
     var isPlaying: Bool { player.playbackState == .playing }
     var notificationObject: AnyObject { player }
     func beginObserving() { player.beginGeneratingPlaybackNotifications() }
@@ -159,14 +164,35 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
         message = nil
         if control == .play { return await startPlayback() }
         guard player.hasItem else { return emptyQueue() }
+        let previousItem = player.itemIdentity
+        let wasPlaying = player.isPlaying
         switch control {
         case .play: break
         case .pause: player.pause()
         case .next: player.next()
         case .previous: player.previous()
         }
+        var resumedNewItem = false
+        // MediaPlayer transport calls are asynchronous and can silently no-op
+        // at queue boundaries. Do not acknowledge a skip until the item changes.
+        for _ in 0..<playbackAttempts {
+            refresh()
+            let changed = player.hasItem && player.itemIdentity != nil && player.itemIdentity != previousItem
+            if control == .pause ? !isPlaying : (changed && (!wasPlaying || isPlaying)) { return .ok }
+            if control != .pause && changed && wasPlaying && !resumedNewItem {
+                resumedNewItem = true
+                player.play()
+            }
+            if Task.isCancelled { return .failed("music.unavailable", "音乐控制已取消。") }
+            await waitForPlayback()
+        }
         refresh()
-        return .ok
+        let changed = player.hasItem && player.itemIdentity != nil && player.itemIdentity != previousItem
+        if control == .pause ? !isPlaying : (changed && (!wasPlaying || isPlaying)) { return .ok }
+        message = control == .pause
+            ? "Apple Music 未暂停，请重试。"
+            : "歌曲没有切换。播放队列可能已到末尾，请在“选择音乐”中添加多首歌曲，或在 Apple Music 中选择一个歌单。"
+        return .failed("music.controlUnavailable", message)
     }
 
     private func startPlayback() async -> DeviceActionResult {

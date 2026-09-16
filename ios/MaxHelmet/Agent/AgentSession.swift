@@ -626,6 +626,10 @@ final class AgentSession: NSObject, ObservableObject {
         }
     }
 
+    @MainActor func confirmNavigation(id: UUID, accepted: Bool) {
+        navigationController.confirmDestination(id: id, accepted: accepted)
+    }
+
     // MARK: - transcript persistence
 
     /// The most recent final turns survive app restarts, stored as JSON in
@@ -967,6 +971,7 @@ final class AgentSession: NSObject, ObservableObject {
             if speaker == .rider {
                 stopAgentSpeech()
                 onCrash { $0.riderTranscript(text) }
+                if final { Task { @MainActor [weak self] in self?.navigationController.handleConfirmationReply(text) } }
             }
             pushTranscript(
                 speaker: speaker, text: text, final: final,

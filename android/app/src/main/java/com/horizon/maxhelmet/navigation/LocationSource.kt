@@ -36,29 +36,21 @@ class LocationManagerSource(private val context: Context) : LocationSource {
         if (listener != null) return // idempotent: already streaming
         if (!hasPermission()) return
         val newListener = LocationListenerAdapter(onFix)
-        // Assign only on success: if requestLocationUpdates throws,
-        // `listener` must stay null, or the idempotence guard above no-ops
-        // every later start() forever — permanently disabling GPS for the
-        // rest of the process on what should have been a retryable failure.
-        val requested = runCatching {
-            manager?.requestLocationUpdates(
-                LocationManager.GPS_PROVIDER,
-                1_000L,
-                0f,
-                newListener,
-                Looper.getMainLooper()
-            )
+        val service = manager ?: return
+        val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+            .filter { runCatching { service.isProviderEnabled(it) }.getOrDefault(false) }
+        var registered = false
+        for (provider in providers) {
+            if (runCatching { service.requestLocationUpdates(provider, 1_000L, 0f, newListener, Looper.getMainLooper()) }.isSuccess) {
+                registered = true
+            }
         }
-        // Nav-fast-follow Task 4 tighten: `manager?.requestLocationUpdates`
-        // short-circuits to a plain `null` when `manager` itself is null
-        // (no system LocationManager service), and `runCatching { null }`
-        // is a `Result.success(null)` — so `requested.isSuccess` alone was
-        // true even though nothing was ever registered. `listener` got
-        // assigned anyway, permanently wedging the idempotence guard above
-        // (`if (listener != null) return`) for the rest of the process on a
-        // device that never had a location service to retry against.
-        if (manager != null && requested.isSuccess) {
+        if (registered) {
             listener = newListener
+            providers.mapNotNull { runCatching { service.getLastKnownLocation(it) }.getOrNull() }
+                .filter { validNavigationFix(it) }
+                .minByOrNull { it.accuracy }
+                ?.let { newListener.onLocationChanged(it) }
         }
     }
 
@@ -76,7 +68,14 @@ class LocationManagerSource(private val context: Context) : LocationSource {
      *  exact same listener instance back to `removeUpdates`. */
     private class LocationListenerAdapter(private val onFix: (LatLon) -> Unit) : android.location.LocationListener {
         override fun onLocationChanged(location: Location) {
-            onFix(LatLon(location.latitude, location.longitude))
+            if (validNavigationFix(location)) onFix(LatLon(location.latitude, location.longitude))
         }
     }
+}
+
+private fun validNavigationFix(location: Location): Boolean {
+    val age = (android.os.SystemClock.elapsedRealtimeNanos() - location.elapsedRealtimeNanos) / 1_000_000_000.0
+    return age in 0.0..15.0 && location.hasAccuracy() && location.accuracy.isFinite() && location.accuracy in 0f..100f
+        && location.latitude.isFinite() && location.latitude in -90.0..90.0
+        && location.longitude.isFinite() && location.longitude in -180.0..180.0
 }

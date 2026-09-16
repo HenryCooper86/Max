@@ -3,10 +3,11 @@ import XCTest
 
 private final class FakePlayer: SystemMusicPlaying, @unchecked Sendable {
     var calls: [String] = []
-    func play() { calls.append("play") }
-    func pause() { calls.append("pause") }
-    func next() { calls.append("next") }
-    func previous() { calls.append("previous") }
+    var result = DeviceActionResult.ok
+    @MainActor func perform(_ control: MusicControl) async -> DeviceActionResult {
+        calls.append(control.rawValue)
+        return result
+    }
 }
 
 private final class FakePresenter: MessagePresenting, @unchecked Sendable {
@@ -33,8 +34,10 @@ final class MusicMessageHandlerTests: XCTestCase {
 
         _ = await handler.perform(.musicControl(control: .play, app: nil))
         _ = await handler.perform(.musicControl(control: .next, app: nil))
+        _ = await handler.perform(.musicControl(control: .pause, app: nil))
+        _ = await handler.perform(.musicControl(control: .previous, app: nil))
 
-        XCTAssertEqual(player.calls, ["play", "next"])
+        XCTAssertEqual(player.calls, ["play", "next", "pause", "previous"])
     }
 
     func testRefusesANamedThirdPartyPlayer() async {
@@ -46,6 +49,20 @@ final class MusicMessageHandlerTests: XCTestCase {
         XCTAssertEqual(result.status, .unsupported)
         XCTAssertEqual(result.reason, "player.unsupported")
         XCTAssertTrue(player.calls.isEmpty, "A refused player must not fall through to Apple Music")
+    }
+
+    func testPlaybackFailureIsReturnedToVoiceCommand() async {
+        let player = FakePlayer()
+        player.result = .failed("music.emptyQueue", "选择音乐")
+        let result = await MusicController(player: player).perform(.musicControl(control: .play, app: nil))
+        XCTAssertEqual(result, player.result)
+    }
+
+    func testMusicPermissionDenialIsReturnedToVoiceCommand() async {
+        let player = FakePlayer()
+        player.result = .denied("permission.music")
+        let result = await MusicController(player: player).perform(.musicControl(control: .play, app: nil))
+        XCTAssertEqual(result, player.result)
     }
 
     func testComposesAMessageWhenStopped() async {

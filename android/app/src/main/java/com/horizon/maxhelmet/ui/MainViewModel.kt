@@ -7,6 +7,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.FileProvider
+import androidx.lifecycle.viewModelScope
+import androidx.core.content.ContextCompat
+import android.Manifest
+import android.content.pm.PackageManager
+import kotlinx.coroutines.launch
+import com.horizon.maxhelmet.companion.*
 import androidx.lifecycle.AndroidViewModel
 import com.horizon.maxhelmet.BuildConfig
 import com.horizon.maxhelmet.agent.AgentSession
@@ -55,8 +61,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = application.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private val secureTokens = SecureTokenStore(prefs)
     private val authClient = AuthClient()
+    private var loginGeneration = 0L
 
     val sessionState: StateFlow<AgentSession.State> = session.state
+    val crash = session.crash
+    val companion = CompanionHolder.get(application)
+    val helmetDiscovery = HelmetDiscovery(application)
+    fun pairHelmet(code: String, discovery: Boolean = false) {
+        if (!isLoggedIn) { companion.fail("请先登录账号"); return }
+        if (session.state.value.handsFree) { companion.fail("请先结束手机免提，再连接头盔"); return }
+        val action = if (discovery) CompanionProtocol.discover(code) else CompanionProtocol.pair(code)
+        if (action == null) { companion.fail("配对码无效"); return }
+        companion.connect(relayUrl.trim(), sessionToken, action, transport = CompanionTransport.client(allowSelfSigned))
+    }
+    fun startHelmetRide() {
+        val owner = sessionToken
+        val host = deviceActions.host ?: return
+        viewModelScope.launch {
+            if (!isLoggedIn || session.state.value.handsFree) { companion.fail("请登录账号并结束手机免提"); return@launch }
+            if (!host.requestPermission(Manifest.permission.ACCESS_FINE_LOCATION)) { companion.fail("骑行定位需要精确位置权限"); return@launch }
+            if (deviceActions.host !== host || owner != sessionToken || !isLoggedIn) return@launch
+            companion.connect(relayUrl.trim(), sessionToken, ride = true, transport = CompanionTransport.client(allowSelfSigned))
+            runCatching { ContextCompat.startForegroundService(getApplication(), Intent(getApplication(), HelmetRideService::class.java)) }
+                .onFailure { companion.fail("无法启动骑行，请在应用内重试") }
+        }
+    }
+    fun unpairHelmet() { if (isLoggedIn) companion.unpair(relayUrl.trim(), sessionToken, CompanionTransport.client(allowSelfSigned)) }
+    val music = session.music
+    val captures = session.captures
+    val camera = session.camera
+    val deviceActions = session.deviceActions
+    var showGallery by mutableStateOf(false)
 
     var relayUrl by mutableStateOf(prefs.getString(KEY_RELAY_URL, DEFAULT_RELAY_URL) ?: DEFAULT_RELAY_URL)
         private set
@@ -79,6 +114,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
 
     fun updateRelayUrl(url: String) {
+        if (url != relayUrl) { loginGeneration++; loginBusy = false; companion.disconnect(); helmetDiscovery.stop(); session.detachCrashAccount() }
         relayUrl = url
         prefs.edit().putString(KEY_RELAY_URL, url).apply()
     }
@@ -89,6 +125,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateAllowSelfSigned(allow: Boolean) {
+        if (allowSelfSigned != (BuildConfig.DEBUG && allow)) companion.disconnect()
         allowSelfSigned = BuildConfig.DEBUG && allow
         prefs.edit().putBoolean(KEY_ALLOW_SELF_SIGNED, allowSelfSigned).apply()
     }
@@ -159,6 +196,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * on the 账号 section. Called by the screen when authRequired flips on.
      */
     fun handleAuthRequired() {
+        loginGeneration++; loginBusy = false
+        companion.disconnect(); helmetDiscovery.stop(); session.detachCrashAccount()
         session.acknowledgeAuthRequired()
         if (isLoggedIn) {
             sessionToken = ""
@@ -189,11 +228,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             loginError = "请输入用户名和密码"
             return
         }
+        val owner = ++loginGeneration
         loginBusy = true
         loginError = null
         authClient.login(relayUrl.trim(), name, password, allowSelfSigned) { login, error ->
+            if (owner != loginGeneration) return@login
             loginBusy = false
             if (login != null) {
+                companion.disconnect(); helmetDiscovery.stop()
                 sessionToken = login.token
                 secureTokens.write(KEY_SESSION_TOKEN, login.token)
                 authUserId = login.user.id
@@ -226,6 +268,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * that authorized it just ended.
      */
     fun logout() {
+        loginGeneration++; loginBusy = false
+        companion.stopRide(); companion.disconnect(); helmetDiscovery.stop(); session.detachCrashAccount()
         authClient.logout(relayUrl.trim(), sessionToken, allowSelfSigned)
         sessionToken = ""
         secureTokens.remove(KEY_SESSION_TOKEN)
@@ -244,7 +288,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         session.selectTranscriptOwner(null)
         if (session.state.value.handsFree) {
             session.stop()
-            VoiceAgentService.stop(getApplication())
+
         }
     }
 
@@ -287,8 +331,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val app = getApplication<Application>()
         if (session.state.value.handsFree) {
             session.stop()
-            VoiceAgentService.stop(app)
+
         } else {
+            if (companion.state.value.riding || crash.controller.active) return
+            companion.disconnect()
             pendingHandsFreeRetry = false
             VoiceAgentService.start(app)
             session.start(
@@ -306,6 +352,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Mutes/unmutes the mic mid-session (bottom mute control). */
     fun toggleMute() = session.toggleMute()
+    override fun onCleared() { helmetDiscovery.stop(); super.onCleared() }
 
     fun setVoiceGender(gender: VoiceGender) = session.setVoiceGender(gender)
 

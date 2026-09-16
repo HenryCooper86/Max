@@ -61,6 +61,7 @@ class PcmPlayer {
      */
     @Volatile
     var useVoiceCall = false
+    @Volatile var level: Float = PLAYBACK_GAIN
 
     @Synchronized
     fun start() {
@@ -141,12 +142,13 @@ class PcmPlayer {
      * hard-clipping — the PCM-domain equivalent of the web's DynamicsCompressor.
      */
     private fun applyGain(pcm: ByteArray): ByteArray {
-        if (PLAYBACK_GAIN == 1.0f) return pcm
+        val gain = level.coerceIn(0.5f, 4f)
+        if (gain == 1.0f) return pcm
         var i = 0
         while (i + 1 < pcm.size) {
             // High byte shl 8 sign-extends; low byte masked → signed Int16.
             val sample = (pcm[i + 1].toInt() shl 8) or (pcm[i].toInt() and 0xFF)
-            val limited = softLimit(sample / 32768f * PLAYBACK_GAIN)
+            val limited = softLimit(sample / 32768f * gain)
             val out = (limited * 32767f).toInt().coerceIn(-32768, 32767)
             pcm[i] = (out and 0xFF).toByte()
             pcm[i + 1] = ((out shr 8) and 0xFF).toByte()

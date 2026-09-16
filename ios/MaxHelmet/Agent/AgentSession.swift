@@ -171,6 +171,7 @@ final class AgentSession: NSObject, ObservableObject {
         CrashSettings(contactNumber: nil, relayOptIn: false, callTarget: "120", logOnly: false)
     }
     private let audioRouter = AudioRouter()
+    @MainActor lazy var music = MusicPlaybackModel()
     private lazy var mic = MicStreamer(
         engine: voiceEngine,
         onFrame: { [weak self] frame in
@@ -255,7 +256,7 @@ final class AgentSession: NSObject, ObservableObject {
         handlers: [
             .torch: TorchController(),
             .volume: PlaybackVolumeController(gain: player),
-            .music: MusicController(),
+            .music: MusicController(player: music),
             .sms: MessageComposer(
                 presenter: MainActorMessagePresenter(),
                 speedProvider: { [weak self] in

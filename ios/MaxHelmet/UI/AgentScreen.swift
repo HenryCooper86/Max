@@ -307,6 +307,7 @@ struct AgentScreen: View {
     private func utilityContent(captionsVisible: Bool) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             StateReadout(caption: orbCaption(state), telltale: stateTelltale(state), color: orbColor(state))
+            MusicPlaybackCard(model: session.music)
             if captionsVisible { captionsCard() }
             // The readout belongs with the helmet above it; 字幕 / 相册 / 设置
             // settle against the bottom edge rather than floating mid-region.

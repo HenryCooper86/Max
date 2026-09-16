@@ -233,6 +233,12 @@ hide the toggle, use the hardened `Info.plist`, and require a trusted certificat
   music reaches only Apple Music and the local library, never 网易云/QQ音乐; SMS is refused above
   5 km/h. Contact numbers never leave the device, and spoken contact names are redacted from stored
   QA transcripts.
+- Music commands reveal an in-app player with track/artist, previous, play/pause, next,
+  and an embedded Apple Music library picker. Touch and voice share the system music queue;
+  no Music-app URL is opened. Media access denial, an empty queue, and preparation errors
+  produce failures instead of a false spoken success. This selects library music, not a
+  catalog search by song name. The voice audio session mixes with music so playback can
+  coexist with microphone capture and agent speech.
 - Voice-triggered live navigation: "导航去X" starts in-app turn-by-turn guidance built on a pure
   `GuidanceEngine` — route matching, off-route detection, and prompt timing, all unit-tested from
   lat/lon literals — and speaks maneuver prompts at ~400 m, ~150 m, and the turn, with one debounced
@@ -253,6 +259,15 @@ hide the toggle, use the hardened `Info.plist`, and require a trusted certificat
 - Release-run/test-case/assignment attribution with explicit iOS platform and stamped git commit.
 
 ## Architecture
+
+Music changes require a physical-iPhone check with a populated Music library (cloud songs
+also require the appropriate account/subscription and network): start hands-free, ask to
+play music, verify Max stays foreground and the music card appears, then use both touch
+and voice for pause/resume/next/previous. Select songs and cancel the in-app picker; verify
+metadata also updates after a headset/lock-screen control. Repeat on speaker and Bluetooth,
+checking the mic level and an audible assistant reply while music plays. Check denied media
+permission, an empty library/queue, and unavailable cloud songs. Simulator tests cannot
+validate Apple Music playback or simultaneous hardware input/output.
 
 The app mirrors the Android client's two-layer split. The `Agent/` layer is pure protocol +
 audio + session logic; the `UI/` layer is the SwiftUI HUD.

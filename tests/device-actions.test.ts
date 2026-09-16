@@ -114,6 +114,12 @@ describe("deviceFailureSpeech", () => {
 
   it("explains an unreachable third-party player", () => {
     expect(deviceFailureSpeech("music.control", "unsupported", "player.unsupported")).toContain("本机音乐");
+    expect(deviceFailureSpeech("music.control", "failed", "music.emptyQueue")).toContain("选择音乐");
+    expect(deviceFailureSpeech("music.control", "failed", "music.unavailable")).toContain("Apple Music");
+    expect(deviceFailureSpeech("music.control", "failed", "music.busy")).toContain("稍后重试");
+    expect(deviceFailureSpeech("music.control", "failed", "music.playerUnavailable")).toContain("播放队列");
+    expect(deviceFailureSpeech("music.control", "denied", "permission.musicControl")).toContain("授权");
+    expect(deviceFailureSpeech("music.control", "failed", "music.queueEnd")).toContain("末尾");
   });
 
   it("explains an unresolvable destination", () => {

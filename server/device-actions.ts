@@ -489,6 +489,17 @@ const FAILURE_SPEECH: Record<string, string> = {
   "device.locked": "手机锁屏了，解锁后我再执行。",
   "unsafe.speed": "骑行中我不发短信，停车以后我再帮你发。",
   "player.unsupported": "我只能控制 Apple Music 和本机音乐。",
+  "music.emptyQueue": "还没有播放队列，请在应用里的音乐卡片上点选择音乐。",
+  "music.unavailable": "音乐暂时无法播放，请在音乐卡片上选择歌曲，并检查 Apple Music 是否可用。",
+  "music.busy": "音乐正在准备，请稍后重试。",
+  "music.queueEnd": "已经到播放队列末尾了，请选择更多音乐。",
+  "music.controlUnavailable": "当前音乐应用不支持这个播放操作。",
+  "music.playerUnavailable": "没有找到这个音乐应用的播放队列，请先在该应用中选择音乐。",
+  "permission.musicControl": "请先在音乐卡片上点控制音乐应用，按提示授权后再试。",
+  "gallery.uploadFailed": "照片或视频上传失败，请检查连接后再试。",
+  "action.invalid": "这个设备操作暂时不支持。",
+  "device.unavailable": "设备暂时无法完成这个操作，请检查权限后再试。",
+  "permission.device": "没有执行这个操作所需的设备权限，请在系统设置中检查。",
   // Shared by the phone's destination.show device action and the relay's own
   // nav.request handling (server/routing.ts) and the embedded navigation
   // controller's device.result reason — one reason code, one truthful line.

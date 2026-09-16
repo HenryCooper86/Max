@@ -21,6 +21,12 @@ struct NavigationDetailsView: View {
     @State private var followsRider = true
     @State private var showsSteps = false
 
+    init(guidance: GuidanceState, music: MusicPlaybackModel? = nil, initiallyShowsSteps: Bool = false) {
+        self.guidance = guidance
+        self.music = music
+        _showsSteps = State(initialValue: initiallyShowsSteps)
+    }
+
     var body: some View {
         NavigationStack {
             GeometryReader { geometry in
@@ -49,8 +55,8 @@ struct NavigationDetailsView: View {
                 } else {
                     VStack(spacing: 10) {
                         maneuver()
-                        map.layoutPriority(1)
-                        tripSummary()
+                        map
+                        tripSummary(stepsHeight: min(160, max(96, geometry.size.height * 0.22)))
                         musicPanel
                     }.padding(12)
                 }
@@ -109,7 +115,7 @@ struct NavigationDetailsView: View {
             .accessibilityIdentifier("ridingNavigationMap")
     }
 
-    private func tripSummary(compact: Bool = false) -> some View {
+    private func tripSummary(compact: Bool = false, stepsHeight: CGFloat = 160) -> some View {
         VStack(spacing: 10) {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -149,9 +155,12 @@ struct NavigationDetailsView: View {
                             }.frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
-                }.frame(maxHeight: 160)
+                }
+                // A maximum alone lets the map compress this viewport to zero.
+                .frame(height: stepsHeight)
             }
         }
+        .fixedSize(horizontal: false, vertical: true)
         .padding(compact ? 8 : 12)
         .background(HudColors.panelElevated, in: RoundedRectangle(cornerRadius: 16))
     }

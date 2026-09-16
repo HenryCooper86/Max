@@ -433,7 +433,11 @@ function matchMusic(raw: string): DeviceCommand | null {
   )
     control = "next";
   else if (/(上一首|上一曲|previous (track|song))/i.test(raw)) control = "previous";
-  else if (/(暂停|停一下|pause)/i.test(raw) && /(音乐|歌|music|song)/i.test(raw)) control = "pause";
+  else if (
+    /(暂停|停一下|停止|取消|关闭|\b(?:pause|stop|cancel|close)\b)/i.test(raw) &&
+    /(音乐|歌|music|song|playback)/i.test(raw)
+  )
+    control = "pause";
   else if (/(放歌|播放音乐|放音乐|来点音乐|play (some )?music)/i.test(raw)) control = "play";
   if (!control) return null;
 

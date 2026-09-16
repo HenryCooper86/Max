@@ -23,7 +23,11 @@ struct MaxHelmetApp: App {
                     #endif
                     updateIdleTimer()
                 }
-                .onChange(of: scenePhase) { _, _ in updateIdleTimer() }
+                .onChange(of: scenePhase) { _, phase in
+                    updateIdleTimer()
+                    if phase == .background { session.music.setAppInBackground(true) }
+                    else if phase == .active { session.music.setAppInBackground(false) }
+                }
                 .onChange(of: session.state.handsFree) { _, _ in updateIdleTimer() }
         }
     }

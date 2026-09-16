@@ -7,9 +7,18 @@ struct MusicPlaybackCard: View {
     var body: some View {
         if model.visible {
             VStack(alignment: .leading, spacing: 8) {
-                Label(model.title, systemImage: "music.note")
-                    .font(.headline)
-                    .lineLimit(2)
+                HStack(alignment: .top) {
+                    Label(model.title, systemImage: "music.note")
+                        .font(.headline)
+                        .lineLimit(2)
+                    Spacer(minLength: 4)
+                    Button { model.stopPlayback(dismiss: true) } label: {
+                        Image(systemName: "xmark").frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("停止并关闭音乐")
+                    .accessibilityIdentifier("closeMusicPlayback")
+                }
                 if !model.artist.isEmpty {
                     Text(model.artist).font(.caption).foregroundStyle(.secondary)
                 }

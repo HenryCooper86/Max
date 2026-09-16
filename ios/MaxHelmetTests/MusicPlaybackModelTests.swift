@@ -149,6 +149,81 @@ final class MusicPlaybackModelTests: XCTestCase {
         XCTAssertEqual(result.status, .failed)
     }
 
+    @MainActor func testClosingCardStopsPlaybackButPreservesQueueForExplicitResume() async {
+        let driver = PlaybackDriver(); driver.starts = true
+        let model = makeModel(driver)
+        _ = await model.perform(.play)
+        model.stopPlayback(dismiss: true)
+        XCTAssertFalse(model.visible)
+        XCTAssertFalse(model.isPlaying)
+        XCTAssertTrue(driver.hasItem)
+        XCTAssertEqual(driver.pauses, 1)
+        _ = await model.perform(.play)
+        XCTAssertTrue(model.isPlaying)
+        XCTAssertTrue(model.visible)
+    }
+
+    @MainActor func testBackgroundStopsAndCannotRestartUntilExplicitForegroundPlay() async {
+        let driver = PlaybackDriver(); driver.starts = true
+        let model = makeModel(driver)
+        _ = await model.perform(.play)
+        model.setAppInBackground(true)
+        XCTAssertFalse(model.isPlaying)
+        let backgroundResult = await model.perform(.play)
+        XCTAssertEqual(backgroundResult.status, .failed)
+        XCTAssertEqual(driver.plays, 1)
+        model.setAppInBackground(false)
+        XCTAssertFalse(model.isPlaying)
+        XCTAssertEqual(driver.plays, 1)
+        _ = await model.perform(.play)
+        XCTAssertTrue(model.isPlaying)
+    }
+
+    @MainActor func testCloseDuringAuthorizationCannotOpenPickerLater() async {
+        var pending: CheckedContinuation<MPMediaLibraryAuthorizationStatus, Never>?
+        let driver = PlaybackDriver()
+        let model = MusicPlaybackModel(player: driver, requestAuthorization: {
+            await withCheckedContinuation { pending = $0 }
+        })
+        let request = Task { await model.chooseMusic() }
+        while pending == nil { await Task.yield() }
+        model.stopPlayback(dismiss: true)
+        pending?.resume(returning: .authorized)
+        await request.value
+        XCTAssertFalse(model.showingPicker)
+        XCTAssertFalse(model.visible)
+        XCTAssertFalse(model.busy)
+        XCTAssertEqual(driver.plays, 0)
+    }
+
+    @MainActor func testPauseCancelsPendingPreparationAndLateCallbackCannotPlay() async {
+        let driver = PlaybackDriver(); driver.holdPreparation = true; driver.starts = true
+        let model = makeModel(driver)
+        let selection = Task { await model.select(MPMediaItemCollection(items: [MPMediaItem()])) }
+        while driver.pending == nil { await Task.yield() }
+        let result = await model.perform(.pause)
+        XCTAssertEqual(result.status, .ok)
+        await selection.value
+        driver.pending?(nil)
+        await Task.yield()
+        XCTAssertEqual(driver.plays, 0)
+        XCTAssertFalse(model.isPlaying)
+        XCTAssertFalse(model.busy)
+    }
+
+    @MainActor func testBackgroundDuringSkipCannotResumeChangedTrack() async {
+        let driver = PlaybackDriver(); driver.isPlaying = true; driver.starts = true
+        var model: MusicPlaybackModel!
+        model = MusicPlaybackModel(player: driver, playbackAttempts: 3, waitForPlayback: {
+            model.setAppInBackground(true)
+            driver.itemIdentity = "two"
+        }, requestAuthorization: { .authorized })
+        let result = await model.perform(.next)
+        XCTAssertEqual(result.status, .failed)
+        XCTAssertEqual(driver.plays, 0)
+        XCTAssertFalse(model.isPlaying)
+    }
+
     @MainActor private func makeModel(_ driver: PlaybackDriver) -> MusicPlaybackModel {
         MusicPlaybackModel(player: driver, playbackAttempts: 2, waitForPlayback: {}, requestAuthorization: { .authorized })
     }
@@ -165,6 +240,7 @@ private final class PlaybackDriver: MusicPlaybackDriving {
     var notificationObject: AnyObject { self }
     var prepares = 0
     var plays = 0
+    var pauses = 0
     var starts = false
     var error: Error?
     var holdPreparation = false
@@ -177,7 +253,7 @@ private final class PlaybackDriver: MusicPlaybackDriving {
         if holdPreparation { pending = completion } else { completion(error) }
     }
     func play() { plays += 1; isPlaying = starts }
-    func pause() { isPlaying = false }
+    func pause() { pauses += 1; isPlaying = false }
     func next() {}
     func previous() {}
 }

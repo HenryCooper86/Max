@@ -21,8 +21,8 @@ protocol MusicPlaybackDriving: AnyObject {
 }
 
 @MainActor
-private final class SystemMusicPlaybackDriver: MusicPlaybackDriving {
-    private let player = MPMusicPlayerController.systemMusicPlayer
+private final class AppMusicPlaybackDriver: MusicPlaybackDriving {
+    private let player = MPMusicPlayerController.applicationMusicPlayer
     var title: String? { player.nowPlayingItem?.title }
     var artist: String? { player.nowPlayingItem?.artist }
     var hasItem: Bool { player.nowPlayingItem != nil }
@@ -55,8 +55,7 @@ private final class MusicPreparation {
     }
 }
 
-/// Shared by voice commands and the HUD. The system queue stays available to
-/// lock-screen/headset controls without navigating away from Max.
+/// Shared by voice commands and the HUD, with a queue owned only by Max.
 @MainActor
 final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
     @Published private(set) var visible = false
@@ -69,6 +68,9 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
 
     private let player: MusicPlaybackDriving
     private var needsPreparation = false
+    private var operationGeneration = 0
+    private var activePreparation: MusicPreparation?
+    private var appInBackground = false
     private let preparationTimeoutNanoseconds: UInt64
     private let playbackAttempts: Int
     private let waitForPlayback: () async -> Void
@@ -84,7 +86,7 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
             MPMediaLibrary.requestAuthorization { continuation.resume(returning: $0) }
         }
     }) {
-        self.player = player ?? SystemMusicPlaybackDriver()
+        self.player = player ?? AppMusicPlaybackDriver()
         self.preparationTimeoutNanoseconds = preparationTimeoutNanoseconds
         self.playbackAttempts = playbackAttempts
         self.waitForPlayback = waitForPlayback
@@ -124,8 +126,9 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
         if isPlaying { message = nil }
     }
 
-    private func authorize() async -> Bool {
+    private func authorize(_ generation: Int) async -> Bool {
         let status = await requestAuthorization()
+        guard operationIsCurrent(generation) else { return false }
         guard status == .authorized else {
             message = "请在系统设置中允许 Max 访问媒体与 Apple Music。"
             return false
@@ -134,73 +137,126 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
         return true
     }
 
+    /// Invalidates pending authorization, preparation, and skip requests before
+    /// pausing, so a late callback cannot restart music after closing Max.
+    func stopPlayback(dismiss: Bool = false) {
+        operationGeneration += 1
+        activePreparation?.finish(NSError(domain: "MaxMusic", code: 2,
+            userInfo: [NSLocalizedDescriptionKey: "播放请求已取消。"] ))
+        activePreparation = nil
+        player.pause()
+        busy = false
+        showingPicker = false
+        message = nil
+        refresh()
+        if dismiss { visible = false }
+    }
+
+    func setAppInBackground(_ background: Bool) {
+        appInBackground = background
+        if background { stopPlayback() }
+        // Returning to Max never automatically resumes a cancelled request.
+    }
+
+    private func operationIsCurrent(_ generation: Int) -> Bool {
+        generation == operationGeneration && !appInBackground && !Task.isCancelled
+    }
+
+    private func cancelled(_ generation: Int) -> DeviceActionResult {
+        if generation == operationGeneration { stopPlayback() }
+        return .failed("music.unavailable", "音乐控制已取消。")
+    }
+
     func chooseMusic() async {
+        guard !appInBackground else { return }
         visible = true
         guard !busy else { return }
+        operationGeneration += 1
+        let generation = operationGeneration
         busy = true
-        defer { busy = false }
-        guard await authorize() else { return }
+        defer { if generation == operationGeneration { busy = false } }
+        guard await authorize(generation), operationIsCurrent(generation) else { return }
         message = nil
         showingPicker = true
     }
 
     func select(_ collection: MPMediaItemCollection) async {
-        guard !busy, !collection.items.isEmpty else { return }
+        guard !appInBackground, !busy, !collection.items.isEmpty else { return }
         visible = true
+        operationGeneration += 1
+        let generation = operationGeneration
         busy = true
-        defer { busy = false }
-        guard await authorize() else { return }
+        defer { if generation == operationGeneration { busy = false } }
+        guard await authorize(generation), operationIsCurrent(generation) else { return }
         player.setQueue(collection)
         needsPreparation = true
-        _ = await startPlayback()
+        _ = await startPlayback(generation)
     }
 
     func perform(_ control: MusicControl) async -> DeviceActionResult {
+        // Stop always wins, even while a picker selection is preparing.
+        if control == .pause {
+            stopPlayback()
+            let generation = operationGeneration
+            for _ in 0..<playbackAttempts {
+                guard generation == operationGeneration else { return cancelled(generation) }
+                refresh()
+                if !isPlaying { return .ok }
+                await waitForPlayback()
+            }
+            guard generation == operationGeneration else { return cancelled(generation) }
+            refresh()
+            return isPlaying ? .failed("music.controlUnavailable", "音乐未暂停，请重试。") : .ok
+        }
+        guard !appInBackground else { return .failed("music.unavailable", "请回到 Max 中播放音乐。") }
         visible = true
         guard !busy else { return .failed("music.busy", "音乐正在准备，请稍后重试。") }
+        operationGeneration += 1
+        let generation = operationGeneration
         busy = true
-        defer { busy = false }
-        guard await authorize() else { return .denied("permission.music", message) }
+        defer { if generation == operationGeneration { busy = false } }
+        let authorized = await authorize(generation)
+        guard operationIsCurrent(generation) else { return cancelled(generation) }
+        guard authorized else { return .denied("permission.music", message) }
         message = nil
-        if control == .play { return await startPlayback() }
+        if control == .play { return await startPlayback(generation) }
         guard player.hasItem else { return emptyQueue() }
         let previousItem = player.itemIdentity
         let wasPlaying = player.isPlaying
         switch control {
-        case .play: break
-        case .pause: player.pause()
+        case .play, .pause: break
         case .next: player.next()
         case .previous: player.previous()
         }
         var resumedNewItem = false
-        // MediaPlayer transport calls are asynchronous and can silently no-op
-        // at queue boundaries. Do not acknowledge a skip until the item changes.
+        // Transport calls can silently no-op at queue boundaries. Only
+        // acknowledge a skip once the new item and playback are confirmed.
         for _ in 0..<playbackAttempts {
+            guard operationIsCurrent(generation) else { return cancelled(generation) }
             refresh()
             let changed = player.hasItem && player.itemIdentity != nil && player.itemIdentity != previousItem
-            if control == .pause ? !isPlaying : (changed && (!wasPlaying || isPlaying)) { return .ok }
-            if control != .pause && changed && wasPlaying && !resumedNewItem {
+            if changed && (!wasPlaying || isPlaying) { return .ok }
+            if changed && wasPlaying && !resumedNewItem {
                 resumedNewItem = true
                 player.play()
             }
-            if Task.isCancelled { return .failed("music.unavailable", "音乐控制已取消。") }
             await waitForPlayback()
         }
+        guard operationIsCurrent(generation) else { return cancelled(generation) }
         refresh()
         let changed = player.hasItem && player.itemIdentity != nil && player.itemIdentity != previousItem
-        if control == .pause ? !isPlaying : (changed && (!wasPlaying || isPlaying)) { return .ok }
-        message = control == .pause
-            ? "Apple Music 未暂停，请重试。"
-            : "歌曲没有切换。播放队列可能已到末尾，请在“选择音乐”中添加多首歌曲，或在 Apple Music 中选择一个歌单。"
+        if changed && (!wasPlaying || isPlaying) { return .ok }
+        message = "歌曲没有切换。播放队列可能已到末尾，请在 Max 的“选择音乐”中添加多首歌曲或歌单。"
         return .failed("music.controlUnavailable", message)
     }
 
-    private func startPlayback() async -> DeviceActionResult {
-        // Resume Music's existing queue directly. Preparing it again can fail
-        // even though Music has a valid current item. Only a new picker queue
-        // needs preparation, and a missing callback must not freeze the card.
+    private func startPlayback(_ generation: Int) async -> DeviceActionResult {
+        guard operationIsCurrent(generation) else { return cancelled(generation) }
+        // Resume Max's queue without preparing it again. Only a new selection
+        // needs preparation; cancellation also resolves a missing callback.
         if needsPreparation {
             let operation = MusicPreparation()
+            activePreparation = operation
             let error: Error? = await withCheckedContinuation { continuation in
                 operation.continuation = continuation
                 operation.timeout = Task { [preparationTimeoutNanoseconds] in
@@ -213,6 +269,8 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
                     Task { @MainActor in operation.finish(error) }
                 }
             }
+            guard operationIsCurrent(generation) else { return cancelled(generation) }
+            activePreparation = nil
             if let error {
                 refresh()
                 let failure = error as NSError
@@ -224,14 +282,15 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
         guard player.hasItem else { return emptyQueue() }
         player.play()
         for _ in 0..<playbackAttempts {
+            guard operationIsCurrent(generation) else { return cancelled(generation) }
             refresh()
             if isPlaying { return .ok }
-            if Task.isCancelled { return .failed("music.unavailable", "播放请求已取消。") }
             await waitForPlayback()
         }
+        guard operationIsCurrent(generation) else { return cancelled(generation) }
         refresh()
         if isPlaying { return .ok }
-        message = "Apple Music 未开始播放。请重新选择歌曲；若在 Apple Music 中也无法播放，请检查网络、账号或歌曲是否可用。"
+        message = "音乐未开始播放。请在 Max 中重新选择歌曲，并检查网络、Apple Music 账号或歌曲是否可用。"
         return .failed("music.unavailable", message)
     }
 

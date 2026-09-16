@@ -58,6 +58,17 @@ describe("extractDeviceCommand — music", () => {
     });
   });
 
+  it.each([
+    "Max stop the music",
+    "Max cancel music",
+    "Max close music",
+    "Max 停止音乐",
+    "Max 取消音乐",
+    "Max 关闭音乐"
+  ])("stops music for %s", (text) => {
+    expect(extractDeviceCommand(text)).toEqual({ action: "music.control", args: { control: "pause" } });
+  });
+
   it("tags a named third-party player so the handler can refuse it", () => {
     expect(extractDeviceCommand("Max 用网易云放歌")).toEqual({
       action: "music.control",

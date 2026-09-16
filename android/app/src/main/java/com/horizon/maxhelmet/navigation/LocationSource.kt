@@ -57,7 +57,8 @@ class LocationManagerSource(private val context: Context) : LocationSource {
     override fun stop() {
         val current = listener ?: return
         listener = null
-        manager?.removeUpdates(current)
+        current.active = false
+        runCatching { manager?.removeUpdates(current) }
     }
 
     private fun hasPermission(): Boolean =
@@ -67,8 +68,9 @@ class LocationManagerSource(private val context: Context) : LocationSource {
     /** A named class (rather than a SAM lambda) so `stop()` can hand the
      *  exact same listener instance back to `removeUpdates`. */
     private class LocationListenerAdapter(private val onFix: (LatLon) -> Unit) : android.location.LocationListener {
+        var active = true
         override fun onLocationChanged(location: Location) {
-            if (validNavigationFix(location)) onFix(LatLon(location.latitude, location.longitude))
+            if (active && validNavigationFix(location)) onFix(LatLon(location.latitude, location.longitude))
         }
     }
 }

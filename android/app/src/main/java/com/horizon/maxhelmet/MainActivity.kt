@@ -22,8 +22,18 @@ import kotlinx.coroutines.CompletableDeferred
 class MainActivity : ComponentActivity(), DeviceActivityHost {
 
     private val viewModel: MainViewModel by viewModels()
+    private var musicSelectionTicket: Int? = null
+    private val musicPicker = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        val ticket = musicSelectionTicket
+        musicSelectionTicket = null
+        if (ticket != null) {
+            uris.forEach { uri -> runCatching { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } }
+            viewModel.music.completeSelection(ticket, uris)
+        }
+    }
     private var actionPermission: CompletableDeferred<Boolean>? = null
     private val actionPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+        viewModel.refreshPhoneLocation()
         actionPermission?.complete(grants.isNotEmpty() && grants.values.all { it }); actionPermission = null
     }
 
@@ -57,14 +67,20 @@ class MainActivity : ComponentActivity(), DeviceActivityHost {
         super.onStart()
         viewModel.deviceActions.host = this
         viewModel.camera.attach(this, window.decorView.display?.rotation ?: Surface.ROTATION_0)
-        viewModel.music.observeWhileVisible(true)
+        viewModel.music.launchPicker = { ticket ->
+            musicSelectionTicket = ticket
+            musicPicker.launch(arrayOf("audio/*"))
+        }
+        viewModel.music.setAppForeground(true)
+        viewModel.refreshPhoneLocation()
     }
 
     override fun onStop() {
         viewModel.helmetDiscovery.stop()
         if (viewModel.deviceActions.host === this) viewModel.deviceActions.host = null
         viewModel.camera.detach(this)
-        viewModel.music.observeWhileVisible(false)
+        viewModel.music.launchPicker = null
+        viewModel.music.setAppForeground(false)
         actionPermission?.complete(false); actionPermission = null
         super.onStop()
     }

@@ -12,6 +12,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -31,15 +33,17 @@ fun NavigationDetailsDialog(guidance: NavGuidanceState, music: MusicController, 
         Surface(Modifier.fillMaxSize().safeDrawingPadding()) {
             Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = { music.show() }) { Text("音乐") }
+                    TextButton(onClick = { music.chooseMusic() }) { Text("音乐") }
                     Text(guidance.destinationName, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                     TextButton(onClick = onDismiss) { Text("收起") }
                 }
                 BoxWithConstraints(Modifier.weight(1f)) {
+                    val largeText = LocalDensity.current.fontScale >= 1.5f
+                    val stepsHeight = (maxHeight * 0.22f).coerceIn(96.dp, 160.dp)
                     val railWidth = minOf(340.dp, maxWidth * 0.42f)
                     val controls: @Composable () -> Unit = {
-                        RidingTripSummary(guidance, showSteps) { showSteps = !showSteps }
+                        RidingTripSummary(guidance, showSteps, stepsHeight) { showSteps = !showSteps }
                         MusicPlaybackCard(music, compact = true)
                     }
                     if (maxWidth > maxHeight * 1.2f) {
@@ -52,6 +56,12 @@ fun NavigationDetailsDialog(guidance: NavGuidanceState, music: MusicController, 
                                 }
                                 MusicPlaybackCard(music, compact = true)
                             }
+                        }
+                    } else if (largeText || maxHeight < 400.dp) {
+                        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            RidingManeuver(guidance)
+                            RidingMap(guidance, following, { following = !following }, Modifier.height(300.dp).fillMaxWidth())
+                            controls()
                         }
                     } else {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -99,7 +109,7 @@ private fun RidingManeuver(guidance: NavGuidanceState) {
 }
 
 @Composable
-private fun RidingTripSummary(guidance: NavGuidanceState, showSteps: Boolean, onToggle: () -> Unit) {
+private fun RidingTripSummary(guidance: NavGuidanceState, showSteps: Boolean, stepsHeight: Dp = 160.dp, onToggle: () -> Unit) {
     Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -115,7 +125,7 @@ private fun RidingTripSummary(guidance: NavGuidanceState, showSteps: Boolean, on
             }
             if (showSteps) {
                 HorizontalDivider()
-                Column(Modifier.heightIn(max = 160.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.height(stepsHeight).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     val steps = guidance.route?.steps.orEmpty().drop(guidance.maneuverIndex.coerceAtLeast(0))
                     val traveled = ((guidance.route?.distanceMeters ?: 0.0) - guidance.remainingMeters).coerceAtLeast(0.0)
                     if (steps.isEmpty()) Text("暂无更多路口信息，请按当前路线行驶。")

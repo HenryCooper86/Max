@@ -23,6 +23,9 @@ class SessionLifecycle {
     fun accepts(candidate: Int): Boolean = active && candidate == generation
 
     @Synchronized
+    fun current(): Int? = generation.takeIf { active }
+
+    @Synchronized
     fun stop(): Boolean {
         if (!active) return false
         active = false

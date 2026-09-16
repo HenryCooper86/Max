@@ -12,10 +12,13 @@ class SessionLifecycleTest {
         val lifecycle = SessionLifecycle()
         val generation = lifecycle.begin()
 
+        assertNull(SessionLifecycle().current())
+        assertTrue(lifecycle.current() == generation)
         assertNotNull(generation)
         assertTrue(lifecycle.accepts(generation!!))
         assertTrue(lifecycle.stop())
         assertFalse(lifecycle.accepts(generation))
+        assertNull(lifecycle.current())
     }
 
     @Test

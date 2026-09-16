@@ -189,7 +189,10 @@ class AgentSession(
 
     private var transcriptTurn = 0
     private var transcriptOwnerId: String? = null
-    private var location: Pair<Double, Double>? = null
+    @Volatile private var location: Pair<Double, Double>? = null
+    @Volatile private var lastLocationFixAt = Long.MIN_VALUE / 2
+    private val sessionLocation = LocationManagerSource(context)
+    private var lastLocationSentAt = Long.MIN_VALUE / 2
     /** Relay-issued speech deliveries already handed to device TTS. */
     private val spokenDeliveryIds = linkedSetOf<String>()
 
@@ -344,6 +347,19 @@ class AgentSession(
             val resolvedLocation = resolveLocation()
             if (!lifecycle.accepts(generation)) return@launch
             location = resolvedLocation
+            lastLocationFixAt = android.os.SystemClock.elapsedRealtime()
+            lastLocationSentAt = Long.MIN_VALUE / 2
+            sessionLocation.start { fix ->
+                if (lifecycle.accepts(generation)) {
+                    location = fix.lat to fix.lon
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    lastLocationFixAt = now
+                    if (_state.value.connection == ConnectionState.READY && now - lastLocationSentAt >= 10_000) {
+                        lastLocationSentAt = now
+                        webSocket?.send(org.json.JSONObject().put("type", "location.update").put("lat", fix.lat).put("lon", fix.lon).toString())
+                    }
+                }
+            }
             connect()
             if (webSocket == null) {
                 failHandsFreeStart(generation, "中继地址无效，请在设置中检查服务器地址")
@@ -370,6 +386,8 @@ class AgentSession(
     /** Deactivates hands-free: stop the mic, restore routing, close the relay. */
     fun stop(force: Boolean = false) {
         if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) { deviceScope.launch { stop(force) }; return }
+        sessionLocation.stop()
+        location = null
         crash.sessionEnded()
         if (crash.controller.active && !force) {
             stopAfterIncident = true
@@ -661,8 +679,8 @@ class AgentSession(
                         voicePersonality = current.voicePersonality,
                         rideMode = current.rideContext.mode,
                         scenario = current.rideContext.scenario,
-                        lat = location?.first,
-                        lon = location?.second,
+                        lat = location?.first?.takeIf { android.os.SystemClock.elapsedRealtime() - lastLocationFixAt <= 15_000 },
+                        lon = location?.second?.takeIf { android.os.SystemClock.elapsedRealtime() - lastLocationFixAt <= 15_000 },
                         testerId = this@AgentSession.testerId.ifEmpty { "android-native" },
                         testerRegion = TimeZone.getDefault().id,
                         testingCampaignId = testingCampaignId,
@@ -1031,8 +1049,7 @@ class AgentSession(
     // ---- location ----------------------------------------------------------
 
     /**
-     * Best-effort one-shot location for the weather context. Last-known is good
-     * enough — the server falls back to its demo location when this is null.
+     * Fresh cached fix for session startup; the continuous stream supplies later fixes.
      */
     @SuppressLint("MissingPermission")
     private suspend fun resolveLocation(): Pair<Double, Double>? {
@@ -1044,9 +1061,12 @@ class AgentSession(
                     LocationManager.GPS_PROVIDER,
                     LocationManager.NETWORK_PROVIDER,
                     LocationManager.PASSIVE_PROVIDER
-                ).firstNotNullOfOrNull { provider ->
+                ).mapNotNull { provider ->
                     runCatching { manager.getLastKnownLocation(provider) }.getOrNull()
-                }?.let { it.latitude to it.longitude }
+                }.filter {
+                    val age = android.os.SystemClock.elapsedRealtimeNanos() - it.elapsedRealtimeNanos
+                    age in 0..15_000_000_000L && it.hasAccuracy() && it.accuracy in 0f..100f
+                }.maxByOrNull { it.elapsedRealtimeNanos }?.let { it.latitude to it.longitude }
             }.getOrNull()
         }
     }

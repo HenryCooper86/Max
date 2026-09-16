@@ -733,3 +733,30 @@ it("web speech times out without leaving an open synthesis connection", async ()
   expect(clientEvents(send).some((e) => e.useBrowserSpeech === true)).toBe(false);
   await controller.close();
 });
+
+describe.each(["ios", "android"])("%s live rider location", (platform) => {
+  it("answers a late GPS fix without navigation, using MAX voice and suppressing conflicting model speech", async () => {
+    stubWeatherFetch();
+    const { controller, send, upstream } = await startSession(platform);
+    const initial = requestPayload(upstream.sent.find((f) => clientFrameEvent(f) === 100));
+    expect(initial.dialog.location).toBeUndefined();
+    await controller.handleMessage(
+      Buffer.from(JSON.stringify({ type: "location.update", lat: 31.23, lon: 121.47 })),
+      false
+    );
+    await riderTurn(upstream, "Max where am I?");
+    const answer = clientEvents(send).find((e) => e.speaker === "agent" && String(e.text).includes("31.23000"));
+    expect(answer).toMatchObject({ final: true, useBrowserSpeech: false });
+    const socket = await openMaxSpeech();
+    expect(socket.sent.filter((f) => clientFrameEvent(f) === 300).map(requestPayload)).toEqual([
+      { content: answer!.text }
+    ]);
+    const before = clientEvents(send).length;
+    await upstream.emit("message", jsonFrame(TTS_SENTENCE_START, { text: "你现在位于人民路，前方两百米左转。" }));
+    expect(clientEvents(send)).toHaveLength(before);
+    socket.emit("message", speechFrame(352, Buffer.alloc(1920, 1)));
+    socket.emit("message", jsonFrame(TTS_ENDED, {}));
+    await vi.waitFor(() => expect(metrics.snapshot().maxSpeechDelivered).toBe(1));
+    await controller.close();
+  });
+});

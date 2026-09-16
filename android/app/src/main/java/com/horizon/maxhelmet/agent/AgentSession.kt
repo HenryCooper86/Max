@@ -208,7 +208,7 @@ class AgentSession(
         com.horizon.maxhelmet.crash.CrashRuntime(context, deviceScope,
             speed = { state.value.rideContext.speedKmh.toDouble().takeIf { state.value.hasRideContext } },
             locate = { resolveCrashLocation() },
-            speak = { text -> stopAgentSpeech(); if (music.state.value.playing) music.control("pause"); ttsSpeak(text) },
+            speak = { text -> stopAgentSpeech(); if (music.state.value.playing) music.stopPlayback(); ttsSpeak(text) },
             send = { text -> if (socketOpen) webSocket?.send(text); Unit },
             resolved = { if (stopAfterIncident || !state.value.handsFree) { stopAfterIncident = false; stop(force = true) } })
     }
@@ -346,20 +346,14 @@ class AgentSession(
         scope.launch {
             val resolvedLocation = resolveLocation()
             if (!lifecycle.accepts(generation)) return@launch
-            location = resolvedLocation
-            lastLocationFixAt = android.os.SystemClock.elapsedRealtime()
-            lastLocationSentAt = Long.MIN_VALUE / 2
-            sessionLocation.start { fix ->
-                if (lifecycle.accepts(generation)) {
-                    location = fix.lat to fix.lon
-                    val now = android.os.SystemClock.elapsedRealtime()
-                    lastLocationFixAt = now
-                    if (_state.value.connection == ConnectionState.READY && now - lastLocationSentAt >= 10_000) {
-                        lastLocationSentAt = now
-                        webSocket?.send(org.json.JSONObject().put("type", "location.update").put("lat", fix.lat).put("lon", fix.lon).toString())
-                    }
-                }
+            val locationStarted = withContext(Dispatchers.Main.immediate) {
+                if (!lifecycle.accepts(generation)) return@withContext false
+                location = resolvedLocation
+                lastLocationFixAt = android.os.SystemClock.elapsedRealtime()
+                refreshPhoneLocation(clearLocation = false)
+                true
             }
+            if (!locationStarted || !lifecycle.accepts(generation)) return@launch
             connect()
             if (webSocket == null) {
                 failHandsFreeStart(generation, "中继地址无效，请在设置中检查服务器地址")
@@ -376,6 +370,27 @@ class AgentSession(
         }
     }
 
+    /** Retry after returning from Settings or granting precise location. */
+    fun refreshPhoneLocation(clearLocation: Boolean = true) {
+        val generation = lifecycle.current() ?: return
+        if (!_state.value.handsFree) return
+        sessionLocation.stop()
+        if (clearLocation) location = null
+        if (clearLocation) lastLocationFixAt = Long.MIN_VALUE / 2
+        lastLocationSentAt = Long.MIN_VALUE / 2
+        sessionLocation.start { fix ->
+            if (lifecycle.accepts(generation)) {
+                location = fix.lat to fix.lon
+                val now = android.os.SystemClock.elapsedRealtime()
+                lastLocationFixAt = now
+                if (_state.value.connection == ConnectionState.READY && now - lastLocationSentAt >= 10_000) {
+                    lastLocationSentAt = now
+                    webSocket?.send(org.json.JSONObject().put("type", "location.update").put("lat", fix.lat).put("lon", fix.lon).toString())
+                }
+            }
+        }
+    }
+
     /** Tears down every resource acquired before an async start failed. */
     private fun failHandsFreeStart(generation: Int, message: String) {
         if (!lifecycle.accepts(generation)) return
@@ -386,6 +401,7 @@ class AgentSession(
     /** Deactivates hands-free: stop the mic, restore routing, close the relay. */
     fun stop(force: Boolean = false) {
         if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) { deviceScope.launch { stop(force) }; return }
+        music.stopPlayback()
         sessionLocation.stop()
         location = null
         crash.sessionEnded()

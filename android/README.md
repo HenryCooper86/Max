@@ -90,7 +90,6 @@ The manifest requests only the permissions needed for the prototype:
 | `MODIFY_AUDIO_SETTINGS`             | Start/stop headset routing and speaker/mic mode adjustments.        |
 | `CAMERA`                            | Requested only for photo/video or torch commands.                   |
 | `READ_CONTACTS`                     | Requested only when resolving a spoken contact name.                |
-| `FOREGROUND_SERVICE_MEDIA_PLAYBACK` | Keep explicitly selected local music playing with the screen off.   |
 
 Location is optional. If the rider denies it, the relay can still use server-side fallback
 weather coordinates.
@@ -139,7 +138,7 @@ The emulator forwards the host Mac's microphone, so the full voice loop is testa
 - Keystore-backed AES-GCM storage for relay/login tokens, including migration from older preferences
 - Release-run/test-case/assignment attribution with explicit Android platform and stamped git commit
 - Every supported device command returns a result: torch, Max voice volume, music, contact/number dialing, SMS composition, photo/video capture, gallery, and navigation. Unknown or malformed actions return an error instead of timing out. Dialing/SMS open the system confirmation UI; SMS is refused without known speed at or below 5 km/h.
-- In-app music card with metadata and play/pause/previous/next. Select local audio through Android's document picker, or explicitly grant notification access to control an active music app. The listener does not consume notification contents. Local music has a separate foreground service and media session for background/lock-screen/headset controls.
+- App-owned music queue with play/pause/previous/next and close, available in both the HUD and full-screen map. Select multiple audio files through Android's document picker. Leaving Max, locking the screen, closing the card, or ending the session pauses playback; returning never resumes automatically. Stop cancels loading immediately, and voice skip succeeds only after the next file actually starts. Android does not integrate the protected Apple Music catalog or control another app's queue.
 - CameraX photos and silent video (no microphone input), with permission prompts, low-storage refusal, a ten-minute/1 GB recording limit, and stop-on-background behavior. Captures stay private until exported.
 - Max gallery with photo/video viewing, deletion confirmation, export to system Photos on Android 10+, system save/share on Android 8–9, and gallery.describe uploads using one photo or eight video frames. Photo previews respect EXIF orientation.
 
@@ -235,7 +234,7 @@ In a **Debug** build, set the relay address to `wss://3.35.135.136/agent` and sw
 - Mid-ride weather refresh and continuous location updates
 - A wake word so the mic need not stream continuously
 - RDK companion and crash/SOS implementations are present; physical acceptance requirements are tracked in the parity audit.
-- Physical-device checks for map tiles/key authorization, Bluetooth, external music apps, and speaker echo cancellation.
+- Physical-device checks for map tiles/key authorization, Bluetooth, app-owned music, and speaker echo cancellation.
 
 ### Helmet rides and crash checks
 
@@ -244,3 +243,7 @@ Settings now includes RDK code/nearby pairing and explicit helmet ride start/sto
 Phone hands-free arms the iOS-equivalent crash detector when linear acceleration and gyroscope sensors are available. An incident progresses through a 15-second check-in and 30-second alarm. “我没事”/“取消”, the crash screen or notification cancels it. Ending hands-free preserves an active alarm; logging out disables its network delivery but retains the local alarm and dialer. Emergency contact notification is opt-in, and relay failures are shown explicitly. The default manual call target is 120; settings can select the configured contact instead. No call is placed automatically.
 
 In a debug build, developer settings expose a local-only crash drill. It cannot notify an emergency contact. Hardware sensor validation, real RDK discovery, Bluetooth audio, live AMap authorization and actual notification-provider delivery remain device/release acceptance gates; see [the parity audit](../docs/mobile-parity.md).
+
+### Latest riding-screen parity
+
+Navigation requires destination approval before turn-by-turn voice guidance. The full-screen map prioritizes the next turn, route, trip summary and compact music controls; expanded steps reserve visible space in portrait. Music selection is owned by the activity so it remains available above the map. Fresh phone GPS updates reach Max during hands-free without navigation or RDK sharing, and location tracking retries after returning from Settings or granting permission. RDK location forwarding remains a separate optional feature.

@@ -9,7 +9,6 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- In-helmet Bluetooth headset routing (runtime permission on Android 12+). -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
@@ -44,20 +43,6 @@
             android:exported="false"
             android:foregroundServiceType="microphone" />
         <service android:name=".companion.HelmetRideService" android:exported="false" android:foregroundServiceType="location" />
-        <service android:name=".music.MusicPlaybackService" android:exported="false"
-            android:foregroundServiceType="mediaPlayback" />
-
-        <!-- Optional access to media sessions, enabled explicitly by the rider.
-             The service does not inspect or store notification contents. -->
-        <service android:name=".music.MusicSessionListener"
-            android:label="Max 音乐控制"
-            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.service.notification.NotificationListenerService" />
-            </intent-filter>
-        </service>
-
         <!-- Shares exported conversation logs (JSON) with other apps. -->
         <provider
             android:name="androidx.core.content.FileProvider"

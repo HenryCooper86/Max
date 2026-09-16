@@ -483,7 +483,10 @@ final class AgentSession: NSObject, ObservableObject {
         // touch points documented above `crashController` as already always
         // running on the main thread, so this asserts that isolation the
         // same way `onCrash` does rather than restructuring the class.
-        MainActor.assumeIsolated { navigationController.teardown() }
+        MainActor.assumeIsolated {
+            music.stopPlayback()
+            navigationController.teardown()
+        }
         synthesizer.stopSpeaking(at: .immediate)
         // An incident past check-in owns the shared engine until it resolves:
         // the siren renders through the same AVAudioEngine as agent speech

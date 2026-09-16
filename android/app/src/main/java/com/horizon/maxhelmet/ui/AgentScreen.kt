@@ -8,6 +8,17 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -35,6 +46,8 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -234,74 +247,56 @@ fun AgentScreen(
                 )
         )
 
-        Column(
-            modifier = Modifier
-                .widthIn(max = 560.dp)
-                .fillMaxHeight()
-                .padding(horizontal = 20.dp, vertical = 14.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            TopBar(state = state)
-
-            state.hazardAlert?.let {
-                Spacer(Modifier.height(12.dp))
-                HazardBanner(it)
+        BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 16.dp, vertical = 12.dp)) {
+            val landscape = maxWidth > maxHeight
+            val musicState by viewModel.music.state.collectAsStateWithLifecycle()
+            val recording by viewModel.camera.isRecording.collectAsStateWithLifecycle()
+            val galleryRequest by viewModel.deviceActions.galleryRequest.collectAsStateWithLifecycle()
+            LaunchedEffect(galleryRequest) { if (galleryRequest > 0) viewModel.showGallery = true }
+            val alerts: @Composable () -> Unit = {
+                state.hazardAlert?.let { HazardBanner(it) }
+                if (isNavPresentationActive(state)) state.navGuidance?.let { GuidanceCard(it) }
+                if (recording) Text("● 正在录像（无声）· 说“停止录像”结束", color = HudColors.Amber)
             }
-
-            if (isNavPresentationActive(state)) {
-                state.navGuidance?.let { guidance ->
-                    Spacer(Modifier.height(12.dp))
-                    GuidanceCard(guidance)
+            val utilities: @Composable () -> Unit = {
+                MusicPlaybackCard(viewModel.music)
+                if (viewModel.showCaptions) CaptionsOverlay(items = state.transcript,
+                    canFlag = state::canFlagTurn, onFlag = viewModel::flagTurn)
+            }
+            val helmet: @Composable (Dp) -> Unit = { diameter ->
+                HelmetVisual(color, state.turnState, state.voiceLevel, state.micMuted,
+                    if (isHazardPresentationActive(state)) state.fusedHazard else HazardLevel.NORMAL,
+                    gaugeMode(state), onToggleHandsFree, diameter, state.handsFree)
+            }
+            val availableHeight = maxHeight
+            Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+                TopBar(state)
+                Spacer(Modifier.height(8.dp))
+                if (landscape) {
+                    Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Column(Modifier.weight(0.42f).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
+                            helmet((availableHeight - 100.dp).coerceIn(116.dp, 220.dp))
+                            SessionReadout(state)
+                        }
+                        Column(Modifier.weight(0.58f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            alerts(); utilities(); SecondaryControls(state, viewModel)
+                        }
+                    }
+                } else {
+                    Column(Modifier.fillMaxWidth().heightIn(max = availableHeight * 0.35f).verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)) { alerts() }
+                    helmet((availableHeight * if (musicState.visible || state.navGuidance != null) 0.25f else 0.40f).coerceIn(116.dp, 300.dp))
+                    Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+                        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        SessionReadout(state); utilities()
+                    }
+                    SecondaryControls(state, viewModel)
                 }
             }
-
-            Spacer(Modifier.weight(1f))
-
-            HelmetVisual(
-                color = color,
-                turnState = state.turnState,
-                voiceLevel = state.voiceLevel,
-                dimmed = state.micMuted,
-                hazard = if (isHazardPresentationActive(state)) state.fusedHazard else HazardLevel.NORMAL,
-                gauge = gaugeMode(state),
-                onTap = onToggleHandsFree
-            )
-            Spacer(Modifier.height(18.dp))
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    text = orbCaption(state),
-                    color = HudColors.HudInk,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    textAlign = TextAlign.Center
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = stateTelltale(state),
-                    color = color,
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
-                    letterSpacing = 4.sp,
-                    fontWeight = FontWeight.Normal
-                )
-            }
-
-            Spacer(Modifier.weight(1f))
-
-            AnimatedVisibility(visible = viewModel.showCaptions) {
-                CaptionsOverlay(
-                    items = state.transcript,
-                    canFlag = state::canFlagTurn,
-                    onFlag = viewModel::flagTurn
-                )
-            }
-            Spacer(Modifier.height(12.dp))
-
-            SecondaryControls(state = state, viewModel = viewModel)
-            Spacer(Modifier.height(16.dp))
-            VoiceMicDock(state = state, onClick = onToggleHandsFree)
         }
     }
+
+    if (viewModel.showGallery) CaptureGallery(viewModel.captures) { viewModel.showGallery = false }
 
     if (viewModel.showPreferences) {
         ModalBottomSheet(
@@ -311,6 +306,7 @@ fun AgentScreen(
             SheetContent("设置") { SettingsPanel(state, viewModel, onExportTranscript) }
         }
     }
+    CrashOverlay(viewModel)
 }
 
 // ---- top status pill -----------------------------------------------------------------
@@ -372,7 +368,9 @@ private fun HelmetVisual(
     dimmed: Boolean,
     hazard: HazardLevel,
     gauge: GaugeMode,
-    onTap: () -> Unit
+    onTap: () -> Unit,
+    diameter: Dp = 300.dp,
+    handsFree: Boolean = false
 ) {
     val breatheDuration = when (turnState) {
         TurnState.IDLE -> 1700
@@ -420,9 +418,10 @@ private fun HelmetVisual(
 
     Canvas(
         modifier = Modifier
-            .size(300.dp)
+            .size(diameter)
             .alpha(if (dimmed) 0.55f else 1f)
-            .clickable(onClick = onTap)
+            .semantics { contentDescription = if (handsFree) "结束免提" else "开启免提" }
+            .clickable(role = Role.Button, onClick = onTap)
     ) {
         val level = voiceLevel.coerceIn(0f, 1f)
         val pulse = pulseAmp * breathe + 0.06f * level
@@ -654,17 +653,20 @@ private fun svgTokens(s: String): List<SvgToken> {
 
 // ---- secondary controls (字幕 · 静音 · 设置) ----------------------------------------
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SecondaryControls(state: AgentSession.State, viewModel: MainViewModel) {
-    Row(
+    FlowRow(
         modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         PillToggle(glyph = "💬", label = "字幕", on = viewModel.showCaptions, onClick = viewModel::toggleCaptions)
         if (state.handsFree) {
             MuteUtilityPill(muted = state.micMuted, onClick = viewModel::toggleMute)
         }
+        PillToggle(glyph = "▧", label = "相册", on = false, onClick = { viewModel.showGallery = true })
+        PillToggle(glyph = "♫", label = "音乐", on = false, onClick = { viewModel.music.show() })
         PillToggle(glyph = "⚙", label = "设置", on = false, onClick = { viewModel.showPreferences = true })
     }
 }
@@ -678,7 +680,8 @@ private fun PillToggle(glyph: String, label: String, on: Boolean, onClick: () ->
             .clip(RoundedCornerShape(50))
             .background(background)
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 9.dp),
+            .heightIn(min = 44.dp)
+            .padding(horizontal = 12.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
@@ -893,6 +896,8 @@ private fun GuidanceCard(guidance: NavGuidanceState) {
                 }
             }
         }
+        Spacer(Modifier.height(8.dp))
+        GuidanceRouteMap(guidance)
     }
 }
 
@@ -915,6 +920,16 @@ internal fun HudCard(
             )
             .padding(16.dp)
     ) {
-        content()
+        CompositionLocalProvider(LocalContentColor provides HudColors.Text) { content() }
+    }
+}
+
+@Composable
+private fun SessionReadout(state: AgentSession.State) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(orbCaption(state), color = HudColors.HudInk, fontSize = 20.sp,
+            fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
+        Text(stateTelltale(state), color = orbColor(state), fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace, letterSpacing = 4.sp)
     }
 }

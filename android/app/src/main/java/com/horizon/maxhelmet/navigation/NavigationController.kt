@@ -32,7 +32,9 @@ data class NavGuidanceState(
     val remainingMeters: Double,
     val remainingSeconds: Double,
     val offRoute: Boolean,
-    val arrived: Boolean
+    val arrived: Boolean,
+    val route: NavigationRoute? = null,
+    val riderCoordinate: LatLon? = null
 )
 
 /** One in-flight reroute attempt's captured inputs — everything
@@ -462,7 +464,7 @@ class NavigationController(
                 return@synchronized null
             }
 
-            onGuidance(publishedState(currentRoute, update))
+            onGuidance(publishedState(currentRoute, update).copy(riderCoordinate = fix))
 
             if (update.offRoute && !rerouting && now() - lastRerouteAt >= REROUTE_COOLDOWN_MILLIS) {
                 rerouting = true
@@ -683,7 +685,8 @@ class NavigationController(
         remainingMeters = update.remainingMeters,
         remainingSeconds = update.remainingSeconds,
         offRoute = update.offRoute,
-        arrived = update.arrived
+        arrived = update.arrived,
+        route = route
     )
 
     private fun initialState(route: NavigationRoute): NavGuidanceState = NavGuidanceState(
@@ -693,6 +696,7 @@ class NavigationController(
         remainingMeters = route.distanceMeters,
         remainingSeconds = route.etaSeconds,
         offRoute = false,
-        arrived = false
+        arrived = false,
+        route = route
     )
 }

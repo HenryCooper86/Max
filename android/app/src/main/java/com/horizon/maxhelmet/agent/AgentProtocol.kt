@@ -247,12 +247,19 @@ sealed interface AgentEvent {
      *  and must be echoed back in the matching device.result. `query` is the
      *  navigation.start destination phrase (args.query); null for actions
      *  (like navigation.stop) that carry none. */
-    data class DeviceCommand(val commandId: String, val action: String, val query: String?) : AgentEvent
+    data class DeviceCommand(
+        val commandId: String,
+        val action: String,
+        val query: String?,
+        val args: Map<String, Any?> = emptyMap()
+    ) : AgentEvent
 
     /** Server → client: the relay resolved a nav.request into a route. */
     data class NavRoute(val data: NavRouteData) : AgentEvent
 
     /** Server → client: the relay could not resolve or route a nav.request. */
+    data class CrashAck(val incidentId: String, val status: String, val detail: String?) : AgentEvent
+    data object CrashSimulate : AgentEvent
     data class NavError(val commandId: String, val code: String) : AgentEvent
 
     /** Event types this client does not consume. */
@@ -282,6 +289,8 @@ fun parseAgentEvent(text: String): AgentEvent {
     val requiredFields = SERVER_EVENT_REQUIRED_FIELDS[type] ?: return AgentEvent.Unhandled
     if (requiredFields.any { !json.has(it) }) return AgentEvent.Unhandled
     return when (type) {
+        "crash.ack" -> AgentEvent.CrashAck(json.optString("incidentId"), json.optString("status"), json.optString("detail").ifEmpty { null })
+        "crash.simulate" -> AgentEvent.CrashSimulate
         ServerEventTypes.SESSION_STARTED -> {
             val caps = json.optJSONObject("capabilities")
             AgentEvent.SessionStarted(
@@ -381,7 +390,8 @@ fun parseAgentEvent(text: String): AgentEvent {
             AgentEvent.DeviceCommand(
                 commandId = json.optString("commandId"),
                 action = json.optString("action"),
-                query = args.optString("query").ifEmpty { null }
+                query = args.optString("query").ifEmpty { null },
+                args = args.keys().asSequence().associateWith { key -> args.opt(key).takeUnless { it == JSONObject.NULL } }
             )
         }
 

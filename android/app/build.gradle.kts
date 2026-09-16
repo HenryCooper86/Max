@@ -1,7 +1,15 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
 }
+
+val localConfig = Properties().apply {
+    rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+}
+val amapAndroidKey = providers.environmentVariable("AMAP_ANDROID_KEY").orNull
+    ?: localConfig.getProperty("amap.android.key", "")
 
 val horizonGitCommitRaw = (providers.environmentVariable("HORIZON_GIT_COMMIT").orNull
     ?.trim()
@@ -38,6 +46,7 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         buildConfigField("String", "GIT_COMMIT", "\"$horizonGitCommit\"")
+        buildConfigField("String", "AMAP_ANDROID_KEY", "\"${amapAndroidKey.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
     }
 
     buildTypes {
@@ -57,6 +66,12 @@ android {
 }
 
 dependencies {
+    // The maintained AMap artifact bundles location/search; we use map APIs only.
+    implementation("com.amap.api:3dmap-location-search:11.2.100_loc11.2.100_sea9.8.1")
+    implementation("androidx.camera:camera-camera2:1.4.2")
+    implementation("androidx.camera:camera-lifecycle:1.4.2")
+    implementation("androidx.camera:camera-video:1.4.2")
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
@@ -70,6 +85,7 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.kotlinx.coroutines.android)
     testImplementation(libs.junit)
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
     // Test-only: the unit-test android.jar's org.json.* classes are throwing
     // stubs (Robolectric-less JVM unit tests get "not mocked" RuntimeExceptions
     // on JSONObject.put/optString/... ). This shadows those stubs with the real

@@ -4,6 +4,9 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.content.Intent
+import android.content.res.Configuration
+import android.view.Surface
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -13,17 +16,23 @@ import androidx.core.content.ContextCompat
 import com.horizon.maxhelmet.ui.AgentScreen
 import com.horizon.maxhelmet.ui.MainViewModel
 import com.horizon.maxhelmet.ui.theme.MaxHelmetTheme
+import com.horizon.maxhelmet.actions.DeviceActivityHost
+import kotlinx.coroutines.CompletableDeferred
 
-class MainActivity : ComponentActivity() {
+class MainActivity : ComponentActivity(), DeviceActivityHost {
 
     private val viewModel: MainViewModel by viewModels()
+    private var actionPermission: CompletableDeferred<Boolean>? = null
+    private val actionPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+        actionPermission?.complete(grants.isNotEmpty() && grants.values.all { it }); actionPermission = null
+    }
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
             // Mic is required; location, Bluetooth, and notifications are
             // best-effort (the relay falls back to demo weather without
             // coordinates, and audio falls back to the phone mic/speaker).
-            if (grants[Manifest.permission.RECORD_AUDIO] == true) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
                 viewModel.toggleHandsFree()
             }
         }
@@ -43,6 +52,38 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onStart() {
+        super.onStart()
+        viewModel.deviceActions.host = this
+        viewModel.camera.attach(this, window.decorView.display?.rotation ?: Surface.ROTATION_0)
+        viewModel.music.observeWhileVisible(true)
+    }
+
+    override fun onStop() {
+        viewModel.helmetDiscovery.stop()
+        if (viewModel.deviceActions.host === this) viewModel.deviceActions.host = null
+        viewModel.camera.detach(this)
+        viewModel.music.observeWhileVisible(false)
+        actionPermission?.complete(false); actionPermission = null
+        super.onStop()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        window.decorView.post { viewModel.camera.updateRotation(window.decorView.display?.rotation ?: Surface.ROTATION_0) }
+    }
+
+    override suspend fun requestPermission(permission: String): Boolean {
+        if (ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED) return true
+        if (actionPermission != null) return false
+        val pending = CompletableDeferred<Boolean>()
+        actionPermission = pending
+        actionPermissionLauncher.launch(if (permission == Manifest.permission.ACCESS_FINE_LOCATION) arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION) else arrayOf(permission))
+        return try { pending.await() } finally { if (actionPermission === pending) actionPermission = null }
+    }
+
+    override fun launch(intent: Intent): Boolean = runCatching { startActivity(intent); true }.getOrDefault(false)
 
     private fun toggleHandsFreeWithPermissions() {
         // Stopping never needs permissions.

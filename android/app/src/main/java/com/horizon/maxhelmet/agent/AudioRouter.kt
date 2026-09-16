@@ -6,83 +6,60 @@ import android.media.AudioManager
 import android.os.Build
 import android.util.Log
 
-/**
- * Routes voice audio to an in-helmet Bluetooth headset when one is connected.
- * Uses the communication-device API on Android 12+ and legacy SCO on older
- * versions. Falls back silently to the phone mic/speaker when no headset is
- * paired — routing is always best-effort and never blocks the session.
- */
+/** Keeps capture and agent playback on the communication path on speaker as
+ * well as headsets. Music retains its separate media playback path. */
 class AudioRouter(context: Context) {
-
-    companion object {
-        private const val TAG = "AudioRouter"
-    }
-
-    private val audioManager: AudioManager =
-        context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-
-    private var routed = false
+    private val manager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    private var active = false
+    private var bluetooth = false
     private var previousMode = AudioManager.MODE_NORMAL
+    private var previousSpeaker = false
 
-    /** True when a Bluetooth headset (SCO profile) is available for voice. */
     val hasBluetoothHeadset: Boolean
-        get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            audioManager.availableCommunicationDevices.any {
-                it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
-            }
-        } else {
-            @Suppress("DEPRECATION")
-            audioManager.isBluetoothScoAvailableOffCall
-        }
-
-    /**
-     * Routes mic and playback to the Bluetooth headset if one is present.
-     * Returns true when headset routing is active.
-     */
-    fun startVoiceRouting(): Boolean {
-        if (routed) return true
-        if (!hasBluetoothHeadset) return false
-
-        previousMode = audioManager.mode
-        val result = runCatching {
-            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                val scoDevice = audioManager.availableCommunicationDevices.first {
-                    it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
-                }
-                audioManager.setCommunicationDevice(scoDevice)
-                Log.i(TAG, "Voice routed to Bluetooth headset: ${scoDevice.productName}")
+        get() = runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) manager.availableCommunicationDevices.any {
+                it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || it.type == AudioDeviceInfo.TYPE_BLE_HEADSET
             } else {
-                @Suppress("DEPRECATION")
-                audioManager.startBluetoothSco()
-                @Suppress("DEPRECATION")
-                audioManager.isBluetoothScoOn = true
-                Log.i(TAG, "Voice routed via legacy Bluetooth SCO")
+                manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
             }
-        }
+        }.getOrDefault(false)
 
-        routed = result.isSuccess
-        result.onFailure {
-            Log.w(TAG, "Bluetooth routing failed; using phone mic/speaker", it)
-            audioManager.mode = previousMode
+    @Suppress("DEPRECATION")
+    fun startVoiceRouting(): Boolean {
+        if (active) return bluetooth
+        previousMode = manager.mode
+        previousSpeaker = manager.isSpeakerphoneOn
+        return runCatching {
+            manager.mode = AudioManager.MODE_IN_COMMUNICATION
+            active = true
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val devices = manager.availableCommunicationDevices
+                val chosen = devices.firstOrNull { it.type in setOf(AudioDeviceInfo.TYPE_BLUETOOTH_SCO, AudioDeviceInfo.TYPE_BLE_HEADSET) }
+                    ?: devices.firstOrNull { it.type in setOf(AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_USB_HEADSET) }
+                    ?: devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                bluetooth = chosen != null && manager.setCommunicationDevice(chosen) &&
+                    chosen.type in setOf(AudioDeviceInfo.TYPE_BLUETOOTH_SCO, AudioDeviceInfo.TYPE_BLE_HEADSET)
+            } else if (hasBluetoothHeadset) {
+                manager.startBluetoothSco(); manager.isBluetoothScoOn = true; bluetooth = true
+            } else {
+                manager.isSpeakerphoneOn = !manager.isWiredHeadsetOn
+            }
+            bluetooth
+        }.getOrElse {
+            Log.w("AudioRouter", "Headset unavailable; using phone voice audio", it)
+            false
         }
-        return routed
     }
 
-    /** Restores default audio routing. */
+    @Suppress("DEPRECATION")
     fun stopVoiceRouting() {
-        if (!routed) return
+        if (!active) return
         runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                audioManager.clearCommunicationDevice()
-            } else {
-                @Suppress("DEPRECATION")
-                audioManager.stopBluetoothSco()
-                @Suppress("DEPRECATION")
-                audioManager.isBluetoothScoOn = false
-            }
-            audioManager.mode = previousMode
-        }.onFailure { Log.w(TAG, "Restoring audio routing failed", it) }
-        routed = false
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) manager.clearCommunicationDevice()
+            else if (bluetooth) { manager.stopBluetoothSco(); manager.isBluetoothScoOn = false }
+            manager.isSpeakerphoneOn = previousSpeaker
+            manager.mode = previousMode
+        }
+        active = false; bluetooth = false
     }
 }

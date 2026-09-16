@@ -19,7 +19,7 @@ Phone (this app)                        Mac / test server
 ## Requirements
 
 - Android Studio with its bundled JBR/JDK. Gradle requires JDK 17-21; avoid Homebrew Java 25+.
-- Android SDK with platform 34.
+- Android SDK with platform 36.1.
 - A device or emulator running Android 8.0+ (API 26+)
 - Gradle wrapper 9.4.1, Android Gradle Plugin 9.2.1, Kotlin 2.2.10, Compose BOM 2024.09.03.
 
@@ -65,7 +65,7 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradle
 | Physical phone (LAN) | `ws://<Mac-LAN-IP>:8787/agent`                                    |
 | Physical phone (USB) | `ws://127.0.0.1:8787/agent` after `adb reverse tcp:8787 tcp:8787` |
 
-3. Tap 开启免提. The app asks for microphone (required) and location (optional, used for
+3. Tap the helmet. The app asks for microphone (required) and location (optional, used for
    live weather). With `VOICE_PROVIDER=mock` you get the scripted demo session; with
    `VOICE_PROVIDER=doubao` you get real speech-to-speech.
 
@@ -79,15 +79,18 @@ same candidate identity.
 
 The manifest requests only the permissions needed for the prototype:
 
-| Permission                      | Why it is needed                                                    |
-| ------------------------------- | ------------------------------------------------------------------- |
-| `INTERNET`                      | Connect to the local or test `/agent` WebSocket relay.              |
-| `RECORD_AUDIO`                  | Stream the rider's microphone as 16 kHz PCM16 frames.               |
-| `ACCESS_COARSE/FINE_LOCATION`   | Send coordinates to the relay for live weather and risk advice.     |
-| `FOREGROUND_SERVICE_MICROPHONE` | Keep the hands-free mic session alive when the app is backgrounded. |
-| `POST_NOTIFICATIONS`            | Show the foreground-service notification on newer Android versions. |
-| `BLUETOOTH_CONNECT`             | Route audio to an in-helmet Bluetooth headset on Android 12+.       |
-| `MODIFY_AUDIO_SETTINGS`         | Start/stop headset routing and speaker/mic mode adjustments.        |
+| Permission                          | Why it is needed                                                    |
+| ----------------------------------- | ------------------------------------------------------------------- |
+| `INTERNET`                          | Connect to the local or test `/agent` WebSocket relay.              |
+| `RECORD_AUDIO`                      | Stream the rider's microphone as 16 kHz PCM16 frames.               |
+| `ACCESS_COARSE/FINE_LOCATION`       | Send coordinates to the relay for live weather and risk advice.     |
+| `FOREGROUND_SERVICE_MICROPHONE`     | Keep the hands-free mic session alive when the app is backgrounded. |
+| `POST_NOTIFICATIONS`                | Show the foreground-service notification on newer Android versions. |
+| `BLUETOOTH_CONNECT`                 | Route audio to an in-helmet Bluetooth headset on Android 12+.       |
+| `MODIFY_AUDIO_SETTINGS`             | Start/stop headset routing and speaker/mic mode adjustments.        |
+| `CAMERA`                            | Requested only for photo/video or torch commands.                   |
+| `READ_CONTACTS`                     | Requested only when resolving a spoken contact name.                |
+| `FOREGROUND_SERVICE_MEDIA_PLAYBACK` | Keep explicitly selected local music playing with the screen off.   |
 
 Location is optional. If the rider denies it, the relay can still use server-side fallback
 weather coordinates.
@@ -106,10 +109,10 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradle
 
 The emulator forwards the host Mac's microphone, so the full voice loop is testable.
 
-## What's implemented (full HUD parity)
+## Core mobile features
 
-- Hands-free toggle: the 开始 / 结束 button **or tapping the helmet** starts/stops mic streaming + relay session
-- Web-parity microphone dock — the native 300 × 64 start/end control mirrors the web HUD; its three-bar meter, key, and lume glow react only to live rider input, while Mute remains a separate utility action.
+- Tap the helmet to start/stop the voice session, matching iOS. Mute remains a separate utility action.
+- Responsive portrait/landscape regions keep the helmet, map, music, captions, and utilities reachable, with system-bar insets and labeled controls.
 - Turn-state ring with the web HUD's captions and palette (待机 / 请讲话 / 聆听 / 思考 / 回答)
 - Live transcript with in-place partial updates and agent-line dedup (same rules as the web client)
 - Transcript JSON export via the system share sheet (导出日志, same payload as the web export)
@@ -135,6 +138,12 @@ The emulator forwards the host Mac's microphone, so the full voice loop is testa
   release builds require trusted TLS and block cleartext
 - Keystore-backed AES-GCM storage for relay/login tokens, including migration from older preferences
 - Release-run/test-case/assignment attribution with explicit Android platform and stamped git commit
+- Every supported device command returns a result: torch, Max voice volume, music, contact/number dialing, SMS composition, photo/video capture, gallery, and navigation. Unknown or malformed actions return an error instead of timing out. Dialing/SMS open the system confirmation UI; SMS is refused without known speed at or below 5 km/h.
+- In-app music card with metadata and play/pause/previous/next. Select local audio through Android's document picker, or explicitly grant notification access to control an active music app. The listener does not consume notification contents. Local music has a separate foreground service and media session for background/lock-screen/headset controls.
+- CameraX photos and silent video (no microphone input), with permission prompts, low-storage refusal, a ten-minute/1 GB recording limit, and stop-on-background behavior. Captures stay private until exported.
+- Max gallery with photo/video viewing, deletion confirmation, export to system Photos on Android 10+, system save/share on Android 8–9, and gallery.describe uploads using one photo or eight video frames. Photo previews respect EXIF orientation.
+
+See [the mobile parity audit](../docs/mobile-parity.md) for verification evidence, platform differences, and remaining work.
 
 ## Navigation
 
@@ -142,8 +151,10 @@ Voice-triggered turn-by-turn guidance: "导航去X" starts an in-app session, "�
 Routing is relay-side — the app sends `nav.request` and receives `nav.route` / `nav.error` over
 the same `/agent` socket the voice session already uses, reaching the same Amap driving service
 web and iOS use. A missing `AMAP_API_KEY` on the relay still resolves a deterministic mock route
-end-to-end, so the whole flow works keyless — no Amap credential of any kind lives on the Android
-side.
+end-to-end. Voice/text guidance therefore works without a client map key. Native map tiles
+require a separately registered **Android** AMap key for the app package and signing certificate.
+Set `AMAP_ANDROID_KEY` for the build, or `amap.android.key=...` in ignored `android/local.properties`.
+The iOS key and relay web-service key cannot be substituted. Never commit a real key.
 
 - **Coordinates.** GCJ-02 on the wire _and_ inside the app — routes arrive already GCJ-02 and stay
   that way. Raw WGS-84 exists only for the instant between a GPS fix and
@@ -153,13 +164,8 @@ side.
   `shared/guidance.ts` (web) and the iOS Swift port, tested against the identical shared table:
   maneuver prompts at ~400 m / ~150 m / the turn, one debounced reroute per wrong turn, an arrival
   announcement, and a clean stop (not a silent retry) when the relay fails.
-- **Display: card + voice only.** There is no map yet. The Amap Android Map SDK key is
-  unregistered, so `GuidanceCard` (in `AgentScreen.kt`) shows the destination, current
-  instruction, distance-to-maneuver, and remaining distance/ETA as a HUD card, with an amber
-  badge when the rider drifts off-route. A route map is a follow-up once that key registers.
-- **Location.** `LocationManagerSource` requests fixes from `LocationManager.GPS_PROVIDER` only
-  (no fused/network provider), and the first fix is bound to 3 s — guidance quietly doesn't start
-  if none lands in time or `ACCESS_FINE_LOCATION` was never granted.
+- **Display.** Native AMap route geometry, destination and rider markers, and a full-route camera control inside the guidance card. All map coordinates are already GCJ-02; the renderer does not convert them again. The SDK is initialized only after the rider accepts the disclosure. Declining preserves text/voice guidance and exposes an enable-map action. Missing keys, invalid geometry, initialization errors, and map-load timeouts show an unavailable state.
+- **Location.** `LocationManagerSource` requests GPS fixes. Fine location is required; the first-fix deadline is eight seconds, with a locating announcement after 1.5 seconds. A timeout returns a spoken failure rather than silently starting without a location.
 - **Session scope.** Navigation lives entirely inside the foreground hands-free session: it wires
   up with `AgentSession` and tears down with it, the same lifetime as the mic. No
   background-location permission, no guidance outside a live session.
@@ -214,16 +220,7 @@ In a **Debug** build, set the relay address to `wss://3.35.135.136/agent` and sw
   iOS's voice-processing unit — which only cancels audio rendered through the _same_
   `AVAudioEngine` — Android's `VOICE_COMMUNICATION` AEC references the actual speaker output at
   the HAL level, so capture and playback do **not** have to share one graph.
-- **Known limitation (built-in speaker, no Bluetooth headset).** When no headset is routed,
-  `AudioRouter.startVoiceRouting()` returns early without setting `MODE_IN_COMMUNICATION`, and
-  `PcmPlayer` plays on `USAGE_MEDIA` (`PcmPlayer.useVoiceCall` is only `true` when Bluetooth is
-  routed). That `MODE_NORMAL` + `USAGE_MEDIA` combination is the configuration where Android's
-  AEC is least reliable, so some devices may leak residual echo on the phone speaker. It has not
-  yet been reproduced on a physical device. The hardening fix — mirroring the iOS approach of
-  keeping capture and playback on one echo-cancelled path — is to always use
-  `MODE_IN_COMMUNICATION` + `USAGE_VOICE_COMMUNICATION` for the live session, not only when a
-  headset is connected. Deferred pending a real-device test (AEC cannot be verified on an
-  emulator, which does not model speaker→mic acoustic feedback).
+- **Speaker and headset routing.** A live voice session now uses `MODE_IN_COMMUNICATION` and `USAGE_VOICE_COMMUNICATION` on the phone speaker as well as Bluetooth. It prefers a connected headset, otherwise the speaker, and restores the prior mode on teardown. Music uses its own media path; it does not mute the mic. Speaker echo cancellation, helmet HFP/SCO behavior, and audible voice/music balance still require physical-device checks.
 
 ## Release caveats
 
@@ -237,6 +234,13 @@ In a **Debug** build, set the relay address to `wss://3.35.135.136/agent` and sw
 - Uplink packet stats (fps / dropped frames) in the telemetry card
 - Mid-ride weather refresh and continuous location updates
 - A wake word so the mic need not stream continuously
-- Unit tests for the protocol parsing and transcript dedup helpers
-- Built-in-speaker echo hardening: always use `MODE_IN_COMMUNICATION` + `USAGE_VOICE_COMMUNICATION`
-  for the live session (see _Audio notes_), pending a physical-device test
+- RDK companion and crash/SOS implementations are present; physical acceptance requirements are tracked in the parity audit.
+- Physical-device checks for map tiles/key authorization, Bluetooth, external music apps, and speaker echo cancellation.
+
+### Helmet rides and crash checks
+
+Settings now includes RDK code/nearby pairing and explicit helmet ride start/stop. Sign in with an account first; the manually pasted relay token does not authorize companion sharing. Starting a ride requires precise location and keeps a visible foreground notification with a stop action. Phone hands-free and helmet ride modes are mutually exclusive. Logout and unpair stop sharing; rides do not resume automatically after process death.
+
+Phone hands-free arms the iOS-equivalent crash detector when linear acceleration and gyroscope sensors are available. An incident progresses through a 15-second check-in and 30-second alarm. “我没事”/“取消”, the crash screen or notification cancels it. Ending hands-free preserves an active alarm; logging out disables its network delivery but retains the local alarm and dialer. Emergency contact notification is opt-in, and relay failures are shown explicitly. The default manual call target is 120; settings can select the configured contact instead. No call is placed automatically.
+
+In a debug build, developer settings expose a local-only crash drill. It cannot notify an emergency contact. Hardware sensor validation, real RDK discovery, Bluetooth audio, live AMap authorization and actual notification-provider delivery remain device/release acceptance gates; see [the parity audit](../docs/mobile-parity.md).

@@ -8,6 +8,12 @@ import AVFoundation
 /// blocks the session.
 final class AudioRouter {
 
+    /// Music and the full-duplex voice engine must coexist. Without mixing,
+    /// starting Apple Music can interrupt capture and agent speech.
+    static let voiceOptions: AVAudioSession.CategoryOptions = [
+        .allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker, .mixWithOthers
+    ]
+
     private let session = AVAudioSession.sharedInstance()
     private var activated = false
 
@@ -29,7 +35,7 @@ final class AudioRouter {
             try session.setCategory(
                 .playAndRecord,
                 mode: .voiceChat,
-                options: [.allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker]
+                options: Self.voiceOptions
             )
             try session.setActive(true, options: [])
             activated = true

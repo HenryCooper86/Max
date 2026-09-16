@@ -164,6 +164,8 @@ internal fun SettingsPanel(
         }
     }
 
+    RideSafetySettings(viewModel)
+
     // Rider voice preferences.
     SectionCard("语音") {
         ChipRow(label = "声音") {

@@ -1,0 +1,5 @@
+# Copy to ignored android/local.properties, then set your own SDK path.
+sdk.dir=/Users/you/Library/Android/sdk
+# Native map display only. Register com.horizon.maxhelmet and the signing SHA-1
+# in the AMap console. The relay and iOS keys are different key types.
+amap.android.key=

@@ -9,6 +9,10 @@ import android.os.Build
 import android.speech.tts.TextToSpeech
 import android.util.Log
 import com.horizon.maxhelmet.BuildConfig
+import com.horizon.maxhelmet.actions.DeviceActions
+import com.horizon.maxhelmet.capture.CameraController
+import com.horizon.maxhelmet.capture.CaptureStore
+import com.horizon.maxhelmet.music.MusicController
 import com.horizon.maxhelmet.navigation.LocationManagerSource
 import com.horizon.maxhelmet.navigation.NavGuidanceState
 import com.horizon.maxhelmet.navigation.NavSpeaker
@@ -75,6 +79,7 @@ class AgentSession(
         val transcript: List<TranscriptItem> = emptyList(),
         val weather: Weather? = null,
         val rideContext: RideContext = RideContext(),
+        val hasRideContext: Boolean = false,
         val sessionMemory: SessionMemory = SessionMemory(),
         val telemetry: Telemetry? = null,
         val bluetoothRouted: Boolean = false,
@@ -194,6 +199,24 @@ class AgentSession(
     private var persistedTranscriptSignature: Pair<Int, Int>? = null
 
     private val player = PcmPlayer()
+    private val deviceScope = CoroutineScope(scope.coroutineContext + Dispatchers.Main.immediate)
+    private var stopAfterIncident = false
+    val crash by lazy {
+        com.horizon.maxhelmet.crash.CrashRuntime(context, deviceScope,
+            speed = { state.value.rideContext.speedKmh.toDouble().takeIf { state.value.hasRideContext } },
+            locate = { resolveCrashLocation() },
+            speak = { text -> stopAgentSpeech(); if (music.state.value.playing) music.control("pause"); ttsSpeak(text) },
+            send = { text -> if (socketOpen) webSocket?.send(text); Unit },
+            resolved = { if (stopAfterIncident || !state.value.handsFree) { stopAfterIncident = false; stop(force = true) } })
+    }
+    fun detachCrashAccount() { deviceScope.launch { crash.controller.detachAccount(); stop(force = true) } }
+    val music = MusicController(context, deviceScope)
+    val captures = CaptureStore(context)
+    val camera = CameraController(context, captures, deviceScope)
+    val deviceActions = DeviceActions(context, player, music, camera,
+        speed = { state.value.rideContext.speedKmh.toDouble().takeIf { state.value.hasRideContext } })
+    private val deviceCommandIds = linkedSetOf<String>()
+    private val deviceJobs = mutableSetOf<Job>()
     private val audioRouter = AudioRouter(context)
     private val mic = MicStreamer(
         onFrame = { frame ->
@@ -288,15 +311,18 @@ class AgentSession(
             httpClient = buildHttpClient(allowSelfSigned)
         }
 
+        stopAfterIncident = false
+        crash.arm()
         intentionalClose = false
         reconnectAttempts = 0
         transmitting = true
         micMuted = false
         spokenDeliveryIds.clear()
+        deviceScope.launch { deviceCommandIds.clear() }
 
         // In-helmet Bluetooth headset routing; playback follows the same path.
         val bluetoothRouted = audioRouter.startVoiceRouting()
-        player.useVoiceCall = bluetoothRouted
+        player.useVoiceCall = true
         // Arm playback for this session. stop() release()s the player; arming here
         // is what lets a late frame from a previous session be dropped instead of
         // resurrecting a track nothing would release.
@@ -308,7 +334,8 @@ class AgentSession(
                 turnState = TurnState.LISTENING,
                 micMuted = false,
                 bluetoothRouted = bluetoothRouted,
-                authRequired = false
+                authRequired = false,
+                hasRideContext = false
             )
         }
         scope.launch {
@@ -339,8 +366,26 @@ class AgentSession(
     }
 
     /** Deactivates hands-free: stop the mic, restore routing, close the relay. */
-    fun stop() {
-        if (!lifecycle.stop()) return
+    fun stop(force: Boolean = false) {
+        if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) { deviceScope.launch { stop(force) }; return }
+        crash.sessionEnded()
+        if (crash.controller.active && !force) {
+            stopAfterIncident = true
+            transmitting = false; micMuted = false; mic.stop(); stopAgentSpeech()
+            webSocket?.send(AUDIO_STOP_EVENT)
+            deviceJobs.forEach { it.cancel() }; deviceJobs.clear(); camera.stopForSession()
+            navSearch.failPending(); navController.teardown()
+            _state.update { it.copy(handsFree = false, micMuted = false, turnState = TurnState.IDLE, voiceLevel = 0f) }
+            return
+        }
+        if (!lifecycle.stop()) {
+            if (!crash.controller.active) { crash.sessionEnded(); VoiceAgentService.stop(context) }
+            return
+        }
+        deviceScope.launch {
+            deviceJobs.forEach { it.cancel() }; deviceJobs.clear()
+            camera.stopForSession()
+        }
         transmitting = false
         micMuted = false
         intentionalClose = true
@@ -357,7 +402,7 @@ class AgentSession(
         audioRouter.stopVoiceRouting()
         // stop() is also called internally on idle/auth/startup failures, not
         // only through MainViewModel, so it owns foreground-service cleanup.
-        VoiceAgentService.stop(context)
+        if (!crash.controller.active) VoiceAgentService.stop(context)
         // A dead/closing socket delivers no route: resolve any in-flight
         // nav.request as an honest failure and retire the active route
         // (silently — there is no rider-facing turn left to answer or speak
@@ -645,14 +690,14 @@ class AgentSession(
                     _state.update { state -> state.copy(statusText = "收到异常代理消息") }
                     return
                 }
-                handleEvent(event)
+                handleEvent(event, webSocket)
             }
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
                 if (webSocket !== this@AgentSession.webSocket) return
                 // AudioTrack setup can throw (unsupported config / bad state); keep it
                 // from escaping onto the reader thread and tearing down the listener.
-                runCatching { player.play(bytes.toByteArray()) }
+                runCatching { if (!crash.controller.active) player.play(bytes.toByteArray()) }
                     .onFailure { Log.w(TAG, "PCM playback failed", it) }
             }
 
@@ -704,7 +749,7 @@ class AgentSession(
         // hands-free entirely (mirrors the web client's stopMic on 4001):
         // leaving it half-alive kept the mic capturing, Bluetooth SCO routed,
         // and the orb pulsing "listening" with no session behind it.
-        if (closeCode == IDLE_CLOSE_CODE) {
+        if (closeCode == IDLE_CLOSE_CODE && !crash.controller.active) {
             reconnectAttempts = 0
             stop()
             _state.update { it.copy(statusText = "会话闲置已断开，请重新开启免提") }
@@ -721,7 +766,7 @@ class AgentSession(
             // upgrade left a zombie session (mic capturing, audio routed, no
             // reconnect) and the next helmet tap STOPPED the zombie instead of
             // retrying with the fresh login.
-            stop()
+            deviceScope.launch { crash.controller.detachAccount(); stop(force = true) }
             _state.update {
                 it.copy(
                     connection = ConnectionState.DEGRADED,
@@ -738,7 +783,7 @@ class AgentSession(
 
         // Unexpected drop: reconnect with exponential backoff (mirrors src/main.tsx).
         reconnectAttempts += 1
-        if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+        if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS && !crash.controller.active) {
             reconnectAttempts = 0
             stop()
             _state.update {
@@ -746,7 +791,7 @@ class AgentSession(
             }
             return
         }
-        val delayMs = minOf(8_000L, 1_000L * (1L shl (reconnectAttempts - 1)))
+        val delayMs = if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) 30_000L else minOf(8_000L, 1_000L * (1L shl (reconnectAttempts - 1)))
         _state.update {
             it.copy(connection = ConnectionState.OFFLINE, statusText = "连接已断开，${delayMs / 1000} 秒后自动重连…")
         }
@@ -758,10 +803,11 @@ class AgentSession(
 
     // ---- event handling ----------------------------------------------------
 
-    private fun handleEvent(event: AgentEvent) {
+    private fun handleEvent(event: AgentEvent, sourceSocket: WebSocket) {
         when (event) {
             is AgentEvent.SessionStarted -> {
                 socketOpen = true
+                deviceScope.launch { if (sourceSocket === webSocket) crash.controller.ready() }
                 _state.update {
                     it.copy(
                         provider = event.provider,
@@ -794,14 +840,17 @@ class AgentSession(
                 }
             }
 
+            is AgentEvent.CrashAck -> deviceScope.launch { if (sourceSocket === webSocket) crash.controller.ack(event.incidentId, event.status, event.detail) }
+            AgentEvent.CrashSimulate -> deviceScope.launch { if (sourceSocket === webSocket && BuildConfig.DEBUG) crash.controller.simulate() }
             is AgentEvent.Transcript -> {
+                if (event.speaker == Speaker.RIDER && event.final) deviceScope.launch { if (sourceSocket === webSocket) crash.controller.transcript(event.text) }
                 // Barge-in: the rider talking always silences the agent.
                 if (event.speaker == Speaker.RIDER) {
                     stopAgentSpeech()
                 }
                 pushTranscript(event.speaker, event.text, event.final, event.turnId, event.deliveryId)
                 val shouldSpeak = event.useBrowserSpeech ?: event.final
-                if (event.speaker == Speaker.AGENT && shouldSpeak && spokenDeliveryIds.add(event.deliveryId)) {
+                if (!crash.controller.active && event.speaker == Speaker.AGENT && shouldSpeak && spokenDeliveryIds.add(event.deliveryId)) {
                     if (spokenDeliveryIds.size > 512) spokenDeliveryIds.remove(spokenDeliveryIds.first())
                     ttsSpeak(event.text)
                 }
@@ -817,7 +866,7 @@ class AgentSession(
                 it.copy(weather = event.weather)
             }
 
-            is AgentEvent.RideContextUpdate -> _state.update { it.copy(rideContext = event.rideContext) }
+            is AgentEvent.RideContextUpdate -> _state.update { it.copy(rideContext = event.rideContext, hasRideContext = true) }
 
             is AgentEvent.SessionMemoryUpdate -> _state.update { it.copy(sessionMemory = event.memory) }
 
@@ -827,12 +876,24 @@ class AgentSession(
 
             is AgentEvent.ErrorEvent -> _state.update { it.copy(statusText = event.message) }
 
-            // Only navigation.* actions route to the controller — every other
-            // device.command action stays silent, as before Task 6.
             is AgentEvent.DeviceCommand -> {
-                if (event.action.startsWith("navigation.")) {
-                    scope.launch { navController.handleCommand(event.commandId, event.action, event.query) }
+                val source = sourceSocket
+                val job = deviceScope.launch {
+                    if (source !== webSocket || !state.value.handsFree || event.commandId.isBlank()) return@launch
+                    if (!deviceCommandIds.add(event.commandId)) return@launch
+                    if (deviceCommandIds.size > 512) deviceCommandIds.remove(deviceCommandIds.first())
+                    if (event.action.startsWith("navigation.") || event.action == "destination.show") {
+                        navController.handleCommand(event.commandId,
+                            if (event.action == "destination.show") "navigation.start" else event.action, event.query)
+                    } else {
+                        val result = deviceActions.execute(event,
+                            isCurrent = { source === webSocket && state.value.handsFree }, send = source::send)
+                        if (source === webSocket && state.value.handsFree) source.send(result.json(event.commandId))
+                    }
                 }
+                // The dispatch scope is the session's main scope; mutations stay
+                // on it even though socket callbacks arrive from OkHttp threads.
+                deviceScope.launch { deviceJobs.removeAll { it.isCompleted }; if (!job.isCompleted) deviceJobs.add(job) }
             }
 
             is AgentEvent.NavRoute -> navSearch.handleNavRoute(event.data)
@@ -986,6 +1047,16 @@ class AgentSession(
                 }?.let { it.latitude to it.longitude }
             }.getOrNull()
         }
+    }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun resolveCrashLocation(): Pair<Double, Double>? = withContext(Dispatchers.IO) {
+        if (!hasLocationPermission()) return@withContext null
+        val manager = context.getSystemService(LocationManager::class.java) ?: return@withContext null
+        listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER).mapNotNull {
+            runCatching { manager.getLastKnownLocation(it) }.getOrNull()
+        }.filter { android.os.SystemClock.elapsedRealtimeNanos() - it.elapsedRealtimeNanos in 0..30_000_000_000L }
+            .maxByOrNull { it.elapsedRealtimeNanos }?.let { it.latitude to it.longitude }
     }
 
     private fun hasLocationPermission(): Boolean =

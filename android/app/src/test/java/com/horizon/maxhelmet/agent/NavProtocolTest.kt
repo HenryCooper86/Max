@@ -32,7 +32,7 @@ class NavProtocolTest {
         """.trimIndent()
 
         assertEquals(
-            AgentEvent.DeviceCommand("cmd-1", "navigation.start", "人民广场"),
+            AgentEvent.DeviceCommand("cmd-1", "navigation.start", "人民广场", mapOf("query" to "人民广场")),
             parseAgentEvent(json)
         )
     }

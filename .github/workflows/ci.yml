@@ -65,6 +65,14 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "4.0.6"
+          bundler-cache: true
+          working-directory: ios
+      - name: Install iOS dependencies
+        working-directory: ios
+        run: bundle exec pod install --deployment
       - name: Select a simulator
         id: simulator
         run: |
@@ -78,7 +86,7 @@ jobs:
       - name: Build and test
         run: |
           xcodebuild \
-            -project ios/MaxHelmet.xcodeproj \
+            -workspace ios/MaxHelmet.xcworkspace \
             -scheme MaxHelmet \
             -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.id }}' \
             HORIZON_GIT_COMMIT="${GITHUB_SHA::12}" \

@@ -102,6 +102,7 @@ struct GuidanceCard: View {
     /// the card into the viewport below it.
     var mapHeight: CGFloat = guidanceCardMapHeight
     var arrangement: GuidanceCardArrangement = .stacked
+    @State private var showingDetails = false
     var onConfirm: (UUID, Bool) -> Void = { _, _ in }
 
     private var distanceText: String {
@@ -125,6 +126,14 @@ struct GuidanceCard: View {
             .applyingGuidanceCardAccessibilityPolicy(
                 guidanceCardAccessibilityContract.enclosingCardChildren
             )
+            .onAppear { if guidance.confirmationID == nil { showingDetails = true } }
+            .onChange(of: guidance.confirmationID) { old, new in
+                if old != nil && new == nil { showingDetails = true }
+                if new != nil { showingDetails = false }
+            }
+            .sheet(isPresented: $showingDetails) {
+                NavigationDetailsView(guidance: guidance).presentationDetents([.large])
+            }
     }
 
     @ViewBuilder
@@ -165,6 +174,17 @@ struct GuidanceCard: View {
             routeMap
                 .frame(height: mapHeight)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(alignment: .topTrailing) {
+                    if guidance.confirmationID == nil {
+                        Button { showingDetails = true } label: {
+                            Label("导航详情", systemImage: "arrow.up.left.and.arrow.down.right")
+                                .font(.subheadline.weight(.semibold)).padding(10)
+                        }
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10)).padding(4)
+                    }
+                }
+        } else if guidance.confirmationID == nil {
+            Button("打开详细导航") { showingDetails = true }.frame(minHeight: 44)
         }
     }
 
@@ -176,7 +196,7 @@ struct GuidanceCard: View {
                     .foregroundStyle(HudColors.amber)
             } else {
                 HStack(spacing: 12) {
-                    Image(systemName: "arrow.turn.up.right")
+                    Image(systemName: navigationManeuverSymbol(guidance.maneuverInstruction ?? ""))
                         .font(.system(size: 30, weight: .bold))
                         .foregroundStyle(HudColors.lume)
                     VStack(alignment: .leading, spacing: 2) {

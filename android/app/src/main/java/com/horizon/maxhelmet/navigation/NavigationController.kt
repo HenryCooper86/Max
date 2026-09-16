@@ -36,7 +36,8 @@ data class NavGuidanceState(
     val arrived: Boolean,
     val route: NavigationRoute? = null,
     val riderCoordinate: LatLon? = null,
-    val confirmationId: String? = null
+    val confirmationId: String? = null,
+    val maneuverIndex: Int = 0
 )
 
 /** One in-flight reroute attempt's captured inputs — everything
@@ -745,6 +746,7 @@ class NavigationController(
     private fun publishedState(route: NavigationRoute, update: GuidanceUpdate): NavGuidanceState = NavGuidanceState(
         destinationName = route.destinationName,
         currentInstruction = update.currentInstruction,
+        maneuverIndex = update.progress.maneuverIndex,
         distanceToManeuverMeters = update.distanceToManeuverMeters,
         remainingMeters = update.remainingMeters,
         remainingSeconds = update.remainingSeconds,

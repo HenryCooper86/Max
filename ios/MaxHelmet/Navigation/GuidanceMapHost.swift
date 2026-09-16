@@ -104,13 +104,15 @@ struct GuidanceMapLoadContainer<MapContent: View, FailureOverlay: View>: View {
 
 struct GuidanceMapHost: View {
     let guidance: GuidanceState
+    var interactive = false
+    var followsRider = false
 
     @StateObject private var consent = AMapConsentStore()
     @State private var loadFailed = false
     private let configuration = AMapConfiguration()
 
     private var model: AMapRouteDisplayModel? {
-        AMapRouteDisplayModel.make(guidance: guidance)
+        AMapRouteDisplayModel.make(guidance: guidance, followsRider: followsRider)
     }
 
     private var presentation: GuidanceMapHostPresentation {
@@ -161,7 +163,9 @@ struct GuidanceMapHost: View {
                         model: model,
                         consent: consent,
                         apiKey: apiKey,
-                        loadFailed: $loadFailed
+                        loadFailed: $loadFailed,
+                        interactive: interactive,
+                        followsRider: followsRider
                     )
                 },
                 failureOverlay: {

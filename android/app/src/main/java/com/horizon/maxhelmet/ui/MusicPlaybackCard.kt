@@ -17,7 +17,7 @@ import com.horizon.maxhelmet.music.MusicController
 import kotlinx.coroutines.launch
 
 @Composable
-fun MusicPlaybackCard(controller: MusicController) {
+fun MusicPlaybackCard(controller: MusicController, compact: Boolean = false) {
     val state by controller.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -29,8 +29,8 @@ fun MusicPlaybackCard(controller: MusicController) {
     }
     if (!state.visible) return
     HudCard {
-        Text(state.title, style = MaterialTheme.typography.titleMedium)
-        Text(listOf(state.artist, state.source).filter { it.isNotBlank() }.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+        Text(state.title, style = MaterialTheme.typography.titleMedium, maxLines = if (compact) 1 else 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+        if (!compact) Text(listOf(state.artist, state.source).filter { it.isNotBlank() }.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
         state.message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         actionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -48,10 +48,16 @@ fun MusicPlaybackCard(controller: MusicController) {
                     }
                 }, modifier = Modifier.size(48.dp)) { Icon(icon, label) }
             }
-            TextButton(onClick = { picker.launch(arrayOf("audio/*")) }, enabled = !state.busy) { Text("选择音乐") }
+            if (compact) {
+                IconButton(onClick = { picker.launch(arrayOf("audio/*")) }, enabled = !state.busy, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Default.LibraryMusic, "选择音乐")
+                }
+            } else {
+                TextButton(onClick = { picker.launch(arrayOf("audio/*")) }, enabled = !state.busy) { Text("选择音乐") }
+            }
         }
         if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-        TextButton(onClick = {
+        if (!compact) TextButton(onClick = {
             if (state.remoteAccess) controller.useExternalPlayer() else showAccess = true
         }) { Text("控制音乐应用") }
     }

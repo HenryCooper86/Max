@@ -4,9 +4,30 @@ import SwiftUI
 struct MusicPlaybackCard: View {
     @ObservedObject var model: MusicPlaybackModel
     var presentsPicker = true
+    var compact = false
 
     var body: some View {
         if model.visible {
+            Group {
+                if compact { compactContent } else { fullContent }
+            }
+            .padding(12)
+            .foregroundStyle(.white)
+            .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
+            .accessibilityIdentifier("musicPlaybackCard")
+            .sheet(isPresented: Binding(
+                get: { presentsPicker && model.showingPicker },
+                set: { if presentsPicker { model.showingPicker = $0 } }
+            )) {
+                MusicLibraryPicker { collection in
+                    model.showingPicker = false
+                    if let collection { Task { await model.select(collection) } }
+                }
+            }
+        }
+    }
+
+    private var fullContent: some View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .top) {
                     Label(model.title, systemImage: "music.note")
@@ -40,18 +61,29 @@ struct MusicPlaybackCard: View {
                 .disabled(model.busy)
                 if model.busy { ProgressView("正在准备音乐…").font(.caption) }
             }
-            .padding(12)
-            .foregroundStyle(.white)
-            .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
-            .accessibilityIdentifier("musicPlaybackCard")
-            .sheet(isPresented: Binding(
-                get: { presentsPicker && model.showingPicker },
-                set: { if presentsPicker { model.showingPicker = $0 } }
-            )) {
-                MusicLibraryPicker { collection in
-                    model.showingPicker = false
-                    if let collection { Task { await model.select(collection) } }
-                }
+    }
+
+    private var compactContent: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 0) {
+                Button { Task { await model.chooseMusic() } } label: {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(model.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                        Text(model.busy ? "正在准备…" : (model.artist.isEmpty ? "选择音乐" : model.artist))
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                }.buttonStyle(.plain).disabled(model.busy)
+                control("上一首", symbol: "backward.end.fill", action: .previous).disabled(model.busy)
+                control(model.isPlaying ? "暂停" : "播放",
+                        symbol: model.isPlaying ? "pause.fill" : "play.fill",
+                        action: model.isPlaying ? .pause : .play).disabled(model.busy)
+                control("下一首", symbol: "forward.end.fill", action: .next).disabled(model.busy)
+                Button { model.stopPlayback(dismiss: true) } label: {
+                    Image(systemName: "xmark").frame(width: 44, height: 44)
+                }.buttonStyle(.plain).accessibilityLabel("停止并关闭音乐")
+            }
+            if let message = model.message {
+                Text(message).font(.caption).foregroundStyle(HudColors.amber).lineLimit(2)
             }
         }
     }

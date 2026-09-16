@@ -1,4 +1,5 @@
 import CoreLocation
+import MediaPlayer
 import SwiftUI
 import XCTest
 @testable import MaxHelmet
@@ -42,20 +43,32 @@ final class NavigationDetailsTests: XCTestCase {
     }
 
     func testDetailedLayoutSnapshot() async throws {
+        try await captureLayout(size: CGSize(width: 402, height: 874), name: "riding-map-portrait")
+    }
+
+    func testLandscapeLayoutSnapshot() async throws {
+        try await captureLayout(size: CGSize(width: 874, height: 402), name: "riding-map-landscape")
+    }
+
+    func testSmallPhoneLayoutSnapshot() async throws {
+        try await captureLayout(size: CGSize(width: 375, height: 667), name: "riding-map-small-phone")
+    }
+
+    private func captureLayout(size: CGSize, name: String) async throws {
         let previous = UserDefaults.standard.object(forKey: AMapConsentStore.defaultsKey)
         UserDefaults.standard.set("accepted", forKey: AMapConsentStore.defaultsKey)
         defer { UserDefaults.standard.set(previous, forKey: AMapConsentStore.defaultsKey) }
-        let music = MusicPlaybackModel(requestAuthorization: { .denied })
+        let music = MusicPlaybackModel(player: NavigationPreviewMusicDriver(), requestAuthorization: { .authorized })
         let controller = UIHostingController(rootView: NavigationDetailsView(guidance: guidance(), music: music))
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
-        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        window.frame = CGRect(origin: .zero, size: size)
         window.rootViewController = controller
         window.makeKeyAndVisible()
         controller.view.frame = window.bounds
         controller.view.layoutIfNeeded()
         // A voice request arrives after the map is already open. Both screens
-        // must observe this same model, including recoverable permission errors.
+        // must observe this same model while playback begins.
         _ = await music.perform(.play)
         XCTAssertTrue(music.visible)
         try await Task.sleep(nanoseconds: 500_000_000)
@@ -64,7 +77,7 @@ final class NavigationDetailsTests: XCTestCase {
             XCTAssertTrue(controller.view.drawHierarchy(in: controller.view.bounds, afterScreenUpdates: true))
         }
         let attachment = XCTAttachment(image: image)
-        attachment.name = "navigation-details-with-music"
+        attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
         window.isHidden = true
@@ -77,4 +90,23 @@ final class NavigationDetailsTests: XCTestCase {
             remainingSeconds: 600, offRoute: false,
             upcomingSteps: navigationStepDetails(route: route, index: 0, remainingMeters: 2000))
     }
+}
+
+
+@MainActor
+private final class NavigationPreviewMusicDriver: MusicPlaybackDriving {
+    let title: String? = "Evening Ride"
+    let artist: String? = "Road Mix"
+    let hasItem = true
+    let itemIdentity: String? = "preview-track"
+    var isPlaying = false
+    var notificationObject: AnyObject { self }
+    func beginObserving() {}
+    func endObserving() {}
+    func setQueue(_ collection: MPMediaItemCollection) {}
+    func prepare(_ completion: @escaping @Sendable (Error?) -> Void) { completion(nil) }
+    func play() { isPlaying = true }
+    func pause() { isPlaying = false }
+    func next() {}
+    func previous() {}
 }

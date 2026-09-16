@@ -20,7 +20,7 @@ import kotlinx.coroutines.delay
 
 /** No AMap API, including privacy initialization, runs before the rider opts in. */
 @Composable
-fun GuidanceRouteMap(guidance: NavGuidanceState, detailed: Boolean = false, followsRider: Boolean = false) {
+fun GuidanceRouteMap(guidance: NavGuidanceState, detailed: Boolean = false, followsRider: Boolean = false, viewportModifier: Modifier? = null) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("max_map", 0) }
     var consent by remember { mutableStateOf(prefs.getBoolean("consent_v1", false)) }
@@ -33,7 +33,7 @@ fun GuidanceRouteMap(guidance: NavGuidanceState, detailed: Boolean = false, foll
         }
         MapAvailability.MISSING_KEY -> Text("地图暂不可用 · 缺少 Android 地图配置")
         MapAvailability.INVALID_ROUTE -> Text("地图暂不可用 · 路线数据不足")
-        MapAvailability.READY -> NativeGuidanceMap(guidance, detailed, followsRider)
+        MapAvailability.READY -> NativeGuidanceMap(guidance, detailed, followsRider, viewportModifier)
     }
     if (showConsent) {
         AlertDialog(
@@ -56,7 +56,7 @@ fun GuidanceRouteMap(guidance: NavGuidanceState, detailed: Boolean = false, foll
 }
 
 @Composable
-private fun NativeGuidanceMap(guidance: NavGuidanceState, detailed: Boolean, followsRider: Boolean) {
+private fun NativeGuidanceMap(guidance: NavGuidanceState, detailed: Boolean, followsRider: Boolean, viewportModifier: Modifier?) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var loaded by remember { mutableStateOf(false) }
@@ -91,7 +91,7 @@ private fun NativeGuidanceMap(guidance: NavGuidanceState, detailed: Boolean, fol
         }
     }
     LaunchedEffect(mapView) { delay(15_000); if (!loaded) failed = true }
-    Box(Modifier.fillMaxWidth().height(if (detailed) 360.dp else 200.dp)) {
+    Box(viewportModifier ?: Modifier.fillMaxWidth().height(if (detailed) 360.dp else 200.dp)) {
         AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize(), update = {
             runCatching { renderer.update(guidance, detailed, followsRider) }.onFailure { failed = true }
         })

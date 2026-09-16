@@ -3,6 +3,7 @@ import SwiftUI
 
 struct MusicPlaybackCard: View {
     @ObservedObject var model: MusicPlaybackModel
+    var presentsPicker = true
 
     var body: some View {
         if model.visible {
@@ -43,7 +44,10 @@ struct MusicPlaybackCard: View {
             .foregroundStyle(.white)
             .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
             .accessibilityIdentifier("musicPlaybackCard")
-            .sheet(isPresented: $model.showingPicker) {
+            .sheet(isPresented: Binding(
+                get: { presentsPicker && model.showingPicker },
+                set: { if presentsPicker { model.showingPicker = $0 } }
+            )) {
                 MusicLibraryPicker { collection in
                     model.showingPicker = false
                     if let collection { Task { await model.select(collection) } }

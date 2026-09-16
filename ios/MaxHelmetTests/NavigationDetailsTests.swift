@@ -41,11 +41,12 @@ final class NavigationDetailsTests: XCTestCase {
         XCTAssertEqual(navigationManeuverSymbol("直行"), "arrow.up")
     }
 
-    func testDetailedLayoutSnapshot() throws {
+    func testDetailedLayoutSnapshot() async throws {
         let previous = UserDefaults.standard.object(forKey: AMapConsentStore.defaultsKey)
         UserDefaults.standard.set("accepted", forKey: AMapConsentStore.defaultsKey)
         defer { UserDefaults.standard.set(previous, forKey: AMapConsentStore.defaultsKey) }
-        let controller = UIHostingController(rootView: NavigationDetailsView(guidance: guidance()))
+        let music = MusicPlaybackModel(requestAuthorization: { .denied })
+        let controller = UIHostingController(rootView: NavigationDetailsView(guidance: guidance(), music: music))
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
@@ -53,13 +54,17 @@ final class NavigationDetailsTests: XCTestCase {
         window.makeKeyAndVisible()
         controller.view.frame = window.bounds
         controller.view.layoutIfNeeded()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        // A voice request arrives after the map is already open. Both screens
+        // must observe this same model, including recoverable permission errors.
+        _ = await music.perform(.play)
+        XCTAssertTrue(music.visible)
+        try await Task.sleep(nanoseconds: 500_000_000)
         controller.view.layoutIfNeeded()
         let image = UIGraphicsImageRenderer(size: window.bounds.size).image { _ in
             XCTAssertTrue(controller.view.drawHierarchy(in: controller.view.bounds, afterScreenUpdates: true))
         }
         let attachment = XCTAttachment(image: image)
-        attachment.name = "navigation-details-portrait"
+        attachment.name = "navigation-details-with-music"
         attachment.lifetime = .keepAlways
         add(attachment)
         window.isHidden = true

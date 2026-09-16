@@ -155,6 +155,7 @@ func helmetToggleAccessibilityValue(handsFree: Bool) -> String {
 /// banner pins to the top. All rider + test settings live in the gear sheet;
 /// captions are optional under the helmet.
 struct AgentScreen: View {
+    @State private var navigationDetailsPresented = false
     @ObservedObject var viewModel: MainViewModel
     @ObservedObject var session: AgentSession
     /// Compact vertical space means the phone is sideways. Info.plist has always
@@ -268,7 +269,9 @@ struct AgentScreen: View {
                     guidance: guidance,
                     mapHeight: guidanceMapHeight(forAlertViewport: viewportHeight, layout: layout),
                     arrangement: guidanceCardArrangement(for: layout),
-                    onConfirm: { id, accepted in session.confirmNavigation(id: id, accepted: accepted) }
+                    onConfirm: { id, accepted in session.confirmNavigation(id: id, accepted: accepted) },
+                    music: session.music,
+                    onDetailsPresentationChanged: { navigationDetailsPresented = $0 }
                 )
                     .padding(.horizontal, 4)
                     .transition(.move(edge: .top).combined(with: .opacity))
@@ -308,7 +311,7 @@ struct AgentScreen: View {
     private func utilityContent(captionsVisible: Bool) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             StateReadout(caption: orbCaption(state), telltale: stateTelltale(state), color: orbColor(state))
-            MusicPlaybackCard(model: session.music)
+            MusicPlaybackCard(model: session.music, presentsPicker: !navigationDetailsPresented)
             if captionsVisible { captionsCard() }
             // The readout belongs with the helmet above it; 字幕 / 相册 / 设置
             // settle against the bottom edge rather than floating mid-region.

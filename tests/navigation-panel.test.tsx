@@ -81,3 +81,19 @@ it("shows actionable failure instead of removing the navigation panel", () => {
   expect(tree!.root.findByProps({ role: "status" }).children).toContain("地图服务暂不可用");
   act(() => tree!.unmount());
 });
+
+it("expands the map and exposes upcoming route steps", () => {
+  const position = MOCK_ROUTE.polyline[0];
+  const update = step(position, route, INITIAL_PROGRESS);
+  let tree: ReturnType<typeof create> | undefined;
+  act(() => {
+    tree = create(<NavigationPanel state={{ phase: "guiding", route, update, position }} />);
+  });
+  const expand = tree!.root.findAllByType("button").find((button) => button.children.includes("展开地图"))!;
+  act(() => expand.props.onClick());
+  expect(tree!.root.findByType("section").props.className).toContain("navigationExpanded");
+  expect(tree!.root.findByType("ol").findAllByType("li")).toHaveLength(
+    route.steps.length - update.progress.maneuverIndex
+  );
+  act(() => tree!.unmount());
+});

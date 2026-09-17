@@ -111,9 +111,11 @@ function useAmapJsKey(): string | null {
 function AmapTileMap({
   mapKey,
   polyline,
-  rider
+  rider,
+  followsRider = false
 }: {
   mapKey: string;
+  followsRider?: boolean;
   polyline: readonly GeoPoint[];
   rider: GeoPoint | null;
 }) {
@@ -197,7 +199,14 @@ function AmapTileMap({
       marker.setMap(mapRef.current);
       markerRef.current = marker;
     }
-  }, [ready, rider]);
+    if (followsRider) mapRef.current.setCenter(position);
+  }, [ready, rider, followsRider]);
+
+  useEffect(() => {
+    if (ready && mapRef.current && !followsRider) {
+      applyAmapCameraPlan(mapRef.current, amapCameraPlan(polyline, rider), polylineRef.current);
+    }
+  }, [ready, followsRider, polyline, rider]);
 
   // Nothing renders while the SDK is loading or if it never becomes ready
   // (absent key never gets here; a load failure leaves `ready` false
@@ -318,6 +327,8 @@ export function NavigationPanel({
   // the tile map never mounts there and the schematic-only tests are
   // unaffected.
   const amapKey = useAmapJsKey();
+  const [followsRider, setFollowsRider] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   // Gates the SDK, not the element: mounting AmapTileMap is what injects the
   // webapi.amap.com script and hands Amap the route.
   const mapAllowed = shouldMountAmapMap(amapKey, mapConsent);
@@ -362,7 +373,22 @@ export function NavigationPanel({
   const etaMinutes = Math.max(0, Math.round(update.remainingSeconds / 60));
 
   return (
-    <section className="navigationPanel" aria-label="导航">
+    <section className={`navigationPanel ${expanded ? "navigationExpanded" : ""}`} aria-label="导航">
+      <div className="navigationActions">
+        <button type="button" aria-pressed={expanded} onClick={() => setExpanded((value) => !value)}>
+          {expanded ? "收起地图" : "展开地图"}
+        </button>
+        {mapAllowed ? (
+          <button
+            type="button"
+            aria-pressed={followsRider}
+            disabled={Boolean(locationStale)}
+            onClick={() => setFollowsRider((value) => !value)}
+          >
+            {followsRider ? "查看全程" : "跟随位置"}
+          </button>
+        ) : null}
+      </div>
       <div className="navigationCard">
         <div className="navigationCardHead">
           <strong>{route.destinationName}</strong>
@@ -383,8 +409,26 @@ export function NavigationPanel({
         ) : null}
       </div>
       <RouteSchematic polyline={route.polyline} maneuvers={route.steps} rider={rider} />
-      {mapAllowed && amapKey ? <AmapTileMap mapKey={amapKey} polyline={route.polyline} rider={rider} /> : null}
+      {mapAllowed && amapKey ? (
+        <AmapTileMap mapKey={amapKey} polyline={route.polyline} rider={rider} followsRider={followsRider} />
+      ) : null}
       {mapOffered ? <AmapConsentPrompt onEnable={onEnableMap!} /> : null}
+      <details className="navigationSteps">
+        <summary>路线步骤 · {route.steps.length - update.progress.maneuverIndex}</summary>
+        <ol>
+          {route.steps.slice(update.progress.maneuverIndex).map((step, index) => (
+            <li key={`${route.commandId}-${index}`}>
+              <strong>{step.instruction}</strong>
+              {!locationStale ? (
+                <span>
+                  距当前位置{" "}
+                  {Math.round(Math.max(0, step.alongRouteMeters - (route.distanceMeters - update.remainingMeters)))} 米
+                </span>
+              ) : null}
+            </li>
+          ))}
+        </ol>
+      </details>
     </section>
   );
 }

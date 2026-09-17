@@ -11,6 +11,7 @@ struct MusicPlaybackCard: View {
             Group {
                 if compact { compactContent } else { fullContent }
             }
+            .fixedSize(horizontal: false, vertical: true)
             .padding(12)
             .foregroundStyle(.white)
             .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
@@ -65,23 +66,25 @@ struct MusicPlaybackCard: View {
 
     private var compactContent: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 0) {
+            HStack(spacing: 8) {
                 Button { Task { await model.chooseMusic() } } label: {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(model.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                        Text(model.title).font(.subheadline.weight(.semibold)).lineLimit(2)
                         Text(model.busy ? "正在准备…" : (model.artist.isEmpty ? "选择音乐" : model.artist))
                             .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 }.buttonStyle(.plain).disabled(model.busy)
-                control("上一首", symbol: "backward.end.fill", action: .previous).disabled(model.busy)
-                control(model.isPlaying ? "暂停" : "播放",
-                        symbol: model.isPlaying ? "pause.fill" : "play.fill",
-                        action: model.isPlaying ? .pause : .play).disabled(model.busy)
-                control("下一首", symbol: "forward.end.fill", action: .next).disabled(model.busy)
                 Button { model.stopPlayback(dismiss: true) } label: {
                     Image(systemName: "xmark").frame(width: 44, height: 44)
                 }.buttonStyle(.plain).accessibilityLabel("停止并关闭音乐")
             }
+            HStack(spacing: 12) {
+                control("上一首", symbol: "backward.end.fill", action: .previous).disabled(model.busy)
+                control(model.isPlaying ? "暂停" : "播放",
+                        symbol: model.isPlaying ? "pause.fill" : "play.fill",
+                        action: model.isPlaying ? .pause : .play).disabled(model.busy && !model.isPlaying)
+                control("下一首", symbol: "forward.end.fill", action: .next).disabled(model.busy)
+            }.frame(maxWidth: .infinity)
             if let message = model.message {
                 Text(message).font(.caption).foregroundStyle(HudColors.amber).lineLimit(2)
             }

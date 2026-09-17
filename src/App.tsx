@@ -1,3 +1,4 @@
+import { MusicPlaybackCard } from "./components/MusicPlaybackCard";
 import { ArrowBendUpRight, ChatCircleText, GearSix, Microphone, NavigationArrow, X } from "@phosphor-icons/react";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { adasDirectionLabel } from "../shared/adas";
@@ -41,7 +42,7 @@ function AppContent() {
   // One decision shared by the panel's prompt and the settings sheet, keyed by
   // account so a shared browser never reuses another rider's answer.
   const amapConsent = useAmapConsent(authUser?.id ?? null);
-  const { setTesterId, selectTranscriptOwner, refreshHealth, disconnect } = agent;
+  const { setTesterId, selectTranscriptOwner, refreshHealth, disconnect, musicController } = agent;
 
   useEffect(() => {
     let active = true;
@@ -90,11 +91,12 @@ function AppContent() {
         setAuthUser(null);
         selectTranscriptOwner(null);
         disconnect();
+        musicController.clear();
         void refreshHealth();
       });
     }, 60_000);
     return () => window.clearInterval(timer);
-  }, [authUser, disconnect, refreshHealth, selectTranscriptOwner]);
+  }, [authUser, disconnect, refreshHealth, selectTranscriptOwner, musicController]);
 
   const [healthTimedOut, setHealthTimedOut] = useState(false);
   useEffect(() => {
@@ -118,6 +120,7 @@ function AppContent() {
     setAuthUser(null);
     agent.selectTranscriptOwner(null);
     agent.disconnect();
+    agent.musicController.clear();
     void agent.refreshHealth();
   }, [agent]);
 
@@ -181,7 +184,7 @@ function AppContent() {
   return (
     <main className="voiceShell">
       <section
-        className={voiceFaceClassName({ captionsOpen, navigationVisible: agent.navState.phase !== "idle" })}
+        className={`${voiceFaceClassName({ captionsOpen, navigationVisible: agent.navState.phase !== "idle" })} voiceWithPanels`}
         aria-label={localized(language, "MAX 头盔语音助手", "MAX helmet voice assistant")}
       >
         <header className={`voiceTopbar ${agent.connected ? "online" : sessionInactive ? "inactive" : "offline"}`}>
@@ -231,11 +234,18 @@ function AppContent() {
           sessionState={starting ? "starting" : sessionInactive ? "inactive" : undefined}
         />
 
-        {agent.navState.phase !== "idle" ? (
-          <NavigationPanel state={agent.navState} mapConsent={amapConsent.decision} onEnableMap={amapConsent.accept} />
-        ) : null}
+        <div className="voiceRidePanels">
+          {agent.navState.phase !== "idle" ? (
+            <NavigationPanel
+              state={agent.navState}
+              mapConsent={amapConsent.decision}
+              onEnableMap={amapConsent.accept}
+            />
+          ) : null}
 
-        {captionsOpen ? <VoiceTranscript agent={agent} /> : null}
+          <MusicPlaybackCard agent={agent} />
+          {captionsOpen ? <VoiceTranscript agent={agent} /> : null}
+        </div>
 
         <nav className="voiceUtilities" aria-label={t("voice.viewLabel")}>
           <button

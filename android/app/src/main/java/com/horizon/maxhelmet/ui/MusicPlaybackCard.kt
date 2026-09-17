@@ -30,6 +30,7 @@ fun MusicPlaybackCard(controller: MusicController, compact: Boolean = false) {
                     actionError = when {
                         result.status == "ok" || result.reason == "action.cancelled" -> null
                         result.reason == "music.queueEnd" -> "已到播放队列末尾，请选择多首歌曲。"
+                        state.source == "QQ音乐" -> null // QQ adapter provides actionable setup/response messages.
                         else -> "暂时无法播放，请在 Max 中重新选择音乐。"
                     }
                 }
@@ -41,14 +42,24 @@ fun MusicPlaybackCard(controller: MusicController, compact: Boolean = false) {
             TextButton(onClick = { controller.chooseMusic() }, enabled = !state.busy, modifier = Modifier.weight(1f)) {
                 Column(Modifier.fillMaxWidth()) {
                     Text(state.title, style = MaterialTheme.typography.titleSmall, maxLines = if (compact) 2 else 1, overflow = TextOverflow.Ellipsis)
-                    Text(if (state.busy) "正在准备…" else "选择音乐", style = MaterialTheme.typography.bodySmall)
+                    Text(if (state.busy) "正在准备…" else state.source, style = MaterialTheme.typography.bodySmall)
                 }
             }
             IconButton(onClick = { actionError = null; controller.stopPlayback(dismiss = true) }, modifier = Modifier.size(48.dp)) {
-                Icon(Icons.Default.Close, "停止并关闭音乐")
+                Icon(Icons.Default.Close, if (state.source == "QQ音乐") "关闭音乐面板" else "停止并关闭音乐")
             }
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) { controls() }
+        if (state.source == "QQ音乐") {
+            Text("先在 QQ 音乐播放歌曲，再授权 Max 控制其媒体会话。系统权限名为通知使用权；Max 不读取或保存通知内容。关闭面板不会停止 QQ 音乐。", style = MaterialTheme.typography.bodySmall)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                TextButton(onClick = controller::openQQMusic) { Text("打开 QQ 音乐") }
+                TextButton(onClick = controller::authorizeQQMusic) { Text("授权控制") }
+            }
+            TextButton(onClick = controller::chooseLocalMusic, enabled = !state.busy) { Text("改用本机音乐") }
+        } else {
+            TextButton(onClick = controller::chooseQQMusic, enabled = !state.busy) { Text("改用 QQ 音乐") }
+        }
         state.message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         actionError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())

@@ -1,6 +1,10 @@
 package com.horizon.maxhelmet.music
 
 import android.content.Context
+import android.content.Intent
+import android.provider.Settings
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
@@ -15,36 +19,50 @@ import android.provider.OpenableColumns
 import com.horizon.maxhelmet.actions.DeviceResult
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 
-/** Android adapter for Max's own player; never controls another app's session. */
-class MusicController(private val context: Context, scope: CoroutineScope) {
+/** Routes to the selected source; QQ controls are restricted to its media session. */
+class MusicController(private val context: Context, private val scope: CoroutineScope) {
     private val audio = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private var currentMediaPlayer: MediaPlayer? = null
     private val focus = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
         .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
         .setOnAudioFocusChangeListener({ change ->
             when (change) {
-                AudioManager.AUDIOFOCUS_LOSS, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> stopPlayback()
+                AudioManager.AUDIOFOCUS_LOSS, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> playback.stop()
                 AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> runCatching { currentMediaPlayer?.setVolume(0.2f, 0.2f) }
                 // A focus gain must never restart a cancelled or backgrounded song.
                 AudioManager.AUDIOFOCUS_GAIN -> runCatching { currentMediaPlayer?.setVolume(1f, 1f) }
             }
         }, Handler(Looper.getMainLooper())).build()
     private val playback = AppMusicPlayback(scope) { AndroidMusicDriver() }
-    val state = playback.state
+    private val sessions = QQMusicSessions(context)
+    private val qq = QQMusicPlayback(sessions::permitted, sessions::find)
+    private var useQQ = true
+    private var foreground = false
+    private val mutableState = MutableStateFlow(qq.state.value)
+    val state = mutableState.asStateFlow()
     private val mediaSession = MediaSession(context, "Max music").apply {
         setCallback(object : MediaSession.Callback() {
-            override fun onPlay() { playback.control("play") }
-            override fun onPause() { stopPlayback() }
-            override fun onSkipToNext() { playback.control("next") }
-            override fun onSkipToPrevious() { playback.control("previous") }
-            override fun onStop() { stopPlayback() }
+            override fun onPlay() { if (!useQQ) playback.control("play") }
+            override fun onPause() { playback.stop() }
+            override fun onSkipToNext() { if (!useQQ) playback.control("next") }
+            override fun onSkipToPrevious() { if (!useQQ) playback.control("previous") }
+            override fun onStop() { playback.stop() }
         }, Handler(Looper.getMainLooper()))
     }
 
     init {
         scope.launch {
-            state.collect { current ->
+            while (kotlinx.coroutines.currentCoroutineContext().isActive) {
+                if (foreground && useQQ && state.value.visible && !state.value.busy) qq.refresh()
+                kotlinx.coroutines.delay(1000)
+            }
+        }
+        scope.launch { qq.state.collect { if (useQQ) mutableState.value = it } }
+        scope.launch {
+            playback.state.collect { current ->
+                if (!useQQ) mutableState.value = current
                 mediaSession.isActive = current.playing
                 mediaSession.setMetadata(MediaMetadata.Builder().putString(MediaMetadata.METADATA_KEY_TITLE, current.title).build())
                 mediaSession.setPlaybackState(PlaybackState.Builder()
@@ -56,18 +74,61 @@ class MusicController(private val context: Context, scope: CoroutineScope) {
     }
 
     var launchPicker: ((Int) -> Unit)? = null
-    fun show() = playback.show()
-    fun chooseMusic() {
+    fun show() { if (useQQ) { qq.show(); qq.refresh() } else playback.show() }
+    fun chooseMusic() { if (useQQ) show() else chooseLocalMusic() }
+    fun chooseQQMusic() {
+        playback.stop()
+        useQQ = true
+        mutableState.value = qq.state.value
+        show()
+    }
+    fun openQQMusic() {
+        val intent = context.packageManager.getLaunchIntentForPackage(QQMusicSessions.PACKAGE)
+            ?: Intent(Intent.ACTION_VIEW, Uri.parse("https://y.qq.com/"))
+        runCatching { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            .onFailure { mutableState.value = state.value.copy(message = "无法打开 QQ 音乐，请先安装 QQ 音乐。") }
+    }
+    fun authorizeQQMusic() {
+        runCatching { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            .onFailure { mutableState.value = state.value.copy(message = "请在系统设置中打开 Max 的通知使用权。") }
+    }
+    fun chooseLocalMusic() {
+        if (useQQ) qq.refresh()
+        if (useQQ && state.value.playing) {
+            scope.launch { if (qq.execute("pause").status == "ok") activateLocalPicker() }
+        } else activateLocalPicker()
+    }
+    private fun activateLocalPicker() {
         val launch = launchPicker ?: return
         val ticket = playback.beginSelection() ?: return
+        qq.dismiss()
+        useQQ = false
+        mutableState.value = playback.state.value
         show()
         runCatching { launch(ticket) }.onFailure { playback.completeSelection(ticket, emptyList()) }
     }
-    fun setAppForeground(foreground: Boolean) = playback.setForeground(foreground)
-    fun stopPlayback(dismiss: Boolean = false) = playback.stop(dismiss)
+    fun setAppForeground(foreground: Boolean) {
+        this.foreground = foreground
+        playback.setForeground(foreground)
+        if (foreground && useQQ) qq.refresh()
+    }
+    fun stopPlayback(dismiss: Boolean = false) {
+        if (!useQQ) playback.stop(dismiss)
+        else {
+            // Closing hides the handoff card; playback remains owned by QQ Music.
+            if (dismiss) qq.dismiss()
+            else if (state.value.playing) scope.launch { qq.execute("pause") }
+        }
+    }
     fun beginSelection(): Int? = playback.beginSelection()
     fun completeSelection(ticket: Int, uris: List<Uri>) = playback.completeSelection(ticket, uris.map(Uri::toString))
-    suspend fun execute(action: String, app: String? = null): DeviceResult = playback.execute(action, app)
+    suspend fun execute(action: String, app: String? = null): DeviceResult {
+        if (!app.isNullOrBlank()) {
+            if (!Regex("qq\\s*(音乐|music)", RegexOption.IGNORE_CASE).matches(app.trim())) return DeviceResult.unsupported("player.unsupported")
+            if (!useQQ) chooseQQMusic()
+        }
+        return if (useQQ) qq.execute(action) else playback.execute(action)
+    }
 
     private inner class AndroidMusicDriver : AppMusicDriver {
         private val player = MediaPlayer().also { currentMediaPlayer = it }

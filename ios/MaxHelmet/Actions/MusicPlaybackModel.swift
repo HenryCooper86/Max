@@ -58,6 +58,7 @@ private final class MusicPreparation {
 /// Shared by voice commands and the HUD, with a queue owned only by Max.
 @MainActor
 final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
+    @Published private(set) var prefersQQMusic: Bool
     @Published private(set) var visible = false
     @Published private(set) var title = "Apple Music"
     @Published private(set) var artist = ""
@@ -77,7 +78,7 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
     private var observing = false
     private let requestAuthorization: () async -> MPMediaLibraryAuthorizationStatus
 
-    init(player: MusicPlaybackDriving? = nil,
+    init(prefersQQMusic: Bool = true, player: MusicPlaybackDriving? = nil,
          preparationTimeoutNanoseconds: UInt64 = 8_000_000_000,
          playbackAttempts: Int = 30,
          waitForPlayback: @escaping () async -> Void = { try? await Task.sleep(nanoseconds: 100_000_000) },
@@ -86,6 +87,7 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
             MPMediaLibrary.requestAuthorization { continuation.resume(returning: $0) }
         }
     }) {
+        self.prefersQQMusic = prefersQQMusic
         self.player = player ?? AppMusicPlaybackDriver()
         self.preparationTimeoutNanoseconds = preparationTimeoutNanoseconds
         self.playbackAttempts = playbackAttempts
@@ -120,6 +122,7 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
     }
 
     private func refresh() {
+        if prefersQQMusic { title = "QQ音乐"; artist = ""; isPlaying = false; return }
         title = player.title ?? "Apple Music"
         artist = player.artist ?? ""
         isPlaying = player.isPlaying
@@ -167,7 +170,28 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
         return .failed("music.unavailable", "音乐控制已取消。")
     }
 
+    func performQQ(_ control: MusicControl) async -> DeviceActionResult {
+        useQQMusic()
+        return .unsupported("music.qq.integrationRequired")
+    }
+
+    func useQQMusic() {
+        stopPlayback()
+        prefersQQMusic = true
+        visible = true
+        title = "QQ音乐"
+        artist = ""
+        isPlaying = false
+        message = "请在 QQ 音乐中播放或切歌。Max 尚未接入 QQ 音乐播放授权，无法控制它的播放。"
+    }
+
+    func chooseLocalMusic() async {
+        prefersQQMusic = false
+        await chooseMusic()
+    }
+
     func chooseMusic() async {
+        if prefersQQMusic { useQQMusic(); return }
         guard !appInBackground else { return }
         visible = true
         guard !busy else { return }
@@ -181,7 +205,7 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
     }
 
     func select(_ collection: MPMediaItemCollection) async {
-        guard !appInBackground, !busy, !collection.items.isEmpty else { return }
+        guard !prefersQQMusic, !appInBackground, !busy, !collection.items.isEmpty else { return }
         visible = true
         operationGeneration += 1
         let generation = operationGeneration
@@ -194,6 +218,7 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
     }
 
     func perform(_ control: MusicControl) async -> DeviceActionResult {
+        if prefersQQMusic { return await performQQ(control) }
         // Stop always wins, even while a picker selection is preparing.
         if control == .pause {
             stopPlayback()

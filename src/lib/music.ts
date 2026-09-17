@@ -2,6 +2,7 @@
 export type MusicControl = "play" | "pause" | "next" | "previous";
 export type MusicTrack = { title: string; url: string };
 export type MusicState = {
+  provider: "qq" | "local";
   visible: boolean;
   tracks: MusicTrack[];
   index: number;
@@ -11,6 +12,7 @@ export type MusicState = {
 };
 export type MusicResult = { status: "ok" | "failed" | "unsupported"; reason?: string };
 export const EMPTY_MUSIC: MusicState = {
+  provider: "qq",
   visible: false,
   tracks: [],
   index: -1,
@@ -63,7 +65,15 @@ export function createMusicController(deps: {
     publish({ playing: false, busy: false });
   }
   async function perform(control: MusicControl, app?: string): Promise<MusicResult> {
-    if (app) return { status: "unsupported", reason: "player.unsupported" };
+    if (app && !/^qq\s*(音乐|music)$/i.test(app.trim())) return { status: "unsupported", reason: "player.unsupported" };
+    if (app) selectQQ();
+    if (state.provider === "qq") {
+      publish({
+        visible: true,
+        message: "请在 QQ 音乐中播放或切歌。网页版 Max 暂未接入 QQ 音乐播放授权，无法控制它的播放。"
+      });
+      return { status: "unsupported", reason: "music.qq.integrationRequired" };
+    }
     if (control === "pause") {
       stop();
       return { status: "ok" };
@@ -115,8 +125,12 @@ export function createMusicController(deps: {
   function select(tracks: MusicTrack[]) {
     clear();
     if (!tracks.length) return;
-    publish({ tracks, index: 0, visible: true });
+    publish({ provider: "local", tracks, index: 0, visible: true });
     void perform("play");
   }
-  return { perform, select, stop, clear };
+  function selectQQ() {
+    clear();
+    publish({ visible: true });
+  }
+  return { perform, select, stop, clear, selectQQ };
 }

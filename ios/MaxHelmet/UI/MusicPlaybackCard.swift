@@ -9,7 +9,7 @@ struct MusicPlaybackCard: View {
     var body: some View {
         if model.visible {
             Group {
-                if compact { compactContent } else { fullContent }
+                if model.prefersQQMusic { qqContent } else if compact { compactContent } else { fullContent }
             }
             .fixedSize(horizontal: false, vertical: true)
             .padding(12)
@@ -25,6 +25,24 @@ struct MusicPlaybackCard: View {
                     if let collection { Task { await model.select(collection) } }
                 }
             }
+        }
+    }
+
+    private var qqContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("QQ 音乐", systemImage: "music.note").font(.headline)
+                Spacer()
+                Button { model.stopPlayback(dismiss: true) } label: {
+                    Image(systemName: "xmark").frame(width: 44, height: 44)
+                }.accessibilityLabel("关闭音乐面板")
+            }
+            Text("请在 QQ 音乐中播放和切歌。Max 暂不能控制 QQ 音乐；关闭此面板不会停止 QQ 音乐。")
+                .font(.caption).foregroundStyle(.secondary)
+            Link("打开 QQ 音乐官网", destination: URL(string: "https://y.qq.com/")!)
+                .frame(minHeight: 44)
+            Button("改用 Apple Music / 本机音乐") { Task { await model.chooseLocalMusic() } }
+                .font(.caption).frame(minHeight: 44)
         }
     }
 
@@ -60,6 +78,7 @@ struct MusicPlaybackCard: View {
                         .frame(minHeight: 44)
                 }
                 .disabled(model.busy)
+                Button("改用 QQ 音乐") { model.useQQMusic() }.font(.caption).frame(minHeight: 44)
                 if model.busy { ProgressView("正在准备音乐…").font(.caption) }
             }
     }
@@ -88,6 +107,7 @@ struct MusicPlaybackCard: View {
             if let message = model.message {
                 Text(message).font(.caption).foregroundStyle(HudColors.amber).lineLimit(2)
             }
+            Button("改用 QQ 音乐") { model.useQQMusic() }.font(.caption).frame(minHeight: 44)
         }
     }
 

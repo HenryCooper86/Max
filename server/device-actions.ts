@@ -210,12 +210,10 @@ export class DeviceActivityContext {
   }
 }
 
-/** Players we cannot drive. MPMusicPlayerController reaches only Apple Music and
- *  the local library; naming any of these must produce an honest refusal rather
- *  than silently controlling the wrong player. */
+/** Preserve explicitly named players so each client can route or refuse honestly. */
 const THIRD_PARTY_PLAYERS: Array<[RegExp, string]> = [
   [/网易云(音乐)?/, "网易云音乐"],
-  [/qq\s*音乐/i, "QQ音乐"],
+  [/qq\s*(音乐|music)/i, "QQ音乐"],
   [/酷狗/, "酷狗音乐"],
   [/酷我/, "酷我音乐"],
   [/spotify/i, "Spotify"]
@@ -426,7 +424,9 @@ function matchCamera(raw: string): DeviceCommand | null {
 function matchMusic(raw: string): DeviceCommand | null {
   let control: "play" | "pause" | "next" | "previous" | undefined;
   if (
-    /(下一首|下一曲|换一?首(?:歌)?|切歌|next\s+(track|song))/i.test(raw) ||
+    /(下一首|下一曲|换一?首(?:歌)?|切歌|next\s+(track|song)|\b(?:next|skip)(?:\s+(?:to\s+)?next)?\s+(?:on\s+|in\s+)?qq\s*(音乐|music))/i.test(
+      raw
+    ) ||
     /\bskip\s+(?:to\s+)?(?:the\s+)?next(?:\s+(?:one|please))?[.!?。！？，,\s]*$/i.test(raw) ||
     /^(?:(?:max|麦克斯)[，,\s]*)?(?:please\s+)?(?:skip|next)(?:\s+(?:one|please))?[.!?。！？，,\s]*$/i.test(raw) ||
     /\bskip\s+(?:(?:to\s+)?(?:another|the\s+next|a\s+different)|this|that|the|current)\s+(song|track)\b/i.test(raw) ||
@@ -434,13 +434,18 @@ function matchMusic(raw: string): DeviceCommand | null {
     /\bchange\s+(?:the|this|current)\s+(song|track)\b/i.test(raw)
   )
     control = "next";
-  else if (/(上一首|上一曲|previous (track|song))/i.test(raw)) control = "previous";
+  else if (/(上一首|上一曲|previous (track|song)|\bprevious\s+(?:on\s+|in\s+)?qq\s*(音乐|music))/i.test(raw))
+    control = "previous";
   else if (
     /(暂停|停一下|停止|取消|关闭|\b(?:pause|stop|cancel|close)\b)/i.test(raw) &&
     /(音乐|歌|music|song|playback)/i.test(raw)
   )
     control = "pause";
-  else if (/(放歌|播放音乐|放音乐|来点音乐|继续播放音乐|恢复播放|(?:play|resume) (?:some |the )?music)/i.test(raw))
+  else if (
+    /(放歌|播放音乐|放音乐|来点音乐|继续播放音乐|恢复播放|(?:播放|打开|继续播放|恢复播放)\s*qq\s*(音乐|music)|(?:play|resume|open)\s+qq\s*(music|音乐)|(?:play|resume) (?:some |the )?music)/i.test(
+      raw
+    )
+  )
     control = "play";
   if (!control) return null;
 
@@ -493,9 +498,10 @@ const FAILURE_SPEECH: Record<string, string> = {
   "permission.music": "我没有音乐库权限，去设置里开启后我再帮你播放。",
   "device.locked": "手机锁屏了，解锁后我再执行。",
   "unsafe.speed": "骑行中我不发短信，停车以后我再帮你发。",
-  "player.unsupported": "我只能控制 Apple Music 和本机音乐。",
+  "player.unsupported": "当前平台不支持控制这个音乐应用，请使用音乐卡片中的可用来源或本机音乐。",
+  "music.qq.integrationRequired": "请在 QQ 音乐中播放或切歌，当前平台尚未接入 QQ 音乐播放授权。",
   "music.emptyQueue": "还没有播放队列，请在应用里的音乐卡片上点选择音乐。",
-  "music.unavailable": "音乐暂时无法播放，请在音乐卡片上选择歌曲，并检查 Apple Music 是否可用。",
+  "music.unavailable": "音乐暂时无法播放，请检查音乐卡片中的提示和当前播放来源。",
   "music.busy": "音乐正在准备，请稍后重试。",
   "music.queueEnd": "已经到播放队列末尾了，请选择更多音乐。",
   "music.controlUnavailable": "当前音乐应用不支持这个播放操作。",

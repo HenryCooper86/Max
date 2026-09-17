@@ -76,6 +76,8 @@ export default defineConfig({
       "/auth": {
         target: "http://localhost:8787"
       },
+      "/nav": { target: "http://localhost:8787" },
+      "/_AMapService": { target: "http://localhost:8787" },
       "/agent": {
         target: "ws://localhost:8787",
         ws: true

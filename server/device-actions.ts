@@ -427,6 +427,8 @@ function matchMusic(raw: string): DeviceCommand | null {
   let control: "play" | "pause" | "next" | "previous" | undefined;
   if (
     /(下一首|下一曲|换一?首(?:歌)?|切歌|next\s+(track|song))/i.test(raw) ||
+    /\bskip\s+(?:to\s+)?(?:the\s+)?next(?:\s+(?:one|please))?[.!?。！？，,\s]*$/i.test(raw) ||
+    /^(?:(?:max|麦克斯)[，,\s]*)?(?:please\s+)?(?:skip|next)(?:\s+(?:one|please))?[.!?。！？，,\s]*$/i.test(raw) ||
     /\bskip\s+(?:(?:to\s+)?(?:another|the\s+next|a\s+different)|this|that|the|current)\s+(song|track)\b/i.test(raw) ||
     /\b(?:play|put\s+on)\s+(?:another|a\s+different)\s+(song|track)\b/i.test(raw) ||
     /\bchange\s+(?:the|this|current)\s+(song|track)\b/i.test(raw)
@@ -438,7 +440,8 @@ function matchMusic(raw: string): DeviceCommand | null {
     /(音乐|歌|music|song|playback)/i.test(raw)
   )
     control = "pause";
-  else if (/(放歌|播放音乐|放音乐|来点音乐|play (some )?music)/i.test(raw)) control = "play";
+  else if (/(放歌|播放音乐|放音乐|来点音乐|继续播放音乐|恢复播放|(?:play|resume) (?:some |the )?music)/i.test(raw))
+    control = "play";
   if (!control) return null;
 
   for (const [pattern, label] of THIRD_PARTY_PLAYERS) {

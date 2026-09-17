@@ -6131,3 +6131,149 @@ button.opsCard:disabled {
     padding: 12px;
   }
 }
+
+/* Map, music and captions share a scrolling region; controls keep their own rows. */
+.voiceShell .voiceFace.voiceWithPanels {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "topbar" "hazard" "hero" "readout" "panels" "utilities" "dock";
+  grid-template-rows: auto auto minmax(80px, 1fr) auto minmax(0, 2fr) auto auto;
+  align-items: stretch;
+  gap: 8px;
+}
+.voiceWithPanels .voiceTopbar {
+  grid-area: topbar;
+}
+.voiceWithPanels .voiceHazard {
+  grid-area: hazard;
+}
+.voiceShell .voiceFace.voiceWithPanels .voiceHero {
+  grid-area: hero;
+  display: grid;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+}
+.voiceShell .voiceFace.voiceWithPanels .voiceReadout {
+  grid-area: readout;
+  display: block;
+}
+.voiceWithPanels .voiceUtilities {
+  grid-area: utilities;
+  margin: 0;
+}
+.voiceWithPanels .voicePrimaryControls {
+  grid-area: dock;
+  margin: 0;
+}
+.voiceRidePanels {
+  grid-area: panels;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 2px;
+}
+.voiceShell .voiceFace.voiceWithPanels .voiceRidePanels > * {
+  width: 100%;
+  min-height: auto;
+  max-height: none;
+  flex: 0 0 auto;
+  margin: 0;
+}
+.voiceShell .voiceFace.voiceWithPanels .navigationSchematic,
+.voiceShell .voiceFace.voiceWithPanels .navigationMapConsent {
+  display: block;
+}
+.voiceRidePanels .voiceTranscriptList {
+  max-height: 260px;
+}
+.musicPlaybackCard {
+  padding: 14px;
+  border: 1px solid var(--hair);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.musicTrackHeading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.musicTrackHeading > div {
+  min-width: 0;
+}
+.musicTrackHeading strong {
+  overflow-wrap: anywhere;
+}
+.musicPlaybackCard p {
+  color: var(--hud-dim);
+  font-size: 13px;
+  margin: 6px 0;
+}
+.musicControls,
+.navigationActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.musicPlaybackCard button,
+.navigationActions button,
+.navigationSteps summary {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--hair);
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.musicPlaybackCard button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.navigationSteps {
+  margin-top: 10px;
+}
+.navigationSteps ol {
+  padding-left: 24px;
+}
+.navigationSteps li {
+  padding: 8px 0;
+  overflow-wrap: anywhere;
+}
+.navigationSteps li span {
+  display: block;
+  color: var(--hud-dim);
+  font-size: 13px;
+}
+.navigationExpanded .navigationMap {
+  height: 380px;
+}
+.navigationExpanded .navigationSchematic {
+  height: 280px;
+}
+@media (orientation: landscape) and (max-height: 560px) {
+  .voiceShell .voiceFace.voiceWithPanels {
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+    grid-template-areas: "topbar topbar" "hazard hazard" "hero panels" "readout panels" "utilities dock";
+    grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+    gap: 6px 16px;
+  }
+  .voiceWithPanels .voiceUtilities {
+    flex-wrap: wrap;
+  }
+}
+@media (max-height: 600px) and (orientation: portrait) {
+  .voiceShell .voiceFace.voiceWithPanels {
+    grid-template-rows: auto auto 0 auto minmax(0, 1fr) auto auto;
+  }
+  .voiceShell .voiceFace.voiceWithPanels .voiceHero {
+    display: none;
+  }
+}

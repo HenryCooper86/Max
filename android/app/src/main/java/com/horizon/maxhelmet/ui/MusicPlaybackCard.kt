@@ -40,16 +40,15 @@ fun MusicPlaybackCard(controller: MusicController, compact: Boolean = false) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { controller.chooseMusic() }, enabled = !state.busy, modifier = Modifier.weight(1f)) {
                 Column(Modifier.fillMaxWidth()) {
-                    Text(state.title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(state.title, style = MaterialTheme.typography.titleSmall, maxLines = if (compact) 2 else 1, overflow = TextOverflow.Ellipsis)
                     Text(if (state.busy) "正在准备…" else "选择音乐", style = MaterialTheme.typography.bodySmall)
                 }
             }
-            if (compact) controls()
             IconButton(onClick = { actionError = null; controller.stopPlayback(dismiss = true) }, modifier = Modifier.size(48.dp)) {
                 Icon(Icons.Default.Close, "停止并关闭音乐")
             }
         }
-        if (!compact) Row { controls() }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) { controls() }
         state.message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         actionError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())

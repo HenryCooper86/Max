@@ -17,7 +17,6 @@ struct NavigationDetailsView: View {
     let guidance: GuidanceState
     var music: MusicPlaybackModel? = nil
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.dynamicTypeSize) private var dynamicType
     @State private var followsRider = true
     @State private var showsSteps = false
 
@@ -33,32 +32,25 @@ struct NavigationDetailsView: View {
                 if geometry.size.width > geometry.size.height * 1.2 {
                     HStack(spacing: 12) {
                         map
-                        VStack(spacing: 10) {
-                            ScrollView {
-                                VStack(spacing: 10) {
-                                    maneuver(compact: true)
-                                    tripSummary(compact: true)
-                                }
+                        ScrollView {
+                            VStack(spacing: 10) {
+                                maneuver(compact: true)
+                                tripSummary(compact: true)
+                                musicPanel
                             }
-                            musicPanel
                         }.frame(width: min(340, geometry.size.width * 0.42))
                     }.padding(12)
-                } else if dynamicType.isAccessibilitySize {
+                } else {
+                    // Intrinsic text and music heights must never compress the map
+                    // into neighboring controls, including when route steps expand.
                     ScrollView {
                         VStack(spacing: 12) {
                             maneuver()
-                            map.frame(height: 300)
+                            map.frame(height: max(240, min(420, geometry.size.height * 0.48)))
                             tripSummary()
                             musicPanel
                         }.padding(12)
                     }
-                } else {
-                    VStack(spacing: 10) {
-                        maneuver()
-                        map
-                        tripSummary(stepsHeight: min(160, max(96, geometry.size.height * 0.22)))
-                        musicPanel
-                    }.padding(12)
                 }
             }
             .background(HudColors.void)

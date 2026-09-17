@@ -44,6 +44,22 @@ const settle = async () => {
 };
 
 describe("browser music queue", () => {
+  it("stays hidden until music is requested and hides again when closed", async () => {
+    const f = fixture();
+    expect(f.state().visible).toBe(false);
+    await f.player.perform("pause");
+    expect(f.state().visible).toBe(false);
+    await f.player.perform("play");
+    expect(f.state().visible).toBe(true);
+    expect(f.state().message).toContain("选择");
+    f.player.clear();
+    expect(f.state().visible).toBe(false);
+    f.player.select(f.tracks);
+    await settle();
+    expect(f.state().visible).toBe(true);
+    f.player.clear();
+    expect(f.state().visible).toBe(false);
+  });
   it("actually changes the audio source when voice requests next or previous", async () => {
     const f = fixture();
     f.player.select(f.tracks);

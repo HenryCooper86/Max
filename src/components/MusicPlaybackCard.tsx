@@ -20,11 +20,13 @@ export function MusicPlaybackCard({ agent }: { agent: HelmetAgent }) {
               : label("选择多首音频，在网页中播放并用语音切歌。", "Choose audio files to play here and skip by voice.")}
           </p>
         </div>
-        {track ? (
-          <button type="button" onClick={player.clear} aria-label={label("停止并清空音乐", "Stop and clear music")}>
-            ×
-          </button>
-        ) : null}
+        <button
+          type="button"
+          onClick={player.clear}
+          aria-label={track ? label("停止并关闭音乐", "Stop and close music") : label("关闭音乐", "Close music")}
+        >
+          ×
+        </button>
       </div>
       <div className="musicControls">
         <button

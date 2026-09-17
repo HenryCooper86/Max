@@ -44,14 +44,35 @@ const settle = async () => {
 };
 
 describe("browser music queue", () => {
+  it("defaults to QQ handoff and never pretends to control remote playback", async () => {
+    const f = fixture();
+    for (const command of ["play", "pause", "next", "previous"] as const) {
+      expect(await f.player.perform(command)).toEqual({
+        status: "unsupported",
+        reason: "music.qq.integrationRequired"
+      });
+    }
+    expect(f.audio.play).not.toHaveBeenCalled();
+    expect(f.state().playing).toBe(false);
+    f.player.select(f.tracks);
+    await settle();
+    expect(f.state().playing).toBe(true);
+    expect(await f.player.perform("next", "QQ Music")).toEqual({
+      status: "unsupported",
+      reason: "music.qq.integrationRequired"
+    });
+    expect(f.state().provider).toBe("qq");
+    expect(f.audio.paused).toBe(true);
+    expect(f.state().tracks).toEqual([]);
+  });
   it("stays hidden until music is requested and hides again when closed", async () => {
     const f = fixture();
     expect(f.state().visible).toBe(false);
-    await f.player.perform("pause");
-    expect(f.state().visible).toBe(false);
+    expect(await f.player.perform("pause")).toEqual({ status: "unsupported", reason: "music.qq.integrationRequired" });
+    expect(f.state().visible).toBe(true);
     await f.player.perform("play");
     expect(f.state().visible).toBe(true);
-    expect(f.state().message).toContain("选择");
+    expect(f.state().message).toContain("QQ 音乐");
     f.player.clear();
     expect(f.state().visible).toBe(false);
     f.player.select(f.tracks);
@@ -71,9 +92,9 @@ describe("browser music queue", () => {
     expect(await f.player.perform("previous")).toEqual({ status: "ok" });
     expect(f.audio.src).toBe("blob:first");
   });
-  it("reports an empty queue and boundary rather than claiming a skip", async () => {
+  it("reports unavailable QQ integration and local queue boundaries rather than claiming a skip", async () => {
     const f = fixture();
-    expect((await f.player.perform("next")).reason).toBe("music.emptyQueue");
+    expect((await f.player.perform("next")).reason).toBe("music.qq.integrationRequired");
     f.player.select(f.tracks);
     await settle();
     expect((await f.player.perform("previous")).reason).toBe("music.queueEnd");

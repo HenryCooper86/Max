@@ -11,6 +11,12 @@ describe("buildToolGroundingPrompt", () => {
     }
   });
 
+  it("explains QQ platform limits without claiming handoff means playback", () => {
+    expect(prompt).toContain("QQ 音乐在 Android");
+    expect(prompt).toContain("iOS 和网页目前仅提供官网入口");
+    expect(prompt).toContain("打开官网不代表播放成功");
+  });
+
   it("declares the camera actions", () => {
     for (const capability of ["拍照", "录像"]) {
       expect(prompt).toContain(capability);

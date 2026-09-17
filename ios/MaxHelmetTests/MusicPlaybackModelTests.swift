@@ -3,8 +3,57 @@ import XCTest
 @testable import MaxHelmet
 
 final class MusicPlaybackModelTests: XCTestCase {
+    @MainActor func testQQDefaultNeverRequestsApplePermissionOrClaimsPlayback() async {
+        var permissions = 0
+        let model = MusicPlaybackModel(requestAuthorization: { permissions += 1; return .authorized })
+        XCTAssertFalse(model.visible)
+        for control in [MusicControl.play, .pause, .next, .previous] {
+            let result = await model.perform(control)
+            XCTAssertEqual(result.status, .unsupported)
+            XCTAssertEqual(result.reason, "music.qq.integrationRequired")
+            XCTAssertTrue(model.visible)
+            XCTAssertTrue(model.prefersQQMusic)
+            XCTAssertFalse(model.isPlaying)
+            XCTAssertFalse(model.showingPicker)
+        }
+        XCTAssertEqual(permissions, 0)
+        model.stopPlayback(dismiss: true)
+        XCTAssertFalse(model.visible)
+    }
+
+    @MainActor func testNamedQQRequestStopsLocalPlaybackWithoutAcknowledgingQQSuccess() async {
+        let driver = PlaybackDriver()
+        driver.starts = true
+        let model = makeModel(driver)
+        _ = await model.perform(.play)
+        let controller = MusicController(player: model)
+        let result = await controller.perform(.musicControl(control: .next, app: "QQ Music"))
+        XCTAssertEqual(result.reason, "music.qq.integrationRequired")
+        XCTAssertTrue(model.prefersQQMusic)
+        XCTAssertFalse(model.isPlaying)
+        XCTAssertTrue(model.visible)
+    }
+
+    @MainActor func testSwitchingToQQCancelsPendingAppleAuthorization() async {
+        let driver = PlaybackDriver()
+        driver.starts = true
+        var pending: CheckedContinuation<MPMediaLibraryAuthorizationStatus, Never>?
+        let model = MusicPlaybackModel(prefersQQMusic: false, player: driver, requestAuthorization: {
+            await withCheckedContinuation { pending = $0 }
+        })
+        let play = Task { await model.perform(.play) }
+        while pending == nil { await Task.yield() }
+        model.useQQMusic()
+        pending?.resume(returning: .authorized)
+        _ = await play.value
+        XCTAssertTrue(model.prefersQQMusic)
+        XCTAssertEqual(driver.plays, 0)
+        XCTAssertFalse(model.isPlaying)
+        XCTAssertFalse(model.busy)
+    }
+
     @MainActor func testDeniedVoiceRequestShowsRecoverableCard() async {
-        let model = MusicPlaybackModel(requestAuthorization: { .denied })
+        let model = MusicPlaybackModel(prefersQQMusic: false, requestAuthorization: { .denied })
         XCTAssertFalse(model.visible)
         let result = await model.perform(.play)
         XCTAssertEqual(result.status, .denied)
@@ -17,7 +66,7 @@ final class MusicPlaybackModelTests: XCTestCase {
     }
 
     @MainActor func testRestrictedLibraryCannotPresentPicker() async {
-        let model = MusicPlaybackModel(requestAuthorization: { .restricted })
+        let model = MusicPlaybackModel(prefersQQMusic: false, requestAuthorization: { .restricted })
         await model.chooseMusic()
         XCTAssertTrue(model.visible)
         XCTAssertFalse(model.showingPicker)
@@ -27,7 +76,7 @@ final class MusicPlaybackModelTests: XCTestCase {
 
     @MainActor func testConcurrentVoiceCommandDoesNotRacePermissionRequest() async {
         var pending: CheckedContinuation<MPMediaLibraryAuthorizationStatus, Never>?
-        let model = MusicPlaybackModel(requestAuthorization: {
+        let model = MusicPlaybackModel(prefersQQMusic: false, requestAuthorization: {
             await withCheckedContinuation { pending = $0 }
         })
         let first = Task { await model.perform(.play) }
@@ -64,7 +113,7 @@ final class MusicPlaybackModelTests: XCTestCase {
     @MainActor func testDelayedPlaybackIsConfirmed() async {
         let driver = PlaybackDriver()
         var waits = 0
-        let model = MusicPlaybackModel(player: driver, playbackAttempts: 3,
+        let model = MusicPlaybackModel(prefersQQMusic: false, player: driver, playbackAttempts: 3,
             waitForPlayback: { waits += 1; if waits == 2 { driver.isPlaying = true } },
             requestAuthorization: { .authorized })
         let result = await model.perform(.play)
@@ -109,7 +158,7 @@ final class MusicPlaybackModelTests: XCTestCase {
 
     @MainActor func testMissingPreparationCallbackTimesOutAndLateCallbackIsIgnored() async {
         let driver = PlaybackDriver(); driver.holdPreparation = true
-        let model = MusicPlaybackModel(player: driver, preparationTimeoutNanoseconds: 1_000_000,
+        let model = MusicPlaybackModel(prefersQQMusic: false, player: driver, preparationTimeoutNanoseconds: 1_000_000,
             playbackAttempts: 1, waitForPlayback: {}, requestAuthorization: { .authorized })
         await model.select(MPMediaItemCollection(items: [MPMediaItem()]))
         XCTAssertFalse(model.busy)
@@ -134,7 +183,7 @@ final class MusicPlaybackModelTests: XCTestCase {
         let driver = PlaybackDriver()
         driver.isPlaying = true
         var waits = 0
-        let model = MusicPlaybackModel(player: driver, playbackAttempts: 4, waitForPlayback: {
+        let model = MusicPlaybackModel(prefersQQMusic: false, player: driver, playbackAttempts: 4, waitForPlayback: {
             waits += 1
             if waits == 1 { driver.itemIdentity = "two"; driver.isPlaying = false }
             if waits == 2 { driver.isPlaying = true }
@@ -182,7 +231,7 @@ final class MusicPlaybackModelTests: XCTestCase {
     @MainActor func testCloseDuringAuthorizationCannotOpenPickerLater() async {
         var pending: CheckedContinuation<MPMediaLibraryAuthorizationStatus, Never>?
         let driver = PlaybackDriver()
-        let model = MusicPlaybackModel(player: driver, requestAuthorization: {
+        let model = MusicPlaybackModel(prefersQQMusic: false, player: driver, requestAuthorization: {
             await withCheckedContinuation { pending = $0 }
         })
         let request = Task { await model.chooseMusic() }
@@ -214,7 +263,7 @@ final class MusicPlaybackModelTests: XCTestCase {
     @MainActor func testBackgroundDuringSkipCannotResumeChangedTrack() async {
         let driver = PlaybackDriver(); driver.isPlaying = true; driver.starts = true
         var model: MusicPlaybackModel!
-        model = MusicPlaybackModel(player: driver, playbackAttempts: 3, waitForPlayback: {
+        model = MusicPlaybackModel(prefersQQMusic: false, player: driver, playbackAttempts: 3, waitForPlayback: {
             model.setAppInBackground(true)
             driver.itemIdentity = "two"
         }, requestAuthorization: { .authorized })
@@ -225,7 +274,7 @@ final class MusicPlaybackModelTests: XCTestCase {
     }
 
     @MainActor private func makeModel(_ driver: PlaybackDriver) -> MusicPlaybackModel {
-        MusicPlaybackModel(player: driver, playbackAttempts: 2, waitForPlayback: {}, requestAuthorization: { .authorized })
+        MusicPlaybackModel(prefersQQMusic: false, player: driver, playbackAttempts: 2, waitForPlayback: {}, requestAuthorization: { .authorized })
     }
 }
 

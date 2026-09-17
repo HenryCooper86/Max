@@ -48,6 +48,23 @@ describe("extractDeviceCommand — volume", () => {
 });
 
 describe("extractDeviceCommand — music", () => {
+  it.each([
+    ["播放QQ音乐", "play"],
+    ["Max play QQ Music", "play"],
+    ["打开QQ音乐", "play"],
+    ["暂停QQ音乐", "pause"],
+    ["QQ音乐下一首", "next"],
+    ["skip to next on QQ Music", "next"],
+    ["next on QQ Music", "next"],
+    ["previous on QQ Music", "previous"],
+    ["QQ音乐上一首", "previous"]
+  ])("preserves QQ Music routing for %s", (text, control) => {
+    expect(extractDeviceCommand(text)).toEqual({ action: "music.control", args: { control, app: "QQ音乐" } });
+  });
+  it.each(["不要播放QQ音乐", "don't play QQ Music"])("ignores negated QQ request %s", (text) => {
+    expect(extractDeviceCommand(text)).toBeNull();
+  });
+
   it("controls the system player", () => {
     expect(extractDeviceCommand("Max 放歌")).toEqual({ action: "music.control", args: { control: "play" } });
     expect(extractDeviceCommand("Max 下一首")).toEqual({ action: "music.control", args: { control: "next" } });
@@ -138,7 +155,7 @@ describe("deviceFailureSpeech", () => {
   it("explains an unreachable third-party player", () => {
     expect(deviceFailureSpeech("music.control", "unsupported", "player.unsupported")).toContain("本机音乐");
     expect(deviceFailureSpeech("music.control", "failed", "music.emptyQueue")).toContain("选择音乐");
-    expect(deviceFailureSpeech("music.control", "failed", "music.unavailable")).toContain("Apple Music");
+    expect(deviceFailureSpeech("music.control", "failed", "music.unavailable")).toContain("播放来源");
     expect(deviceFailureSpeech("music.control", "failed", "music.busy")).toContain("稍后重试");
     expect(deviceFailureSpeech("music.control", "failed", "music.playerUnavailable")).toContain("播放队列");
     expect(deviceFailureSpeech("music.control", "denied", "permission.musicControl")).toContain("授权");

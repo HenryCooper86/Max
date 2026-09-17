@@ -6222,6 +6222,7 @@ button.opsCard:disabled {
   margin-top: 8px;
 }
 .musicPlaybackCard button,
+.musicControls a,
 .navigationActions button,
 .navigationSteps summary {
   min-width: 44px;
@@ -6232,6 +6233,11 @@ button.opsCard:disabled {
   background: transparent;
   color: inherit;
   cursor: pointer;
+}
+.musicControls a {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
 }
 .musicPlaybackCard button:disabled {
   opacity: 0.4;

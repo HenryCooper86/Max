@@ -70,7 +70,7 @@ final class NavigationDetailsTests: XCTestCase {
         let previous = UserDefaults.standard.object(forKey: AMapConsentStore.defaultsKey)
         UserDefaults.standard.set("accepted", forKey: AMapConsentStore.defaultsKey)
         defer { UserDefaults.standard.set(previous, forKey: AMapConsentStore.defaultsKey) }
-        let music = MusicPlaybackModel(player: NavigationPreviewMusicDriver(), requestAuthorization: { .authorized })
+        let music = MusicPlaybackModel(prefersQQMusic: false, player: NavigationPreviewMusicDriver(), requestAuthorization: { .authorized })
         let controller = UIHostingController(rootView: NavigationDetailsView(guidance: guidance(), music: music, initiallyShowsSteps: expanded))
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)

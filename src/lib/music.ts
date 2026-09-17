@@ -2,6 +2,7 @@
 export type MusicControl = "play" | "pause" | "next" | "previous";
 export type MusicTrack = { title: string; url: string };
 export type MusicState = {
+  visible: boolean;
   tracks: MusicTrack[];
   index: number;
   playing: boolean;
@@ -9,7 +10,14 @@ export type MusicState = {
   message: string | null;
 };
 export type MusicResult = { status: "ok" | "failed" | "unsupported"; reason?: string };
-export const EMPTY_MUSIC: MusicState = { tracks: [], index: -1, playing: false, busy: false, message: null };
+export const EMPTY_MUSIC: MusicState = {
+  visible: false,
+  tracks: [],
+  index: -1,
+  playing: false,
+  busy: false,
+  message: null
+};
 type AudioDriver = Pick<
   HTMLAudioElement,
   "src" | "paused" | "play" | "pause" | "load" | "addEventListener" | "removeAttribute"
@@ -60,6 +68,7 @@ export function createMusicController(deps: {
       stop();
       return { status: "ok" };
     }
+    publish({ visible: true });
     if (state.busy) return { status: "failed", reason: "music.busy" };
     if (!state.tracks.length) return fail("music.emptyQueue", "请先选择多首音乐文件，歌曲只在此浏览器播放。");
     const index = state.index + (control === "next" ? 1 : control === "previous" ? -1 : 0);
@@ -106,7 +115,7 @@ export function createMusicController(deps: {
   function select(tracks: MusicTrack[]) {
     clear();
     if (!tracks.length) return;
-    publish({ tracks, index: 0 });
+    publish({ tracks, index: 0, visible: true });
     void perform("play");
   }
   return { perform, select, stop, clear };

@@ -154,6 +154,7 @@ function AppContent() {
   }, [authUser, surface, toggleHandsFreeSession]);
 
   const fusedHazard = combineHazardLevels(agent.rideContext.hazardLevel, agent.weather?.riskLevel ?? "normal");
+  const showRidePanels = agent.navState.phase !== "idle" || agent.musicState.visible;
   const sessionInactive = !agent.connected && !listening && !starting;
   const authKnown = agent.health !== null;
   const authEnabled = agent.health?.auth?.enabled ?? false;
@@ -184,7 +185,7 @@ function AppContent() {
   return (
     <main className="voiceShell">
       <section
-        className={`${voiceFaceClassName({ captionsOpen, navigationVisible: agent.navState.phase !== "idle" })} voiceWithPanels`}
+        className={`${voiceFaceClassName({ captionsOpen, navigationVisible: agent.navState.phase !== "idle" })} ${showRidePanels ? "voiceWithPanels" : ""}`}
         aria-label={localized(language, "MAX 头盔语音助手", "MAX helmet voice assistant")}
       >
         <header className={`voiceTopbar ${agent.connected ? "online" : sessionInactive ? "inactive" : "offline"}`}>
@@ -234,18 +235,22 @@ function AppContent() {
           sessionState={starting ? "starting" : sessionInactive ? "inactive" : undefined}
         />
 
-        <div className="voiceRidePanels">
-          {agent.navState.phase !== "idle" ? (
-            <NavigationPanel
-              state={agent.navState}
-              mapConsent={amapConsent.decision}
-              onEnableMap={amapConsent.accept}
-            />
-          ) : null}
+        {showRidePanels ? (
+          <div className="voiceRidePanels">
+            {agent.navState.phase !== "idle" ? (
+              <NavigationPanel
+                state={agent.navState}
+                mapConsent={amapConsent.decision}
+                onEnableMap={amapConsent.accept}
+              />
+            ) : null}
 
-          <MusicPlaybackCard agent={agent} />
-          {captionsOpen ? <VoiceTranscript agent={agent} /> : null}
-        </div>
+            {agent.musicState.visible ? <MusicPlaybackCard agent={agent} /> : null}
+            {captionsOpen ? <VoiceTranscript agent={agent} /> : null}
+          </div>
+        ) : captionsOpen ? (
+          <VoiceTranscript agent={agent} />
+        ) : null}
 
         <nav className="voiceUtilities" aria-label={t("voice.viewLabel")}>
           <button

@@ -1,3 +1,4 @@
+import { createMusicController, EMPTY_MUSIC, type MusicControl } from "../lib/music";
 // The hands-free session brain: relay WebSocket lifecycle (connect, reconnect,
 // event fan-out), session settings, and the start/stop hands-free flow. Audio
 // I/O lives in useAudioPlayback / useMicCapture.
@@ -219,6 +220,16 @@ export function useHelmetAgent() {
   // navigation prompts, so a single instance stays correct across
   // reconnects and settings changes; only navController.reset() + setNavState
   // below reset its navigation-specific state, on socket close.
+  const [musicState, setMusicState] = useState(EMPTY_MUSIC);
+  const [musicController] = useState(() =>
+    createMusicController({
+      createAudio: () => new Audio(),
+      onState: setMusicState,
+      revokeUrl: (url) => URL.revokeObjectURL(url)
+    })
+  );
+  useEffect(() => () => musicController.clear(), [musicController]);
+
   const [navController] = useState(() =>
     createNavigationController({
       sendJson: (payload) => {
@@ -665,7 +676,29 @@ export function useHelmetAgent() {
           });
         }
         if (event.type === "device.command") {
-          navController.handleDeviceCommand(event);
+          if (event.action === "music.control") {
+            const control = event.args.control;
+            if (["play", "pause", "next", "previous"].includes(String(control))) {
+              void musicController
+                .perform(control as MusicControl, typeof event.args.app === "string" ? event.args.app : undefined)
+                .then((result) => {
+                  if (socketRef.current === socket && socket.readyState === WebSocket.OPEN) {
+                    socket.send(JSON.stringify({ type: "device.result", commandId: event.commandId, ...result }));
+                  }
+                });
+            } else {
+              socket.send(
+                JSON.stringify({
+                  type: "device.result",
+                  commandId: event.commandId,
+                  status: "unsupported",
+                  reason: "action.mismatch"
+                })
+              );
+            }
+          } else {
+            navController.handleDeviceCommand(event);
+          }
         }
         if (event.type === "nav.route" || event.type === "nav.error") {
           navController.handleAgentEvent(event);
@@ -727,7 +760,7 @@ export function useHelmetAgent() {
       setConnectionState("degraded");
       setStatus("连接错误");
     });
-  }, [navController, playPcm16, pushTranscript, setPacketStats, speak, stopAgentSpeech, stopMic]);
+  }, [navController, musicController, playPcm16, pushTranscript, setPacketStats, speak, stopAgentSpeech, stopMic]);
 
   useEffect(() => {
     connectRef.current = connect;
@@ -1258,6 +1291,8 @@ export function useHelmetAgent() {
     audioProcessing,
     guidedDemo,
     navState,
+    musicState,
+    musicController,
     startNavDemo,
     stopNavDemo,
     setVoiceGender,

@@ -12,7 +12,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -39,7 +38,6 @@ fun NavigationDetailsDialog(guidance: NavGuidanceState, music: MusicController, 
                     TextButton(onClick = onDismiss) { Text("收起") }
                 }
                 BoxWithConstraints(Modifier.weight(1f)) {
-                    val largeText = LocalDensity.current.fontScale >= 1.5f
                     val stepsHeight = (maxHeight * 0.22f).coerceIn(96.dp, 160.dp)
                     val railWidth = minOf(340.dp, maxWidth * 0.42f)
                     val controls: @Composable () -> Unit = {
@@ -49,24 +47,18 @@ fun NavigationDetailsDialog(guidance: NavGuidanceState, music: MusicController, 
                     if (maxWidth > maxHeight * 1.2f) {
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             RidingMap(guidance, following, { following = !following }, Modifier.weight(1f).fillMaxHeight())
-                            Column(Modifier.width(railWidth).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Column(Modifier.width(railWidth).fillMaxHeight().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                     RidingManeuver(guidance)
                                     RidingTripSummary(guidance, showSteps) { showSteps = !showSteps }
                                 }
                                 MusicPlaybackCard(music, compact = true)
                             }
                         }
-                    } else if (largeText || maxHeight < 400.dp) {
+                    } else {
                         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             RidingManeuver(guidance)
                             RidingMap(guidance, following, { following = !following }, Modifier.height(300.dp).fillMaxWidth())
-                            controls()
-                        }
-                    } else {
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            RidingManeuver(guidance)
-                            RidingMap(guidance, following, { following = !following }, Modifier.weight(1f).fillMaxWidth())
                             controls()
                         }
                     }

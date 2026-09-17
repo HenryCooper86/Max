@@ -846,3 +846,28 @@ describe("matchPairConfirmReply", () => {
     expect(matchPairConfirmReply("取消确认")).toBe("decline");
   });
 });
+
+describe("short spoken music controls", () => {
+  it.each([
+    "Max skip to next",
+    "skip next",
+    "skip to the next",
+    "Max next",
+    "Max skip",
+    "next please",
+    "please skip",
+    "下一首"
+  ])("recognizes %s", (phrase) => {
+    expect(extractDeviceCommand(phrase)).toEqual({ action: "music.control", args: { control: "next" } });
+  });
+  it.each([
+    "what is next",
+    "next exit",
+    "skip this question",
+    "next week",
+    "please skip the introduction",
+    "skip to next exit"
+  ])("does not hijack %s", (phrase) => {
+    expect(extractDeviceCommand(phrase)?.action).not.toBe("music.control");
+  });
+});

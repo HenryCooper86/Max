@@ -17,10 +17,10 @@ import com.horizon.maxhelmet.navigation.HudCastClient
 fun HudCastControl(client: HudCastClient) {
     val state by client.state.collectAsState()
     var showing by remember { mutableStateOf(false) }
-    var address by remember { mutableStateOf("") }
+    var address by remember { mutableStateOf(client.savedAddress) }
     var code by remember { mutableStateOf("") }
     TextButton(onClick = { if (state.active) client.stop() else showing = true }) {
-        Text(if (state.active) "停止投屏" else "投屏到 HUD")
+        Text(if (state.active) "断开 HUD" else "投屏到 HUD")
     }
     if (showing) AlertDialog(
         onDismissRequest = { showing = false; code = "" },
@@ -33,13 +33,13 @@ fun HudCastControl(client: HudCastClient) {
                 OutlinedTextField(code, { code = it }, label = { Text("六位连接码") }, singleLine = true,
                     visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword))
                 Text(state.status)
-                Text("开发版 Wi-Fi 原型：仅在可信网络使用。退出到后台会停止投屏；连接中断后请手动重连。")
+                Text("开发版 Wi-Fi 原型：仅在可信网络使用。退出到后台会断开 HUD；连接中断后请手动重连。")
             }
         },
         confirmButton = {
             TextButton(enabled = BuildConfig.DEBUG, onClick = {
                 if (state.active) client.stop() else { client.connect(address, code); code = "" }
-            }) { Text(if (state.active) "停止投屏" else "开始投屏") }
+            }) { Text(if (state.active) "断开 HUD" else "开始投屏") }
         },
         dismissButton = { TextButton(onClick = { showing = false; code = "" }) { Text("完成") } }
     )

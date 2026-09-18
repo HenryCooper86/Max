@@ -10,7 +10,16 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** Local, foreground HUD prototype. Sends only the navigation controller's output. */
-class HudCastClient {
+class HudCastClient(context: android.content.Context? = null,
+    readBond: (() -> String?)? = null, private val writeBond: ((String) -> Boolean)? = null) {
+    private val secure = context?.let { com.horizon.maxhelmet.security.SecureTokenStore(it.getSharedPreferences("hud_bond", android.content.Context.MODE_PRIVATE)) }
+    private var bond = runCatching { (readBond?.invoke() ?: secure?.read("wifi"))?.takeIf { it.isNotEmpty() }?.let(::JSONObject) }.getOrNull()
+    val savedAddress: String get() = bond?.optString("address").orEmpty()
+    private var reconnect: Job? = null
+    private var retryDelay = 3000L
+    private fun saveBond() { bond?.let { if ((writeBond?.invoke(it.toString()) ?: secure?.write("wifi", it.toString())) == false) { it.put("enabled", false); secure?.remove("wifi") } } }
+    private fun disableAuto() { bond?.put("enabled", false); saveBond() }
+
     data class State(val active: Boolean = false, val status: String = "未投屏")
     private val mutableState = MutableStateFlow(State())
     val state = mutableState.asStateFlow()
@@ -31,16 +40,23 @@ class HudCastClient {
     @Synchronized fun update(guidance: NavGuidanceState?) {
         latest = guidance
         latestAt = System.nanoTime()
-        if (guidance == null || guidance.confirmationId != null) { stop(); return }
+        if (guidance == null || guidance.confirmationId != null) { reconnect?.cancel(); reconnect = null; closeTransport(); return }
+        if (!mutableState.value.active && bond?.optBoolean("enabled") == true) resumeSaved()
         pending = true
         flush()
     }
 
     @Synchronized fun connect(address: String, code: String) {
-        stop()
+        reconnect?.cancel(); reconnect = null
+        val token = if (code.isEmpty() && savedAddress == address.trim()) bond?.optString("token") else null
+        if (token == null) disableAuto() else { bond?.put("enabled", true); saveBond() }
+        connect(address.trim(), code, token)
+    }
+    @Synchronized private fun connect(address: String, code: String, token: String?) {
+        closeTransport()
         if (!BuildConfig.DEBUG) { fail("Wi-Fi 投屏原型需要开发版本"); return }
         val endpoint = endpoint(address)
-        if (endpoint == null || !code.matches(Regex("[0-9]{6}"))) {
+        if (endpoint == null || (token == null && !code.matches(Regex("[0-9]{6}")))) {
             fail("请输入 RDK 屏幕上的地址和六位连接码"); return
         }
         if (latest == null || (System.nanoTime() - latestAt) > 8_000_000_000L) {
@@ -54,7 +70,9 @@ class HudCastClient {
         socket = transport.newWebSocket(Request.Builder().url(endpoint).build(), object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) = synchronized(this@HudCastClient) {
                 if (generation != current) { webSocket.cancel(); return@synchronized }
-                webSocket.send(JSONObject().put("type", "hud.join").put("code", code).toString())
+                val join = JSONObject().put("type", "hud.join")
+                if (token != null) join.put("resumeToken", token) else join.put("code", code).put("remember", true)
+                webSocket.send(join.toString())
                 Unit
             }
             override fun onMessage(webSocket: WebSocket, text: String) = synchronized(this@HudCastClient) {
@@ -63,6 +81,12 @@ class HudCastClient {
                 lastReply = System.nanoTime()
                 when {
                     reply?.optString("type") == "hud.ready" -> {
+                        val savedToken = reply.optString("resumeToken").takeIf { it.isNotEmpty() } ?: token
+                        if (savedToken != null) {
+                            bond = JSONObject().put("address", address).put("token", savedToken).put("enabled", true)
+                            saveBond()
+                        }
+                        retryDelay = 3000
                         ready = true
                         mutableState.value = State(true, "已连接 · 正在发送导航")
                     }
@@ -80,7 +104,10 @@ class HudCastClient {
             }
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) = synchronized(this@HudCastClient) {
                 webSocket.close(code, null)
-                if (generation == current) fail("HUD 已断开，请重新连接")
+                if (generation == current) {
+                    if (code == 1008) { stop(); mutableState.value = State(status = "配对已失效或 HUD 正忙，请重新配对") }
+                    else fail("HUD 已断开，正在等待重新连接")
+                }
             }
         })
         watchdog = CoroutineScope(Dispatchers.IO).launch {
@@ -103,13 +130,32 @@ class HudCastClient {
     }
 
     @Synchronized fun stop() {
+        disableAuto(); reconnect?.cancel(); reconnect = null
+        closeTransport()
+    }
+    private fun closeTransport() {
         generation++
         watchdog?.cancel(); watchdog = null
         socket?.cancel(); socket = null
         ready = false; awaitingAck = false; pending = false; sequence = 0
         mutableState.value = State()
     }
-    private fun fail(message: String) { stop(); mutableState.value = State(status = message) }
+    private fun fail(message: String) { closeTransport(); mutableState.value = State(status = message); scheduleReconnect() }
+    private fun resumeSaved() {
+        val saved = bond ?: return
+        if (!saved.optBoolean("enabled") || latest == null) return
+        connect(saved.optString("address"), "", saved.optString("token"))
+    }
+    private fun scheduleReconnect() {
+        if (bond?.optBoolean("enabled") != true || latest == null) return
+        reconnect?.cancel()
+        mutableState.value = State(true, "连接中断 · 自动重连中（点断开可取消）")
+        val wait = retryDelay; retryDelay = minOf(30000, retryDelay * 2)
+        reconnect = CoroutineScope(Dispatchers.IO).launch {
+            delay(wait)
+            synchronized(this@HudCastClient) { reconnect = null; resumeSaved() }
+        }
+    }
     private fun flush() {
         if (!ready || awaitingAck || !pending || System.nanoTime() - latestAt >= 8_000_000_000L) return
         val guidance = latest ?: return

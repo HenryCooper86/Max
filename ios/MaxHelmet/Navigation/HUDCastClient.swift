@@ -8,6 +8,16 @@ import UIKit
 final class HUDCastClient: ObservableObject {
     @Published private(set) var status = "未投屏"
     @Published private(set) var active = false
+    private struct Bond: Codable { var address: String; var token: String; var enabled: Bool }
+    private static let bondAccount = "hud.wifi.bond.v1"
+    private var bond: Bond? = SecureTokenStore.read(account: HUDCastClient.bondAccount).flatMap { try? JSONDecoder().decode(Bond.self, from: Data($0.utf8)) }
+    var savedAddress: String { bond?.address ?? "" }
+    private var reconnect: Task<Void, Never>?
+    private var retryDelay = 3.0
+    private func saveBond() {
+        guard let bond, let data = try? JSONEncoder().encode(bond) else { return }
+        if !SecureTokenStore.write(String(decoding: data, as: UTF8.self), account: Self.bondAccount) { self.bond?.enabled = false; SecureTokenStore.remove(account: Self.bondAccount) }
+    }
     private var socket: URLSessionWebSocketTask?
     private var receiver: Task<Void, Never>?
     private var watchdog: Task<Void, Never>?
@@ -76,19 +86,30 @@ final class HUDCastClient: ObservableObject {
         latest = guidance
         HUDMapSource.shared.update(guidance)
         latestAt = Date()
-        guard let guidance, guidance.confirmationID == nil else { stop(); return }
+        guard let guidance, guidance.confirmationID == nil else {
+            reconnect?.cancel(); reconnect = nil; closeTransport(); return
+        }
+        if !active, bond?.enabled == true { resumeSaved(); }
         pending = true
         flush()
     }
 
     func connect(address: String, code: String) {
-        stop()
+        reconnect?.cancel(); reconnect = nil
+        let address = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        let token = code.isEmpty && bond?.address == address ? bond?.token : nil
+        bond?.enabled = token != nil; saveBond()
+        connect(address: address, code: code, token: token)
+    }
+
+    private func connect(address: String, code: String, token: String?) {
+        closeTransport()
         guard Self.supported else { status = "Wi-Fi 投屏原型需要开发版本"; return }
-        guard let url = Self.endpoint(address), code.count == 6, code.allSatisfy({ $0.isASCII && $0.isNumber }) else {
+        guard let url = Self.endpoint(address), token != nil || (code.count == 6 && code.allSatisfy({ $0.isASCII && $0.isNumber })) else {
             status = "请输入 RDK 屏幕上的地址和六位连接码"; return
         }
         guard latest != nil, Date().timeIntervalSince(latestAt) < 8 else {
-            status = "等待手机导航更新后重试"; return
+            status = "等待手机导航更新后重试"; if token != nil { scheduleReconnect() }; return
         }
         let task = URLSession.shared.webSocketTask(with: url)
         socket = task
@@ -100,7 +121,8 @@ final class HUDCastClient: ObservableObject {
         task.resume()
         receiver = Task { [weak self] in
             do {
-                let join = try JSONSerialization.data(withJSONObject: ["type": "hud.join", "code": code])
+                let fields: [String: Any] = token.map { ["type": "hud.join", "resumeToken": $0] } ?? ["type": "hud.join", "code": code, "remember": true]
+                let join = try JSONSerialization.data(withJSONObject: fields)
                 try await task.send(.string(String(decoding: join, as: UTF8.self)))
                 while !Task.isCancelled {
                     let message = try await task.receive()
@@ -111,6 +133,11 @@ final class HUDCastClient: ObservableObject {
                     }
                     self.lastReply = Date()
                     if reply["type"] as? String == "hud.ready" {
+                        if let savedToken = reply["resumeToken"] as? String ?? token {
+                            self.bond = Bond(address: address, token: savedToken, enabled: true)
+                            self.saveBond()
+                        }
+                        self.retryDelay = 3
                         self.ready = true
                         self.receiverDrawsMap = reply["mapMode"] as? String == "streets"
                         HUDMapSource.shared.start(renderMap: !self.receiverDrawsMap)
@@ -134,7 +161,9 @@ final class HUDCastClient: ObservableObject {
                 }
             } catch {
                 guard let self, self.socket === task else { return }
-                self.fail("HUD 已断开，请检查 Wi-Fi 和连接码后重试")
+                if task.closeCode == .policyViolation {
+                    self.stop(); self.status = "配对已失效或 HUD 正忙，请检查连接码后重试"
+                } else { self.fail("HUD 已断开，正在等待重新连接") }
             }
         }
         watchdog = Task { [weak self] in
@@ -159,7 +188,14 @@ final class HUDCastClient: ObservableObject {
         }
     }
 
+    /// Explicit user disconnect: persist the pause so a new GPS fix cannot reconnect.
     func stop() {
+        bond?.enabled = false; saveBond()
+        reconnect?.cancel(); reconnect = nil
+        closeTransport()
+    }
+
+    private func closeTransport() {
         mapCaptureGeneration += 1
         mapCapturePending = false
         HUDMapSource.shared.stop()
@@ -207,7 +243,24 @@ final class HUDCastClient: ObservableObject {
         }
     }
 
-    private func fail(_ message: String) { stop(); status = message }
+    private func fail(_ message: String) {
+        closeTransport(); status = message; scheduleReconnect()
+    }
+    private func resumeSaved() {
+        guard let bond, bond.enabled, latest != nil else { return }
+        connect(address: bond.address, code: "", token: bond.token)
+    }
+    private func scheduleReconnect() {
+        guard bond?.enabled == true, latest != nil else { return }
+        reconnect?.cancel()
+        active = true; status = "连接中断 · 自动重连中（点停止可取消）"
+        let delay = retryDelay; retryDelay = min(30, retryDelay * 2)
+        reconnect = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            self?.reconnect = nil; self?.resumeSaved()
+        }
+    }
 
     private func flush() {
         guard ready, !awaitingAck, pending, let socket, let latest else { return }

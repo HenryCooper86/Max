@@ -472,6 +472,21 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    .music-connection {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 6px;
+      flex-wrap: wrap;
+    }
+    .music-connection button {
+      min-height: 36px;
+      font-size: 13px;
+      padding: 4px 12px;
+    }
+    #nav-music .music-connection {
+      display: none;
+    }
     .music-controls {
       display: flex;
       gap: 10px;
@@ -540,7 +555,7 @@
     }
     @media (max-height: 550px) {
       #join {
-        gap: 8px;
+        gap: 4px;
       }
       #join .weather-main {
         margin: 4px 0;
@@ -634,6 +649,11 @@
             aria-label="播放进度"
             hidden
           ></progress>
+          <div class="music-connection">
+            <span id="idle-music-connection-status" class="label"></span
+            ><button id="idle-music-connect" hidden>重新连接</button
+            ><button id="idle-music-disconnect" hidden>断开并暂停自动连接</button>
+          </div>
           <div id="idle-music-feedback" class="music-feedback" role="status" hidden></div>
         </div>
         <div id="idle-music-controls" class="music-controls">
@@ -683,6 +703,11 @@
             aria-label="播放进度"
             hidden
           ></progress>
+          <div class="music-connection">
+            <span id="nav-music-connection-status" class="label"></span
+            ><button id="nav-music-connect" hidden>重新连接</button
+            ><button id="nav-music-disconnect" hidden>断开并暂停自动连接</button>
+          </div>
           <div id="nav-music-feedback" class="music-feedback" role="status" hidden></div>
         </div>
         <div id="nav-music-controls" class="music-controls">
@@ -869,6 +894,14 @@
           ? [player.artist, player.album].filter(Boolean).join(" · ")
           : music?.message || "";
         get("controls").hidden = !player;
+        const connection = music?.connection;
+        get("connection-status").textContent = connection?.bonded
+          ? `${connection.name} · ${connection.autoReconnect ? (connection.connecting ? "正在重连" : "自动连接已开启") : "自动连接已暂停"}`
+          : "首次请在手机蓝牙设置中配对";
+        get("connect").hidden = !connection?.bonded || connection.autoReconnect;
+        get("disconnect").hidden = !connection?.bonded || !connection.autoReconnect;
+        get("connect").disabled = musicPending;
+        get("disconnect").disabled = musicPending;
         get("toggle").textContent = player?.status === "playing" ? "Ⅱ" : "▶";
         get("toggle").setAttribute("aria-label", player?.status === "playing" ? "暂停" : "播放");
         for (const action of ["previous", "toggle", "next"])
@@ -883,16 +916,17 @@
     }
     async function controlMusic(action) {
       const player = latestState?.music?.player;
-      if (!player || musicPending || latestState.music.busy) return;
+      const connectionAction = action === "connect" || action === "disconnect";
+      if ((!player && !connectionAction) || musicPending || latestState?.music?.busy) return;
       musicPending = true;
       musicFeedback = "";
-      musicFeedbackPlayer = player.id;
+      musicFeedbackPlayer = player?.id;
       renderMusic(latestState);
       try {
         const response = await fetch("/cast/music", {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-HUD-Control": "1" },
-          body: JSON.stringify({ action, playerId: player.id }),
+          body: JSON.stringify({ action, playerId: player?.id }),
           signal: AbortSignal.timeout(20000)
         });
         const result = await response.json();
@@ -905,6 +939,8 @@
       }
     }
     for (const prefix of ["idle", "nav"]) {
+      el(`${prefix}-music-connect`).onclick = () => controlMusic("connect");
+      el(`${prefix}-music-disconnect`).onclick = () => controlMusic("disconnect");
       el(`${prefix}-music-previous`).onclick = () => controlMusic("previous");
       el(`${prefix}-music-next`).onclick = () => controlMusic("next");
       el(`${prefix}-music-toggle`).onclick = () =>

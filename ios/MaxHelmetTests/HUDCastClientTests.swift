@@ -78,6 +78,27 @@ final class HUDCastClientTests: XCTestCase {
     }
     #endif
 
+    func testExplicitDisconnectPersistsAndFreshGuidanceDoesNotReconnect() throws {
+        let account = "hud.wifi.bond.v1"
+        let original = SecureTokenStore.read(account: account)
+        defer { if let original { SecureTokenStore.write(original, account: account) } else { SecureTokenStore.remove(account: account) } }
+        XCTAssertTrue(SecureTokenStore.write(#"{"address":"192.168.50.9:8080","token":"test-token","enabled":true}"#, account: account))
+        let client = HUDCastClient()
+        XCTAssertEqual(client.savedAddress, "192.168.50.9:8080")
+        client.update(nil)
+        let retained = try XCTUnwrap(SecureTokenStore.read(account: account))
+        XCTAssertTrue(retained.contains("true"))
+        client.stop()
+        let stored = try XCTUnwrap(SecureTokenStore.read(account: account))
+        let value = try JSONSerialization.jsonObject(with: Data(stored.utf8)) as? [String: Any]
+        XCTAssertEqual(value?["enabled"] as? Bool, false)
+        let restored = HUDCastClient()
+        let p = CLLocationCoordinate2D(latitude: 31, longitude: 121)
+        restored.update(GuidanceState(destinationName: "终点", polyline: [p, CLLocationCoordinate2D(latitude: 31.1, longitude: 121.1)], currentLocation: p, maneuverInstruction: "直行", distanceToManeuverMeters: 120, remainingDistanceMeters: 800, remainingSeconds: 300, offRoute: false))
+        XCTAssertFalse(restored.active)
+        restored.stop()
+    }
+
     func testNavigationEndingStopsCasting() {
         let client = HUDCastClient()
         client.update(nil)

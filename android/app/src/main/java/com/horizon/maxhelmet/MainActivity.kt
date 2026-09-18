@@ -76,7 +76,6 @@ class MainActivity : ComponentActivity(), DeviceActivityHost {
     }
 
     override fun onStop() {
-        viewModel.hudCast.stop()
         viewModel.helmetDiscovery.stop()
         if (viewModel.deviceActions.host === this) viewModel.deviceActions.host = null
         viewModel.camera.detach(this)

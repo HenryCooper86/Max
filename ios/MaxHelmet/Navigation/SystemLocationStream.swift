@@ -2,8 +2,7 @@ import CoreLocation
 import Foundation
 
 /// Production `LocationStreaming`, a CLLocationManager configured for driving.
-/// Runs only while navigating; the app's idle-timer-disabled hands-free session
-/// keeps it foregrounded, so WhenInUse authorization is sufficient.
+/// Runs only during explicit navigation, including background navigation.
 final class SystemLocationStream: NSObject, LocationStreaming, CLLocationManagerDelegate {
     var onFailure: ((String) -> Void)?
     var onUpdate: ((CLLocationCoordinate2D) -> Void)?
@@ -44,12 +43,18 @@ final class SystemLocationStream: NSObject, LocationStreaming, CLLocationManager
     }
 
     func start() {
+        manager.allowsBackgroundLocationUpdates = true
+        manager.showsBackgroundLocationIndicator = true
         manager.startUpdatingLocation()
         if let cached = manager.location {
             locationManager(manager, didUpdateLocations: [cached])
         }
     }
-    func stop() { manager.stopUpdatingLocation() }
+    func stop() {
+        manager.stopUpdatingLocation()
+        manager.allowsBackgroundLocationUpdates = false
+        manager.showsBackgroundLocationIndicator = false
+    }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         let currentTime = now()

@@ -3,7 +3,7 @@ import CoreLocation
 import Foundation
 import UIKit
 
-/// Foreground bench transport. Navigation remains owned by AgentSession.
+/// Navigation-scoped bench transport. Navigation remains owned by AgentSession.
 @MainActor
 final class HUDCastClient: ObservableObject {
     @Published private(set) var status = "未投屏"
@@ -23,11 +23,27 @@ final class HUDCastClient: ObservableObject {
     private var awaitingAck = false
     private var ready = false
     private var pending = false
-    private var backgroundObserver: AnyCancellable?
+    private var lifecycleObservers: [AnyCancellable] = []
+    private var mapCapturePending = false
+    private var mapCaptureGeneration = 0
 
     init() {
-        backgroundObserver = NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)
-            .sink { [weak self] _ in Task { @MainActor in self?.stop() } }
+        lifecycleObservers = [
+            NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)
+                .sink { [weak self] _ in Task { @MainActor in self?.setForeground(false) } },
+            NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
+                .sink { [weak self] _ in Task { @MainActor in self?.setForeground(true) } }
+        ]
+    }
+
+    func setForeground(_ foreground: Bool) {
+        HUDMapSource.shared.setForeground(foreground)
+        if !foreground && mapCapturePending {
+            mapCaptureGeneration += 1
+            mapCapturePending = false
+            mapBusy = false
+        }
+        // Active navigation owns background execution. Do not close its socket.
     }
 
     static var supported: Bool {
@@ -56,6 +72,7 @@ final class HUDCastClient: ObservableObject {
 
     func update(_ guidance: GuidanceState?) {
         latest = guidance
+        HUDMapSource.shared.update(guidance)
         latestAt = Date()
         guard let guidance, guidance.confirmationID == nil else { stop(); return }
         pending = true
@@ -134,6 +151,8 @@ final class HUDCastClient: ObservableObject {
     }
 
     func stop() {
+        mapCaptureGeneration += 1
+        mapCapturePending = false
         HUDMapSource.shared.stop()
         mapBusy = false; mapSequence = 0
         receiver?.cancel(); receiver = nil
@@ -146,10 +165,14 @@ final class HUDCastClient: ObservableObject {
     private func sendMap() {
         guard ready, !mapBusy, let socket, Date().timeIntervalSince(latestAt) < 8 else { return }
         mapBusy = true
+        mapCapturePending = true
+        mapCaptureGeneration += 1
+        let generation = mapCaptureGeneration
         mapSentAt = Date()
         HUDMapSource.shared.snapshot { [weak self, weak socket] data in
             Task { @MainActor in
-                guard let self, let socket, self.socket === socket else { return }
+                guard let self, let socket, self.socket === socket, self.mapCaptureGeneration == generation else { return }
+                self.mapCapturePending = false
                 guard let data, Date().timeIntervalSince(self.latestAt) < 8 else { self.mapBusy = false; return }
                 self.mapSequence += 1
                 let value: [String: Any] = ["type": "hud.map", "sequence": self.mapSequence, "jpeg": data.base64EncodedString()]

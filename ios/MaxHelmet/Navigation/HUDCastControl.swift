@@ -2,7 +2,6 @@ import SwiftUI
 
 struct HUDCastControl: View {
     @ObservedObject var client: HUDCastClient
-    @Environment(\.scenePhase) private var scenePhase
     @State private var showingSetup = false
     @State private var address = ""
     @State private var code = ""
@@ -28,13 +27,12 @@ struct HUDCastControl: View {
                     }
                     Section {
                         Text(client.status)
-                        Text("开发版 Wi-Fi 原型：仅在可信网络使用。退出到后台会停止投屏；连接中断后请手动重连。")
+                        Text("开发版 Wi-Fi 原型：仅在可信网络使用。导航期间后台继续发送路线。后台显示路线示意图，返回前台恢复街道地图；连接中断后请手动重连。")
                     }
                 }
                 .navigationTitle("投屏到 HUD")
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { showingSetup = false } } }
             }
         }
-        .onChange(of: scenePhase) { _, phase in if phase == .background { client.stop() } }
     }
 }

@@ -49,7 +49,7 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Max 需要使用麦克风进行免提语音对话。</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Max 会在显式开始 Helmet Ride 后使用精确位置，为 RDK 头盔导航提供前台及锁屏期间的位置转发。</string>
+	<string>Max 会在您开始导航或 Helmet Ride 后使用精确位置，在前台、后台及锁屏期间向 HUD 转发位置和导航，直到您停止导航。</string>
 	<key>NSContactsUsageDescription</key>
 	<string>Max 需要读取通讯录，才能在你说出名字时拨打电话或发送短信。</string>
 	<key>NSAppleMusicUsageDescription</key>

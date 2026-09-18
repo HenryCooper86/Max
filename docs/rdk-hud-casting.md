@@ -2,7 +2,7 @@
 
 The Wi-Fi bench prototype sends the **phone's active navigation state** to a
 fullscreen HUD on the RDK. Both iOS and Android send navigation state using the
-same local protocol. iOS additionally shares snapshots of its existing AMap view,
+same local protocol. iOS additionally shares snapshots of a dedicated 800×600 AMap view,
 including real streets, labels, route and provider attribution. Android and older
 iOS senders retain the route schematic. The phone owns routing and guidance;
 there is no second routing engine or new map-provider credential.
@@ -35,9 +35,9 @@ while testing phone casting: the phone remains the navigation/audio owner.
    relay's Helmet Ride pairing code.
 6. Verify that destination, route shape, current location, next instruction,
    distance and remaining ETA agree with the phone. On iOS, keep the navigation
-   map visible and enabled: the HUD mirrors that map once per second. Pan, zoom
-   and select follow/overview on the phone. Valid compass readings rotate the
-   phone map while sharing; stopping sharing restores north-up. In follow mode,
+   map enabled: a dedicated HUD map follows the rider once per second. Phone
+   layout, pan and zoom do not change the HUD camera or image size. Valid compass
+   readings rotate the dedicated HUD map while sharing. In follow mode,
    the rider stays centered while surrounding streets move with GPS updates.
    Without a recent native image, the map falls back to a north-up route
    schematic without streets/tiles. It follows the rider by default; **全程**
@@ -47,14 +47,18 @@ while testing phone casting: the phone remains the navigation/audio owner.
    estimated arrival clock. Street names come from the phone’s route instructions. Routes longer than 2,048 vertices are
    sampled evenly for display, preserving the first and last points; the
    phone's actual navigation geometry is unchanged.
-7. Tap **停止投屏**, end navigation, or put the app in the background to stop.
+7. Tap **停止投屏** or end navigation to stop. iOS keeps sending navigation
+   and heartbeats when minimized, using background location during navigation.
+   Native map rendering pauses in the background; the HUD uses its live route
+   schematic and restores street imagery when Max returns to the foreground.
+   Android still stops sharing when backgrounded.
    On Wi-Fi loss, reconnect explicitly using the new code. Casting does not
-   resume automatically after backgrounding, reconnection or a board restart.
+   resume automatically after a network disconnection, force-quit or board restart.
 
 The phone still needs its existing relay/internet access to request routes.
 The phone-to-HUD transfer itself stays on the local network. RDK-hosted access
 point mode, BLE, automatic address discovery, optical mirroring and locked-screen
-casting are not implemented by this change.
+casting on Android are not implemented by this change.
 
 ## Connection and freshness behavior
 
@@ -124,7 +128,7 @@ releases the display.
 Optional iOS map sharing sends `{"type":"hud.map","sequence":1,"jpeg":"<base64 JPEG>"}`
 after the first guidance frame. It has an independent increasing sequence and
 `hud.map.ack` response. JPEG payloads are limited to 180,000 decoded bytes; the
-phone captures only the consented native map view, not other app content. One
+phone captures only the consented dedicated HUD map view, not other app content. One
 snapshot is in flight at a time. The local-only `/cast/map` endpoint serves the
 latest image; `/cast/state` advertises `mapSequence` while it is recent. Images
 are memory-only, cleared on disconnect and unavailable when guidance is stale.
@@ -133,6 +137,12 @@ capture requires a real iOS device; simulator tests cover heading math, route
 movement and transport behavior, not native map capture or sensor performance.
 
 ## Acceptance record
+
+The independent 800×600 HUD renderer was tested on the connected iPhone on
+2026-09-18. A real SDK snapshot was captured and inspected for route, rider marker,
+fixed 4:3 aspect ratio and AMap attribution. Simulator checks cover navigation-scoped
+background location start/stop. Sustained background transport and lock-screen
+endurance still require a live navigation trial on the phone.
 
 Automated checks cover wire validation, pairing, ownership, stale state,
 rerouting, disconnect cleanup, sender payloads and existing HUD access controls.
@@ -187,7 +197,8 @@ stayed marked stale, and explicit stop released the display. The revised signed
 iOS app was installed and launched on the connected iPhone. Three iOS casting
 tests, the Android unit suite/debug build, and receiver regression tests passed.
 The iOS screen-awake policy now includes active casting as well as hands-free.
-Manual locking/backgrounding still stops this foreground prototype.
+iOS background navigation now keeps the transport active; map-image capture is
+foreground-only. Physical lock/background endurance must be verified on device.
 
 ### Detailed route display
 

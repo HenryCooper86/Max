@@ -3,21 +3,52 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { networkInterfaces } from "node:os";
 import { WebSocketServer, type WebSocket } from "ws";
+import { createBasemap } from "./basemap";
 import { parseCastFrame, type CastFrame } from "./protocol";
 
 export const CAST_STALE_MS = 8_000;
 const CODE_TTL = 5 * 60_000;
 
 /** A separate, opt-in LAN sender. No relay credentials, transcripts or bench token. */
-export function createCastReceiver(page: string, now = Date.now) {
+export function createCastReceiver(page: string, now = Date.now, mapKey = process.env.AMAP_API_KEY?.trim() ?? "") {
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
   let owner: WebSocket | undefined;
   let frame: CastFrame | null = null;
+  let heading: number | null = null;
   let mapImage: Buffer | null = null;
   let mapSequence = 0;
   let mapReceivedAt = 0;
   let receivedAt = 0;
   let lastActivityAt = 0;
+  const displays = new Set<ServerResponse>();
+  const basemap = createBasemap(mapKey, broadcast, fetch, now);
+  function state(port?: number) {
+    return {
+      code: owner ? null : code,
+      expiresAt,
+      addresses: Object.values(networkInterfaces())
+        .flatMap((entries) => entries ?? [])
+        .filter((entry) => entry.family === "IPv4" && !entry.internal)
+        .map((entry) => entry.address),
+      port,
+      connected: !!owner,
+      stale: !frame || now() - receivedAt > CAST_STALE_MS,
+      frame,
+      mapSequence: mapImage && now() - mapReceivedAt <= 5_000 ? mapSequence : null,
+      heading,
+      basemap: basemap.current
+    };
+  }
+  function broadcast() {
+    for (const display of displays) {
+      if (display.writableLength > 256 * 1024) {
+        display.destroy();
+        displays.delete(display);
+        continue;
+      }
+      display.write(`data: ${JSON.stringify(state(display.socket?.localPort))}\n\n`);
+    }
+  }
   let code = "";
   let expiresAt = 0;
   let attempts = 0;
@@ -31,6 +62,8 @@ export function createCastReceiver(page: string, now = Date.now) {
     if (owner !== socket) return;
     owner = undefined;
     frame = null;
+    heading = null;
+    basemap.reset();
     mapImage = null;
     mapSequence = 0;
     mapReceivedAt = 0;
@@ -68,7 +101,7 @@ export function createCastReceiver(page: string, now = Date.now) {
           lastActivityAt = now();
           clearTimeout(timeout);
           code = ""; // one use; displayed again only after disconnect
-          socket.send(JSON.stringify({ type: "hud.ready" }));
+          socket.send(JSON.stringify({ type: "hud.ready", ...(basemap.current ? { mapMode: "streets" } : {}) }));
           return;
         }
         if (value?.type === "hud.stop") {
@@ -79,6 +112,20 @@ export function createCastReceiver(page: string, now = Date.now) {
         if (value?.type === "hud.ping" && Object.keys(value).length === 1) {
           lastActivityAt = now();
           socket.send(JSON.stringify({ type: "hud.pong" }));
+          return;
+        }
+        if (value?.type === "hud.heading") {
+          if (
+            typeof value.heading !== "number" ||
+            !Number.isFinite(value.heading) ||
+            value.heading < 0 ||
+            value.heading >= 360
+          )
+            throw new Error("Invalid heading");
+          heading = value.heading;
+          lastActivityAt = now();
+          socket.send(JSON.stringify({ type: "hud.heading.ack" }));
+          broadcast();
           return;
         }
         if (value?.type === "hud.map") {
@@ -112,9 +159,11 @@ export function createCastReceiver(page: string, now = Date.now) {
         if (next.sequence <= sequence) throw new Error("Old sequence");
         sequence = next.sequence;
         frame = next;
+        void basemap.update(next.position);
         receivedAt = now();
         lastActivityAt = receivedAt;
-        socket.send(JSON.stringify({ type: "hud.ack", sequence }));
+        socket.send(JSON.stringify({ type: "hud.ack", sequence, ...(basemap.current ? { mapMode: "streets" } : {}) }));
+        broadcast();
       } catch {
         release(socket);
         socket.close(1008, "Invalid or unauthorized HUD message");
@@ -122,6 +171,8 @@ export function createCastReceiver(page: string, now = Date.now) {
     });
   });
   const watchdog = setInterval(() => {
+    if (owner && frame) void basemap.update(frame.position);
+    broadcast();
     if (owner && now() - lastActivityAt > 30_000) {
       const socket = owner;
       release(socket);
@@ -140,13 +191,38 @@ export function createCastReceiver(page: string, now = Date.now) {
   }
   return {
     handle(request: IncomingMessage, response: ServerResponse): boolean {
-      const path = (request.url ?? "").split("?")[0];
-      if (path !== "/cast" && path !== "/cast/state" && path !== "/cast/map") return false;
+      const path = (request.url ?? "").split("?")[0] ?? "";
+      if (!["/cast", "/cast/state", "/cast/map", "/cast/basemap", "/cast/events"].includes(path)) return false;
       response.setHeader("Cache-Control", "no-store");
       response.setHeader("X-Content-Type-Options", "nosniff");
       if (request.method !== "GET" || !localDisplay(request)) {
         response.writeHead(403);
         response.end("Open HUD on the RDK at http://127.0.0.1:8080/cast");
+        return true;
+      }
+      if (path === "/cast/events") {
+        if (displays.size >= 4) {
+          response.writeHead(429);
+          response.end();
+          return true;
+        }
+        response.writeHead(200, { "Content-Type": "text/event-stream", Connection: "keep-alive" });
+        response.flushHeaders();
+        displays.add(response);
+        request.on("close", () => displays.delete(response));
+        broadcast();
+        return true;
+      }
+      if (path === "/cast/basemap") {
+        const id = Number(new URL(request.url!, "http://localhost").searchParams.get("v"));
+        const image = owner ? basemap.image(id) : undefined;
+        if (!image) {
+          response.writeHead(404);
+          response.end();
+          return true;
+        }
+        response.writeHead(200, { "Content-Type": image.type });
+        response.end(image.bytes);
         return true;
       }
       if (path === "/cast/map") {
@@ -168,23 +244,8 @@ export function createCastReceiver(page: string, now = Date.now) {
         response.end(page);
       } else {
         if (!owner && now() >= expiresAt) rotateCode();
-        const addresses = Object.values(networkInterfaces())
-          .flatMap((entries) => entries ?? [])
-          .filter((entry) => entry.family === "IPv4" && !entry.internal)
-          .map((entry) => entry.address);
         response.writeHead(200, { "Content-Type": "application/json" });
-        response.end(
-          JSON.stringify({
-            code: owner ? null : code,
-            expiresAt,
-            addresses,
-            port: request.socket.localPort,
-            connected: !!owner,
-            stale: !frame || now() - receivedAt > CAST_STALE_MS,
-            frame,
-            mapSequence: mapImage && now() - mapReceivedAt <= 5_000 ? mapSequence : null
-          })
-        );
+        response.end(JSON.stringify(state(request.socket.localPort)));
       }
       return true;
     },
@@ -200,6 +261,9 @@ export function createCastReceiver(page: string, now = Date.now) {
     },
     close() {
       clearInterval(watchdog);
+      basemap.reset();
+      for (const display of displays) display.end();
+      displays.clear();
       for (const socket of sockets.clients) socket.terminate();
       sockets.close();
     }

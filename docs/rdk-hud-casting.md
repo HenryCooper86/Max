@@ -1,11 +1,20 @@
 # Phone navigation on the RDK display
 
-The Wi-Fi bench prototype sends the **phone's active navigation state** to a
-fullscreen HUD on the RDK. Both iOS and Android send navigation state using the
-same local protocol. iOS additionally shares snapshots of a dedicated 800×600 AMap view,
-including real streets, labels, route and provider attribution. Android and older
-iOS senders retain the route schematic. The phone owns routing and guidance;
-there is no second routing engine or new map-provider credential.
+The Wi-Fi bench prototype sends the phone's active navigation state to the RDK.
+With `AMAP_API_KEY` configured on the RDK, the receiver loads AMap street imagery
+and draws the route, position and compass direction independently. Detailed maps
+therefore continue while iOS is minimized. Position updates use a local SSE stream
+instead of waiting for screenshot capture or the polling fallback. The phone
+still owns GPS, routing, maneuver timing and navigation audio.
+
+The server-only Web Service key is reused from the project's existing AMap setup.
+On the test board it is in `/etc/max/hud-map.env` (0600), loaded by a systemd
+`max-agent` drop-in. It is never served to the browser or committed. Street imagery
+requires RDK internet access. Images remain in memory, recenter after approximately
+90 horizontal or 70 vertical pixels of travel, and refresh at most once every
+three seconds. The rider marker updates independently on each received GPS fix.
+During a provider outage, the last geographic image remains visible; if no image
+has loaded, native iOS images or the route schematic remain the fallback.
 
 This is separate from **Helmet Ride**, which forwards phone GPS through the
 relay for RDK-owned navigation. Do not start a second RDK navigation session
@@ -34,23 +43,17 @@ while testing phone casting: the phone remains the navigation/audio owner.
    Network access when asked. The code is for this HUD connection, not the
    relay's Helmet Ride pairing code.
 6. Verify that destination, route shape, current location, next instruction,
-   distance and remaining ETA agree with the phone. On iOS, keep the navigation
-   map enabled: a dedicated HUD map follows the rider once per second. Phone
-   layout, pan and zoom do not change the HUD camera or image size. Valid compass
-   readings rotate the dedicated HUD map while sharing. In follow mode,
-   the rider stays centered while surrounding streets move with GPS updates.
-   Without a recent native image, the map falls back to a north-up route
-   schematic without streets/tiles. It follows the rider by default; **全程**
-   switches to the entire route and **跟随** returns to the rider. Numbered
-   markers show the next three maneuvers, with the following two instructions
-   in the side panel. A metric scale and remaining distance/time accompany the
-   estimated arrival clock. Street names come from the phone’s route instructions. Routes longer than 2,048 vertices are
-   sampled evenly for display, preserving the first and last points; the
-   phone's actual navigation geometry is unchanged.
+   distance and remaining ETA agree with the phone. The detailed RDK map is north-up,
+   with a compass direction arrow around the rider. Phone layout and zoom do not
+   affect it. iOS coordinates are converted from WGS-84 to GCJ-02 at the cast
+   boundary; Android already uses GCJ-02. Street imagery does not contain a baked-in
+   rider, so fresh positions can be drawn immediately. Native screenshot sharing is
+   skipped only after a successful receiver map load is advertised with
+   `mapMode: "streets"` on an acknowledgment.
 7. Tap **停止投屏** or end navigation to stop. iOS keeps sending navigation
    and heartbeats when minimized, using background location during navigation.
-   Native map rendering pauses in the background; the HUD uses its live route
-   schematic and restores street imagery when Max returns to the foreground.
+   Native iOS rendering pauses in the background, but the RDK street map and
+   live position updates continue independently.
    Android still stops sharing when backgrounded.
    On Wi-Fi loss, reconnect explicitly using the new code. Casting does not
    resume automatically after a network disconnection, force-quit or board restart.
@@ -75,9 +78,9 @@ casting on Android are not implemented by this change.
   marker to an amber outline labeled **上次位置**, and replaces the active maneuver with a request to check the phone.
   The phone reports timeout after twelve seconds without a receiver reply or
   an outstanding frame acknowledgment.
-  Native map snapshots have independent acknowledgments and never refresh GPS
-  freshness. After five seconds without an image, or when GPS is stale, the
-  display falls back to the schematic. iOS disables automatic location pauses
+  Legacy native map snapshots have independent acknowledgments and expire after
+  five seconds. RDK-loaded street imagery stays visible; stale GPS still changes
+  the position marker to last-known and suppresses live maneuver instructions. iOS disables automatic location pauses
   while navigating; this does not improve the accuracy of a weak GPS fix.
   The receiver releases a sender after thirty seconds without frames, maps or heartbeats. A clean stop
   or socket disconnect clears the route immediately.
@@ -136,7 +139,24 @@ The whole snapshot is fitted without cropping provider attribution. Native map
 capture requires a real iOS device; simulator tests cover heading math, route
 movement and transport behavior, not native map capture or sensor performance.
 
+The receiver advertises `mapMode: "streets"` on `hud.ack` after imagery has
+loaded successfully (or `hud.ready` if already available). iOS then
+sends small `hud.heading` messages (`heading` in degrees [0,360)), acknowledged by
+`hud.heading.ack`, instead of map JPEGs. Neither compass nor basemap updates refresh
+GPS freshness. `/cast/events` pushes state to local displays immediately, while
+polling remains a recovery fallback. `/cast/basemap?v=<sequence>` serves the
+matching image for the metadata in `state.basemap`. Both endpoints are loopback-only.
+
 ## Acceptance record
+
+2026-09-18 independent street-map update: local browser rendering and all 1,699
+repository tests pass. An RDK loopback test measured 63 ms from sending a fixture
+position to receiving the SSE update; this excludes phone GPS acquisition and
+is not an end-to-end latency guarantee. Direct AMap static-map requests succeed
+from the development machine but fail with `INVALID_USER_IP` (10005) from both
+RDK and the deployed relay. The provider IP allowlist must be updated before
+street imagery can load on the RDK. Until then, foreground native snapshots and
+background schematic guidance remain available. No relay code was changed.
 
 The independent 800×600 HUD renderer was tested on the connected iPhone on
 2026-09-18. A real SDK snapshot was captured and inspected for route, rider marker,

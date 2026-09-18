@@ -10,6 +10,8 @@ final class HUDMapSource: NSObject, CLLocationManagerDelegate {
     private let compass = CLLocationManager()
     private var heading: Double?
     private var active = false
+    private var rendersMap = true
+    var onHeading: ((Double) -> Void)?
     static let viewport = CGSize(width: 800, height: 600)
     private var guidance: GuidanceState?
     private var foreground = true
@@ -32,7 +34,7 @@ final class HUDMapSource: NSObject, CLLocationManagerDelegate {
     }
 
     private func render() {
-        guard active, foreground, UIApplication.shared.applicationState == .active,
+        guard active, rendersMap, foreground, UIApplication.shared.applicationState == .active,
               let guidance, let model = AMapRouteDisplayModel.make(guidance: guidance, followsRider: true) else { return }
         #if !targetEnvironment(simulator)
         guard let consent = AMapAcceptedConsent(decision: AMapConsentStore().decision),
@@ -72,7 +74,8 @@ final class HUDMapSource: NSObject, CLLocationManagerDelegate {
         compass.headingFilter = 3
     }
 
-    func start() {
+    func start(renderMap: Bool = true) {
+        rendersMap = renderMap
         active = true
         foreground = UIApplication.shared.applicationState == .active
         render()
@@ -105,6 +108,7 @@ final class HUDMapSource: NSObject, CLLocationManagerDelegate {
             guard let self, self.active else { return }
             let filtered = Self.filteredHeading(previous: self.heading, next: degrees)
             self.heading = filtered
+            self.onHeading?(filtered)
             #if !targetEnvironment(simulator)
             if self.foreground, UIApplication.shared.applicationState == .active, let map = self.map {
                 map.setRotationDegree(CGFloat(filtered), animated: true, duration: 0.2)

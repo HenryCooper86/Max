@@ -210,6 +210,8 @@
       text-align: center;
       font-size: 14px;
       color: #bacbd2;
+      background: #17232ae6;
+      border-radius: 8px;
     }
     .compass b {
       display: block;
@@ -221,6 +223,13 @@
       padding: 0 4px 3px;
       white-space: nowrap;
       text-align: center;
+    }
+    .street-map .map-bottom {
+      bottom: 42px;
+    }
+    .street-map #scale {
+      background: #17232ae6;
+      border-radius: 4px;
     }
     #map-note {
       font-size: 13px;
@@ -334,6 +343,36 @@
     };
     let following = true;
     let latestState;
+    let loadedBasemap = null;
+    let requestedBasemap = null;
+    function loadBasemap(state) {
+      if (!state.connected) {
+        loadedBasemap = null;
+        requestedBasemap = null;
+        return;
+      }
+      if (!state.basemap || requestedBasemap === state.basemap.sequence) return;
+      const metadata = state.basemap;
+      requestedBasemap = metadata.sequence;
+      const image = new Image();
+      image.onload = () => {
+        if (requestedBasemap !== metadata.sequence || !latestState?.connected) return;
+        loadedBasemap = metadata;
+        render(latestState);
+      };
+      image.onerror = () => {
+        if (requestedBasemap === metadata.sequence) requestedBasemap = null;
+      };
+      image.src = `/cast/basemap?v=${metadata.sequence}`;
+    }
+    function worldPixel(point, zoom) {
+      const size = 256 * 2 ** zoom;
+      const latitude = (Math.max(-85, Math.min(85, point.lat)) * Math.PI) / 180;
+      return [
+        ((point.lon + 180) / 360) * size,
+        ((1 - Math.log(Math.tan(latitude) + 1 / Math.cos(latitude)) / Math.PI) / 2) * size
+      ];
+    }
     let mapImageSequence = null;
     let mapImageLoaded = false;
     el("phone-map").onload = () => {
@@ -355,6 +394,17 @@
     // Local metric projection: the phone has already converted coordinates to GCJ-02.
     // Follow mode shows a fixed neighborhood; overview includes the whole route.
     function cameraFor(frame, follow) {
+      if (loadedBasemap) {
+        const center = worldPixel(loadedBasemap.center, loadedBasemap.zoom);
+        return {
+          scale:
+            (256 * 2 ** loadedBasemap.zoom) / (40075016.686 * Math.cos((loadedBasemap.center.lat * Math.PI) / 180)),
+          project(p) {
+            const pixel = worldPixel(p, loadedBasemap.zoom);
+            return [300 + pixel[0] - center[0], 240 + pixel[1] - center[1]];
+          }
+        };
+      }
       const origin = frame.position || frame.polyline[0];
       const factor = Math.max(0.01, Math.cos((origin.lat * Math.PI) / 180));
       const meters = (p) => ({ x: (p.lon - origin.lon) * 111320 * factor, y: (origin.lat - p.lat) * 111320 });
@@ -388,7 +438,10 @@
       const visible = ([x, y]) => x >= 45 && x <= 555 && y >= 70 && y <= 410;
       // Draw only the road geometry supplied by the phone. A quiet map canvas and
       // road casing replace the coordinate grid without inventing nearby streets.
-      let drawing = `<rect width="600" height="480" fill="#202722"/><g fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="${line}" stroke="#101712" stroke-width="42"/><polyline points="${line}" stroke="#627067" stroke-width="36"/><polyline points="${line}" stroke="#37453c" stroke-width="32"/><polyline points="${line}" stroke="#1b3021" stroke-width="12"/><polyline points="${line}" stroke="#caff75" stroke-width="7"/></g>`;
+      const background = loadedBasemap
+        ? `<image href="/cast/basemap?v=${loadedBasemap.sequence}" width="600" height="480"/>`
+        : "";
+      let drawing = `<rect width="600" height="480" fill="#202722"/>${background}<g fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="${line}" stroke="#101712" stroke-width="${loadedBasemap ? 15 : 42}"/><polyline points="${line}" stroke="#627067" stroke-width="${loadedBasemap ? 13 : 36}"/><polyline points="${line}" stroke="#37453c" stroke-width="${loadedBasemap ? 11 : 32}"/><polyline points="${line}" stroke="#1b3021" stroke-width="${loadedBasemap ? 8 : 12}"/><polyline points="${line}" stroke="#caff75" stroke-width="${loadedBasemap ? 5 : 7}"/></g>`;
       for (const [index, turn] of (frame.turns || []).entries()) {
         const [x, y] = camera.project(turn);
         if (!visible([x, y])) continue;
@@ -399,6 +452,9 @@
         drawing += `<circle cx="${end[0]}" cy="${end[1]}" r="8" fill="#fff"/><text x="${end[0]}" y="${end[1] - 20}" text-anchor="middle" font-size="16" fill="#fff">终点</text>`;
       if (frame.position) {
         const [x, y] = camera.project(frame.position);
+        if (loadedBasemap && !stale && Number.isFinite(latestState?.heading)) {
+          drawing += `<path d="M 0 -34 L -10 -17 L 10 -17 Z" transform="translate(${x} ${y}) rotate(${latestState.heading})" fill="#63d8ff" stroke="#0d171d" stroke-width="2"/>`;
+        }
         // An outlined amber marker is explicitly last-known, never live GPS.
         drawing += `<circle cx="${x}" cy="${y}" r="20" fill="#0d171d"/><circle cx="${x}" cy="${y}" r="12" fill="${stale ? "#0d171d" : "#63d8ff"}" stroke="${stale ? "#ffbe69" : "#e7faff"}" stroke-width="3"/><text x="${x}" y="${y + 40}" text-anchor="middle" font-size="15" fill="${stale ? "#ffbe69" : "#bacbd2"}">${stale ? "上次位置" : "当前位置"}</text>`;
       }
@@ -417,7 +473,9 @@
     }
     function render(state) {
       latestState = state;
-      const hasPhoneMap = !!state.frame && !state.stale && !!state.mapSequence;
+      loadBasemap(state);
+      document.body.classList.toggle("street-map", !!loadedBasemap);
+      const hasPhoneMap = !!state.frame && !state.stale && !!state.mapSequence && !loadedBasemap;
       if (hasPhoneMap && mapImageSequence !== state.mapSequence) {
         mapImageSequence = state.mapSequence;
         el("phone-map").src = `/cast/map?v=${state.mapSequence}`;
@@ -429,7 +487,7 @@
       const showPhoneMap = hasPhoneMap && mapImageLoaded;
       el("phone-map").hidden = !showPhoneMap;
       el("map").hidden = showPhoneMap;
-      el("camera").hidden = showPhoneMap;
+      el("camera").hidden = showPhoneMap || !!loadedBasemap;
       el("compass").hidden = showPhoneMap;
       el("scale").hidden = showPhoneMap;
       const frame = state.frame;
@@ -488,6 +546,7 @@
       }
       drawMap(frame, state.stale);
       if (showPhoneMap) el("map-note").textContent = "HUD 独立地图 · 跟随位置";
+      if (loadedBasemap) el("map-note").textContent = state.stale ? "街道地图 · 等待位置更新" : "实时街道 · 北向上";
     }
     window.addEventListener("resize", () => {
       if (latestState) render(latestState);
@@ -505,6 +564,16 @@
         el("join").hidden = true;
       }
       setTimeout(poll, 500);
+    }
+    if (typeof EventSource !== "undefined") {
+      const events = new EventSource("/cast/events");
+      events.onmessage = (event) => {
+        try {
+          render(JSON.parse(event.data));
+        } catch {
+          /* polling retries */
+        }
+      };
     }
     poll();
   </script>

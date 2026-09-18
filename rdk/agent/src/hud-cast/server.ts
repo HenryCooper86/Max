@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { networkInterfaces } from "node:os";
 import { WebSocketServer, type WebSocket } from "ws";
+import { createHudWeather } from "./weather";
 import { createBasemap } from "./basemap";
 import { parseCastFrame, type CastFrame } from "./protocol";
 
@@ -21,6 +22,7 @@ export function createCastReceiver(page: string, now = Date.now, mapKey = proces
   let receivedAt = 0;
   let lastActivityAt = 0;
   const displays = new Set<ServerResponse>();
+  const weather = createHudWeather(mapKey, broadcast, fetch, now);
   const basemap = createBasemap(mapKey, broadcast, fetch, now);
   function state(port?: number) {
     return {
@@ -36,6 +38,8 @@ export function createCastReceiver(page: string, now = Date.now, mapKey = proces
       frame,
       mapSequence: mapImage && now() - mapReceivedAt <= 5_000 ? mapSequence : null,
       heading,
+      weather: weather.current,
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       basemap: basemap.current
     };
   }
@@ -69,6 +73,7 @@ export function createCastReceiver(page: string, now = Date.now, mapKey = proces
     mapReceivedAt = 0;
     receivedAt = 0;
     rotateCode();
+    broadcast();
   }
   sockets.on("connection", (socket) => {
     const timeout = setTimeout(() => socket.terminate(), 5_000);
@@ -171,6 +176,7 @@ export function createCastReceiver(page: string, now = Date.now, mapKey = proces
     });
   });
   const watchdog = setInterval(() => {
+    void weather.update(frame?.position ?? null);
     if (owner && frame) void basemap.update(frame.position);
     broadcast();
     if (owner && now() - lastActivityAt > 30_000) {
@@ -262,6 +268,7 @@ export function createCastReceiver(page: string, now = Date.now, mapKey = proces
     close() {
       clearInterval(watchdog);
       basemap.reset();
+      weather.close();
       for (const display of displays) display.end();
       displays.clear();
       for (const socket of sockets.clients) socket.terminate();

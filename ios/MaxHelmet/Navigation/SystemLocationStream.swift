@@ -19,6 +19,7 @@ final class SystemLocationStream: NSObject, LocationStreaming, CLLocationManager
         manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
         manager.activityType = .automotiveNavigation
         manager.distanceFilter = kCLDistanceFilterNone
+        manager.pausesLocationUpdatesAutomatically = false
     }
 
     func authorization() -> LocationAuthorization {

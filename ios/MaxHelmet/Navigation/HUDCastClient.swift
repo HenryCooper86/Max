@@ -16,6 +16,9 @@ final class HUDCastClient: ObservableObject {
     private var lastReply = Date.distantPast
     private var lastPing = Date.distantPast
     private var frameSentAt = Date.distantPast
+    private var mapSequence = 0
+    private var mapBusy = false
+    private var mapSentAt = Date.distantPast
     private var sequence = 0
     private var awaitingAck = false
     private var ready = false
@@ -90,11 +93,14 @@ final class HUDCastClient: ObservableObject {
                     self.lastReply = Date()
                     if reply["type"] as? String == "hud.ready" {
                         self.ready = true
+                        HUDMapSource.shared.start()
                         self.status = "已连接 · 正在发送导航"
                     } else if reply["type"] as? String == "hud.ack",
                               reply["sequence"] as? Int == self.sequence {
                         self.awaitingAck = false
                         self.status = "正在投屏到 HUD"
+                    } else if reply["type"] as? String == "hud.map.ack", reply["sequence"] as? Int == self.mapSequence {
+                        self.mapBusy = false
                     } else if reply["type"] as? String == "hud.pong" {
                         // Transport liveness only; never make old guidance fresh.
                     } else { self.fail("HUD 响应无效"); return }
@@ -110,9 +116,11 @@ final class HUDCastClient: ObservableObject {
                 try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled, let self, self.socket === task else { return }
                 if Date().timeIntervalSince(self.lastReply) > 12 ||
-                    (self.awaitingAck && Date().timeIntervalSince(self.frameSentAt) > 12) {
+                    (self.awaitingAck && Date().timeIntervalSince(self.frameSentAt) > 12) ||
+                    (self.mapBusy && Date().timeIntervalSince(self.mapSentAt) > 12) {
                     self.fail("HUD 连接超时，请重新连接"); return
                 }
+                self.sendMap()
                 if self.ready && Date().timeIntervalSince(self.lastPing) >= 4 {
                     self.lastPing = Date()
                     do { try await task.send(.string(#"{"type":"hud.ping"}"#)) }
@@ -126,11 +134,33 @@ final class HUDCastClient: ObservableObject {
     }
 
     func stop() {
+        HUDMapSource.shared.stop()
+        mapBusy = false; mapSequence = 0
         receiver?.cancel(); receiver = nil
         watchdog?.cancel(); watchdog = nil
         socket?.cancel(with: .normalClosure, reason: nil); socket = nil
         active = false; ready = false; awaitingAck = false; pending = false; sequence = 0
         status = "未投屏"
+    }
+
+    private func sendMap() {
+        guard ready, !mapBusy, let socket, Date().timeIntervalSince(latestAt) < 8 else { return }
+        mapBusy = true
+        mapSentAt = Date()
+        HUDMapSource.shared.snapshot { [weak self, weak socket] data in
+            Task { @MainActor in
+                guard let self, let socket, self.socket === socket else { return }
+                guard let data, Date().timeIntervalSince(self.latestAt) < 8 else { self.mapBusy = false; return }
+                self.mapSequence += 1
+                let value: [String: Any] = ["type": "hud.map", "sequence": self.mapSequence, "jpeg": data.base64EncodedString()]
+                do {
+                    let json = try JSONSerialization.data(withJSONObject: value)
+                    try await socket.send(.string(String(decoding: json, as: UTF8.self)))
+                } catch {
+                    if self.socket === socket { self.fail("地图投屏已断开，请重新连接") }
+                }
+            }
+        }
     }
 
     private func fail(_ message: String) { stop(); status = message }

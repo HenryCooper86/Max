@@ -1,10 +1,11 @@
 # Phone navigation on the RDK display
 
 The Wi-Fi bench prototype sends the **phone's active navigation state** to a
-fullscreen route schematic on the RDK. Both iOS and Android use the same local
-protocol. The phone owns routing, rerouting, location conversion and guidance;
-the receiver only renders. There is no screen recording, map tile transfer,
-second routing engine, or new map-provider credential.
+fullscreen HUD on the RDK. Both iOS and Android send navigation state using the
+same local protocol. iOS additionally shares snapshots of its existing AMap view,
+including real streets, labels, route and provider attribution. Android and older
+iOS senders retain the route schematic. The phone owns routing and guidance;
+there is no second routing engine or new map-provider credential.
 
 This is separate from **Helmet Ride**, which forwards phone GPS through the
 relay for RDK-owned navigation. Do not start a second RDK navigation session
@@ -33,7 +34,12 @@ while testing phone casting: the phone remains the navigation/audio owner.
    Network access when asked. The code is for this HUD connection, not the
    relay's Helmet Ride pairing code.
 6. Verify that destination, route shape, current location, next instruction,
-   distance and remaining ETA agree with the phone. The map is a north-up route
+   distance and remaining ETA agree with the phone. On iOS, keep the navigation
+   map visible and enabled: the HUD mirrors that map once per second. Pan, zoom
+   and select follow/overview on the phone. Valid compass readings rotate the
+   phone map while sharing; stopping sharing restores north-up. In follow mode,
+   the rider stays centered while surrounding streets move with GPS updates.
+   Without a recent native image, the map falls back to a north-up route
    schematic without streets/tiles. It follows the rider by default; **全程**
    switches to the entire route and **跟随** returns to the rider. Numbered
    markers show the next three maneuvers, with the following two instructions
@@ -65,7 +71,11 @@ casting are not implemented by this change.
   marker to an amber outline labeled **上次位置**, and replaces the active maneuver with a request to check the phone.
   The phone reports timeout after twelve seconds without a receiver reply or
   an outstanding frame acknowledgment.
-  The receiver releases a sender after thirty seconds without frames or heartbeats. A clean stop
+  Native map snapshots have independent acknowledgments and never refresh GPS
+  freshness. After five seconds without an image, or when GPS is stale, the
+  display falls back to the schematic. iOS disables automatic location pauses
+  while navigating; this does not improve the accuracy of a weak GPS fix.
+  The receiver releases a sender after thirty seconds without frames, maps or heartbeats. A clean stop
   or socket disconnect clears the route immediately.
 - The code, route and rider position live only in memory. The display endpoint
   is loopback-only, denies foreign Host headers, and uses `Cache-Control: no-store`.
@@ -110,6 +120,17 @@ Invalid, oversized, non-finite or out-of-order frames terminate the connection.
 `{"type":"hud.ping"}` returns `{"type":"hud.pong"}` for connection health only;
 it does not reset guidance freshness. `{"type":"hud.stop"}` or closing the socket
 releases the display.
+
+Optional iOS map sharing sends `{"type":"hud.map","sequence":1,"jpeg":"<base64 JPEG>"}`
+after the first guidance frame. It has an independent increasing sequence and
+`hud.map.ack` response. JPEG payloads are limited to 180,000 decoded bytes; the
+phone captures only the consented native map view, not other app content. One
+snapshot is in flight at a time. The local-only `/cast/map` endpoint serves the
+latest image; `/cast/state` advertises `mapSequence` while it is recent. Images
+are memory-only, cleared on disconnect and unavailable when guidance is stale.
+The whole snapshot is fitted without cropping provider attribution. Native map
+capture requires a real iOS device; simulator tests cover heading math, route
+movement and transport behavior, not native map capture or sensor performance.
 
 ## Acceptance record
 

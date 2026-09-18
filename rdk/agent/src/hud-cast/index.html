@@ -178,6 +178,12 @@
       height: 100%;
       display: block;
     }
+    #phone-map {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
     .map-top,
     .map-bottom {
       position: absolute;
@@ -307,9 +313,10 @@
       </div>
     </section>
     <section id="map-panel" hidden>
+      <img id="phone-map" alt="手机实时高德地图" hidden />
       <svg id="map" viewBox="0 0 600 480" role="img" aria-label="导航路线示意图"></svg>
       <div class="map-top">
-        <span class="compass"><b>▲</b>N</span><button id="camera" aria-pressed="true">全程</button>
+        <span class="compass" id="compass"><b>▲</b>N</span><button id="camera" aria-pressed="true">全程</button>
       </div>
       <div class="map-bottom"><span id="scale"></span><span id="map-note">路线示意 · 北向上</span></div>
     </section>
@@ -327,6 +334,16 @@
     };
     let following = true;
     let latestState;
+    let mapImageSequence = null;
+    let mapImageLoaded = false;
+    el("phone-map").onload = () => {
+      mapImageLoaded = true;
+      if (latestState) render(latestState);
+    };
+    el("phone-map").onerror = () => {
+      mapImageLoaded = false;
+      if (latestState) render(latestState);
+    };
     let arrivalAt = null;
     let lastArrivalSequence = null;
     el("fullscreen").onclick = () => document.documentElement.requestFullscreen?.().catch(() => {});
@@ -400,6 +417,21 @@
     }
     function render(state) {
       latestState = state;
+      const hasPhoneMap = !!state.frame && !state.stale && !!state.mapSequence;
+      if (hasPhoneMap && mapImageSequence !== state.mapSequence) {
+        mapImageSequence = state.mapSequence;
+        el("phone-map").src = `/cast/map?v=${state.mapSequence}`;
+      }
+      if (!hasPhoneMap) {
+        mapImageLoaded = false;
+        mapImageSequence = null;
+      }
+      const showPhoneMap = hasPhoneMap && mapImageLoaded;
+      el("phone-map").hidden = !showPhoneMap;
+      el("map").hidden = showPhoneMap;
+      el("camera").hidden = showPhoneMap;
+      el("compass").hidden = showPhoneMap;
+      el("scale").hidden = showPhoneMap;
       const frame = state.frame;
       el("join").hidden = !!frame;
       el("guidance").hidden = !frame;
@@ -455,9 +487,10 @@
         el("upcoming").append(item);
       }
       drawMap(frame, state.stale);
+      if (showPhoneMap) el("map-note").textContent = "手机实时地图 · 在手机上调整视角";
     }
     window.addEventListener("resize", () => {
-      if (latestState?.frame) drawMap(latestState.frame, latestState.stale);
+      if (latestState) render(latestState);
     });
     async function poll() {
       try {

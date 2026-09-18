@@ -88,6 +88,51 @@ describe("local phone HUD sharing", () => {
     expect((await h.state()).code).toMatch(/^\d{6}$/);
   });
 
+  it("serves paired map images locally without making stale GPS fresh, and clears them on disconnect", async () => {
+    const h = await harness();
+    const socket = await h.connect();
+    await h.send(socket, { type: "hud.join", code: (await h.state()).code });
+    await h.send(socket, frame);
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+    expect(await h.send(socket, { type: "hud.map", sequence: 1, jpeg: jpeg.toString("base64") })).toEqual({
+      type: "hud.map.ack",
+      sequence: 1
+    });
+    const response = await fetch(`${h.url}/cast/map`);
+    expect(response.headers.get("content-type")).toBe("image/jpeg");
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(jpeg);
+    expect((await h.state()).mapSequence).toBe(1);
+    const status = await new Promise<number | undefined>((resolve, reject) => {
+      get(`${h.url}/cast/map`, { headers: { Host: "evil.example" } }, (res) => {
+        res.resume();
+        resolve(res.statusCode);
+      }).on("error", reject);
+    });
+    expect(status).toBe(403);
+    h.advance(CAST_STALE_MS + 1);
+    await h.send(socket, { type: "hud.map", sequence: 2, jpeg: jpeg.toString("base64") });
+    expect((await h.state()).stale).toBe(true);
+    expect((await fetch(`${h.url}/cast/map`)).status).toBe(404);
+    await h.send(socket, { ...frame, sequence: 2 });
+    h.advance(5_001);
+    expect((await h.state()).mapSequence).toBeNull();
+    expect((await fetch(`${h.url}/cast/map`)).status).toBe(404);
+    const closed = once(socket, "close");
+    socket.send(JSON.stringify({ type: "hud.stop" }));
+    await closed;
+    expect((await h.state()).mapSequence).toBeNull();
+  });
+
+  it("rejects non-JPEG map payloads from a paired sender", async () => {
+    const h = await harness();
+    const socket = await h.connect();
+    await h.send(socket, { type: "hud.join", code: (await h.state()).code });
+    await h.send(socket, frame);
+    const closed = once(socket, "close");
+    socket.send(JSON.stringify({ type: "hud.map", sequence: 1, jpeg: Buffer.from("<svg/>").toString("base64") }));
+    expect((await closed)[0]).toBe(1008);
+  });
+
   it("keeps an idle sender paired with heartbeats without refreshing stale guidance", async () => {
     const h = await harness();
     const socket = await h.connect();

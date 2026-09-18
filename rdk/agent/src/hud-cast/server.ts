@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { networkInterfaces } from "node:os";
 import { WebSocketServer, type WebSocket } from "ws";
+import { createHudMusic } from "./music";
 import { createHudWeather } from "./weather";
 import { createBasemap } from "./basemap";
 import { parseCastFrame, type CastFrame } from "./protocol";
@@ -11,7 +12,12 @@ export const CAST_STALE_MS = 8_000;
 const CODE_TTL = 5 * 60_000;
 
 /** A separate, opt-in LAN sender. No relay credentials, transcripts or bench token. */
-export function createCastReceiver(page: string, now = Date.now, mapKey = process.env.AMAP_API_KEY?.trim() ?? "") {
+export function createCastReceiver(
+  page: string,
+  now = Date.now,
+  mapKey = process.env.AMAP_API_KEY?.trim() ?? "",
+  musicFactory = createHudMusic
+) {
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
   let owner: WebSocket | undefined;
   let frame: CastFrame | null = null;
@@ -22,6 +28,7 @@ export function createCastReceiver(page: string, now = Date.now, mapKey = proces
   let receivedAt = 0;
   let lastActivityAt = 0;
   const displays = new Set<ServerResponse>();
+  const music = musicFactory(broadcast);
   const weather = createHudWeather(mapKey, broadcast, fetch, now);
   const basemap = createBasemap(mapKey, broadcast, fetch, now);
   function state(port?: number) {
@@ -39,6 +46,7 @@ export function createCastReceiver(page: string, now = Date.now, mapKey = proces
       mapSequence: mapImage && now() - mapReceivedAt <= 5_000 ? mapSequence : null,
       heading,
       weather: weather.current,
+      music: music.current,
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       basemap: basemap.current
     };
@@ -198,9 +206,50 @@ export function createCastReceiver(page: string, now = Date.now, mapKey = proces
   return {
     handle(request: IncomingMessage, response: ServerResponse): boolean {
       const path = (request.url ?? "").split("?")[0] ?? "";
-      if (!["/cast", "/cast/state", "/cast/map", "/cast/basemap", "/cast/events"].includes(path)) return false;
+      if (!["/cast", "/cast/state", "/cast/map", "/cast/basemap", "/cast/events", "/cast/music"].includes(path))
+        return false;
       response.setHeader("Cache-Control", "no-store");
       response.setHeader("X-Content-Type-Options", "nosniff");
+      if (path === "/cast/music") {
+        if (
+          !localDisplay(request) ||
+          request.method !== "POST" ||
+          request.headers.origin !== `http://${request.headers.host}` ||
+          request.headers["x-hud-control"] !== "1" ||
+          request.headers["content-type"] !== "application/json"
+        ) {
+          response.writeHead(403);
+          response.end();
+          return true;
+        }
+        let body = "";
+        const timeout = setTimeout(() => {
+          request.destroy();
+        }, 3000);
+        request.on("close", () => clearTimeout(timeout));
+        request.on("data", (chunk: Buffer) => {
+          body += chunk.toString();
+          if (body.length > 1024) request.destroy();
+        });
+        request.on("end", () => {
+          clearTimeout(timeout);
+          let value: { action?: unknown; playerId?: unknown };
+          try {
+            value = JSON.parse(body);
+            if (!value || typeof value !== "object") throw new Error("Invalid");
+          } catch {
+            response.writeHead(400);
+            response.end();
+            return;
+          }
+          void music.control(value.action, value.playerId).then((result) => {
+            if (response.destroyed) return;
+            response.writeHead(result.ok ? 200 : 409, { "Content-Type": "application/json" });
+            response.end(JSON.stringify(result));
+          });
+        });
+        return true;
+      }
       if (request.method !== "GET" || !localDisplay(request)) {
         response.writeHead(403);
         response.end("Open HUD on the RDK at http://127.0.0.1:8080/cast");
@@ -269,6 +318,7 @@ export function createCastReceiver(page: string, now = Date.now, mapKey = proces
       clearInterval(watchdog);
       basemap.reset();
       weather.close();
+      music.close();
       for (const display of displays) display.end();
       displays.clear();
       for (const socket of sockets.clients) socket.terminate();

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 class Element {
   hidden = false;
+  disabled = false;
   textContent = "";
   innerHTML = "";
   className = "";
@@ -92,6 +93,35 @@ function harness() {
 }
 
 describe("detailed HUD route display", () => {
+  it("shows the phone player in idle and navigation, retaining paused controls and clearing disconnected controls", () => {
+    const h = harness();
+    const player = {
+      id: "one",
+      name: "Max",
+      title: "Track",
+      artist: "Artist",
+      album: "Album",
+      status: "playing",
+      position: 3000,
+      duration: 100000
+    };
+    const music = { available: true, connected: true, busy: false, player, message: "" };
+    h.render({ frame: null, music });
+    expect(h.get("idle-music").hidden).toBe(false);
+    expect(h.get("nav-music").hidden).toBe(true);
+    expect(h.get("idle-music-title").textContent).toBe("Track");
+    expect(h.get("idle-music-toggle").attributes["aria-label"]).toBe("暂停");
+    h.render({ music: { ...music, player: { ...player, status: "paused" } } });
+    expect(h.get("idle-music").hidden).toBe(true);
+    expect(h.get("nav-music").hidden).toBe(false);
+    expect(h.get("nav-music-toggle").disabled).toBe(false);
+    expect(h.get("nav-music-toggle").attributes["aria-label"]).toBe("播放");
+    h.render({ music: { ...music, busy: true } });
+    expect(h.get("nav-music-next").disabled).toBe(true);
+    h.render({ music: { ...music, player: null, connected: false } });
+    expect(h.get("nav-music").hidden).toBe(true);
+    expect(h.get("nav-music-toggle").disabled).toBe(true);
+  });
   it("returns to the clock, weather and pairing dashboard after sharing ends", () => {
     const h = harness();
     h.render();

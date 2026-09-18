@@ -247,3 +247,59 @@ The map is a route schematic, not a street basemap, and introduces no map SDK or
 external tile requests. ETA is anchored to fresh frames rather than drifting
 with display polling; stale frames hide the arrival estimate and upcoming-turn
 list. Brightness stays constant throughout.
+
+### Phone music on the HUD
+
+The receiver reads the connected phone's Bluetooth AVRCP media session through
+BlueZ (`busctl` on the system bus). This is independent of Wi-Fi navigation:
+ending map sharing does not disconnect music. The idle dashboard shows the
+reported track, artist, album, playback state and progress when supplied by the
+phone. During navigation, a compact card provides previous, play/pause and next.
+At small landscape resolutions, the extra upcoming-turn list yields space to the
+music card; the next turn and trip summary remain visible.
+
+Connect the phone to the RDK in its Bluetooth settings (the current bench name is
+`ubuntu`), select the RDK as the Bluetooth media output if necessary, and start a
+song in the desired phone app. Audio follows the phone's selected Bluetooth audio
+route, so the RDK needs a usable audio output for listening. Wi-Fi map pairing does
+not pair Bluetooth. No music account, subscription or licensed audio is accessed
+by the HUD. It displays and controls the player that the phone exposes; app
+selection, browsing and queue creation stay on the phone.
+
+This same connection supports other phone music apps and music played within Max
+when their active media session exposes AVRCP. Max's iOS application music player
+uses system remote-event handling. Android's local player retains its media
+session while paused so Bluetooth Resume can still address it; it relinquishes
+the session when its card closes or the user switches to QQ Music. Existing Max
+foreground-only local playback rules remain in place: this change does not add
+background audio playback. Other phone apps retain their own background behavior.
+Supported actions and available metadata depend on the phone and selected app.
+The HUD does not promise arbitrary third-party iOS app control through the Max app.
+
+The service polls at one-second intervals with bounded bus requests. Disconnects
+and service failures clear metadata and controls, and reads older than five seconds
+are not presented as an available player. A paused player remains visible. Only
+paired, connected devices and the addressed player are eligible. Ambiguous multiple
+players require selection on the phone. Commands carry an opaque player identity;
+a source change invalidates old controls. Commands never auto-start playback and
+must be confirmed by reported playback state or a track change. Unsupported or
+unconfirmed commands produce a visible error, without optimistic playback state.
+
+`POST /cast/music` is restricted to a loopback peer, a loopback Host, matching
+Origin, JSON content type and the `X-HUD-Control: 1` header. Only the four fixed
+playback actions are passed to BlueZ using argument arrays, never a shell command.
+Read-only metadata is delivered through the existing local state/SSE endpoints.
+
+Validation includes Bluetooth bus fixtures for pause/resume/skip, unconfirmed
+skips, disconnects, source changes, stale data and service shutdown; HTTP boundary
+and render tests; browser control checks; and Android unit tests/debug build.
+All 1,713 repository tests and the full local check command passed. Browser
+fixtures confirmed playback controls and layouts at 800×480 and 390×844. The
+1920×1080 physical RDK display was inspected after deployment. Physical phone
+playback remains a separate acceptance step requiring an active Bluetooth media
+session. The saved iPhone connection attempt timed out; no active phone music
+session was available. The Android APK was built but not installed because no
+Android device was connected.
+
+References: [BlueZ Media API](https://bluez.readthedocs.io/en/latest/media-api/)
+and [Apple external player events](https://developer.apple.com/documentation/mediaplayer/handling-external-player-events-notifications).

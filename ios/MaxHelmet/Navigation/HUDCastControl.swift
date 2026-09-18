@@ -27,7 +27,7 @@ struct HUDCastControl: View {
                     }
                     Section {
                         Text(client.status)
-                        Text("开发版 Wi-Fi 原型：仅在可信网络使用。导航期间后台继续发送路线。后台显示路线示意图，返回前台恢复街道地图；连接中断后请手动重连。")
+                        Text("开发版 Wi-Fi 原型：仅在可信网络使用。导航期间后台继续发送位置和路线。RDK 配置街道地图后，前后台均显示详细地图；连接中断后请手动重连。")
                     }
                 }
                 .navigationTitle("投屏到 HUD")

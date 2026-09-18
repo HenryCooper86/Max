@@ -22,12 +22,14 @@ final class HUDCastClient: ObservableObject {
     private var sequence = 0
     private var awaitingAck = false
     private var ready = false
+    private var receiverDrawsMap = false
     private var pending = false
     private var lifecycleObservers: [AnyCancellable] = []
     private var mapCapturePending = false
     private var mapCaptureGeneration = 0
 
     init() {
+        HUDMapSource.shared.onHeading = { [weak self] heading in self?.sendHeading(heading) }
         lifecycleObservers = [
             NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)
                 .sink { [weak self] _ in Task { @MainActor in self?.setForeground(false) } },
@@ -110,14 +112,21 @@ final class HUDCastClient: ObservableObject {
                     self.lastReply = Date()
                     if reply["type"] as? String == "hud.ready" {
                         self.ready = true
-                        HUDMapSource.shared.start()
+                        self.receiverDrawsMap = reply["mapMode"] as? String == "streets"
+                        HUDMapSource.shared.start(renderMap: !self.receiverDrawsMap)
                         self.status = "已连接 · 正在发送导航"
                     } else if reply["type"] as? String == "hud.ack",
                               reply["sequence"] as? Int == self.sequence {
                         self.awaitingAck = false
+                        if reply["mapMode"] as? String == "streets", !self.receiverDrawsMap {
+                            self.receiverDrawsMap = true
+                            HUDMapSource.shared.start(renderMap: false)
+                        }
                         self.status = "正在投屏到 HUD"
                     } else if reply["type"] as? String == "hud.map.ack", reply["sequence"] as? Int == self.mapSequence {
                         self.mapBusy = false
+                    } else if reply["type"] as? String == "hud.heading.ack" {
+                        // Compass acknowledgment does not refresh guidance.
                     } else if reply["type"] as? String == "hud.pong" {
                         // Transport liveness only; never make old guidance fresh.
                     } else { self.fail("HUD 响应无效"); return }
@@ -154,7 +163,7 @@ final class HUDCastClient: ObservableObject {
         mapCaptureGeneration += 1
         mapCapturePending = false
         HUDMapSource.shared.stop()
-        mapBusy = false; mapSequence = 0
+        mapBusy = false; mapSequence = 0; receiverDrawsMap = false
         receiver?.cancel(); receiver = nil
         watchdog?.cancel(); watchdog = nil
         socket?.cancel(with: .normalClosure, reason: nil); socket = nil
@@ -162,8 +171,20 @@ final class HUDCastClient: ObservableObject {
         status = "未投屏"
     }
 
+    private func sendHeading(_ heading: Double) {
+        guard ready, receiverDrawsMap, let socket else { return }
+        Task { [weak self] in
+            do {
+                let data = try JSONSerialization.data(withJSONObject: ["type": "hud.heading", "heading": heading])
+                try await socket.send(.string(String(decoding: data, as: UTF8.self)))
+            } catch {
+                if self?.socket === socket { self?.fail("HUD 已断开，请重新连接") }
+            }
+        }
+    }
+
     private func sendMap() {
-        guard ready, !mapBusy, let socket, Date().timeIntervalSince(latestAt) < 8 else { return }
+        guard ready, !receiverDrawsMap, !mapBusy, let socket, Date().timeIntervalSince(latestAt) < 8 else { return }
         mapBusy = true
         mapCapturePending = true
         mapCaptureGeneration += 1
@@ -211,7 +232,10 @@ final class HUDCastClient: ObservableObject {
         let source = guidance.polyline
         let count = min(source.count, 2048)
         let points = (0..<count).map { index in source[index * (source.count - 1) / (count - 1)] }
-        func point(_ value: CLLocationCoordinate2D) -> [String: Double] { ["lat": value.latitude, "lon": value.longitude] }
+        func point(_ value: CLLocationCoordinate2D) -> [String: Double] {
+            let display = CoordinateDatum.wgs84ToGcj02(value)
+            return ["lat": display.latitude, "lon": display.longitude]
+        }
         let value: [String: Any] = [
             "type": "hud.frame", "sequence": sequence,
             "destination": String(guidance.destinationName.prefix(200)),
@@ -219,8 +243,10 @@ final class HUDCastClient: ObservableObject {
             "distance": guidance.distanceToManeuverMeters, "remaining": guidance.remainingDistanceMeters,
             "seconds": guidance.remainingSeconds, "offRoute": guidance.offRoute,
             "turns": guidance.upcomingSteps.prefix(3).map { detail -> [String: Any] in
-                ["lat": detail.step.coordinate.latitude, "lon": detail.step.coordinate.longitude,
-                 "instruction": String(detail.step.instruction.prefix(500)), "distance": detail.distanceMeters]
+                var turn: [String: Any] = point(detail.step.coordinate)
+                turn["instruction"] = String(detail.step.instruction.prefix(500))
+                turn["distance"] = detail.distanceMeters
+                return turn
             },
             "polyline": points.map(point), "position": guidance.currentLocation.map { point($0) as Any } ?? NSNull()
         ]

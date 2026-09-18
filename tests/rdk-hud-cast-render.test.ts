@@ -46,6 +46,7 @@ const frame = {
 };
 function harness() {
   let clock = 1_000_000;
+  const images: Element[] = [];
   const elements = new Map<string, Element>();
   const get = (id: string) => {
     if (!elements.has(id)) elements.set(id, new Element());
@@ -54,6 +55,12 @@ function harness() {
   const page = readFileSync(new URL("../rdk/agent/src/hud-cast/index.html", import.meta.url), "utf8");
   const script = page.match(/<script>([\s\S]*?)<\/script>/)![1]!;
   const context = createContext({
+    Image: class extends Element {
+      constructor() {
+        super();
+        images.push(this);
+      }
+    },
     document: {
       getElementById: get,
       createElement: () => new Element(),
@@ -72,6 +79,7 @@ function harness() {
   runInContext(script, context);
   return {
     get,
+    loadImage: () => images.at(-1)!.onload!(),
     value: (expression: string) => runInContext(expression, context),
     advance: () => {
       clock += 60_000;
@@ -99,6 +107,26 @@ describe("detailed HUD route display", () => {
     expect(h.get("map").innerHTML).not.toBe(followed);
     expect(h.get("scale").textContent).toMatch(/米|公里/);
   });
+  it("keeps streets when snapshots stop and updates position directly on the image", () => {
+    const h = harness();
+    const basemap = { sequence: 1, center: frame.position, zoom: 16 };
+    h.render({ basemap });
+    h.loadImage();
+    expect(h.get("map").innerHTML).toContain("/cast/basemap?v=1");
+    expect(h.get("map").innerHTML).toContain('cx="300" cy="240"');
+    h.render({
+      basemap,
+      frame: { ...frame, sequence: 2, position: { ...frame.position, lon: frame.position.lon + 0.001 } }
+    });
+    expect(h.get("map").innerHTML).toMatch(/cx="346\.60/);
+    h.render({ basemap, stale: true });
+    expect(h.get("map").innerHTML).toContain("/cast/basemap?v=1");
+    expect(h.get("map").innerHTML).toContain("上次位置");
+    expect(h.get("map").hidden).toBe(false);
+    h.render({ connected: false, frame: null, basemap: null });
+    expect(h.get("map-panel").hidden).toBe(true);
+  });
+
   it("shows the native phone map only after loading, and falls back when GPS or images expire", () => {
     const h = harness();
     h.render({ mapSequence: 1 });

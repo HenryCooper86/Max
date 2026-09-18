@@ -26,7 +26,7 @@ afterEach(() => {
 });
 async function harness() {
   let time = 1_000_000;
-  const receiver = createCastReceiver("<title>HUD</title>", () => time);
+  const receiver = createCastReceiver("<title>HUD</title>", () => time, "");
   const server = createServer((req, res) => {
     if (!receiver.handle(req, res)) {
       res.writeHead(404);
@@ -131,6 +131,35 @@ describe("local phone HUD sharing", () => {
     const closed = once(socket, "close");
     socket.send(JSON.stringify({ type: "hud.map", sequence: 1, jpeg: Buffer.from("<svg/>").toString("base64") }));
     expect((await closed)[0]).toBe(1008);
+  });
+
+  it("updates compass direction without making old GPS fresh", async () => {
+    const h = await harness();
+    const socket = await h.connect();
+    await h.send(socket, { type: "hud.join", code: (await h.state()).code });
+    await h.send(socket, frame);
+    h.advance(CAST_STALE_MS + 1);
+    expect(await h.send(socket, { type: "hud.heading", heading: 90 })).toEqual({ type: "hud.heading.ack" });
+    expect(await h.state()).toMatchObject({ heading: 90, stale: true });
+  });
+
+  it("pushes position updates to the local display without waiting for polling", async () => {
+    const h = await harness();
+    const socket = await h.connect();
+    await h.send(socket, { type: "hud.join", code: (await h.state()).code });
+    await h.send(socket, frame);
+    const controller = new AbortController();
+    const response = await fetch(`${h.url}/cast/events`, { signal: controller.signal });
+    const reader = response.body!.getReader();
+    try {
+      expect(new TextDecoder().decode((await reader.read()).value)).toContain('"sequence":1');
+      await h.send(socket, { ...frame, sequence: 2, position: { lat: 31.24, lon: 121.48 } });
+      const pushed = new TextDecoder().decode((await reader.read()).value);
+      expect(pushed).toContain('"sequence":2');
+      expect(pushed).toContain('"lat":31.24');
+    } finally {
+      controller.abort();
+    }
   });
 
   it("keeps an idle sender paired with heartbeats without refreshing stale guidance", async () => {

@@ -105,6 +105,7 @@ struct GuidanceCard: View {
     @State private var showingDetails = false
     var onConfirm: (UUID, Bool) -> Void = { _, _ in }
     var music: MusicPlaybackModel? = nil
+    var hudCast: HUDCastClient? = nil
     var onDetailsPresentationChanged: (Bool) -> Void = { _ in }
 
     private var distanceText: String {
@@ -136,7 +137,7 @@ struct GuidanceCard: View {
             .onChange(of: showingDetails) { _, presented in onDetailsPresentationChanged(presented) }
             .onDisappear { onDetailsPresentationChanged(false) }
             .sheet(isPresented: $showingDetails) {
-                NavigationDetailsView(guidance: guidance, music: music).presentationDetents([.large])
+                NavigationDetailsView(guidance: guidance, music: music, hudCast: hudCast).presentationDetents([.large])
             }
     }
 

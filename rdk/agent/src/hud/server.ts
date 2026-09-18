@@ -5,6 +5,7 @@ import { BlockList, isIP } from "node:net";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { WebSocketServer } from "ws";
+import { createCastReceiver } from "../hud-cast/server";
 import type { HudState, RdkHudRoute } from "./state";
 
 const localHudPeers = new BlockList();
@@ -145,7 +146,9 @@ export function createHudServer(
   const here = dirname(fileURLToPath(import.meta.url));
   const page = renderHudPage(readFileSync(join(here, "index.html"), "utf8"), previewPort, visionToken);
 
+  const cast = createCastReceiver(readFileSync(join(here, "../hud-cast/index.html"), "utf8"));
   const http = createServer((request, response) => {
+    if (cast.handle(request, response)) return;
     if (!hudRequestAllowed(request, visionToken)) {
       response.writeHead(401, { "Content-Type": "text/plain; charset=utf-8" });
       response.end(REFUSAL_TEXT);
@@ -154,12 +157,15 @@ export function createHudServer(
     response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     response.end(page);
   });
-  // `noServer` is not used, so gate the upgrade explicitly: without this a
-  // stranger who cannot read the page can still open the socket and watch the
-  // rider's transcript and destination stream past.
+  // Route casting upgrades separately while retaining the bench socket gate:
+  // a sender connection never grants access to transcripts or bench state.
   const sockets = new WebSocketServer({
-    server: http,
+    noServer: true,
     verifyClient: ({ req }: { req: IncomingMessage }) => hudRequestAllowed(req, visionToken)
+  });
+  http.on("upgrade", (request, socket, head) => {
+    if (cast.upgrade(request, socket, head)) return;
+    sockets.handleUpgrade(request, socket, head, (ws) => sockets.emit("connection", ws, request));
   });
   const localSockets = new WeakSet<object>();
   let latest: HudState | null = null;
@@ -186,6 +192,7 @@ export function createHudServer(
       }
     },
     close(): void {
+      cast.close();
       sockets.close();
       http.close();
     }

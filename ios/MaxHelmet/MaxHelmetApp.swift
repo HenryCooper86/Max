@@ -7,6 +7,7 @@ import SwiftUI
 struct MaxHelmetApp: App {
     @StateObject private var viewModel = MainViewModel()
     @StateObject private var session = AgentSession.shared
+    @ObservedObject private var hudCast = AgentSession.shared.hudCast
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -28,6 +29,7 @@ struct MaxHelmetApp: App {
                     if phase == .background { session.music.setAppInBackground(true) }
                     else if phase == .active { session.music.setAppInBackground(false) }
                 }
+                .onChange(of: hudCast.active) { _, _ in updateIdleTimer() }
                 .onChange(of: session.state.handsFree) { _, _ in updateIdleTimer() }
         }
     }
@@ -35,6 +37,6 @@ struct MaxHelmetApp: App {
     private func updateIdleTimer() {
         // Riders glance at the HUD during active sessions; restore the system
         // default as soon as the app backgrounds or hands-free stops.
-        UIApplication.shared.isIdleTimerDisabled = scenePhase == .active && session.state.handsFree
+        UIApplication.shared.isIdleTimerDisabled = scenePhase == .active && (session.state.handsFree || hudCast.active)
     }
 }

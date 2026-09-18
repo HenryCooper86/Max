@@ -1674,3 +1674,9 @@ python3 -m tools.evaluate ./corpus/ride-...
 missed hazards per threat — the measured half of the M1 gate — stamped with
 the tuning fingerprint from the ride's own shadow log. Alert audio stays
 locked until those numbers meet the gate; see "ADAS M2".
+
+## Wi-Fi navigation HUD casting (bench prototype)
+
+Phone-owned navigation can now be sent from either development app to the RDK
+display. Open `/cast` on the board-local HUD server, then use **投屏到 HUD**
+in the phone’s navigation details. See [setup, limits and acceptance checks](../docs/rdk-hud-casting.md).

@@ -349,3 +349,9 @@ publicly trusted TLS certificate.
   certificate and hostname validation.
 - Configure a real signing team, bundle ID, versioning, icons, and privacy text before TestFlight.
 - Keep the protocol parity checklist in sync with web and Android whenever `/agent` changes.
+
+## Wi-Fi navigation HUD casting (bench prototype)
+
+Phone-owned navigation can now be sent from either development app to the RDK
+display. Open `/cast` on the board-local HUD server, then use **投屏到 HUD**
+in the phone’s navigation details. See [setup, limits and acceptance checks](../docs/rdk-hud-casting.md).

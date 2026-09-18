@@ -25,7 +25,7 @@ import java.util.Date
 import kotlin.math.ceil
 
 @Composable
-fun NavigationDetailsDialog(guidance: NavGuidanceState, music: MusicController, onDismiss: () -> Unit) {
+fun NavigationDetailsDialog(guidance: NavGuidanceState, music: MusicController, hudCast: com.horizon.maxhelmet.navigation.HudCastClient? = null, onDismiss: () -> Unit) {
     var following by remember { mutableStateOf(true) }
     var showSteps by remember { mutableStateOf(false) }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -35,6 +35,7 @@ fun NavigationDetailsDialog(guidance: NavGuidanceState, music: MusicController, 
                     TextButton(onClick = { music.chooseMusic() }) { Text("音乐") }
                     Text(guidance.destinationName, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (hudCast != null) HudCastControl(hudCast)
                     TextButton(onClick = onDismiss) { Text("收起") }
                 }
                 BoxWithConstraints(Modifier.weight(1f)) {

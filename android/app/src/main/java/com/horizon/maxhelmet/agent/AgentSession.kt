@@ -251,6 +251,8 @@ class AgentSession(
 
     // ---- navigation ---------------------------------------------------------
 
+    val hudCast = com.horizon.maxhelmet.navigation.HudCastClient()
+
     /** Relay-backed route search: turns navigation.start/reroute into a
      *  nav.request over the same socket, matched back through handleEvent's
      *  NavRoute/NavError forwarding. */
@@ -265,7 +267,10 @@ class AgentSession(
         locationSource = LocationManagerSource(context),
         speaker = this,
         sendResult = { webSocket?.send(it) },
-        onGuidance = { guidance -> _state.update { it.copy(navGuidance = guidance) } },
+        onGuidance = { guidance ->
+            hudCast.update(guidance)
+            _state.update { it.copy(navGuidance = guidance) }
+        },
         hasLocationPermission = ::hasFineLocationPermission,
         sendRelayPrompt = { webSocket?.send(it) }
     )
@@ -400,6 +405,7 @@ class AgentSession(
 
     /** Deactivates hands-free: stop the mic, restore routing, close the relay. */
     fun stop(force: Boolean = false) {
+        hudCast.stop()
         if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) { deviceScope.launch { stop(force) }; return }
         music.stopPlayback()
         sessionLocation.stop()

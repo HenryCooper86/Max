@@ -257,7 +257,7 @@ fun AgentScreen(
             LaunchedEffect(galleryRequest) { if (galleryRequest > 0) viewModel.showGallery = true }
             val alerts: @Composable () -> Unit = {
                 state.hazardAlert?.let { HazardBanner(it) }
-                if (isNavPresentationActive(state)) state.navGuidance?.let { GuidanceCard(it, viewModel::confirmNavigation, viewModel.music) }
+                if (isNavPresentationActive(state)) state.navGuidance?.let { GuidanceCard(it, viewModel::confirmNavigation, viewModel.music, viewModel.hudCast) }
                 if (recording) Text("● 正在录像（无声）· 说“停止录像”结束", color = HudColors.Amber)
             }
             val utilities: @Composable () -> Unit = {
@@ -861,7 +861,7 @@ private fun HazardBanner(alert: AgentEvent.HazardAlert) {
  * NavGuidanceState's doc), so there is no arrived branch to render.
  */
 @Composable
-private fun GuidanceCard(guidance: NavGuidanceState, onConfirm: (String, Boolean) -> Unit, music: com.horizon.maxhelmet.music.MusicController) {
+private fun GuidanceCard(guidance: NavGuidanceState, onConfirm: (String, Boolean) -> Unit, music: com.horizon.maxhelmet.music.MusicController, hudCast: com.horizon.maxhelmet.navigation.HudCastClient) {
     var showingDetails by remember { mutableStateOf(guidance.confirmationId == null) }
     var awaitingApproval by remember { mutableStateOf(guidance.confirmationId != null) }
     LaunchedEffect(guidance.confirmationId) {
@@ -869,7 +869,7 @@ private fun GuidanceCard(guidance: NavGuidanceState, onConfirm: (String, Boolean
         awaitingApproval = guidance.confirmationId != null
         if (awaitingApproval) showingDetails = false
     }
-    if (showingDetails) NavigationDetailsDialog(guidance, music) { showingDetails = false }
+    if (showingDetails) NavigationDetailsDialog(guidance, music, hudCast) { showingDetails = false }
     HudCard(borderColor = if (guidance.offRoute) HudColors.Amber else Color.Transparent) {
         Row(verticalAlignment = Alignment.Top) {
             Column(modifier = Modifier.weight(1f)) {

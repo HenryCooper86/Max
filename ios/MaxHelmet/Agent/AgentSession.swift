@@ -234,6 +234,8 @@ final class AgentSession: NSObject, ObservableObject {
         send: { [weak self] json in self?.webSocket?.send(.string(json)) { _ in } }
     )
 
+    @MainActor let hudCast = HUDCastClient()
+
     /// Held as its own typed property (rather than reached for only through
     /// `deviceRouter`'s handler dictionary) so `stop()` can call its
     /// `teardown()` directly — `DeviceActionHandler` has no such method, and
@@ -242,6 +244,7 @@ final class AgentSession: NSObject, ObservableObject {
         search: relayNavigationSearch,
         stream: SystemLocationStream(),
         onGuidance: { [weak self] guidance in
+            self?.hudCast.update(guidance)
             self?.update { $0.guidance = guidance }
         },
         speak: { [weak self] line in self?.update { $0.statusText = line } },
@@ -484,6 +487,7 @@ final class AgentSession: NSObject, ObservableObject {
         // running on the main thread, so this asserts that isolation the
         // same way `onCrash` does rather than restructuring the class.
         MainActor.assumeIsolated {
+            hudCast.stop()
             music.stopPlayback()
             navigationController.teardown()
         }

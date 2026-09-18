@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="zh-CN">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="google" content="notranslate" />
+  <title>Max · Navigation HUD</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      background: #080e12;
+      color: #f4f8f8;
+      font:
+        20px/1.4 system-ui,
+        sans-serif;
+    }
+    header {
+      height: 64px;
+      padding: 10px 24px;
+      display: flex;
+      gap: 16px;
+      justify-content: space-between;
+      align-items: center;
+      color: #a5b8bf;
+      border-bottom: 1px solid #25343b;
+    }
+    .brand {
+      letter-spacing: 0.16em;
+      font-size: 16px;
+      white-space: nowrap;
+    }
+    #status {
+      font-size: 16px;
+      text-align: center;
+    }
+    button {
+      color: #f4f8f8;
+      background: #17232a;
+      border: 1px solid #40545e;
+      border-radius: 12px;
+      min-height: 44px;
+      padding: 8px 16px;
+      font: inherit;
+      font-size: 16px;
+      cursor: pointer;
+    }
+    button:focus-visible {
+      outline: 3px solid #caff75;
+      outline-offset: 3px;
+    }
+    main {
+      height: calc(100dvh - 64px);
+      min-height: 350px;
+      padding: 20px;
+      display: grid;
+      grid-template-columns: minmax(260px, 0.8fr) minmax(0, 1.2fr);
+      gap: 20px;
+    }
+    #join {
+      grid-column: 1 / -1;
+      align-self: center;
+      text-align: center;
+    }
+    #code {
+      display: block;
+      color: #caff75;
+      font-size: clamp(48px, 10vw, 96px);
+      letter-spacing: 0.15em;
+    }
+    #address {
+      overflow-wrap: anywhere;
+    }
+    #guidance {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      gap: 16px;
+    }
+    #destination {
+      color: #a5b8bf;
+      font-size: clamp(16px, 2vw, 24px);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .turn {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+    }
+    #arrow {
+      font: 700 clamp(48px, 6vw, 90px)/1 system-ui;
+      color: #caff75;
+      width: 1em;
+      flex-shrink: 0;
+      text-align: center;
+    }
+    #distance {
+      color: #caff75;
+      font-size: clamp(32px, 4.8vw, 72px);
+      font-weight: 750;
+      line-height: 1.2;
+    }
+    #instruction {
+      font-size: clamp(20px, 2.8vw, 42px);
+      margin: 0;
+      overflow-wrap: anywhere;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .label {
+      color: #93a8b1;
+      font-size: 13px;
+      letter-spacing: 0.05em;
+    }
+    #upcoming {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    #upcoming li {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 1px solid #25343b;
+    }
+    .turn-number {
+      border: 1px solid #607480;
+      border-radius: 50%;
+      width: 26px;
+      height: 26px;
+      text-align: center;
+      flex-shrink: 0;
+      font-size: 16px;
+    }
+    .turn-copy {
+      min-width: 0;
+      font-size: 16px;
+    }
+    .turn-copy span {
+      display: block;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .turn-copy small {
+      color: #93a8b1;
+    }
+    #trip {
+      margin-top: auto;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      border-top: 1px solid #33434b;
+      padding-top: 14px;
+    }
+    #trip strong {
+      display: block;
+      font-size: clamp(19px, 2.5vw, 34px);
+      white-space: nowrap;
+    }
+    #map-panel {
+      min-width: 0;
+      min-height: 0;
+      position: relative;
+      background: #0d171d;
+      border: 1px solid #293c46;
+      border-radius: 20px;
+      overflow: hidden;
+    }
+    #map {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+    .map-top,
+    .map-bottom {
+      position: absolute;
+      left: 16px;
+      right: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      pointer-events: none;
+    }
+    .map-top {
+      top: 16px;
+    }
+    .map-bottom {
+      bottom: 16px;
+    }
+    .map-top button {
+      pointer-events: auto;
+    }
+    .compass {
+      width: 38px;
+      height: 48px;
+      text-align: center;
+      font-size: 14px;
+      color: #bacbd2;
+    }
+    .compass b {
+      display: block;
+      color: #e5f0f3;
+    }
+    #scale {
+      font-size: 13px;
+      border-bottom: 2px solid #93a8b1;
+      padding: 0 4px 3px;
+      white-space: nowrap;
+      text-align: center;
+    }
+    #map-note {
+      font-size: 13px;
+      color: #93a8b1;
+      background: #0d171de6;
+      padding: 4px 8px;
+      border-radius: 6px;
+    }
+    .stale #status,
+    .stale #distance,
+    .stale #arrow {
+      color: #ffbe69;
+    }
+    [hidden] {
+      display: none !important;
+    }
+    @media (max-width: 900px) and (min-aspect-ratio: 1/1) {
+      main {
+        padding: 12px;
+        gap: 12px;
+      }
+      #guidance {
+        gap: 8px;
+      }
+      #upcoming li {
+        padding: 6px 0;
+      }
+      #trip {
+        padding-top: 8px;
+      }
+      .label {
+        font-size: 11px;
+      }
+    }
+    @media (max-aspect-ratio: 1/1) {
+      main {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto minmax(300px, 1fr);
+        height: auto;
+        min-height: calc(100dvh - 64px);
+      }
+      #map-panel {
+        height: 48vh;
+        min-height: 300px;
+      }
+      #join {
+        grid-row: 1 / -1;
+      }
+      header {
+        padding: 10px 12px;
+        gap: 8px;
+      }
+      #status {
+        font-size: 13px;
+      }
+      .brand {
+        font-size: 12px;
+      }
+    }
+  </style>
+  <header>
+    <span class="brand">MAX / HUD</span><span id="status" role="status">正在连接显示服务…</span
+    ><button id="fullscreen">全屏</button>
+  </header>
+  <main>
+    <section id="join">
+      <p>在手机导航中选择「投屏到 HUD」</p>
+      <p id="address"></p>
+      <strong id="code">—</strong>
+      <p>手机与 RDK 连接同一 Wi-Fi · 连接码 5 分钟内有效</p>
+    </section>
+    <section id="guidance" hidden>
+      <div id="destination"></div>
+      <div class="turn">
+        <span id="arrow" aria-hidden="true"></span>
+        <div>
+          <div class="label">下一步</div>
+          <div id="distance"></div>
+        </div>
+      </div>
+      <h1 id="instruction"></h1>
+      <div id="upcoming-panel">
+        <div class="label">接下来的路口</div>
+        <ol id="upcoming"></ol>
+      </div>
+      <div id="trip">
+        <div><span class="label">剩余里程</span><strong id="remaining"></strong></div>
+        <div><span class="label">剩余时间</span><strong id="duration"></strong></div>
+        <div><span class="label">预计到达</span><strong id="arrival"></strong></div>
+      </div>
+    </section>
+    <section id="map-panel" hidden>
+      <svg id="map" viewBox="0 0 600 480" role="img" aria-label="导航路线示意图"></svg>
+      <div class="map-top">
+        <span class="compass"><b>▲</b>N</span><button id="camera" aria-pressed="true">全程</button>
+      </div>
+      <div class="map-bottom"><span id="scale"></span><span id="map-note">路线示意 · 北向上</span></div>
+    </section>
+  </main>
+  <script>
+    const el = (id) => document.getElementById(id);
+    const distance = (m) => (m < 1000 ? `${Math.round(m)} 米` : `${(m / 1000).toFixed(1)} 公里`);
+    const arrow = (instruction) => {
+      const text = instruction.toLowerCase();
+      if (/掉头|u-turn/.test(text)) return "↶";
+      if (/左|left/.test(text)) return "↰";
+      if (/右|right/.test(text)) return "↱";
+      if (/到达|destination|arrive/.test(text)) return "⚑";
+      return "↑";
+    };
+    let following = true;
+    let latestState;
+    let arrivalAt = null;
+    let lastArrivalSequence = null;
+    el("fullscreen").onclick = () => document.documentElement.requestFullscreen?.().catch(() => {});
+    el("camera").onclick = () => {
+      following = !following;
+      if (latestState) render(latestState);
+    };
+
+    // Local metric projection: the phone has already converted coordinates to GCJ-02.
+    // Follow mode shows a fixed neighborhood; overview includes the whole route.
+    function cameraFor(frame, follow) {
+      const origin = frame.position || frame.polyline[0];
+      const factor = Math.max(0.01, Math.cos((origin.lat * Math.PI) / 180));
+      const meters = (p) => ({ x: (p.lon - origin.lon) * 111320 * factor, y: (origin.lat - p.lat) * 111320 });
+      const all = [...frame.polyline, ...(frame.position ? [frame.position] : [])].map(meters);
+      let cx = 0,
+        cy = 0,
+        scale;
+      if (follow && frame.position) {
+        const radius = Math.min(1500, Math.max(250, frame.distance * 1.35));
+        scale = 180 / radius;
+      } else {
+        const minX = Math.min(...all.map((p) => p.x)),
+          maxX = Math.max(...all.map((p) => p.x));
+        const minY = Math.min(...all.map((p) => p.y)),
+          maxY = Math.max(...all.map((p) => p.y));
+        cx = (minX + maxX) / 2;
+        cy = (minY + maxY) / 2;
+        scale = Math.min(440 / Math.max(50, maxX - minX), 300 / Math.max(50, maxY - minY));
+      }
+      return {
+        scale,
+        project(p) {
+          const m = meters(p);
+          return [300 + (m.x - cx) * scale, 240 + (m.y - cy) * scale];
+        }
+      };
+    }
+    function drawMap(frame, stale) {
+      const camera = cameraFor(frame, following);
+      const line = frame.polyline.map((p) => camera.project(p).join(",")).join(" ");
+      const visible = ([x, y]) => x >= 45 && x <= 555 && y >= 70 && y <= 410;
+      let drawing = `<defs><pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" fill="none" stroke="#182832" stroke-width="1"/></pattern></defs><rect width="600" height="480" fill="url(#grid)"/><polyline points="${line}" fill="none" stroke="#294333" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/><polyline points="${line}" fill="none" stroke="#caff75" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>`;
+      for (const [index, turn] of (frame.turns || []).entries()) {
+        const [x, y] = camera.project(turn);
+        if (!visible([x, y])) continue;
+        drawing += `<circle cx="${x}" cy="${y}" r="14" fill="#ffbe69" stroke="#0d171d" stroke-width="3"/><text x="${x}" y="${y + 5}" text-anchor="middle" font-size="15" font-weight="700" fill="#080e12">${index + 1}</text>`;
+      }
+      const end = camera.project(frame.polyline[frame.polyline.length - 1]);
+      if (visible(end))
+        drawing += `<circle cx="${end[0]}" cy="${end[1]}" r="8" fill="#fff"/><text x="${end[0]}" y="${end[1] - 20}" text-anchor="middle" font-size="16" fill="#fff">终点</text>`;
+      if (frame.position) {
+        const [x, y] = camera.project(frame.position);
+        // An outlined amber marker is explicitly last-known, never live GPS.
+        drawing += `<circle cx="${x}" cy="${y}" r="20" fill="#0d171d"/><circle cx="${x}" cy="${y}" r="12" fill="${stale ? "#0d171d" : "#63d8ff"}" stroke="${stale ? "#ffbe69" : "#e7faff"}" stroke-width="3"/><text x="${x}" y="${y + 40}" text-anchor="middle" font-size="15" fill="${stale ? "#ffbe69" : "#bacbd2"}">${stale ? "上次位置" : "当前位置"}</text>`;
+      }
+      el("map").innerHTML = drawing;
+      const desired = 90 / camera.scale;
+      const magnitude = 10 ** Math.floor(Math.log10(desired));
+      const scaleMeters = [1, 2, 5, 10].map((n) => n * magnitude).find((n) => n >= desired) || magnitude * 10;
+      // Convert SVG user units into CSS pixels (viewBox uses xMidYMid meet).
+      const rect = el("map").getBoundingClientRect();
+      const svgToPixel = Math.min(rect.width / 600, rect.height / 480);
+      el("scale").style.width = `${Math.max(1, scaleMeters * camera.scale * svgToPixel)}px`;
+      el("scale").textContent = distance(scaleMeters);
+      el("camera").textContent = following ? "全程" : "跟随";
+      el("camera").setAttribute("aria-pressed", String(following));
+      el("map-note").textContent = `${following && frame.position ? "跟随位置" : "路线全程"} · 北向上`;
+    }
+    function render(state) {
+      latestState = state;
+      const frame = state.frame;
+      el("join").hidden = !!frame;
+      el("guidance").hidden = !frame;
+      el("map-panel").hidden = !frame;
+      document.body.classList.toggle("stale", state.stale && state.connected);
+      el("status").textContent = !state.connected
+        ? "等待手机连接"
+        : state.stale
+          ? "位置更新中 · 请查看手机"
+          : "手机导航已连接";
+      el("address").textContent = state.addresses.map((address) => `${address}:${state.port}`).join(" / ");
+      el("code").textContent = state.code || "已连接";
+      if (!frame) {
+        arrivalAt = null;
+        lastArrivalSequence = null;
+        return;
+      }
+      el("destination").textContent = `前往 ${frame.destination}`;
+      el("distance").textContent = state.stale
+        ? "等待更新"
+        : frame.offRoute
+          ? "重新规划中"
+          : `${distance(frame.distance)} 后`;
+      el("arrow").textContent = state.stale || frame.offRoute ? "·" : arrow(frame.instruction);
+      el("instruction").textContent = state.stale ? "请查看手机导航" : frame.instruction;
+      el("remaining").textContent = distance(frame.remaining);
+      el("duration").textContent = `${Math.max(1, Math.ceil(frame.seconds / 60))} 分钟`;
+      // Anchor ETA to a new phone frame, not every browser poll or stale interval.
+      if (!state.stale && frame.sequence !== lastArrivalSequence) {
+        arrivalAt = Date.now() + frame.seconds * 1000;
+        lastArrivalSequence = frame.sequence;
+      }
+      el("arrival").textContent =
+        state.stale || arrivalAt === null
+          ? "—"
+          : new Date(arrivalAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+      const turns = (frame.turns || []).slice(1);
+      el("upcoming-panel").hidden = !turns.length || state.stale || frame.offRoute;
+      el("upcoming").replaceChildren();
+      for (const [index, turn] of turns.entries()) {
+        const item = document.createElement("li");
+        const number = document.createElement("span");
+        number.className = "turn-number";
+        number.textContent = String(index + 2);
+        const copy = document.createElement("div");
+        copy.className = "turn-copy";
+        const instruction = document.createElement("span");
+        instruction.textContent = `${arrow(turn.instruction)} ${turn.instruction}`;
+        const meters = document.createElement("small");
+        meters.textContent = `${distance(turn.distance)} 后`;
+        copy.append(instruction, meters);
+        item.append(number, copy);
+        el("upcoming").append(item);
+      }
+      drawMap(frame, state.stale);
+    }
+    window.addEventListener("resize", () => {
+      if (latestState?.frame) drawMap(latestState.frame, latestState.stale);
+    });
+    async function poll() {
+      try {
+        const response = await fetch("/cast/state", { cache: "no-store", signal: AbortSignal.timeout(3000) });
+        if (!response.ok) throw new Error("Disconnected");
+        render(await response.json());
+      } catch {
+        document.body.classList.add("stale");
+        el("status").textContent = "RDK 显示服务已断开";
+        el("guidance").hidden = true;
+        el("map-panel").hidden = true;
+        el("join").hidden = true;
+      }
+      setTimeout(poll, 500);
+    }
+    poll();
+  </script>
+</html>

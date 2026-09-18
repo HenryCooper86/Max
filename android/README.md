@@ -247,3 +247,9 @@ In a debug build, developer settings expose a local-only crash drill. It cannot 
 ### Latest riding-screen parity
 
 Navigation requires destination approval before turn-by-turn voice guidance. The full-screen map prioritizes the next turn, route, trip summary and compact music controls; expanded steps reserve visible space in portrait. Music selection is owned by the activity so it remains available above the map. Fresh phone GPS updates reach Max during hands-free without navigation or RDK sharing, and location tracking retries after returning from Settings or granting permission. RDK location forwarding remains a separate optional feature.
+
+## Wi-Fi navigation HUD casting (bench prototype)
+
+Phone-owned navigation can now be sent from either development app to the RDK
+display. Open `/cast` on the board-local HUD server, then use **投屏到 HUD**
+in the phone’s navigation details. See [setup, limits and acceptance checks](../docs/rdk-hud-casting.md).

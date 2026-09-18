@@ -271,6 +271,7 @@ struct AgentScreen: View {
                     arrangement: guidanceCardArrangement(for: layout),
                     onConfirm: { id, accepted in session.confirmNavigation(id: id, accepted: accepted) },
                     music: session.music,
+                    hudCast: session.hudCast,
                     onDetailsPresentationChanged: { navigationDetailsPresented = $0 }
                 )
                     .padding(.horizontal, 4)

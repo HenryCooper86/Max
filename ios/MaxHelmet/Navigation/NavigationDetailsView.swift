@@ -16,13 +16,15 @@ func navigationDistance(_ meters: Double) -> String {
 struct NavigationDetailsView: View {
     let guidance: GuidanceState
     var music: MusicPlaybackModel? = nil
+    var hudCast: HUDCastClient? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var followsRider = true
     @State private var showsSteps = false
 
-    init(guidance: GuidanceState, music: MusicPlaybackModel? = nil, initiallyShowsSteps: Bool = false) {
+    init(guidance: GuidanceState, music: MusicPlaybackModel? = nil, initiallyShowsSteps: Bool = false, hudCast: HUDCastClient? = nil) {
         self.guidance = guidance
         self.music = music
+        self.hudCast = hudCast
         _showsSteps = State(initialValue: initiallyShowsSteps)
     }
 
@@ -63,6 +65,9 @@ struct NavigationDetailsView: View {
                             Label("音乐", systemImage: "music.note")
                         }.accessibilityIdentifier("navigationChooseMusic")
                     }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    if let hudCast { HUDCastControl(client: hudCast) }
                 }
                 ToolbarItem(placement: .topBarTrailing) { Button("收起") { dismiss() } }
             }

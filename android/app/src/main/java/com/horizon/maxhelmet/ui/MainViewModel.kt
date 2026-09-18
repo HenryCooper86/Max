@@ -91,6 +91,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun unpairHelmet() { if (isLoggedIn) companion.unpair(relayUrl.trim(), sessionToken, CompanionTransport.client(allowSelfSigned)) }
     fun refreshPhoneLocation() = session.refreshPhoneLocation()
 
+    val hudCast = session.hudCast
     val music = session.music
     val captures = session.captures
     val camera = session.camera

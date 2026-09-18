@@ -168,7 +168,7 @@
       min-width: 0;
       min-height: 0;
       position: relative;
-      background: #0d171d;
+      background: #202722;
       border: 1px solid #293c46;
       border-radius: 20px;
       overflow: hidden;
@@ -369,7 +369,9 @@
       const camera = cameraFor(frame, following);
       const line = frame.polyline.map((p) => camera.project(p).join(",")).join(" ");
       const visible = ([x, y]) => x >= 45 && x <= 555 && y >= 70 && y <= 410;
-      let drawing = `<defs><pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" fill="none" stroke="#182832" stroke-width="1"/></pattern></defs><rect width="600" height="480" fill="url(#grid)"/><polyline points="${line}" fill="none" stroke="#294333" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/><polyline points="${line}" fill="none" stroke="#caff75" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>`;
+      // Draw only the road geometry supplied by the phone. A quiet map canvas and
+      // road casing replace the coordinate grid without inventing nearby streets.
+      let drawing = `<rect width="600" height="480" fill="#202722"/><g fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="${line}" stroke="#101712" stroke-width="42"/><polyline points="${line}" stroke="#627067" stroke-width="36"/><polyline points="${line}" stroke="#37453c" stroke-width="32"/><polyline points="${line}" stroke="#1b3021" stroke-width="12"/><polyline points="${line}" stroke="#caff75" stroke-width="7"/></g>`;
       for (const [index, turn] of (frame.turns || []).entries()) {
         const [x, y] = camera.project(turn);
         if (!visible([x, y])) continue;

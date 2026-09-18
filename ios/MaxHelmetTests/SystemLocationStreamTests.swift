@@ -6,11 +6,24 @@ private final class PermissionLocationManager: CLLocationManager {
     var status: CLAuthorizationStatus = .notDetermined
     var requests = 0
     override var authorizationStatus: CLAuthorizationStatus { status }
+    override func startUpdatingLocation() {}
+    override func stopUpdatingLocation() {}
     override func requestWhenInUseAuthorization() { requests += 1 }
 }
 
 @MainActor
 final class SystemLocationStreamTests: XCTestCase {
+    func testBackgroundLocationIsScopedToNavigation() {
+        let manager = PermissionLocationManager()
+        let stream = SystemLocationStream(manager: manager)
+        stream.start()
+        XCTAssertTrue(manager.allowsBackgroundLocationUpdates)
+        XCTAssertTrue(manager.showsBackgroundLocationIndicator)
+        stream.stop()
+        XCTAssertFalse(manager.allowsBackgroundLocationUpdates)
+        XCTAssertFalse(manager.showsBackgroundLocationIndicator)
+    }
+
     func testCachedAndInvalidFixesCannotStartOrAdvanceGuidance() {
         let manager = PermissionLocationManager()
         let now = Date(timeIntervalSince1970: 1_000)

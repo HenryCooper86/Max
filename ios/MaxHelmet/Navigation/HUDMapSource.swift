@@ -1,19 +1,70 @@
 import CoreLocation
 import UIKit
+import SwiftUI
 
-/// Uses the existing, consented map view, including its labels and attribution.
-/// Never creates a second location or map provider session.
+/// A fixed HUD viewport, independent of phone layout, pan and zoom.
+/// Uses the existing map consent and key; renders only while foregrounded.
 @MainActor
 final class HUDMapSource: NSObject, CLLocationManagerDelegate {
     static let shared = HUDMapSource()
     private let compass = CLLocationManager()
     private var heading: Double?
     private var active = false
+    static let viewport = CGSize(width: 800, height: 600)
+    private var guidance: GuidanceState?
+    private var foreground = true
     #if !targetEnvironment(simulator)
-    private let maps = NSHashTable<MAMapView>.weakObjects()
-    func register(_ map: MAMapView) { maps.add(map) }
-    func unregister(_ map: MAMapView) { maps.remove(map) }
+    private var map: MAMapView?
+    private var renderer: AMapRouteMap.Coordinator?
     #endif
+
+    func update(_ guidance: GuidanceState?) {
+        self.guidance = guidance
+        render()
+    }
+
+    func setForeground(_ foreground: Bool) {
+        self.foreground = foreground
+        #if !targetEnvironment(simulator)
+        map?.renderringDisabled = !foreground
+        #endif
+        if foreground { render() }
+    }
+
+    private func render() {
+        guard active, foreground, UIApplication.shared.applicationState == .active,
+              let guidance, let model = AMapRouteDisplayModel.make(guidance: guidance, followsRider: true) else { return }
+        #if !targetEnvironment(simulator)
+        guard let consent = AMapAcceptedConsent(decision: AMapConsentStore().decision),
+              let key = AMapConfiguration().apiKey,
+              AMapSDKBootstrapper.shared.prepare(consent: consent, apiKey: key, configuration: liveAMapSDKPrivacyConfiguration()) else { return }
+        if map == nil {
+            let view = MAMapView(frame: CGRect(origin: .zero, size: Self.viewport))
+            let coordinator = AMapRouteMap.Coordinator(loadFailed: .constant(false))
+            coordinator.configure(interactive: false, followsRider: true)
+            view.delegate = coordinator
+            view.isUserInteractionEnabled = false
+            view.showsUserLocation = false
+            view.isShowsLabels = true
+            view.showsScale = true
+            view.isRotateEnabled = false
+            view.isRotateCameraEnabled = false
+            // The SDK needs a window for annotation/control layout. Keep this
+            // fixed viewport beneath the app root, outside the phone's UI layout.
+            guard let window = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
+                .first(where: { $0.activationState == .foregroundActive })?.windows.first(where: { $0.isKeyWindow }) else { return }
+            view.accessibilityElementsHidden = true
+            window.insertSubview(view, at: 0)
+            view.layoutIfNeeded()
+            renderer = coordinator
+            map = view
+        }
+        if let map {
+            renderer?.render(model, on: map)
+            map.rotationDegree = CGFloat(heading ?? 0)
+        }
+        #endif
+    }
 
     override init() {
         super.init()
@@ -23,6 +74,8 @@ final class HUDMapSource: NSObject, CLLocationManagerDelegate {
 
     func start() {
         active = true
+        foreground = UIApplication.shared.applicationState == .active
+        render()
         if CLLocationManager.headingAvailable() { compass.startUpdatingHeading() }
     }
 
@@ -31,7 +84,9 @@ final class HUDMapSource: NSObject, CLLocationManagerDelegate {
         compass.stopUpdatingHeading()
         heading = nil
         #if !targetEnvironment(simulator)
-        for map in maps.allObjects { map.rotationDegree = 0 }
+        if let map { renderer?.clear(on: map); map.delegate = nil; map.removeFromSuperview() }
+        map = nil
+        renderer = nil
         #endif
     }
 
@@ -51,7 +106,7 @@ final class HUDMapSource: NSObject, CLLocationManagerDelegate {
             let filtered = Self.filteredHeading(previous: self.heading, next: degrees)
             self.heading = filtered
             #if !targetEnvironment(simulator)
-            for map in self.maps.allObjects where map.window != nil {
+            if self.foreground, UIApplication.shared.applicationState == .active, let map = self.map {
                 map.setRotationDegree(CGFloat(filtered), animated: true, duration: 0.2)
             }
             #endif
@@ -59,14 +114,13 @@ final class HUDMapSource: NSObject, CLLocationManagerDelegate {
     }
 
     func snapshot(_ completion: @escaping (Data?) -> Void) {
-        guard active else { completion(nil); return }
+        guard active, foreground, UIApplication.shared.applicationState == .active else { completion(nil); return }
+        render()
         #if !targetEnvironment(simulator)
-        // Prefer the large navigation-details map over the underlying card.
-        guard let map = maps.allObjects.filter({ !$0.isHidden && $0.window != nil && $0.bounds.width > 10 && $0.bounds.height > 10 })
-            .max(by: { $0.bounds.width * $0.bounds.height < $1.bounds.width * $1.bounds.height }) else {
-            completion(nil); return
-        }
-        switch map.window?.windowScene?.interfaceOrientation {
+        guard let map else { completion(nil); return }
+        let orientation = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first(where: { $0.activationState == .foregroundActive })?.interfaceOrientation
+        switch orientation {
         case .landscapeLeft: compass.headingOrientation = .landscapeLeft
         case .landscapeRight: compass.headingOrientation = .landscapeRight
         case .portraitUpsideDown: compass.headingOrientation = .portraitUpsideDown

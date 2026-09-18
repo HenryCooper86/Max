@@ -1,5 +1,6 @@
 import CoreLocation
 import XCTest
+import UIKit
 @testable import MaxHelmet
 
 @MainActor
@@ -43,6 +44,39 @@ final class HUDCastClientTests: XCTestCase {
         XCTAssertEqual(HUDMapSource.filteredHeading(previous: 1, next: 359), 0.3, accuracy: 0.001)
         XCTAssertEqual(HUDMapSource.filteredHeading(previous: nil, next: 90), 90)
     }
+
+    #if !targetEnvironment(simulator)
+    func testIndependentMapProducesFixedSizeSnapshotOnDevice() async throws {
+        guard AMapConsentStore().decision == .accepted, AMapConfiguration().hasAPIKey else {
+            throw XCTSkip("Device map consent and configured key required")
+        }
+        let source = HUDMapSource()
+        let first = CLLocationCoordinate2D(latitude: 31.23, longitude: 121.47)
+        source.update(GuidanceState(destinationName: "测试终点",
+            polyline: [first, CLLocationCoordinate2D(latitude: 31.235, longitude: 121.475)],
+            currentLocation: first, maneuverInstruction: "直行", distanceToManeuverMeters: 120,
+            remainingDistanceMeters: 800, remainingSeconds: 300, offRoute: false))
+        source.start()
+        defer { source.stop() }
+        try await Task.sleep(for: .seconds(2))
+        var captured: Data?
+        for _ in 0..<10 {
+            captured = await withCheckedContinuation { continuation in
+                source.snapshot { continuation.resume(returning: $0) }
+            }
+            if captured != nil { break }
+            try await Task.sleep(for: .seconds(1))
+        }
+        let image = try XCTUnwrap(captured.flatMap(UIImage.init(data:)))
+        XCTAssertEqual(image.size.width / image.size.height, 4.0 / 3.0, accuracy: 0.01)
+        let attachment = XCTAttachment(image: image)
+        attachment.name = "Independent HUD map"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        source.setForeground(false)
+        source.snapshot { XCTAssertNil($0) }
+    }
+    #endif
 
     func testNavigationEndingStopsCasting() {
         let client = HUDCastClient()

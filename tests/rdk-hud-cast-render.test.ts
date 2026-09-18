@@ -11,6 +11,8 @@ class Element {
   attributes: Record<string, string> = {};
   children: Element[] = [];
   onclick?: () => void;
+  onload?: () => void;
+  onerror?: () => void;
   setAttribute(key: string, value: string) {
     this.attributes[key] = value;
   }
@@ -97,6 +99,24 @@ describe("detailed HUD route display", () => {
     expect(h.get("map").innerHTML).not.toBe(followed);
     expect(h.get("scale").textContent).toMatch(/米|公里/);
   });
+  it("shows the native phone map only after loading, and falls back when GPS or images expire", () => {
+    const h = harness();
+    h.render({ mapSequence: 1 });
+    expect(h.get("phone-map").hidden).toBe(true);
+    h.get("phone-map").onload!();
+    expect(h.get("phone-map").hidden).toBe(false);
+    expect(h.get("map").hidden).toBe(true);
+    expect(h.get("camera").hidden).toBe(true);
+    h.render({ mapSequence: 2, stale: true });
+    expect(h.get("phone-map").hidden).toBe(true);
+    expect(h.get("map").hidden).toBe(false);
+    h.render({ mapSequence: 3 });
+    h.get("phone-map").onerror!();
+    expect(h.get("map").hidden).toBe(false);
+    h.render({ mapSequence: null });
+    expect(h.get("camera").hidden).toBe(false);
+  });
+
   it("keeps old phones compatible and labels last-known position on stale GPS", () => {
     const h = harness();
     h.render({ frame: { ...frame, turns: undefined } });

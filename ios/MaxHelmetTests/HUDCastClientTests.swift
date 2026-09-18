@@ -38,6 +38,12 @@ final class HUDCastClientTests: XCTestCase {
         XCTAssertNil(HUDCastClient.frame(guidance, sequence: 8))
     }
 
+    func testHeadingSmoothingCrossesNorthWithoutSpinningAround() {
+        XCTAssertEqual(HUDMapSource.filteredHeading(previous: 359, next: 1), 359.7, accuracy: 0.001)
+        XCTAssertEqual(HUDMapSource.filteredHeading(previous: 1, next: 359), 0.3, accuracy: 0.001)
+        XCTAssertEqual(HUDMapSource.filteredHeading(previous: nil, next: 90), 90)
+    }
+
     func testNavigationEndingStopsCasting() {
         let client = HUDCastClient()
         client.update(nil)

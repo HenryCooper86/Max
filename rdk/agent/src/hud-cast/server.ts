@@ -13,6 +13,9 @@ export function createCastReceiver(page: string, now = Date.now) {
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
   let owner: WebSocket | undefined;
   let frame: CastFrame | null = null;
+  let mapImage: Buffer | null = null;
+  let mapSequence = 0;
+  let mapReceivedAt = 0;
   let receivedAt = 0;
   let lastActivityAt = 0;
   let code = "";
@@ -28,6 +31,9 @@ export function createCastReceiver(page: string, now = Date.now) {
     if (owner !== socket) return;
     owner = undefined;
     frame = null;
+    mapImage = null;
+    mapSequence = 0;
+    mapReceivedAt = 0;
     receivedAt = 0;
     rotateCode();
   }
@@ -75,6 +81,33 @@ export function createCastReceiver(page: string, now = Date.now) {
           socket.send(JSON.stringify({ type: "hud.pong" }));
           return;
         }
+        if (value?.type === "hud.map") {
+          if (
+            !frame ||
+            !Number.isSafeInteger(value.sequence) ||
+            value.sequence <= mapSequence ||
+            typeof value.jpeg !== "string" ||
+            value.jpeg.length > 240_000 ||
+            !/^[A-Za-z0-9+/]+={0,2}$/.test(value.jpeg)
+          )
+            throw new Error("Invalid map");
+          const jpeg = Buffer.from(value.jpeg, "base64");
+          if (
+            jpeg.length < 4 ||
+            jpeg[0] !== 0xff ||
+            jpeg[1] !== 0xd8 ||
+            jpeg[jpeg.length - 2] !== 0xff ||
+            jpeg[jpeg.length - 1] !== 0xd9
+          )
+            throw new Error("Invalid JPEG");
+          mapImage = jpeg;
+          mapSequence = value.sequence;
+          mapReceivedAt = now();
+          lastActivityAt = mapReceivedAt;
+          // Map rendering and compass updates never refresh the GPS timestamp.
+          socket.send(JSON.stringify({ type: "hud.map.ack", sequence: mapSequence }));
+          return;
+        }
         const next = parseCastFrame(value);
         if (next.sequence <= sequence) throw new Error("Old sequence");
         sequence = next.sequence;
@@ -108,7 +141,7 @@ export function createCastReceiver(page: string, now = Date.now) {
   return {
     handle(request: IncomingMessage, response: ServerResponse): boolean {
       const path = (request.url ?? "").split("?")[0];
-      if (path !== "/cast" && path !== "/cast/state") return false;
+      if (path !== "/cast" && path !== "/cast/state" && path !== "/cast/map") return false;
       response.setHeader("Cache-Control", "no-store");
       response.setHeader("X-Content-Type-Options", "nosniff");
       if (request.method !== "GET" || !localDisplay(request)) {
@@ -116,10 +149,20 @@ export function createCastReceiver(page: string, now = Date.now) {
         response.end("Open HUD on the RDK at http://127.0.0.1:8080/cast");
         return true;
       }
+      if (path === "/cast/map") {
+        if (!owner || !mapImage || now() - mapReceivedAt > 5_000 || now() - receivedAt > CAST_STALE_MS) {
+          response.writeHead(404);
+          response.end();
+          return true;
+        }
+        response.writeHead(200, { "Content-Type": "image/jpeg" });
+        response.end(mapImage);
+        return true;
+      }
       if (path === "/cast") {
         response.setHeader(
           "Content-Security-Policy",
-          "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'"
+          "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self'; frame-ancestors 'none'"
         );
         response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
         response.end(page);
@@ -138,7 +181,8 @@ export function createCastReceiver(page: string, now = Date.now) {
             port: request.socket.localPort,
             connected: !!owner,
             stale: !frame || now() - receivedAt > CAST_STALE_MS,
-            frame
+            frame,
+            mapSequence: mapImage && now() - mapReceivedAt <= 5_000 ? mapSequence : null
           })
         );
       }

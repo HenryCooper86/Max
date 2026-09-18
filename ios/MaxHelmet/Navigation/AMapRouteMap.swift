@@ -32,6 +32,7 @@ struct AMapRouteMap: UIViewRepresentable {
         )
 
         let mapView = MAMapView(frame: .zero)
+        HUDMapSource.shared.register(mapView)
         mapView.delegate = context.coordinator
         mapView.isUserInteractionEnabled = interactive
         mapView.isZoomEnabled = interactive
@@ -54,6 +55,7 @@ struct AMapRouteMap: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ mapView: MAMapView, coordinator: Coordinator) {
+        HUDMapSource.shared.unregister(mapView)
         coordinator.clear(on: mapView)
         mapView.delegate = nil
     }

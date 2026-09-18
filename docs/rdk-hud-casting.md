@@ -50,13 +50,15 @@ while testing phone casting: the phone remains the navigation/audio owner.
    rider, so fresh positions can be drawn immediately. Native screenshot sharing is
    skipped only after a successful receiver map load is advertised with
    `mapMode: "streets"` on an acknowledgment.
-7. Tap **停止投屏** or end navigation to stop. iOS keeps sending navigation
+7. Tap **断开 HUD** to stop and pause automatic reconnection, or end navigation to clear the map. iOS keeps sending navigation
    and heartbeats when minimized, using background location during navigation.
    Native iOS rendering pauses in the background, but the RDK street map and
    live position updates continue independently.
-   Android still stops sharing when backgrounded.
-   On Wi-Fi loss, reconnect explicitly using the new code. Casting does not
-   resume automatically after a network disconnection, force-quit or board restart.
+   Both clients securely remember the successful code pairing. During active
+   navigation they retry transient Wi-Fi loss with a 3–30 second backoff. Ending
+   navigation retains the bond for the next route; explicit disconnect persists
+   a pause. To resume manually, use the saved address and leave the code blank.
+   A force-quit cannot run reconnection work until Max is opened again.
 
 The phone still needs its existing relay/internet access to request routes.
 The phone-to-HUD transfer itself stays on the local network. RDK-hosted access
@@ -67,7 +69,10 @@ casting on Android are not implemented by this change.
 
 - Codes expire after five minutes and are consumed by one sender. A new code
   appears after that sender disconnects. At most five join attempts per minute
-  are allowed globally; a rejected second sender never replaces the active one.
+  are allowed globally for code pairing. A valid remembered credential can
+  replace its own half-open socket, so the 30-second liveness window cannot
+  incorrectly reject a reconnect as a second sender. A new remembered code pairing
+  replaces the previous remembered phone.
 - The app sends new navigation outputs, with one frame awaiting acknowledgment
   at a time. Intermediate outputs coalesce into the newest pending frame.
   A separate `hud.ping` / `hud.pong` exchange every four seconds keeps the
@@ -84,7 +89,10 @@ casting on Android are not implemented by this change.
   while navigating; this does not improve the accuracy of a weak GPS fix.
   The receiver releases a sender after thirty seconds without frames, maps or heartbeats. A clean stop
   or socket disconnect clears the route immediately.
-- The code, route and rider position live only in memory. The display endpoint
+- The code, route and rider position live only in memory. A SHA-256 digest of the
+  remembered phone's random 256-bit credential persists in
+  `/var/lib/max/hud-wifi-bond.json` with mode 0600. The phone credential is stored
+  in iOS Keychain or Android Keystore-backed encrypted preferences. The display endpoint
   is loopback-only, denies foreign Host headers, and uses `Cache-Control: no-store`.
   Browser-origin WebSocket senders are rejected. The sender socket does not
   expose bench tokens, account sessions, pairing secrets, cameras or transcripts.
@@ -97,7 +105,10 @@ casting on Android are not implemented by this change.
 
 Connect a native sender to `ws://<rdk-address>:<hud-port>/cast/socket` and send
 `{"type":"hud.join","code":"<six digits>"}` within five seconds. The receiver
-answers `{"type":"hud.ready"}` or closes the connection. Then send complete
+answers `{"type":"hud.ready"}` or closes the connection. New clients include
+`"remember":true` with code pairing and receive a `resumeToken` in `hud.ready`.
+Reconnect sends `{"type":"hud.join","resumeToken":"<saved credential>"}`.
+Credentials are never included in display state or logs. Then send complete
 `hud.frame` snapshots:
 
 ```json
@@ -303,3 +314,45 @@ Android device was connected.
 
 References: [BlueZ Media API](https://bluez.readthedocs.io/en/latest/media-api/)
 and [Apple external player events](https://developer.apple.com/documentation/mediaplayer/handling-external-player-events-notifications).
+
+### Music connection repair and remembered phones — 2026-09-18
+
+The bench phone initially connected without a remote player: the generic
+Bluetooth connection negotiated profiles but supplied no track metadata. After
+refreshing the Bluetooth session and explicitly connecting the phone's A2DP
+Audio Source followed by AVRCP Target, a real player, title and artist appeared.
+The phone reported QQMusic during the live check; HUD Pause and Play were both
+confirmed. Apple Music was reported stopped before the phone's active player
+changed. Other apps are displayed when the phone exposes them as its active player.
+
+The receiver now adopts one unambiguous already paired/trusted phone and persists
+its identity and automatic-connect preference in
+`/var/lib/max/hud-bluetooth-bond.json` (0600). It explicitly connects Audio Source
+then remote-control Target, including repair attempts when audio is connected but
+player metadata is missing. Already-connected audio does not suppress the player
+profile attempt. Retries back off up to sixty seconds and do not start playback.
+No Bluetooth keys are copied; BlueZ retains the original operating-system bond.
+
+Use **断开并暂停自动连接** on the idle HUD music card to disconnect and persistently
+pause Bluetooth retries, including across receiver restarts. **重新连接** resumes
+that opt-in. Phone-side Bluetooth disconnection is not distinguishable from link
+loss through the board's BlueZ 5.64 device properties; use the HUD button when
+retries should stay off. Wi-Fi's **断开 HUD** is a separate phone-app control.
+Automatic Wi-Fi resume requires Max to be running with active navigation and the
+saved RDK address reachable; this does not add automatic address discovery or
+background execution after force-quit.
+
+Verification of this update: saved-credential tests cover receiver restart,
+credential replacement, half-open socket takeover and credential redaction.
+Bluetooth tests cover profile ordering, retries, missing-player repair,
+already-connected audio, deliberate disconnect persistence and ambiguous devices.
+Both native clients have regression tests proving that explicit disconnect stays
+disabled through a new instance and fresh guidance. Five iOS HUD tests and the
+Android unit suite/debug build passed. The signed iOS app was installed and
+launched on the connected phone. The physical RDK showed the real title, artist,
+paused state and controls. Its Bluetooth disconnect remained paused after an
+agent restart; re-enabling and an independent simulated link drop both restored
+the player. Some subsequent Play requests were not confirmed by the phone's
+queue, and the HUD reported that rather than pretending playback had started.
+Apple Music-specific playback testing was deferred by the user. Physical Wi-Fi
+loss/recovery during an active phone navigation route remains an acceptance check.

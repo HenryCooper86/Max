@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { createBluetoothBond, type BondedPhone } from "./bluetooth-bond";
 import { randomUUID } from "node:crypto";
 
 const exec = promisify(execFile);
@@ -21,11 +22,18 @@ export type HudMusic = {
   busy: boolean;
   player: (Omit<Player, "path"> & { id: string }) | null;
   message: string;
+  connection?: { bonded: boolean; name: string; autoReconnect: boolean; connecting: boolean };
 };
 type Bus = (args: string[]) => Promise<string>;
-const systemBus: Bus = async (args) =>
-  (await exec("busctl", ["--system", "--json=short", "--timeout=2", ...args], { timeout: 2500, maxBuffer: 512 * 1024 }))
-    .stdout;
+const systemBus: Bus = async (args) => {
+  const connection = args.includes("ConnectProfile") || ["Connect", "Disconnect"].includes(args.at(-1) ?? "");
+  return (
+    await exec("busctl", ["--system", "--json=short", `--timeout=${connection ? 15 : 2}`, ...args], {
+      timeout: connection ? 16000 : 2500,
+      maxBuffer: 512 * 1024
+    })
+  ).stdout;
+};
 const record = (v: unknown): Record<string, unknown> =>
   v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 const value = (v: unknown) => record(v).data;
@@ -40,8 +48,22 @@ export function readBluetoothPlayers(json: string) {
   const objects = record(Array.isArray(data) ? data[0] : null);
   let connected = false;
   const players: Player[] = [];
-  for (const interfaces of Object.values(objects)) {
+  const phones: BondedPhone[] = [];
+  for (const [path, interfaces] of Object.entries(objects)) {
     const device = record(record(interfaces)["org.bluez.Device1"]);
+    const uuids = value(device.UUIDs);
+    if (
+      value(device.Paired) === true &&
+      (value(device.Icon) === "phone" ||
+        (Array.isArray(uuids) && uuids.includes("0000110a-0000-1000-8000-00805f9b34fb")))
+    )
+      phones.push({
+        path,
+        name: text(value(device.Alias)) || text(value(device.Name)),
+        connected: value(device.Connected) === true,
+        trusted: value(device.Trusted) === true,
+        blocked: value(device.Blocked) === true
+      });
     if (value(device.Connected) === true && value(device.Paired) === true) connected = true;
   }
   for (const [path, interfaces] of Object.entries(objects)) {
@@ -66,7 +88,7 @@ export function readBluetoothPlayers(json: string) {
       duration: milliseconds(value(track.Duration))
     });
   }
-  return { connected, players };
+  return { connected, players, phones };
 }
 
 /** Reads the phone's AVRCP session independently of navigation; never starts playback automatically. */
@@ -74,7 +96,8 @@ export function createHudMusic(
   changed: () => void,
   bus: Bus = systemBus,
   enabled = process.platform === "linux",
-  now = Date.now
+  now = Date.now,
+  bondFile = process.platform === "linux" ? "/var/lib/max/hud-bluetooth-bond.json" : ""
 ) {
   let state: HudMusic = {
     available: enabled,
@@ -83,6 +106,7 @@ export function createHudMusic(
     player: null,
     message: "在手机蓝牙中连接 RDK，然后播放音乐"
   };
+  const bond = createBluetoothBond(bus, changed, now, bondFile);
   let selected: Player | null = null;
   let id = "";
   let fetchedAt = 0;
@@ -102,6 +126,8 @@ export function createHudMusic(
         await bus(["call", "org.bluez", "/", "org.freedesktop.DBus.ObjectManager", "GetManagedObjects"])
       );
       if (closed) return;
+      bond.observe(snapshot.phones, snapshot.players.length > 0);
+      state.connection = bond.current;
       state.connected = snapshot.connected;
       const playing = snapshot.players.filter((p) => p.status === "playing");
       const candidates = playing.length ? playing : snapshot.players;
@@ -153,10 +179,11 @@ export function createHudMusic(
   timer?.unref();
   return {
     update,
+    connectionControl: bond.control,
     get current(): HudMusic {
       if (state.player && now() - fetchedAt > 5000)
         return { ...state, player: null, message: "正在重新连接音乐播放器" };
-      return { ...state, player: state.player ? { ...state.player } : null };
+      return { ...state, connection: bond.current, player: state.player ? { ...state.player } : null };
     },
     async control(action: unknown, expectedId: unknown): Promise<{ ok: boolean; message: string }> {
       if (typeof action !== "string" || !Object.hasOwn(actions, action) || typeof expectedId !== "string")
@@ -174,7 +201,14 @@ export function createHudMusic(
         for (let attempt = 0; attempt < 4 && !closed; attempt++) {
           await update();
           const after = selected as Player | null;
-          if (id !== expectedId || !after) return { ok: false, message: "音乐连接已改变" };
+          if (
+            !after ||
+            after.path !== before.path ||
+            ((action === "next" || action === "previous") && id !== expectedId)
+          )
+            return { ok: false, message: "音乐连接已改变" };
+          // iOS may rename the same player from Music to its active app when Play wakes it.
+          // Confirm the requested playback state on that same phone/player path.
           const changedTrack =
             after.title !== before.title ||
             after.artist !== before.artist ||
@@ -200,6 +234,7 @@ export function createHudMusic(
     },
     close() {
       closed = true;
+      bond.close();
       if (timer) clearInterval(timer);
       clear("");
     }

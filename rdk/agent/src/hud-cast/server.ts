@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { networkInterfaces } from "node:os";
 import { WebSocketServer, type WebSocket } from "ws";
+import { createHudBond } from "./bond";
 import { createHudMusic } from "./music";
 import { createHudWeather } from "./weather";
 import { createBasemap } from "./basemap";
@@ -16,10 +17,12 @@ export function createCastReceiver(
   page: string,
   now = Date.now,
   mapKey = process.env.AMAP_API_KEY?.trim() ?? "",
-  musicFactory = createHudMusic
+  musicFactory = createHudMusic,
+  bond = createHudBond()
 ) {
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
   let owner: WebSocket | undefined;
+  let ownerRemembered = false;
   let frame: CastFrame | null = null;
   let heading: number | null = null;
   let mapImage: Buffer | null = null;
@@ -73,6 +76,7 @@ export function createCastReceiver(
   function release(socket: WebSocket) {
     if (owner !== socket) return;
     owner = undefined;
+    ownerRemembered = false;
     frame = null;
     heading = null;
     basemap.reset();
@@ -100,21 +104,38 @@ export function createCastReceiver(
             attempts = 0;
             attemptWindow = now();
           }
+          const resumed = value?.type === "hud.join" && bond.accepts(value.resumeToken);
+          // A dropped Wi-Fi link may leave its old socket alive for 30 seconds.
+          // Only the same remembered phone may replace that connection.
+          if (resumed && owner && ownerRemembered) {
+            const previous = owner;
+            release(previous);
+            previous.terminate();
+          }
           if (
-            ++attempts > 5 ||
             owner ||
-            now() >= expiresAt ||
             value?.type !== "hud.join" ||
-            typeof value.code !== "string" ||
-            !/^\d{6}$/.test(value.code) ||
-            !timingSafeEqual(Buffer.from(value.code), Buffer.from(code))
+            (!resumed &&
+              (++attempts > 5 ||
+                now() >= expiresAt ||
+                typeof value.code !== "string" ||
+                !/^\d{6}$/.test(value.code) ||
+                !timingSafeEqual(Buffer.from(value.code), Buffer.from(code))))
           )
             throw new Error("Join refused");
+          const resumeToken = !resumed && value.remember === true ? bond.issue() : undefined;
           owner = socket;
+          ownerRemembered = resumed || !!resumeToken;
           lastActivityAt = now();
           clearTimeout(timeout);
           code = ""; // one use; displayed again only after disconnect
-          socket.send(JSON.stringify({ type: "hud.ready", ...(basemap.current ? { mapMode: "streets" } : {}) }));
+          socket.send(
+            JSON.stringify({
+              type: "hud.ready",
+              ...(resumeToken ? { resumeToken } : {}),
+              ...(basemap.current ? { mapMode: "streets" } : {})
+            })
+          );
           return;
         }
         if (value?.type === "hud.stop") {
@@ -242,7 +263,11 @@ export function createCastReceiver(
             response.end();
             return;
           }
-          void music.control(value.action, value.playerId).then((result) => {
+          void (
+            value.action === "connect" || value.action === "disconnect"
+              ? music.connectionControl(value.action)
+              : music.control(value.action, value.playerId)
+          ).then((result) => {
             if (response.destroyed) return;
             response.writeHead(result.ok ? 200 : 409, { "Content-Type": "application/json" });
             response.end(JSON.stringify(result));

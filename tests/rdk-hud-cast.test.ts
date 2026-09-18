@@ -69,6 +69,19 @@ async function harness(musicFactory?: Parameters<typeof createCastReceiver>[3]) 
 }
 
 describe("local phone HUD sharing", () => {
+  it("remembers a code pairing and resumes after disconnect without reusing the code", async () => {
+    const h = await harness();
+    const first = await h.connect();
+    const ready = await h.send(first, { type: "hud.join", code: (await h.state()).code, remember: true });
+    expect(ready.resumeToken).toMatch(/^[\w-]{43}$/);
+    // Reconnect before the old socket has timed out (e.g. a half-open Wi-Fi connection).
+    const closed = once(first, "close");
+    const second = await h.connect();
+    expect(await h.send(second, { type: "hud.join", resumeToken: ready.resumeToken })).toEqual({ type: "hud.ready" });
+    await closed;
+    expect((await h.state()).connected).toBe(true);
+    expect(JSON.stringify(await h.state())).not.toContain(ready.resumeToken);
+  });
   it("renders the phone route, detects stale guidance and accepts fresh reroutes", async () => {
     const h = await harness();
     const { code } = await h.state();
@@ -277,6 +290,7 @@ describe("HUD music command boundary", () => {
       current: { available: true, connected: false, busy: false, player: null, message: "" },
       update: async () => {},
       control,
+      connectionControl: async () => ({ ok: true, message: "" }),
       close: () => {}
     }));
     const headers = { "Content-Type": "application/json", "X-HUD-Control": "1", Origin: h.url };

@@ -251,7 +251,7 @@ class AgentSession(
 
     // ---- navigation ---------------------------------------------------------
 
-    val hudCast = com.horizon.maxhelmet.navigation.HudCastClient()
+    val hudCast = com.horizon.maxhelmet.navigation.HudCastClient(context)
 
     /** Relay-backed route search: turns navigation.start/reroute into a
      *  nav.request over the same socket, matched back through handleEvent's

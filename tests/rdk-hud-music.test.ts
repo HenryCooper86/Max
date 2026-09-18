@@ -94,6 +94,18 @@ describe("Bluetooth HUD music", () => {
     expect(h.music.current.player?.title).toBe("Track Two");
     expect(h.bus).toHaveBeenCalledWith(["call", "org.bluez", path, "org.bluez.MediaPlayer1", "Next"]);
   });
+  it("confirms Play when iOS publishes its active app name after waking the same player", async () => {
+    let json = snapshot({ name: "Music", status: "stopped" });
+    const bus = vi.fn(async (args: string[]) => {
+      if (args.at(-1) === "Play") json = snapshot({ name: "QQMusic", status: "playing" });
+      return json;
+    });
+    const music = createHudMusic(() => {}, bus, true);
+    cleanups.push(music.close);
+    await music.update();
+    expect((await music.control("play", music.current.player!.id)).ok).toBe(true);
+    expect(music.current.player?.name).toBe("QQMusic");
+  });
   it("rejects stale controls after the phone changes app or reconnects", async () => {
     const h = harness();
     await h.music.update();

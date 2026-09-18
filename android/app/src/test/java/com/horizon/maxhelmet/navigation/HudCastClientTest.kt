@@ -5,6 +5,22 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class HudCastClientTest {
+    @Test fun `explicit disconnect persists while navigation ending retains the bond`() {
+        var stored = """{"address":"192.168.50.9:8080","token":"test-token","enabled":true}"""
+        val client = HudCastClient(readBond = { stored }, writeBond = { stored = it; true })
+        client.update(null)
+        assertTrue(JSONObject(stored).getBoolean("enabled"))
+        client.stop()
+        assertFalse(JSONObject(stored).getBoolean("enabled"))
+        val restored = HudCastClient(readBond = { stored }, writeBond = { stored = it; true })
+        assertEquals("192.168.50.9:8080", restored.savedAddress)
+        val points = listOf(LatLon(31.0, 121.0), LatLon(31.1, 121.1))
+        val route = NavigationRoute("终点", points.last(), points, emptyList(), 2000.0, 300.0)
+        restored.update(NavGuidanceState("终点", "直行", 120.0, 2000.0, 300.0, false, false, route, points.first()))
+        assertFalse(restored.state.value.active)
+        restored.stop()
+    }
+
     @Test fun `only local addresses with explicit ports are accepted`() {
         assertEquals("http://192.168.1.20:8080/cast/socket", HudCastClient.endpoint("192.168.1.20:8080"))
         assertNotNull(HudCastClient.endpoint("rdk.local:8080"))

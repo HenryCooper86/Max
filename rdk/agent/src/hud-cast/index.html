@@ -431,6 +431,166 @@
         font-size: 12px;
       }
     }
+
+    .music-card {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      border: 1px solid #30483c;
+      border-radius: 18px;
+      padding: 16px 20px;
+      background: #101b16;
+      min-width: 0;
+    }
+    .music-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      display: grid;
+      place-items: center;
+      background: #233b29;
+      color: #caff75;
+      font-size: 28px;
+      flex-shrink: 0;
+    }
+    .music-copy {
+      flex: 1;
+      min-width: 0;
+    }
+    .music-title {
+      font-size: 20px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin: 4px 0;
+    }
+    .music-artist {
+      color: #a5b8bf;
+      font-size: 14px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .music-controls {
+      display: flex;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+    .music-controls button {
+      min-width: 48px;
+      font-size: 20px;
+      padding: 8px 12px;
+    }
+    .music-controls .music-toggle {
+      color: #132010;
+      background: #caff75;
+      border-color: #caff75;
+    }
+    .music-controls button:disabled {
+      opacity: 0.4;
+      cursor: default;
+    }
+    .music-feedback {
+      color: #ffce88;
+      font-size: 13px;
+      margin-top: 6px;
+    }
+    .music-progress {
+      height: 3px;
+      border: 0;
+      width: 100%;
+      accent-color: #caff75;
+      display: block;
+      margin-top: 10px;
+    }
+    #nav-music {
+      margin-top: 14px;
+      padding: 10px 12px;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    #nav-music .music-icon,
+    #nav-music .music-progress {
+      display: none;
+    }
+    #nav-music .label {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #nav-music .music-title {
+      font-size: 16px;
+    }
+    #nav-music .music-controls {
+      margin-left: auto;
+      gap: 6px;
+    }
+    #nav-music .music-controls button {
+      min-width: 44px;
+      padding: 6px 10px;
+    }
+    @media (max-height: 700px) and (min-aspect-ratio: 1/1) {
+      #guidance:has(#nav-music:not([hidden])) #upcoming-panel {
+        display: none;
+      }
+      #nav-music {
+        margin-top: 0;
+      }
+    }
+    @media (max-height: 550px) {
+      #join {
+        gap: 8px;
+      }
+      #join .weather-main {
+        margin: 4px 0;
+      }
+      #join #weather-temperature {
+        font-size: 42px;
+        line-height: 1.1;
+      }
+      #join #weather-icon {
+        font-size: 32px;
+      }
+      #join #weather-condition {
+        font-size: 18px;
+      }
+      #join #weather-detail,
+      #join #weather-updated {
+        margin-top: 4px;
+        font-size: 11px;
+      }
+      #idle-music {
+        padding: 8px 12px;
+        gap: 12px;
+      }
+      #idle-music .music-icon {
+        width: 38px;
+        height: 38px;
+      }
+      #idle-music .music-title {
+        font-size: 17px;
+      }
+      #idle-music .music-progress {
+        display: none;
+      }
+      #join:has(#idle-music:not([hidden])) #idle-clock {
+        font-size: clamp(60px, 10vw, 100px);
+      }
+      #join:has(#idle-music:not([hidden])) .idle-message {
+        display: none;
+      }
+    }
+    @media (max-width: 550px) {
+      .music-card {
+        flex-wrap: wrap;
+        padding: 14px;
+        gap: 12px;
+      }
+      .music-controls {
+        margin-left: auto;
+      }
+    }
   </style>
   <header>
     <span class="brand">MAX / HUD</span><span id="status" role="status">正在连接显示服务…</span
@@ -460,6 +620,28 @@
           <div id="weather-updated" class="label"></div>
         </div>
       </div>
+      <section id="idle-music" class="music-card" aria-label="音乐播放器" hidden>
+        <div class="music-icon" aria-hidden="true">♫</div>
+        <div class="music-copy">
+          <div id="idle-music-source" class="label">手机音乐 · 蓝牙</div>
+          <div id="idle-music-title" class="music-title">连接手机播放音乐</div>
+          <div id="idle-music-artist" class="music-artist"></div>
+          <progress
+            id="idle-music-progress"
+            class="music-progress"
+            max="1"
+            value="0"
+            aria-label="播放进度"
+            hidden
+          ></progress>
+          <div id="idle-music-feedback" class="music-feedback" role="status" hidden></div>
+        </div>
+        <div id="idle-music-controls" class="music-controls">
+          <button id="idle-music-previous" aria-label="上一首">⏮</button>
+          <button id="idle-music-toggle" class="music-toggle" aria-label="播放">▶</button>
+          <button id="idle-music-next" aria-label="下一首">⏭</button>
+        </div>
+      </section>
       <div class="idle-connect">
         <div>
           <div class="label">连接手机</div>
@@ -487,6 +669,28 @@
         <div class="label">接下来的路口</div>
         <ol id="upcoming"></ol>
       </div>
+      <section id="nav-music" class="music-card" aria-label="音乐播放器" hidden>
+        <div class="music-icon" aria-hidden="true">♫</div>
+        <div class="music-copy">
+          <div id="nav-music-source" class="label">手机音乐 · 蓝牙</div>
+          <div id="nav-music-title" class="music-title">连接手机播放音乐</div>
+          <div id="nav-music-artist" class="music-artist"></div>
+          <progress
+            id="nav-music-progress"
+            class="music-progress"
+            max="1"
+            value="0"
+            aria-label="播放进度"
+            hidden
+          ></progress>
+          <div id="nav-music-feedback" class="music-feedback" role="status" hidden></div>
+        </div>
+        <div id="nav-music-controls" class="music-controls">
+          <button id="nav-music-previous" aria-label="上一首">⏮</button>
+          <button id="nav-music-toggle" class="music-toggle" aria-label="播放">▶</button>
+          <button id="nav-music-next" aria-label="下一首">⏭</button>
+        </div>
+      </section>
       <div id="trip">
         <div><span class="label">剩余里程</span><strong id="remaining"></strong></div>
         <div><span class="label">剩余时间</span><strong id="duration"></strong></div>
@@ -643,6 +847,70 @@
       el("camera").setAttribute("aria-pressed", String(following));
       el("map-note").textContent = `${following && frame.position ? "跟随位置" : "路线全程"} · 北向上`;
     }
+
+    let musicPending = false;
+    let musicFeedback = "";
+    let musicFeedbackPlayer = null;
+    function renderMusic(state) {
+      const music = state.music;
+      const player = music?.player;
+      if (player?.id !== musicFeedbackPlayer) {
+        musicFeedback = "";
+        musicFeedbackPlayer = player?.id;
+      }
+      for (const prefix of ["idle", "nav"]) {
+        const get = (part) => el(`${prefix}-music${part ? "-" + part : ""}`);
+        get("").hidden = prefix === "nav" ? !state.frame || !player : !!state.frame || !music;
+        get("source").textContent = player
+          ? `${player.name} · 蓝牙 · ${player.status === "playing" ? "正在播放" : player.status === "paused" ? "已暂停" : "已停止"}`
+          : "手机音乐 · 蓝牙";
+        get("title").textContent = player ? player.title || "手机正在播放" : "连接手机播放音乐";
+        get("artist").textContent = player
+          ? [player.artist, player.album].filter(Boolean).join(" · ")
+          : music?.message || "";
+        get("controls").hidden = !player;
+        get("toggle").textContent = player?.status === "playing" ? "Ⅱ" : "▶";
+        get("toggle").setAttribute("aria-label", player?.status === "playing" ? "暂停" : "播放");
+        for (const action of ["previous", "toggle", "next"])
+          get(action).disabled = !player || musicPending || music?.busy;
+        const progress = get("progress");
+        progress.hidden = !player || !(player.duration > 0) || player.position === null;
+        progress.max = player?.duration || 1;
+        progress.value = Math.min(player?.position || 0, progress.max);
+        get("feedback").hidden = !musicFeedback;
+        get("feedback").textContent = musicFeedback;
+      }
+    }
+    async function controlMusic(action) {
+      const player = latestState?.music?.player;
+      if (!player || musicPending || latestState.music.busy) return;
+      musicPending = true;
+      musicFeedback = "";
+      musicFeedbackPlayer = player.id;
+      renderMusic(latestState);
+      try {
+        const response = await fetch("/cast/music", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-HUD-Control": "1" },
+          body: JSON.stringify({ action, playerId: player.id }),
+          signal: AbortSignal.timeout(20000)
+        });
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.message || "音乐操作未完成");
+      } catch (error) {
+        musicFeedback = error.message || "音乐连接已断开";
+      } finally {
+        musicPending = false;
+        if (latestState) renderMusic(latestState);
+      }
+    }
+    for (const prefix of ["idle", "nav"]) {
+      el(`${prefix}-music-previous`).onclick = () => controlMusic("previous");
+      el(`${prefix}-music-next`).onclick = () => controlMusic("next");
+      el(`${prefix}-music-toggle`).onclick = () =>
+        controlMusic(latestState?.music?.player?.status === "playing" ? "pause" : "play");
+    }
+
     function updateClock() {
       const now = new Date();
       const timeZone = latestState?.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -693,6 +961,7 @@
     function render(state) {
       latestState = state;
       renderIdle(state);
+      renderMusic(state);
       loadBasemap(state);
       document.body.classList.toggle("street-map", !!loadedBasemap);
       const hasPhoneMap = !!state.frame && !state.stale && !!state.mapSequence && !loadedBasemap;

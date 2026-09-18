@@ -1,6 +1,6 @@
 import { createServer, get } from "node:http";
 import { once } from "node:events";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createCastReceiver, CAST_STALE_MS } from "../rdk/agent/src/hud-cast/server";
 import { parseCastFrame, type CastFrame } from "../rdk/agent/src/hud-cast/protocol";
@@ -24,9 +24,9 @@ const cleanups: Array<() => void> = [];
 afterEach(() => {
   for (const cleanup of cleanups.splice(0)) cleanup();
 });
-async function harness() {
+async function harness(musicFactory?: Parameters<typeof createCastReceiver>[3]) {
   let time = 1_000_000;
-  const receiver = createCastReceiver("<title>HUD</title>", () => time, "");
+  const receiver = createCastReceiver("<title>HUD</title>", () => time, "", musicFactory);
   const server = createServer((req, res) => {
     if (!receiver.handle(req, res)) {
       res.writeHead(404);
@@ -267,5 +267,30 @@ describe("local phone HUD sharing", () => {
     ])
       expect(() => parseCastFrame(bad)).toThrow();
     expect(parseCastFrame({ ...frame, secret: "discard" })).not.toHaveProperty("secret");
+  });
+});
+
+describe("HUD music command boundary", () => {
+  it("allows same-origin local controls but refuses cross-origin, missing-header and GET commands", async () => {
+    const control = vi.fn(async () => ({ ok: true, message: "" }));
+    const h = await harness(() => ({
+      current: { available: true, connected: false, busy: false, player: null, message: "" },
+      update: async () => {},
+      control,
+      close: () => {}
+    }));
+    const headers = { "Content-Type": "application/json", "X-HUD-Control": "1", Origin: h.url };
+    const body = JSON.stringify({ action: "pause", playerId: "current" });
+    expect((await fetch(h.url + "/cast/music", { method: "POST", headers, body })).status).toBe(200);
+    expect(control).toHaveBeenCalledWith("pause", "current");
+    for (const badHeaders of [
+      { ...headers, Origin: "https://other.example" },
+      { ...headers, "X-HUD-Control": "" }
+    ]) {
+      expect((await fetch(h.url + "/cast/music", { method: "POST", headers: badHeaders, body })).status).toBe(403);
+    }
+    expect((await fetch(h.url + "/cast/music")).status).toBe(403);
+    expect((await fetch(h.url + "/cast/music", { method: "POST", headers, body: "null" })).status).toBe(400);
+    expect(control).toHaveBeenCalledTimes(1);
   });
 });

@@ -63,8 +63,11 @@ class MusicController(private val context: Context, private val scope: Coroutine
         scope.launch {
             playback.state.collect { current ->
                 if (!useQQ) mutableState.value = current
-                mediaSession.isActive = current.playing
-                mediaSession.setMetadata(MediaMetadata.Builder().putString(MediaMetadata.METADATA_KEY_TITLE, current.title).build())
+                // Keep a paused queue addressable by Bluetooth so Play can resume it.
+                mediaSession.isActive = !useQQ && current.visible
+                mediaSession.setMetadata(MediaMetadata.Builder()
+                    .putString(MediaMetadata.METADATA_KEY_TITLE, current.title)
+                    .putString(MediaMetadata.METADATA_KEY_ARTIST, current.artist).build())
                 mediaSession.setPlaybackState(PlaybackState.Builder()
                     .setActions(PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_SKIP_TO_NEXT or PlaybackState.ACTION_SKIP_TO_PREVIOUS)
                     .setState(if (current.playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED,
@@ -79,6 +82,7 @@ class MusicController(private val context: Context, private val scope: Coroutine
     fun chooseQQMusic() {
         playback.stop()
         useQQ = true
+        mediaSession.isActive = false
         mutableState.value = qq.state.value
         show()
     }

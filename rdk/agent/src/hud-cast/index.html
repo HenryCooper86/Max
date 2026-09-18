@@ -60,17 +60,159 @@
     }
     #join {
       grid-column: 1 / -1;
-      align-self: center;
-      text-align: center;
+      align-self: stretch;
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+      padding: 10px 18px;
+      min-width: 0;
+    }
+    .idle-topline {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      font-size: 13px;
+      color: #9bacb2;
+    }
+    .idle-kicker {
+      letter-spacing: 0.16em;
+    }
+    #idle-ready {
+      color: #caff75;
+      white-space: nowrap;
+    }
+    .idle-grid {
+      display: grid;
+      grid-template-columns: 1.3fr 1fr;
+      gap: 32px;
+      flex: 1;
+      align-items: center;
+    }
+    #idle-date {
+      color: #d8e1e4;
+      font-size: clamp(17px, 2vw, 28px);
+    }
+    #idle-clock {
+      font-size: clamp(80px, 12vw, 190px);
+      line-height: 1.15;
+      font-weight: 650;
+      letter-spacing: -0.055em;
+      font-variant-numeric: tabular-nums;
+      color: #f6faf8;
+    }
+    .idle-message {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-top: 18px;
+      color: #a5b8bf;
+      font-size: 16px;
+    }
+    .idle-dot {
+      width: 7px;
+      height: 7px;
+      background: #caff75;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .idle-weather-panel {
+      border-left: 1px solid #33443d;
+      padding-left: 32px;
+    }
+    #weather-city {
+      font-size: 18px;
+      color: #d8e1e4;
+    }
+    .weather-main {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      margin: 8px 0;
+    }
+    #weather-icon {
+      font-size: clamp(42px, 5vw, 75px);
+      color: #caff75;
+    }
+    #weather-temperature {
+      font-size: clamp(48px, 6vw, 92px);
+      line-height: 1.3;
+      font-weight: 550;
+    }
+    #weather-condition {
+      font-size: 22px;
+    }
+    #weather-detail,
+    #weather-updated {
+      margin-top: 8px;
+    }
+    .idle-connect {
+      border: 1px solid #2c4037;
+      border-radius: 18px;
+      padding: 18px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 24px;
+      background: #101b16;
+    }
+    #idle-connect-copy {
+      font-size: 18px;
+      margin-top: 4px;
+    }
+    #address {
+      color: #93a8b1;
+      font-size: 14px;
+      overflow-wrap: anywhere;
+    }
+    .pairing {
+      flex-shrink: 0;
+      text-align: right;
     }
     #code {
       display: block;
       color: #caff75;
-      font-size: clamp(48px, 10vw, 96px);
+      font-size: clamp(28px, 4vw, 48px);
+      line-height: 1.3;
       letter-spacing: 0.15em;
+      font-variant-numeric: tabular-nums;
     }
-    #address {
-      overflow-wrap: anywhere;
+    @media (max-height: 550px) {
+      #join {
+        gap: 12px;
+        padding: 0;
+      }
+      .idle-connect {
+        padding: 12px 18px;
+      }
+      .idle-message {
+        margin-top: 10px;
+      }
+    }
+    @media (max-width: 550px) {
+      #join {
+        padding: 4px;
+      }
+      .idle-grid {
+        grid-template-columns: 1fr;
+        gap: 24px;
+      }
+      .idle-weather-panel {
+        border-left: 0;
+        border-top: 1px solid #33443d;
+        padding: 18px 0 0;
+      }
+      .idle-kicker {
+        font-size: 10px;
+        letter-spacing: 0.05em;
+      }
+      .idle-connect {
+        padding: 14px;
+        gap: 14px;
+        flex-wrap: wrap;
+      }
+      .pairing {
+        text-align: left;
+      }
     }
     #guidance {
       display: flex;
@@ -295,11 +437,41 @@
     ><button id="fullscreen">全屏</button>
   </header>
   <main>
-    <section id="join">
-      <p>在手机导航中选择「投屏到 HUD」</p>
-      <p id="address"></p>
-      <strong id="code">—</strong>
-      <p>手机与 RDK 连接同一 Wi-Fi · 连接码 5 分钟内有效</p>
+    <section id="join" aria-label="待机仪表盘">
+      <div class="idle-topline">
+        <span class="idle-kicker">READY FOR YOUR NEXT RIDE</span><span id="idle-ready">● HUD 已就绪</span>
+      </div>
+      <div class="idle-grid">
+        <div class="idle-clock-panel">
+          <div id="idle-date"></div>
+          <div id="idle-clock">--:--</div>
+          <div id="idle-zone" class="label">本地时间</div>
+          <div class="idle-message">
+            <span class="idle-dot"></span><span id="idle-message">随时出发 · 在手机上开始导航</span>
+          </div>
+        </div>
+        <div class="idle-weather-panel">
+          <div class="label" id="weather-city">当地天气</div>
+          <div class="weather-main">
+            <span id="weather-icon" aria-hidden="true">☁</span><strong id="weather-temperature">—</strong>
+          </div>
+          <div id="weather-condition">正在获取天气</div>
+          <div id="weather-detail" class="label">天气数据来自高德</div>
+          <div id="weather-updated" class="label"></div>
+        </div>
+      </div>
+      <div class="idle-connect">
+        <div>
+          <div class="label">连接手机</div>
+          <div id="idle-connect-copy">导航中选择「投屏到 HUD」</div>
+          <div id="address"></div>
+        </div>
+        <div class="pairing">
+          <div class="label">连接码</div>
+          <strong id="code">—</strong>
+          <div class="label" id="pairing-note">同一 Wi-Fi · 5 分钟有效</div>
+        </div>
+      </div>
     </section>
     <section id="guidance" hidden>
       <div id="destination"></div>
@@ -471,8 +643,56 @@
       el("camera").setAttribute("aria-pressed", String(following));
       el("map-note").textContent = `${following && frame.position ? "跟随位置" : "路线全程"} · 北向上`;
     }
+    function updateClock() {
+      const now = new Date();
+      const timeZone = latestState?.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+      el("idle-clock").textContent = now.toLocaleTimeString("zh-CN", {
+        timeZone,
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false
+      });
+      el("idle-date").textContent = now.toLocaleDateString("zh-CN", {
+        timeZone,
+        month: "long",
+        day: "numeric",
+        weekday: "long"
+      });
+      el("idle-zone").textContent = `本地时间 · ${timeZone}`;
+    }
+    function renderIdle(state) {
+      updateClock();
+      el("idle-message").textContent = state.connected ? "手机已连接 · 等待导航路线" : "随时出发 · 在手机上开始导航";
+      el("idle-ready").textContent = state.connected ? "● 手机已连接" : "● HUD 已就绪";
+      el("pairing-note").textContent = state.connected ? "等待手机导航" : "同一 Wi-Fi · 5 分钟有效";
+      const weather = state.weather;
+      el("weather-city").textContent = weather?.city || "当地天气";
+      el("weather-temperature").textContent = weather ? `${weather.temperature}°` : "—";
+      el("weather-condition").textContent = weather ? weather.condition : "天气暂不可用";
+      el("weather-icon").textContent = !weather
+        ? "☁"
+        : /雪/.test(weather.condition)
+          ? "❄"
+          : /雨/.test(weather.condition)
+            ? "☂"
+            : /晴/.test(weather.condition)
+              ? "☀"
+              : "☁";
+      el("weather-detail").textContent = weather
+        ? `${weather.wind} · 湿度 ${weather.humidity}%`
+        : "联网后自动更新 · 高德天气";
+      el("weather-updated").textContent = weather
+        ? `${weather.stale ? "旧数据 · " : ""}${weather.reportTime} 发布 · ${weather.source === "navigation" ? "最近导航城市" : "网络所在地"}`
+        : "";
+    }
+    function clockTick() {
+      updateClock();
+      setTimeout(clockTick, 1000);
+    }
+    clockTick();
     function render(state) {
       latestState = state;
+      renderIdle(state);
       loadBasemap(state);
       document.body.classList.toggle("street-map", !!loadedBasemap);
       const hasPhoneMap = !!state.frame && !state.stale && !!state.mapSequence && !loadedBasemap;

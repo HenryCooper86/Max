@@ -92,6 +92,36 @@ function harness() {
 }
 
 describe("detailed HUD route display", () => {
+  it("returns to the clock, weather and pairing dashboard after sharing ends", () => {
+    const h = harness();
+    h.render();
+    expect(h.get("join").hidden).toBe(true);
+    h.render({
+      connected: false,
+      frame: null,
+      code: "123456",
+      timeZone: "Asia/Shanghai",
+      weather: {
+        city: "北京",
+        condition: "晴",
+        temperature: "23",
+        humidity: "50",
+        wind: "北风 3级",
+        reportTime: "2026-09-18 12:00:00",
+        source: "network",
+        stale: true
+      }
+    });
+    expect(h.get("join").hidden).toBe(false);
+    expect(h.get("map-panel").hidden).toBe(true);
+    expect(h.get("idle-clock").textContent).toMatch(/\d{2}:\d{2}/);
+    expect(h.get("weather-city").textContent).toBe("北京");
+    expect(h.get("weather-temperature").textContent).toBe("23°");
+    expect(h.get("weather-updated").textContent).toContain("旧数据");
+    h.render({ connected: false, frame: null, weather: null });
+    expect(h.get("weather-temperature").textContent).toBe("—");
+    expect(h.get("weather-condition").textContent).toBe("天气暂不可用");
+  });
   it("shows upcoming phone instructions and switches between follow and overview", () => {
     const h = harness();
     h.render();

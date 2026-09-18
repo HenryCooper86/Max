@@ -149,14 +149,30 @@ matching image for the metadata in `state.basemap`. Both endpoints are loopback-
 
 ## Acceptance record
 
-2026-09-18 independent street-map update: local browser rendering and all 1,699
-repository tests pass. An RDK loopback test measured 63 ms from sending a fixture
-position to receiving the SSE update; this excludes phone GPS acquisition and
-is not an end-to-end latency guarantee. Direct AMap static-map requests succeed
-from the development machine but fail with `INVALID_USER_IP` (10005) from both
-RDK and the deployed relay. The provider IP allowlist must be updated before
-street imagery can load on the RDK. Until then, foreground native snapshots and
-background schematic guidance remain available. No relay code was changed.
+2026-09-18 independent street-map update: the provider IP allowlist has been
+updated. Direct requests from the RDK now return HTTP 200 PNG street imagery.
+A 12-second board fixture retained streets without any phone screenshots and
+measured 17 ms from sending a position to receiving its SSE update. This excludes
+phone GPS acquisition and is not an end-to-end latency guarantee. No relay code
+was changed.
+
+### Idle dashboard
+
+When no route is shared, the display shows the RDK's local time and date, weather,
+connection status and a compact pairing panel. Stopping sharing clears the route
+and immediately broadcasts the idle state. Weather refreshes every ten minutes
+using the existing server-side AMap key. Initial city lookup uses the network IP;
+navigation can subsequently select the rider's city. Only the city and weather
+remain in memory after sharing ends; raw GPS coordinates are not retained by the
+weather service. The dashboard labels the city source and provider report time.
+Unavailable weather shows a placeholder; cached data is marked old after thirty
+minutes without a successful fetch or a provider report older than three hours.
+Weather failures back off for one minute and do not interrupt navigation.
+
+Verification: all 1,704 repository tests and the full local check command passed.
+Browser layouts were inspected at 800×480 and 390×844, and the physical RDK
+desktop at 1920×1080 showed live weather. A board fixture confirmed street maps
+without phone snapshots, then returned to idle with weather retained after stop.
 
 The independent 800×600 HUD renderer was tested on the connected iPhone on
 2026-09-18. A real SDK snapshot was captured and inspected for route, rider marker,

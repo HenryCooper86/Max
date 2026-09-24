@@ -1,5 +1,7 @@
 # Max on RDK X5
 
+[简体中文](README.zh-CN.md) · English
+
 Embedded client for the Max helmet assistant. See
 `docs/superpowers/specs/2026-07-25-rdk-x5-embedded-client-design.md`.
 

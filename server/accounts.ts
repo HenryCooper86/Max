@@ -11,7 +11,7 @@ import { promisify } from "node:util";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { config } from "./config";
+import { config } from "./runtime-config";
 import { createLogger } from "./logger";
 import { ensureTestingStorageDirectory } from "./testing-storage";
 

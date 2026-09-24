@@ -79,3 +79,33 @@ describe("account-scoped transcript persistence", () => {
     expect(loadStoredTranscript(bobId)).toMatchObject([{ text: "bob route" }]);
   });
 });
+
+describe("relay token onboarding", () => {
+  it("removes a URL token even when local storage fails and keeps it for this page", async () => {
+    vi.resetModules();
+    const replaceState = vi.fn();
+    vi.stubGlobal("window", {
+      location: {
+        search: "?token=secret&view=voice",
+        href: "https://example.test/?token=secret&view=voice#ride"
+      },
+      localStorage: {
+        setItem: () => {
+          throw new Error("storage unavailable");
+        },
+        getItem: () => {
+          throw new Error("storage unavailable");
+        }
+      },
+      history: { state: null, replaceState }
+    });
+    vi.stubGlobal("document", { title: "Max" });
+    const { relayAuthToken } = await import("../src/lib/persistence");
+
+    expect(relayAuthToken()).toBe("secret");
+    expect(replaceState).toHaveBeenCalledWith(null, "Max", "/?view=voice#ride");
+
+    window.location.search = "?view=voice";
+    expect(relayAuthToken()).toBe("secret");
+  });
+});

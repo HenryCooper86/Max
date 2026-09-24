@@ -1,5 +1,7 @@
 # Max 头盔助手 — iOS App
 
+[简体中文](README.zh-CN.md) · English
+
 Native iOS (Swift + SwiftUI) client for the Max motorcycle helmet voice agent. It speaks the
 same `/agent` relay protocol as the web HUD and the Android app, so the Node server, Doubao
 integration, weather, and ride intelligence all work unchanged — this app replaces only the
@@ -276,9 +278,9 @@ audio + session logic; the `UI/` layer is the SwiftUI HUD.
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | `Agent/AgentProtocol.swift` | Enums, event parsing, `session.start` builder, pure helpers (`combineHazardLevels`, `mapTurnState`, `detectLanguage`, `normalizeTranscriptText`, transcript export) | `shared/agent.ts`, `shared/ride.ts`, `shared/language.ts`, `android/.../AgentProtocol.kt` |
 | `Agent/MicStreamer.swift`   | Mic capture → 16 kHz PCM16 mono, 320-sample (20 ms) frames; enables echo cancellation on the shared engine and owns its start/stop                                  | `public/pcm-worklet.js`, `MicStreamer.kt`                                                 |
-| `Agent/PcmPlayer.swift`     | Gapless 24 kHz PCM16 playback + barge-in; attaches its player node to the shared engine                                                                             | playback cursor in `src/main.tsx`, `PcmPlayer.kt`                                         |
+| `Agent/PcmPlayer.swift`     | Gapless 24 kHz PCM16 playback + barge-in; attaches its player node to the shared engine                                                                             | playback cursor in `src/hooks/useHelmetAgent.ts`, `PcmPlayer.kt`                          |
 | `Agent/AudioRouter.swift`   | `AVAudioSession` voice-chat config + Bluetooth (HFP) routing                                                                                                        | `AudioRouter.kt`                                                                          |
-| `Agent/AgentSession.swift`  | Relay WebSocket, reconnect backoff, transcript dedup, barge-in, `AVSpeechSynthesizer` TTS fallback, location, self-signed TLS, published state                      | `useHelmetAgent` in `src/main.tsx`, `AgentSession.kt`                                     |
+| `Agent/AgentSession.swift`  | Relay WebSocket, reconnect backoff, transcript dedup, barge-in, `AVSpeechSynthesizer` TTS fallback, location, self-signed TLS, published state                      | `useHelmetAgent` in `src/hooks/useHelmetAgent.ts`, `AgentSession.kt`                      |
 | `UI/AgentScreen.swift`      | Voice-mode screen: animated helmet centerpiece (ported SVG), status caption, ADAS banner, captions overlay, minimal controls, and the unified 设置 sheet            | `src/components/HelmetVisual.tsx`, `AgentScreen.kt`                                       |
 | `UI/MainViewModel.swift`    | Relay/cert preferences, Keychain-backed tokens, hands-free toggle, transcript export share sheet                                                                    | `MainViewModel.kt`                                                                        |
 | `UI/HudTheme.swift`         | Design tokens                                                                                                                                                       | `src/styles.css`, `theme/Theme.kt`                                                        |
@@ -308,7 +310,7 @@ audio + session logic; the `UI/` layer is the SwiftUI HUD.
   audio; Doubao returns synthesized audio).
 
 When the relay protocol or the web-side helpers (`shared/agent.ts`, `shared/ride.ts`,
-`shared/language.ts`, the pure functions in `src/main.tsx`, or the dedup logic mirrored in
+`shared/language.ts`, the pure functions in `src/hooks/useHelmetAgent.ts`, or the dedup logic mirrored in
 `server/providers/doubao.ts`) change, update this app's `Agent/` layer alongside the Android
 counterparts.
 

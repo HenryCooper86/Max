@@ -137,6 +137,12 @@ function assertCoordinate(value: unknown, min: number, max: number, field: strin
   }
 }
 
+function assertCrashIncidentId(value: unknown): asserts value is string {
+  if (typeof value !== "string" || !value.trim() || Buffer.byteLength(value) > 120 || hasControlCharacter(value)) {
+    throw new Error("Invalid crash incidentId");
+  }
+}
+
 /** The optional session-memory snapshot echoed back by restarting clients. */
 function assertOptionalMemory(value: unknown) {
   if (value === undefined) return;
@@ -272,16 +278,29 @@ export function parseClientEvent(data: RawData): ClientEvent {
   }
 
   if (value.type === "crash.alert") {
-    if (typeof value.incidentId !== "string" || value.incidentId.length === 0)
-      throw new Error("Invalid crash.alert incidentId");
+    assertCrashIncidentId(value.incidentId);
     if (typeof value.contactOptIn !== "boolean") throw new Error("Invalid crash.alert contactOptIn");
-    if (value.lat !== undefined && typeof value.lat !== "number") throw new Error("Invalid crash.alert lat");
-    if (value.lon !== undefined && typeof value.lon !== "number") throw new Error("Invalid crash.alert lon");
-    if (value.speedKmhRecent !== undefined && typeof value.speedKmhRecent !== "number")
+    assertOptionalCoordinate(value.lat, -90, 90, "crash.alert lat");
+    assertOptionalCoordinate(value.lon, -180, 180, "crash.alert lon");
+    if (
+      value.speedKmhRecent !== undefined &&
+      (typeof value.speedKmhRecent !== "number" || !Number.isFinite(value.speedKmhRecent) || value.speedKmhRecent < 0)
+    )
       throw new Error("Invalid crash.alert speedKmhRecent");
-    if (value.contactNumber !== undefined && typeof value.contactNumber !== "string")
+    if (
+      value.contactNumber !== undefined &&
+      (typeof value.contactNumber !== "string" ||
+        Buffer.byteLength(value.contactNumber) > 128 ||
+        hasControlCharacter(value.contactNumber))
+    )
       throw new Error("Invalid crash.alert contactNumber");
-    if (value.detectedAt !== undefined && typeof value.detectedAt !== "number")
+    if (
+      value.detectedAt !== undefined &&
+      (typeof value.detectedAt !== "number" ||
+        !Number.isFinite(value.detectedAt) ||
+        value.detectedAt < 0 ||
+        value.detectedAt > 8.64e15)
+    )
       throw new Error("Invalid crash.alert detectedAt");
     return {
       type: "crash.alert",
@@ -296,8 +315,7 @@ export function parseClientEvent(data: RawData): ClientEvent {
   }
 
   if (value.type === "crash.cancel") {
-    if (typeof value.incidentId !== "string" || value.incidentId.length === 0)
-      throw new Error("Invalid crash.cancel incidentId");
+    assertCrashIncidentId(value.incidentId);
     return {
       type: "crash.cancel",
       incidentId: value.incidentId

@@ -26,3 +26,10 @@ This review covered the web client, relay, shared TypeScript, RDK vision tests, 
 - The shared test relay still uses a self-signed certificate; release apps require a trusted domain and certificate.
 
 See [mobile parity](mobile-parity.md), [RDK acceptance](rdk-ios-companion-acceptance.md), and the prior [navigation review](code-audit-2026-09-15.md) for detailed acceptance evidence.
+
+## Follow-up quality review
+
+- Split environment settings into `server/runtime-config.ts`. Account storage now imports settings without a circular dependency on health reporting; a local import-graph scan found no remaining cycles across the web, relay, and RDK agent TypeScript modules.
+- Tightened relay parsing of crash events. Incident identifiers and contact numbers are bounded and reject control characters; coordinates, speed, and timestamps reject impossible values. The new regression cases failed before the fix and pass afterward.
+- Re-ran `npm run check`: 1,724 Vitest tests passed, along with protocol generation, formatting, lint, Knip, RDK TypeScript, 24 fault-matrix cases, and the production build. The software-only RDK vision suite passed 478 tests using the pinned local Python environment. `npm audit --omit=dev --audit-level=high` found no vulnerabilities.
+- An advisory ESLint complexity scan at a threshold of 25 flagged 18 functions. The largest are `EvidenceWorkspace` (168), `parseClientEvent` (149), and the Doubao provider's main message handler (115). They remain maintainability risks, not demonstrated defects. Refactor these by responsibility with behavior tests before changing their control flow.

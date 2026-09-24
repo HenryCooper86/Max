@@ -49,6 +49,29 @@ describe("parseClientEvent crash events", () => {
     ).toThrow(/lat/);
   });
 
+  it("rejects impossible crash coordinates and timestamps", () => {
+    const base = { type: "crash.alert", incidentId: "i3", contactOptIn: true };
+    for (const invalid of [
+      { lat: 91 },
+      { lon: -181 },
+      { speedKmhRecent: -1 },
+      { detectedAt: -1 },
+      { detectedAt: 1e100 }
+    ]) {
+      expect(() => parseClientEvent(encode({ ...base, ...invalid }))).toThrow();
+    }
+  });
+
+  it("rejects oversized or control-character crash identifiers and contact numbers", () => {
+    const base = { type: "crash.alert", contactOptIn: true };
+    expect(() => parseClientEvent(encode({ ...base, incidentId: "x".repeat(121) }))).toThrow(/incidentId/);
+    expect(() => parseClientEvent(encode({ ...base, incidentId: "bad\nline" }))).toThrow(/incidentId/);
+    expect(() => parseClientEvent(encode({ ...base, incidentId: "i3", contactNumber: "1".repeat(129) }))).toThrow(
+      /contactNumber/
+    );
+    expect(() => parseClientEvent(encode({ type: "crash.cancel", incidentId: "x".repeat(121) }))).toThrow(/incidentId/);
+  });
+
   it("accepts crash.cancel and rejects one without an incidentId", () => {
     expect(parseClientEvent(encode({ type: "crash.cancel", incidentId: "i4" }))).toMatchObject({
       type: "crash.cancel"

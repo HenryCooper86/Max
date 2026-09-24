@@ -3,6 +3,7 @@ import { once } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createCastReceiver, CAST_STALE_MS } from "../rdk/agent/src/hud-cast/server";
+import { createHudBond } from "../rdk/agent/src/hud-cast/bond";
 import { parseCastFrame, type CastFrame } from "../rdk/agent/src/hud-cast/protocol";
 
 const frame: CastFrame = {
@@ -26,7 +27,7 @@ afterEach(() => {
 });
 async function harness(musicFactory?: Parameters<typeof createCastReceiver>[3]) {
   let time = 1_000_000;
-  const receiver = createCastReceiver("<title>HUD</title>", () => time, "", musicFactory);
+  const receiver = createCastReceiver("<title>HUD</title>", () => time, "", musicFactory, createHudBond(""));
   const server = createServer((req, res) => {
     if (!receiver.handle(req, res)) {
       res.writeHead(404);

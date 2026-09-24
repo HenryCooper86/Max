@@ -15,6 +15,7 @@ const LEGACY_TRANSCRIPT_KEY = "max.transcript.v1";
 const TRANSCRIPT_KEY_PREFIX = "max.transcript.v2.";
 const SETTINGS_KEY = "max.settings.v1";
 const TOKEN_KEY = "max.relayToken";
+let sessionRelayToken = "";
 const VOICE_GENDERS = new Set<VoiceGender>(["female", "male"]);
 const VOICE_PERSONALITIES = new Set<VoicePersonality>(["concise", "friendly", "technical", "rally"]);
 
@@ -189,19 +190,25 @@ export function saveStoredSettings(settings: StoredSettings) {
 export function relayAuthToken(): string {
   const fromUrl = new URLSearchParams(window.location.search).get("token");
   if (fromUrl) {
-    // A token that arrived in hand must survive even if remembering it fails
-    // (Safari private mode / quota-exceeded throws on setItem) — otherwise a
-    // rider onboarded via a single ?token= link gets an empty credential.
+    // Keep it for this page even if storage is unavailable. Scrub the URL
+    // independently so a storage failure does not leave the token in browser
+    // history, copied links, or subsequent same-origin referrers.
+    sessionRelayToken = fromUrl;
     try {
       window.localStorage.setItem(TOKEN_KEY, fromUrl);
+    } catch {
+      /* persistence is best-effort */
+    }
+    try {
       const url = new URL(window.location.href);
       url.searchParams.delete("token");
       window.history.replaceState(window.history.state, document.title, `${url.pathname}${url.search}${url.hash}`);
     } catch {
-      /* persistence/history rewrite is best-effort; the URL token still stands */
+      /* history rewrite is best-effort; the in-memory token still stands */
     }
     return fromUrl;
   }
+  if (sessionRelayToken) return sessionRelayToken;
   try {
     return window.localStorage.getItem(TOKEN_KEY) ?? "";
   } catch {

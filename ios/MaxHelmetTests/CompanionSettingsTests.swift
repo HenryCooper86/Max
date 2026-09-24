@@ -241,6 +241,8 @@ final class CompanionSettingsTests: XCTestCase {
         let releaseUsage = try XCTUnwrap(release["NSLocationWhenInUseUsageDescription"] as? String)
         let debugUsage = try XCTUnwrap(debug["NSLocationWhenInUseUsageDescription"] as? String)
         XCTAssertEqual(releaseUsage, debugUsage)
+        let motionUsage = try XCTUnwrap(release["NSMotionUsageDescription"] as? String)
+        XCTAssertEqual(debug["NSMotionUsageDescription"] as? String, motionUsage)
         XCTAssertTrue(releaseUsage.contains("RDK 头盔导航"))
         XCTAssertTrue(releaseUsage.contains("锁屏"))
         XCTAssertTrue(releaseUsage.contains("Helmet Ride"))

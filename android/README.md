@@ -1,5 +1,7 @@
 # Max 头盔助手 — Android App
 
+[简体中文](README.zh-CN.md) · English
+
 Native Android (Kotlin + Jetpack Compose) client for the Max motorcycle helmet voice agent.
 It speaks the same `/agent` relay protocol as the web HUD, so the Node server, Doubao
 integration, weather, and ride intelligence all work unchanged — this app replaces only the
@@ -177,22 +179,22 @@ When changing shared web/server behavior, update Android at the same time:
 
 - Event names and payloads in `shared/agent.ts` and `agent/AgentProtocol.kt`
 - Ride modes, scenarios, hazard fusion, and prompt labels from `shared/ride.ts`
-- Language detection and transcript normalization from `shared/language.ts` and `src/main.tsx`
+- Language detection and transcript normalization from `shared/language.ts` and `src/hooks/useHelmetAgent.ts`
 - Audio frame assumptions: uplink 16 kHz PCM16 mono, 320 samples / 20 ms; downlink 24 kHz PCM16
 - Reconnect/backoff behavior, barge-in behavior, and transcript JSON export payload
 - Self-signed test-server handling and relay URL defaults
 
 ## Architecture
 
-| File                           | Role                                                                                                              | Web counterpart                                                                      |
-| ------------------------------ | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `agent/AgentProtocol.kt`       | Event types, JSON parsing, ride/hazard/turn-state/language helpers, export payload                                | `shared/agent.ts`, `shared/ride.ts`, `shared/language.ts`, helpers in `src/main.tsx` |
-| `agent/MicStreamer.kt`         | 16 kHz PCM16 mic capture, 20 ms frames; `VOICE_COMMUNICATION` source + `AcousticEchoCanceler` / `NoiseSuppressor` | `public/pcm-worklet.js`                                                              |
-| `agent/PcmPlayer.kt`           | 24 kHz PCM16 gapless playback + barge-in flush                                                                    | playback scheduling in `src/main.tsx`                                                |
-| `agent/AudioRouter.kt`         | Bluetooth headset (SCO) routing for in-helmet headsets                                                            | — (browsers can't control routing)                                                   |
-| `agent/AgentSession.kt`        | Session orchestration, reconnect, transcript, state                                                               | `useHelmetAgent` hook in `src/main.tsx`                                              |
-| `service/VoiceAgentService.kt` | Microphone foreground service                                                                                     | — (browser tabs can't do this)                                                       |
-| `ui/AgentScreen.kt`            | Compose HUD: ring, ride pulse, telemetry, transcript, controls                                                    | `src/components/` + HUD layout in `src/main.tsx`                                     |
+| File                           | Role                                                                                                              | Web counterpart                                                                                     |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `agent/AgentProtocol.kt`       | Event types, JSON parsing, ride/hazard/turn-state/language helpers, export payload                                | `shared/agent.ts`, `shared/ride.ts`, `shared/language.ts`, helpers in `src/hooks/useHelmetAgent.ts` |
+| `agent/MicStreamer.kt`         | 16 kHz PCM16 mic capture, 20 ms frames; `VOICE_COMMUNICATION` source + `AcousticEchoCanceler` / `NoiseSuppressor` | `public/pcm-worklet.js`                                                                             |
+| `agent/PcmPlayer.kt`           | 24 kHz PCM16 gapless playback + barge-in flush                                                                    | playback scheduling in `src/hooks/useHelmetAgent.ts`                                                |
+| `agent/AudioRouter.kt`         | Bluetooth headset (SCO) routing for in-helmet headsets                                                            | — (browsers can't control routing)                                                                  |
+| `agent/AgentSession.kt`        | Session orchestration, reconnect, transcript, state                                                               | `useHelmetAgent` hook in `src/hooks/useHelmetAgent.ts`                                              |
+| `service/VoiceAgentService.kt` | Microphone foreground service                                                                                     | — (browser tabs can't do this)                                                                      |
+| `ui/AgentScreen.kt`            | Compose HUD: ring, ride pulse, telemetry, transcript, controls                                                    | `src/components/` + HUD layout in `src/hooks/useHelmetAgent.ts`                                     |
 
 ## Connecting to the Lightsail test server
 
@@ -228,13 +230,12 @@ In a **Debug** build, set the relay address to `wss://3.35.135.136/agent` and sw
 - The app targets API 36 and compiles against Android 16 QPR2 (36.1), matching the 2026 Play gate.
 - Keep the foreground-service notification clear and user-visible for Android policy compliance.
 
-## Not yet implemented (next steps)
+## Remaining validation and follow-ups
 
-- Uplink packet stats (fps / dropped frames) in the telemetry card
-- Mid-ride weather refresh and continuous location updates
-- A wake word so the mic need not stream continuously
-- RDK companion and crash/SOS implementations are present; physical acceptance requirements are tracked in the parity audit.
-- Physical-device checks for map tiles/key authorization, Bluetooth, app-owned music, and speaker echo cancellation.
+- Validate Bluetooth routing, speaker echo cancellation, crash sensing, and emergency delivery on physical devices.
+- Verify live AMap key authorization and map tiles with a signed Android build. The map implementation and keyless text/voice fallback are present.
+- Finish the physical RDK pairing and helmet-ride acceptance checks in [mobile parity](../docs/mobile-parity.md).
+- Wake-word gating currently applies to the live Doubao relay; microphone streaming continues during a hands-free session.
 
 ### Helmet rides and crash checks
 

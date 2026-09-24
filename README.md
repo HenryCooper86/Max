@@ -1,5 +1,7 @@
 # Max 摩托车头盔 AI
 
+[简体中文](README.zh-CN.md) · English
+
 [![pipeline status](https://gitlab-ce.orb.local/hct/doubao/badges/main/pipeline.svg)](https://gitlab-ce.orb.local/hct/doubao/-/pipelines)
 
 Production-oriented AI voice testing framework for the Max motorcycle helmet assistant. Max keeps the same name and motorcycle helmet assistant role, speaks Chinese by default, can also use English, and refuses other languages. The framework combines the hands-free web HUD, iOS and Android clients, a secure realtime relay, mock/live providers, scenario injection, telemetry, and per-tester QA statistics for validating helmet voice behavior before field release. Realtime Doubao voice defaults to the working female Chinese voice.
@@ -8,15 +10,19 @@ Production-oriented AI voice testing framework for the Max motorcycle helmet ass
 
 The native Android client (`android/`, Kotlin + Jetpack Compose) speaks the same `/agent` relay
 protocol as the web HUD, so the Node server, Doubao integration, weather, and ride intelligence
-all work unchanged. See [android/README.md](android/README.md) for build and setup.
+all work unchanged. See the [Android guide](android/README.md) ([中文](android/README.zh-CN.md)) for build and setup.
 
 ## iOS App
 
 The native iOS client (`ios/`, Swift + SwiftUI) also speaks the same `/agent` relay protocol as
 the web HUD and Android app. It mirrors the hands-free HUD, mic streaming, 24 kHz PCM playback,
 barge-in, reconnect handling, live weather, transcript export, and TTS fallback while using
-iOS-native audio routing and background audio. See [ios/README.md](ios/README.md) for Xcode,
+iOS-native audio routing and background audio. See the [iOS guide](ios/README.md) ([中文](ios/README.zh-CN.md)) for Xcode,
 relay URL, and self-signed test-server setup.
+
+## RDK Helmet
+
+The embedded RDK X5 client runs the helmet audio, camera, local HUD, and ADAS development services. See the [RDK guide](rdk/README.md) ([中文](rdk/README.zh-CN.md)) for provisioning and hardware verification.
 
 ## Current Capabilities
 
@@ -30,13 +36,13 @@ relay URL, and self-signed test-server setup.
 - Voice-triggered device actions (iOS) — spoken commands drive real device capabilities over a `device.command` / `device.result` protocol: torch, Max's own playback volume, Apple Music / local-library playback, SMS composition, and dialing (incl. 110/120/122). The relay parses the rider's utterance with a pure zh+en command grammar, dispatches the action, and reconciles the result so Max's spoken confirmation always matches the real outcome — on failure it truncates the reply and speaks the truth. Limits are honest: dialing and SMS require the native iOS confirmation tap, music can't reach third-party players, SMS is refused above 5 km/h. Contact numbers never leave the device; spoken names are redacted from stored QA transcripts. Works on the mock provider without Doubao credentials.
 - Voice-triggered live navigation (iOS) — "导航去X" starts in-app turn-by-turn guidance built on a pure `GuidanceEngine` (route matching, off-route detection, prompt timing — all unit-tested from lat/lon literals). Routing is relay-side: `nav.request`/`nav.route`/`nav.error` over the agent socket reach the same Amap driving service the web HUD uses (GCJ-02 on the wire, WGS-84 inside the app, converted at the protocol boundary), so destinations resolve identically across platforms and the keyless mock route works end-to-end with no Amap key configured. Guidance semantics are shared verbatim with web — one six-rule `GuidanceEngine` contract, ported to Swift and tested against the same table — and speak maneuver prompts at ~400 m / ~150 m / the turn, with one debounced reroute per wrong turn and an arrival announcement. The route card uses the native AMap iOS 3D Map SDK only after just-in-time consent, converts WGS-84 display inputs to GCJ-02, and shows an honest unavailable state when maps cannot be used; there is no MapKit fallback. "停止导航" ends it. Stays in-app (never hands off) so the device-action layer keeps working; runs during the foreground hands-free session, so no background-location permission. Honest limits kept: car routing only, so it does not respect 摩托车禁行 roads, and a relay that's down or unreachable is a spoken failure, not a silent retry elsewhere.
 - Voice-triggered live navigation (web) — the same "导航去X" / "停止导航" flow now guides from the browser HUD too. Routing runs relay-side (`nav.request`/`nav.route`/`nav.error` over `/agent`) against the Amap Web 服务 REST API (place search + v5 driving, GCJ-02 throughout); with no `AMAP_API_KEY` configured the relay falls back to a deterministic mock route so the demo still works keylessly. The web HUD guides with the same maneuver-timing rules as iOS, ported to a shared TypeScript `GuidanceEngine` (`shared/guidance.ts`) so both platforms are tested against one table, plus an on-map ride simulator (演示导航 walks the route; 演示偏航 forces an off-route reroute) for demoing without a real ride; if that reroute request fails, guidance stops cleanly with a spoken "无法重新规划路线，已停止导航" instead of continuing on the stale route, matching iOS and Android. The Amap JS API tile layer renders the route on a live map; its 安全密钥 (`AMAP_JS_SECRET`) never reaches the browser — it stays server-side inside the `/_AMapService` proxy, which signs requests on the map's behalf. Same honesty limit as iOS: car routing only, no motorcycle profile, so 摩托车禁行 roads aren't respected.
-- Voice-triggered live navigation (Android) — the same "导航去X" / "停止导航" flow now guides from the native app too, on the same relay routing web and iOS use (`nav.request`/`nav.route`/`nav.error`, the same Amap driving service, and a keyless mock route end-to-end with no Amap key configured). GCJ-02 on the wire **and** inside the app — routes arrive already GCJ-02 and stay that way; the one WGS-84→GCJ-02 conversion happens at `NavigationController`'s fix boundary, with no inverse transform anywhere in the app. Guidance is the same six-rule `GuidanceEngine` contract as iOS and web, ported to Kotlin and tested against the identical shared table, speaking maneuver prompts at ~400 m / ~150 m / the turn with one debounced reroute per wrong turn and an arrival announcement. Display is card + voice only for now: a `GuidanceCard` shows the next maneuver, distance, and ETA, but there's no route map yet because the Amap Android Map SDK key is unregistered — that follow-up lands once it does. Runs only inside the foreground hands-free session (no background-location permission), first-fixes off `GPS_PROVIDER` alone with a 3 s bound, and keeps the same honest limits as iOS and web: car routing only, so 摩托车禁行 roads aren't respected.
+- Voice-triggered live navigation (Android) — the same "导航去X" / "停止导航" flow guides from the native app on the shared relay route protocol. GCJ-02 stays on the wire and inside the app; GPS fixes are converted once at the controller boundary. The Kotlin guidance engine follows the same six-rule contract as web and iOS. The Android AMap SDK displays the route, destination, and rider position after map consent when a separately registered Android key is configured; without a usable key, text and voice guidance continue with an unavailable-map state. The first-fix deadline is 8 s. Guidance runs inside the foreground session and uses car routing, which does not account for motorcycle-restricted roads.
 - iPhone companion navigation for the RDK helmet — an authenticated iOS account pairs to one durable RDK device with a six-digit, single-use code, then explicitly starts a separate **Helmet Ride** to forward precise phone fixes through `/companion`. The RDK HUD and ranked audio path own route guidance, pause when the fix is stale or unavailable, resume on a fresh fix, and let armed ADAS alerts preempt ordinary navigation speech. Pairing never starts location, login/app launch never resumes a ride, and Stop Helmet Ride, Unpair, logout, or force-quit ends forwarding. No map or raw-coordinate UI and no fix persistence are added to the phone companion flow.
 - Agent identity — attributes its development to Horizon Continental Technology (neueHCT) and names the CEO (Li Biao / Stone Li), in Chinese and English.
 - Acoustic echo cancellation — built-in-speaker echo is cancelled so the agent doesn't hear and answer itself (web `echoCancellation`; iOS shared voice-processing engine; Android `VOICE_COMMUNICATION` + `AcousticEchoCanceler`).
 - Native iOS and Android clients that reuse the same `/agent` relay protocol as the web HUD, with a width-capped, centered HUD that reads the same on phones and tablets/iPad.
-- Production-clean mobile main screen — hero ring, glance strip (速度 · 风险 · 天气 · 电量), chat-bubble conversation, and a pill hands-free button; rider preferences (声音 / 语气 / 模式) sit behind a gear button.
-- Hidden developer panel on iOS/Android — **long-press the Max logo** to reveal test settings (relay URL, self-signed trust, demo scenarios, latency telemetry, raw status, log export); persisted across launches.
+- Mobile main screen — helmet session control, optional captions, and a settings sheet for rider preferences (声音 / 语气 / 模式).
+- Mobile settings sheet — tap the gear to reach account, relay connection, demo scenarios, diagnostics, and log export. Self-signed trust is available only in Debug builds.
 - Turn-state HUD — the helmet shows when Max is listening, heard the rider, is thinking, or is replying.
 - Ride intelligence modes — switch between 骑行 / 导航 / 停车 / 紧急 so Max changes response length and safety behavior.
 - Scenario-driven mock demos — 通勤、横风、低油、小队、紧急、ADAS scenes exercise realistic rider context without Doubao credentials.
@@ -75,7 +81,9 @@ relay URL, and self-signed test-server setup.
 ```text
 .
 ├── src/
-│   ├── main.tsx              # Helmet HUD and client voice logic
+│   ├── main.tsx              # React bootstrap
+│   ├── App.tsx               # Helmet HUD composition
+│   ├── hooks/useHelmetAgent.ts # Voice session and relay lifecycle
 │   ├── ErrorBoundary.tsx     # Recoverable screen for render-time crashes
 │   ├── components/           # HUD presentational components
 │   └── styles.css            # App styling
@@ -128,7 +136,7 @@ mapping, audio frame sizes, reconnect behavior, barge-in, and TTS fallback.
 
 ```text
 Browser
-  React HUD (src/main.tsx) ......... 开启免提 button + Space toggle, 女声/男声 toggle, HelmetVisual
+  React HUD (src/App.tsx) ......... 开启免提 button + Space toggle, 女声/男声 toggle, HelmetVisual
                                   .... 骑行模式 + 演示场景 controls, ride pulse, transcript
   AudioWorklet (pcm-worklet.js) .... mic capture -> 16 kHz PCM16, 320-sample (20 ms) frames
   Web Audio playback .............. 24 kHz PCM16 voice, gapless scheduling, barge-in stop
@@ -197,14 +205,14 @@ A new realtime backend is added by implementing this interface and wiring it int
 1. `getUserMedia` opens the mic with browser DSP requested (`echoCancellation`, `noiseSuppression`, and `autoGainControl`); the HUD shows the actual track settings reported by the browser.
 2. An `AudioWorklet` (`public/pcm-worklet.js`) runs off the main thread.
 3. The worklet downsamples to **16 kHz** and emits **320-sample (20 ms) PCM16 mono** frames over its message port.
-4. `main.tsx` forwards each frame as a binary WebSocket message to `/agent`.
+4. `useHelmetAgent.ts` forwards each frame as a binary WebSocket message to `/agent`.
 5. The `doubao` provider wraps each frame in a protocol frame and sends it upstream.
 
 **Downlink — Doubao → server → browser**
 
 1. Doubao streams back **24 kHz PCM16 mono** voice audio.
 2. The provider relays the raw PCM payload to the browser as a binary message.
-3. `main.tsx` schedules each buffer gaplessly with a playback cursor; active `AudioBufferSourceNode`s are tracked so **barge-in** can stop them instantly when the rider speaks.
+3. `useAudioPlayback.ts` schedules each buffer gaplessly with a playback cursor; active `AudioBufferSourceNode`s are tracked so **barge-in** can stop them instantly when the rider speaks.
 
 If Doubao returns reply _text_ but no audio, the browser falls back to its own `speechSynthesis` TTS, picking a voice with `detectLanguage` (`shared/language.ts`).
 
@@ -334,9 +342,8 @@ Start the backend relay before launching a native app:
 npm run dev:server
 ```
 
-Then set the app's relay URL. The relay field and debug-only self-signed trust toggle live in the
-hidden developer panel — **long-press the Max logo** on the main screen to reveal it (the
-header subtitle shows `· 开发者模式` while enabled; long-press again to hide):
+Then set the app's relay URL. Open the **设置** sheet with the gear button to edit the relay URL and, in Debug builds, the
+self-signed test-certificate option:
 
 | Client                 | URL                            |
 | ---------------------- | ------------------------------ |
@@ -904,12 +911,21 @@ rollback. The evidence template and physical checklist live in
 
 ## Verification
 
+The latest repository-wide review, fixes, verification results, and remaining physical acceptance gaps are in [docs/code-audit-2026-09-24.md](docs/code-audit-2026-09-24.md).
+
 Build, lint, and test the web/relay stack:
 
 ```bash
 npm run build
 npm run lint
 npm test
+```
+
+Run the RDK vision tests locally with their Python dependencies (hardware cases excluded):
+
+```bash
+uv run --with-requirements rdk/vision/requirements-dev.txt python -m pytest \
+  -c rdk/vision/pytest.ini -m 'not hardware' --strict-markers rdk/vision/tests
 ```
 
 Smoke test health (server must be running):
@@ -951,7 +967,7 @@ on a developer machine.
 
 ## Next Steps
 
-1. Add more agent tools (nearby stops, navigation).
+1. Add a verified nearby-stop tool; navigation is already implemented on web, iOS, and Android.
 2. Mirror the cross-platform GitHub Actions gate to GitLab when an active runner is available.
 3. Replace the Lightsail self-signed certificate with a trusted cert behind a domain name.
 4. Replace the simulated ADAS hazard injector with real sensor input + confidence scoring.

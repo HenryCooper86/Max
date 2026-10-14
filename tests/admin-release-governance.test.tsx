@@ -1,6 +1,7 @@
 import { act } from "react";
 import { create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { TestingStats } from "../shared/agent";
 import type { TestingOperationsSnapshot, TestingPolicy, TestingRun, TestingRunRequirement } from "../shared/testing";
 import { GovernanceWorkspace } from "../src/components/admin/GovernanceWorkspace";
 import { ReleaseValidation } from "../src/components/admin/ReleaseValidation";
@@ -171,6 +172,97 @@ afterEach(async () => {
 });
 
 describe("ReleaseValidation", () => {
+  it("allows a covered matching first release, but blocks stale data and open reviews for that run", async () => {
+    const snapshot = adminData();
+    const candidate = snapshot.operations!.runs[0]!;
+    candidate.assignments = candidate.requirements.map((requirement, index) => ({
+      id: `assignment-${index}`,
+      runId: candidate.id,
+      requirementId: requirement.id,
+      testCaseId: requirement.testCaseId,
+      assignee: "admin",
+      platform: "web",
+      networkType: "wifi",
+      language: "zh",
+      status: "complete",
+      createdAt: 1,
+      updatedAt: 1,
+      completedSessionIds: [`session-${index}`]
+    }));
+    snapshot.testing = {
+      releaseGate: { build: "build-1", status: "pass", blockers: [] },
+      regression: { baselineSource: "none", status: "insufficient", findings: [] }
+    } as unknown as TestingStats;
+    let healthBuild = "build-1";
+    const render = () => (
+      <ReleaseValidation
+        agent={{
+          ...agent(),
+          health: { ...agent().health!, build: { ...agent().health!.build!, gitCommit: healthBuild } }
+        }}
+        user={authUser("admin")}
+        data={snapshot}
+      />
+    );
+    await act(async () => {
+      renderer = create(render());
+    });
+    const approved = () => renderer!.root.find((node) => node.type === "option" && node.props.value === "approved");
+    expect(approved().props.disabled).toBe(false);
+    healthBuild = "build-new";
+    await act(async () => renderer!.update(render()));
+    expect(approved().props.disabled).toBe(true);
+    healthBuild = "build-1";
+    snapshot.status = "stale";
+    await act(async () => renderer!.update(render()));
+    expect(approved().props.disabled).toBe(true);
+    snapshot.status = "ready";
+    snapshot.operations!.reviews = [
+      {
+        id: "review",
+        sessionId: "session-0",
+        runId: candidate.id,
+        status: "open",
+        severity: "high",
+        owner: "admin",
+        title: "Warning",
+        comment: "Missing audible start",
+        createdAt: 1,
+        updatedAt: 1,
+        createdBy: "admin"
+      }
+    ];
+    await act(async () => renderer!.update(render()));
+    expect(approved().props.disabled).toBe(true);
+    expect(text(renderer!.root)).toContain("解决本运行未完成的证据复核");
+    snapshot.operations!.reviews[0]!.runId = "another-run";
+    await act(async () => renderer!.update(render()));
+    expect(approved().props.disabled).toBe(false);
+  });
+
+  it.each(["fail", "watch", "insufficient"] as const)(
+    "blocks approval and explains a %s regression despite quality PASS",
+    async (regressionStatus) => {
+      const snapshot = adminData();
+      snapshot.testing = {
+        releaseGate: { build: "build-1", status: "pass" },
+        regression: {
+          baselineSource: "latest-valid",
+          status: regressionStatus,
+          findings: [{ id: "latency", status: "fail", label: "iOS wake", detail: "Latency increased by 259ms." }]
+        }
+      } as unknown as TestingStats;
+      await act(async () => {
+        renderer = create(<ReleaseValidation agent={agent()} user={authUser("admin")} data={snapshot} />);
+      });
+      const status = renderer!.root.find(
+        (node) => node.type === "select" && node.props["aria-label"] === "发布运行状态"
+      );
+      expect(status.findAllByType("option").find((node) => node.props.value === "approved")!.props.disabled).toBe(true);
+      expect(text(renderer!.root)).toContain("Latency increased by 259ms.");
+    }
+  );
+
   it("uses English for release counts and successful create, status, and assignment actions", async () => {
     const sharedData = adminData();
     vi.mocked(sharedData.createRun).mockResolvedValue({ ok: true, data: run() });

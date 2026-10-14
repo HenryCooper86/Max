@@ -8,6 +8,8 @@ import {
   findHazardWarningStart,
   assertFullPcmLifecycle,
   assertDisconnected,
+  hasProviderReplyCompletion,
+  isProviderReplyDrained,
   type Observation,
   type PlaybackSnapshot
 } from "../scripts/synthetic-qa/browser/assertions";
@@ -27,6 +29,95 @@ const hazard = observation("relay.event", {
   playbackBefore: { ...silent, active: 2, activeSourceIds: [1, 2] }
 });
 describe("synthetic browser behavior assertions", () => {
+  const providerCompleted = observation("relay.event", {
+    event: { type: "status", state: "ready", detail: "豆包回复已完成" }
+  });
+  it("does not mistake hazard final captions or completed text for provider audio completion", () => {
+    const caption = observation("relay.event", {
+      event: { type: "transcript", speaker: "agent", final: true, text: "[后方] 注意，后方车辆高速接近。" }
+    });
+    const textCompleted = observation("relay.event", {
+      event: { type: "status", state: "ready", detail: "豆包回复文本已完成" }
+    });
+    expect(isProviderReplyDrained([...normal, caption, textCompleted], silent, 2000, true)).toBe(false);
+    expect(isProviderReplyDrained(normal, silent, 2000)).toBe(false);
+  });
+  it("permits ongoing ADAS warning speech only after provider completion and a full PCM quiet interval", () => {
+    const events = [...normal, providerCompleted];
+    const warningSpeaking = { ...silent, browserSpeaking: true };
+    expect(isProviderReplyDrained(events, warningSpeaking, 2000, true)).toBe(true);
+    expect(isProviderReplyDrained(events, warningSpeaking, 2000)).toBe(false);
+    expect(isProviderReplyDrained(events, silent, 1999, true)).toBe(false);
+    expect(isProviderReplyDrained(events, { ...silent, active: 1, activeSourceIds: [1] }, 2000, true)).toBe(false);
+    expect(isProviderReplyDrained([providerCompleted], silent, 2000, true)).toBe(false);
+  });
+  it("rejects degraded completion and an earlier exchange outside the current response window", () => {
+    const degraded = observation("relay.event", {
+      event: { type: "status", state: "degraded", detail: "网络拥塞，本轮语音未完整播放" }
+    });
+    expect(isProviderReplyDrained([...normal, degraded], silent, 2000, true)).toBe(false);
+    const twoExchanges = [...normal, providerCompleted, ...normal];
+    expect(isProviderReplyDrained(twoExchanges.slice(4), silent, 2000, true)).toBe(false);
+  });
+  it("requires the provider PCM completion marker and resets quiet time for late PCM", () => {
+    expect(hasProviderReplyCompletion([providerCompleted])).toBe(true);
+    expect(
+      hasProviderReplyCompletion([
+        observation("relay.event", { event: { type: "status", state: "speaking", detail: "豆包回复已完成" } }),
+        observation("relay.event", { event: { type: "transcript", speaker: "agent", final: true, text: "我在。" } })
+      ])
+    ).toBe(false);
+    const late = [
+      ...normal,
+      providerCompleted,
+      observation("audio.received", { bytes: 960 }, 2100),
+      observation("playback.start", { sourceId: 2, samples: 480, state: "running" }, 2100),
+      observation("playback.ended", { sourceId: 2, interrupted: false }, 2200)
+    ];
+    expect(isProviderReplyDrained(late, silent, 3099, true)).toBe(false);
+    expect(isProviderReplyDrained(late, silent, 3100, true)).toBe(true);
+    expect(() => assertFullPcmLifecycle(late, true)).not.toThrow();
+    expect(() =>
+      assertFullPcmLifecycle([...late.slice(0, -1), observation("playback.stop", { sourceId: 2 }, 2200)], true)
+    ).toThrow("PCM source 2 never finished");
+  });
+  it.each([
+    { hazardAt: 1791970713257, firstLateAt: 1791970713312, disconnectAt: 1791970713575, ids: [89, 90, 91, 92, 93] },
+    { hazardAt: 1791970892837, firstLateAt: 1791970892883, disconnectAt: 1791970893178, ids: [306, 307, 308, 309] }
+  ])("rechecks late PCM cut by ordinary teardown in the saved 8dd ADAS pattern $ids", (record) => {
+    const beforeStop = [
+      ...normal.slice(0, 2),
+      observation(
+        "relay.event",
+        {
+          event: { type: "hazard.alert", interrupt: true },
+          playbackBefore: { ...silent, active: 1, activeSourceIds: [1] }
+        },
+        record.hazardAt
+      ),
+      observation("playback.stop", { sourceId: 1 }, record.hazardAt),
+      observation(
+        "relay.event",
+        {
+          event: { type: "transcript", speaker: "agent", final: true, text: "[左后方] 保持车道。" }
+        },
+        record.hazardAt
+      )
+    ];
+    expect(() => assertFullPcmLifecycle(beforeStop, true)).not.toThrow();
+    expect(isProviderReplyDrained(beforeStop, silent, record.hazardAt, true)).toBe(false);
+    const fullSavedLifecycle = [
+      ...beforeStop,
+      ...record.ids.flatMap((sourceId, index) => [
+        observation("audio.received", { bytes: 16384 }, record.firstLateAt + index),
+        observation("playback.start", { sourceId, samples: 8192, state: "running" }, record.firstLateAt + index),
+        observation("playback.stop", { sourceId }, record.disconnectAt)
+      ])
+    ];
+    expect(() => assertFullPcmLifecycle(fullSavedLifecycle, true)).toThrow(
+      `PCM source ${record.ids[0]} never finished`
+    );
+  });
   it("credits a hazard warning only when its exact utterance actually starts", () => {
     const warning = {
       ...hazard,

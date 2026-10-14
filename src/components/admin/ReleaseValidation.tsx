@@ -4,7 +4,7 @@ import type { HelmetAgent } from "../../hooks/useHelmetAgent";
 import { useLanguage } from "../LanguageToggle";
 import { localized } from "../../lib/i18n";
 import type { AuthUser } from "../../lib/auth";
-import { testingAssignmentStatusLabel, testingRunStatusLabel } from "./admin-model";
+import { releaseApprovalBlockers, testingAssignmentStatusLabel, testingRunStatusLabel } from "./admin-model";
 import type { AdminTestingData } from "./useAdminTestingData";
 
 type BusyTarget =
@@ -57,6 +57,17 @@ export function ReleaseValidation({ agent, user, data }: Props) {
   const targetRequestRef = useRef(new Map<string, number>());
   const noticeRequestRef = useRef(0);
   const selectedRun = runs.find((run) => run.id === selectedRunId) ?? runs[0];
+  const approvalBlockers = selectedRun
+    ? releaseApprovalBlockers(
+        selectedRun,
+        data.testing,
+        data.operations?.reviews,
+        language,
+        agent.health?.build?.gitCommit
+      )
+    : [];
+  if (data.status !== "ready")
+    approvalBlockers.unshift(localized(language, "发布数据尚未同步", "Release data is not current."));
 
   useEffect(() => setRunBuild(currentBuild), [currentBuild]);
 
@@ -114,6 +125,15 @@ export function ReleaseValidation({ agent, user, data }: Props) {
   };
 
   const changeRunStatus = async (run: TestingRun, status: TestingRunStatus) => {
+    if (status === "approved" && (user.role !== "admin" || approvalBlockers.length)) {
+      noticeRequestRef.current = ++mutationSequenceRef.current;
+      setNotice({
+        tone: "error",
+        message: `发布批准受阻：${approvalBlockers[0] ?? "需要管理员权限"}`,
+        englishMessage: `Approval blocked: ${approvalBlockers[0] ?? "Administrator access required."}`
+      });
+      return;
+    }
     const request = beginMutation({ kind: "run-status", id: run.id });
     try {
       const result = await data.updateRun(run.id, { status });
@@ -280,7 +300,11 @@ export function ReleaseValidation({ agent, user, data }: Props) {
                       {RUN_STATUSES.filter(
                         (status) => status === selectedRun.status || status !== "approved" || user.role === "admin"
                       ).map((status) => (
-                        <option key={status} value={status} disabled={status === "approved" && user.role !== "admin"}>
+                        <option
+                          key={status}
+                          value={status}
+                          disabled={status === "approved" && (user.role !== "admin" || approvalBlockers.length > 0)}
+                        >
                           {testingRunStatusLabel(status, language)}
                         </option>
                       ))}
@@ -291,6 +315,22 @@ export function ReleaseValidation({ agent, user, data }: Props) {
                     </span>
                   )}
                 </div>
+                {isReviewer &&
+                selectedRun.status !== "approved" &&
+                selectedRun.status !== "archived" &&
+                approvalBlockers.length ? (
+                  <section
+                    className="adminNotice error"
+                    aria-label={localized(language, "批准阻断项", "Approval blockers")}
+                  >
+                    <strong>{localized(language, "批准受阻", "Approval blocked")}</strong>
+                    <ul>
+                      {approvalBlockers.map((blocker, index) => (
+                        <li key={`${index}-${blocker}`}>{blocker}</li>
+                      ))}
+                    </ul>
+                  </section>
+                ) : null}
                 {isReviewer ? (
                   <label className="assignmentOwner">
                     <span>{localized(language, "新任务分配给", "Assign new task to")}</span>

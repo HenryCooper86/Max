@@ -9,6 +9,34 @@ export type AssertionResult = { id: string; status: "pass" | "fail"; detail: str
 function eventPayload(item: Observation): Record<string, unknown> {
   return (item.event || {}) as Record<string, unknown>;
 }
+/** ChatEnded and injected hazard captions do not complete the provider's PCM reply. */
+export function hasProviderReplyCompletion(events: Observation[]): boolean {
+  return events.some((item) => {
+    const payload = eventPayload(item);
+    return (
+      item.type === "relay.event" &&
+      payload.type === "status" &&
+      payload.state === "ready" &&
+      payload.detail === "豆包回复已完成"
+    );
+  });
+}
+export function isProviderReplyDrained(
+  events: Observation[],
+  playback: PlaybackSnapshot,
+  now: number,
+  allowHazardSpeech = false
+): boolean {
+  const received = events.filter((item) => item.type === "audio.received");
+  const last = received[received.length - 1];
+  return (
+    hasProviderReplyCompletion(events) &&
+    !!last &&
+    now - last.at >= 1000 &&
+    playback.active === 0 &&
+    (allowHazardSpeech || !playback.browserSpeaking)
+  );
+}
 export function assertBackgroundQuiet(events: Observation[], initial: PlaybackSnapshot): void {
   if (initial.active || initial.browserSpeaking) throw new Error("Background began with pending agent speech");
   if (

@@ -11,7 +11,8 @@ final class AudioRouter {
     /// Music and the full-duplex voice engine must coexist. Without mixing,
     /// starting Apple Music can interrupt capture and agent speech.
     static let voiceOptions: AVAudioSession.CategoryOptions = [
-        .allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker, .mixWithOthers
+        // The HFP flag's original name also compiles with pre-iOS-26 SDKs.
+        .allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker, .mixWithOthers
     ]
 
     private let session = AVAudioSession.sharedInstance()

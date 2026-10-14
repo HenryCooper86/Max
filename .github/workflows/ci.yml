@@ -57,6 +57,9 @@ jobs:
           java-version: 17
           cache: gradle
       - uses: android-actions/setup-android@v3
+        with:
+          # v3 defaults to the removed legacy "tools" package. Match AGP's SDK selection.
+          packages: "platform-tools platforms;android-36.1 build-tools;36.0.0"
       - run: chmod +x android/gradlew
       - run: android/gradlew -p android test lint
 

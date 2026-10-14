@@ -7,8 +7,8 @@ cd "$(dirname "$0")"
 KEY="${LIGHTSAIL_KEY:-/Users/admin/Desktop/LightsailDefaultKey-ap-northeast-2.pem}"
 HOST="${LIGHTSAIL_HOST:-ubuntu@3.35.135.136}"
 REMOTE_APP_DIR="${LIGHTSAIL_APP_DIR:-/home/ubuntu/app}"
-HEALTH_URL="${LIGHTSAIL_HEALTH_URL:-https://3.35.135.136/health}"
-READY_URL="${LIGHTSAIL_READY_URL:-https://3.35.135.136/ready}"
+HEALTH_URL="${LIGHTSAIL_HEALTH_URL:-https://max.bionicloud.net/health}"
+READY_URL="${LIGHTSAIL_READY_URL:-https://max.bionicloud.net/ready}"
 DEPLOY_BRANCH="${LIGHTSAIL_DEPLOY_BRANCH:-main}"
 DEPLOY_REMOTE="${LIGHTSAIL_DEPLOY_REMOTE:-gitlab}"
 ALLOW_NON_MAIN="${LIGHTSAIL_ALLOW_NON_MAIN:-off}"
@@ -120,7 +120,7 @@ echo "==> 4/4 Health check"
 HEALTH_RESPONSE=""
 HEALTH_VERIFIED="off"
 for attempt in {1..20}; do
-  if HEALTH_RESPONSE="$(curl --fail --silent --show-error --insecure --connect-timeout 5 --max-time 8 "$HEALTH_URL" 2>/dev/null)" &&
+  if HEALTH_RESPONSE="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 8 "$HEALTH_URL" 2>/dev/null)" &&
     printf '%s' "$HEALTH_RESPONSE" | EXPECTED_COMMIT="$GIT_COMMIT" node -e '
       let body = "";
       process.stdin.on("data", (chunk) => (body += chunk));
@@ -147,7 +147,7 @@ fi
 printf '%s\n' "$HEALTH_RESPONSE"
 
 READY_RESPONSE=""
-if ! READY_RESPONSE="$(curl --silent --show-error --insecure --connect-timeout 5 --max-time 8 "$READY_URL")"; then
+if ! READY_RESPONSE="$(curl --silent --show-error --connect-timeout 5 --max-time 8 "$READY_URL")"; then
   echo "Deployment could not reach the readiness endpoint." >&2
   exit 1
 fi

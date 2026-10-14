@@ -41,7 +41,7 @@ const NEGATED_ADVICE_PATTERNS = [
   /\b(?:don'?t|do not|never|no need to|stop)\s+(?:look(?:ing)? at (?:your )?phone|check(?:ing)? (?:your )?phone|speed(?:ing)? up|go(?:ing)? faster|tak(?:e|ing) your hands off|ignor(?:e|ing) (?:the )?(?:road|warning|traffic|alert))\b/gi,
   // Only explicit phone-action modifiers may intervene; punctuation or another
   // clause must not extend a negation to a later instruction to look at a phone.
-  /(?:不要|别|不能|请勿|切勿|不)(?:分神|低头)?(?:看手机|查看手机)/g,
+  /(?:不要|别|不能|请勿|切勿|不)(?:分神|分心|低头)?(?:看手机|查看手机)/g,
   /(?:不要|别|不能|请勿|切勿)(?:看手机|查看手机|加速冲|开快点|加速|忽略)/g
 ];
 

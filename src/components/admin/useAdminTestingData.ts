@@ -23,6 +23,12 @@ type ReplacementRefresh = {
   promise: Promise<boolean>;
 };
 
+type SessionDetailRequest = {
+  scope: number;
+  evidenceGeneration: number;
+  promise: Promise<TesterSessionSummary | null>;
+};
+
 export type AdminTestingData = {
   testing: TestingStats | null;
   sessions: TesterSessionSummary[];
@@ -37,7 +43,7 @@ export type AdminTestingData = {
   lastSyncedAt: number | null;
   refresh: (replace?: boolean) => Promise<void>;
   loadMore: () => Promise<void>;
-  loadSession: (sessionId: string) => Promise<TesterSessionSummary | null>;
+  loadSession: (sessionId: string, force?: boolean) => Promise<TesterSessionSummary | null>;
   saveNotes: (sessionId: string, notes: string) => Promise<boolean>;
   clearEvidence: (scope: TestingClearScope) => Promise<boolean>;
   createRun: (input: CreateTestingRunInput) => Promise<ApiResult<TestingRun>>;
@@ -104,16 +110,20 @@ export function useAdminTestingData({
   const refreshRequestRef = useRef(0);
   const roleRequestRef = useRef(0);
   const noteRequestRef = useRef(0);
+  const noteSessionRequestsRef = useRef(new Map<string, number>());
   const noteFailureRequestRef = useRef(0);
   const evidenceGenerationRef = useRef(0);
   const replacementRequiredRef = useRef<number | null>(null);
   const replacementRefreshRef = useRef<ReplacementRefresh | null>(null);
+  const activeRefreshRef = useRef<ReplacementRefresh | null>(null);
   const loadingMoreRef = useRef(false);
   const hasLoadedDataRef = useRef(false);
   const syncFailureSourceRef = useRef<SyncFailureSource | null>(null);
   const expiredScopeRef = useRef<number | null>(null);
   const sessionsRef = useRef<TesterSessionSummary[]>([]);
   const sessionDetailsRef = useRef<Record<string, TesterSessionSummary>>({});
+  const completeDetailRevisionRef = useRef(new Map<string, number>());
+  const detailRequestsRef = useRef(new Map<string, SessionDetailRequest>());
   const nextCursorRef = useRef<string | undefined>(undefined);
   const authenticationExpiredRef = useRef(onAuthenticationExpired);
   renderedScopeKeyRef.current = scopeKey;
@@ -211,6 +221,7 @@ export function useAdminTestingData({
       if (!isCurrent(scope) || evidenceGeneration !== evidenceGenerationRef.current) return false;
       const requestId = ++refreshRequestRef.current;
       const roleRequestId = ++roleRequestRef.current;
+      const detailsAtStart = sessionDetailsRef.current;
       if (!hasLoadedDataRef.current) setStatus("loading");
 
       const [summaryResult, sessionsResult, roleResult] = await Promise.all([
@@ -241,7 +252,23 @@ export function useAdminTestingData({
 
       setTesting(summaryResult.data);
       const preservePagination = !replace && sessionsRef.current.length > sessionsResult.data.items.length;
-      const merged = mergeAdminSessions(replace ? [] : sessionsRef.current, sessionsResult.data.items);
+      let refreshedSessions = sessionsResult.data.items;
+      if (!replace) {
+        const nextDetails = { ...sessionDetailsRef.current };
+        refreshedSessions = refreshedSessions.map((summary) => {
+          const cached = nextDetails[summary.sessionId];
+          if (!cached) return summary;
+          // A detail read or note save completed after this poll started.
+          // Its newer result must win over the poll's older snapshot.
+          if (cached !== detailsAtStart[summary.sessionId]) return cached;
+          const updated = { ...cached, ...summary, turns: cached.turns };
+          nextDetails[summary.sessionId] = updated;
+          return updated;
+        });
+        sessionDetailsRef.current = nextDetails;
+        setSessionDetails(nextDetails);
+      }
+      const merged = mergeAdminSessions(replace ? [] : sessionsRef.current, refreshedSessions);
       sessionsRef.current = merged;
       setSessions(merged);
       if (!preservePagination) {
@@ -294,18 +321,14 @@ export function useAdminTestingData({
       }
 
       const promise = executeRefresh(effectiveReplace, scope, evidenceGeneration);
-      if (replacementRequired) {
-        const entry = { scope, evidenceGeneration, promise };
-        replacementRefreshRef.current = entry;
-        void promise.then(
-          () => {
-            if (replacementRefreshRef.current === entry) replacementRefreshRef.current = null;
-          },
-          () => {
-            if (replacementRefreshRef.current === entry) replacementRefreshRef.current = null;
-          }
-        );
-      }
+      const entry = { scope, evidenceGeneration, promise };
+      activeRefreshRef.current = entry;
+      if (replacementRequired) replacementRefreshRef.current = entry;
+      const releaseRefresh = () => {
+        if (activeRefreshRef.current === entry) activeRefreshRef.current = null;
+        if (replacementRefreshRef.current === entry) replacementRefreshRef.current = null;
+      };
+      void promise.then(releaseRefresh, releaseRefresh);
       return promise;
     },
     [executeRefresh, isCurrent]
@@ -346,28 +369,54 @@ export function useAdminTestingData({
   }, [expireAuthentication, isCurrent, setSyncFailure]);
 
   const loadSession = useCallback(
-    async (sessionId: string) => {
+    async (sessionId: string, force = false) => {
       const scope = scopeRef.current;
       if (!isCurrent(scope)) return null;
       const cached = sessionDetailsRef.current[sessionId];
-      if (cached) return cached;
+      if (cached && !force) return cached;
       const evidenceGeneration = evidenceGenerationRef.current;
-      const result = await testingApi.fetchSession(sessionId);
-      if (!isCurrent(scope)) return null;
-      if (!result.ok && result.error.kind === "unauthorized") expireAuthentication(result.error, scope);
-      if (evidenceGeneration !== evidenceGenerationRef.current) return null;
-      if (!result.ok) {
-        setSyncFailure(result.error, scope, "full");
-        return null;
+      const pending = detailRequestsRef.current.get(sessionId);
+      if (pending?.scope === scope && pending.evidenceGeneration === evidenceGeneration) {
+        return pending.promise;
       }
+      const completeRevision = completeDetailRevisionRef.current.get(sessionId) ?? 0;
+      const promise = (async () => {
+        const result = await testingApi.fetchSession(sessionId);
+        if (!isCurrent(scope)) return null;
+        if (!result.ok && result.error.kind === "unauthorized") expireAuthentication(result.error, scope);
+        if (evidenceGeneration !== evidenceGenerationRef.current) return null;
+        if (!result.ok) {
+          setSyncFailure(result.error, scope, "full");
+          return null;
+        }
 
-      const nextDetails = { ...sessionDetailsRef.current, [sessionId]: result.data };
-      sessionDetailsRef.current = nextDetails;
-      setSessionDetails(nextDetails);
-      const merged = mergeAdminSessions(sessionsRef.current, [result.data]);
-      sessionsRef.current = merged;
-      setSessions(merged);
-      return result.data;
+        const newerCached = sessionDetailsRef.current[sessionId];
+        // Only a complete detail/note response can supersede this read.
+        // Summary polls update metadata but carry no transcript turns.
+        if (newerCached && (completeDetailRevisionRef.current.get(sessionId) ?? 0) !== completeRevision) {
+          return newerCached;
+        }
+        const detail =
+          newerCached && newerCached !== cached
+            ? { ...result.data, ...newerCached, turns: result.data.turns }
+            : result.data;
+        const nextDetails = { ...sessionDetailsRef.current, [sessionId]: detail };
+        completeDetailRevisionRef.current.set(sessionId, completeRevision + 1);
+        sessionDetailsRef.current = nextDetails;
+        setSessionDetails(nextDetails);
+        const merged = mergeAdminSessions(sessionsRef.current, [detail]);
+        sessionsRef.current = merged;
+        setSessions(merged);
+        return detail;
+      })();
+
+      const request = { scope, evidenceGeneration, promise };
+      detailRequestsRef.current.set(sessionId, request);
+      const releaseRequest = () => {
+        if (detailRequestsRef.current.get(sessionId) === request) detailRequestsRef.current.delete(sessionId);
+      };
+      void promise.then(releaseRequest, releaseRequest);
+      return promise;
     },
     [expireAuthentication, isCurrent, setSyncFailure]
   );
@@ -377,11 +426,15 @@ export function useAdminTestingData({
       const scope = scopeRef.current;
       if (!isCurrent(scope)) return false;
       const requestId = ++noteRequestRef.current;
+      noteSessionRequestsRef.current.set(sessionId, requestId);
       const evidenceGeneration = evidenceGenerationRef.current;
       const result = await testingApi.updateSessionNotes(sessionId, notes);
       if (!isCurrent(scope)) return false;
       if (!result.ok && expireAuthentication(result.error, scope)) return false;
-      if (evidenceGeneration !== evidenceGenerationRef.current || requestId !== noteRequestRef.current) {
+      if (
+        evidenceGeneration !== evidenceGenerationRef.current ||
+        requestId !== noteSessionRequestsRef.current.get(sessionId)
+      ) {
         return false;
       }
       if (!result.ok) {
@@ -391,6 +444,7 @@ export function useAdminTestingData({
       }
 
       const nextDetails = { ...sessionDetailsRef.current, [sessionId]: result.data };
+      completeDetailRevisionRef.current.set(sessionId, (completeDetailRevisionRef.current.get(sessionId) ?? 0) + 1);
       sessionDetailsRef.current = nextDetails;
       setSessionDetails(nextDetails);
       const merged = mergeAdminSessions(sessionsRef.current, [result.data]);
@@ -502,6 +556,9 @@ export function useAdminTestingData({
 
   useEffect(() => {
     const scope = ++scopeSequenceRef.current;
+    const noteSessionRequests = noteSessionRequestsRef.current;
+    const detailRequests = detailRequestsRef.current;
+    const completeDetailRevisions = completeDetailRevisionRef.current;
     scopeRef.current = scope;
     activeRef.current = true;
     activeScopeKeyRef.current = scopeKey;
@@ -509,10 +566,14 @@ export function useAdminTestingData({
     refreshRequestRef.current += 1;
     roleRequestRef.current += 1;
     noteRequestRef.current += 1;
+    noteSessionRequests.clear();
+    detailRequests.clear();
+    completeDetailRevisions.clear();
     noteFailureRequestRef.current = 0;
     evidenceGenerationRef.current += 1;
     replacementRequiredRef.current = null;
     replacementRefreshRef.current = null;
+    activeRefreshRef.current = null;
     loadingMoreRef.current = false;
     hasLoadedDataRef.current = false;
     syncFailureSourceRef.current = null;
@@ -533,7 +594,11 @@ export function useAdminTestingData({
     setLastSyncedAt(null);
 
     void refreshForScope(true, scope);
-    const timer = window.setInterval(() => void refreshForScope(false, scope), 10_000);
+    const timer = window.setInterval(() => {
+      // A slower read must be able to commit before a scheduled poll claims
+      // newer ownership. Explicit refreshes can still supersede it.
+      if (activeRefreshRef.current?.scope !== scope) void refreshForScope(false, scope);
+    }, 10_000);
     return () => {
       window.clearInterval(timer);
       if (scopeRef.current === scope) {
@@ -542,10 +607,14 @@ export function useAdminTestingData({
         refreshRequestRef.current += 1;
         roleRequestRef.current += 1;
         noteRequestRef.current += 1;
+        noteSessionRequests.clear();
+        detailRequests.clear();
+        completeDetailRevisions.clear();
         noteFailureRequestRef.current = 0;
         evidenceGenerationRef.current += 1;
         replacementRequiredRef.current = null;
         replacementRefreshRef.current = null;
+        activeRefreshRef.current = null;
       }
     };
   }, [refreshForScope, scopeKey]);

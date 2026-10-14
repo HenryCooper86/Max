@@ -356,13 +356,16 @@
     const maxLat = lats.length ? Math.max(...lats) : 0;
     const minLon = lons.length ? Math.min(...lons) : 0;
     const maxLon = lons.length ? Math.max(...lons) : 0;
-    // A degenerate route falls back to a 1-unit span so the scale stays finite
-    // instead of dividing by zero.
-    const latSpan = maxLat - minLat || 1;
-    const lonSpan = maxLon - minLon || 1;
+    const latSpan = maxLat - minLat;
+    const lonSpan = maxLon - minLon;
     const innerWidth = VIEW_WIDTH - VIEW_PADDING * 2;
     const innerHeight = VIEW_HEIGHT - VIEW_PADDING * 2;
-    const scale = Math.min(innerWidth / lonSpan, innerHeight / latSpan);
+    // Ignore constant axes when scaling, but keep their zero span to center
+    // them. Point routes use a finite scale and sit at the view center.
+    const scale =
+      latSpan || lonSpan
+        ? Math.min(lonSpan ? innerWidth / lonSpan : Infinity, latSpan ? innerHeight / latSpan : Infinity)
+        : 1;
     return {
       minLat,
       maxLat,

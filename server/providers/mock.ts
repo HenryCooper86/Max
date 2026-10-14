@@ -1,5 +1,5 @@
 import type { WebSocket } from "ws";
-import type { AgentProvider, ProviderTelemetry, SessionStartEvent } from "./types";
+import type { AgentProvider, ProviderSessionContext, ProviderTelemetry, SessionStartEvent } from "./types";
 import { MOCK_CAPABILITIES } from "../../shared/agent";
 import {
   buildRideContextSummary,
@@ -253,6 +253,7 @@ export function createMockProvider(
   // Captured at session.start so the hazard injector can suppress simulated
   // alerts on the embedded board, which detects hazards for real.
   let sessionPlatform: string | undefined;
+  let captureNavigationStop: ProviderSessionContext["captureNavigationStop"];
   let guidedStep = 0;
   // True from the moment a scripted turn begins (emitConversation) until its
   // 650 ms reply timer fires — the mock's stand-in for "a rider turn is
@@ -329,6 +330,7 @@ export function createMockProvider(
       command.action === "vision.watch" ? command.args.on : undefined,
       activity
     );
+    if (command.action === "navigation.stop") issued.onNavigationStopped = captureNavigationStop?.();
     send({
       type: "device.command",
       commandId: issued.commandId,
@@ -528,8 +530,9 @@ export function createMockProvider(
   }
 
   return {
-    async start(event: SessionStartEvent) {
+    async start(event: SessionStartEvent, context?: ProviderSessionContext) {
       sessionPlatform = event.platform;
+      captureNavigationStop = context?.captureNavigationStop;
       scenario = event.scenario ?? "commute";
       const profile = SCENARIOS[scenario];
       rideContext = {
@@ -590,6 +593,9 @@ export function createMockProvider(
       }
       if (!issued) return;
       deviceActivity.reconcile(issued.activity, event);
+      if (issued.action === "navigation.stop" && (event.status === "ok" || event.reason === "navigation.notActive")) {
+        issued.onNavigationStopped?.();
+      }
       if (issued.action === "vision.watch" && event.status === "ok") {
         visionGovernor.setEnabled(issued.watchOn === true);
       }

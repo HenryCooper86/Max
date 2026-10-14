@@ -7,11 +7,11 @@ import { corpusIssueCount, formatAdminRelativeTime, testingRunStatusLabel } from
 
 const QUALITY_PRIORITY: Record<TestingQuality, number> = { fail: 3, watch: 2, pass: 1 };
 
-function releaseStatusLabel(status: TestingStats["releaseGate"]["status"] | undefined) {
+function releaseStatusLabel(status: TestingStats["releaseGate"]["status"] | undefined, language: "zh-CN" | "en-US") {
   if (status === "pass") return "PASS";
   if (status === "watch") return "WATCH";
   if (status === "fail") return "FAIL";
-  return "等待";
+  return localized(language, "等待", "Waiting");
 }
 
 function statusTone(status: string | undefined) {
@@ -153,7 +153,7 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
         <button type="button" className={`opsCard ${statusTone(releaseGate?.status)}`} onClick={onOpenReleases}>
           <span>{localized(language, "发布门禁", "Release gate")}</span>
           <strong className={`adminStatus ${statusTone(releaseGate?.status)}`}>
-            {releaseStatusLabel(releaseGate?.status)}
+            {releaseStatusLabel(releaseGate?.status, language)}
           </strong>
           <p>
             {releaseGate

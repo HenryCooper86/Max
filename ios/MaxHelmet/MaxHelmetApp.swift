@@ -26,7 +26,10 @@ struct MaxHelmetApp: App {
                 }
                 .onChange(of: scenePhase) { _, phase in
                     updateIdleTimer()
-                    if phase == .background { session.music.setAppInBackground(true) }
+                    if phase == .background {
+                        session.music.setAppInBackground(true)
+                        session.stopCameraForSession()
+                    }
                     else if phase == .active { session.music.setAppInBackground(false) }
                 }
                 .onChange(of: hudCast.active) { _, _ in updateIdleTimer() }

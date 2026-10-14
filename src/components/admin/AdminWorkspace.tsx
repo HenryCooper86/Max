@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AccountSessionControls } from "../AccountBar";
 import { useLanguage } from "../LanguageToggle";
 import { localized } from "../../lib/i18n";
+import { CONNECTION_LABELS, CONNECTION_LABELS_EN } from "../../lib/constants";
 import type { HelmetAgent } from "../../hooks/useHelmetAgent";
 import type { AuthUser } from "../../lib/auth";
 import {
@@ -36,6 +37,12 @@ export function AdminWorkspace({ agent, user, onAuthenticationExpired, onClose }
   const data = useAdminTestingData({ user, onAuthenticationExpired });
   const allowed = allowedAdminSections(user.role);
   const active = normalizeAdminSection(section, user.role);
+  const voiceConnectionLabel =
+    agent.connectionState === "offline" && !agent.listening
+      ? agent.starting
+        ? localized(language, "语音启动中", "Voice starting")
+        : localized(language, "语音会话未开启", "Voice session inactive")
+      : `${localized(language, "语音", "Voice")} · ${(language === "en-US" ? CONNECTION_LABELS_EN : CONNECTION_LABELS)[agent.connectionState]}`;
   const handleRequestedSessionHandled = useCallback((sessionId: string) => {
     setRequestedEvidenceSessionId((current) => (current === sessionId ? null : current));
   }, []);
@@ -64,17 +71,13 @@ export function AdminWorkspace({ agent, user, onAuthenticationExpired, onClose }
           </div>
         </div>
         <div className="adminWorkspaceContext">
-          <span className={agent.connected ? "online" : ""}>
-            <Broadcast aria-hidden="true" />{" "}
-            {agent.connected
-              ? language === "en-US"
-                ? "Relay online"
-                : "中继在线"
-              : language === "en-US"
-                ? "Relay offline"
-                : "中继离线"}
+          <span className={agent.connectionState === "ready" ? "online" : ""}>
+            <Broadcast aria-hidden="true" /> {voiceConnectionLabel}
           </span>
-          <span>构建 {agent.health?.build?.gitCommit ?? "本地"}</span>
+          <span>
+            {localized(language, "构建", "Build")}{" "}
+            {agent.health?.build?.gitCommit ?? localized(language, "本地", "Local")}
+          </span>
           <span>
             <ShieldCheck aria-hidden="true" /> @{user.username} · {adminRoleLabel(user.role, language)}
           </span>

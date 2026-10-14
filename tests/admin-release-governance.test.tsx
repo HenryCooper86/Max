@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TestingOperationsSnapshot, TestingPolicy, TestingRun, TestingRunRequirement } from "../shared/testing";
 import { GovernanceWorkspace } from "../src/components/admin/GovernanceWorkspace";
 import { ReleaseValidation } from "../src/components/admin/ReleaseValidation";
+import { LanguageProvider, LanguageToggle } from "../src/components/LanguageToggle";
 import type { AdminTestingData } from "../src/components/admin/useAdminTestingData";
 import type { HelmetAgent } from "../src/hooks/useHelmetAgent";
 import type { ApiResult } from "../src/lib/api-client";
@@ -170,6 +171,60 @@ afterEach(async () => {
 });
 
 describe("ReleaseValidation", () => {
+  it("uses English for release counts and successful create, status, and assignment actions", async () => {
+    const sharedData = adminData();
+    vi.mocked(sharedData.createRun).mockResolvedValue({ ok: true, data: run() });
+    vi.mocked(sharedData.updateRun).mockResolvedValue({ ok: true, data: { ...run(), status: "blocked" } });
+    vi.mocked(sharedData.createAssignment).mockResolvedValue({ ok: true, data: run() });
+    await act(async () => {
+      renderer = create(
+        <LanguageProvider>
+          <LanguageToggle />
+          <ReleaseValidation agent={agent()} user={authUser("admin")} data={sharedData} />
+        </LanguageProvider>
+      );
+    });
+    act(() => button(renderer!, "EN").props.onClick());
+    const runList = renderer.root.findByProps({ className: "releaseRunList" });
+    expect(text(runList)).toContain("0/2 samples");
+    await act(async () => button(renderer!, "Create release run").props.onClick());
+    expect(text(renderer.root)).toContain("Release run “候选发布” created with 2 coverage requirements.");
+    act(() => button(renderer!, "中文").props.onClick());
+    expect(text(renderer.root)).toContain("发布运行“候选发布”已创建，包含 2 项覆盖要求。");
+    act(() => button(renderer!, "EN").props.onClick());
+    expect(text(renderer.root)).toContain("Release run “候选发布” created with 2 coverage requirements.");
+    await act(async () =>
+      renderer!.root
+        .find((node) => node.type === "select" && node.props["aria-label"] === "Release run status")
+        .props.onChange({ target: { value: "blocked" } })
+    );
+    expect(text(renderer.root)).toContain("Release run status updated to Blocked.");
+    await act(async () =>
+      renderer!.root.findAll((node) => node.type === "button" && text(node) === "Assign task")[0].props.onClick()
+    );
+    expect(text(renderer.root)).toContain("Coverage task assigned to admin.");
+  });
+
+  it("locks the release draft while creating and restores it after a failed request", async () => {
+    const pending = deferred<ApiResult<TestingRun>>();
+    const sharedData = adminData();
+    vi.mocked(sharedData.createRun).mockReturnValueOnce(pending.promise);
+    await act(async () => {
+      renderer = create(<ReleaseValidation agent={agent()} user={authUser("admin")} data={sharedData} />);
+    });
+    const draft = renderer.root.findByProps({ className: "runCreateBar" });
+    act(() => draft.findAllByType("input")[0].props.onChange({ target: { value: "Keep this draft" } }));
+    await act(async () => {
+      void button(renderer!, "创建发布运行").props.onClick();
+    });
+    expect(draft.findAllByType("input").every((field) => field.props.disabled)).toBe(true);
+    expect(button(renderer, "正在创建…").props.disabled).toBe(true);
+    pending.resolve({ ok: false, error: { kind: "unavailable", message: "Try again" } });
+    await flush();
+    expect(draft.findAllByType("input").every((field) => !field.props.disabled)).toBe(true);
+    expect(draft.findAllByType("input")[0].props.value).toBe("Keep this draft");
+  });
+
   it("keeps unrelated assignment actions enabled and shows the typed server error", async () => {
     const pending = deferred<ApiResult<TestingRun>>();
     const sharedData = adminData();
@@ -295,6 +350,27 @@ describe("ReleaseValidation", () => {
 });
 
 describe("GovernanceWorkspace", () => {
+  it("locks the policy draft while publishing and restores it after a failed request", async () => {
+    const pending = deferred<ApiResult<TestingPolicy>>();
+    const sharedData = adminData();
+    vi.mocked(sharedData.createPolicy).mockReturnValueOnce(pending.promise);
+    await act(async () => {
+      renderer = create(<GovernanceWorkspace user={authUser("admin")} data={sharedData} />);
+    });
+    const rationale = renderer.root.findByType("textarea");
+    act(() => rationale.props.onChange({ target: { value: "Keep this rationale" } }));
+    await act(async () => {
+      void button(renderer!, "发布版本化策略").props.onClick();
+    });
+    expect(renderer.root.findAllByType("input").every((field) => field.props.disabled)).toBe(true);
+    expect(rationale.props.disabled).toBe(true);
+    pending.resolve({ ok: false, error: { kind: "unavailable", message: "Try again" } });
+    await flush();
+    expect(renderer.root.findAllByType("input").every((field) => !field.props.disabled)).toBe(true);
+    expect(rationale.props.disabled).toBe(false);
+    expect(rationale.props.value).toBe("Keep this rationale");
+  });
+
   it("resets the editable draft when the active policy version changes and enforces numeric floors", async () => {
     const sharedData = adminData();
     await act(async () => {

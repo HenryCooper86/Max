@@ -13,7 +13,8 @@ struct DeviceActionRouter {
         self.isDeviceUnlocked = isDeviceUnlocked
     }
 
-    func handle(_ command: DeviceCommand) async -> DeviceActionResult {
+    @MainActor func handle(_ command: DeviceCommand) async -> DeviceActionResult {
+        guard !Task.isCancelled else { return .failed("device.cancelled") }
         guard isDeviceUnlocked() else {
             return .failed("device.locked")
         }

@@ -31,6 +31,10 @@ export type ProviderSessionContext = {
    *  guard (or any other reason to know route state) omits reading it;
    *  session-controller.ts passes it unconditionally. */
   routeActive?: () => boolean;
+  /** Captures the route generation being stopped. Invoke the returned callback
+   * only when the device confirms it stopped; a newer route must survive a
+   * delayed acknowledgment for this command. */
+  captureNavigationStop?: () => () => void;
 };
 
 export type AgentProvider = {

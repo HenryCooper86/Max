@@ -642,6 +642,51 @@ describe("RDK HUD route card", () => {
     expect(element(harness, "route-svg").innerHTML).not.toContain("Infinity");
   });
 
+  it.each([
+    {
+      direction: "north–south",
+      polyline: [
+        { lat: 31.23, lon: 121.47 },
+        { lat: 31.24, lon: 121.47 }
+      ],
+      expected: [
+        [140, 142],
+        [140, 18]
+      ]
+    },
+    {
+      direction: "east–west",
+      polyline: [
+        { lat: 31.23, lon: 121.47 },
+        { lat: 31.23, lon: 121.48 }
+      ],
+      expected: [
+        [18, 80],
+        [262, 80]
+      ]
+    }
+  ])("fits a $direction route to the HUD schematic", ({ polyline, expected }) => {
+    const harness = renderHarness();
+    harness.render(state({ route: { polyline, steps: [] } }));
+    const svg = element(harness, "route-svg").innerHTML;
+    const points = /<polyline[^>]*points="([^"]+)"/.exec(svg)![1]!.trim().split(/\s+/);
+    expect(points).toHaveLength(2);
+    points.forEach((point, index) => {
+      const [x, y] = point.split(",").map(Number);
+      expect(x).toBeCloseTo(expected[index]![0]!);
+      expect(y).toBeCloseTo(expected[index]![1]!);
+    });
+  });
+
+  it("centers a degenerate route's rider in the HUD schematic", () => {
+    const position = { lat: 31.23, lon: 121.47 };
+    const harness = renderHarness();
+    harness.render(
+      state({ route: { polyline: [position], steps: [] }, navigation: { ...state().navigation!, position } })
+    );
+    expect(element(harness, "route-svg").innerHTML).toContain('cx="140" cy="80"');
+  });
+
   it("projects identically to the web app's schematic", () => {
     const polyline = [
       { lat: 31.23, lon: 121.47 },

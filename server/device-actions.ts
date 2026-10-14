@@ -720,6 +720,8 @@ export type IssuedDeviceCommand = {
   watchOn?: boolean;
   /** Stateful follow-up target captured when the command was issued. */
   activity?: DeviceActivityIntent;
+  /** Relay-owned route retirement, captured when navigation.stop is issued. */
+  onNavigationStopped?: () => void;
 };
 
 /** Tracks dispatched commands so no command can be left pending forever. */

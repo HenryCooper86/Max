@@ -172,6 +172,219 @@ async function trackedHook(currentUser: AuthUser, onAuthenticationExpired = vi.f
 }
 
 describe("useAdminTestingData concurrency", () => {
+  it("refreshes cached evidence metadata without dropping its detailed transcript", async () => {
+    const detail = {
+      ...session("initial", 10),
+      notes: "old notes",
+      quality: "pass" as const,
+      turns: [{ turnId: "turn-1", text: "full transcript" }] as TesterSessionSummary["turns"]
+    };
+    vi.mocked(testingApi.fetchSession).mockResolvedValue(success(detail));
+    const hook = await trackedHook(user("admin"));
+    await act(async () => {
+      await hook.current.loadSession("initial");
+    });
+    vi.mocked(testingApi.fetchSessions).mockResolvedValue(
+      success(page([{ ...detail, notes: "updated by another reviewer", quality: "watch", turns: [] }]))
+    );
+
+    await act(async () => {
+      await hook.current.refresh();
+    });
+
+    expect(hook.current.sessionDetails.initial.notes).toBe("updated by another reviewer");
+    expect(hook.current.sessionDetails.initial.quality).toBe("watch");
+    expect(hook.current.sessionDetails.initial.turns).toEqual(detail.turns);
+    expect(await hook.current.loadSession("initial")).toEqual(hook.current.sessionDetails.initial);
+  });
+
+  it("force-refreshes historical detail even when it is outside the polled first page", async () => {
+    const oldDetail = { ...session("historical", 1), notes: "old notes", turns: [] };
+    vi.mocked(testingApi.fetchSession).mockResolvedValue(success(oldDetail));
+    const hook = await trackedHook(user("admin"));
+    await act(async () => {
+      await hook.current.loadSession("historical");
+    });
+    vi.mocked(testingApi.fetchSession).mockResolvedValue(
+      success({ ...oldDetail, notes: "another reviewer updated this" })
+    );
+    await act(async () => {
+      await hook.current.refresh();
+      await hook.current.loadSession("historical", true);
+    });
+    expect(hook.current.sessionDetails.historical.notes).toBe("another reviewer updated this");
+  });
+
+  it("applies a fresh detailed transcript after a summary-only refresh changes the cache object", async () => {
+    const oldDetail = {
+      ...session("initial", 10),
+      notes: "old notes",
+      quality: "pass" as const,
+      turns: [{ turnId: "old", text: "old transcript" }] as TesterSessionSummary["turns"]
+    };
+    vi.mocked(testingApi.fetchSession).mockResolvedValue(success(oldDetail));
+    const hook = await trackedHook(user("admin"));
+    await act(async () => {
+      await hook.current.loadSession("initial");
+    });
+    const pendingDetail = deferred<Awaited<ReturnType<typeof testingApi.fetchSession>>>();
+    vi.mocked(testingApi.fetchSession).mockReturnValueOnce(pendingDetail.promise);
+    let detailRead!: Promise<TesterSessionSummary | null>;
+    act(() => {
+      detailRead = hook.current.loadSession("initial", true);
+    });
+    vi.mocked(testingApi.fetchSessions).mockResolvedValue(
+      success(page([{ ...oldDetail, notes: "new summary notes", quality: "watch", turns: [] }]))
+    );
+    await act(async () => {
+      await hook.current.refresh();
+    });
+    const newTurns = [{ turnId: "new", text: "new detailed transcript" }] as TesterSessionSummary["turns"];
+    pendingDetail.resolve(success({ ...oldDetail, turns: newTurns }));
+    await act(async () => {
+      await detailRead;
+    });
+    expect(hook.current.sessionDetails.initial.turns).toEqual(newTurns);
+    expect(hook.current.sessionDetails.initial.notes).toBe("new summary notes");
+    expect(hook.current.sessionDetails.initial.quality).toBe("watch");
+  });
+
+  it("shares a slow forced detail read across repeated polling requests", async () => {
+    const oldDetail = { ...session("initial", 10), notes: "notes", turns: [] };
+    vi.mocked(testingApi.fetchSession).mockResolvedValue(success(oldDetail));
+    const hook = await trackedHook(user("admin"));
+    await act(async () => {
+      await hook.current.loadSession("initial");
+    });
+    const newTurns = [{ turnId: "new", text: "new detailed transcript" }] as TesterSessionSummary["turns"];
+    vi.mocked(testingApi.fetchSession)
+      .mockReset()
+      .mockImplementation(
+        () => new Promise((resolve) => setTimeout(() => resolve(success({ ...oldDetail, turns: newTurns })), 12_000))
+      );
+    let first!: Promise<TesterSessionSummary | null>;
+    let second!: Promise<TesterSessionSummary | null>;
+    act(() => {
+      first = hook.current.loadSession("initial", true);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    act(() => {
+      second = hook.current.loadSession("initial", true);
+    });
+    expect(testingApi.fetchSession).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect((await first)?.turns).toEqual(newTurns);
+      expect((await second)?.turns).toEqual(newTurns);
+    });
+    expect(hook.current.sessionDetails.initial.turns).toEqual(newTurns);
+  });
+
+  it("keeps a successful note save when a previously started poll returns old metadata", async () => {
+    const detail = { ...session("initial", 10), notes: "old notes", turns: [] };
+    vi.mocked(testingApi.fetchSession).mockResolvedValue(success(detail));
+    const hook = await trackedHook(user("admin"));
+    await act(async () => {
+      await hook.current.loadSession("initial");
+    });
+    const pendingPage = deferred<Awaited<ReturnType<typeof testingApi.fetchSessions>>>();
+    vi.mocked(testingApi.fetchSessions).mockReturnValueOnce(pendingPage.promise);
+    let refreshing!: Promise<void>;
+    act(() => {
+      refreshing = hook.current.refresh();
+    });
+    vi.mocked(testingApi.updateSessionNotes).mockResolvedValue(success({ ...detail, notes: "just saved" }));
+    await act(async () => {
+      await hook.current.saveNotes("initial", "just saved");
+    });
+    pendingPage.resolve(success(page([detail])));
+    await act(async () => {
+      await refreshing;
+    });
+
+    expect(hook.current.sessionDetails.initial.notes).toBe("just saved");
+    expect(hook.current.sessions.find((item) => item.sessionId === "initial")?.notes).toBe("just saved");
+  });
+
+  it("accepts successful note writes for separate sessions regardless of completion order", async () => {
+    const hook = await trackedHook(user("admin"));
+    const first = deferred<Awaited<ReturnType<typeof testingApi.updateSessionNotes>>>();
+    const second = deferred<Awaited<ReturnType<typeof testingApi.updateSessionNotes>>>();
+    vi.mocked(testingApi.updateSessionNotes).mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    let firstSave!: Promise<boolean>;
+    let secondSave!: Promise<boolean>;
+    act(() => {
+      firstSave = hook.current.saveNotes("first", "first notes");
+      secondSave = hook.current.saveNotes("second", "second notes");
+    });
+
+    second.resolve(success({ ...session("second", 20), notes: "second notes" }));
+    await act(async () => {
+      expect(await secondSave).toBe(true);
+    });
+    first.resolve(success({ ...session("first", 10), notes: "first notes" }));
+    await act(async () => {
+      expect(await firstSave).toBe(true);
+    });
+
+    expect(hook.current.sessionDetails.first.notes).toBe("first notes");
+    expect(hook.current.sessionDetails.second.notes).toBe("second notes");
+  });
+
+  it.each([false, true])("keeps newer saved notes when an earlier detail read completes (force=%s)", async (force) => {
+    const hook = await trackedHook(user("admin"));
+    if (force) {
+      vi.mocked(testingApi.fetchSession).mockResolvedValueOnce(
+        success({ ...session("initial", 10), notes: "old notes", turns: [] })
+      );
+      await act(async () => {
+        await hook.current.loadSession("initial");
+      });
+    }
+    const pendingDetail = deferred<Awaited<ReturnType<typeof testingApi.fetchSession>>>();
+    vi.mocked(testingApi.fetchSession).mockReturnValueOnce(pendingDetail.promise);
+    let loadingDetail!: Promise<TesterSessionSummary | null>;
+    act(() => {
+      loadingDetail = hook.current.loadSession("initial", force);
+    });
+    const savedDetail = { ...session("initial", 10), notes: "new notes", turns: [] };
+    vi.mocked(testingApi.updateSessionNotes).mockResolvedValue(success(savedDetail));
+    await act(async () => {
+      await hook.current.saveNotes("initial", "new notes");
+    });
+    pendingDetail.resolve(success({ ...savedDetail, notes: "old notes" }));
+    await act(async () => {
+      expect(await loadingDetail).toEqual(savedDetail);
+    });
+
+    expect(hook.current.sessionDetails.initial.notes).toBe("new notes");
+    expect(hook.current.sessions.find((item) => item.sessionId === "initial")?.notes).toBe("new notes");
+  });
+
+  it("retains the last-started note write for the same session", async () => {
+    const hook = await trackedHook(user("admin"));
+    const first = deferred<Awaited<ReturnType<typeof testingApi.updateSessionNotes>>>();
+    const second = deferred<Awaited<ReturnType<typeof testingApi.updateSessionNotes>>>();
+    vi.mocked(testingApi.updateSessionNotes).mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    let firstSave!: Promise<boolean>;
+    let secondSave!: Promise<boolean>;
+    act(() => {
+      firstSave = hook.current.saveNotes("initial", "older notes");
+      secondSave = hook.current.saveNotes("initial", "newer notes");
+    });
+    second.resolve(success({ ...session("initial", 10), notes: "newer notes" }));
+    await act(async () => {
+      expect(await secondSave).toBe(true);
+    });
+    first.resolve(success({ ...session("initial", 10), notes: "older notes" }));
+    await act(async () => {
+      expect(await firstSave).toBe(false);
+    });
+    expect(hook.current.sessionDetails.initial.notes).toBe("newer notes");
+  });
+
   it("does not expose or return a cached detail during a scope transition render", async () => {
     const hook = await trackedHook(user("admin"));
     let cached!: TesterSessionSummary | null;
@@ -605,5 +818,25 @@ describe("useAdminTestingData concurrency", () => {
     expect(testingApi.fetchSummary).toHaveBeenCalledTimes(1);
     expect(testingApi.fetchSessions).toHaveBeenCalledTimes(1);
     expect(testingApi.fetchOperations).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a scheduled read slower than the polling interval finish before starting another", async () => {
+    const hook = await trackedHook(user("admin"));
+    vi.mocked(testingApi.fetchSummary)
+      .mockReset()
+      .mockImplementation(
+        () => new Promise((resolve) => setTimeout(() => resolve(success(stats("slow response"))), 12_000))
+      );
+    vi.mocked(testingApi.fetchSessions).mockResolvedValue(success(page([session("slow-session", 100)])));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(22_000);
+    });
+    expect(testingApi.fetchSummary).toHaveBeenCalledTimes(1);
+    expect(hook.current.testing).toEqual(stats("slow response"));
+    expect(hook.current.sessions.map((item) => item.sessionId)).toContain("slow-session");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8_000);
+    });
+    expect(testingApi.fetchSummary).toHaveBeenCalledTimes(2);
   });
 });

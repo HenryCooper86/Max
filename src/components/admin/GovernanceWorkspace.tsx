@@ -142,7 +142,7 @@ export function GovernanceWorkspace({ user, data }: Props) {
                 min={100}
                 value={policyLatency}
                 onChange={(event) => setPolicyLatency(Number(event.target.value))}
-                disabled={!isAdmin}
+                disabled={!isAdmin || publishing}
               />
             </label>
             <label>
@@ -152,7 +152,7 @@ export function GovernanceWorkspace({ user, data }: Props) {
                 min={0}
                 value={policyInvalid}
                 onChange={(event) => setPolicyInvalid(Number(event.target.value))}
-                disabled={!isAdmin}
+                disabled={!isAdmin || publishing}
               />
             </label>
             <label>
@@ -162,7 +162,7 @@ export function GovernanceWorkspace({ user, data }: Props) {
                 min={1}
                 value={policySafetySamples}
                 onChange={(event) => setPolicySafetySamples(Number(event.target.value))}
-                disabled={!isAdmin}
+                disabled={!isAdmin || publishing}
               />
             </label>
             <label className="wide">
@@ -170,7 +170,7 @@ export function GovernanceWorkspace({ user, data }: Props) {
               <textarea
                 value={policyDescription}
                 onChange={(event) => setPolicyDescription(event.target.value)}
-                disabled={!isAdmin}
+                disabled={!isAdmin || publishing}
                 placeholder={localized(
                   language,
                   "说明门槛调整及发布依据…",

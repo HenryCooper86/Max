@@ -364,23 +364,29 @@ export function useHelmetAgent() {
   // Monotonic: a slow token-less poll must not overwrite the fresh post-login
   // response (last-write-wins made the locked-stats banner flash after login).
   const healthRequestSeqRef = useRef(0);
+  const healthRequestsInFlightRef = useRef(0);
   const refreshHealth = useCallback(async () => {
     const seq = ++healthRequestSeqRef.current;
-    const nextHealth = await fetchAgentHealth();
-    if (!nextHealth || seq !== healthRequestSeqRef.current) return;
-    setHealth(nextHealth);
-    setProvider(nextHealth.provider);
-    setCapabilities(nextHealth.capabilities);
+    healthRequestsInFlightRef.current += 1;
+    try {
+      const nextHealth = await fetchAgentHealth();
+      if (!nextHealth || seq !== healthRequestSeqRef.current) return;
+      setHealth(nextHealth);
+      setProvider(nextHealth.provider);
+      setCapabilities(nextHealth.capabilities);
+    } finally {
+      healthRequestsInFlightRef.current -= 1;
+    }
   }, []);
 
   useEffect(() => {
     // Skip polls while the tab is hidden — a backgrounded HUD refreshing the
     // QA dashboard 12×/min serves nobody. Refresh immediately on return.
     const poll = () => {
-      if (!document.hidden) void refreshHealth();
+      if (!document.hidden && healthRequestsInFlightRef.current === 0) void refreshHealth();
     };
     const onVisibility = () => {
-      if (!document.hidden) void refreshHealth();
+      poll();
     };
     void refreshHealth();
     const timer = window.setInterval(poll, HEALTH_POLL_MS);

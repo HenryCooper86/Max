@@ -11,10 +11,14 @@ import {
   type TestingReview
 } from "../shared/testing";
 import { AdminOverview } from "../src/components/admin/AdminOverview";
+import { AdminWorkspace } from "../src/components/admin/AdminWorkspace";
+import { LanguageProvider, LanguageToggle } from "../src/components/LanguageToggle";
 import { EvidenceWorkspace } from "../src/components/admin/EvidenceWorkspace";
 import type { HelmetAgent } from "../src/hooks/useHelmetAgent";
 import type { AuthUser } from "../src/lib/auth";
-import type { AdminTestingData } from "../src/components/admin/useAdminTestingData";
+import { useAdminTestingData, type AdminTestingData } from "../src/components/admin/useAdminTestingData";
+import { testingApi } from "../src/lib/testing-api";
+import { getTestingReview, resetTestingStore, upsertTestingReview } from "../server/testing-store";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 vi.stubGlobal("window", globalThis);
@@ -946,6 +950,121 @@ describe("EvidenceWorkspace navigation state", () => {
 });
 
 describe("EvidenceWorkspace review workflow", () => {
+  it("refreshes only visible selected historical evidence outside the first page", async () => {
+    vi.useFakeTimers();
+    try {
+      const historical = session("historical", "old-key", "old", "pass", "old historical notes");
+      const recent = session("recent", "current-key", "current", "pass", "recent notes");
+      const users = [
+        tester("old-key", "old", { pass: 1, watch: 0, fail: 0 }),
+        tester("current-key", "current", { pass: 1, watch: 0, fail: 0 })
+      ];
+      vi.spyOn(testingApi, "fetchSummary").mockResolvedValue({ ok: true, data: testing(users, [recent]) });
+      vi.spyOn(testingApi, "fetchSessions").mockResolvedValue({ ok: true, data: { items: [recent], total: 2 } });
+      vi.spyOn(testingApi, "fetchOperations").mockResolvedValue({
+        ok: true,
+        data: { operations: operations([]), policies: [policy()] }
+      });
+      vi.spyOn(testingApi, "fetchSession").mockResolvedValue({ ok: true, data: historical });
+      const sharedAgent = agent();
+      const sharedUser = user();
+      function HistoricalEvidence({ active }: { active: boolean }) {
+        const actualData = useAdminTestingData({ user: sharedUser, onAuthenticationExpired: () => undefined });
+        const [requested, setRequested] = useState<string | null>(historical.sessionId);
+        return actualData.testing ? (
+          <EvidenceWorkspace
+            active={active}
+            requestedSessionId={requested}
+            onRequestedSessionHandled={() => setRequested(null)}
+            agent={sharedAgent}
+            user={sharedUser}
+            data={actualData}
+          />
+        ) : null;
+      }
+      await act(async () => {
+        renderer = create(<HistoricalEvidence active />);
+      });
+      const notes = textarea(renderer!, "复现上下文、设备条件和调查记录…");
+      expect(notes.props.value).toBe("old historical notes");
+      vi.mocked(testingApi.fetchSession).mockResolvedValue({
+        ok: true,
+        data: { ...historical, notes: "updated historical notes" }
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(notes.props.value).toBe("updated historical notes");
+      expect(testingApi.fetchSession).toHaveBeenLastCalledWith(historical.sessionId);
+      await act(async () => {
+        renderer?.update(<HistoricalEvidence active={false} />);
+      });
+      const visibleReads = vi.mocked(testingApi.fetchSession).mock.calls.length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(testingApi.fetchSession).toHaveBeenCalledTimes(visibleReads);
+    } finally {
+      await act(async () => renderer?.unmount());
+      renderer = null;
+      vi.useRealTimers();
+    }
+  });
+
+  it("changes only review status while preserving another reviewer's newer metadata", async () => {
+    resetTestingStore();
+    try {
+      const selected = session("selected-session", "current-key", "current", "pass", "");
+      const original = upsertTestingReview(
+        { sessionId: selected.sessionId, title: "Old title", comment: "Old comment", severity: "high", owner: "first" },
+        "first",
+        1
+      )!;
+      const sharedData = data([selected], [tester("current-key", "current", { pass: 1, watch: 0, fail: 0 })]);
+      sharedData.operations = operations([original]);
+      vi.mocked(sharedData.saveReview).mockImplementation(async (input) => ({
+        ok: true,
+        data: upsertTestingReview(input, "first", 3)!
+      }));
+      await act(async () => {
+        renderer = create(
+          <EvidenceWorkspace
+            active
+            requestedSessionId={null}
+            onRequestedSessionHandled={vi.fn()}
+            agent={agent()}
+            user={user()}
+            data={sharedData}
+          />
+        );
+      });
+      const newest = upsertTestingReview(
+        { id: original.id, title: "New title", comment: "New comment", severity: "critical", owner: "second" },
+        "second",
+        2
+      )!;
+      const statusSelect = renderer.root.find(
+        (node) => node.type === "select" && node.props["aria-label"] === "复核状态 Old title"
+      );
+      await act(async () => statusSelect.props.onChange({ target: { value: "triaged" } }));
+
+      expect(sharedData.saveReview).toHaveBeenCalledWith({
+        id: original.id,
+        sessionId: selected.sessionId,
+        status: "triaged"
+      });
+      expect(getTestingReview(original.id)).toMatchObject({
+        title: newest.title,
+        comment: newest.comment,
+        severity: newest.severity,
+        owner: newest.owner,
+        status: "triaged"
+      });
+    } finally {
+      resetTestingStore();
+    }
+  });
+
   it("binds the composer and queue navigation to selected evidence and refreshes after saving", async () => {
     const first = session("session-first", "first-key", "first", "fail", "");
     const second = session("session-second", "second-key", "second", "pass", "");
@@ -1574,6 +1693,93 @@ describe("EvidenceWorkspace review workflow", () => {
 });
 
 describe("Admin evidence presentation guards", () => {
+  it("shows a healthy inactive voice session and localizes admin header and waiting KPI", async () => {
+    const previousWindow = window;
+    const previousDocument = globalThis.document;
+    const previousHTMLElement = globalThis.HTMLElement;
+    vi.stubGlobal("window", {
+      setInterval,
+      clearInterval,
+      setTimeout,
+      clearTimeout,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined
+    });
+    vi.stubGlobal("document", {
+      activeElement: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined
+    });
+    vi.stubGlobal("HTMLElement", class {});
+    const waiting = testing([], []);
+    waiting.releaseGate.status = "waiting";
+    vi.spyOn(testingApi, "fetchSummary").mockResolvedValue({ ok: true, data: waiting });
+    vi.spyOn(testingApi, "fetchSessions").mockResolvedValue({ ok: true, data: { items: [], total: 0 } });
+    vi.spyOn(testingApi, "fetchOperations").mockResolvedValue({
+      ok: true,
+      data: { operations: operations([]), policies: [policy()] }
+    });
+    const idleAgent = {
+      ...agent(),
+      connected: false,
+      listening: false,
+      starting: false,
+      connectionState: "offline" as const
+    };
+    const renderWorkspace = (nextAgent: HelmetAgent) => (
+      <LanguageProvider>
+        <LanguageToggle />
+        <AdminWorkspace agent={nextAgent} user={user()} onAuthenticationExpired={vi.fn()} onClose={vi.fn()} />
+      </LanguageProvider>
+    );
+    try {
+      await act(async () => {
+        renderer = create(renderWorkspace(idleAgent));
+      });
+      act(() => renderer!.root.find((node) => node.type === "button" && node.children.includes("EN")).props.onClick());
+      const header = renderer!.root.findByProps({ className: "adminWorkspaceContext" });
+      expect(text(header)).toContain("Voice session inactive");
+      expect(text(header)).not.toContain("Relay offline");
+      expect(text(header)).toContain("Build abcdef123456");
+      expect(text(header)).toContain("Last synced");
+      const gate = renderer!.root.find((node) => node.type === "button" && text(node).includes("Release gate"));
+      expect(text(gate.findByType("strong"))).toBe("Waiting");
+
+      await act(async () => {
+        renderer?.update(renderWorkspace({ ...idleAgent, connectionState: "connecting", starting: true }));
+      });
+      expect(text(header)).toContain("Voice · Connecting");
+      await act(async () => {
+        renderer?.update(renderWorkspace({ ...idleAgent, connected: true, connectionState: "degraded" }));
+      });
+      expect(text(header)).toContain("Voice · Degraded");
+      expect(header.findAllByType("span")[0].props.className).not.toBe("online");
+      await act(async () => {
+        renderer?.update(renderWorkspace({ ...idleAgent, health: null }));
+      });
+      expect(text(header)).toContain("Build Local");
+      await act(async () => {
+        renderer?.update(renderWorkspace({ ...idleAgent, listening: true }));
+      });
+      expect(text(header)).toContain("Voice · Offline");
+      act(() =>
+        renderer!.root.find((node) => node.type === "button" && node.children.includes("中文")).props.onClick()
+      );
+      await act(async () => {
+        renderer?.update(renderWorkspace(idleAgent));
+      });
+      expect(text(header)).toContain("语音会话未开启");
+      expect(text(header)).toContain("构建 abcdef123456");
+      expect(text(gate.findByType("strong"))).toBe("等待");
+    } finally {
+      await act(async () => renderer?.unmount());
+      renderer = null;
+      vi.stubGlobal("window", previousWindow);
+      vi.stubGlobal("document", previousDocument);
+      vi.stubGlobal("HTMLElement", previousHTMLElement);
+    }
+  });
+
   it("ships an author-level hidden rule that overrides the testing panel display", () => {
     const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
 

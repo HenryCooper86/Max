@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>Max motorcycle helmet</title>
+  <rect width="64" height="64" rx="14" fill="#102221" />
+  <g transform="translate(0 7) scale(.15238)">
+    <path
+      fill="#e8eeea"
+      d="M54 161c4-81 68-132 151-132 93 0 159 61 166 149 2 24-11 45-34 54-45 17-126 26-204 8-50-12-81-39-79-79Z"
+    />
+    <path fill="#8b9b97" d="M220 167c40 4 82 0 126-12-5 28-18 46-40 54-31 11-66 17-103 17 17-17 22-36 17-59Z" />
+    <path fill="#163b40" d="M155 88h155c22 0 40 18 40 40v13c-48 18-106 25-178 21-27-1-49-24-49-51 0-13 11-23 32-23Z" />
+    <path fill="none" stroke="#6fe7d0" stroke-linecap="round" stroke-width="9" d="M164 103h134" />
+    <circle cx="282" cy="205" r="12" fill="#6fe7d0" />
+  </g>
+</svg>

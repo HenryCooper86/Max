@@ -66,6 +66,7 @@ final class GalleryDescribeController: IdentifiedDeviceActionHandler {
 
         let total = frames.count
         for (index, image) in frames.enumerated() {
+            guard !Task.isCancelled else { return .failed("capture.cancelled") }
             send(buildVisionFrame(commandId: commandId, index: index, total: total, image: image, question: question))
         }
         return .ok

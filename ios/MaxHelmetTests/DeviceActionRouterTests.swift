@@ -13,6 +13,19 @@ private final class FakeHandler: DeviceActionHandler, @unchecked Sendable {
 
 final class DeviceActionRouterTests: XCTestCase {
 
+    func testCancelledCommandNeverReachesTheHandler() async {
+        let torch = FakeHandler()
+        let router = DeviceActionRouter(handlers: [.torch: torch], isDeviceUnlocked: { true })
+        let task = Task {
+            while !Task.isCancelled { await Task.yield() }
+            return await router.handle(DeviceCommand(commandId: "cancelled", action: .torchSet(on: true), tier: .low))
+        }
+        task.cancel()
+        let result = await task.value
+        XCTAssertEqual(result, .failed("device.cancelled"))
+        XCTAssertTrue(torch.received.isEmpty)
+    }
+
     func testRoutesEachActionToItsHandler() async {
         let torch = FakeHandler()
         let music = FakeHandler()

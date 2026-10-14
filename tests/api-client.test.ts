@@ -2,9 +2,77 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { requestJson } from "../src/lib/api-client";
 import { adminAccountApi } from "../src/lib/auth";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
 
 describe("requestJson", () => {
+  it("honors cancellation by its caller and releases timeout resources", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    vi.stubGlobal(
+      "fetch",
+      (_path: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+        })
+    );
+    const request = requestJson("/testing/summary", { signal: controller.signal });
+    controller.abort();
+
+    expect(await request).toMatchObject({ ok: false, error: { kind: "unavailable" } });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("reports malformed success responses instead of passing null to GUI consumers", async () => {
+    vi.stubGlobal("fetch", async () => new Response("<html>proxy unavailable</html>", { status: 200 }));
+
+    const result = await adminAccountApi.fetchOverview();
+    expect(result).toMatchObject({ ok: false, error: { kind: "server", status: 200 } });
+  });
+
+  it("times out stalled requests so GUI actions can recover", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      (_path: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+        })
+    );
+    const request = requestJson("/testing/operations");
+    const settled = vi.fn();
+    void request.then(settled);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(settled).toHaveBeenCalledWith({
+      ok: false,
+      error: { kind: "unavailable", message: "无法连接中继，请稍后重试。" }
+    });
+  });
+
+  it("keeps the timeout active while the response body is stalled", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", async (_path: string, init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      json: () =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+        })
+    }));
+    const request = requestJson("/testing/summary");
+    const settled = vi.fn();
+    void request.then(settled);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(settled).toHaveBeenCalledWith({
+      ok: false,
+      error: { kind: "unavailable", message: "无法连接中继，请稍后重试。" }
+    });
+  });
+
   it("returns typed success data", async () => {
     vi.stubGlobal(
       "fetch",

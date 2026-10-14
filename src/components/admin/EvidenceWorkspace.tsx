@@ -437,6 +437,8 @@ export function EvidenceWorkspace({
     const sessionId = selectedSession?.sessionId;
     if (!active || requestedSessionId || !sessionId) return;
     void loadSession(sessionId);
+    const timer = window.setInterval(() => void loadSession(sessionId, true), 10_000);
+    return () => window.clearInterval(timer);
   }, [active, loadSession, requestedSessionId, selectedSession?.sessionId]);
 
   useEffect(() => {
@@ -737,9 +739,10 @@ export function EvidenceWorkspace({
   const changeReviewStatus = async (review: TestingReview, status: TestingReviewStatus) => {
     await saveReview(
       {
-        ...review,
+        id: review.id,
+        sessionId: review.sessionId,
         status,
-        resolution: status === "resolved" ? "已复核" : review.resolution
+        ...(status === "resolved" ? { resolution: "已复核" } : {})
       },
       { kind: "status", reviewId: review.id }
     );

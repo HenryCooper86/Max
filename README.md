@@ -804,13 +804,15 @@ npm run build          # tsc --noEmit type-check, then vite build -> dist/
 
 A shared test server runs on **AWS Lightsail** (region `ap-northeast-2`) so the team can try the product:
 
-| Item            | Value                                                                               |
-| --------------- | ----------------------------------------------------------------------------------- |
-| URL             | `https://3.35.135.136/` — self-signed cert; accept the browser warning once         |
-| Host            | Ubuntu; app deployed at `/home/ubuntu/app`                                          |
-| Process manager | `pm2`, process name `horizon` (runs `tsx server/index.ts` on port `8787`)           |
-| Reverse proxy   | `Caddy` — `:80` redirects to `:443`, terminates self-signed TLS, proxies to `:8787` |
-| Provider        | `VOICE_PROVIDER=doubao` — testers get real Doubao realtime voice                    |
+| Item            | Value                                                                            |
+| --------------- | -------------------------------------------------------------------------------- |
+| URL             | `https://max.bionicloud.net/` — trusted HTTPS with automatic certificate renewal |
+| Host            | Ubuntu; app deployed at `/home/ubuntu/app`                                       |
+| Process manager | `pm2`, process name `horizon` (runs `tsx server/index.ts` on port `8787`)        |
+| Reverse proxy   | `Caddy` — `:80` redirects to `:443`, terminates TLS, proxies to `:8787`          |
+| Provider        | `VOICE_PROVIDER=doubao` — testers get real Doubao realtime voice                 |
+
+The `max.bionicloud.net` A record points to `3.35.135.136` in the existing Lightsail DNS zone for `bionicloud.net`. Caddy manages its Let's Encrypt certificate. The IP URL remains available with its existing self-signed certificate. The web app includes motorcycle helmet SVG/ICO favicons and an Apple touch icon in `public/`.
 
 The Lightsail box cannot reach the internal GitLab, so deployment is an **rsync push from a developer machine** — not a `git pull` on the server.
 QA evidence and operations are indexed in `~/.horizon-helmet-testing/testing.sqlite`; completed sessions are also appended to `sessions.jsonl` as a recovery archive. Both live outside `/home/ubuntu/app`, so deploys do not erase evidence. The default directory is owner-only (`0700`) and evidence files are `0600`. Set `TESTING_DATABASE` or `TESTING_HISTORY_DIR` to relocate them, or `TESTING_HISTORY_MAX_SESSIONS=500` to raise the in-memory dashboard window. The recovery archive is unbounded by default; `TESTING_ARCHIVE_MAX_SESSIONS` adds an explicit retention cap without truncating SQLite.
@@ -969,8 +971,7 @@ on a developer machine.
 
 1. Add a verified nearby-stop tool; navigation is already implemented on web, iOS, and Android.
 2. Mirror the cross-platform GitHub Actions gate to GitLab when an active runner is available.
-3. Replace the Lightsail self-signed certificate with a trusted cert behind a domain name.
-4. Replace the simulated ADAS hazard injector with real sensor input + confidence scoring.
+3. Replace the simulated ADAS hazard injector with real sensor input + confidence scoring.
 
 Recently shipped (see CHANGELOG): auto-fit web cockpit (start button always visible at any viewport
 height), concurrent startup weather fetch so the rider's opening words aren't clipped, relay

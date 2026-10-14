@@ -50,11 +50,12 @@ export function useMicCapture({ socketRef, transmittingRef, providerReadyRef }: 
       return;
     }
     if (!micSetupRef.current) {
-      micSetupRef.current = buildMicGraph().catch((error) => {
-        // Failed setup must not poison later retries.
-        micSetupRef.current = null;
+      const setup = buildMicGraph().catch((error) => {
+        // An abandoned permission prompt may reject after a new setup starts.
+        if (micSetupRef.current === setup) micSetupRef.current = null;
         throw error;
       });
+      micSetupRef.current = setup;
     }
     return micSetupRef.current;
 
@@ -179,7 +180,7 @@ export function useMicCapture({ socketRef, transmittingRef, providerReadyRef }: 
             /* preserve the setup error that explains why mic start failed */
           }
         }
-        setAudioProcessing(DEFAULT_AUDIO_PROCESSING);
+        if (generation === micGenerationRef.current) setAudioProcessing(DEFAULT_AUDIO_PROCESSING);
         throw error;
       }
     }

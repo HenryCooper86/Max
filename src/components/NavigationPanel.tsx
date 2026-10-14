@@ -20,6 +20,8 @@ import type { AmapLatLng as AMapLatLng } from "../lib/amap-camera";
 import { shouldMountAmapMap } from "../lib/amap-consent";
 import type { AmapConsentDecision } from "../lib/amap-consent";
 import type { NavPhase } from "../lib/navigation";
+import { localized } from "../lib/i18n";
+import { useLanguage } from "./LanguageToggle";
 
 // Minimal surface of the Amap JS API 2.0 this component actually calls. The
 // SDK is never bundled (it loads at runtime from webapi.amap.com), so there
@@ -51,6 +53,22 @@ declare global {
 // It is never meaningfully visible: the camera effect points the map at the
 // real route or rider on the same commit that creates it.
 const PLACEHOLDER_CENTER: AMapLatLng = [116.397428, 39.90923];
+
+// Translate the controller's known UI failures; provider-specific detail stays
+// verbatim, like the destination and route instructions.
+const NAVIGATION_ERROR_COPY = new Map<string, string>([
+  [
+    "请在浏览器设置中允许定位，再重新发起导航。",
+    "Allow location access in your browser settings, then start navigation again."
+  ],
+  ["还没定位到，到室外或空旷处再说一次。", "No location fix yet. Move outdoors or to an open area, then try again."],
+  ["没有找到目的地，请换一个名称重新导航。", "Destination not found. Try navigation again with a different name."],
+  ["地图服务暂不可用，请稍后重新发起导航。", "The map service is unavailable. Try navigation again later."],
+  [
+    "重新规划失败，导航已停止。请稍后重新发起导航。",
+    "Replanning failed and navigation stopped. Try navigation again later."
+  ]
+]);
 
 // Module-level (not component-level) so every NavigationPanel mount across
 // the app's lifetime reuses the same script tag/promise instead of injecting
@@ -220,11 +238,18 @@ function AmapTileMap({
  *  interrupting a rider mid-navigation — the panel only exists while guiding.
  *  The full disclosure lives in the settings sheet; this is the doorway. */
 function AmapConsentPrompt({ onEnable }: { onEnable: () => void }) {
+  const { language } = useLanguage();
   return (
     <div className="navigationMapConsent">
-      <p>高德地图可显示路线底图。启用后，路线与当前位置会提供给高德用于地图显示。</p>
+      <p>
+        {localized(
+          language,
+          "高德地图可显示路线底图。启用后，路线与当前位置会提供给高德用于地图显示。",
+          "Amap can show a base map. When enabled, your route and current position are shared with Amap to display it."
+        )}
+      </p>
       <button type="button" onClick={onEnable}>
-        启用地图
+        {localized(language, "启用地图", "Enable map")}
       </button>
     </div>
   );
@@ -259,13 +284,16 @@ export function computeBounds(polyline: readonly GeoPoint[]): SchematicBounds {
   const maxLat = lats.length ? Math.max(...lats) : 0;
   const minLon = lons.length ? Math.min(...lons) : 0;
   const maxLon = lons.length ? Math.max(...lons) : 0;
-  // A degenerate (single-point or empty) route falls back to a 1-unit span
-  // so the scale below stays finite instead of dividing by zero.
-  const latSpan = maxLat - minLat || 1;
-  const lonSpan = maxLon - minLon || 1;
+  const latSpan = maxLat - minLat;
+  const lonSpan = maxLon - minLon;
   const innerWidth = VIEW_WIDTH - VIEW_PADDING * 2;
   const innerHeight = VIEW_HEIGHT - VIEW_PADDING * 2;
-  const scale = Math.min(innerWidth / lonSpan, innerHeight / latSpan);
+  // A constant axis should not constrain the other axis's scale. Keep its
+  // actual zero span for centering, and use a finite scale for point routes.
+  const scale =
+    latSpan || lonSpan
+      ? Math.min(lonSpan ? innerWidth / lonSpan : Infinity, latSpan ? innerHeight / latSpan : Infinity)
+      : 1;
   const xOffset = VIEW_PADDING + (innerWidth - lonSpan * scale) / 2;
   const yOffset = VIEW_PADDING + (innerHeight - latSpan * scale) / 2;
   return { minLat, maxLat, minLon, maxLon, scale, xOffset, yOffset };
@@ -288,6 +316,7 @@ function RouteSchematic({
   maneuvers: ReadonlyArray<{ lat: number; lon: number }>;
   rider: GeoPoint | null;
 }) {
+  const { language } = useLanguage();
   const bounds = computeBounds(polyline);
   const points = polyline.map((p) => project(bounds, p));
   const riderPoint = rider ? project(bounds, rider) : null;
@@ -297,7 +326,7 @@ function RouteSchematic({
       className="navigationSchematic"
       viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`}
       role="img"
-      aria-label="路线示意图"
+      aria-label={localized(language, "路线示意图", "Route schematic")}
     >
       {points.length > 1 ? (
         <polyline className="navigationRoute" points={points.map((p) => `${p.x},${p.y}`).join(" ")} fill="none" />
@@ -322,6 +351,8 @@ export function NavigationPanel({
   mapConsent?: AmapConsentDecision;
   onEnableMap?: () => void;
 }) {
+  const { language } = useLanguage();
+  const label = (zh: string, en: string) => localized(language, zh, en);
   // Called unconditionally, before either early return, per the Rules of
   // Hooks — Node-side/test renders (no window) always resolve to null, so
   // the tile map never mounts there and the schematic-only tests are
@@ -337,25 +368,32 @@ export function NavigationPanel({
   if (state.phase === "idle") return null;
   if (state.phase === "locating")
     return (
-      <section className="navigationPanel" aria-label="导航">
-        <p role="status">正在获取准确定位…请保持页面打开，并到室外或空旷处。</p>
+      <section className="navigationPanel" aria-label={label("导航", "Navigation")}>
+        <p role="status">
+          {label(
+            "正在获取准确定位…请保持页面打开，并到室外或空旷处。",
+            "Getting an accurate location… Keep this page open and move outdoors or to an open area."
+          )}
+        </p>
         <p>{state.query}</p>
       </section>
     );
 
   if (state.phase === "unavailable")
     return (
-      <section className="navigationPanel" aria-label="导航">
-        <p role="status">{state.message}</p>
+      <section className="navigationPanel" aria-label={label("导航", "Navigation")}>
+        <p role="status">
+          {language === "en-US" ? (NAVIGATION_ERROR_COPY.get(state.message) ?? state.message) : state.message}
+        </p>
       </section>
     );
 
   if (state.phase === "requesting") {
     return (
-      <section className="navigationPanel" aria-label="导航">
+      <section className="navigationPanel" aria-label={label("导航", "Navigation")}>
         <div className="navigationCard">
           <div className="navigationCardHead">
-            <strong>正在规划路线…</strong>
+            <strong>{label("正在规划路线…", "Planning route…")}</strong>
           </div>
           <p className="navigationInstruction">{state.query}</p>
         </div>
@@ -373,10 +411,13 @@ export function NavigationPanel({
   const etaMinutes = Math.max(0, Math.round(update.remainingSeconds / 60));
 
   return (
-    <section className={`navigationPanel ${expanded ? "navigationExpanded" : ""}`} aria-label="导航">
+    <section
+      className={`navigationPanel ${expanded ? "navigationExpanded" : ""}`}
+      aria-label={label("导航", "Navigation")}
+    >
       <div className="navigationActions">
         <button type="button" aria-pressed={expanded} onClick={() => setExpanded((value) => !value)}>
-          {expanded ? "收起地图" : "展开地图"}
+          {expanded ? label("收起地图", "Collapse map") : label("展开地图", "Expand map")}
         </button>
         {mapAllowed ? (
           <button
@@ -385,7 +426,7 @@ export function NavigationPanel({
             disabled={Boolean(locationStale)}
             onClick={() => setFollowsRider((value) => !value)}
           >
-            {followsRider ? "查看全程" : "跟随位置"}
+            {followsRider ? label("查看全程", "Show full route") : label("跟随位置", "Follow position")}
           </button>
         ) : null}
       </div>
@@ -393,18 +434,23 @@ export function NavigationPanel({
         <div className="navigationCardHead">
           <strong>{route.destinationName}</strong>
           <span className="navigationEta" hidden={locationStale}>
-            {remainingKm} 公里 · 约 {etaMinutes} 分钟
+            {label(`${remainingKm} 公里 · 约 ${etaMinutes} 分钟`, `${remainingKm} km · about ${etaMinutes} min`)}
           </span>
         </div>
         <p className="navigationInstruction" role={locationStale ? "status" : undefined}>
-          {locationStale ? "定位信号较弱，导航已暂停。定位恢复后将自动继续。" : update.currentInstruction}
+          {locationStale
+            ? label(
+                "定位信号较弱，导航已暂停。定位恢复后将自动继续。",
+                "Location signal is weak. Navigation is paused and will resume when location recovers."
+              )
+            : update.currentInstruction}
         </p>
         <p className="navigationDistance" hidden={locationStale}>
-          {distanceRounded} 米
+          {distanceRounded} {label("米", "m")}
         </p>
         {!locationStale && update.offRoute ? (
           <p className="navigationOffRoute" role="status">
-            已偏离路线，重新规划中…
+            {label("已偏离路线，重新规划中…", "Off route. Replanning…")}
           </p>
         ) : null}
       </div>
@@ -414,15 +460,18 @@ export function NavigationPanel({
       ) : null}
       {mapOffered ? <AmapConsentPrompt onEnable={onEnableMap!} /> : null}
       <details className="navigationSteps">
-        <summary>路线步骤 · {route.steps.length - update.progress.maneuverIndex}</summary>
+        <summary>
+          {label("路线步骤", "Route steps")} · {route.steps.length - update.progress.maneuverIndex}
+        </summary>
         <ol>
           {route.steps.slice(update.progress.maneuverIndex).map((step, index) => (
             <li key={`${route.commandId}-${index}`}>
               <strong>{step.instruction}</strong>
               {!locationStale ? (
                 <span>
-                  距当前位置{" "}
-                  {Math.round(Math.max(0, step.alongRouteMeters - (route.distanceMeters - update.remainingMeters)))} 米
+                  {label("距当前位置", "From current position")}{" "}
+                  {Math.round(Math.max(0, step.alongRouteMeters - (route.distanceMeters - update.remainingMeters)))}{" "}
+                  {label("米", "m")}
                 </span>
               ) : null}
             </li>

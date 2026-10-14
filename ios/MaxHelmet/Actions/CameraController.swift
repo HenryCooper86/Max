@@ -17,12 +17,18 @@ protocol CaptureSessioning {
     func capturePhoto() async throws -> Data
     func startRecording(to url: URL) async throws
     func stopRecording() async throws -> URL
+    func setRecordingCompletion(_ completion: @escaping (Result<URL, Error>) -> Void)
+}
+
+extension CaptureSessioning {
+    func setRecordingCompletion(_ completion: @escaping (Result<URL, Error>) -> Void) {}
 }
 
 /// The camera device-action handler. Owns recording state and the benign state
 /// guards; delegates capture to `CaptureSessioning` and persistence to
 /// `CaptureStoring`. A reference type because it holds recording state across
 /// commands.
+@MainActor
 final class CameraController: DeviceActionHandler {
     /// A forgotten "开始录像" must not eat the disk.
     static let maxRecordingSeconds: TimeInterval = 600
@@ -35,6 +41,12 @@ final class CameraController: DeviceActionHandler {
 
     private var recording = false
     private var autoStopTask: Task<Void, Never>?
+    private var operationGeneration = 0
+    private var startingRecording = false
+    private var lastRecordingResult: DeviceActionResult = .ok
+    private var manualStop = false
+    private var takingPhoto = false
+    private var stopTask: Task<DeviceActionResult, Never>?
 
     init(
         session: CaptureSessioning,
@@ -48,9 +60,16 @@ final class CameraController: DeviceActionHandler {
         self.onRecordingChange = onRecordingChange
         self.onOpenGallery = onOpenGallery
         self.onAutoStopped = onAutoStopped
+        session.setRecordingCompletion { [weak self] result in
+            Task { @MainActor in
+                guard let self else { return }
+                _ = self.finishRecording(result, auto: !self.manualStop)
+            }
+        }
     }
 
     func perform(_ action: DeviceAction) async -> DeviceActionResult {
+        guard !Task.isCancelled else { return .failed("capture.cancelled") }
         switch action {
         case .cameraPhoto:
             return await takePhoto()
@@ -73,7 +92,13 @@ final class CameraController: DeviceActionHandler {
     }
 
     private func takePhoto() async -> DeviceActionResult {
+        guard !recording, !startingRecording else { return .failed("camera.recording") }
+        guard !takingPhoto else { return .failed("camera.busy") }
+        takingPhoto = true
+        defer { takingPhoto = false }
+        let generation = operationGeneration
         guard await ensureAuthorized() else { return .denied("permission.camera") }
+        guard !Task.isCancelled, generation == operationGeneration else { return .failed("capture.cancelled") }
         guard store.hasSpace() else { return .denied("storage.full") }
         do {
             let data = try await session.capturePhoto()
@@ -85,36 +110,71 @@ final class CameraController: DeviceActionHandler {
     }
 
     private func startRecording() async -> DeviceActionResult {
-        guard !recording else { return .failed("camera.recording") }
+        guard !recording, !startingRecording else { return .failed("camera.recording") }
+        guard !takingPhoto, stopTask == nil else { return .failed("camera.busy") }
+        startingRecording = true
+        defer { startingRecording = false }
+        let generation = operationGeneration
         guard await ensureAuthorized() else { return .denied("permission.camera") }
+        guard !Task.isCancelled, generation == operationGeneration else { return .failed("capture.cancelled") }
         guard store.hasSpace() else { return .denied("storage.full") }
+        recording = true
+        lastRecordingResult = .ok
         do {
             try await session.startRecording(to: store.newVideoURL())
-            recording = true
+            guard recording else { return lastRecordingResult }
+            if Task.isCancelled || generation != operationGeneration {
+                _ = await stopRecording(auto: false)
+                return .failed("capture.cancelled")
+            }
             onRecordingChange(true)
             scheduleAutoStop()
             return .ok
         } catch {
-            return .failed("capture.failed")
+            return finishRecording(.failure(error), auto: false)
         }
     }
 
     private func stopRecording(auto: Bool) async -> DeviceActionResult {
+        if let stopTask { return await stopTask.value }
         guard recording else { return .failed("camera.notRecording") }
+        let task = Task { @MainActor in
+            manualStop = !auto
+            defer { manualStop = false; stopTask = nil }
+            autoStopTask?.cancel()
+            autoStopTask = nil
+            do {
+                let url = try await session.stopRecording()
+                return finishRecording(.success(url), auto: auto)
+            } catch {
+                return finishRecording(.failure(error), auto: auto)
+            }
+        }
+        stopTask = task
+        return await task.value
+    }
+
+    /// Ends capture independently of voice/audio teardown and invalidates permission waits.
+    func stopForSession() async {
+        operationGeneration += 1
+        if recording && !startingRecording { _ = await stopRecording(auto: false) }
+    }
+
+    private func finishRecording(_ result: Result<URL, Error>, auto: Bool) -> DeviceActionResult {
+        guard recording else { return lastRecordingResult }
+        recording = false
         autoStopTask?.cancel()
         autoStopTask = nil
+        onRecordingChange(false)
         do {
-            let url = try await session.stopRecording()
-            recording = false
-            onRecordingChange(false)
+            let url = try result.get()
             _ = try store.indexVideo(at: url)
+            lastRecordingResult = .ok
             if auto { onAutoStopped() }
-            return .ok
         } catch {
-            recording = false
-            onRecordingChange(false)
-            return .failed("capture.failed")
+            lastRecordingResult = .failed("capture.failed")
         }
+        return lastRecordingResult
     }
 
     private func scheduleAutoStop() {
@@ -143,6 +203,11 @@ final class AVFoundationCaptureSession: NSObject, CaptureSessioning {
     private var configured = false
     private var photoContinuation: CheckedContinuation<Data, Error>?
     private var recordContinuation: CheckedContinuation<URL, Error>?
+    private var recordingCompletion: ((Result<URL, Error>) -> Void)?
+
+    func setRecordingCompletion(_ completion: @escaping (Result<URL, Error>) -> Void) {
+        queue.async { self.recordingCompletion = completion }
+    }
 
     func authorization() -> CameraAuthorization {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
@@ -250,9 +315,16 @@ extension AVFoundationCaptureSession: AVCaptureFileOutputRecordingDelegate {
     ) {
         queue.async {
             self.session.stopRunning()
-            // A reached minFreeDiskSpaceLimit surfaces as an error, but the file
-            // written so far is valid — keep it rather than losing the clip.
-            self.recordContinuation?.resume(returning: outputFileURL)
+            // AVFoundation can finish without an explicit stop (disk limit or interruption).
+            // Preserve successful partial movies, but never index a failed recording.
+            let finishedSuccessfully = (error as NSError?)?.userInfo[AVErrorRecordingSuccessfullyFinishedKey] as? Bool == true
+            let result: Result<URL, Error> = if let error, !finishedSuccessfully {
+                .failure(error)
+            } else {
+                .success(outputFileURL)
+            }
+            self.recordingCompletion?(result)
+            self.recordContinuation?.resume(with: result)
             self.recordContinuation = nil
         }
     }

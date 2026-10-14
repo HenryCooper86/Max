@@ -1,16 +1,18 @@
 import type { TesterSessionSummary, TestingStats } from "../../../shared/agent";
+import { testingBuildsMatch } from "../../../shared/testing";
 import type { TestingOperationsSnapshot, TestingQuality } from "../../../shared/testing";
 import type { HelmetAgent } from "../../hooks/useHelmetAgent";
 import { useLanguage } from "../LanguageToggle";
 import { localized } from "../../lib/i18n";
-import { corpusIssueCount, formatAdminRelativeTime, testingRunStatusLabel } from "./admin-model";
+import { adminReleaseStatus, corpusIssueCount, formatAdminRelativeTime, testingRunStatusLabel } from "./admin-model";
 
 const QUALITY_PRIORITY: Record<TestingQuality, number> = { fail: 3, watch: 2, pass: 1 };
 
-function releaseStatusLabel(status: TestingStats["releaseGate"]["status"] | undefined, language: "zh-CN" | "en-US") {
-  if (status === "pass") return "PASS";
+function releaseStatusLabel(status: ReturnType<typeof adminReleaseStatus>, language: "zh-CN" | "en-US") {
+  if (status === "approved") return localized(language, "已批准", "APPROVED");
+  if (status === "ready") return localized(language, "待批准", "Awaiting approval");
   if (status === "watch") return "WATCH";
-  if (status === "fail") return "FAIL";
+  if (status === "fail") return localized(language, "受阻", "BLOCKED");
   return localized(language, "等待", "Waiting");
 }
 
@@ -41,6 +43,28 @@ type Props = {
 export function AdminOverview({ agent, testing, sessions, operations, onOpenEvidence, onOpenReleases }: Props) {
   const { language } = useLanguage();
   const releaseGate = testing?.releaseGate;
+  const releaseStatus = adminReleaseStatus(testing, operations?.approvedBaselineBuild, agent.health?.build?.gitCommit);
+  const releaseTone = releaseStatus === "ready" ? "warn" : statusTone(releaseStatus);
+  const regression = testing?.regression;
+  const regressionFindings =
+    regression?.baselineSource !== "none"
+      ? (regression?.findings.filter((finding) => finding.status !== "pass") ?? [])
+      : [];
+  const releaseBlockers = [...(releaseGate?.blockers ?? []), ...regressionFindings.map((finding) => finding.detail)];
+  if (
+    releaseGate &&
+    agent.health?.build?.gitCommit &&
+    !testingBuildsMatch(releaseGate.build, agent.health.build.gitCommit)
+  )
+    releaseBlockers.unshift(
+      localized(
+        language,
+        "证据构建与当前构建不一致，请同步后再批准。",
+        "Release evidence is for a different build. Refresh before approval."
+      )
+    );
+  if (regression?.baselineSource !== "none" && regression && regression.status !== "pass" && !regressionFindings.length)
+    releaseBlockers.push(localized(language, "回归对比尚未通过", "Regression comparison has not passed."));
   const issueCount = corpusIssueCount(testing?.users ?? []);
   const failCount = (testing?.users ?? []).reduce((sum, tester) => sum + tester.qualityCounts.fail, 0);
   const watchCount = (testing?.users ?? []).reduce((sum, tester) => sum + tester.qualityCounts.watch, 0);
@@ -78,8 +102,8 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
         key: "release-blockers",
         tone: "alert",
         label: localized(language, "发布阻断项", "Release blockers"),
-        count: releaseGate?.blockers.length ?? 0,
-        detail: releaseGate?.blockers[0] ?? localized(language, "没有发布阻断项", "No release blockers"),
+        count: releaseBlockers.length,
+        detail: releaseBlockers[0] ?? localized(language, "没有发布阻断项", "No release blockers"),
         onOpen: onOpenReleases
       },
       {
@@ -150,16 +174,23 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
         className="testingOpsStrip adminMetricGrid"
         aria-label={localized(language, "关键质量指标", "Key quality metrics")}
       >
-        <button type="button" className={`opsCard ${statusTone(releaseGate?.status)}`} onClick={onOpenReleases}>
+        <button type="button" className={`opsCard ${releaseTone}`} onClick={onOpenReleases}>
           <span>{localized(language, "发布门禁", "Release gate")}</span>
-          <strong className={`adminStatus ${statusTone(releaseGate?.status)}`}>
-            {releaseStatusLabel(releaseGate?.status, language)}
-          </strong>
+          <strong className={`adminStatus ${releaseTone}`}>{releaseStatusLabel(releaseStatus, language)}</strong>
           <p>
             {releaseGate
               ? `${releaseGate.validSessions} ${localized(language, "有效", "valid")} · ${releaseGate.invalidSessions} ${localized(language, "无效", "invalid")}`
               : localized(language, "等待证据", "Waiting for evidence")}
           </p>
+          {releaseGate && regression ? (
+            <p>
+              {localized(language, "质量", "Quality")} {releaseGate.status.toUpperCase()} ·{" "}
+              {localized(language, "回归", "Regression")}{" "}
+              {regression.baselineSource === "none"
+                ? localized(language, "无基线", "No baseline")
+                : regression.status.toUpperCase()}
+            </p>
+          ) : null}
         </button>
         <button
           type="button"

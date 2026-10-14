@@ -1259,6 +1259,19 @@ export function createDoubaoProvider(
     resetPendingReply();
   }
 
+  /** Called only after actual TtsEnded and a positive wake decision. */
+  function emitReplyCompletionStatus(): void {
+    sendClient({
+      type: "status",
+      state: downstreamAudioAbandoned ? "degraded" : "ready",
+      detail: downstreamAudioAbandoned
+        ? "网络拥塞，本轮语音未完整播放"
+        : receivedTtsAudio
+          ? "豆包回复已完成"
+          : "豆包 TTS 未返回音频，正在使用浏览器语音备用模式"
+    });
+  }
+
   function emitMemory() {
     sendClient({ type: "session.memory", ...memory });
   }
@@ -2038,15 +2051,7 @@ export function createDoubaoProvider(
           }
           // Flush exactly once, using browser speech only when no audio arrived.
           if (pendingReplyText()) flushPendingAgentText(!receivedTtsAudio);
-          sendClient({
-            type: "status",
-            state: downstreamAudioAbandoned ? "degraded" : "ready",
-            detail: downstreamAudioAbandoned
-              ? "网络拥塞，本轮语音未完整播放"
-              : receivedTtsAudio
-                ? "豆包回复已完成"
-                : "豆包 TTS 未返回音频，正在使用浏览器语音备用模式"
-          });
+          emitReplyCompletionStatus();
           receivedTtsAudio = false;
           // The reply is fully resolved (real audio finished, or there never
           // was any and the flush above — empty or not — is the whole
@@ -2095,6 +2100,7 @@ export function createDoubaoProvider(
             sendClient({ type: "status", state: "ready", detail: "豆包语音识别完成" });
             if (ttsEndedBeforeWakeDecision) {
               if (pendingReplyText()) flushPendingAgentText(!receivedTtsAudio);
+              emitReplyCompletionStatus();
               emitTelemetry();
               ttsEndedBeforeWakeDecision = false;
               awaitingReply = false;

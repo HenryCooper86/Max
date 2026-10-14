@@ -1,8 +1,15 @@
-import type { TesterSessionSummary, TesterStats } from "../../../shared/agent";
-import type { TestingReviewSeverity, TestingReviewStatus, TestingRunStatus } from "../../../shared/testing";
+import type { TesterSessionSummary, TesterStats, TestingStats } from "../../../shared/agent";
+import type {
+  TestingReviewSeverity,
+  TestingReviewStatus,
+  TestingRunStatus,
+  TestingRun,
+  TestingReview
+} from "../../../shared/testing";
+import { testingBuildsMatch } from "../../../shared/testing";
 import type { AuthUser } from "../../lib/auth";
 import { formatRelativeTime } from "../../lib/utils";
-import type { Language } from "../../lib/i18n";
+import { localized, type Language } from "../../lib/i18n";
 
 export type AppSurface = "voice" | "settings" | "admin";
 export type AdminSection = "overview" | "releases" | "evidence" | "accounts" | "governance";
@@ -147,4 +154,77 @@ export function confirmationCopy(
   }
   const action = kind === "user" ? "删除" : kind === "invite" ? "撤销" : "清除";
   return `确认${action} ${target}？`;
+}
+
+/** Mirrors the release CLI's quality, regression and approval requirements. */
+export function adminReleaseStatus(
+  testing: TestingStats | null,
+  approvedBuild?: string,
+  expectedBuild?: string
+): "waiting" | "fail" | "watch" | "ready" | "approved" {
+  if (!testing || testing.releaseGate.status === "waiting") return "waiting";
+  if (expectedBuild && !testingBuildsMatch(testing.releaseGate.build, expectedBuild)) return "waiting";
+  const gate = testing.releaseGate;
+  const regression = testing.regression;
+  const baselineRequired = regression.baselineSource !== "none";
+  if (gate.status === "fail" || (baselineRequired && regression.status === "fail")) return "fail";
+  if (gate.status === "watch" || (baselineRequired && regression.status === "watch")) return "watch";
+  if (baselineRequired && regression.status === "insufficient") return "waiting";
+  return approvedBuild && testingBuildsMatch(gate.build, approvedBuild) ? "approved" : "ready";
+}
+
+/** Known client-side blockers; the approval API still checks authoritative evidence and all reviews. */
+export function releaseApprovalBlockers(
+  run: TestingRun,
+  testing: TestingStats | null,
+  reviews: TestingReview[] = [],
+  language: Language = "zh-CN",
+  expectedBuild?: string
+): string[] {
+  if (!testing) return [localized(language, "等待当前发布检查。", "Waiting for current release checks.")];
+  const blockers: string[] = [];
+  if (expectedBuild && !testingBuildsMatch(testing.releaseGate.build, expectedBuild))
+    blockers.push(
+      localized(
+        language,
+        "证据构建与当前构建不一致，请同步后再批准。",
+        "Release evidence is for a different build. Refresh before approval."
+      )
+    );
+  if (!testingBuildsMatch(run.build, testing.releaseGate.build))
+    blockers.push(localized(language, "此运行与当前构建不匹配。", "This run does not match the current build."));
+  if (testing.releaseGate.status !== "pass")
+    blockers.push(
+      ...(testing.releaseGate.blockers.length
+        ? testing.releaseGate.blockers
+        : [localized(language, "质量门禁必须通过。", "Quality gate must pass.")])
+    );
+  if (testing.regression.baselineSource !== "none" && testing.regression.status !== "pass") {
+    blockers.push(
+      ...testing.regression.findings.filter((finding) => finding.status !== "pass").map((finding) => finding.detail)
+    );
+    if (!testing.regression.findings.some((finding) => finding.status !== "pass"))
+      blockers.push(localized(language, "回归对比必须通过。", "Regression comparison must pass."));
+  }
+  if (
+    run.requirements.some(
+      (requirement) =>
+        run.assignments
+          .filter((assignment) => assignment.requirementId === requirement.id)
+          .reduce((sum, assignment) => sum + assignment.completedSessionIds.length, 0) <
+        requirement.requiredValidSessions
+    )
+  )
+    blockers.push(
+      localized(language, "批准前必须完成全部覆盖要求。", "Complete every coverage requirement before approval.")
+    );
+  if (reviews.some((review) => review.runId === run.id && (review.status === "open" || review.status === "triaged")))
+    blockers.push(
+      localized(
+        language,
+        "批准前请解决本运行未完成的证据复核。",
+        "Resolve this run's open evidence reviews before approval."
+      )
+    );
+  return blockers;
 }

@@ -21,6 +21,8 @@ import {
   findHazardWarningStart,
   assertFullPcmLifecycle,
   assertDisconnected,
+  hasProviderReplyCompletion,
+  isProviderReplyDrained,
   type AssertionResult
 } from "./assertions";
 import "./style.css";
@@ -67,15 +69,10 @@ function App() {
       throw error;
     }
   }
-  async function waitForPlaybackDrain(label: string, since = 0) {
+  async function waitForPlaybackDrain(label: string, since = 0, allowHazardSpeech = false) {
     await until(
-      () => {
-        const state = currentPlayback();
-        const received = observations.slice(since).filter((item) => item.type === "audio.received");
-        const last = received[received.length - 1];
-        return !!last && Date.now() - last.at >= 1000 && state.active === 0 && !state.browserSpeaking;
-      },
-      45000,
+      () => isProviderReplyDrained(observations.slice(since), currentPlayback(), Date.now(), allowHazardSpeech),
+      allowHazardSpeech ? 20000 : 45000,
       label
     );
   }
@@ -156,11 +153,7 @@ function App() {
     }
     if (id === "degraded-network-recovery") {
       await playFixture("network");
-      await until(
-        () => latest.current.transcript.some((turn) => turn.speaker === "agent" && turn.final),
-        22000,
-        "first valid network exchange"
-      );
+      await until(() => hasProviderReplyCompletion(observations), 22000, "first valid network exchange");
       await waitForPlaybackDrain("first complete network PCM response");
       check("network-pre-outage-pcm", "First response fully played before planned outage", () =>
         assertFullPcmLifecycle(observations)
@@ -177,14 +170,17 @@ function App() {
       );
       observe("network.recovered", { state: latest.current.connectionState, listening: latest.current.listening });
     }
-    const priorAgentTurns = latest.current.transcript.filter((turn) => turn.speaker === "agent" && turn.final).length;
     const responseStart = observations.length;
     await playFixture(fixtureForCase[id]!);
     await until(
-      () => latest.current.transcript.filter((turn) => turn.speaker === "agent" && turn.final).length > priorAgentTurns,
+      () => hasProviderReplyCompletion(observations.slice(responseStart)),
       22000,
-      "new final agent response"
+      "new provider PCM reply completed"
     );
+    check("provider-reply-completed", "Provider completed this PCM reply, independently of hazard captions", () => {
+      if (!hasProviderReplyCompletion(observations.slice(responseStart)))
+        throw new Error("Provider PCM reply has not completed");
+    });
     if (id === "adas-alert-interrupt") {
       await until(() => findHazardInterruption(observations) !== null, 45000, "ADAS interruption of pending real PCM");
       check("adas-pcm-interruption", "Hazard interrupted every pending PCM source in the production handler", () => {
@@ -199,10 +195,8 @@ function App() {
         if (!findHazardWarningStart(observations))
           throw new Error("No actual speech start for the interrupting hazard");
       });
-      await until(() => currentPlayback().active === 0, 20000, "ADAS PCM queue drained or interrupted");
-    } else {
-      await waitForPlaybackDrain("complete PCM response playback", responseStart);
     }
+    await waitForPlaybackDrain("complete PCM response playback", responseStart, id === "adas-alert-interrupt");
     check(
       "complete-pcm-lifecycle",
       "Every received PCM sample scheduled and every source completed or passed ADAS interruption",
@@ -242,6 +236,11 @@ function App() {
         connection: latest.current.connectionState,
         playback: currentPlayback()
       })
+    );
+    check(
+      "complete-pcm-lifecycle-after-disconnect",
+      "Full observation history includes late PCM and permits only proven ADAS source interruptions",
+      () => assertFullPcmLifecycle(observations, id === "adas-alert-interrupt")
     );
     await save(`${id}-${Date.now()}`, "pass");
     setProgress(`Saved ${id}`);

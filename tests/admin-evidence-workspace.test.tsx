@@ -1693,6 +1693,95 @@ describe("EvidenceWorkspace review workflow", () => {
 });
 
 describe("Admin evidence presentation guards", () => {
+  it("waits for matching evidence when health advances beyond an approved testing snapshot", async () => {
+    const snapshot = testing([], []);
+    snapshot.releaseGate.status = "pass";
+    snapshot.regression.baselineSource = "none";
+    const approved = operations([]);
+    approved.approvedBaselineBuild = snapshot.releaseGate.build;
+    const nextAgent = {
+      ...agent(),
+      health: { ...agent().health!, build: { ...agent().health!.build!, gitCommit: "fedcba654321" } }
+    };
+    await act(async () => {
+      renderer = create(
+        <AdminOverview
+          agent={nextAgent}
+          testing={snapshot}
+          sessions={[]}
+          operations={approved}
+          onOpenEvidence={vi.fn()}
+          onOpenReleases={vi.fn()}
+        />
+      );
+    });
+    const card = renderer!.root.find((node) => node.type === "button" && text(node).includes("发布门禁"));
+    expect(text(card.findByType("strong"))).toBe("等待");
+    expect(text(renderer!.root)).not.toContain("已批准");
+    expect(text(renderer!.root)).toContain("证据构建与当前构建不一致");
+  });
+
+  it("does not present a passed quality gate as release PASS when regression fails", async () => {
+    const snapshot = testing([], []);
+    snapshot.releaseGate.status = "pass";
+    snapshot.regression.baselineSource = "latest-valid";
+    snapshot.regression.status = "fail";
+    snapshot.regression.findings = [
+      { id: "wake-latency", status: "fail", label: "iOS wake", detail: "Latency increased by 259ms." }
+    ];
+    await act(async () => {
+      renderer = create(
+        <AdminOverview
+          agent={agent()}
+          testing={snapshot}
+          sessions={[]}
+          operations={operations([])}
+          onOpenEvidence={vi.fn()}
+          onOpenReleases={vi.fn()}
+        />
+      );
+    });
+    const card = renderer!.root.find((node) => node.type === "button" && text(node).includes("发布门禁"));
+    expect(text(card.findByType("strong"))).toBe("受阻");
+    expect(text(renderer!.root)).toContain("Latency increased by 259ms.");
+    expect(text(card)).toContain("回归 FAIL");
+  });
+
+  it("distinguishes awaiting approval from an approved passing release", async () => {
+    const snapshot = testing([], []);
+    snapshot.releaseGate.status = "pass";
+    snapshot.regression.baselineSource = "none";
+    await act(async () => {
+      renderer = create(
+        <AdminOverview
+          agent={agent()}
+          testing={snapshot}
+          sessions={[]}
+          operations={operations([])}
+          onOpenEvidence={vi.fn()}
+          onOpenReleases={vi.fn()}
+        />
+      );
+    });
+    const card = () => renderer!.root.find((node) => node.type === "button" && text(node).includes("发布门禁"));
+    expect(text(card().findByType("strong"))).toBe("待批准");
+    const approved = operations([]);
+    approved.approvedBaselineBuild = snapshot.releaseGate.build;
+    await act(async () =>
+      renderer!.update(
+        <AdminOverview
+          agent={agent()}
+          testing={snapshot}
+          sessions={[]}
+          operations={approved}
+          onOpenEvidence={vi.fn()}
+          onOpenReleases={vi.fn()}
+        />
+      )
+    );
+    expect(text(card().findByType("strong"))).toBe("已批准");
+  });
+
   it("shows a healthy inactive voice session and localizes admin header and waiting KPI", async () => {
     const previousWindow = window;
     const previousDocument = globalThis.document;

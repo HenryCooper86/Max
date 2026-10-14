@@ -386,6 +386,102 @@ describe("createDoubaoProvider — cumulative ASR partials", () => {
 });
 
 describe("createDoubaoProvider — wake-word gating", () => {
+  it.each([
+    {
+      name: "forwarded PCM",
+      audio: true,
+      congested: false,
+      expectedAudio: 1,
+      expectedState: "ready",
+      expectedDetail: "豆包回复已完成"
+    },
+    {
+      name: "missing PCM",
+      audio: false,
+      congested: false,
+      expectedAudio: 0,
+      expectedState: "ready",
+      expectedDetail: "豆包 TTS 未返回音频，正在使用浏览器语音备用模式"
+    },
+    {
+      name: "abandoned congested PCM",
+      audio: true,
+      congested: true,
+      expectedAudio: 0,
+      expectedState: "degraded",
+      expectedDetail: "网络拥塞，本轮语音未完整播放"
+    }
+  ])("reports truthful completion after early TTS finishes before the wake decision: $name", async (testCase) => {
+    stubWeatherFetch();
+    const { client, send } = makeClient();
+    const { provider, upstream } = await startLiveSession(client);
+    if (testCase.congested) Object.assign(client, { bufferedAmount: 1024 * 1024 });
+
+    await upstream.emit("message", jsonFrame(ASR_INFO, {}));
+    await upstream.emit("message", jsonFrame(ASR_RESPONSE, { results: [{ text: "前面" }] }));
+    await upstream.emit("message", jsonFrame(CHAT_RESPONSE, { content: "前方畅通。" }));
+    await upstream.emit("message", jsonFrame(TTS_SENTENCE_START, { content: "前方畅通。" }));
+    if (testCase.audio) await upstream.emit("message", audioFrame(Buffer.from([1, 2, 3, 4])));
+    await upstream.emit("message", jsonFrame(CHAT_ENDED, {}));
+    await upstream.emit("message", jsonFrame(TTS_ENDED, {}));
+    expect(forwardedAudio(send)).toHaveLength(0);
+    expect(clientEvents(send).some((event) => event.detail === testCase.expectedDetail)).toBe(false);
+
+    await upstream.emit("message", jsonFrame(ASR_RESPONSE, { results: [{ text: "Max 前面堵吗" }] }));
+    await upstream.emit("message", jsonFrame(ASR_ENDED, {}));
+    await upstream.emit("message", jsonFrame(ASR_ENDED, {}));
+    const events = clientEvents(send);
+    const completed = events.filter((event) => event.detail === testCase.expectedDetail);
+    expect(completed).toEqual([{ type: "status", state: testCase.expectedState, detail: testCase.expectedDetail }]);
+    expect(forwardedAudio(send)).toHaveLength(testCase.expectedAudio);
+    const finalAgentIndex = events.findIndex(
+      (event) => event.type === "transcript" && event.speaker === "agent" && event.final === true
+    );
+    expect(finalAgentIndex).toBeGreaterThanOrEqual(0);
+    expect(events.indexOf(completed[0]!)).toBeGreaterThan(finalAgentIndex);
+    if (testCase.expectedState === "degraded")
+      expect(events.some((event) => event.detail === "豆包回复已完成")).toBe(false);
+    await provider.close();
+  });
+
+  it("does not announce completion for early finished TTS when final ASR is unaddressed background", async () => {
+    stubWeatherFetch();
+    const { client, send } = makeClient();
+    const { provider, upstream } = await startLiveSession(client);
+    await upstream.emit("message", jsonFrame(ASR_INFO, {}));
+    await upstream.emit("message", jsonFrame(CHAT_RESPONSE, { content: "前方畅通。" }));
+    await upstream.emit("message", audioFrame(Buffer.from([1, 2, 3, 4])));
+    await upstream.emit("message", jsonFrame(TTS_ENDED, {}));
+    await upstream.emit("message", jsonFrame(ASR_RESPONSE, { results: [{ text: "前面堵吗" }] }));
+    await upstream.emit("message", jsonFrame(ASR_ENDED, {}));
+    expect(forwardedAudio(send)).toHaveLength(0);
+    expect(clientEvents(send).some((event) => event.type === "transcript" && event.speaker === "agent")).toBe(false);
+    expect(
+      clientEvents(send)
+        .filter((event) => event.type === "status")
+        .at(-1)
+    ).toMatchObject({ state: "listening" });
+    expect(clientEvents(send).some((event) => event.detail === "豆包回复已完成")).toBe(false);
+    await provider.close();
+  });
+
+  it("does not turn mere early ChatEnded into a completed PCM reply at the wake decision", async () => {
+    stubWeatherFetch();
+    const { client, send } = makeClient();
+    const { provider, upstream } = await startLiveSession(client);
+    await upstream.emit("message", jsonFrame(ASR_INFO, {}));
+    await upstream.emit("message", jsonFrame(CHAT_RESPONSE, { content: "前方畅通。" }));
+    await upstream.emit("message", audioFrame(Buffer.from([1, 2, 3, 4])));
+    await upstream.emit("message", jsonFrame(CHAT_ENDED, {}));
+    await upstream.emit("message", jsonFrame(ASR_RESPONSE, { results: [{ text: "Max 前面堵吗" }] }));
+    await upstream.emit("message", jsonFrame(ASR_ENDED, {}));
+    expect(forwardedAudio(send)).toHaveLength(1);
+    expect(clientEvents(send).some((event) => event.detail === "豆包回复已完成")).toBe(false);
+    await upstream.emit("message", jsonFrame(TTS_ENDED, {}));
+    expect(clientEvents(send)).toContainEqual({ type: "status", state: "ready", detail: "豆包回复已完成" });
+    await provider.close();
+  });
+
   it("suppresses voice audio and the agent transcript when the rider did not address Max", async () => {
     stubWeatherFetch();
     const { client, send } = makeClient();

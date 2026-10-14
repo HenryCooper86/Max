@@ -1058,7 +1058,10 @@ class AgentSession(
         _state.update {
             it.copy(hazardAlert = alert, turnState = TurnState.SPEAKING, statusText = "⚠️ ${alert.label}")
         }
-        ttsSpeak("${alert.message} ${alert.advice}")
+        ttsSpeak(
+            "${alert.message} ${alert.advice}",
+            utteranceId = if (syntheticCapture) "synthetic-hazard-$generation" else "max-reply"
+        )
         scope.launch {
             delay((alert.ttcSeconds + 2) * 1000L)
             if (hazardAlertGeneration == generation) {
@@ -1082,11 +1085,11 @@ class AgentSession(
      *  (agent replies, ADAS hazards) cuts whatever is currently queued;
      *  `flush = false` (nav far/near prompts) appends behind it instead, so a
      *  turn-by-turn prompt never cuts an in-flight agent reply. */
-    private fun ttsSpeak(text: String, flush: Boolean = true) {
+    private fun ttsSpeak(text: String, flush: Boolean = true, utteranceId: String = "max-reply") {
         val engine = tts ?: return
         if (!ttsReady || text.isBlank()) return
         engine.language = if (detectLanguage(text) == "zh") Locale.SIMPLIFIED_CHINESE else Locale.US
-        engine.speak(text, if (flush) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, "max-reply")
+        engine.speak(text, if (flush) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, utteranceId)
     }
 
     // ---- NavSpeaker (NavigationController's speech + hazard-suppression seam) ----

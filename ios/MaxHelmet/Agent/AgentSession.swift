@@ -104,11 +104,15 @@ final class AgentSession: NSObject, ObservableObject {
     private var qaReceivedPCMBytes = 0
     private var qaSpeechAttempts = 0
     private var qaSpeechStarts = 0
+    private var qaNextHazardSpeechGeneration: Int?
+    private var qaHazardUtterances: [ObjectIdentifier: (utterance: AVSpeechUtterance, generation: Int)] = [:]
+    private var qaStartedHazardGenerations = Set<Int>()
+    var syntheticAudioQAHazardSpeechStarts: Set<Int> { qaStartedHazardGenerations }
     var syntheticAudioQASpeech: (receivedPCMBytes: Int, attempts: Int, starts: Int, isSpeaking: Bool) {
         (qaReceivedPCMBytes, qaSpeechAttempts, qaSpeechStarts, synthesizer.isSpeaking)
     }
     var syntheticAudioQAEvent: ((String) -> Void)?
-    var syntheticAudioQAHazardInterrupt: ((_ pendingBefore: Int, _ pendingAfter: Int, _ interruptionsBefore: Int, _ interruptionsAfter: Int) -> Void)?
+    var syntheticAudioQAHazardInterrupt: ((_ pendingBefore: Int, _ pendingAfter: Int, _ interruptionsBefore: Int, _ interruptionsAfter: Int, _ hazardGeneration: Int) -> Void)?
     var syntheticAudioQACaptureRunning: Bool { mic.syntheticAudioQARunning }
     var syntheticAudioQAOutputRunning: Bool { voiceEngine.isRunning }
     var syntheticAudioQAPlayback: (scheduledBytes: Int, playedBackBytes: Int, interruptedAudio: Int, pendingBytes: Int, discardedBytes: Int, playerArmed: Bool, nodePlaying: Bool) {
@@ -134,6 +138,8 @@ final class AgentSession: NSObject, ObservableObject {
         try? AVAudioSession.sharedInstance().setActive(false)
         syntheticAudioQAEvent = nil
         syntheticAudioQAHazardInterrupt = nil
+        qaHazardUtterances.removeAll()
+        qaNextHazardSpeechGeneration = nil
         syntheticAudioQA = false
     }
 
@@ -1315,20 +1321,25 @@ final class AgentSession: NSObject, ObservableObject {
         #endif
         if alert.interrupt { stopAgentSpeech() }
         #if DEBUG
-        if syntheticAudioQA, alert.interrupt, let qaBefore {
-            // Synchronous around this exact hazard's stop; another main-thread
-            // hearing/rider event cannot be mistaken for this interruption.
-            let qaAfter = player.syntheticAudioQASnapshot
-            syntheticAudioQAHazardInterrupt?(qaBefore.pendingBytes, qaAfter.pendingBytes, qaBefore.interruptedAudio, qaAfter.interruptedAudio)
-        }
+        let qaAfter = syntheticAudioQA ? player.syntheticAudioQASnapshot : nil
         #endif
         hazardAlertGeneration += 1
         let generation = hazardAlertGeneration
+        #if DEBUG
+        if syntheticAudioQA, alert.interrupt, let qaBefore, let qaAfter {
+            // Synchronous around this exact hazard's stop; another main-thread
+            // hearing/rider event cannot be mistaken for this interruption.
+            syntheticAudioQAHazardInterrupt?(qaBefore.pendingBytes, qaAfter.pendingBytes, qaBefore.interruptedAudio, qaAfter.interruptedAudio, generation)
+        }
+        #endif
         update {
             $0.hazardAlert = alert
             $0.turnState = .speaking
             $0.statusText = "⚠️ \(alert.label)"
         }
+        #if DEBUG
+        if syntheticAudioQA { qaNextHazardSpeechGeneration = generation }
+        #endif
         speak("\(alert.message) \(alert.advice)")
         // Dismiss after the reaction window unless a newer alert has replaced it.
         DispatchQueue.main.asyncAfter(deadline: .now() + Double(alert.ttcSeconds) + 2) { [weak self] in
@@ -1360,6 +1371,12 @@ final class AgentSession: NSObject, ObservableObject {
         utterance.voice = AVSpeechSynthesisVoice(
             language: detectLanguage(text) == "zh" ? "zh-CN" : "en-US"
         )
+        #if DEBUG
+        if syntheticAudioQA, let generation = qaNextHazardSpeechGeneration {
+            qaHazardUtterances[ObjectIdentifier(utterance)] = (utterance, generation)
+            qaNextHazardSpeechGeneration = nil
+        }
+        #endif
         synthesizer.stopSpeaking(at: .immediate)
         synthesizer.speak(utterance)
     }
@@ -1388,7 +1405,18 @@ extension AgentSession: AVSpeechSynthesizerDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self, self.syntheticAudioQA else { return }
             self.qaSpeechStarts += 1
+            if let entry = self.qaHazardUtterances.removeValue(forKey: ObjectIdentifier(utterance)) {
+                self.qaStartedHazardGenerations.insert(entry.generation)
+            }
         }
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        DispatchQueue.main.async { [weak self] in self?.qaHazardUtterances.removeValue(forKey: ObjectIdentifier(utterance)) }
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        DispatchQueue.main.async { [weak self] in self?.qaHazardUtterances.removeValue(forKey: ObjectIdentifier(utterance)) }
     }
 }
 #endif

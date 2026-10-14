@@ -497,6 +497,31 @@ describe("relay metrics", () => {
     expect(gate.cases.every((testCase) => testCase.status === "pass")).toBe(true);
   });
 
+  it("reports missing platform coverage without claiming existing valid evidence is invalid", () => {
+    seedValidCompletedSession("valid-web", "baseline-live-session", buildInfo.gitCommit, 180, "web");
+    seedValidCompletedSession("valid-android", "baseline-live-session", buildInfo.gitCommit, 180, "android");
+    beginTesterSession(
+      "aborted-android",
+      {
+        testerId: "aborted",
+        ipAddress: "203.0.113.33",
+        testingTestCaseId: "baseline-live-session",
+        platform: "android"
+      },
+      1_000
+    );
+    endTesterSession("aborted-android", 4_000);
+    const gate = testingSnapshot(5_000).releaseGate;
+    const testCase = gate.cases.find((item) => item.testCaseId === "baseline-live-session")!;
+    expect(testCase).toMatchObject({ status: "missing", validSessions: 2, invalidSessions: 1 });
+    expect(gate.blockers).toContain(
+      "Baseline Live Session: 2/2 valid current-build runs; missing platform evidence for ios."
+    );
+    expect(gate.blockers).not.toContain("Baseline Live Session: only invalid current-build evidence is available.");
+    expect(gate.status).toBe("fail");
+    expect(gate.invalidSessions).toBe(1);
+  });
+
   it("uses the active policy platform set for release coverage", () => {
     const active = getActiveTestingPolicy();
     createTestingPolicy(

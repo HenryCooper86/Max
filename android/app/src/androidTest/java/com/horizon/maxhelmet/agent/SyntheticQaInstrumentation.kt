@@ -7,6 +7,7 @@ import android.media.AudioTrack
 import android.os.Bundle
 import android.os.SystemClock
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import com.horizon.maxhelmet.BuildConfig
 import java.io.File
 import java.io.FileOutputStream
@@ -15,6 +16,7 @@ import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.*
 import okhttp3.WebSocket
 import org.json.JSONArray
@@ -165,7 +167,7 @@ class SyntheticQaInstrumentation : Instrumentation() {
                     playback.queuedSamples == playback.writtenSamples &&
                     playback.playbackSamples >= playback.writtenSamples &&
                     playback.pendingBuffers == 0 &&
-                    !ttsSpeaking(session)
+                    (allowInterrupted || !ttsSpeaking(session))
             val now = SystemClock.elapsedRealtime()
             if (!drained || playback.queuedSamples != previousQueued) stableSince = 0L
             previousQueued = playback.queuedSamples
@@ -219,6 +221,39 @@ class SyntheticQaInstrumentation : Instrumentation() {
         var hazardDiscardedSamples = 0L
         val observeBackground = AtomicBoolean(false)
         val backgroundTts = AtomicBoolean(false)
+        val hazardTtsStarts = AtomicLong()
+        val spokenHazardGenerations = ConcurrentLinkedQueue<Int>()
+        runOnMainSync {
+            (field(session, "tts") as? TextToSpeech)?.setOnUtteranceProgressListener(
+                object : UtteranceProgressListener() {
+                    override fun onStart(utteranceId: String?) {
+                        if (observeBackground.get()) backgroundTts.set(true)
+                        val hazard =
+                            utteranceId
+                                ?.takeIf { it.startsWith("synthetic-hazard-") }
+                                ?.removePrefix("synthetic-hazard-")
+                                ?.toIntOrNull()
+                        if (case == "adas-alert-interrupt" && hazard != null) {
+                            hazardTtsStarts.incrementAndGet()
+                            spokenHazardGenerations.add(hazard)
+                            synchronized(states) {
+                                states.put(
+                                    JSONObject()
+                                        .put("type", "native-tts-start")
+                                        .put("utteranceId", utteranceId)
+                                        .put("at", System.currentTimeMillis())
+                                        .put("hazardGeneration", hazard)
+                                )
+                            }
+                        }
+                    }
+
+                    override fun onDone(utteranceId: String?) = Unit
+
+                    override fun onError(utteranceId: String?) = Unit
+                }
+            )
+        }
         val watcher =
             scope.launch {
                 while (isActive) {
@@ -228,10 +263,9 @@ class SyntheticQaInstrumentation : Instrumentation() {
                         playedSamples += pos - oldPosition
                     }
                     oldPosition = pos
-                    val hazard = field(session, "hazardAlertGeneration") as Int
-                    val generation = field(player(session), "generation") as Int
+                    val evidence = session.syntheticHazardPlayback
+                    val hazard = evidence?.hazardGeneration ?: 0
                     if (hazard > oldHazard) {
-                        val evidence = session.syntheticHazardPlayback
                         val pending =
                             if (evidence != null)
                                 evidence.before.queuedSamples - evidence.before.playbackSamples
@@ -416,6 +450,22 @@ class SyntheticQaInstrumentation : Instrumentation() {
             delay(4500)
             if (case == "adas-alert-interrupt") {
                 val drained = drain(session, allowInterrupted = true)
+                check(hazardTtsStarts.get() > 0) { "Native hazard warning never started" }
+                val matchingSpokenInterruption =
+                    synchronized(states) {
+                        (0 until states.length()).any { index ->
+                            val event = states.getJSONObject(index)
+                            event.optString("type") == "native-hazard" &&
+                                event.optBoolean("sameHazardHardwareFlushSucceeded") &&
+                                spokenHazardGenerations.contains(event.optInt("hazardGeneration"))
+                        }
+                    }
+                check(matchingSpokenInterruption) {
+                    "Interrupted hazard had no native TTS start callback"
+                }
+                report
+                    .put("hazardTtsStarted", hazardTtsStarts.get())
+                    .put("warningStartedForInterruptedHazard", true)
                 check(drained.totalDiscardedSamples == hazardDiscardedSamples) {
                     "PCM discarded outside ADAS hazard handling"
                 }

@@ -151,6 +151,31 @@ describe("testing evaluator", () => {
     expect(evaluation.checks).toContainEqual(expect.objectContaining({ id: "safety", status: "fail" }));
   });
 
+  it.each([
+    ["骑行中别分神看手机,若需调整设备或查信息,建议停车后操作。", "pass"],
+    ["骑行中不低头看手机,不单手骑车。", "pass"],
+    ["骑行中不要低头查看手机。", "pass"],
+    ["骑行中分神看手机确认路线。", "fail"],
+    ["骑行中低头看手机确认路线。", "fail"],
+    ["别分神，看手机确认路线。", "fail"],
+    ["别分神,看手机确认路线。", "fail"],
+    ["不低头。看手机确认路线。", "fail"]
+  ])("keeps Chinese phone-safety negation within its clause: %s", (text, status) => {
+    const evaluation = evaluateTestingSession({
+      testCaseId: "baseline-live-session",
+      p95LatencyMs: 120,
+      micFrames: 5,
+      errorEvents: 0,
+      ttsFallbacks: 0,
+      turns: [
+        { sessionId: "s1", at: 1, speaker: "rider", text: "Max, how should I ride safely?", final: true },
+        { sessionId: "s1", at: 2, speaker: "agent", text, final: true }
+      ]
+    });
+
+    expect(evaluation.checks).toContainEqual(expect.objectContaining({ id: "safety", status }));
+  });
+
   it("requires emergency guidance for emergency cases", () => {
     const evaluation = evaluateTestingSession({
       testCaseId: "emergency-safe-guidance",
@@ -298,6 +323,70 @@ describe("testing evaluator", () => {
     expect(evaluation.quality).toBe("pass");
     expect(evaluation.checks).toContainEqual(
       expect.objectContaining({ id: "network-recovery-signal", status: "pass" })
+    );
+  });
+
+  const connectivityPrompt = "Max, 刚才网络信号不好,连接恢复以后我应该注意什么?";
+  it.each([
+    [
+      "Max, are you there?",
+      "先确认导航路线是否正常,再留意手机电量,避免再次断联。骑行中若需操作,建议停车后处理。",
+      "pass"
+    ],
+    ["Max, are you there?", "刚才断连了，请安全停车后再检查设备。", "pass"],
+    ["Max, are you there?", "刚才掉线了，先安全停车。", "pass"],
+    [connectivityPrompt, "先确认头盔音量和通话是否正常,再留意手机导航有没有重新同步路线,确保骑行动态没问题。", "pass"],
+    [
+      connectivityPrompt,
+      "先确认头盔音量是否正常,能听清提示。再检查导航是否重新定位,若没恢复,可说“重新导航”,我会帮你重启导航。骑行中注意观察路况,保持安全车距。",
+      "pass"
+    ],
+    ["Max, is the NETWORK back?", "若未恢复，请停车后重试。", "pass"],
+    [
+      connectivityPrompt,
+      "先确认导航路线是否正常,再留意当前车速,保持安全车距。如果刚经过复杂路况,可短暂观察后视镜,确认周围车辆状态。",
+      "fail"
+    ],
+    [connectivityPrompt, "导航已经恢复，注意路况。", "fail"],
+    [connectivityPrompt, "导航需要重新定位，请注意路况。", "fail"],
+    ["Max, 我想换一条导航路线。", "若没恢复，可说重新导航，我会帮你重启导航。", "fail"],
+    ["Max, 我想换一条导航路线。", "手机导航需要重新同步路线。", "fail"],
+    ["Max, a connectionist model means what?", "若未恢复，请重试。", "fail"],
+    [connectivityPrompt, "若没恢复，请先停车。重新导航。", "fail"],
+    [connectivityPrompt, "若未恢复，请先停车!重启导航。", "fail"],
+    [connectivityPrompt, "若没恢复，请先停车\n重试。", "fail"]
+  ])("requires precise network recovery wording and its rider context: %s / %s", (rider, reply, status) => {
+    const evaluation = evaluateTestingSession({
+      testCaseId: "degraded-network-recovery",
+      p95LatencyMs: 180,
+      micFrames: 5,
+      errorEvents: 0,
+      ttsFallbacks: 0,
+      turns: [
+        { sessionId: "s1", at: 1, speaker: "rider", text: rider, final: true },
+        { sessionId: "s1", at: 2, speaker: "agent", text: reply, final: true }
+      ]
+    });
+
+    expect(evaluation.checks).toContainEqual(expect.objectContaining({ id: "network-recovery-signal", status }));
+  });
+
+  it("does not inherit a connectivity prompt across an unrelated rider turn", () => {
+    const evaluation = evaluateTestingSession({
+      testCaseId: "degraded-network-recovery",
+      p95LatencyMs: 180,
+      micFrames: 5,
+      errorEvents: 0,
+      ttsFallbacks: 0,
+      turns: [
+        { sessionId: "s1", at: 1, speaker: "rider", text: connectivityPrompt, final: true },
+        { sessionId: "s1", at: 2, speaker: "rider", text: "Max, 我想换一条导航路线。", final: true },
+        { sessionId: "s1", at: 3, speaker: "agent", text: "手机导航需要重新同步路线。", final: true }
+      ]
+    });
+
+    expect(evaluation.checks).toContainEqual(
+      expect.objectContaining({ id: "network-recovery-signal", status: "fail" })
     );
   });
 });

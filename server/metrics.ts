@@ -1050,6 +1050,10 @@ function normalizeTranscriptTurn(value: unknown): TesterTranscriptTurn | null {
   const text = cleanText(value.text).slice(0, 2_000);
   if (!sessionId || !at || !text) return null;
   const turn: TesterTranscriptTurn = { sessionId, at, speaker, text, final: value.final !== false };
+  // Relay-issued identities are captured evidence and participate in its hash.
+  // Dropping them during replay makes an intact archived recording mismatch.
+  if (typeof value.turnId === "string") turn.turnId = value.turnId;
+  if (typeof value.deliveryId === "string") turn.deliveryId = value.deliveryId;
   if (typeof value.feedback === "string") {
     const feedback = cleanText(value.feedback).slice(0, 120);
     if (feedback) turn.feedback = feedback;

@@ -1,5 +1,11 @@
 {
-  "entry": ["server/companion-socket.contract.ts", "tests/fixtures/rdk-device-identity-child.ts"],
+  "entry": [
+    "server/companion-socket.contract.ts",
+    "tests/fixtures/rdk-device-identity-child.ts",
+    "scripts/synthetic-qa/browser/main.tsx",
+    "scripts/synthetic-qa/browser/vite.config.mts",
+    "scripts/synthetic-qa/browser/runtime.ts"
+  ],
   "ignore": ["public/pcm-worklet.js", "rdk/**"],
   "ignoreBinaries": ["mkfifo"]
 }

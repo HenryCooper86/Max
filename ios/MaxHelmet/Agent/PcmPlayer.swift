@@ -37,6 +37,16 @@ final class PcmPlayer {
     private var playing = false
     /// Bumped by barge-in so scheduled completions for the old utterance are ignored.
     private var generation = 0
+    #if DEBUG
+    private var qaScheduledBytes = 0
+    private var qaPlayedBackBytes = 0
+    private var qaPendingBytes = 0
+    private var qaInterruptedAudio = 0
+    private var qaDiscardedBytes = 0
+    var syntheticAudioQASnapshot: (scheduledBytes: Int, playedBackBytes: Int, interruptedAudio: Int, pendingBytes: Int, discardedBytes: Int, playerArmed: Bool, nodePlaying: Bool) {
+        queue.sync { (qaScheduledBytes, qaPlayedBackBytes, qaInterruptedAudio, qaPendingBytes, qaDiscardedBytes, playing, playerNode.isPlaying) }
+    }
+    #endif
     /// PCM that arrived before the shared engine was running — typically the
     /// agent's opening words while the mic-permission dialog is still up
     /// (MicStreamer.start() only runs once permission is granted). Bounded;
@@ -120,12 +130,34 @@ final class PcmPlayer {
         // stopPlayback() (barge-in) flushes the node, so any buffer scheduled
         // before it is discarded — the generation counter mirrors the Android
         // logic and guards against late callbacks if a completion handler is added.
+        #if DEBUG
+        let sourceGeneration = generation
+        qaScheduledBytes += pcm.count
+        qaPendingBytes += pcm.count
+        playerNode.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+            self?.queue.async { [weak self] in
+                guard let self, sourceGeneration == self.generation else { return }
+                self.qaPlayedBackBytes += pcm.count
+                self.qaPendingBytes = max(0, self.qaPendingBytes - pcm.count)
+            }
+        }
+        #else
         playerNode.scheduleBuffer(buffer, completionHandler: nil)
+        #endif
     }
 
     /// Barge-in: drop queued audio and cut the current utterance immediately.
     func stopPlayback() {
         queue.sync {
+            #if DEBUG
+            if qaPendingBytes > 0 {
+                qaInterruptedAudio += 1
+                // Whole scheduled buffers abandoned by interruption, including
+                // the uncompleted remainder of a partly played buffer.
+                qaDiscardedBytes += qaPendingBytes
+            }
+            qaPendingBytes = 0
+            #endif
             generation += 1
             pendingChunks.removeAll()   // buffered audio belongs to the cut utterance
             guard playing else { return }

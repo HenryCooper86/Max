@@ -1,0 +1,64 @@
+body {
+  font: 16px system-ui;
+  background: #101820;
+  color: #e5eef4;
+  margin: 0;
+}
+main {
+  max-width: 1050px;
+  margin: 20px auto;
+  padding: 20px;
+}
+h1 {
+  margin-top: 0;
+}
+.notice {
+  background: #f7dd76;
+  color: #182229;
+  padding: 14px;
+  font-weight: bold;
+}
+.controls {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+button,
+select {
+  padding: 12px;
+  font-size: 15px;
+  border-radius: 6px;
+  border: 1px solid #93aab8;
+}
+button {
+  background: #b1e7cf;
+  color: #15271f;
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.45;
+}
+.metrics {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  background: #263440;
+  padding: 18px;
+  margin-top: 18px;
+}
+pre {
+  background: #20303d;
+  padding: 12px;
+  border-radius: 5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.events {
+  font-size: 12px;
+  max-height: 380px;
+  overflow: auto;
+}
+.hazard {
+  background: #812b29;
+  padding: 18px;
+}

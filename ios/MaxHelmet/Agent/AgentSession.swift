@@ -97,6 +97,60 @@ final class AgentSession: NSObject, ObservableObject {
     func installAMapDeviceValidationGuidance(_ guidance: GuidanceState) {
         update { $0.guidance = guidance }
     }
+
+    /// XCTest-only synthetic capture source. Transport, event parsing, published
+    /// HUD state and PCM playback use the same paths as a rider session.
+    private var syntheticAudioQA = false
+    private var qaReceivedPCMBytes = 0
+    private var qaSpeechAttempts = 0
+    private var qaSpeechStarts = 0
+    var syntheticAudioQASpeech: (receivedPCMBytes: Int, attempts: Int, starts: Int, isSpeaking: Bool) {
+        (qaReceivedPCMBytes, qaSpeechAttempts, qaSpeechStarts, synthesizer.isSpeaking)
+    }
+    var syntheticAudioQAEvent: ((String) -> Void)?
+    var syntheticAudioQAHazardInterrupt: ((_ pendingBefore: Int, _ pendingAfter: Int, _ interruptionsBefore: Int, _ interruptionsAfter: Int) -> Void)?
+    var syntheticAudioQACaptureRunning: Bool { mic.syntheticAudioQARunning }
+    var syntheticAudioQAOutputRunning: Bool { voiceEngine.isRunning }
+    var syntheticAudioQAPlayback: (scheduledBytes: Int, playedBackBytes: Int, interruptedAudio: Int, pendingBytes: Int, discardedBytes: Int, playerArmed: Bool, nodePlaying: Bool) {
+        player.syntheticAudioQASnapshot
+    }
+
+    func prepareSyntheticAudioQA() throws {
+        precondition(!state.handsFree)
+        syntheticAudioQA = true
+        let outputSession = AVAudioSession.sharedInstance()
+        try outputSession.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        try outputSession.setActive(true)
+        player.prepare()
+        voiceEngine.prepare()
+        try voiceEngine.start()
+        player.flushPending()
+    }
+
+    func finishSyntheticAudioQA() {
+        stop()
+        player.release()
+        voiceEngine.stop()
+        try? AVAudioSession.sharedInstance().setActive(false)
+        syntheticAudioQAEvent = nil
+        syntheticAudioQAHazardInterrupt = nil
+        syntheticAudioQA = false
+    }
+
+    @discardableResult
+    func sendSyntheticAudioQAFrame(_ frame: Data) -> Bool {
+        guard syntheticAudioQA, frame.count == MicStreamer.frameBytes,
+              let target = micSendTarget() else { return false }
+        sendMicFrame(frame, on: target)
+        return true
+    }
+
+    /// Drops the actual live WebSocket; the production receive/delegate close
+    /// callbacks must observe the outage and reconnect without test intervention.
+    func dropSyntheticAudioQATransport() {
+        precondition(syntheticAudioQA)
+        webSocket?.cancel(with: .goingAway, reason: nil)
+    }
     #endif
 
     private var urlSession: URLSession!
@@ -306,6 +360,9 @@ final class AgentSession: NSObject, ObservableObject {
 
     override init() {
         super.init()
+        #if DEBUG
+        synthesizer.delegate = self
+        #endif
         urlSession = makeSession()
         // The legacy cache was device-global and cannot be assigned safely to
         // whichever account logs in first after an upgrade.
@@ -381,7 +438,11 @@ final class AgentSession: NSObject, ObservableObject {
         spokenDeliveryIds.removeAll(keepingCapacity: true)
         spokenDeliveryOrder.removeAll(keepingCapacity: true)
 
+        #if DEBUG
+        let bluetoothRouted = syntheticAudioQA ? false : audioRouter.startVoiceRouting()
+        #else
         let bluetoothRouted = audioRouter.startVoiceRouting()
+        #endif
         update {
             $0.handsFree = true
             $0.turnState = .listening
@@ -392,6 +453,15 @@ final class AgentSession: NSObject, ObservableObject {
             $0.guidance = nil
             $0.hasRideContext = false
         }
+        #if DEBUG
+        if syntheticAudioQA {
+            // No location, motion, microphone permission or capture occurs.
+            if !connect() {
+                failHandsFreeStart(generation: generation, message: "中继地址无效")
+            }
+            return
+        }
+        #endif
         onCrash { $0.arm() }
 
         lastLocationSentAt = -.infinity
@@ -514,7 +584,11 @@ final class AgentSession: NSObject, ObservableObject {
         if hasActiveIncident {
             mic.pauseCapture()
         } else {
+            #if DEBUG
+            if syntheticAudioQA { voiceEngine.stop() } else { mic.stop() }
+            #else
             mic.stop()
+            #endif
             player.release()
             audioRouter.stopVoiceRouting()
         }
@@ -703,7 +777,30 @@ final class AgentSession: NSObject, ObservableObject {
 
     private func nativeDeviceLabel() -> String {
         let device = UIDevice.current
+        #if DEBUG
+        if syntheticAudioQA { return "\(device.model) \(device.systemName) \(device.systemVersion) Simulator / XCTest synthetic audio" }
+        #endif
         return "\(device.model) \(device.systemName) \(device.systemVersion)"
+    }
+
+    private func nativeBrowserLanguage() -> String {
+        #if DEBUG
+        if syntheticAudioQA { return "zh-CN" }
+        #endif
+        return Locale.current.identifier
+    }
+
+    private func nativeNetworkType() -> String {
+        #if DEBUG
+        if syntheticAudioQA {
+            switch testingTestCaseId {
+            case "wind-noise-robustness": return "ios-native synthetic field wind"
+            case "degraded-network-recovery": return "ios-native synthetic degraded outage"
+            default: return "ios-native synthetic"
+            }
+        }
+        #endif
+        return "ios-native"
     }
 
     private func nativeAppVersion() -> String {
@@ -810,8 +907,8 @@ final class AgentSession: NSObject, ObservableObject {
             appVersion: nativeAppVersion(),
             gitCommit: nativeGitCommit(),
             deviceLabel: nativeDeviceLabel(),
-            browserLanguage: Locale.current.identifier,
-            networkType: "ios-native",
+            browserLanguage: nativeBrowserLanguage(),
+            networkType: nativeNetworkType(),
             memory: current.sessionMemory
         ))) { _ in }
         // The guided tour lives in the provider instance, so a fresh session
@@ -835,10 +932,19 @@ final class AgentSession: NSObject, ObservableObject {
                         if case .unhandled = event, !text.contains("\"type\"") {
                             self.update { $0.statusText = "收到异常代理消息" }
                         } else {
+                            #if DEBUG
+                            self.syntheticAudioQAEvent?(text)
+                            #endif
                             self.handleEvent(event)
                         }
                     }
                 case .data(let data):
+                    #if DEBUG
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, self.syntheticAudioQA else { return }
+                        self.qaReceivedPCMBytes += data.count
+                    }
+                    #endif
                     self.player.play(data)
                 @unknown default:
                     break
@@ -1051,6 +1157,15 @@ final class AgentSession: NSObject, ObservableObject {
             handleHazardAlert(alert)
 
         case let .deviceCommand(command):
+            #if DEBUG
+            // Synthetic QA cannot operate real device actions, including calls
+            // or message composition. Report a real command-result failure.
+            if syntheticAudioQA {
+                let json = buildDeviceResult(commandId: command.commandId, result: .failed("device.synthetic-qa-disabled"))
+                webSocket?.send(.string(json)) { _ in }
+                return
+            }
+            #endif
             guard let source = webSocket, state.handsFree else { return }
             MainActor.assumeIsolated {
                 deviceCommands.submit(command, perform: { [weak self] command in
@@ -1071,6 +1186,9 @@ final class AgentSession: NSObject, ObservableObject {
             onCrash { $0.handleAck(incidentId: incidentId, status: status, detail: detail) }
 
         case .crashSimulate:
+            #if DEBUG
+            if syntheticAudioQA { return }
+            #endif
             onCrash { $0.handleSimulate() }
 
         case let .navRoute(data):
@@ -1192,7 +1310,18 @@ final class AgentSession: NSObject, ObservableObject {
     /// A proactive ADAS alert: cut any in-progress agent speech so the warning is
     /// heard immediately, surface the banner, speak it, then auto-clear it.
     private func handleHazardAlert(_ alert: HazardAlert) {
+        #if DEBUG
+        let qaBefore = syntheticAudioQA ? player.syntheticAudioQASnapshot : nil
+        #endif
         if alert.interrupt { stopAgentSpeech() }
+        #if DEBUG
+        if syntheticAudioQA, alert.interrupt, let qaBefore {
+            // Synchronous around this exact hazard's stop; another main-thread
+            // hearing/rider event cannot be mistaken for this interruption.
+            let qaAfter = player.syntheticAudioQASnapshot
+            syntheticAudioQAHazardInterrupt?(qaBefore.pendingBytes, qaAfter.pendingBytes, qaBefore.interruptedAudio, qaAfter.interruptedAudio)
+        }
+        #endif
         hazardAlertGeneration += 1
         let generation = hazardAlertGeneration
         update {
@@ -1223,6 +1352,9 @@ final class AgentSession: NSObject, ObservableObject {
     }
 
     private func speak(_ text: String) {
+        #if DEBUG
+        if syntheticAudioQA { qaSpeechAttempts += 1 }
+        #endif
         guard !text.isEmpty else { return }
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = AVSpeechSynthesisVoice(
@@ -1250,6 +1382,17 @@ final class AgentSession: NSObject, ObservableObject {
 }
 
 // Reads like the Kotlin `_state.value`; `state` is already the current snapshot.
+#if DEBUG
+extension AgentSession: AVSpeechSynthesizerDelegate {
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.syntheticAudioQA else { return }
+            self.qaSpeechStarts += 1
+        }
+    }
+}
+#endif
+
 extension AgentSession.State {
     var value: AgentSession.State { self }
 }

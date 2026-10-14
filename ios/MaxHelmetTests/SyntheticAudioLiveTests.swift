@@ -117,9 +117,11 @@ extension SyntheticAudioLiveTests {
         var previousConnection: ConnectionState = .offline
         var hazardInterruptedLivePCM = false
         var hazardPlaybackSnapshots: [[String: Any]] = []
+        var interruptedHazardGenerations = Set<Int>()
         var hazardsWithLivePCM = 0
         var framesAccepted = 0
         var outputDrainVerified = false
+        var speechActiveBeforeProductionStop = false
         var outageObserved = false
         var recoveryObserved = false
         var failure: String?
@@ -135,11 +137,12 @@ extension SyntheticAudioLiveTests {
             event["qaAtSeconds"] = Date().timeIntervalSince(start)
             events.append(event)
         }
-        session.syntheticAudioQAHazardInterrupt = { pendingBefore, pendingAfter, countBefore, countAfter in
-            hazardPlaybackSnapshots.append(["atSeconds": Date().timeIntervalSince(start), "pendingBefore": pendingBefore, "pendingAfter": pendingAfter, "interruptionsBefore": countBefore, "interruptionsAfter": countAfter])
+        session.syntheticAudioQAHazardInterrupt = { pendingBefore, pendingAfter, countBefore, countAfter, generation in
+            hazardPlaybackSnapshots.append(["hazardGeneration": generation, "atSeconds": Date().timeIntervalSince(start), "pendingBefore": pendingBefore, "pendingAfter": pendingAfter, "interruptionsBefore": countBefore, "interruptionsAfter": countAfter])
             if pendingBefore > 0 && countAfter == countBefore + 1 {
                 hazardsWithLivePCM += 1
                 hazardInterruptedLivePCM = true
+                interruptedHazardGenerations.insert(generation)
             }
         }
         let observation = session.$state.sink { state in
@@ -178,7 +181,7 @@ extension SyntheticAudioLiveTests {
                 "productionStopVerified": productionStopVerified,
                 "receivedPCMBytes": speech.receivedPCMBytes,
                 "fallbackSpeechAttempts": speech.attempts, "fallbackSpeechStarts": speech.starts,
-                "speechWasActiveBeforeStop": speech.isSpeaking,
+                "speechWasActiveBeforeStop": speechActiveBeforeProductionStop,
                 "postStopSynthesizerSpeaking": session.syntheticAudioQASpeech.isSpeaking,
                 "postStopPlayerArmed": productionStopPlayback.playerArmed,
                 "postStopNodePlaying": productionStopPlayback.nodePlaying,
@@ -195,6 +198,8 @@ extension SyntheticAudioLiveTests {
                 "drainRawReceiveBalanced": speech.receivedPCMBytes > 0 && speech.receivedPCMBytes == playback.scheduledBytes,
                 "hazardsWithLivePCM": hazardsWithLivePCM, "hazardInterruptedLivePCM": hazardInterruptedLivePCM,
                 "hazardPlaybackSnapshots": hazardPlaybackSnapshots,
+                "interruptedHazardGenerations": interruptedHazardGenerations.sorted(),
+                "startedHazardSpeechGenerations": session.syntheticAudioQAHazardSpeechStarts.sorted(),
                 "outageObserved": outageObserved, "recoveryObserved": recoveryObserved,
                 "elapsedSeconds": Date().timeIntervalSince(start), "failure": failure ?? NSNull(),
                 "events": events, "connectionTransitions": transitions,
@@ -276,10 +281,12 @@ extension SyntheticAudioLiveTests {
                 }
             }
             try await waitFor(8, "actual PCM output playback completion") { session.syntheticAudioQAPlayback.playedBackBytes > 0 }
-            try await waitForOutputDrain(session, allowedInterruptions: { caseID == "adas-alert-interrupt" ? hazardsWithLivePCM : 0 })
+            try await waitForOutputDrain(session, requireSpeechSilence: caseID != "adas-alert-interrupt", allowedInterruptions: { caseID == "adas-alert-interrupt" ? hazardsWithLivePCM : 0 })
             outputDrainVerified = true
             if caseID == "adas-alert-interrupt" {
                 XCTAssertGreaterThan(session.syntheticAudioQASpeech.starts, 0, "ADAS warning must start actual fallback speech")
+                XCTAssertFalse(interruptedHazardGenerations.isEmpty)
+                XCTAssertTrue(interruptedHazardGenerations.isSubset(of: session.syntheticAudioQAHazardSpeechStarts), "Every hazard that actually interrupted PCM must start its exact AVSpeechUtterance")
             }
             let text = session.state.transcript.filter { $0.speaker == .agent }.map(\.text).joined(separator: " ")
             if caseID == "emergency-safe-guidance" { XCTAssertTrue(matches(text, ["减速", "停车", "停下", "安全", "靠边"]), "Emergency reply must prioritize a safe stop") }
@@ -296,6 +303,7 @@ extension SyntheticAudioLiveTests {
                 controller.view.drawHierarchy(in: controller.view.bounds, afterScreenUpdates: true)
             }
             try image.pngData()?.write(to: output.appendingPathComponent(runID + ".png"))
+            speechActiveBeforeProductionStop = session.syntheticAudioQASpeech.isSpeaking
             session.stop()
             try await waitFor(3, "production stop deactivating every output before QA cleanup") {
                 let value = session.syntheticAudioQAPlayback
@@ -318,12 +326,14 @@ extension SyntheticAudioLiveTests {
         throw NSError(domain: "SyntheticAudioQA", code: 1, userInfo: [NSLocalizedDescriptionKey: "Timeout waiting for \(label)"])
     }
     /// .dataPlayedBack has reached the output rather than merely being consumed
-    /// by the engine. Require an empty output queue continuously for half a second.
-    private func waitForOutputDrain(_ session: AgentSession, allowedInterruptions: () -> Int = { 0 }) async throws {
+    /// by the engine. Require an empty PCM queue continuously for half a second.
+    /// Recurrent ADAS warnings may keep fallback TTS active until ordinary stop;
+    /// all other scenarios must also drain fallback speech before stopping.
+    private func waitForOutputDrain(_ session: AgentSession, requireSpeechSilence: Bool = true, allowedInterruptions: () -> Int = { 0 }) async throws {
         let deadline = Date().addingTimeInterval(35)
         var emptySince: Date?
         while Date() < deadline {
-            if session.syntheticAudioQAPlayback.pendingBytes == 0 && !session.syntheticAudioQASpeech.isSpeaking {
+            if session.syntheticAudioQAPlayback.pendingBytes == 0 && (!requireSpeechSilence || !session.syntheticAudioQASpeech.isSpeaking) {
                 if emptySince == nil { emptySince = Date() }
                 if Date().timeIntervalSince(emptySince!) >= 0.5 {
                     let value = session.syntheticAudioQAPlayback

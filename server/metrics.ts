@@ -699,7 +699,7 @@ function buildReleaseGate(
       ? "blocked"
       : caseValid.length >= requiredValidSessions && missingPlatforms.length === 0
         ? "pass"
-        : caseInvalid
+        : caseInvalid && caseValid.length === 0
           ? "invalid"
           : "missing";
 

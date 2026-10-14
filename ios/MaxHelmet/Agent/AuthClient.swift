@@ -24,11 +24,18 @@ final class AuthClient: NSObject {
     }
 
     private var allowSelfSigned = false
-    private lazy var session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
+    private var sessionStorage: URLSession?
+    private var session: URLSession {
+        if let sessionStorage { return sessionStorage }
+        let created = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
+        sessionStorage = created
+        return created
+    }
 
     deinit {
-        // URLSession retains its delegate until invalidated.
-        session.finishTasksAndInvalidate()
+        // Never initialize a delegate-retaining URLSession during deinit: its
+        // asynchronous invalidation would receive a pointer to a dead delegate.
+        sessionStorage?.finishTasksAndInvalidate()
     }
 
     /// ws://host:8787/agent → http://host:8787 ; wss://host/agent → https://host

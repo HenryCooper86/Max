@@ -10,6 +10,7 @@ import XCTest
 /// The viewport therefore proposes its own height to its content, so a trailing
 /// `Spacer` can push the controls down to the bottom edge. Without that the
 /// content keeps its ideal height and the spacer collapses to nothing.
+@MainActor
 final class HudUtilityAnchoringTests: XCTestCase {
     private let phone15Portrait = CGSize(width: 390, height: 751)
     private let phone15Landscape = CGSize(width: 734, height: 342)
@@ -46,6 +47,7 @@ final class HudUtilityAnchoringTests: XCTestCase {
                         Spacer(minLength: 0)
                         Button("设置") {}
                     }
+                    .background(HudRenderProbe(identifier: HudAccessibilityID.utilityViewport))
                 }
             )
             .padding(HudMetrics.contentPadding(for: layout))
@@ -57,10 +59,9 @@ final class HudUtilityAnchoringTests: XCTestCase {
         controller.view.frame = window.bounds
         controller.view.setNeedsLayout()
         controller.view.layoutIfNeeded()
-        // SwiftUI needs a run-loop turn before the scroll views exist.
-        RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        HudRenderProbe.waitForLayout(HudAccessibilityID.utilityViewport, in: controller.view)
         controller.view.layoutIfNeeded()
-        let found = findScrollView(HudAccessibilityID.utilityViewport, in: controller.view)
+        let found = HudRenderProbe.scrollView(HudAccessibilityID.utilityViewport, in: controller.view)
         windows.append(window)
         return found
     }
@@ -86,24 +87,4 @@ final class HudUtilityAnchoringTests: XCTestCase {
     func testLandscapeOffersTheWholeRegionToShortUtilityContent() {
         assertContentFillsViewport(.landscape, phone15Landscape, "landscape")
     }
-}
-
-/// The identifier is applied alongside `accessibilityElement(children: .contain)`,
-/// so it can land on an accessibility element rather than on the scroll view's
-/// own `accessibilityIdentifier`. Both places have to be searched.
-private func findScrollView(_ identifier: String, in root: UIView) -> UIScrollView? {
-    if root.accessibilityIdentifier == identifier, let scroll = root as? UIScrollView {
-        return scroll
-    }
-    for element in root.accessibilityElements ?? [] {
-        guard let object = element as? NSObject,
-              object.value(forKey: "accessibilityIdentifier") as? String == identifier,
-              let scroll = object as? UIScrollView
-        else { continue }
-        return scroll
-    }
-    for subview in root.subviews {
-        if let found = findScrollView(identifier, in: subview) { return found }
-    }
-    return nil
 }

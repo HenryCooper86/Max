@@ -14,7 +14,7 @@ export function assertBackgroundQuiet(events: Observation[], initial: PlaybackSn
   if (
     events.some(
       (item) =>
-        ["audio.received", "playback.start", "speech.start"].includes(item.type) ||
+        ["audio.received", "playback.start", "speech.request", "speech.start"].includes(item.type) ||
         (item.type === "relay.event" &&
           eventPayload(item).type === "transcript" &&
           eventPayload(item).speaker === "agent")
@@ -34,13 +34,51 @@ export function findHazardInterruption(events: Observation[]): { hazardAt: numbe
     for (const next of events.slice(index + 1)) {
       if (
         next.at - hazard.at > 1000 ||
-        ["relay.event", "audio.received", "playback.start", "speech.start"].includes(next.type)
+        ["relay.event", "audio.received", "playback.start", "speech.request", "speech.start"].includes(next.type)
       )
         break;
       if (next.type === "playback.stop" && typeof next.sourceId === "number") stopped.add(next.sourceId);
     }
     if (before.activeSourceIds.every((id) => stopped.has(id)))
       return { hazardAt: hazard.at, stoppedSourceIds: [...before.activeSourceIds] };
+  }
+  return null;
+}
+
+export function findHazardWarningStart(events: Observation[]): { hazardAt: number; utteranceId: number } | null {
+  for (let index = 0; index < events.length; index++) {
+    const hazard = events[index]!;
+    const payload = eventPayload(hazard);
+    if (hazard.type !== "relay.event" || payload.type !== "hazard.alert" || payload.interrupt !== true) continue;
+    if (findHazardInterruption(events.slice(index))?.hazardAt !== hazard.at) continue;
+    const text = `${payload.message || ""} ${payload.advice || ""}`.trim();
+    let request: Observation | undefined;
+    for (const next of events.slice(index + 1)) {
+      if (
+        next.at - hazard.at > 1000 ||
+        ["relay.event", "audio.received", "playback.start", "speech.start"].includes(next.type)
+      )
+        break;
+      if (next.type === "speech.request") {
+        request = next;
+        break;
+      }
+    }
+    if (!text || request?.text !== text || typeof request.utteranceId !== "number") continue;
+    const nextHazardAt =
+      events
+        .slice(index + 1)
+        .find((event) => event.type === "relay.event" && eventPayload(event).type === "hazard.alert")?.at ?? Infinity;
+    if (
+      events.some(
+        (event) =>
+          event.type === "speech.start" &&
+          event.utteranceId === request.utteranceId &&
+          event.at >= request.at &&
+          event.at < nextHazardAt
+      )
+    )
+      return { hazardAt: hazard.at, utteranceId: request.utteranceId };
   }
   return null;
 }

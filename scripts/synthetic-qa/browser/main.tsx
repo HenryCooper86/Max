@@ -18,6 +18,7 @@ import {
 import {
   assertBackgroundQuiet,
   findHazardInterruption,
+  findHazardWarningStart,
   assertFullPcmLifecycle,
   assertDisconnected,
   type AssertionResult
@@ -188,6 +189,15 @@ function App() {
       await until(() => findHazardInterruption(observations) !== null, 45000, "ADAS interruption of pending real PCM");
       check("adas-pcm-interruption", "Hazard interrupted every pending PCM source in the production handler", () => {
         if (!findHazardInterruption(observations)) throw new Error("No hazard correlated to pending PCM source stops");
+      });
+      await until(
+        () => findHazardWarningStart(observations) !== null,
+        20000,
+        "actual warning utterance start after PCM interruption"
+      );
+      check("adas-warning-start", "The exact warning utterance started after its hazard interrupted PCM", () => {
+        if (!findHazardWarningStart(observations))
+          throw new Error("No actual speech start for the interrupting hazard");
       });
       await until(() => currentPlayback().active === 0, 20000, "ADAS PCM queue drained or interrupted");
     } else {

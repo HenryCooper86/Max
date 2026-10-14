@@ -23,6 +23,7 @@ const active = new Set<AudioBufferSourceNode>();
 const captureContexts = new Set<AudioContext>();
 const sourceIds = new WeakMap<AudioBufferSourceNode, number>();
 let sourceSerial = 0;
+let utteranceSerial = 0;
 const playback = {
   started: 0,
   ended: 0,
@@ -30,6 +31,7 @@ const playback = {
   active: 0,
   contextState: "none",
   speechStarted: 0,
+  speechRequested: 0,
   speechCancelled: 0
 };
 class ObservedAudioContext extends NativeAudioContext {
@@ -97,9 +99,15 @@ if ("speechSynthesis" in window) {
   const speak = window.speechSynthesis.speak.bind(window.speechSynthesis);
   const cancel = window.speechSynthesis.cancel.bind(window.speechSynthesis);
   window.speechSynthesis.speak = (utterance) => {
-    playback.speechStarted++;
-    observe("speech.start", { text: utterance.text });
-    utterance.addEventListener("end", () => observe("speech.end"));
+    const utteranceId = ++utteranceSerial;
+    playback.speechRequested++;
+    observe("speech.request", { utteranceId, text: utterance.text });
+    utterance.addEventListener("start", () => {
+      playback.speechStarted++;
+      observe("speech.start", { utteranceId, text: utterance.text });
+    });
+    utterance.addEventListener("end", () => observe("speech.end", { utteranceId }));
+    utterance.addEventListener("error", (event) => observe("speech.error", { utteranceId, error: event.error }));
     speak(utterance);
   };
   window.speechSynthesis.cancel = () => {

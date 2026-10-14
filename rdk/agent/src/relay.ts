@@ -76,6 +76,8 @@ export type RelayClient = {
   disconnect(): void;
   sendFrame(frame: Int16Array): void;
   sendEvent(event: unknown): void;
+  /** An async operation may reply only on the transport that requested it. */
+  captureEventSender(): (event: unknown) => void;
   isReady(): boolean;
 };
 
@@ -148,9 +150,11 @@ export function createRelayClient(
     let awaitingPong = false;
 
     current.on("open", () => {
+      if (socket !== current) return;
       current.send(JSON.stringify(buildSessionStart(config, deviceId, memory)));
       awaitingPong = false;
       liveness = timers.set(() => {
+        if (socket !== current) return;
         if (awaitingPong) {
           // The relay pings from its side too, but neither close crosses a
           // black-holed path. Terminating locally is the only exit.
@@ -168,6 +172,7 @@ export function createRelayClient(
     });
 
     current.on("message", (rawData: unknown, rawIsBinary: unknown) => {
+      if (socket !== current) return;
       const data = rawData as Buffer;
       const isBinary = rawIsBinary as boolean;
       if (isBinary) {
@@ -244,6 +249,13 @@ export function createRelayClient(
     sendEvent(event: unknown): void {
       if (socket?.readyState !== SOCKET_OPEN) return;
       socket.send(JSON.stringify(event));
+    },
+    captureEventSender(): (event: unknown) => void {
+      const owner = socket;
+      return (event) => {
+        if (!owner || socket !== owner || owner.readyState !== SOCKET_OPEN) return;
+        owner.send(JSON.stringify(event));
+      };
     },
     isReady(): boolean {
       return ready;

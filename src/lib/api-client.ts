@@ -13,12 +13,19 @@ function errorKind(status: number): ApiErrorKind {
 }
 
 export async function requestJson<T>(path: string, init?: RequestInit): Promise<ApiResult<T>> {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  const callerSignal = init?.signal;
+  if (callerSignal?.aborted) abort();
+  else callerSignal?.addEventListener("abort", abort, { once: true });
+  const timeout = setTimeout(abort, 15_000);
   try {
-    const response = await fetch(path, init);
+    const response = await fetch(path, { ...init, signal: controller.signal });
     let payload: unknown;
     try {
       payload = await response.json();
-    } catch {
+    } catch (error) {
+      if (controller.signal.aborted) throw error;
       payload = null;
     }
     if (!response.ok) {
@@ -28,8 +35,17 @@ export async function requestJson<T>(path: string, init?: RequestInit): Promise<
           : `请求失败（HTTP ${response.status}）。`;
       return { ok: false, error: { kind: errorKind(response.status), status: response.status, message } };
     }
+    if (payload === null) {
+      return {
+        ok: false,
+        error: { kind: "server", status: response.status, message: "中继返回了无效的数据，请稍后重试。" }
+      };
+    }
     return { ok: true, data: payload as T };
   } catch {
     return { ok: false, error: { kind: "unavailable", message: "无法连接中继，请稍后重试。" } };
+  } finally {
+    clearTimeout(timeout);
+    callerSignal?.removeEventListener("abort", abort);
   }
 }

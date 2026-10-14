@@ -235,6 +235,26 @@ final class AgentSession: NSObject, ObservableObject {
     )
 
     @MainActor let hudCast = HUDCastClient()
+    @MainActor private let deviceCommands = DeviceCommandSession()
+    @MainActor private lazy var cameraController = CameraController(
+        session: AVFoundationCaptureSession(), store: captureStore,
+        onRecordingChange: { [weak self] recording in
+            self?.update {
+                $0.recording = recording
+                $0.recordingStartedAt = recording ? Date().timeIntervalSince1970 : nil
+            }
+        },
+        onOpenGallery: { [weak self] in self?.update { $0.galleryRequestToken += 1 } },
+        onAutoStopped: { [weak self] in self?.speak("录像已停止并保存。") }
+    )
+
+    func stopCameraForSession() {
+        Task { @MainActor in await cameraController.stopForSession() }
+    }
+
+    private func invalidateDeviceCommands() {
+        MainActor.assumeIsolated { deviceCommands.invalidate() }
+    }
 
     /// Held as its own typed property (rather than reached for only through
     /// `deviceRouter`'s handler dictionary) so `stop()` can call its
@@ -272,26 +292,13 @@ final class AgentSession: NSObject, ObservableObject {
             ),
             .call: CallDialer(),
             .navigation: navigationController,
-            .camera: CameraController(
-                session: AVFoundationCaptureSession(),
-                store: captureStore,
-                onRecordingChange: { [weak self] recording in
-                    self?.update {
-                        $0.recording = recording
-                        $0.recordingStartedAt = recording ? Date().timeIntervalSince1970 : nil
-                    }
-                },
-                onOpenGallery: { [weak self] in
-                    self?.update { $0.galleryRequestToken += 1 }
-                },
-                onAutoStopped: { [weak self] in
-                    // Reuse the existing local-speech path; no relay turn to reconcile.
-                    self?.speak("录像已达十分钟上限，已保存。")
-                }
-            ),
+            .camera: cameraController,
             .galleryDescribe: GalleryDescribeController(
                 store: captureStore,
-                send: { [weak self] json in self?.webSocket?.send(.string(json)) { _ in } }
+                send: { [weak self] json in
+                    guard !Task.isCancelled else { return }
+                    self?.webSocket?.send(.string(json)) { _ in }
+                }
             )
         ],
         isDeviceUnlocked: { UIApplication.shared.isProtectedDataAvailable }
@@ -453,6 +460,8 @@ final class AgentSession: NSObject, ObservableObject {
     /// Deactivates hands-free: stop the mic, restore routing, close the relay.
     func stop() {
         guard lifecycle.stop() else { return }
+        invalidateDeviceCommands()
+        stopCameraForSession()
         locationProvider.stop()
         location = nil
         withTransportLock {
@@ -713,6 +722,7 @@ final class AgentSession: NSObject, ObservableObject {
     }
 
     private func restartSession() {
+        invalidateDeviceCommands()
         let socket = webSocket
         withTransportLock {
             webSocket = nil
@@ -855,6 +865,8 @@ final class AgentSession: NSObject, ObservableObject {
         assert(Thread.isMainThread)
         // Ignore a socket already superseded by a newer one (e.g. a restart).
         if let current = webSocket, task !== current { return }
+        invalidateDeviceCommands()
+        stopCameraForSession()
         withTransportLock {
             socketOpen = false
             webSocket = nil
@@ -1039,10 +1051,17 @@ final class AgentSession: NSObject, ObservableObject {
             handleHazardAlert(alert)
 
         case let .deviceCommand(command):
-            Task { [weak self] in
-                guard let self else { return }
-                let result = await self.deviceRouter.handle(command)
-                self.webSocket?.send(.string(buildDeviceResult(commandId: command.commandId, result: result))) { _ in }
+            guard let source = webSocket, state.handsFree else { return }
+            MainActor.assumeIsolated {
+                deviceCommands.submit(command, perform: { [weak self] command in
+                    guard let self, source === self.webSocket, self.state.handsFree else {
+                        return .failed("device.cancelled")
+                    }
+                    return await self.deviceRouter.handle(command)
+                }, send: { [weak self] json in
+                    guard let self, source === self.webSocket, self.state.handsFree else { return }
+                    source.send(.string(json)) { _ in }
+                })
             }
 
         case let .error(message):

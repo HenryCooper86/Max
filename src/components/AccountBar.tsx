@@ -15,6 +15,7 @@ import {
   type UserMemorySummary
 } from "../lib/auth";
 import { useLanguage } from "./LanguageToggle";
+import { localized } from "../lib/i18n";
 
 type FormProps = {
   authEnabled: boolean;
@@ -197,7 +198,7 @@ export function AccountSessionControls(props: SessionControlsProps) {
 }
 
 function AccountSessionControlsForUser({ user, onSignedOut }: SessionControlsProps) {
-  const { t } = useLanguage();
+  const { language, t } = useLanguage();
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
@@ -289,7 +290,11 @@ function AccountSessionControlsForUser({ user, onSignedOut }: SessionControlsPro
         <button
           type="button"
           className="accountSwitch"
-          title="Copy the session token and paste it into the iOS/Android app to connect"
+          title={localized(
+            language,
+            "复制会话令牌，粘贴到 iOS/Android App 中连接",
+            "Copy the session token and paste it into the iOS/Android app to connect"
+          )}
           onClick={() => {
             const ownerId = user.id;
             const sequence = ++copySequenceRef.current;
@@ -319,7 +324,11 @@ function AccountSessionControlsForUser({ user, onSignedOut }: SessionControlsPro
           type="button"
           className={`danger ${memoryClearArmed ? "armed" : ""}`}
           disabled={memoryBusy || !memorySummary?.turnCount}
-          title="Clear Max's saved cross-session memory for this account"
+          title={localized(
+            language,
+            "清除 Max 为此账号保存的跨会话记忆",
+            "Clear Max's saved cross-session memory for this account"
+          )}
           onClick={() => {
             if (!memoryClearArmed) {
               setMemoryClearArmed(true);

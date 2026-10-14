@@ -40,6 +40,7 @@ const { MockWebSocket, upstreamInstances } = vi.hoisted(() => {
 vi.mock("ws", () => ({ WebSocket: MockWebSocket }));
 
 import { createDoubaoProvider } from "../server/providers/doubao";
+import { AgentSessionController } from "../server/session-controller";
 import type { AgentProvider, SessionStartEvent } from "../server/providers/types";
 
 // Doubao server-response event codes (EventReceive is a non-exported const enum).
@@ -482,6 +483,125 @@ describe("createDoubaoProvider — wake-word gating", () => {
 });
 
 describe("createDoubaoProvider — mid-ride location updates", () => {
+  it("does not let startup weather replace a newer GPS refresh or reconnect context", async () => {
+    const responses: Array<(response: Response) => void> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        String(url).includes("api.open-meteo.com")
+          ? new Promise<Response>((resolve) => responses.push(resolve))
+          : Promise.resolve(new Response("{}"))
+      )
+    );
+    const { client, send } = makeClient();
+    const provider = createDoubaoProvider(client, silentLog);
+    await provider.start(START_EVENT);
+    const upstream = upstreamInstances.at(-1)!;
+    upstream.emit("open");
+    const connection = upstream.emit("message", jsonFrame(CONNECTION_STARTED, {}));
+    const location = provider.updateLocation?.(2.5, 3.5);
+    const response = (temperature: number) =>
+      new Response(
+        JSON.stringify({ current: { temperature_2m: temperature, weather_code: 0, wind_speed_10m: 5, is_day: 1 } })
+      );
+    responses[1]!(response(30));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    responses[0]!(response(10));
+    await Promise.all([location, connection]);
+    expect(
+      clientEvents(send)
+        .filter((event) => event.type === "weather")
+        .map((event) => event.temperatureC)
+    ).toEqual([30]);
+    const start = upstream.sent.find((frame) => clientFrameEvent(frame) === 100);
+    expect(JSON.stringify(clientFramePayload(start))).toContain("30°C");
+    expect(JSON.stringify(clientFramePayload(start))).not.toContain("10°C");
+    await provider.close();
+  });
+
+  it("keeps queued microphone frames moving while location weather is pending", async () => {
+    const fetchMock = stubWeatherFetch();
+    const { client } = makeClient();
+    const { provider } = await startLiveSession(client);
+    const sendAudio = vi.spyOn(provider, "sendAudio");
+    let resolveWeather!: (response: Response) => void;
+    fetchMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveWeather = resolve;
+        }) as never
+    );
+    const controller = new AgentSessionController(client as never, () => ({ ...provider, start: async () => {} }));
+    const event = (value: unknown) => Buffer.from(JSON.stringify(value));
+    await controller.handleMessage(event({ ...START_EVENT, type: "session.start" }), false);
+    await controller.handleMessage(event({ type: "audio.start" }), false);
+    const location = controller.handleMessage(event({ type: "location.update", lat: 2.5, lon: 3.5 }), false);
+    const audio = controller.handleMessage(Buffer.alloc(640), true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    try {
+      expect(sendAudio).toHaveBeenCalledWith(Buffer.alloc(640));
+    } finally {
+      resolveWeather(
+        new Response(JSON.stringify({ current: { temperature_2m: 21, weather_code: 0, wind_speed_10m: 5, is_day: 1 } }))
+      );
+      await Promise.all([location, audio]);
+      await controller.close();
+    }
+  });
+
+  it("keeps the newest location weather when older refreshes finish later", async () => {
+    const fetchMock = stubWeatherFetch();
+    const { client, send } = makeClient();
+    const { provider } = await startLiveSession(client);
+    const responses: Array<(response: Response) => void> = [];
+    fetchMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          responses.push(resolve);
+        }) as never
+    );
+    const oldLocation = provider.updateLocation?.(2.5, 3.5);
+    const newLocation = provider.updateLocation?.(4, 5);
+    const response = (temperature: number) =>
+      new Response(
+        JSON.stringify({ current: { temperature_2m: temperature, weather_code: 0, wind_speed_10m: 5, is_day: 1 } })
+      );
+    responses[1]!(response(30));
+    await newLocation;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    responses[0]!(response(10));
+    await oldLocation;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(
+      clientEvents(send)
+        .filter((event) => event.type === "weather")
+        .at(-1)?.temperatureC
+    ).toBe(30);
+    await provider.close();
+  });
+
+  it("does not emit pending weather after the provider closes", async () => {
+    const fetchMock = stubWeatherFetch();
+    const { client, send } = makeClient();
+    const { provider } = await startLiveSession(client);
+    let resolveWeather!: (response: Response) => void;
+    fetchMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveWeather = resolve;
+        }) as never
+    );
+    const location = provider.updateLocation?.(2.5, 3.5);
+    await provider.close();
+    send.mockClear();
+    resolveWeather(
+      new Response(JSON.stringify({ current: { temperature_2m: 30, weather_code: 0, wind_speed_10m: 5, is_day: 1 } }))
+    );
+    await location;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(clientEvents(send).filter((event) => event.type === "weather")).toEqual([]);
+  });
+
   it("refetches weather immediately after a far move, but not for GPS jitter", async () => {
     const fetchMock = stubWeatherFetch();
     const { client } = makeClient();

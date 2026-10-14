@@ -5,6 +5,7 @@ import type { TurnState } from "../components/HelmetVisual";
 import type { AudioProcessingState, RiderLocation, TranscriptItem } from "../types";
 import type { Language } from "./i18n";
 import { authToken } from "./auth";
+import { requestJson } from "./api-client";
 import { AUDIO_PROCESSING_LABELS } from "./constants";
 import { relayAuthToken } from "./persistence";
 
@@ -31,11 +32,11 @@ export async function fetchAgentHealth(): Promise<AgentHealth | null> {
     // The token unlocks the per-tester QA block on protected relays; /health
     // itself never requires it.
     const token = credentialToken();
-    const response = await fetch("/health", {
+    const response = await requestJson<AgentHealth>("/health", {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined
     });
     if (!response.ok) return null;
-    return (await response.json()) as AgentHealth;
+    return response.data;
   } catch {
     return null;
   }

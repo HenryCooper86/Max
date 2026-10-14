@@ -398,9 +398,9 @@ class AgentSession(
 
     /** Tears down every resource acquired before an async start failed. */
     private fun failHandsFreeStart(generation: Int, message: String) {
-        if (!lifecycle.accepts(generation)) return
-        stop()
-        _state.update { it.copy(connection = ConnectionState.DEGRADED, statusText = message) }
+        lifecycle.finishOn(deviceScope, generation, teardown = { stop() }, publish = {
+            _state.update { it.copy(connection = ConnectionState.DEGRADED, statusText = message) }
+        })
     }
 
     /** Deactivates hands-free: stop the mic, restore routing, close the relay. */
@@ -786,6 +786,7 @@ class AgentSession(
             _state.update { it.copy(connection = ConnectionState.OFFLINE, statusText = "离线") }
             return
         }
+        val generation = lifecycle.current() ?: return
 
         // The relay closed an idle session to free its upstream slot. End
         // hands-free entirely (mirrors the web client's stopMic on 4001):
@@ -793,8 +794,9 @@ class AgentSession(
         // and the orb pulsing "listening" with no session behind it.
         if (closeCode == IDLE_CLOSE_CODE && !crash.controller.active) {
             reconnectAttempts = 0
-            stop()
-            _state.update { it.copy(statusText = "会话闲置已断开，请重新开启免提") }
+            lifecycle.finishOn(deviceScope, generation, teardown = { stop() }, publish = {
+                _state.update { it.copy(statusText = "会话闲置已断开，请重新开启免提") }
+            })
             return
         }
 
@@ -808,18 +810,20 @@ class AgentSession(
             // upgrade left a zombie session (mic capturing, audio routed, no
             // reconnect) and the next helmet tap STOPPED the zombie instead of
             // retrying with the fresh login.
-            deviceScope.launch { crash.controller.detachAccount(); stop(force = true) }
-            _state.update {
-                it.copy(
-                    connection = ConnectionState.DEGRADED,
-                    authRequired = httpStatus == 401,
-                    statusText = if (httpStatus == 401) {
-                        "需要登录：在设置的「账号」里登录（或粘贴认证令牌）"
-                    } else {
-                        "中继拒绝连接（HTTP $httpStatus），请检查中继地址"
+            lifecycle.finishOn(deviceScope, generation,
+                teardown = { crash.controller.detachAccount(); stop(force = true) }, publish = {
+                    _state.update {
+                        it.copy(
+                            connection = ConnectionState.DEGRADED,
+                            authRequired = httpStatus == 401,
+                            statusText = if (httpStatus == 401) {
+                                "需要登录：在设置的「账号」里登录（或粘贴认证令牌）"
+                            } else {
+                                "中继拒绝连接（HTTP $httpStatus），请检查中继地址"
+                            }
+                        )
                     }
-                )
-            }
+                })
             return
         }
 
@@ -827,10 +831,11 @@ class AgentSession(
         reconnectAttempts += 1
         if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS && !crash.controller.active) {
             reconnectAttempts = 0
-            stop()
-            _state.update {
-                it.copy(connection = ConnectionState.DEGRADED, statusText = "语音中继连接失败，请重新开启免提")
-            }
+            lifecycle.finishOn(deviceScope, generation, teardown = { stop() }, publish = {
+                _state.update {
+                    it.copy(connection = ConnectionState.DEGRADED, statusText = "语音中继连接失败，请重新开启免提")
+                }
+            })
             return
         }
         val delayMs = if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) 30_000L else minOf(8_000L, 1_000L * (1L shl (reconnectAttempts - 1)))

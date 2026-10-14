@@ -349,7 +349,7 @@ export function AccountManagement({
         </button>
       </div>
 
-      <div className="adminAccountSummary" aria-label="账号概览">
+      <div className="adminAccountSummary" aria-label={localized(language, "账号概览", "Account overview")}>
         <span>
           <b>{users.filter((account) => account.role === "admin").length}</b>
           {localized(language, "管理员", "Administrators")}

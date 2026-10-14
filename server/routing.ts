@@ -25,6 +25,9 @@ export type NavHandler = ((event: NavRequestEvent) => Promise<void>) & {
    *  staleness caveat below for why this exists and what it still cannot
    *  cover. */
   clearRoute(): void;
+  /** Capture a clear that applies only while the current route generation
+   * remains unchanged, for delayed navigation.stop device acknowledgments. */
+  captureStop(): () => void;
 };
 
 export type NavPromptSpeech = {
@@ -265,9 +268,10 @@ export function createNavHandler(options: {
   } = options;
   // Cleared by a new "start" request (below) and by clearRoute() — the latter
   // called from navigation-prompts.ts on a genuine end of route reported by
-  // the client. Neither is exhaustive: NavRequestEvent's reason is only
-  // "start" | "reroute" (no "stop"), and clearRoute only fires for the two
-  // nav.prompt kinds ("arrived"/"rerouteFailed") that unambiguously mean the
+  // the client, or by a recognized navigation.stop device acknowledgment.
+  // These are not exhaustive: NavRequestEvent's reason is only
+  // "start" | "reroute" (no "stop"), and the nav.prompt clear only fires for
+  // "arrived"/"rerouteFailed", which unambiguously mean the
   // route is over — a paused route ("locationLost"), a route the client
   // abandons without ever reporting arrival, or a client that goes away
   // entirely (app killed, connectivity lost) never clears this. activeRoute()
@@ -389,6 +393,12 @@ export function createNavHandler(options: {
     startEpoch += 1;
     lastRoute = undefined;
     lastRerouteAt = undefined;
+  };
+  handleNavRequest.captureStop = () => {
+    const epoch = startEpoch;
+    return () => {
+      if (epoch === startEpoch) handleNavRequest.clearRoute();
+    };
   };
   return handleNavRequest;
 }

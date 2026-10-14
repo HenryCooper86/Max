@@ -510,10 +510,10 @@ export async function loginUser(usernameInput: unknown, passwordInput: unknown, 
   if (!user || !provided || !hashesMatch(hash, expected)) {
     return { ok: false, error: "用户名或密码不正确。" };
   }
-  // Re-check after the await: an admin may have deleted this account while
-  // scrypt ran — success here would hand out a token that can never work and
-  // persist an orphan session.
-  if (users.get(username) !== user) {
+  // Hashing yields to password changes and account deletion. A verification
+  // against retired credentials must never create a new session after the
+  // password-change path has already revoked the old sessions.
+  if (users.get(username) !== user || user.salt !== salt || user.passwordHash !== expected) {
     return { ok: false, error: "用户名或密码不正确。" };
   }
   user.lastLoginAt = now;
@@ -547,15 +547,23 @@ export async function changePassword(
   if (newPassword.length > MAX_PASSWORD_LENGTH) return { ok: false, error: "新密码过长。" };
 
   const provided = typeof currentPassword === "string" ? currentPassword : "";
-  const currentHash = await hashPassword(provided.slice(0, MAX_PASSWORD_LENGTH), user.salt);
-  if (!provided || !hashesMatch(currentHash, user.passwordHash)) {
+  const previousSalt = user.salt;
+  const previousHash = user.passwordHash;
+  const currentHash = await hashPassword(provided.slice(0, MAX_PASSWORD_LENGTH), previousSalt);
+  if (!provided || !hashesMatch(currentHash, previousHash)) {
     return { ok: false, error: "当前密码不正确。" };
   }
 
   const salt = randomBytes(16).toString("hex");
   const passwordHash = await hashPassword(newPassword, salt);
-  // Re-check after the awaits: the account may have been deleted meanwhile.
-  if (users.get(user.username) !== user) return { ok: false, error: "未登录或会话已过期。" };
+  // Both awaits can overlap logout, another password change, or deletion.
+  // Commit only while the same session and verified credentials still exist.
+  if (users.get(user.username) !== user || sessions.get(token) !== session) {
+    return { ok: false, error: "未登录或会话已过期。" };
+  }
+  if (user.salt !== previousSalt || user.passwordHash !== previousHash) {
+    return { ok: false, error: "密码已修改，请使用当前密码重试。" };
+  }
   user.salt = salt;
   user.passwordHash = passwordHash;
   for (const [candidateToken, candidate] of sessions) {

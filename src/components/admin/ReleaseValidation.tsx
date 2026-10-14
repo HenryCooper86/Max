@@ -13,7 +13,7 @@ type BusyTarget =
   | { kind: "assignment"; runId: string; requirementId: string }
   | null;
 
-type Notice = { tone: "success" | "error"; message: string };
+type Notice = { tone: "success" | "error"; message: string; englishMessage?: string };
 type MutationRequest = { key: string; requestId: number };
 
 type Props = {
@@ -91,7 +91,7 @@ export function ReleaseValidation({ agent, user, data }: Props) {
     const request = beginMutation({ kind: "create-run" });
     try {
       const result = await data.createRun({
-        name: runName.trim() || `发布 ${runBuild}`,
+        name: runName.trim() || localized(language, `发布 ${runBuild}`, `Release ${runBuild}`),
         build: runBuild.trim() || currentBuild,
         owner: runOwner.trim() || user.username,
         dueAt: runDueDate ? new Date(`${runDueDate}T23:59:59`).getTime() : undefined
@@ -101,7 +101,8 @@ export function ReleaseValidation({ agent, user, data }: Props) {
         setSelectedRunId(result.data.id);
         setOwnedNotice(request, {
           tone: "success",
-          message: `发布运行“${result.data.name}”已创建，包含 ${result.data.requirements.length} 项覆盖要求。`
+          message: `发布运行“${result.data.name}”已创建，包含 ${result.data.requirements.length} 项覆盖要求。`,
+          englishMessage: `Release run “${result.data.name}” created with ${result.data.requirements.length} coverage requirements.`
         });
         await data.refresh();
       } else {
@@ -119,7 +120,8 @@ export function ReleaseValidation({ agent, user, data }: Props) {
       if (result.ok) {
         setOwnedNotice(request, {
           tone: "success",
-          message: `发布运行状态已更新为${testingRunStatusLabel(result.data.status, language)}。`
+          message: `发布运行状态已更新为${testingRunStatusLabel(result.data.status, "zh-CN")}。`,
+          englishMessage: `Release run status updated to ${testingRunStatusLabel(result.data.status, "en-US")}.`
         });
         await data.refresh();
       } else {
@@ -136,7 +138,11 @@ export function ReleaseValidation({ agent, user, data }: Props) {
     try {
       const result = await data.createAssignment(run.id, requirementId, owner);
       if (result.ok) {
-        setOwnedNotice(request, { tone: "success", message: `覆盖任务已分配给 ${owner}。` });
+        setOwnedNotice(request, {
+          tone: "success",
+          message: `覆盖任务已分配给 ${owner}。`,
+          englishMessage: `Coverage task assigned to ${owner}.`
+        });
         await data.refresh();
       } else {
         setOwnedNotice(request, { tone: "error", message: result.error.message });
@@ -149,7 +155,11 @@ export function ReleaseValidation({ agent, user, data }: Props) {
   const linkAssignment = (runId: string, assignmentId: string, testCaseId: string) => {
     noticeRequestRef.current = ++mutationSequenceRef.current;
     agent.setTestingAssignmentContext(runId, assignmentId, testCaseId);
-    setNotice({ tone: "success", message: "任务已关联；下一次语音会话将计入此发布任务。" });
+    setNotice({
+      tone: "success",
+      message: "任务已关联；下一次语音会话将计入此发布任务。",
+      englishMessage: "Task linked. Your next voice session will count toward this release task."
+    });
   };
 
   return (
@@ -170,7 +180,7 @@ export function ReleaseValidation({ agent, user, data }: Props) {
 
       {notice ? (
         <p className={`adminNotice ${notice.tone}`} role="status">
-          {notice.message}
+          {localized(language, notice.message, notice.englishMessage ?? notice.message)}
         </p>
       ) : null}
 
@@ -181,21 +191,35 @@ export function ReleaseValidation({ agent, user, data }: Props) {
               <span>{localized(language, "运行名称", "Run name")}</span>
               <input
                 value={runName}
+                disabled={busyTargets.has("create-run")}
                 onChange={(event) => setRunName(event.target.value)}
                 placeholder={localized(language, "七月候选发布", "July candidate release")}
               />
             </label>
             <label>
               <span>{localized(language, "构建", "Build")}</span>
-              <input value={runBuild} onChange={(event) => setRunBuild(event.target.value)} />
+              <input
+                value={runBuild}
+                disabled={busyTargets.has("create-run")}
+                onChange={(event) => setRunBuild(event.target.value)}
+              />
             </label>
             <label>
               <span>{localized(language, "负责人", "Owner")}</span>
-              <input value={runOwner} onChange={(event) => setRunOwner(event.target.value)} />
+              <input
+                value={runOwner}
+                disabled={busyTargets.has("create-run")}
+                onChange={(event) => setRunOwner(event.target.value)}
+              />
             </label>
             <label>
               <span>{localized(language, "截止日期", "Due date")}</span>
-              <input type="date" value={runDueDate} onChange={(event) => setRunDueDate(event.target.value)} />
+              <input
+                type="date"
+                value={runDueDate}
+                disabled={busyTargets.has("create-run")}
+                onChange={(event) => setRunDueDate(event.target.value)}
+              />
             </label>
             <button type="button" disabled={busyTargets.has("create-run")} onClick={() => void createRun()}>
               {busyTargets.has("create-run")
@@ -219,7 +243,7 @@ export function ReleaseValidation({ agent, user, data }: Props) {
                   <span className={`adminStatus ${run.status}`}>{testingRunStatusLabel(run.status, language)}</span>
                   <strong>{run.name}</strong>
                   <small>
-                    {run.build} · {progress.completed}/{progress.required} 个样本
+                    {run.build} · {progress.completed}/{progress.required} {localized(language, "个样本", "samples")}
                   </small>
                   <i>
                     <b style={{ width: `${progress.percent}%` }} />

@@ -599,6 +599,7 @@ export function createDoubaoProvider(
   // by mid-ride location.update events so a long ride's weather doesn't stay
   // pinned to the start point.
   let weatherLocation: { lat: number; lon: number; source: "rider" | "configured" | "demo" } | undefined;
+  let weatherRequestEpoch = 0;
   // Wake-word ("Max") gating. The rider transcript for the current turn
   // accumulates in riderTurnText; addressedUntil holds the conversation window.
   // replyDecided/replyAddressed latch the decision for the whole agent turn so
@@ -644,8 +645,9 @@ export function createDoubaoProvider(
   // signal createNavPromptHandler already trusts to decide whether a relay
   // nav prompt should speak at all) is a better source but NOT an
   // authoritative one: it is cleared by a fresh "start" request and, since
-  // this branch, by navigation-prompts.ts on an "arrived"/"rerouteFailed"
-  // nav.prompt, but neither covers every way a route actually ends —
+  // navigation-prompts.ts on an "arrived"/"rerouteFailed" nav.prompt, and
+  // a recognized navigation.stop acknowledgment. Other ways to end a route
+  // still require the client to report its lifecycle —
   // NavRequestEvent's reason is "start" | "reroute" only (no "stop"), a
   // paused-not-ended route ("locationLost") does not clear it, and a client
   // that goes away without reporting either (app killed, connectivity lost)
@@ -656,6 +658,7 @@ export function createDoubaoProvider(
   // (the safe direction — see NO_ROUTE_LINE/ROUTE_ACTIVE_LINE below) if
   // start() is ever called without it.
   let routeActiveFromContext: (() => boolean) | undefined;
+  let captureNavigationStop: ProviderSessionContext["captureNavigationStop"];
   // Enforces that navigation truth may originate only from the relay's own
   // nav.* speech (speakNavLine/speakNavPrompt — session-controller.ts), never
   // from the model's own TTS stream. Wired into the TtsSentenceStart/End and
@@ -1017,6 +1020,7 @@ export function createDoubaoProvider(
       command.action === "vision.watch" ? command.args.on : undefined,
       activity
     );
+    if (command.action === "navigation.stop") issued.onNavigationStopped = captureNavigationStop?.();
     sendClient({
       type: "device.command",
       commandId: issued.commandId,
@@ -1520,9 +1524,11 @@ export function createDoubaoProvider(
   /** Refetches weather for the current location and pushes the HUD update. */
   async function refreshWeather(trigger: "interval" | "location") {
     const location = weatherLocation;
-    if (!location) return;
+    if (!location || closedByProvider) return;
+    const epoch = ++weatherRequestEpoch;
     try {
       const weather = await fetchRiderWeather(location.lat, location.lon);
+      if (closedByProvider || epoch !== weatherRequestEpoch) return;
       sendClient({
         type: "weather",
         description: weather.description,
@@ -1544,7 +1550,9 @@ export function createDoubaoProvider(
         `${weather.riderAdvice}当骑手询问天气或风力时，只基于这条实时数据简短回答。`;
       updateProviderConfig();
     } catch {
-      log.warn("weather refresh failed — keeping last reading", { trigger });
+      if (!closedByProvider && epoch === weatherRequestEpoch) {
+        log.warn("weather refresh failed — keeping last reading", { trigger });
+      }
     }
   }
 
@@ -1643,7 +1651,7 @@ export function createDoubaoProvider(
           // Fold in the concurrently-fetched weather (bounded; "" if unavailable),
           // then start the session. Doubao sends nothing until StartSession, so
           // awaiting here only defers our own next send.
-          currentWeatherRole = await config.weatherRolePromise;
+          await config.weatherRolePromise;
           let systemRole = config.baseSystemRole + currentWeatherRole + riderLocation.role();
           if (resumedSession) {
             // Context replay for an in-place upstream reconnect: same ride, same
@@ -2197,6 +2205,7 @@ export function createDoubaoProvider(
       sessionPlatform = event.platform;
       started = true;
       routeActiveFromContext = context?.routeActive;
+      captureNavigationStop = context?.captureNavigationStop;
 
       let systemRole = process.env.DOUBAO_SYSTEM_ROLE ?? DEFAULT_AGENT_SYSTEM_PROMPT;
       const scenario: DemoScenario = event.scenario ?? "commute";
@@ -2242,6 +2251,7 @@ export function createDoubaoProvider(
         void riderLocation.update(weatherLocation.lat, weatherLocation.lon).then(() => updateProviderConfig());
       }
       const initialLocation = weatherLocation;
+      const initialWeatherEpoch = ++weatherRequestEpoch;
 
       // Kick the weather fetch off WITHOUT awaiting it here: it now runs
       // concurrently with the upstream connection handshake and is folded into
@@ -2252,6 +2262,7 @@ export function createDoubaoProvider(
       const weatherRolePromise = (async (): Promise<string> => {
         try {
           const weather = await fetchRiderWeather(initialLocation.lat, initialLocation.lon);
+          if (closedByProvider || initialWeatherEpoch !== weatherRequestEpoch) return currentWeatherRole;
           const locationLabel =
             initialLocation.source === "rider"
               ? "骑手当前位置"
@@ -2277,6 +2288,7 @@ export function createDoubaoProvider(
             `${weather.riderAdvice}当骑手询问天气或风力时，只基于这条真实数据简短回答。`;
           return currentWeatherRole;
         } catch {
+          if (closedByProvider || initialWeatherEpoch !== weatherRequestEpoch) return currentWeatherRole;
           log.warn("initial weather fetch failed", { lat: initialLocation.lat, lon: initialLocation.lon });
           sendClient({ type: "status", state: "ready", detail: "实时天气暂不可用，使用通用回答" });
           return "";
@@ -2351,7 +2363,10 @@ export function createDoubaoProvider(
       // to plausibly differ; otherwise the periodic refresh picks up the new
       // coordinates on its own. 20 km ≈ a fresh forecast cell.
       if (!previous || previous.source !== "rider" || approxDistanceKm(previous, { lat, lon }) >= 20) {
-        await refreshWeather("location");
+        // This method runs in the controller's PCM/control queue. Weather is
+        // independent work; its request epoch keeps late readings from replacing
+        // the current location after this returns and another update arrives.
+        void refreshWeather("location");
       }
     },
     async deviceResult(event) {
@@ -2361,6 +2376,9 @@ export function createDoubaoProvider(
       scheduleDeviceExpiry();
       if (!issued) return;
       deviceActivity.reconcile(issued.activity, event);
+      if (issued.action === "navigation.stop" && (event.status === "ok" || event.reason === "navigation.notActive")) {
+        issued.onNavigationStopped?.();
+      }
       if (issued.action === "vision.watch" && event.status === "ok") {
         visionGovernor.setEnabled(issued.watchOn === true);
       }

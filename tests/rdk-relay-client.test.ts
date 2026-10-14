@@ -46,6 +46,63 @@ describe("buildSessionStart", () => {
 });
 
 describe("createRelayClient lifecycle", () => {
+  it("keeps asynchronous command replies bound to their original socket", () => {
+    const sockets: ReturnType<typeof fakeSocket>[] = [];
+    const client = createRelayClient(CONFIG, DEVICE_ID, HANDLERS, {
+      wsFactory: () => {
+        const socket = fakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      log: () => {}
+    });
+    client.connect();
+    sockets[0]!.readyState = 1;
+    const reply = client.captureEventSender();
+    reply({ type: "device.result", commandId: "current" });
+    expect(sockets[0]!.sent).toHaveLength(1);
+    sockets[0]!.readyState = 2;
+    client.connect();
+    sockets[1]!.readyState = 1;
+    reply({ type: "device.result", commandId: "stale" });
+    expect(sockets[0]!.sent).toHaveLength(1);
+    expect(sockets[1]!.sent).toHaveLength(0);
+  });
+
+  it("ignores all messages and a late open from a superseded socket", () => {
+    const sockets: ReturnType<typeof fakeSocket>[] = [];
+    const onEvent = vi.fn();
+    const onVoice = vi.fn();
+    const onReady = vi.fn();
+    const setInterval = vi.fn();
+    const client = createRelayClient(
+      CONFIG,
+      DEVICE_ID,
+      { ...HANDLERS, onEvent, onVoice, onReady },
+      {
+        wsFactory: () => {
+          const socket = fakeSocket();
+          sockets.push(socket);
+          return socket;
+        },
+        setInterval: setInterval as unknown as typeof globalThis.setInterval,
+        log: () => {}
+      }
+    );
+    client.connect();
+    sockets[0]!.readyState = 2;
+    client.connect();
+    sockets[0]!.emit("open");
+    sockets[0]!.emit("message", Buffer.alloc(2), true);
+    sockets[0]!.emit("message", Buffer.from(JSON.stringify({ type: "session.started" })), false);
+    sockets[0]!.emit("message", Buffer.from(JSON.stringify({ type: "device.command", commandId: "old" })), false);
+    expect(sockets[0]!.sent).toEqual([]);
+    expect(setInterval).not.toHaveBeenCalled();
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(onVoice).not.toHaveBeenCalled();
+    expect(onReady).not.toHaveBeenCalled();
+  });
+
   it("reuses the loaded identity in every reconnect handshake", () => {
     const sockets: ReturnType<typeof fakeSocket>[] = [];
     const client = createRelayClient(CONFIG, DEVICE_ID, HANDLERS, {

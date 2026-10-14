@@ -8,7 +8,8 @@ protocol URLOpening {
 struct SystemURLOpener: URLOpening {
     @MainActor
     func open(_ url: URL) async -> Bool {
-        await UIApplication.shared.open(url)
+        guard !Task.isCancelled else { return false }
+        return await UIApplication.shared.open(url)
     }
 }
 
@@ -31,9 +32,11 @@ struct CallDialer: DeviceActionHandler {
         var target = number
         if target == nil, let name {
             guard await resolver.isAuthorized() else { return .denied("permission.contacts") }
+            guard !Task.isCancelled else { return .failed("device.cancelled") }
             guard let resolved = await resolver.number(matching: name) else { return .failed("contact.notFound") }
             target = resolved
         }
+        guard !Task.isCancelled else { return .failed("device.cancelled") }
         guard let target, let url = URL(string: "tel://\(target.filter { $0.isNumber || $0 == "+" })") else {
             return .failed("dial.failed")
         }

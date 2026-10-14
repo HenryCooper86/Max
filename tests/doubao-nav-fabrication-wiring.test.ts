@@ -349,6 +349,69 @@ describe("doubao provider — fabrication guard covers the chatText fallback pat
 });
 
 describe("doubao provider — honest-line selection reads the supplied route state", () => {
+  it.each([
+    { status: "ok", reason: undefined, newerRoute: false, unknownCommand: false, expected: NO_ROUTE_LINE },
+    {
+      status: "failed",
+      reason: "navigation.notActive",
+      newerRoute: false,
+      unknownCommand: false,
+      expected: NO_ROUTE_LINE
+    },
+    { status: "denied", reason: undefined, newerRoute: false, unknownCommand: false, expected: ROUTE_ACTIVE_LINE },
+    { status: "ok", reason: undefined, newerRoute: true, unknownCommand: false, expected: ROUTE_ACTIVE_LINE },
+    { status: "ok", reason: undefined, newerRoute: false, unknownCommand: true, expected: ROUTE_ACTIVE_LINE }
+  ])(
+    "reconciles stopped route state for $status/$reason, newer=$newerRoute, unknown=$unknownCommand",
+    async ({ status, reason, newerRoute, unknownCommand, expected }) => {
+      routeProviderOverride.current = createMockRouteProvider();
+      stubWeatherFetch();
+      const { client, send } = makeClient();
+      const controller = new AgentSessionController(
+        client,
+        (socket, telemetry) => createDoubaoProvider(socket, silentLog, telemetry),
+        silentLog
+      );
+      const control = (value: unknown) => controller.handleMessage(Buffer.from(JSON.stringify(value)), false);
+      await control({ type: "session.start", sampleRate: 16000, channels: 1, platform: "ios" });
+      const upstream = upstreamInstances.at(-1)!;
+      upstream.emit("open");
+      await upstream.emit("message", jsonFrame(CONNECTION_STARTED, {}));
+      upstream.emit("message", jsonFrame(SESSION_STARTED, { dialog_id: "dialog-live" }));
+      await control({ type: "audio.start" });
+      const plan = async (commandId: string) => {
+        await control({
+          type: "nav.request",
+          commandId,
+          reason: "start",
+          origin: { lat: 31.2304, lon: 121.4737 },
+          query: "人民广场"
+        });
+        await vi.waitFor(() =>
+          expect(clientEvents(send).some((event) => event.type === "nav.route" && event.commandId === commandId)).toBe(
+            true
+          )
+        );
+      };
+      await plan("first-route");
+      await riderTurn(upstream, "Max 停止导航");
+      const stop = clientEvents(send).find(
+        (event) => event.type === "device.command" && event.action === "navigation.stop"
+      );
+      expect(stop).toBeDefined();
+      if (newerRoute) await plan("new-route");
+      await control({ type: "device.result", commandId: unknownCommand ? "unknown" : stop!.commandId, status, reason });
+      send.mockClear();
+      await riderTurn(upstream, "Max 还有多远");
+      await upstream.emit(
+        "message",
+        jsonFrame(TTS_SENTENCE_START, { reply_id: "reply-after-stop", text: "前方800米后左转" })
+      );
+      expect(clientEvents(send).some((event) => event.type === "transcript" && event.text === expected)).toBe(true);
+      await controller.close();
+    }
+  );
+
   it("defaults to the no-route line when start() receives no routeActive accessor", async () => {
     stubWeatherFetch();
     const { client, send } = makeClient();

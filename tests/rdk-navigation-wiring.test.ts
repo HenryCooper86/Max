@@ -130,7 +130,14 @@ vi.mock("../rdk/agent/src/relay", async (importOriginal) => {
   return {
     ...actual,
     createRelayClient: (_config: unknown, _deviceId: string, handlers: RelayHandlers) => {
-      fixtures.relayHandlers = handlers;
+      let generation = 0;
+      fixtures.relayHandlers = {
+        ...handlers,
+        onClosed: (idle) => {
+          generation += 1;
+          handlers.onClosed(idle);
+        }
+      };
       return {
         connect: () => {
           fixtures.relayConnects += 1;
@@ -140,6 +147,12 @@ vi.mock("../rdk/agent/src/relay", async (importOriginal) => {
         },
         sendFrame: vi.fn(),
         sendEvent: (event: unknown) => fixtures.relayEvents.push(event),
+        captureEventSender: () => {
+          const owner = generation;
+          return (event: unknown) => {
+            if (owner === generation) fixtures.relayEvents.push(event);
+          };
+        },
         isReady: () => true
       };
     }
@@ -569,14 +582,7 @@ describe.sequential("start navigation lifecycle wiring", () => {
           (event as { type?: string; commandId?: string }).type === "device.result" &&
           (event as { commandId?: string }).commandId === "pending-at-close"
       )
-    ).toEqual([
-      {
-        type: "device.result",
-        commandId: "pending-at-close",
-        status: "failed",
-        reason: "navigation.cancelled"
-      }
-    ]);
+    ).toEqual([]);
 
     handlers!.onReady();
     expect(fixtures.sources).toHaveLength(2);

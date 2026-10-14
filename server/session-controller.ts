@@ -675,6 +675,7 @@ export class AgentSessionController {
           // constructor has finished), regardless of the two properties'
           // relative construction order above.
           routeActive: () => this.navHandler.activeRoute() !== undefined,
+          captureNavigationStop: () => this.navHandler.captureStop(),
           ...(durableMemory && (durableMemory.turns.length || durableMemory.facts.length)
             ? {
                 previousConversation: {

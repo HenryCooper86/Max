@@ -1,5 +1,9 @@
 package com.horizon.maxhelmet.agent
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+
 /**
  * Pure ownership gate for asynchronous hands-free startup.
  *
@@ -32,4 +36,13 @@ class SessionLifecycle {
         generation += 1
         return true
     }
+
+    /** Resource teardown and its final status share the device's main scope.
+     * A queued callback may not stop a newer hands-free generation. */
+    fun finishOn(scope: CoroutineScope, candidate: Int, teardown: () -> Unit, publish: () -> Unit): Job =
+        scope.launch {
+            if (!accepts(candidate)) return@launch
+            teardown()
+            publish()
+        }
 }

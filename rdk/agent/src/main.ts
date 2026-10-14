@@ -387,16 +387,15 @@ function start(): void {
     cue: (kind) => writeCue(playback, kind)
   });
 
-  const dispatch = createDeviceDispatcher({
+  const dispatcherOptions = {
     vision,
-    setVolume: (level) => setAlsaVolume(config.alsaPlayback, level),
+    setVolume: (level: number) => setAlsaVolume(config.alsaPlayback, level),
     previewPort: config.visionPreviewPort,
-    poweroff,
+    poweroff
     // Same client-event path hazard.report already uses below (relay.sendEvent),
     // not a new one: image bytes go up base64-encoded in a camera.frame JSON
     // event, never over the raw binary uplink that carries mic audio.
-    onFrame: (commandId, jpeg) => relay.sendEvent({ type: "camera.frame", commandId, image: jpeg.toString("base64") })
-  });
+  };
 
   const relay = createRelayClient(config, deviceId, {
     onReady: () => {
@@ -437,8 +436,13 @@ function start(): void {
       }
       if (event.type === "device.command") {
         const command = { commandId: event.commandId, action: event.action, args: event.args };
+        const reply = relay.captureEventSender();
+        const dispatch = createDeviceDispatcher({
+          ...dispatcherOptions,
+          onFrame: (commandId, jpeg) => reply({ type: "camera.frame", commandId, image: jpeg.toString("base64") })
+        });
         void routeDeviceCommand({ command, navigation: navigationSession.navigation, dispatch }).then((result) =>
-          relay.sendEvent(result)
+          reply(result)
         );
       }
     },

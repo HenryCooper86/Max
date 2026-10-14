@@ -32,6 +32,7 @@ final class SystemMessagePresenter: NSObject, MFMessageComposeViewControllerDele
     }
 
     private func show(number: String, body: String) async -> Bool {
+        guard !Task.isCancelled else { return false }
         guard MFMessageComposeViewController.canSendText() else { return false }
         guard let root = UIApplication.shared.connectedScenes
             .compactMap({ ($0 as? UIWindowScene)?.keyWindow })
@@ -81,7 +82,9 @@ struct MessageComposer: DeviceActionHandler {
             return .denied("unsafe.speed")
         }
         guard await resolver.isAuthorized() else { return .denied("permission.contacts") }
+        guard !Task.isCancelled else { return .failed("device.cancelled") }
         guard let number = await resolver.number(matching: name) else { return .failed("contact.notFound") }
+        guard !Task.isCancelled else { return .failed("device.cancelled") }
         let presented = await presenter.present(number: number, body: body)
         return presented ? .ok : .failed("compose.dismissed")
     }

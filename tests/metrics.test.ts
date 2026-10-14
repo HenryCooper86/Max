@@ -388,6 +388,57 @@ describe("relay metrics", () => {
     expect(testingSessionDetail("note-write-failure")?.notes).toBe("");
   });
 
+  it("verifies signed transcript identities on durable reads and after reviewer notes", () => {
+    beginTesterSession(
+      "signed-turns",
+      { testerId: "signed-rider", testingTestCaseId: "baseline-live-session", gitCommit: buildInfo.gitCommit },
+      1_000
+    );
+    recordTesterClientAudio("signed-turns", 320, 1_100);
+    recordTesterServerEvent("signed-turns", { type: "metric", latencyMs: 372 }, 32, 1_200);
+    recordTesterServerEvent(
+      "signed-turns",
+      { type: "transcript", speaker: "rider", text: "Max, route status?", turnId: "rider-1", deliveryId: "request-1" },
+      64,
+      1_300
+    );
+    recordTesterServerEvent(
+      "signed-turns",
+      {
+        type: "transcript",
+        speaker: "agent",
+        text: "Route clear. Ride safely.",
+        turnId: "agent-1",
+        deliveryId: "reply-1"
+      },
+      64,
+      1_800
+    );
+    endTesterSession("signed-turns", 5_000);
+
+    const captured = testingSnapshot(6_000).sessions[0];
+    const detail = testingSessionDetail("signed-turns");
+    expect(detail?.evidenceIntegrity).toBe("verified");
+    expect(detail?.turns.map(({ turnId, deliveryId }) => ({ turnId, deliveryId }))).toEqual([
+      { turnId: "rider-1", deliveryId: "request-1" },
+      { turnId: "agent-1", deliveryId: "reply-1" }
+    ]);
+    expect(testingSessionPage().items[0].evidenceIntegrity).toBe("verified");
+
+    updateTestingSessionNotes("signed-turns", "Reviewer annotation.");
+    expect(testingSessionDetail("signed-turns")).toMatchObject({
+      evidenceHash: captured.evidenceHash,
+      evidenceIntegrity: "verified",
+      notes: "Reviewer annotation."
+    });
+
+    testingStore.saveTestingSession({
+      ...captured,
+      turns: captured.turns.map((turn) => ({ ...turn, deliveryId: "tampered-delivery" }))
+    });
+    expect(testingSessionDetail("signed-turns")?.evidenceIntegrity).toBe("mismatch");
+  });
+
   it("classifies invalid sessions and excludes them from release-gate evidence", () => {
     beginTesterSession(
       "invalid-no-reply",

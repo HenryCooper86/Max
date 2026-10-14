@@ -84,6 +84,55 @@ describe("testing history replay", () => {
     expect(testingSnapshot(10_000).sessions[0].evidenceIntegrity).toBe("mismatch");
   });
 
+  it("keeps signed turn identities verified across archive replay and note writes", async () => {
+    const file = historyFile([]);
+    const capture = await loadMetricsWithHistory(file);
+    capture.beginTesterSession(
+      "signed-history",
+      { testerId: "history-tester", testingTestCaseId: "baseline-live-session" },
+      1_000
+    );
+    capture.recordTesterClientAudio("signed-history", 320, 1_100);
+    capture.recordTesterServerEvent("signed-history", { type: "metric", latencyMs: 372 }, 32, 1_200);
+    capture.recordTesterServerEvent(
+      "signed-history",
+      { type: "transcript", speaker: "rider", text: "Max, route status?", turnId: "rider-1", deliveryId: "request-1" },
+      64,
+      1_300
+    );
+    capture.recordTesterServerEvent(
+      "signed-history",
+      {
+        type: "transcript",
+        speaker: "agent",
+        text: "Route clear. Ride safely.",
+        turnId: "agent-1",
+        deliveryId: "reply-1"
+      },
+      64,
+      1_800
+    );
+    capture.endTesterSession("signed-history", 5_000);
+    await capture.flushTestingHistory();
+    const originalHash = JSON.parse(fs.readFileSync(file, "utf8").trim()).evidenceHash;
+
+    const replay = await loadMetricsWithHistory(file);
+    const snapshot = replay.testingSnapshot(6_000);
+    expect(snapshot.sessions[0].evidenceIntegrity).toBe("verified");
+    expect(snapshot.totals.validTestSessions).toBe(1);
+    expect(snapshot.totals.invalidTestSessions).toBe(0);
+    expect(replay.testingSessionDetail("signed-history")?.turns).toMatchObject([
+      { turnId: "rider-1", deliveryId: "request-1" },
+      { turnId: "agent-1", deliveryId: "reply-1" }
+    ]);
+    replay.updateTestingSessionNotes("signed-history", "Reviewed after restart.");
+    expect(replay.testingSessionDetail("signed-history")).toMatchObject({
+      evidenceHash: originalHash,
+      evidenceIntegrity: "verified",
+      notes: "Reviewed after restart."
+    });
+  });
+
   it("retains the full session cap despite the trailing newline", async () => {
     // 25 sessions on disk, cap 20 → exactly the newest 20 must survive. The
     // old loader counted the trailing "" as a line and silently dropped the

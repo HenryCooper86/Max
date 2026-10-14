@@ -41,6 +41,7 @@ vi.mock("ws", () => ({ WebSocket: MockWebSocket }));
 
 import { createDoubaoProvider } from "../server/providers/doubao";
 import { AgentSessionController } from "../server/session-controller";
+import { metrics } from "../server/metrics";
 import type { AgentProvider, SessionStartEvent } from "../server/providers/types";
 
 // Doubao server-response event codes (EventReceive is a non-exported const enum).
@@ -159,6 +160,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe("createDoubaoProvider — cumulative ASR partials", () => {
@@ -213,6 +215,172 @@ describe("createDoubaoProvider — cumulative ASR partials", () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(upstreamInstances).toHaveLength(2);
 
+    await provider.close();
+  });
+
+  it("recovers when addressed final ASR receives no reply progress", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    stubWeatherFetch();
+    const { client, send } = makeClient();
+    const { provider, upstream } = await startLiveSession(client);
+    await provider.startAudio();
+    const failuresBefore = metrics.snapshot().upstreamFailures;
+    await riderTurn(upstream, "Max 你好，请用一句话回答，你叫什么名字？");
+    await upstream.emit("message", jsonFrame(CHAT_RESPONSE, { content: "" }));
+
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(upstream.readyState).toBe(MockWebSocket.OPEN);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(upstream.readyState).toBe(MockWebSocket.CLOSED);
+    expect(metrics.snapshot().upstreamFailures).toBe(failuresBefore + 1);
+    expect(clientEvents(send)).toContainEqual(
+      expect.objectContaining({ type: "status", state: "connecting", detail: expect.stringContaining("回复") })
+    );
+    expect(clientEvents(send).filter((event) => event.type === "transcript" && event.speaker === "agent")).toEqual([]);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(upstreamInstances).toHaveLength(2);
+    await provider.close();
+  });
+
+  it.each(["chat", "tts-text", "tts-audio"])(
+    "cancels the missing-reply deadline on meaningful %s progress",
+    async (progress) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000_000);
+      stubWeatherFetch();
+      const { client } = makeClient();
+      const { provider, upstream } = await startLiveSession(client);
+      await provider.startAudio();
+      await riderTurn(upstream, "Max 你叫什么名字？");
+      await vi.advanceTimersByTimeAsync(9_000);
+      if (progress === "chat") await upstream.emit("message", jsonFrame(CHAT_RESPONSE, { content: "我是 Max。" }));
+      else if (progress === "tts-text")
+        await upstream.emit("message", jsonFrame(TTS_SENTENCE_START, { content: "我是 Max。" }));
+      else await upstream.emit("message", audioFrame(Buffer.from([1, 2, 3, 4])));
+
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(upstream.readyState).toBe(MockWebSocket.OPEN);
+      expect(upstreamInstances).toHaveLength(1);
+      await provider.close();
+    }
+  );
+
+  it("does not arm missing-reply recovery for unaddressed background speech", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    stubWeatherFetch();
+    const { client, send } = makeClient();
+    const { provider, upstream } = await startLiveSession(client);
+    await provider.startAudio();
+    await riderTurn(upstream, "今天的晚饭很好吃。大家一起聊聊天。");
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(upstream.readyState).toBe(MockWebSocket.OPEN);
+    expect(upstreamInstances).toHaveLength(1);
+    expect(clientEvents(send).filter((event) => event.type === "transcript" && event.speaker === "agent")).toEqual([]);
+    await provider.close();
+  });
+
+  it("honors meaningful reply progress that arrived before final ASR", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    stubWeatherFetch();
+    const { client } = makeClient();
+    const { provider, upstream } = await startLiveSession(client);
+    await provider.startAudio();
+    await upstream.emit("message", jsonFrame(ASR_INFO, {}));
+    await upstream.emit("message", jsonFrame(ASR_RESPONSE, { results: [{ text: "Max 你叫什么名字？" }] }));
+    await upstream.emit("message", jsonFrame(CHAT_RESPONSE, { content: "我是 Max。" }));
+    await upstream.emit("message", jsonFrame(ASR_ENDED, {}));
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(upstream.readyState).toBe(MockWebSocket.OPEN);
+    expect(upstreamInstances).toHaveLength(1);
+    await provider.close();
+  });
+
+  it.each(["stop", "close", "new-turn"])("clears the pending reply deadline on %s", async (action) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    stubWeatherFetch();
+    const { client } = makeClient();
+    const { provider, upstream } = await startLiveSession(client);
+    await provider.startAudio();
+    await riderTurn(upstream, "Max 你叫什么名字？");
+    await vi.advanceTimersByTimeAsync(9_000);
+    if (action === "stop") await provider.stopAudio();
+    else if (action === "close") await provider.close();
+    else {
+      await upstream.emit("message", jsonFrame(ASR_INFO, {}));
+      await upstream.emit("message", jsonFrame(ASR_RESPONSE, { results: [{ text: "Max 新问题" }] }));
+    }
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(upstreamInstances).toHaveLength(1);
+    expect(upstream.readyState).toBe(action === "close" ? MockWebSocket.CLOSED : MockWebSocket.OPEN);
+    await provider.close();
+  });
+
+  it("uses the existing bounded retry budget for repeated missing replies", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    stubWeatherFetch();
+    const { client } = makeClient();
+    const { provider, upstream } = await startLiveSession(client);
+    await provider.startAudio();
+    let current = upstream;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await riderTurn(current, "Max 你叫什么名字？");
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(current.readyState).toBe(MockWebSocket.CLOSED);
+      if (attempt < 3) {
+        await vi.advanceTimersByTimeAsync(500 * 2 ** attempt);
+        current = upstreamInstances.at(-1)!;
+        current.emit("open");
+        await current.emit("message", jsonFrame(CONNECTION_STARTED, {}));
+        current.emit("message", jsonFrame(SESSION_STARTED, { dialog_id: "dialog-live" }));
+      }
+    }
+    expect(upstreamInstances).toHaveLength(4);
+    expect((client as unknown as { close: Mock }).close).toHaveBeenCalled();
+    await provider.close();
+  });
+
+  it("does not let an old socket's timer or late progress affect the resumed turn", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    stubWeatherFetch();
+    const { client } = makeClient();
+    const { provider, upstream } = await startLiveSession(client);
+    await provider.startAudio();
+    await riderTurn(upstream, "Max 你叫什么名字？");
+    await vi.advanceTimersByTimeAsync(9_000);
+    upstream.close();
+    await vi.advanceTimersByTimeAsync(500);
+    const resumed = upstreamInstances.at(-1)!;
+    resumed.emit("open");
+    await resumed.emit("message", jsonFrame(CONNECTION_STARTED, {}));
+    resumed.emit("message", jsonFrame(SESSION_STARTED, { dialog_id: "dialog-live" }));
+    await riderTurn(resumed, "Max 再问一次，你叫什么名字？");
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(resumed.readyState).toBe(MockWebSocket.OPEN);
+    await upstream.emit("message", jsonFrame(CHAT_RESPONSE, { content: "过时的回复。" }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(resumed.readyState).toBe(MockWebSocket.CLOSED);
+    await provider.close();
+  });
+
+  it("clamps an undersized configured reply deadline instead of closing immediately", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    vi.stubEnv("DOUBAO_REPLY_TIMEOUT_MS", "1");
+    stubWeatherFetch();
+    const { client } = makeClient();
+    const { provider, upstream } = await startLiveSession(client);
+    await provider.startAudio();
+    await riderTurn(upstream, "Max 你叫什么名字？");
+    await vi.advanceTimersByTimeAsync(999);
+    expect(upstream.readyState).toBe(MockWebSocket.OPEN);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(upstream.readyState).toBe(MockWebSocket.CLOSED);
     await provider.close();
   });
 });

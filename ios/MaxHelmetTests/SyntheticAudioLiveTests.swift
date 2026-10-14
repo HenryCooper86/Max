@@ -60,6 +60,31 @@ extension SyntheticAudioLiveTests {
         XCTAssertEqual(player.syntheticAudioQASnapshot.pendingBytes, 0)
     }
 
+    func testEarlierRiderASRDoesNotInterruptLaterPCMWhenMainQueueIsBusy() async throws {
+        let permission = AVAudioApplication.shared.recordPermission
+        let session = AgentSession()
+        try session.prepareSyntheticAudioQA()
+        defer {
+            session.finishSyntheticAudioQA()
+            XCTAssertEqual(AVAudioApplication.shared.recordPermission, permission)
+        }
+        let asr = #"{"type":"transcript","turnId":"11111111-1111-4111-8111-111111111111","deliveryId":"22222222-2222-4222-8222-222222222222","speaker":"rider","text":"Max你好","final":true}"#
+        session.deliverSyntheticAudioQAMessage(.string(asr))
+        session.deliverSyntheticAudioQAMessage(.data(Data(repeating: 0, count: 24_000)))
+        // Give a background renderer time to overtake the earlier queued ASR.
+        // The production dispatcher must preserve wire order during this load.
+        simulateBusyMainQueue()
+        try await pause(1)
+        XCTAssertEqual(session.state.transcript.first?.text, "Max你好")
+        let value = session.syntheticAudioQAPlayback
+        XCTAssertEqual(value.interruptedAudio, 0, "Earlier ASR must not cut audio that arrived later on the wire")
+        XCTAssertEqual(value.discardedBytes, 0)
+        XCTAssertEqual(value.scheduledBytes, 24_000)
+        XCTAssertEqual(value.playedBackBytes, 24_000)
+    }
+
+    private func simulateBusyMainQueue() { Thread.sleep(forTimeInterval: 0.05) }
+
     struct Connection: Decodable {
         let url: String; let token: String; let build: String
         let runId: String?; let campaignId: String?; let testerId: String?

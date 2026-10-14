@@ -151,6 +151,13 @@ final class AgentSession: NSObject, ObservableObject {
         return true
     }
 
+    /// Local ordering regression uses the identical transport dispatcher without
+    /// opening a relay or enabling microphone/location capture.
+    func deliverSyntheticAudioQAMessage(_ message: URLSessionWebSocketTask.Message) {
+        precondition(syntheticAudioQA)
+        dispatchReceivedMessage(message, accepts: { [weak self] in self?.syntheticAudioQA == true })
+    }
+
     /// Drops the actual live WebSocket; the production receive/delegate close
     /// callbacks must observe the outage and reconnect without test intervention.
     func dropSyntheticAudioQATransport() {
@@ -930,31 +937,9 @@ final class AgentSession: NSObject, ObservableObject {
             guard let self, self.isCurrentSocket(task) else { return }
             switch result {
             case .success(let message):
-                switch message {
-                case .string(let text):
-                    let event = parseAgentEvent(text)
-                    DispatchQueue.main.async { [weak self] in
-                        guard let self, task === self.webSocket else { return }
-                        if case .unhandled = event, !text.contains("\"type\"") {
-                            self.update { $0.statusText = "收到异常代理消息" }
-                        } else {
-                            #if DEBUG
-                            self.syntheticAudioQAEvent?(text)
-                            #endif
-                            self.handleEvent(event)
-                        }
-                    }
-                case .data(let data):
-                    #if DEBUG
-                    DispatchQueue.main.async { [weak self] in
-                        guard let self, self.syntheticAudioQA else { return }
-                        self.qaReceivedPCMBytes += data.count
-                    }
-                    #endif
-                    self.player.play(data)
-                @unknown default:
-                    break
-                }
+                self.dispatchReceivedMessage(message, accepts: { [weak self] in
+                    self?.isCurrentSocket(task) == true
+                })
                 self.receive(on: task)
             case .failure:
                 DispatchQueue.main.async { [weak self] in
@@ -962,6 +947,38 @@ final class AgentSession: NSObject, ObservableObject {
                     self.handleSocketClosed(task)
                 }
             }
+        }
+    }
+
+    private func dispatchReceivedMessage(_ message: URLSessionWebSocketTask.Message, accepts: @escaping () -> Bool) {
+        switch message {
+        case .string(let text):
+            let event = parseAgentEvent(text)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, accepts() else { return }
+                if case .unhandled = event, !text.contains("\"type\"") {
+                    self.update { $0.statusText = "收到异常代理消息" }
+                } else {
+                    #if DEBUG
+                    self.syntheticAudioQAEvent?(text)
+                    #endif
+                    self.handleEvent(event)
+                }
+            }
+        case .data(let data):
+            // Use the same serial main queue as preceding text events. Otherwise
+            // later PCM can play before an earlier queued rider ASR event runs,
+            // and that ASR event then cuts the agent's own new response.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, accepts() else { return }
+                #if DEBUG
+                if self.syntheticAudioQA { self.qaReceivedPCMBytes += data.count }
+                #endif
+                // Conversion/scheduling still runs on PcmPlayer's own queue.
+                self.player.play(data)
+            }
+        @unknown default:
+            break
         }
     }
 

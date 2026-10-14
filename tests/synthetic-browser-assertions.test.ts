@@ -5,6 +5,7 @@ import { IDLE_CLOSE_CODE } from "../shared/agent";
 import {
   assertBackgroundQuiet,
   findHazardInterruption,
+  findHazardWarningStart,
   assertFullPcmLifecycle,
   assertDisconnected,
   type Observation,
@@ -26,6 +27,27 @@ const hazard = observation("relay.event", {
   playbackBefore: { ...silent, active: 2, activeSourceIds: [1, 2] }
 });
 describe("synthetic browser behavior assertions", () => {
+  it("credits a hazard warning only when its exact utterance actually starts", () => {
+    const warning = {
+      ...hazard,
+      event: { type: "hazard.alert", interrupt: true, message: "Brake", advice: "Slow down" }
+    };
+    const events = [
+      warning,
+      observation("playback.stop", { sourceId: 1 }),
+      observation("playback.stop", { sourceId: 2 }),
+      observation("speech.request", { utteranceId: 9, text: "Brake Slow down" }),
+      observation("speech.start", { utteranceId: 9, text: "Brake Slow down" }, 1200)
+    ];
+    expect(findHazardWarningStart(events)).toEqual({ hazardAt: 1000, utteranceId: 9 });
+    expect(findHazardWarningStart(events.slice(0, -1))).toBeNull();
+    expect(
+      findHazardWarningStart([...events.slice(0, -1), observation("speech.start", { utteranceId: 10 })])
+    ).toBeNull();
+    expect(
+      findHazardWarningStart([warning, observation("relay.event", { event: { type: "status" } }), ...events.slice(1)])
+    ).toBeNull();
+  });
   it("simulates an unexpected outage instead of the terminal relay idle close", () => {
     let code: number | undefined;
     closeForSyntheticOutage({

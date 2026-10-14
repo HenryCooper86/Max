@@ -614,6 +614,8 @@ export function createDoubaoProvider(
   // final event (AsrEnded can repeat without new speech in between).
   let riderTurnFinalized = false;
   let asrTurnTimer: NodeJS.Timeout | undefined;
+  let replyTurnTimer: NodeJS.Timeout | undefined;
+  let replyProgressObserved = false;
   // True from AsrEnded (once a turn is decided addressed) until the reply is
   // fully resolved — TtsEnded's real-completion branch, or the TTS-fallback
   // timer taking over. Closes the gap isSpeechOpen (further below) would
@@ -745,6 +747,7 @@ export function createDoubaoProvider(
   const CONNECTION_TIMEOUT_MS = boundedEnvInt("DOUBAO_CONNECTION_TIMEOUT_MS", 8_000, 1_000, 30_000);
   const SESSION_TIMEOUT_MS = boundedEnvInt("DOUBAO_SESSION_TIMEOUT_MS", 10_000, 1_000, 30_000);
   const ASR_TURN_TIMEOUT_MS = boundedEnvInt("DOUBAO_ASR_TURN_TIMEOUT_MS", 30_000, 5_000, 60_000);
+  const REPLY_TIMEOUT_MS = boundedEnvInt("DOUBAO_REPLY_TIMEOUT_MS", 10_000, 1_000, 60_000);
   // A session that stayed up at least this long before dropping counts as
   // recovered and earns a fresh in-place reconnect budget.
   const UPSTREAM_STABILITY_RESET_MS = 60_000;
@@ -870,6 +873,42 @@ export function createDoubaoProvider(
       sessionReady = false;
       socket.close(1011, "doubao asr turn timeout");
     }, ASR_TURN_TIMEOUT_MS);
+  }
+
+  function clearReplyTurnTimer(): void {
+    if (replyTurnTimer) clearTimeout(replyTurnTimer);
+    replyTurnTimer = undefined;
+  }
+
+  function noteReplyProgress(): void {
+    replyProgressObserved = true;
+    clearReplyTurnTimer();
+  }
+
+  function armReplyTurnTimer(socket: WebSocket): void {
+    clearReplyTurnTimer();
+    // Chat/TTS can beat final ASR. Only guard a still-unanswered live turn;
+    // stopping capture must not reopen recovery on a late ASR completion.
+    if (!audioActive || replyProgressObserved || !awaitingReply) return;
+    const turnId = riderDelivery.turnId;
+    replyTurnTimer = setTimeout(() => {
+      replyTurnTimer = undefined;
+      if (
+        closedByProvider ||
+        upstream !== socket ||
+        riderDelivery.turnId !== turnId ||
+        !audioActive ||
+        !awaitingReply ||
+        replyProgressObserved ||
+        socket.readyState !== WebSocket.OPEN
+      )
+        return;
+      metrics.upstreamFailure();
+      log.warn("doubao reply timed out — reconnecting upstream", { timeoutMs: REPLY_TIMEOUT_MS, turnId });
+      sendClient({ type: "status", state: "connecting", detail: "豆包回复超时，正在自动恢复，请稍后重试。" });
+      sessionReady = false;
+      socket.close(1011, "doubao reply timeout");
+    }, REPLY_TIMEOUT_MS);
   }
 
   function sendUpstreamControl(event: EventSend, metadata: unknown = {}): boolean {
@@ -1680,6 +1719,8 @@ export function createDoubaoProvider(
         }
 
         if (frame.event === EventReceive.SessionStarted) {
+          clearReplyTurnTimer();
+          replyProgressObserved = false;
           if (sessionTimer) clearTimeout(sessionTimer);
           sessionTimer = undefined;
           const sessionPayload = parseJsonPayload(frame);
@@ -1711,6 +1752,7 @@ export function createDoubaoProvider(
 
         if (frame.event === EventReceive.TtsResponse) {
           if (fallbackSpoke) return;
+          if (frame.payload.length) noteReplyProgress();
           // ASR and TTS may overlap. Hold a short bounded prefix until the wake
           // decision is final; otherwise background speech can leak audible Max
           // output before the final ASR hypothesis proves it was unaddressed.
@@ -1765,6 +1807,8 @@ export function createDoubaoProvider(
           return;
         }
         if (frame.event === EventReceive.AsrInfo) {
+          clearReplyTurnTimer();
+          replyProgressObserved = false;
           cancelMaxSpeech();
           // A new rider utterance means the currently playing reply was
           // interrupted. Tell the provider how much was plausibly heard so its
@@ -1891,6 +1935,7 @@ export function createDoubaoProvider(
           if (!chatStartedAt) chatStartedAt = Date.now();
           const text = extractChatText(payload);
           if (text) {
+            if (text.trim()) noteReplyProgress();
             chatText += text;
             // Backstop for a reply whose TtsSentenceStart/End never arrives at
             // all (the same gap the TTS-fallback browser-speech path exists to
@@ -1918,6 +1963,7 @@ export function createDoubaoProvider(
           currentReplyId = stringField(payload, "reply_id") ?? stringField(payload, "item_id") ?? currentReplyId;
           const text = extractChatText(payload);
           if (text && text !== lastTtsSentence) {
+            if (text.trim()) noteReplyProgress();
             ttsText += text;
             lastTtsSentence = text;
             // Navigation truth may come only from the relay's own nav.*
@@ -2054,6 +2100,7 @@ export function createDoubaoProvider(
               awaitingReply = false;
               releaseOrdinarySpeechWaiters();
             }
+            armReplyTurnTimer(socket);
           } else {
             clearUndecidedTtsAudio();
             resetPendingReply();
@@ -2108,6 +2155,7 @@ export function createDoubaoProvider(
 
     socket.on("close", () => {
       if (upstream !== socket) return;
+      clearReplyTurnTimer();
       clearStateTimers();
       clearAsrTurnTimer();
       clearPendingAudioFlush();
@@ -2462,6 +2510,7 @@ export function createDoubaoProvider(
       galleryFrameAssembler.accept(event);
     },
     async stopAudio() {
+      clearReplyTurnTimer();
       audioActive = false;
       hazardInjector.stop();
       // Frames still waiting for the session to become ready belong to a mic
@@ -2475,6 +2524,7 @@ export function createDoubaoProvider(
       sendClient({ type: "status", state: "ready", detail: "麦克风已静音" });
     },
     async close() {
+      clearReplyTurnTimer();
       cancelMaxSpeech();
       closedByProvider = true;
       audioActive = false;

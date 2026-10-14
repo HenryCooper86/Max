@@ -53,7 +53,9 @@ import javax.net.ssl.X509TrustManager
  */
 class AgentSession(
     private val context: Context,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    /** Debug-only PCM capture factory for native synthetic integration tests. */
+    captureFactory: (((ByteArray) -> Unit, (Float) -> Unit, () -> Unit) -> PcmCapture)? = null
 ) : NavSpeaker {
 
     data class State(
@@ -138,6 +140,7 @@ class AgentSession(
         private const val MAX_MIC_QUEUE_BYTES = 256L * 1024L
     }
 
+    private val syntheticCapture = BuildConfig.DEBUG && captureFactory != null
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state.asStateFlow()
 
@@ -221,8 +224,10 @@ class AgentSession(
     private val deviceCommandIds = linkedSetOf<String>()
     private val deviceJobs = mutableSetOf<Job>()
     private val audioRouter = AudioRouter(context)
-    private val mic = MicStreamer(
-        onFrame = { frame ->
+    private val mic: PcmCapture = (captureFactory?.also {
+        require(BuildConfig.DEBUG) { "Injected capture is restricted to debug builds" }
+    } ?: { frame, level, error -> MicStreamer(frame, level, error) })(
+        { frame ->
             val socket = webSocket
             if (
                 transmitting && !micMuted && socketOpen &&
@@ -231,8 +236,8 @@ class AgentSession(
                 socket.send(frame.toByteString())
             }
         },
-        onLevel = { level -> _state.update { it.copy(voiceLevel = if (transmitting && !micMuted) level else 0f) } },
-        onError = {
+        { level -> _state.update { it.copy(voiceLevel = if (transmitting && !micMuted) level else 0f) } },
+        {
             // Capture died on its own (dead mic / unrecoverable read error).
             // Marshal off the capture thread and end hands-free — leaving the HUD
             // pulsing "listening" behind a mic that will never emit another frame
@@ -322,7 +327,7 @@ class AgentSession(
         }
 
         stopAfterIncident = false
-        crash.arm()
+        if (!syntheticCapture) crash.arm()
         intentionalClose = false
         reconnectAttempts = 0
         transmitting = true
@@ -349,7 +354,7 @@ class AgentSession(
             )
         }
         scope.launch {
-            val resolvedLocation = resolveLocation()
+            val resolvedLocation = if (syntheticCapture) null else resolveLocation()
             if (!lifecycle.accepts(generation)) return@launch
             val locationStarted = withContext(Dispatchers.Main.immediate) {
                 if (!lifecycle.accepts(generation)) return@withContext false
@@ -378,7 +383,7 @@ class AgentSession(
     /** Retry after returning from Settings or granting precise location. */
     fun refreshPhoneLocation(clearLocation: Boolean = true) {
         val generation = lifecycle.current() ?: return
-        if (!_state.value.handsFree) return
+        if (!_state.value.handsFree || syntheticCapture) return
         sessionLocation.stop()
         if (clearLocation) location = null
         if (clearLocation) lastLocationFixAt = Long.MIN_VALUE / 2
@@ -632,10 +637,19 @@ class AgentSession(
     }
 
     private fun nativeDeviceLabel(): String =
-        "Android ${Build.MANUFACTURER} ${Build.MODEL}"
+        "${if (BuildConfig.DEBUG && syntheticCapture) "Android emulator instrumentation synthetic audio" else "Android"} ${Build.MANUFACTURER} ${Build.MODEL}"
             .replace(Regex("\\s+"), " ")
             .trim()
             .take(120)
+
+    private fun nativeNetworkType(): String =
+        if (BuildConfig.DEBUG && syntheticCapture) {
+            when (testingTestCaseId) {
+                "wind-noise-robustness" -> "synthetic field wind"
+                "degraded-network-recovery" -> "synthetic degraded outage"
+                else -> "android-native synthetic"
+            }
+        } else "android-native"
 
     private fun nativeAppVersion(): String =
         runCatching {
@@ -713,7 +727,7 @@ class AgentSession(
                         gitCommit = BuildConfig.GIT_COMMIT,
                         deviceLabel = nativeDeviceLabel(),
                         browserLanguage = Locale.getDefault().toLanguageTag(),
-                        networkType = "android-native",
+                        networkType = nativeNetworkType(),
                         memory = current.sessionMemory
                     )
                 )
@@ -854,7 +868,7 @@ class AgentSession(
         when (event) {
             is AgentEvent.SessionStarted -> {
                 socketOpen = true
-                deviceScope.launch { if (sourceSocket === webSocket) crash.controller.ready() }
+                deviceScope.launch { if (sourceSocket === webSocket && !syntheticCapture) crash.controller.ready() }
                 _state.update {
                     it.copy(
                         provider = event.provider,
@@ -887,10 +901,10 @@ class AgentSession(
                 }
             }
 
-            is AgentEvent.CrashAck -> deviceScope.launch { if (sourceSocket === webSocket) crash.controller.ack(event.incidentId, event.status, event.detail) }
-            AgentEvent.CrashSimulate -> deviceScope.launch { if (sourceSocket === webSocket && BuildConfig.DEBUG) crash.controller.simulate() }
+            is AgentEvent.CrashAck -> deviceScope.launch { if (sourceSocket === webSocket && !syntheticCapture) crash.controller.ack(event.incidentId, event.status, event.detail) }
+            AgentEvent.CrashSimulate -> deviceScope.launch { if (sourceSocket === webSocket && BuildConfig.DEBUG && !syntheticCapture) crash.controller.simulate() }
             is AgentEvent.Transcript -> {
-                if (event.speaker == Speaker.RIDER && event.final) deviceScope.launch { if (sourceSocket === webSocket) { crash.controller.transcript(event.text); navController.handleConfirmationReply(event.text) } }
+                if (event.speaker == Speaker.RIDER && event.final) deviceScope.launch { if (sourceSocket === webSocket && !syntheticCapture) { crash.controller.transcript(event.text); navController.handleConfirmationReply(event.text) } }
                 // Barge-in: the rider talking always silences the agent.
                 if (event.speaker == Speaker.RIDER) {
                     stopAgentSpeech()
@@ -924,6 +938,10 @@ class AgentSession(
             is AgentEvent.ErrorEvent -> _state.update { it.copy(statusText = event.message) }
 
             is AgentEvent.DeviceCommand -> {
+                if (syntheticCapture) {
+                    sourceSocket.send(buildDeviceResult(event.commandId, "failed", "synthetic-disabled", "Device actions are disabled for synthetic QA"))
+                    return
+                }
                 val source = sourceSocket
                 val job = deviceScope.launch {
                     if (source !== webSocket || !state.value.handsFree || event.commandId.isBlank()) return@launch
@@ -1019,9 +1037,23 @@ class AgentSession(
      * A proactive ADAS alert: cut any in-progress agent speech so the warning is
      * heard immediately, surface the banner, speak it, then auto-clear it.
      */
+    data class SyntheticHazardPlayback(
+        val hazardGeneration: Int,
+        val before: PcmPlayer.PlaybackDiagnostics,
+        val after: PcmPlayer.PlaybackDiagnostics
+    )
+
+    @Volatile
+    var syntheticHazardPlayback: SyntheticHazardPlayback? = null
+        private set
+
     private fun handleHazardAlert(alert: AgentEvent.HazardAlert) {
+        val before = if (BuildConfig.DEBUG && syntheticCapture) player.playbackDiagnostics() else null
         if (alert.interrupt) stopAgentSpeech()
         hazardAlertGeneration += 1
+        if (before != null) {
+            syntheticHazardPlayback = SyntheticHazardPlayback(hazardAlertGeneration, before, player.playbackDiagnostics())
+        }
         val generation = hazardAlertGeneration
         _state.update {
             it.copy(hazardAlert = alert, turnState = TurnState.SPEAKING, statusText = "⚠️ ${alert.label}")

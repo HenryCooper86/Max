@@ -9,6 +9,12 @@ import android.media.audiofx.NoiseSuppressor
 import kotlin.concurrent.thread
 import kotlin.math.sqrt
 
+/** Capture lifecycle shared by AudioRecord and debug-only synthetic inputs. */
+interface PcmCapture {
+    fun start()
+    fun stop()
+}
+
 /**
  * Captures mic audio as 16 kHz PCM16 mono and emits 320-sample (20 ms) frames —
  * the Android counterpart of public/pcm-worklet.js. AudioRecord resamples for
@@ -24,7 +30,7 @@ class MicStreamer(
      * appearing to keep listening with a mic that will never emit another frame.
      */
     private val onError: () -> Unit
-) {
+) : PcmCapture {
     companion object {
         const val SAMPLE_RATE = 16_000
         const val FRAME_SAMPLES = 320 // 20 ms, matches the worklet frame size
@@ -47,7 +53,7 @@ class MicStreamer(
 
     /** Starts capture. The caller must already hold RECORD_AUDIO permission. */
     @SuppressLint("MissingPermission")
-    fun start() {
+    override fun start() {
         if (running) return
         val minBuffer = AudioRecord.getMinBufferSize(
             SAMPLE_RATE,
@@ -142,7 +148,7 @@ class MicStreamer(
         }
     }
 
-    fun stop() {
+    override fun stop() {
         if (!running && record == null) return
         running = false
         // stop() unblocks a capture thread waiting inside read().

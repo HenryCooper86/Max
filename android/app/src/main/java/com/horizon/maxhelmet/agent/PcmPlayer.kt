@@ -3,6 +3,8 @@ package com.horizon.maxhelmet.agent
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import com.horizon.maxhelmet.BuildConfig
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.LinkedBlockingQueue
 import kotlin.concurrent.thread
 import kotlin.math.abs
@@ -36,6 +38,39 @@ class PcmPlayer {
     }
 
     private val queue = LinkedBlockingQueue<ByteArray>()
+    private val totalQueuedSamples = AtomicLong()
+    private val generationQueuedSamples = AtomicLong()
+    private val generationWrittenSamples = AtomicLong()
+    private val completedPlayedSamples = AtomicLong()
+    private val totalDiscardedSamples = AtomicLong()
+    @Volatile private var lastFlushSucceeded = false
+
+    /** Debug-only observations of actual queued/written PCM, never an audio sink. */
+    data class PlaybackDiagnostics(
+        val totalQueuedSamples: Long,
+        val totalPlayedSamples: Long,
+        val totalDiscardedSamples: Long,
+        val queuedSamples: Long,
+        val writtenSamples: Long,
+        val playbackSamples: Long,
+        val generation: Int,
+        val pendingBuffers: Int,
+        val active: Boolean,
+        val running: Boolean,
+        val lastFlushSucceeded: Boolean
+    )
+
+    fun playbackDiagnostics(): PlaybackDiagnostics {
+        check(BuildConfig.DEBUG)
+        return PlaybackDiagnostics(
+            totalQueuedSamples.get(),
+            completedPlayedSamples.get() + minOf(generationQueuedSamples.get(), track?.playbackHeadPosition?.toLong()?.and(0xffffffffL) ?: 0),
+            totalDiscardedSamples.get(),
+            generationQueuedSamples.get(),
+            generationWrittenSamples.get(), track?.playbackHeadPosition?.toLong()?.and(0xffffffffL) ?: 0,
+            generation, queue.size, active, running, lastFlushSucceeded
+        )
+    }
     private var track: AudioTrack? = null
     private var feederThread: Thread? = null
 
@@ -109,6 +144,9 @@ class PcmPlayer {
                     val written = audioTrack.write(buffer, offset, buffer.size - offset)
                     if (written < 0) break
                     offset += written
+                    if (BuildConfig.DEBUG && startGeneration == generation) {
+                        generationWrittenSamples.addAndGet(written.toLong() / 2)
+                    }
                 }
             }
         }
@@ -132,6 +170,10 @@ class PcmPlayer {
         synchronized(this) {
             if (!active) return
             if (!running) start()
+            if (BuildConfig.DEBUG) {
+                totalQueuedSamples.addAndGet(buffer.size.toLong() / 2)
+                generationQueuedSamples.addAndGet(buffer.size.toLong() / 2)
+            }
             queue.put(buffer)
         }
     }
@@ -171,22 +213,39 @@ class PcmPlayer {
 
     /** Barge-in: drop queued audio and cut the current utterance immediately. */
     fun stopPlayback() {
+        if (BuildConfig.DEBUG) {
+            val queued = generationQueuedSamples.get()
+            val played = minOf(queued, track?.playbackHeadPosition?.toLong()?.and(0xffffffffL) ?: 0)
+            completedPlayedSamples.addAndGet(played)
+            totalDiscardedSamples.addAndGet(queued - played)
+        }
         generation += 1
+        generationQueuedSamples.set(0)
+        generationWrittenSamples.set(0)
         queue.clear()
-        track?.let {
+        val flushSucceeded = track?.let {
             runCatching {
                 it.pause()
                 it.flush()
                 it.play()
-            }
-        }
+            }.isSuccess
+        } ?: false
+        if (BuildConfig.DEBUG) lastFlushSucceeded = flushSucceeded
     }
 
     @Synchronized
     fun release() {
         active = false
         running = false
+        if (BuildConfig.DEBUG) {
+            val queued = generationQueuedSamples.get()
+            val played = minOf(queued, track?.playbackHeadPosition?.toLong()?.and(0xffffffffL) ?: 0)
+            completedPlayedSamples.addAndGet(played)
+            totalDiscardedSamples.addAndGet(queued - played)
+        }
         generation += 1
+        generationQueuedSamples.set(0)
+        generationWrittenSamples.set(0)
         queue.clear()
         feederThread?.interrupt()
         feederThread?.join(500)

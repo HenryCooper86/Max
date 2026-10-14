@@ -25,6 +25,9 @@ final class MicStreamer {
     /// Accumulates resampled PCM16 bytes until a full 320-sample frame is ready.
     private var pending = Data()
     private var running = false
+    #if DEBUG
+    var syntheticAudioQARunning: Bool { running }
+    #endif
     /// Observes AVAudioEngineConfigurationChange so a mid-session route change
     /// (a Bluetooth helmet connecting, AirPods dropping) reinstalls the tap for
     /// the new hardware format and restarts the engine if the change stopped it.

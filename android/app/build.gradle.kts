@@ -45,6 +45,7 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
+        testInstrumentationRunner = "com.horizon.maxhelmet.agent.SyntheticQaInstrumentation"
         buildConfigField("String", "GIT_COMMIT", "\"$horizonGitCommit\"")
         buildConfigField("String", "AMAP_ANDROID_KEY", "\"${amapAndroidKey.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
     }

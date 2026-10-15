@@ -381,7 +381,7 @@ describe("relay metrics", () => {
 
   it("does not report a cached note update when the durable write fails", () => {
     seedValidCompletedSession("note-write-failure", "baseline-live-session");
-    vi.spyOn(testingStore, "saveTestingSession").mockImplementation(() => {
+    vi.spyOn(testingStore, "updateStoredTestingSessionNotes").mockImplementation(() => {
       throw new Error("SQLite unavailable");
     });
 

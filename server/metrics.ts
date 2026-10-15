@@ -19,6 +19,7 @@ import {
   type TestingBuildSummary,
   type TestingEvaluationSummary,
   type TestingPlatform,
+  type TestingPolicy,
   type TestingQuality,
   type TestingRegressionCohort,
   type TestingRegressionFinding,
@@ -32,6 +33,7 @@ import {
 import { buildInfo } from "./build-info";
 import { redactContactNames } from "./device-actions";
 import { classifySessionEvidence, evaluateTestingSession } from "./testing-evaluator";
+import { BoundedTestingCache, unindexedTestingSessions as unindexedSessions } from "./testing-cache";
 import { createLogger } from "./logger";
 import {
   METRICS_WINDOW_MINUTES,
@@ -62,15 +64,73 @@ import {
   loadTestingSessions,
   loadTestingSessionsExcludingBuild,
   loadTestingSessionsForBuild,
-  replaceStoredTestingSessions,
+  recoverStoredTestingSessions,
   resetTestingStore,
   saveTestingSession,
   storedTestingSessionPage,
   testingOperationsSnapshot,
-  testingStorePersistent
+  testingStorePersistent,
+  testingStoreRevision,
+  updateStoredTestingSessionNotes,
+  TestingEvidenceReadError
 } from "./testing-store";
 
 const log = createLogger("testing-history");
+const normalizedRows = new BoundedTestingCache<TesterSessionSummary | null>(4_096, 16 * 1024 * 1024);
+const normalizedQueries = new BoundedTestingCache<TesterSessionSummary[]>(16, 16 * 1024 * 1024);
+let normalizedQueryRevision = "";
+let completedEvidenceRevision = 0;
+
+type DecisionRead = {
+  revision: string;
+  key: string;
+  policyKey: string;
+  policy: TestingPolicy;
+  approvedBaseline?: string;
+  rows: Map<string, TesterSessionSummary>;
+};
+
+function decisionRead(): DecisionRead {
+  try {
+    assertHistoryRecoveryComplete();
+    const revision = testingStoreRevision();
+    const policy = getActiveTestingPolicy();
+    const approvedBaseline = getApprovedBaselineBuild();
+    const policyKey = JSON.stringify(policy);
+    const key = JSON.stringify([revision, completedEvidenceRevision, policyKey, approvedBaseline, buildInfo.gitCommit]);
+    if (key !== normalizedQueryRevision) {
+      normalizedQueries.clear();
+      normalizedQueryRevision = key;
+    }
+    return { revision, key, policyKey, policy, approvedBaseline, rows: new Map() };
+  } catch (error) {
+    normalizedQueries.clear();
+    normalizedRows.clear();
+    normalizedQueryRevision = "";
+    throw error;
+  }
+}
+
+function completedQuery(kind: "build" | "previous", build: string, read: DecisionRead): TesterSessionSummary[] {
+  const key = JSON.stringify([read.key, kind, build]);
+  let rows = normalizedQueries.get(key);
+  if (!rows) {
+    const stored = kind === "build" ? loadTestingSessionsForBuild(build) : loadTestingSessionsExcludingBuild(build);
+    rows = stored.map((value) => {
+      const session = normalizeCompletedSession(value, read.policyKey);
+      if (!session) throw new TestingEvidenceReadError("Stored testing evidence cannot be normalized");
+      return session;
+    });
+    normalizedQueries.set(key, rows, JSON.stringify(rows).length * 2);
+  }
+  for (const row of rows) {
+    read.rows.set(row.sessionId, row);
+    // A repaired durable row is authoritative from now on, including a later
+    // external deletion. Failed initial indexing is not a permanent exemption.
+    unindexedSessions.delete(row.sessionId);
+  }
+  return rows;
+}
 
 let companionEventsAccepted = 0;
 let companionEventsRejected = 0;
@@ -119,7 +179,12 @@ export const metrics = {
     testers.clear();
     testingTimeline.clear();
     completedSessions.length = 0;
+    unindexedSessions.clear();
+    completedEvidenceRevision += 1;
+    normalizedQueries.clear();
+    normalizedRows.clear();
     testingHistoryLoaded = false;
+    historyRecoveryPending = false;
     resetTestingStore();
     companionEventsAccepted = 0;
     companionEventsRejected = 0;
@@ -249,6 +314,11 @@ const testingSessions = new Map<string, ActiveTestingSession>();
 const testingTimeline = new Map<number, MutableTestingBucket>();
 const completedSessions: TesterSessionSummary[] = [];
 let testingHistoryLoaded = false;
+let historyRecoveryPending = false;
+
+function assertHistoryRecoveryComplete() {
+  if (historyRecoveryPending) throw new Error("Testing history recovery indexing is incomplete");
+}
 
 function readBoundedInt(raw: string | undefined, fallback: number, min: number, max: number): number {
   const trimmed = raw?.trim();
@@ -553,17 +623,17 @@ function pooledLatencyP95(sessions: TesterSessionSummary[]): number {
   return percentile(pooled, 95);
 }
 
-function completedSessionsForBuild(build: string): TesterSessionSummary[] {
+function completedSessionsForBuild(build: string, read?: DecisionRead): TesterSessionSummary[] {
   const cached = completedSessions.filter((session) => testingBuildsMatch(session.gitCommit, build));
   try {
-    const durable = loadTestingSessionsForBuild(build)
-      .map(normalizeCompletedSession)
-      .filter((session): session is TesterSessionSummary => Boolean(session));
+    const durable = completedQuery("build", build, read ?? decisionRead());
     const durableIds = new Set(durable.map((session) => session.sessionId));
-    return [...durable, ...cached.filter((session) => !durableIds.has(session.sessionId))].sort(
-      (left, right) => right.endedAt - left.endedAt
-    );
-  } catch {
+    return [
+      ...durable,
+      ...cached.filter((session) => unindexedSessions.has(session.sessionId) && !durableIds.has(session.sessionId))
+    ].sort((left, right) => right.endedAt - left.endedAt);
+  } catch (error) {
+    if (read) throw error;
     return cached;
   }
 }
@@ -633,9 +703,9 @@ function regressionCohortKey(session: TesterSessionSummary): string {
 
 function buildReleaseGate(
   now: number,
-  sessions: TesterSessionSummary[] = completedSessionsForBuild(buildInfo.gitCommit)
+  sessions: TesterSessionSummary[] = completedSessionsForBuild(buildInfo.gitCommit),
+  policy = activeTestingPolicy()
 ): TestingReleaseGate {
-  const policy = activeTestingPolicy();
   const criteria = {
     minValidSessionsPerRequiredCase: policy.release.minStandardSessions,
     maxFailSessions: policy.release.maxFailSessions,
@@ -792,36 +862,40 @@ function regressionStatus(findings: TestingRegressionFinding[]): TestingRegressi
 }
 
 function buildRegressionSummary(
-  currentBuildSessions: TesterSessionSummary[] = completedSessionsForBuild(buildInfo.gitCommit)
+  currentBuildSessions: TesterSessionSummary[] = completedSessionsForBuild(buildInfo.gitCommit),
+  read?: DecisionRead
 ): TestingRegressionSummary {
-  const policy = activeTestingPolicy();
+  const policy = read?.policy ?? activeTestingPolicy();
   const currentBuild = buildInfo.gitCommit;
   const current = summarizeBuild(currentBuild, currentBuildSessions);
-  let approvedBaseline: string | undefined;
+  let approvedBaseline = read?.approvedBaseline;
   try {
-    approvedBaseline = getApprovedBaselineBuild();
-  } catch {
+    if (!read) approvedBaseline = getApprovedBaselineBuild();
+  } catch (error) {
+    if (read) throw error;
     // Fall back to the latest valid build when the operations index is down.
   }
   const approvedBaselineSessions = approvedBaseline
     ? testingBuildsMatch(approvedBaseline, currentBuild)
       ? currentBuildSessions
-      : completedSessionsForBuild(approvedBaseline)
+      : completedSessionsForBuild(approvedBaseline, read)
     : [];
   const approvedBaselineUsable = approvedBaselineSessions.some(isDecisionGradeEvidence);
   let previousBuildSessions: TesterSessionSummary[];
   try {
-    const durable = loadTestingSessionsExcludingBuild(currentBuild)
-      .map(normalizeCompletedSession)
-      .filter((session): session is TesterSessionSummary => Boolean(session));
+    const durable = completedQuery("previous", currentBuild, read ?? decisionRead());
     const durableIds = new Set(durable.map((session) => session.sessionId));
     previousBuildSessions = [
       ...durable,
       ...completedSessions.filter(
-        (session) => !testingBuildsMatch(session.gitCommit, currentBuild) && !durableIds.has(session.sessionId)
+        (session) =>
+          unindexedSessions.has(session.sessionId) &&
+          !testingBuildsMatch(session.gitCommit, currentBuild) &&
+          !durableIds.has(session.sessionId)
       )
     ];
-  } catch {
+  } catch (error) {
+    if (read) throw error;
     previousBuildSessions = completedSessions.filter((session) => !testingBuildsMatch(session.gitCommit, currentBuild));
   }
   const latestValidBaseline = previousBuildSessions
@@ -839,7 +913,7 @@ function buildRegressionSummary(
   const baselineSessions = baselineBuild
     ? baselineBuild === approvedBaseline
       ? approvedBaselineSessions
-      : completedSessionsForBuild(baselineBuild)
+      : completedSessionsForBuild(baselineBuild, read)
     : [];
   const baseline = baselineBuild ? summarizeBuild(baselineBuild, baselineSessions) : undefined;
   const findings: TestingRegressionFinding[] = [];
@@ -1084,7 +1158,16 @@ function normalizeTranscriptTurn(value: unknown): TesterTranscriptTurn | null {
   return turn;
 }
 
-function normalizeCompletedSession(value: unknown): TesterSessionSummary | null {
+function normalizeCompletedSession(value: unknown, policyKey?: string): TesterSessionSummary | null {
+  const key = JSON.stringify([buildInfo.gitCommit, policyKey ?? JSON.stringify(activeTestingPolicy()), value]);
+  const cached = normalizedRows.get(key);
+  if (cached !== undefined) return cached;
+  const session = deriveCompletedSession(value);
+  normalizedRows.set(key, session, JSON.stringify(session).length * 2);
+  return session;
+}
+
+function deriveCompletedSession(value: unknown): TesterSessionSummary | null {
   if (!isRecord(value)) return null;
   const sessionId = typeof value.sessionId === "string" ? cleanText(value.sessionId).slice(0, 120) : "";
   const ipAddress = normalizeIpAddress(value.ipAddress);
@@ -1280,10 +1363,35 @@ function trimCompletedSessions() {
   if (completedSessions.length > MAX_COMPLETED_SESSIONS) {
     completedSessions.length = MAX_COMPLETED_SESSIONS;
   }
+  const retained = new Set(completedSessions.map((session) => session.sessionId));
+  for (const id of unindexedSessions) if (!retained.has(id)) unindexedSessions.delete(id);
 }
 
 function ensureTestingHistoryLoaded() {
-  if (testingHistoryLoaded) return;
+  if (testingHistoryLoaded) {
+    if (historyRecoveryPending && TESTING_HISTORY_PATH) {
+      try {
+        const recovered = fs
+          .readFileSync(TESTING_HISTORY_PATH, "utf8")
+          .split("\n")
+          .filter((line) => line.trim())
+          .flatMap((line) => {
+            try {
+              const session = normalizeCompletedSession(JSON.parse(line));
+              return session ? [session] : [];
+            } catch {
+              return [];
+            }
+          });
+        recoverStoredTestingSessions(recovered);
+        historyRecoveryPending = false;
+      } catch {
+        // Leave decisions noncertifying, and retry without restoring tester
+        // aggregates twice or overwriting a concurrently indexed capture.
+      }
+    }
+    return;
+  }
   testingHistoryLoaded = true;
   try {
     const stored = loadTestingSessions(MAX_COMPLETED_SESSIONS);
@@ -1328,7 +1436,9 @@ function ensureTestingHistoryLoaded() {
     trimInactiveTesters();
     // One-time migration: preserve JSONL as the append-oriented archive while
     // indexing the normalized evidence in SQLite for scoped/paginated reads.
-    replaceStoredTestingSessions(migratedSessions);
+    historyRecoveryPending = true;
+    recoverStoredTestingSessions(migratedSessions);
+    historyRecoveryPending = false;
     compactTestingHistory(lines);
   } catch {
     // History is best-effort. Missing or unreadable files must not break /health.
@@ -1361,7 +1471,11 @@ let persistQueue: Promise<void> = Promise.resolve();
 function persistCompletedSession(session: TesterSessionSummary) {
   try {
     saveTestingSession(session);
+    unindexedSessions.delete(session.sessionId);
   } catch (error) {
+    if (completedSessions.some((cached) => cached.sessionId === session.sessionId)) {
+      unindexedSessions.add(session.sessionId);
+    }
     // JSONL remains the recovery archive if the database index is unavailable.
     log.error("failed to index completed testing session", {
       sessionId: session.sessionId,
@@ -1454,8 +1568,12 @@ export function clearTesterData(testerKey: string): TestingClearResult {
   }
   const before = completedSessions.length;
   for (let index = completedSessions.length - 1; index >= 0; index -= 1) {
-    if (completedSessions[index]?.testerKey === testerKey) completedSessions.splice(index, 1);
+    if (completedSessions[index]?.testerKey === testerKey) {
+      unindexedSessions.delete(completedSessions[index]!.sessionId);
+      completedSessions.splice(index, 1);
+    }
   }
+  completedEvidenceRevision += 1;
   const removedCachedSessions = before - completedSessions.length;
   const removedSessions = removedActiveSessions + Math.max(removedCachedSessions, removedStoredSessions);
   if (removedTesters || removedSessions) {
@@ -1480,6 +1598,8 @@ export function clearTestingSession(sessionId: string): TestingClearResult {
   const removedStored = deleteStoredTestingSession(sessionId);
   const index = completedSessions.findIndex((session) => session.sessionId === sessionId);
   if (index >= 0) completedSessions.splice(index, 1);
+  unindexedSessions.delete(sessionId);
+  completedEvidenceRevision += 1;
   if (index < 0 && !removedStored) return { removedTesters: 0, removedSessions: 0 };
   filterTestingHistory((value) => !value || value.sessionId !== sessionId);
   return { removedTesters: 0, removedSessions: 1 };
@@ -1497,6 +1617,8 @@ export function clearAllTesterData(): TestingClearResult {
   testers.clear();
   testingSessions.clear();
   completedSessions.length = 0;
+  unindexedSessions.clear();
+  completedEvidenceRevision += 1;
   testingTimeline.clear();
   filterTestingHistory(() => false);
   return { removedTesters, removedSessions };
@@ -1507,6 +1629,7 @@ function rememberCompletedSession(session: TesterSessionSummary) {
   completedSessions.unshift(session);
   trimCompletedSessions();
   persistCompletedSession(session);
+  completedEvidenceRevision += 1;
 }
 
 function testerSnapshot(tester: MutableTesterStats): TesterStats {
@@ -1754,24 +1877,14 @@ type TestingSnapshotOptions = {
 };
 
 function clonedSession(session: TesterSessionSummary, includeTurns: boolean): TesterSessionSummary {
-  return {
-    ...session,
-    validity: { ...session.validity, reasons: [...session.validity.reasons] },
-    capturedValidity: { ...session.capturedValidity, reasons: [...session.capturedValidity.reasons] },
-    evaluation: { ...session.evaluation, checks: session.evaluation.checks.map((check) => ({ ...check })) },
-    capturedEvaluation: {
-      ...session.capturedEvaluation,
-      checks: session.capturedEvaluation.checks.map((check) => ({ ...check }))
-    },
-    audioQuality: { ...session.audioQuality },
-    flags: [...session.flags],
-    turns: includeTurns ? session.turns.map((turn) => ({ ...turn })) : []
-  };
+  return structuredClone({ ...session, turns: includeTurns ? session.turns : [] });
 }
 
 export function testingSnapshot(now = Date.now(), options: TestingSnapshotOptions = {}): TestingStats {
   ensureTestingHistoryLoaded();
-  const currentBuildSessions = completedSessionsForBuild(buildInfo.gitCommit);
+  const read = decisionRead();
+  const currentBuildSessions = completedSessionsForBuild(buildInfo.gitCommit, read);
+  const regression = buildRegressionSummary(currentBuildSessions, read);
   const scopedTesterId = options.testerId ? normalizeTesterId(options.testerId) : undefined;
   const users = [...testers.values()]
     .filter((tester) => !scopedTesterId || tester.testerId === scopedTesterId)
@@ -1781,14 +1894,19 @@ export function testingSnapshot(now = Date.now(), options: TestingSnapshotOption
       if (b.lastSeenAt !== a.lastSeenAt) return b.lastSeenAt - a.lastSeenAt;
       return b.totalSessions - a.totalSessions;
     });
-  const scopedSessions = completedSessions.filter((session) => !scopedTesterId || session.testerId === scopedTesterId);
+  const scopedSessions = completedSessions
+    .map((session) => read.rows.get(session.sessionId) ?? (unindexedSessions.has(session.sessionId) ? session : null))
+    .filter(
+      (session): session is TesterSessionSummary =>
+        Boolean(session) && (!scopedTesterId || session!.testerId === scopedTesterId)
+    );
   const latency = users.flatMap((user) => {
     const tester = testers.get(user.testerKey);
     return tester?.latencyMs ?? [];
   });
   const validCompletedSessions = scopedSessions.filter(isDecisionGradeEvidence).length;
   const invalidCompletedSessions = scopedSessions.length - validCompletedSessions;
-  return {
+  const result: TestingStats = {
     windowMinutes: TESTING_WINDOW_MINUTES,
     catalog: testingCatalog(),
     history: {
@@ -1810,8 +1928,8 @@ export function testingSnapshot(now = Date.now(), options: TestingSnapshotOption
       validTestSessions: validCompletedSessions,
       invalidTestSessions: invalidCompletedSessions
     },
-    releaseGate: buildReleaseGate(now, currentBuildSessions),
-    regression: buildRegressionSummary(currentBuildSessions),
+    releaseGate: buildReleaseGate(now, currentBuildSessions, read.policy),
+    regression,
     users,
     sessions:
       options.includeSessions === false
@@ -1820,6 +1938,11 @@ export function testingSnapshot(now = Date.now(), options: TestingSnapshotOption
     timeline: timelineSnapshot(now),
     ...(options.includeOperations ? { operations: testingOperationsSnapshot() } : {})
   };
+  if (testingStoreRevision() !== read.revision) {
+    normalizedQueries.clear();
+    throw new Error("Testing evidence changed during decision; retry with current storage");
+  }
+  return result;
 }
 
 function decodeCursor(cursor: string | undefined): { endedAt: number; sessionId: string } | null {
@@ -1842,6 +1965,7 @@ export function testingSessionPage(
   requesterTesterId?: string
 ): TestingSessionPage<TesterSessionSummary> {
   ensureTestingHistoryLoaded();
+  assertHistoryRecoveryComplete();
   const allowedTesterId = requesterTesterId ? normalizeTesterId(requesterTesterId) : undefined;
 
   // SQLite is the durable evidence index and can contain substantially more
@@ -1852,11 +1976,15 @@ export function testingSessionPage(
     return {
       ...storedPage,
       items: storedPage.items
-        .map(normalizeCompletedSession)
-        .filter((session): session is TesterSessionSummary => Boolean(session))
+        .map((value) => {
+          const session = normalizeCompletedSession(value);
+          if (!session) throw new TestingEvidenceReadError("Stored testing evidence cannot be normalized");
+          return session;
+        })
         .map((session) => clonedSession(session, false))
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof TestingEvidenceReadError) throw error;
     // Keep the live, bounded cache usable if the durable index is unavailable.
   }
 
@@ -1907,11 +2035,15 @@ export function testingSessionPage(
 
 export function testingSessionDetail(sessionId: string, requesterTesterId?: string): TesterSessionSummary | null {
   ensureTestingHistoryLoaded();
+  assertHistoryRecoveryComplete();
   let session: TesterSessionSummary | null | undefined;
   try {
     const stored = loadStoredTestingSession(sessionId);
     session = stored ? normalizeCompletedSession(stored) : null;
-  } catch {
+    if (stored && !session) throw new TestingEvidenceReadError("Stored testing evidence cannot be normalized");
+    if (!session && !unindexedSessions.has(sessionId)) return null;
+  } catch (error) {
+    if (error instanceof TestingEvidenceReadError) throw error;
     // Fall back to the live cache below.
   }
   session ??= completedSessions.find((item) => item.sessionId === sessionId);
@@ -1922,21 +2054,19 @@ export function testingSessionDetail(sessionId: string, requesterTesterId?: stri
 
 export function updateTestingSessionNotes(sessionId: string, notes: unknown): TesterSessionSummary | null {
   ensureTestingHistoryLoaded();
+  assertHistoryRecoveryComplete();
   const cachedSession = completedSessions.find((item) => item.sessionId === sessionId);
-  let session = cachedSession;
-  if (!session) {
-    try {
-      const stored = loadStoredTestingSession(sessionId);
-      session = stored ? (normalizeCompletedSession(stored) ?? undefined) : undefined;
-    } catch {
-      // The cache fallback below still permits notes on recent evidence.
-    }
+  const stored = updateStoredTestingSessionNotes(
+    sessionId,
+    typeof notes === "string" ? cleanText(notes).slice(0, 1_000) : "",
+    unindexedSessions.has(sessionId) ? cachedSession : undefined
+  );
+  if (!stored) return null;
+  const updated = normalizeCompletedSession(stored);
+  if (!updated) throw new Error("Stored testing evidence cannot be normalized after notes update");
+  if (cachedSession) {
+    completedSessions[completedSessions.indexOf(cachedSession)] = updated;
+    completedEvidenceRevision += 1;
   }
-  if (!session) return null;
-  const updated = { ...session, notes: typeof notes === "string" ? cleanText(notes).slice(0, 1_000) : "" };
-  // A failed durable write is distinct from an unknown session. Let it reach
-  // the typed endpoint as a 500 rather than claiming the cached note saved.
-  saveTestingSession(updated);
-  if (cachedSession) cachedSession.notes = updated.notes;
   return clonedSession(updated, true);
 }

@@ -25,6 +25,7 @@ import {
 import { DEFAULT_TESTING_POLICY, TESTING_TEST_CASES, type TestingPlatform } from "../shared/testing";
 import { createTestingPolicy, getActiveTestingPolicy } from "../server/testing-store";
 import * as testingStore from "../server/testing-store";
+import { reevaluateStoredSession } from "../server/testing-evaluator";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -35,7 +36,7 @@ function seedValidCompletedSession(
   sessionId: string,
   testCaseId: string,
   gitCommit = buildInfo.gitCommit,
-  p95LatencyMs = 180,
+  p95LatencyMs: number | number[] = 180,
   platform: TestingPlatform = "web"
 ) {
   const agentText: Record<string, string> = {
@@ -68,7 +69,9 @@ function seedValidCompletedSession(
     recordTesterClientAudio(sessionId, 320, 1_100);
     recordTesterServerEvent(sessionId, { type: "transcript", speaker: "rider", text: "Max, run the test." }, 64, 1_150);
   }
-  recordTesterServerEvent(sessionId, { type: "metric", latencyMs: p95LatencyMs }, 32, 1_200);
+  (Array.isArray(p95LatencyMs) ? p95LatencyMs : [p95LatencyMs]).forEach((latencyMs, index) =>
+    recordTesterServerEvent(sessionId, { type: "metric", latencyMs }, 32, 1_200 + index)
+  );
   recordTesterServerEvent(
     sessionId,
     { type: "transcript", speaker: "agent", text: agentText[testCaseId] ?? agentText["baseline-live-session"] },
@@ -465,7 +468,7 @@ describe("relay metrics", () => {
     expect(snapshot.releaseGate.validSessions).toBe(0);
   });
 
-  it("passes the release gate when every required case has valid current-build evidence", () => {
+  it("requires full latency distributions for otherwise complete release coverage", () => {
     let expectedSessions = 0;
     for (const testCase of TESTING_TEST_CASES) {
       const required = Math.max(
@@ -495,6 +498,20 @@ describe("relay metrics", () => {
     expect(gate.invalidSessions).toBe(0);
     expect(gate.blockers).toEqual([]);
     expect(gate.cases.every((testCase) => testCase.status === "pass")).toBe(true);
+
+    const original = testingStore.loadTestingSessionsForBuild(buildInfo.gitCommit)[0]!;
+    const partial = {
+      ...original,
+      latencySamples: 220,
+      latencyMsSamples: Array<number>(200).fill(180),
+      evidenceHash: ""
+    };
+    partial.evidenceHash = testingStore.evidenceHash(partial);
+    testingStore.saveTestingSession(partial);
+    const incomplete = testingSnapshot(5_000).releaseGate;
+    expect(incomplete.validSessions).toBe(expectedSessions);
+    expect(incomplete.status).toBe("watch");
+    expect(incomplete.warnings).toContainEqual(expect.stringContaining("partial raw latency"));
   });
 
   it("reports missing platform coverage without claiming existing valid evidence is invalid", () => {
@@ -566,6 +583,181 @@ describe("relay metrics", () => {
     expect(regression.findings).toContainEqual(
       expect.objectContaining({ id: expect.stringContaining("cohort-baseline-live-session"), status: "fail" })
     );
+  });
+
+  it("counts an actually measured zero in live capture and stored reevaluation", () => {
+    seedValidCompletedSession("measured-zero", "baseline-live-session", buildInfo.gitCommit, 0);
+    const session = testingSnapshot(5_000).sessions.find((item) => item.sessionId === "measured-zero")!;
+    expect(session).toMatchObject({ latencySamples: 1, latencyMsSamples: [0], p95LatencyMs: 0, quality: "pass" });
+    const captured = { ...session, quality: "watch" as const };
+    expect(reevaluateStoredSession(captured).quality).toBe("pass");
+    expect(captured.quality).toBe("watch");
+    const missing = { ...captured, latencySamples: 0, latencyMsSamples: undefined };
+    expect(reevaluateStoredSession(missing).quality).toBe("watch");
+  });
+
+  it("restores a tester's measured zero latency when loading unchanged durable evidence", () => {
+    seedValidCompletedSession("reloaded-zero", "baseline-live-session", buildInfo.gitCommit, 0);
+    expect(testingSnapshot(5_000).users[0]).toMatchObject({ latencySamples: 1, avgLatencyMs: 0 });
+    const original = testingStore.loadTestingSessionsForBuild(buildInfo.gitCommit)[0]!;
+
+    metrics.reset();
+    testingStore.saveTestingSession(original);
+
+    const reloaded = testingSnapshot(5_000);
+    expect(reloaded.users[0]).toMatchObject({ latencySamples: 1, avgLatencyMs: 0, p95LatencyMs: 0 });
+    expect(reloaded.sessions[0]).toMatchObject({ latencySamples: 1, latencyMsSamples: [0], quality: "pass" });
+    expect(testingStore.loadTestingSessionsForBuild(buildInfo.gitCommit)[0]!.evidenceHash).toBe(original.evidenceHash);
+  });
+
+  it.each([
+    { label: "pure measured zero", metric: { latencyMs: 0 }, samples: [0], quality: "pass" },
+    { label: "outgoing frames placeholder", metric: { latencyMs: 0, outgoingFps: 50 }, samples: [], quality: "watch" },
+    { label: "dropped frames placeholder", metric: { latencyMs: 0, droppedFrames: 1 }, samples: [], quality: "watch" },
+    {
+      label: "positive latency alongside frame telemetry",
+      metric: { latencyMs: 120, outgoingFps: 50, droppedFrames: 1 },
+      samples: [120],
+      quality: "pass"
+    }
+  ])("counts latency correctly for $label", ({ metric, samples, quality }) => {
+    const id = "metric-shape";
+    beginTesterSession(id, { testerId: "metric-shape", testingTestCaseId: "baseline-live-session" }, 1_000);
+    recordTesterClientAudio(id, 320, 1_100);
+    recordTesterServerEvent(id, { type: "transcript", speaker: "rider", text: "Max, route status?" }, 64, 1_150);
+    recordTesterServerEvent(id, { type: "metric", ...metric }, 32, 1_200);
+    recordTesterServerEvent(
+      id,
+      { type: "transcript", speaker: "agent", text: "Route clear. Keep your eyes on the road and ride safely." },
+      96,
+      1_300
+    );
+    endTesterSession(id, 4_000);
+
+    const snapshot = testingSnapshot(5_000);
+    expect(snapshot.sessions[0]).toMatchObject({ latencySamples: samples.length, latencyMsSamples: samples, quality });
+    expect(snapshot.users[0].latencySamples).toBe(samples.length);
+    expect(snapshot.timeline.reduce((count, bucket) => count + bucket.latencySamples, 0)).toBe(samples.length);
+  });
+
+  it("retains legitimate zero samples when pooling the actual latency distribution", () => {
+    seedValidCompletedSession("pooled-zero", "baseline-live-session", buildInfo.gitCommit, [
+      ...Array<number>(95).fill(0),
+      ...Array<number>(5).fill(500)
+    ]);
+    const snapshot = testingSnapshot(5_000);
+    expect(snapshot.releaseGate.p95LatencyMs).toBe(0);
+    expect(snapshot.regression.current.p95LatencyMs).toBe(0);
+    expect(snapshot.sessions.find((item) => item.sessionId === "pooled-zero")).toMatchObject({
+      latencySamples: 100,
+      p95LatencyMs: 0,
+      quality: "pass"
+    });
+  });
+
+  it("persists and reloads the full latency distribution beyond 200 samples", () => {
+    const samples = [...Array<number>(20).fill(500), ...Array<number>(200).fill(100)];
+    seedValidCompletedSession("long-latency", "baseline-live-session", buildInfo.gitCommit, samples);
+    const stored = testingStore.loadTestingSessionsForBuild(buildInfo.gitCommit)[0]!;
+    expect(stored.latencySamples).toBe(220);
+    expect(stored.latencyMsSamples).toEqual(samples);
+    const snapshot = testingSnapshot(5_000);
+    expect(snapshot.releaseGate.p95LatencyMs).toBe(500);
+    expect(snapshot.regression.current.p95LatencyMs).toBe(500);
+    expect(snapshot.sessions.find((session) => session.sessionId === "long-latency")).toMatchObject({
+      p95LatencyMs: 500,
+      latencyMsSamples: samples,
+      evidenceIntegrity: "verified"
+    });
+    expect(testingStore.loadTestingSessionsForBuild(buildInfo.gitCommit)[0]!.evidenceHash).toBe(stored.evidenceHash);
+  });
+
+  it("pools a full latency distribution beyond the JavaScript argument limit without losing its slow tail", () => {
+    const samples = [...Array<number>(7_800).fill(500), ...Array<number>(122_200).fill(100)];
+    seedValidCompletedSession("argument-limit-latency", "baseline-live-session", buildInfo.gitCommit, samples);
+
+    const snapshot = testingSnapshot(5_000);
+    expect(snapshot.releaseGate.p95LatencyMs).toBe(500);
+    expect(snapshot.regression.current.p95LatencyMs).toBe(500);
+    expect(snapshot.sessions.find((session) => session.sessionId === "argument-limit-latency")).toMatchObject({
+      latencySamples: 130_000,
+      latencyMsSamples: samples,
+      p95LatencyMs: 500,
+      evidenceIntegrity: "verified"
+    });
+  });
+
+  it.each(["current", "baseline"])("does not certify pooled regression from known partial %s raw samples", (side) => {
+    seedValidCompletedSession("partial-prev-1", "baseline-live-session", "previous-build", 100);
+    seedValidCompletedSession("partial-prev-2", "baseline-live-session", "previous-build", 100);
+    seedValidCompletedSession("partial-current-1", "baseline-live-session", buildInfo.gitCommit, 100);
+    seedValidCompletedSession("partial-current-2", "baseline-live-session", buildInfo.gitCommit, 100);
+    const id = side === "current" ? "partial-current-1" : "partial-prev-1";
+    const original = testingStore.loadTestingSessions(20).find((session) => session.sessionId === id)!;
+    const partial = {
+      ...original,
+      p95LatencyMs: 500,
+      latencySamples: 220,
+      latencyMsSamples: Array<number>(200).fill(100),
+      evidenceHash: ""
+    };
+    partial.evidenceHash = testingStore.evidenceHash(partial);
+    testingStore.saveTestingSession(partial);
+    const regression = testingSnapshot(5_000).regression;
+    expect(regression.cohorts[0]!.status).toBe("insufficient");
+    expect(regression.status).toBe("insufficient");
+    expect(regression.findings).toContainEqual(
+      expect.objectContaining({ status: "watch", detail: expect.stringContaining("partial raw latency") })
+    );
+    const retained = testingStore.loadTestingSessions(20).find((session) => session.sessionId === id)!;
+    expect(retained.evidenceHash).toBe(partial.evidenceHash);
+    expect(retained.p95LatencyMs).toBe(500);
+    expect(retained.latencyMsSamples).toHaveLength(200);
+  });
+
+  it("keeps the existing legacy p95 fallback when no raw distribution was captured", () => {
+    for (const build of ["previous-build", buildInfo.gitCommit]) {
+      for (let index = 0; index < 2; index++) {
+        const id = `${build}-${index}`;
+        seedValidCompletedSession(id, "baseline-live-session", build, 100);
+        const original = testingStore.loadTestingSessionsForBuild(build).find((session) => session.sessionId === id)!;
+        const legacy = { ...original, latencyMsSamples: undefined, evidenceHash: "" };
+        legacy.evidenceHash = testingStore.evidenceHash(legacy);
+        testingStore.saveTestingSession(legacy);
+      }
+    }
+    const regression = testingSnapshot(5_000).regression;
+    expect(regression.status).toBe("pass");
+    expect(regression.cohorts[0]).toMatchObject({
+      currentP95LatencyMs: 100,
+      baselineP95LatencyMs: 100,
+      status: "pass"
+    });
+  });
+
+  it("preserves the captured positive Android wake and wind regression failures", () => {
+    const evidence = [
+      { id: "wake-word-addressed-only", baseline: [31, 3], current: [338, 1], delta: 307 },
+      { id: "wind-noise-robustness", baseline: [103, 221], current: [117, 509], delta: 288 }
+    ];
+    for (const item of evidence) {
+      item.baseline.forEach((sample, index) =>
+        seedValidCompletedSession(`${item.id}-old-${index}`, item.id, "previous-build", sample, "android")
+      );
+      item.current.forEach((sample, index) =>
+        seedValidCompletedSession(`${item.id}-new-${index}`, item.id, buildInfo.gitCommit, sample, "android")
+      );
+    }
+    const regression = testingSnapshot(5_000).regression;
+    expect(regression.status).toBe("fail");
+    for (const item of evidence) {
+      expect(regression.cohorts.find((cohort) => cohort.testCaseId === item.id)).toMatchObject({
+        status: "fail",
+        currentSessions: 2,
+        baselineSessions: 2,
+        latencyDeltaMs: item.delta
+      });
+    }
   });
 
   it("pools raw latency samples for the build p95 instead of collapsing to the worst session", () => {

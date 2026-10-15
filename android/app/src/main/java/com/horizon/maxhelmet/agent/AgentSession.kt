@@ -205,6 +205,29 @@ class AgentSession(
     private var persistedTranscriptSignature: Pair<Int, Int>? = null
 
     private val player = PcmPlayer()
+
+    /** Opt-in observations for synthetic diagnostics; no payload text or credentials. */
+    var syntheticPipelineObserver: ((String, Int) -> Unit)? = null
+        set(value) {
+            check(BuildConfig.DEBUG && syntheticCapture)
+            field = value
+            player.syntheticPipelineObserver = value
+        }
+
+    private fun observePipeline(stage: String, value: Int = 0) {
+        if (syntheticCapture) syntheticPipelineObserver?.invoke(stage, value)
+    }
+
+    private fun pipelineEventName(event: AgentEvent): String = when (event) {
+        is AgentEvent.Status -> when (event.detail) {
+            "豆包语音识别完成" -> "asr-complete"
+            "已收到豆包语音音频" -> "first-pcm-status"
+            "豆包回复已完成" -> "provider-complete"
+            else -> "Status:${event.state}"
+        }
+        is AgentEvent.Transcript -> "Transcript:${event.speaker.wire}:${event.final}"
+        else -> event.javaClass.simpleName
+    }
     private val deviceScope = CoroutineScope(scope.coroutineContext + Dispatchers.Main.immediate)
     private var stopAfterIncident = false
     val crash by lazy {
@@ -233,7 +256,10 @@ class AgentSession(
                 transmitting && !micMuted && socketOpen &&
                 socket != null && socket.queueSize() + frame.size < MAX_MIC_QUEUE_BYTES
             ) {
-                socket.send(frame.toByteString())
+                observePipeline("capture.frame.send.begin", frame.size)
+                if (syntheticPipelineObserver != null) observePipeline("capture.socket.queue.bytes", socket.queueSize().toInt())
+                val accepted = socket.send(frame.toByteString())
+                observePipeline("capture.frame.send.end", if (accepted) frame.size else 0)
             }
         },
         { level -> _state.update { it.copy(voiceLevel = if (transmitting && !micMuted) level else 0f) } },
@@ -364,6 +390,26 @@ class AgentSession(
                 true
             }
             if (!locationStarted || !lifecycle.accepts(generation)) return@launch
+            // AudioTrack creation may take hundreds of milliseconds. Complete it
+            // off the reader/main threads before any provider PCM can arrive.
+            val playbackReady = try {
+                withContext(Dispatchers.IO) {
+                    lifecycle.accepts(generation) && player.warmUp()
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                // The blocking platform constructor can finish after its owner was
+                // cancelled. Release its acquired output even though deviceScope
+                // shares that cancelled Job; a newer generation must stay intact.
+                withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main.immediate) {
+                    if (lifecycle.accepts(generation)) stop(force = true)
+                }
+                throw cancelled
+            } catch (error: Exception) {
+                Log.w(TAG, "Playback preparation failed", error)
+                failHandsFreeStart(generation, "音频播放不可用，请检查音频设备")
+                return@launch
+            }
+            if (!playbackReady || !lifecycle.accepts(generation)) return@launch
             connect()
             if (webSocket == null) {
                 failHandsFreeStart(generation, "中继地址无效，请在设置中检查服务器地址")
@@ -742,19 +788,29 @@ class AgentSession(
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 if (webSocket !== this@AgentSession.webSocket) return
+                observePipeline("socket.text.received", text.length)
                 val event = runCatching { parseAgentEvent(text) }.getOrElse {
                     _state.update { state -> state.copy(statusText = "收到异常代理消息") }
+                    observePipeline("socket.text.invalid", text.length)
                     return
                 }
-                handleEvent(event, webSocket)
+                val tracedEvent = if (syntheticPipelineObserver != null) pipelineEventName(event) else ""
+                if (syntheticPipelineObserver != null) observePipeline("socket.event.parsed:$tracedEvent", text.length)
+                try {
+                    handleEvent(event, webSocket)
+                } finally {
+                    if (syntheticPipelineObserver != null) observePipeline("socket.event.handled:$tracedEvent", text.length)
+                }
             }
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
                 if (webSocket !== this@AgentSession.webSocket) return
                 // AudioTrack setup can throw (unsupported config / bad state); keep it
                 // from escaping onto the reader thread and tearing down the listener.
+                observePipeline("socket.binary.received", bytes.size)
                 runCatching { if (!crash.controller.active) player.play(bytes.toByteArray()) }
                     .onFailure { Log.w(TAG, "PCM playback failed", it) }
+                observePipeline("socket.binary.handled", bytes.size)
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -917,7 +973,9 @@ class AgentSession(
                 }
             }
 
-            is AgentEvent.Metric -> _state.update { it.copy(latencyMs = event.latencyMs) }
+            is AgentEvent.Metric -> event.latencyMs?.let { latency ->
+                _state.update { it.copy(latencyMs = latency) }
+            }
 
             is AgentEvent.WeatherUpdate -> _state.update {
                 // rideContext.hazardLevel is owned by ride.context events (already fused

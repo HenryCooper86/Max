@@ -189,11 +189,11 @@ function App() {
       await until(
         () => findHazardWarningStart(observations) !== null,
         20000,
-        "actual warning utterance start after PCM interruption"
+        "actual warning audio rendered after PCM interruption"
       );
-      check("adas-warning-start", "The exact warning utterance started after its hazard interrupted PCM", () => {
+      check("adas-warning-start", "The exact warning rendered after its hazard interrupted PCM", () => {
         if (!findHazardWarningStart(observations))
-          throw new Error("No actual speech start for the interrupting hazard");
+          throw new Error("No verified warning audio output for the interrupting hazard");
       });
     }
     await waitForPlaybackDrain("complete PCM response playback", responseStart, id === "adas-alert-interrupt");

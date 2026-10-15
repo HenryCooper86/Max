@@ -29,8 +29,77 @@ const hazard = observation("relay.event", {
   playbackBefore: { ...silent, active: 2, activeSourceIds: [1, 2] }
 });
 describe("synthetic browser behavior assertions", () => {
+  it("requires rendered, independently verified canonical warning audio after the exact PCM cut", () => {
+    const hash = "a".repeat(64);
+    const warning = {
+      ...hazard,
+      event: { type: "hazard.alert", interrupt: true, message: "Brake", advice: "Slow down" }
+    };
+    const events = [
+      warning,
+      observation("playback.stop", { sourceId: 1 }),
+      observation("playback.stop", { sourceId: 2 }),
+      observation("warning.audio.scheduled", {
+        sourceId: 3,
+        text: "Brake Slow down",
+        state: "running",
+        pcmSha256: hash
+      }),
+      observation("warning.audio.verified", { sourceId: 3, pcmSha256: hash, matchesManifest: true }, 1010),
+      observation("warning.audio.rendered", { sourceId: 3, peak: 0.2, state: "running" }, 1020)
+    ];
+    expect(findHazardWarningStart(events)).toEqual({ hazardAt: 1000, warningSourceId: 3 });
+    expect(findHazardWarningStart(events.slice(0, -1))).toBeNull();
+    expect(findHazardWarningStart(events.filter((x) => x.type !== "warning.audio.verified"))).toBeNull();
+    expect(
+      findHazardWarningStart(
+        events.map((x) => (x.type === "warning.audio.verified" ? { ...x, matchesManifest: false } : x))
+      )
+    ).toBeNull();
+    expect(
+      findHazardWarningStart(
+        events.map((x) => (x.type === "warning.audio.scheduled" ? { ...x, text: "Wrong advice" } : x))
+      )
+    ).toBeNull();
+    expect(
+      findHazardWarningStart([
+        ...events.slice(0, -1),
+        observation("warning.audio.stop", { sourceId: 3 }, 1015),
+        events.at(-1)!
+      ])
+    ).toBeNull();
+    expect(
+      findHazardWarningStart([
+        ...events.slice(0, -1),
+        observation("warning.audio.ended", { sourceId: 3 }, 1015),
+        events.at(-1)!
+      ])
+    ).toBeNull();
+    expect(
+      findHazardWarningStart(events.map((x) => (x.type === "warning.audio.rendered" ? { ...x, peak: 0 } : x)))
+    ).toBeNull();
+  });
   const providerCompleted = observation("relay.event", {
     event: { type: "status", state: "ready", detail: "豆包回复已完成" }
+  });
+  it("allows a continuing ADAS warning before stop but never a pending provider buffer", () => {
+    const warningOnly = { ...silent, active: 1, activeSourceIds: [3], activeProviderSourceIds: [] };
+    expect(isProviderReplyDrained([...normal, providerCompleted], warningOnly, 2000, true)).toBe(true);
+    expect(isProviderReplyDrained([...normal, providerCompleted], warningOnly, 2000, false)).toBe(false);
+    expect(
+      isProviderReplyDrained(
+        [...normal, providerCompleted],
+        { ...warningOnly, activeProviderSourceIds: [3] },
+        2000,
+        true
+      )
+    ).toBe(false);
+    expect(
+      findHazardInterruption([
+        { ...hazard, playbackBefore: warningOnly },
+        observation("warning.audio.stop", { sourceId: 3 })
+      ])
+    ).toBeNull();
   });
   it("does not mistake hazard final captions or completed text for provider audio completion", () => {
     const caption = observation("relay.event", {

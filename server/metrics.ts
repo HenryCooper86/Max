@@ -152,9 +152,6 @@ const UNKNOWN_TESTER_ID = "unknown-tester";
 const UNKNOWN_IP = "unknown-ip";
 const MAX_TESTERS = 50;
 const MAX_LATENCY_SAMPLES_PER_TESTER = 128;
-// Raw latency samples persisted per session so build/gate/cohort p95 can pool
-// across sessions. Bounded to keep the JSONL history compact.
-const MAX_LATENCY_SAMPLES_PER_SESSION = 200;
 const MAX_TRANSCRIPT_TURNS_PER_TESTER = 80;
 const MAX_TRANSCRIPT_TURNS_PER_SESSION = 120;
 const MAX_COMPLETED_SESSIONS = readBoundedInt(process.env.TESTING_HISTORY_MAX_SESSIONS, 200, 20, 5_000);
@@ -524,20 +521,32 @@ function percentile(values: number[], percentileRank: number): number {
   return sorted[Math.max(0, index)] ?? 0;
 }
 
+function capturedLatencySamples(session: TesterSessionSummary): number[] | undefined {
+  const zeroMeasured = Number.isFinite(session.latencySamples) && session.latencySamples > 0;
+  return session.latencyMsSamples?.filter(
+    (value) => Number.isFinite(value) && (value > 0 || (value === 0 && zeroMeasured))
+  );
+}
+
+/** Absence is legacy fallback; an explicitly shorter array proves known loss. */
+function hasPartialLatencyDistribution(session: TesterSessionSummary): boolean {
+  const samples = capturedLatencySamples(session);
+  return samples !== undefined && session.latencySamples > samples.length;
+}
+
 /**
- * A TRUE pooled p95 over the raw latency samples of the given sessions. Pooling
- * the samples (not the per-session p95s) avoids the percentile-of-percentiles
- * distortion where, at QA sample sizes, `percentile(perSessionP95s, 95)`
- * collapses to the single worst session's p95. Sessions captured before raw
- * samples were persisted fall back to contributing their p95LatencyMs.
+ * Pool the actual distribution, including measured zeros. Sessions predating
+ * raw capture retain the existing p95 fallback; callers flag known partial
+ * arrays so their numerical aggregate cannot certify a complete comparison.
  */
 function pooledLatencyP95(sessions: TesterSessionSummary[]): number {
   const pooled: number[] = [];
   for (const session of sessions) {
-    const samples = session.latencyMsSamples?.filter((value) => Number.isFinite(value) && value > 0);
+    const zeroMeasured = Number.isFinite(session.latencySamples) && session.latencySamples > 0;
+    const samples = capturedLatencySamples(session);
     if (samples && samples.length) {
-      pooled.push(...samples);
-    } else if (session.p95LatencyMs > 0) {
+      for (const sample of samples) pooled.push(sample);
+    } else if (session.p95LatencyMs > 0 || (session.p95LatencyMs === 0 && zeroMeasured)) {
       pooled.push(session.p95LatencyMs);
     }
   }
@@ -645,6 +654,12 @@ function buildReleaseGate(
   const p95LatencyMs = pooledLatencyP95(validSessions);
   const blockers: string[] = [];
   const warnings: string[] = [];
+  const partialLatencySessions = validSessions.filter(hasPartialLatencyDistribution).length;
+  if (partialLatencySessions > 0) {
+    warnings.push(
+      `${partialLatencySessions} valid current-build session(s) have partial raw latency distributions; exact pooled latency cannot be verified.`
+    );
+  }
   const integrityFailures = sessions.filter((session) => session.evidenceIntegrity === "mismatch");
   const legacyEvidence = sessions.filter((session) => session.evidenceIntegrity === "legacy");
   if (integrityFailures.length) {
@@ -895,9 +910,12 @@ function buildRegressionSummary(
     const baselineAvgScore = average(baselineSessions.map((session) => session.evaluation.score));
     const latencyDeltaMs = currentP95LatencyMs - baselineP95LatencyMs;
     const scoreDelta = currentAvgScore - baselineAvgScore;
+    const partialCurrent = currentSessions.filter(hasPartialLatencyDistribution).length;
+    const partialBaseline = baselineSessions.filter(hasPartialLatencyDistribution).length;
     const sufficient =
       currentSessions.length >= policy.regression.minimumMatchedCohortSessions &&
-      baselineSessions.length >= policy.regression.minimumMatchedCohortSessions;
+      baselineSessions.length >= policy.regression.minimumMatchedCohortSessions &&
+      partialCurrent + partialBaseline === 0;
     const status: TestingRegressionCohort["status"] = !sufficient
       ? "insufficient"
       : latencyDeltaMs > policy.regression.latencyFailDeltaMs || scoreDelta < policy.regression.scoreFailDelta
@@ -933,7 +951,10 @@ function buildRegressionSummary(
         id: `cohort-${key}-coverage`,
         label: `${sample.testCaseName} · ${sample.platform}`,
         status: "watch",
-        detail: `Cohort needs ${policy.regression.minimumMatchedCohortSessions} sessions in both builds; current ${currentSessions.length}, baseline ${baselineSessions.length}.`
+        detail:
+          partialCurrent + partialBaseline > 0
+            ? `Cohort has partial raw latency distributions (current ${partialCurrent}, baseline ${partialBaseline}); exact pooled latency cannot be verified.`
+            : `Cohort needs ${policy.regression.minimumMatchedCohortSessions} sessions in both builds; current ${currentSessions.length}, baseline ${baselineSessions.length}.`
       });
     }
   }
@@ -974,6 +995,7 @@ function scoreSession(session: ActiveTestingSession): {
   const evaluation = evaluateTestingSession({
     testCaseId: session.testCaseId,
     p95LatencyMs: percentile(session.latencyMs, 95),
+    latencySamples: session.latencyMs.length,
     micFrames: session.micFrames,
     errorEvents: session.errorEvents,
     ttsFallbacks: session.ttsFallbacks,
@@ -1024,7 +1046,8 @@ function completedSessionSummary(session: ActiveTestingSession, endedAt: number)
     latencySamples: session.latencyMs.length,
     avgLatencyMs: average(session.latencyMs),
     p95LatencyMs: percentile(session.latencyMs, 95),
-    latencyMsSamples: session.latencyMs.slice(-MAX_LATENCY_SAMPLES_PER_SESSION),
+    // A truncated prefix could remove earlier slow samples from pooled p95.
+    latencyMsSamples: [...session.latencyMs],
     errorEvents: session.errorEvents,
     ttsFallbacks: session.ttsFallbacks,
     quality,
@@ -1095,6 +1118,7 @@ function normalizeCompletedSession(value: unknown): TesterSessionSummary | null 
   const evaluation = evaluateTestingSession({
     testCaseId: testCase.id,
     p95LatencyMs,
+    latencySamples: numberField("latencySamples"),
     micFrames,
     errorEvents,
     ttsFallbacks,
@@ -1158,7 +1182,6 @@ function normalizeCompletedSession(value: unknown): TesterSessionSummary | null 
       ? value.latencyMsSamples
           .filter((sample): sample is number => typeof sample === "number" && Number.isFinite(sample) && sample >= 0)
           .map((sample) => Math.round(sample))
-          .slice(-MAX_LATENCY_SAMPLES_PER_SESSION)
       : undefined,
     errorEvents,
     ttsFallbacks,
@@ -1238,7 +1261,12 @@ function applyCompletedSessionToTester(session: TesterSessionSummary) {
   tester.ttsFallbacks += session.ttsFallbacks;
   tester.qualityCounts[session.quality] += 1;
   tester.lastSeenAt = Math.max(tester.lastSeenAt, session.endedAt);
-  if (session.latencySamples > 0 && session.avgLatencyMs > 0) {
+  if (
+    Number.isFinite(session.latencySamples) &&
+    session.latencySamples > 0 &&
+    Number.isFinite(session.avgLatencyMs) &&
+    session.avgLatencyMs >= 0
+  ) {
     tester.latencyMs.push(...Array.from({ length: Math.min(4, session.latencySamples) }, () => session.avgLatencyMs));
     while (tester.latencyMs.length > MAX_LATENCY_SAMPLES_PER_TESTER) tester.latencyMs.shift();
   }
@@ -1648,7 +1676,12 @@ export function recordTesterServerEvent(sessionId: string, payload: unknown, byt
     session.errorEvents += 1;
     bucket.errorEvents += 1;
   }
-  if (payload.type === "metric" && typeof payload.latencyMs === "number") {
+  if (
+    payload.type === "metric" &&
+    typeof payload.latencyMs === "number" &&
+    // Frames-only telemetry uses zero as a placeholder rather than a new first-audio measurement.
+    (payload.latencyMs !== 0 || (payload.outgoingFps === undefined && payload.droppedFrames === undefined))
+  ) {
     recordLatency(tester, session, payload.latencyMs, now);
   }
   recordTranscriptTurn(tester, session, payload, now);

@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import {
   REQUIRED_FIXTURES,
   validateManifest,
   verifyFixture,
+  validateWarningManifest,
   type Fixture
 } from "../scripts/synthetic-qa/browser/fixtures";
 const bytes = new Int16Array([0, 1200, -800, 50]).buffer;
@@ -27,6 +29,16 @@ function manifest() {
   };
 }
 describe("synthetic browser preflight", () => {
+  it("requires all distinct exact warning identities, not duplicate entries in an eighteen-row manifest", () => {
+    const valid = JSON.parse(readFileSync("public/audio/adas/manifest.json", "utf8"));
+    expect(validateWarningManifest(valid).length).toBe(18);
+    const duplicate = structuredClone(valid);
+    duplicate.assets[17] = duplicate.assets[0];
+    expect(() => validateWarningManifest(duplicate)).toThrow();
+    const wrongText = structuredClone(valid);
+    wrongText.assets[0].text = "Different advice";
+    expect(() => validateWarningManifest(wrongText)).toThrow();
+  });
   it("accepts all required mono fixtures and verifies their content", async () => {
     expect(validateManifest(manifest()).sampleRate).toBe(16000);
     await expect(verifyFixture(fixture, bytes)).resolves.toBeUndefined();

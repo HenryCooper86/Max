@@ -211,7 +211,8 @@ sealed interface AgentEvent {
         val useBrowserSpeech: Boolean?
     ) : AgentEvent
 
-    data class Metric(val latencyMs: Int) : AgentEvent
+    /** Null means a packet-counter update, not a new first-audio measurement. */
+    data class Metric(val latencyMs: Int?) : AgentEvent
     data class WeatherUpdate(val weather: Weather) : AgentEvent
     data class RideContextUpdate(val rideContext: RideContext) : AgentEvent
     data class SessionMemoryUpdate(val memory: SessionMemory) : AgentEvent
@@ -322,7 +323,11 @@ fun parseAgentEvent(text: String): AgentEvent {
             useBrowserSpeech = if (json.has("useBrowserSpeech")) json.optBoolean("useBrowserSpeech") else null
         )
 
-        ServerEventTypes.METRIC -> AgentEvent.Metric(json.optInt("latencyMs"))
+        ServerEventTypes.METRIC -> {
+            val latency = json.optInt("latencyMs")
+            val packetCounterOnly = latency == 0 && (json.has("outgoingFps") || json.has("droppedFrames"))
+            AgentEvent.Metric(if (packetCounterOnly) null else latency)
+        }
 
         ServerEventTypes.WEATHER -> AgentEvent.WeatherUpdate(
             Weather(

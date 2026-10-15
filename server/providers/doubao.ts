@@ -696,6 +696,13 @@ export function createDoubaoProvider(
   let chatStartedAt = 0;
   let firstAudioAt = 0;
   let asrEndedAt = 0;
+  let diagnosticTurn = 0;
+  let firstUpstreamAudioObserved = false;
+  // Debug-only boundary timings distinguish provider/network wait from the
+  // relay's wake gate and forwarding work without logging rider content.
+  const traceTurnStage = (stage: string, fields: Record<string, unknown> = {}) => {
+    log.debug("turn stage", { turn: diagnosticTurn, stage, monoMs: performance.now(), ...fields });
+  };
   let currentQuestionId: string | undefined;
   let currentReplyId: string | undefined;
   // The reply id AsrInfo just superseded (the id currentReplyId held right
@@ -970,6 +977,7 @@ export function createDoubaoProvider(
       return;
     }
     if (!firstAudioAt) {
+      traceTurnStage("first-audio-forward", { bytes: chunk.byteLength, pendingBytes: pendingUndecidedAudioBytes });
       firstAudioAt = Date.now();
       firstForwardedReplyAt = performance.now();
       recordFirstAudioLatency();
@@ -1668,6 +1676,13 @@ export function createDoubaoProvider(
       try {
         if (upstream !== socket) return;
         const frame = parseDoubaoFrame(message);
+        if (frame.event === EventReceive.TtsResponse && frame.payload.length && !firstUpstreamAudioObserved) {
+          firstUpstreamAudioObserved = true;
+          traceTurnStage("first-audio-received", {
+            bytes: frame.payload.length,
+            addressed: replyDecided && replyAddressed
+          });
+        }
 
         if (frame.errorCode !== undefined) {
           const detail = frame.payload.toString().slice(0, 300);
@@ -1847,6 +1862,9 @@ export function createDoubaoProvider(
           // Anchor the per-turn latency timers and reset the wake-word
           // accumulation, decision latch, and double-speak guard.
           asrStartedAt = Date.now();
+          diagnosticTurn += 1;
+          firstUpstreamAudioObserved = false;
+          traceTurnStage("asr-started");
           asrFirstTextAt = 0;
           chatStartedAt = 0;
           firstAudioAt = 0;
@@ -2070,9 +2088,11 @@ export function createDoubaoProvider(
           if (riderTurnFinalized) return;
           riderTurnFinalized = true;
           asrEndedAt = Date.now();
+          traceTurnStage("asr-ended");
           recordFirstAudioLatency();
           const addressed = replyIsAddressed();
           updateProviderConfig(); // Re-evaluate location freshness at each rider turn.
+          traceTurnStage("config-update-complete", { addressed, pendingBytes: pendingUndecidedAudioBytes });
           if (addressed) {
             // A reply is now expected — the "thinking" window starts here,
             // before any ChatResponse/TtsSentence has even arrived. Cleared

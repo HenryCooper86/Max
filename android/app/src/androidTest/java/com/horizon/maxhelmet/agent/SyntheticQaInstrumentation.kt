@@ -36,8 +36,11 @@ class SyntheticQaInstrumentation : Instrumentation() {
                 .put("invocationId", invocationId)
                 .put("build", BuildConfig.GIT_COMMIT)
                 .put("nativeBundleSourceBuild", BuildConfig.GIT_COMMIT)
+                .put("diagnosticOverlaySha256", args.getString("diagnosticOverlaySha256", ""))
                 .put("serverBuild", serverBuild)
-                .put("source", "Android API34 ARM64 emulator; debug synthetic integration")
+                .put("source", if (args.getString("diagnosticOverlaySha256", "").isNotEmpty())
+                    "Android API34 emulator; uncommitted diagnostic overlay on actual source base; no release QA credit"
+                    else "Android API34 ARM64 emulator; debug synthetic integration")
                 .put(
                     "capture",
                     "synthetic s16le 16000Hz mono; microphone/camera/location permissions denied",
@@ -62,6 +65,30 @@ class SyntheticQaInstrumentation : Instrumentation() {
     }
 
     override fun onStart() {
+        if (args.getString("case") == "__pcm_generation__") {
+            runNativePcmGenerationDiagnostic(this, args)
+            return
+        }
+        if (args.getString("case") == "__warmup_cancel__") {
+            runNativeWarmupStopRaceDiagnostic(this, cancelOwner = true)
+            return
+        }
+        if (args.getString("case") == "__warmup_restart_race__") {
+            runNativeWarmupStopRaceDiagnostic(this, restart = true)
+            return
+        }
+        if (args.getString("case") == "__warmup_stop_race__") {
+            runNativeWarmupStopRaceDiagnostic(this)
+            return
+        }
+        if (args.getString("case") == "__warmup_lifecycle__") {
+            runNativePlaybackWarmupDiagnostic(this)
+            return
+        }
+        if (args.getString("case") == "__pipeline__") {
+            runNativePipelineDiagnostic(this, args)
+            return
+        }
         val output = Bundle()
         try {
             dir = File(targetContext.filesDir, "synthetic-qa")
@@ -211,6 +238,18 @@ class SyntheticQaInstrumentation : Instrumentation() {
                         SyntheticCapture(scope, frame, level).also { capture = it }
                     },
                 )
+        }
+        val pipeline = ConcurrentLinkedQueue<JSONObject>()
+        val pipelineCount = AtomicLong()
+        val pipelineDropped = AtomicLong()
+        if (args.getString("tracePipeline") == "true") {
+            session.syntheticPipelineObserver = { stage, value ->
+                if (pipelineCount.incrementAndGet() <= 16000) {
+                    pipeline.add(JSONObject().put("stage", stage).put("value", value)
+                        .put("monoNs", SystemClock.elapsedRealtimeNanos())
+                        .put("utcMs", System.currentTimeMillis()).put("thread", Thread.currentThread().name))
+                } else pipelineDropped.incrementAndGet()
+            }
         }
         val states = JSONArray()
         var oldHazard = 0
@@ -370,7 +409,9 @@ class SyntheticQaInstrumentation : Instrumentation() {
             suspend fun feed(name: String) {
                 val fixture = manifest.getJSONObject("fixtures").getJSONObject(name)
                 report.put("fixture", name).put("fixtureSha256", fixture.getString("sha256"))
+                session.syntheticPipelineObserver?.invoke("fixture.feed.begin:$name", 0)
                 capture.feed(File(dir, fixture.getString("file")).readBytes())
+                session.syntheticPipelineObserver?.invoke("fixture.feed.end:$name", 0)
             }
             if (case == "wake-word-addressed-only") {
                 val initialPcmSamples = player(session).playbackDiagnostics().totalQueuedSamples
@@ -551,6 +592,10 @@ class SyntheticQaInstrumentation : Instrumentation() {
                 stopped = false
             }
             report.put("nativeStopped", stopped)
+            if (args.getString("tracePipeline") == "true") {
+                report.put("nativePipelineObservations", JSONArray(pipeline.toList()))
+                    .put("nativePipelineDroppedObservations", pipelineDropped.get())
+            }
             if (!stopped) report.put("passed", false).put("failureClass", "NativeTeardownFailure")
             watcher.cancelAndJoin()
             collect.cancelAndJoin()

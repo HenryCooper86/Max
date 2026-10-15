@@ -62,6 +62,7 @@ import type {
   VoiceGender
 } from "../types";
 import { useAudioPlayback } from "./useAudioPlayback";
+import { displayedMetricLatency } from "../lib/metric-latency";
 import { useMicCapture } from "./useMicCapture";
 
 const storedSettings = loadStoredSettings();
@@ -207,7 +208,7 @@ export function useHelmetAgent() {
     setStatus("已打断 Max，继续听你说");
   }, []);
 
-  const { playPcm16, stopAgentSpeech, speak, ensurePlaybackContext, closePlayback } = useAudioPlayback({
+  const { playPcm16, stopAgentSpeech, speak, speakWarning, ensurePlaybackContext, closePlayback } = useAudioPlayback({
     voiceGenderRef,
     transmittingRef,
     onInterrupted
@@ -594,7 +595,11 @@ export function useHelmetAgent() {
           // Proactive ADAS warning: cut any in-progress agent speech so the
           // alert is heard immediately, speak it, then surface it and auto-dismiss.
           if (event.interrupt) stopAgentSpeech();
-          speak(`${event.message} ${event.advice}`);
+          void speakWarning(`${event.message} ${event.advice}`).then((result) => {
+            if (socketRef.current === socket && result === "unavailable") {
+              setStatus("本地安全提示音不可用，已尝试系统语音；请留意屏幕警报");
+            }
+          });
           // Only status events (gated on transmittingRef) ever map turnState
           // back, so don't set "speaking" when hands-free is off — it would
           // stick until the next mic toggle.
@@ -615,9 +620,8 @@ export function useHelmetAgent() {
           hazardClearTimerRef.current = window.setTimeout(() => setHazardAlert(null), (ttcSeconds + 2) * 1000);
         }
         if (event.type === "metric") {
-          // A frames-only metric arrives with latencyMs 0 — keep the last
-          // real reading instead of zeroing the HUD readout.
-          if (event.latencyMs > 0) setLatencyMs(event.latencyMs);
+          const measuredLatency = displayedMetricLatency(event);
+          if (measuredLatency !== undefined) setLatencyMs(measuredLatency);
           setPacketStats((stats) => ({
             ...stats,
             outgoingFps: event.outgoingFps ?? stats.outgoingFps,
@@ -766,7 +770,17 @@ export function useHelmetAgent() {
       setConnectionState("degraded");
       setStatus("连接错误");
     });
-  }, [navController, musicController, playPcm16, pushTranscript, setPacketStats, speak, stopAgentSpeech, stopMic]);
+  }, [
+    navController,
+    musicController,
+    playPcm16,
+    pushTranscript,
+    setPacketStats,
+    speak,
+    speakWarning,
+    stopAgentSpeech,
+    stopMic
+  ]);
 
   useEffect(() => {
     connectRef.current = connect;
@@ -1059,7 +1073,9 @@ export function useHelmetAgent() {
       // the location grace, socket open, and a possible mic-permission prompt
       // below, transient activation has expired and Safari would keep the
       // context suspended, muting the first agent reply.
-      ensurePlaybackContext();
+      const warningsReady = await ensurePlaybackContext();
+      if (attempt !== startAttemptRef.current) return;
+      if (!warningsReady) throw new Error("安全提示音加载失败，无法开启免提；请检查连接后重试");
       // Geolocation is best-effort for live weather; fire it in parallel so a slow
       // or pending GPS prompt never blocks opening the relay or the mic. A short
       // grace window lets cached/fast coordinates make the first session.start.

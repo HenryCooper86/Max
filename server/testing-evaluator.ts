@@ -13,6 +13,8 @@ import { containsWakePhrase, WAKE_FOLLOWUP_MAX_CHAIN_MS, WAKE_FOLLOWUP_WINDOW_MS
 export type TestingEvaluationInput = {
   testCaseId?: string;
   p95LatencyMs: number;
+  /** Required to distinguish a real zero-duration sample from legacy missing data. */
+  latencySamples?: number;
   micFrames: number;
   errorEvents: number;
   ttsFallbacks: number;
@@ -299,6 +301,8 @@ function scoreFromChecks(checks: TestingEvaluationCheck[]): number {
 export function evaluateTestingSession(input: TestingEvaluationInput): TestingEvaluationSummary {
   const testCase = findTestingTestCase(input.testCaseId);
   const checks: TestingEvaluationCheck[] = [];
+  const hasMeasuredZero =
+    input.p95LatencyMs === 0 && Number.isFinite(input.latencySamples) && (input.latencySamples ?? 0) > 0;
   const replyText = agentText(input.turns);
   const minRiderTurns = testCase.minRiderTurns ?? (testCase.requireTranscript && !testCase.requireAdasAlert ? 1 : 0);
   const minAgentTurns = testCase.minAgentTurns ?? (testCase.requireTranscript ? 1 : 0);
@@ -310,7 +314,7 @@ export function evaluateTestingSession(input: TestingEvaluationInput): TestingEv
   );
 
   checks.push(
-    input.p95LatencyMs <= 0
+    input.p95LatencyMs <= 0 && !hasMeasuredZero
       ? check("latency", "P95 latency", "warn", "No first-audio latency sample was recorded.")
       : input.p95LatencyMs <= testCase.maxP95LatencyMs
         ? check("latency", "P95 latency", "pass", `P95 ${input.p95LatencyMs}ms within ${testCase.maxP95LatencyMs}ms.`)
@@ -485,6 +489,7 @@ export function reevaluateStoredSession(summary: TesterSessionSummary): TesterSe
   const evaluation = evaluateTestingSession({
     testCaseId: summary.testCaseId,
     p95LatencyMs: summary.p95LatencyMs,
+    latencySamples: summary.latencySamples,
     micFrames: summary.micFrames,
     errorEvents: summary.errorEvents,
     ttsFallbacks: summary.ttsFallbacks,

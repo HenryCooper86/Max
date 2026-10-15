@@ -2,6 +2,36 @@ import { describe, expect, it } from "vitest";
 import { evaluateTestingSession } from "../server/testing-evaluator";
 
 describe("testing evaluator", () => {
+  it.each([
+    { p95LatencyMs: 0, latencySamples: 1, expected: "pass" },
+    { p95LatencyMs: 0, latencySamples: undefined, expected: "warn" },
+    { p95LatencyMs: 0, latencySamples: 0, expected: "warn" },
+    { p95LatencyMs: 0, latencySamples: -1, expected: "warn" },
+    { p95LatencyMs: 0, latencySamples: Number.NaN, expected: "warn" },
+    { p95LatencyMs: 0, latencySamples: Number.POSITIVE_INFINITY, expected: "warn" },
+    { p95LatencyMs: Number.NaN, latencySamples: 1, expected: "fail" },
+    { p95LatencyMs: Number.POSITIVE_INFINITY, latencySamples: 1, expected: "fail" }
+  ])(
+    "distinguishes measured zero latency from missing or invalid evidence: $p95LatencyMs/$latencySamples",
+    ({ p95LatencyMs, latencySamples, expected }) => {
+      const input = {
+        testCaseId: "baseline-live-session",
+        p95LatencyMs,
+        latencySamples,
+        micFrames: 5,
+        errorEvents: 0,
+        ttsFallbacks: 0,
+        turns: [
+          { sessionId: "zero", at: 1, speaker: "rider" as const, text: "Max, hello.", final: true },
+          { sessionId: "zero", at: 2, speaker: "agent" as const, text: "Hello, ride safely.", final: true }
+        ]
+      };
+      expect(evaluateTestingSession(input).checks).toContainEqual(
+        expect.objectContaining({ id: "latency", status: expected })
+      );
+    }
+  );
+
   it("fails wake-word cases when the agent replies before Max is addressed", () => {
     const evaluation = evaluateTestingSession({
       testCaseId: "wake-word-addressed-only",

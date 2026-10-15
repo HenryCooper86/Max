@@ -1,4 +1,11 @@
-import { REQUIRED_FIXTURES, validateManifest, verifyFixture, type FixtureManifest } from "./fixtures";
+import {
+  REQUIRED_FIXTURES,
+  validateManifest,
+  validateWarningManifest,
+  verifyFixture,
+  type FixtureManifest,
+  type WarningAsset
+} from "./fixtures";
 import type { Observation } from "./assertions";
 import { closeForSyntheticOutage } from "./outage";
 export const observations: Observation[] = [];
@@ -24,6 +31,13 @@ const captureContexts = new Set<AudioContext>();
 const sourceIds = new WeakMap<AudioBufferSourceNode, number>();
 let sourceSerial = 0;
 let utteranceSerial = 0;
+const warningAssets = new Map<string, WarningAsset>();
+const warningSources = new WeakSet<AudioBufferSourceNode>();
+async function sha256(bytes: ArrayBuffer): Promise<string> {
+  return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)))
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
+}
 const playback = {
   started: 0,
   ended: 0,
@@ -60,20 +74,67 @@ class ObservedAudioContext extends NativeAudioContext {
       const sourceId = ++sourceSerial;
       sourceIds.set(source, sourceId);
       let interrupted = false;
+      let warning = false;
+      let ended = false;
+      let analyser: AnalyserNode | null = null;
+      const connect = source.connect.bind(source);
+      source.connect = ((destination: AudioNode, output?: number, input?: number) => {
+        if (!Reflect.get(source, Symbol.for("max.warningAudio"))) return connect(destination, output, input);
+        analyser ??= this.createAnalyser();
+        analyser.fftSize = 2048;
+        connect(analyser, output);
+        return analyser.connect(destination, 0, input);
+      }) as typeof source.connect;
       const start = source.start.bind(source);
       const stop = source.stop.bind(source);
       source.start = (...args: Parameters<AudioBufferSourceNode["start"]>) => {
+        const metadata = Reflect.get(source, Symbol.for("max.warningAudio")) as WarningAsset | undefined;
+        warning = !!metadata;
+        if (warning) warningSources.add(source);
         start(...args);
         active.add(source);
         playback.started++;
         playback.active = active.size;
-        observe("playback.start", {
+        observe(warning ? "warning.audio.scheduled" : "playback.start", {
           sourceId,
           samples: source.buffer?.length,
           duration: source.buffer?.duration,
           active: active.size,
-          state: this.state
+          state: this.state,
+          ...(metadata ? { text: metadata.text, url: metadata.url, pcmSha256: metadata.pcmSha256 } : {})
         });
+        if (metadata && source.buffer) {
+          const buffer = source.buffer;
+          const values = buffer.getChannelData(0);
+          const pcm = new DataView(new ArrayBuffer(values.length * 2));
+          values.forEach((value, index) =>
+            pcm.setInt16(index * 2, Math.max(-32768, Math.min(32767, Math.round(value * 32768))), true)
+          );
+          void sha256(pcm.buffer as ArrayBuffer).then((hash) => {
+            const expected = warningAssets.get(metadata.url);
+            observe("warning.audio.verified", {
+              sourceId,
+              pcmSha256: hash,
+              matchesManifest:
+                !!expected &&
+                expected.text === metadata.text &&
+                expected.pcmSha256 === hash &&
+                expected.samples === values.length &&
+                buffer.sampleRate === 24000 &&
+                buffer.numberOfChannels === 1
+            });
+          });
+          const samples = new Float32Array(analyser?.fftSize ?? 2048);
+          const inspectRender = () => {
+            if (ended || interrupted || this.state === "closed") return;
+            analyser?.getFloatTimeDomainData(samples);
+            const peak = samples.reduce((max, value) => Math.max(max, Math.abs(value)), 0);
+            if (this.state === "running" && peak > 0)
+              observe("warning.audio.rendered", { sourceId, peak, state: this.state });
+            else requestAnimationFrame(inspectRender);
+          };
+          requestAnimationFrame(inspectRender);
+        }
       };
       source.stop = (...args: Parameters<AudioBufferSourceNode["stop"]>) => {
         stop(...args);
@@ -81,14 +142,16 @@ class ObservedAudioContext extends NativeAudioContext {
           interrupted = true;
           playback.stopped++;
           playback.active = active.size;
-          observe("playback.stop", { sourceId, active: active.size });
+          observe(warning ? "warning.audio.stop" : "playback.stop", { sourceId, active: active.size });
         }
       };
       source.addEventListener("ended", () => {
+        ended = true;
         active.delete(source);
         playback.ended++;
         playback.active = active.size;
-        observe("playback.ended", { sourceId, interrupted, active: active.size });
+        observe(warning ? "warning.audio.ended" : "playback.ended", { sourceId, interrupted, active: active.size });
+        analyser?.disconnect();
       });
     }
     return source;
@@ -190,6 +253,17 @@ export async function preflightFixtures(): Promise<void> {
     verifiedFixtures.set(name, data);
   }
   verifiedManifest = manifest;
+  warningAssets.clear();
+  const warningResponse = await fetch("/audio/adas/manifest.json");
+  if (!warningResponse.ok) throw new Error("Canonical warning audio manifest unavailable");
+  const assets = validateWarningManifest(await warningResponse.json());
+  for (const asset of assets) {
+    const response = await fetch(asset.url);
+    if (!response.ok || (await sha256(await response.arrayBuffer())) !== asset.sha256)
+      throw new Error("Canonical warning asset hash mismatch");
+    warningAssets.set(asset.url, asset);
+  }
+  observe("warning.assets.preflight", { assets: warningAssets.size });
   observe("fixtures.preflight.complete", {
     fixtures: REQUIRED_FIXTURES.length,
     sampleRate: 16000,
@@ -289,6 +363,9 @@ export function currentPlayback() {
     ...playback,
     active: active.size,
     activeSourceIds: [...active].map((source) => sourceIds.get(source)!),
+    activeProviderSourceIds: [...active]
+      .filter((source) => !warningSources.has(source))
+      .map((source) => sourceIds.get(source)!),
     browserSpeaking: window.speechSynthesis?.speaking ?? false
   };
 }

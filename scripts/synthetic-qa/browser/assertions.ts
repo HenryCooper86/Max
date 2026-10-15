@@ -4,6 +4,7 @@ export type PlaybackSnapshot = {
   activeSourceIds: number[];
   browserSpeaking: boolean;
   contextState: string;
+  activeProviderSourceIds?: number[];
 };
 export type AssertionResult = { id: string; status: "pass" | "fail"; detail: string };
 function eventPayload(item: Observation): Record<string, unknown> {
@@ -33,7 +34,9 @@ export function isProviderReplyDrained(
     hasProviderReplyCompletion(events) &&
     !!last &&
     now - last.at >= 1000 &&
-    playback.active === 0 &&
+    (allowHazardSpeech && playback.activeProviderSourceIds
+      ? playback.activeProviderSourceIds.length === 0
+      : playback.active === 0) &&
     (allowHazardSpeech || !playback.browserSpeaking)
   );
 }
@@ -42,7 +45,9 @@ export function assertBackgroundQuiet(events: Observation[], initial: PlaybackSn
   if (
     events.some(
       (item) =>
-        ["audio.received", "playback.start", "speech.request", "speech.start"].includes(item.type) ||
+        ["audio.received", "playback.start", "speech.request", "speech.start", "warning.audio.scheduled"].includes(
+          item.type
+        ) ||
         (item.type === "relay.event" &&
           eventPayload(item).type === "transcript" &&
           eventPayload(item).speaker === "agent")
@@ -58,14 +63,23 @@ export function findHazardInterruption(events: Observation[]): { hazardAt: numbe
     if (hazard.type !== "relay.event" || payload.type !== "hazard.alert" || payload.interrupt !== true) continue;
     const before = hazard.playbackBefore as PlaybackSnapshot | undefined;
     if (!before?.active || before.activeSourceIds.length !== before.active) continue;
+    if (before.activeProviderSourceIds && !before.activeProviderSourceIds.length) continue;
     const stopped = new Set<number>();
     for (const next of events.slice(index + 1)) {
       if (
         next.at - hazard.at > 1000 ||
-        ["relay.event", "audio.received", "playback.start", "speech.request", "speech.start"].includes(next.type)
+        [
+          "relay.event",
+          "audio.received",
+          "playback.start",
+          "speech.request",
+          "speech.start",
+          "warning.audio.scheduled"
+        ].includes(next.type)
       )
         break;
-      if (next.type === "playback.stop" && typeof next.sourceId === "number") stopped.add(next.sourceId);
+      if (["playback.stop", "warning.audio.stop"].includes(next.type) && typeof next.sourceId === "number")
+        stopped.add(next.sourceId);
     }
     if (before.activeSourceIds.every((id) => stopped.has(id)))
       return { hazardAt: hazard.at, stoppedSourceIds: [...before.activeSourceIds] };
@@ -73,13 +87,58 @@ export function findHazardInterruption(events: Observation[]): { hazardAt: numbe
   return null;
 }
 
-export function findHazardWarningStart(events: Observation[]): { hazardAt: number; utteranceId: number } | null {
+export function findHazardWarningStart(
+  events: Observation[]
+): { hazardAt: number; utteranceId: number } | { hazardAt: number; warningSourceId: number } | null {
   for (let index = 0; index < events.length; index++) {
     const hazard = events[index]!;
     const payload = eventPayload(hazard);
     if (hazard.type !== "relay.event" || payload.type !== "hazard.alert" || payload.interrupt !== true) continue;
     if (findHazardInterruption(events.slice(index))?.hazardAt !== hazard.at) continue;
     const text = `${payload.message || ""} ${payload.advice || ""}`.trim();
+    const nextHazardAt =
+      events
+        .slice(index + 1)
+        .find((event) => event.type === "relay.event" && eventPayload(event).type === "hazard.alert")?.at ?? Infinity;
+    const scheduled = events.slice(index + 1).find((event) => event.type === "warning.audio.scheduled");
+    if (
+      scheduled &&
+      scheduled.at < nextHazardAt &&
+      scheduled.at - hazard.at <= 1000 &&
+      scheduled.text === text &&
+      scheduled.state === "running" &&
+      typeof scheduled.sourceId === "number" &&
+      typeof scheduled.pcmSha256 === "string" &&
+      /^[a-f0-9]{64}$/.test(scheduled.pcmSha256)
+    ) {
+      const verified = events.some(
+        (event) =>
+          event.type === "warning.audio.verified" &&
+          event.sourceId === scheduled.sourceId &&
+          event.matchesManifest === true &&
+          event.pcmSha256 === scheduled.pcmSha256
+      );
+      const rendered = events.find(
+        (event) =>
+          event.type === "warning.audio.rendered" &&
+          event.sourceId === scheduled.sourceId &&
+          event.at >= scheduled.at &&
+          event.at < nextHazardAt &&
+          event.state === "running" &&
+          typeof event.peak === "number" &&
+          event.peak > 0
+      );
+      const stoppedBeforeRender =
+        rendered &&
+        events.some(
+          (event) =>
+            ["warning.audio.stop", "warning.audio.ended"].includes(event.type) &&
+            event.sourceId === scheduled.sourceId &&
+            event.at <= rendered.at
+        );
+      if (verified && rendered && !stoppedBeforeRender)
+        return { hazardAt: hazard.at, warningSourceId: scheduled.sourceId };
+    }
     let request: Observation | undefined;
     for (const next of events.slice(index + 1)) {
       if (
@@ -93,10 +152,6 @@ export function findHazardWarningStart(events: Observation[]): { hazardAt: numbe
       }
     }
     if (!text || request?.text !== text || typeof request.utteranceId !== "number") continue;
-    const nextHazardAt =
-      events
-        .slice(index + 1)
-        .find((event) => event.type === "relay.event" && eventPayload(event).type === "hazard.alert")?.at ?? Infinity;
     if (
       events.some(
         (event) =>

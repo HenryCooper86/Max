@@ -37,7 +37,20 @@ class PcmPlayer {
         private const val LIMIT_THRESHOLD = 0.7f
     }
 
-    private val queue = LinkedBlockingQueue<ByteArray>()
+    var syntheticPipelineObserver: ((String, Int) -> Unit)? = null
+        set(value) {
+            check(BuildConfig.DEBUG)
+            field = value
+        }
+
+    private fun observePipeline(stage: String, value: Int = 0) {
+        if (BuildConfig.DEBUG) syntheticPipelineObserver?.invoke(stage, value)
+    }
+
+    // Guarded by this player: prewarming alone has no PCM to interrupt.
+    private var generationHasAudio = false
+    private data class PcmTicket(val pcm: ByteArray, val epoch: Long, val generation: Int)
+    private val queue = LinkedBlockingQueue<PcmTicket>()
     private val totalQueuedSamples = AtomicLong()
     private val generationQueuedSamples = AtomicLong()
     private val generationWrittenSamples = AtomicLong()
@@ -86,6 +99,10 @@ class PcmPlayer {
     @Volatile
     private var active = false
 
+    /** Changes when a session arms/releases output, fencing unfinished construction. */
+    @Volatile
+    private var playbackEpoch = 0L
+
     /** Bumped by barge-in so the feeder abandons the buffer it is writing. */
     @Volatile
     private var generation = 0
@@ -98,9 +115,9 @@ class PcmPlayer {
     var useVoiceCall = false
     @Volatile var level: Float = PLAYBACK_GAIN
 
-    @Synchronized
-    fun start() {
-        if (running) return
+    /** AudioTrack construction/play can block in the platform: never hold our monitor here. */
+    private fun createTrack(voiceCall: Boolean): AudioTrack {
+        observePipeline("pcm.track.start.begin")
         val minBuffer = AudioTrack.getMinBufferSize(
             SAMPLE_RATE,
             AudioFormat.CHANNEL_OUT_MONO,
@@ -109,10 +126,7 @@ class PcmPlayer {
         val audioTrack = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
-                    .setUsage(
-                        if (useVoiceCall) AudioAttributes.USAGE_VOICE_COMMUNICATION
-                        else AudioAttributes.USAGE_MEDIA
-                    )
+                    .setUsage(if (voiceCall) AudioAttributes.USAGE_VOICE_COMMUNICATION else AudioAttributes.USAGE_MEDIA)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build()
             )
@@ -123,59 +137,126 @@ class PcmPlayer {
                     .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                     .build()
             )
-            .setBufferSizeInBytes(maxOf(minBuffer, SAMPLE_RATE)) // ~0.5 s of headroom
+            .setBufferSizeInBytes(maxOf(minBuffer, SAMPLE_RATE))
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
+        try {
+            audioTrack.play()
+            observePipeline("pcm.track.start.end")
+            return audioTrack
+        } catch (error: Throwable) {
+            runCatching { releaseCandidate(audioTrack) }
+            throw error
+        }
+    }
 
-        track = audioTrack
-        running = true
-        audioTrack.play()
+    private fun releaseCandidate(candidate: AudioTrack) {
+        runCatching { candidate.pause(); candidate.flush() }
+        candidate.release()
+        observePipeline("pcm.track.candidate.released")
+    }
 
+    /** Installs only an output belonging to the still-active session. */
+    private fun ensureStarted(epoch: Long): Boolean {
+        val voiceCall = synchronized(this) {
+            if (!active || playbackEpoch != epoch) return false
+            if (running) return true
+            useVoiceCall
+        }
+        val candidate = createTrack(voiceCall)
+        val installed = synchronized(this) {
+            if (!active || playbackEpoch != epoch || running) false else {
+                track = candidate
+                running = true
+                startFeeder(candidate, epoch)
+                true
+            }
+        }
+        if (!installed) releaseCandidate(candidate)
+        return synchronized(this) { active && playbackEpoch == epoch && running }
+    }
+
+    private fun startFeeder(audioTrack: AudioTrack, epoch: Long) {
         feederThread = thread(name = "pcm-player") {
-            while (running) {
-                val buffer = try {
+            while (running && playbackEpoch == epoch) {
+                val ticket = try {
                     queue.take()
                 } catch (_: InterruptedException) {
                     continue
                 }
-                val startGeneration = generation
+                // Observers can block in controlled tests; never invoke them while
+                // holding the hardware/generation fence used by an interruption.
+                observePipeline("pcm.dequeued", ticket.pcm.size)
                 var offset = 0
-                while (running && offset < buffer.size && startGeneration == generation) {
-                    val written = audioTrack.write(buffer, offset, buffer.size - offset)
+                while (offset < ticket.pcm.size) {
+                    observePipeline("pcm.write.begin", ticket.pcm.size - offset)
+                    val written = synchronized(this@PcmPlayer) {
+                        if (!active || !running || playbackEpoch != ticket.epoch ||
+                            generation != ticket.generation || track !== audioTrack) null else {
+                            // The check and nonblocking write are atomic with pause/flush.
+                            // No interrupted ticket can write behind the hardware flush.
+                            audioTrack.write(ticket.pcm, offset, ticket.pcm.size - offset,
+                                AudioTrack.WRITE_NON_BLOCKING).also {
+                                if (BuildConfig.DEBUG && it > 0) generationWrittenSamples.addAndGet(it.toLong() / 2)
+                            }
+                        }
+                    }
+                    if (written == null) {
+                        observePipeline("pcm.write.cancelled", ticket.pcm.size - offset)
+                        break
+                    }
+                    observePipeline("pcm.write.end", written)
                     if (written < 0) break
                     offset += written
-                    if (BuildConfig.DEBUG && startGeneration == generation) {
-                        generationWrittenSamples.addAndGet(written.toLong() / 2)
+                    if (written == 0) {
+                        // Only the feeder waits for hardware capacity, never GUI Stop.
+                        try { Thread.sleep(5) } catch (_: InterruptedException) { }
                     }
                 }
             }
         }
     }
 
-    /** Arms the player for a new session so [play] may lazily (re)start the track.
-     *  Paired with [release]; called by AgentSession.start(). */
+    /** Arms playback; unfinished work from an older session cannot install here. */
     @Synchronized
     fun prepare() {
+        playbackEpoch += 1
         active = true
     }
 
-    /** Queues a 24 kHz PCM16 buffer. Called from the WebSocket reader thread. */
-    fun play(pcm: ByteArray) {
-        val buffer = applyGain(pcm)
-        // Gate the check-and-start under the same lock release() holds. A frame on
-        // the reader thread and a main-thread release() otherwise race: a play()
-        // that lands after release() would see !running, start(), and rebuild an
-        // orphaned track + feeder thread. The `active` gate closes that window
-        // while still allowing the next session to arm and lazily start again.
-        synchronized(this) {
-            if (!active) return
-            if (!running) start()
-            if (BuildConfig.DEBUG) {
-                totalQueuedSamples.addAndGet(buffer.size.toLong() / 2)
-                generationQueuedSamples.addAndGet(buffer.size.toLong() / 2)
-            }
-            queue.put(buffer)
+    /** Completes output preparation off the reader/main threads before connecting. */
+    fun warmUp(): Boolean {
+        val epoch = synchronized(this) {
+            if (!active) return false
+            playbackEpoch
         }
+        return ensureStarted(epoch)
+    }
+
+    /** Accepts a PCM ticket before transforming it, so interruption accounts
+     * for every received sample even if gain processing has not finished. */
+    fun play(pcm: ByteArray) {
+        val ticket = synchronized(this) {
+            if (!active) return
+            if (pcm.isNotEmpty()) generationHasAudio = true
+            if (BuildConfig.DEBUG) {
+                totalQueuedSamples.addAndGet(pcm.size.toLong() / 2)
+                generationQueuedSamples.addAndGet(pcm.size.toLong() / 2)
+            }
+            PcmTicket(pcm, playbackEpoch, generation)
+        }
+        observePipeline("pcm.gain.begin", pcm.size)
+        val buffer = applyGain(pcm)
+        observePipeline("pcm.gain.end", buffer.size)
+        if (!ensureStarted(ticket.epoch)) return
+        val enqueued = synchronized(this) {
+            if (!active || playbackEpoch != ticket.epoch || generation != ticket.generation || !running) false else {
+                queue.put(if (buffer === ticket.pcm) ticket else ticket.copy(pcm = buffer))
+                true
+            }
+        }
+        if (enqueued) observePipeline("pcm.queued", buffer.size)
+        else observePipeline("pcm.enqueue.cancelled", buffer.size)
     }
 
     /**
@@ -212,6 +293,7 @@ class PcmPlayer {
     }
 
     /** Barge-in: drop queued audio and cut the current utterance immediately. */
+    @Synchronized
     fun stopPlayback() {
         if (BuildConfig.DEBUG) {
             val queued = generationQueuedSamples.get()
@@ -223,18 +305,20 @@ class PcmPlayer {
         generationQueuedSamples.set(0)
         generationWrittenSamples.set(0)
         queue.clear()
-        val flushSucceeded = track?.let {
+        val flushSucceeded = if (generationHasAudio) track?.let {
             runCatching {
                 it.pause()
                 it.flush()
                 it.play()
             }.isSuccess
-        } ?: false
+        } ?: false else false
+        generationHasAudio = false
         if (BuildConfig.DEBUG) lastFlushSucceeded = flushSucceeded
     }
 
     @Synchronized
     fun release() {
+        playbackEpoch += 1
         active = false
         running = false
         if (BuildConfig.DEBUG) {
@@ -247,8 +331,10 @@ class PcmPlayer {
         generationQueuedSamples.set(0)
         generationWrittenSamples.set(0)
         queue.clear()
+        generationHasAudio = false
+        // No join on the GUI thread. The epoch and locked nonblocking-write
+        // fence prevent the interrupted feeder from touching this track again.
         feederThread?.interrupt()
-        feederThread?.join(500)
         feederThread = null
         track?.let {
             runCatching {

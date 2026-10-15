@@ -30,6 +30,7 @@ import {
 } from "../shared/testing";
 import { createLogger } from "./logger";
 import { reevaluateStoredSession } from "./testing-evaluator";
+import { BoundedTestingCache, unindexedTestingSessions } from "./testing-cache";
 import {
   DEFAULT_TESTING_STORAGE_DIRECTORY,
   ensureTestingStorageDirectorySync,
@@ -38,6 +39,9 @@ import {
 
 const log = createLogger("testing-store");
 
+/** Distinguishes a known unusable durable row from a temporary read outage. */
+export class TestingEvidenceReadError extends Error {}
+
 /** Upper bound on rows scanned when filtering the evidence page by re-derived
  * quality (which has no SQL column, so it is filtered in memory). Scoped to the
  * most recent matching sessions so a growing store can't load unbounded rows on
@@ -45,6 +49,9 @@ const log = createLogger("testing-store");
 const QUALITY_FILTER_SCAN_LIMIT = 5000;
 
 let databaseInstance: DatabaseSync | null = null;
+let databaseEpoch = 0;
+let sessionQueryRevision = "";
+const sessionQueries = new BoundedTestingCache<TesterSessionSummary[]>(16, 16 * 1024 * 1024);
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -90,6 +97,9 @@ function database(): DatabaseSync {
     secureTestingFileSync(`${filePath}-shm`);
   }
   const db = new DatabaseSync(filePath);
+  const policyTableExisted = Boolean(
+    db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'testing_policies'").get()
+  );
   if (filePath !== ":memory:") secureTestingFileSync(filePath);
   db.exec("PRAGMA foreign_keys = ON");
   if (filePath !== ":memory:") {
@@ -164,8 +174,55 @@ function database(): DatabaseSync {
     );
   `);
   databaseInstance = db;
-  ensureDefaultPolicy();
+  databaseEpoch += 1;
+  // Only a new schema initializes defaults. An existing store that lost its
+  // policy must not silently replace a stricter policy after a reconnect.
+  if (!policyTableExisted) ensureDefaultPolicy();
   return db;
+}
+
+/** Both same-connection SQL and other writers participate; reopen gets a new
+ * epoch even when SQLite's counters happen to repeat. Never cache read errors. */
+export function testingStoreRevision(): string {
+  try {
+    const revision = database()
+      .prepare("SELECT total_changes() AS localChanges, data_version AS externalChanges FROM pragma_data_version")
+      .get() as { localChanges?: number; externalChanges?: number } | undefined;
+    if (!revision || !Number.isFinite(revision.localChanges) || !Number.isFinite(revision.externalChanges)) {
+      throw new Error("Testing storage revision is unavailable");
+    }
+    return `${databaseEpoch}:${revision.localChanges}:${revision.externalChanges}`;
+  } catch (error) {
+    sessionQueries.clear();
+    sessionQueryRevision = "";
+    throw error;
+  }
+}
+
+function cachedSessionQuery(key: string, read: () => Array<{ payload_json?: string }>): TesterSessionSummary[] {
+  const revision = testingStoreRevision();
+  if (revision !== sessionQueryRevision) {
+    sessionQueries.clear();
+    sessionQueryRevision = revision;
+  }
+  const cached = sessionQueries.get(key);
+  if (cached) {
+    cached.forEach(observedSession);
+    return structuredClone(cached);
+  }
+  const rows = read();
+  const parsed = rows.map((row) => observedSession(decodeStoredSession(row.payload_json)));
+  sessionQueries.set(
+    key,
+    parsed,
+    rows.reduce((size, row) => size + (row.payload_json?.length ?? 0) * 2, 0)
+  );
+  return structuredClone(parsed);
+}
+
+function observedSession(session: TesterSessionSummary): TesterSessionSummary {
+  unindexedTestingSessions.delete(session.sessionId);
+  return session;
 }
 
 function parseJson<T>(value: unknown): T | null {
@@ -174,6 +231,31 @@ function parseJson<T>(value: unknown): T | null {
     return JSON.parse(value) as T;
   } catch {
     return null;
+  }
+}
+
+function decodeStoredSession(payload: unknown): TesterSessionSummary {
+  const value = parseJson<unknown>(payload);
+  if (
+    !isRecord(value) ||
+    typeof value.sessionId !== "string" ||
+    !value.sessionId.trim() ||
+    typeof value.startedAt !== "number" ||
+    !Number.isFinite(value.startedAt) ||
+    !value.startedAt
+  ) {
+    throw new TestingEvidenceReadError("Stored testing evidence payload is unusable");
+  }
+  return value as unknown as TesterSessionSummary;
+}
+
+function evaluateReadableStoredSession(session: TesterSessionSummary): TesterSessionSummary {
+  try {
+    return reevaluateStoredSession(session);
+  } catch {
+    // The durable payload was read, but its schema cannot be evaluated. Do
+    // not let a GUI caller misclassify that as a temporary database outage.
+    throw new TestingEvidenceReadError("Stored testing evidence cannot be evaluated");
   }
 }
 
@@ -260,16 +342,19 @@ export function saveTestingSession(session: TesterSessionSummary): void {
     session.evidenceHash,
     JSON.stringify(session)
   );
+  unindexedTestingSessions.delete(session.sessionId);
   if (session.assignmentId) completeAssignmentFromSession(session.assignmentId, session.sessionId, session.endedAt);
 }
 
 export function loadTestingSessions(limit: number): TesterSessionSummary[] {
-  const rows = database()
-    .prepare("SELECT payload_json FROM testing_sessions ORDER BY ended_at DESC LIMIT ?")
-    .all(Math.max(1, Math.min(5_000, Math.round(limit)))) as Array<{ payload_json?: string }>;
-  return rows
-    .map((row) => parseJson<TesterSessionSummary>(row.payload_json))
-    .filter((session): session is TesterSessionSummary => Boolean(session));
+  const safeLimit = Math.max(1, Math.min(5_000, Math.round(limit)));
+  return cachedSessionQuery(
+    JSON.stringify(["latest", safeLimit]),
+    () =>
+      database()
+        .prepare("SELECT payload_json FROM testing_sessions ORDER BY ended_at DESC LIMIT ?")
+        .all(safeLimit) as Array<{ payload_json?: string }>
+  );
 }
 
 function safeSessionLimit(limit: number, fallback = 5_000): number {
@@ -306,26 +391,30 @@ function buildIdentityPredicate(build: string, exclude = false): { sql: string; 
 
 export function loadTestingSessionsForBuild(build: string, limit = 5_000): TesterSessionSummary[] {
   const predicate = buildIdentityPredicate(build);
-  const rows = database()
-    .prepare(
-      `SELECT payload_json FROM testing_sessions WHERE ${predicate.sql} ORDER BY ended_at DESC, session_id DESC LIMIT ?`
-    )
-    .all(...predicate.parameters, safeSessionLimit(limit)) as Array<{ payload_json?: string }>;
-  return rows
-    .map((row) => parseJson<TesterSessionSummary>(row.payload_json))
-    .filter((session): session is TesterSessionSummary => Boolean(session));
+  const safeLimit = safeSessionLimit(limit);
+  return cachedSessionQuery(
+    JSON.stringify(["build", predicate, safeLimit]),
+    () =>
+      database()
+        .prepare(
+          `SELECT payload_json FROM testing_sessions WHERE ${predicate.sql} ORDER BY ended_at DESC, session_id DESC LIMIT ?`
+        )
+        .all(...predicate.parameters, safeLimit) as Array<{ payload_json?: string }>
+  );
 }
 
 export function loadTestingSessionsExcludingBuild(build: string, limit = 5_000): TesterSessionSummary[] {
   const predicate = buildIdentityPredicate(build, true);
-  const rows = database()
-    .prepare(
-      `SELECT payload_json FROM testing_sessions WHERE ${predicate.sql} ORDER BY ended_at DESC, session_id DESC LIMIT ?`
-    )
-    .all(...predicate.parameters, safeSessionLimit(limit)) as Array<{ payload_json?: string }>;
-  return rows
-    .map((row) => parseJson<TesterSessionSummary>(row.payload_json))
-    .filter((session): session is TesterSessionSummary => Boolean(session));
+  const safeLimit = safeSessionLimit(limit);
+  return cachedSessionQuery(
+    JSON.stringify(["excluding-build", predicate, safeLimit]),
+    () =>
+      database()
+        .prepare(
+          `SELECT payload_json FROM testing_sessions WHERE ${predicate.sql} ORDER BY ended_at DESC, session_id DESC LIMIT ?`
+        )
+        .all(...predicate.parameters, safeLimit) as Array<{ payload_json?: string }>
+  );
 }
 
 function decodeSessionCursor(cursor: string | undefined): { endedAt: number; sessionId: string } | null {
@@ -411,9 +500,9 @@ export function storedTestingSessionPage(
       });
     }
     const matches = scanned
-      .map((row) => parseJson<TesterSessionSummary>(row.payload_json))
-      .filter((session): session is TesterSessionSummary => Boolean(session))
-      .map(reevaluateStoredSession)
+      .map((row) => decodeStoredSession(row.payload_json))
+      .map(observedSession)
+      .map(evaluateReadableStoredSession)
       .filter((session) => session.quality === query.quality);
     const afterCursorMatches = matches.filter(afterCursor);
     const items = afterCursorMatches.slice(0, limit);
@@ -442,13 +531,13 @@ export function storedTestingSessionPage(
   const hasMore = rows.length > limit;
   const items = rows
     .slice(0, limit)
-    .map((row) => parseJson<TesterSessionSummary>(row.payload_json))
-    .filter((session): session is TesterSessionSummary => Boolean(session))
+    .map((row) => decodeStoredSession(row.payload_json))
+    .map(observedSession)
     // Re-derive quality/validity against the current catalog so the durable
     // evidence page shows the SAME classification the release gate uses, not the
     // capture-time value frozen in the payload (which a later policy change
     // makes stale). The capture-time snapshot stays on captured*.
-    .map(reevaluateStoredSession);
+    .map(evaluateReadableStoredSession);
   const lastItem = items.at(-1);
   return {
     items,
@@ -460,7 +549,40 @@ export function storedTestingSessionPage(
 export function loadStoredTestingSession(sessionId: string): TesterSessionSummary | null {
   const row = database().prepare("SELECT payload_json FROM testing_sessions WHERE session_id = ?").get(sessionId) as
     { payload_json?: string } | undefined;
-  return parseJson<TesterSessionSummary>(row?.payload_json);
+  return row ? observedSession(decodeStoredSession(row.payload_json)) : null;
+}
+
+/** Update only mutable notes under one writer transaction. A concurrent writer
+ * cannot have captured fields overwritten by a stale read-modify-write. */
+export function updateStoredTestingSessionNotes(
+  sessionId: string,
+  notes: string,
+  unindexedFallback?: TesterSessionSummary
+): TesterSessionSummary | null {
+  if (unindexedFallback && unindexedFallback.sessionId !== sessionId)
+    throw new Error("Testing session identity mismatch");
+  const db = database();
+  const wasUnindexed = unindexedTestingSessions.has(sessionId);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    let row = db
+      .prepare(
+        "UPDATE testing_sessions SET payload_json = json_set(payload_json, '$.notes', ?) WHERE session_id = ? RETURNING payload_json"
+      )
+      .get(notes, sessionId) as { payload_json?: string } | undefined;
+    if (!row && unindexedFallback) {
+      saveTestingSession({ ...unindexedFallback, notes });
+      row = db.prepare("SELECT payload_json FROM testing_sessions WHERE session_id = ?").get(sessionId) as
+        { payload_json?: string } | undefined;
+    }
+    const session = row ? decodeStoredSession(row.payload_json) : null;
+    db.exec("COMMIT");
+    return session ? observedSession(session) : null;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    if (wasUnindexed) unindexedTestingSessions.add(sessionId);
+    throw error;
+  }
 }
 
 function revokeTestingSessionCredits(sessionIds: string[], now = Date.now()): void {
@@ -572,11 +694,64 @@ export function replaceStoredTestingSessions(sessions: TesterSessionSummary[]): 
   }
 }
 
+/** Archive recovery never deletes or replaces a newer durable capture. */
+export function recoverStoredTestingSessions(sessions: TesterSessionSummary[]): void {
+  const db = database();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const exists = db.prepare("SELECT 1 FROM testing_sessions WHERE session_id = ?");
+    for (const session of sessions) if (!exists.get(session.sessionId)) saveTestingSession(session);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 export function getActiveTestingPolicy(): TestingPolicy {
   const row = database()
-    .prepare("SELECT payload_json FROM testing_policies WHERE active = 1 ORDER BY created_at DESC LIMIT 1")
-    .get() as { payload_json?: string } | undefined;
-  return clone(parseJson<TestingPolicy>(row?.payload_json) ?? DEFAULT_TESTING_POLICY);
+    .prepare("SELECT version, payload_json FROM testing_policies WHERE active = 1 ORDER BY created_at DESC LIMIT 1")
+    .get() as { version?: string; payload_json?: string } | undefined;
+  const policy = parseJson<unknown>(row?.payload_json);
+  const numeric = (value: unknown, minimum?: number) =>
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    Number.isInteger(value) &&
+    (minimum === undefined || value >= minimum);
+  if (
+    !row ||
+    !isRecord(policy) ||
+    typeof policy.version !== "string" ||
+    !policy.version.trim() ||
+    policy.version !== row.version ||
+    !isRecord(policy.release) ||
+    !isRecord(policy.regression)
+  )
+    throw new Error("Active testing policy is missing or unusable");
+  const release = policy.release;
+  const regression = policy.regression;
+  if (
+    ![
+      "maxFailSessions",
+      "maxWatchSessions",
+      "maxInvalidSessions",
+      "maxP95LatencyMs",
+      "minStandardSessions",
+      "minSafetyCriticalSessions"
+    ].every((key) => numeric(release[key], 0)) ||
+    !Array.isArray(release.requiredPlatforms) ||
+    !release.requiredPlatforms.length ||
+    !release.requiredPlatforms.every((platform) =>
+      ["web", "ios", "android", "embedded", "unknown"].includes(platform)
+    ) ||
+    !numeric(regression.minimumMatchedCohortSessions, 1) ||
+    !numeric(regression.latencyWatchDeltaMs, 0) ||
+    !numeric(regression.latencyFailDeltaMs, 0) ||
+    !numeric(regression.scoreWatchDelta) ||
+    !numeric(regression.scoreFailDelta)
+  )
+    throw new Error("Active testing policy has unusable decision rules");
+  return clone(policy as unknown as TestingPolicy);
 }
 
 export function listTestingPolicies(): TestingPolicy[] {
@@ -1108,7 +1283,10 @@ export function listTestingAudit(limit = 100): TestingAuditEvent[] {
 export function getApprovedBaselineBuild(): string | undefined {
   const row = database().prepare("SELECT value FROM testing_settings WHERE key = 'approvedBaselineBuild'").get() as
     { value?: string } | undefined;
-  return cleanString(row?.value, "", 80) || undefined;
+  if (!row) return undefined;
+  if (typeof row.value !== "string" || !cleanString(row.value, "", 80))
+    throw new Error("Approved testing baseline is unusable");
+  return cleanString(row.value, "", 80);
 }
 
 function setApprovedBaselineBuild(build: string, actor: string, now = Date.now()): string {
@@ -1146,6 +1324,7 @@ export function inferTestingPlatform(value: unknown, deviceLabel?: string, netwo
 
 /** Test-only reset. Production never destroys the database implicitly. */
 export function resetTestingStore(): void {
+  unindexedTestingSessions.clear();
   const db = database();
   db.exec(`
     DELETE FROM testing_sessions;
@@ -1159,6 +1338,8 @@ export function resetTestingStore(): void {
 }
 
 export function closeTestingStore(): void {
+  sessionQueries.clear();
+  sessionQueryRevision = "";
   try {
     databaseInstance?.close();
   } catch (error) {

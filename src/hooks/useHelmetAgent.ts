@@ -214,13 +214,9 @@ export function useHelmetAgent() {
     onInterrupted
   });
 
-  // Created once for the hook's lifetime (not per socket connection/reconnect
-  // — a fresh controller on every reconnect would silently drop an in-flight
-  // "requesting"/"guiding" session). `sendJson` resolves
-  // against the live socket at call time; the relay owns MAX’s voice for
-  // navigation prompts, so a single instance stays correct across
-  // reconnects and settings changes; only navController.reset() + setNavState
-  // below reset its navigation-specific state, on socket close.
+  // Keep a stable controller for event handlers; its commands and route ids
+  // belong to one relay session. Both socket close and settings replacement
+  // reset it before another session can receive navigation output.
   const [musicState, setMusicState] = useState(EMPTY_MUSIC);
   const [musicController] = useState(() =>
     createMusicController({
@@ -790,9 +786,13 @@ export function useHelmetAgent() {
   // (e.g. the voice gender). The mic graph is untouched, so capture continues.
   const restartSession = useCallback(() => {
     if (!socketRef.current) return;
+    // The old socket's close event is ignored once connect() replaces it.
+    // Cancel its timers and route ids here, just as the normal close path does.
+    navController.reset();
+    setNavState({ phase: "idle" });
     socketRef.current.close();
     connect();
-  }, [connect]);
+  }, [connect, navController]);
 
   // Switch the assistant voice. The live Doubao speaker is fixed at session
   // start, so restart the session; the mock path just uses browser TTS.

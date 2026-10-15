@@ -44,6 +44,14 @@
   network (ASR is server-side), and iOS cannot place calls itself — the call
   button needs a human tap.
 
+## 2026-10-15 — Browser navigation session isolation
+
+- Reset browser navigation when a settings change replaces the relay session.
+  Pending location/route work and active guidance are retired before reconnecting,
+  so old command results and route prompts cannot leak onto the replacement socket.
+  Regression coverage exercises pending location, route lookup, active guidance,
+  stale route responses, and successful navigation in the new session.
+
 ## 2026-08-11 — Helmet board: a review pass over `rdk/`
 
 A read of the whole embedded client, agent and sidecar, and the eleven things

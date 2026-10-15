@@ -64,6 +64,8 @@ android {
         compose = true
         buildConfig = true
     }
+    // Reuse the canonical safety clips directly; no duplicated binary source files.
+    sourceSets.getByName("main").assets.srcDir(rootProject.file("../public/audio"))
 }
 
 dependencies {

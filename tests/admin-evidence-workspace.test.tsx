@@ -8,7 +8,8 @@ import {
   TESTING_TEST_CASES,
   type TestingOperationsSnapshot,
   type TestingPolicy,
-  type TestingReview
+  type TestingReview,
+  type TestingRun
 } from "../shared/testing";
 import { AdminOverview } from "../src/components/admin/AdminOverview";
 import { AdminWorkspace } from "../src/components/admin/AdminWorkspace";
@@ -1693,6 +1694,179 @@ describe("EvidenceWorkspace review workflow", () => {
 });
 
 describe("Admin evidence presentation guards", () => {
+  function currentRun(overrides: Partial<TestingRun> = {}): TestingRun {
+    return {
+      id: "current-run",
+      name: "Current release",
+      build: "abcdef123456",
+      status: "ready",
+      owner: "admin",
+      createdAt: 1,
+      updatedAt: 2,
+      policyVersion: "policy-v1",
+      requirements: [],
+      assignments: [],
+      notes: "",
+      ...overrides
+    };
+  }
+
+  it.each(["open", "triaged"] as const)("blocks the overview for a current run's %s safety review", async (status) => {
+    const snapshot = testing([], []);
+    const current = operations([review("adas-failure", { runId: "current-run", status, severity: "critical" })]);
+    current.runs = [currentRun()];
+    await act(async () => {
+      renderer = create(
+        <AdminOverview
+          agent={agent()}
+          testing={snapshot}
+          sessions={[]}
+          operations={current}
+          onOpenEvidence={vi.fn()}
+          onOpenReleases={vi.fn()}
+        />
+      );
+    });
+    const card = renderer!.root.find((node) => node.type === "button" && text(node).includes("发布门禁"));
+    expect(text(card.findByType("strong"))).toBe("受阻");
+    expect(text(renderer!.root)).toContain("本运行未完成的证据复核");
+  });
+
+  it("keeps a manually blocked current run blocked even when numeric checks pass", async () => {
+    const current = operations([]);
+    current.runs = [currentRun({ status: "blocked" })];
+    await act(async () => {
+      renderer = create(
+        <AdminOverview
+          agent={agent()}
+          testing={testing([], [])}
+          sessions={[]}
+          operations={current}
+          onOpenEvidence={vi.fn()}
+          onOpenReleases={vi.fn()}
+        />
+      );
+    });
+    const card = renderer!.root.find((node) => node.type === "button" && text(node).includes("发布门禁"));
+    expect(text(card.findByType("strong"))).toBe("受阻");
+  });
+
+  it("shows the same blocked run to testers whose role-scoped runs have no operations metadata", async () => {
+    await act(async () => {
+      renderer = create(
+        <AdminOverview
+          agent={agent()}
+          testing={testing([], [])}
+          sessions={[]}
+          operations={null}
+          runs={[currentRun({ status: "blocked" })]}
+          onOpenEvidence={vi.fn()}
+          onOpenReleases={vi.fn()}
+        />
+      );
+    });
+    const card = renderer!.root.find((node) => node.type === "button" && text(node).includes("发布门禁"));
+    expect(text(card.findByType("strong"))).toBe("受阻");
+  });
+
+  it("waits for authoritative release review when only a tester's partial assignments are available", async () => {
+    await act(async () => {
+      renderer = create(
+        <AdminOverview
+          agent={agent()}
+          testing={testing([], [])}
+          sessions={[]}
+          operations={null}
+          runs={[currentRun()]}
+          onOpenEvidence={vi.fn()}
+          onOpenReleases={vi.fn()}
+        />
+      );
+    });
+    const card = renderer!.root.find((node) => node.type === "button" && text(node).includes("发布门禁"));
+    expect(text(card.findByType("strong"))).toBe("等待");
+    expect(text(renderer!.root)).toContain("等待发布复核信息");
+  });
+
+  it("requires current-run coverage before showing awaiting approval", async () => {
+    const current = operations([]);
+    current.runs = [
+      currentRun({
+        requirements: [
+          {
+            id: "required-adas",
+            testCaseId: "adas-alert-interrupt",
+            platform: "android",
+            networkType: "any",
+            language: "any",
+            requiredValidSessions: 2
+          }
+        ]
+      })
+    ];
+    await act(async () => {
+      renderer = create(
+        <AdminOverview
+          agent={agent()}
+          testing={testing([], [])}
+          sessions={[]}
+          operations={current}
+          onOpenEvidence={vi.fn()}
+          onOpenReleases={vi.fn()}
+        />
+      );
+    });
+    const card = renderer!.root.find((node) => node.type === "button" && text(node).includes("发布门禁"));
+    expect(text(card.findByType("strong"))).toBe("受阻");
+    expect(text(renderer!.root)).toContain("完成全部覆盖要求");
+  });
+
+  it("scopes overview blockers to the latest matching run and ignores resolved reviews", async () => {
+    const current = operations([
+      review("old-adas", { runId: "old-run", status: "open" }),
+      review("fixed-adas", { runId: "current-run", status: "resolved" })
+    ]);
+    current.runs = [currentRun({ id: "old-run", updatedAt: 1, status: "blocked" }), currentRun()];
+    await act(async () => {
+      renderer = create(
+        <AdminOverview
+          agent={agent()}
+          testing={testing([], [])}
+          sessions={[]}
+          operations={current}
+          onOpenEvidence={vi.fn()}
+          onOpenReleases={vi.fn()}
+        />
+      );
+    });
+    const card = renderer!.root.find((node) => node.type === "button" && text(node).includes("发布门禁"));
+    expect(text(card.findByType("strong"))).toBe("待批准");
+  });
+
+  it.each(["stale", "loading", "error"] as const)(
+    "does not certify an approved snapshot when Admin data is %s",
+    async (dataStatus) => {
+      const current = operations([]);
+      current.approvedBaselineBuild = "abcdef123456";
+      await act(async () => {
+        renderer = create(
+          <AdminOverview
+            agent={agent()}
+            testing={testing([], [])}
+            sessions={[]}
+            operations={current}
+            dataStatus={dataStatus}
+            onOpenEvidence={vi.fn()}
+            onOpenReleases={vi.fn()}
+          />
+        );
+      });
+      const card = renderer!.root.find((node) => node.type === "button" && text(node).includes("发布门禁"));
+      expect(text(card.findByType("strong"))).toBe("等待");
+      expect(text(renderer!.root)).toContain("发布数据尚未同步");
+    }
+  );
+
   it("waits for matching evidence when health advances beyond an approved testing snapshot", async () => {
     const snapshot = testing([], []);
     snapshot.releaseGate.status = "pass";

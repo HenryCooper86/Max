@@ -135,6 +135,8 @@ export function AdminWorkspace({ agent, user, onAuthenticationExpired, onClose }
               testing={data.testing}
               sessions={data.sessions}
               operations={data.operations}
+              runs={data.runs}
+              dataStatus={data.status}
               onOpenEvidence={(sessionId) => {
                 setRequestedEvidenceSessionId(sessionId ?? null);
                 setEvidenceFocusRequestKey((current) => current + 1);

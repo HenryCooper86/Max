@@ -6,6 +6,8 @@ import android.media.AudioTrack
 import com.horizon.maxhelmet.BuildConfig
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.LinkedBlockingQueue
+import java.io.ByteArrayOutputStream
+import java.util.Base64
 import kotlin.concurrent.thread
 import kotlin.math.abs
 import kotlin.math.exp
@@ -16,7 +18,7 @@ import kotlin.math.exp
  * AudioTrack streaming mode plus a feeder thread gives the same behavior, and
  * stopPlayback() implements barge-in by flushing everything queued.
  */
-class PcmPlayer {
+class PcmPlayer(private val verifyWarningRender: Boolean = false) {
     companion object {
         const val SAMPLE_RATE = 24_000
 
@@ -49,6 +51,10 @@ class PcmPlayer {
 
     // Guarded by this player: prewarming alone has no PCM to interrupt.
     private var generationHasAudio = false
+    private data class WarningWrite(val epoch: Long, val generation: Int, val expected: ByteArray,
+        val gain: Float, val firstNonzero: Int, val accepted: ByteArrayOutputStream = ByteArrayOutputStream(),
+        var rendered: WarningPcmProgress? = null)
+    private var warningWrite: WarningWrite? = null
     private data class PcmTicket(val pcm: ByteArray, val epoch: Long, val generation: Int)
     private val queue = LinkedBlockingQueue<PcmTicket>()
     private val totalQueuedSamples = AtomicLong()
@@ -73,7 +79,7 @@ class PcmPlayer {
         val lastFlushSucceeded: Boolean
     )
 
-    fun playbackDiagnostics(): PlaybackDiagnostics {
+    @Synchronized fun playbackDiagnostics(): PlaybackDiagnostics {
         check(BuildConfig.DEBUG)
         return PlaybackDiagnostics(
             totalQueuedSamples.get(),
@@ -83,6 +89,29 @@ class PcmPlayer {
             generationWrittenSamples.get(), track?.playbackHeadPosition?.toLong()?.and(0xffffffffL) ?: 0,
             generation, queue.size, active, running, lastFlushSucceeded
         )
+    }
+
+    /** A proof is derived from accepted bytes and the actual hardware head, never play()/enqueue. */
+    @Synchronized fun warningOutputState(): WarningOutputState {
+        val played = if (BuildConfig.DEBUG) runCatching {
+            track?.playbackHeadPosition?.toLong()?.and(0xffffffffL) ?: 0
+        }.getOrDefault(0) else 0
+        val w = warningWrite
+        val proof = if (BuildConfig.DEBUG && verifyWarningRender && w != null &&
+            active && running && w.epoch == playbackEpoch && w.generation == generation &&
+            w.firstNonzero >= 0 && w.accepted.size() / 2 > w.firstNonzero &&
+            played > w.firstNonzero && played <= w.accepted.size() / 2) {
+            w.rendered ?: run {
+                val accepted = w.accepted.toByteArray()
+                WarningPcmProgress(playbackEpoch, generation, accepted.size.toLong() / 2, played,
+                    w.firstNonzero, safetySha256(accepted), safetySha256(w.expected.copyOf(accepted.size)),
+                    Base64.getEncoder().encodeToString(accepted), w.gain).also { w.rendered = it }
+            }
+        } else null
+        return WarningOutputState(active, running, playbackEpoch, generation,
+            totalQueuedSamples.get(), completedPlayedSamples.get() + minOf(generationQueuedSamples.get(), played),
+            totalDiscardedSamples.get(), generationQueuedSamples.get(), generationWrittenSamples.get(),
+            played, queue.size, proof)
     }
     private var track: AudioTrack? = null
     private var feederThread: Thread? = null
@@ -198,6 +227,10 @@ class PcmPlayer {
                             audioTrack.write(ticket.pcm, offset, ticket.pcm.size - offset,
                                 AudioTrack.WRITE_NON_BLOCKING).also {
                                 if (BuildConfig.DEBUG && it > 0) generationWrittenSamples.addAndGet(it.toLong() / 2)
+                                if (BuildConfig.DEBUG && verifyWarningRender && it > 0) {
+                                    warningWrite?.takeIf { w -> w.epoch == ticket.epoch && w.generation == ticket.generation }
+                                        ?.accepted?.write(ticket.pcm, offset, it)
+                                }
                             }
                         }
                     }
@@ -235,9 +268,9 @@ class PcmPlayer {
 
     /** Accepts a PCM ticket before transforming it, so interruption accounts
      * for every received sample even if gain processing has not finished. */
-    fun play(pcm: ByteArray) {
+    @JvmOverloads fun play(pcm: ByteArray, acceptsSource: () -> Boolean = { true }) {
         val ticket = synchronized(this) {
-            if (!active) return
+            if (!active || !acceptsSource()) return
             if (pcm.isNotEmpty()) generationHasAudio = true
             if (BuildConfig.DEBUG) {
                 totalQueuedSamples.addAndGet(pcm.size.toLong() / 2)
@@ -246,11 +279,16 @@ class PcmPlayer {
             PcmTicket(pcm, playbackEpoch, generation)
         }
         observePipeline("pcm.gain.begin", pcm.size)
-        val buffer = applyGain(pcm)
+        val gain = level.coerceIn(0.5f, 4f)
+        val buffer = applyGain(pcm, gain)
         observePipeline("pcm.gain.end", buffer.size)
         if (!ensureStarted(ticket.epoch)) return
         val enqueued = synchronized(this) {
             if (!active || playbackEpoch != ticket.epoch || generation != ticket.generation || !running) false else {
+                if (BuildConfig.DEBUG && verifyWarningRender) {
+                    val first = (0 until buffer.size / 2).firstOrNull { i -> buffer[i * 2].toInt() != 0 || buffer[i * 2 + 1].toInt() != 0 } ?: -1
+                    warningWrite = WarningWrite(ticket.epoch, ticket.generation, buffer.copyOf(), gain, first)
+                }
                 queue.put(if (buffer === ticket.pcm) ticket else ticket.copy(pcm = buffer))
                 true
             }
@@ -264,8 +302,7 @@ class PcmPlayer {
      * them through a soft limiter so loud peaks compress smoothly instead of
      * hard-clipping — the PCM-domain equivalent of the web's DynamicsCompressor.
      */
-    private fun applyGain(pcm: ByteArray): ByteArray {
-        val gain = level.coerceIn(0.5f, 4f)
+    private fun applyGain(pcm: ByteArray, gain: Float): ByteArray {
         if (gain == 1.0f) return pcm
         var i = 0
         while (i + 1 < pcm.size) {
@@ -302,6 +339,7 @@ class PcmPlayer {
             totalDiscardedSamples.addAndGet(queued - played)
         }
         generation += 1
+        warningWrite = null
         generationQueuedSamples.set(0)
         generationWrittenSamples.set(0)
         queue.clear()
@@ -328,6 +366,7 @@ class PcmPlayer {
             totalDiscardedSamples.addAndGet(queued - played)
         }
         generation += 1
+        warningWrite = null
         generationQueuedSamples.set(0)
         generationWrittenSamples.set(0)
         queue.clear()

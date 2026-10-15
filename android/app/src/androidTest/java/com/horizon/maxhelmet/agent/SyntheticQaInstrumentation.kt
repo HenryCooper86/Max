@@ -12,6 +12,9 @@ import com.horizon.maxhelmet.BuildConfig
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import android.util.Base64
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -29,6 +32,7 @@ class SyntheticQaInstrumentation : Instrumentation() {
     private val results = JSONArray()
     private val invocationId = "${System.currentTimeMillis()}-${UUID.randomUUID()}"
     private var serverBuild = "unknown"
+    private lateinit var warningAssets: QaWarningAssets
 
     private fun persist(harnessFailure: String? = null) {
         val content =
@@ -65,6 +69,10 @@ class SyntheticQaInstrumentation : Instrumentation() {
     }
 
     override fun onStart() {
+        if (args.getString("case") == "__offline_warning__") {
+            runNativeSafetyWarningDiagnostic(this)
+            return
+        }
         if (args.getString("case") == "__pcm_generation__") {
             runNativePcmGenerationDiagnostic(this, args)
             return
@@ -123,6 +131,7 @@ class SyntheticQaInstrumentation : Instrumentation() {
                         } == fixture.getString("sha256")
                     )
                 }
+                warningAssets = QaWarningAssets { path -> targetContext.assets.open("adas/$path").use { it.readBytes() } }
                 if (args.getString("case") == "__preflight__") return@runBlocking
                 val cases =
                     listOf(
@@ -262,6 +271,8 @@ class SyntheticQaInstrumentation : Instrumentation() {
         val backgroundTts = AtomicBoolean(false)
         val hazardTtsStarts = AtomicLong()
         val spokenHazardGenerations = ConcurrentLinkedQueue<Int>()
+        val observedWarningProofs = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        var expectedWarningSessionEpoch = 0L
         runOnMainSync {
             (field(session, "tts") as? TextToSpeech)?.setOnUtteranceProgressListener(
                 object : UtteranceProgressListener() {
@@ -297,6 +308,20 @@ class SyntheticQaInstrumentation : Instrumentation() {
             scope.launch {
                 while (isActive) {
                     if (observeBackground.get() && ttsSpeaking(session)) backgroundTts.set(true)
+                    val warning = session.syntheticWarningDiagnostics()
+                    for (proof in warning.proofs) {
+                        val request = proof.request
+                        val key = "${request.sessionEpoch}/${request.hazardGeneration}/${request.playbackEpoch}/${request.playbackGeneration}/${request.requestedAtNanos}"
+                        if (observedWarningProofs.add(key)) synchronized(states) {
+                            states.put(JSONObject().put("type", "native-warning-render-observed")
+                                .put("at", System.currentTimeMillis())
+                                .put("sessionEpoch", request.sessionEpoch.toString())
+                                .put("hazardGeneration", request.hazardGeneration)
+                                .put("playbackEpoch", request.playbackEpoch.toString())
+                                .put("playbackGeneration", request.playbackGeneration)
+                                .put("capturedAtNanos", proof.capturedAtNanos.toString()))
+                        }
+                    }
                     val pos = runCatching { position(session) }.getOrDefault(0)
                     if (pos > oldPosition) {
                         playedSamples += pos - oldPosition
@@ -342,6 +367,12 @@ class SyntheticQaInstrumentation : Instrumentation() {
                                     .put("hardwarePlayedBefore", evidence?.before?.playbackSamples)
                                     .put("livePcmPendingAtHazard", speaking)
                                     .put("sameHazardHardwareFlushSucceeded", flushed)
+                                    .put("warningSessionEpoch", evidence?.warningSessionEpoch?.toString())
+                                    .put("warningText", evidence?.warningText)
+                                    .put("warningThreat", evidence?.threat)
+                                    .put("warningGender", evidence?.voiceGender)
+                                    .put("providerPlaybackBefore", evidence?.before?.let { qaProviderPlaybackJson(it) })
+                                    .put("providerPlaybackAfter", evidence?.after?.let { qaProviderPlaybackJson(it) })
                             )
                         }
                     }
@@ -400,6 +431,15 @@ class SyntheticQaInstrumentation : Instrumentation() {
                     session.state.value.isLive
             }
             check(capture.running.get())
+            val warningReady = session.syntheticWarningDiagnostics()
+            check(warningReady.prepared && warningReady.output.active && warningReady.output.running) {
+                "Bundled warning output was not prewarmed before provider readiness"
+            }
+            expectedWarningSessionEpoch = warningReady.sessionEpoch
+            report.put("warningEvidenceVersion", 2)
+                .put("warningProofMechanism", "canonical-asset-accepted-postgain-prefix-and-hardware-playback-head")
+                .put("warningSessionEpoch", expectedWarningSessionEpoch.toString())
+                .put("warningPreparedAtReady", true)
             check(field(field(session, "sessionLocation")!!, "listener") == null)
             check(
                 field(session.crash, "listening") == false && field(session.crash, "timer") == null
@@ -415,6 +455,7 @@ class SyntheticQaInstrumentation : Instrumentation() {
             }
             if (case == "wake-word-addressed-only") {
                 val initialPcmSamples = player(session).playbackDiagnostics().totalQueuedSamples
+                val initialWarning = session.syntheticWarningDiagnostics()
                 observeBackground.set(true)
                 feed("wake-background")
                 delay(9000)
@@ -425,6 +466,13 @@ class SyntheticQaInstrumentation : Instrumentation() {
                 report
                     .put("unaddressedPcmSamples", backgroundSamples)
                     .put("unaddressedTtsSpeech", backgroundTts.get())
+                val backgroundWarning = session.syntheticWarningDiagnostics()
+                val backgroundWarningSamples = backgroundWarning.output.totalQueuedSamples - initialWarning.output.totalQueuedSamples
+                report.put("unaddressedWarningQueuedSamples", backgroundWarningSamples)
+                    .put("unaddressedWarningProofs", backgroundWarning.proofs.size - initialWarning.proofs.size)
+                check(backgroundWarningSamples == 0L && backgroundWarning.proofs.size == initialWarning.proofs.size) {
+                    "Unaddressed speech scheduled or rendered a bundled warning"
+                }
                 check(backgroundSamples == 0L && !backgroundTts.get()) {
                     "Unaddressed speech produced native audio"
                 }
@@ -491,22 +539,23 @@ class SyntheticQaInstrumentation : Instrumentation() {
             delay(4500)
             if (case == "adas-alert-interrupt") {
                 val drained = drain(session, allowInterrupted = true)
-                check(hazardTtsStarts.get() > 0) { "Native hazard warning never started" }
-                val matchingSpokenInterruption =
-                    synchronized(states) {
-                        (0 until states.length()).any { index ->
-                            val event = states.getJSONObject(index)
-                            event.optString("type") == "native-hazard" &&
-                                event.optBoolean("sameHazardHardwareFlushSucceeded") &&
-                                spokenHazardGenerations.contains(event.optInt("hazardGeneration"))
-                        }
-                    }
-                check(matchingSpokenInterruption) {
-                    "Interrupted hazard had no native TTS start callback"
+                val diagnostics = session.syntheticWarningDiagnostics()
+                val snapshotAtNanos = System.nanoTime()
+                val cuts = synchronized(states) { (0 until states.length()).map { states.getJSONObject(it) }
+                    .filter { it.optString("type") == "native-hazard" && it.optBoolean("livePcmPendingAtHazard") && it.optBoolean("sameHazardHardwareFlushSucceeded") } }
+                check(cuts.isNotEmpty()) { "No actual provider PCM cut to verify" }
+                val verified = JSONArray()
+                for (cut in cuts) {
+                    check(cut.getString("warningSessionEpoch") == expectedWarningSessionEpoch.toString()) { "Provider cut belongs to another warning session" }
+                    val expected = warningAssets.identity(cut.getString("warningThreat"), cut.getString("warningText"), cut.getString("warningGender"))
+                    val matching = diagnostics.proofs.filter { it.request.sessionEpoch == expectedWarningSessionEpoch && it.request.hazardGeneration == cut.getInt("hazardGeneration") }
+                    check(matching.size == 1) { "Every interrupted provider hazard needs its exact single hardware render proof" }
+                    verified.put(warningAssets.verify(matching.single(), expectedWarningSessionEpoch, cut.getInt("hazardGeneration"), expected, diagnostics, snapshotAtNanos))
                 }
                 report
-                    .put("hazardTtsStarted", hazardTtsStarts.get())
+                    .put("hazardTtsStarted", hazardTtsStarts.get()) // Diagnostic only; never credits catalog audio.
                     .put("warningStartedForInterruptedHazard", true)
+                    .put("verifiedWarningRenders", verified)
                 check(drained.totalDiscardedSamples == hazardDiscardedSamples) {
                     "PCM discarded outside ADAS hazard handling"
                 }
@@ -549,6 +598,7 @@ class SyntheticQaInstrumentation : Instrumentation() {
             report
                 .put("passed", false)
                 .put("failureClass", error.javaClass.simpleName)
+                .apply { if (error is QaWarningProofFailure) put("failureDetail", error.message) }
                 .put("status", session.state.value.statusText)
                 .put("connection", session.state.value.connection.name)
         } finally {
@@ -563,6 +613,9 @@ class SyntheticQaInstrumentation : Instrumentation() {
                     }
                 ),
             )
+            val warningBeforeStop = session.syntheticWarningDiagnostics()
+            val warningBeforeStopAtNanos = System.nanoTime()
+            report.put("warningDiagnosticsBeforeStop", qaWarningDiagnosticsJson(warningBeforeStop, warningBeforeStopAtNanos))
             val beforeStop = player(session).playbackDiagnostics()
             runOnMainSync { session.stop(force = true) }
             val afterStop = player(session).playbackDiagnostics()
@@ -585,12 +638,20 @@ class SyntheticQaInstrumentation : Instrumentation() {
                             !player(session).playbackDiagnostics().active &&
                             !player(session).playbackDiagnostics().running &&
                             !ttsSpeaking(session) &&
-                            field(session, "webSocket") == null
+                            field(session, "webSocket") == null &&
+                            session.syntheticWarningDiagnostics().let { warning ->
+                                !warning.prepared && warning.current == null && !warning.output.active &&
+                                    !warning.output.running && warning.output.pendingBuffers == 0
+                            }
                     stopped
                 }
             } catch (_: TimeoutCancellationException) {
                 stopped = false
             }
+            val warningAfterStop = session.syntheticWarningDiagnostics()
+            report.put("warningDiagnosticsAfterStop", qaWarningDiagnosticsJson(warningAfterStop, System.nanoTime()))
+                .put("nativeWarningStopped", !warningAfterStop.prepared && warningAfterStop.current == null &&
+                    !warningAfterStop.output.active && !warningAfterStop.output.running && warningAfterStop.output.pendingBuffers == 0)
             report.put("nativeStopped", stopped)
             if (args.getString("tracePipeline") == "true") {
                 report.put("nativePipelineObservations", JSONArray(pipeline.toList()))
@@ -617,6 +678,163 @@ class SyntheticQaInstrumentation : Instrumentation() {
                 },
             )
         }
+    }
+}
+
+private fun qaProviderPlaybackJson(p: PcmPlayer.PlaybackDiagnostics): JSONObject = JSONObject()
+    .put("running", p.running).put("active", p.active).put("generation", p.generation)
+    .put("queuedSamples", p.queuedSamples).put("writtenSamples", p.writtenSamples)
+    .put("playbackSamples", p.playbackSamples).put("pendingBuffers", p.pendingBuffers)
+    .put("totalQueuedSamples", p.totalQueuedSamples).put("totalPlayedSamples", p.totalPlayedSamples)
+    .put("totalDiscardedSamples", p.totalDiscardedSamples).put("lastFlushSucceeded", p.lastFlushSucceeded)
+
+private fun qaWarningIdentityJson(clip: WarningClipIdentity): JSONObject = JSONObject()
+    .put("threat", clip.threat).put("text", clip.text).put("gender", clip.gender)
+    .put("wavSha256", clip.wavSha256).put("pcmSha256", clip.pcmSha256).put("samples", clip.samples)
+
+private fun qaWarningRequestJson(request: SafetyWarningRequest): JSONObject = JSONObject()
+    .put("sessionEpoch", request.sessionEpoch.toString()).put("hazardGeneration", request.hazardGeneration)
+    .put("clip", qaWarningIdentityJson(request.clip)).put("playbackEpoch", request.playbackEpoch.toString())
+    .put("playbackGeneration", request.playbackGeneration).put("requestedAtNanos", request.requestedAtNanos.toString())
+
+private fun qaWarningProgressJson(progress: WarningPcmProgress): JSONObject = JSONObject()
+    .put("playbackEpoch", progress.playbackEpoch.toString()).put("playbackGeneration", progress.playbackGeneration)
+    .put("writtenSamples", progress.writtenSamples).put("hardwarePlayedSamples", progress.hardwarePlayedSamples)
+    .put("firstNonzeroSample", progress.firstNonzeroSample)
+    .put("actualWrittenPcmSha256", progress.actualWrittenPcmSha256)
+    .put("expectedWrittenPcmSha256", progress.expectedWrittenPcmSha256)
+    .put("actualWrittenPcmBase64", progress.actualWrittenPcmBase64).put("outputGain", progress.outputGain)
+    .put("observedAtNanos", progress.observedAtNanos.toString())
+
+internal fun qaWarningDiagnosticsJson(d: SafetyWarningDiagnostics, observedAtNanos: Long = System.nanoTime()): JSONObject = JSONObject()
+    .put("sessionEpoch", d.sessionEpoch.toString()).put("prepared", d.prepared)
+    .put("snapshotAtNanos", observedAtNanos.toString())
+    .put("current", d.current?.let { qaWarningRequestJson(it) } ?: JSONObject.NULL)
+    .put("output", JSONObject().put("active", d.output.active).put("running", d.output.running)
+        .put("playbackEpoch", d.output.playbackEpoch.toString()).put("playbackGeneration", d.output.playbackGeneration)
+        .put("totalQueuedSamples", d.output.totalQueuedSamples).put("totalPlayedSamples", d.output.totalPlayedSamples)
+        .put("totalDiscardedSamples", d.output.totalDiscardedSamples).put("queuedSamples", d.output.queuedSamples)
+        .put("writtenSamples", d.output.writtenSamples).put("hardwarePlayedSamples", d.output.hardwarePlayedSamples)
+        .put("pendingBuffers", d.output.pendingBuffers)
+        .put("progress", d.output.progress?.let { qaWarningProgressJson(it) } ?: JSONObject.NULL))
+    .put("proofs", JSONArray(d.proofs.map { p -> JSONObject().put("request", qaWarningRequestJson(p.request))
+        .put("progress", qaWarningProgressJson(p.progress)).put("capturedAtNanos", p.capturedAtNanos.toString()) }))
+    .put("retiredRequests", JSONArray(d.retiredRequests.map { r -> JSONObject()
+        .put("request", qaWarningRequestJson(r.request)).put("retiredAtNanos", r.retiredAtNanos.toString()) }))
+
+private class QaWarningProofFailure(message: String) : IllegalStateException("Warning proof: $message")
+private fun qaWarningRequire(condition: Boolean, message: String) { if (!condition) throw QaWarningProofFailure(message) }
+
+/** Independent test-side asset decoder and gain contract; production verification helpers are never called. */
+private class QaWarningAssets(read: (String) -> ByteArray) {
+    private data class Asset(val identity: WarningClipIdentity, val pcm: ByteArray)
+    private val assets: List<Asset>
+    private fun sha(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+
+    init {
+        val manifest = JSONObject(read("manifest.json").toString(Charsets.UTF_8))
+        qaWarningRequire(manifest.getInt("version") == 1 && manifest.getInt("sampleRate") == 24000 &&
+            manifest.getInt("channels") == 1 && manifest.getString("sampleFormat") == "s16le", "manifest format")
+        val entries = manifest.getJSONArray("assets")
+        qaWarningRequire(entries.length() == 18, "all eighteen canonical assets required")
+        val threats = setOf("rear_approach", "forward_collision", "left_blind_spot", "right_blind_spot",
+            "lane_departure", "left_cross_traffic", "right_cross_traffic", "pedestrian_ahead", "tailgating")
+        val keys = mutableSetOf<String>()
+        assets = (0 until entries.length()).map { i ->
+            val item = entries.getJSONObject(i)
+            val threat = item.getString("threat"); val gender = item.getString("gender"); val text = item.getString("text")
+            val file = item.getString("file")
+            qaWarningRequire(threat in threats && gender in setOf("female", "male") && text.isNotBlank() &&
+                file == "$gender/$threat.wav" && keys.add(file), "unknown or duplicate warning identity")
+            val identity = WarningClipIdentity(threat, text, gender, item.getString("sha256"), item.getString("pcmSha256"), item.getInt("samples"))
+            val wav = read(file)
+            qaWarningRequire(sha(wav) == identity.wavSha256, "canonical WAV hash")
+            val pcm = decodeWav(wav, identity.samples)
+            qaWarningRequire(sha(pcm) == identity.pcmSha256, "canonical PCM hash")
+            Asset(identity, pcm)
+        }
+        for (threat in threats) qaWarningRequire(assets.filter { it.identity.threat == threat }.map { it.identity.text }.distinct().size == 1, "gender text mismatch")
+    }
+
+    fun identity(threat: String, text: String, gender: String): WarningClipIdentity =
+        assets.singleOrNull { it.identity.threat == threat && it.identity.text == text && it.identity.gender == gender }?.identity
+            ?: throw QaWarningProofFailure("hazard does not match canonical exact text/gender/threat")
+
+    fun verify(proof: SafetyWarningRenderProof, sessionEpoch: Long, hazard: Int, expected: WarningClipIdentity,
+        diagnostics: SafetyWarningDiagnostics, snapshotAtNanos: Long): JSONObject {
+        val r = proof.request; val p = proof.progress
+        qaWarningRequire(r.sessionEpoch == sessionEpoch && sessionEpoch > 0 && r.hazardGeneration == hazard && hazard > 0, "stale session or wrong hazard")
+        qaWarningRequire(r.clip == expected, "wrong warning identity for exact provider cut")
+        val asset = assets.singleOrNull { it.identity == r.clip } ?: throw QaWarningProofFailure("untrusted asset")
+        qaWarningRequire(r.playbackEpoch > 0 && r.playbackEpoch == p.playbackEpoch && r.playbackGeneration == p.playbackGeneration, "stale output epoch/generation")
+        qaWarningRequire(p.writtenSamples in 1..r.clip.samples.toLong() && p.hardwarePlayedSamples in 1..p.writtenSamples, "accepted/hardware sample counts")
+        qaWarningRequire(p.actualWrittenPcmBase64.length.toLong() <= (r.clip.samples.toLong() * 2 + 2) / 3 * 4, "accepted prefix too large")
+        val actual = Base64.decode(p.actualWrittenPcmBase64, Base64.NO_WRAP)
+        qaWarningRequire(actual.size.toLong() == p.writtenSamples * 2 && Base64.encodeToString(actual, Base64.NO_WRAP) == p.actualWrittenPcmBase64, "accepted prefix length/base64")
+        val processed = processPcm(asset.pcm, p.outputGain)
+        val expectedPrefix = processed.copyOfRange(0, actual.size)
+        val expectedHash = sha(expectedPrefix)
+        qaWarningRequire(actual.contentEquals(expectedPrefix) && sha(actual) == p.actualWrittenPcmSha256 &&
+            expectedHash == p.expectedWrittenPcmSha256, "actual accepted bytes differ from independently processed prefix")
+        var first = -1
+        var playedNonzero = 0
+        for (i in 0 until actual.size / 2) if (actual[i * 2].toInt() != 0 || actual[i * 2 + 1].toInt() != 0) {
+            if (first < 0) first = i
+            if (i.toLong() < p.hardwarePlayedSamples) playedNonzero++
+        }
+        qaWarningRequire(first >= 0 && first == p.firstNonzeroSample && p.hardwarePlayedSamples > first && playedNonzero > 0, "hardware has not passed actual postgain nonzero sample")
+        qaWarningRequire(r.requestedAtNanos > 0 && r.requestedAtNanos <= p.observedAtNanos &&
+            p.observedAtNanos <= proof.capturedAtNanos && proof.capturedAtNanos <= snapshotAtNanos, "invalid proof time order")
+        val retired = diagnostics.retiredRequests.filter { it.request == r }
+        qaWarningRequire(retired.size <= 1, "ambiguous request ownership")
+        if (retired.isNotEmpty()) qaWarningRequire(proof.capturedAtNanos < retired.single().retiredAtNanos, "progress first observed after supersession")
+        else qaWarningRequire(diagnostics.current == r, "proof is neither current nor retired in this session")
+        return JSONObject().put("verified", true).put("hazardGeneration", hazard)
+            .put("sessionEpoch", sessionEpoch.toString()).put("playbackEpoch", r.playbackEpoch.toString())
+            .put("playbackGeneration", r.playbackGeneration).put("clip", qaWarningIdentityJson(expected))
+            .put("verifiedPrefixSha256", expectedHash).put("firstNonzeroSample", first)
+            .put("hardwarePlayedNonzeroSamples", playedNonzero).put("writtenSamples", p.writtenSamples)
+            .put("hardwarePlayedSamples", p.hardwarePlayedSamples)
+    }
+
+    private fun decodeWav(wav: ByteArray, samples: Int): ByteArray {
+        qaWarningRequire(samples > 0 && wav.size >= 12, "WAV too short")
+        val b = ByteBuffer.wrap(wav).order(ByteOrder.LITTLE_ENDIAN)
+        fun tag(at: Int) = String(wav, at, 4, Charsets.US_ASCII)
+        qaWarningRequire(tag(0) == "RIFF" && tag(8) == "WAVE" && b.getInt(4).toLong() + 8 == wav.size.toLong(), "WAV header")
+        var at = 12; var format = false; var pcm: ByteArray? = null
+        while (at < wav.size) {
+            qaWarningRequire(at + 8 <= wav.size, "truncated WAV chunk")
+            val length = b.getInt(at + 4).toLong() and 0xffffffffL; val start = at + 8; val end = start.toLong() + length
+            qaWarningRequire(end + length % 2 <= wav.size, "WAV chunk bounds")
+            when (tag(at)) {
+                "fmt " -> { qaWarningRequire(!format && length >= 16 && b.getShort(start).toInt() == 1 &&
+                    b.getShort(start + 2).toInt() == 1 && b.getInt(start + 4) == 24000 && b.getInt(start + 8) == 48000 &&
+                    b.getShort(start + 12).toInt() == 2 && b.getShort(start + 14).toInt() == 16, "WAV PCM format"); format = true }
+                "data" -> { qaWarningRequire(pcm == null && length == samples.toLong() * 2, "WAV sample count"); pcm = wav.copyOfRange(start, end.toInt()) }
+            }
+            at = (end + length % 2).toInt()
+        }
+        qaWarningRequire(format && pcm != null && pcm.any { it.toInt() != 0 }, "missing or silent source PCM")
+        return pcm!!
+    }
+
+    private fun processPcm(source: ByteArray, gain: Float): ByteArray {
+        qaWarningRequire(gain.isFinite() && gain in 0.5f..4f, "gain outside declared processing contract")
+        val bytes = source.copyOf()
+        if (gain == 1f) return bytes
+        for (at in bytes.indices step 2) {
+            val sample = (bytes[at + 1].toInt() shl 8) or (bytes[at].toInt() and 255)
+            val scaled = sample / 32768f * gain
+            val magnitude = kotlin.math.abs(scaled); val threshold = 0.7f; val headroom = 1f - threshold
+            val limited = if (magnitude <= threshold) scaled else {
+                val value = threshold + headroom * (1f - kotlin.math.exp(-(magnitude - threshold) / headroom))
+                if (scaled < 0f) -value else value
+            }
+            val output = (limited * 32767f).toInt().coerceIn(-32768, 32767)
+            bytes[at] = output.toByte(); bytes[at + 1] = (output shr 8).toByte()
+        }
+        return bytes
     }
 }
 

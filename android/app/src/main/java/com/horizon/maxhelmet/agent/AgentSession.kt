@@ -205,6 +205,23 @@ class AgentSession(
     private var persistedTranscriptSignature: Pair<Int, Int>? = null
 
     private val player = PcmPlayer()
+    private val warningPlayer = PcmPlayer(verifyWarningRender = BuildConfig.DEBUG)
+    private val warningAudio = SafetyWarningAudio(
+        load = { SafetyWarningCatalog.load { path -> context.assets.open("adas/$path").use { it.readBytes() } } },
+        sink = object : SafetyWarningSink {
+            override fun prepare() = warningPlayer.prepare()
+            override fun warmUp() = warningPlayer.warmUp()
+            override fun play(pcm: ByteArray) = warningPlayer.play(pcm)
+            override fun stop() = warningPlayer.stopPlayback()
+            override fun release() = warningPlayer.release()
+            override fun diagnostics() = warningPlayer.warningOutputState()
+        }
+    )
+
+    fun syntheticWarningDiagnostics(): SafetyWarningDiagnostics {
+        check(BuildConfig.DEBUG && syntheticCapture)
+        return warningAudio.diagnostics()
+    }
 
     /** Opt-in observations for synthetic diagnostics; no payload text or credentials. */
     var syntheticPipelineObserver: ((String, Int) -> Unit)? = null
@@ -212,6 +229,9 @@ class AgentSession(
             check(BuildConfig.DEBUG && syntheticCapture)
             field = value
             player.syntheticPipelineObserver = value
+            warningPlayer.syntheticPipelineObserver = value?.let { observer ->
+                { stage, amount -> observer("warning.$stage", amount) }
+            }
         }
 
     private fun observePipeline(stage: String, value: Int = 0) {
@@ -364,10 +384,12 @@ class AgentSession(
         // In-helmet Bluetooth headset routing; playback follows the same path.
         val bluetoothRouted = audioRouter.startVoiceRouting()
         player.useVoiceCall = true
+        warningPlayer.useVoiceCall = true
         // Arm playback for this session. stop() release()s the player; arming here
         // is what lets a late frame from a previous session be dropped instead of
         // resurrecting a track nothing would release.
         player.prepare()
+        warningAudio.prepare(generation)
 
         _state.update {
             it.copy(
@@ -394,7 +416,8 @@ class AgentSession(
             // off the reader/main threads before any provider PCM can arrive.
             val playbackReady = try {
                 withContext(Dispatchers.IO) {
-                    lifecycle.accepts(generation) && player.warmUp()
+                    lifecycle.accepts(generation) && warningAudio.warmUp() &&
+                        lifecycle.accepts(generation) && player.warmUp()
                 }
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 // The blocking platform constructor can finish after its owner was
@@ -492,6 +515,7 @@ class AgentSession(
         tts?.stop()
         // Release (not just flush) so the next session can pick a new audio route.
         player.release()
+        warningAudio.release()
         audioRouter.stopVoiceRouting()
         // stop() is also called internally on idle/auth/startup failures, not
         // only through MainViewModel, so it owns foreground-service cleanup.
@@ -705,6 +729,7 @@ class AgentSession(
     private fun restartSession() {
         val socket = webSocket
         webSocket = null
+        warningAudio.stop()
         intentionalClose = true
         socket?.close(1000, "session restart")
         restartJob?.cancel()
@@ -808,7 +833,11 @@ class AgentSession(
                 // AudioTrack setup can throw (unsupported config / bad state); keep it
                 // from escaping onto the reader thread and tearing down the listener.
                 observePipeline("socket.binary.received", bytes.size)
-                runCatching { if (!crash.controller.active) player.play(bytes.toByteArray()) }
+                runCatching {
+                    if (!crash.controller.active) player.play(bytes.toByteArray()) {
+                        webSocket === this@AgentSession.webSocket && lifecycle.current() != null
+                    }
+                }
                     .onFailure { Log.w(TAG, "PCM playback failed", it) }
                 observePipeline("socket.binary.handled", bytes.size)
             }
@@ -851,6 +880,7 @@ class AgentSession(
         closedSocket = socket
         socketOpen = false
         webSocket = null
+        warningAudio.stop()
         if (intentionalClose) {
             if (_state.value.handsFree) return // restartSession() will reconnect
             _state.update { it.copy(connection = ConnectionState.OFFLINE, statusText = "离线") }
@@ -991,7 +1021,7 @@ class AgentSession(
 
             is AgentEvent.TelemetryUpdate -> _state.update { it.copy(telemetry = event.telemetry) }
 
-            is AgentEvent.HazardAlert -> handleHazardAlert(event)
+            is AgentEvent.HazardAlert -> handleHazardAlert(event, sourceSocket)
 
             is AgentEvent.ErrorEvent -> _state.update { it.copy(statusText = event.message) }
 
@@ -1098,32 +1128,58 @@ class AgentSession(
     data class SyntheticHazardPlayback(
         val hazardGeneration: Int,
         val before: PcmPlayer.PlaybackDiagnostics,
-        val after: PcmPlayer.PlaybackDiagnostics
+        val after: PcmPlayer.PlaybackDiagnostics,
+        val warningText: String,
+        val voiceGender: String,
+        val threat: String,
+        val warningSessionEpoch: Long
     )
 
     @Volatile
     var syntheticHazardPlayback: SyntheticHazardPlayback? = null
         private set
 
-    private fun handleHazardAlert(alert: AgentEvent.HazardAlert) {
-        val before = if (BuildConfig.DEBUG && syntheticCapture) player.playbackDiagnostics() else null
-        if (alert.interrupt) stopAgentSpeech()
-        hazardAlertGeneration += 1
-        if (before != null) {
-            syntheticHazardPlayback = SyntheticHazardPlayback(hazardAlertGeneration, before, player.playbackDiagnostics())
-        }
-        val generation = hazardAlertGeneration
-        _state.update {
-            it.copy(hazardAlert = alert, turnState = TurnState.SPEAKING, statusText = "⚠️ ${alert.label}")
-        }
-        ttsSpeak(
-            "${alert.message} ${alert.advice}",
-            utteranceId = if (syntheticCapture) "synthetic-hazard-$generation" else "max-reply"
-        )
-        scope.launch {
-            delay((alert.ttcSeconds + 2) * 1000L)
-            if (hazardAlertGeneration == generation) {
-                _state.update { it.copy(hazardAlert = null) }
+    private fun handleHazardAlert(alert: AgentEvent.HazardAlert, sourceSocket: WebSocket) {
+        val owner = lifecycle.current() ?: return
+        warningAudio.withCurrentOwner(owner, { sourceSocket === webSocket && lifecycle.accepts(owner) }) {
+            if (!lifecycle.accepts(owner)) return@withCurrentOwner
+            val text = "${alert.message} ${alert.advice}"
+            val gender = _state.value.voiceGender.wire
+            val before = if (BuildConfig.DEBUG && syntheticCapture) player.playbackDiagnostics() else null
+            if (alert.interrupt) stopAgentSpeech()
+            hazardAlertGeneration += 1
+            if (before != null) {
+                syntheticHazardPlayback = SyntheticHazardPlayback(hazardAlertGeneration, before, player.playbackDiagnostics(),
+                    text, gender, alert.threat, warningAudio.diagnostics().sessionEpoch)
+            }
+            val generation = hazardAlertGeneration
+            _state.update {
+                it.copy(hazardAlert = alert, turnState = TurnState.SPEAKING, statusText = "⚠️ ${alert.label}")
+            }
+            try {
+                tts?.stop()
+                if (!warningAudio.play(alert.threat, text, gender, generation, owner)) {
+                    check(!warningAudio.isKnown(alert.threat, text, gender)) {
+                        "Prepared bundled safety warning is unavailable"
+                    }
+                    // Unknown future vocabulary must never substitute a different bundled warning.
+                    warningAudio.stop()
+                    if (lifecycle.accepts(owner)) check(ttsSpeak(text,
+                        utteranceId = if (syntheticCapture) "synthetic-hazard-$generation" else "max-reply")) {
+                        "Device safety speech is unavailable"
+                    }
+                }
+            } catch (error: Exception) {
+                Log.w(TAG, "Safety warning playback failed", error)
+                if (lifecycle.accepts(owner)) _state.update { it.copy(statusText = "安全提示音播放失败，请留意警示信息") }
+            }
+            scope.launch {
+                delay((alert.ttcSeconds + 2) * 1000L)
+                warningAudio.withCurrentOwner(owner, { sourceSocket === webSocket && lifecycle.accepts(owner) }) {
+                    if (lifecycle.accepts(owner) && hazardAlertGeneration == generation) {
+                        _state.update { it.copy(hazardAlert = null) }
+                    }
+                }
             }
         }
     }
@@ -1133,6 +1189,7 @@ class AgentSession(
     /** Barge-in: silence whatever the agent is currently saying. */
     private fun stopAgentSpeech() {
         tts?.stop()
+        warningAudio.stop()
         player.stopPlayback()
         if (transmitting) {
             _state.update { it.copy(turnState = TurnState.LISTENING, statusText = "已打断 Max，继续听你说") }
@@ -1143,11 +1200,11 @@ class AgentSession(
      *  (agent replies, ADAS hazards) cuts whatever is currently queued;
      *  `flush = false` (nav far/near prompts) appends behind it instead, so a
      *  turn-by-turn prompt never cuts an in-flight agent reply. */
-    private fun ttsSpeak(text: String, flush: Boolean = true, utteranceId: String = "max-reply") {
-        val engine = tts ?: return
-        if (!ttsReady || text.isBlank()) return
-        engine.language = if (detectLanguage(text) == "zh") Locale.SIMPLIFIED_CHINESE else Locale.US
-        engine.speak(text, if (flush) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, utteranceId)
+    private fun ttsSpeak(text: String, flush: Boolean = true, utteranceId: String = "max-reply"): Boolean {
+        val engine = tts ?: return false
+        if (!ttsReady || text.isBlank()) return false
+        if (engine.setLanguage(if (detectLanguage(text) == "zh") Locale.SIMPLIFIED_CHINESE else Locale.US) < 0) return false
+        return engine.speak(text, if (flush) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, utteranceId) == TextToSpeech.SUCCESS
     }
 
     // ---- NavSpeaker (NavigationController's speech + hazard-suppression seam) ----

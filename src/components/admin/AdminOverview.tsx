@@ -1,10 +1,17 @@
 import type { TesterSessionSummary, TestingStats } from "../../../shared/agent";
 import { testingBuildsMatch } from "../../../shared/testing";
-import type { TestingOperationsSnapshot, TestingQuality } from "../../../shared/testing";
+import type { TestingOperationsSnapshot, TestingQuality, TestingRun } from "../../../shared/testing";
 import type { HelmetAgent } from "../../hooks/useHelmetAgent";
 import { useLanguage } from "../LanguageToggle";
 import { localized } from "../../lib/i18n";
-import { adminReleaseStatus, corpusIssueCount, formatAdminRelativeTime, testingRunStatusLabel } from "./admin-model";
+import {
+  adminReleaseStatus,
+  corpusIssueCount,
+  formatAdminRelativeTime,
+  releaseApprovalBlockers,
+  testingRunStatusLabel,
+  type AdminDataStatus
+} from "./admin-model";
 
 const QUALITY_PRIORITY: Record<TestingQuality, number> = { fail: 3, watch: 2, pass: 1 };
 
@@ -36,21 +43,63 @@ type Props = {
   testing: TestingStats | null;
   sessions: TesterSessionSummary[];
   operations: TestingOperationsSnapshot | null;
+  runs?: TestingRun[];
+  dataStatus?: AdminDataStatus;
   onOpenEvidence: (sessionId?: string) => void;
   onOpenReleases: () => void;
 };
 
-export function AdminOverview({ agent, testing, sessions, operations, onOpenEvidence, onOpenReleases }: Props) {
+export function AdminOverview({
+  agent,
+  testing,
+  sessions,
+  operations,
+  runs = [],
+  dataStatus = "ready",
+  onOpenEvidence,
+  onOpenReleases
+}: Props) {
   const { language } = useLanguage();
   const releaseGate = testing?.releaseGate;
-  const releaseStatus = adminReleaseStatus(testing, operations?.approvedBaselineBuild, agent.health?.build?.gitCommit);
+  const numericReleaseStatus = adminReleaseStatus(
+    testing,
+    operations?.approvedBaselineBuild,
+    agent.health?.build?.gitCommit
+  );
+  const currentRun = [...(operations?.runs ?? runs)]
+    .filter((run) => run.status !== "archived" && testingBuildsMatch(run.build, releaseGate?.build))
+    .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt)[0];
+  const approvalBlockers =
+    currentRun && operations
+      ? releaseApprovalBlockers(currentRun, testing, operations?.reviews, language, agent.health?.build?.gitCommit)
+      : [];
+  if (currentRun?.status === "blocked")
+    approvalBlockers.unshift(localized(language, "当前发布运行已受阻。", "The current release run is blocked."));
+  const releaseStatus =
+    dataStatus !== "ready" || numericReleaseStatus === "waiting"
+      ? "waiting"
+      : approvalBlockers.length
+        ? "fail"
+        : operations
+          ? numericReleaseStatus
+          : "waiting";
   const releaseTone = releaseStatus === "ready" ? "warn" : statusTone(releaseStatus);
   const regression = testing?.regression;
   const regressionFindings =
     regression?.baselineSource !== "none"
       ? (regression?.findings.filter((finding) => finding.status !== "pass") ?? [])
       : [];
-  const releaseBlockers = [...(releaseGate?.blockers ?? []), ...regressionFindings.map((finding) => finding.detail)];
+  const releaseBlockers = [
+    ...new Set([
+      ...(releaseGate?.blockers ?? []),
+      ...regressionFindings.map((finding) => finding.detail),
+      ...approvalBlockers
+    ])
+  ];
+  if (dataStatus !== "ready")
+    releaseBlockers.unshift(localized(language, "发布数据尚未同步", "Release data is not current."));
+  else if (!operations && !approvalBlockers.length)
+    releaseBlockers.unshift(localized(language, "等待发布复核信息。", "Waiting for release review."));
   if (
     releaseGate &&
     agent.health?.build?.gitCommit &&
@@ -200,7 +249,7 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
           <span>{localized(language, "待复核证据", "Evidence to review")}</span>
           <strong className={`adminStatus ${issueCount ? "alert" : "good"}`}>{issueCount}</strong>
           <p>
-            {failCount} FAIL · {watchCount} WATCH · {localized(language, "全量服务端统计", "Full server aggregate")}
+            {failCount} FAIL · {watchCount} WATCH · {localized(language, "近期测试者记录", "Recent tester history")}
           </p>
         </button>
         <button
@@ -212,7 +261,7 @@ export function AdminOverview({ agent, testing, sessions, operations, onOpenEvid
           <strong className={`adminStatus ${validEvidenceTone}`}>{testing?.totals.validTestSessions ?? 0}</strong>
           <p>
             {hasDecisionGradeEvidence
-              ? `${invalidCount} ${localized(language, "无效", "invalid")} · ${testing?.history.persistent ? localized(language, "持久化历史", "Persistent history") : localized(language, "仅内存历史", "Memory-only history")}`
+              ? `${invalidCount} ${localized(language, "无效", "invalid")} · ${testing?.history.persistent ? localized(language, "近期已保存记录", "Recent saved history") : localized(language, "近期内存记录", "Recent memory history")}`
               : localized(language, "等待门禁证据", "Waiting for gate evidence")}
           </p>
         </button>

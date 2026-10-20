@@ -489,12 +489,55 @@ QA data uses:
 
 - `GET /testing/summary` — scoped dashboard totals, gate, regression, and catalog.
 - `GET /testing/sessions?limit=25&cursor=...` — scoped, filterable evidence
-  pages without transcript turns.
+  pages without transcript turns. Filters include `search` (transcript, feedback,
+  notes and metadata), `testerId`, `testCaseId`, `build`, `platform`, `quality`,
+  `runId`, and `reviewStatus=open|triaged|resolved|waived`. Review status matches
+  any independent review on the session. Totals describe the filtered corpus,
+  not the remainder after the cursor; tester credentials can never expand
+  their own scope by supplying a different tester ID.
 - `GET /testing/sessions/:id` — one authorized full replay.
 - `GET/POST/PATCH /testing/runs...` — release runs and assignments.
 - `GET/POST /testing/reviews` — durable issue triage.
 - `GET/POST /testing/policies` — policy history; writes are admin-only.
 - `GET /testing/audit` — retained operational change history.
+
+### Web operations workspace
+
+- **Navigation:** open `/#/admin/overview`, `releases`, `evidence`, `accounts`,
+  or `governance`. Authentication and role restrictions still apply to direct
+  links. Release URLs use `run`; evidence URLs use `session`, `q`, `tester`,
+  `quality`, `build`, `platform`, `review`, `tab`, and optional `reviewId`.
+  Refresh and browser Back/Forward retain the represented view.
+- **Evidence:** All testers is the default for reviewers/admins; tester
+  credentials remain self-scoped. Search runs on the server, including
+  transcripts not yet loaded by the browser. More filters exposes build,
+  platform and review status. Select a result for Conversation, Diagnostics,
+  or Review; mobile uses a list-to-detail view with Back to results.
+  Execution setup and aggregate diagnostics are separate disclosures.
+- **Drafts:** notes and review drafts survive filtering, selection changes,
+  section switches and reload in the same browser tab. They are scoped by
+  account/role in `sessionStorage`; unavailable storage preserves them only
+  while mounted. Reload/close warns while dirty. Leaving the workspace can be
+  cancelled; accepting discard removes the saved draft. Account/role changes
+  invalidate the old authority scope. Release and policy forms remain mounted
+  across section switches and warn before workspace exit or reload.
+- **Releases:** coverage is grouped by test case and platform. Evidence in one
+  requirement cannot inflate another requirement's progress. Blockers link to
+  evidence or missing coverage. **Approve release… → Confirm approval** is an
+  administrator-only action, separate from the lifecycle selector. The dialog
+  rechecks readiness, build identity and current data; the server remains
+  authoritative. Unavailable run links do not fall back to another editable run.
+- **Policies and audit:** inspect every release/regression threshold and
+  compare a historical version with the active version. **Review & publish**
+  shows the old/new values and reason before **Confirm publish**. An external
+  policy version never overwrites a dirty draft: publication is blocked until
+  the operator explicitly loads the latest policy. Audit search and
+  actor/action/date filters operate on the loaded recent audit snapshot;
+  technical identifiers remain available in expandable details.
+- **Accounts and preferences:** Users and Invitations are separate groups.
+  Invite revocation and account deletion retain their two-step confirmation.
+  The header profile menu holds language, password, app token, memory and
+  sign-out controls without occupying the mobile navigation area.
 
 ### Release workflow
 

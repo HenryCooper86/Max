@@ -104,6 +104,79 @@ async function mount(currentUser = user("admin"), onAuthenticationExpired = vi.f
   return { renderer, onAuthenticationExpired };
 }
 
+type AccountLocationStub = { hash: () => string; back: () => void; forward: () => void; restore: () => void };
+
+/** react-test-renderer has no DOM history; stand in for location/history so
+ * URL-driven filter hydration and Back/Forward navigation can be exercised. */
+function stubAccountLocation(initialHash = "#/admin/accounts"): AccountLocationStub {
+  const listeners = new Set<() => void>();
+  const stack = [initialHash];
+  let index = 0;
+  const location = { origin: "https://max.example", hash: initialHash };
+  const fire = () => {
+    for (const listener of [...listeners]) listener();
+  };
+  const history = {
+    pushState: (_state: unknown, _title: string, url: string) => {
+      stack.splice(index + 1);
+      stack.push(url);
+      index = stack.length - 1;
+      location.hash = url;
+    },
+    replaceState: (_state: unknown, _title: string, url: string) => {
+      stack[index] = url;
+      location.hash = url;
+    },
+    back: () => {
+      if (index <= 0) return;
+      index -= 1;
+      location.hash = stack[index];
+    },
+    forward: () => {
+      if (index >= stack.length - 1) return;
+      index += 1;
+      location.hash = stack[index];
+    }
+  };
+  const scope = globalThis as unknown as Record<string, unknown>;
+  const originals = new Map<string, unknown>([
+    ["location", scope.location],
+    ["history", scope.history],
+    ["addEventListener", scope.addEventListener],
+    ["removeEventListener", scope.removeEventListener],
+    ["dispatchEvent", scope.dispatchEvent]
+  ]);
+  scope.location = location;
+  scope.history = history;
+  scope.addEventListener = (type: string, listener: () => void) => {
+    if (type === "hashchange" || type === "popstate") listeners.add(listener);
+  };
+  scope.removeEventListener = (type: string, listener: () => void) => {
+    listeners.delete(listener);
+  };
+  scope.dispatchEvent = (event: Event) => {
+    if (event.type === "hashchange" || event.type === "popstate") fire();
+    return true;
+  };
+  return {
+    hash: () => location.hash,
+    back: () => {
+      history.back();
+      fire();
+    },
+    forward: () => {
+      history.forward();
+      fire();
+    },
+    restore: () => {
+      for (const [key, value] of originals) {
+        if (value === undefined) delete scope[key];
+        else scope[key] = value;
+      }
+    }
+  };
+}
+
 describe("AccountManagement", () => {
   it("routes an explicit 401 to authentication expiry and shows a typed 403 message", async () => {
     const onAuthenticationExpired = vi.fn();
@@ -338,7 +411,143 @@ describe("AccountManagement", () => {
     });
     await flush();
 
-    expect(text(renderer.root)).toContain("@alice");
-    expect(renderer.root.findByProps({ "data-load-status": "ready" })).toBeDefined();
+    expect(text(renderer!.root)).toContain("@alice");
+    expect(renderer!.root.findByProps({ "data-load-status": "ready" })).toBeDefined();
+  });
+
+  it("filters accounts and invites with per-group empty hints", async () => {
+    await mount();
+    const filterInput = renderer!.root.findByProps({ placeholder: "姓名、角色或邀请码" });
+    await act(async () => filterInput.props.onChange({ target: { value: "alice" } }));
+    expect(text(renderer!.root)).toContain("@alice");
+    expect(text(renderer!.root)).not.toContain("@admin");
+    expect(text(renderer!.root)).toContain("没有邀请匹配当前筛选。");
+    expect(text(renderer!.root)).not.toContain("没有账号匹配当前筛选。");
+  });
+
+  it("groups users and invites into distinct sections with counts and role details", async () => {
+    await mount();
+    const groups = renderer!.root.findAllByProps({ className: "adminAccountGroup" });
+    expect(groups).toHaveLength(2);
+    expect(text(groups[0])).toContain("用户");
+    expect(text(groups[0])).toContain("2 / 2");
+    expect(text(groups[1])).toContain("未使用邀请");
+    expect(text(groups[1])).toContain("1 / 1");
+    expect(text(renderer!.root)).toContain("管理账号与邀请、发布策略、批准版本");
+    expect(text(renderer!.root)).toContain("记录并提交测试会话证据");
+  });
+
+  it("labels invite status and shows absolute expiry with a countdown", async () => {
+    vi.mocked(adminAccountApi.fetchOverview).mockResolvedValueOnce(
+      success(
+        overview(undefined, [
+          { ...invite("invite_fresh_1111"), expiresAt: Date.now() + 5 * 86_400_000 },
+          { ...invite("invite_soon_22222"), expiresAt: Date.now() + 3_600_000 },
+          { ...invite("invite_late_33333"), expiresAt: Date.now() - 1_000 }
+        ])
+      )
+    );
+    await mount();
+    const chips = renderer!.root.findAll(
+      (node) => node.type === "span" && String(node.props.className).split(" ").includes("inviteStatus")
+    );
+    expect(chips.map((chip) => text(chip))).toEqual(["已过期", "即将过期", "未使用"]);
+    expect(text(renderer!.root)).toContain("后过期");
+  });
+
+  it("hydrates the account filter from the accounts URL and ignores governance params", async () => {
+    vi.stubGlobal("location", { origin: "https://max.example", hash: "#/admin/accounts?q=alice" });
+    await mount();
+    expect(text(renderer!.root)).toContain("@alice");
+    expect(text(renderer!.root)).not.toContain("@admin");
+    await act(async () => renderer?.unmount());
+    renderer = null;
+
+    vi.stubGlobal("location", { origin: "https://max.example", hash: "#/admin/governance?q=alice" });
+    await mount();
+    expect(text(renderer!.root)).toContain("@alice");
+    expect(text(renderer!.root)).toContain("@admin");
+  });
+
+  it("keeps the account filter in sync across browser Back and Forward", async () => {
+    const location = stubAccountLocation();
+    await mount();
+    try {
+      const filter = () => renderer!.root.findByProps({ placeholder: "姓名、角色或邀请码" });
+
+      await act(async () => filter().props.onChange({ target: { value: "alice" } }));
+      expect(filter().props.value).toBe("alice");
+      expect(text(renderer!.root)).toContain("@alice");
+      expect(text(renderer!.root)).not.toContain("@admin");
+      expect(location.hash()).toBe("#/admin/accounts?q=alice");
+
+      await act(async () => filter().props.onChange({ target: { value: "admin" } }));
+      expect(filter().props.value).toBe("admin");
+      expect(text(renderer!.root)).toContain("@admin");
+      expect(text(renderer!.root)).not.toContain("@alice");
+      expect(location.hash()).toBe("#/admin/accounts?q=admin");
+
+      act(() => location.back());
+      await flush();
+      expect(location.hash()).toBe("#/admin/accounts?q=alice");
+      expect(filter().props.value).toBe("alice");
+      expect(text(renderer!.root)).toContain("@alice");
+
+      act(() => location.forward());
+      await flush();
+      expect(location.hash()).toBe("#/admin/accounts?q=admin");
+      expect(filter().props.value).toBe("admin");
+      expect(text(renderer!.root)).toContain("@admin");
+    } finally {
+      await act(async () => renderer?.unmount());
+      renderer = null;
+      location.restore();
+    }
+  });
+
+  it("rejects a role update when the server returns a mismatched target", async () => {
+    vi.mocked(adminAccountApi.updateRole).mockResolvedValueOnce(success(user("alice", "tester")));
+    await mount();
+    const roleSelect = () =>
+      renderer!.root.find((node) => node.type === "select" && node.props["aria-label"] === "alice 的角色");
+
+    await act(async () => roleSelect().props.onChange({ target: { value: "reviewer" } }));
+    await flush();
+
+    expect(text(renderer!.root)).toContain("服务器返回的角色更新与请求目标不一致。");
+    expect(text(renderer!.root)).not.toContain("@alice 现在是审核员。");
+    expect(adminAccountApi.fetchOverview).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a deletion when the server returns a different account", async () => {
+    vi.mocked(adminAccountApi.deleteUser).mockResolvedValueOnce(success(user("bob", "tester")));
+    await mount();
+
+    act(() => button(renderer!, "删除").props.onClick());
+    await act(async () => button(renderer!, "确认删除 @alice？").props.onClick());
+    await flush();
+
+    expect(text(renderer!.root)).toContain("服务器返回的账号与删除目标不一致。");
+    expect(text(renderer!.root)).not.toContain("@alice 已删除。");
+  });
+
+  it("blocks every mutation control while a role change is in flight", async () => {
+    const pending = deferred<ApiResult<AuthUser>>();
+    vi.mocked(adminAccountApi.updateRole).mockReturnValueOnce(pending.promise);
+    await mount();
+    const roleSelect = () =>
+      renderer!.root.find((node) => node.type === "select" && node.props["aria-label"] === "alice 的角色");
+
+    await act(async () => roleSelect().props.onChange({ target: { value: "reviewer" } }));
+    expect(roleSelect().props.disabled).toBe(true);
+    expect(button(renderer!, "撤销").props.disabled).toBe(true);
+    expect(button(renderer!, "生成邀请链接").props.disabled).toBe(true);
+
+    await act(async () => {
+      pending.resolve(success(user("alice", "reviewer")));
+      await pending.promise;
+    });
+    await flush();
+    expect(button(renderer!, "撤销").props.disabled).toBe(false);
   });
 });

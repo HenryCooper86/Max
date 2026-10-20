@@ -391,6 +391,75 @@ describe("relay metrics", () => {
     expect(testingSessionDetail("note-write-failure")?.notes).toBe("");
   });
 
+  it("serves transcript, feedback, and metadata search from the in-memory window without broadening tester scope", () => {
+    beginTesterSession(
+      "fallback-search",
+      {
+        testerId: "scoped-rider",
+        testingTestCaseId: "baseline-live-session",
+        gitCommit: buildInfo.gitCommit,
+        deviceLabel: "Pixel 8 dashcam"
+      },
+      1_000
+    );
+    recordTesterClientAudio("fallback-search", 320, 1_100);
+    recordTesterServerEvent(
+      "fallback-search",
+      { type: "transcript", speaker: "rider", text: "Max, 前方路线如何?", turnId: "rider-1" },
+      64,
+      1_200
+    );
+    recordTesterServerEvent(
+      "fallback-search",
+      { type: "transcript", speaker: "agent", text: "Route clear. Ride safely.", turnId: "agent-1" },
+      64,
+      1_300
+    );
+    recordTesterTurnFeedback(
+      "fallback-search",
+      { turnId: "agent-1", speaker: "agent", text: "Route clear. Ride safely.", reason: "回答不对" },
+      1_400
+    );
+    endTesterSession("fallback-search", 5_000);
+    seedValidCompletedSession("other-fallback-search", "baseline-live-session");
+
+    const durableDown = vi.spyOn(testingStore, "storedTestingSessionPage").mockImplementation(() => {
+      throw new Error("SQLite unavailable");
+    });
+
+    // The fallback haystack mirrors the durable LOWER(payload_json) scan:
+    // transcript text, tester feedback, and device metadata all match.
+    expect(testingSessionPage({ search: "前方路线" }).items.map((session) => session.sessionId)).toEqual([
+      "fallback-search"
+    ]);
+    expect(testingSessionPage({ search: "回答不对" }).items.map((session) => session.sessionId)).toEqual([
+      "fallback-search"
+    ]);
+    expect(testingSessionPage({ search: "pixel 8 dashcam" }).items.map((session) => session.sessionId)).toEqual([
+      "fallback-search"
+    ]);
+
+    // Cross-tester search cannot broaden scope to another tester's transcript.
+    expect(testingSessionPage({ search: "run the test" }, "scoped-rider").total).toBe(0);
+    expect(
+      testingSessionPage({ search: "ride safely" }, "scoped-rider").items.map((session) => session.sessionId)
+    ).toEqual(["fallback-search"]);
+
+    // Cursor paging keeps the FULL filtered count on every page.
+    const first = testingSessionPage({ search: "max", limit: 1 });
+    expect(first.items).toHaveLength(1);
+    expect(first.total).toBe(2);
+    expect(first.nextCursor).toBeDefined();
+    const second = testingSessionPage({ search: "max", limit: 1, cursor: first.nextCursor });
+    expect(second.items).toHaveLength(1);
+    expect(second.total).toBe(2);
+    expect(second.nextCursor).toBeUndefined();
+
+    // Review state lives only in the durable index; the fallback refuses to guess.
+    expect(() => testingSessionPage({ reviewStatus: "open" })).toThrow(/durable evidence index/i);
+    durableDown.mockRestore();
+  });
+
   it("verifies signed transcript identities on durable reads and after reviewer notes", () => {
     beginTesterSession(
       "signed-turns",

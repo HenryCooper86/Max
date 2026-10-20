@@ -308,6 +308,10 @@ export type TestingSessionQuery = {
   quality?: TestingQuality;
   platform?: TestingPlatform;
   runId?: string;
+  /** Filters to sessions having ANY TestingReview with this status. Sessions
+   * accumulate independent reviews, so one session can match several
+   * statuses at once. Requires the durable evidence index. */
+  reviewStatus?: TestingReviewStatus;
   search?: string;
 };
 

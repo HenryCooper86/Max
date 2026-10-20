@@ -66,8 +66,8 @@ function operations(label: string): TestingOperationsSnapshot {
   };
 }
 
-function page(items: TesterSessionSummary[], nextCursor?: string) {
-  return { items, nextCursor, total: items.length };
+function page(items: TesterSessionSummary[], nextCursor?: string, total?: number) {
+  return { items, nextCursor, total: total ?? items.length };
 }
 
 type RenderRecord = {
@@ -838,5 +838,119 @@ describe("useAdminTestingData concurrency", () => {
       await vi.advanceTimersByTimeAsync(8_000);
     });
     expect(testingApi.fetchSummary).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("useAdminTestingData evidence search", () => {
+  it("commits only the newest search and merges its hits into the session cache", async () => {
+    const hook = await trackedHook(user("admin"));
+    const stalePage = deferred<Awaited<ReturnType<typeof testingApi.fetchSessions>>>();
+    vi.mocked(testingApi.fetchSessions).mockReturnValueOnce(stalePage.promise);
+    let staleSearch!: Promise<void>;
+    act(() => {
+      staleSearch = hook.current.searchSessions({ search: "旧关键词" });
+    });
+
+    vi.mocked(testingApi.fetchSessions).mockResolvedValueOnce(success(page([session("newest-hit", 90)], undefined, 3)));
+    await act(async () => {
+      await hook.current.searchSessions({ search: "新关键词" });
+    });
+    expect(hook.current.searchStatus).toBe("ready");
+    expect(hook.current.searchResults.map((item) => item.sessionId)).toEqual(["newest-hit"]);
+    expect(hook.current.searchTotal).toBe(3);
+    expect(hook.current.searchCursor).toBeUndefined();
+    expect(hook.current.sessions.map((item) => item.sessionId)).toContain("newest-hit");
+
+    stalePage.resolve(success(page([session("stale-hit", 80)], undefined, 9)));
+    await act(async () => {
+      await staleSearch;
+    });
+    expect(hook.current.searchResults.map((item) => item.sessionId)).toEqual(["newest-hit"]);
+    expect(hook.current.searchTotal).toBe(3);
+    expect(hook.current.sessions.map((item) => item.sessionId)).not.toContain("stale-hit");
+  });
+
+  it("appends search pages under the server cursor and keeps the global total", async () => {
+    const hook = await trackedHook(user("admin"));
+    vi.mocked(testingApi.fetchSessions)
+      .mockResolvedValueOnce(success(page([session("hit-1", 90), session("hit-2", 80)], "cursor-2", 5)))
+      .mockResolvedValueOnce(success(page([session("hit-3", 70)], undefined, 5)));
+    await act(async () => {
+      await hook.current.searchSessions({ search: "命中" });
+    });
+    expect(hook.current.searchCursor).toBe("cursor-2");
+
+    await act(async () => {
+      await hook.current.searchSessions({ search: "命中", cursor: hook.current.searchCursor });
+    });
+    expect(hook.current.searchResults.map((item) => item.sessionId)).toEqual(["hit-1", "hit-2", "hit-3"]);
+    expect(hook.current.searchTotal).toBe(5);
+    expect(hook.current.searchCursor).toBeUndefined();
+    for (const hit of ["hit-1", "hit-2", "hit-3"]) {
+      expect(hook.current.sessions.map((item) => item.sessionId)).toContain(hit);
+    }
+  });
+
+  it("drops an in-flight search when the account scope changes", async () => {
+    const hook = await trackedHook(user("admin"));
+    const pendingPage = deferred<Awaited<ReturnType<typeof testingApi.fetchSessions>>>();
+    vi.mocked(testingApi.fetchSessions).mockReturnValueOnce(pendingPage.promise);
+    let pendingSearch!: Promise<void>;
+    act(() => {
+      pendingSearch = hook.current.searchSessions({ search: "跨账号" });
+    });
+
+    await hook.rerender(user("other", "admin"));
+    expect(hook.current.searchResults).toEqual([]);
+    expect(hook.current.searchStatus).toBe("idle");
+
+    pendingPage.resolve(success(page([session("old-account-hit", 90)], undefined, 1)));
+    await act(async () => {
+      await pendingSearch;
+    });
+    expect(hook.current.searchResults).toEqual([]);
+    expect(hook.current.searchTotal).toBe(0);
+    expect(hook.current.sessions.map((item) => item.sessionId)).not.toContain("old-account-hit");
+  });
+
+  it("invalidates an in-flight search when evidence is cleared", async () => {
+    const hook = await trackedHook(user("admin"));
+    const pendingPage = deferred<Awaited<ReturnType<typeof testingApi.fetchSessions>>>();
+    vi.mocked(testingApi.fetchSessions).mockReturnValueOnce(pendingPage.promise);
+    let pendingSearch!: Promise<void>;
+    act(() => {
+      pendingSearch = hook.current.searchSessions({ search: "待清除" });
+    });
+
+    let cleared!: boolean;
+    await act(async () => {
+      cleared = await hook.current.clearEvidence({ scope: "all" });
+    });
+    expect(cleared).toBe(true);
+    expect(hook.current.searchResults).toEqual([]);
+    expect(hook.current.searchStatus).toBe("idle");
+
+    pendingPage.resolve(success(page([session("deleted-hit", 90)], undefined, 1)));
+    await act(async () => {
+      await pendingSearch;
+    });
+    expect(hook.current.searchResults).toEqual([]);
+    expect(hook.current.sessions.map((item) => item.sessionId)).not.toContain("deleted-hit");
+  });
+
+  it("surfaces a failed search without clobbering an appended page", async () => {
+    const hook = await trackedHook(user("admin"));
+    vi.mocked(testingApi.fetchSessions).mockResolvedValueOnce(success(page([session("hit-1", 90)], "cursor-2", 5)));
+    await act(async () => {
+      await hook.current.searchSessions({ search: "命中" });
+    });
+    vi.mocked(testingApi.fetchSessions).mockResolvedValueOnce(failure("unavailable", "搜索第二页失败"));
+    await act(async () => {
+      await hook.current.searchSessions({ search: "命中", cursor: "cursor-2" });
+    });
+    expect(hook.current.searchStatus).toBe("error");
+    expect(hook.current.searchError?.message).toBe("搜索第二页失败");
+    expect(hook.current.searchResults.map((item) => item.sessionId)).toEqual(["hit-1"]);
+    expect(hook.current.searchTotal).toBe(5);
   });
 });

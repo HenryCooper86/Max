@@ -361,6 +361,92 @@ describe("testing operations store", () => {
     expect(reopened?.status).toBe("open");
   });
 
+  it("searches transcript text and feedback without broadening tester scope", () => {
+    saveTestingSession(
+      sessionEvidence("search-turns-a", "run", "assignment", {
+        testerId: "rider-a",
+        turns: [
+          { sessionId: "search-turns-a", at: 2_000, speaker: "rider", text: "Max, 前方路线如何?", final: true },
+          {
+            sessionId: "search-turns-a",
+            at: 2_500,
+            speaker: "agent",
+            text: "Route clear. Ride safely.",
+            final: true,
+            feedback: "回答不对"
+          }
+        ]
+      })
+    );
+    saveTestingSession(
+      sessionEvidence("search-turns-b", "run", "assignment", {
+        testerId: "rider-b",
+        turns: [
+          { sessionId: "search-turns-b", at: 2_000, speaker: "rider", text: "Max, weather on my route?", final: true },
+          {
+            sessionId: "search-turns-b",
+            at: 2_500,
+            speaker: "agent",
+            text: "Weather is clear. Ride safely.",
+            final: true
+          }
+        ]
+      })
+    );
+
+    expect(storedTestingSessionPage({ search: "前方路线" }).items.map((session) => session.sessionId)).toEqual([
+      "search-turns-a"
+    ]);
+    expect(storedTestingSessionPage({ search: "回答不对" }).items.map((session) => session.sessionId)).toEqual([
+      "search-turns-a"
+    ]);
+    expect(
+      storedTestingSessionPage({ search: "weather on my route" }).items.map((session) => session.sessionId)
+    ).toEqual(["search-turns-b"]);
+    // A hit inside ANOTHER tester's transcript must stay invisible to them.
+    expect(storedTestingSessionPage({ search: "前方路线" }, "rider-b").total).toBe(0);
+    expect(
+      storedTestingSessionPage({ search: "ride safely" }, "rider-b").items.map((session) => session.sessionId)
+    ).toEqual(["search-turns-b"]);
+  });
+
+  it("filters, counts, and paginates across a session's review history", () => {
+    saveTestingSession(sessionEvidence("review-open-a", "run", "assignment", { endedAt: 7_000 }));
+    saveTestingSession(sessionEvidence("review-open-b", "run", "assignment", { endedAt: 6_000 }));
+    saveTestingSession(sessionEvidence("review-open-c", "run", "assignment", { endedAt: 5_000 }));
+    saveTestingSession(sessionEvidence("review-resolved", "run", "assignment", { endedAt: 4_000 }));
+    saveTestingSession(sessionEvidence("review-none", "run", "assignment", { endedAt: 3_000 }));
+    upsertTestingReview({ sessionId: "review-open-a" }, "reviewer", 8_000);
+    upsertTestingReview({ sessionId: "review-open-b" }, "reviewer", 8_100);
+    upsertTestingReview({ sessionId: "review-open-c" }, "reviewer", 8_200);
+    upsertTestingReview({ sessionId: "review-resolved" }, "reviewer", 8_300);
+    upsertTestingReview({ sessionId: "review-resolved", status: "resolved" }, "reviewer", 8_400);
+
+    const first = storedTestingSessionPage({ reviewStatus: "open", limit: 2 });
+    expect(first.items.map((session) => session.sessionId)).toEqual(["review-open-a", "review-open-b"]);
+    expect(first.total).toBe(3);
+    expect(first.nextCursor).toBeDefined();
+    const second = storedTestingSessionPage({ reviewStatus: "open", limit: 2, cursor: first.nextCursor });
+    expect(second.items.map((session) => session.sessionId)).toEqual(["review-open-c"]);
+    // The count is taken before pagination: later pages report the full total.
+    expect(second.total).toBe(3);
+    expect(second.nextCursor).toBeUndefined();
+
+    expect(storedTestingSessionPage({ reviewStatus: "resolved" }).items.map((session) => session.sessionId)).toEqual([
+      "review-resolved"
+    ]);
+    expect(storedTestingSessionPage({ reviewStatus: "waived" }).total).toBe(0);
+
+    // A newer independent review does not hide the older one: after resolving
+    // and reopening, the session carries both a resolved and an open review,
+    // so it must appear in BOTH status views.
+    upsertTestingReview({ sessionId: "review-resolved" }, "reviewer", 9_000);
+    expect(storedTestingSessionPage({ reviewStatus: "open" }).total).toBe(4);
+    expect(storedTestingSessionPage({ reviewStatus: "resolved" }).items.map((session) => session.sessionId)).toEqual([
+      "review-resolved"
+    ]);
+  });
+
   it("updates an existing buried review in place without changing its authoritative attribution", () => {
     // An open review created first, then buried under >500 newer reviews so it
     // falls outside listTestingReviews' capped scan.

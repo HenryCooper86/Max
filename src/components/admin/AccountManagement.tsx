@@ -1,29 +1,41 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { adminAccountApi, inviteUrl, type AdminOverview, type AuthUser } from "../../lib/auth";
 import { useLanguage } from "../LanguageToggle";
-import { localized } from "../../lib/i18n";
+import { localized, type Language } from "../../lib/i18n";
 import { adminRoleLabel, confirmationCopy, formatAdminRelativeTime } from "./admin-model";
+import { readAdminLocation, setAdminLocation, useAdminLocation } from "./admin-location";
 
 const INVITE_EXPIRING_SOON_MS = 2 * 24 * 60 * 60 * 1000;
 
 type LoadStatus = "loading" | "ready" | "stale";
 type Notice = { tone: "success" | "error"; message: string };
+type AccountMutation = { ownerId: string; sequence: number; owns: () => boolean };
 
-function formatInviteExpiry(timestamp: number, language: "zh-CN" | "en-US" = "zh-CN") {
+/** Absolute expiry plus a readable countdown, so an admin never has to do
+ * date math before deciding whether an invite needs a nudge. */
+function formatInviteExpiry(timestamp: number, language: Language) {
   if (!Number.isFinite(timestamp) || timestamp <= 0) return "—";
+  const absolute = new Intl.DateTimeFormat(language === "en-US" ? "en-US" : "zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).format(timestamp);
   const remainingMs = timestamp - Date.now();
-  if (remainingMs <= 0) return language === "en-US" ? "Expired" : "已过期";
-  if (remainingMs < 3_600_000)
-    return language === "en-US"
-      ? `in ${Math.ceil(remainingMs / 60_000)} min`
-      : `${Math.ceil(remainingMs / 60_000)} 分钟后`;
-  if (remainingMs < 86_400_000)
-    return language === "en-US"
-      ? `in ${Math.ceil(remainingMs / 3_600_000)} hr`
-      : `${Math.ceil(remainingMs / 3_600_000)} 小时后`;
+  if (remainingMs <= 0) {
+    return language === "en-US" ? `expired ${absolute}` : `已于 ${absolute} 过期`;
+  }
+  const unit =
+    remainingMs < 3_600_000
+      ? { count: Math.ceil(remainingMs / 60_000), zh: "分钟", en: "min" }
+      : remainingMs < 86_400_000
+        ? { count: Math.ceil(remainingMs / 3_600_000), zh: "小时", en: "hr" }
+        : { count: Math.ceil(remainingMs / 86_400_000), zh: "天", en: "day" };
   return language === "en-US"
-    ? `in ${Math.ceil(remainingMs / 86_400_000)} days`
-    : `${Math.ceil(remainingMs / 86_400_000)} 天后`;
+    ? `${absolute} (in ${unit.count} ${unit.en})`
+    : `${absolute}（${unit.count} ${unit.zh}后过期）`;
 }
 
 async function writeClipboard(value: string): Promise<boolean> {
@@ -36,6 +48,12 @@ async function writeClipboard(value: string): Promise<boolean> {
   }
 }
 
+const ROLE_DETAILS: Record<AuthUser["role"], readonly [string, string]> = {
+  admin: ["管理账号与邀请、发布策略、批准版本", "Manage accounts and invites, publish policy, approve builds"],
+  reviewer: ["复核证据、处理评审、管理发布验证", "Review evidence, triage findings, manage release runs"],
+  tester: ["记录并提交测试会话证据", "Record and submit testing sessions"]
+};
+
 export function AccountManagement({
   user,
   onAuthenticationExpired
@@ -44,6 +62,8 @@ export function AccountManagement({
   onAuthenticationExpired: () => void;
 }) {
   const { language } = useLanguage();
+  const location = useAdminLocation();
+  const onAccountsSection = location.isAdmin && location.section === "accounts";
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [status, setStatus] = useState<LoadStatus>("loading");
   const [loadNotice, setLoadNotice] = useState<Notice | null>(null);
@@ -52,7 +72,10 @@ export function AccountManagement({
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [createdCopied, setCreatedCopied] = useState(false);
   const [manualInviteUrl, setManualInviteUrl] = useState<string | null>(null);
-  const [accountFilter, setAccountFilter] = useState("");
+  const [accountFilter, setAccountFilter] = useState<string>(() => {
+    const initial = readAdminLocation();
+    return initial.isAdmin && initial.section === "accounts" ? (initial.params.get("q") ?? "") : "";
+  });
   const [armedDelete, setArmedDelete] = useState<string | null>(null);
   const [armedInvite, setArmedInvite] = useState<string | null>(null);
   const mountedRef = useRef(true);
@@ -147,7 +170,22 @@ export function AccountManagement({
     return () => window.clearTimeout(timer);
   }, [createdCopied]);
 
-  const beginMutation = (target: string) => {
+  // URL is the source of truth while the accounts section is visible; the
+  // component stays mounted when hidden, so hydration ignores other sections.
+  const accountQuery = onAccountsSection ? (location.params.get("q") ?? "") : null;
+  useEffect(() => {
+    if (accountQuery === null) return;
+    setAccountFilter((current) => (current === accountQuery ? current : accountQuery));
+  }, [accountQuery]);
+
+  const updateAccountFilter = (value: string) => {
+    setAccountFilter(value);
+    // Hidden sections must never rewrite the visible route.
+    if (!(location.isAdmin && location.section === "accounts")) return;
+    setAdminLocation("accounts", { q: value === "" ? null : value });
+  };
+
+  const beginMutation = (target: string): AccountMutation => {
     const ownerId = accountOwnerRef.current;
     const sequence = ++mutationSequenceRef.current;
     clipboardSequenceRef.current += 1;
@@ -161,16 +199,16 @@ export function AccountManagement({
     };
   };
 
-  const finishMutation = (operation: ReturnType<typeof beginMutation>) => {
+  const finishMutation = (operation: AccountMutation) => {
     if (operation.owns()) setBusyTarget(null);
   };
 
-  const refreshAfterMutation = async (operation: ReturnType<typeof beginMutation>): Promise<boolean> => {
+  const refreshAfterMutation = async (operation: AccountMutation): Promise<boolean> => {
     const refreshed = await refresh(operation.ownerId);
     return operation.owns() && refreshed;
   };
 
-  const failMutation = (operation: ReturnType<typeof beginMutation>, error: { kind: string; message: string }) => {
+  const failMutation = (operation: AccountMutation, error: { kind: string; message: string }) => {
     if (!operation.owns()) return;
     if (error.kind === "unauthorized") authenticationExpiredRef.current();
     else setActionNotice({ tone: "error", message: error.message });
@@ -192,8 +230,18 @@ export function AccountManagement({
     setManualInviteUrl(copied ? null : createdUrl);
     setActionNotice(
       copied
-        ? { tone: "success", message: "邀请链接已生成并复制。" }
-        : { tone: "error", message: "链接已生成，但无法写入剪贴板。" }
+        ? {
+            tone: "success",
+            message: localized(language, "邀请链接已生成并复制。", "Invite link generated and copied.")
+          }
+        : {
+            tone: "error",
+            message: localized(
+              language,
+              "链接已生成，但无法写入剪贴板。",
+              "Link generated, but the clipboard is unavailable."
+            )
+          }
     );
     await refreshAfterMutation(operation);
     if (!operation.owns()) return;
@@ -244,8 +292,11 @@ export function AccountManagement({
     }
     setActionNotice(
       result.data.removed
-        ? { tone: "success", message: "邀请已撤销。" }
-        : { tone: "success", message: "邀请已不存在，无需再次撤销。" }
+        ? { tone: "success", message: localized(language, "邀请已撤销。", "Invite revoked.") }
+        : {
+            tone: "success",
+            message: localized(language, "邀请已不存在，无需再次撤销。", "Invite already gone; nothing to revoke.")
+          }
     );
     await refreshAfterMutation(operation);
     if (!operation.owns()) return;
@@ -268,11 +319,21 @@ export function AccountManagement({
       return;
     }
     if (result.data.username !== username) {
-      setActionNotice({ tone: "error", message: "服务器返回的账号与删除目标不一致。" });
+      setActionNotice({
+        tone: "error",
+        message: localized(
+          language,
+          "服务器返回的账号与删除目标不一致。",
+          "The server returned a different account than the delete target."
+        )
+      });
       finishMutation(operation);
       return;
     }
-    setActionNotice({ tone: "success", message: `@${username} 已删除。` });
+    setActionNotice({
+      tone: "success",
+      message: localized(language, `@${username} 已删除。`, `@${username} deleted.`)
+    });
     await refreshAfterMutation(operation);
     if (!operation.owns()) return;
     finishMutation(operation);
@@ -288,7 +349,14 @@ export function AccountManagement({
       return;
     }
     if (result.data.username !== username || result.data.role !== role) {
-      setActionNotice({ tone: "error", message: "服务器返回的角色更新与请求目标不一致。" });
+      setActionNotice({
+        tone: "error",
+        message: localized(
+          language,
+          "服务器返回的角色更新与请求目标不一致。",
+          "The server returned a different role update than requested."
+        )
+      });
       finishMutation(operation);
       return;
     }
@@ -372,11 +440,23 @@ export function AccountManagement({
         </span>
       </div>
 
+      <details className="accountPermissions">
+        <summary>{localized(language, "角色权限说明", "Role permissions")}</summary>
+        <dl className="accountRoleLegend" aria-label={localized(language, "角色权限说明", "Role permissions")}>
+          {(["admin", "reviewer", "tester"] as const).map((role) => (
+            <div key={role}>
+              <dt>{adminRoleLabel(role, language)}</dt>
+              <dd>{localized(language, ROLE_DETAILS[role][0], ROLE_DETAILS[role][1])}</dd>
+            </div>
+          ))}
+        </dl>
+      </details>
+
       <label className="adminAccountFilter">
         <span>{localized(language, "查找账号或邀请", "Find account or invite")}</span>
         <input
           value={accountFilter}
-          onChange={(event) => setAccountFilter(event.target.value)}
+          onChange={(event) => updateAccountFilter(event.target.value)}
           placeholder={localized(language, "姓名、角色或邀请码", "Name, role, or invite code")}
           autoComplete="off"
           spellCheck={false}
@@ -402,7 +482,7 @@ export function AccountManagement({
         <label className="adminAccountFilter accountInviteRecovery">
           <span>{localized(language, "手动复制邀请链接", "Copy invite link manually")}</span>
           <input
-            aria-label="手动复制邀请链接"
+            aria-label={localized(language, "手动复制邀请链接", "Copy invite link manually")}
             value={manualInviteUrl}
             readOnly
             onFocus={(event) => event.currentTarget.select()}
@@ -411,90 +491,133 @@ export function AccountManagement({
       ) : null}
 
       <div className="adminAccountList">
-        {filteredUsers.map((account) => (
-          <div className="accountAdminRow" key={account.id}>
-            <div className="adminAccountUser">
-              <strong>{account.displayName}</strong>
-              <span>
-                @{account.username} · {adminRoleLabel(account.role, language)} ·{" "}
-                {language === "en-US" ? "Last login " : "最近登录 "}{" "}
-                {formatAdminRelativeTime(account.lastLoginAt, language)}
-              </span>
-            </div>
-            <div className="adminAccountRoleActions">
-              {account.username === user.username ? (
-                <span className="adminAccountSelf">
-                  {language === "en-US" ? "Current account" : "当前账号"} · {adminRoleLabel(account.role, language)}
+        <section className="adminAccountGroup" aria-label={localized(language, "用户", "Users")}>
+          <h4 className="adminAccountGroupHead">
+            {localized(language, "用户", "Users")}
+            <span>
+              {filteredUsers.length} / {users.length}
+            </span>
+          </h4>
+          {filteredUsers.map((account) => (
+            <div className="accountAdminRow" key={account.id}>
+              <div className="adminAccountUser">
+                <strong>{account.displayName}</strong>
+                <span>
+                  @{account.username} · {adminRoleLabel(account.role, language)} ·{" "}
+                  {language === "en-US" ? "Last login " : "最近登录 "}{" "}
+                  {formatAdminRelativeTime(account.lastLoginAt, language)}
                 </span>
-              ) : (
-                <>
-                  <select
-                    value={account.role}
-                    aria-label={`${account.username} 的角色`}
-                    disabled={busyTarget !== null}
-                    onChange={(event) => void changeRole(account.username, event.target.value as AuthUser["role"])}
-                  >
-                    <option value="tester">{localized(language, "测试员", "Tester")}</option>
-                    <option value="reviewer">{localized(language, "审核员", "Reviewer")}</option>
-                    <option value="admin">{localized(language, "管理员", "Administrator")}</option>
-                  </select>
-                  {account.role !== "admin" ? (
-                    <button
-                      type="button"
-                      className={`danger adminDanger ${armedDelete === account.username ? "armed" : ""}`}
+              </div>
+              <div className="adminAccountRoleActions">
+                {account.username === user.username ? (
+                  <span className="adminAccountSelf">
+                    {language === "en-US" ? "Current account" : "当前账号"} · {adminRoleLabel(account.role, language)}
+                  </span>
+                ) : (
+                  <>
+                    <select
+                      value={account.role}
+                      aria-label={localized(language, `${account.username} 的角色`, `${account.username}'s role`)}
                       disabled={busyTarget !== null}
-                      onClick={() => void removeUser(account.username)}
+                      onChange={(event) => void changeRole(account.username, event.target.value as AuthUser["role"])}
                     >
-                      {armedDelete === account.username
-                        ? confirmationCopy("user", `@${account.username}`, language)
-                        : localized(language, "删除", "Delete")}
-                    </button>
-                  ) : null}
-                </>
-              )}
+                      <option value="tester">{localized(language, "测试员", "Tester")}</option>
+                      <option value="reviewer">{localized(language, "审核员", "Reviewer")}</option>
+                      <option value="admin">{localized(language, "管理员", "Administrator")}</option>
+                    </select>
+                    {account.role !== "admin" ? (
+                      <button
+                        type="button"
+                        className={`danger adminDanger ${armedDelete === account.username ? "armed" : ""}`}
+                        disabled={busyTarget !== null}
+                        onClick={() => void removeUser(account.username)}
+                      >
+                        {armedDelete === account.username
+                          ? confirmationCopy("user", `@${account.username}`, language)
+                          : localized(language, "删除", "Delete")}
+                      </button>
+                    ) : null}
+                  </>
+                )}
+              </div>
             </div>
-          </div>
-        ))}
-        {filteredInvites.map((item) => (
-          <div className="accountAdminRow invite" key={item.code}>
-            <div className="adminAccountUser">
-              <strong>邀请 · {item.code.slice(4, 12)}…</strong>
-              <span>
-                {localized(language, "由", "Created by")} {item.createdBy} ·{" "}
-                {formatAdminRelativeTime(item.createdAt, language)} · {localized(language, "过期", "expires")}{" "}
-                {formatInviteExpiry(item.expiresAt, language)}
-              </span>
-            </div>
-            <div className="adminAccountInviteActions">
-              <button type="button" disabled={busyTarget !== null} onClick={() => void copyInvite(item.code)}>
-                {copiedCode === item.code
-                  ? localized(language, "已复制 ✓", "Copied ✓")
-                  : localized(language, "复制链接", "Copy link")}
-              </button>
-              <button
-                type="button"
-                className={`danger adminDanger ${armedInvite === item.code ? "armed" : ""}`}
-                disabled={busyTarget !== null}
-                onClick={() => void removeInvite(item.code)}
-              >
-                {busyTarget === `invite:${item.code}`
-                  ? localized(language, "正在撤销…", "Revoking…")
-                  : armedInvite === item.code
-                    ? confirmationCopy("invite", item.code, language)
-                    : localized(language, "撤销", "Revoke")}
-              </button>
-            </div>
-          </div>
-        ))}
-        {!filteredUsers.length && !filteredInvites.length ? (
+          ))}
+          {!filteredUsers.length && users.length ? (
+            <p className="testerConversationEmpty">
+              {localized(language, "没有账号匹配当前筛选。", "No accounts match this filter.")}
+            </p>
+          ) : null}
+        </section>
+
+        <section className="adminAccountGroup" aria-label={localized(language, "未使用邀请", "Unused invites")}>
+          <h4 className="adminAccountGroupHead">
+            {localized(language, "未使用邀请", "Unused invites")}
+            <span className={expiringInviteCount ? "warn" : ""}>
+              {filteredInvites.length} / {invites.length}
+              {expiringInviteCount
+                ? localized(language, ` · ${expiringInviteCount} 即将过期`, ` · ${expiringInviteCount} expiring soon`)
+                : ""}
+            </span>
+          </h4>
+          {filteredInvites.map((item) => {
+            const remainingMs = item.expiresAt - Date.now();
+            const expired = remainingMs <= 0;
+            const expiringSoon = !expired && remainingMs <= INVITE_EXPIRING_SOON_MS;
+            return (
+              <div className="accountAdminRow invite" key={item.code}>
+                <div className="adminAccountUser">
+                  <strong>
+                    {localized(language, "邀请", "Invite")} · {item.code.slice(4, 12)}…
+                    <span className={`inviteStatus${expired ? " expired" : expiringSoon ? " warn" : ""}`}>
+                      {expired
+                        ? localized(language, "已过期", "Expired")
+                        : expiringSoon
+                          ? localized(language, "即将过期", "Expiring soon")
+                          : localized(language, "未使用", "Unused")}
+                    </span>
+                  </strong>
+                  <span>
+                    {localized(language, "由", "Created by")} {item.createdBy} {localized(language, "创建", "created")}{" "}
+                    · {formatAdminRelativeTime(item.createdAt, language)} · {localized(language, "过期", "Expires")}{" "}
+                    {formatInviteExpiry(item.expiresAt, language)}
+                  </span>
+                </div>
+                <div className="adminAccountInviteActions">
+                  <button type="button" disabled={busyTarget !== null} onClick={() => void copyInvite(item.code)}>
+                    {copiedCode === item.code
+                      ? localized(language, "已复制 ✓", "Copied ✓")
+                      : localized(language, "复制链接", "Copy link")}
+                  </button>
+                  <button
+                    type="button"
+                    className={`danger adminDanger ${armedInvite === item.code ? "armed" : ""}`}
+                    disabled={busyTarget !== null}
+                    onClick={() => void removeInvite(item.code)}
+                  >
+                    {busyTarget === `invite:${item.code}`
+                      ? localized(language, "正在撤销…", "Revoking…")
+                      : armedInvite === item.code
+                        ? confirmationCopy("invite", item.code, language)
+                        : localized(language, "撤销", "Revoke")}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+          {!filteredInvites.length && invites.length ? (
+            <p className="testerConversationEmpty">
+              {localized(language, "没有邀请匹配当前筛选。", "No invites match this filter.")}
+            </p>
+          ) : null}
+        </section>
+
+        {!users.length && !invites.length ? (
           <p className="testerConversationEmpty">
             {status === "loading"
               ? localized(language, "正在加载账号数据…", "Loading account data…")
-              : users.length || invites.length
-                ? localized(language, "没有账号或邀请匹配当前筛选。", "No accounts or invites match this filter.")
-                : status === "stale"
-                  ? localized(language, "暂时无法加载账号数据。", "Account data is temporarily unavailable.")
-                  : localized(language, "暂无账号或未使用邀请。", "No accounts or unused invites.")}
+              : status === "stale"
+                ? localized(language, "暂时无法加载账号数据。", "Account data is temporarily unavailable.")
+                : localized(language, "暂无账号或未使用邀请。", "No accounts or unused invites.")}
           </p>
         ) : null}
       </div>

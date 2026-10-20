@@ -461,6 +461,18 @@ export function storedTestingSessionPage(
     where.push("run_id = ?");
     parameters.push(query.runId);
   }
+  if (query.reviewStatus && REVIEW_STATUSES.has(query.reviewStatus)) {
+    // A session can carry several independent reviews (an older open issue
+    // stays visible even after a newer review is resolved), so match ANY
+    // review with the requested status — not just the most recent one.
+    // Applied in SQL before COUNT/pagination so totals and cursors agree with
+    // the visible items; sessions without reviews never match. Invalid
+    // statuses are ignored like the HTTP boundary does.
+    where.push(
+      "EXISTS (SELECT 1 FROM testing_reviews r WHERE r.session_id = testing_sessions.session_id AND r.status = ?)"
+    );
+    parameters.push(query.reviewStatus);
+  }
   // NOTE: quality is deliberately NOT a SQL predicate. Every returned row's
   // quality is re-derived against the current catalog (reevaluateStoredSession
   // below), so filtering/counting on the frozen json_extract(payload_json,

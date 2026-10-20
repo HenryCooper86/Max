@@ -4866,697 +4866,1794 @@ button.opsCard:disabled {
 /* --- Admin workspace ----------------------------------------------------- */
 
 .adminWorkspace {
-  --admin-bg: #0b100e;
-  --admin-panel: #111815;
-  --admin-panel-raised: #141d19;
-  --admin-border: rgba(180, 198, 190, 0.13);
-  --admin-muted: #8fa099;
-  --admin-good: #5ff0b0;
-  --admin-warn: #f2c765;
-  --admin-alert: #ff806c;
-
+  --admin-bg: #101216;
+  --admin-panel: #191c22;
+  --admin-panel-raised: #20242c;
+  --admin-border: #343a45;
+  --admin-muted: #aeb6c4;
+  --admin-good: #6de3af;
+  --admin-warn: #f0cd7b;
+  --admin-alert: #ff9a91;
+  --muted: var(--admin-muted);
+  color-scheme: dark;
   min-height: 100dvh;
-  background: radial-gradient(circle at 72% 0%, rgba(62, 232, 159, 0.055), transparent 32%), var(--admin-bg);
-  color: #eaf2ee;
+  background: var(--admin-bg);
+  color: #f0f2f6;
   font-family: var(--font-cjk);
+  font-size: 0.9rem;
+}
+
+.adminWorkspace :where(h1, h2, h3, p) {
+  overflow-wrap: anywhere;
+}
+.adminWorkspace :where(button, input, select, textarea, summary, a) {
+  touch-action: manipulation;
+}
+.adminWorkspace button {
+  min-height: 40px;
+  padding: 8px 13px;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  background: var(--admin-panel-raised);
+  color: #edf1f7;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.adminWorkspace button:hover:not(:disabled) {
+  border-color: #7a8597;
+  background: #2b313c;
+}
+.adminWorkspace button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.adminWorkspace input,
+.adminWorkspace select,
+.adminWorkspace textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  padding: 9px 11px;
+  border: 1px solid #454d5b;
+  border-radius: 8px;
+  background: #11141a;
+  color: #f0f2f6;
+  font-size: 0.875rem;
+}
+.adminWorkspace textarea {
+  min-height: 100px;
+  resize: vertical;
+}
+.adminWorkspace input::placeholder,
+.adminWorkspace textarea::placeholder {
+  color: #919bad;
+  opacity: 1;
+}
+.adminWorkspace input[type="checkbox"] {
+  width: 18px;
+  min-height: 18px;
+  accent-color: var(--admin-good);
+}
+.adminWorkspace label {
+  min-width: 0;
+}
+.adminWorkspace a {
+  color: #a5c7ff;
+  text-underline-offset: 3px;
+}
+.adminWorkspace :where(button, input, select, textarea, a, summary):focus-visible {
+  outline: 3px solid var(--admin-good);
+  outline-offset: 3px;
+}
+.adminWorkspace [hidden],
+.adminWorkspaceContent > .testingPanel[hidden] {
+  display: none !important;
 }
 
 .adminWorkspaceHeader {
   position: sticky;
   top: 0;
-  z-index: 5;
+  z-index: 10;
   display: flex;
-  min-height: 78px;
+  min-height: 76px;
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
-  padding: 14px clamp(16px, 3vw, 30px);
+  gap: 16px;
+  padding: 12px 24px;
   border-bottom: 1px solid var(--admin-border);
-  background: rgba(16, 23, 20, 0.96);
-  backdrop-filter: blur(16px);
+  background: #15181e;
 }
-
 .adminWorkspaceBrand {
   display: flex;
   min-width: 0;
   align-items: center;
   gap: 12px;
 }
-
 .adminWorkspaceLogo {
   display: grid;
-  width: 42px;
-  height: 42px;
+  width: 40px;
+  height: 40px;
   flex: 0 0 auto;
   place-items: center;
-  border: 1px solid rgba(62, 232, 159, 0.34);
-  border-radius: 12px;
-  background: rgba(62, 232, 159, 0.1);
+  border: 1px solid #397359;
+  border-radius: 10px;
+  background: #1b362c;
   color: var(--admin-good);
-  font-family: var(--font-display);
-  font-size: 1.15rem;
-  font-weight: 700;
-  box-shadow: 0 0 24px rgba(62, 232, 159, 0.08);
+  font: 700 1.2rem var(--font-display);
 }
-
-.adminWorkspaceBrand > div {
-  min-width: 0;
-}
-
 .adminWorkspaceBrand small {
   display: block;
-  color: var(--admin-good);
-  font: 700 0.64rem/1.2 var(--font-mono);
-  letter-spacing: 0.16em;
+  color: var(--admin-muted);
+  font-size: 0.65rem;
+  letter-spacing: 0.14em;
 }
-
 .adminWorkspaceBrand h1 {
-  margin-top: 3px;
-  font-size: clamp(1.05rem, 2vw, 1.35rem);
-  letter-spacing: 0.01em;
+  margin: 2px 0 0;
+  font: 650 1.1rem var(--font-display);
 }
-
 .adminWorkspaceContext {
   display: flex;
   min-width: 0;
   align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 12px;
 }
-
-.adminWorkspaceContext > span,
-.adminWorkspaceContext > small {
-  display: inline-flex;
-  max-width: min(100%, 24rem);
-  min-height: 30px;
+.adminVoiceContext {
+  display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 9px;
-  overflow: hidden;
-  border: 1px solid rgba(180, 198, 190, 0.1);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.025);
   color: var(--admin-muted);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
+}
+.adminVoiceContext.online {
+  color: var(--admin-good);
+}
+.adminWorkspace .adminBackAction {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: transparent;
+}
+.adminProfile {
+  position: relative;
+}
+.adminProfile > summary {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  cursor: pointer;
+  list-style: none;
+}
+.adminProfile > summary::-webkit-details-marker {
+  display: none;
+}
+.adminProfile > summary span {
+  max-width: 150px;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-.adminWorkspaceContext > span.online {
-  border-color: rgba(62, 232, 159, 0.2);
-  color: var(--admin-good);
+.adminProfileMenu {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 20;
+  width: min(330px, calc(100vw - 28px));
+  max-height: calc(100dvh - 90px);
+  padding: 18px;
+  overflow: auto;
+  border: 1px solid #4a5361;
+  border-radius: 12px;
+  background: var(--admin-panel);
+  box-shadow: 0 16px 45px #0008;
 }
-
-.adminWorkspaceContext > span svg {
-  flex: 0 0 auto;
-}
-
-.adminWorkspaceContext > button {
-  display: inline-flex;
-  min-height: 40px;
+.adminProfileMenu > p {
+  display: flex;
   align-items: center;
   gap: 7px;
-  padding: 0 14px;
-  border: 1px solid rgba(180, 198, 190, 0.17);
-  border-radius: 11px;
-  background: rgba(255, 255, 255, 0.04);
-  color: #eaf2ee;
-  cursor: pointer;
-  font-weight: 680;
+  margin: 0 0 14px;
+  color: var(--admin-muted);
+}
+.adminProfileMenu .accountBar {
+  display: grid;
+  padding: 14px 0 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.adminProfileMenu :is(.accountActions, .accountFields) {
+  display: grid;
+  grid-template-columns: 1fr;
+  width: 100%;
+}
+.adminProfileMenu :is(.accountForm, .accountIdentity, .accountActions) {
+  min-width: 0;
+}
+.adminProfileMenu .accountActions button {
+  width: 100%;
+}
+.adminProfileMenu .languageToggle {
+  width: 100%;
+  justify-content: center;
 }
 
 .adminWorkspaceLayout {
   display: grid;
-  min-height: calc(100dvh - 78px);
-  grid-template-columns: 210px minmax(0, 1fr);
+  min-height: calc(100dvh - 76px);
+  grid-template-columns: 220px minmax(0, 1fr);
 }
-
 .adminWorkspaceNav {
   display: flex;
   min-width: 0;
-  padding: 20px 13px;
+  padding: 28px 14px;
   flex-direction: column;
-  gap: 5px;
-  border-right: 1px solid rgba(180, 198, 190, 0.11);
-  background: #0e1512;
+  gap: 16px;
+  border-right: 1px solid var(--admin-border);
+  background: #15181e;
 }
-
-/* Transparent to layout: the sidebar stacks its buttons exactly as it did
-   before this wrapper existed. The phone breakpoint gives it a real box. */
+.adminNavCaption {
+  padding: 0 12px;
+  color: #929eaf;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
 .adminWorkspaceNavTabs {
-  display: contents;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
 }
-
-.adminWorkspaceNav > button,
-.adminWorkspaceNavTabs > button {
-  min-height: 44px;
-  padding: 0 13px;
+.adminWorkspaceNavTabs > a {
+  display: flex;
+  min-height: 46px;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 12px;
   border: 1px solid transparent;
-  border-radius: 10px;
-  background: transparent;
-  color: var(--admin-muted);
-  cursor: pointer;
-  text-align: left;
-  transition:
-    border-color 0.16s ease,
-    background 0.16s ease,
-    color 0.16s ease;
+  border-radius: 8px;
+  color: #b9c2cf;
+  text-decoration: none;
+  white-space: nowrap;
 }
-
-.adminWorkspaceNav > button:hover,
-.adminWorkspaceNavTabs > button:hover {
-  background: rgba(255, 255, 255, 0.035);
-  color: #eaf2ee;
+.adminWorkspaceNavTabs > a svg {
+  flex-shrink: 0;
 }
-
-.adminWorkspaceNav > button.active,
-.adminWorkspaceNavTabs > button.active {
-  border-color: rgba(62, 232, 159, 0.2);
-  background: rgba(62, 232, 159, 0.1);
-  color: var(--admin-good);
+.adminWorkspaceNavTabs > a:hover {
+  background: var(--admin-panel-raised);
+  color: #fff;
 }
-
-.adminWorkspaceNav > .accountBar {
+.adminWorkspaceNavTabs > a.active {
+  border-color: #3c4944;
+  background: #24352e;
+  color: #9cf0c9;
+}
+.adminNavBuild {
   display: grid;
+  gap: 6px;
   margin-top: auto;
-  padding: 12px 0 0;
-  border: 0;
-  border-top: 1px solid rgba(180, 198, 190, 0.1);
-  border-radius: 0;
-  background: transparent;
+  padding: 16px 12px;
+  color: #929eaf;
+  font-size: 0.7rem;
 }
-
-.adminWorkspaceNav .accountActions,
-.adminWorkspaceNav .accountForm,
-.adminWorkspaceNav .accountFields {
-  display: grid;
-  width: 100%;
-  grid-template-columns: 1fr;
+.adminNavBuild code {
+  overflow-wrap: anywhere;
+  color: #c1c9d5;
+  font-size: 0.75rem;
 }
-
-.adminWorkspaceNav .accountActions button,
-.adminWorkspaceNav .accountFields input {
-  width: 100%;
-  min-height: 40px;
-}
-
 .adminWorkspaceContent {
-  width: min(100%, 1480px);
+  width: min(100%, 1520px);
   min-width: 0;
   margin: 0 auto;
-  padding: clamp(18px, 3vw, 34px);
+  padding: clamp(18px, 2.5vw, 36px);
 }
-
 .adminWorkspaceContent > * {
   min-width: 0;
+}
+.adminPageHeading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.adminPageHeading > div > span {
+  color: var(--admin-muted);
+  font-size: 0.75rem;
+}
+.adminPageHeading h2 {
+  margin: 3px 0 0;
+  font: 650 clamp(1.4rem, 2.5vw, 1.85rem) var(--font-display);
+}
+.adminSyncControls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.adminSyncControls small {
+  color: var(--admin-muted);
+  font-size: 0.75rem;
+}
+.adminSyncControls button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
 }
 
 .adminSectionCard {
   min-width: 0;
   border: 1px solid var(--admin-border);
-  border-radius: 14px;
-  background: linear-gradient(135deg, rgba(62, 232, 159, 0.025), transparent 34%), var(--admin-panel);
-  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.15);
-}
-
-.adminOverview {
-  display: grid;
-  gap: 16px;
-  padding: clamp(16px, 2vw, 24px);
-}
-
-.adminSectionCard.adminSectionInset {
-  padding: 14px;
-  border-radius: 11px;
-  background: var(--admin-panel-raised);
+  border-radius: 12px;
+  background: var(--admin-panel);
   box-shadow: none;
 }
-
-.adminSectionHeader {
-  min-width: 0;
+.adminOverview {
+  display: flex;
+  padding: 24px;
+  flex-direction: column;
+  gap: 24px;
 }
-
-.adminSectionHeader h2,
-.adminSectionHeader strong {
-  color: #f2f7f5;
+.adminOverview > .adminSectionHeader {
+  order: 0;
 }
-
+.adminOverview > .adminWorkGrid {
+  order: 1;
+}
+.adminOverview > .adminMetricGrid {
+  order: 2;
+}
+.adminSectionCard.adminSectionInset {
+  padding: 18px;
+  border: 0;
+  border-radius: 8px;
+  background: #14171d;
+  box-shadow: none;
+}
+.adminSectionHeader :is(h2, strong) {
+  color: #f0f2f6;
+}
 .adminSectionHeader span {
   color: var(--admin-muted);
 }
-
-.decisionPanelHead button {
-  min-height: 40px;
-  padding: 0 12px;
-  border: 1px solid rgba(95, 240, 176, 0.25);
-  border-radius: 9px;
-  background: rgba(95, 240, 176, 0.08);
-  color: #d9fae9;
-  cursor: pointer;
-  font-weight: 680;
+.adminWorkspace .adminSectionHeader h2 {
+  font-size: 1.05rem;
 }
-
+.adminWorkspace .decisionPanelHead {
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.adminWorkspace .decisionPanelHead > span {
+  color: #c0c9d6;
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+}
+.adminWorkspace .decisionPanelHead > strong {
+  font-size: 0.75rem;
+}
+.adminWorkspace .sessionButton {
+  padding: 14px;
+  border-color: var(--admin-border);
+  background: var(--admin-panel);
+  gap: 7px;
+  border-radius: 8px;
+}
+.adminWorkspace .sessionButton > :is(span, small) {
+  color: var(--admin-muted);
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+.adminWorkspace .sessionButton > strong {
+  color: #f0f2f6;
+  font-size: 0.95rem;
+}
+.adminWorkspace .sessionButton.active {
+  border-color: #6de3af;
+  background: #22342d;
+}
 .adminMetricGrid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
 }
-
-.adminMetricGrid .opsCard {
-  min-height: 112px;
-  padding: 15px;
-  border-color: var(--admin-border);
-  border-left-width: 1px;
-  border-radius: 11px;
-  background: var(--admin-panel-raised);
-  transition:
-    border-color 0.16s ease,
-    background 0.16s ease,
-    transform 0.16s ease;
+.adminWorkspace .adminMetricGrid .opsCard {
+  min-height: 136px;
+  padding: 16px;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  background: #14171d;
 }
-
-.adminMetricGrid button.opsCard:hover {
-  border-color: rgba(180, 198, 190, 0.25);
-  background: #17211d;
-  transform: translateY(-1px);
-}
-
-.adminMetricGrid button.opsCard.good:hover {
-  border-left-color: var(--admin-good);
-}
-
-.adminMetricGrid button.opsCard.warn:hover {
-  border-left-color: var(--admin-warn);
-}
-
-.adminMetricGrid button.opsCard.alert:hover {
-  border-left-color: var(--admin-alert);
-}
-
-.adminMetricGrid .opsCard strong {
-  margin-top: 10px;
-  font: 700 clamp(1.25rem, 2.4vw, 1.7rem)/1 var(--font-mono);
-}
-
-.adminWorkGrid {
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
-  gap: 12px;
-}
-
-.adminStatus {
-  border-color: rgba(180, 198, 190, 0.16);
+.adminMetricGrid .opsCard > span {
   color: var(--admin-muted);
+  font-size: 0.72rem;
 }
-
-.adminStatus.good,
-.adminStatus.ready,
-.adminStatus.approved {
-  border-color: rgba(95, 240, 176, 0.34);
+.adminWorkspace .adminMetricGrid .opsCard strong {
+  margin-top: 12px;
+  font: 650 clamp(1.1rem, 2vw, 1.5rem)/1.2 var(--font-display);
+}
+.adminMetricGrid .opsCard p {
+  margin-top: 9px;
+  color: var(--admin-muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+.adminWorkGrid {
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  gap: 18px;
+}
+.adminStatus {
+  color: var(--admin-muted);
+  border-color: var(--admin-border);
+}
+.adminWorkspace .good,
+.adminWorkspace .adminStatus:is(.ready, .approved) {
   color: var(--admin-good);
 }
-
-.adminStatus.warn,
-.adminStatus.draft,
-.adminStatus.active {
-  border-color: rgba(242, 199, 101, 0.34);
+.adminWorkspace .warn,
+.adminWorkspace .adminStatus:is(.draft, .active) {
   color: var(--admin-warn);
 }
-
-.adminStatus.alert,
-.adminStatus.blocked {
-  border-color: rgba(255, 128, 108, 0.38);
+.adminWorkspace .alert,
+.adminWorkspace .adminStatus.blocked {
   color: var(--admin-alert);
 }
-
-.adminMetricGrid .opsCard {
-  border-left-width: 3px;
+.adminWorkspace .adminStatus {
+  display: inline-block;
+  width: fit-content;
 }
-
-.adminMetricGrid .opsCard.good {
-  border-left-color: var(--admin-good);
-}
-
-.adminMetricGrid .opsCard.warn {
-  border-left-color: var(--admin-warn);
-}
-
-.adminMetricGrid .opsCard.alert {
-  border-left-color: var(--admin-alert);
-}
-
-.adminMetricGrid .opsCard strong.adminStatus.good {
-  color: var(--admin-good);
-}
-
-.adminMetricGrid .opsCard strong.adminStatus.warn {
-  color: var(--admin-warn);
-}
-
-.adminMetricGrid .opsCard strong.adminStatus.alert {
-  color: var(--admin-alert);
-}
-
 .adminDataSplit {
   display: grid;
   min-width: 0;
-  grid-template-columns: minmax(210px, 0.42fr) minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: minmax(220px, 0.42fr) minmax(0, 1fr);
+  gap: 20px;
 }
-
-.adminSyncNotice {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 3px 12px;
-  align-items: center;
-  margin-bottom: 16px;
-  padding: 12px 14px;
-  border: 1px solid rgba(255, 128, 108, 0.32);
-  border-radius: 11px;
-  background: rgba(255, 128, 108, 0.08);
-  color: #ffd9d2;
+.adminWorkspace .testerConversationEmpty {
+  padding: 16px;
+  color: var(--admin-muted);
+  font-size: 0.85rem;
 }
-
-.adminSyncNotice strong,
-.adminSyncNotice span {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.adminSyncNotice span {
-  color: #cdb8b3;
-  font-size: 0.78rem;
-}
-
-.adminSyncNotice button {
-  grid-column: 2;
-  grid-row: 1 / span 2;
-  min-height: 40px;
-  padding: 0 13px;
-  border: 1px solid currentColor;
-  border-radius: 9px;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-}
-
-.adminSyncNotice.unavailable,
-.adminSyncNotice.conflict {
-  border-color: rgba(242, 199, 101, 0.32);
-  background: rgba(242, 199, 101, 0.08);
-  color: #f8dfa0;
-}
-
-.adminSyncNotice.unavailable span,
-.adminSyncNotice.conflict span {
-  color: #c7b787;
-}
-
 .adminWorkspaceLoading {
   margin: 0;
-  padding: 28px;
-  border: 1px dashed rgba(180, 198, 190, 0.18);
+  padding: 32px;
+  border: 1px dashed var(--admin-border);
   border-radius: 12px;
   color: var(--admin-muted);
   text-align: center;
 }
-
-.adminNotice.success {
-  border-color: rgba(95, 240, 176, 0.3);
-  background: rgba(95, 240, 176, 0.08);
-  color: #c9f9e2;
+.adminSyncNotice {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 8px 16px;
+  margin-bottom: 20px;
+  padding: 16px;
+  border: 1px solid #845650;
+  border-radius: 8px;
+  background: #302022;
+  color: #ffd1cc;
 }
-
-.adminDanger {
+.adminSyncNotice :is(strong, span) {
+  min-width: 0;
   overflow-wrap: anywhere;
-  border-color: rgba(255, 128, 108, 0.42) !important;
-  background: rgba(255, 128, 108, 0.09) !important;
-  color: #ffd9d2 !important;
 }
-
+.adminSyncNotice button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+.adminWorkspace .adminNotice {
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+.adminNotice.success {
+  border-color: #3f705b;
+  background: #1b3027;
+  color: #b5f0d3;
+}
+.adminDanger {
+  border-color: #83534e !important;
+  background: #312123 !important;
+  color: #ffb8b1 !important;
+}
 .adminDanger.armed {
-  border-color: rgba(255, 128, 108, 0.9) !important;
-  background: rgba(255, 128, 108, 0.28) !important;
+  border-color: #ff9a91 !important;
+  background: #633431 !important;
   color: #fff !important;
 }
-
 .adminAccount {
-  gap: 14px;
-  padding: clamp(15px, 2vw, 22px);
+  gap: 20px;
+  padding: 24px;
 }
-
-.adminAccountSummary span,
-.statGrid span {
-  border: 1px solid rgba(180, 198, 190, 0.1);
-  background: var(--admin-panel-raised);
+.adminWorkspace .adminAccountSummary span,
+.adminWorkspace .statGrid span {
+  padding: 12px;
+  border: 1px solid var(--admin-border);
+  background: #14171d;
 }
-
-.accountAdminRow,
-.releaseRunDetail,
-.reviewComposer,
-.activePolicyCard,
-.policyFields {
-  background: rgba(8, 13, 11, 0.5);
+.adminWorkspace .accountAdminRow {
+  padding: 16px;
+  border-color: var(--admin-border);
+  background: #14171d;
 }
-
-.adminAccountFilter input,
-.testingControlPlane input,
-.testingControlPlane select,
-.testingControlPlane textarea,
-.evidenceNotes textarea {
-  min-height: 42px;
-  border-color: rgba(180, 198, 190, 0.18);
-  background: #0b110e;
+.adminWorkspace .adminAccountFilter {
+  padding: 0;
+  background: transparent;
 }
-
-.testingControlPlane.adminSectionCard {
+.adminWorkspace .adminAccountFilter span {
+  margin-bottom: 7px;
+  font-size: 0.8rem;
+}
+.adminWorkspace :is(.releaseRunDetail, .reviewComposer, .activePolicyCard, .policyFields) {
+  background: #14171d;
+  border-color: var(--admin-border);
+}
+.adminWorkspace .testingControlPlane.adminSectionCard {
   border-color: var(--admin-border);
   background: var(--admin-panel);
 }
-
-.testingControlPlane button,
-.evidenceNotes button,
-.loadMoreEvidence {
-  min-height: 40px;
+.adminWorkspace .controlPlaneHead {
+  padding: 20px 24px;
+  border-color: var(--admin-border);
+}
+.adminWorkspace .controlPlaneHead > div > span {
+  color: var(--admin-muted);
+}
+.adminWorkspace .controlPlaneHead strong {
+  margin-top: 4px;
+  font-size: 1.05rem;
+}
+.adminWorkspace .controlPlaneBody {
+  padding: 20px 24px;
+}
+.adminWorkspace :is(.reviewFields, .policyFields) {
+  gap: 14px;
+}
+.adminWorkspace :is(.reviewFields, .policyFields, .runCreateBar) label > span {
+  color: var(--admin-muted);
+  font-size: 0.8rem;
+}
+.adminWorkspace .testerTable {
+  font-size: 0.8rem;
+}
+.adminWorkspace .testerTable :is(th, td) {
+  padding: 12px 10px;
+}
+.adminWorkspace .testerTable th {
+  color: #aeb6c4;
+}
+.adminWorkspace .testerTableWrap {
+  max-width: 100%;
+}
+.adminWorkspace .primary {
+  border-color: #6de3af;
+  background: #6de3af;
+  color: #10241b;
+  font-weight: 650;
+}
+.adminWorkspace .primary:hover:not(:disabled) {
+  border-color: #a7f5d2;
+  background: #a7f5d2;
 }
 
-.adminWorkspace button:focus-visible,
-.adminWorkspace input:focus-visible,
-.adminWorkspace select:focus-visible,
-.adminWorkspace textarea:focus-visible,
-.adminWorkspace a:focus-visible {
-  outline: 3px solid #77f5c0;
-  outline-offset: 3px;
-  box-shadow: 0 0 0 1px #07110d;
+.adminWorkspace .testingPanel {
+  padding: 24px;
+  gap: 22px;
+}
+.adminWorkspace .testingPanel > .panelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.adminWorkspace .testingPanel .panelHeader h2 {
+  font-size: 1.05rem;
+}
+.adminWorkspace .testingPanel .panelHeader span {
+  color: var(--admin-muted);
+}
+.adminWorkspace .testingFilterBar {
+  grid-template-columns: minmax(0, 1.5fr) minmax(150px, 0.65fr) minmax(230px, 1fr);
+  align-items: end;
+  gap: 14px;
+}
+.adminWorkspace .testingFilterBar label {
+  display: grid;
+  gap: 7px;
+  padding: 0;
+  background: transparent;
+}
+.adminWorkspace .testingFilterBar label > span {
+  color: var(--admin-muted);
+  font-size: 0.75rem;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.adminWorkspace .testingFilterBar input {
+  margin-top: 0;
+  padding: 9px 11px;
+}
+.evidenceSearchInput {
+  min-width: 0;
+}
+.adminWorkspace .testingFilterBar .qualityFilter {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  min-height: 42px;
+  padding: 0;
+  background: transparent;
+  gap: 6px;
+}
+.adminWorkspace .evidenceFilters {
+  grid-column: 1 / -1;
+  padding: 10px 14px;
+}
+.evidenceFiltersBody {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  align-items: end;
+}
+.adminWorkspace .evidenceFilters > summary {
+  min-height: 24px;
+}
+.adminWorkspace .evidenceFilters > summary::marker {
+  color: var(--admin-muted);
+}
+.evidenceTools {
+  position: relative;
+}
+.evidenceTools > summary {
+  display: list-item;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  background: var(--admin-panel-raised);
+  color: #edf1f7;
+  font-size: 0.8rem;
+  cursor: pointer;
+  list-style-position: inside;
+}
+.evidenceToolsMenu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 4;
+  width: min(300px, calc(100vw - 60px));
+  padding: 12px;
+  border: 1px solid #566274;
+  border-radius: 8px;
+  background: var(--admin-panel);
+  box-shadow: 0 16px 30px #0007;
+}
+.evidenceToolsMenu button {
+  width: 100%;
+  white-space: normal;
+}
+.adminWorkspace .testQuality:is(.none, .collecting) strong {
+  color: var(--admin-muted);
+}
+.adminWorkspace .qualityFilter button.active,
+.adminWorkspace .evidenceTabs button.active {
+  border-color: #658d79;
+  background: #24382e;
+  color: #a5efcb;
+}
+.adminWorkspace .testingFilterBar .historyRetention {
+  padding: 8px 0;
+  background: transparent;
+}
+.adminWorkspace .historyRetention strong {
+  color: var(--admin-muted);
+  font-size: 0.75rem;
+}
+.adminWorkspace .sessionReplayGrid {
+  align-items: start;
+  grid-template-columns: minmax(230px, 0.4fr) minmax(0, 1fr);
+  gap: 22px;
+}
+.adminWorkspace .sessionReplayGrid > .sessionList {
+  max-height: 760px;
+  padding: 0 4px 4px 0;
+  overflow: auto;
+}
+.evidenceResultCount {
+  margin: 0 0 8px;
+  color: var(--admin-muted);
+  font-size: 0.8rem;
+}
+.evidenceResultCount.error {
+  color: var(--admin-alert);
+}
+.adminWorkspace .sessionDetail {
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  background: #14171d;
+}
+.evidenceTabPanel {
+  min-width: 0;
+}
+.adminWorkspace .evidenceBackToResults {
+  display: none;
+}
+.evidenceDetailHead {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.evidenceDetailHead > div {
+  min-width: 0;
+}
+.evidenceDetailHead > div > span {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--admin-muted);
+  font-size: 0.75rem;
+}
+.evidenceDetailHead strong {
+  font-size: 1.05rem;
+}
+.evidenceDetailHead p {
+  margin: 7px 0 0;
+  color: var(--admin-muted);
+  font-size: 0.8rem;
+}
+.evidenceDetailHead .testerConversationActions {
+  margin-left: auto;
+}
+.evidenceTabs {
+  display: flex;
+  gap: 8px;
+  margin: 18px 0;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--admin-border);
+}
+.adminWorkspace .sessionTranscriptList {
+  max-height: 620px;
+  padding-right: 4px;
+  overflow: auto;
+}
+.adminWorkspace .testerTurn {
+  padding: 14px;
+  margin-bottom: 10px;
+  border-color: var(--admin-border);
+  border-radius: 8px;
+  background: var(--admin-panel);
+}
+.adminWorkspace .testerTurn.agent {
+  border-left: 2px solid #5b997c;
+}
+.adminWorkspace .testerTurn.rider {
+  border-left: 2px solid #7a8faa;
+}
+.adminWorkspace .testerTurn p {
+  font-size: 0.9rem;
+  line-height: 1.7;
+}
+.adminWorkspace .sessionMetricGrid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.adminWorkspace .sessionMetricGrid > span {
+  padding: 12px;
+  background: var(--admin-panel);
+}
+.adminWorkspace .evaluationCheck {
+  border-color: var(--admin-border);
+  background: var(--admin-panel);
+}
+.adminWorkspace .issueWorkbench.evidenceReviewTab {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 20px;
+}
+.adminWorkspace .reviewComposer {
+  padding: 16px;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+}
+.adminWorkspace .reviewComposer > span {
+  display: block;
+  color: var(--admin-muted);
+  font-size: 0.75rem;
+}
+.adminWorkspace .reviewComposer > strong {
+  display: block;
+  margin: 8px 0 16px;
+  overflow-wrap: anywhere;
+}
+.adminWorkspace .reviewFields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.adminWorkspace .reviewFields label > span,
+.adminWorkspace .evidenceNotes label > span {
+  color: var(--admin-muted);
+  font-size: 0.8rem;
+}
+.adminWorkspace .evidenceNotes {
+  display: grid;
+  grid-template-columns: 1fr;
+  padding: 16px;
+  gap: 12px;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  background: var(--admin-panel);
+}
+.adminWorkspace .reviewQueue {
+  display: grid;
+  gap: 12px;
+}
+.adminWorkspace .reviewRow {
+  padding: 14px;
+  border-color: var(--admin-border);
+  background: var(--admin-panel);
+}
+.adminWorkspace .reviewRow select {
+  margin-top: 10px;
+}
+.adminCollapsible {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  background: #14171d;
+}
+.adminCollapsible > summary {
+  display: list-item;
+  min-height: 28px;
+  color: #c6cfdd;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.adminCollapsible[open] > summary {
+  margin-bottom: 20px;
+}
+.adminCollapsible > .testerBar {
+  margin-top: 16px;
+}
+.adminWorkspace .testerTableFilter {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 18px 0;
+}
+.testerTableFilter label {
+  display: grid;
+  flex: 1 1 200px;
+  gap: 7px;
+}
+.testerTableFilter label > span {
+  color: var(--admin-muted);
+  font-size: 0.75rem;
+}
+.adminWorkspace .testerTableWrap {
+  min-width: 0;
+}
+.adminWorkspace .activePolicyCard {
+  display: grid;
+  gap: 10px;
+}
+.adminWorkspace .activePolicyCard p {
+  margin: 0;
+  line-height: 1.65;
 }
 
 @media (max-width: 1100px) {
-  .adminMetricGrid,
-  .testingFilterBar,
-  .testerBar {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .adminWorkspace .sessionReplayGrid {
+    grid-template-columns: minmax(210px, 0.45fr) minmax(0, 1fr);
+    gap: 14px;
   }
-
-  .testingWorkflowBar {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .adminWorkspace .sessionDetail {
+    padding: 14px;
   }
-
-  .testingWorkflowBar .testCaseBrief {
+  .adminWorkspace .testingFilterBar {
+    grid-template-columns: minmax(0, 1fr) minmax(150px, 0.5fr);
+  }
+  .adminWorkspace .testingFilterBar .qualityFilter {
     grid-column: 1 / -1;
   }
 }
+@media (max-width: 900px) {
+  .adminWorkspace .sessionReplayGrid {
+    grid-template-columns: 1fr;
+  }
+  .adminWorkspace .sessionReplayGrid > .sessionDetail {
+    display: none;
+  }
+  .adminWorkspace .sessionReplayGrid.showDetail > .sessionList {
+    display: none;
+  }
+  .adminWorkspace .sessionReplayGrid.showDetail > .sessionDetail {
+    display: block;
+  }
+  .adminWorkspace .evidenceBackToResults {
+    display: inline-flex;
+    margin-bottom: 18px;
+  }
+  .adminWorkspace .sessionReplayGrid > .sessionList {
+    max-height: none;
+    overflow: visible;
+    padding: 0;
+  }
+}
+@media (max-width: 640px) {
+  .adminWorkspace .testingPanel {
+    padding: 16px;
+    gap: 18px;
+  }
+  .adminWorkspace .testingPanel .panelHeader h2 {
+    display: none;
+  }
+  .adminWorkspace .testingPanel .panelHeader > div:first-child > span {
+    font-size: 0.65rem;
+    letter-spacing: 0;
+  }
+  .adminWorkspace .testingPanel .panelActions {
+    display: flex;
+    flex-wrap: wrap;
+    width: 100%;
+    gap: 8px;
+  }
+  .adminWorkspace .testingPanel .panelActions > span {
+    margin-right: auto;
+  }
+  .adminWorkspace .testingPanel .panelActions button {
+    font-size: 0.75rem;
+  }
+  .adminWorkspace .testingFilterBar {
+    grid-template-columns: 1fr;
+  }
+  .adminWorkspace .testingFilterBar .qualityFilter {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-column: 1;
+  }
+  .adminWorkspace .testingFilterBar .qualityFilter button {
+    padding: 8px 5px;
+    font-size: 0.75rem;
+  }
+  .evidenceFiltersBody {
+    grid-template-columns: 1fr;
+  }
+  .adminWorkspace .reviewFields {
+    grid-template-columns: 1fr;
+  }
+  .adminWorkspace .sessionMetricGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .evidenceTabs {
+    gap: 5px;
+  }
+  .adminWorkspace .evidenceTabs button {
+    padding: 8px 10px;
+    font-size: 0.8rem;
+  }
+  .evidenceDetailHead .testerConversationActions {
+    margin-left: 0;
+  }
+  .evidenceToolsMenu {
+    left: 0;
+    right: auto;
+  }
+  .adminWorkspace .sessionReplayGrid > :is(.sessionList, .sessionDetail) {
+    scroll-margin-top: 80px;
+  }
+}
 
+.adminWorkspace .releaseRunActions {
+  flex-direction: row;
+  gap: 8px;
+}
+.policyWorkbench {
+  display: grid;
+  grid-template-columns: minmax(190px, 0.35fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 24px;
+  padding: 24px;
+}
+.adminWorkspace .activePolicyCard {
+  padding: 18px;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+}
+.policyEditor {
+  min-width: 0;
+}
+.policyGroupHead {
+  margin: 0 0 16px;
+  font-size: 0.95rem;
+}
+.policyGroupHead:not(:first-child) {
+  margin-top: 24px;
+}
+.policyFieldGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.policyField,
+.policyRationale,
+.policyVersionSelect,
+.governanceFilterField {
+  display: grid;
+  align-content: start;
+  min-width: 0;
+  gap: 7px;
+}
+.policyField > span,
+.policyRationale > span,
+.policyVersionSelect > span,
+.governanceFilterField > span {
+  color: var(--admin-muted);
+  font-size: 0.8rem;
+}
+.policyFieldError {
+  color: var(--admin-alert);
+  font-size: 0.75rem;
+  font-style: normal;
+}
+.policyPlatformPicker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  margin: 0 0 20px;
+  padding: 14px;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+}
+.policyPlatformPicker legend {
+  padding: 0 6px;
+  color: var(--admin-muted);
+  font-size: 0.8rem;
+}
+.policyPlatformPicker label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.policyPlatformPicker .policyFieldError {
+  flex-basis: 100%;
+}
+.policyActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 18px;
+}
+.policyReviewPanel {
+  padding: 20px;
+  margin-top: 20px;
+  border: 1px solid #607b6d;
+  border-radius: 8px;
+  background: #1d2924;
+}
+.policyReviewNote,
+.policyHistoryMeta {
+  color: var(--admin-muted);
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+.policyReviewRationale {
+  padding: 12px;
+  border-left: 2px solid #6b9c83;
+  background: #131a17;
+  white-space: pre-wrap;
+}
+.policyHistory {
+  grid-column: 1 / -1;
+  min-width: 0;
+  padding-top: 24px;
+  border-top: 1px solid var(--admin-border);
+}
+.policyVersionSelect {
+  max-width: 360px;
+  margin-bottom: 12px;
+}
+.policyDiffTable {
+  margin: 16px 0 0;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.policyDiffRow {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(0, 1.2fr);
+  gap: 16px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--admin-border);
+}
+.policyDiffRow:first-child {
+  border-top: 0;
+}
+.policyDiffRow.changed {
+  background: #383125;
+}
+.policyDiffRow dt {
+  color: var(--admin-muted);
+  font-size: 0.8rem;
+}
+.policyDiffRow dd {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+.policyDiffFrom {
+  color: var(--admin-muted);
+}
+.policyDiffTo {
+  color: #f0f2f6;
+}
+.adminWorkspace .auditTimeline {
+  display: grid;
+  gap: 16px;
+  padding: 24px;
+}
+.governanceFilterBar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  align-items: end;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--admin-border);
+}
+.governanceFilterCount {
+  margin: 0;
+  color: var(--admin-muted);
+  font-size: 0.8rem;
+}
+.adminWorkspace .auditTimeline article.auditEvent {
+  display: block;
+  padding: 20px;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  background: #14171d;
+}
+.auditEventHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+.auditEventHead strong {
+  font-size: 0.95rem;
+}
+.adminWorkspace .auditEventHead time {
+  color: var(--admin-muted);
+  font-size: 0.75rem;
+}
+.auditEventMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin: 12px 0;
+  color: var(--admin-muted);
+  font-size: 0.8rem;
+}
+.auditTargetMissing {
+  color: var(--admin-muted);
+}
+.auditEventDetail {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+  font-size: 0.8rem;
+}
+.auditEventDetail > div {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  gap: 12px;
+}
+.auditEventDetail dt {
+  color: var(--admin-muted);
+}
+.auditEventDetail dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.adminWorkspace .auditRawToggle {
+  min-height: 36px;
+  padding: 6px 10px;
+  margin-top: 8px;
+  font-size: 0.75rem;
+}
+.auditRaw {
+  max-height: 320px;
+  padding: 16px;
+  overflow: auto;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  background: #0e1116;
+  font: 0.75rem/1.6 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.accountPermissions {
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--admin-border);
+}
+.accountPermissions > summary {
+  color: var(--admin-muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.accountRoleLegend {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin: 0;
+  padding: 16px 0 0;
+}
+.accountRoleLegend dt {
+  font-size: 0.85rem;
+  font-weight: 650;
+}
+.accountRoleLegend dd {
+  margin: 7px 0 0;
+  color: var(--admin-muted);
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+.adminAccountGroup {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.adminAccountGroup + .adminAccountGroup {
+  margin-top: 20px;
+}
+.adminAccountGroupHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 4px;
+  font-size: 0.95rem;
+}
+.adminAccountGroupHead > span {
+  padding: 2px 8px;
+  border: 1px solid var(--admin-border);
+  border-radius: 5px;
+  color: var(--admin-muted);
+  font-size: 0.75rem;
+}
+.inviteStatus {
+  display: inline-block;
+  width: fit-content;
+  padding: 2px 7px;
+  margin-left: 7px;
+  border: 1px solid #4e5d75;
+  border-radius: 5px;
+  color: #b7c9e4;
+  font-size: 0.7rem;
+}
+.inviteStatus.expired {
+  color: var(--admin-alert);
+  border-color: #83534e;
+}
+
+@media (max-width: 900px) {
+  .policyWorkbench {
+    grid-template-columns: 1fr;
+  }
+  .accountRoleLegend {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+}
+@media (max-width: 640px) {
+  .policyWorkbench,
+  .adminWorkspace .auditTimeline {
+    padding: 16px;
+    gap: 18px;
+  }
+  .policyFieldGrid,
+  .governanceFilterBar,
+  .policyDiffRow {
+    grid-template-columns: 1fr;
+  }
+  .policyReviewPanel {
+    padding: 14px;
+  }
+  .policyDiffRow {
+    gap: 8px;
+  }
+  .policyDiffRow dd {
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  }
+  .auditEventDetail > div {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+  .adminWorkspace .auditTimeline article.auditEvent {
+    padding: 14px;
+  }
+}
+
+.releaseHeadActions,
+.releaseRunActions,
+.releaseGateActions,
+.coverageRowActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.releaseDraftBadge {
+  padding: 4px 8px;
+  border: 1px solid var(--admin-border);
+  border-radius: 6px;
+  color: var(--admin-muted);
+  font-size: 0.75rem;
+}
+.adminWorkspace .releaseRunGrid {
+  align-items: start;
+  grid-template-columns: minmax(210px, 0.36fr) minmax(0, 1fr);
+}
+.adminWorkspace .releaseRunDetail {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+}
+.adminWorkspace .releaseRunTitle {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.adminWorkspace .releaseRunTitle > div {
+  min-width: 0;
+}
+.adminWorkspace .releaseRunTitle strong {
+  font-size: 1.15rem;
+}
+.releaseRunActions {
+  flex: 1 1 auto;
+  justify-content: flex-end;
+}
+.adminWorkspace .releaseRunActions select {
+  width: auto;
+  flex: 1 1 150px;
+}
+.adminWorkspace .releaseRunList > button {
+  padding: 14px;
+  border-color: var(--admin-border);
+  background: #14171d;
+  gap: 7px;
+}
+.adminWorkspace .releaseRunList > button.active {
+  border-color: #6b9c83;
+  background: #22342d;
+}
+.adminWorkspace .releaseRunList button small {
+  color: var(--admin-muted);
+  font-size: 0.75rem;
+}
+.releaseProgress {
+  display: grid;
+  gap: 8px;
+  margin: 18px 0;
+}
+.releaseProgress > i,
+.coverageCaseHead > i {
+  display: block;
+  overflow: hidden;
+  height: 5px;
+  border-radius: 3px;
+  background: #3a424e;
+}
+.releaseProgress i > b,
+.coverageCaseHead i > b {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--admin-good);
+}
+.releaseProgress > span {
+  color: var(--admin-muted);
+  font-size: 0.8rem;
+}
+.releaseGateActions {
+  margin-top: 14px;
+}
+.releaseCoverage {
+  display: grid;
+  gap: 16px;
+  margin-top: 20px;
+}
+.coverageCaseGroup {
+  overflow: hidden;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+}
+.coverageCaseHead {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 14px;
+  background: var(--admin-panel-raised);
+}
+.coverageCaseHead strong {
+  font-size: 0.9rem;
+}
+.coverageCaseHead > span {
+  color: var(--admin-muted);
+  font-size: 0.75rem;
+}
+.coverageCaseHead > i {
+  grid-column: 1 / -1;
+  height: 3px;
+}
+.coverageRequirementRows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.coverageRequirementRow {
+  display: grid;
+  grid-template-columns: 68px minmax(60px, 1fr) auto;
+  align-items: center;
+  gap: 10px 12px;
+  padding: 14px;
+  border-top: 1px solid var(--admin-border);
+}
+.coverageRequirementRow:focus-visible {
+  outline: 3px solid var(--admin-good);
+  outline-offset: -3px;
+}
+.coveragePlatform {
+  width: fit-content;
+  padding: 4px 8px;
+  border: 1px solid #536075;
+  border-radius: 5px;
+  color: #c5d7ef;
+  font-size: 0.75rem;
+  text-transform: capitalize;
+}
+.coverageRequirementMeta,
+.coverageUnassigned {
+  color: var(--admin-muted);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+.coverageRequirementCount {
+  justify-self: end;
+  font-variant-numeric: tabular-nums;
+}
+.coverageRequirementRow.complete .coverageRequirementCount {
+  color: var(--admin-good);
+}
+.coverageAssignees {
+  grid-column: 1 / 3;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--admin-muted);
+  font-size: 0.75rem;
+}
+.coverageRowActions {
+  grid-column: 3;
+  grid-row: 2;
+  justify-content: flex-end;
+}
+.adminWorkspace .coverageRowActions button {
+  min-height: 36px;
+  padding: 6px 9px;
+  font-size: 0.75rem;
+}
+.adminWorkspace .coverageEvidenceLink {
+  border-color: transparent;
+  background: transparent;
+  color: #aacaff;
+}
+.releaseEmpty {
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  padding: 40px 20px;
+  text-align: center;
+}
+.releaseEmpty strong {
+  font-size: 1.1rem;
+}
+.releaseEmpty p {
+  max-width: 34em;
+  margin: 0;
+  color: var(--admin-muted);
+}
+.releaseApproveDialog {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  padding: 24px;
+  background: #000a;
+}
+.releaseApprovePanel {
+  width: min(100%, 560px);
+  max-height: calc(100dvh - 48px);
+  padding: 24px;
+  overflow: auto;
+  border: 1px solid #566274;
+  border-radius: 14px;
+  background: var(--admin-panel);
+  box-shadow: 0 25px 90px #0009;
+}
+.releaseApproveHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+.releaseApproveHead > strong {
+  font-size: 1.2rem;
+}
+.releaseApproveFacts {
+  display: grid;
+  gap: 12px;
+  padding: 18px 0;
+}
+.releaseApproveFacts > div {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  gap: 12px;
+}
+.releaseApproveFacts dt {
+  color: var(--admin-muted);
+  font-size: 0.8rem;
+}
+.releaseApproveFacts dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.releaseApproveReady {
+  padding: 12px;
+  border: 1px solid #3f705b;
+  border-radius: 8px;
+  color: #b5f0d3;
+  background: #1b3027;
+}
+.releaseApproveActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+@media (max-width: 1100px) {
+  .adminWorkspace .releaseRunGrid {
+    grid-template-columns: 1fr;
+  }
+  .adminWorkspace .releaseRunList {
+    max-height: 240px;
+  }
+}
+@media (max-width: 640px) {
+  .adminWorkspace .releaseRunDetail {
+    padding: 12px;
+  }
+  .releaseRunActions {
+    justify-content: stretch;
+  }
+  .releaseRunActions > button {
+    flex: 1 1 auto;
+  }
+  .coverageCaseHead {
+    grid-template-columns: 1fr;
+  }
+  .coverageRequirementRow {
+    grid-template-columns: auto 1fr auto;
+    padding: 12px;
+    gap: 10px 8px;
+  }
+  .coverageAssignees {
+    grid-column: 1 / -1;
+  }
+  .coverageRowActions {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    justify-content: flex-start;
+  }
+  .releaseApproveDialog {
+    padding: 14px;
+  }
+  .releaseApprovePanel {
+    padding: 18px;
+    max-height: calc(100dvh - 28px);
+  }
+  .releaseApproveFacts > div {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+  .releaseApproveFacts dd {
+    margin-bottom: 10px;
+  }
+}
+
+@media (max-width: 1100px) {
+  .adminMetricGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .adminVoiceContext {
+    display: none;
+  }
+  .adminWorkspaceLayout {
+    grid-template-columns: 194px minmax(0, 1fr);
+  }
+  .adminWorkGrid {
+    grid-template-columns: 1fr;
+  }
+  .adminWorkspace .testerBar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 @media (max-width: 900px) {
   .adminWorkspaceHeader {
     position: relative;
   }
-
   .adminWorkspaceLayout {
     grid-template-columns: 1fr;
   }
-
-  /* Two rows, not one long sideways scroller. With the account bar inside the
-     same scrolling row it sat 500px off the right-hand edge: signing out meant
-     discovering you could drag a strip of tabs sideways. */
   .adminWorkspaceNav {
     position: sticky;
     top: 0;
-    z-index: 4;
-    overflow-x: visible;
-    padding: 10px 14px;
-    flex-direction: column;
-    gap: 8px;
+    z-index: 5;
+    padding: 8px 14px;
     border-right: 0;
-    border-bottom: 1px solid rgba(180, 198, 190, 0.11);
+    border-bottom: 1px solid var(--admin-border);
   }
-
-  /* The tabs keep the horizontal scroll — there are five of them and they are
-     genuinely wider than a phone. */
-  .adminWorkspaceNavTabs {
-    display: flex;
-    overflow-x: auto;
-    flex-direction: row;
-    gap: 5px;
-    scrollbar-width: none;
-  }
-
-  .adminWorkspaceNavTabs::-webkit-scrollbar {
+  .adminNavCaption,
+  .adminNavBuild {
     display: none;
   }
-
-  .adminWorkspaceNavTabs > button {
+  .adminWorkspaceNavTabs {
+    flex-direction: row;
+    gap: 5px;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+  .adminWorkspaceNavTabs > a {
     flex: 0 0 auto;
+    min-height: 44px;
+    font-size: 0.8rem;
+    padding: 8px 11px;
   }
-
-  .adminWorkspaceNav > .accountBar {
-    display: flex;
-    min-width: 0;
-    flex: 0 0 auto;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin: 0;
-    padding: 8px 0 0;
-    border: 0;
-    border-top: 1px solid rgba(180, 198, 190, 0.1);
+  .adminDataSplit {
+    grid-template-columns: 1fr;
   }
-
-  .adminWorkspaceNav .accountIdentity {
-    min-width: 0;
-  }
-
-  /* `flex: 0 0 auto` (the desktop default) meant these rows could not shrink,
-     so `flex-wrap` never engaged and the action pills ran 51px off the side of
-     a 375px screen. Let them shrink, and they wrap instead. */
-  .adminWorkspaceNav .accountActions,
-  .adminWorkspaceNav .accountForm,
-  .adminWorkspaceNav .accountFields {
-    display: flex;
-    width: auto;
-    min-width: 0;
-    flex: 1 1 auto;
-    flex-wrap: wrap;
-  }
-
-  .adminWorkspaceNav .accountActions button,
-  .adminWorkspaceNav .accountFields input {
-    width: auto;
-    min-width: 0;
-  }
-
-  .adminWorkspaceNav .accountMemoryNotice {
-    min-width: 180px;
-  }
-
   .adminWorkspaceContent {
     max-width: 100vw;
   }
-
-  .adminDataSplit,
-  .adminWorkGrid {
-    grid-template-columns: 1fr;
-  }
 }
-
 @media (max-width: 640px) {
   .adminWorkspaceHeader {
-    position: relative;
+    min-height: 66px;
+    padding: 10px 14px;
+    gap: 8px;
+  }
+  .adminWorkspaceBrand {
+    gap: 8px;
+  }
+  .adminWorkspaceLogo {
+    width: 32px;
+    height: 34px;
+    font-size: 1rem;
+  }
+  .adminWorkspaceBrand small {
+    font-size: 0.55rem;
+    letter-spacing: 0.08em;
+  }
+  .adminWorkspaceBrand h1 {
+    font-size: 0.9rem;
+  }
+  .adminWorkspaceContext {
+    gap: 6px;
+  }
+  .adminWorkspace .adminBackAction {
+    font-size: 0.75rem;
+    padding: 6px 8px;
+  }
+  .adminProfile > summary {
+    padding: 6px;
+    border-color: transparent;
+  }
+  .adminProfile > summary :is(span, svg:last-child) {
+    display: none;
+  }
+  .adminWorkspaceContent {
+    padding: 18px 14px 32px;
+  }
+  .adminPageHeading {
+    margin-bottom: 18px;
+    gap: 10px;
+    align-items: flex-start;
+  }
+  .adminPageHeading h2 {
+    font-size: 1.4rem;
+  }
+  .adminSyncControls {
+    align-items: flex-end;
+    flex-direction: column-reverse;
+    gap: 5px;
+  }
+  .adminSyncControls small {
+    font-size: 0.65rem;
+  }
+  .adminOverview,
+  .adminAccount {
+    padding: 16px;
+    gap: 18px;
+  }
+  .adminSectionCard.adminSectionInset {
+    padding: 12px;
+  }
+  .adminWorkspace .decisionPanelHead {
+    flex-wrap: wrap;
+  }
+  .adminWorkspace .controlPlaneHead,
+  .adminWorkspace .controlPlaneBody {
+    padding: 16px;
+  }
+  .adminWorkspace
+    :is(
+      .adminWorkGrid,
+      .adminDataSplit,
+      .testerBar,
+      .testingWorkflowBar,
+      .chartGrid,
+      .issueWorkbench,
+      .runCreateBar,
+      .coverageMatrix,
+      .reviewFields,
+      .policyFields,
+      .evidenceNotes
+    ) {
+    grid-template-columns: 1fr;
+  }
+  .adminWorkspace .testingWorkflowBar .testCaseBrief {
+    grid-column: auto;
+  }
+  .adminWorkspace :is(.adminAccountHead, .accountAdminRow, .testerConversationHeader, .releaseRunTitle) {
     align-items: stretch;
     flex-direction: column;
   }
-
-  .adminWorkspaceContext {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    justify-content: stretch;
+  .adminWorkspace .adminAccountSummary {
+    display: flex;
+    overflow-x: auto;
+    padding-bottom: 6px;
+    scrollbar-width: thin;
   }
-
-  .adminWorkspaceContext > span,
-  .adminWorkspaceContext > small,
-  .adminWorkspaceContext > button {
-    min-width: 0;
-    justify-content: center;
-    white-space: normal;
+  .adminWorkspace .adminAccountSummary > span {
+    flex: 0 0 140px;
   }
-
-  .adminWorkspaceContext > button {
-    grid-column: 1 / -1;
+  .adminWorkspace :is(.adminAccountRoleActions, .adminAccountInviteActions, .testerConversationActions) {
+    width: 100%;
+    flex-wrap: wrap;
   }
-
-  .adminWorkspaceContext > span,
-  .adminWorkspaceContext > small {
-    overflow-wrap: anywhere;
-    text-overflow: clip;
-  }
-
-  /* `max-content` here forced the bar as wide as its widest row, which is what
-     pushed it out of the viewport once it left the scrolling strip. */
-  .adminWorkspaceNav > .accountBar {
-    min-width: 0;
-    flex-basis: auto;
-  }
-
-  .adminWorkspaceContent {
-    padding: 14px;
-  }
-
-  .adminMetricGrid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .adminDataSplit,
-  .adminWorkGrid,
-  .testingFilterBar,
-  .testerBar,
-  .testingWorkflowBar,
-  .chartGrid,
-  .issueWorkbench,
-  .runCreateBar,
-  .coverageMatrix,
-  .reviewFields,
-  .policyFields,
-  .evidenceNotes {
-    align-items: stretch;
-    grid-template-columns: 1fr;
-  }
-
-  .testingWorkflowBar .testCaseBrief {
-    grid-column: auto;
-  }
-
   .adminSyncNotice {
     grid-template-columns: 1fr;
   }
-
   .adminSyncNotice button {
     grid-column: 1;
     grid-row: auto;
   }
-
-  .adminAccountHead,
-  .accountAdminRow,
-  .testerConversationHeader,
-  .releaseRunTitle {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .adminAccountRoleActions,
-  .adminAccountInviteActions,
-  .testerConversationActions {
-    width: 100%;
-    flex-wrap: wrap;
-  }
-
-  .adminAccountRoleActions > *,
-  .adminAccountInviteActions > *,
-  .testerConversationActions > * {
-    flex: 1 1 140px;
-  }
-
-  .testerTableWrap {
-    max-width: calc(100vw - 28px);
-  }
 }
-
 @media (prefers-reduced-motion: reduce) {
   .adminWorkspace *,
   .settingsAdminAction {

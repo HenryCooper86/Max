@@ -66,7 +66,12 @@ import {
   upsertTestingReview
 } from "./testing-store";
 import { closeTestingStore } from "./testing-store";
-import { testingBuildsMatch, type TestingPlatform, type TestingQuality } from "../shared/testing";
+import {
+  testingBuildsMatch,
+  type TestingPlatform,
+  type TestingQuality,
+  type TestingReviewStatus
+} from "../shared/testing";
 import { createDoubaoProvider } from "./providers/doubao";
 import { createMockProvider } from "./providers/mock";
 import type { AgentProvider, ProviderTelemetry } from "./providers/types";
@@ -393,6 +398,7 @@ app.get("/testing/sessions", (req, res) => {
   if (!access) return;
   const quality = typeof req.query.quality === "string" ? req.query.quality : undefined;
   const platform = typeof req.query.platform === "string" ? req.query.platform : undefined;
+  const reviewStatus = typeof req.query.reviewStatus === "string" ? req.query.reviewStatus : undefined;
   const page = testingSessionPage(
     {
       cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
@@ -412,6 +418,13 @@ app.get("/testing/sessions", (req, res) => {
           ? (platform as TestingPlatform)
           : undefined,
       runId: typeof req.query.runId === "string" ? req.query.runId : undefined,
+      reviewStatus:
+        reviewStatus === "open" ||
+        reviewStatus === "triaged" ||
+        reviewStatus === "resolved" ||
+        reviewStatus === "waived"
+          ? (reviewStatus as TestingReviewStatus)
+          : undefined,
       search: typeof req.query.search === "string" ? req.query.search : undefined
     },
     access.testerId

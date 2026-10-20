@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { TesterSessionSummary, TestingStats } from "../../../shared/agent";
-import type { TestingOperationsSnapshot, TestingPolicy, TestingReview, TestingRun } from "../../../shared/testing";
+import type {
+  TestingOperationsSnapshot,
+  TestingPolicy,
+  TestingQuality,
+  TestingReview,
+  TestingReviewStatus,
+  TestingRun,
+  TestingPlatform
+} from "../../../shared/testing";
 import type { ApiError, ApiResult } from "../../lib/api-client";
 import type { AuthUser } from "../../lib/auth";
 import {
@@ -29,6 +37,19 @@ type SessionDetailRequest = {
   promise: Promise<TesterSessionSummary | null>;
 };
 
+type EvidenceSearchStatus = "idle" | "loading" | "ready" | "error";
+
+type EvidenceSearchQuery = {
+  search?: string;
+  testerId?: string;
+  quality?: TestingQuality;
+  build?: string;
+  platform?: TestingPlatform;
+  reviewStatus?: TestingReviewStatus;
+  cursor?: string;
+  limit?: number;
+};
+
 export type AdminTestingData = {
   testing: TestingStats | null;
   sessions: TesterSessionSummary[];
@@ -41,6 +62,14 @@ export type AdminTestingData = {
   status: AdminDataStatus;
   error: ApiError | null;
   lastSyncedAt: number | null;
+  /** Server-side evidence search across the entire durable corpus, not just the loaded page. */
+  searchResults: TesterSessionSummary[];
+  searchTotal: number;
+  searchCursor?: string;
+  searchStatus: EvidenceSearchStatus;
+  searchError: ApiError | null;
+  searchSessions: (query: EvidenceSearchQuery) => Promise<void>;
+  clearSearch: () => void;
   refresh: (replace?: boolean) => Promise<void>;
   loadMore: () => Promise<void>;
   loadSession: (sessionId: string, force?: boolean) => Promise<TesterSessionSummary | null>;
@@ -97,6 +126,11 @@ export function useAdminTestingData({
   const [runs, setRuns] = useState<TestingRun[]>([]);
   const [nextCursor, setNextCursor] = useState<string | undefined>();
   const [sessionTotal, setSessionTotal] = useState(0);
+  const [searchResults, setSearchResults] = useState<TesterSessionSummary[]>([]);
+  const [searchTotal, setSearchTotal] = useState(0);
+  const [searchCursor, setSearchCursor] = useState<string | undefined>();
+  const [searchStatus, setSearchStatus] = useState<EvidenceSearchStatus>("idle");
+  const [searchError, setSearchError] = useState<ApiError | null>(null);
   const [status, setStatus] = useState<AdminDataStatus>("loading");
   const [error, setError] = useState<ApiError | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
@@ -118,6 +152,8 @@ export function useAdminTestingData({
   const activeRefreshRef = useRef<ReplacementRefresh | null>(null);
   const loadingMoreRef = useRef(false);
   const hasLoadedDataRef = useRef(false);
+  const searchSequenceRef = useRef(0);
+  const searchResultsRef = useRef<TesterSessionSummary[]>([]);
   const syncFailureSourceRef = useRef<SyncFailureSource | null>(null);
   const expiredScopeRef = useRef<number | null>(null);
   const sessionsRef = useRef<TesterSessionSummary[]>([]);
@@ -368,6 +404,68 @@ export function useAdminTestingData({
     setSessionTotal(result.data.total);
   }, [expireAuthentication, isCurrent, setSyncFailure]);
 
+  /**
+   * Server-side evidence search. Runs across the entire durable corpus with the
+   * same predicates the sessions page uses, so a transcript match on an
+   * unloaded page is still found. Only the newest request may commit, and a
+   * commit is void when the evidence generation moved on (clear) or the
+   * account/role scope changed mid-flight.
+   */
+  const searchSessions = useCallback(
+    async (query: EvidenceSearchQuery) => {
+      const scope = scopeRef.current;
+      if (!isCurrent(scope)) return;
+      const requestId = ++searchSequenceRef.current;
+      const evidenceGeneration = evidenceGenerationRef.current;
+      const appending = Boolean(query.cursor);
+      if (!appending) {
+        searchResultsRef.current = [];
+        setSearchResults([]);
+        setSearchTotal(0);
+        setSearchCursor(undefined);
+      }
+      setSearchStatus("loading");
+      setSearchError(null);
+      const result = await testingApi.fetchSessions({ limit: 100, ...query });
+      if (!isCurrent(scope)) return;
+      if (!result.ok && result.error.kind === "unauthorized") expireAuthentication(result.error, scope);
+      if (requestId !== searchSequenceRef.current) return;
+      if (evidenceGeneration !== evidenceGenerationRef.current) return;
+      if (!result.ok) {
+        setSearchStatus("error");
+        setSearchError(result.error);
+        if (!appending) {
+          searchResultsRef.current = [];
+          setSearchResults([]);
+          setSearchTotal(0);
+          setSearchCursor(undefined);
+        }
+        return;
+      }
+
+      const merged = mergeAdminSessions(sessionsRef.current, result.data.items);
+      sessionsRef.current = merged;
+      setSessions(merged);
+      const combined = appending ? mergeAdminSessions(searchResultsRef.current, result.data.items) : result.data.items;
+      searchResultsRef.current = combined;
+      setSearchResults(combined);
+      setSearchTotal(result.data.total);
+      setSearchCursor(result.data.nextCursor);
+      setSearchStatus("ready");
+    },
+    [expireAuthentication, isCurrent]
+  );
+
+  const clearSearch = useCallback(() => {
+    searchSequenceRef.current += 1;
+    searchResultsRef.current = [];
+    setSearchResults([]);
+    setSearchTotal(0);
+    setSearchCursor(undefined);
+    setSearchStatus("idle");
+    setSearchError(null);
+  }, []);
+
   const loadSession = useCallback(
     async (sessionId: string, force = false) => {
       const scope = scopeRef.current;
@@ -471,6 +569,8 @@ export function useAdminTestingData({
       replacementRequiredRef.current = evidenceGeneration;
       refreshRequestRef.current += 1;
       loadingMoreRef.current = false;
+      searchSequenceRef.current += 1;
+      searchResultsRef.current = [];
       sessionsRef.current = [];
       sessionDetailsRef.current = {};
       nextCursorRef.current = undefined;
@@ -478,6 +578,11 @@ export function useAdminTestingData({
       setSessionDetails({});
       setNextCursor(undefined);
       setSessionTotal(0);
+      setSearchResults([]);
+      setSearchTotal(0);
+      setSearchCursor(undefined);
+      setSearchStatus("idle");
+      setSearchError(null);
       await refreshForScope(true, scope);
       return true;
     },
@@ -581,6 +686,8 @@ export function useAdminTestingData({
     sessionsRef.current = [];
     sessionDetailsRef.current = {};
     nextCursorRef.current = undefined;
+    searchSequenceRef.current += 1;
+    searchResultsRef.current = [];
     setTesting(null);
     setSessions([]);
     setSessionDetails({});
@@ -589,6 +696,11 @@ export function useAdminTestingData({
     setRuns([]);
     setNextCursor(undefined);
     setSessionTotal(0);
+    setSearchResults([]);
+    setSearchTotal(0);
+    setSearchCursor(undefined);
+    setSearchStatus("idle");
+    setSearchError(null);
     setStatus("loading");
     setError(null);
     setLastSyncedAt(null);
@@ -631,6 +743,13 @@ export function useAdminTestingData({
     runs: stateMatchesScope ? runs : [],
     nextCursor: stateMatchesScope ? nextCursor : undefined,
     sessionTotal: stateMatchesScope ? sessionTotal : 0,
+    searchResults: stateMatchesScope ? searchResults : [],
+    searchTotal: stateMatchesScope ? searchTotal : 0,
+    searchCursor: stateMatchesScope ? searchCursor : undefined,
+    searchStatus: stateMatchesScope ? searchStatus : "idle",
+    searchError: stateMatchesScope ? searchError : null,
+    searchSessions,
+    clearSearch,
     status: stateMatchesScope ? status : "loading",
     error: stateMatchesScope ? error : null,
     lastSyncedAt: stateMatchesScope ? lastSyncedAt : null,

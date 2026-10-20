@@ -1988,11 +1988,19 @@ export function testingSessionPage(
     // Keep the live, bounded cache usable if the durable index is unavailable.
   }
 
+  if (query.reviewStatus) {
+    // Review state lives only in the durable evidence index. The degraded
+    // in-memory window cannot answer this filter honestly, so refuse it rather
+    // than fabricate review scoping.
+    throw new Error("Review status filtering requires the durable evidence index");
+  }
   const requestedLimit = typeof query.limit === "number" && Number.isFinite(query.limit) ? query.limit : 25;
   const limit = Math.max(1, Math.min(100, Math.round(requestedLimit)));
   const cursor = decodeCursor(query.cursor);
-  const search = cleanText(query.search ?? "").toLowerCase();
-  const filtered = completedSessions.filter((session) => {
+  const search = cleanText(query.search ?? "")
+    .slice(0, 160)
+    .toLowerCase();
+  const matching = completedSessions.filter((session) => {
     if (allowedTesterId && session.testerId !== allowedTesterId) return false;
     if (query.testerId && session.testerId !== normalizeTesterId(query.testerId)) return false;
     if (query.testCaseId && session.testCaseId !== query.testCaseId) return false;
@@ -2000,36 +2008,29 @@ export function testingSessionPage(
     if (query.quality && session.quality !== query.quality) return false;
     if (query.platform && session.platform !== query.platform) return false;
     if (query.runId && session.runId !== query.runId) return false;
-    if (
-      cursor &&
-      (session.endedAt > cursor.endedAt ||
-        (session.endedAt === cursor.endedAt && session.sessionId >= cursor.sessionId))
-    ) {
-      return false;
-    }
     if (search) {
-      const haystack = [
-        session.sessionId,
-        session.testerId,
-        session.testCaseName,
-        session.deviceLabel,
-        session.networkType,
-        session.gitCommit,
-        session.notes,
-        ...session.flags
-      ]
-        .join(" ")
-        .toLowerCase();
-      if (!haystack.includes(search)) return false;
+      // Mirror the durable LOWER(payload_json) LIKE scan: the WHOLE serialized
+      // session is the haystack, so transcript text/feedback, metadata, and
+      // notes match identically in both storage modes.
+      if (!JSON.stringify(session).toLowerCase().includes(search)) return false;
     }
     return true;
   });
-  const page = filtered.slice(0, limit);
+  // Count BEFORE applying the cursor so later pages keep reporting the same
+  // full filtered total as the durable COUNT(*), not a shrinking remainder.
+  const remaining = cursor
+    ? matching.filter(
+        (session) =>
+          session.endedAt < cursor.endedAt ||
+          (session.endedAt === cursor.endedAt && session.sessionId < cursor.sessionId)
+      )
+    : matching;
+  const page = remaining.slice(0, limit);
   const lastPageItem = page.at(-1);
   return {
     items: page.map((session) => clonedSession(session, false)),
-    nextCursor: filtered.length > limit && lastPageItem ? encodeCursor(lastPageItem) : undefined,
-    total: filtered.length
+    nextCursor: remaining.length > limit && lastPageItem ? encodeCursor(lastPageItem) : undefined,
+    total: matching.length
   };
 }
 

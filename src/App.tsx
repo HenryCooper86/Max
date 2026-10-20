@@ -10,6 +10,7 @@ import { VoiceTranscript } from "./components/VoiceTranscript";
 import { WebSettingsSheet } from "./components/WebSettingsSheet";
 import { LanguageProvider, useLanguage } from "./components/LanguageToggle";
 import { surfaceAfterAuthentication, type AppSurface } from "./components/admin/admin-model";
+import { leaveAdminLocation, setAdminLocation, useAdminLocation } from "./components/admin/admin-location";
 import { useAmapConsent } from "./hooks/useAmapConsent";
 import { useHelmetAgent } from "./hooks/useHelmetAgent";
 import { fetchCurrentUser, type AuthUser } from "./lib/auth";
@@ -24,16 +25,40 @@ function AppContent() {
   const { language, t } = useLanguage();
   const agent = useHelmetAgent();
   const { listening, starting, startMic, stopMic } = agent;
-  const [surface, setSurface] = useState<AppSurface>("voice");
+  const location = useAdminLocation();
+  const lastAdminLocation = useRef({ section: location.section, params: location.params });
+  const locationQuery = location.params.toString();
+  const [surface, setSurface] = useState<AppSurface>(() => (location.isAdmin ? "admin" : "voice"));
   const [captionsOpen, setCaptionsOpen] = useState(false);
   const settingsButtonRef = useRef<HTMLButtonElement>(null);
   const closeSettings = useCallback(() => setSurface("voice"), []);
   const openSettings = useCallback(() => setSurface("settings"), []);
-  const openAdmin = useCallback(() => setSurface("admin"), []);
+  const openAdmin = useCallback(() => {
+    setAdminLocation("overview");
+    setSurface("admin");
+  }, []);
   const closeAdmin = useCallback(() => {
+    if (!window.dispatchEvent(new Event("admin:beforeleave", { cancelable: true }))) return;
+    window.dispatchEvent(new Event("admin:didleave"));
+    leaveAdminLocation();
     setSurface("voice");
     window.requestAnimationFrame(() => settingsButtonRef.current?.focus());
   }, []);
+
+  useEffect(() => {
+    if (location.isAdmin) {
+      lastAdminLocation.current = { section: location.section, params: new URLSearchParams(locationQuery) };
+      setSurface("admin");
+    } else if (surface === "admin") {
+      if (!window.dispatchEvent(new Event("admin:beforeleave", { cancelable: true }))) {
+        const previous = lastAdminLocation.current;
+        setAdminLocation(previous.section, Object.fromEntries(previous.params), true);
+      } else {
+        window.dispatchEvent(new Event("admin:didleave"));
+        setSurface("voice");
+      }
+    }
+  }, [location.isAdmin, location.section, locationQuery, surface]);
 
   // Site-wide access gate: once any account exists on the relay, the voice
   // face stays hidden behind authentication. The relay enforces this too.

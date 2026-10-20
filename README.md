@@ -497,6 +497,16 @@ manage policy, roles, destructive actions, and release approval. See
 [`docs/live-agent-testing.md`](docs/live-agent-testing.md) for route and workflow
 details.
 
+The web workspace opens from **Settings → Testing & Admin**, or directly at
+`/#/admin/overview`. Sections, selected releases/sessions, and filters have
+shareable URLs and survive refresh and browser Back/Forward. The profile menu
+contains language, password, app-token, memory, and sign-out controls.
+Evidence opens as a searchable list/detail workspace with Conversation,
+Diagnostics, and Review views; search includes transcripts across unloaded
+pages. Unsaved evidence drafts are account/role-scoped in the current browser
+tab and protected on departure. Release approval and policy publication each
+require a separate review/confirmation step.
+
 ### `POST /auth/register` · `POST /auth/login` · `POST /auth/logout` · `GET /auth/me`
 
 User accounts for the testing framework, stored dependency-free in
@@ -529,7 +539,7 @@ links** (`/?invite=inv_…`, auto-copied; `POST /auth/admin/invites`, revoke via
 `/auth/admin/invites/revoke`), and deletes tester accounts (their sessions die
 with them; admin accounts cannot be deleted — `POST /auth/admin/users/delete`,
 overview at `GET /auth/admin/overview`). Any logged-in user can copy their
-session token from the account bar (复制令牌) and paste it into the iOS/Android
+session token from the Admin profile menu (复制令牌) and paste it into the iOS/Android
 认证令牌 field to connect the native apps.
 
 Authenticated conversation memory is stored separately in

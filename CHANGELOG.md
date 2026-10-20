@@ -44,6 +44,30 @@
   network (ASR is server-side), and iOS cannot place calls itself — the call
   button needs a human tap.
 
+## 2026-10-20 — Web admin operations workspace
+
+- Replaced the dark-green, densely stacked admin layout with neutral charcoal
+  surfaces, consistent controls, action-first overview, compact mobile navigation
+  and a profile menu for account utilities and language.
+- Added shareable admin section, release, session and filter URLs with refresh
+  and browser-history support. Missing run/session links no longer select
+  unrelated actionable records.
+- Reorganized evidence into a session list and Conversation/Diagnostics/Review
+  detail views; moved test setup and aggregate diagnostics into disclosures.
+  Added server-side transcript search across unloaded pages and composable
+  tester, build, platform, quality and independent-review-status filters.
+- Preserved account/role-scoped evidence drafts across triage and reload, with
+  explicit discard cleanup and protections against stale search/save responses.
+  Empty, collecting, invalid and missing-measurement states no longer imply PASS.
+- Grouped release coverage by case/platform, capped progress per requirement,
+  added actionable blockers and a separate confirmed administrator approval.
+  Late creation requests cannot replace a newer release selection.
+- Added complete policy threshold comparisons, inline validation and reviewed
+  publication; external policy changes preserve dirty drafts and block stale
+  publication. Audit entries use readable labels, linked records, filters and
+  expandable technical details. Account/invite groups retain destructive
+  safeguards and clipboard fallback; admin copy is localized in English/Chinese.
+
 ## 2026-10-15 — Browser navigation session isolation
 
 - Reset browser navigation when a settings change replaces the relay session.

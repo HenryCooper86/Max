@@ -14,11 +14,12 @@ import {
 } from "./admin-model";
 
 const QUALITY_PRIORITY: Record<TestingQuality, number> = { fail: 3, watch: 2, pass: 1 };
+const EVALUATION_LABELS = { pass: "通过", watch: "需关注", fail: "未通过", waiting: "等待", insufficient: "证据不足" };
 
 function releaseStatusLabel(status: ReturnType<typeof adminReleaseStatus>, language: "zh-CN" | "en-US") {
   if (status === "approved") return localized(language, "已批准", "APPROVED");
   if (status === "ready") return localized(language, "待批准", "Awaiting approval");
-  if (status === "watch") return "WATCH";
+  if (status === "watch") return localized(language, "需关注", "Needs attention");
   if (status === "fail") return localized(language, "受阻", "BLOCKED");
   return localized(language, "等待", "Waiting");
 }
@@ -26,6 +27,7 @@ function releaseStatusLabel(status: ReturnType<typeof adminReleaseStatus>, langu
 function statusTone(status: string | undefined) {
   if (status === "pass" || status === "approved" || status === "ready") return "good";
   if (status === "fail" || status === "blocked") return "alert";
+  if (status === "waiting" || status === undefined) return "neutral";
   return "warn";
 }
 
@@ -45,8 +47,8 @@ type Props = {
   operations: TestingOperationsSnapshot | null;
   runs?: TestingRun[];
   dataStatus?: AdminDataStatus;
-  onOpenEvidence: (sessionId?: string) => void;
-  onOpenReleases: () => void;
+  onOpenEvidence: (sessionId?: string, filters?: Record<string, string | null>) => void;
+  onOpenReleases: (runId?: string) => void;
 };
 
 export function AdminOverview({
@@ -83,7 +85,7 @@ export function AdminOverview({
         : operations
           ? numericReleaseStatus
           : "waiting";
-  const releaseTone = releaseStatus === "ready" ? "warn" : statusTone(releaseStatus);
+  const releaseTone = statusTone(releaseStatus);
   const regression = testing?.regression;
   const regressionFindings =
     regression?.baselineSource !== "none"
@@ -123,10 +125,10 @@ export function AdminOverview({
   const hasDecisionGradeEvidence = releaseGate
     ? releaseGate.status !== "waiting" && releaseGate.validSessions + releaseGate.invalidSessions > 0
     : (testing?.totals.totalTestSessions ?? 0) > 0;
-  const validEvidenceTone = !hasDecisionGradeEvidence || invalidCount > 0 ? "warn" : "good";
+  const validEvidenceTone = !hasDecisionGradeEvidence ? "neutral" : invalidCount > 0 ? "warn" : "good";
   const p95Tone =
     !hasDecisionGradeEvidence || p95ThresholdMs === undefined || p95LatencyMs <= 0
-      ? "warn"
+      ? "neutral"
       : p95LatencyMs > p95ThresholdMs
         ? "alert"
         : "good";
@@ -153,7 +155,7 @@ export function AdminOverview({
         label: localized(language, "发布阻断项", "Release blockers"),
         count: releaseBlockers.length,
         detail: releaseBlockers[0] ?? localized(language, "没有发布阻断项", "No release blockers"),
-        onOpen: onOpenReleases
+        onOpen: () => onOpenReleases(currentRun?.id)
       },
       {
         key: "fail-evidence",
@@ -163,7 +165,7 @@ export function AdminOverview({
         detail: latestFail
           ? `${latestFail.testerId} · ${latestFail.testCaseName} · ${formatAdminRelativeTime(latestFail.endedAt, language)}`
           : localized(language, "当前已加载页面没有 FAIL 证据", "No FAIL evidence in the loaded page"),
-        onOpen: () => onOpenEvidence(latestFail?.sessionId)
+        onOpen: () => onOpenEvidence(latestFail?.sessionId, { quality: "fail" })
       },
       {
         key: "watch-evidence",
@@ -173,7 +175,7 @@ export function AdminOverview({
         detail: latestWatch
           ? `${latestWatch.testerId} · ${latestWatch.testCaseName} · ${formatAdminRelativeTime(latestWatch.endedAt, language)}`
           : localized(language, "当前已加载页面没有 WATCH 证据", "No WATCH evidence in the loaded page"),
-        onOpen: () => onOpenEvidence(latestWatch?.sessionId)
+        onOpen: () => onOpenEvidence(latestWatch?.sessionId, { quality: "watch" })
       },
       {
         key: "invalid-evidence",
@@ -191,7 +193,7 @@ export function AdminOverview({
         label: localized(language, "发布覆盖缺口", "Release coverage gaps"),
         count: missingCases.length,
         detail: missingCases[0]?.testCaseName ?? localized(language, "必需用例覆盖完整", "Required cases are covered"),
-        onOpen: onOpenReleases
+        onOpen: () => onOpenReleases(currentRun?.id)
       }
     ] satisfies QueueItem[]
   ).filter((item) => item.count > 0);
@@ -204,7 +206,7 @@ export function AdminOverview({
     >
       <div className="panelHeader adminSectionHeader">
         <div>
-          <h2>{language === "en-US" ? "Quality & release overview" : "质量与发布概览"}</h2>
+          <h2>{localized(language, "优先处理", "Your next actions")}</h2>
           <span>
             {localized(language, "当前构建", "Current build")}{" "}
             {agent.health?.build?.gitCommit ?? releaseGate?.build ?? "local"} ·{" "}
@@ -223,7 +225,7 @@ export function AdminOverview({
         className="testingOpsStrip adminMetricGrid"
         aria-label={localized(language, "关键质量指标", "Key quality metrics")}
       >
-        <button type="button" className={`opsCard ${releaseTone}`} onClick={onOpenReleases}>
+        <button type="button" className={`opsCard ${releaseTone}`} onClick={() => onOpenReleases(currentRun?.id)}>
           <span>{localized(language, "发布门禁", "Release gate")}</span>
           <strong className={`adminStatus ${releaseTone}`}>{releaseStatusLabel(releaseStatus, language)}</strong>
           <p>
@@ -233,21 +235,24 @@ export function AdminOverview({
           </p>
           {releaseGate && regression ? (
             <p>
-              {localized(language, "质量", "Quality")} {releaseGate.status.toUpperCase()} ·{" "}
+              {localized(language, "质量", "Quality")}{" "}
+              {localized(language, EVALUATION_LABELS[releaseGate.status], releaseGate.status.toUpperCase())} ·{" "}
               {localized(language, "回归", "Regression")}{" "}
               {regression.baselineSource === "none"
                 ? localized(language, "无基线", "No baseline")
-                : regression.status.toUpperCase()}
+                : localized(language, EVALUATION_LABELS[regression.status], regression.status.toUpperCase())}
             </p>
           ) : null}
         </button>
         <button
           type="button"
-          className={`opsCard ${issueCount ? "alert" : "good"}`}
+          className={`opsCard ${issueCount ? "alert" : hasDecisionGradeEvidence ? "good" : "neutral"}`}
           onClick={() => onOpenEvidence(latestIssue?.sessionId)}
         >
           <span>{localized(language, "待复核证据", "Evidence to review")}</span>
-          <strong className={`adminStatus ${issueCount ? "alert" : "good"}`}>{issueCount}</strong>
+          <strong className={`adminStatus ${issueCount ? "alert" : hasDecisionGradeEvidence ? "good" : "neutral"}`}>
+            {issueCount}
+          </strong>
           <p>
             {failCount} FAIL · {watchCount} WATCH · {localized(language, "近期测试者记录", "Recent tester history")}
           </p>
@@ -265,7 +270,7 @@ export function AdminOverview({
               : localized(language, "等待门禁证据", "Waiting for gate evidence")}
           </p>
         </button>
-        <button type="button" className={`opsCard ${p95Tone}`} onClick={onOpenReleases}>
+        <button type="button" className={`opsCard ${p95Tone}`} onClick={() => onOpenReleases(currentRun?.id)}>
           <span>
             {releaseGate
               ? localized(language, "门禁 P95 首音", "Gate P95 first audio")
@@ -288,7 +293,11 @@ export function AdminOverview({
           <div className="decisionPanelHead">
             <span>{localized(language, "优先工作队列", "Priority work queue")}</span>
             <strong className={queue.some((item) => item.tone === "alert") ? "alert" : "warn"}>
-              {queue.length ? `${queue.length} ${localized(language, "类待处理", "categories pending")}` : "PASS"}
+              {queue.length
+                ? `${queue.length} ${localized(language, "类待处理", "categories pending")}`
+                : hasDecisionGradeEvidence
+                  ? localized(language, "已处理完毕", "Up to date")
+                  : localized(language, "等待证据", "Awaiting evidence")}
             </strong>
           </div>
           <div className="sessionList">
@@ -303,9 +312,20 @@ export function AdminOverview({
                 </button>
               ))
             ) : (
-              <p className="testerConversationEmpty">
-                {localized(language, "当前没有阻断项或待复核证据。", "No blockers or evidence awaiting review.")}
-              </p>
+              <>
+                <p className="testerConversationEmpty">
+                  {hasDecisionGradeEvidence
+                    ? localized(language, "当前没有阻断项或待复核证据。", "No blockers or evidence awaiting review.")
+                    : localized(
+                        language,
+                        "尚无可用于决策的证据。创建发布运行并分配测试任务以开始。",
+                        "No decision-grade evidence yet. Create a release run and assign coverage to get started."
+                      )}
+                </p>
+                <button type="button" onClick={() => onOpenReleases(currentRun?.id)}>
+                  {localized(language, "规划发布验证", "Plan release coverage")}
+                </button>
+              </>
             )}
           </div>
         </section>
@@ -316,7 +336,7 @@ export function AdminOverview({
         >
           <div className="decisionPanelHead">
             <span>{localized(language, "近期发布进度", "Recent release progress")}</span>
-            <button type="button" onClick={onOpenReleases}>
+            <button type="button" onClick={() => onOpenReleases()}>
               {localized(language, "查看发布验证", "View release validation")}
             </button>
           </div>
@@ -325,7 +345,7 @@ export function AdminOverview({
               recentRuns.map((run) => {
                 const completed = run.assignments.filter((assignment) => assignment.status === "complete").length;
                 return (
-                  <button type="button" className="sessionButton" key={run.id} onClick={onOpenReleases}>
+                  <button type="button" className="sessionButton" key={run.id} onClick={() => onOpenReleases(run.id)}>
                     <span className={`sessionQuality adminStatus ${statusTone(run.status)}`}>
                       {testingRunStatusLabel(run.status, language)}
                     </span>

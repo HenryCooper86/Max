@@ -455,7 +455,7 @@ describe("AccountManagement", () => {
     expect(text(renderer!.root)).toContain("后过期");
   });
 
-  it("hydrates the account filter from the accounts URL and ignores governance params", async () => {
+  it("hydrates the account filter from the accounts URL and ignores other admin sections", async () => {
     vi.stubGlobal("location", { origin: "https://max.example", hash: "#/admin/accounts?q=alice" });
     await mount();
     expect(text(renderer!.root)).toContain("@alice");
@@ -463,7 +463,7 @@ describe("AccountManagement", () => {
     await act(async () => renderer?.unmount());
     renderer = null;
 
-    vi.stubGlobal("location", { origin: "https://max.example", hash: "#/admin/governance?q=alice" });
+    vi.stubGlobal("location", { origin: "https://max.example", hash: "#/admin/audit?q=alice" });
     await mount();
     expect(text(renderer!.root)).toContain("@alice");
     expect(text(renderer!.root)).toContain("@admin");

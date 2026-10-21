@@ -1,8 +1,16 @@
 import { useSyncExternalStore } from "react";
 import type { Workspace, WorkspaceSection } from "./admin-model";
 
-const TESTING_SECTIONS: readonly WorkspaceSection[] = ["overview", "plans", "evidence"];
-const ADMIN_SECTIONS: readonly WorkspaceSection[] = ["overview", "releases", "evidence", "accounts", "governance"];
+const TESTING_SECTIONS: readonly WorkspaceSection[] = [
+  "overview",
+  "plans",
+  "evidence",
+  "quality",
+  "releases",
+  "diagnostics",
+  "policies"
+];
+const ADMIN_SECTIONS: readonly WorkspaceSection[] = ["overview", "accounts", "audit"];
 
 function locationHash(): string {
   return typeof window === "undefined" ? "" : (window.location?.hash ?? "");
@@ -48,11 +56,11 @@ export function setWorkspaceLocation(
   const current = readWorkspaceLocation();
   const target =
     workspace ??
-    (["releases", "accounts", "governance"].includes(section)
+    (section === "accounts" || section === "audit"
       ? "admin"
-      : section === "plans"
-        ? "testing"
-        : (current.workspace ?? "testing"));
+      : section === "overview"
+        ? (current.workspace ?? "testing")
+        : "testing");
   const allowed = target === "admin" ? ADMIN_SECTIONS : TESTING_SECTIONS;
   const targetSection = allowed.includes(section) ? section : "overview";
   const params =

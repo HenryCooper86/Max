@@ -212,6 +212,15 @@ function parseDetailTab(value: string | null, canReview: boolean, technicalMode:
   return tab;
 }
 
+/**
+ * The two Testing sections this one mounted instance serves: the plain daily
+ * Sessions view and the advanced diagnostics view. Administration owns no
+ * evidence route, so an admin root can never display this component.
+ */
+function isEvidenceRouteSection(section: string | null | undefined): section is "evidence" | "diagnostics" {
+  return section === "evidence" || section === "diagnostics";
+}
+
 function emptyQualityCounts(): QualityCounts {
   return { pass: 0, watch: 0, fail: 0 };
 }
@@ -260,6 +269,19 @@ function formatSessionDate(timestamp: number, language: Language) {
     minute: "2-digit",
     hour12: false
   }).format(timestamp);
+}
+
+/** Deletion confirmations read a date and test case, never a raw session id. */
+function sessionClearTargetLabel(
+  session: Pick<TesterSessionSummary, "startedAt" | "testCaseId" | "testCaseName">,
+  language: Language
+) {
+  const title = testingSessionTitle(session, language);
+  return localized(
+    language,
+    `${formatSessionDate(session.startedAt, "zh-CN")} 的会话记录「${title}」`,
+    `the session record from ${formatSessionDate(session.startedAt, "en-US")} (“${title}”)`
+  );
 }
 
 function barHeight(value: number, max: number) {
@@ -346,9 +368,9 @@ type Props = {
   user: AuthUser;
   data: AdminTestingData;
   /**
-   * Technical (administration) rendering for reviewer/admin accounts. The
-   * plain testing view is human-only; testers never get technical mode, even
-   * if a caller passes true.
+   * Technical (advanced diagnostics) rendering for reviewer/admin accounts.
+   * The plain Sessions view is human-only; testers never get technical mode,
+   * even if a caller passes true.
    */
   technical?: boolean;
 };
@@ -417,6 +439,7 @@ export function EvidenceWorkspace({
   const languageRef = useRef(language);
   const lastEvidenceUrlRef = useRef<string | null>(null);
   const sawOtherSectionRef = useRef(false);
+  const lastOwnedSectionRef = useRef<"evidence" | "diagnostics" | null>(null);
   // Filters are read inside URL/handoff handlers that must see the newest
   // values without re-subscribing; mirror them in refs each render.
   const queryRef = useRef(query);
@@ -552,8 +575,8 @@ export function EvidenceWorkspace({
   const canClear = user.role === "admin";
   const canReview = user.role === "admin" || user.role === "reviewer";
   // Technical rendering is an authorization decision, not a URL decision: it
-  // requires a reviewer/admin account AND the administration panel. Testers
-  // never see raw identifiers, telemetry, or diagnostics.
+  // requires a reviewer/admin account AND the advanced diagnostics section.
+  // Testers never see raw identifiers, telemetry, or diagnostics.
   const technicalMode = canReview && technical;
 
   const serverQuery = useMemo(
@@ -703,17 +726,18 @@ export function EvidenceWorkspace({
   const writeEvidenceUrl = useCallback((updates: Record<string, string | null>) => {
     // A hidden evidence panel must never rewrite the route of the section the
     // operator is actually looking at. The authored URL preserves the exact
-    // workspace (testing or admin) the operator is in.
+    // workspace and the exact Testing section — sessions or diagnostics — so
+    // a diagnostics URL never collapses back into evidence.
     const current = readWorkspaceLocation();
-    if (!current.isWorkspace || current.section !== "evidence" || !current.workspace) return;
+    if (!current.isWorkspace || !current.workspace || !isEvidenceRouteSection(current.section)) return;
     const params = new URLSearchParams(current.params);
     for (const [key, value] of Object.entries(updates)) {
       if (value === null || value === "") params.delete(key);
       else params.set(key, value);
     }
-    lastEvidenceUrlRef.current = `${current.workspace}/evidence?${params.toString()}`;
+    lastEvidenceUrlRef.current = `${current.workspace}/${current.section}?${params.toString()}`;
     sawOtherSectionRef.current = false;
-    setWorkspaceLocation("evidence", updates, true, current.workspace);
+    setWorkspaceLocation(current.section, updates, true, current.workspace);
   }, []);
 
   const currentEvidenceUpdates = useCallback((): Record<string, string | null> => {
@@ -845,29 +869,36 @@ export function EvidenceWorkspace({
   }, [user]);
 
   // URL → state hydration. Shares the shell's hash URL so a session, filters
-  // and tab survive reload and Back/Forward, in either workspace. Round-trips
-  // through another section keep the mounted state (and its unsaved drafts)
-  // untouched.
+  // and tab survive reload and Back/Forward, in either Testing section.
+  // Round-trips through other sections keep the mounted state (and its
+  // unsaved drafts) untouched.
   useEffect(() => {
-    if (!location.isWorkspace || location.section !== "evidence" || !location.workspace) {
+    if (!location.isWorkspace || !location.workspace || !isEvidenceRouteSection(location.section)) {
       sawOtherSectionRef.current = true;
       return;
     }
+    // Sessions ↔ diagnostics is a section switch of this same mounted view,
+    // not a foreign snapshot: with a bare URL it preserves the working state
+    // exactly like returning from an unrelated section.
+    if (lastOwnedSectionRef.current && lastOwnedSectionRef.current !== location.section) {
+      sawOtherSectionRef.current = true;
+    }
+    lastOwnedSectionRef.current = location.section;
     const url = location.params.toString();
     const current = readWorkspaceLocation();
     if (
       !current.isWorkspace ||
-      current.section !== "evidence" ||
       !current.workspace ||
+      !isEvidenceRouteSection(current.section) ||
       current.params.toString() !== url
     ) {
       return;
     }
-    // The self-authored guard includes the workspace: switching between the
-    // testing and administration panels keeps this instance mounted, and an
-    // authored URL must never be mistaken for a foreign snapshot (or vice
-    // versa) when the panel changes.
-    const routeKey = `${current.workspace}/evidence?${url}`;
+    // The self-authored guard includes the workspace and the exact section:
+    // switching between sessions and diagnostics keeps this instance mounted,
+    // and an authored URL must never be mistaken for a foreign snapshot (or
+    // vice versa) when the section changes.
+    const routeKey = `${current.workspace}/${current.section}?${url}`;
     if (lastEvidenceUrlRef.current === null) {
       lastEvidenceUrlRef.current = routeKey;
       if (location.params.size > 0 && !requestedSessionId) applyEvidenceParams(location.params);
@@ -879,8 +910,9 @@ export function EvidenceWorkspace({
       return;
     }
     if (sawOtherSectionRef.current && location.params.size === 0) {
-      // Returning from another section with a bare evidence URL: preserve the
-      // working state, then make the URL describe it again.
+      // Arriving at a bare URL in this section (a section switch or a return
+      // from another section): preserve the working state, then make the URL
+      // describe it again under the section the operator is in.
       sawOtherSectionRef.current = false;
       writeEvidenceUrl(currentEvidenceUpdates());
       return;
@@ -973,11 +1005,10 @@ export function EvidenceWorkspace({
     return () => window.clearTimeout(timer);
   }, [active, clearSearch, reviewFilterRevision, searchActive, searchSessions, serverQuery]);
 
-  const incomingSessionId =
-    location.isWorkspace && location.section === "evidence" ? location.params.get("session") : null;
+  const onEvidenceRoute = location.isWorkspace && isEvidenceRouteSection(location.section);
+  const incomingSessionId = onEvidenceRoute ? location.params.get("session") : null;
   const incomingFilters =
-    location.isWorkspace &&
-    location.section === "evidence" &&
+    onEvidenceRoute &&
     Boolean(
       location.params.get("q") ||
       location.params.get("tester") ||
@@ -1076,7 +1107,7 @@ export function EvidenceWorkspace({
   useEffect(() => {
     if (!canReview || focusedReviewId || reviewDraftDirtyRef.current) return;
     const handoff = readWorkspaceLocation();
-    if (!handoff.isWorkspace || handoff.section !== "evidence") return;
+    if (!handoff.isWorkspace || !isEvidenceRouteSection(handoff.section)) return;
     const reviewIdParam = handoff.params.get("reviewId");
     const sessionParam = handoff.params.get("session");
     if (!reviewIdParam || !sessionParam || sessionParam !== selectedSessionId) return;
@@ -1671,9 +1702,6 @@ export function EvidenceWorkspace({
             {technicalMode
               ? `${testing.windowMinutes} ${localized(language, "分钟", "min")} · ${testing.users.length} ${localized(language, "位测试员", "testers")}`
               : localized(language, "查看对话、测试结果和反馈。", "Read conversations, test results, and feedback.")}
-            {technicalMode && agent.health?.build
-              ? ` · ${localized(language, "构建", "Build")} ${agent.health.build.gitCommit}`
-              : ""}
           </span>
         </div>
         <div className="panelActions">
@@ -1996,18 +2024,14 @@ export function EvidenceWorkspace({
                             void runClear(
                               key,
                               { scope: "session", sessionId: selectedSession.sessionId },
-                              localized(
-                                language,
-                                `会话 ${selectedSession.sessionId}`,
-                                `session ${selectedSession.sessionId}`
-                              ),
+                              sessionClearTargetLabel(selectedSession, language),
                               [selectedSession.sessionId]
                             )
                         );
                       }}
                     >
                       {armedAction === `clear-session:${selectedSession.sessionId}`
-                        ? confirmationCopy("session", selectedSession.sessionId, language)
+                        ? confirmationCopy("session", sessionClearTargetLabel(selectedSession, language))
                         : localized(language, "删除会话", "Delete session")}
                     </button>
                   </div>
@@ -2111,7 +2135,8 @@ export function EvidenceWorkspace({
                   </div>
                 ) : null}
                 {technicalMode && detailTab === "diagnostics" ? (
-                  <>
+                  <details className="adminCollapsible evidenceTechnical">
+                    <summary>{localized(language, "技术细节", "Technical details")}</summary>
                     <div className="sessionMetricGrid">
                       <span>
                         <b>{testingQualityLabel(selectedSession.quality, language)}</b>
@@ -2232,7 +2257,7 @@ export function EvidenceWorkspace({
                         </div>
                       ))}
                     </div>
-                  </>
+                  </details>
                 ) : null}
                 {canReview && detailTab === "review" ? (
                   <div className="issueWorkbench evidenceReviewTab">

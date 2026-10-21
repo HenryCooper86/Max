@@ -506,16 +506,16 @@ QA data uses:
 
 ### Separate Testing and Administration workspaces
 
-- **Navigation:** Testing uses `/#/testing/overview`, `plans`, and `evidence`.
-  Administration uses `/#/admin/overview`, `releases`, `evidence` (technical
-  diagnostics), `accounts`, and `governance`. Settings has separate entries;
-  reviewers/admins can switch panels from the header. Testers cannot enter
-  Administration; reviewers cannot enter Accounts. Authentication and server
+- **Navigation:** Testing uses `/#/testing/overview`, `plans`, `evidence`, and —
+  for reviewers/admins — `quality`, `releases`, `diagnostics`, and `policies`.
+  Administration uses `/#/admin/overview`, `accounts`, and `audit` for admins
+  only. Settings has separate entries; admins can switch panels from the header,
+  while reviewers and testers stay in Testing. Authentication and server
   permissions remain authoritative for direct links.
   Release URLs use `run`; session URLs use `session`, `q`, `tester`, `quality`,
-  `platform`, `review`, `tab`, and optional `reviewId`. The `build` filter is
-  Administration-only and is removed when entering Testing. Refresh and browser
-  Back/Forward retain the represented view.
+  `platform`, `review`, and optional `reviewId`; diagnostics use `tab`. The
+  `build` filter is diagnostics-only and is removed when entering ordinary
+  Testing sessions. Refresh and browser Back/Forward retain the represented view.
 - **Testing:** the overview summarizes the displayed recent records rather
   than presenting a partial page as an all-history total. Plans show assigned
   tasks, readable instructions, device requirements, due dates, and scoped,
@@ -524,15 +524,17 @@ QA data uses:
   native-device tasks explain which client to use. Setup runs only after
   workspace departure/draft guards accept.
 - **Conversations and results:** Testing displays readable names and result
-  reasons without hashes, system IDs, raw checks, or diagnostic tables.
-  Passed/Needs attention/Failed filters combine quality with `validity=valid`;
-  Incomplete uses `validity=invalid`, regardless of automated quality. A missing
-  response-time sample is not described as a slow response.
+  reasons without hashes, system IDs, raw checks, or diagnostic tables by
+  default. Passed/Needs attention/Failed filters combine quality with
+  `validity=valid`; Incomplete uses `validity=invalid`, regardless of automated
+  quality. A missing response-time sample is not described as a slow response.
   All testers is available to reviewers/admins; tester credentials remain
   self-scoped. Search includes transcripts not loaded by the browser. More
   filters contains device/platform and review status. Testing has Conversation
-  and authorized Review views; Diagnostics, execution setup, telemetry, raw
-  exports and destructive evidence controls belong to Administration.
+  and authorized Review views. Diagnostics, execution setup, telemetry, raw
+  exports and destructive evidence controls are exposed only to reviewers and
+  admins behind explicitly labelled, initially closed **Technical details**
+  disclosures; the daily Sessions view stays human-only for everyone.
   Mobile detail hides list filters until **Back to results**.
 - **Drafts:** notes and review drafts survive filtering, selection changes,
   section/panel switches and reload in the same browser tab. They are scoped by
@@ -547,17 +549,19 @@ QA data uses:
   administrator-only action, separate from the lifecycle selector. The dialog
   rechecks readiness, build identity and current data; the server remains
   authoritative. Unavailable run links do not fall back to another editable run.
-- **Policies and audit:** inspect every release/regression threshold and
-  compare a historical version with the active version. **Review & publish**
-  shows the old/new values and reason before **Confirm publish**. An external
-  policy version never overwrites a dirty draft: publication is blocked until
-  the operator explicitly loads the latest policy. Audit search and
-  actor/action/date filters operate on the loaded recent audit snapshot;
-  technical identifiers remain available in expandable details.
-- **Accounts and preferences:** Users and Invitations are separate groups.
-  Invite revocation and account deletion retain their two-step confirmation.
-  Both profile menus contain language, password, memory and sign-out controls;
-  app-token copying appears only in Administration.
+- **Policies and audit:** Testing `policies` lets reviewers/admins inspect every
+  release/regression threshold and compare a historical version with the active
+  version. **Review & publish** shows the old/new values and reason before
+  **Confirm publish**, and publication is admin-only. An external policy version
+  never overwrites a dirty draft: publication is blocked until the operator
+  explicitly loads the latest policy. Administration `audit` is a read-only
+  history of account and QA change events with search and actor/action/date
+  filters; technical identifiers remain available in expandable details.
+- **Accounts and preferences:** Administration `overview` summarizes accounts
+  and invitations; Users and Invitations are separate groups. Invite revocation
+  and account deletion retain their two-step confirmation. Both profile menus
+  contain language, password, memory and sign-out controls; app-token copying
+  appears only in Administration.
 
 ### Release workflow
 

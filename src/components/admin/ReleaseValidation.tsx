@@ -17,6 +17,7 @@ import {
   testingAssignmentStatusLabel,
   testingRunStatusLabel
 } from "./admin-model";
+import { testingPlatformLabel } from "./testing-presentation";
 import { readWorkspaceLocation, setWorkspaceLocation, useWorkspaceLocation } from "./workspace-location";
 import type { AdminTestingData } from "./useAdminTestingData";
 
@@ -97,6 +98,24 @@ function dueDateLabel(dueAt: number | undefined) {
   return `${date.getFullYear()}-${month}-${day}`;
 }
 
+/** Coverage dimensions read as a human checklist, not raw enum pairs. */
+const NETWORK_TYPE_LABELS: Record<string, [string, string]> = {
+  any: ["任意网络", "Any network"],
+  degraded: ["弱网环境", "Degraded network"],
+  field: ["实地环境", "Field conditions"]
+};
+
+function networkTypeLabel(networkType: string, language: "zh-CN" | "en-US") {
+  const pair = NETWORK_TYPE_LABELS[networkType];
+  return pair ? localized(language, pair[0], pair[1]) : networkType;
+}
+
+function requirementLanguageLabel(languageCode: "zh" | "en" | "any", language: "zh-CN" | "en-US") {
+  if (languageCode === "zh") return localized(language, "中文", "Chinese");
+  if (languageCode === "en") return localized(language, "英文", "English");
+  return localized(language, "任意语言", "Any language");
+}
+
 function busyTargetKey(target: Exclude<BusyTarget, null>) {
   if (target.kind === "create-run") return "create-run";
   if (target.kind === "run-status") return `run-status:${target.id}`;
@@ -131,7 +150,7 @@ export function ReleaseValidation({ agent, user, data }: Props) {
   const navigationVersionRef = useRef(0);
   const mountedRef = useRef(true);
   // The URL owns the selection while this section is active; the remembered id keeps
-  // it across section switches because every admin section stays mounted.
+  // it across section switches because every testing section stays mounted.
   const urlRunId = section === "releases" ? params.get("run") : null;
   const selectedRun = urlRunId
     ? runs.find((run) => run.id === urlRunId)
@@ -290,7 +309,7 @@ export function ReleaseValidation({ agent, user, data }: Props) {
   const writeRunParam = (runId: string, replace: boolean) => {
     const location = readWorkspaceLocation();
     // Async completions can fire while another section is active; never hijack its URL.
-    if (!location.isAdmin || location.section !== "releases") return;
+    if (!location.isTesting || location.section !== "releases") return;
     setWorkspaceLocation("releases", { run: runId }, replace);
   };
 
@@ -392,7 +411,9 @@ export function ReleaseValidation({ agent, user, data }: Props) {
   };
 
   const openEvidence = (build: string, platform?: string) => {
-    navigate("evidence", {
+    // Build-scoped evidence lives in the advanced diagnostics view; the plain
+    // Sessions section is human-only and carries no build filter.
+    navigate("diagnostics", {
       build,
       platform: platform && platform !== "unknown" ? platform : null
     });
@@ -435,7 +456,11 @@ export function ReleaseValidation({ agent, user, data }: Props) {
     }
     if (facts.openReviews) {
       actions.push(
-        <button key="reviews" type="button" onClick={() => navigate("evidence", { build: run.build, review: "open" })}>
+        <button
+          key="reviews"
+          type="button"
+          onClick={() => navigate("diagnostics", { build: run.build, review: "open" })}
+        >
           {localized(language, `处理未完成复核（${facts.openReviews}）`, `Resolve open reviews (${facts.openReviews})`)}
         </button>
       );
@@ -632,8 +657,8 @@ export function ReleaseValidation({ agent, user, data }: Props) {
                   <span className={`adminStatus ${run.status}`}>{testingRunStatusLabel(run.status, language)}</span>
                   <strong>{run.name}</strong>
                   <small>
-                    {run.build} · {runItemProgress.completed}/{runItemProgress.required}{" "}
-                    {localized(language, "个样本", "samples")}
+                    {runItemProgress.completed}/{runItemProgress.required} {localized(language, "个样本", "samples")}
+                    {run.dueAt ? ` · ${localized(language, "截止", "Due")} ${dueDateLabel(run.dueAt)}` : ""}
                   </small>
                   <i>
                     <b style={{ width: `${runItemProgress.percent}%` }} />
@@ -659,11 +684,9 @@ export function ReleaseValidation({ agent, user, data }: Props) {
               <>
                 <div className="releaseRunTitle">
                   <div>
-                    <span>{selectedRun.build}</span>
                     <strong>{selectedRun.name}</strong>
                     <p>
-                      {localized(language, "负责人", "Owner")} {selectedRun.owner} ·{" "}
-                      {localized(language, "策略", "Policy")} {selectedRun.policyVersion}
+                      {localized(language, "负责人", "Owner")} {selectedRun.owner}
                       {dueLabel ? ` · ${localized(language, "截止", "Due")} ${dueLabel}` : ""}
                       {selectedRun.status === "approved" && selectedRun.approvedBy
                         ? ` · ${localized(language, "已由", "Approved by")} ${selectedRun.approvedBy}${
@@ -673,6 +696,19 @@ export function ReleaseValidation({ agent, user, data }: Props) {
                           }`
                         : ""}
                     </p>
+                    <details className="adminCollapsible releaseTechnicalDetails">
+                      <summary>{localized(language, "技术细节", "Technical details")}</summary>
+                      <dl className="releaseTechnicalFacts">
+                        <div>
+                          <dt>{localized(language, "构建", "Build")}</dt>
+                          <dd>{selectedRun.build}</dd>
+                        </div>
+                        <div>
+                          <dt>{localized(language, "策略版本", "Policy version")}</dt>
+                          <dd>{selectedRun.policyVersion}</dd>
+                        </div>
+                      </dl>
+                    </details>
                   </div>
                   <div className="releaseRunActions">
                     {isReviewer ? (
@@ -785,10 +821,11 @@ export function ReleaseValidation({ agent, user, data }: Props) {
                                 className={`coverageRequirementRow ${row.complete ? "complete" : "pending"}`}
                               >
                                 <span className={`coveragePlatform ${row.requirement.platform}`}>
-                                  {row.requirement.platform}
+                                  {testingPlatformLabel(row.requirement.platform, language)}
                                 </span>
                                 <span className="coverageRequirementMeta">
-                                  {row.requirement.networkType} · {row.requirement.language}
+                                  {networkTypeLabel(row.requirement.networkType, language)} ·{" "}
+                                  {requirementLanguageLabel(row.requirement.language, language)}
                                 </span>
                                 <span className="coverageRequirementCount">
                                   {row.completed}/{row.requirement.requiredValidSessions}
@@ -837,7 +874,8 @@ export function ReleaseValidation({ agent, user, data }: Props) {
                                     </button>
                                   ) : mine ? (
                                     <small>
-                                      {localized(language, "请打开", "Open")} {mine.platform}{" "}
+                                      {localized(language, "请打开", "Open")}{" "}
+                                      {testingPlatformLabel(mine.platform, language)}{" "}
                                       {localized(language, "客户端采集此任务。", "client to collect this task.")}
                                     </small>
                                   ) : null}

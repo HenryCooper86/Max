@@ -3224,28 +3224,6 @@ button.opsCard:disabled {
   font-size: 0.95rem;
 }
 
-.controlPlaneTabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-
-.controlPlaneTabs button {
-  padding: 6px 10px;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 0.72rem;
-}
-
-.controlPlaneTabs button.active {
-  border-color: rgba(62, 232, 159, 0.35);
-  background: rgba(62, 232, 159, 0.1);
-  color: var(--accent);
-}
-
 .testingControlPlane > .adminNotice {
   margin: 10px 12px 0;
 }
@@ -3685,8 +3663,6 @@ button.opsCard:disabled {
     flex-direction: column;
   }
 
-  .controlPlaneTabs,
-  .controlPlaneTabs button,
   .adminAccountRoleActions,
   .adminAccountRoleActions select {
     width: 100%;
@@ -5136,19 +5112,6 @@ button.opsCard:disabled {
   background: #24352e;
   color: #9cf0c9;
 }
-.adminNavBuild {
-  display: grid;
-  gap: 6px;
-  margin-top: auto;
-  padding: 16px 12px;
-  color: #929eaf;
-  font-size: 0.7rem;
-}
-.adminNavBuild code {
-  overflow-wrap: anywhere;
-  color: #c1c9d5;
-  font-size: 0.75rem;
-}
 .adminWorkspaceContent {
   width: min(100%, 1520px);
   min-width: 0;
@@ -6527,8 +6490,7 @@ button.opsCard:disabled {
     border-right: 0;
     border-bottom: 1px solid var(--admin-border);
   }
-  .adminNavCaption,
-  .adminNavBuild {
+  .adminNavCaption {
     display: none;
   }
   .adminWorkspaceNavTabs {

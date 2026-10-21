@@ -114,10 +114,18 @@ function readFailure(...results: ApiResult<unknown>[]): ApiError | null {
 
 export function useAdminTestingData({
   user,
-  onAuthenticationExpired
+  onAuthenticationExpired,
+  enabled = true
 }: {
   user: AuthUser;
   onAuthenticationExpired: () => void;
+  /**
+   * Pauses AUTOMATIC QA refresh (initial load and interval polling) while the
+   * QA host surface is hidden. Cached data, drafts, manual refreshes and
+   * pending mutation completions are untouched; re-enabling refreshes current
+   * data and resumes polling for the active account/role scope.
+   */
+  enabled?: boolean;
 }): AdminTestingData {
   const scopeKey = `${user.id}\u0000${user.role}`;
   const [testing, setTesting] = useState<TestingStats | null>(null);
@@ -707,14 +715,7 @@ export function useAdminTestingData({
     setError(null);
     setLastSyncedAt(null);
 
-    void refreshForScope(true, scope);
-    const timer = window.setInterval(() => {
-      // A slower read must be able to commit before a scheduled poll claims
-      // newer ownership. Explicit refreshes can still supersede it.
-      if (activeRefreshRef.current?.scope !== scope) void refreshForScope(false, scope);
-    }, 10_000);
     return () => {
-      window.clearInterval(timer);
       if (scopeRef.current === scope) {
         activeRef.current = false;
         loadingMoreRef.current = false;
@@ -731,7 +732,28 @@ export function useAdminTestingData({
         activeRefreshRef.current = null;
       }
     };
-  }, [refreshForScope, scopeKey]);
+  }, [scopeKey]);
+
+  // Automatic QA refresh only runs while the owning surface keeps this hook
+  // enabled. Pausing stops new background loads/polls but keeps every cache,
+  // draft and in-flight commit alive; manual refresh() and all mutations keep
+  // working. Re-enabling reloads an untouched scope and resumes polling.
+  // scopeKey is a dependency because the interval must rebind to the new
+  // scope whenever the account/role identity changes (see the effect above).
+  useEffect(() => {
+    if (!enabled) return;
+    const scope = scopeRef.current;
+    if (!isCurrent(scope)) return;
+    void refreshForScope(!hasLoadedDataRef.current, scope);
+    const timer = window.setInterval(() => {
+      // A slower read must be able to commit before a scheduled poll claims
+      // newer ownership. Explicit refreshes can still supersede it.
+      if (activeRefreshRef.current?.scope !== scope) void refreshForScope(false, scope);
+    }, 10_000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [enabled, isCurrent, refreshForScope, scopeKey]);
 
   const stateMatchesScope =
     committedScopeKeyRef.current === scopeKey && activeScopeKeyRef.current === renderedScopeKeyRef.current;

@@ -27,11 +27,12 @@ import {
 import { readWorkspaceLocation, setWorkspaceLocation, useWorkspaceLocation } from "./workspace-location";
 import type { AdminTestingData } from "./useAdminTestingData";
 
-type GovernanceTab = "policy" | "audit";
+type GovernanceView = "policy" | "audit";
 type Notice = { tone: "success" | "error"; message: string };
 type AuditFilters = { search: string; actor: string; action: string; from: string; to: string };
 
 type Props = {
+  view: GovernanceView;
   user: AuthUser;
   data: AdminTestingData;
 };
@@ -247,14 +248,14 @@ function auditTargetDisplay(
     case "run": {
       const run = lookup.runs.get(event.targetId);
       return {
-        href: run ? `#/admin/releases?run=${encodeURIComponent(run.id)}` : null,
+        href: run ? `#/testing/releases?run=${encodeURIComponent(run.id)}` : null,
         text: run ? run.name : localized(language, "发布运行未加载", "Release run not loaded")
       };
     }
     case "assignment": {
       const found = lookup.assignments.get(event.targetId);
       return {
-        href: found ? `#/admin/releases?run=${encodeURIComponent(found.run.id)}` : null,
+        href: found ? `#/testing/releases?run=${encodeURIComponent(found.run.id)}` : null,
         text: found
           ? `${found.run.name} · ${found.assignment.assignee}`
           : localized(language, "测试任务未加载", "Assignment not loaded")
@@ -288,7 +289,7 @@ function auditTargetDisplay(
     case "policy": {
       return {
         href: lookup.policies.has(event.targetId)
-          ? `#/admin/governance?tab=policy&policy=${encodeURIComponent(event.targetId)}`
+          ? `#/testing/policies?policy=${encodeURIComponent(event.targetId)}`
           : null,
         text: event.targetId
       };
@@ -297,7 +298,15 @@ function auditTargetDisplay(
       const runId = typeof event.detail.runId === "string" ? event.detail.runId : null;
       const run = runId ? lookup.runs.get(runId) : undefined;
       return {
-        href: run ? `#/admin/releases?run=${encodeURIComponent(run.id)}` : null,
+        href: run ? `#/testing/releases?run=${encodeURIComponent(run.id)}` : null,
+        text: event.targetId
+      };
+    }
+    case "account": {
+      // Accounts are not part of the testing snapshot, so the audit trail can
+      // only hand off to the accounts section, pre-filtered to the actor.
+      return {
+        href: `#/admin/accounts?q=${encodeURIComponent(event.targetId)}`,
         text: event.targetId
       };
     }
@@ -457,9 +466,15 @@ function dateFilterBound(date: string, endOfDay: boolean): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
-function initialGovernanceParams(): URLSearchParams {
+/** Initial params are only adopted from the exact section this view owns, so
+ * a wrong-view or hidden instance never steals another section's URL state. */
+function initialViewParams(view: GovernanceView): URLSearchParams {
   const initial = readWorkspaceLocation();
-  return initial.isAdmin && initial.section === "governance" ? initial.params : new URLSearchParams();
+  const ownsSection =
+    view === "policy"
+      ? initial.isTesting && initial.section === "policies"
+      : initial.isAdmin && initial.section === "audit";
+  return ownsSection ? initial.params : new URLSearchParams();
 }
 
 function PolicyDiffTable({ rows, language }: { rows: PolicyDiffRow[]; language: Language }) {
@@ -479,32 +494,23 @@ function PolicyDiffTable({ rows, language }: { rows: PolicyDiffRow[]; language: 
   );
 }
 
-export function GovernanceWorkspace({ user, data }: Props) {
+/** One persistent instance per responsibility: Testing/policies owns the
+ * policy workbench; Administration/audit owns the read-only audit trail. The
+ * parent keeps both mounted and hides the inactive one, so each view guards
+ * every URL read and write against its own exact section. */
+export function GovernanceWorkspace({ view, user, data }: Props) {
+  if (view === "audit") return <AuditTrailView user={user} data={data} />;
+  return <PolicyWorkbenchView user={user} data={data} />;
+}
+
+function PolicyWorkbenchView({ user, data }: Omit<Props, "view">) {
   const { language } = useLanguage();
   const location = useWorkspaceLocation();
-  const onGovernanceSection = location.isAdmin && location.section === "governance";
+  const onPolicySection = location.isTesting && location.section === "policies";
 
-  const [tab, setTab] = useState<GovernanceTab>(() =>
-    initialGovernanceParams().get("tab") === "audit" ? "audit" : "policy"
+  const [policyViewVersion, setPolicyViewVersion] = useState<string | null>(() =>
+    initialViewParams("policy").get("policy")
   );
-  const [policyViewVersion, setPolicyViewVersion] = useState<string | null>(() => {
-    const params = initialGovernanceParams();
-    return params.get("tab") !== "audit" ? params.get("policy") : null;
-  });
-  const [auditEventId, setAuditEventId] = useState<string | null>(() => {
-    const params = initialGovernanceParams();
-    return params.get("tab") === "audit" ? params.get("audit") : null;
-  });
-  const [filters, setFilters] = useState<AuditFilters>(() => {
-    const params = initialGovernanceParams();
-    return {
-      search: params.get("search") ?? "",
-      actor: params.get("actor") ?? "",
-      action: params.get("action") ?? "all",
-      from: params.get("from") ?? "",
-      to: params.get("to") ?? ""
-    };
-  });
   const [notice, setNotice] = useState<Notice | null>(null);
   const [publishing, setPublishing] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
@@ -560,67 +566,24 @@ export function GovernanceWorkspace({ user, data }: Props) {
     };
   }, [draftDirty, language]);
 
-  // URL is the source of truth while the governance section is visible; the
+  // URL is the source of truth while the policies section is visible; the
   // component stays mounted when hidden, so hydration ignores other sections.
-  const governanceQuery = onGovernanceSection ? location.params.toString() : null;
+  const policyQuery = onPolicySection ? location.params.toString() : null;
   useEffect(() => {
-    if (governanceQuery === null) return;
-    const params = new URLSearchParams(governanceQuery);
-    const nextTab = params.get("tab") === "audit" ? "audit" : "policy";
-    setTab((current) => (current === nextTab ? current : nextTab));
-    const nextPolicy = params.get("policy");
+    if (policyQuery === null) return;
+    const nextPolicy = new URLSearchParams(policyQuery).get("policy");
     setPolicyViewVersion((current) => (current === nextPolicy ? current : nextPolicy));
-    const nextAudit = params.get("audit");
-    setAuditEventId((current) => (current === nextAudit ? current : nextAudit));
-    setFilters((current) => {
-      const next: AuditFilters = {
-        search: params.get("search") ?? "",
-        actor: params.get("actor") ?? "",
-        action: params.get("action") ?? "all",
-        from: params.get("from") ?? "",
-        to: params.get("to") ?? ""
-      };
-      return current.search === next.search &&
-        current.actor === next.actor &&
-        current.action === next.action &&
-        current.from === next.from &&
-        current.to === next.to
-        ? current
-        : next;
-    });
-  }, [governanceQuery]);
+  }, [policyQuery]);
 
   // Hidden sections must never rewrite the visible route.
-  const writeGovernanceParams = (updates: Record<string, string | null>, replace = true) => {
-    if (!(location.isAdmin && location.section === "governance")) return;
-    setWorkspaceLocation("governance", updates, replace);
-  };
-
-  const selectTab = (next: GovernanceTab) => {
-    setTab(next);
-    setReviewOpen(false);
-    writeGovernanceParams({ tab: next === "policy" ? null : "audit" }, false);
+  const writePolicyParams = (updates: Record<string, string | null>, replace = true) => {
+    if (!(location.isTesting && location.section === "policies")) return;
+    setWorkspaceLocation("policies", updates, replace);
   };
 
   const selectPolicyVersion = (version: string | null) => {
     setPolicyViewVersion(version);
-    writeGovernanceParams({ policy: version && version !== activePolicy?.version ? version : null }, false);
-  };
-
-  const updateFilter = (key: keyof AuditFilters, value: string) => {
-    setFilters((current) => ({ ...current, [key]: value }));
-    writeGovernanceParams({ [key]: value === "" || (key === "action" && value === "all") ? null : value });
-  };
-
-  const clearAuditFilters = () => {
-    setFilters(EMPTY_AUDIT_FILTERS);
-    writeGovernanceParams({ search: null, actor: null, action: null, from: null, to: null });
-  };
-
-  const toggleAuditDetail = (eventId: string) => {
-    const next = auditEventId === eventId ? null : eventId;
-    setAuditEventId(next);
-    writeGovernanceParams({ audit: next });
+    writePolicyParams({ policy: version && version !== activePolicy?.version ? version : null }, false);
   };
 
   const updateDraftThreshold = (field: PolicyThresholdField, raw: string) => {
@@ -686,44 +649,6 @@ export function GovernanceWorkspace({ user, data }: Props) {
     setPublishing(false);
   };
 
-  const lookup = useMemo(() => buildAuditLookup(data), [data]);
-  const audit = useMemo(() => data.operations?.audit ?? [], [data.operations?.audit]);
-  const availableActions = useMemo(() => [...new Set(audit.map((event) => event.action))].sort(), [audit]);
-
-  const filteredAudit = useMemo(() => {
-    const actorNeedle = filters.actor.trim().toLowerCase();
-    const searchNeedle = filters.search.trim().toLowerCase();
-    const fromMs = dateFilterBound(filters.from, false);
-    const toMs = dateFilterBound(filters.to, true);
-    return audit.filter((event) => {
-      if (filters.action !== "all" && event.action !== filters.action) return false;
-      if (actorNeedle && !event.actor.toLowerCase().includes(actorNeedle)) return false;
-      if (fromMs !== null && event.at < fromMs) return false;
-      if (toMs !== null && event.at > toMs) return false;
-      if (searchNeedle) {
-        const target = auditTargetDisplay(event, lookup, language);
-        const haystack = [
-          labelPair(AUDIT_ACTION_LABELS[event.action], language, event.action),
-          event.action,
-          event.actor,
-          target.text,
-          event.targetId
-        ]
-          .join(" ")
-          .toLowerCase();
-        if (!haystack.includes(searchNeedle)) return false;
-      }
-      return true;
-    });
-  }, [audit, filters, language, lookup]);
-
-  const filtersActive =
-    filters.search.trim() !== "" ||
-    filters.actor.trim() !== "" ||
-    filters.action !== "all" ||
-    filters.from !== "" ||
-    filters.to !== "";
-
   const historyPolicies = useMemo(() => [...data.policies].sort((a, b) => b.createdAt - a.createdAt), [data.policies]);
   const selectedPolicy = useMemo(() => {
     if (!activePolicy) return null;
@@ -734,21 +659,13 @@ export function GovernanceWorkspace({ user, data }: Props) {
   return (
     <section
       className="testingControlPlane adminSectionCard"
-      aria-label={localized(language, "策略与审计", "Policy & audit")}
+      aria-label={localized(language, "发布策略", "Publish policy")}
     >
       <div className="controlPlaneHead adminSectionHeader">
         <div>
-          <span>MAX QA · {localized(language, "治理", "Governance")}</span>
-          <strong>{localized(language, "策略与审计", "Policy & audit")}</strong>
+          <span>MAX QA · {localized(language, "策略", "Policy")}</span>
+          <strong>{localized(language, "发布策略", "Publish policy")}</strong>
         </div>
-        <nav className="controlPlaneTabs" aria-label={localized(language, "治理视图", "Governance views")}>
-          <button type="button" className={tab === "policy" ? "active" : ""} onClick={() => selectTab("policy")}>
-            {localized(language, "发布策略", "Publish policy")}
-          </button>
-          <button type="button" className={tab === "audit" ? "active" : ""} onClick={() => selectTab("audit")}>
-            {localized(language, "审计日志", "Audit log")}
-          </button>
-        </nav>
       </div>
 
       {notice ? (
@@ -760,12 +677,12 @@ export function GovernanceWorkspace({ user, data }: Props) {
       {!activePolicy ? (
         <p className="adminWorkspaceLoading">
           {data.status === "loading"
-            ? localized(language, "正在加载治理数据…", "Loading governance data…")
+            ? localized(language, "正在加载策略数据…", "Loading policy data…")
             : localized(language, "暂无可用策略数据。", "No policy data available.")}
         </p>
       ) : null}
 
-      {tab === "policy" && activePolicy && draft ? (
+      {activePolicy && draft ? (
         <div className="policyWorkbench">
           <div className="activePolicyCard">
             <span>{localized(language, "当前生效策略", "Active policy")}</span>
@@ -999,8 +916,130 @@ export function GovernanceWorkspace({ user, data }: Props) {
           ) : null}
         </div>
       ) : null}
+    </section>
+  );
+}
 
-      {tab === "audit" ? (
+function AuditTrailView({ user, data }: Omit<Props, "view">) {
+  const { language } = useLanguage();
+  const location = useWorkspaceLocation();
+  const isAdmin = user.role === "admin";
+  const onAuditSection = location.isAdmin && location.section === "audit";
+
+  const [auditEventId, setAuditEventId] = useState<string | null>(() => initialViewParams("audit").get("audit"));
+  const [filters, setFilters] = useState<AuditFilters>(() => {
+    const params = initialViewParams("audit");
+    return {
+      search: params.get("search") ?? "",
+      actor: params.get("actor") ?? "",
+      action: params.get("action") ?? "all",
+      from: params.get("from") ?? "",
+      to: params.get("to") ?? ""
+    };
+  });
+
+  const lookup = useMemo(() => buildAuditLookup(data), [data]);
+  const audit = useMemo(() => data.operations?.audit ?? [], [data.operations?.audit]);
+  const availableActions = useMemo(() => [...new Set(audit.map((event) => event.action))].sort(), [audit]);
+
+  const filteredAudit = useMemo(() => {
+    const actorNeedle = filters.actor.trim().toLowerCase();
+    const searchNeedle = filters.search.trim().toLowerCase();
+    const fromMs = dateFilterBound(filters.from, false);
+    const toMs = dateFilterBound(filters.to, true);
+    return audit.filter((event) => {
+      if (filters.action !== "all" && event.action !== filters.action) return false;
+      if (actorNeedle && !event.actor.toLowerCase().includes(actorNeedle)) return false;
+      if (fromMs !== null && event.at < fromMs) return false;
+      if (toMs !== null && event.at > toMs) return false;
+      if (searchNeedle) {
+        const target = auditTargetDisplay(event, lookup, language);
+        const haystack = [
+          labelPair(AUDIT_ACTION_LABELS[event.action], language, event.action),
+          event.action,
+          event.actor,
+          target.text,
+          event.targetId
+        ]
+          .join(" ")
+          .toLowerCase();
+        if (!haystack.includes(searchNeedle)) return false;
+      }
+      return true;
+    });
+  }, [audit, filters, language, lookup]);
+
+  const filtersActive =
+    filters.search.trim() !== "" ||
+    filters.actor.trim() !== "" ||
+    filters.action !== "all" ||
+    filters.from !== "" ||
+    filters.to !== "";
+
+  // URL is the source of truth while the audit section is visible; the
+  // component stays mounted when hidden, so hydration ignores other sections.
+  const auditQuery = onAuditSection ? location.params.toString() : null;
+  useEffect(() => {
+    if (auditQuery === null) return;
+    const params = new URLSearchParams(auditQuery);
+    const nextAudit = params.get("audit");
+    setAuditEventId((current) => (current === nextAudit ? current : nextAudit));
+    setFilters((current) => {
+      const next: AuditFilters = {
+        search: params.get("search") ?? "",
+        actor: params.get("actor") ?? "",
+        action: params.get("action") ?? "all",
+        from: params.get("from") ?? "",
+        to: params.get("to") ?? ""
+      };
+      return current.search === next.search &&
+        current.actor === next.actor &&
+        current.action === next.action &&
+        current.from === next.from &&
+        current.to === next.to
+        ? current
+        : next;
+    });
+  }, [auditQuery]);
+
+  // Hidden sections must never rewrite the visible route.
+  const writeAuditParams = (updates: Record<string, string | null>, replace = true) => {
+    if (!(location.isAdmin && location.section === "audit")) return;
+    setWorkspaceLocation("audit", updates, replace);
+  };
+
+  const updateFilter = (key: keyof AuditFilters, value: string) => {
+    setFilters((current) => ({ ...current, [key]: value }));
+    writeAuditParams({ [key]: value === "" || (key === "action" && value === "all") ? null : value });
+  };
+
+  const clearAuditFilters = () => {
+    setFilters(EMPTY_AUDIT_FILTERS);
+    writeAuditParams({ search: null, actor: null, action: null, from: null, to: null });
+  };
+
+  const toggleAuditDetail = (eventId: string) => {
+    const next = auditEventId === eventId ? null : eventId;
+    setAuditEventId(next);
+    writeAuditParams({ audit: next });
+  };
+
+  return (
+    <section className="testingControlPlane adminSectionCard" aria-label={localized(language, "审计日志", "Audit log")}>
+      <div className="controlPlaneHead adminSectionHeader">
+        <div>
+          <span>MAX ADMIN · {localized(language, "审计", "Audit")}</span>
+          <strong>{localized(language, "审计日志", "Audit log")}</strong>
+        </div>
+      </div>
+
+      {/* The parent mounts this view only for administrators; the leaf still
+       * fails closed so a reviewer can never reach the audit history. */}
+      {!isAdmin ? (
+        <p className="adminWorkspaceLoading">
+          {localized(language, "系统审计日志仅限管理员查看。", "The system audit log is restricted to administrators.")}
+        </p>
+      ) : (
         <div className="auditTimeline">
           <div className="governanceFilterBar">
             <label className="governanceFilterField">
@@ -1132,7 +1171,7 @@ export function GovernanceWorkspace({ user, data }: Props) {
 
           {!audit.length ? (
             <p className="testerConversationEmpty">
-              {localized(language, "尚未记录治理或发布变更。", "No governance or release changes recorded.")}
+              {localized(language, "尚未记录系统或质量变更。", "No system or quality changes recorded.")}
             </p>
           ) : null}
           {audit.length && !filteredAudit.length ? (
@@ -1146,7 +1185,7 @@ export function GovernanceWorkspace({ user, data }: Props) {
             </div>
           ) : null}
         </div>
-      ) : null}
+      )}
     </section>
   );
 }

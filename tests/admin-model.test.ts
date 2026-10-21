@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { TesterSessionSummary, TesterStats } from "../shared/agent";
 import {
   allowedAdminSections,
+  allowedTestingSections,
   adminStatusAfterFailure,
   corpusIssueCount,
   mergeAdminSessions,
@@ -83,9 +84,20 @@ function session(sessionId: string, endedAt: number): TesterSessionSummary {
 describe("Admin navigation permissions", () => {
   it("shows only role-authorized workspace sections", () => {
     expect(allowedAdminSections("tester")).toEqual([]);
-    expect(allowedAdminSections("reviewer")).toEqual(["overview", "releases", "evidence", "governance"]);
-    expect(allowedAdminSections("admin")).toEqual(["overview", "releases", "evidence", "accounts", "governance"]);
+    expect(allowedAdminSections("reviewer")).toEqual([]);
+    expect(allowedAdminSections("admin")).toEqual(["overview", "accounts", "audit"]);
     expect(normalizeAdminSection("accounts", "reviewer")).toBe("overview");
+    expect(allowedTestingSections("tester")).toEqual(["overview", "plans", "evidence"]);
+    expect(allowedTestingSections("reviewer")).toEqual([
+      "overview",
+      "plans",
+      "evidence",
+      "quality",
+      "releases",
+      "diagnostics",
+      "policies"
+    ]);
+    expect(allowedTestingSections("admin")).toEqual(allowedTestingSections("reviewer"));
   });
 
   it("returns to the login flow when authentication is lost", () => {

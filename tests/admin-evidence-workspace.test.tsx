@@ -10,7 +10,7 @@ import {
   type TestingReview,
   type TestingRun
 } from "../shared/testing";
-import { AdminOverview } from "../src/components/admin/AdminOverview";
+import { QualityOverview } from "../src/components/admin/QualityOverview";
 import { OperationsWorkspace } from "../src/components/admin/OperationsWorkspace";
 import { LanguageProvider } from "../src/components/LanguageToggle";
 import { EvidenceWorkspace } from "../src/components/admin/EvidenceWorkspace";
@@ -883,7 +883,9 @@ describe("EvidenceWorkspace navigation state", () => {
       renderer!.root.find((node) => node.type === "button" && text(node) === "删除会话").props.onClick();
     });
     await act(async () => {
-      renderer!.root.find((node) => node.type === "button" && text(node).includes("fail-session")).props.onClick();
+      renderer!.root
+        .find((node) => node.type === "button" && String(node.props.className).includes("armed"))
+        .props.onClick();
       await Promise.resolve();
     });
     expect(sharedData.clearEvidence).toHaveBeenCalledWith({ scope: "session", sessionId: "fail-session" });
@@ -1097,7 +1099,7 @@ describe("EvidenceWorkspace navigation state", () => {
   });
 
   it("keeps an incoming URL session instead of auto-selecting the first visible session", async () => {
-    stubLocation("#/admin/evidence?session=session-b");
+    stubLocation("#/testing/evidence?session=session-b");
     const first = session("session-a", "a-key", "tester-a", "fail", "A 备注");
     const second = session("session-b", "b-key", "tester-b", "pass", "B 备注");
     const sharedData = data(
@@ -1174,7 +1176,7 @@ describe("EvidenceWorkspace navigation state", () => {
 
 describe("EvidenceWorkspace draft protection", () => {
   it("keeps unsaved notes and review drafts per session across switches and URL back/forward", async () => {
-    const url = stubLocation("#/admin/evidence");
+    const url = stubLocation("#/testing/evidence");
     const first = session("session-first", "first-key", "first", "fail", "A 服务端备注");
     const second = session("session-second", "second-key", "second", "pass", "B 服务端备注");
     const sharedData = data(
@@ -1234,18 +1236,18 @@ describe("EvidenceWorkspace draft protection", () => {
     expect(notesTextarea(renderer!).props.value).toBe("B 服务端备注");
     expect(reviewTitleInput(renderer!).props.value).toBe("会话需要复核");
 
-    url.setHash("#/admin/evidence?session=session-first&tab=review");
+    url.setHash("#/testing/evidence?session=session-first&tab=review");
     await flush();
     await renderWith();
     expect(notesTextarea(renderer!).props.value).toBe("A 未保存备注");
     expect(reviewTitleInput(renderer!).props.value).toBe("A 未保存复核");
 
-    url.setHash("#/admin/evidence?session=session-second&tab=review");
+    url.setHash("#/testing/evidence?session=session-second&tab=review");
     await flush();
     await renderWith();
     expect(notesTextarea(renderer!).props.value).toBe("B 服务端备注");
 
-    url.setHash("#/admin/evidence?session=session-first&tab=review");
+    url.setHash("#/testing/evidence?session=session-first&tab=review");
     await flush();
     await renderWith();
     expect(notesTextarea(renderer!).props.value).toBe("A 未保存备注");
@@ -1569,7 +1571,7 @@ describe("EvidenceWorkspace truthfulness and search", () => {
 
   it("hydrates session, filters, tab, and focused review from a shared URL", async () => {
     stubLocation(
-      "#/admin/evidence?session=deep-session&quality=fail&tab=review&reviewId=review-deep&q=%E8%BF%9C%E7%A8%8B"
+      "#/testing/evidence?session=deep-session&quality=fail&tab=review&reviewId=review-deep&q=%E8%BF%9C%E7%A8%8B"
     );
     const deep = session("deep-session", "deep-key", "deep", "fail", "深链备注");
     const other = session("other-session", "other-key", "other", "pass", "其他备注");
@@ -1607,7 +1609,7 @@ describe("EvidenceWorkspace truthfulness and search", () => {
   });
 
   it("fetches a deep-linked session that is absent from the initial page load", async () => {
-    stubLocation("#/admin/evidence?session=old-session");
+    stubLocation("#/testing/evidence?session=old-session");
     const recent = session("recent-session", "recent-key", "recent", "pass", "recent notes");
     const historical = session("old-session", "old-key", "old", "fail", "old historical notes");
     const users = [
@@ -2559,7 +2561,7 @@ describe("EvidenceWorkspace testing panel presentation", () => {
   });
 
   it("never grants a tester technical mode, even when the technical prop is forged", async () => {
-    stubLocation("#/admin/evidence?session=plain-session&tab=diagnostics");
+    stubLocation("#/testing/evidence?session=plain-session&tab=diagnostics");
     const plain = session("plain-session", "plain-key", "plain-tester", "fail", "普通备注");
     const sharedData = data([plain], [tester("plain-key", "plain-tester", { pass: 0, watch: 0, fail: 1 })]);
     await act(async () => {
@@ -2589,15 +2591,17 @@ describe("EvidenceWorkspace testing panel presentation", () => {
     expect(rootText).not.toContain("127.0.0.1");
     expect(rootText).not.toContain("abcdef123456");
     // The forged technical tab is normalized even for a tester.
-    expect(window.location.hash).toBe("#/admin/evidence?session=plain-session");
+    expect(window.location.hash).toBe("#/testing/evidence?session=plain-session");
   });
 
-  it("keeps notes and review drafts while switching between testing and admin panels", async () => {
-    stubLocation("#/admin/evidence");
+  it("keeps notes and review drafts while switching between sessions and diagnostics sections", async () => {
+    const url = stubLocation("#/testing/evidence");
     const first = session("session-first", "first-key", "first", "fail", "A 服务端备注");
     const sharedData = data([first], [tester("first-key", "first", { pass: 0, watch: 0, fail: 1 })]);
     const sharedAgent = agent();
     const sharedUser = user();
+    // The shell keeps one instance mounted and only flips the technical prop
+    // when the operator moves between the Sessions and Diagnostics sections.
     const renderWith = async (technical: boolean) => {
       await act(async () => {
         renderer?.update(
@@ -2617,7 +2621,6 @@ describe("EvidenceWorkspace testing panel presentation", () => {
       renderer = create(
         <EvidenceWorkspace
           active
-          technical
           requestedSessionId={null}
           onRequestedSessionHandled={vi.fn()}
           agent={sharedAgent}
@@ -2629,29 +2632,74 @@ describe("EvidenceWorkspace testing panel presentation", () => {
     await flush();
     openReviewTab(renderer!);
     await act(async () => {
-      notesTextarea(renderer!).props.onChange({ target: { value: "跨面板备注草稿" } });
-      reviewTitleInput(renderer!).props.onChange({ target: { value: "跨面板复核草稿" } });
+      notesTextarea(renderer!).props.onChange({ target: { value: "跨区块备注草稿" } });
+      reviewTitleInput(renderer!).props.onChange({ target: { value: "跨区块复核草稿" } });
     });
 
-    // Switching to the testing panel keeps this instance mounted: the drafts
-    // and the selection survive without applying a stale URL snapshot.
-    await renderWith(false);
-    openReviewTab(renderer!);
-    expect(notesTextarea(renderer!).props.value).toBe("跨面板备注草稿");
-    expect(reviewTitleInput(renderer!).props.value).toBe("跨面板复核草稿");
-    expect(
-      text(renderer!.root.find((node) => node.type === "button" && node.props.className === "sessionButton active"))
-    ).toContain("first目标用例");
-
-    // Switching back to administration restores technical surfaces without
-    // losing the drafts.
+    // Switching to the advanced diagnostics section keeps this instance
+    // mounted: the drafts and the selection survive, and the authored URL
+    // stays on the diagnostics section instead of collapsing into evidence.
+    url.setHash("#/testing/diagnostics");
     await renderWith(true);
+    await flush();
     openReviewTab(renderer!);
-    expect(notesTextarea(renderer!).props.value).toBe("跨面板备注草稿");
-    expect(reviewTitleInput(renderer!).props.value).toBe("跨面板复核草稿");
+    expect(notesTextarea(renderer!).props.value).toBe("跨区块备注草稿");
+    expect(reviewTitleInput(renderer!).props.value).toBe("跨区块复核草稿");
     expect(
       text(renderer!.root.find((node) => node.type === "button" && node.props.className === "sessionButton active"))
     ).toContain("first目标用例");
+    expect(window.location.hash).toContain("#/testing/diagnostics?session=session-first");
+    expect(
+      renderer!.root.findAll((node) => node.type === "button" && node.props.role === "tab").map((node) => text(node))
+    ).toEqual(["对话", "诊断", "复核"]);
+
+    // Switching back to the plain Sessions section keeps the same drafts and
+    // re-authors the URL under the evidence section.
+    url.setHash("#/testing/evidence");
+    await renderWith(false);
+    await flush();
+    openReviewTab(renderer!);
+    expect(notesTextarea(renderer!).props.value).toBe("跨区块备注草稿");
+    expect(reviewTitleInput(renderer!).props.value).toBe("跨区块复核草稿");
+    expect(window.location.hash).toContain("#/testing/evidence?session=session-first");
+    expect(
+      renderer!.root.findAll((node) => node.type === "button" && node.props.role === "tab").map((node) => text(node))
+    ).toEqual(["对话", "复核"]);
+  });
+
+  it("renders a human-only view for a tester forging the diagnostics section URL", async () => {
+    stubLocation("#/testing/diagnostics?session=plain-session&build=abcdef123456&tab=diagnostics");
+    const plain = session("plain-session", "plain-key", "plain-tester", "fail", "普通备注");
+    const sharedData = data([plain], [tester("plain-key", "plain-tester", { pass: 0, watch: 0, fail: 1 })]);
+    await act(async () => {
+      renderer = create(
+        <EvidenceWorkspace
+          active
+          technical
+          requestedSessionId={null}
+          onRequestedSessionHandled={vi.fn()}
+          agent={agent()}
+          user={user({ id: "tester-user", username: "plain-tester", role: "tester" })}
+          data={sharedData}
+        />
+      );
+    });
+    await flush();
+
+    // The role gate ignores the forged technical prop and the forged section:
+    // no diagnostics tab, no build filter, no raw identifiers or telemetry.
+    const tabLabels = renderer!.root
+      .findAll((node) => node.type === "button" && node.props.role === "tab")
+      .map((node) => text(node));
+    expect(tabLabels).toEqual(["对话"]);
+    const rootText = text(renderer!.root);
+    expect(rootText).not.toContain("构建");
+    expect(rootText).not.toContain("abcdef123456");
+    expect(rootText).not.toContain("评分");
+    expect(rootText).toContain("plain-tester目标用例");
+
+    // The forged build filter and diagnostics tab are normalized out of the URL.
+    expect(window.location.hash).toBe("#/testing/diagnostics?session=plain-session");
   });
 
   it("normalizes a diagnostics tab arriving via Back/Forward outside technical mode", async () => {
@@ -2686,7 +2734,7 @@ describe("EvidenceWorkspace testing panel presentation", () => {
   });
 });
 
-describe("Admin evidence presentation guards", () => {
+describe("Quality overview release-gate guards", () => {
   function currentRun(overrides: Partial<TestingRun> = {}): TestingRun {
     return {
       id: "current-run",
@@ -2710,7 +2758,7 @@ describe("Admin evidence presentation guards", () => {
     current.runs = [currentRun()];
     await act(async () => {
       renderer = create(
-        <AdminOverview
+        <QualityOverview
           agent={agent()}
           testing={snapshot}
           sessions={[]}
@@ -2730,7 +2778,7 @@ describe("Admin evidence presentation guards", () => {
     current.runs = [currentRun({ status: "blocked" })];
     await act(async () => {
       renderer = create(
-        <AdminOverview
+        <QualityOverview
           agent={agent()}
           testing={testing([], [])}
           sessions={[]}
@@ -2747,7 +2795,7 @@ describe("Admin evidence presentation guards", () => {
   it("shows the same blocked run to testers whose role-scoped runs have no operations metadata", async () => {
     await act(async () => {
       renderer = create(
-        <AdminOverview
+        <QualityOverview
           agent={agent()}
           testing={testing([], [])}
           sessions={[]}
@@ -2765,7 +2813,7 @@ describe("Admin evidence presentation guards", () => {
   it("waits for authoritative release review when only a tester's partial assignments are available", async () => {
     await act(async () => {
       renderer = create(
-        <AdminOverview
+        <QualityOverview
           agent={agent()}
           testing={testing([], [])}
           sessions={[]}
@@ -2799,7 +2847,7 @@ describe("Admin evidence presentation guards", () => {
     ];
     await act(async () => {
       renderer = create(
-        <AdminOverview
+        <QualityOverview
           agent={agent()}
           testing={testing([], [])}
           sessions={[]}
@@ -2822,7 +2870,7 @@ describe("Admin evidence presentation guards", () => {
     current.runs = [currentRun({ id: "old-run", updatedAt: 1, status: "blocked" }), currentRun()];
     await act(async () => {
       renderer = create(
-        <AdminOverview
+        <QualityOverview
           agent={agent()}
           testing={testing([], [])}
           sessions={[]}
@@ -2843,7 +2891,7 @@ describe("Admin evidence presentation guards", () => {
       current.approvedBaselineBuild = "abcdef123456";
       await act(async () => {
         renderer = create(
-          <AdminOverview
+          <QualityOverview
             agent={agent()}
             testing={testing([], [])}
             sessions={[]}
@@ -2872,7 +2920,7 @@ describe("Admin evidence presentation guards", () => {
     };
     await act(async () => {
       renderer = create(
-        <AdminOverview
+        <QualityOverview
           agent={nextAgent}
           testing={snapshot}
           sessions={[]}
@@ -2898,7 +2946,7 @@ describe("Admin evidence presentation guards", () => {
     ];
     await act(async () => {
       renderer = create(
-        <AdminOverview
+        <QualityOverview
           agent={agent()}
           testing={snapshot}
           sessions={[]}
@@ -2919,7 +2967,7 @@ describe("Admin evidence presentation guards", () => {
     snapshot.regression.baselineSource = "none";
     await act(async () => {
       renderer = create(
-        <AdminOverview
+        <QualityOverview
           agent={agent()}
           testing={snapshot}
           sessions={[]}
@@ -2935,7 +2983,7 @@ describe("Admin evidence presentation guards", () => {
     approved.approvedBaselineBuild = snapshot.releaseGate.build;
     await act(async () =>
       renderer!.update(
-        <AdminOverview
+        <QualityOverview
           agent={agent()}
           testing={snapshot}
           sessions={[]}
@@ -2948,12 +2996,12 @@ describe("Admin evidence presentation guards", () => {
     expect(text(card().findByType("strong"))).toBe("已批准");
   });
 
-  it("shows a healthy inactive voice session and localizes admin header and waiting KPI", async () => {
+  it("shows a healthy inactive voice session and localizes testing header and waiting KPI", async () => {
     const previousWindow = window;
     const previousDocument = globalThis.document;
     const previousHTMLElement = globalThis.HTMLElement;
     vi.stubGlobal("window", {
-      location: { hash: "#/admin/overview" },
+      location: { hash: "#/testing/quality" },
       setInterval,
       clearInterval,
       setTimeout,

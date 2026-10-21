@@ -13,7 +13,7 @@ import {
   UserCircle,
   Users
 } from "@phosphor-icons/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { AccountSessionControls } from "../AccountBar";
 import { LanguageToggle, useLanguage } from "../LanguageToggle";
 import { localized } from "../../lib/i18n";
@@ -23,15 +23,16 @@ import type { AuthUser } from "../../lib/auth";
 import {
   adminRoleLabel,
   allowedAdminSections,
+  allowedTestingSections,
   formatAdminRelativeTime,
   normalizeAdminSection,
   workspaceSectionLabel,
-  type Workspace,
-  type WorkspaceSection
+  type Workspace
 } from "./admin-model";
 import { useWorkspaceLocation } from "./workspace-location";
 import { AccountManagement } from "./AccountManagement";
 import { AdminOverview } from "./AdminOverview";
+import { QualityOverview } from "./QualityOverview";
 import { EvidenceWorkspace } from "./EvidenceWorkspace";
 import { GovernanceWorkspace } from "./GovernanceWorkspace";
 import { ReleaseValidation } from "./ReleaseValidation";
@@ -42,12 +43,14 @@ import { useAdminTestingData } from "./useAdminTestingData";
 const SECTION_ICONS = {
   overview: ChartLine,
   plans: ListChecks,
-  releases: RocketLaunch,
   evidence: ChatCircleText,
+  quality: ChartLine,
+  releases: RocketLaunch,
+  diagnostics: GearSix,
+  policies: GearSix,
   accounts: Users,
-  governance: GearSix
+  audit: ShieldCheck
 };
-const TESTING_SECTIONS: WorkspaceSection[] = ["overview", "plans", "evidence"];
 
 type Props = {
   agent: HelmetAgent;
@@ -60,9 +63,10 @@ export function OperationsWorkspace({ agent, user, onAuthenticationExpired, onCl
   const { language } = useLanguage();
   const location = useWorkspaceLocation();
   const { section, navigate } = location;
-  const canAdminister = user.role === "admin" || user.role === "reviewer";
+  const canAdminister = user.role === "admin";
+  const canManageTesting = user.role === "admin" || user.role === "reviewer";
   const workspace: Workspace = location.isAdmin && canAdminister ? "admin" : "testing";
-  const allowed = workspace === "admin" ? allowedAdminSections(user.role) : TESTING_SECTIONS;
+  const allowed = workspace === "admin" ? allowedAdminSections(user.role) : allowedTestingSections(user.role);
   const active =
     workspace === "admin"
       ? normalizeAdminSection(section, user.role)
@@ -75,7 +79,8 @@ export function OperationsWorkspace({ agent, user, onAuthenticationExpired, onCl
   const [refreshing, setRefreshing] = useState(false);
   const closeRef = useRef<HTMLButtonElement>(null);
   const profileRef = useRef<HTMLDetailsElement>(null);
-  const data = useAdminTestingData({ user, onAuthenticationExpired });
+  const needsTestingData = workspace === "testing" || active === "audit";
+  const data = useAdminTestingData({ user, onAuthenticationExpired, enabled: needsTestingData });
   const voiceConnectionLabel =
     agent.connectionState === "offline" && !agent.listening
       ? agent.starting
@@ -116,13 +121,13 @@ export function OperationsWorkspace({ agent, user, onAuthenticationExpired, onCl
     setRefreshing(true);
     try {
       await data.refresh();
-      await agent.refreshHealth();
+      if (workspace === "testing") await agent.refreshHealth();
     } finally {
       setRefreshing(false);
     }
   };
   const administration = workspace === "admin";
-  const title = workspaceSectionLabel(active, language, workspace);
+  const title = workspaceSectionLabel(active, language);
 
   return (
     <main className={`adminWorkspace ${administration ? "adminControlWorkspace" : "testingWorkspace"}`}>
@@ -139,7 +144,7 @@ export function OperationsWorkspace({ agent, user, onAuthenticationExpired, onCl
           </div>
         </div>
         <div className="adminWorkspaceContext">
-          {administration ? (
+          {!administration ? (
             <span className={`adminVoiceContext ${agent.connectionState === "ready" ? "online" : ""}`}>
               <Broadcast aria-hidden="true" /> {voiceConnectionLabel}
             </span>
@@ -177,7 +182,7 @@ export function OperationsWorkspace({ agent, user, onAuthenticationExpired, onCl
               <AccountSessionControls
                 user={user}
                 onSignedOut={onAuthenticationExpired}
-                showConnectionToken={administration}
+                showConnectionToken={administration || user.role === "reviewer"}
               />
             </div>
           </details>
@@ -199,30 +204,28 @@ export function OperationsWorkspace({ agent, user, onAuthenticationExpired, onCl
           </span>
           <div className="adminWorkspaceNavTabs">
             {allowed.map((item) => {
-              const Icon = item === "evidence" && administration ? GearSix : SECTION_ICONS[item];
+              const Icon = SECTION_ICONS[item];
               return (
-                <a
-                  key={item}
-                  href={`#/${workspace}/${item}`}
-                  className={active === item ? "active" : ""}
-                  aria-current={active === item ? "page" : undefined}
-                  onClick={(event) => {
-                    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-                    event.preventDefault();
-                    navigate(item, {}, false, workspace);
-                  }}
-                >
-                  <Icon size={20} aria-hidden="true" /> {workspaceSectionLabel(item, language, workspace)}
-                </a>
+                <Fragment key={item}>
+                  {!administration && item === "quality" ? (
+                    <span className="adminNavCaption">{localized(language, "质量管理", "QA tools")}</span>
+                  ) : null}
+                  <a
+                    href={`#/${workspace}/${item}`}
+                    className={active === item ? "active" : ""}
+                    aria-current={active === item ? "page" : undefined}
+                    onClick={(event) => {
+                      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                      event.preventDefault();
+                      navigate(item, {}, false, workspace);
+                    }}
+                  >
+                    <Icon size={20} aria-hidden="true" /> {workspaceSectionLabel(item, language)}
+                  </a>
+                </Fragment>
               );
             })}
           </div>
-          {administration ? (
-            <div className="adminNavBuild">
-              <span>{localized(language, "当前构建", "Current build")}</span>
-              <code>{agent.health?.build?.gitCommit ?? localized(language, "本地", "Local")}</code>
-            </div>
-          ) : null}
         </nav>
         <section className="adminWorkspaceContent">
           <div className="adminPageHeading">
@@ -234,19 +237,21 @@ export function OperationsWorkspace({ agent, user, onAuthenticationExpired, onCl
               </span>
               <h2>{title}</h2>
             </div>
-            <div className="adminSyncControls">
-              <small aria-live="polite">
-                {data.lastSyncedAt
-                  ? `${localized(language, "最近更新", "Last updated")} ${formatAdminRelativeTime(data.lastSyncedAt, language)}`
-                  : localized(language, "正在获取数据", "Getting your data")}
-              </small>
-              <button type="button" onClick={() => void refresh()} disabled={refreshing || data.status === "loading"}>
-                <ArrowsClockwise aria-hidden="true" />{" "}
-                {refreshing ? localized(language, "更新中…", "Updating…") : localized(language, "刷新", "Refresh")}
-              </button>
-            </div>
+            {needsTestingData ? (
+              <div className="adminSyncControls">
+                <small aria-live="polite">
+                  {data.lastSyncedAt
+                    ? `${localized(language, "最近更新", "Last updated")} ${formatAdminRelativeTime(data.lastSyncedAt, language)}`
+                    : localized(language, "正在获取数据", "Getting your data")}
+                </small>
+                <button type="button" onClick={() => void refresh()} disabled={refreshing || data.status === "loading"}>
+                  <ArrowsClockwise aria-hidden="true" />{" "}
+                  {refreshing ? localized(language, "更新中…", "Updating…") : localized(language, "刷新", "Refresh")}
+                </button>
+              </div>
+            ) : null}
           </div>
-          {data.error ? (
+          {needsTestingData && data.error ? (
             <div className={`adminSyncNotice ${data.error.kind}`} role="status">
               <strong>
                 {data.status === "stale"
@@ -289,15 +294,15 @@ export function OperationsWorkspace({ agent, user, onAuthenticationExpired, onCl
               }}
             />
           ) : null}
-          {administration && active === "overview" && !data.testing ? (
+          {!administration && active === "quality" && !data.testing ? (
             <p className="adminWorkspaceLoading">
               {data.status === "loading"
                 ? localized(language, "正在加载概览…", "Loading overview…")
                 : localized(language, "暂无可用概览数据。", "No overview data available.")}
             </p>
           ) : null}
-          {administration && active === "overview" && data.testing ? (
-            <AdminOverview
+          {!administration && active === "quality" && data.testing ? (
+            <QualityOverview
               agent={agent}
               testing={data.testing}
               sessions={data.sessions}
@@ -305,12 +310,21 @@ export function OperationsWorkspace({ agent, user, onAuthenticationExpired, onCl
               runs={data.runs}
               dataStatus={data.status}
               onOpenEvidence={(sessionId, filters = {}) => openSessions({ ...filters, session: sessionId ?? null })}
-              onOpenReleases={(runId) => navigate("releases", { run: runId ?? null }, false, "admin")}
+              onOpenReleases={(runId) => navigate("releases", { run: runId ?? null }, false, "testing")}
+            />
+          ) : null}
+          {administration && active === "overview" ? (
+            <AdminOverview
+              key={accountScope}
+              user={user}
+              onAuthenticationExpired={onAuthenticationExpired}
+              onOpenAccounts={() => navigate("accounts", {}, false, "admin")}
+              onOpenAudit={() => navigate("audit", {}, false, "admin")}
             />
           ) : null}
           <EvidenceWorkspace
-            active={active === "evidence"}
-            technical={administration}
+            active={!administration && (active === "evidence" || active === "diagnostics")}
+            technical={!administration && active === "diagnostics" && canManageTesting}
             focusRequestKey={evidenceFocusRequestKey}
             requestedSessionId={requestedEvidenceSessionId}
             onRequestedSessionHandled={handleRequestedSessionHandled}
@@ -318,31 +332,34 @@ export function OperationsWorkspace({ agent, user, onAuthenticationExpired, onCl
             user={user}
             data={data}
           />
-          {canAdminister ? (
+          {canManageTesting ? (
             <div
               className="adminSectionView"
-              hidden={!administration || active !== "releases"}
-              inert={!administration || active !== "releases" ? true : undefined}
+              hidden={administration || active !== "releases"}
+              inert={administration || active !== "releases" ? true : undefined}
             >
               <ReleaseValidation key={accountScope} agent={agent} user={user} data={data} />
             </div>
           ) : null}
+          {canManageTesting ? (
+            <div
+              className="adminSectionView"
+              hidden={administration || active !== "policies"}
+              inert={administration || active !== "policies" ? true : undefined}
+            >
+              <GovernanceWorkspace key={`${accountScope}:policy`} view="policy" user={user} data={data} />
+            </div>
+          ) : null}
+          {administration && active === "accounts" ? (
+            <AccountManagement key={accountScope} user={user} onAuthenticationExpired={onAuthenticationExpired} />
+          ) : null}
           {canAdminister ? (
             <div
               className="adminSectionView"
-              hidden={!administration || active !== "governance"}
-              inert={!administration || active !== "governance" ? true : undefined}
+              hidden={!administration || active !== "audit"}
+              inert={!administration || active !== "audit" ? true : undefined}
             >
-              <GovernanceWorkspace key={accountScope} user={user} data={data} />
-            </div>
-          ) : null}
-          {user.role === "admin" ? (
-            <div
-              className="adminSectionView"
-              hidden={!administration || active !== "accounts"}
-              inert={!administration || active !== "accounts" ? true : undefined}
-            >
-              <AccountManagement key={accountScope} user={user} onAuthenticationExpired={onAuthenticationExpired} />
+              <GovernanceWorkspace key={`${accountScope}:audit`} view="audit" user={user} data={data} />
             </div>
           ) : null}
         </section>

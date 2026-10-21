@@ -500,19 +500,24 @@ details.
 The web app has separate **Settings → Testing** and **Settings → Administration**
 entries. Testing opens at `/#/testing/overview`, with `plans` and `evidence`
 pages for assigned work, conversations, readable results, notes, and feedback.
-It does not show build hashes, system IDs, raw check details, or telemetry.
+Reviewers and administrators additionally see QA pages — `quality`, `releases`,
+`diagnostics`, and `policies` — for release validation, technical diagnostics,
+and versioned testing policy. Testing does not show build hashes, system IDs,
+raw check details, or telemetry by default; raw technical details remain behind
+explicitly labelled, initially closed disclosures for reviewers/admins only.
 Incomplete recordings are separate from Passed results, including when their
 automated checks passed. Mobile conversation detail hides the list filters
 until **Back to results**.
 
-Administration opens at `/#/admin/overview` for reviewers and administrators.
-Release validation, technical evidence diagnostics, policy/audit, and admin-only
-account management live there; testers are redirected to Testing. App-token
-copying is available in the Administration profile menu, not Testing.
-Sections, selected releases/sessions, and filters have shareable URLs and
-survive refresh and browser Back/Forward. Evidence drafts are account/role-scoped
-in the current browser tab and survive switching workspaces. Release approval
-and policy publication still require separate review/confirmation steps.
+Administration opens at `/#/admin/overview` for administrators only, with an
+account `overview`, `accounts`, and `audit` pages. Reviewers stay in Testing;
+testers are redirected to Testing. App-token copying is available in the
+profile menu for reviewers (in Testing) and administrators (in Administration);
+testers cannot copy tokens. Sections, selected releases/sessions, and filters
+have shareable URLs and survive refresh and browser Back/Forward.
+Evidence drafts are account/role-scoped in the current browser tab and survive
+switching workspaces. Release approval and policy publication still require
+separate review/confirmation steps, and both remain server-enforced.
 
 ### `POST /auth/register` · `POST /auth/login` · `POST /auth/logout` · `GET /auth/me`
 
@@ -545,8 +550,9 @@ the full-width Admin workspace lists every account, generates **single-use 7-day
 links** (`/?invite=inv_…`, auto-copied; `POST /auth/admin/invites`, revoke via
 `/auth/admin/invites/revoke`), and deletes tester accounts (their sessions die
 with them; admin accounts cannot be deleted — `POST /auth/admin/users/delete`,
-overview at `GET /auth/admin/overview`). Any logged-in user can copy their
-session token from the Admin profile menu (复制令牌) and paste it into the iOS/Android
+overview at `GET /auth/admin/overview`). Reviewers and administrators can copy
+their session token from the workspace profile menu (复制令牌 — reviewers in
+Testing, administrators in Administration) and paste it into the iOS/Android
 认证令牌 field to connect the native apps.
 
 Authenticated conversation memory is stored separately in

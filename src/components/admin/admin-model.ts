@@ -13,7 +13,8 @@ import { localized, type Language } from "../../lib/i18n";
 
 export type AppSurface = "voice" | "settings" | "testing" | "admin";
 export type Workspace = "testing" | "admin";
-export type WorkspaceSection = "overview" | "plans" | "releases" | "evidence" | "accounts" | "governance";
+export type WorkspaceSection =
+  "overview" | "plans" | "evidence" | "quality" | "releases" | "diagnostics" | "policies" | "accounts" | "audit";
 export type AdminDataStatus = "loading" | "ready" | "stale" | "error";
 
 export function adminStatusAfterFailure(hasLoadedData: boolean): AdminDataStatus {
@@ -24,26 +25,35 @@ const ADMIN_SECTION_LABELS: Record<WorkspaceSection, string> = {
   overview: "概览",
   plans: "测试计划",
   releases: "发布验证",
-  evidence: "技术诊断",
+  evidence: "测试记录",
+  quality: "质量概览",
+  diagnostics: "测试诊断",
+  policies: "测试策略",
   accounts: "账号管理",
-  governance: "策略与审计"
+  audit: "审计历史"
 };
 
 const ADMIN_SECTION_LABELS_EN: Record<WorkspaceSection, string> = {
   overview: "Overview",
   plans: "Test plans",
   releases: "Release validation",
-  evidence: "Diagnostics",
+  evidence: "Sessions",
+  quality: "Quality overview",
+  diagnostics: "Diagnostics",
+  policies: "Testing policies",
   accounts: "Accounts",
-  governance: "Policy & audit"
+  audit: "Audit history"
 };
 
-const BASE_SECTIONS: WorkspaceSection[] = ["overview", "releases", "evidence"];
+const TESTING_SECTIONS: WorkspaceSection[] = ["overview", "plans", "evidence"];
+const QA_SECTIONS: WorkspaceSection[] = ["quality", "releases", "diagnostics", "policies"];
+
+export function allowedTestingSections(role: AuthUser["role"]): WorkspaceSection[] {
+  return role === "admin" || role === "reviewer" ? [...TESTING_SECTIONS, ...QA_SECTIONS] : [...TESTING_SECTIONS];
+}
 
 export function allowedAdminSections(role: AuthUser["role"]): WorkspaceSection[] {
-  if (role === "admin") return [...BASE_SECTIONS, "accounts", "governance"];
-  if (role === "reviewer") return [...BASE_SECTIONS, "governance"];
-  return [];
+  return role === "admin" ? ["overview", "accounts", "audit"] : [];
 }
 
 export function normalizeAdminSection(section: WorkspaceSection, role: AuthUser["role"]): WorkspaceSection {
@@ -72,12 +82,7 @@ export function adminRoleLabel(role: AuthUser["role"], language: Language = "zh-
   return role === "admin" ? "管理员" : role === "reviewer" ? "审核员" : "测试员";
 }
 
-export function workspaceSectionLabel(
-  section: WorkspaceSection,
-  language: Language = "zh-CN",
-  workspace: Workspace = "admin"
-): string {
-  if (workspace === "testing" && section === "evidence") return localized(language, "测试记录", "Sessions");
+export function workspaceSectionLabel(section: WorkspaceSection, language: Language = "zh-CN"): string {
   return language === "en-US" ? ADMIN_SECTION_LABELS_EN[section] : ADMIN_SECTION_LABELS[section];
 }
 

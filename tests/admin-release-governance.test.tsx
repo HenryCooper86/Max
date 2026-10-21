@@ -575,11 +575,11 @@ describe("ReleaseValidation", () => {
     await act(async () => {
       renderer = create(<ReleaseValidation agent={agent()} user={authUser("tester")} data={testerData} />);
     });
-    expect(text(renderer.root)).toContain("请打开 ios 客户端采集此任务");
+    expect(text(renderer.root)).toContain("请打开 iPhone 客户端采集此任务");
   });
 
   it("tracks the selected run in the URL across refresh, Back, and section switches", async () => {
-    locationStub = stubAdminLocation("#/admin/releases");
+    locationStub = stubAdminLocation("#/testing/releases");
     const runB = { ...run(), id: "run-b", name: "发布 B" };
     const sharedData = adminData(operations(policy("v1"), [run(), runB]));
     const render = <ReleaseValidation agent={agent()} user={authUser("reviewer")} data={sharedData} />;
@@ -592,7 +592,7 @@ describe("ReleaseValidation", () => {
         .findAllByType("button")
         .find((node) => text(node).includes(name))!;
     act(() => runButton("发布 B").props.onClick());
-    expect(locationStub.hash()).toBe("#/admin/releases?run=run-b");
+    expect(locationStub.hash()).toBe("#/testing/releases?run=run-b");
     expect(runButton("发布 B").props.className).toBe("active");
 
     // A fresh mount reads the URL exactly like a page refresh.
@@ -604,7 +604,7 @@ describe("ReleaseValidation", () => {
 
     // Browser Back restores the previous selection.
     act(() => locationStub!.back());
-    expect(locationStub!.hash()).toBe("#/admin/releases");
+    expect(locationStub!.hash()).toBe("#/testing/releases");
     expect(runButton("候选发布").props.className).toBe("active");
 
     // Section switches never rewrite the URL from the hidden releases panel,
@@ -613,12 +613,12 @@ describe("ReleaseValidation", () => {
     const draft = renderer.root.findByProps({ className: "runCreateBar" });
     act(() => draft.findAllByType("input")[0].props.onChange({ target: { value: "Keep this draft" } }));
     act(() => setWorkspaceLocation("evidence"));
-    expect(locationStub!.hash()).toBe("#/admin/evidence");
+    expect(locationStub!.hash()).toBe("#/testing/evidence");
     expect(draft.findAllByType("input")[0].props.value).toBe("Keep this draft");
   });
 
   it("keeps a missing run's empty state from mutating the default run", async () => {
-    locationStub = stubAdminLocation("#/admin/releases?run=gone");
+    locationStub = stubAdminLocation("#/testing/releases?run=gone");
     const snapshot = adminData();
     await act(async () => {
       renderer = create(<ReleaseValidation agent={agent()} user={authUser("admin")} data={snapshot} />);
@@ -633,7 +633,7 @@ describe("ReleaseValidation", () => {
 
     // Recovery returns to the available-run list without dispatching a mutation.
     await act(async () => button(renderer!, "查看可用运行").props.onClick());
-    expect(locationStub!.hash()).toBe("#/admin/releases");
+    expect(locationStub.hash()).toBe("#/testing/releases");
     expect(snapshot.updateRun).not.toHaveBeenCalled();
     expect(
       renderer!.root.find((node) => node.type === "select" && node.props["aria-label"] === "发布运行状态")
@@ -641,7 +641,7 @@ describe("ReleaseValidation", () => {
   });
 
   it("restores the remembered run URL when returning to the releases section", async () => {
-    locationStub = stubAdminLocation("#/admin/releases");
+    locationStub = stubAdminLocation("#/testing/releases");
     const runB = { ...run(), id: "run-b", name: "发布 B" };
     const sharedData = adminData(operations(policy("v1"), [run(), runB]));
     const render = <ReleaseValidation agent={agent()} user={authUser("reviewer")} data={sharedData} />;
@@ -654,14 +654,14 @@ describe("ReleaseValidation", () => {
         .findAllByType("button")
         .find((node) => text(node).includes(name))!;
     act(() => runButton("发布 B").props.onClick());
-    expect(locationStub!.hash()).toBe("#/admin/releases?run=run-b");
+    expect(locationStub.hash()).toBe("#/testing/releases?run=run-b");
 
     // Leave the section, then return: the hidden panel must re-assert its URL.
     act(() => setWorkspaceLocation("evidence"));
-    expect(locationStub!.hash()).toBe("#/admin/evidence");
+    expect(locationStub!.hash()).toBe("#/testing/evidence");
     act(() => setWorkspaceLocation("releases"));
     await flush();
-    expect(locationStub!.hash()).toBe("#/admin/releases?run=run-b");
+    expect(locationStub!.hash()).toBe("#/testing/releases?run=run-b");
     expect(runButton("发布 B").props.className).toBe("active");
 
     // A refresh (fresh mount) keeps B from the restored URL.
@@ -673,7 +673,7 @@ describe("ReleaseValidation", () => {
   });
 
   it("does not let an in-flight create completion hijack a newer run selection", async () => {
-    locationStub = stubAdminLocation("#/admin/releases");
+    locationStub = stubAdminLocation("#/testing/releases");
     const runB = { ...run(), id: "run-b", name: "发布 B" };
     const created = { ...run(), id: "run-new", name: "新发布" };
     const pending = deferred<ApiResult<TestingRun>>();
@@ -692,7 +692,7 @@ describe("ReleaseValidation", () => {
       void button(renderer!, "创建发布运行").props.onClick();
     });
     act(() => runButton("发布 B").props.onClick());
-    expect(locationStub!.hash()).toBe("#/admin/releases?run=run-b");
+    expect(locationStub.hash()).toBe("#/testing/releases?run=run-b");
 
     await act(async () => {
       pending.resolve({ ok: true, data: created });
@@ -700,12 +700,12 @@ describe("ReleaseValidation", () => {
     });
     await flush();
 
-    expect(locationStub!.hash()).toBe("#/admin/releases?run=run-b");
+    expect(locationStub.hash()).toBe("#/testing/releases?run=run-b");
     expect(runButton("发布 B").props.className).toBe("active");
   });
 
   it("cannot redirect an in-flight create after the section unmounts", async () => {
-    locationStub = stubAdminLocation("#/admin/releases");
+    locationStub = stubAdminLocation("#/testing/releases");
     const created = { ...run(), id: "run-new", name: "新发布" };
     const pending = deferred<ApiResult<TestingRun>>();
     const sharedData = adminData();
@@ -724,7 +724,79 @@ describe("ReleaseValidation", () => {
       pending.resolve({ ok: true, data: created });
       await pending.promise;
     });
-    expect(locationStub!.hash()).toBe("#/admin/releases");
+    expect(locationStub.hash()).toBe("#/testing/releases");
+  });
+
+  it("hands coverage evidence over to the build-scoped advanced diagnostics view", async () => {
+    locationStub = stubAdminLocation("#/testing/releases");
+    const complete = run();
+    complete.assignments = [
+      {
+        id: "assignment-complete",
+        runId: complete.id,
+        requirementId: complete.requirements[0].id,
+        testCaseId: complete.requirements[0].testCaseId,
+        assignee: "reviewer",
+        platform: "web",
+        networkType: "wifi",
+        language: "zh",
+        status: "complete",
+        createdAt: 1,
+        updatedAt: 1,
+        completedSessionIds: ["session-0"]
+      }
+    ];
+    const sharedData = adminData(operations(policy("v1"), [complete]));
+    await act(async () => {
+      renderer = create(<ReleaseValidation agent={agent()} user={authUser("reviewer")} data={sharedData} />);
+    });
+    const evidenceButtons = () => renderer!.root.findAllByProps({ className: "coverageEvidenceLink" });
+    // The complete row reviews evidence; the missing row asks for more.
+    expect(evidenceButtons().map((node) => text(node))).toEqual(["查看证据", "补充证据"]);
+    act(() => evidenceButtons()[0].props.onClick());
+    expect(locationStub.hash()).toBe("#/testing/diagnostics?build=build-1&platform=web");
+    act(() => setWorkspaceLocation("releases"));
+    act(() => evidenceButtons()[1].props.onClick());
+    expect(locationStub.hash()).toBe("#/testing/diagnostics?build=build-1&platform=web");
+  });
+
+  it("sends approval-blocker follow-ups to build-scoped diagnostics", async () => {
+    locationStub = stubAdminLocation("#/testing/releases");
+    const snapshot = adminData();
+    snapshot.operations!.reviews = [
+      {
+        id: "review-open",
+        sessionId: "session-0",
+        runId: snapshot.operations!.runs[0].id,
+        status: "open",
+        severity: "high",
+        owner: "reviewer",
+        title: "Warning",
+        comment: "",
+        createdAt: 1,
+        updatedAt: 1,
+        createdBy: "reviewer"
+      }
+    ];
+    await act(async () => {
+      renderer = create(<ReleaseValidation agent={agent()} user={authUser("reviewer")} data={snapshot} />);
+    });
+    const gateActions = () => renderer!.root.findByProps({ className: "releaseGateActions" });
+    act(() =>
+      gateActions()
+        .findAllByType("button")
+        .find((node) => text(node) === "处理未完成复核（1）")!
+        .props.onClick()
+    );
+    expect(locationStub.hash()).toBe("#/testing/diagnostics?build=build-1&review=open");
+    act(() => setWorkspaceLocation("releases"));
+    act(() =>
+      gateActions()
+        .findAllByType("button")
+        .find((node) => text(node) === "查看证据")!
+        .props.onClick()
+    );
+    expect(locationStub.hash()).toBe("#/testing/diagnostics?build=build-1");
   });
 
   it("caps oversampled requirements so over-completing one never implies 100% overall", async () => {
@@ -810,15 +882,34 @@ describe("GovernanceWorkspace", () => {
     return data;
   }
 
+  /** Every mount states its responsibility explicitly; the parent keeps one
+   * persistent instance per view, so the tests mirror that split. */
+  const governanceRender = (view: "policy" | "audit", role: AuthUser["role"], data: AdminTestingData) => (
+    <GovernanceWorkspace view={view} user={authUser(role)} data={data} />
+  );
+
   const latencyInput = () => renderer!.root.findByProps({ "aria-label": "发布 P95 上限（ms）" });
   const governanceFilterField = (label: string) =>
-    renderer!.root.find((node) => node.props.className === "governanceFilterField" && text(node).startsWith(label));
+    renderer!.root.find((node) => node.props?.className === "governanceFilterField" && text(node).startsWith(label));
   const clearFilterButtons = () =>
     renderer!.root.findAll((node) => node.type === "button" && text(node) === "清除筛选");
 
+  let locationStub: AdminLocationStub | null = null;
+
+  afterEach(async () => {
+    // Unmount while the location/history/EventTarget stub is still installed so
+    // effect cleanups (window.removeEventListener) can run, then restore globals.
+    if (renderer) {
+      await act(async () => renderer?.unmount());
+      renderer = null;
+    }
+    locationStub?.restore();
+    locationStub = null;
+  });
+
   it("keeps an unsaved draft across same-version and new-version polls, blocking publish until refreshed", async () => {
     await act(async () => {
-      renderer = create(<GovernanceWorkspace user={authUser("admin")} data={governanceData()} />);
+      renderer = create(governanceRender("policy", "admin", governanceData()));
     });
     const latency = latencyInput();
     const rationale = renderer.root.findByType("textarea");
@@ -830,12 +921,7 @@ describe("GovernanceWorkspace", () => {
 
     // A fresh poll object with the same active version must not clobber the draft.
     await act(async () => {
-      renderer?.update(
-        <GovernanceWorkspace
-          user={authUser("admin")}
-          data={governanceData({ ...operations(), audit: auditEvents() })}
-        />
-      );
+      renderer?.update(governanceRender("policy", "admin", governanceData({ ...operations(), audit: auditEvents() })));
     });
     expect(latency.props.value).toBe("999");
     expect(rationale.props.value).toBe("准备发布");
@@ -845,10 +931,11 @@ describe("GovernanceWorkspace", () => {
     const v2 = policy("v2", 640);
     await act(async () => {
       renderer?.update(
-        <GovernanceWorkspace
-          user={authUser("admin")}
-          data={governanceData({ ...operations(v2), audit: auditEvents("v2") }, [v2, policy("v1")])}
-        />
+        governanceRender(
+          "policy",
+          "admin",
+          governanceData({ ...operations(v2), audit: auditEvents("v2") }, [v2, policy("v1")])
+        )
       );
     });
     expect(latency.props.value).toBe("999");
@@ -867,7 +954,7 @@ describe("GovernanceWorkspace", () => {
 
   it("adopts a new active version automatically when the fresh draft is untouched", async () => {
     await act(async () => {
-      renderer = create(<GovernanceWorkspace user={authUser("admin")} data={governanceData()} />);
+      renderer = create(governanceRender("policy", "admin", governanceData()));
     });
     const latency = latencyInput();
     expect(latency.props.value).toBe("800");
@@ -876,10 +963,11 @@ describe("GovernanceWorkspace", () => {
     const v2 = policy("v2", 640);
     await act(async () => {
       renderer?.update(
-        <GovernanceWorkspace
-          user={authUser("admin")}
-          data={governanceData({ ...operations(v2), audit: auditEvents("v2") }, [v2, policy("v1")])}
-        />
+        governanceRender(
+          "policy",
+          "admin",
+          governanceData({ ...operations(v2), audit: auditEvents("v2") }, [v2, policy("v1")])
+        )
       );
     });
     expect(latency.props.value).toBe("640");
@@ -891,7 +979,7 @@ describe("GovernanceWorkspace", () => {
     vi.stubGlobal("confirm", confirmMock);
     try {
       await act(async () => {
-        renderer = create(<GovernanceWorkspace user={authUser("admin")} data={governanceData()} />);
+        renderer = create(governanceRender("policy", "admin", governanceData()));
       });
       const latency = latencyInput();
       const rationale = renderer.root.findByType("textarea");
@@ -903,10 +991,11 @@ describe("GovernanceWorkspace", () => {
       const v2 = policy("v2", 640);
       await act(async () => {
         renderer?.update(
-          <GovernanceWorkspace
-            user={authUser("admin")}
-            data={governanceData({ ...operations(v2), audit: auditEvents("v2") }, [v2, policy("v1")])}
-          />
+          governanceRender(
+            "policy",
+            "admin",
+            governanceData({ ...operations(v2), audit: auditEvents("v2") }, [v2, policy("v1")])
+          )
         );
       });
       expect(latency.props.value).toBe("999");
@@ -928,7 +1017,7 @@ describe("GovernanceWorkspace", () => {
 
   it("keeps a cleared allowed-zero threshold empty and invalid instead of silently zero", async () => {
     await act(async () => {
-      renderer = create(<GovernanceWorkspace user={authUser("admin")} data={governanceData()} />);
+      renderer = create(governanceRender("policy", "admin", governanceData()));
     });
     const failSessions = renderer!.root.findByProps({ "aria-label": "允许失败证据数" });
     expect(failSessions.props.value).toBe("0");
@@ -943,7 +1032,7 @@ describe("GovernanceWorkspace", () => {
     const sharedData = governanceData();
     vi.mocked(sharedData.createPolicy).mockReturnValueOnce(pending.promise);
     await act(async () => {
-      renderer = create(<GovernanceWorkspace user={authUser("admin")} data={sharedData} />);
+      renderer = create(governanceRender("policy", "admin", sharedData));
     });
     const latency = latencyInput();
     const rationale = renderer.root.findByType("textarea");
@@ -984,7 +1073,7 @@ describe("GovernanceWorkspace", () => {
       .mockResolvedValueOnce({ ok: false, error: { kind: "forbidden", message: "只有管理员可以发布策略。" } })
       .mockResolvedValueOnce({ ok: true, data: policy("v2") });
     await act(async () => {
-      renderer = create(<GovernanceWorkspace user={authUser("admin")} data={sharedData} />);
+      renderer = create(governanceRender("policy", "admin", sharedData));
     });
     const rationale = renderer.root.findByType("textarea");
     act(() => rationale.props.onChange({ target: { value: "更新门槛" } }));
@@ -998,7 +1087,7 @@ describe("GovernanceWorkspace", () => {
 
     await act(async () => renderer?.unmount());
     await act(async () => {
-      renderer = create(<GovernanceWorkspace user={authUser("reviewer")} data={sharedData} />);
+      renderer = create(governanceRender("policy", "reviewer", sharedData));
     });
     expect(text(renderer.root)).toContain("审核员拥有只读权限");
     expect(renderer.root.findAllByType("input").every((input) => input.props.disabled)).toBe(true);
@@ -1006,9 +1095,8 @@ describe("GovernanceWorkspace", () => {
 
   it("renders readable audit history, links only loaded records, and keeps raw ids behind a toggle", async () => {
     await act(async () => {
-      renderer = create(<GovernanceWorkspace user={authUser("admin")} data={governanceData()} />);
+      renderer = create(governanceRender("audit", "admin", governanceData()));
     });
-    act(() => button(renderer, "审计日志").props.onClick());
     expect(text(renderer.root)).toContain("更新发布验证");
     expect(text(renderer.root)).toContain("变更账号角色");
     expect(text(renderer.root)).toContain("新角色");
@@ -1016,17 +1104,20 @@ describe("GovernanceWorkspace", () => {
     expect(text(renderer.root)).toContain("状态");
     expect(text(renderer.root)).toContain("待批准");
 
-    const runLink = renderer.root.findByProps({ href: "#/admin/releases?run=run-1" });
+    const runLink = renderer.root.findByProps({ href: "#/testing/releases?run=run-1" });
     expect(text(runLink)).toContain("候选发布");
-    const policyLink = renderer.root.findByProps({ href: "#/admin/governance?tab=policy&policy=v1" });
+    const policyLink = renderer.root.findByProps({ href: "#/testing/policies?policy=v1" });
     expect(text(policyLink)).toBe("v1");
+    // Account targets hand off to the pre-filtered Administration accounts list.
+    const accountLink = renderer.root.findByProps({ href: "#/admin/accounts?q=alice" });
+    expect(text(accountLink)).toBe("alice");
     // session-1 is not in the loaded evidence, so it must never render as a dead link
     expect(
       renderer.root.findAllByType("a").some((node) => (node.props.href ?? "").includes("#/testing/evidence"))
     ).toBe(false);
-    // The unloaded session and the account target have no loaded destination,
-    // so both render as plain missing targets rather than dead links.
-    expect(renderer.root.findAllByProps({ className: "auditTargetMissing" })).toHaveLength(2);
+    // The unloaded session has no loaded destination, so it renders as plain
+    // missing text rather than a dead link.
+    expect(renderer.root.findAllByProps({ className: "auditTargetMissing" })).toHaveLength(1);
 
     const toggles = renderer.root.findAllByProps({ className: "auditRawToggle" });
     act(() => toggles[2].props.onClick());
@@ -1037,9 +1128,8 @@ describe("GovernanceWorkspace", () => {
 
   it("filters the audit trail by search, actor, action, and date with a useful empty state", async () => {
     await act(async () => {
-      renderer = create(<GovernanceWorkspace user={authUser("admin")} data={governanceData()} />);
+      renderer = create(governanceRender("audit", "admin", governanceData()));
     });
-    act(() => button(renderer, "审计日志").props.onClick());
     expect(text(renderer.root)).toContain("显示 4 / 4 条记录");
 
     act(() =>
@@ -1077,11 +1167,11 @@ describe("GovernanceWorkspace", () => {
     expect(text(renderer.root)).toContain("显示 4 / 4 条记录");
   });
 
-  it("hydrates the governance tab and audit filters from the URL", async () => {
-    vi.stubGlobal("location", { hash: "#/admin/governance?tab=audit&actor=admin" });
+  it("hydrates audit filters from the admin audit URL", async () => {
+    vi.stubGlobal("location", { hash: "#/admin/audit?actor=admin" });
     try {
       await act(async () => {
-        renderer = create(<GovernanceWorkspace user={authUser("admin")} data={governanceData()} />);
+        renderer = create(governanceRender("audit", "admin", governanceData()));
       });
       expect(text(renderer.root)).toContain("显示 3 / 4 条记录");
       expect(governanceFilterField("操作人").findByType("input").props.value).toBe("admin");
@@ -1092,19 +1182,22 @@ describe("GovernanceWorkspace", () => {
   });
 
   it("compares a selected historical version against the active policy across every threshold", async () => {
+    locationStub = stubAdminLocation("#/testing/policies");
     const active = policy("v1", 800);
     const older = policy("v0", 900);
     await act(async () => {
       renderer = create(
-        <GovernanceWorkspace
-          user={authUser("admin")}
-          data={governanceData({ ...operations(active), audit: auditEvents() }, [active, older])}
-        />
+        governanceRender(
+          "policy",
+          "admin",
+          governanceData({ ...operations(active), audit: auditEvents() }, [active, older])
+        )
       );
     });
     const history = renderer.root.findByProps({ className: "policyHistory" });
     expect(text(history)).toContain("正在查看当前生效版本。");
     act(() => history.findByProps({ "aria-label": "历史版本" }).props.onChange({ target: { value: "v0" } }));
+    expect(locationStub.hash()).toBe("#/testing/policies?policy=v0");
     expect(text(history)).toContain("与当前生效版本 v1 对比：");
     expect(text(history)).toContain("必需平台");
     expect(text(history)).toContain("900");
@@ -1112,5 +1205,128 @@ describe("GovernanceWorkspace", () => {
     const changed = history.findAllByProps({ className: "policyDiffRow changed" });
     expect(text(changed[0])).toContain("900");
     expect(text(changed[0])).toContain("800");
+  });
+
+  it("renders only the policy workbench in the policy view, with no audit surface", async () => {
+    locationStub = stubAdminLocation("#/testing/policies");
+    await act(async () => {
+      renderer = create(governanceRender("policy", "admin", governanceData()));
+    });
+    expect(renderer.root.findAllByProps({ className: "policyEditor" })).toHaveLength(1);
+    expect(renderer.root.findAllByProps({ className: "policyHistory" })).toHaveLength(1);
+    expect(renderer.root.findByProps({ "aria-label": "发布策略" })).toBeDefined();
+    expect(renderer.root.findAllByProps({ className: "governanceFilterBar" })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ className: "auditEvent" })).toHaveLength(0);
+    expect(renderer.root.findAllByType("textarea")).toHaveLength(1);
+  });
+
+  it("renders only the audit trail in the audit view and never writes testing routes", async () => {
+    locationStub = stubAdminLocation("#/admin/audit");
+    await act(async () => {
+      renderer = create(governanceRender("audit", "admin", governanceData()));
+    });
+    expect(renderer.root.findAllByProps({ className: "governanceFilterBar" })).toHaveLength(1);
+    expect(renderer.root.findAllByProps({ className: "auditEvent" })).toHaveLength(4);
+    expect(renderer.root.findAllByProps({ "aria-label": "审计日志" })).toHaveLength(1);
+    // No policy thresholds, editor, history, or publication controls leak in.
+    expect(renderer.root.findAllByType("textarea")).toHaveLength(0);
+    expect(renderer.root.findAllByType("input").some((field) => field.props.type === "number")).toBe(false);
+    expect(renderer.root.findAll((node) => node.type === "button" && text(node) === "检查并发布")).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ className: "policyEditor" })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ className: "policyHistory" })).toHaveLength(0);
+    // Audit interactions only ever own the admin audit route.
+    act(() =>
+      governanceFilterField("操作人")
+        .findByType("input")
+        .props.onChange({ target: { value: "reviewer" } })
+    );
+    expect(locationStub.hash()).toBe("#/admin/audit?actor=reviewer");
+    // actor=reviewer leaves only the run.updated event; its technical-detail
+    // toggle must still own the admin audit route with the surviving id.
+    const toggles = renderer.root.findAllByProps({ className: "auditRawToggle" });
+    act(() => toggles[0].props.onClick());
+    expect(locationStub.hash()).toBe("#/admin/audit?actor=reviewer&audit=audit-run");
+  });
+
+  it("fails closed for reviewers in the audit view even if the parent gate is bypassed", async () => {
+    await act(async () => {
+      renderer = create(governanceRender("audit", "reviewer", governanceData()));
+    });
+    expect(text(renderer.root)).toContain("系统审计日志仅限管理员查看。");
+    expect(renderer.root.findAllByProps({ className: "auditEvent" })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ className: "governanceFilterBar" })).toHaveLength(0);
+  });
+
+  it("keeps a policy draft across a hidden Administration audit trip without URL theft", async () => {
+    locationStub = stubAdminLocation("#/testing/policies");
+    const sharedData = governanceData();
+    // Both persistent instances stay mounted, exactly like the parent host.
+    const renderHost = (
+      <>
+        <div className="adminSectionView">
+          <GovernanceWorkspace view="policy" user={authUser("admin")} data={sharedData} />
+        </div>
+        <div className="adminSectionView">
+          <GovernanceWorkspace view="audit" user={authUser("admin")} data={sharedData} />
+        </div>
+      </>
+    );
+    await act(async () => {
+      renderer = create(renderHost);
+    });
+    const latency = latencyInput();
+    const rationale = renderer.root.findByType("textarea");
+    act(() => {
+      latency.props.onChange({ target: { value: "999" } });
+      rationale.props.onChange({ target: { value: "保留这份草稿" } });
+    });
+
+    // Enter the Administration audit section; the hidden policy instance must
+    // never rewrite that route, and audit filters must own it exclusively.
+    act(() => setWorkspaceLocation("audit", {}, false, "admin"));
+    await flush();
+    expect(locationStub.hash()).toBe("#/admin/audit");
+    act(() =>
+      governanceFilterField("操作人")
+        .findByType("input")
+        .props.onChange({ target: { value: "reviewer" } })
+    );
+    expect(locationStub.hash()).toBe("#/admin/audit?actor=reviewer");
+
+    // Returning to the policy section restores the draft exactly as left.
+    act(() => setWorkspaceLocation("policies", {}, false, "testing"));
+    await flush();
+    expect(locationStub.hash()).toBe("#/testing/policies");
+    expect(latency.props.value).toBe("999");
+    expect(rationale.props.value).toBe("保留这份草稿");
+    expect(renderer.root.findAllByType("input").some((field) => field.props.type === "number")).toBe(true);
+  });
+
+  it("never adopts another section's URL params into the wrong view", async () => {
+    // A policy instance mounted on the audit route must ignore its policy param.
+    vi.stubGlobal("location", { hash: "#/admin/audit?policy=v0" });
+    try {
+      const active = policy("v1", 800);
+      const older = policy("v0", 900);
+      await act(async () => {
+        renderer = create(
+          governanceRender("policy", "admin", governanceData({ ...operations(active) }, [active, older]))
+        );
+      });
+      const history = renderer.root.findByProps({ className: "policyHistory" });
+      expect(text(history)).toContain("正在查看当前生效版本。");
+
+      await act(async () => renderer?.unmount());
+      renderer = null;
+      // An audit instance mounted on the policies route must ignore audit filters.
+      vi.stubGlobal("location", { hash: "#/testing/policies?actor=reviewer" });
+      await act(async () => {
+        renderer = create(governanceRender("audit", "admin", governanceData()));
+      });
+      expect(text(renderer.root)).toContain("显示 4 / 4 条记录");
+      expect(governanceFilterField("操作人").findByType("input").props.value).toBe("");
+    } finally {
+      vi.stubGlobal("location", undefined);
+    }
   });
 });

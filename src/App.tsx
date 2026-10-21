@@ -364,7 +364,7 @@ function AppContent() {
           agent={agent}
           amapConsent={amapConsent}
           onOpenTesting={openTesting}
-          onOpenAdmin={authUser.role === "tester" ? undefined : openAdmin}
+          onOpenAdmin={authUser.role === "admin" ? openAdmin : undefined}
           onClose={closeSettings}
         />
       ) : null}

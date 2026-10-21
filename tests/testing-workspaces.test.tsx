@@ -236,6 +236,9 @@ function flush() {
 }
 
 const plainClick = { preventDefault: () => undefined, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false };
+const QA_TESTING_NAV = ["overview", "plans", "evidence", "quality", "releases", "diagnostics", "policies"].map(
+  (section) => `#/testing/${section}`
+);
 
 let renderer: ReactTestRenderer | null = null;
 let locationStub: LocationStub | null = null;
@@ -547,8 +550,8 @@ describe("OperationsWorkspace", () => {
     expect(locationStub.hash()).toBe("#/testing/overview");
   });
 
-  it("renders a tester's forged administration evidence URL as human-only sessions, never diagnostics", async () => {
-    locationStub = stubBrowserLocation("#/admin/evidence");
+  it("redirects a tester's forged advanced diagnostics URL without exposing technical tools", async () => {
+    locationStub = stubBrowserLocation("#/testing/diagnostics?tab=diagnostics");
     vi.mocked(useAdminTestingData).mockReturnValue(adminData());
     await act(async () => {
       renderer = create(
@@ -564,7 +567,7 @@ describe("OperationsWorkspace", () => {
     const root = renderer!.root;
     expect(navTargets(root)).toEqual(["#/testing/overview", "#/testing/plans", "#/testing/evidence"]);
     expect(root.findAllByType("a").some((link) => String(link.props.href).startsWith("#/admin/"))).toBe(false);
-    expect(locationStub.hash()).toBe("#/testing/evidence");
+    expect(locationStub.hash()).toBe("#/testing/overview");
   });
 
   it("switches an administrator between distinct navigation and profile tools", async () => {
@@ -582,27 +585,21 @@ describe("OperationsWorkspace", () => {
     });
     await flush();
     const root = () => renderer!.root;
-    expect(navTargets(root())).toEqual(["#/testing/overview", "#/testing/plans", "#/testing/evidence"]);
+    expect(navTargets(root())).toEqual(QA_TESTING_NAV);
     expect(root().findAll((node) => node.type === "button" && text(node).startsWith("复制令牌"))).toHaveLength(0);
 
     await act(async () => root().findAllByProps({ className: "workspaceSwitch" })[0].props.onClick(plainClick));
     expect(locationStub.hash()).toBe("#/admin/overview");
-    expect(navTargets(root())).toEqual([
-      "#/admin/overview",
-      "#/admin/releases",
-      "#/admin/evidence",
-      "#/admin/accounts",
-      "#/admin/governance"
-    ]);
+    expect(navTargets(root())).toEqual(["#/admin/overview", "#/admin/accounts", "#/admin/audit"]);
     expect(root().findAll((node) => node.type === "button" && text(node).startsWith("复制令牌"))).toHaveLength(1);
 
     await act(async () => root().findAllByProps({ className: "workspaceSwitch" })[0].props.onClick(plainClick));
     expect(locationStub.hash()).toBe("#/testing/overview");
-    expect(navTargets(root())).toEqual(["#/testing/overview", "#/testing/plans", "#/testing/evidence"]);
+    expect(navTargets(root())).toEqual(QA_TESTING_NAV);
     expect(root().findAll((node) => node.type === "button" && text(node).startsWith("复制令牌"))).toHaveLength(0);
   });
 
-  it("gives a reviewer administration without account management", async () => {
+  it("gives a reviewer QA management in Testing but no Administration access", async () => {
     locationStub = stubBrowserLocation("#/admin/overview");
     vi.mocked(useAdminTestingData).mockReturnValue(adminData({ operations: operations() }));
     await act(async () => {
@@ -617,12 +614,12 @@ describe("OperationsWorkspace", () => {
     });
     await flush();
     const root = renderer!.root;
-    expect(navTargets(root)).toEqual([
-      "#/admin/overview",
-      "#/admin/releases",
-      "#/admin/evidence",
-      "#/admin/governance"
-    ]);
+    expect(navTargets(root)).toEqual(QA_TESTING_NAV);
+    expect(locationStub.hash()).toBe("#/testing/overview");
+    expect(root.findAllByProps({ className: "workspaceSwitch" })).toHaveLength(0);
+    // Token copy is self-service: reviewers keep it in Testing even without an
+    // Administration entry.
+    expect(root.findAll((node) => node.type === "button" && text(node).startsWith("复制令牌"))).toHaveLength(1);
   });
 
   it("does not rewrite a navigation that leaves both workspaces", async () => {

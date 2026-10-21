@@ -32,8 +32,8 @@ function installLocation(hash: string) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("separate testing and administration routes", () => {
-  it("does not carry administration diagnostics or build filters into testing sessions", () => {
-    installLocation("#/admin/evidence?session=private-old&build=deadbeef&tab=diagnostics");
+  it("does not carry advanced diagnostic filters into ordinary testing sessions", () => {
+    installLocation("#/testing/diagnostics?session=private-old&build=deadbeef&tab=diagnostics");
     setWorkspaceLocation("evidence", { session: "chosen-session" }, false, "testing");
     const location = readWorkspaceLocation();
     expect(location.workspace).toBe("testing");
@@ -54,20 +54,20 @@ describe("separate testing and administration routes", () => {
 
   it("opens management-only sections in administration without carrying testing filters", () => {
     installLocation("#/testing/evidence?tester=kim&quality=fail");
-    setWorkspaceLocation("governance", { tab: "audit" });
+    setWorkspaceLocation("audit", { audit: "event-1" });
     const location = readWorkspaceLocation();
     expect(location.isAdmin).toBe(true);
-    expect(location.section).toBe("governance");
-    expect([...location.params.keys()]).toEqual(["tab"]);
+    expect(location.section).toBe("audit");
+    expect([...location.params.keys()]).toEqual(["audit"]);
   });
 
   it("opens test plans in testing even when leaving an administrative page", () => {
-    installLocation("#/admin/releases?run=release-a");
+    installLocation("#/admin/audit?audit=event-a");
     setWorkspaceLocation("plans");
     const location = readWorkspaceLocation();
     expect(location.isTesting).toBe(true);
     expect(location.section).toBe("plans");
-    expect(location.params.has("run")).toBe(false);
+    expect(location.params.has("audit")).toBe(false);
   });
 
   it("does not treat an administrative section below the testing root as an admin route", () => {
@@ -77,6 +77,19 @@ describe("separate testing and administration routes", () => {
     expect(location.isAdmin).toBe(false);
     expect(location.section).toBe("overview");
   });
+
+  it.each(["quality", "releases", "diagnostics", "policies"] as const)(
+    "keeps %s in Testing and rejects it below Administration",
+    (section) => {
+      installLocation("#/admin/accounts?search=kim");
+      setWorkspaceLocation(section);
+      expect(readWorkspaceLocation().isTesting).toBe(true);
+      expect(readWorkspaceLocation().section).toBe(section);
+      expect(readWorkspaceLocation().params.has("search")).toBe(false);
+      installLocation(`#/admin/${section}`);
+      expect(readWorkspaceLocation().section).toBe("overview");
+    }
+  );
 
   it("does not recognize similarly prefixed application paths as a workspace", () => {
     installLocation("#/administrator/accounts");

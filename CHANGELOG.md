@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-10-21 — QA tools join Testing; Administration becomes account-only
+
+- Moved quality overview, release validation, diagnostics, and versioned testing
+  policy into the role-gated Testing workspace (`/#/testing/{quality,releases,
+diagnostics,policies}`); reviewers and admins see them, testers stay on
+  overview/plans/evidence. Raw technical details remain behind explicitly
+  labelled, initially closed disclosures for reviewers/admins only.
+- Restricted Administration (`/#/admin/{overview,accounts,audit}`) to admins,
+  with an account administration overview replacing the QA overview and a
+  read-only audit history separated from testing policies. Reviewers no longer
+  get an Administration entry.
+- Paused QA background refresh while in Administration and resumed it on return;
+  drafts and cached evidence are preserved across the workspace switch.
+
 ### Added
 
 - **iPhone companion navigation for the RDK helmet** — an authenticated iOS account can pair to a

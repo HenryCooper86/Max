@@ -2006,6 +2006,7 @@ export function testingSessionPage(
     if (query.testCaseId && session.testCaseId !== query.testCaseId) return false;
     if (query.build && session.gitCommit !== query.build) return false;
     if (query.quality && session.quality !== query.quality) return false;
+    if (query.validity && session.validity.status !== query.validity) return false;
     if (query.platform && session.platform !== query.platform) return false;
     if (query.runId && session.runId !== query.runId) return false;
     if (search) {

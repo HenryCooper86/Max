@@ -11,7 +11,7 @@ import {
   type TestingRun
 } from "../shared/testing";
 import { AdminOverview } from "../src/components/admin/AdminOverview";
-import { AdminWorkspace } from "../src/components/admin/AdminWorkspace";
+import { OperationsWorkspace } from "../src/components/admin/OperationsWorkspace";
 import { LanguageProvider } from "../src/components/LanguageToggle";
 import { EvidenceWorkspace } from "../src/components/admin/EvidenceWorkspace";
 import type { HelmetAgent } from "../src/hooks/useHelmetAgent";
@@ -23,7 +23,7 @@ import { getTestingReview, resetTestingStore, upsertTestingReview } from "../ser
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 vi.stubGlobal("window", globalThis);
 
-const SEARCH_PLACEHOLDER = "转写、用例、设备、构建或备注…";
+const SEARCH_PLACEHOLDER = "转写、用例、设备或备注…";
 const NOTES_PLACEHOLDER = "复现上下文、设备条件和调查记录…";
 
 const campaign = TESTING_CAMPAIGNS[0];
@@ -327,6 +327,10 @@ function notesTextarea(renderer: ReactTestRenderer) {
   return renderer.root.find((node) => node.type === "textarea" && node.props.placeholder === NOTES_PLACEHOLDER);
 }
 
+function testerSelect(renderer: ReactTestRenderer) {
+  return renderer.root.find((node) => node.type === "select" && text(node).includes("全部测试员"));
+}
+
 function textarea(renderer: ReactTestRenderer, placeholder: string) {
   return renderer.root.find((node) => node.type === "textarea" && node.props.placeholder === placeholder);
 }
@@ -570,7 +574,9 @@ describe("EvidenceWorkspace navigation state", () => {
         />,
         {
           createNodeMock: (element) =>
-            element.type === "section" && element.props["aria-label"] === "证据与问题" ? { focus: focusEvidence } : null
+            element.type === "section" && element.props.className === "adminSectionCard testingPanel"
+              ? { focus: focusEvidence }
+              : null
         }
       );
     });
@@ -578,7 +584,7 @@ describe("EvidenceWorkspace navigation state", () => {
 
     await act(async () => {
       searchInput(renderer!).props.onChange({ target: { value: "不存在" } });
-      renderer!.root.find((node) => node.type === "button" && text(node) === "PASS").props.onClick();
+      renderer!.root.find((node) => node.type === "button" && text(node) === "通过").props.onClick();
     });
     expect(focusEvidence).not.toHaveBeenCalled();
 
@@ -601,21 +607,21 @@ describe("EvidenceWorkspace navigation state", () => {
     expect(onRequestedSessionHandled).toHaveBeenCalledWith("target-session");
     expect(focusEvidence).toHaveBeenCalledTimes(1);
     expect(
-      renderer!.root.find((node) => node.type === "section" && node.props["aria-label"] === "证据与问题").props.tabIndex
+      renderer!.root.find((node) => node.type === "section" && node.props.className === "adminSectionCard testingPanel")
+        .props.tabIndex
     ).toBe(-1);
     expect(searchInput(renderer!).props.value).toBe("");
-    expect(renderer!.root.find((node) => node.type === "button" && text(node) === "FAIL").props["aria-pressed"]).toBe(
+    expect(renderer!.root.find((node) => node.type === "button" && text(node) === "未通过").props["aria-pressed"]).toBe(
       true
     );
-    expect(renderer!.root.find((node) => node.type === "button" && text(node) === "PASS").props["aria-pressed"]).toBe(
+    expect(renderer!.root.find((node) => node.type === "button" && text(node) === "通过").props["aria-pressed"]).toBe(
       false
     );
     const activeSession = renderer!.root.find(
       (node) => node.type === "button" && node.props.className === "sessionButton active"
     );
     expect(text(activeSession)).toContain("target目标用例");
-    const selectedTester = renderer!.root.find((node) => node.type === "tr" && node.props.className === "selected");
-    expect(text(selectedTester)).toContain("target");
+    expect(testerSelect(renderer!).props.value).toBe("target");
   });
 
   it("acknowledges a pending requested session when ordinary navigation supersedes it", async () => {
@@ -723,7 +729,7 @@ describe("EvidenceWorkspace navigation state", () => {
     openReviewTab(renderer!);
 
     await act(async () => {
-      input(renderer!, "ID、IP 或区域").props.onChange({ target: { value: "华东" } });
+      renderer!.root.find((node) => node.type === "button" && text(node) === "全部").props.onClick();
       searchInput(renderer!).props.onChange({ target: { value: "目标用例" } });
     });
     await flush();
@@ -750,7 +756,7 @@ describe("EvidenceWorkspace navigation state", () => {
       );
     });
     const hiddenWorkspace = renderer!.root.find(
-      (node) => node.type === "section" && node.props["aria-label"] === "证据与问题"
+      (node) => node.type === "section" && node.props.className === "adminSectionCard testingPanel"
     );
     expect(hiddenWorkspace.props.hidden).toBe(true);
     expect(hiddenWorkspace.props.inert).toBe(true);
@@ -769,14 +775,11 @@ describe("EvidenceWorkspace navigation state", () => {
     });
     openReviewTab(renderer!);
 
-    expect(input(renderer!, "ID、IP 或区域").props.value).toBe("华东");
+    expect(renderer!.root.find((node) => node.type === "button" && text(node) === "全部").props["aria-pressed"]).toBe(
+      true
+    );
     expect(searchInput(renderer!).props.value).toBe("目标用例");
     expect(notesTextarea(renderer!).props.value).toBe("未保存草稿");
-    const activeSession = renderer!.root.find(
-      (node) => node.type === "button" && node.props.className === "sessionButton active"
-    );
-    expect(text(activeSession)).toContain("PASS");
-    expect(text(activeSession)).not.toContain("FAIL");
     expect(hiddenWorkspace.props.hidden).toBe(false);
     expect(hiddenWorkspace.props.inert).toBeUndefined();
 
@@ -806,16 +809,24 @@ describe("EvidenceWorkspace navigation state", () => {
   });
 
   it("keeps the pinned pass draft while clearing the fail session and searching", async () => {
-    const pass = session("pass-session", "current-key", "current", "pass", "PASS 备注");
-    const fail = session("fail-session", "current-key", "current", "fail", "FAIL 备注");
+    const pass = {
+      ...session("pass-session", "current-key", "current", "pass", "PASS 备注"),
+      testCaseName: "草稿记录"
+    };
+    const fail = {
+      ...session("fail-session", "current-key", "current", "fail", "FAIL 备注"),
+      testCaseName: "待删除记录"
+    };
     const sharedData = data([pass, fail], [tester("current-key", "current", { pass: 1, watch: 0, fail: 1 })]);
     const sharedAgent = agent();
     const sharedUser = user();
+    // Deletion is an authorized technical action: exercise it in admin mode.
     const renderWith = async (nextData: AdminTestingData) => {
       await act(async () => {
         renderer?.update(
           <EvidenceWorkspace
             active
+            technical
             requestedSessionId={null}
             onRequestedSessionHandled={vi.fn()}
             agent={sharedAgent}
@@ -829,6 +840,7 @@ describe("EvidenceWorkspace navigation state", () => {
       renderer = create(
         <EvidenceWorkspace
           active
+          technical
           requestedSessionId={null}
           onRequestedSessionHandled={vi.fn()}
           agent={sharedAgent}
@@ -847,7 +859,7 @@ describe("EvidenceWorkspace navigation state", () => {
           (node) =>
             node.type === "button" &&
             String(node.props.className).startsWith("sessionButton") &&
-            text(node).includes("PASS")
+            text(node).includes(pass.testCaseName)
         )
         .props.onClick()
     );
@@ -861,7 +873,7 @@ describe("EvidenceWorkspace navigation state", () => {
           (node) =>
             node.type === "button" &&
             String(node.props.className).startsWith("sessionButton") &&
-            text(node).includes("FAIL")
+            text(node).includes(fail.testCaseName)
         )
         .props.onClick()
     );
@@ -884,7 +896,7 @@ describe("EvidenceWorkspace navigation state", () => {
           (node) =>
             node.type === "button" &&
             String(node.props.className).startsWith("sessionButton") &&
-            text(node).includes("PASS")
+            text(node).includes(pass.testCaseName)
         )
         .props.onClick()
     );
@@ -897,7 +909,7 @@ describe("EvidenceWorkspace navigation state", () => {
     // Free-text search never silently drops a selection: the server owns the
     // match, and the pinned session keeps its draft safety.
     const queriedList = renderer!.root.find((node) => node.type === "div" && node.props.className === "sessionList");
-    expect(text(queriedList)).not.toContain("current目标用例");
+    expect(text(queriedList)).not.toContain(pass.testCaseName);
     expect(notesTextarea(renderer!).props.value).toBe("PASS 未保存草稿");
 
     await act(async () => {
@@ -905,7 +917,7 @@ describe("EvidenceWorkspace navigation state", () => {
     });
     await flush();
     const restoredList = renderer!.root.find((node) => node.type === "div" && node.props.className === "sessionList");
-    expect(text(restoredList)).toContain("current目标用例");
+    expect(text(restoredList)).toContain(pass.testCaseName);
     expect(notesTextarea(renderer!).props.value).toBe("PASS 未保存草稿");
   });
 
@@ -994,7 +1006,9 @@ describe("EvidenceWorkspace navigation state", () => {
         />,
         {
           createNodeMock: (element) =>
-            element.type === "section" && element.props["aria-label"] === "证据与问题" ? { focus: focusEvidence } : null
+            element.type === "section" && element.props.className === "adminSectionCard testingPanel"
+              ? { focus: focusEvidence }
+              : null
         }
       );
     });
@@ -1049,6 +1063,7 @@ describe("EvidenceWorkspace navigation state", () => {
       renderer = create(
         <EvidenceWorkspace
           active
+          technical
           requestedSessionId={null}
           onRequestedSessionHandled={vi.fn()}
           agent={agent()}
@@ -1062,7 +1077,7 @@ describe("EvidenceWorkspace navigation state", () => {
     await act(async () => {
       input(renderer!, "ID、IP 或区域").props.onChange({ target: { value: "华东" } });
       searchInput(renderer!).props.onChange({ target: { value: "目标用例" } });
-      renderer!.root.find((node) => node.type === "button" && text(node) === "PASS").props.onClick();
+      renderer!.root.find((node) => node.type === "button" && text(node) === "通过").props.onClick();
     });
     await act(async () => {
       renderer!.root.find((node) => node.type === "button" && text(node) === "清除全部证据").props.onClick();
@@ -1076,7 +1091,7 @@ describe("EvidenceWorkspace navigation state", () => {
     expect(sharedData.clearEvidence).toHaveBeenCalledWith({ scope: "all" });
     expect(input(renderer!, "ID、IP 或区域").props.value).toBe("华东");
     expect(searchInput(renderer!).props.value).toBe("目标用例");
-    expect(renderer!.root.find((node) => node.type === "button" && text(node) === "PASS").props["aria-pressed"]).toBe(
+    expect(renderer!.root.find((node) => node.type === "button" && text(node) === "通过").props["aria-pressed"]).toBe(
       true
     );
   });
@@ -1144,14 +1159,14 @@ describe("EvidenceWorkspace navigation state", () => {
     await flush();
 
     await act(async () => {
-      renderer!.root.find((node) => node.type === "button" && text(node) === "PASS").props.onClick();
+      renderer!.root.find((node) => node.type === "button" && text(node) === "通过").props.onClick();
     });
     await flush();
 
     expect(
       renderer!.root.findAll((node) => node.type === "button" && node.props.className === "sessionButton active")
     ).toHaveLength(0);
-    expect(renderer!.root.find((node) => node.type === "button" && text(node) === "PASS").props["aria-pressed"]).toBe(
+    expect(renderer!.root.find((node) => node.type === "button" && text(node) === "通过").props["aria-pressed"]).toBe(
       true
     );
   });
@@ -1259,7 +1274,7 @@ describe("EvidenceWorkspace draft protection", () => {
     });
 
     await act(async () => {
-      renderer!.root.find((node) => node.type === "button" && text(node) === "FAIL").props.onClick();
+      renderer!.root.find((node) => node.type === "button" && text(node) === "未通过").props.onClick();
     });
     await flush();
     expect(
@@ -1432,6 +1447,7 @@ describe("EvidenceWorkspace truthfulness and search", () => {
       renderer = create(
         <EvidenceWorkspace
           active
+          technical
           requestedSessionId={null}
           onRequestedSessionHandled={vi.fn()}
           agent={agent()}
@@ -1457,6 +1473,7 @@ describe("EvidenceWorkspace truthfulness and search", () => {
       renderer!.update(
         <EvidenceWorkspace
           active
+          technical
           requestedSessionId={null}
           onRequestedSessionHandled={vi.fn()}
           agent={agent()}
@@ -1472,10 +1489,6 @@ describe("EvidenceWorkspace truthfulness and search", () => {
     );
     expect(detailText).toContain("— / —");
     expect(detailText).not.toContain("0ms");
-    const listButton = renderer!.root.find(
-      (node) => node.type === "button" && String(node.props.className).startsWith("sessionButton")
-    );
-    expect(text(listButton)).toContain("— P95");
   });
 
   it("runs a cross-tester server search, reports the honest count, and loads an unloaded hit", async () => {
@@ -1585,7 +1598,7 @@ describe("EvidenceWorkspace truthfulness and search", () => {
 
     expect(sharedData.loadSession).toHaveBeenCalledWith("deep-session");
     expect(searchInput(renderer!).props.value).toBe("远程");
-    expect(renderer!.root.find((node) => node.type === "button" && text(node) === "FAIL").props["aria-pressed"]).toBe(
+    expect(renderer!.root.find((node) => node.type === "button" && text(node) === "未通过").props["aria-pressed"]).toBe(
       true
     );
     expect(tabButton(renderer!, "复核").props["aria-selected"]).toBe(true);
@@ -2011,7 +2024,7 @@ describe("EvidenceWorkspace review workflow", () => {
     await renderWith(dataWithB);
     expect(reviewTitleInput(renderer).props.value).toBe("未加载复核 B");
     expect(textarea(renderer, NOTES_PLACEHOLDER).props.value).toBe("B 备注");
-    expect(renderer.root.find((node) => node.type === "button" && text(node) === "PASS").props["aria-pressed"]).toBe(
+    expect(renderer.root.find((node) => node.type === "button" && text(node) === "通过").props["aria-pressed"]).toBe(
       true
     );
 
@@ -2019,13 +2032,12 @@ describe("EvidenceWorkspace review workflow", () => {
       loadA.resolve(unloadedA);
       await loadA.promise;
     });
-    const selectedTester = renderer.root.find((node) => node.type === "tr" && node.props.className === "selected");
+    expect(testerSelect(renderer).props.value).toBe("tester-b");
     const selectedSessionButton = renderer.root.find(
       (node) => node.type === "button" && node.props.className === "sessionButton active"
     );
-    expect(text(selectedTester)).toContain("tester-b");
     expect(text(selectedSessionButton)).toContain("tester-b目标用例");
-    expect(renderer.root.find((node) => node.type === "button" && text(node) === "PASS").props["aria-pressed"]).toBe(
+    expect(renderer.root.find((node) => node.type === "button" && text(node) === "通过").props["aria-pressed"]).toBe(
       true
     );
     expect(textarea(renderer, NOTES_PLACEHOLDER).props.value).toBe("B 备注");
@@ -2115,7 +2127,7 @@ describe("EvidenceWorkspace review workflow", () => {
         (node) => node.type === "button" && node.props.className === "sessionButton active"
       );
       expect(text(selectedSessionButton)).toContain("tester-b目标用例");
-      const expectedQuality = navigationKind === "ordinary session row" ? "全部" : "PASS";
+      const expectedQuality = navigationKind === "ordinary session row" ? "全部" : "通过";
       expect(
         renderer.root.find((node) => node.type === "button" && text(node) === expectedQuality).props["aria-pressed"]
       ).toBe(true);
@@ -2470,6 +2482,210 @@ describe("EvidenceWorkspace review workflow", () => {
   });
 });
 
+describe("EvidenceWorkspace testing panel presentation", () => {
+  it("renders a human-only testing view and normalizes a forged diagnostics deep link", async () => {
+    stubLocation("#/testing/evidence?session=plain-session&tab=diagnostics");
+    const base = session("plain-session", "plain-key", "plain-tester", "fail", "普通备注");
+    const plain: TesterSessionSummary = {
+      ...base,
+      latencySamples: 1,
+      avgLatencyMs: 950,
+      p95LatencyMs: 950,
+      turns: [
+        {
+          sessionId: "plain-session",
+          at: 150,
+          speaker: "rider",
+          text: "Max，前面路况怎么样？",
+          final: true,
+          feedback: "回答不对"
+        }
+      ],
+      evaluation: {
+        ...base.evaluation,
+        checks: [
+          { id: "safety", label: "Unsafe advice", status: "fail", detail: "UNSAFE_CODE_42 in reply text." },
+          { id: "latency", label: "P95 latency", status: "fail", detail: "P95 950ms exceeded 800ms budget." }
+        ]
+      }
+    };
+    const sharedData = data([plain], [tester("plain-key", "plain-tester", { pass: 0, watch: 0, fail: 1 })]);
+    await act(async () => {
+      renderer = create(
+        <EvidenceWorkspace
+          active
+          requestedSessionId={null}
+          onRequestedSessionHandled={vi.fn()}
+          agent={agent()}
+          user={user()}
+          data={sharedData}
+        />
+      );
+    });
+    await flush();
+
+    // Conversation plus the reviewer/admin review tab — no raw diagnostics.
+    const tabLabels = renderer!.root
+      .findAll((node) => node.type === "button" && node.props.role === "tab")
+      .map((node) => text(node));
+    expect(tabLabels).toEqual(["对话", "复核"]);
+
+    const rootText = text(renderer!.root);
+    // No system identifiers, telemetry, hashes, versions, or addresses.
+    expect(rootText).not.toContain("plain-session");
+    expect(rootText).not.toContain("plain-key");
+    expect(rootText).not.toContain("abcdef123456");
+    expect(rootText).not.toContain("policy-v1");
+    expect(rootText).not.toContain("127.0.0.1");
+    expect(rootText).not.toContain("0.1.0");
+    expect(rootText).not.toContain("P95");
+    expect(rootText).not.toContain("950ms");
+    expect(rootText).not.toContain("评分");
+    expect(rootText).not.toContain("UNSAFE_CODE_42");
+    expect(rootText).not.toContain("exceeded 800ms budget");
+    expect(rootText).not.toContain("有效证据");
+
+    // Readable row and readable expanded result, including actionable reasons
+    // derived from check ids/status — never the raw check detail.
+    const row = renderer!.root.find(
+      (node) => node.type === "button" && node.props.className === "sessionButton active"
+    );
+    expect(text(row)).toContain("plain-tester目标用例");
+    expect(text(row)).toContain("plain-tester");
+    expect(rootText).toContain("回答不对");
+
+    // The forged technical deep link is normalized out of the URL.
+    expect(window.location.hash).toBe("#/testing/evidence?session=plain-session");
+  });
+
+  it("never grants a tester technical mode, even when the technical prop is forged", async () => {
+    stubLocation("#/admin/evidence?session=plain-session&tab=diagnostics");
+    const plain = session("plain-session", "plain-key", "plain-tester", "fail", "普通备注");
+    const sharedData = data([plain], [tester("plain-key", "plain-tester", { pass: 0, watch: 0, fail: 1 })]);
+    await act(async () => {
+      renderer = create(
+        <EvidenceWorkspace
+          active
+          technical
+          requestedSessionId={null}
+          onRequestedSessionHandled={vi.fn()}
+          agent={agent()}
+          user={user({ id: "tester-user", username: "plain-tester", role: "tester" })}
+          data={sharedData}
+        />
+      );
+    });
+    await flush();
+
+    const tabLabels = renderer!.root
+      .findAll((node) => node.type === "button" && node.props.role === "tab")
+      .map((node) => text(node));
+    expect(tabLabels).toEqual(["对话"]);
+    const rootText = text(renderer!.root);
+    expect(rootText).not.toContain("诊断");
+    expect(rootText).not.toContain("导出统计");
+    expect(rootText).not.toContain("清除全部证据");
+    expect(rootText).not.toContain("删除会话");
+    expect(rootText).not.toContain("127.0.0.1");
+    expect(rootText).not.toContain("abcdef123456");
+    // The forged technical tab is normalized even for a tester.
+    expect(window.location.hash).toBe("#/admin/evidence?session=plain-session");
+  });
+
+  it("keeps notes and review drafts while switching between testing and admin panels", async () => {
+    stubLocation("#/admin/evidence");
+    const first = session("session-first", "first-key", "first", "fail", "A 服务端备注");
+    const sharedData = data([first], [tester("first-key", "first", { pass: 0, watch: 0, fail: 1 })]);
+    const sharedAgent = agent();
+    const sharedUser = user();
+    const renderWith = async (technical: boolean) => {
+      await act(async () => {
+        renderer?.update(
+          <EvidenceWorkspace
+            active
+            technical={technical}
+            requestedSessionId={null}
+            onRequestedSessionHandled={vi.fn()}
+            agent={sharedAgent}
+            user={sharedUser}
+            data={sharedData}
+          />
+        );
+      });
+    };
+    await act(async () => {
+      renderer = create(
+        <EvidenceWorkspace
+          active
+          technical
+          requestedSessionId={null}
+          onRequestedSessionHandled={vi.fn()}
+          agent={sharedAgent}
+          user={sharedUser}
+          data={sharedData}
+        />
+      );
+    });
+    await flush();
+    openReviewTab(renderer!);
+    await act(async () => {
+      notesTextarea(renderer!).props.onChange({ target: { value: "跨面板备注草稿" } });
+      reviewTitleInput(renderer!).props.onChange({ target: { value: "跨面板复核草稿" } });
+    });
+
+    // Switching to the testing panel keeps this instance mounted: the drafts
+    // and the selection survive without applying a stale URL snapshot.
+    await renderWith(false);
+    openReviewTab(renderer!);
+    expect(notesTextarea(renderer!).props.value).toBe("跨面板备注草稿");
+    expect(reviewTitleInput(renderer!).props.value).toBe("跨面板复核草稿");
+    expect(
+      text(renderer!.root.find((node) => node.type === "button" && node.props.className === "sessionButton active"))
+    ).toContain("first目标用例");
+
+    // Switching back to administration restores technical surfaces without
+    // losing the drafts.
+    await renderWith(true);
+    openReviewTab(renderer!);
+    expect(notesTextarea(renderer!).props.value).toBe("跨面板备注草稿");
+    expect(reviewTitleInput(renderer!).props.value).toBe("跨面板复核草稿");
+    expect(
+      text(renderer!.root.find((node) => node.type === "button" && node.props.className === "sessionButton active"))
+    ).toContain("first目标用例");
+  });
+
+  it("normalizes a diagnostics tab arriving via Back/Forward outside technical mode", async () => {
+    const url = stubLocation("#/testing/evidence?session=plain-session");
+    const plain = session("plain-session", "plain-key", "plain-tester", "pass", "普通备注");
+    const sharedData = data([plain], [tester("plain-key", "plain-tester", { pass: 1, watch: 0, fail: 0 })]);
+    await act(async () => {
+      renderer = create(
+        <EvidenceWorkspace
+          active
+          requestedSessionId={null}
+          onRequestedSessionHandled={vi.fn()}
+          agent={agent()}
+          user={user()}
+          data={sharedData}
+        />
+      );
+    });
+    await flush();
+    expect(window.location.hash).toBe("#/testing/evidence?session=plain-session");
+
+    // Browser Back lands on a stale technical deep link.
+    url.setHash("#/testing/evidence?session=plain-session&tab=diagnostics");
+    await flush();
+
+    expect(window.location.hash).toBe("#/testing/evidence?session=plain-session");
+    const tabLabels = renderer!.root
+      .findAll((node) => node.type === "button" && node.props.role === "tab")
+      .map((node) => text(node));
+    expect(tabLabels).toEqual(["对话", "复核"]);
+    expect(text(renderer!.root)).not.toContain("评分");
+  });
+});
+
 describe("Admin evidence presentation guards", () => {
   function currentRun(overrides: Partial<TestingRun> = {}): TestingRun {
     return {
@@ -2737,6 +2953,7 @@ describe("Admin evidence presentation guards", () => {
     const previousDocument = globalThis.document;
     const previousHTMLElement = globalThis.HTMLElement;
     vi.stubGlobal("window", {
+      location: { hash: "#/admin/overview" },
       setInterval,
       clearInterval,
       setTimeout,
@@ -2767,7 +2984,7 @@ describe("Admin evidence presentation guards", () => {
     };
     const renderWorkspace = (nextAgent: HelmetAgent) => (
       <LanguageProvider>
-        <AdminWorkspace agent={nextAgent} user={user()} onAuthenticationExpired={vi.fn()} onClose={vi.fn()} />
+        <OperationsWorkspace agent={nextAgent} user={user()} onAuthenticationExpired={vi.fn()} onClose={vi.fn()} />
       </LanguageProvider>
     );
     try {

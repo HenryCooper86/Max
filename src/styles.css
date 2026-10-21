@@ -4512,11 +4512,17 @@ button.opsCard:disabled {
 
 .settingsAdminFooter {
   flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
   padding: 12px clamp(16px, 4vw, 32px) 18px;
   border-top: 1px solid rgba(180, 198, 190, 0.11);
   background: rgba(13, 18, 16, 0.97);
   -webkit-backdrop-filter: blur(16px);
   backdrop-filter: blur(16px);
+}
+.settingsAdminFooter > .settingsAdminAction:only-child {
+  grid-column: 1 / -1;
 }
 
 .settingsAdminAction {
@@ -5773,6 +5779,9 @@ button.opsCard:disabled {
   .adminWorkspace .sessionReplayGrid.showDetail > .sessionDetail {
     display: block;
   }
+  .testingWorkspace .testingPanel[data-detail-open="true"] > :is(.panelHeader, .testingFilterBar) {
+    display: none;
+  }
   .adminWorkspace .evidenceBackToResults {
     display: inline-flex;
     margin-bottom: 18px;
@@ -6664,6 +6673,457 @@ button.opsCard:disabled {
   }
 }
 
+/* ---------------------------------------------------------------------------
+   Testing workspace: plain-language panels for the people who run the tests.
+   Compact cards and human result chips keep it visually distinct from the
+   denser administration workspace while sharing the same dark surfaces.
+--------------------------------------------------------------------------- */
+.testingWorkspace .testingOverview,
+.testingWorkspace .testingPlans {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+}
+.testingWorkspace .testingWelcome,
+.testingWorkspace .testingPlansHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px 18px;
+}
+.testingWorkspace .testingWelcomeCopy {
+  min-width: min(100%, 320px);
+}
+.testingWorkspace .testingWelcomeCopy h2,
+.testingWorkspace .testingPlansHead h2 {
+  margin: 0 0 6px;
+  font-size: 1.25rem;
+}
+.testingWorkspace .testingWelcomeCopy p,
+.testingWorkspace .testingPlansHead p {
+  max-width: 46em;
+  margin: 0;
+  color: var(--admin-muted);
+  font-size: 0.85rem;
+  line-height: 1.65;
+}
+.testingWorkspace .testingWelcomeActions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+.testingWorkspace .testingStatusNote {
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px dashed var(--admin-border);
+  border-radius: 9px;
+  color: var(--admin-muted);
+  font-size: 0.8rem;
+}
+.testingWorkspace .testingResultHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 14px;
+}
+.testingWorkspace .testingResultHead h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+.testingWorkspace .testingResultScope {
+  color: var(--admin-muted);
+  font-size: 0.76rem;
+}
+.testingWorkspace .testingQualityRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+.testingWorkspace .testingQualityCard {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: 6px;
+  padding: 13px 14px;
+  border: 1px solid var(--admin-border);
+  border-left: 3px solid var(--admin-border);
+  border-radius: 11px;
+  background: var(--admin-panel);
+  text-align: left;
+}
+.testingWorkspace .testingQualityCard.good {
+  border-left-color: var(--admin-good);
+}
+.testingWorkspace .testingQualityCard.warn {
+  border-left-color: var(--admin-warn);
+}
+.testingWorkspace .testingQualityCard.alert {
+  border-left-color: var(--admin-alert);
+}
+.testingWorkspace .testingQualityCard span {
+  color: var(--admin-muted);
+  font-size: 0.78rem;
+}
+.testingWorkspace .testingQualityCard strong {
+  color: #f0f2f6;
+  font: 650 1.4rem/1.15 var(--font-display);
+}
+.testingWorkspace .testingSessionList,
+.testingWorkspace .testingPlanTasks,
+.testingWorkspace .testingPlanAssignees,
+.testingWorkspace .testingArchivedList {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.testingWorkspace .testingPlanAssignees {
+  gap: 6px;
+}
+.testingWorkspace button.testingSessionRow {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: 5px;
+  padding: 12px 14px;
+  border: 1px solid var(--admin-border);
+  border-radius: 11px;
+  background: var(--admin-panel);
+  text-align: left;
+}
+.testingWorkspace button.testingSessionRow:hover:not(:disabled) {
+  border-color: #5b997c;
+  background: var(--admin-panel-raised);
+}
+.testingWorkspace .testingSessionRowTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.testingWorkspace .testingSessionRowTop strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #f0f2f6;
+  font-size: 0.92rem;
+}
+.testingWorkspace .testingQualityChip {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  border: 1px solid var(--admin-border);
+  border-radius: 999px;
+  color: var(--admin-muted);
+  font-size: 0.72rem;
+}
+.testingWorkspace .testingQualityChip.good {
+  border-color: #3f705b;
+  background: #1b2a24;
+  color: #9cf0c9;
+}
+.testingWorkspace .testingQualityChip.warn {
+  border-color: #6a5c2e;
+  background: #2a2517;
+  color: #f0cd7b;
+}
+.testingWorkspace .testingQualityChip.alert {
+  border-color: #73413c;
+  background: #2b1d1b;
+  color: #ffb0a8;
+}
+.testingWorkspace .testingSessionRow small {
+  color: var(--admin-muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.testingWorkspace .testingEmpty {
+  margin: 0;
+  padding: 18px 16px;
+  border: 1px dashed var(--admin-border);
+  border-radius: 11px;
+  color: var(--admin-muted);
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+.testingWorkspace .testingPlanList {
+  display: grid;
+  gap: 14px;
+}
+.testingWorkspace .testingPlanCard {
+  display: grid;
+  min-width: 0;
+  gap: 13px;
+  padding: 16px;
+  border: 1px solid var(--admin-border);
+  border-radius: 12px;
+  background: var(--admin-panel);
+}
+.testingWorkspace .testingPlanHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px 16px;
+}
+.testingWorkspace .testingPlanTitle {
+  min-width: min(100%, 260px);
+}
+.testingWorkspace .testingPlanTitle h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 1.05rem;
+}
+.testingWorkspace .testingPlanMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 12px;
+  margin: 7px 0 0;
+  color: var(--admin-muted);
+  font-size: 0.78rem;
+}
+.testingWorkspace .testingOverdue {
+  color: var(--admin-warn);
+}
+.testingWorkspace .testingPlanProgress {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 3px;
+  justify-items: end;
+}
+.testingWorkspace .testingPlanProgress span {
+  color: var(--admin-muted);
+  font-size: 0.72rem;
+}
+.testingWorkspace .testingPlanProgress strong {
+  color: #f0f2f6;
+  font-size: 1.05rem;
+}
+.testingWorkspace .testingPlanNote {
+  margin: 0;
+  color: var(--admin-muted);
+  font-size: 0.8rem;
+}
+.testingWorkspace .testingPlanTask {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--admin-border);
+  border-radius: 10px;
+  background: #14171d;
+}
+.testingWorkspace .testingPlanTaskHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+.testingWorkspace .testingPlanTaskHead strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #f0f2f6;
+  font-size: 0.92rem;
+}
+.testingWorkspace .testingPlanTaskCount {
+  flex: 0 0 auto;
+  color: var(--admin-muted);
+  font-size: 0.78rem;
+}
+.testingWorkspace .testingPlanTask > p {
+  margin: 0;
+  color: #c3cad6;
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+.testingWorkspace .testingTaskChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.testingWorkspace .testingTaskChips span {
+  padding: 3px 10px;
+  border: 1px solid var(--admin-border);
+  border-radius: 999px;
+  color: var(--admin-muted);
+  font-size: 0.72rem;
+}
+.testingWorkspace .testingPlanAssignee {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  color: var(--admin-muted);
+  font-size: 0.8rem;
+}
+.testingWorkspace button.testingAssigneeStart {
+  min-height: 36px;
+  padding: 6px 12px;
+  border-color: #6de3af;
+  background: rgba(109, 227, 175, 0.12);
+  color: #b5f0d3;
+  font-size: 0.78rem;
+}
+.testingWorkspace button.testingAssigneeStart:hover:not(:disabled) {
+  border-color: #a7f5d2;
+  background: rgba(109, 227, 175, 0.2);
+}
+.testingWorkspace .testingPlansArchived {
+  padding-top: 12px;
+  border-top: 1px solid var(--admin-border);
+}
+.testingWorkspace .testingPlansArchived > summary {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  color: var(--admin-muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.testingWorkspace .testingArchivedList {
+  gap: 8px;
+  margin-top: 10px;
+}
+.testingWorkspace .testingArchivedList li {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--admin-border);
+  border-radius: 10px;
+  background: #14171d;
+  opacity: 0.8;
+}
+.testingWorkspace .testingArchivedList strong {
+  overflow-wrap: anywhere;
+  color: #e2e6ee;
+  font-size: 0.88rem;
+}
+.testingWorkspace .testingArchivedList span {
+  color: var(--admin-muted);
+  font-size: 0.75rem;
+}
+
+/* Header switch between the testing and administration workspaces, plus the
+   icon now living in the workspace logo. */
+.adminWorkspace .workspaceSwitch {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 13px;
+  border: 1px solid #46536b;
+  border-radius: 9px;
+  background: #232a36;
+  color: #cfe0ff;
+  font-size: 0.8rem;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.adminWorkspace .workspaceSwitch:hover {
+  border-color: #7a92c4;
+  background: #2b3444;
+  color: #eaf1ff;
+}
+.adminWorkspace .workspaceSwitch > svg {
+  flex-shrink: 0;
+}
+.adminWorkspaceLogo > svg {
+  width: 22px;
+  height: 22px;
+}
+
+/* Readable result summary shared by the session detail views. */
+.sessionResultSummary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--admin-border);
+  border-radius: 11px;
+  background: var(--admin-panel);
+}
+.sessionResultSummary > div {
+  display: grid;
+  flex: 1 1 240px;
+  min-width: 0;
+  gap: 8px;
+}
+.sessionResultSummary strong {
+  overflow-wrap: anywhere;
+  color: #f0f2f6;
+  font-size: 0.95rem;
+}
+.sessionResultSummary ul {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.sessionResultReason {
+  color: var(--admin-muted);
+  font-size: 0.82rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.sessionResultReason::before {
+  margin-right: 7px;
+  color: var(--admin-warn);
+  content: "•";
+}
+
+@media (max-width: 640px) {
+  .testingWorkspace .testingOverview,
+  .testingWorkspace .testingPlans {
+    gap: 14px;
+    padding: 16px;
+  }
+  .testingWorkspace .testingWelcome,
+  .testingWorkspace .testingPlansHead,
+  .testingWorkspace .testingPlanHead {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .testingWorkspace .testingWelcomeActions {
+    width: 100%;
+  }
+  .testingWorkspace .testingWelcomeActions > button {
+    flex: 1 1 auto;
+  }
+  .testingWorkspace .testingPlanProgress {
+    justify-items: start;
+  }
+  .testingWorkspace .testingPlanProgress strong {
+    font-size: 1rem;
+  }
+  .testingWorkspace .testingQualityCard strong {
+    font-size: 1.25rem;
+  }
+  .testingWorkspace button.testingAssigneeStart {
+    flex: 1 1 auto;
+  }
+  .adminWorkspace .workspaceSwitch {
+    padding: 6px 10px;
+    font-size: 0.72rem;
+  }
+  .adminWorkspace .workspaceSwitch > svg {
+    width: 16px;
+    height: 16px;
+  }
+  .adminWorkspaceLogo > svg {
+    width: 18px;
+    height: 18px;
+  }
+}
+
 @media (max-width: 700px) {
   .voiceFace {
     padding-right: 16px;
@@ -6709,6 +7169,7 @@ button.opsCard:disabled {
   }
 
   .settingsAdminFooter {
+    grid-template-columns: 1fr;
     padding-bottom: max(14px, env(safe-area-inset-bottom));
   }
 

@@ -1,6 +1,6 @@
 // Account UI building blocks. AccountForm remains the full-screen LoginGate's
 // login/registration form. AccountSessionControls is the authenticated user's
-// identity, security, memory, and logout footer in the Admin workspace.
+// profile controls shared by Testing and Administration.
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
@@ -191,13 +191,13 @@ async function copyToClipboard(value: string): Promise<boolean> {
   }
 }
 
-type SessionControlsProps = { user: AuthUser; onSignedOut: () => void };
+type SessionControlsProps = { user: AuthUser; onSignedOut: () => void; showConnectionToken?: boolean };
 
 export function AccountSessionControls(props: SessionControlsProps) {
   return <AccountSessionControlsForUser key={props.user.id} {...props} />;
 }
 
-function AccountSessionControlsForUser({ user, onSignedOut }: SessionControlsProps) {
+function AccountSessionControlsForUser({ user, onSignedOut, showConnectionToken = false }: SessionControlsProps) {
   const { language, t } = useLanguage();
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -287,29 +287,31 @@ function AccountSessionControlsForUser({ user, onSignedOut }: SessionControlsPro
         </span>
       </div>
       <div className="accountActions">
-        <button
-          type="button"
-          className="accountSwitch"
-          title={localized(
-            language,
-            "复制会话令牌，粘贴到 iOS/Android App 中连接",
-            "Copy the session token and paste it into the iOS/Android app to connect"
-          )}
-          onClick={() => {
-            const ownerId = user.id;
-            const sequence = ++copySequenceRef.current;
-            setClipboardNotice(null);
-            void copyToClipboard(authToken()).then((ok) => {
-              if (!mountedRef.current || currentUserRef.current !== ownerId || copySequenceRef.current !== sequence) {
-                return;
-              }
-              setCopied(ok);
-              if (!ok) setClipboardNotice(t("account.copyFailed"));
-            });
-          }}
-        >
-          {copied ? t("account.copied") : t("account.copyToken")}
-        </button>
+        {showConnectionToken ? (
+          <button
+            type="button"
+            className="accountSwitch"
+            title={localized(
+              language,
+              "复制会话令牌，粘贴到 iOS/Android App 中连接",
+              "Copy the session token and paste it into the iOS/Android app to connect"
+            )}
+            onClick={() => {
+              const ownerId = user.id;
+              const sequence = ++copySequenceRef.current;
+              setClipboardNotice(null);
+              void copyToClipboard(authToken()).then((ok) => {
+                if (!mountedRef.current || currentUserRef.current !== ownerId || copySequenceRef.current !== sequence) {
+                  return;
+                }
+                setCopied(ok);
+                if (!ok) setClipboardNotice(t("account.copyFailed"));
+              });
+            }}
+          >
+            {copied ? t("account.copied") : t("account.copyToken")}
+          </button>
+        ) : null}
         <button
           type="button"
           className="accountSwitch"

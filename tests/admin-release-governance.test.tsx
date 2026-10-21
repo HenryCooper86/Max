@@ -13,7 +13,7 @@ import { GovernanceWorkspace } from "../src/components/admin/GovernanceWorkspace
 import { ReleaseValidation } from "../src/components/admin/ReleaseValidation";
 import { LanguageProvider, LanguageToggle } from "../src/components/LanguageToggle";
 import type { AdminTestingData } from "../src/components/admin/useAdminTestingData";
-import { setAdminLocation } from "../src/components/admin/admin-location";
+import { setWorkspaceLocation } from "../src/components/admin/workspace-location";
 import type { HelmetAgent } from "../src/hooks/useHelmetAgent";
 import type { ApiResult } from "../src/lib/api-client";
 import type { AuthUser } from "../src/lib/auth";
@@ -612,7 +612,7 @@ describe("ReleaseValidation", () => {
     act(() => button(renderer!, "新建发布运行").props.onClick());
     const draft = renderer.root.findByProps({ className: "runCreateBar" });
     act(() => draft.findAllByType("input")[0].props.onChange({ target: { value: "Keep this draft" } }));
-    act(() => setAdminLocation("evidence"));
+    act(() => setWorkspaceLocation("evidence"));
     expect(locationStub!.hash()).toBe("#/admin/evidence");
     expect(draft.findAllByType("input")[0].props.value).toBe("Keep this draft");
   });
@@ -657,9 +657,9 @@ describe("ReleaseValidation", () => {
     expect(locationStub!.hash()).toBe("#/admin/releases?run=run-b");
 
     // Leave the section, then return: the hidden panel must re-assert its URL.
-    act(() => setAdminLocation("evidence"));
+    act(() => setWorkspaceLocation("evidence"));
     expect(locationStub!.hash()).toBe("#/admin/evidence");
-    act(() => setAdminLocation("releases"));
+    act(() => setWorkspaceLocation("releases"));
     await flush();
     expect(locationStub!.hash()).toBe("#/admin/releases?run=run-b");
     expect(runButton("发布 B").props.className).toBe("active");
@@ -1021,9 +1021,9 @@ describe("GovernanceWorkspace", () => {
     const policyLink = renderer.root.findByProps({ href: "#/admin/governance?tab=policy&policy=v1" });
     expect(text(policyLink)).toBe("v1");
     // session-1 is not in the loaded evidence, so it must never render as a dead link
-    expect(renderer.root.findAllByType("a").some((node) => (node.props.href ?? "").includes("#/admin/evidence"))).toBe(
-      false
-    );
+    expect(
+      renderer.root.findAllByType("a").some((node) => (node.props.href ?? "").includes("#/testing/evidence"))
+    ).toBe(false);
     // The unloaded session and the account target have no loaded destination,
     // so both render as plain missing targets rather than dead links.
     expect(renderer.root.findAllByProps({ className: "auditTargetMissing" })).toHaveLength(2);

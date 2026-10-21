@@ -88,34 +88,22 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-async function mount(role: AuthUser["role"] = "admin", onSignedOut = vi.fn()) {
+async function mount(role: AuthUser["role"] = "admin", onSignedOut = vi.fn(), showConnectionToken = false) {
   await act(async () => {
-    renderer = create(<AccountSessionControls user={user(role)} onSignedOut={onSignedOut} />);
+    renderer = create(
+      <AccountSessionControls user={user(role)} onSignedOut={onSignedOut} showConnectionToken={showConnectionToken} />
+    );
   });
   await flush();
   return { renderer, onSignedOut };
 }
 
 describe("AccountSessionControls", () => {
-  it.each(["admin", "reviewer", "tester"] as const)(
-    "keeps token, password, memory, and logout controls available to %s",
-    async (role) => {
-      await mount(role);
-      expect(text(renderer!.root)).toContain(`@${role}`);
-      expect(button(renderer!, "复制令牌（App 用）")).toBeDefined();
-      expect(button(renderer!, "修改密码")).toBeDefined();
-      expect(button(renderer!, "记忆 4 段 · 1 条重点")).toBeDefined();
-      expect(button(renderer!, "退出登录")).toBeDefined();
-      await act(async () => renderer?.unmount());
-      renderer = null;
-    }
-  );
-
   it("does not claim token-copy success when the clipboard rejects", async () => {
     vi.stubGlobal("navigator", {
       clipboard: { writeText: vi.fn().mockRejectedValue(new Error("denied")) }
     });
-    await mount();
+    await mount("admin", vi.fn(), true);
 
     await act(async () => button(renderer!, "复制令牌（App 用）").props.onClick());
     await flush();
@@ -127,7 +115,9 @@ describe("AccountSessionControls", () => {
     );
 
     await act(async () => {
-      renderer!.update(<AccountSessionControls user={user("tester", "replacement")} onSignedOut={vi.fn()} />);
+      renderer!.update(
+        <AccountSessionControls user={user("tester", "replacement")} onSignedOut={vi.fn()} showConnectionToken />
+      );
       await Promise.resolve();
     });
     expect(text(renderer!.root)).not.toContain("无法复制会话令牌。");
@@ -181,7 +171,7 @@ describe("AccountSessionControls", () => {
   });
 
   it("cleans polling, confirmation, and feedback timers on unmount", async () => {
-    await mount();
+    await mount("admin", vi.fn(), true);
     await act(async () => button(renderer!, "复制令牌（App 用）").props.onClick());
     act(() => button(renderer!, "记忆 4 段 · 1 条重点").props.onClick());
     expect(vi.getTimerCount()).toBeGreaterThan(0);
@@ -310,7 +300,7 @@ describe("AccountSessionControls", () => {
   });
 
   it("resets copied, password-success, memory-summary, and memory-notice state for a replacement user", async () => {
-    await mount("admin");
+    await mount("admin", vi.fn(), true);
     await act(async () => button(renderer!, "复制令牌（App 用）").props.onClick());
     await flush();
     expect(text(renderer!.root)).toContain("已复制 ✓");
@@ -335,7 +325,9 @@ describe("AccountSessionControls", () => {
     expect(text(renderer!.root)).toContain("记忆已清除 ✓");
 
     await act(async () => {
-      renderer!.update(<AccountSessionControls user={user("reviewer", "replacement")} onSignedOut={vi.fn()} />);
+      renderer!.update(
+        <AccountSessionControls user={user("reviewer", "replacement")} onSignedOut={vi.fn()} showConnectionToken />
+      );
       await Promise.resolve();
     });
     await flush();

@@ -2,7 +2,7 @@ import type { DemoScenario, RideMode } from "./ride";
 
 export type TestingQuality = "pass" | "watch" | "fail";
 export type TestingCheckStatus = "pass" | "warn" | "fail" | "skipped";
-type TestingValidityStatus = "valid" | "invalid";
+export type TestingValidityStatus = "valid" | "invalid";
 export type TestingPlatform = "web" | "ios" | "android" | "embedded" | "unknown";
 type TestingRisk = "standard" | "safety-critical";
 export type TestingRunStatus = "draft" | "active" | "blocked" | "ready" | "approved" | "archived";
@@ -306,6 +306,12 @@ export type TestingSessionQuery = {
   testCaseId?: string;
   build?: string;
   quality?: TestingQuality;
+  /** Filters by the CURRENT-catalog release validity of each session
+   * (TesterSessionSummary.validity.status), never the capture-time
+   * capturedValidity snapshot. "invalid" matches incomplete recordings
+   * regardless of quality; "valid" combined with quality excludes evidence the
+   * release gate refuses. ANDs with every other filter. */
+  validity?: TestingValidityStatus;
   platform?: TestingPlatform;
   runId?: string;
   /** Filters to sessions having ANY TestingReview with this status. Sessions

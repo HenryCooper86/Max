@@ -70,7 +70,8 @@ import {
   testingBuildsMatch,
   type TestingPlatform,
   type TestingQuality,
-  type TestingReviewStatus
+  type TestingReviewStatus,
+  type TestingValidityStatus
 } from "../shared/testing";
 import { createDoubaoProvider } from "./providers/doubao";
 import { createMockProvider } from "./providers/mock";
@@ -397,8 +398,16 @@ app.get("/testing/sessions", (req, res) => {
   const access = requireTestingRead(req, res);
   if (!access) return;
   const quality = typeof req.query.quality === "string" ? req.query.quality : undefined;
+  const validity = typeof req.query.validity === "string" ? req.query.validity : undefined;
   const platform = typeof req.query.platform === "string" ? req.query.platform : undefined;
   const reviewStatus = typeof req.query.reviewStatus === "string" ? req.query.reviewStatus : undefined;
+  // Unlike quality/platform/reviewStatus (ignored when unrecognized), validity
+  // guards release-gate evidence semantics, so a bogus value is rejected rather
+  // than silently widening the result set back to unfiltered rows.
+  if (validity && validity !== "valid" && validity !== "invalid") {
+    res.status(400).json({ ok: false, error: "validity 必须为 valid 或 invalid。" });
+    return;
+  }
   const page = testingSessionPage(
     {
       cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
@@ -409,6 +418,7 @@ app.get("/testing/sessions", (req, res) => {
       build: typeof req.query.build === "string" ? req.query.build : undefined,
       quality:
         quality === "pass" || quality === "watch" || quality === "fail" ? (quality as TestingQuality) : undefined,
+      validity: validity === "valid" || validity === "invalid" ? (validity as TestingValidityStatus) : undefined,
       platform:
         platform === "web" ||
         platform === "ios" ||

@@ -491,31 +491,51 @@ QA data uses:
 - `GET /testing/sessions?limit=25&cursor=...` — scoped, filterable evidence
   pages without transcript turns. Filters include `search` (transcript, feedback,
   notes and metadata), `testerId`, `testCaseId`, `build`, `platform`, `quality`,
-  `runId`, and `reviewStatus=open|triaged|resolved|waived`. Review status matches
-  any independent review on the session. Totals describe the filtered corpus,
-  not the remainder after the cursor; tester credentials can never expand
-  their own scope by supplying a different tester ID.
+  `validity=valid|invalid`, `runId`, and `reviewStatus=open|triaged|resolved|waived`.
+  Review status matches any independent review on the session. Quality and
+  validity use current-catalog reevaluation, not capture-time claims. Their
+  existing bounded scan covers up to 5,000 newest rows matching the other
+  predicates; totals cover that recent candidate window, before cursor paging.
+  Other queries count the full filtered index. Tester credentials can never
+  expand their own scope by supplying a different tester ID.
 - `GET /testing/sessions/:id` — one authorized full replay.
 - `GET/POST/PATCH /testing/runs...` — release runs and assignments.
 - `GET/POST /testing/reviews` — durable issue triage.
 - `GET/POST /testing/policies` — policy history; writes are admin-only.
 - `GET /testing/audit` — retained operational change history.
 
-### Web operations workspace
+### Separate Testing and Administration workspaces
 
-- **Navigation:** open `/#/admin/overview`, `releases`, `evidence`, `accounts`,
-  or `governance`. Authentication and role restrictions still apply to direct
-  links. Release URLs use `run`; evidence URLs use `session`, `q`, `tester`,
-  `quality`, `build`, `platform`, `review`, `tab`, and optional `reviewId`.
-  Refresh and browser Back/Forward retain the represented view.
-- **Evidence:** All testers is the default for reviewers/admins; tester
-  credentials remain self-scoped. Search runs on the server, including
-  transcripts not yet loaded by the browser. More filters exposes build,
-  platform and review status. Select a result for Conversation, Diagnostics,
-  or Review; mobile uses a list-to-detail view with Back to results.
-  Execution setup and aggregate diagnostics are separate disclosures.
+- **Navigation:** Testing uses `/#/testing/overview`, `plans`, and `evidence`.
+  Administration uses `/#/admin/overview`, `releases`, `evidence` (technical
+  diagnostics), `accounts`, and `governance`. Settings has separate entries;
+  reviewers/admins can switch panels from the header. Testers cannot enter
+  Administration; reviewers cannot enter Accounts. Authentication and server
+  permissions remain authoritative for direct links.
+  Release URLs use `run`; session URLs use `session`, `q`, `tester`, `quality`,
+  `platform`, `review`, `tab`, and optional `reviewId`. The `build` filter is
+  Administration-only and is removed when entering Testing. Refresh and browser
+  Back/Forward retain the represented view.
+- **Testing:** the overview summarizes the displayed recent records rather
+  than presenting a partial page as an all-history total. Plans show assigned
+  tasks, readable instructions, device requirements, due dates, and scoped,
+  capped progress—not the administrative coverage matrix. Browser-compatible
+  assignments in active/blocked plans can configure the next voice test;
+  native-device tasks explain which client to use. Setup runs only after
+  workspace departure/draft guards accept.
+- **Conversations and results:** Testing displays readable names and result
+  reasons without hashes, system IDs, raw checks, or diagnostic tables.
+  Passed/Needs attention/Failed filters combine quality with `validity=valid`;
+  Incomplete uses `validity=invalid`, regardless of automated quality. A missing
+  response-time sample is not described as a slow response.
+  All testers is available to reviewers/admins; tester credentials remain
+  self-scoped. Search includes transcripts not loaded by the browser. More
+  filters contains device/platform and review status. Testing has Conversation
+  and authorized Review views; Diagnostics, execution setup, telemetry, raw
+  exports and destructive evidence controls belong to Administration.
+  Mobile detail hides list filters until **Back to results**.
 - **Drafts:** notes and review drafts survive filtering, selection changes,
-  section switches and reload in the same browser tab. They are scoped by
+  section/panel switches and reload in the same browser tab. They are scoped by
   account/role in `sessionStorage`; unavailable storage preserves them only
   while mounted. Reload/close warns while dirty. Leaving the workspace can be
   cancelled; accepting discard removes the saved draft. Account/role changes
@@ -536,8 +556,8 @@ QA data uses:
   technical identifiers remain available in expandable details.
 - **Accounts and preferences:** Users and Invitations are separate groups.
   Invite revocation and account deletion retain their two-step confirmation.
-  The header profile menu holds language, password, app token, memory and
-  sign-out controls without occupying the mobile navigation area.
+  Both profile menus contain language, password, memory and sign-out controls;
+  app-token copying appears only in Administration.
 
 ### Release workflow
 

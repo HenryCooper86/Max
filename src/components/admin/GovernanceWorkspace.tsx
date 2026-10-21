@@ -24,7 +24,7 @@ import {
   testingReviewStatusLabel,
   testingRunStatusLabel
 } from "./admin-model";
-import { readAdminLocation, setAdminLocation, useAdminLocation } from "./admin-location";
+import { readWorkspaceLocation, setWorkspaceLocation, useWorkspaceLocation } from "./workspace-location";
 import type { AdminTestingData } from "./useAdminTestingData";
 
 type GovernanceTab = "policy" | "audit";
@@ -264,7 +264,7 @@ function auditTargetDisplay(
       const session = lookup.sessions.get(event.targetId);
       if (session) {
         return {
-          href: `#/admin/evidence?session=${encodeURIComponent(session.sessionId)}`,
+          href: `#/testing/evidence?session=${encodeURIComponent(session.sessionId)}`,
           text: sessionLabel(session)
         };
       }
@@ -280,7 +280,7 @@ function auditTargetDisplay(
       const review = lookup.reviews.get(event.targetId);
       return {
         href: review
-          ? `#/admin/evidence?session=${encodeURIComponent(review.sessionId)}&tab=review&reviewId=${encodeURIComponent(review.id)}`
+          ? `#/testing/evidence?session=${encodeURIComponent(review.sessionId)}&tab=review&reviewId=${encodeURIComponent(review.id)}`
           : null,
         text: review ? review.title : localized(language, "复核记录未加载", "Review not loaded")
       };
@@ -458,7 +458,7 @@ function dateFilterBound(date: string, endOfDay: boolean): number | null {
 }
 
 function initialGovernanceParams(): URLSearchParams {
-  const initial = readAdminLocation();
+  const initial = readWorkspaceLocation();
   return initial.isAdmin && initial.section === "governance" ? initial.params : new URLSearchParams();
 }
 
@@ -481,7 +481,7 @@ function PolicyDiffTable({ rows, language }: { rows: PolicyDiffRow[]; language: 
 
 export function GovernanceWorkspace({ user, data }: Props) {
   const { language } = useLanguage();
-  const location = useAdminLocation();
+  const location = useWorkspaceLocation();
   const onGovernanceSection = location.isAdmin && location.section === "governance";
 
   const [tab, setTab] = useState<GovernanceTab>(() =>
@@ -593,7 +593,7 @@ export function GovernanceWorkspace({ user, data }: Props) {
   // Hidden sections must never rewrite the visible route.
   const writeGovernanceParams = (updates: Record<string, string | null>, replace = true) => {
     if (!(location.isAdmin && location.section === "governance")) return;
-    setAdminLocation("governance", updates, replace);
+    setWorkspaceLocation("governance", updates, replace);
   };
 
   const selectTab = (next: GovernanceTab) => {

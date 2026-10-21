@@ -197,6 +197,85 @@ describe("testing operations store", () => {
     expect(second.nextCursor).toBeUndefined();
   });
 
+  it("separates Passed from Incomplete by re-derived validity, not capture-time claims", () => {
+    // Otherwise-passing recording (full transcript, mic audio, low latency) that
+    // is too short: quality re-derives to "pass" but validity to "invalid" — the
+    // exact Passed/Incomplete mismatch. Its capture-time snapshot claims "valid"
+    // to prove the filter trusts the re-derived classification, not the payload.
+    saveTestingSession(sessionEvidence("too-short-pass", "", "", { endedAt: 3_000, durationMs: 400 }));
+    saveTestingSession(sessionEvidence("valid-pass", "", "", { endedAt: 2_000 }));
+
+    // Testing Passed = quality pass AND re-derived validity valid: the too-short
+    // recording must be excluded even though ?quality=pass alone would match it.
+    const passed = storedTestingSessionPage({ quality: "pass", validity: "valid" });
+    expect(passed.items.map((session) => session.sessionId)).toEqual(["valid-pass"]);
+    expect(passed.total).toBe(1);
+
+    // Testing Incomplete = re-derived validity invalid with no quality filter:
+    // the too-short recording surfaces with its pass quality intact.
+    const incomplete = storedTestingSessionPage({ validity: "invalid" });
+    expect(incomplete.items.map((session) => session.sessionId)).toEqual(["too-short-pass"]);
+    expect(incomplete.total).toBe(1);
+    expect(incomplete.items[0]).toMatchObject({
+      quality: "pass",
+      validity: { status: "invalid" },
+      capturedValidity: { status: "valid" }
+    });
+
+    // Validity-only "valid" works symmetrically, without a quality filter.
+    const validOnly = storedTestingSessionPage({ validity: "valid" });
+    expect(validOnly.items.map((session) => session.sessionId)).toEqual(["valid-pass"]);
+
+    // Administration's existing quality-only filter is intentionally unchanged:
+    // quality=pass still returns both, so the two workspaces may disagree on
+    // purpose rather than share a single broken bucket.
+    const adminPass = storedTestingSessionPage({ quality: "pass" });
+    expect(adminPass.items.map((session) => session.sessionId)).toEqual(["too-short-pass", "valid-pass"]);
+    expect(adminPass.total).toBe(2);
+  });
+
+  it("counts and paginates validity-filtered evidence before slicing", () => {
+    // Interleave otherwise-passing too-short recordings (quality pass, validity
+    // invalid) with genuinely valid ones so a naive "page the quality matches
+    // then drop invalids" cannot fabricate a full first page or the right total.
+    for (const [sessionId, endedAt, durationMs] of [
+      ["short-a", 6_000, 400],
+      ["valid-a", 5_000, 4_000],
+      ["short-b", 4_000, 400],
+      ["valid-b", 3_000, 4_000],
+      ["valid-c", 2_000, 4_000],
+      ["short-c", 1_000, 400]
+    ] as const) {
+      saveTestingSession(sessionEvidence(sessionId, "", "", { endedAt, durationMs }));
+    }
+
+    const first = storedTestingSessionPage({ quality: "pass", validity: "valid", limit: 2 });
+    expect(first.items.map((session) => session.sessionId)).toEqual(["valid-a", "valid-b"]);
+    expect(first.total).toBe(3);
+    expect(first.nextCursor).toBeDefined();
+
+    const second = storedTestingSessionPage({ quality: "pass", validity: "valid", limit: 2, cursor: first.nextCursor });
+    expect(second.items.map((session) => session.sessionId)).toEqual(["valid-c"]);
+    // The count is taken before pagination: later pages report the full total.
+    expect(second.total).toBe(3);
+    expect(second.nextCursor).toBeUndefined();
+  });
+
+  it("keeps validity filtering scoped to the authenticated tester, not a forged testerId", () => {
+    saveTestingSession(sessionEvidence("a-short", "", "", { testerId: "rider-a", endedAt: 3_000, durationMs: 400 }));
+    saveTestingSession(sessionEvidence("b-short", "", "", { testerId: "rider-b", endedAt: 2_000, durationMs: 400 }));
+
+    // rider-a sees their own invalid recording.
+    const own = storedTestingSessionPage({ validity: "invalid" }, "rider-a");
+    expect(own.items.map((session) => session.sessionId)).toEqual(["a-short"]);
+
+    // A forged testerId naming rider-b must never surface rider-b's rows to an
+    // authenticated rider-a, even when the validity filter matches them.
+    const forged = storedTestingSessionPage({ validity: "invalid", testerId: "rider-b" }, "rider-a");
+    expect(forged.items.map((session) => session.sessionId)).not.toContain("b-short");
+    expect(forged.items.every((session) => session.testerId === "rider-a")).toBe(true);
+  });
+
   it("only credits matching decision-grade evidence to an assignment", () => {
     const active = getActiveTestingPolicy();
     createTestingPolicy(

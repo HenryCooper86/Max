@@ -43,10 +43,11 @@ const log = createLogger("testing-store");
 export class TestingEvidenceReadError extends Error {}
 
 /** Upper bound on rows scanned when filtering the evidence page by re-derived
- * quality (which has no SQL column, so it is filtered in memory). Scoped to the
- * most recent matching sessions so a growing store can't load unbounded rows on
- * one request; hitting it is logged rather than silently truncating the totals. */
-const QUALITY_FILTER_SCAN_LIMIT = 5000;
+ * quality or validity (neither has a SQL column, so both are filtered in
+ * memory). Scoped to the most recent matching sessions so a growing store
+ * can't load unbounded rows on one request; hitting it is logged rather than
+ * silently truncating the totals. */
+const REEVALUATED_FILTER_SCAN_LIMIT = 5000;
 
 let databaseInstance: DatabaseSync | null = null;
 let databaseEpoch = 0;
@@ -473,12 +474,13 @@ export function storedTestingSessionPage(
     );
     parameters.push(query.reviewStatus);
   }
-  // NOTE: quality is deliberately NOT a SQL predicate. Every returned row's
-  // quality is re-derived against the current catalog (reevaluateStoredSession
-  // below), so filtering/counting on the frozen json_extract(payload_json,
-  // '$.quality') disagreed with the classification actually shown — it hid a
-  // now-failing row from ?quality=fail and surfaced rows under ?quality=watch
-  // that render as "fail". Applied in memory instead (see the branch below).
+  // NOTE: quality and validity are deliberately NOT SQL predicates. Every
+  // returned row's quality/validity is re-derived against the current catalog
+  // (reevaluateStoredSession below), so filtering/counting on the frozen
+  // json_extract(payload_json, '$.quality'/'$.validity') disagreed with the
+  // classification actually shown — it hid a now-failing row from ?quality=fail
+  // and surfaced rows under ?quality=watch that render as "fail". Applied in
+  // memory instead (see the branch below).
   const search = cleanString(query.search, "", 160).toLowerCase();
   if (search) {
     const escaped = search.replace(/[\\%_]/g, (character) => `\\${character}`);
@@ -497,25 +499,31 @@ export function storedTestingSessionPage(
     session.endedAt < cursor.endedAt ||
     (session.endedAt === cursor.endedAt && session.sessionId < cursor.sessionId);
 
-  if (query.quality) {
-    // Re-derived quality has no SQL column, so filter, count, and paginate in
-    // memory after reevaluateStoredSession. Bounded to the most recent
-    // QUALITY_FILTER_SCAN_LIMIT sessions matching the other predicates so a
-    // growing store cannot load unbounded rows on a single request.
+  if (query.quality || query.validity) {
+    // Re-derived quality/validity have no SQL column, so filter, count, and
+    // paginate in memory after reevaluateStoredSession. Bounded to the most
+    // recent REEVALUATED_FILTER_SCAN_LIMIT sessions matching the other
+    // predicates so a growing store cannot load unbounded rows on a single
+    // request.
     const scanned = database()
       .prepare(`SELECT payload_json FROM testing_sessions ${baseWhere} ORDER BY ended_at DESC, session_id DESC LIMIT ?`)
-      .all(...parameters, QUALITY_FILTER_SCAN_LIMIT) as Array<{ payload_json?: string }>;
-    if (scanned.length === QUALITY_FILTER_SCAN_LIMIT) {
-      log.warn("quality filter scan hit its bound; totals cover the most recent sessions only", {
+      .all(...parameters, REEVALUATED_FILTER_SCAN_LIMIT) as Array<{ payload_json?: string }>;
+    if (scanned.length === REEVALUATED_FILTER_SCAN_LIMIT) {
+      log.warn("re-evaluated quality/validity filter scan hit its bound; totals cover the most recent sessions only", {
         scanned: scanned.length,
-        quality: query.quality
+        quality: query.quality,
+        validity: query.validity
       });
     }
     const matches = scanned
       .map((row) => decodeStoredSession(row.payload_json))
       .map(observedSession)
       .map(evaluateReadableStoredSession)
-      .filter((session) => session.quality === query.quality);
+      .filter(
+        (session) =>
+          (!query.quality || session.quality === query.quality) &&
+          (!query.validity || session.validity.status === query.validity)
+      );
     const afterCursorMatches = matches.filter(afterCursor);
     const items = afterCursorMatches.slice(0, limit);
     const lastItem = items.at(-1);

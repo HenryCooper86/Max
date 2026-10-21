@@ -3,7 +3,7 @@ import { adminAccountApi, inviteUrl, type AdminOverview, type AuthUser } from ".
 import { useLanguage } from "../LanguageToggle";
 import { localized, type Language } from "../../lib/i18n";
 import { adminRoleLabel, confirmationCopy, formatAdminRelativeTime } from "./admin-model";
-import { readAdminLocation, setAdminLocation, useAdminLocation } from "./admin-location";
+import { readWorkspaceLocation, setWorkspaceLocation, useWorkspaceLocation } from "./workspace-location";
 
 const INVITE_EXPIRING_SOON_MS = 2 * 24 * 60 * 60 * 1000;
 
@@ -62,7 +62,7 @@ export function AccountManagement({
   onAuthenticationExpired: () => void;
 }) {
   const { language } = useLanguage();
-  const location = useAdminLocation();
+  const location = useWorkspaceLocation();
   const onAccountsSection = location.isAdmin && location.section === "accounts";
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [status, setStatus] = useState<LoadStatus>("loading");
@@ -73,7 +73,7 @@ export function AccountManagement({
   const [createdCopied, setCreatedCopied] = useState(false);
   const [manualInviteUrl, setManualInviteUrl] = useState<string | null>(null);
   const [accountFilter, setAccountFilter] = useState<string>(() => {
-    const initial = readAdminLocation();
+    const initial = readWorkspaceLocation();
     return initial.isAdmin && initial.section === "accounts" ? (initial.params.get("q") ?? "") : "";
   });
   const [armedDelete, setArmedDelete] = useState<string | null>(null);
@@ -182,7 +182,7 @@ export function AccountManagement({
     setAccountFilter(value);
     // Hidden sections must never rewrite the visible route.
     if (!(location.isAdmin && location.section === "accounts")) return;
-    setAdminLocation("accounts", { q: value === "" ? null : value });
+    setWorkspaceLocation("accounts", { q: value === "" ? null : value });
   };
 
   const beginMutation = (target: string): AccountMutation => {

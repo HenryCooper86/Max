@@ -17,7 +17,7 @@ import {
   testingAssignmentStatusLabel,
   testingRunStatusLabel
 } from "./admin-model";
-import { readAdminLocation, setAdminLocation, useAdminLocation } from "./admin-location";
+import { readWorkspaceLocation, setWorkspaceLocation, useWorkspaceLocation } from "./workspace-location";
 import type { AdminTestingData } from "./useAdminTestingData";
 
 type BusyTarget =
@@ -105,7 +105,7 @@ function busyTargetKey(target: Exclude<BusyTarget, null>) {
 
 export function ReleaseValidation({ agent, user, data }: Props) {
   const { language } = useLanguage();
-  const { section, params, navigate } = useAdminLocation();
+  const { section, params, navigate } = useWorkspaceLocation();
   const isReviewer = user.role === "admin" || user.role === "reviewer";
   const isAdmin = user.role === "admin";
   const currentBuild = agent.health?.build?.gitCommit ?? "local";
@@ -288,10 +288,10 @@ export function ReleaseValidation({ agent, user, data }: Props) {
   };
 
   const writeRunParam = (runId: string, replace: boolean) => {
-    const location = readAdminLocation();
+    const location = readWorkspaceLocation();
     // Async completions can fire while another section is active; never hijack its URL.
     if (!location.isAdmin || location.section !== "releases") return;
-    setAdminLocation("releases", { run: runId }, replace);
+    setWorkspaceLocation("releases", { run: runId }, replace);
   };
 
   const selectRun = (runId: string) => {

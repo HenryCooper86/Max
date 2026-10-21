@@ -30,11 +30,19 @@ import {
   testingReviewSeverityLabel,
   testingReviewStatusLabel
 } from "./admin-model";
-import { readAdminLocation, setAdminLocation, useAdminLocation } from "./admin-location";
+import { readWorkspaceLocation, setWorkspaceLocation, useWorkspaceLocation } from "./workspace-location";
+import {
+  testingFeedbackLabel,
+  testingInvalidReasonLabel,
+  testingPlatformLabel,
+  testingQualityLabel,
+  testingSessionResult,
+  testingSessionTitle
+} from "./testing-presentation";
 import type { AdminTestingData } from "./useAdminTestingData";
 import type { TesterSessionSummary } from "../../../shared/agent";
 
-const TEST_QUALITY_FILTERS = ["all", "pass", "watch", "fail"] as const;
+const TEST_QUALITY_FILTERS = ["all", "pass", "watch", "fail", "incomplete"] as const;
 type TestQualityFilter = (typeof TEST_QUALITY_FILTERS)[number];
 type QualityCounts = Record<TestingQuality, number>;
 type PendingNoteSave = {
@@ -105,15 +113,86 @@ function sameReviewDraft(left: ReviewDraftFields, right: ReviewDraftFields) {
   );
 }
 
-function testQualityLabel(quality: TestQualityFilter, language: Language) {
-  if (quality === "all") return localized(language, "全部", "All");
-  if (quality === "pass") return "PASS";
-  if (quality === "watch") return "WATCH";
-  return "FAIL";
+/**
+ * Plain-language reasons for evaluation checks, keyed by check id. Never
+ * renders `check.detail` (it can carry technical codes) and never echoes an
+ * unknown id: unmapped checks get a meaningful generic label.
+ */
+const CHECK_REASON_LABELS: Record<string, [string, string]> = {
+  errors: ["服务出现错误", "Server errors occurred"],
+  latency: ["响应太慢", "Responses were too slow"],
+  "tts-fallback": ["语音播报使用了备用通道", "Spoken audio used a fallback voice"],
+  "mic-audio": ["没有收到麦克风音频", "No microphone audio was captured"],
+  transcript: ["缺少对话内容", "The conversation transcript is missing"],
+  "exchange-shape": ["对话轮次不完整", "The conversation exchange is incomplete"],
+  "response-order": ["回复顺序或时机不符合要求", "Reply order or timing did not meet the plan"],
+  "wake-word": ["唤醒词处理不符合要求", "Wake-word handling did not meet the plan"],
+  language: ["回复语言不符合要求", "Reply language did not meet the plan"],
+  "tester-feedback": ["测试员标记了对话问题", "The tester flagged conversation problems"],
+  safety: ["包含不安全的骑行建议", "Contained unsafe riding advice"],
+  emergency: ["缺少可执行的紧急指引", "Missing actionable emergency guidance"],
+  adas: ["缺少安全警报提示", "Missing the safety alert"],
+  "wind-noise-signal": ["未按风噪场景回应", "Did not handle the wind or noise scenario"],
+  "network-recovery-signal": ["未按弱网场景回应", "Did not handle the degraded-network scenario"]
+};
+
+type PlainEvidenceSession = {
+  validity?: { status: string; reasons: string[] };
+  turns: { feedback?: string }[];
+  evaluation: { checks: { id: string; status: string }[] };
+};
+
+/** Concise human result line for session rows: no scores, no telemetry. */
+function sessionResultSummary(session: PlainEvidenceSession, language: Language) {
+  if (session.validity?.status === "invalid") {
+    return localized(language, "记录不完整，需要重测", "Incomplete recording, needs repeating");
+  }
+  const issues = sessionIssueCount(session);
+  if (issues > 0) {
+    return localized(language, `${issues} 个待处理的问题`, `${issues} issue${issues === 1 ? "" : "s"} to address`);
+  }
+  return localized(language, "未发现问题", "No issues found");
+}
+
+/**
+ * Actionable plain-language reasons derived from check ids/status, flagged
+ * turns, and validity reasons. Raw `check.detail` is deliberately never used;
+ * a Set keeps the reasons deduplicated in first-mention order.
+ */
+function sessionActionableReasons(session: PlainEvidenceSession, language: Language) {
+  const reasons = new Set<string>();
+  for (const check of session.evaluation.checks) {
+    if (check.status !== "fail" && check.status !== "warn") continue;
+    const pair = CHECK_REASON_LABELS[check.id];
+    const label =
+      check.id === "latency" && check.status === "warn"
+        ? localized(
+            language,
+            "没有记录到回复时间，请重测以确认响应速度。",
+            "Response timing was not recorded. Repeat the test to check responsiveness."
+          )
+        : pair
+          ? localized(language, pair[0], pair[1])
+          : localized(language, "一项检查未通过", "A check did not pass");
+    reasons.add(label);
+  }
+  const flagged = flaggedTurns(session);
+  const hasTesterFeedbackCheck = session.evaluation.checks.some(
+    (check) => check.id === "tester-feedback" && (check.status === "fail" || check.status === "warn")
+  );
+  if (flagged > 0 && !hasTesterFeedbackCheck) {
+    reasons.add(
+      localized(language, `测试员标记了 ${flagged} 处对话问题`, `The tester flagged ${flagged} conversation turns`)
+    );
+  }
+  if (session.validity?.status === "invalid") {
+    for (const reason of session.validity.reasons) reasons.add(testingInvalidReasonLabel(reason, language));
+  }
+  return [...reasons];
 }
 
 function parseQualityFilter(value: string | null): TestQualityFilter {
-  return value === "pass" || value === "watch" || value === "fail" ? value : "all";
+  return value === "pass" || value === "watch" || value === "fail" || value === "incomplete" ? value : "all";
 }
 
 function parseReviewStatusFilter(value: string | null): ReviewStatusFilter {
@@ -124,13 +203,13 @@ function parsePlatformFilter(value: string | null): PlatformFilter {
   return PLATFORM_FILTERS.includes(value as PlatformFilter) ? (value as PlatformFilter) : "";
 }
 
-function parseDetailTab(value: string | null, canReview: boolean): DetailTab {
+function parseDetailTab(value: string | null, canReview: boolean, technicalMode: boolean): DetailTab {
   const tab = DETAIL_TABS.includes(value as DetailTab) ? (value as DetailTab) : "conversation";
-  return tab === "review" && !canReview ? "conversation" : tab;
-}
-
-function testQualityClass(quality: TestingQuality) {
-  return quality === "pass" ? "good" : quality === "watch" ? "warn" : "alert";
+  if (tab === "review" && !canReview) return "conversation";
+  // Raw diagnostics are technical-only: a deep link (or browser Back/Forward)
+  // can never open them in the plain testing view.
+  if (tab === "diagnostics" && !technicalMode) return "conversation";
+  return tab;
 }
 
 function emptyQualityCounts(): QualityCounts {
@@ -206,6 +285,7 @@ function sessionMatchesFilters(
   filters: {
     testerId: string;
     quality: TestQualityFilter;
+    validity?: "valid" | "invalid";
     build: string;
     platform: PlatformFilter;
     reviewStatus: ReviewStatusFilter;
@@ -213,7 +293,9 @@ function sessionMatchesFilters(
   }
 ) {
   if (filters.testerId && session.testerId !== filters.testerId) return false;
-  if (filters.quality !== "all" && session.quality !== filters.quality) return false;
+  if (filters.quality !== "all" && filters.quality !== "incomplete" && session.quality !== filters.quality)
+    return false;
+  if (filters.validity && session.validity.status !== filters.validity) return false;
   if (filters.platform && session.platform !== filters.platform) return false;
   const build = filters.build.trim().toLowerCase();
   if (build && !`${session.appVersion} ${session.gitCommit}`.toLowerCase().includes(build)) return false;
@@ -263,6 +345,12 @@ type Props = {
   agent: HelmetAgent;
   user: AuthUser;
   data: AdminTestingData;
+  /**
+   * Technical (administration) rendering for reviewer/admin accounts. The
+   * plain testing view is human-only; testers never get technical mode, even
+   * if a caller passes true.
+   */
+  technical?: boolean;
 };
 
 export function EvidenceWorkspace({
@@ -272,10 +360,11 @@ export function EvidenceWorkspace({
   onRequestedSessionHandled,
   agent,
   user,
-  data
+  data,
+  technical = false
 }: Props) {
   const { language } = useLanguage();
-  const location = useAdminLocation();
+  const location = useWorkspaceLocation();
   const [query, setQuery] = useState("");
   const [testerIdFilter, setTesterIdFilter] = useState("");
   const [qualityFilter, setQualityFilter] = useState<TestQualityFilter>("all");
@@ -462,22 +551,33 @@ export function EvidenceWorkspace({
   const selectedTesterTurns = selectedTester?.recentTurns ?? [];
   const canClear = user.role === "admin";
   const canReview = user.role === "admin" || user.role === "reviewer";
+  // Technical rendering is an authorization decision, not a URL decision: it
+  // requires a reviewer/admin account AND the administration panel. Testers
+  // never see raw identifiers, telemetry, or diagnostics.
+  const technicalMode = canReview && technical;
 
   const serverQuery = useMemo(
     () => ({
       search: query.trim() || undefined,
       testerId: testerIdFilter || undefined,
-      quality: qualityFilter === "all" ? undefined : qualityFilter,
-      build: buildFilter.trim() || undefined,
+      quality: qualityFilter === "all" || qualityFilter === "incomplete" ? undefined : qualityFilter,
+      validity:
+        qualityFilter === "incomplete"
+          ? ("invalid" as const)
+          : qualityFilter === "all"
+            ? undefined
+            : ("valid" as const),
+      build: technicalMode ? buildFilter.trim() || undefined : undefined,
       platform: platformFilter || undefined,
       reviewStatus: canReview && reviewFilter !== "all" ? reviewFilter : undefined
     }),
-    [buildFilter, canReview, platformFilter, qualityFilter, query, reviewFilter, testerIdFilter]
+    [buildFilter, canReview, platformFilter, qualityFilter, query, reviewFilter, testerIdFilter, technicalMode]
   );
   const searchActive = Boolean(
     serverQuery.search ||
     serverQuery.testerId ||
     serverQuery.quality ||
+    serverQuery.validity ||
     serverQuery.build ||
     serverQuery.platform ||
     serverQuery.reviewStatus
@@ -547,6 +647,9 @@ export function EvidenceWorkspace({
   const selectedSessionTurns = selectedSession?.turns ?? [];
   const selectedTesterCounts = selectedTester?.qualityCounts ?? emptyQualityCounts();
   const selectedSessionIssues = selectedSession ? sessionIssueCount(selectedSession) : 0;
+  const selectedPlainResult = selectedSession ? testingSessionResult(selectedSession, language) : null;
+  const selectedPlainReasons =
+    selectedSession && !technicalMode ? sessionActionableReasons(selectedSession, language) : [];
   const selectedTestRequirements = testRequirementLabels(selectedTestCase, language);
   const totalDownBytes = (testingTotals?.audioDownBytes ?? 0) + (testingTotals?.controlDownBytes ?? 0);
   const totalBandwidthBytes = (testingTotals?.audioUpBytes ?? 0) + totalDownBytes;
@@ -599,17 +702,18 @@ export function EvidenceWorkspace({
 
   const writeEvidenceUrl = useCallback((updates: Record<string, string | null>) => {
     // A hidden evidence panel must never rewrite the route of the section the
-    // operator is actually looking at.
-    const current = readAdminLocation();
-    if (!current.isAdmin || current.section !== "evidence") return;
+    // operator is actually looking at. The authored URL preserves the exact
+    // workspace (testing or admin) the operator is in.
+    const current = readWorkspaceLocation();
+    if (!current.isWorkspace || current.section !== "evidence" || !current.workspace) return;
     const params = new URLSearchParams(current.params);
     for (const [key, value] of Object.entries(updates)) {
       if (value === null || value === "") params.delete(key);
       else params.set(key, value);
     }
-    lastEvidenceUrlRef.current = params.toString();
+    lastEvidenceUrlRef.current = `${current.workspace}/evidence?${params.toString()}`;
     sawOtherSectionRef.current = false;
-    setAdminLocation("evidence", updates, true);
+    setWorkspaceLocation("evidence", updates, true, current.workspace);
   }, []);
 
   const currentEvidenceUpdates = useCallback((): Record<string, string | null> => {
@@ -619,13 +723,13 @@ export function EvidenceWorkspace({
       q: queryRef.current || null,
       tester: testerIdFilterRef.current || null,
       quality: qualityFilterRef.current === "all" ? null : qualityFilterRef.current,
-      build: buildFilterRef.current || null,
+      build: technicalMode ? buildFilterRef.current || null : null,
       platform: platformFilterRef.current || null,
       review: canReview && reviewFilterRef.current !== "all" ? reviewFilterRef.current : null,
       tab: tab === "conversation" ? null : tab,
       reviewId: focusedReviewIdRef.current
     };
-  }, [canReview]);
+  }, [canReview, technicalMode]);
 
   const selectSession = useCallback(
     (
@@ -686,10 +790,17 @@ export function EvidenceWorkspace({
       setQuery(params.get("q") ?? "");
       setTesterIdFilter(params.get("tester") ?? "");
       setQualityFilter(parseQualityFilter(params.get("quality")));
-      setBuildFilter(params.get("build") ?? "");
+      setBuildFilter(technicalMode ? (params.get("build") ?? "") : "");
       setPlatformFilter(parsePlatformFilter(params.get("platform")));
       setReviewFilter(parseReviewStatusFilter(params.get("review")));
-      setDetailTab(parseDetailTab(params.get("tab"), canReview));
+      const tabParam = params.get("tab");
+      setDetailTab(parseDetailTab(tabParam, canReview, technicalMode));
+      // A diagnostics deep link is technical-only: normalize the URL instead
+      // of ever rendering raw telemetry in the plain testing view. This also
+      // covers browser Back/Forward arrivals.
+      if (!technicalMode && (tabParam === "diagnostics" || params.has("build"))) {
+        writeEvidenceUrl({ build: null, ...(tabParam === "diagnostics" ? { tab: null } : {}) });
+      }
       const reviewIdParam = canReview ? params.get("reviewId") : null;
       const focused = reviewIdParam ? operationReviews.find((review) => review.id === reviewIdParam) : undefined;
       setFocusedReviewId(focused ? reviewIdParam : null);
@@ -704,7 +815,7 @@ export function EvidenceWorkspace({
         clearSelectedSession({ writeUrl: false });
       }
     },
-    [canReview, clearSelectedSession, operationReviews, selectSession]
+    [canReview, clearSelectedSession, operationReviews, selectSession, technicalMode, writeEvidenceUrl]
   );
 
   // Draft store scope: rehydrate the account's stashed drafts once on mount;
@@ -734,24 +845,37 @@ export function EvidenceWorkspace({
   }, [user]);
 
   // URL → state hydration. Shares the shell's hash URL so a session, filters
-  // and tab survive reload and Back/Forward. Round-trips through another admin
-  // section keep the mounted state (and its unsaved drafts) untouched.
+  // and tab survive reload and Back/Forward, in either workspace. Round-trips
+  // through another section keep the mounted state (and its unsaved drafts)
+  // untouched.
   useEffect(() => {
-    if (!location.isAdmin || location.section !== "evidence") {
+    if (!location.isWorkspace || location.section !== "evidence" || !location.workspace) {
       sawOtherSectionRef.current = true;
       return;
     }
     const url = location.params.toString();
-    const current = readAdminLocation();
-    if (!current.isAdmin || current.section !== "evidence" || current.params.toString() !== url) return;
+    const current = readWorkspaceLocation();
+    if (
+      !current.isWorkspace ||
+      current.section !== "evidence" ||
+      !current.workspace ||
+      current.params.toString() !== url
+    ) {
+      return;
+    }
+    // The self-authored guard includes the workspace: switching between the
+    // testing and administration panels keeps this instance mounted, and an
+    // authored URL must never be mistaken for a foreign snapshot (or vice
+    // versa) when the panel changes.
+    const routeKey = `${current.workspace}/evidence?${url}`;
     if (lastEvidenceUrlRef.current === null) {
-      lastEvidenceUrlRef.current = url;
+      lastEvidenceUrlRef.current = routeKey;
       if (location.params.size > 0 && !requestedSessionId) applyEvidenceParams(location.params);
       return;
     }
-    if (url === lastEvidenceUrlRef.current && !sawOtherSectionRef.current) return;
+    if (routeKey === lastEvidenceUrlRef.current && !sawOtherSectionRef.current) return;
     if (requestedSessionId) {
-      lastEvidenceUrlRef.current = url;
+      lastEvidenceUrlRef.current = routeKey;
       return;
     }
     if (sawOtherSectionRef.current && location.params.size === 0) {
@@ -762,9 +886,20 @@ export function EvidenceWorkspace({
       return;
     }
     sawOtherSectionRef.current = false;
-    lastEvidenceUrlRef.current = url;
+    lastEvidenceUrlRef.current = routeKey;
     applyEvidenceParams(location.params);
   }, [applyEvidenceParams, currentEvidenceUpdates, location, requestedSessionId, writeEvidenceUrl]);
+
+  // Losing technical authority (a panel switch away from administration, or a
+  // permission change) must close an open diagnostics view before anything
+  // can render raw telemetry.
+  useEffect(() => {
+    if (technicalMode) return;
+    if (detailTab !== "diagnostics" && !buildFilter) return;
+    if (detailTab === "diagnostics") setDetailTab("conversation");
+    if (buildFilter) setBuildFilter("");
+    writeEvidenceUrl({ build: null, ...(detailTab === "diagnostics" ? { tab: null } : {}) });
+  }, [buildFilter, detailTab, technicalMode, writeEvidenceUrl]);
 
   useEffect(() => {
     // Evidence, notes, and review drafts are scoped to the authenticated identity
@@ -838,9 +973,10 @@ export function EvidenceWorkspace({
     return () => window.clearTimeout(timer);
   }, [active, clearSearch, reviewFilterRevision, searchActive, searchSessions, serverQuery]);
 
-  const incomingSessionId = location.isAdmin && location.section === "evidence" ? location.params.get("session") : null;
+  const incomingSessionId =
+    location.isWorkspace && location.section === "evidence" ? location.params.get("session") : null;
   const incomingFilters =
-    location.isAdmin &&
+    location.isWorkspace &&
     location.section === "evidence" &&
     Boolean(
       location.params.get("q") ||
@@ -874,7 +1010,8 @@ export function EvidenceWorkspace({
     const matches = sessionMatchesFilters(selectedPredicateSummary, {
       testerId: testerIdFilter,
       quality: qualityFilter,
-      build: buildFilter,
+      validity: serverQuery.validity,
+      build: serverQuery.build ?? "",
       platform: platformFilter,
       reviewStatus: canReview ? reviewFilter : "all",
       reviewStatusesOfSession: reviewStatusesBySession.get(selectedPredicateSummary.sessionId)
@@ -883,7 +1020,8 @@ export function EvidenceWorkspace({
     claimEvidenceNavigationIntent();
     clearSelectedSession();
   }, [
-    buildFilter,
+    serverQuery.build,
+    serverQuery.validity,
     canReview,
     clearSelectedSession,
     claimEvidenceNavigationIntent,
@@ -937,9 +1075,10 @@ export function EvidenceWorkspace({
   // focused review as soon as it exists, without overriding a dirty draft.
   useEffect(() => {
     if (!canReview || focusedReviewId || reviewDraftDirtyRef.current) return;
-    const params = readAdminLocation().params;
-    const reviewIdParam = params.get("reviewId");
-    const sessionParam = params.get("session");
+    const handoff = readWorkspaceLocation();
+    if (!handoff.isWorkspace || handoff.section !== "evidence") return;
+    const reviewIdParam = handoff.params.get("reviewId");
+    const sessionParam = handoff.params.get("session");
     if (!reviewIdParam || !sessionParam || sessionParam !== selectedSessionId) return;
     if (!operationReviews.some((review) => review.id === reviewIdParam)) return;
     setFocusedReviewId(reviewIdParam);
@@ -1465,18 +1604,18 @@ export function EvidenceWorkspace({
 
   const resultCountLabel = searchActive
     ? data.searchStatus === "loading"
-      ? localized(language, "正在搜索全部证据…", "Searching all evidence…")
+      ? localized(language, "正在搜索测试记录…", "Searching test records…")
       : data.searchStatus === "error"
         ? localized(language, "搜索失败。", "Search failed.")
         : localized(
             language,
-            `服务器匹配 ${data.searchTotal} 条 · 已显示 ${visibleSessions.length}`,
-            `${data.searchTotal} matching on server · ${visibleSessions.length} shown`
+            `显示 ${visibleSessions.length} 条，共 ${data.searchTotal} 条${qualityFilter === "all" ? "匹配" : "近期匹配"}记录`,
+            `Showing ${visibleSessions.length} of ${data.searchTotal} matching ${qualityFilter === "all" ? "" : "recent "}records`
           )
     : localized(
         language,
-        `已加载 ${testingSessions.length}/${data.sessionTotal}`,
-        `Loaded ${testingSessions.length}/${data.sessionTotal}`
+        `显示 ${testingSessions.length} 条，共 ${data.sessionTotal} 条记录`,
+        `Showing ${testingSessions.length} of ${data.sessionTotal} records`
       );
 
   const testerClearIds = selectedTester
@@ -1488,7 +1627,11 @@ export function EvidenceWorkspace({
       <section
         ref={workspaceRef}
         className="adminSectionCard testingPanel"
-        aria-label="证据与问题"
+        aria-label={
+          technicalMode
+            ? localized(language, "证据与诊断", "Evidence diagnostics")
+            : localized(language, "测试结果", "Test results")
+        }
         aria-busy={data.status === "loading"}
         hidden={!active}
         inert={!active ? true : undefined}
@@ -1496,8 +1639,8 @@ export function EvidenceWorkspace({
       >
         <p className="adminWorkspaceLoading">
           {data.status === "loading"
-            ? localized(language, "正在加载证据与问题…", "Loading evidence and issues…")
-            : localized(language, "暂无可用证据数据。", "No evidence data available.")}
+            ? localized(language, "正在加载测试记录…", "Loading test records…")
+            : localized(language, "暂无可用的测试记录。", "No test records available.")}
         </p>
       </section>
     );
@@ -1507,64 +1650,81 @@ export function EvidenceWorkspace({
     <section
       ref={workspaceRef}
       className="adminSectionCard testingPanel"
-      aria-label="证据与问题"
+      data-detail-open={mobileDetailOpen || undefined}
+      aria-label={
+        technicalMode
+          ? localized(language, "证据与诊断", "Evidence diagnostics")
+          : localized(language, "测试结果", "Test results")
+      }
       hidden={!active}
       inert={!active ? true : undefined}
       tabIndex={-1}
     >
       <div className="panelHeader">
         <div>
-          <h2>{localized(language, "证据与问题", "Evidence & issues")}</h2>
+          <h2>
+            {technicalMode
+              ? localized(language, "证据与诊断", "Evidence diagnostics")
+              : localized(language, "对话与结果", "Conversations & results")}
+          </h2>
           <span>
-            {testing
+            {technicalMode
               ? `${testing.windowMinutes} ${localized(language, "分钟", "min")} · ${testing.users.length} ${localized(language, "位测试员", "testers")}`
-              : localized(language, "等待证据", "Waiting for evidence")}
-            {agent.health?.build ? ` · ${localized(language, "构建", "Build")} ${agent.health.build.gitCommit}` : ""}
+              : localized(language, "查看对话、测试结果和反馈。", "Read conversations, test results, and feedback.")}
+            {technicalMode && agent.health?.build
+              ? ` · ${localized(language, "构建", "Build")} ${agent.health.build.gitCommit}`
+              : ""}
           </span>
         </div>
         <div className="panelActions">
-          <span>
-            {corpusIssueCount(testerUsers)} {localized(language, "项待复核", "to review")}
-          </span>
-          <button
-            type="button"
-            onClick={() => exportTestingReport(agent.health, agent.testerId, agent.testerRegion, testing)}
-          >
-            {localized(language, "导出统计", "Export stats")}
-          </button>
-          <details className="evidenceTools">
-            <summary>{localized(language, "更多操作", "More actions")}</summary>
-            <div className="evidenceToolsMenu">
+          {technicalMode ? (
+            <span>
+              {corpusIssueCount(testerUsers)} {localized(language, "项待复核", "to review")}
+            </span>
+          ) : null}
+          {technicalMode ? (
+            <>
               <button
                 type="button"
-                className={`danger adminDanger ${armedAction === "clear-all" ? "armed" : ""}`}
-                disabled={busyAction !== null || !testerUsers.length || !canClear}
-                title={
-                  canClear ? undefined : localized(language, "需要管理员权限", "Administrator permission required")
-                }
-                onClick={() =>
-                  arm(
-                    "clear-all",
-                    () =>
-                      void runClear(
-                        "clear-all",
-                        { scope: "all" },
-                        localized(language, "全部测试证据", "all testing evidence"),
-                        Object.keys(notesStashRef.current).concat(Object.keys(reviewStashRef.current))
-                      )
-                  )
-                }
+                onClick={() => exportTestingReport(agent.health, agent.testerId, agent.testerRegion, testing)}
               >
-                {armedAction === "clear-all"
-                  ? confirmationCopy(
-                      "all-evidence",
-                      localized(language, "全部测试证据", "all testing evidence"),
-                      language
-                    )
-                  : localized(language, "清除全部证据", "Clear all evidence")}
+                {localized(language, "导出统计", "Export stats")}
               </button>
-            </div>
-          </details>
+              <details className="evidenceTools">
+                <summary>{localized(language, "更多操作", "More actions")}</summary>
+                <div className="evidenceToolsMenu">
+                  <button
+                    type="button"
+                    className={`danger adminDanger ${armedAction === "clear-all" ? "armed" : ""}`}
+                    disabled={busyAction !== null || !testerUsers.length || !canClear}
+                    title={
+                      canClear ? undefined : localized(language, "需要管理员权限", "Administrator permission required")
+                    }
+                    onClick={() =>
+                      arm(
+                        "clear-all",
+                        () =>
+                          void runClear(
+                            "clear-all",
+                            { scope: "all" },
+                            localized(language, "全部测试证据", "all testing evidence"),
+                            Object.keys(notesStashRef.current).concat(Object.keys(reviewStashRef.current))
+                          )
+                      )
+                    }
+                  >
+                    {armedAction === "clear-all"
+                      ? confirmationCopy(
+                          "all-evidence",
+                          localized(language, "全部测试证据", "all testing evidence"),
+                          language
+                        )
+                      : localized(language, "清除全部证据", "Clear all evidence")}
+                  </button>
+                </div>
+              </details>
+            </>
+          ) : null}
         </div>
       </div>
 
@@ -1572,35 +1732,33 @@ export function EvidenceWorkspace({
 
       <div className="testingFilterBar">
         <label className="evidenceSearchInput">
-          <span>{localized(language, "搜索证据", "Search evidence")}</span>
+          <span>{localized(language, "搜索测试记录", "Search test records")}</span>
           <input
             value={query}
             onChange={(event) => setFilterQuery(event.target.value)}
-            placeholder={localized(
-              language,
-              "转写、用例、设备、构建或备注…",
-              "Transcripts, cases, devices, builds, notes…"
-            )}
+            placeholder={localized(language, "转写、用例、设备或备注…", "Transcripts, cases, devices, notes…")}
             autoComplete="off"
             spellCheck={false}
           />
         </label>
-        <label>
-          <span>{localized(language, "测试员", "Tester")}</span>
-          <select value={testerIdFilter} onChange={(event) => setFilterTester(event.target.value)}>
-            <option value="">{localized(language, "全部测试员", "All testers")}</option>
-            {agent.testerId ? (
-              <option value={agent.testerId}>
-                {localized(language, "当前测试员", "Current tester")} · {agent.testerId}
-              </option>
-            ) : null}
-            {testerUsers.map((tester) => (
-              <option key={tester.testerKey} value={tester.testerId}>
-                {tester.testerId}
-              </option>
-            ))}
-          </select>
-        </label>
+        {canReview ? (
+          <label>
+            <span>{localized(language, "测试员", "Tester")}</span>
+            <select value={testerIdFilter} onChange={(event) => setFilterTester(event.target.value)}>
+              <option value="">{localized(language, "全部测试员", "All testers")}</option>
+              {agent.testerId ? (
+                <option value={agent.testerId}>
+                  {localized(language, "当前测试员", "Current tester")} · {agent.testerId}
+                </option>
+              ) : null}
+              {testerUsers.map((tester) => (
+                <option key={tester.testerKey} value={tester.testerId}>
+                  {tester.testerId}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         <div
           className="qualityFilter"
           role="group"
@@ -1614,7 +1772,9 @@ export function EvidenceWorkspace({
               aria-pressed={qualityFilter === quality}
               onClick={() => setFilterQuality(quality)}
             >
-              {testQualityLabel(quality, language)}
+              {quality === "incomplete"
+                ? localized(language, "记录不完整", "Incomplete recording")
+                : testingQualityLabel(quality, language)}
             </button>
           ))}
         </div>
@@ -1624,16 +1784,18 @@ export function EvidenceWorkspace({
             {searchActive || testerIdFilter ? ` · ${resultCountLabel}` : ""}
           </summary>
           <div className="evidenceFiltersBody">
-            <label>
-              <span>{localized(language, "构建", "Build")}</span>
-              <input
-                value={buildFilter}
-                onChange={(event) => setFilterBuild(event.target.value)}
-                placeholder={localized(language, "版本或提交", "Version or commit")}
-                autoComplete="off"
-                spellCheck={false}
-              />
-            </label>
+            {technicalMode ? (
+              <label>
+                <span>{localized(language, "构建", "Build")}</span>
+                <input
+                  value={buildFilter}
+                  onChange={(event) => setFilterBuild(event.target.value)}
+                  placeholder={localized(language, "版本或提交", "Version or commit")}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </label>
+            ) : null}
             <label>
               <span>{localized(language, "平台", "Platform")}</span>
               <select
@@ -1642,7 +1804,7 @@ export function EvidenceWorkspace({
               >
                 {PLATFORM_FILTERS.map((platform) => (
                   <option key={platform || "all"} value={platform}>
-                    {platform ? platform.toUpperCase() : localized(language, "全部", "All")}
+                    {platform ? testingPlatformLabel(platform, language) : localized(language, "全部", "All")}
                   </option>
                 ))}
               </select>
@@ -1672,15 +1834,17 @@ export function EvidenceWorkspace({
             >
               {localized(language, "重置筛选", "Reset filters")}
             </button>
-            <div className="historyRetention">
-              <span>{localized(language, "证据历史", "Evidence history")}</span>
-              <strong>
-                {testing?.history.persistent
-                  ? localized(language, "持久化", "Persistent")
-                  : localized(language, "内存", "Memory")}{" "}
-                · {resultCountLabel}
-              </strong>
-            </div>
+            {technicalMode ? (
+              <div className="historyRetention">
+                <span>{localized(language, "证据历史", "Evidence history")}</span>
+                <strong>
+                  {testing?.history.persistent
+                    ? localized(language, "持久化", "Persistent")
+                    : localized(language, "内存", "Memory")}{" "}
+                  · {resultCountLabel}
+                </strong>
+              </div>
+            ) : null}
           </div>
         </details>
       </div>
@@ -1691,12 +1855,18 @@ export function EvidenceWorkspace({
             {resultListStatus === "loading"
               ? localized(language, "正在检索…", "Retrieving…")
               : resultListStatus === "error"
-                ? `${localized(language, "搜索失败。", "Search failed.")}${data.searchError ? ` ${data.searchError.message}` : ""}`
+                ? technicalMode
+                  ? `${localized(language, "搜索失败。", "Search failed.")}${data.searchError ? ` ${data.searchError.message}` : ""}`
+                  : localized(
+                      language,
+                      "暂时无法完成搜索，请重试或重置筛选。",
+                      "Search could not be completed. Try again or reset the filters."
+                    )
                 : resultCountLabel}
           </p>
           {visibleSessions.length ? (
             visibleSessions.map((session) => {
-              const issues = sessionIssueCount(session);
+              const result = testingSessionResult(session, language);
               return (
                 <button
                   className={`sessionButton ${selectedSessionId === session.sessionId ? "active" : ""}`}
@@ -1704,25 +1874,14 @@ export function EvidenceWorkspace({
                   type="button"
                   onClick={() => selectSession(session.sessionId)}
                 >
-                  <span className={`sessionQuality ${testQualityClass(session.quality)}`}>
-                    {testQualityLabel(session.quality, language)}
-                  </span>
+                  <span className={`sessionQuality ${result.tone}`}>{result.label}</span>
                   <strong>{formatSessionDate(session.startedAt, language)}</strong>
-                  <span>{session.testCaseName}</span>
+                  <span>{testingSessionTitle(session, language)}</span>
                   <span>{session.testerId}</span>
                   <span>
-                    {formatDuration(session.durationMs)} · {session.platform} ·{" "}
-                    {latencyLabel(session.latencySamples, session.p95LatencyMs)} P95
+                    {formatDuration(session.durationMs)} · {testingPlatformLabel(session.platform, language)}
                   </span>
-                  <span>
-                    {localized(language, "评分", "Score")} {session.evaluation.score} · {issues}{" "}
-                    {localized(language, "个问题", "issues")}
-                  </span>
-                  <span>
-                    {session.validity.status === "valid"
-                      ? localized(language, "有效证据", "Valid evidence")
-                      : session.validity.detail}
-                  </span>
+                  <span>{sessionResultSummary(session, language)}</span>
                 </button>
               );
             })
@@ -1806,49 +1965,53 @@ export function EvidenceWorkspace({
                   <span>{localized(language, "会话回放", "Session replay")}</span>
                   <strong>{formatSessionDate(selectedSession.startedAt, language)}</strong>
                   <p>
-                    {selectedSession.campaignName} · {selectedSession.testCaseName} · {selectedSession.testerId} ·{" "}
-                    {formatDuration(selectedSession.durationMs)} · {selectedSessionIssues}{" "}
-                    {localized(language, "个问题", "issues")}
+                    {technicalMode
+                      ? `${selectedSession.campaignName} · ${selectedSession.testCaseName} · ${selectedSession.testerId} · ${formatDuration(selectedSession.durationMs)} · ${selectedSessionIssues} ${localized(language, "个问题", "issues")}`
+                      : `${testingSessionTitle(selectedSession, language)} · ${selectedSession.testerId} · ${formatDuration(selectedSession.durationMs)}`}
                   </p>
                 </div>
-                <div className="testerConversationActions">
-                  <button
-                    type="button"
-                    onClick={() => selectedSession && exportTestingSession(selectedSession)}
-                    disabled={!selectedSession}
-                  >
-                    {localized(language, "导出会话", "Export session")}
-                  </button>
-                  <button
-                    type="button"
-                    className={`danger adminDanger ${armedAction === `clear-session:${selectedSession.sessionId}` ? "armed" : ""}`}
-                    disabled={busyAction !== null || !canClear}
-                    title={
-                      canClear ? undefined : localized(language, "需要管理员权限", "Administrator permission required")
-                    }
-                    onClick={() => {
-                      const key = `clear-session:${selectedSession.sessionId}`;
-                      arm(
-                        key,
-                        () =>
-                          void runClear(
-                            key,
-                            { scope: "session", sessionId: selectedSession.sessionId },
-                            localized(
-                              language,
-                              `会话 ${selectedSession.sessionId}`,
-                              `session ${selectedSession.sessionId}`
-                            ),
-                            [selectedSession.sessionId]
-                          )
-                      );
-                    }}
-                  >
-                    {armedAction === `clear-session:${selectedSession.sessionId}`
-                      ? confirmationCopy("session", selectedSession.sessionId, language)
-                      : localized(language, "删除会话", "Delete session")}
-                  </button>
-                </div>
+                {technicalMode ? (
+                  <div className="testerConversationActions">
+                    <button
+                      type="button"
+                      onClick={() => selectedSession && exportTestingSession(selectedSession)}
+                      disabled={!selectedSession}
+                    >
+                      {localized(language, "导出会话", "Export session")}
+                    </button>
+                    <button
+                      type="button"
+                      className={`danger adminDanger ${armedAction === `clear-session:${selectedSession.sessionId}` ? "armed" : ""}`}
+                      disabled={busyAction !== null || !canClear}
+                      title={
+                        canClear
+                          ? undefined
+                          : localized(language, "需要管理员权限", "Administrator permission required")
+                      }
+                      onClick={() => {
+                        const key = `clear-session:${selectedSession.sessionId}`;
+                        arm(
+                          key,
+                          () =>
+                            void runClear(
+                              key,
+                              { scope: "session", sessionId: selectedSession.sessionId },
+                              localized(
+                                language,
+                                `会话 ${selectedSession.sessionId}`,
+                                `session ${selectedSession.sessionId}`
+                              ),
+                              [selectedSession.sessionId]
+                            )
+                        );
+                      }}
+                    >
+                      {armedAction === `clear-session:${selectedSession.sessionId}`
+                        ? confirmationCopy("session", selectedSession.sessionId, language)
+                        : localized(language, "删除会话", "Delete session")}
+                    </button>
+                  </div>
+                ) : null}
               </div>
               {noticeElement}
               <div
@@ -1870,27 +2033,31 @@ export function EvidenceWorkspace({
                   tabs[next]?.click();
                 }}
               >
-                {(["conversation", "diagnostics", ...(canReview ? (["review"] as const) : [])] as DetailTab[]).map(
-                  (tab) => (
-                    <button
-                      key={tab}
-                      type="button"
-                      role="tab"
-                      id={`evidence-tab-${tab}`}
-                      aria-controls={`evidence-panel-${tab}`}
-                      tabIndex={detailTab === tab ? 0 : -1}
-                      className={detailTab === tab ? "active" : ""}
-                      aria-selected={detailTab === tab}
-                      onClick={() => setDetailTabWithUrl(tab)}
-                    >
-                      {tab === "conversation"
-                        ? localized(language, "对话", "Conversation")
-                        : tab === "diagnostics"
-                          ? localized(language, "诊断", "Diagnostics")
-                          : localized(language, "复核", "Review")}
-                    </button>
-                  )
-                )}
+                {(
+                  [
+                    "conversation",
+                    ...(technicalMode ? (["diagnostics"] as DetailTab[]) : []),
+                    ...(canReview ? (["review"] as DetailTab[]) : [])
+                  ] as DetailTab[]
+                ).map((tab) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    role="tab"
+                    id={`evidence-tab-${tab}`}
+                    aria-controls={`evidence-panel-${tab}`}
+                    tabIndex={detailTab === tab ? 0 : -1}
+                    className={detailTab === tab ? "active" : ""}
+                    aria-selected={detailTab === tab}
+                    onClick={() => setDetailTabWithUrl(tab)}
+                  >
+                    {tab === "conversation"
+                      ? localized(language, "对话", "Conversation")
+                      : tab === "diagnostics"
+                        ? localized(language, "诊断", "Diagnostics")
+                        : localized(language, "复核", "Review")}
+                  </button>
+                ))}
               </div>
               <div
                 role="tabpanel"
@@ -1898,6 +2065,23 @@ export function EvidenceWorkspace({
                 id={`evidence-panel-${detailTab}`}
                 aria-labelledby={`evidence-tab-${detailTab}`}
               >
+                {detailTab === "conversation" && !technicalMode && selectedPlainResult ? (
+                  <div className="sessionResultSummary">
+                    <span className={`sessionQuality ${selectedPlainResult.tone}`}>{selectedPlainResult.label}</span>
+                    <div>
+                      <strong>{sessionResultSummary(selectedSession, language)}</strong>
+                      {selectedPlainReasons.length ? (
+                        <ul>
+                          {selectedPlainReasons.map((reason) => (
+                            <li key={reason} className="sessionResultReason">
+                              {reason}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
                 {detailTab === "conversation" ? (
                   <div className="sessionTranscriptList">
                     {selectedSessionTurns.length ? (
@@ -1912,7 +2096,9 @@ export function EvidenceWorkspace({
                               {formatClockTime(turn.at)} ·{" "}
                               {turn.final ? localized(language, "最终", "Final") : localized(language, "实时", "Live")}
                             </span>
-                            {turn.feedback ? <span className="turnFlagChip">⚑ {turn.feedback}</span> : null}
+                            {turn.feedback ? (
+                              <span className="turnFlagChip">⚑ {testingFeedbackLabel(turn.feedback, language)}</span>
+                            ) : null}
                           </div>
                           <p>{turn.text}</p>
                         </article>
@@ -1924,11 +2110,11 @@ export function EvidenceWorkspace({
                     )}
                   </div>
                 ) : null}
-                {detailTab === "diagnostics" ? (
+                {technicalMode && detailTab === "diagnostics" ? (
                   <>
                     <div className="sessionMetricGrid">
                       <span>
-                        <b>{testQualityLabel(selectedSession.quality, language)}</b>
+                        <b>{testingQualityLabel(selectedSession.quality, language)}</b>
                         {localized(language, "质量", "Quality")}
                       </span>
                       <span>
@@ -2188,8 +2374,8 @@ export function EvidenceWorkspace({
             <p className="testerConversationEmpty">
               {localized(
                 language,
-                "选择左侧会话即可回放转写、查看诊断并发起复核。",
-                "Pick a session to replay its transcript, inspect diagnostics, and file reviews."
+                "选择左侧会话即可回放对话、查看结果摘要并发起复核。",
+                "Pick a session to replay its conversation, read the result summary, and file reviews."
               )}
             </p>
           )}
@@ -2235,360 +2421,373 @@ export function EvidenceWorkspace({
           ) : null}
         </div>
       </div>
-
-      <details className="adminCollapsible evidenceAggregate">
-        <summary>
-          {localized(language, "测试员总览、历史与聚合诊断", "Testers, history & aggregate diagnostics")}
-        </summary>
-        <div className="statGrid">
-          <span>
-            <b>{testingTotals?.activeTestSessions ?? agent.health?.metrics?.activeSessions ?? 0}</b>
-            {localized(language, "活跃会话", "Active sessions")}
-          </span>
-          <span>
-            <b>{testingTotals?.totalTestSessions ?? 0}</b>
-            {localized(language, "会话总数", "Total sessions")}
-          </span>
-          <span>
-            <b>{formatBytes(testingTotals?.audioUpBytes ?? 0)}</b>
-            {localized(language, "麦克风上行", "Mic uplink")}
-          </span>
-          <span>
-            <b>{formatBytes(totalDownBytes)}</b>
-            {localized(language, "下行", "Downlink")}
-          </span>
-          <span>
-            <b>{latencyLabel(timelineLatencySamples, testingTotals?.avgLatencyMs ?? 0)}</b>
-            {localized(language, "平均首音", "Average first audio")}
-          </span>
-          <span>
-            <b>{latencyLabel(timelineLatencySamples, testingTotals?.p95LatencyMs ?? 0)}</b>
-            P95 {localized(language, "首音", "first audio")}
-          </span>
-          <span>
-            <b>{testingTotals?.errorEvents ?? 0}</b>
-            {localized(language, "错误", "Errors")}
-          </span>
-          <span>
-            <b>{testingTotals?.ttsFallbacks ?? 0}</b>
-            {localized(language, "TTS 回退", "TTS fallback")}
-          </span>
-        </div>
-        <div className="chartGrid">
-          <div className="chartBlock">
-            <div className="instrumentHead">
-              <span>{localized(language, "带宽", "Bandwidth")}</span>
-              <b>{formatBytes(totalBandwidthBytes)}</b>
-            </div>
-            <div className="miniChart" aria-label={localized(language, "最近带宽趋势", "Recent bandwidth trend")}>
-              {testingTimeline.map((bucket) => {
-                const bytes = bucket.audioUpBytes + bucket.audioDownBytes + bucket.controlDownBytes;
-                return (
-                  <i
-                    key={bucket.at}
-                    style={{ height: barHeight(bytes, maxBandwidthBucket) }}
-                    title={`${formatClockTime(bucket.at)} · ${formatBytes(bytes)}`}
-                  />
-                );
-              })}
-            </div>
-            <div className="chartLegend">
+      {technicalMode ? (
+        <>
+          <details className="adminCollapsible evidenceAggregate">
+            <summary>
+              {localized(language, "测试员总览、历史与聚合诊断", "Testers, history & aggregate diagnostics")}
+            </summary>
+            <div className="statGrid">
               <span>
-                {localized(language, "上行", "Uplink")} {formatBytes(testingTotals?.audioUpBytes ?? 0)}
+                <b>{testingTotals?.activeTestSessions ?? agent.health?.metrics?.activeSessions ?? 0}</b>
+                {localized(language, "活跃会话", "Active sessions")}
               </span>
               <span>
-                {localized(language, "下行", "Downlink")} {formatBytes(totalDownBytes)}
-              </span>
-            </div>
-          </div>
-          <div className="chartBlock">
-            <div className="instrumentHead">
-              <span>{localized(language, "首音延迟", "First audio latency")}</span>
-              <b>
-                {timelineLatencySamples > 0 ? `${testingTotals?.p95LatencyMs ?? 0}ms P95` : "—"}{" "}
-                {timelineLatencySamples === 0 ? localized(language, "无样本", "no samples") : ""}
-              </b>
-            </div>
-            <div
-              className="miniChart latencyChart"
-              aria-label={localized(language, "最近首音延迟趋势", "Recent first-audio latency trend")}
-            >
-              {testingTimeline.map((bucket) => (
-                <i
-                  key={bucket.at}
-                  style={{ height: barHeight(bucket.avgLatencyMs, maxLatencyBucket) }}
-                  title={`${formatClockTime(bucket.at)} · ${latencyLabel(bucket.latencySamples, bucket.avgLatencyMs)}`}
-                />
-              ))}
-            </div>
-            <div className="chartLegend">
-              <span>
-                {timelineLatencySamples} {localized(language, "个样本", "samples")}
+                <b>{testingTotals?.totalTestSessions ?? 0}</b>
+                {localized(language, "会话总数", "Total sessions")}
               </span>
               <span>
-                {testingTotals?.errorEvents ?? 0} {localized(language, "个错误", "errors")}
+                <b>{formatBytes(testingTotals?.audioUpBytes ?? 0)}</b>
+                {localized(language, "麦克风上行", "Mic uplink")}
+              </span>
+              <span>
+                <b>{formatBytes(totalDownBytes)}</b>
+                {localized(language, "下行", "Downlink")}
+              </span>
+              <span>
+                <b>{latencyLabel(timelineLatencySamples, testingTotals?.avgLatencyMs ?? 0)}</b>
+                {localized(language, "平均首音", "Average first audio")}
+              </span>
+              <span>
+                <b>{latencyLabel(timelineLatencySamples, testingTotals?.p95LatencyMs ?? 0)}</b>
+                P95 {localized(language, "首音", "first audio")}
+              </span>
+              <span>
+                <b>{testingTotals?.errorEvents ?? 0}</b>
+                {localized(language, "错误", "Errors")}
+              </span>
+              <span>
+                <b>{testingTotals?.ttsFallbacks ?? 0}</b>
+                {localized(language, "TTS 回退", "TTS fallback")}
               </span>
             </div>
-          </div>
-        </div>
-        <div className="testerTableWrap">
-          <div className="testerTableFilter">
-            <label>
-              <span>{localized(language, "查找测试员", "Find tester")}</span>
-              <input
-                value={testerFilter}
-                onChange={(event) => {
-                  setArmedAction(null);
-                  setTesterFilter(event.target.value);
-                }}
-                placeholder={localized(language, "ID、IP 或区域", "ID, IP, or region")}
-                autoComplete="off"
-                spellCheck={false}
-              />
-            </label>
-          </div>
-          <table className="testerTable">
-            <thead>
-              <tr>
-                <th>{localized(language, "测试员", "Tester")}</th>
-                <th>IP / {localized(language, "区域", "Region")}</th>
-                <th>{localized(language, "会话", "Sessions")}</th>
-                <th>{localized(language, "质量", "Quality")}</th>
-                <th>{localized(language, "问题", "Issues")}</th>
-                <th>{localized(language, "时长", "Duration")}</th>
-                <th>{localized(language, "数据量", "Data")}</th>
-                <th>{localized(language, "延迟", "Latency")}</th>
-                <th>{localized(language, "最近活动", "Last activity")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredTesterUsers.length ? (
-                filteredTesterUsers.map((tester) => {
-                  const counts = tester.qualityCounts;
-                  const testerIssues = counts.fail + counts.watch + tester.errorEvents;
-                  return (
-                    <tr
-                      className={selectedTester?.testerKey === tester.testerKey ? "selected" : ""}
-                      key={tester.testerKey}
-                    >
-                      <td>
-                        <button className="testerLink" type="button" onClick={() => setFilterTester(tester.testerId)}>
-                          <strong>{tester.testerId}</strong>
-                          <span>
-                            {tester.activeSessions
-                              ? localized(language, "活跃", "Active")
-                              : `${tester.errorEvents} ${localized(language, "个错误", "errors")}`}
-                          </span>
-                        </button>
-                      </td>
-                      <td>
-                        <button className="testerLink" type="button" onClick={() => setFilterTester(tester.testerId)}>
-                          <strong>{tester.ipAddress}</strong>
-                          <span>{tester.region}</span>
-                        </button>
-                      </td>
-                      <td>{tester.totalSessions}</td>
-                      <td>
-                        <span className="qualityBreakdown">{qualityBreakdownLabel(counts)}</span>
-                      </td>
-                      <td>
-                        <span className={testerIssues ? "issueCount active" : "issueCount"}>{testerIssues}</span>
-                      </td>
-                      <td>{formatDuration(tester.totalSessionMs)}</td>
-                      <td>{formatBytes(tester.audioUpBytes + tester.audioDownBytes + tester.controlDownBytes)}</td>
-                      <td>
-                        {latencyLabel(tester.latencySamples, tester.avgLatencyMs)}/
-                        {latencyLabel(tester.latencySamples, tester.p95LatencyMs)}
-                      </td>
-                      <td>{formatAdminRelativeTime(tester.lastSeenAt, language)}</td>
-                    </tr>
-                  );
-                })
-              ) : (
-                <tr>
-                  <td colSpan={9}>
-                    {testerUsers.length
-                      ? localized(language, "没有匹配筛选条件的测试员", "No testers match the current filters")
-                      : localized(language, "暂无测试会话", "No test sessions")}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-        <div className="testerConversationPanel">
-          <div className="testerConversationHeader">
-            <div>
-              <span>{localized(language, "测试员最近对话", "Tester's recent conversation")}</span>
-              <strong>{selectedTester?.testerId ?? localized(language, "全部测试员", "All testers")}</strong>
-              {selectedTester ? (
-                <p>
-                  {selectedTester.ipAddress} · {selectedTester.region} · {selectedTester.totalSessions}{" "}
-                  {localized(language, "次会话", "sessions")} · {qualityBreakdownLabel(selectedTesterCounts)} ·{" "}
-                  {formatAdminRelativeTime(selectedTester.lastSeenAt, language)}
-                </p>
-              ) : null}
-            </div>
-            <div className="testerConversationActions">
-              <button
-                type="button"
-                className={`danger adminDanger ${armedAction === `clear-tester:${selectedTester?.testerKey}` ? "armed" : ""}`}
-                disabled={busyAction !== null || !selectedTester || !canClear}
-                title={
-                  canClear ? undefined : localized(language, "需要管理员权限", "Administrator permission required")
-                }
-                onClick={() => {
-                  if (!selectedTester) return;
-                  const key = `clear-tester:${selectedTester.testerKey}`;
-                  arm(
-                    key,
-                    () =>
-                      void runClear(
-                        key,
-                        { scope: "tester", testerKey: selectedTester.testerKey },
-                        localized(
-                          language,
-                          `测试员 ${selectedTester.testerId} 的全部证据`,
-                          `all evidence for tester ${selectedTester.testerId}`
-                        ),
-                        testerClearIds
-                      )
-                  );
-                }}
-              >
-                {armedAction === `clear-tester:${selectedTester?.testerKey}` && selectedTester
-                  ? confirmationCopy("tester", selectedTester.testerId, language)
-                  : localized(language, "清除此测试员证据", "Clear this tester's evidence")}
-              </button>
-            </div>
-          </div>
-          <div className="testerConversationList">
-            {selectedTesterTurns.length ? (
-              selectedTesterTurns.map((turn, index) => (
-                <article
-                  className={`testerTurn ${turn.speaker}`}
-                  key={`${turn.sessionId}-${turn.at}-${turn.speaker}-${index}`}
+            <div className="chartGrid">
+              <div className="chartBlock">
+                <div className="instrumentHead">
+                  <span>{localized(language, "带宽", "Bandwidth")}</span>
+                  <b>{formatBytes(totalBandwidthBytes)}</b>
+                </div>
+                <div className="miniChart" aria-label={localized(language, "最近带宽趋势", "Recent bandwidth trend")}>
+                  {testingTimeline.map((bucket) => {
+                    const bytes = bucket.audioUpBytes + bucket.audioDownBytes + bucket.controlDownBytes;
+                    return (
+                      <i
+                        key={bucket.at}
+                        style={{ height: barHeight(bytes, maxBandwidthBucket) }}
+                        title={`${formatClockTime(bucket.at)} · ${formatBytes(bytes)}`}
+                      />
+                    );
+                  })}
+                </div>
+                <div className="chartLegend">
+                  <span>
+                    {localized(language, "上行", "Uplink")} {formatBytes(testingTotals?.audioUpBytes ?? 0)}
+                  </span>
+                  <span>
+                    {localized(language, "下行", "Downlink")} {formatBytes(totalDownBytes)}
+                  </span>
+                </div>
+              </div>
+              <div className="chartBlock">
+                <div className="instrumentHead">
+                  <span>{localized(language, "首音延迟", "First audio latency")}</span>
+                  <b>
+                    {timelineLatencySamples > 0 ? `${testingTotals?.p95LatencyMs ?? 0}ms P95` : "—"}{" "}
+                    {timelineLatencySamples === 0 ? localized(language, "无样本", "no samples") : ""}
+                  </b>
+                </div>
+                <div
+                  className="miniChart latencyChart"
+                  aria-label={localized(language, "最近首音延迟趋势", "Recent first-audio latency trend")}
                 >
-                  <div>
-                    <strong>{turn.speaker === "rider" ? localized(language, "骑手", "Rider") : "Max"}</strong>
-                    <span>
-                      {formatClockTime(turn.at)} ·{" "}
-                      {turn.final ? localized(language, "最终", "Final") : localized(language, "实时", "Live")}
-                    </span>
-                    {turn.feedback ? <span className="turnFlagChip">⚑ {turn.feedback}</span> : null}
-                  </div>
-                  <p>{turn.text}</p>
-                </article>
-              ))
-            ) : (
-              <p className="testerConversationEmpty">
-                {selectedTester
-                  ? localized(language, "尚未捕获对话转写。", "No conversation transcript captured yet.")
-                  : localized(
-                      language,
-                      "在上方表格选择测试员，查看其最近对话。",
-                      "Pick a tester in the table above to see their recent conversation."
-                    )}
-              </p>
-            )}
-          </div>
-        </div>
-      </details>
-
-      <details className="adminCollapsible evidenceExecution">
-        <summary>{localized(language, "测试执行设置", "Test execution setup")}</summary>
-        <div className="testerBar">
-          <label>
-            <span>{localized(language, "测试员 ID", "Tester ID")}</span>
-            <input
-              value={agent.testerId}
-              onChange={(event) => agent.setTesterId(event.target.value)}
-              placeholder="tester-name"
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </label>
-          <div className={`testQuality ${qualityTone}`}>
-            <span>{localized(language, "质量", "Quality")}</span>
-            <strong>
-              {qualityTone === "none"
-                ? localized(language, "无数据", "NO DATA")
-                : qualityTone === "collecting"
-                  ? localized(language, "采集中", "COLLECTING")
-                  : qualityTone === "invalid"
-                    ? localized(language, "无效证据", "INVALID EVIDENCE")
-                    : qualityTone === "good"
-                      ? "PASS"
-                      : qualityTone === "warn"
-                        ? "WATCH"
-                        : "FAIL"}
-            </strong>
-          </div>
-          <div>
-            <span>{localized(language, "当前测试员", "Current tester")}</span>
-            <strong>
-              {currentTester
-                ? `${currentTester.totalSessions} ${localized(language, "次会话", "sessions")}`
-                : localized(language, "新测试员", "New tester")}
-            </strong>
-          </div>
-          <div>
-            <span>IP / {localized(language, "区域", "Region")}</span>
-            <strong>
-              {currentTester
-                ? `${currentTester.ipAddress} · ${currentTester.region}`
-                : `${localized(language, "待采集", "Pending")} · ${agent.testerRegion}`}
-            </strong>
-          </div>
-        </div>
-        <div className="testingWorkflowBar">
-          <label>
-            <span>{localized(language, "测试活动", "Test campaign")}</span>
-            <select
-              value={selectedCampaign.id}
-              onChange={(event) => {
-                setArmedAction(null);
-                agent.setTestingCampaignId(event.target.value);
-              }}
-            >
-              {testingCampaigns.map((campaign) => (
-                <option key={campaign.id} value={campaign.id}>
-                  {campaign.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>{localized(language, "测试用例", "Test case")}</span>
-            <select
-              value={selectedTestCase.id}
-              onChange={(event) => {
-                setArmedAction(null);
-                agent.setTestingTestCaseId(event.target.value);
-              }}
-            >
-              {testCasesForCampaign.map((testCase) => (
-                <option key={testCase.id} value={testCase.id}>
-                  {testCase.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="testCaseBrief">
-            <span>{selectedTestCase.id}</span>
-            <strong>{selectedTestCase.description}</strong>
-            <p>
-              {scenarioLabel(selectedTestCase.scenario)} · {selectedTestCase.rideMode} · P95 ≤{" "}
-              {selectedTestCase.maxP95LatencyMs}ms
-            </p>
-            <div className="testRequirementChips">
-              {selectedTestRequirements.map((requirement) => (
-                <span key={requirement}>{requirement}</span>
-              ))}
+                  {testingTimeline.map((bucket) => (
+                    <i
+                      key={bucket.at}
+                      style={{ height: barHeight(bucket.avgLatencyMs, maxLatencyBucket) }}
+                      title={`${formatClockTime(bucket.at)} · ${latencyLabel(bucket.latencySamples, bucket.avgLatencyMs)}`}
+                    />
+                  ))}
+                </div>
+                <div className="chartLegend">
+                  <span>
+                    {timelineLatencySamples} {localized(language, "个样本", "samples")}
+                  </span>
+                  <span>
+                    {testingTotals?.errorEvents ?? 0} {localized(language, "个错误", "errors")}
+                  </span>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-      </details>
+            <div className="testerTableWrap">
+              <div className="testerTableFilter">
+                <label>
+                  <span>{localized(language, "查找测试员", "Find tester")}</span>
+                  <input
+                    value={testerFilter}
+                    onChange={(event) => {
+                      setArmedAction(null);
+                      setTesterFilter(event.target.value);
+                    }}
+                    placeholder={localized(language, "ID、IP 或区域", "ID, IP, or region")}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </label>
+              </div>
+              <table className="testerTable">
+                <thead>
+                  <tr>
+                    <th>{localized(language, "测试员", "Tester")}</th>
+                    <th>IP / {localized(language, "区域", "Region")}</th>
+                    <th>{localized(language, "会话", "Sessions")}</th>
+                    <th>{localized(language, "质量", "Quality")}</th>
+                    <th>{localized(language, "问题", "Issues")}</th>
+                    <th>{localized(language, "时长", "Duration")}</th>
+                    <th>{localized(language, "数据量", "Data")}</th>
+                    <th>{localized(language, "延迟", "Latency")}</th>
+                    <th>{localized(language, "最近活动", "Last activity")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredTesterUsers.length ? (
+                    filteredTesterUsers.map((tester) => {
+                      const counts = tester.qualityCounts;
+                      const testerIssues = counts.fail + counts.watch + tester.errorEvents;
+                      return (
+                        <tr
+                          className={selectedTester?.testerKey === tester.testerKey ? "selected" : ""}
+                          key={tester.testerKey}
+                        >
+                          <td>
+                            <button
+                              className="testerLink"
+                              type="button"
+                              onClick={() => setFilterTester(tester.testerId)}
+                            >
+                              <strong>{tester.testerId}</strong>
+                              <span>
+                                {tester.activeSessions
+                                  ? localized(language, "活跃", "Active")
+                                  : `${tester.errorEvents} ${localized(language, "个错误", "errors")}`}
+                              </span>
+                            </button>
+                          </td>
+                          <td>
+                            <button
+                              className="testerLink"
+                              type="button"
+                              onClick={() => setFilterTester(tester.testerId)}
+                            >
+                              <strong>{tester.ipAddress}</strong>
+                              <span>{tester.region}</span>
+                            </button>
+                          </td>
+                          <td>{tester.totalSessions}</td>
+                          <td>
+                            <span className="qualityBreakdown">{qualityBreakdownLabel(counts)}</span>
+                          </td>
+                          <td>
+                            <span className={testerIssues ? "issueCount active" : "issueCount"}>{testerIssues}</span>
+                          </td>
+                          <td>{formatDuration(tester.totalSessionMs)}</td>
+                          <td>{formatBytes(tester.audioUpBytes + tester.audioDownBytes + tester.controlDownBytes)}</td>
+                          <td>
+                            {latencyLabel(tester.latencySamples, tester.avgLatencyMs)}/
+                            {latencyLabel(tester.latencySamples, tester.p95LatencyMs)}
+                          </td>
+                          <td>{formatAdminRelativeTime(tester.lastSeenAt, language)}</td>
+                        </tr>
+                      );
+                    })
+                  ) : (
+                    <tr>
+                      <td colSpan={9}>
+                        {testerUsers.length
+                          ? localized(language, "没有匹配筛选条件的测试员", "No testers match the current filters")
+                          : localized(language, "暂无测试会话", "No test sessions")}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <div className="testerConversationPanel">
+              <div className="testerConversationHeader">
+                <div>
+                  <span>{localized(language, "测试员最近对话", "Tester's recent conversation")}</span>
+                  <strong>{selectedTester?.testerId ?? localized(language, "全部测试员", "All testers")}</strong>
+                  {selectedTester ? (
+                    <p>
+                      {selectedTester.ipAddress} · {selectedTester.region} · {selectedTester.totalSessions}{" "}
+                      {localized(language, "次会话", "sessions")} · {qualityBreakdownLabel(selectedTesterCounts)} ·{" "}
+                      {formatAdminRelativeTime(selectedTester.lastSeenAt, language)}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="testerConversationActions">
+                  <button
+                    type="button"
+                    className={`danger adminDanger ${armedAction === `clear-tester:${selectedTester?.testerKey}` ? "armed" : ""}`}
+                    disabled={busyAction !== null || !selectedTester || !canClear}
+                    title={
+                      canClear ? undefined : localized(language, "需要管理员权限", "Administrator permission required")
+                    }
+                    onClick={() => {
+                      if (!selectedTester) return;
+                      const key = `clear-tester:${selectedTester.testerKey}`;
+                      arm(
+                        key,
+                        () =>
+                          void runClear(
+                            key,
+                            { scope: "tester", testerKey: selectedTester.testerKey },
+                            localized(
+                              language,
+                              `测试员 ${selectedTester.testerId} 的全部证据`,
+                              `all evidence for tester ${selectedTester.testerId}`
+                            ),
+                            testerClearIds
+                          )
+                      );
+                    }}
+                  >
+                    {armedAction === `clear-tester:${selectedTester?.testerKey}` && selectedTester
+                      ? confirmationCopy("tester", selectedTester.testerId, language)
+                      : localized(language, "清除此测试员证据", "Clear this tester's evidence")}
+                  </button>
+                </div>
+              </div>
+              <div className="testerConversationList">
+                {selectedTesterTurns.length ? (
+                  selectedTesterTurns.map((turn, index) => (
+                    <article
+                      className={`testerTurn ${turn.speaker}`}
+                      key={`${turn.sessionId}-${turn.at}-${turn.speaker}-${index}`}
+                    >
+                      <div>
+                        <strong>{turn.speaker === "rider" ? localized(language, "骑手", "Rider") : "Max"}</strong>
+                        <span>
+                          {formatClockTime(turn.at)} ·{" "}
+                          {turn.final ? localized(language, "最终", "Final") : localized(language, "实时", "Live")}
+                        </span>
+                        {turn.feedback ? (
+                          <span className="turnFlagChip">⚑ {testingFeedbackLabel(turn.feedback, language)}</span>
+                        ) : null}
+                      </div>
+                      <p>{turn.text}</p>
+                    </article>
+                  ))
+                ) : (
+                  <p className="testerConversationEmpty">
+                    {selectedTester
+                      ? localized(language, "尚未捕获对话转写。", "No conversation transcript captured yet.")
+                      : localized(
+                          language,
+                          "在上方表格选择测试员，查看其最近对话。",
+                          "Pick a tester in the table above to see their recent conversation."
+                        )}
+                  </p>
+                )}
+              </div>
+            </div>
+          </details>
+
+          <details className="adminCollapsible evidenceExecution">
+            <summary>{localized(language, "测试执行设置", "Test execution setup")}</summary>
+            <div className="testerBar">
+              <label>
+                <span>{localized(language, "测试员 ID", "Tester ID")}</span>
+                <input
+                  value={agent.testerId}
+                  onChange={(event) => agent.setTesterId(event.target.value)}
+                  placeholder="tester-name"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </label>
+              <div className={`testQuality ${qualityTone}`}>
+                <span>{localized(language, "质量", "Quality")}</span>
+                <strong>
+                  {qualityTone === "none"
+                    ? localized(language, "无数据", "NO DATA")
+                    : qualityTone === "collecting"
+                      ? localized(language, "采集中", "COLLECTING")
+                      : qualityTone === "invalid"
+                        ? localized(language, "无效证据", "INVALID EVIDENCE")
+                        : qualityTone === "good"
+                          ? "PASS"
+                          : qualityTone === "warn"
+                            ? "WATCH"
+                            : "FAIL"}
+                </strong>
+              </div>
+              <div>
+                <span>{localized(language, "当前测试员", "Current tester")}</span>
+                <strong>
+                  {currentTester
+                    ? `${currentTester.totalSessions} ${localized(language, "次会话", "sessions")}`
+                    : localized(language, "新测试员", "New tester")}
+                </strong>
+              </div>
+              <div>
+                <span>IP / {localized(language, "区域", "Region")}</span>
+                <strong>
+                  {currentTester
+                    ? `${currentTester.ipAddress} · ${currentTester.region}`
+                    : `${localized(language, "待采集", "Pending")} · ${agent.testerRegion}`}
+                </strong>
+              </div>
+            </div>
+            <div className="testingWorkflowBar">
+              <label>
+                <span>{localized(language, "测试活动", "Test campaign")}</span>
+                <select
+                  value={selectedCampaign.id}
+                  onChange={(event) => {
+                    setArmedAction(null);
+                    agent.setTestingCampaignId(event.target.value);
+                  }}
+                >
+                  {testingCampaigns.map((campaign) => (
+                    <option key={campaign.id} value={campaign.id}>
+                      {campaign.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>{localized(language, "测试用例", "Test case")}</span>
+                <select
+                  value={selectedTestCase.id}
+                  onChange={(event) => {
+                    setArmedAction(null);
+                    agent.setTestingTestCaseId(event.target.value);
+                  }}
+                >
+                  {testCasesForCampaign.map((testCase) => (
+                    <option key={testCase.id} value={testCase.id}>
+                      {testCase.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="testCaseBrief">
+                <span>{selectedTestCase.id}</span>
+                <strong>{selectedTestCase.description}</strong>
+                <p>
+                  {scenarioLabel(selectedTestCase.scenario)} · {selectedTestCase.rideMode} · P95 ≤{" "}
+                  {selectedTestCase.maxP95LatencyMs}ms
+                </p>
+                <div className="testRequirementChips">
+                  {selectedTestRequirements.map((requirement) => (
+                    <span key={requirement}>{requirement}</span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </details>
+        </>
+      ) : null}
     </section>
   );
 }

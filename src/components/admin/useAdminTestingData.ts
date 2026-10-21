@@ -7,7 +7,8 @@ import type {
   TestingReview,
   TestingReviewStatus,
   TestingRun,
-  TestingPlatform
+  TestingPlatform,
+  TestingValidityStatus
 } from "../../../shared/testing";
 import type { ApiError, ApiResult } from "../../lib/api-client";
 import type { AuthUser } from "../../lib/auth";
@@ -43,6 +44,7 @@ type EvidenceSearchQuery = {
   search?: string;
   testerId?: string;
   quality?: TestingQuality;
+  validity?: TestingValidityStatus;
   build?: string;
   platform?: TestingPlatform;
   reviewStatus?: TestingReviewStatus;

@@ -6,6 +6,7 @@ import {
   Gauge,
   MapTrifold,
   Pulse,
+  ShieldCheck,
   SlidersHorizontal,
   Trash,
   Waveform,
@@ -45,11 +46,12 @@ import { audioProcessingLabel, exportTranscriptLog } from "../lib/utils";
 type Props = {
   agent: HelmetAgent;
   amapConsent: AmapConsentControls;
-  onOpenAdmin: () => void;
+  onOpenTesting: () => void;
+  onOpenAdmin?: () => void;
   onClose: () => void;
 };
 
-export function WebSettingsSheet({ agent, amapConsent, onOpenAdmin, onClose }: Props) {
+export function WebSettingsSheet({ agent, amapConsent, onOpenTesting, onOpenAdmin, onClose }: Props) {
   const { language, t } = useLanguage();
   const fusedHazard = combineHazardLevels(agent.rideContext.hazardLevel, agent.weather?.riskLevel ?? "normal");
   const latencyTone = agent.latencyMs < 140 ? "good" : agent.latencyMs < 280 ? "warn" : "alert";
@@ -464,14 +466,26 @@ export function WebSettingsSheet({ agent, amapConsent, onOpenAdmin, onClose }: P
           </details>
         </div>
         <footer className="settingsAdminFooter">
-          <button type="button" className="settingsAdminAction" onClick={onOpenAdmin}>
+          <button type="button" className="settingsAdminAction" onClick={onOpenTesting}>
             <Flask size={22} aria-hidden="true" />
             <span>
-              <strong>{t("settings.admin")}</strong>
-              <small>{t("settings.adminHelp")}</small>
+              <strong>{localized(language, "测试", "Testing")}</strong>
+              <small>
+                {localized(language, "测试计划、对话记录和反馈", "Test plans, conversations, and feedback")}
+              </small>
             </span>
-            <span className="settingsAdminActionLabel">{t("settings.openWorkspace")}</span>
+            <span className="settingsAdminActionLabel">{localized(language, "进入测试", "Open testing")}</span>
           </button>
+          {onOpenAdmin ? (
+            <button type="button" className="settingsAdminAction" onClick={onOpenAdmin}>
+              <ShieldCheck size={22} aria-hidden="true" />
+              <span>
+                <strong>{t("settings.admin")}</strong>
+                <small>{t("settings.adminHelp")}</small>
+              </span>
+              <span className="settingsAdminActionLabel">{t("settings.openWorkspace")}</span>
+            </button>
+          ) : null}
         </footer>
       </section>
     </div>

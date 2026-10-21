@@ -497,15 +497,22 @@ manage policy, roles, destructive actions, and release approval. See
 [`docs/live-agent-testing.md`](docs/live-agent-testing.md) for route and workflow
 details.
 
-The web workspace opens from **Settings → Testing & Admin**, or directly at
-`/#/admin/overview`. Sections, selected releases/sessions, and filters have
-shareable URLs and survive refresh and browser Back/Forward. The profile menu
-contains language, password, app-token, memory, and sign-out controls.
-Evidence opens as a searchable list/detail workspace with Conversation,
-Diagnostics, and Review views; search includes transcripts across unloaded
-pages. Unsaved evidence drafts are account/role-scoped in the current browser
-tab and protected on departure. Release approval and policy publication each
-require a separate review/confirmation step.
+The web app has separate **Settings → Testing** and **Settings → Administration**
+entries. Testing opens at `/#/testing/overview`, with `plans` and `evidence`
+pages for assigned work, conversations, readable results, notes, and feedback.
+It does not show build hashes, system IDs, raw check details, or telemetry.
+Incomplete recordings are separate from Passed results, including when their
+automated checks passed. Mobile conversation detail hides the list filters
+until **Back to results**.
+
+Administration opens at `/#/admin/overview` for reviewers and administrators.
+Release validation, technical evidence diagnostics, policy/audit, and admin-only
+account management live there; testers are redirected to Testing. App-token
+copying is available in the Administration profile menu, not Testing.
+Sections, selected releases/sessions, and filters have shareable URLs and
+survive refresh and browser Back/Forward. Evidence drafts are account/role-scoped
+in the current browser tab and survive switching workspaces. Release approval
+and policy publication still require separate review/confirmation steps.
 
 ### `POST /auth/register` · `POST /auth/login` · `POST /auth/logout` · `GET /auth/me`
 

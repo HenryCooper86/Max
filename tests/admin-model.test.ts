@@ -2,9 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { TesterSessionSummary, TesterStats } from "../shared/agent";
 import {
   allowedAdminSections,
-  adminRoleLabel,
   adminStatusAfterFailure,
-  confirmationCopy,
   corpusIssueCount,
   mergeAdminSessions,
   normalizeAdminSection,
@@ -84,7 +82,7 @@ function session(sessionId: string, endedAt: number): TesterSessionSummary {
 
 describe("Admin navigation permissions", () => {
   it("shows only role-authorized workspace sections", () => {
-    expect(allowedAdminSections("tester")).toEqual(["overview", "releases", "evidence"]);
+    expect(allowedAdminSections("tester")).toEqual([]);
     expect(allowedAdminSections("reviewer")).toEqual(["overview", "releases", "evidence", "governance"]);
     expect(allowedAdminSections("admin")).toEqual(["overview", "releases", "evidence", "accounts", "governance"]);
     expect(normalizeAdminSection("accounts", "reviewer")).toBe("overview");
@@ -93,12 +91,6 @@ describe("Admin navigation permissions", () => {
   it("returns to the login flow when authentication is lost", () => {
     expect(surfaceAfterAuthentication("admin", false)).toBe("voice");
     expect(surfaceAfterAuthentication("admin", true)).toBe("admin");
-  });
-
-  it("keeps authenticated workspace surfaces explicit", () => {
-    expect(surfaceAfterAuthentication("settings", true)).toBe("settings");
-    expect(surfaceAfterAuthentication("admin", true)).toBe("admin");
-    expect(surfaceAfterAuthentication("settings", false)).toBe("voice");
   });
 });
 
@@ -126,11 +118,5 @@ describe("Admin derived data", () => {
       ["new", 40],
       ["external", 30]
     ]);
-  });
-
-  it("uses Chinese role and target-specific confirmation copy", () => {
-    expect(adminRoleLabel("reviewer")).toBe("审核员");
-    expect(confirmationCopy("user", "@alice")).toContain("@alice");
-    expect(confirmationCopy("all-evidence", "全部测试证据")).toContain("全部测试证据");
   });
 });

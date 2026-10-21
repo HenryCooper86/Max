@@ -44,6 +44,24 @@
   network (ASR is server-side), and iOS cannot place calls itself — the call
   button needs a human tap.
 
+## 2026-10-20 — Separate Testing and Administration
+
+- Split the web workspace into dedicated Testing and Administration entries,
+  routes and navigation. Testers stay in Testing; reviewer/admin permissions
+  remain enforced independently by the server.
+- Added a concise testing overview and read-only assigned test plans with
+  readable names, instructions, device guidance and scoped progress. Browser
+  task setup respects draft departure guards and supports blocked-run recovery.
+- Removed raw IDs, build hashes, diagnostic tables and raw check details from
+  Testing. Conversations provide plain-language results and feedback; mobile
+  detail hides list filters. Technical diagnostics and management stay in Admin.
+- Separated incomplete recordings from passing results and added current-catalog
+  validity filtering before result totals/pagination. Missing response timing is
+  explained without falsely reporting slow responses; hidden build filters do
+  not carry into Testing.
+- Preserved account/role-scoped drafts across panel switches and reload, and
+  kept browser Back/Forward navigation between the voice app and workspaces.
+
 ## 2026-10-20 — Web admin operations workspace
 
 - Replaced the dark-green, densely stacked admin layout with neutral charcoal

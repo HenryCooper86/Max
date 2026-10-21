@@ -11,39 +11,42 @@ import type { AuthUser } from "../../lib/auth";
 import { formatRelativeTime } from "../../lib/utils";
 import { localized, type Language } from "../../lib/i18n";
 
-export type AppSurface = "voice" | "settings" | "admin";
-export type AdminSection = "overview" | "releases" | "evidence" | "accounts" | "governance";
+export type AppSurface = "voice" | "settings" | "testing" | "admin";
+export type Workspace = "testing" | "admin";
+export type WorkspaceSection = "overview" | "plans" | "releases" | "evidence" | "accounts" | "governance";
 export type AdminDataStatus = "loading" | "ready" | "stale" | "error";
 
 export function adminStatusAfterFailure(hasLoadedData: boolean): AdminDataStatus {
   return hasLoadedData ? "stale" : "error";
 }
 
-const ADMIN_SECTION_LABELS: Record<AdminSection, string> = {
+const ADMIN_SECTION_LABELS: Record<WorkspaceSection, string> = {
   overview: "概览",
+  plans: "测试计划",
   releases: "发布验证",
-  evidence: "证据与问题",
+  evidence: "技术诊断",
   accounts: "账号管理",
   governance: "策略与审计"
 };
 
-const ADMIN_SECTION_LABELS_EN: Record<AdminSection, string> = {
+const ADMIN_SECTION_LABELS_EN: Record<WorkspaceSection, string> = {
   overview: "Overview",
+  plans: "Test plans",
   releases: "Release validation",
-  evidence: "Evidence & issues",
+  evidence: "Diagnostics",
   accounts: "Accounts",
   governance: "Policy & audit"
 };
 
-const BASE_SECTIONS: AdminSection[] = ["overview", "releases", "evidence"];
+const BASE_SECTIONS: WorkspaceSection[] = ["overview", "releases", "evidence"];
 
-export function allowedAdminSections(role: AuthUser["role"]): AdminSection[] {
+export function allowedAdminSections(role: AuthUser["role"]): WorkspaceSection[] {
   if (role === "admin") return [...BASE_SECTIONS, "accounts", "governance"];
   if (role === "reviewer") return [...BASE_SECTIONS, "governance"];
-  return [...BASE_SECTIONS];
+  return [];
 }
 
-export function normalizeAdminSection(section: AdminSection, role: AuthUser["role"]): AdminSection {
+export function normalizeAdminSection(section: WorkspaceSection, role: AuthUser["role"]): WorkspaceSection {
   return allowedAdminSections(role).includes(section) ? section : "overview";
 }
 
@@ -69,7 +72,12 @@ export function adminRoleLabel(role: AuthUser["role"], language: Language = "zh-
   return role === "admin" ? "管理员" : role === "reviewer" ? "审核员" : "测试员";
 }
 
-export function adminSectionLabel(section: AdminSection, language: Language = "zh-CN"): string {
+export function workspaceSectionLabel(
+  section: WorkspaceSection,
+  language: Language = "zh-CN",
+  workspace: Workspace = "admin"
+): string {
+  if (workspace === "testing" && section === "evidence") return localized(language, "测试记录", "Sessions");
   return language === "en-US" ? ADMIN_SECTION_LABELS_EN[section] : ADMIN_SECTION_LABELS[section];
 }
 

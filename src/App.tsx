@@ -10,55 +10,77 @@ import { VoiceTranscript } from "./components/VoiceTranscript";
 import { WebSettingsSheet } from "./components/WebSettingsSheet";
 import { LanguageProvider, useLanguage } from "./components/LanguageToggle";
 import { surfaceAfterAuthentication, type AppSurface } from "./components/admin/admin-model";
-import { leaveAdminLocation, setAdminLocation, useAdminLocation } from "./components/admin/admin-location";
+import {
+  leaveWorkspaceLocation,
+  setWorkspaceLocation,
+  useWorkspaceLocation
+} from "./components/admin/workspace-location";
 import { useAmapConsent } from "./hooks/useAmapConsent";
 import { useHelmetAgent } from "./hooks/useHelmetAgent";
 import { fetchCurrentUser, type AuthUser } from "./lib/auth";
 import { localized } from "./lib/i18n";
 import { voiceFaceClassName } from "./lib/voice-shell";
 
-const AdminWorkspace = lazy(() =>
-  import("./components/admin/AdminWorkspace").then((module) => ({ default: module.AdminWorkspace }))
+const OperationsWorkspace = lazy(() =>
+  import("./components/admin/OperationsWorkspace").then((module) => ({ default: module.OperationsWorkspace }))
 );
 
 function AppContent() {
   const { language, t } = useLanguage();
   const agent = useHelmetAgent();
   const { listening, starting, startMic, stopMic } = agent;
-  const location = useAdminLocation();
-  const lastAdminLocation = useRef({ section: location.section, params: location.params });
+  const location = useWorkspaceLocation();
+  const lastWorkspaceLocation = useRef({
+    workspace: location.workspace,
+    section: location.section,
+    params: location.params
+  });
   const locationQuery = location.params.toString();
-  const [surface, setSurface] = useState<AppSurface>(() => (location.isAdmin ? "admin" : "voice"));
+  const [surface, setSurface] = useState<AppSurface>(() => location.workspace ?? "voice");
   const [captionsOpen, setCaptionsOpen] = useState(false);
   const settingsButtonRef = useRef<HTMLButtonElement>(null);
   const closeSettings = useCallback(() => setSurface("voice"), []);
   const openSettings = useCallback(() => setSurface("settings"), []);
+  const openTesting = useCallback(() => {
+    setWorkspaceLocation("overview", {}, false, "testing");
+    setSurface("testing");
+  }, []);
   const openAdmin = useCallback(() => {
-    setAdminLocation("overview");
+    setWorkspaceLocation("overview", {}, false, "admin");
     setSurface("admin");
   }, []);
-  const closeAdmin = useCallback(() => {
-    if (!window.dispatchEvent(new Event("admin:beforeleave", { cancelable: true }))) return;
+  const closeWorkspace = useCallback(() => {
+    if (!window.dispatchEvent(new Event("admin:beforeleave", { cancelable: true }))) return false;
     window.dispatchEvent(new Event("admin:didleave"));
-    leaveAdminLocation();
+    leaveWorkspaceLocation();
     setSurface("voice");
     window.requestAnimationFrame(() => settingsButtonRef.current?.focus());
+    return true;
   }, []);
 
   useEffect(() => {
-    if (location.isAdmin) {
-      lastAdminLocation.current = { section: location.section, params: new URLSearchParams(locationQuery) };
-      setSurface("admin");
-    } else if (surface === "admin") {
+    if (location.workspace) {
+      lastWorkspaceLocation.current = {
+        workspace: location.workspace,
+        section: location.section,
+        params: new URLSearchParams(locationQuery)
+      };
+      setSurface(location.workspace);
+    } else if (surface === "admin" || surface === "testing") {
       if (!window.dispatchEvent(new Event("admin:beforeleave", { cancelable: true }))) {
-        const previous = lastAdminLocation.current;
-        setAdminLocation(previous.section, Object.fromEntries(previous.params), true);
+        const previous = lastWorkspaceLocation.current;
+        setWorkspaceLocation(
+          previous.section,
+          Object.fromEntries(previous.params),
+          true,
+          previous.workspace ?? undefined
+        );
       } else {
         window.dispatchEvent(new Event("admin:didleave"));
         setSurface("voice");
       }
     }
-  }, [location.isAdmin, location.section, locationQuery, surface]);
+  }, [location.workspace, location.section, locationQuery, surface]);
 
   // Site-wide access gate: once any account exists on the relay, the voice
   // face stays hidden behind authentication. The relay enforces this too.
@@ -199,10 +221,21 @@ function AppContent() {
     );
   }
 
-  if (surface === "admin") {
+  if (surface === "admin" || surface === "testing") {
     return (
-      <Suspense fallback={<main className="adminWorkspace adminWorkspaceLoading">{t("app.loadingAdmin")}</main>}>
-        <AdminWorkspace agent={agent} user={authUser} onAuthenticationExpired={handleSignedOut} onClose={closeAdmin} />
+      <Suspense
+        fallback={
+          <main className="adminWorkspace adminWorkspaceLoading">
+            {localized(language, "正在加载工作区…", "Loading workspace…")}
+          </main>
+        }
+      >
+        <OperationsWorkspace
+          agent={agent}
+          user={authUser}
+          onAuthenticationExpired={handleSignedOut}
+          onClose={closeWorkspace}
+        />
       </Suspense>
     );
   }
@@ -327,7 +360,13 @@ function AppContent() {
       </section>
 
       {surface === "settings" ? (
-        <WebSettingsSheet agent={agent} amapConsent={amapConsent} onOpenAdmin={openAdmin} onClose={closeSettings} />
+        <WebSettingsSheet
+          agent={agent}
+          amapConsent={amapConsent}
+          onOpenTesting={openTesting}
+          onOpenAdmin={authUser.role === "tester" ? undefined : openAdmin}
+          onClose={closeSettings}
+        />
       ) : null}
     </main>
   );

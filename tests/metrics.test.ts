@@ -81,6 +81,27 @@ function seedValidCompletedSession(
   endTesterSession(sessionId, 4_000);
 }
 
+function seedTooShortPassingSession(sessionId: string, testerId: string, endedAt = 1_200) {
+  // A complete transcript plus mic audio so quality stays "pass", but the short
+  // duration re-derives validity as "invalid" (too-short) — the Passed vs
+  // Incomplete mismatch the validity filter must separate.
+  beginTesterSession(
+    sessionId,
+    { testerId, testingTestCaseId: "baseline-live-session", gitCommit: buildInfo.gitCommit },
+    1_000
+  );
+  recordTesterClientAudio(sessionId, 320, 1_100);
+  recordTesterServerEvent(sessionId, { type: "transcript", speaker: "rider", text: "Max, route status?" }, 64, 1_150);
+  recordTesterServerEvent(sessionId, { type: "metric", latencyMs: 180 }, 32, 1_160);
+  recordTesterServerEvent(
+    sessionId,
+    { type: "transcript", speaker: "agent", text: "Route clear. Ride safely." },
+    96,
+    1_170
+  );
+  endTesterSession(sessionId, endedAt);
+}
+
 describe("relay metrics", () => {
   it("tracks the session lifecycle without going negative", () => {
     metrics.sessionOpened();
@@ -457,6 +478,40 @@ describe("relay metrics", () => {
 
     // Review state lives only in the durable index; the fallback refuses to guess.
     expect(() => testingSessionPage({ reviewStatus: "open" })).toThrow(/durable evidence index/i);
+    durableDown.mockRestore();
+  });
+
+  it("filters the in-memory fallback by re-derived validity before counting or scoping", () => {
+    seedTooShortPassingSession("qa-short-pass", "qa-short", 1_300);
+    seedTooShortPassingSession("other-short-pass", "other-rider", 1_200);
+    seedValidCompletedSession("valid-pass", "baseline-live-session");
+
+    const durableDown = vi.spyOn(testingStore, "storedTestingSessionPage").mockImplementation(() => {
+      throw new Error("SQLite unavailable");
+    });
+
+    // Testing Passed excludes too-short recordings even though ?quality=pass
+    // alone would include them; the total reflects only genuinely valid rows.
+    const passed = testingSessionPage({ quality: "pass", validity: "valid" });
+    expect(passed.items.map((session) => session.sessionId)).toEqual(["valid-pass"]);
+    expect(passed.total).toBe(1);
+
+    // Testing Incomplete surfaces both too-short recordings with pass quality intact.
+    const incomplete = testingSessionPage({ validity: "invalid" });
+    expect(incomplete.items.map((session) => session.sessionId)).toEqual(["qa-short-pass", "other-short-pass"]);
+    expect(incomplete.total).toBe(2);
+    expect(incomplete.items.every((session) => session.quality === "pass")).toBe(true);
+    expect(incomplete.items.every((session) => session.validity.status === "invalid")).toBe(true);
+
+    // Authenticated scoping still applies: qa-short sees only their own invalid
+    // recording, and a forged testerId never broadens their scope.
+    expect(testingSessionPage({ validity: "invalid" }, "qa-short").items.map((session) => session.sessionId)).toEqual([
+      "qa-short-pass"
+    ]);
+    const forged = testingSessionPage({ validity: "invalid", testerId: "other-rider" }, "qa-short");
+    expect(forged.items.map((session) => session.sessionId)).not.toContain("other-short-pass");
+    expect(forged.items.every((session) => session.testerId === "qa-short")).toBe(true);
+
     durableDown.mockRestore();
   });
 

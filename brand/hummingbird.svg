@@ -1,7 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <title>Hummingbird</title>
-  <rect width="64" height="64" fill="#0B0C0E" />
-  <path d="M33 27C27 17 18 11 7 9c3 11 11 19 22 23z" fill="#C6F432" />
-  <path d="M43 20c-5-3-11-1-13 4C24 31 17 41 12 55l9-5c9-4 17-11 21-20l1-3 16-6z" fill="#F2F4F5" />
+  <defs>
+    <linearGradient id="wing" x1="7" y1="9" x2="33" y2="32" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#C6F432" />
+      <stop offset="1" stop-color="#2FD08A" />
+    </linearGradient>
+    <linearGradient id="body" x1="50" y1="18" x2="14" y2="56" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2FD08A" />
+      <stop offset="0.55" stop-color="#12B0A0" />
+      <stop offset="1" stop-color="#1C7FD0" />
+    </linearGradient>
+  </defs>
+  <path d="M33 27C27 17 18 11 7 9c3 11 11 19 22 23z" fill="url(#wing)" />
+  <path d="M43 20c-5-3-11-1-13 4C24 31 17 41 12 55l9-5c9-4 17-11 21-20l1-3 16-6z" fill="url(#body)" />
   <circle cx="38.5" cy="24" r="1.9" fill="#0B0C0E" />
+  <circle cx="39.1" cy="23.4" r="0.6" fill="#FFFFFF" />
 </svg>

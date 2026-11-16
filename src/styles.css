@@ -10271,6 +10271,132 @@ button.opsCard:disabled {
   }
 }
 
+/* The app screen in motion. It is a working display, often glanced at while
+   moving, so the motion is brief and stops once a session is live: the screen
+   fades in in order, a new status line fades into place, the controls answer
+   the pointer, and the idle screen invites a start.
+
+   Nothing here moves a control from where the layout puts it. Arrival is a
+   fade, never a slide: the start control has to be exactly where it will be,
+   and tappable, from the first frame. */
+@media (prefers-reduced-motion: no-preference) {
+  .voiceFace > .voiceTopbar,
+  .voiceFace > .voiceHero,
+  .voiceFace > .voiceReadout,
+  .voiceFace > .voiceUtilities,
+  .voiceFace > .voicePrimaryControls {
+    animation: fadeIn 560ms var(--ease-out) both;
+  }
+
+  .voiceFace > .voiceHero {
+    animation-delay: 80ms;
+  }
+
+  .voiceFace > .voiceReadout {
+    animation-delay: 160ms;
+  }
+
+  .voiceFace > .voiceUtilities {
+    animation-delay: 240ms;
+  }
+
+  .voiceFace > .voicePrimaryControls {
+    animation-delay: 320ms;
+  }
+
+  /* A new status line fades into place. */
+  .voiceReadoutState,
+  .voiceReadoutHint {
+    animation: fadeIn 320ms var(--ease-out) both;
+  }
+
+  .voiceReadoutHint {
+    animation-delay: 70ms;
+  }
+
+  /* Cards under the lens, and alerts, fade in instead of appearing. */
+  .voiceRidePanels > * {
+    animation: fadeIn 360ms var(--ease-out) both;
+  }
+
+  .voiceHazard {
+    animation: fadeIn 220ms var(--ease-out) both;
+  }
+
+  /* The pills and the dock answer the pointer. */
+  .voiceUtilities button {
+    transition:
+      transform var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out),
+      background var(--dur-fast) var(--ease-out),
+      border-color var(--dur-fast) var(--ease-out);
+  }
+
+  .voiceUtilities button:hover {
+    transform: translateY(-2px);
+  }
+
+  .voiceUtilities button svg {
+    transition: transform var(--dur-slow) cubic-bezier(0.3, 1.6, 0.5, 1);
+  }
+
+  .voiceUtilities button:hover svg {
+    transform: scale(1.18) rotate(-6deg);
+  }
+
+  .voiceUtilities button:active {
+    transform: translateY(0) scale(0.97);
+  }
+
+  /* Before a session, the microphone key invites a start. Once one is live
+     it is still: nothing on this screen should pull the eye while riding. */
+  .voiceMicButton:not(.active):not(.starting) .voiceMicKey {
+    animation: voiceInvite 2.8s ease-out infinite;
+  }
+
+  @keyframes voiceInvite {
+    0% {
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) calc(var(--glow) * 55%), transparent);
+    }
+    70%,
+    100% {
+      box-shadow: 0 0 0 14px transparent;
+    }
+  }
+
+  /* A connected relay shows a quiet heartbeat. */
+  .voiceTopbar.online .voiceRelayDot {
+    animation: voiceHeartbeat 2.8s ease-out infinite;
+  }
+
+  @keyframes voiceHeartbeat {
+    0% {
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 60%, transparent);
+    }
+    70%,
+    100% {
+      box-shadow: 0 0 0 7px transparent;
+    }
+  }
+
+  /* A slow light behind the idle screen, gone once a session starts. */
+  .voiceFace {
+    isolation: isolate;
+  }
+
+  .voiceFace:has(> .voiceTopbar.inactive)::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 7%, transparent), transparent) no-repeat;
+    background-size: 80% 70%;
+    opacity: var(--glow);
+    pointer-events: none;
+    animation: siteLight 26s ease-in-out infinite alternate;
+  }
+}
+
 /* The configurator in motion: the page arrives in order, each step's fields
    arrive afresh, and a line under the steps shows how far through you are. */
 .buildSteps ol {

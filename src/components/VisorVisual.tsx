@@ -437,8 +437,11 @@ export function VoiceStateReadout({
     const starting = sessionState === "starting";
     return (
       <div className={`voiceReadout ${starting ? "starting" : "welcome"}`} aria-live="polite">
-        <h1 className="voiceReadoutState">{starting ? t("voice.connecting") : t("voice.welcome", { name })}</h1>
-        <p className="voiceReadoutHint">
+        {/* Keyed by what they say, so a new line arrives instead of swapping in place. */}
+        <h1 key={starting ? "starting" : "welcome"} className="voiceReadoutState">
+          {starting ? t("voice.connecting") : t("voice.welcome", { name })}
+        </h1>
+        <p key={starting ? "starting-hint" : "welcome-hint"} className="voiceReadoutHint">
           {starting ? t("voice.setupHint") : t(deviceCopyKey("voice.startHint", assistant.device))}
         </p>
       </div>
@@ -466,8 +469,12 @@ export function VoiceStateReadout({
 
   return (
     <div className={`voiceReadout ${hazard ? `hazard-${hazard}` : turnState}`} aria-live="polite">
-      <h1 className="voiceReadoutState">{caption}</h1>
-      <p className="voiceReadoutHint">{hint}</p>
+      <h1 key={caption} className="voiceReadoutState">
+        {caption}
+      </h1>
+      <p key={hint} className="voiceReadoutHint">
+        {hint}
+      </p>
     </div>
   );
 }

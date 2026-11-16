@@ -271,8 +271,8 @@ time,
 }
 
 .brandLogo.loginMark {
-  width: 44px;
-  height: 44px;
+  width: 30px;
+  height: 30px;
 }
 
 .adminWorkspace .brandLogo.adminWorkspaceLogo {
@@ -2676,62 +2676,346 @@ time,
 /* ============================================================
    Sign-in
    ============================================================ */
+@property --login-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
 .loginShell {
+  position: relative;
+  isolation: isolate;
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   min-height: 100dvh;
-  place-items: center;
-  padding: max(24px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+  /* The backdrop clips itself; the page must still scroll on a short screen. */
+  overflow-x: clip;
+  padding: max(16px, env(safe-area-inset-top)) 20px max(24px, env(safe-area-inset-bottom));
   background: var(--bg);
+}
+
+/* Backdrop: two slow lights, a dot grid that fades towards the edges and a
+   soft light under the pointer. All of it scales with the template's glow, so
+   a high-contrast template can turn it off. */
+.loginAmbient {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  opacity: var(--glow);
+  pointer-events: none;
+}
+
+.loginAmbient > span {
+  position: absolute;
+}
+
+.loginAurora {
+  width: 70vmax;
+  height: 70vmax;
+  border-radius: 50%;
+  will-change: transform;
+}
+
+.loginAurora.a {
+  top: -34vmax;
+  left: -22vmax;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 17%, transparent), transparent);
+  animation: loginDriftA 24s ease-in-out infinite alternate;
+}
+
+.loginAurora.b {
+  right: -30vmax;
+  bottom: -38vmax;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--user) 11%, transparent), transparent);
+  animation: loginDriftB 30s ease-in-out infinite alternate;
+}
+
+.loginGrid {
+  inset: -28px;
+  background-image: radial-gradient(var(--line-strong) 1px, transparent 1.5px);
+  background-size: 28px 28px;
+  mask-image: radial-gradient(ellipse 70% 62% at 50% 45%, #000 10%, transparent 78%);
+  animation: loginGridPan 36s linear infinite;
+}
+
+.loginPointer {
+  inset: 0;
+  background: radial-gradient(
+    420px circle at var(--login-x, 50%) var(--login-y, 32%),
+    color-mix(in srgb, var(--accent) 8%, transparent),
+    transparent 70%
+  );
+}
+
+@keyframes loginDriftA {
+  to {
+    transform: translate(16vmax, 12vmax) scale(1.15);
+  }
+}
+
+@keyframes loginDriftB {
+  to {
+    transform: translate(-14vmax, -10vmax) scale(0.9);
+  }
+}
+
+@keyframes loginGridPan {
+  to {
+    transform: translate(28px, 28px);
+  }
+}
+
+@keyframes loginRise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+}
+
+.loginTop {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  animation: fadeIn 500ms var(--ease-out) both;
+}
+
+.loginTop strong {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font: 600 var(--fs-15) / 1.2 var(--font-display);
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.loginMark {
+  width: 40px;
+  height: 17px;
+  color: var(--accent);
+}
+
+.loginStage {
+  display: grid;
+  width: min(1080px, 100%);
+  min-width: 0;
+  margin: 0 auto;
+  padding: 12px 0 8px;
+  align-content: center;
+  justify-items: center;
+  gap: 22px;
+}
+
+.loginHero {
+  display: grid;
+  width: min(440px, 100%);
+  min-width: 0;
+  justify-items: center;
+  text-align: center;
+}
+
+.loginHero > * {
+  animation: loginRise 620ms var(--ease-out) both;
+}
+
+.loginHero > :nth-child(2) {
+  animation-delay: 70ms;
+}
+
+.loginHero > :nth-child(3) {
+  animation-delay: 130ms;
+}
+
+.loginHero > :nth-child(4) {
+  animation-delay: 190ms;
+}
+
+.loginVisor {
+  width: min(260px, 68%);
+  margin-bottom: 16px;
+}
+
+.loginVisor .visorStage {
+  width: 100%;
+}
+
+.loginHero h1 {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font: 600 clamp(1.5rem, 1.1rem + 2vw, 2.5rem) / 1.1 var(--font-display);
+  letter-spacing: -0.03em;
+}
+
+.loginTagline {
+  margin: 8px 0 0;
+  color: var(--text-2);
+  font-size: var(--fs-15);
+  line-height: 1.5;
+}
+
+/* What the lens is hearing, typed out as it "listens". The dot is the
+   speaker: the wearer's colour while they talk, the accent while the
+   assistant answers. */
+.loginPhrase {
+  display: inline-flex;
+  max-width: 100%;
+  min-width: min(100%, 19em);
+  min-height: 38px;
+  margin: 18px 0 0;
+  padding: 0 14px;
+  align-items: center;
+  gap: 10px;
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--surface-1) 70%, transparent);
+  color: var(--text);
+  font-size: var(--fs-13);
+  text-align: left;
+}
+
+.loginPhraseDot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-3);
+  transition: background var(--dur) var(--ease-out);
+}
+
+.loginPhrase.hearing .loginPhraseDot {
+  background: var(--user);
+}
+
+.loginPhrase.speaking .loginPhraseDot {
+  background: var(--accent);
+  animation: loginPulse 900ms ease-in-out infinite;
+}
+
+.loginPhraseText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.loginPhrase.rest .loginPhraseText,
+.loginPhrase.speaking .loginPhraseText {
+  color: var(--text-2);
+}
+
+.loginCaret {
+  display: inline-block;
+  width: 1.5px;
+  height: 1em;
+  margin-left: 2px;
+  background: currentColor;
+  vertical-align: -0.14em;
+  animation: loginCaret 1s steps(2, jump-none) infinite;
+}
+
+.loginPhrase:not(.hearing) .loginCaret {
+  visibility: hidden;
+}
+
+@keyframes loginCaret {
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes loginPulse {
+  50% {
+    transform: scale(1.7);
+    opacity: 0.55;
+  }
 }
 
 .loginGate {
   display: grid;
   width: min(420px, 100%);
   min-width: 0;
-  gap: 20px;
-  animation: sheetIn var(--dur-slow) var(--ease-out);
-}
-
-.loginBrand {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 14px;
-  padding: 0 4px;
-}
-
-.loginMark {
-  width: 52px;
-  height: 22px;
-}
-
-.loginBrand h1 {
-  margin: 0;
-  overflow-wrap: anywhere;
-  font: 600 var(--fs-22) / 1.15 var(--font-display);
-  letter-spacing: -0.02em;
-}
-
-.loginBrand p {
-  margin: 2px 0 0;
-  color: var(--text-2);
-  font-size: var(--fs-13);
+  gap: 18px;
+  animation: loginRise 620ms var(--ease-out) 240ms both;
 }
 
 .loginCard {
+  position: relative;
   padding: 24px;
   border: var(--line-w) solid var(--line);
   border-radius: var(--radius-card);
-  background: var(--surface-1);
+  background: color-mix(in srgb, var(--surface-1) 84%, transparent);
+  box-shadow: 0 24px 60px -32px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(18px);
+  transition: border-color var(--dur) var(--ease-out);
 }
 
-.loginCard h2 {
+/* A short arc of accent travels round the card's edge. */
+.loginCard::before {
+  content: "";
+  position: absolute;
+  inset: calc(var(--line-w) * -1);
+  padding: 1px;
+  border-radius: inherit;
+  background: conic-gradient(
+    from var(--login-angle),
+    transparent 0 64%,
+    color-mix(in srgb, var(--accent) 90%, transparent) 80%,
+    transparent 92%
+  );
+  mask:
+    linear-gradient(#000 0 0) content-box exclude,
+    linear-gradient(#000 0 0);
+  opacity: var(--glow);
+  pointer-events: none;
+  animation: loginOrbit 7s linear infinite;
+}
+
+@keyframes loginOrbit {
+  to {
+    --login-angle: 360deg;
+  }
+}
+
+.loginCard.refused {
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+}
+
+.loginCard.refused::before {
+  opacity: 0;
+}
+
+.loginEyebrow {
+  display: flex;
   margin: 0;
-  font: 600 var(--fs-17) / 1.3 var(--font-display);
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+  font: 500 var(--fs-12) / 1.3 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.loginEyebrowDot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 60%, transparent);
+  animation: loginBeacon 2.4s ease-out infinite;
+}
+
+@keyframes loginBeacon {
+  70%,
+  100% {
+    box-shadow: 0 0 0 7px transparent;
+  }
 }
 
 .loginHint {
-  margin: 6px 0 20px;
+  margin: 10px 0 20px;
   color: var(--text-2);
   font-size: var(--fs-13);
   line-height: 1.5;
@@ -2739,9 +3023,52 @@ time,
 
 .loginFootnote {
   margin: 0;
-  color: var(--text-2);
+  color: var(--text-3);
   font-size: var(--fs-12);
   text-align: center;
+}
+
+@media (min-width: 960px) {
+  .loginStage {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 420px);
+    align-items: center;
+    gap: 72px;
+    padding: 24px 12px;
+  }
+
+  .loginHero {
+    width: 100%;
+    justify-items: start;
+    text-align: left;
+  }
+
+  .loginVisor {
+    width: min(480px, 100%);
+    margin-bottom: 36px;
+  }
+
+  .loginTagline {
+    font-size: var(--fs-17);
+  }
+
+  .loginPhrase {
+    min-height: 44px;
+    margin-top: 28px;
+    padding: 0 18px;
+    font-size: var(--fs-15);
+  }
+}
+
+@media (max-height: 700px) and (max-width: 959px) {
+  .loginVisor {
+    width: min(220px, 60%);
+    margin-bottom: 12px;
+  }
+
+  .loginStage {
+    gap: 18px;
+    padding-top: 8px;
+  }
 }
 
 /* Account forms: sign-in, registration, password change */
@@ -2780,23 +3107,203 @@ time,
   border-color: var(--accent);
 }
 
+/* Sign-in fields: an icon, and a label that rests in the field and lifts out
+   of the way once there is something in it. */
+.accountField {
+  position: relative;
+  display: block;
+  color: var(--text-3);
+}
+
+.accountFields .accountField input {
+  min-height: 54px;
+  padding: 20px 14px 4px 42px;
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.accountFields .accountField.hasToggle input {
+  padding-right: 48px;
+}
+
+.accountFields .accountField input:focus {
+  outline: 0;
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+
+.accountFields .accountField input:-webkit-autofill {
+  -webkit-text-fill-color: var(--text);
+  caret-color: var(--text);
+  box-shadow: 0 0 0 100px var(--surface-2) inset;
+}
+
+.accountFieldIcon {
+  position: absolute;
+  top: 50%;
+  left: 14px;
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transform: translateY(-50%);
+  pointer-events: none;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.accountField:focus-within {
+  color: var(--accent);
+}
+
+.accountFieldLabel {
+  position: absolute;
+  top: 50%;
+  left: 42px;
+  right: 14px;
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: var(--fs-15);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transform: translateY(-50%);
+  transform-origin: 0 50%;
+  pointer-events: none;
+  transition:
+    transform var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.accountField.hasToggle .accountFieldLabel {
+  right: 48px;
+}
+
+.accountField input:focus ~ .accountFieldLabel,
+.accountField input:not(:placeholder-shown) ~ .accountFieldLabel,
+.accountField input:-webkit-autofill ~ .accountFieldLabel {
+  color: var(--text-2);
+  transform: translateY(-118%) scale(0.78);
+}
+
+.accountField input:focus ~ .accountFieldLabel {
+  color: var(--accent);
+}
+
+.accountFieldEnter {
+  animation: loginRise 320ms var(--ease-out) both;
+}
+
+.accountReveal {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transform: translateY(-50%);
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.accountReveal:hover,
+.accountReveal[aria-pressed="true"] {
+  color: var(--text);
+}
+
+.accountReveal svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .loginCard .accountActions {
   display: grid;
   gap: 4px;
 }
 
 .loginCard .accountActions button[type="submit"] {
-  min-height: 44px;
+  position: relative;
+  display: flex;
+  min-height: 48px;
+  overflow: hidden;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   border: 0;
   border-radius: var(--radius-control);
   background: var(--accent);
   color: var(--on-accent);
   cursor: pointer;
   font-weight: 600;
+  transition:
+    transform var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+
+/* A band of light crosses the button when it is pointed at. */
+.loginCard .accountActions button[type="submit"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, 0.38) 50%, transparent 65%);
+  transform: translateX(-110%);
+  pointer-events: none;
 }
 
 .loginCard .accountActions button[type="submit"]:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 88%, var(--text));
+  box-shadow: 0 10px 28px -12px color-mix(in srgb, var(--accent) calc(var(--glow) * 80%), transparent);
+}
+
+.loginCard .accountActions button[type="submit"]:hover:not(:disabled)::after {
+  transform: translateX(110%);
+  transition: transform 700ms var(--ease-out);
+}
+
+.loginCard .accountActions button[type="submit"]:active:not(:disabled) {
+  transform: scale(0.985);
+}
+
+.loginCard .accountActions button[type="submit"].busy {
+  opacity: 1;
+  background: color-mix(in srgb, var(--accent) 70%, var(--surface-1));
+  cursor: progress;
+}
+
+.accountArrow {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform var(--dur) var(--ease-out);
+}
+
+button:hover:not(:disabled) > .accountArrow {
+  transform: translateX(4px);
+}
+
+.accountSpinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
 }
 
 .loginCard .accountSwitch {
@@ -2816,6 +3323,47 @@ time,
   margin: 0;
   color: var(--danger);
   font-size: var(--fs-13);
+}
+
+.loginCard .accountError {
+  padding: 10px 12px;
+  border-radius: var(--radius-control);
+  background: var(--danger-soft);
+  line-height: 1.45;
+  animation: loginShake 380ms var(--ease-out);
+}
+
+@keyframes loginShake {
+  20% {
+    transform: translateX(-6px);
+  }
+  45% {
+    transform: translateX(5px);
+  }
+  70% {
+    transform: translateX(-3px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loginAurora,
+  .loginGrid,
+  .loginCard::before,
+  .loginEyebrowDot,
+  .loginPhraseDot,
+  .loginCaret,
+  .loginTop,
+  .loginHero > *,
+  .loginGate,
+  .accountFieldEnter,
+  .loginCard .accountError {
+    animation: none;
+  }
+
+  .loginCard::before,
+  .loginCard .accountActions button[type="submit"]::after {
+    display: none;
+  }
 }
 
 /* ============================================================

@@ -2,7 +2,7 @@
 // login/registration form. AccountSessionControls is the authenticated user's
 // profile controls shared by Testing and Administration.
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import {
   authToken,
   changePasswordAccount,
@@ -27,23 +27,55 @@ type FormProps = {
   onSignedIn: (user: AuthUser) => void;
 };
 
-export function AccountForm({ authEnabled, registrationOpen, inviteCode, onSignedIn }: FormProps) {
+/** What the form is doing, for a surface that wants to react to it (the
+ *  sign-in page's lens): a keystroke, a request in flight, a refusal. */
+export type AccountFormActivity = "typing" | "busy" | "error" | "idle";
+
+function FieldIcon({ kind }: { kind: "user" | "lock" | "tag" }) {
+  return (
+    <svg className="accountFieldIcon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+      {kind === "user" ? (
+        <path d="M10 10.2a3.4 3.4 0 1 0 0-6.8 3.4 3.4 0 0 0 0 6.8ZM3.6 16.6c.7-2.6 3.2-4 6.4-4s5.7 1.4 6.4 4" />
+      ) : kind === "lock" ? (
+        <path d="M5.2 9h9.6c.6 0 1 .4 1 1v5.6c0 .6-.4 1-1 1H5.2c-.6 0-1-.4-1-1V10c0-.6.4-1 1-1Zm1.6 0V6.6a3.2 3.2 0 0 1 6.4 0V9" />
+      ) : (
+        <path d="M3.4 4.4c0-.6.4-1 1-1h5.2l7 7-6.2 6.2-7-7V4.4Zm3.4 2.4h.01" />
+      )}
+    </svg>
+  );
+}
+
+export function AccountForm({
+  authEnabled,
+  registrationOpen,
+  inviteCode,
+  onSignedIn,
+  onActivity
+}: FormProps & { onActivity?: (activity: AccountFormActivity) => void }) {
   const { t } = useLanguage();
   const canRegister = registrationOpen || Boolean(inviteCode);
   const [mode, setMode] = useState<"login" | "register">(authEnabled && !inviteCode ? "login" : "register");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Counts refusals so the same message shown twice still replays its motion.
+  const [attempt, setAttempt] = useState(0);
 
   const registering = mode === "register" && canRegister;
+  const typed = (set: (value: string) => void) => (event: ChangeEvent<HTMLInputElement>) => {
+    set(event.target.value);
+    onActivity?.("typing");
+  };
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (busy) return;
     setBusy(true);
     setError(null);
+    onActivity?.("busy");
     const request = registering
       ? registerAccount(username, password, displayName || undefined, inviteCode)
       : loginAccount(username, password);
@@ -51,46 +83,89 @@ export function AccountForm({ authEnabled, registrationOpen, inviteCode, onSigne
       .then((result) => {
         if (result.ok) {
           setPassword("");
+          onActivity?.("idle");
           onSignedIn(result.user);
         } else {
           setError(result.error);
+          setAttempt((count) => count + 1);
+          onActivity?.("error");
         }
       })
       .finally(() => setBusy(false));
   };
 
   return (
-    <form className="accountForm" aria-label={t("account.loginOrRegister")} onSubmit={submit}>
+    <form className="accountForm" aria-label={t("account.loginOrRegister")} aria-busy={busy} onSubmit={submit}>
       <div className="accountFields">
-        <input
-          value={username}
-          onChange={(event) => setUsername(event.target.value)}
-          placeholder={t("account.username")}
-          autoComplete="username"
-          spellCheck={false}
-          required
-        />
-        <input
-          type="password"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          placeholder={registering ? t("account.passwordMin") : t("account.password")}
-          autoComplete={registering ? "new-password" : "current-password"}
-          required
-        />
-        {registering ? (
+        <label className="accountField">
+          <FieldIcon kind="user" />
           <input
-            value={displayName}
-            onChange={(event) => setDisplayName(event.target.value)}
-            placeholder={t("account.displayName")}
-            autoComplete="nickname"
+            value={username}
+            onChange={typed(setUsername)}
+            placeholder=" "
+            autoComplete="username"
+            autoCapitalize="none"
             spellCheck={false}
+            required
           />
+          <span className="accountFieldLabel">{t("account.username")}</span>
+        </label>
+        <label className="accountField hasToggle">
+          <FieldIcon kind="lock" />
+          <input
+            type={showPassword ? "text" : "password"}
+            value={password}
+            onChange={typed(setPassword)}
+            placeholder=" "
+            autoComplete={registering ? "new-password" : "current-password"}
+            autoCapitalize="none"
+            spellCheck={false}
+            required
+          />
+          <span className="accountFieldLabel">{registering ? t("account.passwordMin") : t("account.password")}</span>
+          <button
+            type="button"
+            className="accountReveal"
+            aria-pressed={showPassword}
+            aria-label={showPassword ? t("account.hidePassword") : t("account.showPassword")}
+            onClick={() => setShowPassword((shown) => !shown)}
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+              <path d="M2.2 10s2.8-5 7.8-5 7.8 5 7.8 5-2.8 5-7.8 5-7.8-5-7.8-5Z" />
+              <circle cx="10" cy="10" r="2.3" />
+              {showPassword ? null : <path d="M4 16 16 4" />}
+            </svg>
+          </button>
+        </label>
+        {registering ? (
+          <label className="accountField accountFieldEnter">
+            <FieldIcon kind="tag" />
+            <input
+              value={displayName}
+              onChange={typed(setDisplayName)}
+              placeholder=" "
+              autoComplete="nickname"
+              spellCheck={false}
+            />
+            <span className="accountFieldLabel">{t("account.displayName")}</span>
+          </label>
         ) : null}
       </div>
+      {error ? (
+        <p key={attempt} className="accountError" role="alert">
+          {error}
+        </p>
+      ) : null}
       <div className="accountActions">
-        <button type="submit" disabled={busy}>
-          {registering ? t("account.register") : t("account.login")}
+        <button type="submit" className={busy ? "busy" : undefined} disabled={busy}>
+          <span>{busy ? t("account.working") : registering ? t("account.register") : t("account.login")}</span>
+          {busy ? (
+            <span className="accountSpinner" aria-hidden="true" />
+          ) : (
+            <svg className="accountArrow" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+              <path d="M4 10h11m-4.5-4.5L15 10l-4.5 4.5" />
+            </svg>
+          )}
         </button>
         {canRegister ? (
           <button type="button" className="accountSwitch" onClick={() => setMode(registering ? "login" : "register")}>
@@ -102,11 +177,6 @@ export function AccountForm({ authEnabled, registrationOpen, inviteCode, onSigne
           </button>
         ) : null}
       </div>
-      {error ? (
-        <p className="accountError" role="alert">
-          {error}
-        </p>
-      ) : null}
     </form>
   );
 }

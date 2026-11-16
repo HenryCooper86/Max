@@ -74,6 +74,7 @@ import {
   type TestingValidityStatus
 } from "../shared/testing";
 import { assistantLogo } from "./assistant";
+import { sendBrandLogo } from "./brand-logo-route";
 import { localizeErrors } from "./error-language";
 import { removeStudioLogo, saveStudioConfig, saveStudioLogo, studioState } from "./studio";
 import { loadStudioBackends, saveStudioBackends, studioBackendsState } from "./studio-backends";
@@ -162,18 +163,7 @@ app.use(localizeErrors);
 // sign-in page shows it. An SVG is served under a policy that lets it draw and
 // nothing else, so a logo file can never run script on the relay's origin.
 app.get("/brand/logo", (_req, res) => {
-  const logo = assistantLogo();
-  if (!logo) {
-    res.status(404).json({ ok: false });
-    return;
-  }
-  res.setHeader("Content-Type", logo.contentType);
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox");
-  res.setHeader("Cache-Control", "public, max-age=86400");
-  res.sendFile(logo.path, (error) => {
-    if (error && !res.headersSent) res.status(404).json({ ok: false });
-  });
+  sendBrandLogo(res, assistantLogo());
 });
 
 app.get("/health", (_req, res) => {

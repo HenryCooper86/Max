@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>Hummingbird</title>
+  <rect width="64" height="64" fill="#0B0C0E" />
+  <path d="M33 27C27 17 18 11 7 9c3 11 11 19 22 23z" fill="#C6F432" />
+  <path d="M43 20c-5-3-11-1-13 4C24 31 17 41 12 55l9-5c9-4 17-11 21-20l1-3 16-6z" fill="#F2F4F5" />
+  <circle cx="38.5" cy="24" r="1.9" fill="#0B0C0E" />
+</svg>

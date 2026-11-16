@@ -19,7 +19,7 @@ import { amapCameraPlan, applyAmapCameraPlan } from "../lib/amap-camera";
 import type { AmapLatLng as AMapLatLng } from "../lib/amap-camera";
 import { shouldMountAmapMap } from "../lib/amap-consent";
 import type { AmapConsentDecision } from "../lib/amap-consent";
-import type { NavPhase } from "../lib/navigation";
+import { displayInstruction, NAVIGATION_COPY, type NavPhase } from "../lib/navigation";
 import { localized } from "../lib/i18n";
 import { useLanguage } from "./LanguageToggle";
 
@@ -56,19 +56,7 @@ const PLACEHOLDER_CENTER: AMapLatLng = [116.397428, 39.90923];
 
 // Translate the controller's known UI failures; provider-specific detail stays
 // verbatim, like the destination and route instructions.
-const NAVIGATION_ERROR_COPY = new Map<string, string>([
-  [
-    "请在浏览器设置中允许定位，再重新发起导航。",
-    "Allow location access in your browser settings, then start navigation again."
-  ],
-  ["还没定位到，到室外或空旷处再说一次。", "No location fix yet. Move outdoors or to an open area, then try again."],
-  ["没有找到目的地，请换一个名称重新导航。", "Destination not found. Try navigation again with a different name."],
-  ["地图服务暂不可用，请稍后重新发起导航。", "The map service is unavailable. Try navigation again later."],
-  [
-    "重新规划失败，导航已停止。请稍后重新发起导航。",
-    "Replanning failed and navigation stopped. Try navigation again later."
-  ]
-]);
+const NAVIGATION_ERROR_COPY = new Map<string, string>(Object.values(NAVIGATION_COPY).map((line) => [line.zh, line.en]));
 
 // Module-level (not component-level) so every NavigationPanel mount across
 // the app's lifetime reuses the same script tag/promise instead of injecting
@@ -443,7 +431,7 @@ export function NavigationPanel({
                 "定位信号较弱，导航已暂停。定位恢复后将自动继续。",
                 "Location signal is weak. Navigation is paused and will resume when location recovers."
               )
-            : update.currentInstruction}
+            : (displayInstruction(route.steps[update.progress.maneuverIndex]) ?? update.currentInstruction)}
         </p>
         <p className="navigationDistance" hidden={locationStale}>
           {distanceRounded} {label("米", "m")}
@@ -466,7 +454,7 @@ export function NavigationPanel({
         <ol>
           {route.steps.slice(update.progress.maneuverIndex).map((step, index) => (
             <li key={`${route.commandId}-${index}`}>
-              <strong>{step.instruction}</strong>
+              <strong>{displayInstruction(step)}</strong>
               {!locationStale ? (
                 <span>
                   {label("距当前位置", "From current position")}{" "}

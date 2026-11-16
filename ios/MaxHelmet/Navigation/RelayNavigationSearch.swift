@@ -80,7 +80,8 @@ final class RelayNavigationSearch: NavigationRouteSearching {
                 ManeuverStep(
                     instruction: step.instruction,
                     coordinate: CoordinateDatum.gcj02ToWgs84(step.coordinate),
-                    alongRouteMeters: step.alongRouteMeters
+                    alongRouteMeters: step.alongRouteMeters,
+                    localizedInstruction: step.localizedInstruction
                 )
             },
             totalDistanceMeters: data.distanceMeters,

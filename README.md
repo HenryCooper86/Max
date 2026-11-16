@@ -29,6 +29,10 @@ Everything about the assistant lives in `assistant.config.json` (see `assistant.
 
 The apps read all of this from the relay's `/health`.
 
+**Studio.** An admin can change all of the above from the app, at Admin → Studio, with a live preview; a save applies to new sessions at once. The Studio writes its own `assistant.config.json` under `STUDIO_DIR` (default `~/.horizon-helmet-testing`), outside the app directory so a deploy does not erase it, and that file takes precedence over one beside the code. Voice backends can be set up there too: enter a backend's API key, model and voices, choose the default backend, and decide whether wearers may switch. Keys are write-only — they can be set or cleared, never read back — and are stored in `voice-backends.json` under `STUDIO_DIR` with owner-only permissions. A value cleared in the Studio falls back to what `.env` provides.
+
+**Language.** Each app sends the language it is set to. When the assistant speaks that language it answers in it for the session, and the relay's own lines (device confirmations, failures, route summaries) are spoken in it too. An English app makes the stock Max, who is Chinese-first, answer in English.
+
 **Voice equaliser.** A ten-band graphic equaliser with a preamp. The relay shapes the assistant's speech itself (`server/audio-eq.ts`), so it sounds the same on every client and on a board that plays raw audio. Wearers can tune it per session in Settings unless `VOICE_EQUALIZER_ADJUSTABLE=off`.
 
 **Voice backends** are chosen with `VOICE_PROVIDER` and, per session, from the apps' Settings → Assistant list (only backends that are set up on the relay are selectable; `VOICE_PROVIDER_SWITCHING=off` pins everyone to the default).

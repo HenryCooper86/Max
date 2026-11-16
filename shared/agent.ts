@@ -218,6 +218,10 @@ export type SessionStartEvent = {
    *  Honored only when the relay allows switching and that backend has
    *  credentials; otherwise the relay's default backend is used. */
   voiceProvider?: string;
+  /** The language the wearer's app is set to ("en", "zh", …). The assistant
+   *  answers in it for this session when it is one of the languages the
+   *  assistant speaks; otherwise the assistant's own default applies. */
+  language?: string;
   /** Equaliser for the assistant's voice this session. Honored only when the
    *  relay reports `voice.equalizer.adjustable`. */
   equalizer?: VoiceEqualizer;
@@ -311,7 +315,17 @@ export type ClientEvent =
   | NavPromptEvent
   | VisionFramesEvent;
 
-export type NavManeuver = { instruction: string; lat: number; lon: number; alongRouteMeters: number };
+export type NavManeuver = {
+  /** The routing service's own wording. Clients may parse it (for the turn
+   *  icon, say), so it is never translated in place. */
+  instruction: string;
+  /** The same instruction in the session's language, when that is not the
+   *  routing service's. Show and speak this when present. */
+  localizedInstruction?: string;
+  lat: number;
+  lon: number;
+  alongRouteMeters: number;
+};
 
 /** Client → server: ask the relay to route the rider. `origin` and, when
  *  present, `destination` are GCJ-02, like every nav.* coordinate. */

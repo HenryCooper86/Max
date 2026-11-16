@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Device mark "vr-headset", converted from brand/devices/vr-headset.svg. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="64dp"
+    android:height="64dp"
+    android:viewportWidth="64"
+    android:viewportHeight="64">
+    <path
+        android:pathData="M0,0h64v64h-64z"
+        android:fillColor="#0B0C0E" />
+    <path
+        android:pathData="M12 22h40c3.3 0 6 2.7 6 6v10c0 3.3-2.7 6-6 6H41c-2 0-3.5-1-4.5-2.5L35 40c-1.5-2-4.5-2-6 0l-1.5 1.5C26.5 43 25 44 23 44H12c-3.3 0-6-2.7-6-6V28c0-3.3 2.7-6 6-6z"
+        android:fillColor="#131518"
+        android:strokeColor="#F2F4F5"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M14 32h7l3-4 4 8 4-6 2 2h16"
+        android:strokeColor="#C6F432"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

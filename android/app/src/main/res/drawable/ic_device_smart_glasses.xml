@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Device mark "smart-glasses", converted from brand/devices/smart-glasses.svg. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="64dp"
+    android:height="64dp"
+    android:viewportWidth="64"
+    android:viewportHeight="64">
+    <path
+        android:pathData="M0,0h64v64h-64z"
+        android:fillColor="#0B0C0E" />
+    <path
+        android:pathData="M15,25h7a6,6 0 0 1 6,6v3a6,6 0 0 1 -6,6h-7a6,6 0 0 1 -6,-6v-3a6,6 0 0 1 6,-6z"
+        android:fillColor="#131518"
+        android:strokeColor="#F2F4F5"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M42,25h7a6,6 0 0 1 6,6v3a6,6 0 0 1 -6,6h-7a6,6 0 0 1 -6,-6v-3a6,6 0 0 1 6,-6z"
+        android:fillColor="#131518"
+        android:strokeColor="#F2F4F5"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M28 30c2-2 6-2 8 0M9 30l-4-5M55 30l4-5"
+        android:strokeColor="#F2F4F5"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M49.2,29a1.8,1.8 0 1 0 3.6,0a1.8,1.8 0 1 0 -3.6,0z"
+        android:fillColor="#C6F432"
+        android:strokeColor="#C6F432"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

@@ -70,7 +70,7 @@ function PreviewContent({ style }: { style: VoiceVisualizer }) {
 }
 
 /** A tiny static lens showing one frame of the style. */
-function VisualizerPreview({ style }: { style: VoiceVisualizer }) {
+export function VisualizerPreview({ style }: { style: VoiceVisualizer }) {
   return (
     <svg
       className={`vizPreview ${style}`}

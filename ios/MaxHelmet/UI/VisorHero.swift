@@ -63,9 +63,12 @@ struct VisorView: View {
     let handsFree: Bool
     /// The stage this view fills (also its hit target).
     let stage: CGSize
+    /// Drawing style of the live voice display (wave is the original line).
+    var style: VoiceVisualizer = .wave
     var onTap: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var spectrum = SpectrumState()
 
     /// The stage always has a real size from the layout; never draw into a
     /// degenerate or non-finite coordinate system.
@@ -74,6 +77,8 @@ struct VisorView: View {
     }
 
     var body: some View {
+        // Read the theme here (not inside Canvas) so a template change redraws.
+        let palette = VisorPalette.current
         Button(action: onTap) {
             if drawable {
                 TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { timeline in
@@ -88,7 +93,10 @@ struct VisorView: View {
                         drawVisor(
                             in: &context, size: size, mode: mode, tint: tint,
                             level: Double(max(0, min(1, voiceLevel))), t: t,
-                            lensAspect: HudMetrics.visorAspect
+                            lensAspect: HudMetrics.visorAspect,
+                            palette: palette, style: style, spectrum: spectrum,
+                            reduceMotion: reduceMotion,
+                            clock: timeline.date.timeIntervalSinceReferenceDate
                         )
                     }
                     .opacity(hazardPulse)
@@ -118,9 +126,36 @@ func visorLensRect(in size: CGSize, aspect: CGFloat = HudMetrics.visorAspect) ->
     return CGRect(x: (size.width - w) / 2, y: (size.height - h) / 2, width: w, height: h)
 }
 
+/// The template colours the hero draws with, captured in `body`.
+struct VisorPalette {
+    let rim, glass, rimStroke, glassStroke, textSecondary, textTertiary, text, danger: Color
+    let glow: Double
+
+    static var current: VisorPalette {
+        VisorPalette(
+            rim: Visor.surface2, glass: Visor.bg, rimStroke: Visor.lineStrong, glassStroke: Visor.line,
+            textSecondary: Visor.textSecondary, textTertiary: Visor.textTertiary, text: Visor.text,
+            danger: Visor.danger, glow: Visor.glow
+        )
+    }
+}
+
+func spectrumMode(_ mode: VisorMode) -> SpectrumMode {
+    switch mode {
+    case .idle: return .idle
+    case .connecting: return .connecting
+    case .listening: return .listening
+    case .thinking: return .thinking
+    case .speaking: return .speaking
+    case .offline: return .offline
+    }
+}
+
 private func drawVisor(
     in context: inout GraphicsContext, size: CGSize, mode: VisorMode, tint: Color,
-    level: Double, t: Double, lensAspect: CGFloat
+    level: Double, t: Double, lensAspect: CGFloat,
+    palette: VisorPalette, style: VoiceVisualizer, spectrum: SpectrumState,
+    reduceMotion: Bool, clock: Double
 ) {
     let lens = visorLensRect(in: size, aspect: lensAspect)
     guard lens.width > 0, lens.height > 0 else { return }
@@ -129,7 +164,7 @@ private func drawVisor(
     // The one allowed effect: a faint accent-tinted radial vignette.
     do {
         var c = context
-        let vignetteA = 0.07 + (live ? 0.05 : 0) + 0.06 * level
+        let vignetteA = (0.07 + (live ? 0.05 : 0) + 0.06 * level) * palette.glow
         c.translateBy(x: size.width / 2, y: size.height / 2)
         c.scaleBy(x: size.width / max(size.height, 1), y: 1)
         let r = size.height / 2
@@ -144,14 +179,23 @@ private func drawVisor(
 
     // Rim + lens: flat fills, hairline strokes.
     let rim = Path(roundedRect: lens, cornerRadius: lens.height / 2, style: .continuous)
-    context.fill(rim, with: .color(Visor.surface2))
-    context.stroke(rim, with: .color(live ? tint.opacity(0.55) : Visor.lineStrong), lineWidth: 1)
+    context.fill(rim, with: .color(palette.rim))
+    context.stroke(rim, with: .color(live ? tint.opacity(0.55) : palette.rimStroke), lineWidth: Visor.hairline)
 
     let rimWidth = max(4, lens.height * 0.055)
     let glass = lens.insetBy(dx: rimWidth, dy: rimWidth)
     let glassPath = Path(roundedRect: glass, cornerRadius: glass.height / 2, style: .continuous)
-    context.fill(glassPath, with: .color(Visor.bg))
-    context.stroke(glassPath, with: .color(Visor.line), lineWidth: 1)
+    context.fill(glassPath, with: .color(palette.glass))
+    context.stroke(glassPath, with: .color(palette.glassStroke), lineWidth: Visor.hairline)
+
+    // Spectrum styles replace the waveform; everything else is shared.
+    if style != .wave {
+        drawSpectrumStyle(
+            in: &context, lens: lens, mode: mode, tint: tint, level: level, style: style,
+            spectrum: spectrum, reduceMotion: reduceMotion, clock: clock, palette: palette
+        )
+        return
+    }
 
     // Waveform.
     let inset = glass.height * 0.55
@@ -184,11 +228,11 @@ private func drawVisor(
     switch mode {
     case .idle:
         let pts = wave { u in 0.035 * envelope(u) * sin(u * 7 + t * 0.6) * (0.4 + 0.6 * breathe) }
-        context.stroke(polyline(pts), with: .color(Visor.textSecondary.opacity(0.45 + 0.30 * breathe)), style: style)
+        context.stroke(polyline(pts), with: .color(palette.textSecondary.opacity(0.45 + 0.30 * breathe)), style: style)
 
     case .connecting:
         let flat = wave { _ in 0 }
-        context.stroke(polyline(flat), with: .color(Visor.textTertiary.opacity(0.7)), style: style)
+        context.stroke(polyline(flat), with: .color(palette.textTertiary.opacity(0.7)), style: style)
         let span = 0.24
         let head = (t * 0.7).truncatingRemainder(dividingBy: 1 + span)
         let seg = (0...steps).compactMap { i -> CGPoint? in
@@ -197,7 +241,7 @@ private func drawVisor(
             return flat[i]
         }
         if seg.count > 1 {
-            context.stroke(polyline(seg), with: .color(Visor.text), style: style)
+            context.stroke(polyline(seg), with: .color(palette.text), style: style)
         }
 
     case .listening:
@@ -233,10 +277,113 @@ private func drawVisor(
 
     case .offline:
         let flat = wave { _ in 0 }
-        context.stroke(polyline(flat), with: .color(Visor.textTertiary.opacity(0.4)), style: style)
+        context.stroke(polyline(flat), with: .color(palette.textTertiary.opacity(0.4)), style: style)
         var tick = Path()
         tick.move(to: CGPoint(x: x0 - inset * 0.05, y: midY - halfH * 0.55))
         tick.addLine(to: CGPoint(x: x0 - inset * 0.05, y: midY + halfH * 0.55))
-        context.stroke(tick, with: .color(Visor.danger), style: StrokeStyle(lineWidth: lineW * 1.4, lineCap: .round))
+        context.stroke(tick, with: .color(palette.danger), style: StrokeStyle(lineWidth: lineW * 1.4, lineCap: .round))
+    }
+}
+
+// MARK: - spectrum styles (bars, mirror, dots, ring)
+
+// Geometry in the web's 480x200 lens space, scaled to the lens rect.
+private enum SpectrumGeometry {
+    static let w = 480.0, h = 200.0, mid = 100.0
+    static let left = 96.0, step = 12.0, barWidth = 8.0
+    static let barBase = 152.0, barMax = 106.0, mirrorHalf = 66.0
+    static let dotRows = 9, dotStep = 12.0
+    static let spokes = Spectrum.bins * 2
+    static let ringInner = 36.0, ringReach = 46.0
+    static func columnX(_ i: Int) -> Double { left + Double(i) * step + (step - barWidth) / 2 }
+    static func spokeAngle(_ k: Int) -> Double { Double(k) / Double(spokes) * 2 * .pi - .pi / 2 }
+    /// Spokes mirror the bins left/right so low frequencies sit at the top.
+    static func spokeBin(_ k: Int) -> Int { k < Spectrum.bins ? k : spokes - 1 - k }
+}
+
+private func drawSpectrumStyle(
+    in context: inout GraphicsContext, lens: CGRect, mode: VisorMode, tint: Color, level: Double,
+    style: VoiceVisualizer, spectrum: SpectrumState, reduceMotion: Bool, clock: Double,
+    palette: VisorPalette
+) {
+    typealias G = SpectrumGeometry
+    let sMode = spectrumMode(mode)
+    let values: [Double]
+    let peaks: [Double]
+    if reduceMotion {
+        // One still, representative frame per state.
+        values = Spectrum.synthesize(mode: sMode, level: level, t: 1.2)
+        peaks = values
+    } else {
+        spectrum.advance(mode: sMode, level: level, t: clock)
+        values = spectrum.display
+        peaks = spectrum.peaks
+    }
+    let k = lens.width / G.w
+    func px(_ x: Double) -> CGFloat { lens.minX + CGFloat(x) * k }
+    func py(_ y: Double) -> CGFloat { lens.minY + CGFloat(y) * k }
+
+    switch style {
+    case .wave:
+        break
+    case .bars:
+        for i in 0..<Spectrum.bins {
+            let height = max(2, values[i] * G.barMax)
+            let r = CGRect(x: px(G.columnX(i)), y: py(G.barBase - height), width: CGFloat(G.barWidth) * k, height: CGFloat(height) * k)
+            context.fill(Path(roundedRect: r, cornerRadius: 2 * k), with: .color(tint))
+            let capY = G.barBase - max(2, peaks[i] * G.barMax) - 6
+            let cap = CGRect(x: px(G.columnX(i)), y: py(capY), width: CGFloat(G.barWidth) * k, height: 3 * k)
+            context.fill(Path(roundedRect: cap, cornerRadius: 1.5 * k), with: .color(tint.opacity(0.7)))
+        }
+    case .mirror:
+        var base = Path()
+        base.move(to: CGPoint(x: px(G.left - 8), y: py(G.mid)))
+        base.addLine(to: CGPoint(x: px(G.left + Double(Spectrum.bins) * G.step + 8), y: py(G.mid)))
+        context.stroke(base, with: .color(palette.glassStroke), lineWidth: 1)
+        for i in 0..<Spectrum.bins {
+            let half = max(1, values[i] * G.mirrorHalf)
+            let r = CGRect(x: px(G.columnX(i)), y: py(G.mid - half), width: CGFloat(G.barWidth) * k, height: CGFloat(half * 2) * k)
+            context.fill(Path(roundedRect: r, cornerRadius: 2 * k), with: .color(tint))
+        }
+    case .dots:
+        for i in 0..<Spectrum.bins {
+            let lit = Int((values[i] * Double(G.dotRows)).rounded())
+            let peak = min(G.dotRows - 1, Int((peaks[i] * Double(G.dotRows)).rounded()) - 1)
+            for row in 0..<G.dotRows {
+                let opacity = row < lit ? 1.0 : (row == peak ? 0.7 : 0.14)
+                let cx = G.columnX(i) + G.barWidth / 2
+                let cy = G.barBase - 4 - Double(row) * G.dotStep
+                let r = 3.6 * k
+                context.fill(
+                    Path(ellipseIn: CGRect(x: px(cx) - r, y: py(cy) - r, width: r * 2, height: r * 2)),
+                    with: .color(tint.opacity(opacity))
+                )
+            }
+        }
+    case .ring:
+        var sum = 0.0
+        let centre = CGPoint(x: px(G.w / 2), y: py(G.mid))
+        for s in 0..<G.spokes {
+            let value = values[G.spokeBin(s)]
+            sum += value
+            let a = G.spokeAngle(s)
+            let outer = G.ringInner + 4 + value * G.ringReach
+            var p = Path()
+            p.move(to: CGPoint(x: centre.x + CGFloat(cos(a) * G.ringInner) * k, y: centre.y + CGFloat(sin(a) * G.ringInner) * k))
+            p.addLine(to: CGPoint(x: centre.x + CGFloat(cos(a) * outer) * k, y: centre.y + CGFloat(sin(a) * outer) * k))
+            context.stroke(p, with: .color(tint), style: StrokeStyle(lineWidth: max(1.5, 3 * k), lineCap: .round))
+        }
+        let coreR = (G.ringInner - 10 + sum / Double(G.spokes) * 10) * k
+        context.fill(
+            Path(ellipseIn: CGRect(x: centre.x - coreR, y: centre.y - coreR, width: coreR * 2, height: coreR * 2)),
+            with: .color(tint.opacity(0.35))
+        )
+    }
+
+    if mode == .offline {
+        var tick = Path()
+        tick.move(to: CGPoint(x: px(58), y: py(G.mid - 22)))
+        tick.addLine(to: CGPoint(x: px(58), y: py(G.mid + 22)))
+        context.stroke(tick, with: .color(palette.danger), style: StrokeStyle(lineWidth: max(2, 4 * k), lineCap: .round))
     }
 }

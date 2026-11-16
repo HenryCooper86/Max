@@ -1,5 +1,9 @@
 package com.horizon.maxhelmet.agent
 
+import com.horizon.maxhelmet.ui.tr
+import com.horizon.maxhelmet.ui.Str
+import com.horizon.maxhelmet.ui.AssistantBranding
+
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
@@ -7,6 +11,7 @@ import android.content.pm.PackageManager
 import android.location.LocationManager
 import android.os.Build
 import android.speech.tts.TextToSpeech
+import com.horizon.maxhelmet.ui.Localization
 import android.util.Log
 import com.horizon.maxhelmet.BuildConfig
 import com.horizon.maxhelmet.actions.DeviceActions
@@ -61,7 +66,7 @@ class AgentSession(
     data class State(
         val handsFree: Boolean = false,
         val connection: ConnectionState = ConnectionState.OFFLINE,
-        val statusText: String = "离线",
+        val statusText: String = tr(Str.CONN_OFFLINE),
         val provider: String = "",
         val isLive: Boolean = false,
         /** Provider capabilities advertised by session.started (mirror of
@@ -296,7 +301,7 @@ class AgentSession(
                 if (!_state.value.handsFree) return@launch
                 stop()
                 _state.update {
-                    it.copy(connection = ConnectionState.DEGRADED, statusText = "麦克风已中断，请重新开启免提")
+                    it.copy(connection = ConnectionState.DEGRADED, statusText = tr(Str.STATUS_MIC_INTERRUPTED))
                 }
             }
         }
@@ -431,13 +436,13 @@ class AgentSession(
                 throw cancelled
             } catch (error: Exception) {
                 Log.w(TAG, "Playback preparation failed", error)
-                failHandsFreeStart(generation, "音频播放不可用，请检查音频设备")
+                failHandsFreeStart(generation, tr(Str.STATUS_AUDIO_UNAVAILABLE))
                 return@launch
             }
             if (!playbackReady || !lifecycle.accepts(generation)) return@launch
             connect()
             if (webSocket == null) {
-                failHandsFreeStart(generation, "中继地址无效，请在设置中检查服务器地址")
+                failHandsFreeStart(generation, tr(Str.STATUS_RELAY_BAD))
                 return@launch
             }
             try {
@@ -446,7 +451,7 @@ class AgentSession(
                 if (!lifecycle.accepts(generation)) mic.stop()
             } catch (error: Exception) {
                 Log.w(TAG, "Mic start failed", error)
-                failHandsFreeStart(generation, "麦克风不可用，请检查录音权限")
+                failHandsFreeStart(generation, tr(Str.STATUS_MIC_UNAVAILABLE))
             }
         }
     }
@@ -534,7 +539,7 @@ class AgentSession(
             it.copy(
                 handsFree = false,
                 connection = ConnectionState.OFFLINE,
-                statusText = "离线",
+                statusText = tr(Str.CONN_OFFLINE),
                 turnState = TurnState.IDLE,
                 voiceLevel = 0f,
                 micMuted = false,
@@ -586,11 +591,14 @@ class AgentSession(
         _state.update {
             it.copy(
                 voiceGender = gender,
-                statusText = if (gender == VoiceGender.MALE) "已切换到男声" else "已切换到女声"
+                statusText = if (gender == VoiceGender.MALE) tr(Str.STATUS_MALE) else tr(Str.STATUS_FEMALE)
             )
         }
         restartIfConnected()
     }
+
+    /** The app language changed: a live session restarts so the assistant follows it, like a voice change. */
+    fun languageChanged() = restartIfConnected()
 
     /** Selects the relay voice backend; restarts the session like a gender change. */
     fun setVoiceProvider(id: String?) {
@@ -603,7 +611,7 @@ class AgentSession(
     fun setVoicePersonality(personality: VoicePersonality) {
         if (_state.value.voicePersonality == personality) return
         _state.update {
-            it.copy(voicePersonality = personality, statusText = "已切换语气：${personality.label}")
+            it.copy(voicePersonality = personality, statusText = tr(Str.STATUS_TONE, "label" to personality.label))
         }
         restartIfConnected()
     }
@@ -644,7 +652,7 @@ class AgentSession(
             it.copy(
                 guidedDemo = enabled,
                 statusText = if (enabled && it.connection != ConnectionState.READY) {
-                    "巡游演示已开启，开启免提后自动巡游场景"
+                    tr(Str.STATUS_TOUR_ON)
                 } else {
                     it.statusText
                 }
@@ -759,7 +767,7 @@ class AgentSession(
         _state.update {
             it.copy(
                 connection = ConnectionState.CONNECTING,
-                statusText = if (reconnectAttempts > 0) "重新连接中…（第 $reconnectAttempts 次）" else "连接中"
+                statusText = if (reconnectAttempts > 0) tr(Str.STATUS_RECONNECTING, "n" to reconnectAttempts) else tr(Str.CONN_CONNECTING)
             )
         }
 
@@ -770,7 +778,7 @@ class AgentSession(
         val request = runCatching { Request.Builder().url(relayUrl).build() }.getOrElse { error ->
             Log.w(TAG, "Invalid relay URL", error)
             _state.update {
-                it.copy(connection = ConnectionState.DEGRADED, statusText = "中继地址无效，请在设置中检查服务器地址")
+                it.copy(connection = ConnectionState.DEGRADED, statusText = tr(Str.STATUS_RELAY_BAD))
             }
             return
         }
@@ -784,7 +792,7 @@ class AgentSession(
                 _state.update {
                     it.copy(
                         connection = ConnectionState.RELAY,
-                        statusText = "就绪",
+                        statusText = tr(Str.STATUS_READY),
                         feedbackFloorId = transcriptTurn
                     )
                 }
@@ -792,6 +800,7 @@ class AgentSession(
                 webSocket.send(
                     buildSessionStart(
                         voiceGender = current.voiceGender,
+                        language = com.horizon.maxhelmet.ui.Localization.language.wire,
                         voicePersonality = current.voicePersonality,
                         rideMode = current.rideContext.mode,
                         scenario = current.rideContext.scenario,
@@ -825,7 +834,7 @@ class AgentSession(
                 if (webSocket !== this@AgentSession.webSocket) return
                 observePipeline("socket.text.received", text.length)
                 val event = runCatching { parseAgentEvent(text) }.getOrElse {
-                    _state.update { state -> state.copy(statusText = "收到异常代理消息") }
+                    _state.update { state -> state.copy(statusText = tr(Str.STATUS_BAD_PROVIDER)) }
                     observePipeline("socket.text.invalid", text.length)
                     return
                 }
@@ -893,7 +902,7 @@ class AgentSession(
         warningAudio.stop()
         if (intentionalClose) {
             if (_state.value.handsFree) return // restartSession() will reconnect
-            _state.update { it.copy(connection = ConnectionState.OFFLINE, statusText = "离线") }
+            _state.update { it.copy(connection = ConnectionState.OFFLINE, statusText = tr(Str.CONN_OFFLINE)) }
             return
         }
         val generation = lifecycle.current() ?: return
@@ -905,7 +914,7 @@ class AgentSession(
         if (closeCode == IDLE_CLOSE_CODE && !crash.controller.active) {
             reconnectAttempts = 0
             lifecycle.finishOn(deviceScope, generation, teardown = { stop() }, publish = {
-                _state.update { it.copy(statusText = "会话闲置已断开，请重新开启免提") }
+                _state.update { it.copy(statusText = tr(Str.STATUS_IDLE_ENDED)) }
             })
             return
         }
@@ -927,9 +936,9 @@ class AgentSession(
                             connection = ConnectionState.DEGRADED,
                             authRequired = httpStatus == 401,
                             statusText = if (httpStatus == 401) {
-                                "需要登录：在设置的「账号」里登录（或粘贴认证令牌）"
+                                tr(Str.STATUS_LOGIN_REQUIRED)
                             } else {
-                                "中继拒绝连接（HTTP $httpStatus），请检查中继地址"
+                                tr(Str.STATUS_RELAY_REFUSED, "status" to httpStatus)
                             }
                         )
                     }
@@ -943,14 +952,14 @@ class AgentSession(
             reconnectAttempts = 0
             lifecycle.finishOn(deviceScope, generation, teardown = { stop() }, publish = {
                 _state.update {
-                    it.copy(connection = ConnectionState.DEGRADED, statusText = "语音中继连接失败，请重新开启免提")
+                    it.copy(connection = ConnectionState.DEGRADED, statusText = tr(Str.STATUS_RELAY_FAILED))
                 }
             })
             return
         }
         val delayMs = if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) 30_000L else minOf(8_000L, 1_000L * (1L shl (reconnectAttempts - 1)))
         _state.update {
-            it.copy(connection = ConnectionState.OFFLINE, statusText = "连接已断开，${delayMs / 1000} 秒后自动重连…")
+            it.copy(connection = ConnectionState.OFFLINE, statusText = tr(Str.STATUS_RECONNECT_IN, "n" to delayMs / 1000))
         }
         reconnectJob = scope.launch {
             delay(delayMs)
@@ -971,7 +980,7 @@ class AgentSession(
                         isLive = event.mode != "mock",
                         capabilities = event.capabilities,
                         connection = ConnectionState.READY,
-                        statusText = if (event.mode == "mock") "模拟路线已启用" else "豆包实时语音在线"
+                        statusText = if (event.mode == "mock") tr(Str.STATUS_MOCK_ON) else tr(Str.STATUS_DOUBAO_ON)
                     )
                 }
             }
@@ -1168,7 +1177,13 @@ class AgentSession(
             }
             try {
                 tts?.stop()
-                if (!warningAudio.play(alert.threat, text, gender, generation, owner)) {
+                // English mode: speak the event's English message with device TTS (the bundled clips are
+                // Chinese). If TTS is unavailable, fall through to the clip so a warning is never silent.
+                val spokenByTts = hazardSpeechPath(Localization.language, alert.message) == HazardSpeech.DEVICE_TTS &&
+                    ttsSpeak(alert.message, utteranceId = if (syntheticCapture) "synthetic-hazard-$generation" else "max-reply")
+                if (spokenByTts) {
+                    warningAudio.stop()
+                } else if (!warningAudio.play(alert.threat, text, gender, generation, owner)) {
                     check(!warningAudio.isKnown(alert.threat, text, gender)) {
                         "Prepared bundled safety warning is unavailable"
                     }
@@ -1181,7 +1196,7 @@ class AgentSession(
                 }
             } catch (error: Exception) {
                 Log.w(TAG, "Safety warning playback failed", error)
-                if (lifecycle.accepts(owner)) _state.update { it.copy(statusText = "安全提示音播放失败，请留意警示信息") }
+                if (lifecycle.accepts(owner)) _state.update { it.copy(statusText = tr(Str.STATUS_SAFETY_SOUND_FAILED)) }
             }
             scope.launch {
                 delay((alert.ttcSeconds + 2) * 1000L)
@@ -1202,7 +1217,7 @@ class AgentSession(
         warningAudio.stop()
         player.stopPlayback()
         if (transmitting) {
-            _state.update { it.copy(turnState = TurnState.LISTENING, statusText = "已打断 Max，继续听你说") }
+            _state.update { it.copy(turnState = TurnState.LISTENING, statusText = tr(Str.STATUS_INTERRUPTED, "name" to AssistantBranding.name)) }
         }
     }
 
@@ -1213,7 +1228,7 @@ class AgentSession(
     private fun ttsSpeak(text: String, flush: Boolean = true, utteranceId: String = "max-reply"): Boolean {
         val engine = tts ?: return false
         if (!ttsReady || text.isBlank()) return false
-        if (engine.setLanguage(if (detectLanguage(text) == "zh") Locale.SIMPLIFIED_CHINESE else Locale.US) < 0) return false
+        if (engine.setLanguage(ttsLocaleFor(text)) < 0) return false
         return engine.speak(text, if (flush) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, utteranceId) == TextToSpeech.SUCCESS
     }
 
@@ -1300,3 +1315,13 @@ object AgentSessionHolder {
             ).also { session = it }
         }
 }
+
+/** How a hazard warning is voiced: the bundled Chinese clip, or the event's English message through device TTS. */
+internal enum class HazardSpeech { CLIP, DEVICE_TTS }
+
+internal fun hazardSpeechPath(language: com.horizon.maxhelmet.ui.AppLanguage, message: String): HazardSpeech =
+    if (language == com.horizon.maxhelmet.ui.AppLanguage.EN && message.isNotBlank()) HazardSpeech.DEVICE_TTS else HazardSpeech.CLIP
+
+/** The TTS voice for a line of text: any Han character selects Chinese, otherwise US English. */
+internal fun ttsLocaleFor(text: String): Locale =
+    if (detectLanguage(text) == "zh") Locale.SIMPLIFIED_CHINESE else Locale.US

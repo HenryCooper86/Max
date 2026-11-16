@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { AssistantDevice, AssistantSummary, VoiceEqualizer, VoiceVisualizer } from "../shared/agent";
 import { normalizeEqualizer } from "./audio-eq";
@@ -190,6 +191,20 @@ function themeFrom(raw: unknown): Record<string, string> | undefined {
   return Object.keys(theme).length ? theme : undefined;
 }
 
+/** Config keys that change who the assistant is or how it speaks. */
+const PERSONA_KEYS = [
+  "name",
+  "device",
+  "deviceLabel",
+  "wearer",
+  "developer",
+  "identityNotes",
+  "languages",
+  "strictLanguages",
+  "wake",
+  "persona"
+] as const;
+
 const VISUALIZERS: readonly VoiceVisualizer[] = ["wave", "bars", "mirror", "dots", "ring"];
 
 const HAN = /\p{Script=Han}/u;
@@ -252,18 +267,35 @@ export function assistantProfileFrom(raw: unknown, baseDir = process.cwd()): Ass
     strictLanguages: typeof raw.strictLanguages === "boolean" ? raw.strictLanguages : !renamed && device === "helmet",
     wake: !renamed && raw.wake === undefined ? DEFAULT_WAKE_NAMES : wakeNamesFrom(name, raw.wake),
     persona: text(raw.persona, 6000),
-    isDefault: false
+    // Changing only the look, the logo or the sound leaves the assistant who
+    // it was: it keeps the original Max prompts word for word.
+    isDefault: !PERSONA_KEYS.some((key) => raw[key] !== undefined && raw[key] !== null)
   };
 }
 
 function loadAssistantProfile(): AssistantProfile {
   const configured = process.env.ASSISTANT_CONFIG?.trim();
   if (configured?.toLowerCase() === "off") return DEFAULT_ASSISTANT_PROFILE;
-  const file = configured ? path.resolve(configured) : path.resolve("assistant.config.json");
-  let contents: string;
-  try {
-    contents = fs.readFileSync(file, "utf8");
-  } catch {
+  // ASSISTANT_CONFIG names the file outright. Otherwise the config an admin
+  // saved from the Studio (kept outside the app directory, which a deploy
+  // replaces) wins over a file checked out beside the code.
+  const studioFile = path.join(
+    process.env.STUDIO_DIR?.trim() || path.join(os.homedir(), ".horizon-helmet-testing"),
+    "assistant.config.json"
+  );
+  const candidates = configured ? [path.resolve(configured)] : [studioFile, path.resolve("assistant.config.json")];
+  let file = candidates[0]!;
+  let contents: string | undefined;
+  for (const candidate of candidates) {
+    try {
+      contents = fs.readFileSync(candidate, "utf8");
+      file = candidate;
+      break;
+    } catch {
+      /* try the next place */
+    }
+  }
+  if (contents === undefined) {
     if (configured) throw new Error(`ASSISTANT_CONFIG points at ${file}, which cannot be read`);
     return DEFAULT_ASSISTANT_PROFILE;
   }
@@ -283,6 +315,13 @@ configureWakePhrase(active.wake);
 /** The configured assistant. Read at call time so tests can swap it. */
 export function assistant(): AssistantProfile {
   return active;
+}
+
+/** Makes `profile` the live assistant: new sessions get its persona and wake
+ *  phrase, and /health reports it. Used by the Studio after a save. */
+export function installAssistantProfile(profile: AssistantProfile): void {
+  active = profile;
+  configureWakePhrase(profile.wake);
 }
 
 /** Test seam: install a profile (or restore the default with no argument). */

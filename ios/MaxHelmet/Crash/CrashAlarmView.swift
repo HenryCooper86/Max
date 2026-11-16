@@ -21,26 +21,26 @@ struct CrashCheckInBanner: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 20, weight: .bold))
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("疑似摔车 — 你还好吗？（\(remaining)s）")
+                        Text(L("crash.banner.title", ("n", String(remaining))))
                             .visorFont(.subhead, .bold)
-                        Text("点此取消，或说“我没事”").visorFont(.caption, .medium)
+                        Text(L("crash.banner.sub")).visorFont(.caption, .medium)
                     }
                     Spacer()
                 }
                 .padding(Visor.Space.s3)
                 .frame(minHeight: Visor.hit)
                 .background(Visor.danger, in: RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous))
-                .foregroundStyle(Visor.bg)
+                .foregroundStyle(Visor.onDanger)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("疑似摔车，点击取消警报，剩余\(remaining)秒")
+            .accessibilityLabel(L("crash.banner.a11y", ("n", String(remaining))))
         }
     }
 }
 
 /// Alarm + escalated: full-screen, glanceable from the ground, tappable by
 /// a gloved hand or a bystander. Deliberately the loudest surface in the app:
-/// solid danger fill, dark ink, the largest type in the scale.
+/// solid danger fill, the template's legible ink (dark on light reds, white on dark reds), the largest type in the scale.
 struct CrashAlarmView: View {
     let phase: CrashUIPhase
     let locationText: String?
@@ -49,8 +49,8 @@ struct CrashAlarmView: View {
 
     private var statusLine: String {
         switch phase {
-        case let .escalated(ackText): return ackText ?? "正在通知紧急联系人…"
-        default: return "无人响应将通知紧急联系人"
+        case let .escalated(ackText): return ackText ?? L("crash.alarm.notifying")
+        default: return L("crash.alarm.noreply")
         }
     }
 
@@ -62,7 +62,7 @@ struct CrashAlarmView: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 48, weight: .black))
                         .accessibilityHidden(true)
-                    Text("检测到摔车")
+                    Text(L("crash.alarm.title"))
                         .visorFont(.alarm, .black)
                         .minimumScaleFactor(0.6)
                         .multilineTextAlignment(.center)
@@ -77,7 +77,7 @@ struct CrashAlarmView: View {
                             sinceT: sinceT,
                             now: ProcessInfo.processInfo.systemUptime
                         )
-                        Text("\(remaining) 秒后通知紧急联系人")
+                        Text(L("crash.alarm.countdown", ("n", String(remaining))))
                             .visorFont(.title, .black, mono: true)
                             .multilineTextAlignment(.center)
                     }
@@ -87,11 +87,11 @@ struct CrashAlarmView: View {
                             .visorFont(.title, .bold, mono: true)
                             .multilineTextAlignment(.center)
                     } else {
-                        Text("正在定位…").visorFont(.body)
+                        Text(L("crash.alarm.locating")).visorFont(.body)
                     }
                     Spacer(minLength: 0)
                     Button(action: onCancel) {
-                        Text("我没事")
+                        Text(L("crash.alarm.ok"))
                             .visorFont(.display, .black)
                             .frame(maxWidth: .infinity, minHeight: 88)
                             .background(Visor.bg, in: RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous))
@@ -102,18 +102,18 @@ struct CrashAlarmView: View {
                             Task { _ = await SystemURLOpener().open(url) }
                         }
                     } label: {
-                        Text("拨打 \(callNumber)")
+                        Text(L("crash.alarm.call", ("number", callNumber)))
                             .visorFont(.title, .bold)
                             .frame(maxWidth: .infinity, minHeight: 66)
                             .overlay(
                                 RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous)
-                                    .strokeBorder(Visor.bg, lineWidth: 2)
+                                    .strokeBorder(Visor.onDanger, lineWidth: 2)
                             )
-                            .foregroundStyle(Visor.bg)
+                            .foregroundStyle(Visor.onDanger)
                     }
                 }
                 .padding(Visor.Space.s6)
-                .foregroundStyle(Visor.bg)
+                .foregroundStyle(Visor.onDanger)
             }
         }
     }

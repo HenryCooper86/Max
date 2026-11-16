@@ -12,6 +12,8 @@ type Props = {
   onChange: (value: VoiceEqualizer | null) => void;
   enabled: boolean;
   onEnabledChange: (enabled: boolean) => void;
+  /** Show the on/off switch (an editor for a stored config has none). */
+  showPower?: boolean;
 };
 
 const CUSTOM = "__custom";
@@ -129,7 +131,7 @@ function Fader({
 /** Settings → Voice → Equalizer: a ten-band graphic equaliser with a preamp,
  *  a preset menu, an on/off switch and a curve drawn through the bands.
  *  Read-only when the relay fixes the equaliser. */
-export function VoiceEqualizerPanel({ options, value, onChange, enabled, onEnabledChange }: Props) {
+export function VoiceEqualizerPanel({ options, value, onChange, enabled, onEnabledChange, showPower = true }: Props) {
   const { t } = useLanguage();
   const adjustable = options.adjustable;
   const resolved = resolveEqualizer(adjustable ? value : null, options);
@@ -144,7 +146,7 @@ export function VoiceEqualizerPanel({ options, value, onChange, enabled, onEnabl
   return (
     <div className={`eqPanel${adjustable ? "" : " readOnly"}${enabled || !adjustable ? "" : " off"}`}>
       <div className="eqToolbar">
-        {adjustable ? (
+        {adjustable && showPower ? (
           <button
             type="button"
             role="switch"

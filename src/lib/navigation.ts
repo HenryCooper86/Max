@@ -33,7 +33,44 @@ export type NavPhase =
   | { phase: "guiding"; route: NavRouteEvent; update: GuidanceUpdate; position: GeoPoint; locationStale?: boolean };
 
 type DeviceCommand = { commandId: string; action: string; args: Record<string, unknown> };
+
+/** Lines this controller composes itself: shown in the panel, and (as a
+ *  device.result detail) spoken verbatim by the relay — so they follow the
+ *  session's language. Everything else the wearer hears about navigation
+ *  (off route, arrived, rerouting, location lost, the destination
+ *  confirmation) is worded by the relay from a `nav.prompt` kind. */
+export const NAVIGATION_COPY = {
+  noFix: {
+    zh: "还没定位到，到室外或空旷处再说一次。",
+    en: "No location fix yet. Move outdoors or to an open area, then try again."
+  },
+  cancelled: { zh: "已取消导航请求。", en: "The navigation request was cancelled." },
+  permission: {
+    zh: "请在浏览器设置中允许定位，再重新发起导航。",
+    en: "Allow location access in your browser settings, then start navigation again."
+  },
+  notFound: {
+    zh: "没有找到目的地，请换一个名称重新导航。",
+    en: "Destination not found. Try navigation again with a different name."
+  },
+  unavailable: {
+    zh: "地图服务暂不可用，请稍后重新发起导航。",
+    en: "The map service is unavailable. Try navigation again later."
+  },
+  rerouteFailed: {
+    zh: "重新规划失败，导航已停止。请稍后重新发起导航。",
+    en: "I couldn't find a new route. Navigation has stopped."
+  }
+} as const;
+
+export type NavigationLanguage = "zh" | "en";
 type AgentEvent = { type: string } & Record<string, unknown>;
+
+/** The instruction to show for a maneuver: the session-language text when
+ *  the route carries one, else the routing service's own. */
+export function displayInstruction(step: { instruction: string; localizedInstruction?: string } | undefined) {
+  return step ? (step.localizedInstruction ?? step.instruction) : null;
+}
 
 export function createNavigationController(deps: {
   sendJson: (payload: unknown) => void;
@@ -47,6 +84,8 @@ export function createNavigationController(deps: {
    *  defaults to "never denied" so callers (and every existing test) that
    *  don't track permission state keep today's wait-for-fix behavior. */
   hasLocationPermission?: () => boolean;
+  /** The session's language for the lines above; Chinese when absent. */
+  language?: () => NavigationLanguage;
   now?: () => number;
   /** Injected so tests stay deterministic. Returns a cancel function. */
   schedule?: (ms: number, fn: () => void) => () => void;
@@ -58,6 +97,7 @@ export function createNavigationController(deps: {
 } {
   const now = deps.now ?? (() => Date.now());
   const hasLocationPermission = deps.hasLocationPermission ?? (() => true);
+  const copy = (key: keyof typeof NAVIGATION_COPY) => NAVIGATION_COPY[key][deps.language?.() ?? "zh"];
   const schedule =
     deps.schedule ??
     ((ms: number, fn: () => void) => {
@@ -67,8 +107,6 @@ export function createNavigationController(deps: {
 
   const FIRST_FIX_ANNOUNCE_MS = 1_500;
   const FIRST_FIX_TIMEOUT_MS = 8_000;
-
-  const NO_FIX_DETAIL = "还没定位到，到室外或空旷处再说一次。";
 
   let lastFix: GeoPoint | null = null;
   let lastFixAt = 0;
@@ -169,10 +207,10 @@ export function createNavigationController(deps: {
     if (awaitingFix) {
       const commandId = awaitingFix.commandId;
       clearFixWait();
-      sendResult(commandId, "failed", "navigation.cancelled", "已取消导航请求。");
+      sendResult(commandId, "failed", "navigation.cancelled", copy("cancelled"));
     }
     if (pendingCommandId === null) return;
-    sendResult(pendingCommandId, "failed", "navigation.cancelled", "已取消导航请求。");
+    sendResult(pendingCommandId, "failed", "navigation.cancelled", copy("cancelled"));
   }
 
   /** Runs one guidance step from `lastFix` and pushes the resulting phase.
@@ -199,7 +237,7 @@ export function createNavigationController(deps: {
     // theirs does.
     if (!hasLocationPermission()) {
       sendResult(commandId, "denied", "permission.location");
-      if (!isActive()) deps.onState({ phase: "unavailable", message: "请在浏览器设置中允许定位，再重新发起导航。" });
+      if (!isActive()) deps.onState({ phase: "unavailable", message: copy("permission") });
       return;
     }
     if (!freshFix()) {
@@ -220,8 +258,8 @@ export function createNavigationController(deps: {
           schedule(FIRST_FIX_TIMEOUT_MS, () => {
             if (awaitingFix?.commandId !== commandId) return;
             clearFixWait();
-            deps.onState({ phase: "unavailable", message: NO_FIX_DETAIL });
-            sendResult(commandId, "failed", "route.unavailable", NO_FIX_DETAIL);
+            deps.onState({ phase: "unavailable", message: copy("noFix") });
+            sendResult(commandId, "failed", "route.unavailable", copy("noFix"));
           })
         ]
       };
@@ -310,10 +348,7 @@ export function createNavigationController(deps: {
       sendResult(commandId, "failed", event.code);
       deps.onState({
         phase: "unavailable",
-        message:
-          event.code === "destination.notFound"
-            ? "没有找到目的地，请换一个名称重新导航。"
-            : "地图服务暂不可用，请稍后重新发起导航。"
+        message: event.code === "destination.notFound" ? copy("notFound") : copy("unavailable")
       });
       return;
     }
@@ -324,7 +359,7 @@ export function createNavigationController(deps: {
       // NavigationController, which speak this same line on this same case.
       prompt("rerouteFailed");
       resetNavigationState();
-      deps.onState({ phase: "unavailable", message: "重新规划失败，导航已停止。请稍后重新发起导航。" });
+      deps.onState({ phase: "unavailable", message: copy("rerouteFailed") });
       return;
     }
     // Stale/unknown commandId: nothing active it could belong to. Ignore.

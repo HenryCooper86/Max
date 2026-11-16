@@ -4,6 +4,7 @@ import readline from "node:readline/promises";
 import { EQUALIZER_PRESETS } from "../server/audio-eq";
 import { DEVICE_PRESETS, devicePreset, isKnownDevice } from "../server/device-presets";
 import { VOICE_PROVIDERS } from "../server/providers/catalog";
+import { localPipelineSettings } from "../server/providers/live/pipeline";
 
 /**
  * `npm run setup` — makes the kit yours in a minute.
@@ -41,10 +42,58 @@ export function mergeEnv(existing: string, updates: Record<string, string>): str
   return `${lines.join("\n")}\n`;
 }
 
+/** The three stages of the local pipeline, as the wizard asks about them. */
+export const LOCAL_STAGES = [
+  { key: "STT", label: "Speech-to-text", server: "Speaches / whisper.cpp", model: "Speech-to-text model" },
+  { key: "LLM", label: "Chat model", server: "Ollama / llama.cpp / vLLM / LM Studio", model: "Chat model name" },
+  { key: "TTS", label: "Text-to-speech", server: "Kokoro-FastAPI / openedai-speech", model: "Text-to-speech model" }
+] as const;
+
+export type LocalAnswers = Record<"STT" | "LLM" | "TTS", { baseUrl: string; model: string }> & {
+  voice: string;
+  voiceMale: string;
+};
+
+/** The .env lines for a local stack. Only what differs from the relay's own
+ *  defaults is written, so the file says what this installation changed. */
+export function localEnv(answers: LocalAnswers, defaults: LocalAnswers): Record<string, string> {
+  const env: Record<string, string> = { LOCAL_VOICE: "on" };
+  for (const { key } of LOCAL_STAGES) {
+    const baseUrl = answers[key].baseUrl.trim().replace(/\/+$/, "");
+    if (baseUrl && baseUrl !== defaults[key].baseUrl) env[`LOCAL_${key}_BASE_URL`] = baseUrl;
+    const model = answers[key].model.trim();
+    if (model && model !== defaults[key].model) env[`LOCAL_${key}_MODEL`] = model;
+  }
+  if (answers.voice.trim() && answers.voice.trim() !== defaults.voice) env.LOCAL_TTS_VOICE = answers.voice.trim();
+  if (answers.voiceMale.trim() && answers.voiceMale.trim() !== defaults.voiceMale) {
+    env.LOCAL_TTS_VOICE_MALE = answers.voiceMale.trim();
+  }
+  return env;
+}
+
+/** Whether an OpenAI-compatible server answers at `baseUrl`. Any HTTP reply
+ *  counts: servers differ on whether /models needs a key or exists at all. */
+export async function serverResponds(baseUrl: string, request: typeof fetch = fetch): Promise<boolean> {
+  try {
+    await request(`${baseUrl.replace(/\/+$/, "")}/models`, { signal: AbortSignal.timeout(2500) });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function main(): Promise<void> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const ask = async (question: string, fallback: string) =>
-    (await rl.question(`${question}${fallback ? ` [${fallback}]` : ""}: `)).trim() || fallback;
+  // Answers are read as a stream of lines rather than with rl.question, so the
+  // wizard behaves the same at a keyboard and with answers piped in (a script,
+  // a test): piped input arrives all at once and would otherwise be lost.
+  const rl = readline.createInterface({ input: process.stdin });
+  const lines = rl[Symbol.asyncIterator]();
+  const ask = async (question: string, fallback: string) => {
+    process.stdout.write(`${question}${fallback ? ` [${fallback}]` : ""}: `);
+    const next = await lines.next();
+    if (next.done) process.stdout.write("\n");
+    return (next.done ? "" : String(next.value)).trim() || fallback;
+  };
 
   console.log("\nSet up your voice assistant. Press Enter to keep the value in brackets.\n");
 
@@ -89,7 +138,53 @@ async function main(): Promise<void> {
   const provider = VOICE_PROVIDERS[Number.isInteger(picked) ? picked - 1 : 0] ?? VOICE_PROVIDERS[0]!;
 
   const env: Record<string, string> = { VOICE_PROVIDER: provider.id };
-  if (provider.id === "local") env.LOCAL_VOICE = "on";
+  let localNotes: string[] = [];
+  if (provider.id === "local") {
+    const stack = localPipelineSettings();
+    const defaults: LocalAnswers = {
+      STT: { baseUrl: stack.stt.baseUrl, model: stack.stt.model },
+      LLM: { baseUrl: stack.llm.baseUrl, model: stack.llm.model },
+      TTS: { baseUrl: stack.tts.baseUrl, model: stack.tts.model },
+      voice: stack.tts.voice("female"),
+      voiceMale: stack.tts.voice("male")
+    };
+    console.log("\nLocal models run on your own hardware, with no account and no API key.");
+    console.log("Each stage is any OpenAI-compatible server. Press Enter to keep the usual defaults.\n");
+    const answers: LocalAnswers = {
+      ...defaults,
+      STT: { ...defaults.STT },
+      LLM: { ...defaults.LLM },
+      TTS: { ...defaults.TTS }
+    };
+    for (const { key, label, server, model } of LOCAL_STAGES) {
+      answers[key].baseUrl = await ask(`${label} server (${server})`, defaults[key].baseUrl);
+      answers[key].model = await ask(model, defaults[key].model);
+    }
+    answers.voice = await ask("Voice (female)", defaults.voice);
+    answers.voiceMale = await ask("Voice (male)", defaults.voiceMale);
+    Object.assign(env, localEnv(answers, defaults));
+
+    console.log("\nChecking the three servers…");
+    let missing = 0;
+    for (const { key, label } of LOCAL_STAGES) {
+      const up = await serverResponds(answers[key].baseUrl);
+      if (!up) missing += 1;
+      console.log(`  ${up ? "✓" : "✗"} ${label.padEnd(15)} ${answers[key].baseUrl}${up ? "" : "  — not answering"}`);
+    }
+    if (missing) {
+      localNotes = [
+        "Start the local stack before running the relay:",
+        "  docker compose -f docker-compose.local-voice.yml up -d",
+        `  docker compose -f docker-compose.local-voice.yml exec ollama ollama pull ${answers.LLM.model}`,
+        "See docs/local-models.md for other servers and models."
+      ];
+    } else {
+      localNotes = [
+        `If the chat model is not downloaded yet:  ollama pull ${answers.LLM.model}`,
+        "See docs/local-models.md for other servers and models."
+      ];
+    }
+  }
   if (provider.id === "local-realtime") {
     env.LOCAL_REALTIME_URL = await ask("Local realtime server URL", "ws://localhost:8000/v1/realtime");
   }
@@ -124,6 +219,7 @@ async function main(): Promise<void> {
   fs.writeFileSync(envPath, mergeEnv(existing, env), { mode: 0o600 });
 
   console.log(`\nWrote ${path.basename(assistantPath)} and updated .env (VOICE_PROVIDER=${provider.id}).`);
+  for (const line of localNotes) console.log(line);
   console.log("Start it with:  npm run dev   then open http://localhost:5173\n");
 }
 

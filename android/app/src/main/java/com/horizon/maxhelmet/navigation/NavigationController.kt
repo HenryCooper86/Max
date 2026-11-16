@@ -1,5 +1,8 @@
 package com.horizon.maxhelmet.navigation
 
+import com.horizon.maxhelmet.ui.Str
+import com.horizon.maxhelmet.ui.tr
+
 import com.horizon.maxhelmet.agent.buildDeviceResult
 import org.json.JSONObject
 import java.util.UUID
@@ -37,8 +40,13 @@ data class NavGuidanceState(
     val route: NavigationRoute? = null,
     val riderCoordinate: LatLon? = null,
     val confirmationId: String? = null,
-    val maneuverIndex: Int = 0
-)
+    val maneuverIndex: Int = 0,
+    /** English wording of [currentInstruction] when the route has one (shown instead of it). */
+    val currentInstructionLocalized: String? = null
+) {
+    /** What the UI shows; icon parsing keeps using [currentInstruction]. */
+    val displayInstruction: String? get() = currentInstructionLocalized ?: currentInstruction
+}
 
 /** One in-flight reroute attempt's captured inputs — everything
  *  [NavigationController.performReroute] needs after its `search.reroute`
@@ -301,7 +309,7 @@ class NavigationController(
                 val pending = synchronized(lock) {
                     if (generation != navigationGeneration) return@synchronized null
                     confirmation?.also {
-                        if (!relayPrompt(resolved, "confirm")) speaker.speak("请确认目的地：${resolved.destinationName}。确认后开始导航。", false)
+                        if (!relayPrompt(resolved, "confirm")) speaker.speak(tr(Str.NAV_CONFIRM_PROMPT, "name" to resolved.destinationName), false)
                     }
                 }
                 val accepted = pending?.let { withTimeoutOrNull(confirmationTimeoutMillis) { it.await() } } == true
@@ -400,7 +408,7 @@ class NavigationController(
                 lastRerouteAt = NO_PRIOR_REROUTE
                 locationSource.stop()
                 onGuidance(null)
-                if (sendRelayPrompt == null) speaker.speak(STOP_SPOKEN, interrupt = false)
+                if (sendRelayPrompt == null) speaker.speak(tr(Str.NAV_STOP), interrupt = false)
             } else {
                 // No route yet, but a start was genuinely in flight, and
                 // nothing else needs the source anymore. Silent here: the
@@ -519,7 +527,7 @@ class NavigationController(
                 // after this cleanup is never streamless. (A reroute already
                 // in flight for THIS SAME route is a different story — see
                 // performReroute's route-null guard below.)
-                if (!relayPrompt(currentRoute, "arrived")) speaker.speak(ARRIVED_SPOKEN, interrupt = false)
+                if (!relayPrompt(currentRoute, "arrived")) speaker.speak(tr(Str.NAV_ARRIVED), interrupt = false)
                 route = null
                 onGuidance(null)
                 locationSource.stop()
@@ -532,7 +540,7 @@ class NavigationController(
                 rerouting = true
                 rerouteAttemptId += 1
                 lastRerouteAt = now()
-                if (!relayPrompt(currentRoute, "offRoute")) speaker.speak(REROUTE_SENDING_SPOKEN, interrupt = false)
+                if (!relayPrompt(currentRoute, "offRoute")) speaker.speak(tr(Str.NAV_OFF_ROUTE), interrupt = false)
                 RerouteAttempt(
                     attemptId = rerouteAttemptId,
                     generation = navigationGeneration,
@@ -595,7 +603,7 @@ class NavigationController(
                     resolveConfirmationLocked(false)
                     navigationGeneration += 1
                     starting = false
-                    route?.let { if (!relayPrompt(it, "rerouteFailed")) speaker.speak(REROUTE_FAILED_SPOKEN, interrupt = false) }
+                    route?.let { if (!relayPrompt(it, "rerouteFailed")) speaker.speak(tr(Str.NAV_REROUTE_FAILED), interrupt = false) }
                     route = null
                     rerouting = false
                     onGuidance(null)
@@ -676,7 +684,7 @@ class NavigationController(
             firstFixAnnounce = scope.launch {
                 delay(firstFixAnnounceMillis)
                 synchronized(lock) {
-                    if (firstFixContinuation === deferred) speaker.speak(LOCATING_SPOKEN, interrupt = false)
+                    if (firstFixContinuation === deferred) speaker.speak(tr(Str.NAV_LOCATING), interrupt = false)
                 }
             }
             firstFixWatchdog = scope.launch {
@@ -746,6 +754,7 @@ class NavigationController(
     private fun publishedState(route: NavigationRoute, update: GuidanceUpdate): NavGuidanceState = NavGuidanceState(
         destinationName = route.destinationName,
         currentInstruction = update.currentInstruction,
+        currentInstructionLocalized = update.currentInstructionLocalized,
         maneuverIndex = update.progress.maneuverIndex,
         distanceToManeuverMeters = update.distanceToManeuverMeters,
         remainingMeters = update.remainingMeters,
@@ -760,6 +769,7 @@ class NavigationController(
     private fun initialState(route: NavigationRoute): NavGuidanceState = NavGuidanceState(
         destinationName = route.destinationName,
         currentInstruction = route.steps.firstOrNull()?.instruction,
+        currentInstructionLocalized = route.steps.firstOrNull()?.localizedInstruction,
         distanceToManeuverMeters = route.steps.firstOrNull()?.alongRouteMeters ?: route.distanceMeters,
         remainingMeters = route.distanceMeters,
         remainingSeconds = route.etaSeconds,

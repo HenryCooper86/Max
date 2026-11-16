@@ -1,0 +1,31 @@
+// Top-level surfaces. The public landing page is the root; the assistant app
+// (sign-in gate, voice HUD, Testing and Admin workspaces) lives under /app;
+// the public configurator is /build. The relay serves index.html for every
+// path, so this is decided in the browser before anything heavy loads.
+
+type Surface = "landing" | "build" | "app";
+
+export const APP_PATH = "/app";
+export const BUILD_PATH = "/build";
+/** The public repository. Empty while it is private; links appear once set. */
+export const REPOSITORY_URL = "";
+
+export type Route = { surface: Surface; redirect?: string };
+
+function normalizePath(pathname: string): string {
+  const trimmed = pathname.replace(/\/+$/, "");
+  return trimmed === "" ? "/" : trimmed;
+}
+
+/** Which surface a location shows. A bookmark from before the landing page
+ *  existed (`/#/admin/...`, `/#/testing/...`) is sent to the same hash
+ *  under /app so testers' links keep working. */
+export function resolveRoute(location: { pathname: string; hash: string; search?: string }): Route {
+  const path = normalizePath(location.pathname);
+  if (path === APP_PATH || path.startsWith(`${APP_PATH}/`)) return { surface: "app" };
+  if (path === BUILD_PATH) return { surface: "build" };
+  if (path === "/" && /^#\/(admin|testing)(\/|\?|$)/.test(location.hash)) {
+    return { surface: "app", redirect: `${APP_PATH}${location.search ?? ""}${location.hash}` };
+  }
+  return { surface: "landing" };
+}

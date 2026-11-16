@@ -36,14 +36,14 @@ internal fun micDockPresentation(state: AgentSession.State): MicDockPresentation
         else -> MicDockMode.LIVE
     }
     val label = when (mode) {
-        MicDockMode.IDLE -> "开始免提"
-        MicDockMode.CONNECTING -> "连接中"
-        MicDockMode.LIVE, MicDockMode.MUTED -> "结束免提"
+        MicDockMode.IDLE -> tr(Str.HF_BEGIN)
+        MicDockMode.CONNECTING -> tr(Str.CONN_CONNECTING)
+        MicDockMode.LIVE, MicDockMode.MUTED -> tr(Str.HF_END)
     }
     val accessibilityLabel = when (mode) {
-        MicDockMode.IDLE -> "开始免提"
-        MicDockMode.CONNECTING -> "正在连接免提，点按取消"
-        MicDockMode.LIVE, MicDockMode.MUTED -> "结束免提"
+        MicDockMode.IDLE -> tr(Str.HF_BEGIN)
+        MicDockMode.CONNECTING -> tr(Str.HF_CANCEL_HINT)
+        MicDockMode.LIVE, MicDockMode.MUTED -> tr(Str.HF_END)
     }
     return MicDockPresentation(mode, label, accessibilityLabel, micDisplayLevel(state))
 }

@@ -21,11 +21,11 @@ enum CrashUIPhase: Equatable {
 @MainActor
 final class CrashController {
     struct Lines {
-        var checkIn = "检测到疑似摔车。你还好吗？没事请回答“我没事”，或点一下屏幕。"
-        var ackNotified = "已通知紧急联系人。"
-        var ackFailed = "紧急联系人通知失败，请手动拨打求助电话。"
-        var ackUnconfigured = "服务器没有配置通知通道，请手动拨打求助电话。"
-        var noAck = "服务器未确认 — 请手动拨打"
+        var checkIn: String { L("crash.line.checkIn") }
+        var ackNotified: String { L("crash.ack.notified") }
+        var ackFailed: String { L("crash.ack.failed") }
+        var ackUnconfigured: String { L("crash.ack.unconfigured") }
+        var noAck: String { L("crash.ack.none") }
     }
 
     private let motion: MotionStreaming

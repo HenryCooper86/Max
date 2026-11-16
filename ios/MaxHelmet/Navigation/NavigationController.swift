@@ -32,8 +32,8 @@ final class NavigationController: DeviceActionHandler {
     // Mirrors the web client's REROUTE_COOLDOWN_MS (src/lib/navigation.ts):
     // 20 s from send time. Was 15 s here pre-Task-4 — aligned to match.
     private static let rerouteCooldownSeconds: TimeInterval = 20
-    private static let locatingSpoken = "正在定位…"
-    private static let noFixDetail = "还没获取到精确位置。请检查 Max 的定位和精确位置权限，并到室外或空旷处重试。"
+    private static var locatingSpoken: String { L("nav.locating") }
+    private static var noFixDetail: String { L("loc.noFix", ("name", "Max")) }
 
     private let search: NavigationRouteSearching
     private let stream: LocationStreaming
@@ -117,7 +117,7 @@ final class NavigationController: DeviceActionHandler {
                 self.resolveFirstFix(nil)
                 self.search.failPending()
                 if let route = self.route {
-                    _ = self.relayPrompt(route, kind: "locationLost")
+                    if !self.relayPrompt(route, kind: "locationLost") { self.speak(L("nav.locationLost")) }
                     self.resolveConfirmation(false)
                     self.route = nil
                     self.stream.stop()
@@ -214,7 +214,7 @@ final class NavigationController: DeviceActionHandler {
                 confirmationID = UUID()
                 publish(location: latestLocation ?? origin)
                 if !relayPrompt(resolved, kind: "confirm") {
-                    speak("请确认目的地：\(resolved.destinationName)。确认后开始导航。")
+                    speak(L("nav.confirmSpoken", ("dest", resolved.destinationName)))
                 }
                 confirmationTimeout = Task { @MainActor [weak self] in
                     guard let self else { return }
@@ -350,7 +350,7 @@ final class NavigationController: DeviceActionHandler {
             lastRerouteAt = -.greatestFiniteMagnitude
             stream.stop()
             onGuidance(nil)
-            if sendRelayPrompt == nil { speak("已停止导航。") }
+            if sendRelayPrompt == nil { speak(L("nav.stopped")) }
         } else {
             // No route yet, but a start was genuinely in flight, and
             // nothing else needs the stream anymore. Silent here: the
@@ -425,7 +425,7 @@ final class NavigationController: DeviceActionHandler {
         progress = update.progress
 
         if update.arrived {
-            if !relayPrompt(route, kind: "arrived") { speak("已到达目的地。") }
+            if !relayPrompt(route, kind: "arrived") { speak(L("nav.arrived")) }
         } else if let threshold = update.firedThreshold, let prompt = update.spokenPrompt {
             let alongRoute = route.totalDistanceMeters - update.remainingMeters
             let distance = max(0, route.steps[maneuverIndex].alongRouteMeters - alongRoute)
@@ -462,7 +462,7 @@ final class NavigationController: DeviceActionHandler {
         let generation = navigationGeneration
         rerouteAttemptId += 1
         let attemptId = rerouteAttemptId
-        if let route, !relayPrompt(route, kind: "offRoute") { speak("已偏离路线，正在重新规划。") }
+        if let route, !relayPrompt(route, kind: "offRoute") { speak(L("nav.offRoute")) }
         Task { @MainActor in
             defer { if attemptId == rerouteAttemptId { rerouting = false } }
             let fresh = await search.reroute(to: destination, from: origin)
@@ -512,7 +512,7 @@ final class NavigationController: DeviceActionHandler {
                 resolveConfirmation(false)
                 navigationGeneration += 1
                 starting = false
-                if let route, !relayPrompt(route, kind: "rerouteFailed") { speak("无法重新规划路线，已停止导航。") }
+                if let route, !relayPrompt(route, kind: "rerouteFailed") { speak(L("nav.rerouteFailed")) }
                 route = nil
                 rerouting = false
                 stream.stop()
@@ -540,12 +540,14 @@ final class NavigationController: DeviceActionHandler {
 
     private func publish(location: CLLocationCoordinate2D?, update: GuidanceUpdate? = nil) {
         guard let route else { return }
-        let maneuver = update?.currentInstruction ?? route.steps.first?.instruction
+        let maneuver = update?.currentInstruction ?? route.steps.first?.displayInstruction
+        let original = update?.currentOriginalInstruction ?? route.steps.first?.instruction
         onGuidance(GuidanceState(
             destinationName: route.destinationName,
             polyline: route.polyline,
             currentLocation: location,
             maneuverInstruction: maneuver,
+            maneuverOriginalInstruction: original,
             distanceToManeuverMeters: update?.distanceToManeuverMeters ?? route.steps.first?.alongRouteMeters ?? route.totalDistanceMeters,
             remainingDistanceMeters: update?.remainingMeters ?? route.totalDistanceMeters,
             remainingSeconds: update?.remainingSeconds ?? route.totalEtaSeconds,

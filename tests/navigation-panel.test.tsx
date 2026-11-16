@@ -38,10 +38,7 @@ describe("NavigationPanel", () => {
     ["还没定位到，到室外或空旷处再说一次。", "No location fix yet. Move outdoors or to an open area, then try again."],
     ["没有找到目的地，请换一个名称重新导航。", "Destination not found. Try navigation again with a different name."],
     ["地图服务暂不可用，请稍后重新发起导航。", "The map service is unavailable. Try navigation again later."],
-    [
-      "重新规划失败，导航已停止。请稍后重新发起导航。",
-      "Replanning failed and navigation stopped. Try navigation again later."
-    ],
+    ["重新规划失败，导航已停止。请稍后重新发起导航。", "I couldn't find a new route. Navigation has stopped."],
     ["Custom provider detail", "Custom provider detail"]
   ])("localizes known navigation failure %s while preserving custom error detail", async (message, expected) => {
     vi.stubGlobal("window", { localStorage: { getItem: () => "en-US" } });

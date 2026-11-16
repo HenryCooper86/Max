@@ -5,6 +5,7 @@ import { createMusicController, EMPTY_MUSIC, type MusicControl } from "../lib/mu
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { TurnState } from "../components/VisorVisual";
+import { useLanguage } from "../components/LanguageToggle";
 import {
   IDLE_CLOSE_CODE,
   type AgentHealth,
@@ -193,6 +194,11 @@ export function useHelmetAgent() {
   const voicePersonalityRef = useRef<VoicePersonality>(storedSettings.voicePersonality ?? "concise");
   const voiceProviderRef = useRef(storedSettings.voiceProvider ?? "");
   const equalizerRef = useRef<VoiceEqualizer | null>(storedSettings.equalizer ?? null);
+  // The app's UI language ("zh" / "en"); the assistant answers in it when it
+  // speaks it. Sent with every session.start.
+  const { language: uiLanguage } = useLanguage();
+  const sessionLanguage: "zh" | "en" = uiLanguage === "en-US" ? "en" : "zh";
+  const sessionLanguageRef = useRef(sessionLanguage);
   const equalizerEnabledRef = useRef(storedSettings.equalizerOff !== true);
   // What the relay offers, from the latest /health; read at session start.
   const equalizerOptionsRef = useRef<VoiceEqualizerOptions | undefined>(undefined);
@@ -262,7 +268,8 @@ export function useHelmetAgent() {
       // never yet requested this session) must not be treated as a denial,
       // or the very first hands-free nav command of a session would wrongly
       // fail before geolocation ever got a chance to prompt.
-      hasLocationPermission: () => locationPermissionRef.current !== "denied"
+      hasLocationPermission: () => locationPermissionRef.current !== "denied",
+      language: () => sessionLanguageRef.current
     })
   );
 
@@ -561,6 +568,7 @@ export function useHelmetAgent() {
           voicePersonality: voicePersonalityRef.current,
           ...(voiceProviderRef.current ? { voiceProvider: voiceProviderRef.current } : {}),
           ...(sessionEqualizer ? { equalizer: sessionEqualizer } : {}),
+          language: sessionLanguageRef.current,
           rideMode: rideModeRef.current,
           scenario: scenarioRef.current,
           ...(location ? { lat: location.lat, lon: location.lon } : {}),
@@ -638,11 +646,13 @@ export function useHelmetAgent() {
           // Proactive ADAS warning: cut any in-progress agent speech so the
           // alert is heard immediately, speak it, then surface it and auto-dismiss.
           if (event.interrupt) stopAgentSpeech();
-          void speakWarning(`${event.message} ${event.advice}`).then((result) => {
-            if (socketRef.current === socket && result === "unavailable") {
-              setStatus("本地安全提示音不可用，已尝试系统语音；请留意屏幕警报");
+          void speakWarning(`${event.message} ${event.advice}`, { language: sessionLanguageRef.current }).then(
+            (result) => {
+              if (socketRef.current === socket && result === "unavailable") {
+                setStatus("本地安全提示音不可用，已尝试系统语音；请留意屏幕警报");
+              }
             }
-          });
+          );
           // Only status events (gated on transmittingRef) ever map turnState
           // back, so don't set "speaking" when hands-free is off — it would
           // stick until the next mic toggle.
@@ -849,6 +859,14 @@ export function useHelmetAgent() {
     socketRef.current.close();
     connect();
   }, [cancelEqualizerRestart, connect, navController]);
+
+  // Switching the app's language mid-session restarts it, like a new voice,
+  // so the assistant changes language too.
+  useEffect(() => {
+    if (sessionLanguageRef.current === sessionLanguage) return;
+    sessionLanguageRef.current = sessionLanguage;
+    if (socketRef.current) restartSession();
+  }, [sessionLanguage, restartSession]);
 
   // Switch the assistant voice. The live Doubao speaker is fixed at session
   // start, so restart the session; the mock path just uses browser TTS.

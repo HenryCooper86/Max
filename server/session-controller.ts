@@ -1,3 +1,6 @@
+import { assistant } from "./assistant";
+import { sessionLanguage } from "./prompts";
+import { localizeOutgoing } from "./relay-speech";
 import { normalizeEqualizer } from "./audio-eq";
 import type { RawData, WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
@@ -60,6 +63,7 @@ const MAX_TESTER_REGION_BYTES = 96;
 const MAX_TESTING_META_BYTES = 160;
 const RDK_DEVICE_ID = /^rdk-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const VOICE_PROVIDER_ID = /^[a-z][a-z0-9-]{0,31}$/;
+const LANGUAGE_TAG = /^[a-z]{2,3}(?:[-_][A-Za-z0-9]{2,8}){0,3}$/i;
 
 export function normalizeRawData(data: RawData): Buffer {
   if (Buffer.isBuffer(data)) return data;
@@ -526,6 +530,9 @@ export function parseClientEvent(data: RawData): ClientEvent {
   ) {
     throw new Error("Invalid voiceProvider");
   }
+  if (value.language !== undefined && (typeof value.language !== "string" || !LANGUAGE_TAG.test(value.language))) {
+    throw new Error("Invalid language");
+  }
   if (value.equalizer !== undefined) {
     // Sanitised rather than rejected: out-of-range bands clamp, junk drops.
     const equalizer = normalizeEqualizer(value.equalizer);
@@ -674,6 +681,7 @@ export class AgentSessionController {
         );
       }
       if (event.type === "session.start") {
+        this.speechLanguage = sessionLanguage(event.language, assistant().languages);
         const durableMemory = this.authenticatedUser ? userConversationMemory(this.authenticatedUser.id) : null;
         // Once durable memory is enabled, the server is authoritative for a
         // login identity. A newly logged-in user must never inherit the
@@ -845,7 +853,11 @@ export class AgentSessionController {
     }
   }
 
-  private send(payload: unknown) {
+  /** "" keeps the relay's wording; set from session.start (see sessionLanguage). */
+  private speechLanguage = "";
+
+  private send(original: unknown) {
+    const payload = localizeOutgoing(original, this.speechLanguage);
     if (this.client.readyState === this.client.OPEN) {
       const encoded = JSON.stringify(payload);
       metrics.serverEvent(Buffer.byteLength(encoded));

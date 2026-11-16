@@ -33,27 +33,27 @@ fun GuidanceRouteMap(guidance: NavGuidanceState, detailed: Boolean = false, foll
     val uri = LocalUriHandler.current
     when (mapAvailability(consent, BuildConfig.AMAP_ANDROID_KEY, guidance.route)) {
         MapAvailability.CONSENT_REQUIRED -> {
-            MapNote("地图未启用 · 语音导航仍可使用")
-            VisorButton("启用地图", { showConsent = true })
+            MapNote(tr(Str.MAP_OFF))
+            VisorButton(tr(Str.ENABLE_MAP), { showConsent = true })
         }
-        MapAvailability.MISSING_KEY -> MapNote("地图暂不可用 · 缺少 Android 地图配置")
-        MapAvailability.INVALID_ROUTE -> MapNote("地图暂不可用 · 路线数据不足")
+        MapAvailability.MISSING_KEY -> MapNote(tr(Str.MAP_NO_KEY))
+        MapAvailability.INVALID_ROUTE -> MapNote(tr(Str.MAP_BAD_ROUTE))
         MapAvailability.READY -> NativeGuidanceMap(guidance, detailed, followsRider, viewportModifier)
     }
     if (showConsent) {
         VisorAlertDialog(
             onDismissRequest = { showConsent = false; prefs.edit().putBoolean("consent_v1", false).apply() },
-            title = "高德地图与隐私",
+            title = tr(Str.AMAP_TITLE),
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(com.horizon.maxhelmet.ui.theme.VisorSpace.x2)) {
-                    DialogText("启用后，路线和当前位置会提供给高德地图用于地图显示，高德还会接收加载地图所需的网络请求。${AssistantBranding.name} 使用现有位置数据，不启用高德定位服务。")
-                    VisorButton("查看高德地图隐私政策", { uri.openUri("https://lbs.amap.com/pages/privacy/") }, style = VisorButtonStyle.GHOST)
+                    DialogText(tr(Str.AMAP_BODY, "name" to AssistantBranding.name))
+                    VisorButton(tr(Str.AMAP_POLICY), { uri.openUri("https://lbs.amap.com/pages/privacy/") }, style = VisorButtonStyle.GHOST)
                 }
             },
-            confirmButton = { VisorButton("同意并启用", {
+            confirmButton = { VisorButton(tr(Str.AGREE_ENABLE), {
                 prefs.edit().putBoolean("consent_v1", true).apply(); consent = true; showConsent = false
             }, style = VisorButtonStyle.PRIMARY) },
-            dismissButton = { VisorButton("暂不启用", {
+            dismissButton = { VisorButton(tr(Str.NOT_NOW), {
                 prefs.edit().putBoolean("consent_v1", false).apply(); showConsent = false
             }, style = VisorButtonStyle.GHOST) }
         )
@@ -74,7 +74,7 @@ private fun NativeGuidanceMap(guidance: NavGuidanceState, detailed: Boolean, fol
             MapView(context).apply { onCreate(Bundle()) }
         }.getOrNull()
     }
-    if (mapView == null) { MapNote("地图加载失败 · 语音导航仍可使用"); return }
+    if (mapView == null) { MapNote(tr(Str.MAP_FAILED)); return }
     val accentArgb = Visor.colors.accent.toArgb()
     val renderer = remember(mapView, accentArgb) { RouteMapRenderer(mapView, accentArgb) }
     DisposableEffect(mapView, lifecycle) {
@@ -103,12 +103,12 @@ private fun NativeGuidanceMap(guidance: NavGuidanceState, detailed: Boolean, fol
         })
         if (!loaded || failed) Surface(color = Visor.colors.surface2) {
             Text(
-                if (failed) "地图加载失败 · 语音导航仍可使用" else "正在加载地图…",
+                if (failed) tr(Str.MAP_FAILED) else tr(Str.MAP_LOADING),
                 Modifier.padding(8.dp), color = Visor.colors.textSecondary, style = VisorType.caption
             )
         }
     }
-    if (!detailed) VisorButton("查看完整路线", { renderer.fit() }, style = VisorButtonStyle.GHOST)
+    if (!detailed) VisorButton(tr(Str.VIEW_FULL_ROUTE), { renderer.fit() }, style = VisorButtonStyle.GHOST)
 }
 
 @Composable
@@ -143,14 +143,14 @@ private class RouteMapRenderer(private val view: MapView, private val routeColor
         val next = state.route?.steps?.getOrNull(state.maneuverIndex)
         if (next != null) {
             val position = LatLng(next.coordinate.lat, next.coordinate.lon)
-            if (turn == null) turn = map.addMarker(MarkerOptions().position(position).title(next.instruction)
+            if (turn == null) turn = map.addMarker(MarkerOptions().position(position).title(next.spoken)
                 .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_ORANGE)))
-            else { turn?.position = position; turn?.title = next.instruction }
+            else { turn?.position = position; turn?.title = next.spoken }
         } else { turn?.remove(); turn = null }
         if (modeChanged && !following) fit()
         state.riderCoordinate?.let { fix ->
             val position = LatLng(fix.lat, fix.lon)
-            if (rider == null) rider = map.addMarker(MarkerOptions().position(position).title("当前位置")
+            if (rider == null) rider = map.addMarker(MarkerOptions().position(position).title(tr(Str.MAP_YOU))
                 .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE)))
             else rider?.position = position
             if (following && (modeChanged || fix != lastRider)) map.moveCamera(CameraUpdateFactory.newLatLngZoom(position, 17f))

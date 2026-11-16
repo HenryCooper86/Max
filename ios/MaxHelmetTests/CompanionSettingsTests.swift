@@ -223,7 +223,7 @@ final class CompanionSettingsTests: XCTestCase {
 
     func testSettingsSourceConsumesPurePresentationAndUsesNormalSectionNumberPadAndConfirmation() throws {
         let source = try String(contentsOf: iosRoot.appendingPathComponent("MaxHelmet/UI/AgentSettingsPanel.swift"))
-        XCTAssertTrue(source.contains("VisorGroup(title: \"RDK 头盔\")"))
+        XCTAssertTrue(source.contains("VisorGroup(title: L(\"set.rdk\"))"))   // "RDK 头盔" / "RDK helmet"
         XCTAssertTrue(source.contains("CompanionSettingsPresentation.make"))
         XCTAssertTrue(source.contains(".keyboardType(.numberPad)"))
         XCTAssertTrue(source.contains(".confirmationDialog"))

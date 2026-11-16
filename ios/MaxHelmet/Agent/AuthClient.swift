@@ -62,7 +62,7 @@ final class AuthClient: NSObject {
         completion: @escaping (Result<Login, Failure>) -> Void
     ) {
         guard let base = Self.authBaseURL(fromRelay: relayURL) else {
-            completion(.failure(Failure(message: "中继地址无效，请检查设置")))
+            completion(.failure(Failure(message: L("auth.badURL"))))
             return
         }
         allowSelfSigned = allowSelfSignedTls
@@ -113,7 +113,7 @@ final class AuthClient: NSObject {
         if let message = object?["error"] as? String, !message.isEmpty {
             return .failure(Failure(message: message))
         }
-        return .failure(Failure(message: transportError == nil ? "登录失败，请重试" : "无法连接服务器，请检查中继地址"))
+        return .failure(Failure(message: transportError == nil ? L("auth.loginFailed") : L("auth.unreachable")))
     }
 }
 

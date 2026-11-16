@@ -110,11 +110,11 @@ struct GuidanceCard: View {
 
     private var distanceText: String {
         let m = guidance.distanceToManeuverMeters
-        return m >= 1000 ? String(format: "%.1f 公里", m / 1000) : "\(Int(m)) 米"
+        return navigationDistance(m, rounding: .towardZero)
     }
 
     private var etaText: String {
-        "\(Int((guidance.remainingSeconds / 60).rounded())) 分钟 · \(String(format: "%.1f", guidance.remainingDistanceMeters / 1000)) 公里"
+        navigationETA(guidance)
     }
 
     var body: some View {
@@ -163,13 +163,13 @@ struct GuidanceCard: View {
     private var summaryWithConfirmation: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let id = guidance.confirmationID {
-                Text("确认目的地：\(guidance.destinationName)")
+                Text(L("nav.confirmTitle", ("dest", guidance.destinationName)))
                     .visorFont(.body, .semibold).foregroundStyle(Visor.text)
                 Text(etaText).visorFont(.subhead, mono: false).foregroundStyle(Visor.textSecondary)
                 HStack(spacing: Visor.Space.s2) {
-                    Button("取消") { onConfirm(id, false) }
+                    Button(L("common.cancel")) { onConfirm(id, false) }
                         .buttonStyle(.visor(.secondary))
-                    Button("确认导航") { onConfirm(id, true) }
+                    Button(L("nav.confirmGo")) { onConfirm(id, true) }
                         .buttonStyle(.visor(.primary))
                 }
             } else { guidanceSummary }
@@ -185,7 +185,7 @@ struct GuidanceCard: View {
                 .overlay(alignment: .topTrailing) {
                     if guidance.confirmationID == nil {
                         Button { showingDetails = true } label: {
-                            Label("导航详情", systemImage: "arrow.up.left.and.arrow.down.right")
+                            Label(L("nav.details"), systemImage: "arrow.up.left.and.arrow.down.right")
                                 .visorFont(.footnote, .semibold)
                                 .foregroundStyle(Visor.text)
                                 .padding(.horizontal, Visor.Space.s3)
@@ -197,7 +197,7 @@ struct GuidanceCard: View {
                     }
                 }
         } else if guidance.confirmationID == nil {
-            Button("打开详细导航") { showingDetails = true }
+            Button(L("nav.openDetails")) { showingDetails = true }
                 .buttonStyle(.visor(.plain, fullWidth: false))
         }
     }
@@ -205,12 +205,12 @@ struct GuidanceCard: View {
     private var guidanceSummary: some View {
         VStack(alignment: .leading, spacing: 10) {
             if guidance.offRoute {
-                Text("重新规划中…")
+                Text(L("nav.rerouting"))
                     .visorFont(.body, .semibold)
                     .foregroundStyle(Visor.warn)
             } else {
                 HStack(spacing: 12) {
-                    Image(systemName: navigationManeuverSymbol(guidance.maneuverInstruction ?? ""))
+                    Image(systemName: navigationManeuverSymbol(guidance.maneuverOriginalInstruction ?? guidance.maneuverInstruction ?? ""))
                         .font(.system(size: 30, weight: .bold))
                         .foregroundStyle(Visor.accent)
                     VStack(alignment: .leading, spacing: 2) {
@@ -241,9 +241,8 @@ struct GuidanceCard: View {
 }
 
 func guidanceCardAccessibilitySummary(_ guidance: GuidanceState) -> String {
-    let distance = guidance.distanceToManeuverMeters >= 1000
-        ? String(format: "%.1f 公里", guidance.distanceToManeuverMeters / 1000)
-        : "\(Int(guidance.distanceToManeuverMeters)) 米"
-    let eta = "\(Int((guidance.remainingSeconds / 60).rounded())) 分钟 · \(String(format: "%.1f", guidance.remainingDistanceMeters / 1000)) 公里"
-    return "导航 \(guidance.destinationName)，\(guidance.maneuverInstruction ?? "")，\(distance)，\(eta)"
+    let distance = navigationDistance(guidance.distanceToManeuverMeters, rounding: .towardZero)
+    let eta = navigationETA(guidance)
+    return L("nav.a11y", ("dest", guidance.destinationName), ("instr", guidance.maneuverInstruction ?? ""),
+             ("dist", distance), ("eta", eta))
 }

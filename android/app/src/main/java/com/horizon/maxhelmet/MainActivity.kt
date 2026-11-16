@@ -65,6 +65,7 @@ class MainActivity : ComponentActivity(), DeviceActivityHost {
 
     override fun onStart() {
         super.onStart()
+        viewModel.syncLanguage()
         viewModel.deviceActions.host = this
         viewModel.camera.attach(this, window.decorView.display?.rotation ?: Surface.ROTATION_0)
         viewModel.music.launchPicker = { ticket ->
@@ -87,6 +88,7 @@ class MainActivity : ComponentActivity(), DeviceActivityHost {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
+        viewModel.syncLanguage()
         window.decorView.post { viewModel.camera.updateRotation(window.decorView.display?.rotation ?: Surface.ROTATION_0) }
     }
 

@@ -24,7 +24,7 @@ enum VoiceGender: String, CaseIterable {
     case female, male
 
     var wire: String { rawValue }
-    var label: String { self == .female ? "女声" : "男声" }
+    var label: String { self == .female ? L("voice.female") : L("voice.male") }
 }
 
 /// Mirror of VoicePersonality in shared/agent.ts, labels from the web HUD.
@@ -34,10 +34,10 @@ enum VoicePersonality: String, CaseIterable {
     var wire: String { rawValue }
     var label: String {
         switch self {
-        case .concise: return "极简"
-        case .friendly: return "友好"
-        case .technical: return "技术"
-        case .rally: return "领航"
+        case .concise: return L("persona.concise")
+        case .friendly: return L("persona.friendly")
+        case .technical: return L("persona.technical")
+        case .rally: return L("persona.rally")
         }
     }
 }
@@ -58,17 +58,17 @@ enum HazardLevel: Int, CaseIterable {
 
     var label: String {
         switch self {
-        case .normal: return "稳定"
-        case .caution: return "注意"
-        case .critical: return "高风险"
+        case .normal: return L("hazard.label.normal")
+        case .caution: return L("hazard.label.caution")
+        case .critical: return L("hazard.label.critical")
         }
     }
 
     var riderAction: String {
         switch self {
-        case .normal: return "保持节奏，专注下一步提示"
-        case .caution: return "放缓一点，扩大车距"
-        case .critical: return "优先靠边，确认安全"
+        case .normal: return L("hazard.action.normal")
+        case .caution: return L("hazard.action.caution")
+        case .critical: return L("hazard.action.critical")
         }
     }
 
@@ -84,10 +84,10 @@ enum RideMode: String, CaseIterable {
     var wire: String { rawValue }
     var label: String {
         switch self {
-        case .ride: return "骑行"
-        case .navigation: return "导航"
-        case .stop: return "停车"
-        case .emergency: return "紧急"
+        case .ride: return L("mode.ride")
+        case .navigation: return L("mode.navigation")
+        case .stop: return L("mode.stop")
+        case .emergency: return L("mode.emergency")
         }
     }
 
@@ -103,13 +103,13 @@ enum DemoScenario: String, CaseIterable {
     var wire: String { rawValue }
     var label: String {
         switch self {
-        case .commute: return "通勤"
-        case .wind: return "横风"
-        case .fuel: return "低油"
-        case .group: return "小队"
-        case .emergency: return "紧急"
-        case .adas: return "ADAS"
-        case .crash: return "事故"
+        case .commute: return L("scenario.commute")
+        case .wind: return L("scenario.wind")
+        case .fuel: return L("scenario.fuel")
+        case .group: return L("scenario.group")
+        case .emergency: return L("scenario.emergency")
+        case .adas: return L("scenario.adas")
+        case .crash: return L("scenario.crash")
         }
     }
 
@@ -152,18 +152,18 @@ func rideModeHazard(_ mode: RideMode) -> HazardLevel {
 /// Mirror of NETWORK_LABELS in src/main.tsx.
 func networkLabel(_ network: String) -> String {
     switch network {
-    case "online": return "在线"
-    case "degraded": return "弱网"
-    default: return "离线"
+    case "online": return L("network.online")
+    case "degraded": return L("network.degraded")
+    default: return L("network.offline")
     }
 }
 
 /// Mirror of RESPONSE_MODE_LABELS in src/main.tsx.
 func responseModeLabel(_ responseMode: String) -> String {
     switch responseMode {
-    case "normal": return "正常"
-    case "emergency": return "紧急"
-    default: return "极简"
+    case "normal": return L("response.normal")
+    case "emergency": return L("response.emergency")
+    default: return L("response.concise")
     }
 }
 
@@ -198,6 +198,18 @@ struct TranscriptItem: Identifiable, Equatable, Codable {
 /// and in the admin session replay.
 let turnFlagReasons = ["听错了", "回答不对", "太慢", "不安全"]
 
+/// The reason as shown to the wearer. The wire value stays Chinese (it lands on
+/// the relay-side turn and in the admin replay); only the display is localised.
+func turnFlagReasonLabel(_ reason: String) -> String {
+    switch reason {
+    case "听错了": return L("flag.mishear")
+    case "回答不对": return L("flag.wrong")
+    case "太慢": return L("flag.slow")
+    case "不安全": return L("flag.unsafe")
+    default: return reason
+    }
+}
+
 struct Weather: Equatable {
     let description: String
     let temperatureC: Int
@@ -230,15 +242,15 @@ struct ProviderCapabilities: Equatable {
 /// Mirror of the ride.context event payload / DEFAULT_RIDE_CONTEXT in src/main.tsx.
 struct RideContext: Equatable {
     var mode: RideMode = .navigation
-    var modeLabel: String = "导航"
+    var modeLabel: String = L("mode.navigation")
     var scenario: DemoScenario = .commute
-    var scenarioLabel: String = "通勤"
+    var scenarioLabel: String = L("scenario.commute")
     var speedKmh: Int = 0
-    var routePhase: String = "等待骑行上下文"
+    var routePhase: String = L("ride.default.routePhase")
     var network: String = "offline"
     var batteryPct: Int = 0
     var hazardLevel: HazardLevel = .normal
-    var glanceableFocus: String = "下一步提示"
+    var glanceableFocus: String = L("ride.default.focus")
 }
 
 /// Mirror of the session.memory event payload / DEFAULT_MEMORY in src/main.tsx.
@@ -264,12 +276,7 @@ struct HazardAlert: Equatable {
     /// Chinese label for the threat direction.
     var directionLabel: String {
         switch direction {
-        case "front": return "前方"
-        case "rear": return "后方"
-        case "left": return "左侧"
-        case "right": return "右侧"
-        case "left_rear": return "左后方"
-        case "right_rear": return "右后方"
+        case "front", "rear", "left", "right", "left_rear", "right_rear": return L("hazard.dir." + direction)
         default: return ""
         }
     }
@@ -448,7 +455,7 @@ func parseAgentEvent(_ text: String) -> AgentEvent {
             windSpeedKmh: int("windSpeedKmh"),
             isDay: bool("isDay", true),
             riskLevel: HazardLevel.fromWire(str("riskLevel", "normal")),
-            riderAdvice: str("riderAdvice", "天气风险较低，保持正常安全骑行。")
+            riderAdvice: str("riderAdvice", L("ride.default.advice"))
         ))
 
     case ServerEventTypes.rideContext:
@@ -462,7 +469,7 @@ func parseAgentEvent(_ text: String) -> AgentEvent {
             scenario: scenario,
             scenarioLabel: str("scenarioLabel", scenario.label),
             speedKmh: int("speedKmh"),
-            routePhase: routePhase.isEmpty ? "等待路线信息" : routePhase,
+            routePhase: routePhase.isEmpty ? L("ride.default.routePhase2") : routePhase,
             network: network.isEmpty ? "online" : network,
             batteryPct: int("batteryPct"),
             hazardLevel: HazardLevel.fromWire(str("hazardLevel")),
@@ -591,7 +598,8 @@ private func parseManeuverSteps(_ any: Any?) -> [ManeuverStep]? {
         result.append(ManeuverStep(
             instruction: item["instruction"] as? String ?? "",
             coordinate: coordinate,
-            alongRouteMeters: alongRouteMeters
+            alongRouteMeters: alongRouteMeters,
+            localizedInstruction: (item["localizedInstruction"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         ))
     }
     return result
@@ -617,7 +625,9 @@ func buildSessionStart(
     browserLanguage: String? = nil,
     networkType: String? = nil,
     memory: SessionMemory? = nil,
-    voiceProvider: String? = nil
+    voiceProvider: String? = nil,
+    /// The app's effective language ("zh" / "en"); the key is omitted when nil.
+    language: String? = nil
 ) -> String {
     var payload: [String: Any] = [
         "type": "session.start",
@@ -631,6 +641,7 @@ func buildSessionStart(
         "testingTestCaseId": testingTestCaseId
     ]
     if let voiceProvider, !voiceProvider.isEmpty { payload["voiceProvider"] = voiceProvider }
+    if let language, !language.isEmpty { payload["language"] = language }
     if let testerId, !testerId.isEmpty { payload["testerId"] = testerId }
     if let testerRegion, !testerRegion.isEmpty { payload["testerRegion"] = testerRegion }
     if let testingRunId, !testingRunId.isEmpty { payload["testingRunId"] = testingRunId }
@@ -830,6 +841,12 @@ func mapConnectionState(_ state: String, previous: ConnectionState) -> Connectio
 }
 
 /// Port of detectLanguage in shared/language.ts — any Han character means Chinese.
+/// The speech-synthesis voice for a line of text: Chinese when it contains
+/// Han characters, otherwise English, so English lines never get a Chinese voice.
+func speechVoiceLanguage(for text: String) -> String {
+    detectLanguage(text) == "zh" ? "zh-CN" : "en-US"
+}
+
 func detectLanguage(_ text: String) -> String {
     for scalar in text.unicodeScalars where isHan(scalar) {
         return "zh"

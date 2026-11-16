@@ -3,8 +3,14 @@ import { randomUUID } from "node:crypto";
 import { RiderLocationContext, asksCurrentLocation } from "../rider-location";
 import { synthesizeMaxSpeech } from "../max-speech";
 import { assistant, basePersonaPrompt, DEFAULT_ASSISTANT_PROFILE, identityPrompt, wakeHint } from "../assistant";
-import { buildLanguageInteractionPrompt, buildToolGroundingPrompt } from "../prompts";
+import {
+  buildLanguageInteractionPrompt,
+  buildSessionLanguagePrompt,
+  buildToolGroundingPrompt,
+  sessionLanguage
+} from "../prompts";
 import { createEqualizer, type Equalizer } from "../audio-eq";
+import { localizeOutgoing } from "../relay-speech";
 import { sessionEqualizer } from "../session-equalizer";
 import type { AgentProvider, ProviderSessionContext, ProviderTelemetry, SessionStartEvent, VoiceGender } from "./types";
 import { LIVE_CAPABILITIES } from "../../shared/agent";
@@ -796,7 +802,9 @@ export function createDoubaoProvider(
       .finally(() => metrics.maxSpeechCompleted(outcome, Date.now() - requestedAt));
   }
 
-  function sendClient(payload: unknown) {
+  function sendClient(original: unknown) {
+    // Relay-spoken lines go out in the session's language.
+    let payload = localizeOutgoing(original, speechLanguage);
     const event = payload as {
       type?: string;
       speaker?: string;
@@ -1316,6 +1324,8 @@ export function createDoubaoProvider(
   let sessionPlatform: string | undefined;
   // Replaced at session.start with the wearer's (or the profile's) settings.
   let equalizer: Equalizer = createEqualizer(undefined);
+  /** "" keeps the relay's own wording; "en" when the wearer's app is in English. */
+  let speechLanguage = "";
 
   // The helmet has no way to speak generated text: it drops `useBrowserSpeech`
   // transcripts, and pre-rendered alert WAVs cannot cover arbitrary wording. So
@@ -2269,6 +2279,14 @@ export function createDoubaoProvider(
       // A restarting client (voice/personality/mode switch) echoes back its last
       // session.memory snapshot so the agent keeps its short-term memory.
       memory = restoreSessionMemory(event.memory, rideContext.mode);
+      // The app's language decides the session's starting language; what the
+      // rider then actually speaks can still move it (updateSessionMemory).
+      const appLanguage = sessionLanguage(event.language, assistant().languages);
+      speechLanguage = appLanguage;
+      if (appLanguage === "en" && !event.memory?.language) memory = { ...memory, language: "en" };
+      const sessionLanguageRule = appLanguage
+        ? `\n${buildSessionLanguagePrompt(event.language, assistant().languages)}`
+        : "";
       const previousConversationPrompt = buildPreviousConversationPrompt(
         [],
         context?.previousConversation?.facts ?? []
@@ -2281,6 +2299,7 @@ export function createDoubaoProvider(
         `\n\n[骑行上下文] ${buildRideContextSummary(rideContext)}。` +
         `\n${buildVoiceSettingPrompt(event.voiceGender ?? "female")}` +
         `\n${buildLanguageInteractionPrompt()}` +
+        sessionLanguageRule +
         `你必须根据模式调整回答长度和安全策略；紧急模式优先生命安全，导航模式只给下一步。\n${buildSafetyPrompt(
           rideContext,
           memory

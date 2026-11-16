@@ -197,10 +197,16 @@ export function step(position: GeoPoint, route: NavRouteEvent, progress: Guidanc
         const urgent = due.reduce((most, candidate) => (candidate.meters < most.meters ? candidate : most));
         firedThresholds = [...firedThresholds, ...due.map((t) => t.id)];
         firedThreshold = urgent.id;
+        // A route planned for an English session carries each instruction in
+        // English beside the original; speak that, with an English lead-in.
+        const localized = currentManeuver.localizedInstruction;
+        const ahead = Math.round(distanceToManeuver / 50) * 50;
         spokenPrompt =
           urgent.id === "now"
-            ? currentManeuver.instruction
-            : `前方${Math.round(distanceToManeuver / 50) * 50}米，${currentManeuver.instruction}`;
+            ? (localized ?? currentManeuver.instruction)
+            : localized
+              ? `In ${ahead} metres, ${localized.charAt(0).toLowerCase()}${localized.slice(1)}`
+              : `前方${ahead}米，${currentManeuver.instruction}`;
       }
 
       const reachedManeuver =

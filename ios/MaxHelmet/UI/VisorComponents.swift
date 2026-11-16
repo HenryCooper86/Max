@@ -134,7 +134,7 @@ struct VisorChevronRow: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.4)
+        .opacity(enabled ? 1 : Visor.disabledOpacity)
     }
 }
 
@@ -215,7 +215,7 @@ struct VisorSegmented<Value: Hashable>: View {
                         .frame(minHeight: 32)
                         .background(
                             RoundedRectangle(cornerRadius: Visor.Radius.control - 2, style: .continuous)
-                                .fill(selected ? tint.opacity(0.14) : Color.clear)
+                                .fill(selected ? (option.tint == nil ? Visor.accentSoft : Visor.soft(tint)) : Color.clear)
                         )
                         .frame(minHeight: Visor.hit)
                         .contentShape(Rectangle())
@@ -232,7 +232,7 @@ struct VisorSegmented<Value: Hashable>: View {
         )
         .visorAnimation(selection)
         .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.4)
+        .opacity(enabled ? 1 : Visor.disabledOpacity)
     }
 }
 
@@ -298,7 +298,7 @@ struct VisorButtonStyle: ButtonStyle {
             switch kind {
             case .primary: return Visor.accent
             case .secondary: return Visor.surface3
-            case .destructive: return Visor.danger.opacity(0.14)
+            case .destructive: return Visor.dangerSoft
             case .plain: return .clear
             }
         }()
@@ -309,7 +309,7 @@ struct VisorButtonStyle: ButtonStyle {
             .frame(maxWidth: fullWidth ? .infinity : nil, minHeight: Visor.hit)
             .background(bg, in: RoundedRectangle(cornerRadius: Visor.Radius.control, style: .continuous))
             .contentShape(RoundedRectangle(cornerRadius: Visor.Radius.control, style: .continuous))
-            .opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1) : 0.4)
+            .opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1) : Visor.disabledOpacity)
             .animation(reduceMotion ? nil : .easeOut(duration: Visor.Motion.fast), value: configuration.isPressed)
     }
 }
@@ -320,8 +320,19 @@ extension ButtonStyle where Self == VisorButtonStyle {
     }
 }
 
+private struct VisorPillCompactKey: EnvironmentKey { static let defaultValue = false }
+
+extension EnvironmentValues {
+    /// Tighter pill padding, used when four English labels must share one row.
+    var visorPillCompact: Bool {
+        get { self[VisorPillCompactKey.self] }
+        set { self[VisorPillCompactKey.self] = newValue }
+    }
+}
+
 /// Utility pill (字幕 / 静音 / 相册 / 设置). Capsule, >= 44pt tall.
 struct VisorPillLabel: View {
+    @Environment(\.visorPillCompact) private var compact
     let icon: String
     let label: String
     var active = false
@@ -329,15 +340,15 @@ struct VisorPillLabel: View {
 
     var body: some View {
         let color = tint ?? Visor.accent
-        HStack(spacing: Visor.Space.s2 - 2) {
+        HStack(spacing: compact ? 4 : Visor.Space.s2 - 2) {
             Image(systemName: icon).font(.system(size: 13, weight: .semibold))
             Text(label).visorFont(.footnote, .medium).lineLimit(1)
         }
         .foregroundStyle(active ? color : Visor.textSecondary)
-        .padding(.horizontal, Visor.Space.s4 - 2)
+        .padding(.horizontal, compact ? 9 : Visor.Space.s4 - 2)
         .frame(minHeight: 36)
-        .background(Capsule().fill(active ? color.opacity(0.14) : Visor.surface2))
-        .overlay(Capsule().strokeBorder(active ? color.opacity(0.4) : Visor.line, lineWidth: Visor.hairline))
+        .background(Capsule().fill(active ? (tint == nil ? Visor.accentSoft : Visor.soft(color)) : Visor.surface2))
+        .overlay(Capsule().strokeBorder(active ? color.opacity(0.55) : Visor.line, lineWidth: Visor.hairline))
         .frame(minHeight: Visor.hit)
         .contentShape(Capsule())
     }
@@ -357,7 +368,7 @@ struct VisorSheetHeader: View {
                 .foregroundStyle(Visor.text)
                 .accessibilityAddTraits(.isHeader)
             Spacer()
-            Button("完成", action: onDone)
+            Button(L("common.done"), action: onDone)
                 .buttonStyle(.visor(.plain, fullWidth: false))
         }
     }

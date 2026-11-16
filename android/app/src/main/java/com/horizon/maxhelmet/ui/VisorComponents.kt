@@ -71,7 +71,7 @@ internal fun VisorCard(
             .fillMaxWidth()
             .clip(VisorShapes.card)
             .background(c.surface1)
-            .border(1.dp, borderColor ?: c.line, VisorShapes.card)
+            .border(Visor.metrics.lineWidth, borderColor ?: c.line, VisorShapes.card)
             .padding(VisorSpace.x4),
         verticalArrangement = Arrangement.spacedBy(VisorSpace.x2)
     ) {
@@ -96,12 +96,12 @@ internal fun VisorButton(
         VisorButtonStyle.PRIMARY -> c.accent to c.onAccent
         VisorButtonStyle.SECONDARY -> c.surface3 to c.text
         VisorButtonStyle.GHOST -> Color.Transparent to c.text
-        VisorButtonStyle.DANGER -> c.danger.copy(alpha = 0.14f) to c.danger
+        VisorButtonStyle.DANGER -> c.dangerSoft to c.danger
     }
     Row(
         modifier = modifier
             .heightIn(min = 48.dp)
-            .alpha(if (enabled) 1f else 0.4f)
+            .alpha(if (enabled) 1f else Visor.metrics.disabledOpacity)
             .clip(VisorShapes.control)
             .background(bg)
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
@@ -125,7 +125,7 @@ internal fun VisorChip(
 ) {
     val c = Visor.colors
     val bg by animateColorAsState(
-        if (selected) selectedColor.copy(alpha = 0.14f) else c.surface2,
+        if (selected) c.soft(selectedColor) else c.surface2,
         tween(VisorMotion.FAST, easing = VisorMotion.easeOut), label = "chipBg"
     )
     val fg = if (selected) selectedColor else c.textSecondary
@@ -181,8 +181,8 @@ internal fun SettingsGroup(
                 .fillMaxWidth()
                 .clip(VisorShapes.card)
                 .background(c.line)
-                .border(1.dp, c.line, VisorShapes.card),
-            verticalArrangement = Arrangement.spacedBy(1.dp)
+                .border(Visor.metrics.lineWidth, c.line, VisorShapes.card),
+            verticalArrangement = Arrangement.spacedBy(Visor.metrics.lineWidth)
         ) { content() }
         if (footer != null) {
             Text(footer, color = c.textTertiary, style = VisorType.caption, modifier = Modifier.padding(horizontal = VisorSpace.x1))
@@ -208,7 +208,7 @@ internal fun SettingsRow(
             .fillMaxWidth()
             .background(c.surface1)
             .then(if (onClick != null) Modifier.clickable(enabled = enabled, role = Role.Button, onClick = onClick) else Modifier)
-            .alpha(if (enabled) 1f else 0.5f)
+            .alpha(if (enabled) 1f else Visor.metrics.disabledOpacity)
             .heightIn(min = 56.dp)
             .padding(horizontal = VisorSpace.x4, vertical = VisorSpace.x3),
         verticalAlignment = Alignment.CenterVertically,
@@ -272,19 +272,20 @@ internal fun <T> SegmentedControl(
         modifier = modifier
             .clip(VisorShapes.control)
             .background(c.surface2)
-            .border(1.dp, c.line, VisorShapes.control)
+            .border(Visor.metrics.lineWidth, c.line, VisorShapes.control)
     ) {
         options.forEach { option ->
             val isSelected = option == selected
             val tint = selectedColor?.invoke(option) ?: c.accent
             val bg by animateColorAsState(
-                if (isSelected) tint.copy(alpha = 0.14f) else Color.Transparent,
+                if (isSelected) c.soft(tint) else Color.Transparent,
                 tween(VisorMotion.FAST, easing = VisorMotion.easeOut), label = "segBg"
             )
             val isEnabled = enabled(option)
             Box(
                 modifier = Modifier
-                    .then(if (fill) Modifier.weight(1f) else Modifier)
+                    // Equal widths would clip longer (English) labels, so weight by label length.
+                    .then(if (fill) Modifier.weight(label(option).length + 4f) else Modifier)
                     .heightIn(min = 48.dp)
                     .semantics { role = Role.RadioButton; this.selected = isSelected }
                     .clickable(enabled = isEnabled) { onSelect(option) }
@@ -439,5 +440,5 @@ internal fun DialogText(text: String) =
 /** 1dp hairline. */
 @Composable
 internal fun VisorDivider(modifier: Modifier = Modifier) {
-    Box(modifier.fillMaxWidth().height(1.dp).background(Visor.colors.line))
+    Box(modifier.fillMaxWidth().height(Visor.metrics.lineWidth).background(Visor.colors.line))
 }

@@ -10,7 +10,7 @@ const TESTING_SECTIONS: readonly WorkspaceSection[] = [
   "diagnostics",
   "policies"
 ];
-const ADMIN_SECTIONS: readonly WorkspaceSection[] = ["overview", "accounts", "audit"];
+const ADMIN_SECTIONS: readonly WorkspaceSection[] = ["overview", "studio", "accounts", "audit"];
 
 function locationHash(): string {
   return typeof window === "undefined" ? "" : (window.location?.hash ?? "");
@@ -56,7 +56,7 @@ export function setWorkspaceLocation(
   const current = readWorkspaceLocation();
   const target =
     workspace ??
-    (section === "accounts" || section === "audit"
+    (section === "accounts" || section === "audit" || section === "studio"
       ? "admin"
       : section === "overview"
         ? (current.workspace ?? "testing")

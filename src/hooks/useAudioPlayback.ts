@@ -26,6 +26,9 @@ export function useAudioPlayback({ voiceGenderRef, transmittingRef, onInterrupte
   const playbackAnalyserRef = useRef<AnalyserNode | null>(null);
   const deferredSpeechRef = useRef<string | null>(null);
   const warningGenerationRef = useRef(0);
+  // True while a safety warning is being spoken by browser TTS (English
+  // sessions); ordinary replies wait for it, exactly as they wait for a clip.
+  const spokenWarningRef = useRef(false);
   const [warningPlayer] = useState(() =>
     createWarningAudioPlayer({
       onEnded: () => {
@@ -44,10 +47,12 @@ export function useAudioPlayback({ voiceGenderRef, transmittingRef, onInterrupte
     // Max was silent fought the server's hearing/asr turn states.
     const wasSpeaking =
       warningPlayer.isActive() ||
+      spokenWarningRef.current ||
       playbackSourcesRef.current.length > 0 ||
       ("speechSynthesis" in window && window.speechSynthesis.speaking);
     deferredSpeechRef.current = null;
     warningGenerationRef.current += 1;
+    spokenWarningRef.current = false;
     warningPlayer.stop();
     if ("speechSynthesis" in window) window.speechSynthesis.cancel();
     for (const source of playbackSourcesRef.current) {
@@ -96,7 +101,7 @@ export function useAudioPlayback({ voiceGenderRef, transmittingRef, onInterrupte
 
   const speak = useCallback(
     (text: string) => {
-      if (warningPlayer.isActive()) {
+      if (warningPlayer.isActive() || spokenWarningRef.current) {
         // Ordinary replies already replace older replies; retain the latest one
         // without letting browser TTS talk over the safety announcement.
         deferredSpeechRef.current = text;
@@ -126,9 +131,42 @@ export function useAudioPlayback({ voiceGenderRef, transmittingRef, onInterrupte
     return gain;
   }, []);
 
+  /** A safety warning in English, spoken by the browser with an en-US voice.
+   *  It replaces whatever browser speech was playing and holds later replies
+   *  back until it ends — the same priority the recorded Chinese clip gets. */
+  const speakWarningAloud = useCallback(
+    (text: string, owner: number) => {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = VOICE_LOCALE.en;
+      const { voice } = selectVoice("en", voiceGenderRef.current);
+      if (voice) utterance.voice = voice;
+      utterance.rate = 1.04;
+      const finish = () => {
+        if (owner !== warningGenerationRef.current) return;
+        spokenWarningRef.current = false;
+        const pending = deferredSpeechRef.current;
+        deferredSpeechRef.current = null;
+        if (pending) speakNow(pending);
+      };
+      utterance.onend = finish;
+      utterance.onerror = finish;
+      spokenWarningRef.current = true;
+      window.speechSynthesis.speak(utterance);
+    },
+    [speakNow, voiceGenderRef]
+  );
+
   const speakWarning = useCallback(
-    (text: string) => {
+    (text: string, options: { language?: "zh" | "en" } = {}) => {
       const owner = ++warningGenerationRef.current;
+      // English session: speak the relay's English wording instead of the
+      // recorded Chinese clip. Chinese, or no speech synthesis: the clip.
+      if (options.language === "en" && detectLanguage(text) === "en" && "speechSynthesis" in window) {
+        warningPlayer.stop();
+        speakWarningAloud(text, owner);
+        return Promise.resolve("spoken" as const);
+      }
       if (!getWarningClip(text, voiceGenderRef.current)) {
         speak(text);
         return Promise.resolve("unknown" as const);
@@ -155,7 +193,7 @@ export function useAudioPlayback({ voiceGenderRef, transmittingRef, onInterrupte
           return result;
         });
     },
-    [playbackOutput, speak, voiceGenderRef, warningPlayer]
+    [playbackOutput, speak, speakWarningAloud, voiceGenderRef, warningPlayer]
   );
 
   const playPcm16 = useCallback(

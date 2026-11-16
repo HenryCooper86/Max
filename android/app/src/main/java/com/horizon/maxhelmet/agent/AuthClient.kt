@@ -1,5 +1,8 @@
 package com.horizon.maxhelmet.agent
 
+import com.horizon.maxhelmet.ui.tr
+import com.horizon.maxhelmet.ui.Str
+
 import android.os.Handler
 import android.os.Looper
 import com.horizon.maxhelmet.BuildConfig
@@ -64,7 +67,7 @@ class AuthClient {
     ) {
         val base = authBaseUrl(relayUrl)
         if (base == null) {
-            onResult(null, "中继地址无效，请检查设置")
+            onResult(null, tr(Str.ERR_RELAY_BAD))
             return
         }
         ensureClient(allowSelfSignedTls)
@@ -78,7 +81,7 @@ class AuthClient {
 
         httpClient.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
-                mainHandler.post { onResult(null, "无法连接服务器，请检查中继地址") }
+                mainHandler.post { onResult(null, tr(Str.ERR_RELAY_UNREACHABLE)) }
             }
 
             override fun onResponse(call: Call, response: Response) {
@@ -103,7 +106,7 @@ class AuthClient {
                 // The relay reports failures as {ok:false, error:"…"} (wrong
                 // password, rate limited) — show its message verbatim.
                 val error = if (login == null) {
-                    parsed?.optString("error")?.takeIf { it.isNotEmpty() } ?: "登录失败，请重试"
+                    parsed?.optString("error")?.takeIf { it.isNotEmpty() } ?: tr(Str.ERR_LOGIN_FAILED)
                 } else {
                     null
                 }

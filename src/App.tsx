@@ -11,7 +11,6 @@ import {
   useState,
   type ReactNode
 } from "react";
-import { adasDirectionLabel } from "../shared/adas";
 import type { VoiceVisualizer } from "../shared/agent";
 import { combineHazardLevels } from "../shared/ride";
 import { AssistantProvider } from "./components/AssistantContext";
@@ -63,6 +62,10 @@ function AppContent() {
   }, []);
   const openAdmin = useCallback(() => {
     setWorkspaceLocation("overview", {}, false, "admin");
+    setSurface("admin");
+  }, []);
+  const openStudio = useCallback(() => {
+    setWorkspaceLocation("studio", {}, false, "admin");
     setSurface("admin");
   }, []);
   const closeWorkspace = useCallback(() => {
@@ -340,7 +343,7 @@ function AppContent() {
 
         {agent.hazardAlert ? (
           <div className={`hazardBanner voiceHazard ${agent.hazardAlert.severity}`} role="alert" aria-live="assertive">
-            <span className="hazardDir">{adasDirectionLabel(agent.hazardAlert.direction)}</span>
+            <span className="hazardDir">{t(`hazard.direction.${agent.hazardAlert.direction}`)}</span>
             <div className="hazardBody">
               <strong>{agent.hazardAlert.label}</strong>
               <p>
@@ -450,6 +453,7 @@ function AppContent() {
           amapConsent={amapConsent}
           onOpenTesting={openTesting}
           onOpenAdmin={authUser.role === "admin" ? openAdmin : undefined}
+          onOpenStudio={authUser.role === "admin" ? openStudio : undefined}
           appearance={{
             templateId: appearance.template.id,
             pinned: assistant.templateSwitching === false,

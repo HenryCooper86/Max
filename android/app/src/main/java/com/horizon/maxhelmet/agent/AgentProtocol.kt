@@ -1,5 +1,7 @@
 package com.horizon.maxhelmet.agent
 
+import com.horizon.maxhelmet.ui.Str
+import com.horizon.maxhelmet.ui.tr
 import com.horizon.maxhelmet.navigation.LatLon
 import com.horizon.maxhelmet.navigation.ManeuverStep
 import org.json.JSONArray
@@ -28,17 +30,21 @@ enum class TurnState {
     IDLE, LISTENING, HEARING, THINKING, SPEAKING
 }
 
-enum class VoiceGender(val wire: String, val label: String) {
-    FEMALE("female", "女声"),
-    MALE("male", "男声")
+enum class VoiceGender(val wire: String, private val text: Str) {
+    FEMALE("female", Str.GENDER_FEMALE),
+    MALE("male", Str.GENDER_MALE);
+
+    val label: String get() = tr(text)
 }
 
 /** Mirror of VoicePersonality in shared/agent.ts, labels from the web HUD. */
-enum class VoicePersonality(val wire: String, val label: String) {
-    CONCISE("concise", "极简"),
-    FRIENDLY("friendly", "友好"),
-    TECHNICAL("technical", "技术"),
-    RALLY("rally", "领航")
+enum class VoicePersonality(val wire: String, private val text: Str) {
+    CONCISE("concise", Str.TONE_CONCISE),
+    FRIENDLY("friendly", Str.TONE_FRIENDLY),
+    TECHNICAL("technical", Str.TONE_TECHNICAL),
+    RALLY("rally", Str.TONE_RALLY);
+
+    val label: String get() = tr(text)
 }
 
 /**
@@ -46,10 +52,13 @@ enum class VoicePersonality(val wire: String, val label: String) {
  * (HAZARD_LABELS / HAZARD_ACTIONS in src/main.tsx). Ordinal order encodes
  * severity so combineHazardLevels can compare.
  */
-enum class HazardLevel(val wire: String, val label: String, val riderAction: String) {
-    NORMAL("normal", "稳定", "保持节奏，专注下一步提示"),
-    CAUTION("caution", "注意", "放缓一点，扩大车距"),
-    CRITICAL("critical", "高风险", "优先靠边，确认安全");
+enum class HazardLevel(val wire: String, private val text: Str, private val action: Str) {
+    NORMAL("normal", Str.HZ_NORMAL, Str.HZ_NORMAL_ACTION),
+    CAUTION("caution", Str.RISK_CAUTION, Str.HZ_CAUTION_ACTION),
+    CRITICAL("critical", Str.RISK_HIGH, Str.HZ_CRITICAL_ACTION);
+
+    val label: String get() = tr(text)
+    val riderAction: String get() = tr(action)
 
     companion object {
         fun fromWire(value: String): HazardLevel = entries.firstOrNull { it.wire == value } ?: NORMAL
@@ -57,11 +66,13 @@ enum class HazardLevel(val wire: String, val label: String, val riderAction: Str
 }
 
 /** Mirror of RideMode in shared/ride.ts, in the web HUD's display order. */
-enum class RideMode(val wire: String, val label: String) {
-    RIDE("ride", "骑行"),
-    NAVIGATION("navigation", "导航"),
-    STOP("stop", "停车"),
-    EMERGENCY("emergency", "紧急");
+enum class RideMode(val wire: String, private val text: Str) {
+    RIDE("ride", Str.MODE_RIDE),
+    NAVIGATION("navigation", Str.MODE_NAV),
+    STOP("stop", Str.MODE_STOP),
+    EMERGENCY("emergency", Str.MODE_EMERGENCY);
+
+    val label: String get() = tr(text)
 
     companion object {
         fun fromWire(value: String): RideMode = entries.firstOrNull { it.wire == value } ?: NAVIGATION
@@ -69,13 +80,15 @@ enum class RideMode(val wire: String, val label: String) {
 }
 
 /** Mirror of DemoScenario in shared/ride.ts, with SCENARIO_HAZARDS from src/main.tsx. */
-enum class DemoScenario(val wire: String, val label: String, val hazard: HazardLevel) {
-    COMMUTE("commute", "通勤", HazardLevel.NORMAL),
-    WIND("wind", "横风", HazardLevel.CAUTION),
-    FUEL("fuel", "低油", HazardLevel.NORMAL),
-    GROUP("group", "小队", HazardLevel.NORMAL),
-    EMERGENCY("emergency", "紧急", HazardLevel.CRITICAL),
-    ADAS("adas", "ADAS", HazardLevel.CAUTION);
+enum class DemoScenario(val wire: String, private val text: Str?, val hazard: HazardLevel) {
+    COMMUTE("commute", Str.SC_COMMUTE, HazardLevel.NORMAL),
+    WIND("wind", Str.SC_WIND, HazardLevel.CAUTION),
+    FUEL("fuel", Str.SC_FUEL, HazardLevel.NORMAL),
+    GROUP("group", Str.SC_GROUP, HazardLevel.NORMAL),
+    EMERGENCY("emergency", Str.MODE_EMERGENCY, HazardLevel.CRITICAL),
+    ADAS("adas", null, HazardLevel.CAUTION);
+
+    val label: String get() = text?.let { tr(it) } ?: "ADAS"
 
     companion object {
         fun fromWire(value: String): DemoScenario = entries.firstOrNull { it.wire == value } ?: COMMUTE
@@ -102,16 +115,16 @@ fun rideModeHazard(mode: RideMode): HazardLevel = when (mode) {
 
 /** Mirror of NETWORK_LABELS in src/main.tsx. */
 fun networkLabel(network: String): String = when (network) {
-    "online" -> "在线"
-    "degraded" -> "弱网"
-    else -> "离线"
+    "online" -> tr(Str.NET_ONLINE)
+    "degraded" -> tr(Str.NET_WEAK)
+    else -> tr(Str.CONN_OFFLINE)
 }
 
 /** Mirror of RESPONSE_MODE_LABELS in src/main.tsx. */
 fun responseModeLabel(responseMode: String): String = when (responseMode) {
-    "normal" -> "正常"
-    "emergency" -> "紧急"
-    else -> "极简"
+    "normal" -> tr(Str.RISK_NORMAL)
+    "emergency" -> tr(Str.MODE_EMERGENCY)
+    else -> tr(Str.TONE_CONCISE)
 }
 
 enum class Speaker(val wire: String) {
@@ -178,15 +191,15 @@ data class ProviderCapabilities(
 /** Mirror of the ride.context event payload / DEFAULT_RIDE_CONTEXT in src/main.tsx. */
 data class RideContext(
     val mode: RideMode = RideMode.NAVIGATION,
-    val modeLabel: String = "导航",
+    val modeLabel: String = tr(Str.MODE_NAV),
     val scenario: DemoScenario = DemoScenario.COMMUTE,
-    val scenarioLabel: String = "通勤",
+    val scenarioLabel: String = tr(Str.SC_COMMUTE),
     val speedKmh: Int = 0,
-    val routePhase: String = "等待骑行上下文",
+    val routePhase: String = tr(Str.WAITING_RIDE_CONTEXT),
     val network: String = "offline",
     val batteryPct: Int = 0,
     val hazardLevel: HazardLevel = HazardLevel.NORMAL,
-    val glanceableFocus: String = "下一步提示"
+    val glanceableFocus: String = tr(Str.NEXT_PROMPT)
 )
 
 /** Mirror of the session.memory event payload / DEFAULT_MEMORY in src/main.tsx. */
@@ -232,12 +245,12 @@ sealed interface AgentEvent {
         /** Chinese label for the threat direction. */
         val directionLabel: String
             get() = when (direction) {
-                "front" -> "前方"
-                "rear" -> "后方"
-                "left" -> "左侧"
-                "right" -> "右侧"
-                "left_rear" -> "左后方"
-                "right_rear" -> "右后方"
+                "front" -> tr(Str.DIR_FRONT)
+                "rear" -> tr(Str.DIR_REAR)
+                "left" -> tr(Str.DIR_LEFT)
+                "right" -> tr(Str.DIR_RIGHT)
+                "left_rear" -> tr(Str.DIR_LEFT_REAR)
+                "right_rear" -> tr(Str.DIR_RIGHT_REAR)
                 else -> ""
             }
     }
@@ -336,7 +349,7 @@ fun parseAgentEvent(text: String): AgentEvent {
                 windSpeedKmh = json.optInt("windSpeedKmh"),
                 isDay = json.optBoolean("isDay", true),
                 riskLevel = HazardLevel.fromWire(json.optString("riskLevel", "normal")),
-                riderAdvice = json.optString("riderAdvice", "天气风险较低，保持正常安全骑行。")
+                riderAdvice = json.optString("riderAdvice", tr(Str.WEATHER_LOW_RISK))
             )
         )
 
@@ -350,7 +363,7 @@ fun parseAgentEvent(text: String): AgentEvent {
                     scenario = scenario,
                     scenarioLabel = json.optString("scenarioLabel").ifEmpty { scenario.label },
                     speedKmh = json.optInt("speedKmh", 0),
-                    routePhase = json.optString("routePhase").ifEmpty { "等待路线信息" },
+                    routePhase = json.optString("routePhase").ifEmpty { tr(Str.WAITING_ROUTE) },
                     network = json.optString("network").ifEmpty { "online" },
                     batteryPct = json.optInt("batteryPct", 0),
                     hazardLevel = HazardLevel.fromWire(json.optString("hazardLevel")),
@@ -459,7 +472,12 @@ private fun parseManeuverSteps(array: JSONArray): List<ManeuverStep>? {
         val step = array.optJSONObject(index) ?: return null
         val coordinate = parseLatLon(step) ?: return null
         val alongRouteMeters = (step.opt("alongRouteMeters") as? Number)?.toDouble() ?: return null
-        steps.add(ManeuverStep(step.optString("instruction"), coordinate, alongRouteMeters))
+        steps.add(
+            ManeuverStep(
+                step.optString("instruction"), coordinate, alongRouteMeters,
+                localizedInstruction = step.optString("localizedInstruction").trim().takeIf { it.isNotEmpty() }
+            )
+        )
     }
     return steps
 }
@@ -484,7 +502,9 @@ fun buildSessionStart(
     browserLanguage: String? = null,
     networkType: String? = null,
     memory: SessionMemory? = null,
-    voiceProvider: String? = null
+    voiceProvider: String? = null,
+    /** The app's effective language, "zh" or "en"; the key is omitted when null so older relays are unaffected. */
+    language: String? = null
 ): String =
     JSONObject().apply {
         put("type", "session.start")
@@ -495,6 +515,7 @@ fun buildSessionStart(
         put("rideMode", rideMode.wire)
         put("scenario", scenario.wire)
         voiceProvider?.takeIf { it.isNotBlank() }?.let { put("voiceProvider", it) }
+        language?.takeIf { it == "zh" || it == "en" }?.let { put("language", it) }
         testerId?.takeIf { it.isNotBlank() }?.let { put("testerId", it) }
         testerRegion?.takeIf { it.isNotBlank() }?.let { put("testerRegion", it) }
         put("testingCampaignId", testingCampaignId)

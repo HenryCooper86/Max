@@ -60,6 +60,51 @@ final class RelayHealthClient: NSObject {
         }.resume()
     }
 
+    /// What `/brand/logo` returned.
+    enum LogoResult: Equatable {
+        case png(Data)
+        /// SVG (or anything else): not renderable natively; use the bundled mark.
+        case unsupported
+    }
+
+    /// Resolves a relay-served logo path against the relay origin. Only a plain
+    /// absolute path on the relay is accepted (never another host).
+    static func logoURL(base: URL, path: String) -> URL? {
+        let p = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard p.hasPrefix("/"), !p.hasPrefix("//"), !p.contains("\\") else { return nil }
+        var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        guard let q = URLComponents(string: "http://x" + p) else { return nil }
+        comps?.path = q.path
+        comps?.percentEncodedQuery = q.percentEncodedQuery
+        return comps?.url
+    }
+
+    static let pngSignature: [UInt8] = [0x89, 0x50, 0x4E, 0x47]
+    static let maxLogoBytes = 2_000_000
+
+    /// Classifies a logo response by Content-Type, then verifies the PNG magic.
+    static func classifyLogo(contentType: String?, data: Data) -> LogoResult {
+        let type = (contentType ?? "").split(separator: ";").first?.trimmingCharacters(in: .whitespaces).lowercased()
+        guard type == "image/png", data.count <= maxLogoBytes,
+              Array(data.prefix(4)) == pngSignature else { return .unsupported }
+        return .png(data)
+    }
+
+    /// Best-effort GET of the owner's logo with the same relay base-URL and TLS
+    /// handling as `fetch`. Completion on main; failures are silent (no call).
+    func fetchLogo(relayURL: String, allowSelfSignedTls: Bool, path: String, completion: @escaping (LogoResult) -> Void) {
+        guard let base = AuthClient.authBaseURL(fromRelay: relayURL),
+              let url = Self.logoURL(base: base, path: path) else { return }
+        allowSelfSigned = allowSelfSignedTls
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8
+        session.dataTask(with: request) { data, response, _ in
+            guard let data, let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return }
+            let result = Self.classifyLogo(contentType: http.value(forHTTPHeaderField: "Content-Type"), data: data)
+            DispatchQueue.main.async { completion(result) }
+        }.resume()
+    }
+
     static func parse(data: Data) -> RelayHealth? {
         guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
         var health = RelayHealth()
@@ -68,7 +113,14 @@ final class RelayHealthClient: NSObject {
                 name: assistant["name"] as? String,
                 device: assistant["device"] as? String,
                 wakePhrase: assistant["wakePhrase"] as? String,
-                accentColor: assistant["accentColor"] as? String
+                accentColor: assistant["accentColor"] as? String,
+                deviceProfile: assistant["deviceProfile"] as? String,
+                deviceLabel: assistant["deviceLabel"] as? String,
+                template: assistant["template"] as? String,
+                templateSwitching: assistant["templateSwitching"] as? Bool,
+                theme: (assistant["theme"] as? [String: Any])?.compactMapValues { $0 as? String },
+                logoUrl: assistant["logoUrl"] as? String,
+                visualizer: assistant["visualizer"] as? String
             )
         }
         if let voice = root["voice"] as? [String: Any], let active = voice["active"] as? String {

@@ -1,5 +1,9 @@
 package com.horizon.maxhelmet.music
 
+import com.horizon.maxhelmet.ui.tr
+import com.horizon.maxhelmet.ui.Str
+import com.horizon.maxhelmet.ui.AssistantBranding
+
 import com.horizon.maxhelmet.actions.DeviceResult
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -51,19 +55,19 @@ class QQMusicPlayback(
         val owner = ++generation
         mutableState.update { it.copy(busy = true, message = null) }
         try {
-            if (!permitted()) return failure("permission.musicControl", "请点“授权控制”，在系统通知使用权设置中允许 Max。授权用于读取 QQ 音乐的媒体会话；Max 不读取或保存通知内容。")
-            val session = findSession() ?: return failure("music.playerUnavailable", "请打开 QQ 音乐，先选择并播放一首歌，再返回 Max。")
+            if (!permitted()) return failure("permission.musicControl", tr(Str.QQ_NEEDS_PERMISSION, "name" to AssistantBranding.name))
+            val session = findSession() ?: return failure("music.playerUnavailable", tr(Str.QQ_OPEN_FIRST, "name" to AssistantBranding.name))
             val before = session.snapshot()
             publish(before)
             if ((action == "play" && before.playing) || (action == "pause" && before.paused)) return DeviceResult.OK
-            if (action !in before.actions) return failure("music.controlUnavailable", "QQ 音乐当前未提供此操作，请在 QQ 音乐中操作。")
+            if (action !in before.actions) return failure("music.controlUnavailable", tr(Str.QQ_NO_ACTION))
             if (action in setOf("next", "previous") && before.identity == null)
-                return failure("music.controlUnavailable", "无法确认 QQ 音乐的当前歌曲，请在 QQ 音乐中切歌。")
+                return failure("music.controlUnavailable", tr(Str.QQ_UNKNOWN_SONG))
             session.send(action)
             repeat(attempts) {
                 wait()
                 if (owner != generation) return DeviceResult.failed("action.cancelled")
-                if (!permitted()) return failure("permission.musicControl", "音乐控制权限已关闭，请重新授权。")
+                if (!permitted()) return failure("permission.musicControl", tr(Str.QQ_PERMISSION_OFF))
                 val after = session.snapshot()
                 publish(after)
                 val confirmed = when (action) {
@@ -73,13 +77,13 @@ class QQMusicPlayback(
                 }
                 if (confirmed) return DeviceResult.OK
             }
-            return failure("music.controlUnavailable", "QQ 音乐未确认此操作。请检查播放队列或在 QQ 音乐中操作。")
+            return failure("music.controlUnavailable", tr(Str.QQ_UNCONFIRMED))
         } catch (_: SecurityException) {
-            return failure("permission.musicControl", "请先授权音乐控制。")
+            return failure("permission.musicControl", tr(Str.QQ_GRANT_FIRST))
         } catch (error: kotlinx.coroutines.CancellationException) {
             throw error
         } catch (_: Exception) {
-            return failure("music.playerUnavailable", "QQ 音乐播放会话已断开，请打开 QQ 音乐后重试。")
+            return failure("music.playerUnavailable", tr(Str.QQ_SESSION_LOST))
         } finally {
             if (owner == generation) mutableState.update { it.copy(busy = false) }
         }

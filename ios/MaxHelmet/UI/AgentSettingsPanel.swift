@@ -34,13 +34,13 @@ private struct LoginFields: View {
     @State private var password = ""
 
     var body: some View {
-        VisorFieldRow(title: "用户名", hint: "使用网页测试平台的账号登录；登录后自动获取会话令牌。") {
-            TextField("用户名", text: $username)
+        VisorFieldRow(title: L("set.user"), hint: L("set.login.hint")) {
+            TextField(L("set.user"), text: $username)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled(true)
         }
-        VisorFieldRow(title: "密码", divider: viewModel.loginError != nil) {
-            SecureField("密码", text: $password)
+        VisorFieldRow(title: L("set.pass"), divider: viewModel.loginError != nil) {
+            SecureField(L("set.pass"), text: $password)
         }
         if let error = viewModel.loginError {
             VisorRow(title: error, titleColor: Visor.danger)
@@ -50,7 +50,7 @@ private struct LoginFields: View {
             // on success this form unmounts (state discarded) anyway.
             viewModel.login(username: username, password: password)
         } label: {
-            Text(viewModel.loginBusy ? "登录中…" : "登录")
+            Text(viewModel.loginBusy ? L("set.login.busy") : L("set.login"))
         }
         .buttonStyle(.visor(.primary))
         .disabled(viewModel.loginBusy)
@@ -97,41 +97,41 @@ struct CompanionSettingsPresentation: Equatable {
         let statusText: String
         switch connectionState {
         case .signedOut:
-            statusText = isLoggedIn ? "尚未连接 RDK 头盔" : "请先登录账号"
+            statusText = isLoggedIn ? L("rdk.st.notConnected") : L("rdk.st.signIn")
         case .connecting:
-            statusText = "正在连接 RDK 头盔…"
+            statusText = L("rdk.st.connecting")
         case .unpaired:
-            statusText = "尚未配对"
+            statusText = L("rdk.st.unpaired")
         case .paired:
-            statusText = "已配对，等待开始骑行"
+            statusText = L("rdk.st.paired")
         case .helmetOffline:
-            statusText = "已配对，头盔离线"
+            statusText = L("rdk.st.pairedOffline")
         case .ready:
-            statusText = "RDK 头盔已连接"
+            statusText = L("rdk.st.ready")
         case .sharing:
-            statusText = "正在向 RDK 头盔转发导航位置"
+            statusText = L("rdk.st.sharing")
         case let .failed(code, _):
-            statusText = code == "auth" ? "账号会话已失效，请重新登录" : "RDK 头盔连接失败，请重试"
+            statusText = code == "auth" ? L("rdk.st.authFailed") : L("rdk.st.failed")
         }
 
         let permissionText: String
         switch permission {
         case .notDetermined:
-            permissionText = "位置权限将在开始 Helmet Ride 时请求"
+            permissionText = L("rdk.perm.undetermined")
         case .denied:
-            permissionText = "位置权限已拒绝，请在系统设置中允许使用位置"
+            permissionText = L("rdk.perm.denied")
         case .reduced:
-            permissionText = "位置精度不足，请在系统设置中开启精确位置"
+            permissionText = L("rdk.perm.reduced")
         case .precise:
-            permissionText = "精确位置可用"
+            permissionText = L("rdk.perm.precise")
         }
 
         let forwardingText: String
         if let lastForwardedAt {
             let age = max(0, Int(now.timeIntervalSince(lastForwardedAt)))
-            forwardingText = "上次转发：\(age) 秒前"
+            forwardingText = L("rdk.fwd.last", ("n", String(age)))
         } else {
-            forwardingText = "尚未转发位置"
+            forwardingText = L("rdk.fwd.none")
         }
 
         let paired: Bool
@@ -182,7 +182,7 @@ struct CompanionSettingsPresentation: Equatable {
             statusText: statusText,
             permissionText: permissionText,
             forwardingText: forwardingText,
-            primaryActionTitle: rideOwned ? "停止 Helmet Ride" : "开始 Helmet Ride",
+            primaryActionTitle: rideOwned ? L("set.rdk.stop") : L("set.rdk.start"),
             isPairEnabled: isLoggedIn && exactCode && pairingState && !rideOwned && !busy,
             isPrimaryActionEnabled: rideOwned || (isLoggedIn && startable && !busy),
             showsUnpair: paired,
@@ -205,6 +205,7 @@ struct SettingsPanel: View {
         VStack(alignment: .leading, spacing: Visor.Space.s6) {
             accountGroup
             assistantGroup
+            appearanceGroup
             voiceGroup
             connectionGroup
             companionGroup
@@ -223,14 +224,14 @@ struct SettingsPanel: View {
     /// token then rides the /agent URL automatically. The manual 认证令牌 field
     /// in 连接 stays as the operator fallback.
     private var accountGroup: some View {
-        VisorGroup(title: "账号") {
+        VisorGroup(title: L("set.account")) {
             if viewModel.isLoggedIn {
                 VisorRow(
                     title: viewModel.authDisplayName.isEmpty ? viewModel.authUsername : viewModel.authDisplayName,
-                    subtitle: "@\(viewModel.authUsername) · \(viewModel.authRole == "admin" ? "管理员" : "测试员")",
+                    subtitle: "@\(viewModel.authUsername) · \(viewModel.authRole == "admin" ? L("set.role.admin") : L("set.role.tester"))",
                     divider: false
                 ) {
-                    Button("退出登录") { viewModel.logout() }
+                    Button(L("set.logout")) { viewModel.logout() }
                         .buttonStyle(.visor(.destructive, fullWidth: false))
                 }
             } else {
@@ -243,19 +244,22 @@ struct SettingsPanel: View {
 
     private var assistantGroup: some View {
         VisorGroup(
-            title: "助手",
-            footer: viewModel.voiceHealth?.switching == true ? "切换语音后端会重新开始当前会话。" : nil
+            title: L("set.assistant"),
+            footer: viewModel.voiceHealth?.switching == true ? L("set.assistant.footer") : nil
         ) {
-            VisorRow(title: "名称", divider: true) {
-                Text(Visor.assistantName).visorFont(.subhead).foregroundStyle(Visor.textSecondary)
+            VisorRow(title: L("set.name"), divider: true) {
+                HStack(spacing: Visor.Space.s2) {
+                    AssistantMarkView(size: 28)
+                    Text(Visor.assistantName).visorFont(.subhead).foregroundStyle(Visor.textSecondary)
+                }
             }
-            VisorRow(title: "设备", divider: Visor.wakePhrase != nil || viewModel.voiceHealth != nil) {
-                Label(Visor.deviceKind.noun, systemImage: Visor.deviceKind.symbol)
+            VisorRow(title: L("set.device"), divider: Visor.wakePhrase != nil || viewModel.voiceHealth != nil) {
+                Label(VisorTheme.shared.deviceDisplayName, systemImage: Visor.deviceKind.symbol)
                     .visorFont(.subhead)
                     .foregroundStyle(Visor.textSecondary)
             }
             if let wake = Visor.wakePhrase {
-                VisorRow(title: "唤醒词", divider: viewModel.voiceHealth != nil) {
+                VisorRow(title: L("set.wake"), divider: viewModel.voiceHealth != nil) {
                     Text("“\(wake)”").visorFont(.subhead).foregroundStyle(Visor.textSecondary)
                 }
             }
@@ -270,7 +274,7 @@ struct SettingsPanel: View {
                         ) { viewModel.setVoiceProvider(provider.id) }
                     }
                 } else {
-                    VisorRow(title: "语音后端", divider: false) {
+                    VisorRow(title: L("set.backend"), divider: false) {
                         Text(voice.activeLabel).visorFont(.subhead).foregroundStyle(Visor.textSecondary)
                     }
                 }
@@ -278,22 +282,74 @@ struct SettingsPanel: View {
         }
     }
 
+    // MARK: appearance (design template + voice display)
+
+    private var appearanceGroup: some View {
+        let theme = VisorTheme.shared
+        let pinned = !theme.canSwitchTemplate
+        return VisorGroup(
+            title: L("set.appearance"),
+            footer: pinned ? L("set.appearance.pinned") : nil
+        ) {
+            VisorSegmentedRow(
+                title: L("set.lang"),
+                options: [
+                    VisorSegmentOption(value: AppLanguageChoice.system, label: L("set.lang.system")),
+                    VisorSegmentOption(value: AppLanguageChoice.zh, label: L("set.lang.zh")),
+                    VisorSegmentOption(value: AppLanguageChoice.en, label: L("set.lang.en"))
+                ],
+                selection: theme.languageChoice
+            ) { choice in
+                let before = theme.language
+                theme.selectLanguage(choice)
+                if theme.language != before { AgentSession.shared.languageChanged() }
+            }
+            Text(L("set.lang.footer"))
+                .visorFont(.caption)
+                .foregroundStyle(Visor.textTertiary)
+                .padding(.horizontal, Visor.Space.s4)
+                .padding(.bottom, Visor.Space.s2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+            if pinned {
+                let current = theme.template
+                VisorRow(title: current.label, subtitle: current.descriptionText) {
+                    VisorChip(label: L("set.pinned"))
+                }
+                VisorRow(title: L("set.viz"), divider: false) {
+                    HStack(spacing: Visor.Space.s2) {
+                        VisualizerPreview(style: theme.visualizer, size: CGSize(width: 44, height: 24))
+                        VisorChip(label: theme.visualizer.label)
+                    }
+                }
+            } else {
+                ForEach(Array(VisorTemplate.all.enumerated()), id: \.element.id) { _, template in
+                    TemplateRow(template: template, selected: template.id == theme.template.id) {
+                        theme.selectTemplate(template.id)
+                    }
+                }
+                VisorRow(title: L("set.viz"), divider: false)
+                VisualizerPicker(selected: theme.visualizer) { theme.selectVisualizer($0) }
+            }
+        }
+    }
+
     // MARK: rider voice preferences
 
     private var voiceGroup: some View {
-        VisorGroup(title: "语音") {
+        VisorGroup(title: L("set.voice")) {
             VisorSegmentedRow(
-                title: "声音",
+                title: L("set.voice.sound"),
                 options: VoiceGender.allCases.map { VisorSegmentOption(value: $0, label: $0.label) },
                 selection: state.voiceGender
             ) { viewModel.setVoiceGender($0) }
             VisorSegmentedRow(
-                title: "语气",
+                title: L("set.voice.style"),
                 options: VoicePersonality.allCases.map { VisorSegmentOption(value: $0, label: $0.label) },
                 selection: state.voicePersonality
             ) { viewModel.setVoicePersonality($0) }
             VisorSegmentedRow(
-                title: "模式",
+                title: L("set.voice.mode"),
                 options: RideMode.allCases.map {
                     VisorSegmentOption(value: $0, label: $0.label, tint: $0 == .emergency ? Visor.danger : nil)
                 },
@@ -306,34 +362,34 @@ struct SettingsPanel: View {
     // MARK: server / relay connection
 
     private var connectionGroup: some View {
-        VisorGroup(title: "连接") {
+        VisorGroup(title: L("set.connection")) {
             if state.handsFree {
-                VisorRow(title: "当前服务器", subtitle: viewModel.relayURL)
-                VisorRow(subtitle: "结束免提后可修改服务器地址。", divider: false)
+                VisorRow(title: L("set.server.current"), subtitle: viewModel.relayURL)
+                VisorRow(subtitle: L("set.server.locked"), divider: false)
             } else {
-                VisorFieldRow(title: "语音中继地址（ws:// 或 wss://）") {
-                    TextField("语音中继地址", text: $viewModel.relayURL)
+                VisorFieldRow(title: L("set.relay.field")) {
+                    TextField(L("set.relay.placeholder"), text: $viewModel.relayURL)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled(true)
                 }
                 #if DEBUG
                 VisorFieldRow(
-                    title: "认证令牌",
-                    hint: "网页登录后点「复制令牌（App 用）」获取；开放模式可留空",
+                    title: L("set.token"),
+                    hint: L("set.token.hint"),
                     divider: true
                 ) {
-                    SecureField("认证令牌", text: $viewModel.authToken)
+                    SecureField(L("set.token"), text: $viewModel.authToken)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled(true)
                 }
-                VisorToggleRow(title: "信任自签名证书（仅调试）", isOn: $viewModel.allowSelfSigned, divider: false)
+                VisorToggleRow(title: L("set.selfSigned"), isOn: $viewModel.allowSelfSigned, divider: false)
                 #else
                 VisorFieldRow(
-                    title: "认证令牌",
-                    hint: "网页登录后点「复制令牌（App 用）」获取；开放模式可留空",
+                    title: L("set.token"),
+                    hint: L("set.token.hint"),
                     divider: false
                 ) {
-                    SecureField("认证令牌", text: $viewModel.authToken)
+                    SecureField(L("set.token"), text: $viewModel.authToken)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled(true)
                 }
@@ -356,16 +412,16 @@ struct SettingsPanel: View {
             discoveredHelmets: viewModel.discoveredHelmets,
             isAwaitingHelmetConfirm: viewModel.isAwaitingHelmetConfirm
         )
-        return VisorGroup(title: "RDK 头盔") {
+        return VisorGroup(title: L("set.rdk")) {
             VisorRow(title: companion.statusText, subtitle: "\(companion.permissionText)\n\(companion.forwardingText)")
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel("RDK 头盔状态：\(companion.statusText)。\(companion.permissionText)。\(companion.forwardingText)")
+                .accessibilityLabel(L("set.rdk.a11y", ("status", companion.statusText), ("permission", companion.permissionText), ("forwarding", companion.forwardingText)))
 
             // Nearby helmets found via Bonjour — a discovered beacon's token
             // stands in for the six-digit code below.
             ForEach(companion.discoveredHelmets) { helmet in
-                VisorRow(title: "\(Visor.assistantName) 头盔", subtitle: "附近") {
-                    Button("配对") { viewModel.pairDiscoveredHelmet(token: helmet.token) }
+                VisorRow(title: L("set.rdk.nearbyTitle", ("name", Visor.assistantName)), subtitle: L("set.rdk.nearby")) {
+                    Button(L("set.rdk.pair")) { viewModel.pairDiscoveredHelmet(token: helmet.token) }
                         .buttonStyle(.visor(.secondary, fullWidth: false))
                         .disabled(!companion.isPairEnabledForDiscovery)
                 }
@@ -375,12 +431,12 @@ struct SettingsPanel: View {
                 // server/companion-registry.ts: a bare 确认 is too short for the
                 // ASR to finalize, and riders reach for this phone's button
                 // unless told the confirmation is spoken at the helmet.
-                VisorRow(title: "等待头盔确认…请对头盔说\u{201C}确认配对\u{201D}，无需按键", titleColor: Visor.accent)
+                VisorRow(title: L("set.rdk.awaiting"), titleColor: Visor.accent)
             }
 
-            VisorFieldRow(title: "配对码") {
+            VisorFieldRow(title: L("set.rdk.code")) {
                 TextField(
-                    "手动输入配对码",
+                    L("set.rdk.codePlaceholder"),
                     text: Binding(
                         get: { viewModel.pairCode },
                         set: { viewModel.pairCode = CompanionSettingsPresentation.filteredPairCode($0) }
@@ -389,14 +445,14 @@ struct SettingsPanel: View {
                 .visorFont(.subhead, mono: true)
                 .keyboardType(.numberPad)
                 .textContentType(.oneTimeCode)
-                .accessibilityLabel("RDK 头盔六位配对码")
+                .accessibilityLabel(L("set.rdk.codeA11y"))
             }
 
             VStack(spacing: Visor.Space.s2) {
-                Button("配对头盔") { viewModel.pairHelmet() }
+                Button(L("set.rdk.pairHelmet")) { viewModel.pairHelmet() }
                     .buttonStyle(.visor(.secondary))
                     .disabled(!companion.isPairEnabled)
-                    .accessibilityHint("只建立配对，不会开始位置转发")
+                    .accessibilityHint(L("set.rdk.pairHint"))
 
                 Button(companion.primaryActionTitle) {
                     if viewModel.helmetRideOwned {
@@ -407,17 +463,17 @@ struct SettingsPanel: View {
                 }
                 .buttonStyle(.visor(.primary))
                 .disabled(!companion.isPrimaryActionEnabled)
-                .accessibilityHint(viewModel.helmetRideOwned ? "停止向 RDK 头盔转发位置" : "从前台开始导航位置转发")
+                .accessibilityHint(viewModel.helmetRideOwned ? L("set.rdk.stopHint") : L("set.rdk.startHint"))
 
                 if companion.showsUnpair {
-                    Button("取消配对", role: .destructive) { showUnpairConfirmation = true }
+                    Button(L("set.rdk.unpair"), role: .destructive) { showUnpairConfirmation = true }
                         .buttonStyle(.visor(.destructive))
                         .disabled(!companion.isUnpairEnabled)
-                        .confirmationDialog("取消 RDK 头盔配对？", isPresented: $showUnpairConfirmation) {
-                            Button("取消配对", role: .destructive) { viewModel.unpairHelmet() }
-                            Button("保留配对", role: .cancel) {}
+                        .confirmationDialog(L("set.rdk.unpairTitle"), isPresented: $showUnpairConfirmation) {
+                            Button(L("set.rdk.unpair"), role: .destructive) { viewModel.unpairHelmet() }
+                            Button(L("set.rdk.keep"), role: .cancel) {}
                         } message: {
-                            Text("Helmet Ride 会先停止，之后需要新的六位配对码才能重新连接。")
+                            Text(L("set.rdk.unpairMsg"))
                         }
                 }
             }
@@ -438,30 +494,30 @@ struct SettingsPanel: View {
     /// Emergency contact, relay opt-in, alarm-view call target, and a log-only
     /// mode for collecting false-positive data.
     private var emergencyGroup: some View {
-        VisorGroup(title: "紧急求助") {
-            VisorFieldRow(title: "紧急联系人号码") {
+        VisorGroup(title: L("set.emergency")) {
+            VisorFieldRow(title: L("set.emergency.number")) {
                 TextField("+86 …", text: $viewModel.crashContactNumber)
                     .keyboardType(.phonePad)
                     .disabled(state.handsFree)   // never mid-session
                     .onSubmit { viewModel.resolveCrashContactIfNeeded() }
             }
             VisorToggleRow(
-                title: "事故升级时通知紧急联系人",
-                subtitle: "号码仅在升级时发送到服务器",
+                title: L("set.emergency.notify"),
+                subtitle: L("set.emergency.notifySub"),
                 isOn: $viewModel.crashRelayOptIn
             )
             .disabled(state.handsFree)
             VisorSegmentedRow(
-                title: "警报界面拨打",
+                title: L("set.emergency.callTarget"),
                 options: [
                     VisorSegmentOption(value: "120", label: "120"),
-                    VisorSegmentOption(value: "contact", label: "紧急联系人")
+                    VisorSegmentOption(value: "contact", label: L("set.emergency.contact"))
                 ],
                 selection: viewModel.crashCallTarget
             ) { viewModel.crashCallTarget = $0 }
             VisorToggleRow(
-                title: "仅记录模式",
-                subtitle: "只记录检测，不报警 — 采集误报数据用",
+                title: L("set.emergency.logOnly"),
+                subtitle: L("set.emergency.logOnlySub"),
                 isOn: $viewModel.crashLogOnly,
                 divider: false
             )
@@ -474,22 +530,22 @@ struct SettingsPanel: View {
     /// Weather, route, and session memory. The data already flows over the
     /// protocol (weather / ride.context / session.memory events).
     private var rideGroup: some View {
-        VisorGroup(title: "骑行情报") {
+        VisorGroup(title: L("set.ride")) {
             if let weather = state.weather {
-                VisorRow(title: weather.description, subtitle: "风速 \(weather.windSpeedKmh) km/h · \(weather.riderAdvice)") {
+                VisorRow(title: weather.description, subtitle: L("set.ride.wind", ("v", String(weather.windSpeedKmh)), ("advice", weather.riderAdvice))) {
                     HStack(spacing: Visor.Space.s2) {
                         Text("\(weather.temperatureC)°")
                             .visorFont(.title, .semibold, mono: true)
                             .foregroundStyle(Visor.text)
-                        Text(weather.riskLevel == .critical ? "高风险" : weather.riskLevel == .caution ? "注意" : "正常")
+                        Text(weather.riskLevel == .critical ? L("set.ride.high") : weather.riskLevel == .caution ? L("set.ride.caution") : L("set.ride.normal"))
                             .visorFont(.caption, .bold)
                             .foregroundStyle(hazardColor(weather.riskLevel))
                     }
                 }
             } else {
-                VisorRow(title: "天气", subtitle: "激活后接入定位天气")
+                VisorRow(title: L("set.weather"), subtitle: L("set.weather.pending"))
             }
-            VisorRow(title: "路线") {
+            VisorRow(title: L("set.route")) {
                 Text("\(state.rideContext.speedKmh) km/h · \(state.rideContext.routePhase)")
                     .visorFont(.subhead, mono: true)
                     .foregroundStyle(Visor.textSecondary)
@@ -499,11 +555,11 @@ struct SettingsPanel: View {
                     HStack(spacing: 6) {
                         VisorChip(label: state.sessionMemory.language == "zh" ? "中文" : "English")
                         VisorChip(label: responseModeLabel(state.sessionMemory.responseMode))
-                        VisorChip(label: state.sessionMemory.lastIntent ?? "待识别")
+                        VisorChip(label: state.sessionMemory.lastIntent ?? L("set.intent.pending"))
                         if let destination = state.sessionMemory.destination {
                             VisorChip(label: destination, tint: Visor.accent)
                         }
-                        VisorChip(label: "电量 \(state.rideContext.batteryPct)%", mono: true)
+                        VisorChip(label: L("set.battery", ("n", String(state.rideContext.batteryPct))), mono: true)
                     }
                 }
             }
@@ -513,9 +569,9 @@ struct SettingsPanel: View {
     // MARK: demo scenarios (ADAS hazard injection)
 
     private var demoGroup: some View {
-        VisorGroup(title: "演示场景") {
+        VisorGroup(title: L("set.demo")) {
             VisorSegmentedRow(
-                title: "场景",
+                title: L("set.demo.scenario"),
                 options: DemoScenario.allCases.map {
                     VisorSegmentOption(value: $0, label: $0.label, tint: hazardColor($0.hazard))
                 },
@@ -525,8 +581,8 @@ struct SettingsPanel: View {
             // Guided tour of every scenario — mock provider only, like the web.
             if state.provider == "mock" {
                 VisorToggleRow(
-                    title: "巡游演示",
-                    subtitle: state.guidedDemo ? "巡游中" : nil,
+                    title: L("set.demo.tour"),
+                    subtitle: state.guidedDemo ? L("set.demo.touring") : nil,
                     isOn: Binding(get: { state.guidedDemo }, set: { viewModel.setGuidedDemo($0) }),
                     divider: false
                 )
@@ -538,14 +594,14 @@ struct SettingsPanel: View {
 
     private var qaGroup: some View {
         VisorGroup(
-            title: "QA 任务归因",
-            footer: "从网页管理台的 Release runs 复制任务标识。下一次会话会按构建、平台和任务进入发布证据矩阵。"
+            title: L("set.qa"),
+            footer: L("set.qa.footer")
         ) {
             Group {
                 qaField("Campaign ID", $viewModel.testingCampaignId)
                 qaField("Test case ID", $viewModel.testingTestCaseId)
-                qaField("Run ID（可选）", $viewModel.testingRunId)
-                qaField("Assignment ID（可选）", $viewModel.testingAssignmentId)
+                qaField(L("set.qa.run"), $viewModel.testingRunId)
+                qaField(L("set.qa.assignment"), $viewModel.testingAssignmentId)
             }
             .disabled(state.handsFree)
             VisorRow(divider: false) {
@@ -572,23 +628,23 @@ struct SettingsPanel: View {
             ? Visor.ok
             : (state.latencyMs < 280 ? Visor.warn : Visor.danger)
         let hasTranscript = !state.transcript.isEmpty
-        return VisorGroup(title: "诊断") {
-            VisorRow(title: "延迟") {
+        return VisorGroup(title: L("set.diag")) {
+            VisorRow(title: L("set.diag.latency")) {
                 Text("\(state.latencyMs) ms")
                     .visorFont(.subhead, .semibold, mono: true)
                     .foregroundStyle(toneColor)
             }
             if let telemetry = state.telemetry {
                 VisorRow(
-                    title: "时序",
-                    subtitle: "ASR \(telemetry.asrMs) · 思考 \(telemetry.thinkMs) · 首音 \(telemetry.firstAudioMs) · 总计 \(telemetry.totalMs)ms"
+                    title: L("set.diag.timing"),
+                    subtitle: L("set.diag.timingValue", ("asr", String(telemetry.asrMs)), ("think", String(telemetry.thinkMs)), ("first", String(telemetry.firstAudioMs)), ("total", String(telemetry.totalMs)))
                 )
             }
-            VisorRow(title: "状态", subtitle: state.statusText)
-            VisorChevronRow(title: "导出日志", enabled: hasTranscript) {
+            VisorRow(title: L("set.diag.status"), subtitle: state.statusText)
+            VisorChevronRow(title: L("set.diag.export"), enabled: hasTranscript) {
                 if hasTranscript { viewModel.exportTranscript() }
             }
-            VisorChevronRow(title: "清空日志", titleColor: Visor.danger, enabled: hasTranscript, divider: false) {
+            VisorChevronRow(title: L("set.diag.clear"), titleColor: Visor.danger, enabled: hasTranscript, divider: false) {
                 if hasTranscript { viewModel.clearTranscript() }
             }
         }
@@ -605,9 +661,9 @@ private struct VoiceProviderRow: View {
 
     private var kindLabel: String {
         switch provider.kind {
-        case "demo": return "演示"
-        case "pipeline": return "管线"
-        default: return "实时"
+        case "demo": return L("set.kind.demo")
+        case "pipeline": return L("set.kind.pipeline")
+        default: return L("set.kind.live")
         }
     }
 
@@ -615,7 +671,7 @@ private struct VoiceProviderRow: View {
         Button(action: action) {
             VisorRow(
                 title: provider.label,
-                subtitle: provider.configured ? provider.description : "需要 API Key",
+                subtitle: provider.configured ? provider.description : L("set.needsKey"),
                 divider: divider
             ) {
                 HStack(spacing: Visor.Space.s2) {
@@ -630,9 +686,172 @@ private struct VoiceProviderRow: View {
         }
         .buttonStyle(.plain)
         .disabled(!provider.configured)
-        .opacity(provider.configured ? 1 : 0.5)
+        .opacity(provider.configured ? 1 : Visor.disabledOpacity)
         .accessibilityLabel(provider.label)
-        .accessibilityValue(provider.configured ? (selected ? "已选择" : "") : "需要 API Key")
+        .accessibilityValue(provider.configured ? (selected ? L("common.selected") : "") : L("set.needsKey"))
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+// MARK: - appearance pickers
+
+/// One template: a small swatch, the name, a one-line description.
+private struct TemplateRow: View {
+    let template: VisorTemplate
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Visor.Space.s3) {
+                TemplateSwatch(template: template)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(template.label).visorFont(.subhead, .semibold).foregroundStyle(Visor.text)
+                    Text(template.descriptionText)
+                        .visorFont(.caption)
+                        .foregroundStyle(Visor.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: Visor.Space.s2)
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 18))
+                    .foregroundStyle(selected ? Visor.accent : Visor.textTertiary)
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, Visor.Space.s4)
+            .padding(.vertical, Visor.Space.s2)
+            .frame(minHeight: Visor.hit)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .bottom) { VisorDivider().padding(.leading, Visor.Space.s4) }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(L("tpl.a11y", ("name", template.label), ("desc", template.descriptionText)))
+        .accessibilityValue(selected ? L("common.selected") : "")
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+    }
+}
+
+/// A 44x32 thumbnail of a template: its background, a surface bar, a text
+/// line and the accent dot.
+private struct TemplateSwatch: View {
+    let template: VisorTemplate
+
+    var body: some View {
+        let sw = template.swatch
+        ZStack(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 7, style: .continuous).fill(sw.bg.color)
+            VStack(alignment: .leading, spacing: 3) {
+                RoundedRectangle(cornerRadius: 2).fill(sw.text.color).frame(width: 20, height: 3)
+                RoundedRectangle(cornerRadius: 3).fill(sw.surface.color).frame(width: 30, height: 8)
+                Circle().fill(sw.accent.color).frame(width: 8, height: 8)
+            }
+            .padding(.leading, 6)
+        }
+        .frame(width: 44, height: 32)
+        .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(Visor.lineStrong, lineWidth: 1))
+        .accessibilityHidden(true)
+    }
+}
+
+/// The five voice display styles as selectable tiles with a still preview.
+private struct VisualizerPicker: View {
+    let selected: VoiceVisualizer
+    let onSelect: (VoiceVisualizer) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: Visor.Space.s2) {
+                ForEach(VoiceVisualizer.allCases) { style in
+                    let on = style == selected
+                    Button { onSelect(style) } label: {
+                        VStack(spacing: 4) {
+                            VisualizerPreview(style: style, size: CGSize(width: 64, height: 32))
+                            Text(style.label)
+                                .visorFont(.caption, on ? .semibold : .regular)
+                                .foregroundStyle(on ? Visor.accent : Visor.textSecondary)
+                        }
+                        .padding(Visor.Space.s2)
+                        .frame(minWidth: 76, minHeight: Visor.hit)
+                        .background(on ? Visor.accentSoft : Visor.surface2,
+                                    in: RoundedRectangle(cornerRadius: Visor.Radius.control, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Visor.Radius.control, style: .continuous)
+                                .strokeBorder(on ? Visor.accent : Visor.line, lineWidth: Visor.hairline)
+                        )
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(L("set.viz.a11y", ("name", style.label)))
+                    .accessibilityValue(on ? L("common.selected") : "")
+                    .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+                }
+            }
+            .padding(.horizontal, Visor.Space.s4)
+            .padding(.bottom, Visor.Space.s3)
+        }
+    }
+}
+
+/// A tiny still frame of a voice display style (speaking state, fixed time).
+struct VisualizerPreview: View {
+    let style: VoiceVisualizer
+    let size: CGSize
+
+    var body: some View {
+        let tint = Visor.accent
+        let line = Visor.textTertiary
+        Canvas { context, canvas in
+            let values = Spectrum.synthesize(mode: .speaking, level: 0.5, t: 1.2)
+            let w = canvas.width, h = canvas.height
+            switch style {
+            case .wave:
+                var p = Path()
+                for i in 0...40 {
+                    let u = Double(i) / 40
+                    let y = h / 2 - sin(u * .pi) * sin(u * 14) * h * 0.38
+                    let pt = CGPoint(x: 4 + (w - 8) * u, y: y)
+                    i == 0 ? p.move(to: pt) : p.addLine(to: pt)
+                }
+                context.stroke(p, with: .color(tint), style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
+            case .bars, .mirror, .dots:
+                let n = 12
+                let colW = (w - 8) / CGFloat(n)
+                for i in 0..<n {
+                    let v = CGFloat(values[i * 2])
+                    let x = 4 + CGFloat(i) * colW
+                    if style == .bars {
+                        let bh = max(2, v * (h - 6))
+                        context.fill(Path(roundedRect: CGRect(x: x, y: h - 3 - bh, width: colW * 0.7, height: bh), cornerRadius: 1), with: .color(tint))
+                    } else if style == .mirror {
+                        let bh = max(2, v * (h - 6))
+                        context.fill(Path(roundedRect: CGRect(x: x, y: (h - bh) / 2, width: colW * 0.7, height: bh), cornerRadius: 1), with: .color(tint))
+                    } else {
+                        let lit = Int((Double(v) * 5).rounded())
+                        for row in 0..<5 {
+                            let r = colW * 0.3
+                            let y = h - 4 - CGFloat(row) * ((h - 8) / 5)
+                            context.fill(Path(ellipseIn: CGRect(x: x, y: y - r, width: r * 2, height: r * 2)), with: .color(row < lit ? tint : line.opacity(0.35)))
+                        }
+                    }
+                }
+            case .ring:
+                let c = CGPoint(x: w / 2, y: h / 2)
+                let rIn = h * 0.2
+                for k in 0..<24 {
+                    let a = Double(k) / 24 * 2 * .pi
+                    let v = values[k < 12 ? k : 23 - k]
+                    let out = rIn + 2 + CGFloat(v) * h * 0.26
+                    var p = Path()
+                    p.move(to: CGPoint(x: c.x + cos(a) * rIn, y: c.y + sin(a) * rIn))
+                    p.addLine(to: CGPoint(x: c.x + cos(a) * out, y: c.y + sin(a) * out))
+                    context.stroke(p, with: .color(tint), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+                }
+            }
+        }
+        .frame(width: size.width, height: size.height)
+        .accessibilityHidden(true)
     }
 }

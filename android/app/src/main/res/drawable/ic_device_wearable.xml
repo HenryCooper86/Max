@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Device mark "wearable", converted from brand/devices/wearable.svg. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="64dp"
+    android:height="64dp"
+    android:viewportWidth="64"
+    android:viewportHeight="64">
+    <path
+        android:pathData="M0,0h64v64h-64z"
+        android:fillColor="#0B0C0E" />
+    <path
+        android:pathData="M20,20h24a12,12 0 0 1 12,12v0a12,12 0 0 1 -12,12h-24a12,12 0 0 1 -12,-12v-0a12,12 0 0 1 12,-12z"
+        android:fillColor="#131518"
+        android:strokeColor="#F2F4F5"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M15 32h7l4-7 6 14 5-11 3 4h9"
+        android:strokeColor="#C6F432"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

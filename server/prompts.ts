@@ -32,3 +32,61 @@ export function buildToolGroundingPrompt(): string {
     "骑手在录像或导航后说‘取消’、‘停一下’或 cancel it 时，系统会根据当前动作处理；你必须等待系统结果，不能自行声称已经停止。"
   );
 }
+
+const SESSION_LANGUAGE_NAMES: Record<string, { zh: string; en: string }> = {
+  zh: { zh: "中文", en: "Chinese" },
+  en: { zh: "English", en: "English" },
+  ja: { zh: "日语", en: "Japanese" },
+  ko: { zh: "韩语", en: "Korean" },
+  es: { zh: "西班牙语", en: "Spanish" },
+  fr: { zh: "法语", en: "French" },
+  de: { zh: "德语", en: "German" },
+  pt: { zh: "葡萄牙语", en: "Portuguese" },
+  ru: { zh: "俄语", en: "Russian" },
+  ar: { zh: "阿拉伯语", en: "Arabic" },
+  hi: { zh: "印地语", en: "Hindi" },
+  it: { zh: "意大利语", en: "Italian" },
+  tr: { zh: "土耳其语", en: "Turkish" }
+};
+
+/** The base language of a tag: "en-US" → "en". Empty when it is not a tag. */
+export function baseLanguage(tag: unknown): string {
+  if (typeof tag !== "string") return "";
+  const match = /^([a-z]{2,3})(?:[-_][a-z0-9]{2,8})*$/i.exec(tag.trim());
+  return match ? match[1]!.toLowerCase() : "";
+}
+
+/**
+ * The language the assistant should answer in for one session, given the
+ * language the wearer's app is set to. It applies only when the assistant
+ * actually speaks that language and it is not already its first one: an app
+ * in English makes a Chinese-first assistant answer in English, and an app in
+ * a language the assistant does not speak changes nothing. Returns "" when
+ * the assistant's own default stands.
+ */
+export function sessionLanguage(requested: unknown, spoken: readonly string[]): string {
+  const base = baseLanguage(requested);
+  if (!base) return "";
+  const speaks = spoken.map((language) => baseLanguage(language));
+  if (!speaks.includes(base) || speaks[0] === base) return "";
+  return base;
+}
+
+/**
+ * Tells the model which language this session runs in. It is appended after
+ * the assistant's general language rule and says so, because that rule names
+ * a different default. Written in both languages so the instruction is
+ * unmistakable whichever one the model weighs more.
+ */
+export function buildSessionLanguagePrompt(requested: unknown, spoken: readonly string[]): string {
+  const language = sessionLanguage(requested, spoken);
+  if (!language) return "";
+  const name = SESSION_LANGUAGE_NAMES[language] ?? { zh: language, en: language };
+  return (
+    `[本次会话语言] 对方的应用界面设置为 ${name.zh}。本次会话默认用 ${name.zh} 回答，包括确认、提醒、安全提示和闲聊；` +
+    `这一条优先于上面的默认语言规则。只有当对方明确改用其他受支持的语言时才切换。` +
+    ` [Session language] The wearer's app is set to ${name.en}. Answer in ${name.en} by default for this whole session — ` +
+    `confirmations, reminders, safety prompts and small talk included. This overrides the default-language rule above. ` +
+    `Switch only if they clearly start speaking another supported language.`
+  );
+}

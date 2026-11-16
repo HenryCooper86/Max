@@ -27,32 +27,32 @@ fun HudCastControl(client: HudCastClient) {
     var address by remember { mutableStateOf(client.savedAddress) }
     var code by remember { mutableStateOf("") }
     VisorButton(
-        text = if (state.active) "断开 HUD" else "投屏到 HUD",
+        text = if (state.active) tr(Str.HUD_DISCONNECT) else tr(Str.HUD_CAST),
         onClick = { if (state.active) client.stop() else showing = true },
         style = if (state.active) VisorButtonStyle.DANGER else VisorButtonStyle.GHOST
     )
     if (showing) VisorAlertDialog(
         onDismissRequest = { showing = false; code = "" },
-        title = "投屏到 HUD",
+        title = tr(Str.HUD_CAST),
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(VisorSpace.x3)) {
-                DialogText("手机与 RDK 连接同一 Wi-Fi，输入 RDK HUD 屏幕上的地址和连接码。")
-                VisorTextField(address, { address = it }, "RDK 地址，例如 192.168.1.20:8080", mono = true,
+                DialogText(tr(Str.HUD_HELP))
+                VisorTextField(address, { address = it }, tr(Str.HUD_ADDRESS), mono = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
-                VisorTextField(code, { code = it }, "六位连接码", secret = true, mono = true,
+                VisorTextField(code, { code = it }, tr(Str.HUD_CODE), secret = true, mono = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword))
                 Text(state.status, color = c.text, style = VisorType.bodySmall, modifier = Modifier.fillMaxWidth())
-                DialogText("开发版 Wi-Fi 原型：仅在可信网络使用。退出到后台会断开 HUD；连接中断后请手动重连。")
+                DialogText(tr(Str.HUD_NOTE))
             }
         },
         confirmButton = {
             VisorButton(
-                text = if (state.active) "断开 HUD" else "开始投屏",
+                text = if (state.active) tr(Str.HUD_DISCONNECT) else tr(Str.HUD_START),
                 enabled = BuildConfig.DEBUG,
                 style = VisorButtonStyle.PRIMARY,
                 onClick = { if (state.active) client.stop() else { client.connect(address, code); code = "" } }
             )
         },
-        dismissButton = { VisorButton("完成", { showing = false; code = "" }, style = VisorButtonStyle.GHOST) }
+        dismissButton = { VisorButton(tr(Str.DONE), { showing = false; code = "" }, style = VisorButtonStyle.GHOST) }
     )
 }

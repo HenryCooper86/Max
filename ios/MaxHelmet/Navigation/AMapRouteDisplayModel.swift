@@ -42,7 +42,7 @@ struct AMapRouteDisplayModel: Equatable {
                 : makeBounds(route: route, currentLocation: rider),
             destinationName: guidance.destinationName,
             nextTurn: guidance.upcomingSteps.first.map { CoordinateDatum.wgs84ToGcj02($0.step.coordinate) },
-            nextTurnInstruction: guidance.upcomingSteps.first?.step.instruction
+            nextTurnInstruction: guidance.upcomingSteps.first?.step.displayInstruction
         )
     }
 

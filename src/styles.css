@@ -7524,6 +7524,1633 @@ button.opsCard:disabled {
 }
 
 /* ============================================================
+   Public site: the landing page (/) and the configurator (/build).
+   Same tokens as the app. One bold move — the live lens at full width in
+   the hero — and a quiet, left-aligned editorial column everywhere else:
+   sections separated by space and a single rule, no card grid.
+   ============================================================ */
+.site {
+  --site-max: 1180px;
+  --site-gutter: clamp(16px, 4vw, 40px);
+  min-height: 100dvh;
+  /* The lens's waveform runs past its clip box; never let it widen the page.
+     clip, not hidden, so the sticky header keeps working. */
+  overflow-x: clip;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.skipLink {
+  position: absolute;
+  top: -48px;
+  left: 16px;
+  z-index: 50;
+  padding: 10px 14px;
+  border-radius: var(--radius-control);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+.skipLink:focus {
+  top: 12px;
+}
+
+.siteHeader {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  max-width: calc(var(--site-max) + 2 * var(--site-gutter));
+  min-height: 64px;
+  margin: 0 auto;
+  align-items: center;
+  gap: 24px;
+  padding: 10px var(--site-gutter);
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(12px);
+}
+
+.siteBrand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+  font: 600 var(--fs-17) / 1 var(--font-display);
+  letter-spacing: -0.01em;
+  text-decoration: none;
+}
+
+.siteMark {
+  width: 36px;
+  height: 15px;
+  fill: none;
+  overflow: visible;
+}
+
+.siteMark rect {
+  stroke: var(--text);
+  stroke-width: 1.5;
+}
+
+.siteMark path {
+  stroke: var(--accent);
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.siteNav {
+  display: flex;
+  gap: 4px;
+  margin-right: auto;
+}
+
+.siteNav a {
+  padding: 8px 10px;
+  border-radius: var(--radius-control);
+  color: var(--text-2);
+  font-size: var(--fs-15);
+  text-decoration: none;
+}
+
+.siteNav a:hover,
+.siteNav a[aria-current="page"] {
+  color: var(--text);
+}
+
+.siteHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.siteButton {
+  display: inline-flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 22px;
+  border: var(--line-w) solid var(--accent);
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--on-accent);
+  cursor: pointer;
+  font: 600 var(--fs-15) / 1 var(--font-display);
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.siteButton:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 88%, var(--text));
+}
+
+.siteButton.secondary {
+  border-color: var(--line-strong);
+  background: transparent;
+  color: var(--text);
+}
+
+.siteButton.secondary:hover:not(:disabled) {
+  border-color: var(--line-hover);
+  background: var(--surface-1);
+}
+
+.siteButton.quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-2);
+}
+
+.siteButton.quiet:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.siteButton.small {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: var(--fs-13);
+}
+
+.siteTextLink {
+  color: var(--text-2);
+  font-size: var(--fs-15);
+  text-underline-offset: 4px;
+}
+
+.siteMain {
+  max-width: calc(var(--site-max) + 2 * var(--site-gutter));
+  margin: 0 auto;
+  padding: 0 var(--site-gutter);
+}
+
+/* Hero: the claim on the left, then the live lens across the whole column. */
+.hero {
+  display: grid;
+  padding-block: clamp(40px, 8vw, 96px) clamp(48px, 8vw, 96px);
+  gap: clamp(32px, 5vw, 64px);
+}
+
+.heroText h1 {
+  max-width: 15ch;
+  margin: 0;
+  font: 600 clamp(2.5rem, 6.4vw, 5.25rem) / 1.02 var(--font-display);
+  letter-spacing: -0.035em;
+  text-wrap: balance;
+}
+
+.heroText p {
+  max-width: 54ch;
+  margin: 24px 0 0;
+  color: var(--text-2);
+  font-size: clamp(var(--fs-17), 1.6vw, 1.25rem);
+  line-height: 1.55;
+}
+
+.heroActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+  margin-top: 32px;
+}
+
+.heroLens {
+  display: grid;
+  height: clamp(150px, 36vw, 440px);
+  place-items: center;
+  container-type: size;
+}
+
+.heroLens .visorStage {
+  width: min(1100px, 100cqw, 240cqh);
+}
+
+/* Wide screens: the claim and the lens side by side, so the live voice is
+   in view on arrival. */
+@media (min-width: 1024px) {
+  .hero {
+    min-height: calc(100dvh - 64px);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+    align-items: center;
+    padding-block: 48px 72px;
+  }
+
+  .heroText h1 {
+    font-size: clamp(2.75rem, 4.6vw, 4.5rem);
+  }
+
+  .heroLens {
+    height: clamp(240px, 30vw, 380px);
+    margin-right: calc(var(--site-gutter) * -0.5);
+  }
+}
+
+/* Sections */
+.siteSection {
+  padding-block: clamp(64px, 9vw, 128px);
+  border-top: var(--line-w) solid var(--line);
+}
+
+.sectionHead {
+  max-width: 64ch;
+  margin-bottom: clamp(32px, 4vw, 56px);
+}
+
+.sectionHead h2 {
+  max-width: 22ch;
+  margin: 0;
+  font: 600 clamp(1.75rem, 3.6vw, 2.75rem) / 1.1 var(--font-display);
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+  scroll-margin-top: 88px;
+}
+
+.sectionHead p {
+  margin: 16px 0 0;
+  color: var(--text-2);
+  font-size: var(--fs-17);
+  line-height: 1.6;
+}
+
+.siteSection h3 {
+  margin: 0;
+  font: 600 var(--fs-17) / 1.3 var(--font-display);
+}
+
+/* Demo */
+.demoLayout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(260px, 1fr);
+  align-items: start;
+  gap: clamp(24px, 4vw, 48px);
+}
+
+.demoControls {
+  display: grid;
+  gap: 24px;
+}
+
+.demoControl {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.demoControl > label,
+.demoControl > legend {
+  margin-bottom: 10px;
+  padding: 0;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  font-weight: 600;
+}
+
+.demoSwatches {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 8px;
+}
+
+.demoSwatches button {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 10px 6px 8px;
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface-1);
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: var(--fs-13);
+}
+
+.demoSwatches button:hover {
+  border-color: var(--line-hover);
+}
+
+.demoSwatches button.active {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.demoSwatches .templateSwatch {
+  width: 48px;
+  height: 34px;
+}
+
+.studioSelect {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-1);
+  color: var(--text);
+  font-size: var(--fs-15);
+}
+
+/* A scripted session in its own template (scoped custom properties). */
+.assistantPreview {
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+  padding: clamp(16px, 2.4vw, 24px);
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-sheet);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-display);
+}
+
+.previewTopbar {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.previewBrand {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--fs-17);
+}
+
+.previewBrand strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.previewLogo {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: 22%;
+  object-fit: cover;
+}
+
+.previewDevice {
+  flex: none;
+  padding: 4px 10px;
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-pill);
+  color: var(--text-2);
+  font-size: var(--fs-12);
+}
+
+.previewHazard {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: var(--line-w) solid color-mix(in srgb, var(--warn) 45%, transparent);
+  border-radius: var(--radius-card);
+  background: var(--warn-soft);
+}
+
+.previewHazardDir {
+  display: grid;
+  min-width: 40px;
+  height: 36px;
+  place-items: center;
+  padding: 0 8px;
+  border-radius: var(--radius-control);
+  background: var(--warn);
+  color: var(--on-warn);
+  font-size: var(--fs-13);
+  font-weight: 700;
+}
+
+.previewHazard strong {
+  display: block;
+  font-size: var(--fs-15);
+}
+
+.previewHazard small {
+  color: var(--text-2);
+  font-size: var(--fs-13);
+}
+
+.previewLens {
+  display: grid;
+  height: clamp(130px, 22vw, 220px);
+  place-items: center;
+  container-type: size;
+}
+
+.previewLens .visorStage {
+  width: min(560px, 100cqw, 240cqh);
+}
+
+.assistantPreview.compact .previewLens {
+  height: clamp(120px, 16vw, 170px);
+}
+
+.previewState {
+  margin: 0;
+  font: 600 var(--fs-17) / 1.3 var(--font-display);
+  text-align: center;
+}
+
+.previewAction {
+  display: inline-flex;
+  justify-self: center;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-13);
+  font-weight: 600;
+}
+
+.previewCaptions {
+  display: grid;
+  min-height: 9.5em;
+  align-content: end;
+  gap: 10px;
+  margin: 4px 0 0;
+  padding: 14px 0 0;
+  border-top: var(--line-w) solid var(--line);
+  list-style: none;
+  font-size: var(--fs-15);
+  line-height: 1.45;
+}
+
+.previewCaptions li span {
+  display: block;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  font-weight: 600;
+}
+
+.previewCaptions li.wearer {
+  color: var(--user);
+}
+
+/* Devices: a two-column list, each with its mark. */
+.deviceList {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 clamp(24px, 4vw, 56px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.deviceList li {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  align-items: start;
+  gap: 18px;
+  padding: 24px 0;
+  border-top: var(--line-w) solid var(--line);
+}
+
+.deviceList img {
+  border-radius: 14px;
+}
+
+.deviceList p {
+  margin: 6px 0 0;
+  color: var(--text-2);
+  font-size: var(--fs-15);
+  line-height: 1.5;
+}
+
+.deviceList .deviceDefaults {
+  color: var(--text-2);
+  font-size: var(--fs-13);
+}
+
+/* Backends */
+.backendGroups {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: clamp(24px, 4vw, 56px);
+}
+
+.backendGroupNote {
+  margin: 6px 0 16px;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+}
+
+.backendGroup ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.backendGroup li {
+  display: grid;
+  gap: 4px;
+  padding: 14px 0;
+  border-top: var(--line-w) solid var(--line);
+}
+
+.backendGroup li span {
+  color: var(--text-2);
+  font-size: var(--fs-15);
+  line-height: 1.5;
+}
+
+.backendDemoNote {
+  max-width: 64ch;
+  margin: 32px 0 0;
+  color: var(--text-2);
+  font-size: var(--fs-15);
+}
+
+/* Look and sound */
+.lookGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr) minmax(0, 1.3fr);
+  gap: clamp(24px, 4vw, 48px);
+}
+
+.lookList {
+  display: grid;
+  gap: 14px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lookList li {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+}
+
+.lookList .templateSwatch {
+  width: 56px;
+  height: 40px;
+}
+
+.lookList span {
+  display: grid;
+  gap: 2px;
+}
+
+.lookList small {
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  line-height: 1.4;
+}
+
+.lookEq > p {
+  margin: 8px 0 16px;
+  color: var(--text-2);
+  font-size: var(--fs-15);
+}
+
+/* How it works: a real sequence, so it is numbered. */
+.howSteps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: clamp(20px, 3vw, 40px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+
+.howSteps li {
+  padding-top: 18px;
+  border-top: calc(var(--line-w) * 2) solid var(--text);
+  counter-increment: step;
+}
+
+.howSteps li::before {
+  content: counter(step);
+  display: block;
+  margin-bottom: 18px;
+  color: var(--accent);
+  font: 600 var(--fs-32) / 1 var(--font-display);
+}
+
+.howSteps p {
+  margin: 8px 0 0;
+  color: var(--text-2);
+  font-size: var(--fs-15);
+  line-height: 1.55;
+}
+
+/* Get started */
+.startLayout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: clamp(24px, 4vw, 48px);
+}
+
+.codeBlock {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+  padding: 20px 20px 14px;
+  border-radius: var(--radius-card);
+  background: var(--surface-1);
+  box-shadow: inset 0 0 0 var(--line-w) var(--line);
+}
+
+.codeBlock pre,
+.outputBlock pre {
+  max-width: 100%;
+  margin: 0;
+  overflow-x: auto;
+  font: var(--fs-15) / 1.7 var(--font-mono);
+}
+
+.startNotes {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-2);
+  font-size: var(--fs-15);
+  line-height: 1.5;
+}
+
+.startNotes code,
+.outputNote code {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+.startActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+  margin-top: 40px;
+}
+
+.siteFooter {
+  display: flex;
+  max-width: calc(var(--site-max) + 2 * var(--site-gutter));
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 24px;
+  margin: 0 auto;
+  padding: 40px var(--site-gutter) max(40px, env(safe-area-inset-bottom));
+  border-top: var(--line-w) solid var(--line);
+  color: var(--text-2);
+  font-size: var(--fs-13);
+}
+
+.siteFooter p {
+  max-width: 48ch;
+  margin: 6px 0 0;
+}
+
+.siteFooter strong {
+  color: var(--text);
+  font-size: var(--fs-15);
+}
+
+.siteFooter nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+}
+
+.siteFooter a {
+  color: var(--text-2);
+}
+
+/* ---- Configurator ------------------------------------------------------ */
+.buildPage {
+  padding-block: clamp(32px, 6vw, 72px) clamp(64px, 8vw, 112px);
+}
+
+.buildIntro h1 {
+  margin: 0;
+  font: 600 clamp(2rem, 4.6vw, 3.25rem) / 1.05 var(--font-display);
+  letter-spacing: -0.03em;
+}
+
+.buildIntro p {
+  max-width: 64ch;
+  margin: 14px 0 0;
+  color: var(--text-2);
+  font-size: var(--fs-17);
+  line-height: 1.55;
+}
+
+.buildSteps {
+  margin: 32px 0 28px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.buildSteps ol {
+  display: flex;
+  gap: 4px;
+  margin: 0;
+  padding: 0 0 2px;
+  list-style: none;
+}
+
+.buildSteps button {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px 0 6px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: var(--fs-15);
+  white-space: nowrap;
+}
+
+.buildStepNumber {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: 50%;
+  font: 600 var(--fs-13) / 1 var(--font-display);
+}
+
+.buildSteps button:hover {
+  color: var(--text);
+}
+
+.buildSteps button.active {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.buildSteps button.active .buildStepNumber {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.buildSteps button.invalid svg {
+  color: var(--danger);
+}
+
+.buildLayout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 420px);
+  align-items: start;
+  gap: clamp(24px, 4vw, 56px);
+}
+
+.buildForm h2 {
+  margin: 0;
+  font: 600 var(--fs-22) / 1.2 var(--font-display);
+  outline-offset: 4px;
+}
+
+.buildLede {
+  margin: 6px 0 24px;
+  color: var(--text-2);
+  font-size: var(--fs-15);
+}
+
+.buildNav {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: var(--line-w) solid var(--line);
+}
+
+.buildPreview {
+  position: sticky;
+  top: 80px;
+  display: grid;
+  gap: 8px;
+}
+
+.buildPreviewNote,
+.studioPreviewNote {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  text-align: center;
+}
+
+.buildFinish {
+  display: grid;
+  gap: 28px;
+}
+
+.buildProblems {
+  padding: 14px 16px;
+  border: var(--line-w) solid color-mix(in srgb, var(--danger) 45%, transparent);
+  border-radius: var(--radius-card);
+  background: var(--danger-soft);
+}
+
+.buildProblems ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.outputBlock {
+  display: grid;
+  gap: 10px;
+}
+
+.outputHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.outputHead h3 {
+  margin: 0;
+  font: 600 var(--fs-15) / 1.3 var(--font-mono);
+}
+
+.outputActions {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.outputBlock pre {
+  padding: 16px 18px;
+  border-radius: var(--radius-card);
+  background: var(--surface-1);
+  box-shadow: inset 0 0 0 var(--line-w) var(--line);
+  font-size: var(--fs-13);
+  line-height: 1.6;
+}
+
+.outputNote {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  line-height: 1.5;
+}
+
+@media (max-width: 960px) {
+  .demoLayout,
+  .buildLayout,
+  .backendGroups,
+  .startLayout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .lookGrid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .lookEq {
+    grid-column: 1 / -1;
+  }
+
+  .howSteps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .buildPreview {
+    position: static;
+    order: -1;
+  }
+}
+
+@media (max-width: 720px) {
+  .siteNav {
+    display: none;
+  }
+
+  .deviceList,
+  .lookGrid,
+  .howSteps {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .siteHeader {
+    gap: 12px;
+  }
+}
+
+@media (max-width: 400px) {
+  .siteHeaderActions .languageToggle button {
+    padding: 0 8px;
+  }
+
+  .heroActions .siteButton {
+    flex: 1 1 auto;
+  }
+}
+
+/* ---- Shared assistant controls (configurator + admin Studio) -----------
+   Prefixed with .studioScope so they hold their own inside the admin
+   workspace, whose element rules (button, input) would otherwise win. */
+.studioScope .studioField {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+  margin: 0 0 28px;
+}
+
+.studioScope .studioLabel {
+  color: var(--text);
+  font-size: var(--fs-15);
+  font-weight: 600;
+}
+
+.studioScope .studioHint {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  line-height: 1.5;
+}
+
+.studioScope .studioError {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--fs-13);
+}
+
+.studioScope input.studioInput {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-1);
+  color: var(--text);
+  font-size: var(--fs-15);
+}
+
+.studioScope input.studioInput.mono {
+  font-family: var(--font-mono);
+}
+
+.studioScope input.studioInput:hover {
+  border-color: var(--line-hover);
+}
+
+.studioScope .studioField.invalid input.studioInput[aria-invalid] {
+  border-color: var(--danger);
+}
+
+.studioScope input.visuallyHidden {
+  width: 1px;
+  min-width: 0;
+  height: 1px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+}
+
+.studioScope .studioPair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 20px;
+}
+
+.studioScope .studioCheck {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+  font-size: var(--fs-15);
+  cursor: pointer;
+}
+
+.studioScope .studioCheck input {
+  width: 18px;
+  min-height: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.studioScope .deviceChoices {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.studioScope .deviceChoice {
+  position: relative;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  padding: 12px;
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface-1);
+  cursor: pointer;
+}
+
+.studioScope .deviceChoice img {
+  border-radius: 10px;
+}
+
+.studioScope .deviceChoice strong {
+  display: block;
+  font-size: var(--fs-15);
+}
+
+.studioScope .deviceChoice small {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  line-height: 1.4;
+}
+
+.studioScope .deviceChoice:hover,
+.studioScope .backendChoice:hover {
+  border-color: var(--line-hover);
+}
+
+.studioScope .deviceChoice.active,
+.studioScope .backendChoice.active {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 var(--line-w) var(--accent);
+}
+
+.studioScope .deviceChoice:has(input:focus-visible),
+.studioScope .backendChoice:has(input:focus-visible) {
+  outline: var(--focus-w) solid var(--accent);
+  outline-offset: 2px;
+}
+
+.studioScope .languageChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.studioScope button.languageChip {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  line-height: 1;
+}
+
+.studioScope button.languageChip:hover:not(:disabled) {
+  border-color: var(--line-hover);
+  background: transparent;
+  color: var(--text);
+}
+
+.studioScope button.languageChip.active,
+.studioScope button.languageChip.active:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.studioScope .languageOrder {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 0.6875rem;
+  font-weight: 700;
+}
+
+.studioScope .accentRow,
+.studioScope .logoRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+}
+
+.studioScope input.accentSwatch {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 2px;
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-1);
+  cursor: pointer;
+}
+
+.studioScope .accentRow input.studioInput {
+  width: 9.5em;
+}
+
+.studioScope .logoPreview {
+  border-radius: 22%;
+  object-fit: cover;
+  box-shadow: 0 0 0 var(--line-w) var(--line);
+}
+
+.studioScope .logoSource {
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  margin-right: auto;
+}
+
+.studioScope button.studioButton {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px;
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-13);
+  line-height: 1;
+}
+
+.studioScope button.studioButton:hover:not(:disabled) {
+  border-color: var(--line-hover);
+  background: var(--surface-2);
+}
+
+.studioScope button.studioButton.quiet {
+  border-color: transparent;
+  color: var(--text-2);
+}
+
+.studioScope button.linkButton,
+.linkButton {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.studioScope button.linkButton:hover:not(:disabled) {
+  border: 0;
+  background: none;
+}
+
+.studioScope .backendChoices {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.studioScope .backendChoice {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface-1);
+  cursor: pointer;
+}
+
+.studioScope .backendChoiceHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  font-size: var(--fs-15);
+}
+
+.studioScope .backendPlace {
+  padding: 1px 8px;
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: var(--radius-pill);
+  color: var(--text-2);
+  font-size: var(--fs-12);
+}
+
+.studioScope .backendPlace.local {
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+  color: var(--ok);
+}
+
+.studioScope .backendChoiceText {
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  line-height: 1.45;
+}
+
+.studioScope .backendEnv,
+.studioScope .backendState code {
+  color: var(--text);
+  font: var(--fs-13) / 1.4 var(--font-mono);
+}
+
+.studioScope .backendStatusList {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.studioScope .backendStatusList li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 16px;
+  padding: 12px 0;
+  border-top: var(--line-w) solid var(--line);
+}
+
+.studioScope .backendStatusName {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.studioScope .backendDefault {
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-12);
+}
+
+.studioScope .backendState {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+}
+
+.studioScope .backendState.ready {
+  color: var(--ok);
+}
+
+/* The equaliser and pickers inside the admin workspace keep their own look. */
+.studioScope .eqPanel button.eqPower,
+.studioScope .eqPanel button.eqReset {
+  min-height: 36px;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  line-height: 1;
+}
+
+.studioScope .eqPanel button.eqReset {
+  border: 0;
+  border-radius: var(--radius-control);
+}
+
+.studioScope .eqPanel select {
+  min-height: 36px;
+  padding: 0 32px 0 12px;
+}
+
+/* Studio → Voice backends: one expandable card per backend. */
+.studioScope .backendSetup {
+  display: grid;
+  gap: 16px;
+}
+
+.studioScope .backendGeneral {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: var(--radius-card);
+  background: var(--surface-1);
+  box-shadow: inset 0 0 0 var(--line-w) var(--line);
+}
+
+.studioScope .backendGeneral .studioField {
+  margin: 0;
+}
+
+.studioScope .backendCards {
+  display: grid;
+  gap: 8px;
+}
+
+.studioScope .backendCard {
+  border-radius: var(--radius-control);
+  background: var(--surface-1);
+  box-shadow: inset 0 0 0 var(--line-w) var(--line);
+}
+
+.studioScope .backendCard[open] {
+  box-shadow: inset 0 0 0 var(--line-w) var(--line-strong);
+}
+
+.studioScope .backendCard > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  min-height: 52px;
+  padding: 10px 14px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.studioScope .backendCard > summary::-webkit-details-marker {
+  display: none;
+}
+
+.studioScope .backendCardTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: auto;
+  font-size: var(--fs-15);
+}
+
+.studioScope .backendCardCaret {
+  color: var(--text-2);
+  transition: transform var(--dur) var(--ease-out);
+}
+
+.studioScope .backendCard[open] .backendCardCaret {
+  transform: rotate(180deg);
+}
+
+.studioScope .backendState.missing {
+  color: var(--text-2);
+}
+
+.studioScope .backendCardBody {
+  display: grid;
+  gap: 14px;
+  padding: 0 14px 14px;
+}
+
+.studioScope .backendCardBody form {
+  display: grid;
+  gap: 14px;
+}
+
+.studioScope .backendField {
+  display: grid;
+  gap: 6px;
+}
+
+.studioScope .backendField label {
+  color: var(--text);
+  font-size: var(--fs-13);
+  font-weight: 600;
+}
+
+.studioScope .backendField label code,
+.studioScope .backendCard summary code {
+  color: var(--text-2);
+  font: 400 var(--fs-12) / 1.4 var(--font-mono);
+}
+
+.studioScope .backendFieldControl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.studioScope .backendFieldControl input.studioInput {
+  flex: 1 1 auto;
+}
+
+.studioScope .backendCardActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.studioScope button.studioSwitch {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-self: start;
+  gap: 10px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: var(--fs-15);
+  line-height: 1.3;
+  text-align: left;
+}
+
+.studioScope button.studioSwitch:hover:not(:disabled) {
+  border: 0;
+  background: none;
+}
+
+.studioScope .studioSwitch > span {
+  position: relative;
+  width: 40px;
+  height: 24px;
+  flex: none;
+  border-radius: var(--radius-pill);
+  background: var(--surface-3);
+  box-shadow: inset 0 0 0 var(--line-w) var(--line-strong);
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.studioScope .studioSwitch > span::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--text-2);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.studioScope .studioSwitch.on > span {
+  background: var(--accent);
+}
+
+.studioScope .studioSwitch.on > span::after {
+  background: var(--on-accent);
+  transform: translateX(16px);
+}
+
+/* ---- Admin Studio ------------------------------------------------------ */
+.studio {
+  display: grid;
+  gap: 24px;
+}
+
+.studioChecklist {
+  padding: 18px 20px;
+  border-radius: var(--radius-card);
+  background: var(--surface-1);
+  box-shadow: inset 0 0 0 var(--line-w) var(--line);
+}
+
+.studioChecklist h3 {
+  margin: 0;
+  font-size: var(--fs-17);
+}
+
+.studioChecklist p {
+  margin: 4px 0 12px;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+}
+
+.studioChecklist ol {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.studioChecklist li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-2);
+  font-size: var(--fs-15);
+}
+
+.studioChecklist li.done {
+  color: var(--text);
+}
+
+.studioChecklist li.done svg {
+  color: var(--ok);
+}
+
+.studioLayout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 380px);
+  align-items: start;
+  gap: clamp(20px, 3vw, 40px);
+}
+
+.studioForm > section + section {
+  padding-top: 24px;
+  border-top: var(--line-w) solid var(--line);
+}
+
+.studioForm h3 {
+  margin: 0 0 16px;
+  font-size: var(--fs-17);
+}
+
+.studioPreview {
+  position: sticky;
+  top: 88px;
+  display: grid;
+  gap: 8px;
+}
+
+.studioDanger p {
+  margin: -6px 0 12px;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+}
+
+.studioSaveBar {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  padding: 12px 16px;
+  border-radius: var(--radius-card);
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 var(--line-w) var(--line);
+}
+
+.studioSaveBar.dirty {
+  box-shadow: inset 0 0 0 var(--line-w) var(--accent);
+}
+
+.studioStatus {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+}
+
+.studioStatus.saved {
+  color: var(--ok);
+}
+
+.studioStatus.error {
+  color: var(--danger);
+}
+
+.studioSaveActions {
+  display: flex;
+  gap: 8px;
+}
+
+@media (max-width: 960px) {
+  .studioLayout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .studioPreview {
+    position: static;
+    order: -1;
+  }
+}
+
+@media (max-width: 560px) {
+  .studioScope .studioPair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ============================================================
    Reduced motion: keep every state legible, drop the movement.
    ============================================================ */
 @media (prefers-reduced-motion: reduce) {

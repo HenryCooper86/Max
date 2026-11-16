@@ -4,12 +4,12 @@ import SwiftUI
 
 private func connectionLabel(_ state: ConnectionState) -> String {
     switch state {
-    case .offline: return "离线"
-    case .connecting: return "连接中"
-    case .relay: return "中继在线"
-    case .provider: return "代理握手"
-    case .ready: return "已就绪"
-    case .degraded: return "降级"
+    case .offline: return L("conn.offline")
+    case .connecting: return L("conn.connecting")
+    case .relay: return L("conn.relay")
+    case .provider: return L("conn.provider")
+    case .ready: return L("conn.ready")
+    case .degraded: return L("conn.degraded")
     }
 }
 
@@ -24,11 +24,11 @@ private func connectionTone(_ state: ConnectionState) -> Color {
 
 private func turnCaption(_ turn: TurnState, name: String) -> String {
     switch turn {
-    case .idle: return "待机"
-    case .listening: return "免提待命 · 请讲话"
-    case .hearing: return "正在聆听…"
-    case .thinking: return "\(name) 思考中…"
-    case .speaking: return "\(name) 回答中"
+    case .idle: return L("turn.idle")
+    case .listening: return L("turn.listening")
+    case .hearing: return L("turn.hearing")
+    case .thinking: return L("turn.thinking", ("name", name))
+    case .speaking: return L("turn.speaking", ("name", name))
     }
 }
 
@@ -55,9 +55,9 @@ func crashCountdownSeconds(windowS: Double, sinceT: TimeInterval, now: TimeInter
 private func readoutHeadline(_ state: AgentSession.State, name: String) -> String {
     let base: String
     if !state.handsFree {
-        base = "你好，我是\(name)"
+        base = L("main.hello", ("name", name))
     } else if state.micMuted {
-        base = "麦克风已静音"
+        base = L("main.muted")
     } else if state.connection == .ready {
         base = turnCaption(state.turnState, name: name)
     } else {
@@ -66,30 +66,30 @@ private func readoutHeadline(_ state: AgentSession.State, name: String) -> Strin
     let presentedHazard = isHazardPresentationActive(state) ? state.fusedHazard : .normal
     switch presentedHazard {
     case .normal: return base
-    case .caution: return "注意路况 · " + base
-    case .critical: return "高风险 · 优先安全 · " + base
+    case .caution: return L("main.hazard.caution") + base
+    case .critical: return L("main.hazard.critical") + base
     }
 }
 
 private func readoutHint(_ state: AgentSession.State, wakePhrase: String?) -> String {
     if !state.handsFree {
-        if let wakePhrase, !wakePhrase.isEmpty { return "点按镜面开始对话，或说“\(wakePhrase)”" }
-        return "点按镜面开始对话，再点一次结束"
+        if let wakePhrase, !wakePhrase.isEmpty { return L("hint.wake", ("wake", wakePhrase)) }
+        return L("hint.start")
     }
-    if state.micMuted { return "点按「取消静音」后继续对话" }
-    return "再点一次镜面结束对话"
+    if state.micMuted { return L("hint.unmute") }
+    return L("hint.end")
 }
 
 func helmetToggleAccessibilityLabel(handsFree: Bool) -> String {
-    handsFree ? "结束免提" : "开启免提"
+    handsFree ? L("a11y.toggle.stop") : L("a11y.toggle.start")
 }
 
 func helmetToggleAccessibilityHint(handsFree: Bool) -> String {
-    handsFree ? "结束免提会话，或取消正在进行的连接" : "开启免提会话"
+    handsFree ? L("a11y.toggle.hint.stop") : L("a11y.toggle.hint.start")
 }
 
 func helmetToggleAccessibilityValue(handsFree: Bool) -> String {
-    handsFree ? "免提已开启" : "免提未开启"
+    handsFree ? L("a11y.toggle.value.on") : L("a11y.toggle.value.off")
 }
 
 /// The voice-mode main screen: wordmark and connection state on top, the Visor
@@ -139,6 +139,7 @@ struct AgentScreen: View {
                             hazard: presentedHazard,
                             handsFree: state.handsFree,
                             stage: stage,
+                            style: Visor.visualizer,
                             onTap: viewModel.toggleHandsFree
                         )
                     },
@@ -177,7 +178,7 @@ struct AgentScreen: View {
             if required { viewModel.handleAuthRequired() }
         }
         .sheet(isPresented: $viewModel.showPreferences) {
-            SettingsSheet(title: "设置") {
+            SettingsSheet(title: L("pill.settings")) {
                 SettingsPanel(state: state, viewModel: viewModel)
             }
             // Attached to the settings sheet so 导出日志 (tapped from inside it)
@@ -286,18 +287,21 @@ private struct TopBar: View {
 
     var body: some View {
         HStack(spacing: Visor.Space.s3) {
-            Text(Visor.assistantName)
-                .visorFont(.body, .semibold)
-                .foregroundStyle(Visor.text)
-                .lineLimit(1)
-                .accessibilityAddTraits(.isHeader)
+            HStack(spacing: Visor.Space.s2) {
+                AssistantMarkView(size: 28)
+                Text(Visor.assistantName)
+                    .visorFont(.body, .semibold)
+                    .foregroundStyle(Visor.text)
+                    .lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
+            }
             Spacer(minLength: 0)
             HStack(spacing: Visor.Space.s2) {
                 if state.bluetoothRouted {
                     Image(systemName: "headphones")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(Visor.textSecondary)
-                        .accessibilityLabel("蓝牙音频")
+                        .accessibilityLabel(L("a11y.bluetooth"))
                 }
                 HStack(spacing: 6) {
                     Circle()
@@ -312,7 +316,7 @@ private struct TopBar: View {
                 .frame(minHeight: 28)
                 .overlay(Capsule().strokeBorder(Visor.line, lineWidth: Visor.hairline))
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel("连接状态：\(connectionLabel(state.connection))")
+                .accessibilityLabel(L("a11y.connection", ("state", connectionLabel(state.connection))))
             }
         }
         .frame(maxWidth: .infinity, minHeight: HudMetrics.topBarHeight)
@@ -329,7 +333,7 @@ private struct RecordingIndicator: View {
         TimelineView(.periodic(from: .now, by: 1)) { _ in
             HStack(spacing: Visor.Space.s2) {
                 Circle().fill(Visor.danger).frame(width: 8, height: 8)
-                Text("录像中").visorFont(.footnote, .semibold).foregroundStyle(Visor.text)
+                Text(L("rec.recording")).visorFont(.footnote, .semibold).foregroundStyle(Visor.text)
                 Text(elapsed).visorFont(.footnote, .medium, mono: true).foregroundStyle(Visor.textSecondary)
             }
             .padding(.horizontal, Visor.Space.s3)
@@ -358,7 +362,7 @@ private struct HazardBanner: View {
                 .foregroundStyle(color)
                 .frame(minWidth: 56, minHeight: 40)
                 .padding(.horizontal, Visor.Space.s2)
-                .background(color.opacity(0.16), in: RoundedRectangle(cornerRadius: Visor.Radius.control, style: .continuous))
+                .background(Visor.soft(color), in: RoundedRectangle(cornerRadius: Visor.Radius.control, style: .continuous))
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -378,7 +382,7 @@ private struct HazardBanner: View {
                 .foregroundStyle(color)
         }
         .padding(Visor.Space.s3)
-        .background(color.opacity(0.10), in: RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous))
+        .background(Visor.soft(color), in: RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous)
                 .strokeBorder(color, lineWidth: Visor.hairline)
@@ -437,7 +441,7 @@ private struct CaptionsOverlay: View {
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 if items.isEmpty {
-                    Text("暂无字幕")
+                    Text(L("captions.empty"))
                         .visorFont(.footnote)
                         .foregroundStyle(Visor.textTertiary)
                         .frame(maxWidth: .infinity, alignment: .center)
@@ -493,32 +497,36 @@ private struct SecondaryControls: View {
     var body: some View {
         ViewThatFits(in: .horizontal) {
             controlsRow
+            // Longer (English) labels: same single row, tighter pills.
+            controlsRow(spacing: 6).environment(\.visorPillCompact, true)
             controlsGrid
         }
         .frame(maxWidth: .infinity)
     }
 
     private var captionsPill: some View {
-        PillToggle(icon: "text.bubble", label: "字幕", on: viewModel.showCaptions) {
+        PillToggle(icon: "text.bubble", label: L("pill.captions"), on: viewModel.showCaptions) {
             viewModel.showCaptions.toggle()
         }
     }
 
     private var galleryPill: some View {
-        PillToggle(icon: "photo.stack", label: "相册", on: false) {
+        PillToggle(icon: "photo.stack", label: L("pill.gallery"), on: false) {
             viewModel.galleryModel.refresh()
             viewModel.showGallery = true
         }
     }
 
     private var settingsPill: some View {
-        PillToggle(icon: "gearshape", label: "设置", on: false, accessibilityIdentifier: HudAccessibilityID.secondaryAction) {
+        PillToggle(icon: "gearshape", label: L("pill.settings"), on: false, accessibilityIdentifier: HudAccessibilityID.secondaryAction) {
             viewModel.showPreferences = true
         }
     }
 
-    private var controlsRow: some View {
-        HStack(spacing: Visor.Space.s2) {
+    private var controlsRow: some View { controlsRow(spacing: Visor.Space.s2) }
+
+    private func controlsRow(spacing: CGFloat) -> some View {
+        HStack(spacing: spacing) {
             captionsPill
             if state.handsFree {
                 MuteUtilityPill(muted: state.micMuted, action: viewModel.toggleMute)
@@ -588,10 +596,10 @@ private struct ChatBubble: View {
                     .padding(.vertical, Visor.Space.s2 + 1)
                     .background(
                         RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous)
-                            .fill(isRider ? Visor.user.opacity(0.14) : Visor.surface2)
+                            .fill(isRider ? Visor.userSoft : Visor.surface2)
                     )
                 HStack(spacing: 6) {
-                    Text(isRider ? "骑手" : assistantName)
+                    Text(isRider ? L(Visor.deviceKind == .helmet ? "caption.rider.helmet" : "caption.rider.other") : assistantName)
                         .visorFont(.caption, .semibold)
                         .foregroundStyle(isRider ? Visor.user : Visor.textSecondary)
                     Text(time).visorFont(.caption, mono: true).foregroundStyle(Visor.textTertiary)
@@ -599,17 +607,17 @@ private struct ChatBubble: View {
                         Text("…").visorFont(.caption).foregroundStyle(Visor.textTertiary)
                     }
                     if let feedback = item.feedback {
-                        Text("已标记 · \(feedback)")
+                        Text(L("caption.flagged", ("reason", turnFlagReasonLabel(feedback))))
                             .visorFont(.caption, .semibold)
                             .foregroundStyle(Visor.danger)
                     } else if flaggable {
                         // One tap opens the preset reasons — no typing mid-ride.
                         Menu {
                             ForEach(turnFlagReasons, id: \.self) { reason in
-                                Button(reason) { onFlag(reason) }
+                                Button(turnFlagReasonLabel(reason)) { onFlag(reason) }
                             }
                         } label: {
-                            Text("有问题?")
+                            Text(L("caption.flag"))
                                 .visorFont(.caption, .semibold)
                                 .foregroundStyle(Visor.danger)
                                 .padding(.horizontal, 8)

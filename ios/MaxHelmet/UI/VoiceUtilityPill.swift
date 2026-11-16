@@ -10,7 +10,7 @@ struct MuteUtilityPill: View {
         Button(action: action) {
             VisorPillLabel(
                 icon: muted ? "mic.slash.fill" : "mic.fill",
-                label: muted ? "取消静音" : "静音",
+                label: muted ? L("pill.unmute") : L("pill.mute"),
                 active: muted,
                 tint: Visor.warn
             )
@@ -18,7 +18,7 @@ struct MuteUtilityPill: View {
         .buttonStyle(.plain)
         .frame(minHeight: muteUtilityMinimumHitHeight)
         .contentShape(Rectangle())
-        .accessibilityLabel(muted ? "取消静音" : "静音")
+        .accessibilityLabel(muted ? L("pill.unmute") : L("pill.mute"))
         .accessibilityIdentifier(HudAccessibilityID.muteUtility)
     }
 }

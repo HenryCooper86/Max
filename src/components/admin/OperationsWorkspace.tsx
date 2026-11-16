@@ -8,6 +8,7 @@ import {
   Flask,
   GearSix,
   ListChecks,
+  PaintBrush,
   RocketLaunch,
   ShieldCheck,
   UserCircle,
@@ -35,6 +36,7 @@ import {
 import { useWorkspaceLocation } from "./workspace-location";
 import { AccountManagement } from "./AccountManagement";
 import { AdminOverview } from "./AdminOverview";
+import { AssistantStudio, SECTION_LEAVE_EVENT } from "./AssistantStudio";
 import { QualityOverview } from "./QualityOverview";
 import { EvidenceWorkspace } from "./EvidenceWorkspace";
 import { GovernanceWorkspace } from "./GovernanceWorkspace";
@@ -52,7 +54,8 @@ const SECTION_ICONS = {
   diagnostics: GearSix,
   policies: GearSix,
   accounts: Users,
-  audit: ShieldCheck
+  audit: ShieldCheck,
+  studio: PaintBrush
 };
 
 // One line under each page title saying what the page is for.
@@ -65,7 +68,11 @@ const SECTION_DESCRIPTIONS: Record<WorkspaceSection, [string, string]> = {
   diagnostics: ["逐条查看会话的技术细节。", "Inspect the technical detail of individual sessions."],
   policies: ["设置评估规则和发布门槛。", "Set evaluation rules and release thresholds."],
   accounts: ["管理账号、角色和邀请。", "Manage accounts, roles, and invitations."],
-  audit: ["谁在什么时候改了什么。", "Who changed what, and when."]
+  audit: ["谁在什么时候改了什么。", "Who changed what, and when."],
+  studio: [
+    "修改正在运行的助手：名字、设备、外观和声音。保存后新会话立即生效。",
+    "Change the running assistant: its name, device, look and sound. New sessions use a save straight away."
+  ]
 };
 
 type Props = {
@@ -233,6 +240,12 @@ export function OperationsWorkspace({ agent, user, onAuthenticationExpired, onCl
                     onClick={(event) => {
                       if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                       event.preventDefault();
+                      // A section with unsaved edits (the Studio) may veto the switch.
+                      if (
+                        item !== active &&
+                        !window.dispatchEvent(new Event(SECTION_LEAVE_EVENT, { cancelable: true }))
+                      )
+                        return;
                       navigate(item, {}, false, workspace);
                     }}
                   >
@@ -369,6 +382,13 @@ export function OperationsWorkspace({ agent, user, onAuthenticationExpired, onCl
             >
               <GovernanceWorkspace key={`${accountScope}:policy`} view="policy" user={user} data={data} />
             </div>
+          ) : null}
+          {administration && active === "studio" ? (
+            <AssistantStudio
+              key={accountScope}
+              onSaved={() => void agent.refreshHealth()}
+              onAuthenticationExpired={onAuthenticationExpired}
+            />
           ) : null}
           {administration && active === "accounts" ? (
             <AccountManagement key={accountScope} user={user} onAuthenticationExpired={onAuthenticationExpired} />

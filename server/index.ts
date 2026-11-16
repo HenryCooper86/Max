@@ -74,6 +74,8 @@ import {
   type TestingValidityStatus
 } from "../shared/testing";
 import { assistantLogo } from "./assistant";
+import { removeStudioLogo, saveStudioConfig, saveStudioLogo, studioState } from "./studio";
+import { loadStudioBackends, saveStudioBackends, studioBackendsState } from "./studio-backends";
 import { chooseVoiceProvider, createSelectableProvider, createVoiceProvider } from "./providers/factory";
 import type { AgentProvider, ProviderTelemetry } from "./providers/types";
 import { AgentSessionController } from "./session-controller";
@@ -90,6 +92,10 @@ import {
   registerAuthenticatedConnection,
   unregisterAuthenticatedConnection
 } from "./authenticated-connections";
+
+// Voice backend settings saved from the Studio are laid over the environment
+// before anything reads it.
+loadStudioBackends();
 
 const app = express();
 const server = http.createServer(app);
@@ -343,6 +349,69 @@ app.post("/auth/admin/invites/revoke", (req, res) => {
   }
   const removed = revokeInvite(body.code);
   res.json({ ok: true, removed });
+});
+
+// Studio: an admin edits the live assistant (name, device, look, voice shaping)
+// from the app. API keys are never read or written here.
+app.get("/auth/admin/studio", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  res.json(studioState());
+});
+
+app.put("/auth/admin/studio", (req, res) => {
+  const admin = requireAdmin(req, res);
+  if (!admin) return;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  try {
+    const state = saveStudioConfig(body.config);
+    log.info("assistant config saved from studio", { by: admin.username, name: state.assistant.name });
+    res.json(state);
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error instanceof Error ? error.message : "Invalid assistant config." });
+  }
+});
+
+app.put(
+  "/auth/admin/studio/logo",
+  express.raw({ type: ["image/svg+xml", "image/png", "application/octet-stream"], limit: "600kb" }),
+  (req, res) => {
+    const admin = requireAdmin(req, res);
+    if (!admin) return;
+    try {
+      const state = saveStudioLogo(req.body as Buffer);
+      log.info("assistant logo uploaded from studio", { by: admin.username });
+      res.json(state);
+    } catch (error) {
+      res.status(400).json({ ok: false, error: error instanceof Error ? error.message : "Invalid logo." });
+    }
+  }
+);
+
+// Voice backend setup. Keys are write-only: they can be set or cleared here,
+// and come back only as "set". The log records which settings changed, never
+// their values.
+app.get("/auth/admin/studio/backends", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  res.json(studioBackendsState());
+});
+
+app.put("/auth/admin/studio/backends", (req, res) => {
+  const admin = requireAdmin(req, res);
+  if (!admin) return;
+  try {
+    const { state, changed } = saveStudioBackends(req.body);
+    log.info("voice backends changed from studio", { by: admin.username, changed });
+    res.json(state);
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error instanceof Error ? error.message : "Invalid settings." });
+  }
+});
+
+app.delete("/auth/admin/studio/logo", (req, res) => {
+  const admin = requireAdmin(req, res);
+  if (!admin) return;
+  log.info("assistant logo removed from studio", { by: admin.username });
+  res.json(removeStudioLogo());
 });
 
 app.post("/auth/admin/users/delete", (req, res) => {

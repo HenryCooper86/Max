@@ -1,5 +1,9 @@
 package com.horizon.maxhelmet.music
 
+import com.horizon.maxhelmet.ui.tr
+import com.horizon.maxhelmet.ui.Str
+import com.horizon.maxhelmet.ui.AssistantBranding
+
 import com.horizon.maxhelmet.actions.DeviceResult
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -77,11 +81,11 @@ class AppMusicPlayback(private val scope: CoroutineScope, private val createDriv
         if (action !in setOf("play", "pause", "next", "previous")) return DeviceResult.failed("action.invalid")
         if (!app.isNullOrBlank()) return DeviceResult.unsupported("player.unsupported")
         if (action == "pause") { stop(); return DeviceResult.OK }
-        if (!foreground) return DeviceResult.failed("music.unavailable", "请回到 Max 中播放音乐。")
+        if (!foreground) return DeviceResult.failed("music.unavailable", tr(Str.MUSIC_RETURN, "name" to AssistantBranding.name))
         show()
         if (state.value.busy) return DeviceResult.failed("music.busy")
         if (playlist.isEmpty()) {
-            mutableState.update { it.copy(message = "暂无播放队列，请在 Max 中选择音乐。") }
+            mutableState.update { it.copy(message = tr(Str.MUSIC_NO_QUEUE, "name" to AssistantBranding.name)) }
             return DeviceResult.failed("music.emptyQueue")
         }
         when (action) {
@@ -122,7 +126,7 @@ class AppMusicPlayback(private val scope: CoroutineScope, private val createDriv
         timeout?.cancel()
         runCatching { driver?.release() }
         driver = null; prepared = false
-        mutableState.update { it.copy(visible = true, title = "正在准备音乐", artist = "", playing = false, busy = true, message = null) }
+        mutableState.update { it.copy(visible = true, title = tr(Str.MUSIC_PREPARING_TITLE), artist = "", playing = false, busy = true, message = null) }
         try {
             val current = createDriver()
             driver = current
@@ -145,12 +149,12 @@ class AppMusicPlayback(private val scope: CoroutineScope, private val createDriv
             })
             if (owner == generation && state.value.busy) timeout = scope.launch {
                 delay(6000)
-                if (owner == generation && state.value.busy) failPlayback("音乐加载超时，请重新选择。")
+                if (owner == generation && state.value.busy) failPlayback(tr(Str.MUSIC_LOAD_TIMEOUT))
             }
         } catch (_: Exception) { if (owner == generation) failPlayback() }
     }
 
-    private fun failPlayback(message: String = "音乐无法播放，请重新选择音频文件。") : DeviceResult {
+    private fun failPlayback(message: String = tr(Str.MUSIC_PLAY_FAILED)) : DeviceResult {
         generation++
         timeout?.cancel(); timeout = null
         runCatching { driver?.release() }; driver = null; prepared = false

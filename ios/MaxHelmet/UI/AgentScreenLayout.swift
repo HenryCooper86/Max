@@ -385,8 +385,8 @@ struct HudRegionLayout<AlertContent: View, HelmetContent: View, UtilityContent: 
         .frame(height: height)
         .accessibilityIdentifier(HudAccessibilityID.alertViewport)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("状态、安全和导航提醒")
-        .accessibilityHint(policy.alertChildrenRemainAccessible ? "上下滑动可查看全部提醒" : "")
+        .accessibilityLabel(L("a11y.alerts.label"))
+        .accessibilityHint(policy.alertChildrenRemainAccessible ? L("a11y.alerts.hint") : "")
     }
 
     private func utilityViewport(
@@ -417,8 +417,8 @@ struct HudRegionLayout<AlertContent: View, HelmetContent: View, UtilityContent: 
         .frame(height: height)
         .accessibilityIdentifier(HudAccessibilityID.utilityViewport)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("会话状态和工具")
-        .accessibilityHint("上下滑动可查看字幕和工具")
+        .accessibilityLabel(L("a11y.utility.label"))
+        .accessibilityHint(L("a11y.utility.hint"))
     }
 }
 

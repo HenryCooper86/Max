@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Device mark "bicycle-helmet", converted from brand/devices/bicycle-helmet.svg. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="64dp"
+    android:height="64dp"
+    android:viewportWidth="64"
+    android:viewportHeight="64">
+    <path
+        android:pathData="M0,0h64v64h-64z"
+        android:fillColor="#0B0C0E" />
+    <path
+        android:pathData="M10 39c1-13 12-22 25-22 11 0 19 7 19 18v4z"
+        android:fillColor="#131518"
+        android:strokeColor="#F2F4F5"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M22 25l-4 9M32 21l-3 13M42 22l-2 12"
+        android:strokeColor="#C6F432"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M18 39l6 9h8"
+        android:strokeColor="#F2F4F5"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

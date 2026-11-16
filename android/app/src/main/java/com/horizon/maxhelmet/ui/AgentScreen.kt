@@ -82,18 +82,19 @@ import java.util.Date
 import java.util.Locale
 
 private fun turnCaption(turn: TurnState, name: String): String = when (turn) {
-    TurnState.IDLE -> "待机"
-    TurnState.LISTENING -> "免提待命 · 请讲话"
-    TurnState.HEARING -> "正在聆听…"
-    TurnState.THINKING -> "$name 思考中…"
-    TurnState.SPEAKING -> "$name 回答中"
+    TurnState.IDLE -> tr(Str.TURN_IDLE)
+    TurnState.LISTENING -> tr(Str.TURN_LISTENING)
+    TurnState.HEARING -> tr(Str.TURN_HEARING)
+    TurnState.THINKING -> tr(Str.TURN_THINKING, "name" to name)
+    TurnState.SPEAKING -> tr(Str.TURN_SPEAKING, "name" to name)
 }
 
 /** Caption prefixes for a non-normal fused hazard. */
-private val HAZARD_CAPTIONS = mapOf(
-    HazardLevel.CAUTION to "注意路况",
-    HazardLevel.CRITICAL to "高风险 · 优先安全"
-)
+private fun hazardCaption(level: HazardLevel): String? = when (level) {
+    HazardLevel.CAUTION -> tr(Str.HAZARD_CAUTION)
+    HazardLevel.CRITICAL -> tr(Str.HAZARD_CRITICAL)
+    else -> null
+}
 
 internal fun hazardColor(c: VisorColors, hazard: HazardLevel): Color = when (hazard) {
     HazardLevel.NORMAL -> c.ok
@@ -105,12 +106,12 @@ internal fun hazardColor(c: VisorColors, hazard: HazardLevel): Color = when (haz
 internal fun hazardColor(hazard: HazardLevel): Color = hazardColor(Visor.colors, hazard)
 
 private fun connectionLabel(state: ConnectionState): String = when (state) {
-    ConnectionState.OFFLINE -> "离线"
-    ConnectionState.CONNECTING -> "连接中"
-    ConnectionState.RELAY -> "中继在线"
-    ConnectionState.PROVIDER -> "代理握手"
-    ConnectionState.READY -> "已就绪"
-    ConnectionState.DEGRADED -> "降级"
+    ConnectionState.OFFLINE -> tr(Str.CONN_OFFLINE)
+    ConnectionState.CONNECTING -> tr(Str.CONN_CONNECTING)
+    ConnectionState.RELAY -> tr(Str.CONN_RELAY)
+    ConnectionState.PROVIDER -> tr(Str.CONN_PROVIDER)
+    ConnectionState.READY -> tr(Str.CONN_READY)
+    ConnectionState.DEGRADED -> tr(Str.CONN_DEGRADED)
 }
 
 /**
@@ -134,9 +135,9 @@ private fun settledState(state: AgentSession.State): AgentSession.State {
 
 /** The single caption under the visor. */
 internal fun orbCaption(state: AgentSession.State, assistantName: String = DEFAULT_ASSISTANT_NAME): String {
-    if (!state.handsFree) return "点按镜面开始对话"
+    if (!state.handsFree) return tr(Str.TAP_VISOR)
     val caption = if (state.micMuted) {
-        "麦克风已静音"
+        tr(Str.MIC_MUTED)
     } else {
         when (state.connection) {
             ConnectionState.READY -> turnCaption(state.turnState, assistantName)
@@ -145,7 +146,7 @@ internal fun orbCaption(state: AgentSession.State, assistantName: String = DEFAU
     }
     // A non-normal fused hazard leads the caption.
     val presentedHazard = if (isHazardPresentationActive(state)) state.fusedHazard else HazardLevel.NORMAL
-    val hazardPrefix = HAZARD_CAPTIONS[presentedHazard]
+    val hazardPrefix = hazardCaption(presentedHazard)
     return if (hazardPrefix != null) "$hazardPrefix · $caption" else caption
 }
 
@@ -161,7 +162,11 @@ fun AgentScreen(
     onToggleHandsFree: () -> Unit,
     onExportTranscript: () -> Unit
 ) {
-    VisorTheme(accent = viewModel.accent) {
+    val appearance = remember(
+        viewModel.relayTemplate, viewModel.wearerTemplate, viewModel.templateSwitching,
+        viewModel.themeOverrides, viewModel.accentHex
+    ) { viewModel.appearance }
+    VisorTheme(template = appearance.template) {
         AgentScreenContent(viewModel, onToggleHandsFree, onExportTranscript)
     }
 }
@@ -222,13 +227,14 @@ private fun AgentScreenContent(
                     handsFree = state.handsFree,
                     dimmed = state.micMuted,
                     onTap = onToggleHandsFree,
-                    width = width
+                    width = width,
+                    style = viewModel.voiceStyle
                 )
             }
             val availableHeight = maxHeight
             val availableWidth = maxWidth
             Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
-                TopBar(state, name)
+                TopBar(state, name, viewModel)
                 if (landscape) {
                     Row(Modifier.weight(1f).padding(top = VisorSpace.x2), horizontalArrangement = Arrangement.spacedBy(VisorSpace.x4)) {
                         Column(
@@ -275,6 +281,7 @@ private fun AgentScreenContent(
         ModalBottomSheet(
             onDismissRequest = { viewModel.showPreferences = false },
             containerColor = c.bg,
+            scrimColor = c.scrim,
             shape = VisorShapes.sheet,
             dragHandle = {
                 Box(
@@ -283,7 +290,7 @@ private fun AgentScreenContent(
                 )
             }
         ) {
-            SheetContent("设置") { SettingsPanel(state, viewModel, onExportTranscript) }
+            SheetContent(tr(Str.SETTINGS)) { SettingsPanel(state, viewModel, onExportTranscript) }
         }
     }
     CrashOverlay(viewModel)
@@ -303,22 +310,29 @@ private fun connectionTone(state: AgentSession.State): Color {
 }
 
 @Composable
-private fun TopBar(state: AgentSession.State, name: String) {
+private fun TopBar(state: AgentSession.State, name: String, viewModel: MainViewModel) {
     val c = Visor.colors
     val tone = connectionTone(state)
     Row(
         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(name, color = c.text, style = VisorType.title, maxLines = 1)
-        Spacer(Modifier.weight(1f))
+        DeviceLogo(viewModel.deviceProfile, viewModel.deviceKind, viewModel.logoBitmap, size = 28.dp)
+        Spacer(Modifier.width(VisorSpace.x2))
+        // The name takes the remaining width, which pins the connection state to
+        // the trailing edge. (A second weighted spacer split the space in two and
+        // left the state floating mid-bar.)
+        Text(
+            name, color = c.text, style = VisorType.title, maxLines = 1,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
+        )
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(VisorSpace.x2)) {
             if (state.bluetoothRouted) {
-                Icon(Icons.Filled.Headset, contentDescription = "蓝牙音频", tint = c.textSecondary, modifier = Modifier.size(16.dp))
+                Icon(Icons.Filled.Headset, contentDescription = tr(Str.BLUETOOTH_AUDIO), tint = c.textSecondary, modifier = Modifier.size(16.dp))
             }
             Box(Modifier.size(8.dp).clip(CircleShape).background(tone))
             Text(
-                text = if (state.handsFree) connectionLabel(state.connection) else "未连接",
+                text = if (state.handsFree) connectionLabel(state.connection) else tr(Str.NOT_CONNECTED),
                 color = c.textSecondary,
                 style = VisorType.caption,
                 maxLines = 1
@@ -334,27 +348,34 @@ private fun SessionReadout(state: AgentSession.State, name: String, wakePhrase: 
     val c = Visor.colors
     // Idle: greet, then say how to start. Live: the turn state, then relay detail.
     val idle = !state.handsFree
-    val headline = if (idle) "你好，我是 $name" else orbCaption(state, name)
+    val headline = if (idle) tr(Str.GREETING, "name" to name) else orbCaption(state, name)
     val hint = when {
-        idle && !wakePhrase.isNullOrBlank() -> "${orbCaption(state, name)}，或说“$wakePhrase”"
+        idle && !wakePhrase.isNullOrBlank() -> tr(Str.HINT_WAKE, "caption" to orbCaption(state, name), "wake" to wakePhrase)
         idle -> orbCaption(state, name)
         // While a turn is in flight the relay's detail only rewords the headline
         // ("Max 思考中…" / "Max 正在思考"); it adds something only while waiting.
         state.connection == ConnectionState.READY &&
             state.turnState != TurnState.IDLE && state.turnState != TurnState.LISTENING -> ""
-        else -> state.statusText
+        else -> relocalize(state.statusText)
     }.takeIf { it != headline }.orEmpty()
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(VisorSpace.x1)) {
-        Text(
-            headline, color = c.text, style = VisorType.headline, textAlign = TextAlign.Center,
-            maxLines = 1, overflow = TextOverflow.Ellipsis
-        )
+        FitLine(headline, c.text, VisorType.headline)
         // Always one line tall, so the pills below hold their position as the hint comes and goes.
-        Text(
-            hint, color = c.textSecondary, style = VisorType.body, textAlign = TextAlign.Center,
-            minLines = 1, maxLines = 1, overflow = TextOverflow.Ellipsis
-        )
+        FitLine(hint, c.textSecondary, VisorType.body, minLines = 1)
     }
+}
+
+/** One line of text that shrinks (down to 60%) rather than truncating, so longer English wording keeps the one-line readout. */
+@Composable
+private fun FitLine(text: String, color: Color, style: androidx.compose.ui.text.TextStyle, minLines: Int = 1) {
+    var scale by remember(text, style.fontSize) { mutableStateOf(1f) }
+    Text(
+        text, color = color,
+        style = style.copy(fontSize = style.fontSize * scale, lineHeight = style.lineHeight),
+        textAlign = TextAlign.Center, minLines = minLines, maxLines = 1,
+        overflow = if (scale <= 0.6f) TextOverflow.Ellipsis else TextOverflow.Clip,
+        onTextLayout = { if (it.hasVisualOverflow && scale > 0.6f) scale = (scale - 0.06f).coerceAtLeast(0.6f) }
+    )
 }
 
 /** The utility row under the readout: capsule pills, the same set and order as
@@ -363,19 +384,19 @@ private fun SessionReadout(state: AgentSession.State, name: String, wakePhrase: 
 @Composable
 private fun UtilityPills(state: AgentSession.State, viewModel: MainViewModel) {
     FlowRow(
-        horizontalArrangement = Arrangement.spacedBy(VisorSpace.x2, Alignment.CenterHorizontally),
+        horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
         verticalArrangement = Arrangement.spacedBy(VisorSpace.x1)
     ) {
-        UtilityPill(Icons.Filled.ClosedCaption, "字幕", on = viewModel.showCaptions, onClick = viewModel::toggleCaptions)
+        UtilityPill(Icons.Filled.ClosedCaption, tr(Str.PILL_CAPTIONS), on = viewModel.showCaptions, onClick = viewModel::toggleCaptions)
         if (state.handsFree) {
             UtilityPill(
                 if (state.micMuted) Icons.Filled.MicOff else Icons.Filled.Mic,
-                if (state.micMuted) "取消静音" else "静音",
+                if (state.micMuted) tr(Str.PILL_UNMUTE) else tr(Str.PILL_MUTE),
                 on = state.micMuted, onColor = Visor.colors.warn, onClick = viewModel::toggleMute
             )
         }
-        UtilityPill(Icons.Filled.PhotoLibrary, "相册", on = false, onClick = { viewModel.showGallery = true })
-        UtilityPill(Icons.Filled.Settings, "设置", on = false, onClick = { viewModel.showPreferences = true })
+        UtilityPill(Icons.Filled.PhotoLibrary, tr(Str.PILL_GALLERY), on = false, onClick = { viewModel.showGallery = true })
+        UtilityPill(Icons.Filled.Settings, tr(Str.SETTINGS), on = false, onClick = { viewModel.showPreferences = true })
     }
 }
 
@@ -400,13 +421,13 @@ private fun UtilityPill(
         Row(
             Modifier
                 .heightIn(min = 36.dp)
-                .background(if (on) onColor.copy(alpha = 0.14f) else c.surface2, CircleShape)
-                .border(1.dp, if (on) onColor.copy(alpha = 0.4f) else c.line, CircleShape)
-                .padding(horizontal = 14.dp),
+                .background(if (on) c.soft(onColor) else c.surface2, CircleShape)
+                .border(Visor.metrics.lineWidth, if (on) onColor.copy(alpha = 0.4f) else c.line, CircleShape)
+                .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+            horizontalArrangement = Arrangement.spacedBy(3.dp)
         ) {
-            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(16.dp))
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(14.dp))
             Text(label, color = tint, style = VisorType.bodySmall, maxLines = 1)
         }
     }
@@ -423,7 +444,7 @@ private fun RecordingNotice() {
         horizontalArrangement = Arrangement.spacedBy(VisorSpace.x2)
     ) {
         Box(Modifier.size(8.dp).clip(CircleShape).background(c.danger))
-        Text("正在录像（无声）· 说“停止录像”结束", color = c.textSecondary, style = VisorType.bodySmall)
+        Text(tr(Str.RECORDING_NOTICE), color = c.textSecondary, style = VisorType.bodySmall)
     }
 }
 
@@ -447,7 +468,7 @@ private fun CaptionsOverlay(
     VisorCard {
         if (items.isEmpty()) {
             Text(
-                text = "暂无字幕",
+                text = tr(Str.CAPTIONS_EMPTY),
                 color = c.textTertiary,
                 style = VisorType.bodySmall,
                 textAlign = TextAlign.Center,
@@ -496,7 +517,7 @@ private fun ChatBubble(
             Box(
                 modifier = Modifier
                     .clip(VisorShapes.card)
-                    .background(if (isUser) c.user.copy(alpha = 0.14f) else c.surface2)
+                    .background(if (isUser) c.userSoft else c.surface2)
                     .padding(horizontal = VisorSpace.x3, vertical = VisorSpace.x2)
             ) {
                 Text(item.text, color = c.text, style = VisorType.body)
@@ -507,7 +528,7 @@ private fun ChatBubble(
                 modifier = Modifier.padding(top = VisorSpace.x1)
             ) {
                 Text(
-                    text = if (isUser) "你" else assistantName,
+                    text = if (isUser) tr(Str.SPEAKER_YOU) else assistantName,
                     color = speakerColor,
                     style = VisorType.caption.copy(fontWeight = FontWeight.SemiBold)
                 )
@@ -520,13 +541,13 @@ private fun ChatBubble(
                     var reasonsOpen by remember { mutableStateOf(false) }
                     Box {
                         Text(
-                            text = "有问题?",
+                            text = tr(Str.FLAG_ISSUE),
                             color = c.danger,
                             style = VisorType.caption.copy(fontWeight = FontWeight.SemiBold),
                             modifier = Modifier
                                 .minimumInteractiveComponentSize()
                                 .clip(VisorShapes.pill)
-                                .background(c.danger.copy(alpha = 0.14f))
+                                .background(c.dangerSoft)
                                 .clickable(role = Role.Button) { reasonsOpen = true }
                                 .padding(horizontal = VisorSpace.x2, vertical = 2.dp)
                         )
@@ -537,7 +558,7 @@ private fun ChatBubble(
                         ) {
                             TURN_FLAG_REASONS.forEach { reason ->
                                 DropdownMenuItem(
-                                    text = { Text(reason, color = c.text, style = VisorType.body) },
+                                    text = { Text(flagReasonLabel(reason), color = c.text, style = VisorType.body) },
                                     onClick = {
                                         reasonsOpen = false
                                         onFlag(reason)
@@ -563,7 +584,7 @@ private fun HazardBanner(alert: AgentEvent.HazardAlert) {
             Box(
                 modifier = Modifier
                     .clip(VisorShapes.control)
-                    .background(color.copy(alpha = 0.14f))
+                    .background(c.soft(color))
                     .padding(horizontal = VisorSpace.x3, vertical = VisorSpace.x2)
             ) {
                 Text(alert.directionLabel, color = color, style = VisorType.title.copy(fontWeight = FontWeight.Bold))
@@ -607,35 +628,44 @@ private fun GuidanceCard(guidance: NavGuidanceState, onConfirm: (String, Boolean
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(VisorSpace.x1)) {
                 Text(guidance.destinationName, color = c.textSecondary, style = VisorType.caption, maxLines = 1)
                 Text(
-                    text = if (guidance.confirmationId != null) "请确认目的地" else guidance.currentInstruction ?: guidance.destinationName,
+                    text = if (guidance.confirmationId != null) tr(Str.CONFIRM_DEST) else guidance.displayInstruction ?: guidance.destinationName,
                     color = c.text,
                     style = VisorType.headline
                 )
                 Spacer(Modifier.height(VisorSpace.x1))
                 Text(
-                    text = "距下一路口 ${formatDistanceMeters(guidance.distanceToManeuverMeters)}",
+                    text = tr(Str.NAV_TO_TURN, "distance" to formatDistanceMeters(guidance.distanceToManeuverMeters)),
                     color = c.text,
                     style = VisorType.mono
                 )
                 Text(
-                    text = "剩余 ${formatRemaining(guidance.remainingMeters, guidance.remainingSeconds)}",
+                    text = tr(Str.NAV_REMAINING, "remaining" to formatRemaining(guidance.remainingMeters, guidance.remainingSeconds)),
                     color = c.textSecondary,
                     style = VisorType.monoCaption
                 )
             }
             if (guidance.offRoute) {
-                VisorTag("已偏离路线", tint = c.warn)
+                VisorTag(tr(Str.OFF_ROUTE), tint = c.warn)
             }
         }
         guidance.confirmationId?.let { id ->
             Row(horizontalArrangement = Arrangement.spacedBy(VisorSpace.x3), modifier = Modifier.fillMaxWidth()) {
-                VisorButton("取消", onClick = { onConfirm(id, false) }, modifier = Modifier.weight(1f))
-                VisorButton("确认导航", onClick = { onConfirm(id, true) }, modifier = Modifier.weight(1f), style = VisorButtonStyle.PRIMARY)
+                VisorButton(tr(Str.CANCEL), onClick = { onConfirm(id, false) }, modifier = Modifier.weight(1f))
+                VisorButton(tr(Str.CONFIRM_NAV), onClick = { onConfirm(id, true) }, modifier = Modifier.weight(1f), style = VisorButtonStyle.PRIMARY)
             }
         }
         if (guidance.confirmationId == null) {
-            VisorButton("打开详细导航", onClick = { showingDetails = true }, style = VisorButtonStyle.GHOST)
+            VisorButton(tr(Str.OPEN_NAV), onClick = { showingDetails = true }, style = VisorButtonStyle.GHOST)
         }
         GuidanceRouteMap(guidance)
     }
+}
+
+/** Flag reasons are sent to the relay in Chinese (admin replay stays uniform); the menu shows them in the current language. */
+internal fun flagReasonLabel(reason: String): String = when (reason) {
+    "听错了" -> tr(Str.FLAG_MISHEARD)
+    "回答不对" -> tr(Str.FLAG_WRONG)
+    "太慢" -> tr(Str.FLAG_SLOW)
+    "不安全" -> tr(Str.FLAG_UNSAFE)
+    else -> reason
 }

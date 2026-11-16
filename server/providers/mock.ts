@@ -1,3 +1,6 @@
+import { assistant } from "../assistant";
+import { sessionLanguage } from "../prompts";
+import { localizeOutgoing } from "../relay-speech";
 import type { WebSocket } from "ws";
 import type { AgentProvider, ProviderSessionContext, ProviderTelemetry, SessionStartEvent } from "./types";
 import { MOCK_CAPABILITIES } from "../../shared/agent";
@@ -305,8 +308,12 @@ export function createMockProvider(
     }
   });
 
-  function send(payload: unknown) {
+  /** "" keeps the relay's own wording; "en" when the wearer's app is in English. */
+  let speechLanguage = "";
+
+  function send(original: unknown) {
     if (client.readyState === client.OPEN) {
+      const payload = localizeOutgoing(original, speechLanguage);
       const encoded = JSON.stringify(payload);
       telemetry?.serverEvent(payload, Buffer.byteLength(encoded));
       client.send(encoded);
@@ -532,6 +539,7 @@ export function createMockProvider(
   return {
     async start(event: SessionStartEvent, context?: ProviderSessionContext) {
       sessionPlatform = event.platform;
+      speechLanguage = sessionLanguage(event.language, assistant().languages);
       captureNavigationStop = context?.captureNavigationStop;
       scenario = event.scenario ?? "commute";
       const profile = SCENARIOS[scenario];

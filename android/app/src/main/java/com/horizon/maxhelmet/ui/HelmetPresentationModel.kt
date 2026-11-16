@@ -25,12 +25,12 @@ internal fun isNavPresentationActive(state: AgentSession.State): Boolean =
  *  also used standalone for the card's distance-to-maneuver line (which has
  *  no associated duration). */
 internal fun formatDistanceMeters(meters: Double): String =
-    if (meters >= 1000) String.format(Locale.ROOT, "%.1f公里", meters / 1000) else "${meters.roundToInt()}米"
+    if (meters >= 1000) String.format(Locale.ROOT, tr(Str.DIST_KM), meters / 1000) else tr(Str.DIST_M, "n" to meters.roundToInt())
 
 /** "1.2公里 · 4分钟" — remaining distance and time to the destination, for the
  *  guidance card. Minutes round UP (a nearly-finished minute still counts as
  *  a minute of riding left), mirroring the relay's ETA semantics. */
 internal fun formatRemaining(meters: Double, seconds: Double): String {
     val minutes = ceil(seconds / 60).toInt()
-    return "${formatDistanceMeters(meters)} · ${minutes}分钟"
+    return tr(Str.DIST_WITH_MIN, "distance" to formatDistanceMeters(meters), "n" to minutes)
 }

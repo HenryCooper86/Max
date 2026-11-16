@@ -1,5 +1,8 @@
 package com.horizon.maxhelmet.navigation
 
+import com.horizon.maxhelmet.ui.tr
+import com.horizon.maxhelmet.ui.Str
+
 import com.horizon.maxhelmet.BuildConfig
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,7 +23,7 @@ class HudCastClient(context: android.content.Context? = null,
     private fun saveBond() { bond?.let { if ((writeBond?.invoke(it.toString()) ?: secure?.write("wifi", it.toString())) == false) { it.put("enabled", false); secure?.remove("wifi") } } }
     private fun disableAuto() { bond?.put("enabled", false); saveBond() }
 
-    data class State(val active: Boolean = false, val status: String = "未投屏")
+    data class State(val active: Boolean = false, val status: String = tr(Str.HUD_NOT_CASTING))
     private val mutableState = MutableStateFlow(State())
     val state = mutableState.asStateFlow()
     private val transport = OkHttpClient.Builder().connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS).build()
@@ -54,16 +57,16 @@ class HudCastClient(context: android.content.Context? = null,
     }
     @Synchronized private fun connect(address: String, code: String, token: String?) {
         closeTransport()
-        if (!BuildConfig.DEBUG) { fail("Wi-Fi 投屏原型需要开发版本"); return }
+        if (!BuildConfig.DEBUG) { fail(tr(Str.HUD_NEEDS_DEBUG)); return }
         val endpoint = endpoint(address)
         if (endpoint == null || (token == null && !code.matches(Regex("[0-9]{6}")))) {
-            fail("请输入 RDK 屏幕上的地址和六位连接码"); return
+            fail(tr(Str.HUD_NEEDS_INPUT)); return
         }
         if (latest == null || (System.nanoTime() - latestAt) > 8_000_000_000L) {
-            fail("等待手机导航更新后重试"); return
+            fail(tr(Str.HUD_WAIT_NAV)); return
         }
         val current = generation
-        mutableState.value = State(true, "正在连接 HUD…")
+        mutableState.value = State(true, tr(Str.HUD_CONNECTING))
         lastReply = System.nanoTime()
         lastPing = lastReply
         pending = true
@@ -88,25 +91,25 @@ class HudCastClient(context: android.content.Context? = null,
                         }
                         retryDelay = 3000
                         ready = true
-                        mutableState.value = State(true, "已连接 · 正在发送导航")
+                        mutableState.value = State(true, tr(Str.HUD_CONNECTED_SENDING))
                     }
                     reply?.optString("type") == "hud.ack" && reply.optLong("sequence") == sequence -> {
                         awaitingAck = false
-                        mutableState.value = State(true, "正在投屏到 HUD")
+                        mutableState.value = State(true, tr(Str.HUD_CASTING))
                     }
                     reply?.optString("type") == "hud.pong" -> Unit // Liveness, not a fresh GPS fix.
-                    else -> { fail("HUD 响应无效"); return@synchronized }
+                    else -> { fail(tr(Str.HUD_BAD_RESPONSE)); return@synchronized }
                 }
                 flush()
             }
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) = synchronized(this@HudCastClient) {
-                if (generation == current) fail("HUD 已断开，请检查 Wi-Fi 和连接码后重试")
+                if (generation == current) fail(tr(Str.HUD_DROPPED_CHECK))
             }
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) = synchronized(this@HudCastClient) {
                 webSocket.close(code, null)
                 if (generation == current) {
-                    if (code == 1008) { stop(); mutableState.value = State(status = "配对已失效或 HUD 正忙，请重新配对") }
-                    else fail("HUD 已断开，正在等待重新连接")
+                    if (code == 1008) { stop(); mutableState.value = State(status = tr(Str.HUD_PAIR_EXPIRED)) }
+                    else fail(tr(Str.HUD_DROPPED_WAITING))
                 }
             }
         })
@@ -118,10 +121,10 @@ class HudCastClient(context: android.content.Context? = null,
                         val now = System.nanoTime()
                         if (now - lastReply > 12_000_000_000L ||
                             (awaitingAck && now - frameSentAt > 12_000_000_000L)) {
-                            fail("HUD 连接超时，请重新连接")
+                            fail(tr(Str.HUD_TIMEOUT))
                         } else if (ready && now - lastPing >= 4_000_000_000L) {
                             lastPing = now
-                            if (socket?.send("{\"type\":\"hud.ping\"}") != true) fail("HUD 已断开，请重新连接")
+                            if (socket?.send("{\"type\":\"hud.ping\"}") != true) fail(tr(Str.HUD_DROPPED_RECONNECT))
                         }
                     }
                 }
@@ -149,7 +152,7 @@ class HudCastClient(context: android.content.Context? = null,
     private fun scheduleReconnect() {
         if (bond?.optBoolean("enabled") != true || latest == null) return
         reconnect?.cancel()
-        mutableState.value = State(true, "连接中断 · 自动重连中（点断开可取消）")
+        mutableState.value = State(true, tr(Str.HUD_RECONNECTING))
         val wait = retryDelay; retryDelay = minOf(30000, retryDelay * 2)
         reconnect = CoroutineScope(Dispatchers.IO).launch {
             delay(wait)
@@ -160,10 +163,10 @@ class HudCastClient(context: android.content.Context? = null,
         if (!ready || awaitingAck || !pending || System.nanoTime() - latestAt >= 8_000_000_000L) return
         val guidance = latest ?: return
         val text = frame(guidance, ++sequence)
-        if (text == null) { fail("当前导航数据暂时无法投屏"); return }
+        if (text == null) { fail(tr(Str.HUD_NO_NAV_DATA)); return }
         frameSentAt = System.nanoTime()
         awaitingAck = true; pending = false
-        if (socket?.send(text) != true) fail("HUD 已断开，请重新连接")
+        if (socket?.send(text) != true) fail(tr(Str.HUD_DROPPED_RECONNECT))
     }
 
     companion object {

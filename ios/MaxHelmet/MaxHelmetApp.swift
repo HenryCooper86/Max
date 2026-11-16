@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// App entry — the iOS counterpart of android/.../MainActivity.kt. Hosts the
-/// single hands-free HUD, forces dark mode (the HUD is designed dark), and keeps
+/// single hands-free HUD, follows the active design template's colour scheme (light for daylight), and keeps
 /// the screen awake while open so riders can glance at it (FLAG_KEEP_SCREEN_ON).
 @main
 struct MaxHelmetApp: App {
@@ -13,7 +13,7 @@ struct MaxHelmetApp: App {
     var body: some Scene {
         WindowGroup {
             AgentScreen(viewModel: viewModel, session: session)
-                .preferredColorScheme(.dark)
+                .modifier(VisorSchemeModifier())
                 .onAppear {
                     #if DEBUG
                     AMapDeviceValidationHarness.apply(
@@ -41,5 +41,14 @@ struct MaxHelmetApp: App {
         // Riders glance at the HUD during active sessions; restore the system
         // default as soon as the app backgrounds or hands-free stops.
         UIApplication.shared.isIdleTimerDisabled = scenePhase == .active && (session.state.handsFree || hudCast.active)
+    }
+}
+
+/// Applies the active template's colour scheme to the whole window, so system
+/// chrome, sheets and the status bar match. Reads the observable theme in its
+/// own body, so a template change updates it.
+private struct VisorSchemeModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content.preferredColorScheme(Visor.colorScheme)
     }
 }

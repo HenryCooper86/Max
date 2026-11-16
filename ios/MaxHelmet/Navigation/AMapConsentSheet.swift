@@ -12,16 +12,16 @@ struct AMapConsentSheet: View {
                         .font(.system(size: 28, weight: .regular))
                         .foregroundStyle(Visor.textSecondary)
                         .accessibilityHidden(true)
-                    Text("高德地图与隐私")
+                    Text(L("amap.title"))
                         .visorFont(.title, .semibold)
                         .foregroundStyle(Visor.text)
                         .accessibilityAddTraits(.isHeader)
-                    Text("导航卡片使用高德地图（AMap）显示路线与当前位置。启用后，路线和当前位置会提供给高德地图用于地图显示，高德还会接收加载地图所需的网络请求；\(Visor.assistantName) 仍使用现有位置与路线数据，不启用高德定位服务。")
+                    Text(L("amap.body", ("name", Visor.assistantName)))
                         .visorFont(.subhead)
                         .foregroundStyle(Visor.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                     Link(
-                        "查看高德地图隐私政策",
+                        L("amap.policy"),
                         destination: URL(string: "https://lbs.amap.com/pages/privacy/")!
                     )
                     .visorFont(.subhead, .semibold)
@@ -34,9 +34,9 @@ struct AMapConsentSheet: View {
             .background(Visor.bg)
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: Visor.Space.s2) {
-                    Button("同意并启用", action: onAccept)
+                    Button(L("amap.accept"), action: onAccept)
                         .buttonStyle(.visor(.primary))
-                    Button("暂不启用", action: onDecline)
+                    Button(L("amap.decline"), action: onDecline)
                         .buttonStyle(.visor(.secondary))
                 }
                 .padding(.horizontal, Visor.Space.s6)
@@ -44,7 +44,7 @@ struct AMapConsentSheet: View {
                 .background(Visor.surface1)
                 .overlay(alignment: .top) { VisorDivider() }
             }
-            .navigationTitle("地图设置")
+            .navigationTitle(L("amap.navTitle"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(Visor.bg, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)

@@ -36,17 +36,17 @@ struct MusicPlaybackCard: View {
     private var qqContent: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Label("QQ 音乐", systemImage: "music.note").visorFont(.subhead, .semibold)
+                Label(L("music.qq"), systemImage: "music.note").visorFont(.subhead, .semibold)
                 Spacer()
                 Button { model.stopPlayback(dismiss: true) } label: {
                     Image(systemName: "xmark").frame(width: 44, height: 44)
-                }.accessibilityLabel("关闭音乐面板")
+                }.accessibilityLabel(L("music.closePanel"))
             }
-            Text("请在 QQ 音乐中播放和切歌。\(Visor.assistantName) 暂不能控制 QQ 音乐；关闭此面板不会停止 QQ 音乐。")
+            Text(L("music.qqNote", ("name", Visor.assistantName)))
                 .visorFont(.caption).foregroundStyle(Visor.textSecondary)
-            Link("打开 QQ 音乐官网", destination: URL(string: "https://y.qq.com/")!)
+            Link(L("music.openQQ"), destination: URL(string: "https://y.qq.com/")!)
                 .frame(minHeight: 44)
-            Button("改用 Apple Music / 本机音乐") { Task { await model.chooseLocalMusic() } }
+            Button(L("music.useLocal")) { Task { await model.chooseLocalMusic() } }
                 .visorFont(.caption).foregroundStyle(Visor.textSecondary).frame(minHeight: 44)
         }
     }
@@ -62,7 +62,7 @@ struct MusicPlaybackCard: View {
                         Image(systemName: "xmark").frame(width: 44, height: 44)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("停止并关闭音乐")
+                    .accessibilityLabel(L("music.stopClose"))
                     .accessibilityIdentifier("closeMusicPlayback")
                 }
                 if !model.artist.isEmpty {
@@ -72,19 +72,19 @@ struct MusicPlaybackCard: View {
                     Text(message).visorFont(.caption).foregroundStyle(Visor.warn)
                 }
                 HStack(spacing: 8) {
-                    control("上一首", symbol: "backward.end.fill", action: .previous)
-                    control(model.isPlaying ? "暂停" : "播放",
+                    control(L("music.prev"), symbol: "backward.end.fill", action: .previous)
+                    control(model.isPlaying ? L("music.pause") : L("music.play"),
                             symbol: model.isPlaying ? "pause.fill" : "play.fill",
                             action: model.isPlaying ? .pause : .play)
-                    control("下一首", symbol: "forward.end.fill", action: .next)
+                    control(L("music.next"), symbol: "forward.end.fill", action: .next)
                     Spacer(minLength: 0)
-                    Button("选择音乐") { Task { await model.chooseMusic() } }
+                    Button(L("music.choose")) { Task { await model.chooseMusic() } }
                         .visorFont(.caption)
                         .frame(minHeight: 44)
                 }
                 .disabled(model.busy)
-                Button("改用 QQ 音乐") { model.useQQMusic() }.visorFont(.caption).foregroundStyle(Visor.textSecondary).frame(minHeight: 44)
-                if model.busy { ProgressView("正在准备音乐…").visorFont(.caption) }
+                Button(L("music.useQQ")) { model.useQQMusic() }.visorFont(.caption).foregroundStyle(Visor.textSecondary).frame(minHeight: 44)
+                if model.busy { ProgressView(L("music.preparingLong")).visorFont(.caption) }
             }
     }
 
@@ -94,25 +94,25 @@ struct MusicPlaybackCard: View {
                 Button { Task { await model.chooseMusic() } } label: {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(model.title).visorFont(.subhead, .semibold).lineLimit(2)
-                        Text(model.busy ? "正在准备…" : (model.artist.isEmpty ? "选择音乐" : model.artist))
+                        Text(model.busy ? L("music.preparing") : (model.artist.isEmpty ? L("music.choose") : model.artist))
                             .visorFont(.caption).foregroundStyle(Visor.textSecondary).lineLimit(1)
                     }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 }.buttonStyle(.plain).disabled(model.busy)
                 Button { model.stopPlayback(dismiss: true) } label: {
                     Image(systemName: "xmark").frame(width: 44, height: 44)
-                }.buttonStyle(.plain).accessibilityLabel("停止并关闭音乐")
+                }.buttonStyle(.plain).accessibilityLabel(L("music.stopClose"))
             }
             HStack(spacing: 12) {
-                control("上一首", symbol: "backward.end.fill", action: .previous).disabled(model.busy)
-                control(model.isPlaying ? "暂停" : "播放",
+                control(L("music.prev"), symbol: "backward.end.fill", action: .previous).disabled(model.busy)
+                control(model.isPlaying ? L("music.pause") : L("music.play"),
                         symbol: model.isPlaying ? "pause.fill" : "play.fill",
                         action: model.isPlaying ? .pause : .play).disabled(model.busy && !model.isPlaying)
-                control("下一首", symbol: "forward.end.fill", action: .next).disabled(model.busy)
+                control(L("music.next"), symbol: "forward.end.fill", action: .next).disabled(model.busy)
             }.frame(maxWidth: .infinity)
             if let message = model.message {
                 Text(message).visorFont(.caption).foregroundStyle(Visor.warn).lineLimit(2)
             }
-            Button("改用 QQ 音乐") { model.useQQMusic() }.visorFont(.caption).foregroundStyle(Visor.textSecondary).frame(minHeight: 44)
+            Button(L("music.useQQ")) { model.useQQMusic() }.visorFont(.caption).foregroundStyle(Visor.textSecondary).frame(minHeight: 44)
         }
     }
 
@@ -134,7 +134,7 @@ private struct MusicLibraryPicker: UIViewControllerRepresentable {
         let picker = MPMediaPickerController(mediaTypes: .music)
         picker.allowsPickingMultipleItems = true
         picker.showsCloudItems = true
-        picker.prompt = "选择多首歌曲或歌单，以便切换上一首和下一首"
+        picker.prompt = L("music.pickerPrompt")
         picker.delegate = context.coordinator
         return picker
     }

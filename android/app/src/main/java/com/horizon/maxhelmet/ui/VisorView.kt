@@ -1,8 +1,18 @@
 package com.horizon.maxhelmet.ui
 
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import android.provider.Settings
+import kotlin.math.cos
+import kotlin.math.max
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -114,9 +124,11 @@ internal fun VisorView(
     dimmed: Boolean,
     onTap: () -> Unit,
     width: Dp,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    style: VoiceStyle = VoiceStyle.WAVE
 ) {
     val c = Visor.colors
+    val metrics = Visor.metrics
     val ease = tween<Float>(VisorMotion.SLOW, easing = VisorMotion.easeOut)
     val tintAnimated by animateColorAsState(tint, tween(VisorMotion.SLOW, easing = VisorMotion.easeOut), label = "visorTint")
     val energy by animateFloatAsState(visorEnergy(mode, level), tween(VisorMotion.FAST, easing = VisorMotion.easeOut), label = "visorEnergy")
@@ -137,6 +149,37 @@ internal fun VisorView(
         0f, 1f, infiniteRepeatable(tween(720, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "visorPulse"
     )
 
+    // Spectrum styles (everything but the wave): one frame clock drives a synthesised spectrum,
+    // smoothed with peak caps. With animations off (animator scale 0) a single still frame per
+    // state is drawn instead. The clock is read in the draw phase, so frames never recompose.
+    val context = LocalContext.current
+    val animationsOff = remember {
+        runCatching { Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f }.getOrDefault(false)
+    }
+    val spectrumMode = spectrumModeOf(mode, handsFree)
+    val spectrumModeNow by rememberUpdatedState(spectrumMode)
+    val levelNow by rememberUpdatedState(level)
+    val target = remember { FloatArray(SPECTRUM_BINS) }
+    val display = remember { FloatArray(SPECTRUM_BINS) }
+    val peaks = remember { FloatArray(SPECTRUM_BINS) }
+    val still = remember { FloatArray(SPECTRUM_BINS) }
+    var clock by remember { mutableFloatStateOf(0f) }
+    if (style != VoiceStyle.WAVE && !animationsOff) {
+        LaunchedEffect(style) {
+            var last = 0L
+            while (true) {
+                withFrameNanos { now ->
+                    val dt = if (last == 0L) 1f / 60f else ((now - last) / 1e9f).coerceIn(0f, 0.1f)
+                    last = now
+                    synthesizeSpectrum(target, spectrumModeNow, levelNow, now / 1e9f)
+                    smoothSpectrum(display, target, dt)
+                    updatePeaks(peaks, display, dt)
+                    clock = now / 1e9f
+                }
+            }
+        }
+    }
+
     val surface = c.surface1
     val rimIdle = c.lineStrong
     val tickColor = c.danger
@@ -148,11 +191,12 @@ internal fun VisorView(
             .width(width)
             .height(width * 0.6f)
             .alpha(if (dimmed) 0.55f else 1f)
-            .semantics { contentDescription = if (handsFree) "结束免提" else "开启免提" }
+            .semantics { contentDescription = if (handsFree) tr(Str.HF_END) else tr(Str.HF_START) }
             // No ripple: it is drawn as the canvas's rectangle, which shows its
             // corners around a capsule. The lens itself reacts to the tap.
             .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onTap)
     ) {
+        if (style != VoiceStyle.WAVE) clock // read: redraw on every frame of the clock
         val lensW = size.width * 0.84f
         val lensH = lensW / 2.4f
         val left = (size.width - lensW) / 2f
@@ -163,8 +207,8 @@ internal fun VisorView(
         // The one allowed effect: a faint tinted vignette behind the lens. Drawn
         // as an ellipse that reaches zero alpha exactly at the canvas edge, so
         // no edge of the drawing area can ever show against the background.
-        if (mode != VisorMode.OFFLINE) {
-            val glow = tintAnimated.copy(alpha = 0.10f * (0.4f + 0.6f * rimActive))
+        if (mode != VisorMode.OFFLINE && metrics.glow > 0f) {
+            val glow = tintAnimated.copy(alpha = 0.10f * metrics.glow * (0.4f + 0.6f * rimActive))
             scale(scaleX = 1f, scaleY = size.height / size.width, pivot = Offset(size.width / 2f, cy)) {
                 drawCircle(
                     brush = Brush.radialGradient(
@@ -188,7 +232,7 @@ internal fun VisorView(
             topLeft = Offset(left, top),
             size = Size(lensW, lensH),
             cornerRadius = radius,
-            style = Stroke(width = 1.5.dp.toPx())
+            style = Stroke(width = 1.5.dp.toPx() * metrics.lineWidth.value)
         )
 
         // Waveform area, inset from the rim.
@@ -197,7 +241,7 @@ internal fun VisorView(
         val x1 = left + lensW - inset
         val span = x1 - x0
         val amp = lensH * 0.34f
-        val stroke = 2.5.dp.toPx()
+        val stroke = (2.5.dp + (metrics.lineWidth - 1.dp)).toPx()
         val steps = 72
 
         fun wavePath(e: Float, p: Float): Path = Path().apply {
@@ -208,7 +252,17 @@ internal fun VisorView(
             }
         }
 
-        when (mode) {
+        if (style != VoiceStyle.WAVE) {
+            val frame = if (animationsOff) synthesizeSpectrum(still, spectrumMode, level, 1.2f) else display
+            val caps = if (animationsOff) still else peaks
+            val unit = lensW / 480f
+            if (style == VoiceStyle.MIRROR) drawLine(baseline, Offset(left, cy), Offset(left + lensW, cy), strokeWidth = 1.5.dp.toPx(), cap = StrokeCap.Round)
+            drawSpectrum(style, frame, caps, tintAnimated.copy(alpha = if (mode == VisorMode.OFFLINE) 0.5f else 1f), left, top, unit)
+            if (mode == VisorMode.OFFLINE) {
+                val tick = lensH * 0.26f
+                drawLine(tickColor, Offset((x0 + x1) / 2f, cy - tick), Offset((x0 + x1) / 2f, cy + tick), strokeWidth = stroke, cap = StrokeCap.Round)
+            }
+        } else when (mode) {
             VisorMode.IDLE -> {
                 // Flat line, slowly breathing in weight and brightness.
                 val e = energy * (0.6f + 0.4f * breath)
@@ -272,3 +326,65 @@ internal fun VisorView(
 }
 
 private fun lerpColor(a: Color, b: Color, t: Float): Color = androidx.compose.ui.graphics.lerp(a, b, t.coerceIn(0f, 1f))
+
+// Spectrum geometry in the web's 480x200 lens units (see VisorVisual.tsx): 24 columns 12 units
+// apart from x = 96, so the capsule's round ends stay clear.
+private const val SPECTRUM_LEFT = 96f
+private const val SPECTRUM_STEP = 12f
+private const val BAR_WIDTH = 8f
+private const val BAR_BASE = 152f
+private const val BAR_MAX = 106f
+private const val MIRROR_HALF = 66f
+private const val MID = 100f
+private const val DOT_ROWS = 9
+private const val DOT_STEP = 12f
+private const val RING_SPOKES = SPECTRUM_BINS * 2
+private const val RING_INNER = 36f
+private const val RING_REACH = 46f
+
+/** Draws one frame of a spectrum style; [left]/[top] is the lens origin and [u] the pixels per lens unit. */
+private fun DrawScope.drawSpectrum(style: VoiceStyle, values: FloatArray, peaks: FloatArray, color: Color, left: Float, top: Float, u: Float) {
+    fun px(x: Float) = left + x * u
+    fun py(y: Float) = top + y * u
+    fun columnX(i: Int) = SPECTRUM_LEFT + i * SPECTRUM_STEP + (SPECTRUM_STEP - BAR_WIDTH) / 2f
+    when (style) {
+        VoiceStyle.BARS -> for (i in 0 until SPECTRUM_BINS) {
+            val h = max(2f, values[i] * BAR_MAX)
+            drawRoundRect(color, Offset(px(columnX(i)), py(BAR_BASE - h)), Size(BAR_WIDTH * u, h * u), CornerRadius(2f * u))
+            val capY = BAR_BASE - max(2f, peaks[i] * BAR_MAX) - 6f
+            drawRoundRect(color.copy(alpha = color.alpha * 0.85f), Offset(px(columnX(i)), py(capY)), Size(BAR_WIDTH * u, 3f * u), CornerRadius(1.5f * u))
+        }
+        VoiceStyle.MIRROR -> for (i in 0 until SPECTRUM_BINS) {
+            val half = max(1f, values[i] * MIRROR_HALF)
+            drawRoundRect(color, Offset(px(columnX(i)), py(MID - half)), Size(BAR_WIDTH * u, half * 2f * u), CornerRadius(2f * u))
+        }
+        VoiceStyle.DOTS -> for (i in 0 until SPECTRUM_BINS) {
+            val lit = Math.round(values[i] * DOT_ROWS)
+            val peak = minOf(DOT_ROWS - 1, Math.round(peaks[i] * DOT_ROWS) - 1)
+            for (row in 0 until DOT_ROWS) {
+                val a = if (row < lit) 1f else if (row == peak) 0.7f else 0.14f
+                drawCircle(color.copy(alpha = color.alpha * a), 3.6f * u, Offset(px(columnX(i) + BAR_WIDTH / 2f), py(BAR_BASE - 4f - row * DOT_STEP)))
+            }
+        }
+        VoiceStyle.RING -> {
+            var sum = 0f
+            for (k in 0 until RING_SPOKES) {
+                val value = values[if (k < SPECTRUM_BINS) k else RING_SPOKES - 1 - k]
+                sum += value
+                val angle = k.toFloat() / RING_SPOKES * 2f * PI.toFloat() - PI.toFloat() / 2f
+                val outer = RING_INNER + 4f + value * RING_REACH
+                drawLine(
+                    color, Offset(px(240f + cos(angle) * RING_INNER), py(MID + sin(angle) * RING_INNER)),
+                    Offset(px(240f + cos(angle) * outer), py(MID + sin(angle) * outer)),
+                    strokeWidth = 3f * u, cap = StrokeCap.Round
+                )
+            }
+            drawCircle(color.copy(alpha = color.alpha * 0.6f), (RING_INNER - 10f + sum / RING_SPOKES * 10f) * u, Offset(px(240f), py(MID)), style = Stroke(2f * u))
+        }
+        VoiceStyle.WAVE -> Unit
+    }
+}
+
+/** Preview helper: draws a style with the lens origin at (0,0). */
+internal fun DrawScope.drawSpectrumPreview(style: VoiceStyle, values: FloatArray, peaks: FloatArray, color: Color, unit: Float) =
+    drawSpectrum(style, values, peaks, color, 0f, 0f, unit)

@@ -20,7 +20,7 @@ struct CaptureViewer: View {
                 } else if let image = UIImage(contentsOfFile: model.fileURL(for: capture).path) {
                     Image(uiImage: image).resizable().scaledToFit()
                 } else {
-                    Text("无法打开").visorFont(.subhead).foregroundStyle(Visor.textSecondary)
+                    Text(L("viewer.cannotOpen")).visorFont(.subhead).foregroundStyle(Visor.textSecondary)
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
@@ -31,26 +31,26 @@ struct CaptureViewer: View {
                     if model.exporting.contains(capture.id) {
                         ProgressView()
                     } else if capture.exported {
-                        Label("已导出", systemImage: "checkmark.circle.fill")
+                        Label(L("gallery.exported"), systemImage: "checkmark.circle.fill")
                             .foregroundStyle(Visor.ok)
                     } else {
                         Button { Task { await model.export(capture) } } label: {
-                            Label("导出到相册", systemImage: "square.and.arrow.up")
+                            Label(L("viewer.export"), systemImage: "square.and.arrow.up")
                         }
                     }
                 }
                 ToolbarItem(placement: .bottomBar) {
                     Button(role: .destructive) { confirmingDelete = true } label: {
-                        Label("删除", systemImage: "trash")
+                        Label(L("viewer.delete"), systemImage: "trash")
                     }
                 }
             }
-            .confirmationDialog("删除这个拍摄内容？", isPresented: $confirmingDelete, titleVisibility: .visible) {
-                Button("删除", role: .destructive) {
+            .confirmationDialog(L("viewer.deleteTitle"), isPresented: $confirmingDelete, titleVisibility: .visible) {
+                Button(L("viewer.delete"), role: .destructive) {
                     model.delete(capture)
                     dismiss()
                 }
-                Button("取消", role: .cancel) {}
+                Button(L("common.cancel"), role: .cancel) {}
             }
         }
         .tint(Visor.accent)

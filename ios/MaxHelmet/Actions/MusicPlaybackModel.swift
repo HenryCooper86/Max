@@ -122,7 +122,7 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
     }
 
     private func refresh() {
-        if prefersQQMusic { title = "QQ音乐"; artist = ""; isPlaying = false; return }
+        if prefersQQMusic { title = L("music.qq.short"); artist = ""; isPlaying = false; return }
         title = player.title ?? "Apple Music"
         artist = player.artist ?? ""
         isPlaying = player.isPlaying
@@ -133,7 +133,7 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
         let status = await requestAuthorization()
         guard operationIsCurrent(generation) else { return false }
         guard status == .authorized else {
-            message = "请在系统设置中允许 Max 访问媒体与 Apple Music。"
+            message = L("music.err.photosAccess", ("name", "Max"))
             return false
         }
         observePlayback()
@@ -145,7 +145,7 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
     func stopPlayback(dismiss: Bool = false) {
         operationGeneration += 1
         activePreparation?.finish(NSError(domain: "MaxMusic", code: 2,
-            userInfo: [NSLocalizedDescriptionKey: "播放请求已取消。"] ))
+            userInfo: [NSLocalizedDescriptionKey: L("music.err.requestCancelled")] ))
         activePreparation = nil
         player.pause()
         busy = false
@@ -167,7 +167,7 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
 
     private func cancelled(_ generation: Int) -> DeviceActionResult {
         if generation == operationGeneration { stopPlayback() }
-        return .failed("music.unavailable", "音乐控制已取消。")
+        return .failed("music.unavailable", L("music.err.cancelled"))
     }
 
     func performQQ(_ control: MusicControl) async -> DeviceActionResult {
@@ -179,10 +179,10 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
         stopPlayback()
         prefersQQMusic = true
         visible = true
-        title = "QQ音乐"
+        title = L("music.qq.short")
         artist = ""
         isPlaying = false
-        message = "请在 QQ 音乐中播放或切歌。Max 尚未接入 QQ 音乐播放授权，无法控制它的播放。"
+        message = L("music.err.qqNote", ("name", "Max"))
     }
 
     func chooseLocalMusic() async {
@@ -231,11 +231,11 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
             }
             guard generation == operationGeneration else { return cancelled(generation) }
             refresh()
-            return isPlaying ? .failed("music.controlUnavailable", "音乐未暂停，请重试。") : .ok
+            return isPlaying ? .failed("music.controlUnavailable", L("music.err.notPaused")) : .ok
         }
-        guard !appInBackground else { return .failed("music.unavailable", "请回到 Max 中播放音乐。") }
+        guard !appInBackground else { return .failed("music.unavailable", L("music.err.foreground", ("name", "Max"))) }
         visible = true
-        guard !busy else { return .failed("music.busy", "音乐正在准备，请稍后重试。") }
+        guard !busy else { return .failed("music.busy", L("music.err.busy")) }
         operationGeneration += 1
         let generation = operationGeneration
         busy = true
@@ -271,7 +271,7 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
         refresh()
         let changed = player.hasItem && player.itemIdentity != nil && player.itemIdentity != previousItem
         if changed && (!wasPlaying || isPlaying) { return .ok }
-        message = "歌曲没有切换。播放队列可能已到末尾，请在 Max 的“选择音乐”中添加多首歌曲或歌单。"
+        message = L("music.err.noSkip", ("name", "Max"))
         return .failed("music.controlUnavailable", message)
     }
 
@@ -288,7 +288,7 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
                     do { try await Task.sleep(nanoseconds: preparationTimeoutNanoseconds) }
                     catch { return }
                     operation.finish(NSError(domain: "MaxMusic", code: 1,
-                        userInfo: [NSLocalizedDescriptionKey: "准备音乐超时，请重试或重新选择歌曲。"] ))
+                        userInfo: [NSLocalizedDescriptionKey: L("music.err.prepTimeout")] ))
                 }
                 player.prepare { error in
                     Task { @MainActor in operation.finish(error) }
@@ -299,7 +299,7 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
             if let error {
                 refresh()
                 let failure = error as NSError
-                message = "音乐准备失败：\(failure.localizedDescription)（\(failure.domain) / \(failure.code)）"
+                message = L("music.err.prepFailed", ("detail", failure.localizedDescription), ("domain", failure.domain), ("code", String(failure.code)))
                 return .failed("music.unavailable", message)
             }
             needsPreparation = false
@@ -315,12 +315,12 @@ final class MusicPlaybackModel: NSObject, ObservableObject, SystemMusicPlaying {
         guard operationIsCurrent(generation) else { return cancelled(generation) }
         refresh()
         if isPlaying { return .ok }
-        message = "音乐未开始播放。请在 Max 中重新选择歌曲，并检查网络、Apple Music 账号或歌曲是否可用。"
+        message = L("music.err.notPlaying", ("name", "Max"))
         return .failed("music.unavailable", message)
     }
 
     private func emptyQueue() -> DeviceActionResult {
-        message = "暂无播放队列，请点“选择音乐”添加歌曲。"
+        message = L("music.err.emptyQueue")
         refresh()
         return .failed("music.emptyQueue", message)
     }

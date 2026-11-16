@@ -137,11 +137,11 @@ struct GuidanceMapHost: View {
         Group {
             switch presentation.viewState {
             case .consentRequired:
-                placeholder(title: "等待启用高德地图", actionTitle: nil, action: nil)
+                placeholder(title: L("map.waiting"), actionTitle: nil, action: nil)
             case .notEnabled:
-                placeholder(title: "地图未启用", actionTitle: "启用地图", action: consent.reconsider)
+                placeholder(title: L("map.disabled"), actionTitle: L("map.enable"), action: consent.reconsider)
             case .unavailable:
-                placeholder(title: "地图暂不可用", actionTitle: nil, action: nil)
+                placeholder(title: L("map.unavailable"), actionTitle: nil, action: nil)
             case let .nativeMap(acceptedConsent):
                 map(consent: acceptedConsent)
             }
@@ -169,11 +169,11 @@ struct GuidanceMapHost: View {
                     )
                 },
                 failureOverlay: {
-                    placeholder(title: "地图暂不可用", actionTitle: nil, action: nil)
+                    placeholder(title: L("map.unavailable"), actionTitle: nil, action: nil)
                 }
             )
         } else {
-            placeholder(title: "地图暂不可用", actionTitle: nil, action: nil)
+            placeholder(title: L("map.unavailable"), actionTitle: nil, action: nil)
         }
     }
 

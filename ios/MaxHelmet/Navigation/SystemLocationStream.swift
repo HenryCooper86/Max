@@ -72,7 +72,7 @@ final class SystemLocationStream: NSObject, LocationStreaming, CLLocationManager
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         // A temporary inability to acquire satellites is retried by Core Location.
         if (error as? CLError)?.code == .locationUnknown { return }
-        onFailure?("定位不可用。请开启系统定位服务，并在 Max 的位置权限中允许使用期间访问和精确位置。")
+        onFailure?(L("loc.unavailable", ("name", "Max")))
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {

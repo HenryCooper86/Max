@@ -22,6 +22,7 @@ import {
 } from "../../../shared/session";
 import { containsWakePhrase, WAKE_FOLLOWUP_MAX_CHAIN_MS, WAKE_FOLLOWUP_WINDOW_MS } from "../../../shared/wake";
 import { createEqualizer, type Equalizer } from "../../audio-eq";
+import { localizeOutgoing, relaySpeech } from "../../relay-speech";
 import { sessionEqualizer } from "../../session-equalizer";
 import { assistant, basePersonaPrompt, identityPrompt, promptsInChinese, wakeHint } from "../../assistant";
 import { config as appConfig } from "../../config";
@@ -37,7 +38,12 @@ import {
 import { createHazardInjector } from "../../hazard-injector";
 import { createLogger, type Logger } from "../../logger";
 import { metrics } from "../../metrics";
-import { buildLanguageInteractionPrompt, buildToolGroundingPrompt } from "../../prompts";
+import {
+  buildLanguageInteractionPrompt,
+  buildSessionLanguagePrompt,
+  buildToolGroundingPrompt,
+  sessionLanguage
+} from "../../prompts";
 import { asksCurrentLocation, RiderLocationContext } from "../../rider-location";
 import { createTranscriptDelivery, transcriptEvent, type TranscriptDelivery } from "../../transcript-events";
 import { buildPreviousConversationPrompt } from "../../user-memory";
@@ -111,6 +117,7 @@ export function buildLiveInstructions(input: {
   const profile = assistant();
   const inChinese = promptsInChinese(profile);
   const voiceLabel = (input.event.voiceGender ?? "female") === "male" ? "男声" : "女声";
+  const sessionRule = buildSessionLanguagePrompt(input.event.language, profile.languages);
   const previous = buildPreviousConversationPrompt(
     input.previousConversation?.turns ?? [],
     input.previousConversation?.facts ?? []
@@ -131,6 +138,7 @@ export function buildLiveInstructions(input: {
     // The stock language rule is Max's own (Chinese and English only); a
     // customised assistant states its language rule in its persona instead.
     (profile.isDefault ? `\n${buildLanguageInteractionPrompt()}` : "") +
+    (sessionRule ? `\n${sessionRule}` : "") +
     `\n你必须根据模式调整回答长度和安全策略；紧急模式优先生命安全，导航模式只给下一步。` +
     `\n${buildSafetyPrompt(input.rideContext, input.memory)}` +
     `\n${buildIntentGuidancePrompt(input.memory.lastIntent)}` +
@@ -175,6 +183,8 @@ export function createLiveProvider(
 
   let startEvent: SessionStartEvent | undefined;
   let equalizer: Equalizer = createEqualizer(undefined);
+  /** "" keeps the relay's own wording; "en" when the wearer's app is in English. */
+  let speechLanguage = "";
   let sessionPlatform: string | undefined;
   let previousConversation: ProviderSessionContext["previousConversation"];
   let captureNavigationStop: ProviderSessionContext["captureNavigationStop"];
@@ -221,8 +231,9 @@ export function createLiveProvider(
   const deviceActivity = new DeviceActivityContext();
   const recentGalleryCommands = new Map<string, { action: DeviceActionName; question?: string }>();
 
-  function send(payload: unknown): void {
+  function send(original: unknown): void {
     if (client.readyState !== client.OPEN) return;
+    const payload = localizeOutgoing(original, speechLanguage);
     const encoded = JSON.stringify(payload);
     telemetry?.serverEvent(payload, Buffer.byteLength(encoded));
     client.send(encoded);
@@ -386,7 +397,7 @@ export function createLiveProvider(
     send(transcriptEvent(delivery, "agent", text, { final: true, useBrowserSpeech: !embedded }));
     if (embedded && engineReady && engine?.say) {
       forcedReplies += 1;
-      engine.say(text);
+      engine.say(relaySpeech(text, speechLanguage));
     }
   }
 
@@ -767,6 +778,10 @@ export function createLiveProvider(
       const scenario: DemoScenario = event.scenario ?? "commute";
       rideContext = { mode: rideModeFromScenario(event.rideMode, scenario), scenario, network: "online" };
       memory = restoreSessionMemory(event.memory, rideContext.mode);
+      speechLanguage = sessionLanguage(event.language, assistant().languages);
+      if (speechLanguage === "en" && !event.memory?.language) {
+        memory = { ...memory, language: "en" };
+      }
 
       send({ type: "session.started", provider: backend.id, mode: "live", capabilities: backend.capabilities });
       emitRideContext();

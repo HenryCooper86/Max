@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Device mark "sunglasses", converted from brand/devices/sunglasses.svg. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="64dp"
+    android:height="64dp"
+    android:viewportWidth="64"
+    android:viewportHeight="64">
+    <path
+        android:pathData="M0,0h64v64h-64z"
+        android:fillColor="#0B0C0E" />
+    <path
+        android:pathData="M9 27h46"
+        android:strokeColor="#F2F4F5"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M11 27h17v6a7 7 0 0 1-7 7h-3a7 7 0 0 1-7-7z"
+        android:fillColor="#F2F4F5"
+        android:strokeColor="#F2F4F5"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M36 27h17v6a7 7 0 0 1-7 7h-3a7 7 0 0 1-7-7z"
+        android:fillColor="#F2F4F5"
+        android:strokeColor="#F2F4F5"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M28 29c2-2 6-2 8 0"
+        android:strokeColor="#F2F4F5"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M15 31l4 5M40 31l4 5"
+        android:strokeColor="#0B0C0E"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M9 27l-3-4M55 27l3-4"
+        android:strokeColor="#C6F432"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

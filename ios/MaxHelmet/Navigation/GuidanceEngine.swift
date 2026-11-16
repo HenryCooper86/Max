@@ -37,6 +37,21 @@ struct GuidanceUpdate: Equatable {
     /// template is the bare instruction, with no "现在" marker left to grep for.
     var firedThreshold: PromptThreshold?
     var currentInstruction: String?
+    /// The original instruction (parsing, never display).
+    var currentOriginalInstruction: String? = nil
+}
+
+/// The spoken prompt for a step. With a localized (English) instruction the
+/// lead-in is English ("In 200 metres, turn right onto …"); without one the
+/// Chinese wording is exactly what it always was.
+func leadIn(step: ManeuverStep, now: Bool, meters: Int) -> String {
+    if let localized = step.localizedInstruction {
+        if now { return localized }
+        let lowered = localized.prefix(1).lowercased() + localized.dropFirst()
+        return L("nav.ahead.localized", in: .en, ("n", String(meters)), ("instr", lowered))
+    }
+    if now { return step.instruction }
+    return L("nav.ahead", in: .zh, ("n", String(meters)), ("instr", step.instruction))
 }
 
 /// Pure route math and prompt timing — no I/O, no CoreLocation manager. Every
@@ -122,9 +137,10 @@ enum GuidanceEngine {
                     let urgent = due.min { $0.meters < $1.meters }!
                     due.forEach { firedThresholds.insert($0) }
                     firedThreshold = urgent
-                    spokenPrompt = urgent == .now
-                        ? currentManeuver.instruction
-                        : "前方\(Int((distanceToManeuver / 50).rounded()) * 50)米，\(currentManeuver.instruction)"
+                    spokenPrompt = leadIn(
+                        step: currentManeuver, now: urgent == .now,
+                        meters: Int((distanceToManeuver / 50).rounded()) * 50
+                    )
                 }
 
                 let reachedManeuver = distanceToManeuver <= maneuverAdvanceMeters
@@ -141,7 +157,8 @@ enum GuidanceEngine {
         let distanceToManeuverMeters = finalManeuver
             .map { max(0, $0.alongRouteMeters - snap.alongRouteMeters) }
             ?? max(0, route.totalDistanceMeters - snap.alongRouteMeters)
-        let currentInstruction = finalManeuver?.instruction
+        let currentInstruction = finalManeuver?.displayInstruction
+        let currentOriginalInstruction = finalManeuver?.instruction
 
         let remainingMeters = max(0, route.totalDistanceMeters - snap.alongRouteMeters)
         let remainingSeconds = route.totalDistanceMeters > 0
@@ -157,7 +174,8 @@ enum GuidanceEngine {
             arrived: arrived,
             spokenPrompt: offRoute ? nil : spokenPrompt,
             firedThreshold: offRoute ? nil : firedThreshold,
-            currentInstruction: currentInstruction
+            currentInstruction: currentInstruction,
+            currentOriginalInstruction: currentOriginalInstruction
         )
     }
 }

@@ -1,0 +1,92 @@
+import Foundation
+
+// Status text, errors and messages authored by the app's logic layer
+// (session, auth, music, location, crash, pairing). Relay-supplied strings
+// are never listed here.
+extension LocalizationTable {
+    static let statusRows: [(String, String, String)] = [
+        ("st.demoTour", "巡游演示已开启，开启免提后自动巡游场景", "Guided tour on. Start hands-free to tour the scenarios automatically"),
+        ("st.voiceMale", "已切换到男声", "Switched to a male voice"),
+        ("st.voiceFemale", "已切换到女声", "Switched to a female voice"),
+        ("st.persona", "已切换语气：{p}", "Style changed: {p}"),
+        ("st.reconnecting", "重新连接中…（第 {n} 次）", "Reconnecting… (attempt {n})"),
+        ("st.ready", "就绪", "Ready"),
+        ("st.badAgent", "收到异常代理消息", "Received an unexpected agent message"),
+        ("st.idleEnded", "会话闲置已断开，请重新开启免提", "The session ended after sitting idle. Start hands-free again"),
+        ("st.authRequired", "需要登录：在设置的「账号」里登录（或粘贴认证令牌）", "Sign-in required: sign in under Account in Settings (or paste an auth token)"),
+        ("st.relayRefused", "中继拒绝连接（HTTP {status}），请检查中继地址", "The relay refused the connection (HTTP {status}). Check the relay address"),
+        ("st.networkLost", "网络中断 — 求助信息将在恢复后自动发送", "Network lost — the emergency message will be sent once it's back"),
+        ("st.relayFailed", "语音中继连接失败，请重新开启免提", "Couldn't reach the voice relay. Start hands-free again"),
+        ("st.disconnected", "连接已断开，{n} 秒后自动重连…", "Disconnected. Reconnecting in {n} s…"),
+        ("st.mockRoute", "模拟路线已启用", "Simulated route on"),
+        ("st.doubaoLive", "豆包实时语音在线", "Doubao live voice online"),
+        ("st.interrupted", "已打断 {name}，继续听你说", "Interrupted {name}. Listening"),
+        ("st.recordingSaved", "录像已停止并保存。", "Recording stopped and saved."),
+        ("st.badRelayURL", "中继地址无效", "Invalid relay address"),
+        ("st.badRelayURLSettings", "中继地址无效，请在设置中检查服务器地址", "Invalid relay address. Check the server address in Settings"),
+        ("st.micPermission", "请在设置中允许麦克风权限", "Allow microphone access in Settings"),
+        ("st.micUnavailable", "麦克风不可用，请检查录音权限", "The microphone isn't available. Check the recording permission"),
+        // auth
+        ("auth.badURL", "中继地址无效，请检查设置", "Invalid relay address. Check Settings"),
+        ("auth.loginFailed", "登录失败，请重试", "Sign-in failed. Try again"),
+        ("auth.unreachable", "无法连接服务器，请检查中继地址", "Can't reach the server. Check the relay address"),
+        ("auth.needCreds", "请输入用户名和密码", "Enter a username and password"),
+        ("auth.unavailable", "登录服务不可用", "Sign-in isn't available"),
+        // pairing
+        ("pair.busy", "头盔正忙，请稍后再试", "The helmet is busy. Try again in a moment"),
+        ("pair.declined", "头盔侧已取消配对", "Pairing was declined at the helmet"),
+        ("pair.timeout", "确认超时，请重试", "Confirmation timed out. Try again"),
+        // gallery
+        ("gallery.exportError", "导出到相册失败，检查相册权限后重试。", "Couldn't export to Photos. Check the photo permission and try again."),
+        // music
+        ("music.err.photosAccess", "请在系统设置中允许 {name} 访问媒体与 Apple Music。", "Allow {name} to access media and Apple Music in Settings."),
+        ("music.err.requestCancelled", "播放请求已取消。", "The playback request was cancelled."),
+        ("music.err.cancelled", "音乐控制已取消。", "Music control was cancelled."),
+        ("music.err.qqNote", "请在 QQ 音乐中播放或切歌。{name} 尚未接入 QQ 音乐播放授权，无法控制它的播放。", "Play or skip in QQ Music. {name} isn't authorised to control QQ Music playback yet."),
+        ("music.err.notPaused", "音乐未暂停，请重试。", "Music didn't pause. Try again."),
+        ("music.err.foreground", "请回到 {name} 中播放音乐。", "Come back to {name} to play music."),
+        ("music.err.busy", "音乐正在准备，请稍后重试。", "Music is getting ready. Try again shortly."),
+        ("music.err.noSkip", "歌曲没有切换。播放队列可能已到末尾，请在 {name} 的“选择音乐”中添加多首歌曲或歌单。", "The track didn't change. The queue may have reached its end. Add several songs or a playlist under “Choose music” in {name}."),
+        ("music.err.prepTimeout", "准备音乐超时，请重试或重新选择歌曲。", "Preparing the music timed out. Try again or pick another song."),
+        ("music.err.prepFailed", "音乐准备失败：{detail}（{domain} / {code}）", "Couldn't prepare the music: {detail} ({domain} / {code})"),
+        ("music.err.notPlaying", "音乐未开始播放。请在 {name} 中重新选择歌曲，并检查网络、Apple Music 账号或歌曲是否可用。", "The music didn't start. Pick the song again in {name} and check your network, Apple Music account, or whether the song is available."),
+        ("music.err.emptyQueue", "暂无播放队列，请点“选择音乐”添加歌曲。", "The queue is empty. Tap “Choose music” to add songs."),
+        // location
+        ("loc.unavailable", "定位不可用。请开启系统定位服务，并在 {name} 的位置权限中允许使用期间访问和精确位置。", "Location isn't available. Turn on Location Services and allow While Using the App and Precise Location for {name}."),
+        ("loc.noFix", "还没获取到精确位置。请检查 {name} 的定位和精确位置权限，并到室外或空旷处重试。", "No precise location yet. Check {name}'s location and Precise Location permissions, then try again outdoors or in the open."),
+        // crash
+        ("crash.line.checkIn", "检测到疑似摔车。你还好吗？没事请回答“我没事”，或点一下屏幕。", "Possible crash detected. Are you OK? Tap the screen to cancel."),
+        ("crash.ack.notified", "已通知紧急联系人。", "Your emergency contact has been notified."),
+        ("crash.ack.failed", "紧急联系人通知失败，请手动拨打求助电话。", "Couldn't notify your emergency contact. Please call for help yourself."),
+        ("crash.ack.unconfigured", "服务器没有配置通知通道，请手动拨打求助电话。", "The server has no notification channel set up. Please call for help yourself."),
+        ("crash.ack.none", "服务器未确认 — 请手动拨打", "The server hasn't confirmed — please call yourself"),
+        // navigation spoken / status
+        ("nav.locating", "正在定位…", "Locating…"),
+        ("nav.confirmSpoken", "请确认目的地：{dest}。确认后开始导航。", "Confirm the destination: {dest}. Say “确认导航” or tap Confirm to start turn-by-turn guidance."),
+        ("nav.locationLost", "手机定位中断，导航已暂停。", "The phone's location dropped out. Navigation is paused."),
+        ("nav.ahead.localized", "In {n} metres, {instr}", "In {n} metres, {instr}"),
+        ("nav.stopped", "已停止导航。", "Navigation stopped."),
+        ("nav.arrived", "已到达目的地。", "You have arrived."),
+        ("nav.offRoute", "已偏离路线，正在重新规划。", "You're off the route. Recalculating."),
+        ("nav.rerouteFailed", "无法重新规划路线，已停止导航。", "I couldn't find a new route. Navigation has stopped."),
+        ("nav.routeToDestination", "沿路线前往目的地", "Follow the route to your destination"),
+        ("nav.currentLocation", "当前位置", "Current location"),
+        ("nav.nextTurn", "下一路口", "Next turn"),
+        // HUD cast status
+        ("hud.status.idle", "未投屏", "Not casting"),
+        ("hud.status.debugOnly", "Wi-Fi 投屏原型需要开发版本", "The Wi-Fi cast prototype needs a development build"),
+        ("hud.status.needCode", "请输入 RDK 屏幕上的地址和六位连接码", "Enter the address and six-digit code shown on the RDK screen"),
+        ("hud.status.waitNav", "等待手机导航更新后重试", "Waiting for a navigation update from the phone, then retrying"),
+        ("hud.status.connecting", "正在连接 HUD…", "Connecting to the HUD…"),
+        ("hud.status.badReply", "HUD 响应无效", "The HUD sent an invalid reply"),
+        ("hud.status.connectedSending", "已连接 · 正在发送导航", "Connected · sending navigation"),
+        ("hud.status.casting", "正在投屏到 HUD", "Casting to the HUD"),
+        ("hud.status.pairInvalid", "配对已失效或 HUD 正忙，请检查连接码后重试", "The pairing expired or the HUD is busy. Check the code and try again"),
+        ("hud.status.droppedWaiting", "HUD 已断开，正在等待重新连接", "The HUD disconnected. Waiting to reconnect"),
+        ("hud.status.timeout", "HUD 连接超时，请重新连接", "The HUD connection timed out. Reconnect"),
+        ("hud.status.dropped", "HUD 已断开，请重新连接", "The HUD disconnected. Reconnect"),
+        ("hud.status.mapDropped", "地图投屏已断开，请重新连接", "Map casting disconnected. Reconnect"),
+        ("hud.status.autoReconnect", "连接中断 · 自动重连中（点停止可取消）", "Connection lost · reconnecting automatically (tap Stop to cancel)"),
+        ("hud.status.noData", "当前导航数据暂时无法投屏", "This navigation data can't be cast right now"),
+    ]
+}

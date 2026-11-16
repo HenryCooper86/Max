@@ -124,14 +124,14 @@ struct AMapRouteMap: UIViewRepresentable {
                 riderAnnotation = model.currentLocation.map { coordinate in
                     let annotation = MAPointAnnotation()
                     annotation.coordinate = coordinate
-                    annotation.title = "当前位置"
+                    annotation.title = L("nav.currentLocation")
                     mapView.addAnnotation(annotation)
                     return annotation
                 }
                 lastRider = model.currentLocation
             }
             destinationAnnotation = updateMarker(destinationAnnotation, coordinate: model.polyline.last, title: model.destinationName, kind: "destination", on: mapView)
-            turnAnnotation = updateMarker(turnAnnotation, coordinate: model.nextTurn, title: model.nextTurnInstruction ?? "下一路口", kind: "turn", on: mapView)
+            turnAnnotation = updateMarker(turnAnnotation, coordinate: model.nextTurn, title: model.nextTurnInstruction ?? L("nav.nextTurn"), kind: "turn", on: mapView)
         }
 
         private func updateMarker(_ marker: MAPointAnnotation?, coordinate: CLLocationCoordinate2D?, title: String, kind: String, on map: MAMapView) -> MAPointAnnotation? {

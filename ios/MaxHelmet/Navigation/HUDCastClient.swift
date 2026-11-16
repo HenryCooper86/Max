@@ -6,7 +6,7 @@ import UIKit
 /// Navigation-scoped bench transport. Navigation remains owned by AgentSession.
 @MainActor
 final class HUDCastClient: ObservableObject {
-    @Published private(set) var status = "未投屏"
+    @Published private(set) var status = L("hud.status.idle")
     @Published private(set) var active = false
     private struct Bond: Codable { var address: String; var token: String; var enabled: Bool }
     private static let bondAccount = "hud.wifi.bond.v1"
@@ -104,17 +104,17 @@ final class HUDCastClient: ObservableObject {
 
     private func connect(address: String, code: String, token: String?) {
         closeTransport()
-        guard Self.supported else { status = "Wi-Fi 投屏原型需要开发版本"; return }
+        guard Self.supported else { status = L("hud.status.debugOnly"); return }
         guard let url = Self.endpoint(address), token != nil || (code.count == 6 && code.allSatisfy({ $0.isASCII && $0.isNumber })) else {
-            status = "请输入 RDK 屏幕上的地址和六位连接码"; return
+            status = L("hud.status.needCode"); return
         }
         guard latest != nil, Date().timeIntervalSince(latestAt) < 8 else {
-            status = "等待手机导航更新后重试"; if token != nil { scheduleReconnect() }; return
+            status = L("hud.status.waitNav"); if token != nil { scheduleReconnect() }; return
         }
         let task = URLSession.shared.webSocketTask(with: url)
         socket = task
         active = true
-        status = "正在连接 HUD…"
+        status = L("hud.status.connecting")
         lastReply = Date()
         lastPing = Date()
         pending = true
@@ -129,7 +129,7 @@ final class HUDCastClient: ObservableObject {
                     guard let self, self.socket === task else { return }
                     guard case let .string(text) = message, let data = text.data(using: .utf8),
                           let reply = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                        self.fail("HUD 响应无效"); return
+                        self.fail(L("hud.status.badReply")); return
                     }
                     self.lastReply = Date()
                     if reply["type"] as? String == "hud.ready" {
@@ -141,7 +141,7 @@ final class HUDCastClient: ObservableObject {
                         self.ready = true
                         self.receiverDrawsMap = reply["mapMode"] as? String == "streets"
                         HUDMapSource.shared.start(renderMap: !self.receiverDrawsMap)
-                        self.status = "已连接 · 正在发送导航"
+                        self.status = L("hud.status.connectedSending")
                     } else if reply["type"] as? String == "hud.ack",
                               reply["sequence"] as? Int == self.sequence {
                         self.awaitingAck = false
@@ -149,21 +149,21 @@ final class HUDCastClient: ObservableObject {
                             self.receiverDrawsMap = true
                             HUDMapSource.shared.start(renderMap: false)
                         }
-                        self.status = "正在投屏到 HUD"
+                        self.status = L("hud.status.casting")
                     } else if reply["type"] as? String == "hud.map.ack", reply["sequence"] as? Int == self.mapSequence {
                         self.mapBusy = false
                     } else if reply["type"] as? String == "hud.heading.ack" {
                         // Compass acknowledgment does not refresh guidance.
                     } else if reply["type"] as? String == "hud.pong" {
                         // Transport liveness only; never make old guidance fresh.
-                    } else { self.fail("HUD 响应无效"); return }
+                    } else { self.fail(L("hud.status.badReply")); return }
                     self.flush()
                 }
             } catch {
                 guard let self, self.socket === task else { return }
                 if task.closeCode == .policyViolation {
-                    self.stop(); self.status = "配对已失效或 HUD 正忙，请检查连接码后重试"
-                } else { self.fail("HUD 已断开，正在等待重新连接") }
+                    self.stop(); self.status = L("hud.status.pairInvalid")
+                } else { self.fail(L("hud.status.droppedWaiting")) }
             }
         }
         watchdog = Task { [weak self] in
@@ -173,14 +173,14 @@ final class HUDCastClient: ObservableObject {
                 if Date().timeIntervalSince(self.lastReply) > 12 ||
                     (self.awaitingAck && Date().timeIntervalSince(self.frameSentAt) > 12) ||
                     (self.mapBusy && Date().timeIntervalSince(self.mapSentAt) > 12) {
-                    self.fail("HUD 连接超时，请重新连接"); return
+                    self.fail(L("hud.status.timeout")); return
                 }
                 self.sendMap()
                 if self.ready && Date().timeIntervalSince(self.lastPing) >= 4 {
                     self.lastPing = Date()
                     do { try await task.send(.string(#"{"type":"hud.ping"}"#)) }
                     catch {
-                        if self.socket === task { self.fail("HUD 已断开，请重新连接") }
+                        if self.socket === task { self.fail(L("hud.status.dropped")) }
                         return
                     }
                 }
@@ -204,7 +204,7 @@ final class HUDCastClient: ObservableObject {
         watchdog?.cancel(); watchdog = nil
         socket?.cancel(with: .normalClosure, reason: nil); socket = nil
         active = false; ready = false; awaitingAck = false; pending = false; sequence = 0
-        status = "未投屏"
+        status = L("hud.status.idle")
     }
 
     private func sendHeading(_ heading: Double) {
@@ -214,7 +214,7 @@ final class HUDCastClient: ObservableObject {
                 let data = try JSONSerialization.data(withJSONObject: ["type": "hud.heading", "heading": heading])
                 try await socket.send(.string(String(decoding: data, as: UTF8.self)))
             } catch {
-                if self?.socket === socket { self?.fail("HUD 已断开，请重新连接") }
+                if self?.socket === socket { self?.fail(L("hud.status.dropped")) }
             }
         }
     }
@@ -237,7 +237,7 @@ final class HUDCastClient: ObservableObject {
                     let json = try JSONSerialization.data(withJSONObject: value)
                     try await socket.send(.string(String(decoding: json, as: UTF8.self)))
                 } catch {
-                    if self.socket === socket { self.fail("地图投屏已断开，请重新连接") }
+                    if self.socket === socket { self.fail(L("hud.status.mapDropped")) }
                 }
             }
         }
@@ -253,7 +253,7 @@ final class HUDCastClient: ObservableObject {
     private func scheduleReconnect() {
         guard bond?.enabled == true, latest != nil else { return }
         reconnect?.cancel()
-        active = true; status = "连接中断 · 自动重连中（点停止可取消）"
+        active = true; status = L("hud.status.autoReconnect")
         let delay = retryDelay; retryDelay = min(30, retryDelay * 2)
         reconnect = Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
@@ -267,7 +267,7 @@ final class HUDCastClient: ObservableObject {
         guard Date().timeIntervalSince(latestAt) < 8 else { return }
         sequence += 1
         guard let text = Self.frame(latest, sequence: sequence) else {
-            fail("当前导航数据暂时无法投屏"); return
+            fail(L("hud.status.noData")); return
         }
         frameSentAt = Date()
         awaitingAck = true; pending = false
@@ -275,7 +275,7 @@ final class HUDCastClient: ObservableObject {
             do { try await socket.send(.string(text)) }
             catch {
                 guard let self, self.socket === socket else { return }
-                self.fail("HUD 已断开，请重新连接")
+                self.fail(L("hud.status.dropped"))
             }
         }
     }
@@ -292,12 +292,12 @@ final class HUDCastClient: ObservableObject {
         let value: [String: Any] = [
             "type": "hud.frame", "sequence": sequence,
             "destination": String(guidance.destinationName.prefix(200)),
-            "instruction": String((guidance.maneuverInstruction ?? "沿路线前往目的地").prefix(500)),
+            "instruction": String((guidance.maneuverInstruction ?? L("nav.routeToDestination")).prefix(500)),
             "distance": guidance.distanceToManeuverMeters, "remaining": guidance.remainingDistanceMeters,
             "seconds": guidance.remainingSeconds, "offRoute": guidance.offRoute,
             "turns": guidance.upcomingSteps.prefix(3).map { detail -> [String: Any] in
                 var turn: [String: Any] = point(detail.step.coordinate)
-                turn["instruction"] = String(detail.step.instruction.prefix(500))
+                turn["instruction"] = String(detail.step.displayInstruction.prefix(500))
                 turn["distance"] = detail.distanceMeters
                 return turn
             },

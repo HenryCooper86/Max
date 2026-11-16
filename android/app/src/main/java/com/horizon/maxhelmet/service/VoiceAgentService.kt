@@ -1,5 +1,9 @@
 package com.horizon.maxhelmet.service
 
+import com.horizon.maxhelmet.ui.tr
+import com.horizon.maxhelmet.ui.Str
+import com.horizon.maxhelmet.ui.AssistantBranding
+
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -44,24 +48,24 @@ class VoiceAgentService : Service() {
     override fun onCreate() {
         super.onCreate()
         val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(NotificationChannel("crash_alert", "摔车检查与求助", NotificationManager.IMPORTANCE_HIGH))
+        manager.createNotificationChannel(NotificationChannel("crash_alert", tr(Str.NOTIF_CRASH_CHANNEL), NotificationManager.IMPORTANCE_HIGH))
         serviceScope.launch {
             AgentSessionHolder.get(this@VoiceAgentService).crash.ui.collectLatest { state ->
                 if (state.phase !in setOf(CrashPhase.CHECK_IN, CrashPhase.ALARM, CrashPhase.ESCALATED)) { manager.cancel(4); return@collectLatest }
                 val open = PendingIntent.getActivity(this@VoiceAgentService, 40, Intent(this@VoiceAgentService, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
                 val cancel = PendingIntent.getService(this@VoiceAgentService, 41, Intent(this@VoiceAgentService, VoiceAgentService::class.java).setAction("crash.cancel"), PendingIntent.FLAG_IMMUTABLE)
                 val notification = NotificationCompat.Builder(this@VoiceAgentService, "crash_alert")
-                    .setSmallIcon(R.drawable.ic_launcher_foreground).setContentTitle("疑似摔车 · 你还好吗？")
-                    .setContentText(state.message ?: "${state.remaining} 秒 · 点击查看或取消报警")
+                    .setSmallIcon(R.drawable.ic_launcher_foreground).setContentTitle(tr(Str.NOTIF_CRASH_TITLE))
+                    .setContentText(state.message ?: tr(Str.NOTIF_CRASH_TEXT, "n" to state.remaining))
                     .setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).setCategory(NotificationCompat.CATEGORY_ALARM)
-                    .addAction(0, "我没事 · 取消", cancel).build()
+                    .addAction(0, tr(Str.NOTIF_CRASH_CANCEL), cancel).build()
                 runCatching { manager.notify(4, notification) }
             }
         }
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(
                 CHANNEL_ID,
-                getString(R.string.notification_channel_name),
+                tr(Str.NOTIF_CHANNEL),
                 NotificationManager.IMPORTANCE_LOW
             )
         )
@@ -81,8 +85,8 @@ class VoiceAgentService : Service() {
             PendingIntent.FLAG_IMMUTABLE
         )
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle(getString(R.string.notification_title, com.horizon.maxhelmet.ui.AssistantBranding.name))
-            .setContentText(getString(R.string.notification_text))
+            .setContentTitle(tr(Str.NOTIF_TITLE, "name" to com.horizon.maxhelmet.ui.AssistantBranding.name))
+            .setContentText(tr(Str.NOTIF_TEXT))
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentIntent(openApp)
             .setOngoing(true)

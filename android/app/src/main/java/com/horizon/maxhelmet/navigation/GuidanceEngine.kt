@@ -32,7 +32,9 @@ data class GuidanceUpdate(
      *  decision MUST key on this, never on `spokenPrompt` text: the "now"
      *  template is the bare instruction, with no marker left to grep for. */
     val firedThreshold: PromptThreshold?,
-    val currentInstruction: String?
+    val currentInstruction: String?,
+    /** English wording of [currentInstruction] when the route carries one; [currentInstruction] stays the original for icon parsing. */
+    val currentInstructionLocalized: String? = null
 )
 
 /**
@@ -114,11 +116,7 @@ object GuidanceEngine {
                     val urgent = due.reduce { most, candidate -> if (candidate.meters < most.meters) candidate else most }
                     firedThresholds = firedThresholds + due
                     firedThreshold = urgent
-                    spokenPrompt = if (urgent == PromptThreshold.NOW) {
-                        currentManeuver.instruction
-                    } else {
-                        "前方${(distanceToManeuver / 50.0).roundToInt() * 50}米，${currentManeuver.instruction}"
-                    }
+                    spokenPrompt = maneuverPrompt(currentManeuver, urgent == PromptThreshold.NOW, (distanceToManeuver / 50.0).roundToInt() * 50)
                 }
 
                 val reachedManeuver = distanceToManeuver <= MANEUVER_ADVANCE_METERS ||
@@ -135,6 +133,7 @@ object GuidanceEngine {
         val distanceToManeuverMeters = finalManeuver?.let { max(0.0, it.alongRouteMeters - snap.alongRouteMeters) }
             ?: max(0.0, route.distanceMeters - snap.alongRouteMeters)
         val currentInstruction = finalManeuver?.instruction
+        val currentInstructionLocalized = finalManeuver?.localizedInstruction
 
         val remainingMeters = max(0.0, route.distanceMeters - snap.alongRouteMeters)
         val remainingSeconds = if (route.distanceMeters > 0) {
@@ -152,7 +151,21 @@ object GuidanceEngine {
             arrived = arrived,
             spokenPrompt = if (offRoute) null else spokenPrompt,
             firedThreshold = if (offRoute) null else firedThreshold,
-            currentInstruction = currentInstruction
+            currentInstruction = currentInstruction,
+            currentInstructionLocalized = currentInstructionLocalized
         )
     }
+}
+
+/**
+ * The spoken prompt for a maneuver. A step with a [ManeuverStep.localizedInstruction] is spoken in
+ * English ("In 200 metres, turn right onto ..."); otherwise today's Chinese wording is used exactly.
+ */
+internal fun maneuverPrompt(step: ManeuverStep, now: Boolean, roundedMeters: Int): String {
+    val english = step.localizedInstruction
+    if (english != null) {
+        if (now) return english
+        return "In $roundedMeters metres, ${english.replaceFirstChar { it.lowercaseChar() }}"
+    }
+    return if (now) step.instruction else "前方${roundedMeters}米，${step.instruction}"
 }

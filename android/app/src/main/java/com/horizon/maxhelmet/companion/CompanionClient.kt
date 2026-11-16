@@ -1,5 +1,8 @@
 package com.horizon.maxhelmet.companion
 
+import com.horizon.maxhelmet.ui.tr
+import com.horizon.maxhelmet.ui.Str
+
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -28,7 +31,7 @@ class CompanionClient(private val scope: CoroutineScope, private val stopped: ()
 
     fun connect(relay: String, token: String, initialAction: String? = null, ride: Boolean = false, transport: WebSocket.Factory? = null) {
         disconnect()
-        val url = CompanionProtocol.endpoint(relay, token) ?: run { fail("请先登录账号并检查服务器地址"); return }
+        val url = CompanionProtocol.endpoint(relay, token) ?: run { fail(tr(Str.COMP_SIGN_IN)); return }
         factory = transport ?: client
         endpoint = url; action = initialAction; desiredRide = ride; binding = initialAction?.contains("companion.pair") == true
         gate = CompanionFixGate(); attempts = 0
@@ -56,7 +59,7 @@ class CompanionClient(private val scope: CoroutineScope, private val stopped: ()
             override fun onOpen(ws: WebSocket, response: Response) { scope.launch {
                 if (owner != generation || socket !== ws) return@launch
                 timeout?.cancel()
-                timeout = scope.launch { delay(if (binding) 65_000 else 15_000); if (owner == generation) fail("头盔确认超时，请重试") }
+                timeout = scope.launch { delay(if (binding) 65_000 else 15_000); if (owner == generation) fail(tr(Str.COMP_TIMEOUT)) }
             } }
             override fun onMessage(ws: WebSocket, text: String) { scope.launch {
                 if (owner != generation || socket !== ws) return@launch
@@ -71,7 +74,7 @@ class CompanionClient(private val scope: CoroutineScope, private val stopped: ()
                 }
                 if (incoming.status == "error" && incoming.device?.startsWith("location.") == true) return@launch
                 timeout?.cancel(); binding = false
-                if (incoming.status == "error") { fail(incoming.detail ?: "配对失败"); return@launch }
+                if (incoming.status == "error") { fail(incoming.detail ?: tr(Str.COMP_PAIR_FAILED)); return@launch }
                 attempts = 0
                 if (incoming.status == "unpaired") { disconnect(); mutableState.value = incoming; return@launch }
                 ready = desiredRide && incoming.status in setOf("ready", "sharing")
@@ -91,9 +94,9 @@ class CompanionClient(private val scope: CoroutineScope, private val stopped: ()
     private fun transportLost(ws: WebSocket, owner: Long, status: Int?) {
         if (owner != generation || socket !== ws) return
         socket = null; ready = false; timeout?.cancel(); ws.cancel()
-        if (!desiredRide || status != null || attempts >= 6) { fail(if (status == 401) "登录失效，请重新登录" else "头盔连接中断，请重试"); return }
+        if (!desiredRide || status != null || attempts >= 6) { fail(if (status == 401) tr(Str.COMP_SESSION_EXPIRED) else tr(Str.COMP_LINK_LOST)); return }
         val wait = minOf(8000L, 1000L shl attempts++)
-        mutableState.value = mutableState.value.copy(status = "connecting", detail = "连接中断，正在重连")
+        mutableState.value = mutableState.value.copy(status = "connecting", detail = tr(Str.COMP_RECONNECTING))
         retry = scope.launch { delay(wait); if (owner == generation && desiredRide) open() }
     }
     fun sendFix(fix: CompanionFix, elapsedMs: Long, wallMs: Long) {

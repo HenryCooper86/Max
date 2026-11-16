@@ -46,9 +46,9 @@ fun MusicPlaybackCard(controller: MusicController, compact: Boolean = false, ass
     var actionError by remember { mutableStateOf<String?>(null) }
     if (!state.visible) return
     val controls: @Composable RowScope.() -> Unit = {
-        listOf(Triple("previous", "上一首", Icons.Default.SkipPrevious),
-            Triple(if (state.playing) "pause" else "play", if (state.playing) "暂停" else "播放", if (state.playing) Icons.Default.Pause else Icons.Default.PlayArrow),
-            Triple("next", "下一首", Icons.Default.SkipNext)).forEach { (action, label, icon) ->
+        listOf(Triple("previous", tr(Str.PREVIOUS), Icons.Default.SkipPrevious),
+            Triple(if (state.playing) "pause" else "play", if (state.playing) tr(Str.PAUSE) else tr(Str.PLAY), if (state.playing) Icons.Default.Pause else Icons.Default.PlayArrow),
+            Triple("next", tr(Str.NEXT), Icons.Default.SkipNext)).forEach { (action, label, icon) ->
             val primary = action == "play" || action == "pause"
             IconButton(enabled = !state.busy || action == "pause", onClick = {
                 actionError = null
@@ -56,9 +56,9 @@ fun MusicPlaybackCard(controller: MusicController, compact: Boolean = false, ass
                     val result = controller.execute(action)
                     actionError = when {
                         result.status == "ok" || result.reason == "action.cancelled" -> null
-                        result.reason == "music.queueEnd" -> "已到播放队列末尾，请选择多首歌曲。"
+                        result.reason == "music.queueEnd" -> tr(Str.QUEUE_END)
                         state.source == "QQ音乐" -> null // QQ adapter provides actionable setup/response messages.
-                        else -> "暂时无法播放，请在 $assistantName 中重新选择音乐。"
+                        else -> tr(Str.PLAY_FAIL, "name" to assistantName)
                     }
                 }
             }, modifier = Modifier.size(48.dp).then(if (primary) Modifier.background(c.accent, CircleShape) else Modifier)) {
@@ -72,25 +72,25 @@ fun MusicPlaybackCard(controller: MusicController, compact: Boolean = false, ass
                 Modifier.weight(1f).clip(com.horizon.maxhelmet.ui.theme.VisorShapes.control).clickable(enabled = !state.busy) { controller.chooseMusic() }
                     .padding(vertical = VisorSpace.x1)
             ) {
-                Text(state.title, color = c.text, style = VisorType.body.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold),
+                Text(musicLabel(state.title), color = c.text, style = VisorType.body.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold),
                     maxLines = if (compact) 2 else 1, overflow = TextOverflow.Ellipsis)
-                Text(if (state.busy) "正在准备…" else state.source, color = c.textSecondary, style = VisorType.caption)
+                Text(if (state.busy) tr(Str.PREPARING) else musicLabel(state.source), color = c.textSecondary, style = VisorType.caption)
             }
             IconButton(onClick = { actionError = null; controller.stopPlayback(dismiss = true) }, modifier = Modifier.size(48.dp)) {
-                Icon(Icons.Default.Close, if (state.source == "QQ音乐") "关闭音乐面板" else "停止并关闭音乐", tint = c.textSecondary)
+                Icon(Icons.Default.Close, if (state.source == "QQ音乐") tr(Str.CLOSE_MUSIC_PANEL) else tr(Str.STOP_CLOSE_MUSIC), tint = c.textSecondary)
             }
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) { controls() }
         if (state.source == "QQ音乐") {
-            Text("先在 QQ 音乐播放歌曲，再授权 $assistantName 控制其媒体会话。系统权限名为通知使用权；$assistantName 不读取或保存通知内容。关闭面板不会停止 QQ 音乐。",
+            Text(tr(Str.QQ_HELP, "name" to assistantName, "name" to assistantName),
                 color = c.textSecondary, style = VisorType.caption)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(VisorSpace.x2)) {
-                VisorButton("打开 QQ 音乐", controller::openQQMusic, Modifier.weight(1f))
-                VisorButton("授权控制", controller::authorizeQQMusic, Modifier.weight(1f))
+                VisorButton(tr(Str.OPEN_QQ), controller::openQQMusic, Modifier.weight(1f))
+                VisorButton(tr(Str.GRANT_CONTROL), controller::authorizeQQMusic, Modifier.weight(1f))
             }
-            VisorButton("改用本机音乐", controller::chooseLocalMusic, enabled = !state.busy, style = VisorButtonStyle.GHOST)
+            VisorButton(tr(Str.USE_LOCAL_MUSIC), controller::chooseLocalMusic, enabled = !state.busy, style = VisorButtonStyle.GHOST)
         } else {
-            VisorButton("改用 QQ 音乐", controller::chooseQQMusic, enabled = !state.busy, style = VisorButtonStyle.GHOST)
+            VisorButton(tr(Str.USE_QQ_MUSIC), controller::chooseQQMusic, enabled = !state.busy, style = VisorButtonStyle.GHOST)
         }
         state.message?.let { Text(it, color = c.textSecondary, style = VisorType.caption) }
         actionError?.let { Text(it, color = c.danger, style = VisorType.caption) }

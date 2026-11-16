@@ -1,4 +1,4 @@
-import { CaretDown, CaretRight, DownloadSimple, Flask, ShieldCheck, Trash, X } from "@phosphor-icons/react";
+import { CaretDown, CaretRight, DownloadSimple, Flask, PaintBrush, ShieldCheck, Trash, X } from "@phosphor-icons/react";
 import { useEffect, useId, useMemo, useRef, type ReactNode } from "react";
 import type { VoiceProviderSummary } from "../../shared/agent";
 import { combineHazardLevels, scenarioLabel } from "../../shared/ride";
@@ -43,6 +43,8 @@ type Props = {
   amapConsent: AmapConsentControls;
   onOpenTesting: () => void;
   onOpenAdmin?: () => void;
+  /** Admins only: the Studio, where the running assistant is edited. */
+  onOpenStudio?: () => void;
   appearance: AppearanceControls;
   onClose: () => void;
 };
@@ -118,7 +120,15 @@ function Segmented<T extends string>({
   );
 }
 
-export function WebSettingsSheet({ agent, amapConsent, onOpenTesting, onOpenAdmin, appearance, onClose }: Props) {
+export function WebSettingsSheet({
+  agent,
+  amapConsent,
+  onOpenTesting,
+  onOpenAdmin,
+  onOpenStudio,
+  appearance,
+  onClose
+}: Props) {
   const { language, t } = useLanguage();
   const assistant = useAssistant();
   const en = language === "en-US";
@@ -267,6 +277,9 @@ export function WebSettingsSheet({ agent, amapConsent, onOpenTesting, onOpenAdmi
           </Section>
 
           <Section title={t("settings.voice")}>
+            <Row label={t("language.label")} detail={t("settings.languageHelp", { name: assistant.name })}>
+              <LanguageToggle />
+            </Row>
             <Row label={localized(language, "声音", "Voice")}>
               <Segmented
                 label={localized(language, "语音性别", "Voice gender")}
@@ -407,6 +420,16 @@ export function WebSettingsSheet({ agent, amapConsent, onOpenTesting, onOpenAdmi
                 <span className="settingsRowText">
                   <span className="settingsRowLabel">{t("settings.admin")}</span>
                   <span className="settingsRowDetail">{t("settings.adminHelp")}</span>
+                </span>
+                <CaretRight className="settingsChevron" size={16} aria-hidden="true" />
+              </button>
+            ) : null}
+            {onOpenStudio ? (
+              <button type="button" className="settingsRow settingsLink" onClick={onOpenStudio}>
+                <PaintBrush size={20} aria-hidden="true" />
+                <span className="settingsRowText">
+                  <span className="settingsRowLabel">{t("settings.studio")}</span>
+                  <span className="settingsRowDetail">{t("settings.studioHelp", { name: assistant.name })}</span>
                 </span>
                 <CaretRight className="settingsChevron" size={16} aria-hidden="true" />
               </button>

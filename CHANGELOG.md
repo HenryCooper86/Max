@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-11-16 — Landing page, public configurator, onboarding and admin Studio
+
+- Added the Studio API (`/auth/admin/studio`, admins only): read and save the
+  running relay's assistant config with live reload, and upload or remove a
+  logo (SVG or PNG; SVGs with scripts or external links are refused). Saved
+  under `STUDIO_DIR`, outside the app directory. API keys are not exposed.
+- An assistant whose config changes only look, logo or sound keeps the
+  original Max prompts word for word.
+- Added voice backend setup to the Studio API (`/auth/admin/studio/backends`):
+  API keys (write-only), models, voices, the default backend and whether
+  wearers may switch, laid over the environment and stored 0600 under
+  `STUDIO_DIR`.
+- A session now carries the app's language (`session.start.language`). When
+  the assistant speaks it, every backend answers in it and the relay's own
+  spoken lines are translated to English.
+- The setup wizard configures the local model stack: servers, models and
+  voices per stage, with a reachability check. It also works with piped input.
+
 ## 2026-11-16 — Ten-band equaliser, more presets, voice display styles
 
 - Rebuilt the voice equaliser as a ten-band graphic equaliser with a preamp

@@ -31,7 +31,7 @@ final class GalleryModel: ObservableObject {
             store.markExported(capture.id)
             refresh()
         } else {
-            exportError = "导出到相册失败，检查相册权限后重试。"
+            exportError = L("gallery.exportError")
         }
     }
 

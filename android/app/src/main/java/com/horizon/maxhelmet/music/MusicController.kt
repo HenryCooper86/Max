@@ -1,5 +1,9 @@
 package com.horizon.maxhelmet.music
 
+import com.horizon.maxhelmet.ui.tr
+import com.horizon.maxhelmet.ui.Str
+import com.horizon.maxhelmet.ui.AssistantBranding
+
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
@@ -90,11 +94,11 @@ class MusicController(private val context: Context, private val scope: Coroutine
         val intent = context.packageManager.getLaunchIntentForPackage(QQMusicSessions.PACKAGE)
             ?: Intent(Intent.ACTION_VIEW, Uri.parse("https://y.qq.com/"))
         runCatching { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-            .onFailure { mutableState.value = state.value.copy(message = "无法打开 QQ 音乐，请先安装 QQ 音乐。") }
+            .onFailure { mutableState.value = state.value.copy(message = tr(Str.QQ_NOT_INSTALLED)) }
     }
     fun authorizeQQMusic() {
         runCatching { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-            .onFailure { mutableState.value = state.value.copy(message = "请在系统设置中打开 Max 的通知使用权。") }
+            .onFailure { mutableState.value = state.value.copy(message = tr(Str.QQ_ACCESS, "name" to AssistantBranding.name)) }
     }
     fun chooseLocalMusic() {
         if (useQQ) qq.refresh()

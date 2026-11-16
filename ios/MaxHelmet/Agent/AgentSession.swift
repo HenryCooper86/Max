@@ -13,7 +13,7 @@ final class AgentSession: NSObject, ObservableObject {
     struct State: Equatable {
         var handsFree = false
         var connection: ConnectionState = .offline
-        var statusText = "离线"
+        var statusText = L("conn.offline")
         var provider = ""
         var isLive = false
         /// Provider capabilities advertised by session.started (mirror of
@@ -315,7 +315,7 @@ final class AgentSession: NSObject, ObservableObject {
             }
         },
         onOpenGallery: { [weak self] in self?.update { $0.galleryRequestToken += 1 } },
-        onAutoStopped: { [weak self] in self?.speak("录像已停止并保存。") }
+        onAutoStopped: { [weak self] in self?.speak(L("st.recordingSaved")) }
     )
 
     func stopCameraForSession() {
@@ -473,7 +473,7 @@ final class AgentSession: NSObject, ObservableObject {
         if syntheticAudioQA {
             // No location, motion, microphone permission or capture occurs.
             if !connect() {
-                failHandsFreeStart(generation: generation, message: "中继地址无效")
+                failHandsFreeStart(generation: generation, message: L("st.badRelayURL"))
             }
             return
         }
@@ -498,7 +498,7 @@ final class AgentSession: NSObject, ObservableObject {
             guard self.lifecycle.accepts(generation) else { return }
             self.location = coordinate
             guard self.connect() else {
-                self.failHandsFreeStart(generation: generation, message: "中继地址无效，请在设置中检查服务器地址")
+                self.failHandsFreeStart(generation: generation, message: L("st.badRelayURLSettings"))
                 return
             }
             self.requestMicAndStart(generation: generation)
@@ -513,7 +513,7 @@ final class AgentSession: NSObject, ObservableObject {
                 guard let self,
                       self.lifecycle.accepts(generation) else { return }
                 guard granted else {
-                    self.failHandsFreeStart(generation: generation, message: "请在设置中允许麦克风权限")
+                    self.failHandsFreeStart(generation: generation, message: L("st.micPermission"))
                     return
                 }
                 do {
@@ -527,7 +527,7 @@ final class AgentSession: NSObject, ObservableObject {
                     // that the shared engine is running.
                     self.player.flushPending()
                 } catch {
-                    self.failHandsFreeStart(generation: generation, message: "麦克风不可用，请检查录音权限")
+                    self.failHandsFreeStart(generation: generation, message: L("st.micUnavailable"))
                 }
             }
         }
@@ -615,7 +615,7 @@ final class AgentSession: NSObject, ObservableObject {
         update {
             $0.handsFree = false
             $0.connection = .offline
-            $0.statusText = "离线"
+            $0.statusText = L("conn.offline")
             $0.turnState = .idle
             $0.voiceLevel = 0
             $0.micMuted = false
@@ -639,7 +639,7 @@ final class AgentSession: NSObject, ObservableObject {
         update {
             $0.guidedDemo = enabled
             if enabled && $0.connection != .ready {
-                $0.statusText = "巡游演示已开启，开启免提后自动巡游场景"
+                $0.statusText = L("st.demoTour")
             }
         }
         webSocket?.send(.string(buildGuidedDemo(enabled: enabled))) { _ in }
@@ -680,7 +680,7 @@ final class AgentSession: NSObject, ObservableObject {
         guard state.value.voiceGender != gender else { return }
         update {
             $0.voiceGender = gender
-            $0.statusText = gender == .male ? "已切换到男声" : "已切换到女声"
+            $0.statusText = gender == .male ? L("st.voiceMale") : L("st.voiceFemale")
         }
         restartIfConnected()
     }
@@ -700,7 +700,7 @@ final class AgentSession: NSObject, ObservableObject {
         guard state.value.voicePersonality != personality else { return }
         update {
             $0.voicePersonality = personality
-            $0.statusText = "已切换语气：\(personality.label)"
+            $0.statusText = L("st.persona", ("p", personality.label))
         }
         restartIfConnected()
     }
@@ -798,6 +798,10 @@ final class AgentSession: NSObject, ObservableObject {
         return URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }
 
+    /// The app language changed: a live session restarts so the assistant
+    /// speaks the new language (same as changing the voice).
+    func languageChanged() { restartIfConnected() }
+
     private func restartIfConnected() {
         if state.value.handsFree && webSocket != nil { restartSession() }
     }
@@ -890,7 +894,7 @@ final class AgentSession: NSObject, ObservableObject {
         withTransportLock { socketOpen = false }
         update {
             $0.connection = .connecting
-            $0.statusText = self.reconnectAttempts > 0 ? "重新连接中…（第 \(self.reconnectAttempts) 次）" : "连接中"
+            $0.statusText = self.reconnectAttempts > 0 ? L("st.reconnecting", ("n", String(self.reconnectAttempts))) : L("conn.connecting")
         }
 
         let task = urlSession.webSocketTask(with: url)
@@ -912,7 +916,7 @@ final class AgentSession: NSObject, ObservableObject {
         reconnectAttempts = 0
         update {
             $0.connection = .relay
-            $0.statusText = "就绪"
+            $0.statusText = L("st.ready")
             // Only turns appended from here on belong to this relay session
             // and are eligible for turn.feedback.
             $0.feedbackFloorId = self.transcriptTurn
@@ -937,7 +941,8 @@ final class AgentSession: NSObject, ObservableObject {
             browserLanguage: nativeBrowserLanguage(),
             networkType: nativeNetworkType(),
             memory: current.sessionMemory,
-            voiceProvider: current.voiceProvider
+            voiceProvider: current.voiceProvider,
+            language: VisorTheme.shared.language.rawValue
         ))) { _ in }
         // The guided tour lives in the provider instance, so a fresh session
         // must be told about it again (mirrors the web client's open handler).
@@ -972,7 +977,7 @@ final class AgentSession: NSObject, ObservableObject {
             DispatchQueue.main.async { [weak self] in
                 guard let self, accepts() else { return }
                 if case .unhandled = event, !text.contains("\"type\"") {
-                    self.update { $0.statusText = "收到异常代理消息" }
+                    self.update { $0.statusText = L("st.badAgent") }
                 } else {
                     #if DEBUG
                     self.syntheticAudioQAEvent?(text)
@@ -1025,7 +1030,7 @@ final class AgentSession: NSObject, ObservableObject {
             if state.value.handsFree { return } // restartSession() will reconnect
             update {
                 $0.connection = .offline
-                $0.statusText = "离线"
+                $0.statusText = L("conn.offline")
             }
             return
         }
@@ -1037,7 +1042,7 @@ final class AgentSession: NSObject, ObservableObject {
         if task.closeCode.rawValue == Self.idleCloseCode {
             reconnectAttempts = 0
             stop()
-            update { $0.statusText = "会话闲置已断开，请重新开启免提" }
+            update { $0.statusText = L("st.idleEnded") }
             return
         }
 
@@ -1057,8 +1062,8 @@ final class AgentSession: NSObject, ObservableObject {
                 $0.connection = .degraded
                 $0.authRequired = status == 401
                 $0.statusText = status == 401
-                    ? "需要登录：在设置的「账号」里登录（或粘贴认证令牌）"
-                    : "中继拒绝连接（HTTP \(status)），请检查中继地址"
+                    ? L("st.authRequired")
+                    : L("st.relayRefused", ("status", String(status)))
             }
             return
         }
@@ -1083,7 +1088,7 @@ final class AgentSession: NSObject, ObservableObject {
             if onCrash({ $0.hasActiveIncident }) {
                 update {
                     $0.connection = .offline
-                    $0.statusText = "网络中断 — 求助信息将在恢复后自动发送"
+                    $0.statusText = L("st.networkLost")
                 }
                 let work = DispatchWorkItem { [weak self] in self?.connect() }
                 reconnectWorkItem = work
@@ -1094,14 +1099,14 @@ final class AgentSession: NSObject, ObservableObject {
             stop()
             update {
                 $0.connection = .degraded
-                $0.statusText = "语音中继连接失败，请重新开启免提"
+                $0.statusText = L("st.relayFailed")
             }
             return
         }
         let delayMs = min(8_000, 1_000 * (1 << (reconnectAttempts - 1)))
         update {
             $0.connection = .offline
-            $0.statusText = "连接已断开，\(delayMs / 1000) 秒后自动重连…"
+            $0.statusText = L("st.disconnected", ("n", String(delayMs / 1000)))
         }
         let work = DispatchWorkItem { [weak self] in self?.connect() }
         reconnectWorkItem = work
@@ -1119,7 +1124,7 @@ final class AgentSession: NSObject, ObservableObject {
                 $0.isLive = mode != "mock"
                 $0.capabilities = capabilities
                 $0.connection = .ready
-                $0.statusText = mode == "mock" ? "模拟路线已启用" : "豆包实时语音在线"
+                $0.statusText = mode == "mock" ? L("st.mockRoute") : L("st.doubaoLive")
             }
             onCrash { $0.socketBecameReady() }
 
@@ -1389,7 +1394,7 @@ final class AgentSession: NSObject, ObservableObject {
         if transmitting {
             update {
                 $0.turnState = .listening
-                $0.statusText = "已打断 Max，继续听你说"
+                $0.statusText = L("st.interrupted", ("name", Visor.assistantName))
             }
         }
     }
@@ -1400,9 +1405,7 @@ final class AgentSession: NSObject, ObservableObject {
         #endif
         guard !text.isEmpty else { return }
         let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = AVSpeechSynthesisVoice(
-            language: detectLanguage(text) == "zh" ? "zh-CN" : "en-US"
-        )
+        utterance.voice = AVSpeechSynthesisVoice(language: speechVoiceLanguage(for: text))
         #if DEBUG
         if syntheticAudioQA, let generation = qaNextHazardSpeechGeneration {
             qaHazardUtterances[ObjectIdentifier(utterance)] = (utterance, generation)

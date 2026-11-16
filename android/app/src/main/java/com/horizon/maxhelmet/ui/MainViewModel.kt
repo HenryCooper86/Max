@@ -19,9 +19,13 @@ import com.horizon.maxhelmet.agent.AgentSession
 import com.horizon.maxhelmet.agent.AgentSessionHolder
 import com.horizon.maxhelmet.agent.AuthClient
 import com.horizon.maxhelmet.agent.HealthClient
-import androidx.compose.ui.graphics.Color
-import com.horizon.maxhelmet.ui.theme.VisorColors
+import com.horizon.maxhelmet.agent.LogoCache
+import com.horizon.maxhelmet.ui.theme.VisorTemplates
 import com.horizon.maxhelmet.ui.theme.parseAccentHex
+import com.horizon.maxhelmet.ui.theme.Appearance
+import com.horizon.maxhelmet.ui.theme.AppearanceInput
+import com.horizon.maxhelmet.ui.theme.resolveAppearance
+import org.json.JSONObject
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import com.horizon.maxhelmet.agent.DemoScenario
@@ -66,6 +70,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val KEY_WAKE_PHRASE = "assistant_wake_phrase"
         private const val KEY_ACCENT_HEX = "assistant_accent_hex"
         private const val KEY_VOICE_PROVIDER = "voice_provider"
+        private const val KEY_DEVICE_PROFILE = "assistant_device_profile"
+        private const val KEY_DEVICE_LABEL = "assistant_device_label"
+        private const val KEY_RELAY_TEMPLATE = "assistant_template"
+        private const val KEY_TEMPLATE_SWITCHING = "assistant_template_switching"
+        private const val KEY_THEME_OVERRIDES = "assistant_theme"
+        private const val KEY_RELAY_VISUALIZER = "assistant_visualizer"
+        private const val KEY_LANGUAGE = "ui_language"
+        private const val KEY_WEARER_TEMPLATE = "wearer_template"
+        private const val KEY_WEARER_VISUALIZER = "wearer_visualizer"
     }
 
     private val session: AgentSession = AgentSessionHolder.get(application)
@@ -82,22 +95,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val companion = CompanionHolder.get(application)
     val helmetDiscovery = HelmetDiscovery(application)
     fun pairHelmet(code: String, discovery: Boolean = false) {
-        if (!isLoggedIn) { companion.fail("请先登录账号"); return }
-        if (session.state.value.handsFree) { companion.fail("请先结束手机免提，再连接头盔"); return }
+        if (!isLoggedIn) { companion.fail(tr(Str.ERR_LOGIN_FIRST)); return }
+        if (session.state.value.handsFree) { companion.fail(tr(Str.ERR_END_HF_FIRST)); return }
         val action = if (discovery) CompanionProtocol.discover(code) else CompanionProtocol.pair(code)
-        if (action == null) { companion.fail("配对码无效"); return }
+        if (action == null) { companion.fail(tr(Str.ERR_BAD_PAIR_CODE)); return }
         companion.connect(relayUrl.trim(), sessionToken, action, transport = CompanionTransport.client(allowSelfSigned))
     }
     fun startHelmetRide() {
         val owner = sessionToken
         val host = deviceActions.host ?: return
         viewModelScope.launch {
-            if (!isLoggedIn || session.state.value.handsFree) { companion.fail("请登录账号并结束手机免提"); return@launch }
-            if (!host.requestPermission(Manifest.permission.ACCESS_FINE_LOCATION)) { companion.fail("骑行定位需要精确位置权限"); return@launch }
+            if (!isLoggedIn || session.state.value.handsFree) { companion.fail(tr(Str.ERR_LOGIN_AND_END_HF)); return@launch }
+            if (!host.requestPermission(Manifest.permission.ACCESS_FINE_LOCATION)) { companion.fail(tr(Str.ERR_PRECISE_LOCATION)); return@launch }
             if (deviceActions.host !== host || owner != sessionToken || !isLoggedIn) return@launch
             companion.connect(relayUrl.trim(), sessionToken, ride = true, transport = CompanionTransport.client(allowSelfSigned))
             runCatching { ContextCompat.startForegroundService(getApplication(), Intent(getApplication(), HelmetRideService::class.java)) }
-                .onFailure { companion.fail("无法启动骑行，请在应用内重试") }
+                .onFailure { companion.fail(tr(Str.ERR_RIDE_START)) }
         }
     }
     fun unpairHelmet() { if (isLoggedIn) companion.unpair(relayUrl.trim(), sessionToken, CompanionTransport.client(allowSelfSigned)) }
@@ -219,9 +232,57 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var wakePhrase by mutableStateOf(prefs.getString(KEY_WAKE_PHRASE, null))
         private set
 
-    /** Runtime accent; the Visor theme reads this, so branding can recolour the app. */
-    var accent by mutableStateOf(parseAccentHex(prefs.getString(KEY_ACCENT_HEX, null)) ?: VisorColors.DEFAULT_ACCENT)
+    /** The relay's brand accent (#RRGGBB), applied last over the template; null = none. */
+    var accentHex by mutableStateOf(prefs.getString(KEY_ACCENT_HEX, null)?.takeIf { parseAccentHex(it) != null })
         private set
+
+    /** Specific device (motorcycle-helmet ... wearable) and its label, from /health. */
+    var deviceProfile by mutableStateOf(prefs.getString(KEY_DEVICE_PROFILE, null))
+        private set
+    var deviceLabel by mutableStateOf(prefs.getString(KEY_DEVICE_LABEL, null))
+        private set
+
+    /** The owner's template id, whether the wearer may switch, and the owner's token overrides. */
+    var relayTemplate by mutableStateOf(prefs.getString(KEY_RELAY_TEMPLATE, null))
+        private set
+    var templateSwitching by mutableStateOf(prefs.getBoolean(KEY_TEMPLATE_SWITCHING, true))
+        private set
+    var themeOverrides by mutableStateOf(decodeTheme(prefs.getString(KEY_THEME_OVERRIDES, null)))
+        private set
+    var relayVisualizer by mutableStateOf(prefs.getString(KEY_RELAY_VISUALIZER, null))
+        private set
+
+    /** The wearer's own choices from Settings (ignored while the owner pins the look). */
+    var wearerTemplate by mutableStateOf(prefs.getString(KEY_WEARER_TEMPLATE, null))
+        private set
+    var wearerVisualizer by mutableStateOf(prefs.getString(KEY_WEARER_VISUALIZER, null))
+        private set
+
+    /** The owner's PNG logo once downloaded (in memory only); null = show the bundled device mark. */
+    var logoBitmap by mutableStateOf<android.graphics.Bitmap?>(null)
+        private set
+    private var logoKey: String? = null
+
+    /** Default -> relay -> wearer -> relay overrides -> relay accent, resolved. */
+    val appearance: Appearance
+        get() = resolveAppearance(
+            AppearanceInput(relayTemplate, wearerTemplate, templateSwitching, themeOverrides, accentHex)
+        )
+
+    val voiceStyle: VoiceStyle
+        get() = resolveVoiceStyle(relayVisualizer, wearerVisualizer, templateSwitching)
+
+    fun selectTemplate(id: String) {
+        if (!templateSwitching || VisorTemplates.find(id) == null) return
+        wearerTemplate = id
+        prefs.edit().putString(KEY_WEARER_TEMPLATE, id).apply()
+    }
+
+    fun selectVoiceStyle(style: VoiceStyle) {
+        if (!templateSwitching) return
+        wearerVisualizer = style.wire
+        prefs.edit().putString(KEY_WEARER_VISUALIZER, style.wire).apply()
+    }
 
     /** Voice backends advertised by the relay (null until /health reports `voice`). */
     var voiceBackends by mutableStateOf<VoiceBackends?>(null)
@@ -233,7 +294,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private var healthJob: Job? = null
 
+    /** The wearer's language choice (follow system / 中文 / English), applied live. */
+    var languagePreference by mutableStateOf(LanguagePreference.fromStored(prefs.getString(KEY_LANGUAGE, null)))
+        private set
+
+    fun selectLanguage(preference: LanguagePreference) {
+        languagePreference = preference
+        prefs.edit().apply { if (preference.stored == null) remove(KEY_LANGUAGE) else putString(KEY_LANGUAGE, preference.stored) }.apply()
+        applyLanguage()
+    }
+
+    private fun applyLanguage() {
+        val before = Localization.language
+        Localization.apply(languagePreference)
+        if (Localization.language != before) session.languageChanged()
+    }
+
+    /** Re-reads the system language (call when the activity starts or the configuration changes). */
+    fun syncLanguage() = applyLanguage()
+
     init {
+        Localization.apply(languagePreference)
         AssistantBranding.name = assistantName
         session.setVoiceProvider(voiceProviderId)
         session.selectTranscriptOwner(authUserId.takeIf { isLoggedIn && it.isNotEmpty() })
@@ -255,15 +336,51 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             a.name?.let { assistantName = it; AssistantBranding.name = it }
             a.device?.let { deviceKind = it }
             a.wakePhrase?.let { wakePhrase = it }
-            parseAccentHex(a.accentHex)?.let { accent = it }
+            // The assistant block is authoritative for the look: an absent field clears it.
+            accentHex = a.accentHex?.takeIf { parseAccentHex(it) != null }
+            deviceProfile = a.deviceProfile
+            deviceLabel = a.deviceLabel
+            relayTemplate = a.template
+            templateSwitching = a.templateSwitching
+            themeOverrides = a.theme
+            relayVisualizer = a.visualizer
+            applyLogo(a.logoUrl)
+            prefs.edit().apply {
+                putString(KEY_ACCENT_HEX, accentHex)
+                putString(KEY_DEVICE_PROFILE, a.deviceProfile)
+                putString(KEY_DEVICE_LABEL, a.deviceLabel)
+                putString(KEY_RELAY_TEMPLATE, a.template)
+                putBoolean(KEY_TEMPLATE_SWITCHING, a.templateSwitching)
+                putString(KEY_THEME_OVERRIDES, JSONObject(a.theme).toString())
+                putString(KEY_RELAY_VISUALIZER, a.visualizer)
+            }.apply()
             prefs.edit().apply {
                 a.name?.let { putString(KEY_ASSISTANT_NAME, it) }
                 a.device?.let { putString(KEY_DEVICE_KIND, it.wire) }
                 a.wakePhrase?.let { putString(KEY_WAKE_PHRASE, it) }
-                a.accentHex?.takeIf { parseAccentHex(it) != null }?.let { putString(KEY_ACCENT_HEX, it) }
             }.apply()
         }
         voiceBackends = info.voice
+    }
+
+    /** Shows the owner's PNG logo for [path] (cached in memory); SVG and failures keep the bundled mark. */
+    private fun applyLogo(path: String?) {
+        val base = AuthClient.authBaseUrl(relayUrl.trim())
+        if (path == null || base == null) { logoKey = null; logoBitmap = null; return }
+        val key = base + path
+        if (key == logoKey) return
+        logoKey = key
+        logoBitmap = LogoCache.get(key)
+        if (logoBitmap != null || LogoCache.isUnsupported(key)) return
+        healthClient.fetchLogo(relayUrl.trim(), effectiveToken, allowSelfSigned, path) { bitmap ->
+            LogoCache.put(key, bitmap)
+            if (logoKey == key) logoBitmap = bitmap
+        }
+    }
+
+    private fun decodeTheme(json: String?): Map<String, String> {
+        val obj = runCatching { JSONObject(json ?: return emptyMap()) }.getOrNull() ?: return emptyMap()
+        return buildMap { obj.keys().forEach { k -> (obj.opt(k) as? String)?.let { put(k, it) } } }
     }
 
     /** Picks a voice backend; persists it and restarts a live session like a gender change. */
@@ -308,7 +425,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun login(username: String, password: String) {
         val name = username.trim()
         if (name.isEmpty() || password.isEmpty()) {
-            loginError = "请输入用户名和密码"
+            loginError = tr(Str.ERR_ENTER_CREDENTIALS)
             return
         }
         val owner = ++loginGeneration
@@ -341,7 +458,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     toggleHandsFree()
                 }
             } else {
-                loginError = error ?: "登录失败，请重试"
+                loginError = error ?: tr(Str.ERR_LOGIN_FAILED)
             }
         }
     }
@@ -475,6 +592,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             putExtra(Intent.EXTRA_SUBJECT, file.name)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        activity.startActivity(Intent.createChooser(sendIntent, "导出对话记录"))
+        activity.startActivity(Intent.createChooser(sendIntent, tr(Str.EXPORT_CHOOSER)))
     }
 }

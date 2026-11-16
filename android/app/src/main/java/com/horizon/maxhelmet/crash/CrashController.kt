@@ -1,5 +1,8 @@
 package com.horizon.maxhelmet.crash
 
+import com.horizon.maxhelmet.ui.tr
+import com.horizon.maxhelmet.ui.Str
+
 import org.json.JSONObject
 import java.util.UUID
 
@@ -25,12 +28,12 @@ class CrashController(private val now: () -> Double, private val wall: () -> Lon
     val active get() = state.active
     fun arm() { armed = true; if (!active) networkAllowed = true }
     fun sessionEnded() { if (!active) { armed = false; state = CrashState(); render() } }
-    fun detachAccount() { networkAllowed = false; pending = null; sentAt = null; if (active) { message = "账号已退出，请手动拨打求助电话"; render() } }
+    fun detachAccount() { networkAllowed = false; pending = null; sentAt = null; if (active) { message = tr(Str.CRASH_SIGNED_OUT); render() } }
     fun sample(value: CrashSample) { if (armed) apply(CrashEngine.step(state, value, tuning)) }
     fun tick() {
         if (!armed) return
         apply(CrashEngine.tick(state, now(), tuning))
-        if (!acked && sentAt?.let { now() - it >= 10 } == true) message = "服务器未确认，请手动拨打求助电话"
+        if (!acked && sentAt?.let { now() - it >= 10 } == true) message = tr(Str.CRASH_UNCONFIRMED)
         render()
     }
     // A developer drill exercises the UI/siren but can never notify a real contact.
@@ -42,9 +45,9 @@ class CrashController(private val now: () -> Double, private val wall: () -> Lon
         if (id != incidentId || state.phase != CrashPhase.ESCALATED || status !in setOf("notified", "failed", "unconfigured")) return
         acked = true; pending = null; sentAt = null
         message = when (status) {
-            "notified" -> "已通知紧急联系人。"
-            "unconfigured" -> "服务器未配置通知通道，请手动拨打求助电话。"
-            else -> "紧急联系人通知失败，请手动拨打求助电话。"
+            "notified" -> tr(Str.CRASH_NOTIFIED)
+            "unconfigured" -> tr(Str.CRASH_NO_CHANNEL)
+            else -> tr(Str.CRASH_NOTIFY_FAILED)
         } + (detail?.take(200)?.let { "（$it）" } ?: "")
         speak(message!!); render()
     }
@@ -54,7 +57,7 @@ class CrashController(private val now: () -> Double, private val wall: () -> Lon
         for (effect in update.effects) {
             if (settings().logOnly && !simulation && effect == CrashEffect.CHECK_IN) { state = CrashState(); continue }
             when (effect) {
-                CrashEffect.CHECK_IN -> { message = if (simulation) "演练：不会通知联系人" else null; speak("检测到疑似摔车。你还好吗？没事请回答我没事，或点一下屏幕。") }
+                CrashEffect.CHECK_IN -> { message = if (simulation) tr(Str.CRASH_DRILL_NOTE) else null; speak("检测到疑似摔车。你还好吗？没事请回答我没事，或点一下屏幕。") }
                 CrashEffect.ALARM -> siren(true)
                 CrashEffect.ESCALATE -> escalate()
                 CrashEffect.DISMISS -> { siren(false); pending = null; sentAt = null; message = null; coordinate = null }
@@ -67,7 +70,7 @@ class CrashController(private val now: () -> Double, private val wall: () -> Lon
     }
     private fun escalate() {
         val id = UUID.randomUUID().toString(); incidentId = id; acked = false
-        if (simulation || !networkAllowed) { message = if (simulation) "演练结束：未发送通知" else "请手动拨打求助电话"; return }
+        if (simulation || !networkAllowed) { message = if (simulation) tr(Str.CRASH_DRILL_OVER) else tr(Str.CRASH_CALL_MANUALLY); return }
         val config = settings(); val speed = state.peakSpeed
         locate { point ->
             if (incidentId != id || state.phase != CrashPhase.ESCALATED || !networkAllowed) return@locate

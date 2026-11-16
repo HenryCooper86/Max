@@ -28,13 +28,13 @@ struct GalleryView: View {
                 }
             }
             .background(Visor.bg.ignoresSafeArea())
-            .navigationTitle("相册")
+            .navigationTitle(L("gallery.title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(Visor.bg, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成", action: onClose)
+                    Button(L("common.done"), action: onClose)
                         .visorFont(.subhead, .semibold)
                         .frame(minHeight: Visor.hit)
                 }
@@ -42,11 +42,11 @@ struct GalleryView: View {
             .sheet(item: $selected) { capture in
                 CaptureViewer(capture: capture, model: model)
             }
-            .alert("导出失败", isPresented: Binding(
+            .alert(L("gallery.exportFailed"), isPresented: Binding(
                 get: { model.exportError != nil },
                 set: { if !$0 { model.exportError = nil } }
             )) {
-                Button("好", role: .cancel) {}
+                Button(L("common.ok"), role: .cancel) {}
             } message: {
                 Text(model.exportError ?? "")
             }
@@ -76,15 +76,16 @@ struct GalleryView: View {
                     }
                 }
                 if capture.exported {
-                    Text("已导出")
+                    Text(L("gallery.exported"))
                         .foregroundStyle(Visor.ok)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Visor.bg.opacity(0.85), in: Capsule())
                 }
             }
             .visorFont(.caption, .semibold, mono: true)
             .foregroundStyle(Visor.text)
+            // Legible over any photo in every template, light or dark.
+            .padding(.horizontal, capture.type == .video || capture.exported ? 6 : 0)
+            .padding(.vertical, capture.type == .video || capture.exported ? 2 : 0)
+            .background(capture.type == .video || capture.exported ? Visor.bg.opacity(0.85) : Color.clear, in: Capsule())
             .padding(Visor.Space.s2 - 2)
         }
         // clipShape bounds only the pixels, not hit-testing — without this, an
@@ -95,7 +96,7 @@ struct GalleryView: View {
     private var emptyState: some View {
         VStack(spacing: Visor.Space.s2) {
             Image(systemName: "photo.on.rectangle.angled").font(.system(size: 32, weight: .light))
-            Text("还没有拍摄内容").visorFont(.subhead)
+            Text(L("gallery.empty")).visorFont(.subhead)
         }
         .foregroundStyle(Visor.textTertiary)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

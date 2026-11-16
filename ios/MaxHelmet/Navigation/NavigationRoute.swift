@@ -8,14 +8,22 @@ func coordinatesEqual(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) 
 
 /// One turn on the route: what to do, where, and how long this step runs.
 struct ManeuverStep: Equatable {
+    /// The original (Chinese) instruction. Clients parse this one (maneuver
+    /// symbol etc.); never show it when `localizedInstruction` exists.
     let instruction: String
     let coordinate: CLLocationCoordinate2D
     /// Cumulative along-route distance from the route start to this maneuver,
     /// matching NavManeuver.alongRouteMeters on the wire. NOT a per-leg length.
     let alongRouteMeters: Double
+    /// English text for an English session (`nav.route` step `localizedInstruction`).
+    var localizedInstruction: String? = nil
+
+    /// What is shown and spoken: the localized instruction when there is one.
+    var displayInstruction: String { localizedInstruction ?? instruction }
 
     static func == (lhs: ManeuverStep, rhs: ManeuverStep) -> Bool {
         lhs.instruction == rhs.instruction
+            && lhs.localizedInstruction == rhs.localizedInstruction
             && coordinatesEqual(lhs.coordinate, rhs.coordinate)
             && lhs.alongRouteMeters == rhs.alongRouteMeters
     }
@@ -48,7 +56,11 @@ struct GuidanceState: Equatable {
     let destinationName: String
     let polyline: [CLLocationCoordinate2D]
     var currentLocation: CLLocationCoordinate2D?
+    /// Shown text (localized when the relay supplied it).
     var maneuverInstruction: String?
+    /// The original instruction, for parsing (maneuver symbol). Falls back to
+    /// `maneuverInstruction` when nil.
+    var maneuverOriginalInstruction: String? = nil
     var distanceToManeuverMeters: Double
     var remainingDistanceMeters: Double
     var remainingSeconds: Double
@@ -62,6 +74,7 @@ struct GuidanceState: Equatable {
             && zip(lhs.polyline, rhs.polyline).allSatisfy { coordinatesEqual($0, $1) }
             && optionalCoordinatesEqual(lhs.currentLocation, rhs.currentLocation)
             && lhs.maneuverInstruction == rhs.maneuverInstruction
+            && lhs.maneuverOriginalInstruction == rhs.maneuverOriginalInstruction
             && lhs.distanceToManeuverMeters == rhs.distanceToManeuverMeters
             && lhs.remainingDistanceMeters == rhs.remainingDistanceMeters
             && lhs.remainingSeconds == rhs.remainingSeconds

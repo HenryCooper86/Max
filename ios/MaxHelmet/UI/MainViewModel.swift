@@ -176,6 +176,28 @@ final class MainViewModel: ObservableObject {
             guard let self, generation == self.healthRequestGeneration else { return }
             VisorTheme.shared.apply(health.branding)
             self.voiceHealth = health.voice
+            self.refreshLogo(path: health.branding.logoUrl, relayURL: url)
+        }
+    }
+
+    /// Fetches the owner's logo when the relay serves a PNG; an SVG (or a
+    /// failure) leaves the bundled device mark. One attempt per relay+path.
+    private func refreshLogo(path: String?, relayURL: String) {
+        let theme = VisorTheme.shared
+        guard let path, !path.isEmpty else {
+            theme.setCustomLogo(nil)
+            theme.logoAttemptKey = nil
+            return
+        }
+        let key = relayURL + path
+        guard theme.logoAttemptKey != key else { return }
+        theme.logoAttemptKey = key
+        theme.setCustomLogo(nil)
+        healthClient.fetchLogo(relayURL: relayURL, allowSelfSignedTls: allowSelfSigned, path: path) { result in
+            guard theme.logoAttemptKey == key else { return }
+            if case let .png(data) = result, let image = UIImage(data: data) {
+                theme.setCustomLogo(image)
+            }
         }
     }
 
@@ -318,11 +340,11 @@ final class MainViewModel: ObservableObject {
     func login(username: String, password: String) {
         let name = username.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, !password.isEmpty else {
-            loginError = "请输入用户名和密码"
+            loginError = L("auth.needCreds")
             return
         }
         guard let authClient else {
-            loginError = "登录服务不可用"
+            loginError = L("auth.unavailable")
             return
         }
         loginBusy = true
@@ -538,9 +560,9 @@ final class MainViewModel: ObservableObject {
     /// (e.g. "auth", "connection") so callers can fall back to their copy.
     static func companionErrorCopy(code: String) -> String? {
         switch code {
-        case "pair.busy": return "头盔正忙，请稍后再试"
-        case "pair.declined": return "头盔侧已取消配对"
-        case "pair.timeout": return "确认超时，请重试"
+        case "pair.busy": return L("pair.busy")
+        case "pair.declined": return L("pair.declined")
+        case "pair.timeout": return L("pair.timeout")
         default: return nil
         }
     }

@@ -1,0 +1,3 @@
+websockets>=10
+# Only needed with a real sound card; --play/--record work without it.
+sounddevice>=0.4

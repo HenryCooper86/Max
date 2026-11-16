@@ -15,6 +15,25 @@ import { useEffect, useRef, useState } from "react";
 
 export type MascotMood = "ready" | "listening" | "thinking" | "speaking" | "happy" | "alert" | "asleep" | "wink";
 
+/** The mood that goes with the assistant's live state, for surfaces that
+ *  already drive the lens from it. */
+export function mascotMoodFor(state: {
+  connected: boolean;
+  turnState: "idle" | "listening" | "hearing" | "thinking" | "speaking";
+  hazardLevel?: "normal" | "caution" | "critical";
+  sessionState?: "inactive" | "starting";
+}): MascotMood {
+  if (!state.connected) {
+    if (state.sessionState === "starting") return "thinking";
+    return state.sessionState === "inactive" ? "ready" : "asleep";
+  }
+  if (state.hazardLevel && state.hazardLevel !== "normal") return "alert";
+  if (state.turnState === "thinking") return "thinking";
+  if (state.turnState === "speaking") return "speaking";
+  if (state.turnState === "listening" || state.turnState === "hearing") return "listening";
+  return "ready";
+}
+
 const BASE = "/character/hummingbird";
 
 function prefersReducedMotion(): boolean {

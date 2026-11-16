@@ -2761,6 +2761,32 @@ time,
   }
 }
 
+/* The bird beside the lens: on the landing page and on the app screen it
+   hovers at the lens's upper right, clear of the waveform. */
+.heroLens,
+.voiceHero {
+  position: relative;
+}
+
+/* `--half` is half the lens's width, worked out the way the lens sizes
+   itself, so the bird keeps its place on the rim at every screen size. */
+.heroBird,
+.voiceBird {
+  position: absolute;
+  top: calc(50% - var(--half) * 0.42);
+  left: calc(50% + var(--half) * 0.74);
+  width: clamp(92px, var(--half) * 0.62, 230px);
+  translate: -50% -50%;
+}
+
+.heroBird {
+  --half: min(550px, 50cqw, 120cqh);
+}
+
+.voiceBird {
+  --half: min(300px, 46cqw, 108cqh);
+}
+
 /* ============================================================
    Sign-in
    ============================================================ */

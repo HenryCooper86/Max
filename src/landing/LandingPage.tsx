@@ -11,6 +11,7 @@ import { SETUP_COMMANDS } from "../lib/assistant-config";
 import { BACKENDS, BUILT_IN_EQUALIZER, DEVICES, deviceLogoUrl, findDevice } from "../lib/device-catalog";
 import { localized } from "../lib/i18n";
 import { APP_PATH, BUILD_PATH, REPOSITORY_URL } from "../lib/routes";
+import { Mascot, mascotMoodFor } from "../components/Mascot";
 import { useScriptedDemo } from "../lib/scripted-demo";
 import { TEMPLATES } from "../lib/templates";
 import { VISUALIZERS } from "../lib/visualizer";
@@ -43,6 +44,7 @@ function Hero({ signedIn }: { signedIn: boolean }) {
   const { language } = useLanguage();
   const say = (zh: string, en: string) => localized(language, zh, en);
   const frame = useScriptedDemo("helmet");
+  const visor = visorPropsFor(frame);
   return (
     <section className="hero" aria-labelledby="hero-title">
       <div className="heroText">
@@ -76,7 +78,8 @@ function Hero({ signedIn }: { signedIn: boolean }) {
         </div>
       </div>
       <div className="heroLens" aria-hidden="true">
-        <VisorVisual {...visorPropsFor(frame)} visualizer="wave" />
+        <VisorVisual {...visor} visualizer="wave" />
+        <Mascot className="heroBird" mood={mascotMoodFor(visor)} followCursor restOver=".heroActions, .siteHeader" />
       </div>
     </section>
   );

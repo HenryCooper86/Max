@@ -31,6 +31,7 @@ import { useHelmetAgent } from "./hooks/useHelmetAgent";
 import { fetchCurrentUser, type AuthUser } from "./lib/auth";
 import { applyBrandFavicon, resolveAssistant } from "./lib/assistant";
 import { loadStoredSettings, saveStoredAppearance } from "./lib/persistence";
+import { Mascot, mascotMoodFor } from "./components/Mascot";
 import { resolveVisualizer } from "./lib/visualizer";
 import { applyAppearance, resolveAppearance } from "./lib/templates";
 import { deviceAssistantCopy, localized } from "./lib/i18n";
@@ -364,6 +365,17 @@ function AppContent() {
             sessionState={sessionPhase}
             visualizer={visualizer}
             getAnalyser={agent.getVoiceAnalyser}
+          />
+          <Mascot
+            className="voiceBird"
+            mood={mascotMoodFor({
+              connected: sessionLive,
+              turnState: agent.turnState,
+              hazardLevel: fusedHazard,
+              sessionState: sessionPhase
+            })}
+            followCursor
+            restOver=".voiceUtilities, .voicePrimaryControls, .voiceRidePanels, .voiceTopbar"
           />
         </div>
 

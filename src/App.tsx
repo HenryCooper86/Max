@@ -216,7 +216,12 @@ function AppContent() {
 
   const fusedHazard = combineHazardLevels(agent.rideContext.hazardLevel, agent.weather?.riskLevel ?? "normal");
   const showRidePanels = agent.navState.phase !== "idle" || agent.musicState.visible || captionsOpen;
-  const sessionInactive = !agent.connected && !listening && !starting;
+  // "Live" is what the wearer experiences as a session: the relay is up AND the
+  // microphone is open. Ending hands-free keeps the relay socket warm on
+  // purpose (a quick restart, and it closes itself when idle), but to the
+  // wearer the session is over — the screen must say so, not "connected".
+  const sessionLive = agent.connected && listening;
+  const sessionInactive = !listening && !starting;
   const authKnown = agent.health !== null;
   const authEnabled = agent.health?.auth?.enabled ?? false;
   const registrationOpen = agent.health?.auth?.registrationOpen ?? true;
@@ -267,7 +272,7 @@ function AppContent() {
         aria-label={t(deviceCopyKey("voice.assistantLabel", assistant.device), { name: assistant.name })}
       >
         <header
-          className={`voiceTopbar ${agent.connected ? "online" : starting ? "starting" : sessionInactive ? "inactive" : "offline"}`}
+          className={`voiceTopbar ${sessionLive ? "online" : starting ? "starting" : sessionInactive ? "inactive" : "offline"}`}
         >
           <div className="voiceBrand">
             <VisorMark />
@@ -275,7 +280,7 @@ function AppContent() {
           </div>
           <div className="voiceRelay" role="status">
             <span className="voiceRelayDot" aria-hidden="true" />
-            {agent.connected
+            {sessionLive
               ? t("voice.sessionConnected")
               : starting
                 ? t("voice.connectingShort")
@@ -300,7 +305,7 @@ function AppContent() {
 
         <div className="voiceHero">
           <VisorVisual
-            connected={agent.connected}
+            connected={sessionLive}
             listening={agent.listening}
             voiceLevel={agent.voiceLevel}
             turnState={agent.turnState}
@@ -310,7 +315,7 @@ function AppContent() {
         </div>
 
         <VoiceStateReadout
-          connected={agent.connected}
+          connected={sessionLive}
           turnState={agent.turnState}
           hazardLevel={fusedHazard}
           sessionState={sessionPhase}

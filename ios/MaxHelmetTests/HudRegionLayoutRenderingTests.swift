@@ -42,12 +42,12 @@ final class HudRegionLayoutRenderingTests: XCTestCase {
             helmetFrames.append(helmet.bounds)
             alertContentHeights.append(alertViewport.contentSize.height)
             XCTAssertGreaterThanOrEqual(helmet.bounds.height, 116)
-            XCTAssertEqual(helmet.bounds.height, 300, accuracy: 0.5)
+            XCTAssertEqual(helmet.bounds.height, 240, accuracy: 0.5)
             // Navigating: the viewport takes the whole guidance card (284) so
             // the route map is not clipped, and the utility row keeps what is
-            // left after the helmet holds its full 300.
+            // left after the helmet holds its full 240.
             XCTAssertEqual(alertViewport.bounds.height, 284, accuracy: 0.5)
-            XCTAssertEqual(utilityViewport.bounds.height, 115, accuracy: 0.5)
+            XCTAssertEqual(utilityViewport.bounds.height, 175, accuracy: 0.5)
             XCTAssertTrue(alertViewport.isScrollEnabled)
             XCTAssertTrue(utilityViewport.isScrollEnabled)
             XCTAssertNotNil(HudRenderProbe.find(HudAccessibilityID.guidanceMapAction, in: rendered.controller.view))
@@ -89,8 +89,8 @@ final class HudRegionLayoutRenderingTests: XCTestCase {
             // guidance card. Portrait grants it outright. Landscape cannot:
             // the helmet's 116-point floor and its 8-point gap cap the header
             // at 198/211, and the helmet falls to that floor to pay for it.
-            ("iPhone 15 portrait", .portrait, phone15Portrait, CGSize(width: 350, height: 723), 300, 284),
-            ("iPhone SE portrait", .portrait, phoneSEPortrait, CGSize(width: 335, height: 619), 259, 284),
+            ("iPhone 15 portrait", .portrait, phone15Portrait, CGSize(width: 350, height: 723), 240, 284),
+            ("iPhone SE portrait", .portrait, phoneSEPortrait, CGSize(width: 335, height: 619), 240, 284),
             ("iPhone 15 landscape", .landscape, phone15Landscape, CGSize(width: 702, height: 322), 116, 198),
             ("iPhone SE landscape", .landscape, phoneSELandscape, CGSize(width: 635, height: 335), 116, 211),
         ]
@@ -172,7 +172,7 @@ final class HudRegionLayoutRenderingTests: XCTestCase {
         let utility = requiredScrollView(HudAccessibilityID.utilityViewport, in: rendered.controller.view)
         let helmet = requiredRenderedView(HudAccessibilityID.helmetButton, in: rendered.controller.view)
         XCTAssertEqual(alert.bounds.height, 220, accuracy: 0.5)
-        XCTAssertEqual(helmet.bounds.height, 300, accuracy: 0.5)
+        XCTAssertEqual(helmet.bounds.height, 240, accuracy: 0.5)
         XCTAssertGreaterThan(alert.contentSize.height, alert.bounds.height)
         XCTAssertGreaterThan(utility.contentSize.height, utility.bounds.height)
         XCTAssertEqual(allScrollViews(in: rendered.controller.view).count, 2)

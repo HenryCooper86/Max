@@ -3,7 +3,7 @@ import React from "react";
 type Props = { children: React.ReactNode };
 type State = { error: Error | null };
 
-/** Catches render-time crashes so the helmet HUD shows a recoverable screen. */
+/** Catches render-time crashes so the voice HUD shows a recoverable screen. */
 export class ErrorBoundary extends React.Component<Props, State> {
   override state: State = { error: null };
 
@@ -12,7 +12,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
   }
 
   override componentDidCatch(error: Error, info: React.ErrorInfo) {
-    console.error("Helmet HUD crashed", error, info);
+    console.error("Voice HUD crashed", error, info);
   }
 
   override render() {
@@ -20,13 +20,12 @@ export class ErrorBoundary extends React.Component<Props, State> {
     if (!error) return this.props.children;
 
     return (
-      <main className="shell">
-        <section className="visor errorVisor">
-          <p className="eyebrow">HCT Helmet OS</p>
-          <h1>头盔 HUD 遇到错误</h1>
-          <p className="errorMessage">{error.message || "未知错误"}</p>
-          <button className="mainButton" type="button" onClick={() => window.location.reload()}>
-            重新加载
+      <main className="errorScreen">
+        <section className="errorCard" role="alert">
+          <h1>页面遇到错误 · Something went wrong</h1>
+          <p className="errorMessage">{error.message || "未知错误 · Unknown error"}</p>
+          <button className="errorReload" type="button" onClick={() => window.location.reload()}>
+            重新加载 · Reload
           </button>
         </section>
       </main>

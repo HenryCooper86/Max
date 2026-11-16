@@ -1,14 +1,17 @@
 import { Flag } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import type { HelmetAgent } from "../hooks/useHelmetAgent";
+import { deviceCopyKey } from "../lib/i18n";
 import { formatClockTime } from "../lib/utils";
 import type { TranscriptItem } from "../types";
+import { useAssistant } from "./AssistantContext";
 import { useLanguage } from "./LanguageToggle";
 
 const TURN_FLAG_REASONS = ["听错了", "回答不对", "太慢", "不安全"] as const;
 
 export function VoiceTranscript({ agent }: { agent: HelmetAgent }) {
   const { t } = useLanguage();
+  const assistant = useAssistant();
   const [flagTargetId, setFlagTargetId] = useState<number | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const visibleItems = agent.transcript.slice(-8);
@@ -26,10 +29,7 @@ export function VoiceTranscript({ agent }: { agent: HelmetAgent }) {
   return (
     <section className="voiceTranscript" aria-label={t("transcript.aria")}>
       <div className="voiceTranscriptHead">
-        <div>
-          <span aria-hidden="true" />
-          <strong>{t("transcript.title")}</strong>
-        </div>
+        <strong>{t("transcript.title")}</strong>
         <small>
           {visibleItems.length ? t("transcript.items", { count: visibleItems.length }) : t("transcript.waiting")}
         </small>
@@ -39,7 +39,7 @@ export function VoiceTranscript({ agent }: { agent: HelmetAgent }) {
           visibleItems.map((item) => (
             <article className={`voiceMessage ${item.speaker}`} key={item.id}>
               <div>
-                <strong>{item.speaker === "rider" ? t("transcript.you") : "Max"}</strong>
+                <strong>{item.speaker === "rider" ? t("transcript.you") : assistant.name}</strong>
                 <time dateTime={new Date(item.at).toISOString()}>{formatClockTime(item.at)}</time>
                 {!item.final ? <small>{t("transcript.live")}</small> : null}
                 {agent.canFlagTurn(item) ? (
@@ -70,7 +70,7 @@ export function VoiceTranscript({ agent }: { agent: HelmetAgent }) {
         ) : (
           <div className="voiceTranscriptEmpty">
             <strong>{t("transcript.greeting")}</strong>
-            <p>{t("transcript.help")}</p>
+            <p>{t(deviceCopyKey("transcript.help", assistant.device))}</p>
           </div>
         )}
       </div>

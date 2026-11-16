@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-11-16 — Assistant kit: your own name, device and voice backend; Visor redesign
+
+- Added `assistant.config.json` (`server/assistant.ts`): name, device (helmet,
+  glasses, other), wake names, languages, maker, accent colour and an optional
+  persona override. With no file the relay is the original Max assistant,
+  prompt for prompt. `/health` now reports `assistant` and `voice`.
+- Added four voice backends beside Doubao and the demo: OpenAI Realtime, xAI
+  Grok Voice, Gemini Live, and a Whisper pipeline (speech-to-text → chat model
+  → text-to-speech over OpenAI-compatible endpoints, local servers included).
+  They share one session core (`server/providers/live/session.ts`) for the wake
+  word, device actions, navigation speech, vision, weather and memory.
+- Clients may pick a configured backend per session
+  (`session.start.voiceProvider`); `VOICE_PROVIDER_SWITCHING=off` disables it.
+- Added `npm run setup`, `assistant.config.example.json` and the new keys in
+  `.env.example`.
+- The wake-word matcher is configurable (`createWakeMatcher`,
+  `configureWakePhrase`); the Doubao backend takes its persona, bot name and
+  hotwords from the assistant profile.
+- Redesigned the web HUD, Admin/Testing workspaces, iOS and Android apps on the
+  shared "Visor" design system, with the assistant name, accent colour and a
+  voice backend picker driven by the relay.
+- Not covered: the nav fabrication guard and the board's Doubao-TTS
+  confirmation path remain Doubao-only; the new backends rely on the grounding
+  prompt and on the engine voicing relay lines on the embedded board. The new
+  backends are verified against scripted upstreams, not live vendor accounts.
+
 ## 2026-10-21 — QA tools join Testing; Administration becomes account-only
 
 - Moved quality overview, release validation, diagnostics, and versioned testing

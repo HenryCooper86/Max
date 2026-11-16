@@ -9,8 +9,10 @@ enum HudLayout {
 }
 
 enum HudMetrics {
-    /// The helmet's visual design size; it never grows past this.
-    static let helmetMaxDiameter: CGFloat = 300
+    /// Height of the hero stage (the Visor lens plus its vignette); it never
+    /// grows past this. The lens itself is a 2.4:1 capsule that spans the stage
+    /// width, so the stage is far shorter than it is wide.
+    static let helmetMaxDiameter: CGFloat = 240
     /// The minimum visible and tappable diameter for the sole session control.
     static let helmetMinDiameter: CGFloat = 116
 
@@ -43,7 +45,9 @@ enum HudMetrics {
     /// landscape. These are fixed view hierarchy gaps, not measured content.
     static let portraitStackGaps: CGFloat = 24
     static let landscapeStackGap: CGFloat = 8
-    /// Share of width reserved for the helmet in landscape.
+    /// Width / height of the Visor lens.
+    static let visorAspect: CGFloat = 2.4
+    /// Share of width reserved for the hero stage in landscape.
     static let landscapeHelmetColumn: CGFloat = 0.42
 
     /// AgentScreen applies this padding outside its layout GeometryReader.
@@ -309,7 +313,9 @@ struct HudRegionLayout<AlertContent: View, HelmetContent: View, UtilityContent: 
     /// Receives the viewport height it was granted so tall alert content (the
     /// guidance card's route map) can size itself to fit rather than clip.
     @ViewBuilder let alertContent: (_ viewportHeight: CGFloat) -> AlertContent
-    @ViewBuilder let helmetContent: (_ diameter: CGFloat) -> HelmetContent
+    /// Receives the hero stage's size: full available width in portrait, the
+    /// landscape column in landscape, and the allocated height.
+    @ViewBuilder let helmetContent: (_ stage: CGSize) -> HelmetContent
     @ViewBuilder let utilityContent: (_ captionsVisible: Bool) -> UtilityContent
     var utilityScrollTarget: AnyHashable? = nil
 
@@ -331,8 +337,8 @@ struct HudRegionLayout<AlertContent: View, HelmetContent: View, UtilityContent: 
                     VStack(spacing: 0) {
                         alertViewport(height: allocation.alertViewportHeight, policy: policy)
                         Spacer(minLength: 0).frame(height: HudMetrics.portraitStackGaps / 2)
-                        helmetContent(allocation.helmetDiameter)
-                            .frame(width: allocation.helmetDiameter, height: allocation.helmetDiameter)
+                        helmetContent(CGSize(width: available.width, height: allocation.helmetDiameter))
+                            .frame(width: available.width, height: allocation.helmetDiameter)
                             .accessibilityIdentifier(HudAccessibilityID.helmetButton)
                         Spacer(minLength: 0).frame(height: HudMetrics.portraitStackGaps / 2)
                         utilityViewport(
@@ -346,9 +352,10 @@ struct HudRegionLayout<AlertContent: View, HelmetContent: View, UtilityContent: 
                         alertViewport(height: allocation.alertViewportHeight, policy: policy)
                         Spacer(minLength: 0).frame(height: HudMetrics.landscapeStackGap)
                         HStack(spacing: 18) {
-                            helmetContent(allocation.helmetDiameter)
+                            let stageWidth = max(allocation.helmetDiameter, available.width * HudMetrics.landscapeHelmetColumn)
+                            helmetContent(CGSize(width: stageWidth, height: allocation.utilityViewportHeight))
                             .frame(
-                                width: allocation.helmetDiameter,
+                                width: stageWidth,
                                 height: allocation.utilityViewportHeight,
                                 alignment: .center
                             )
@@ -390,6 +397,10 @@ struct HudRegionLayout<AlertContent: View, HelmetContent: View, UtilityContent: 
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 utilityContent(captionsVisible)
+                    // A scroll view proposes no height to its content, so a
+                    // child that wants "the rest of the region" (the captions
+                    // card) reads the granted height from here.
+                    .environment(\.hudUtilityViewportHeight, height)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     // Offer the whole region, so content that wants to sit at
                     // the bottom can reach it instead of being top-aligned with
@@ -408,5 +419,17 @@ struct HudRegionLayout<AlertContent: View, HelmetContent: View, UtilityContent: 
         .accessibilityElement(children: .contain)
         .accessibilityLabel("会话状态和工具")
         .accessibilityHint("上下滑动可查看字幕和工具")
+    }
+}
+
+private struct HudUtilityViewportHeightKey: EnvironmentKey {
+    static let defaultValue: CGFloat? = nil
+}
+
+extension EnvironmentValues {
+    /// Height the HUD granted the utility region, when inside one.
+    var hudUtilityViewportHeight: CGFloat? {
+        get { self[HudUtilityViewportHeightKey.self] }
+        set { self[HudUtilityViewportHeightKey.self] = newValue }
     }
 }

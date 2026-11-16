@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Compose draws everything; this just sets the window chrome to match the
-         HUD background (the "bg" token in src/styles.css) so launch doesn't flash white. -->
+    <!-- Compose draws everything; window chrome matches the Visor bg token so launch
+         doesn't flash and the status/navigation bars blend into the screen. -->
     <style name="Theme.MaxHelmet" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">#101415</item>
-        <item name="android:statusBarColor">#101415</item>
-        <item name="android:navigationBarColor">#101415</item>
+        <item name="android:windowBackground">@color/visor_bg</item>
+        <item name="android:statusBarColor">@color/visor_bg</item>
+        <item name="android:navigationBarColor">@color/visor_bg</item>
     </style>
 </resources>

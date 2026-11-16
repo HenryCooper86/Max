@@ -6,6 +6,30 @@
 
 Production-oriented AI voice testing framework for the Max motorcycle helmet assistant. Max keeps the same name and motorcycle helmet assistant role, speaks Chinese by default, can also use English, and refuses other languages. The framework combines the hands-free web HUD, iOS and Android clients, a secure realtime relay, mock/live providers, scenario injection, telemetry, and per-tester QA statistics for validating helmet voice behavior before field release. Realtime Doubao voice defaults to the working female Chinese voice.
 
+## Make It Your Own
+
+The relay and apps are a kit: rename the assistant, put it in a helmet or a pair of smart glasses, and choose the voice behind it.
+
+```bash
+npm install
+npm run setup   # name, device, wake word, languages, accent colour, voice backend
+npm run dev     # http://localhost:5173
+```
+
+- **Identity** lives in `assistant.config.json` (see `assistant.config.example.json`): `name`, `device` (`helmet` | `glasses` | `other`), `languages`, `wake.names` (extra spellings and mishearings the assistant answers to), `developer`, `accentColor`, and an optional full `persona` override. Without the file the relay is the original Max helmet assistant, prompt for prompt. The web, iOS and Android apps read the name, wake phrase and accent colour from the relay's `/health`.
+- **Voice backends** are chosen with `VOICE_PROVIDER` and, per session, from the apps' Settings → Assistant list (only backends whose key is set on the relay are selectable; `VOICE_PROVIDER_SWITCHING=off` pins everyone to the default).
+
+| `VOICE_PROVIDER` | Backend                                                                                                            | Needs                                                      |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
+| `mock`           | Scripted demo                                                                                                      | nothing                                                    |
+| `doubao`         | Doubao realtime voice                                                                                              | `DOUBAO_API_KEY`                                           |
+| `openai`         | OpenAI Realtime                                                                                                    | `OPENAI_API_KEY`                                           |
+| `grok`           | xAI Grok Voice                                                                                                     | `XAI_API_KEY`                                              |
+| `gemini`         | Google Gemini Live                                                                                                 | `GEMINI_API_KEY`                                           |
+| `pipeline`       | Whisper speech-to-text → any chat model → any text-to-speech (OpenAI-compatible endpoints, local servers included) | `PIPELINE_API_KEY` or `OPENAI_API_KEY`; none for localhost |
+
+Every backend shares one session core (`server/providers/live/session.ts`): wake word, device actions and their honest outcomes, navigation speech, camera questions, weather and memory behave the same whichever voice is plugged in. Adding a backend means implementing the small `VoiceEngine` interface in `server/providers/live/engine.ts` and registering it in `server/providers/catalog.ts` and `server/providers/factory.ts`. All model names, voices and endpoints are overridable in `.env` (see `.env.example`).
+
 ## Android App
 
 The native Android client (`android/`, Kotlin + Jetpack Compose) speaks the same `/agent` relay

@@ -5,6 +5,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.toArgb
+import com.horizon.maxhelmet.ui.theme.Visor
+import com.horizon.maxhelmet.ui.theme.VisorShapes
+import com.horizon.maxhelmet.ui.theme.VisorType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
@@ -28,29 +33,29 @@ fun GuidanceRouteMap(guidance: NavGuidanceState, detailed: Boolean = false, foll
     val uri = LocalUriHandler.current
     when (mapAvailability(consent, BuildConfig.AMAP_ANDROID_KEY, guidance.route)) {
         MapAvailability.CONSENT_REQUIRED -> {
-            Text("地图未启用 · 语音导航仍可使用")
-            TextButton(onClick = { showConsent = true }) { Text("启用地图") }
+            MapNote("地图未启用 · 语音导航仍可使用")
+            VisorButton("启用地图", { showConsent = true })
         }
-        MapAvailability.MISSING_KEY -> Text("地图暂不可用 · 缺少 Android 地图配置")
-        MapAvailability.INVALID_ROUTE -> Text("地图暂不可用 · 路线数据不足")
+        MapAvailability.MISSING_KEY -> MapNote("地图暂不可用 · 缺少 Android 地图配置")
+        MapAvailability.INVALID_ROUTE -> MapNote("地图暂不可用 · 路线数据不足")
         MapAvailability.READY -> NativeGuidanceMap(guidance, detailed, followsRider, viewportModifier)
     }
     if (showConsent) {
-        AlertDialog(
+        VisorAlertDialog(
             onDismissRequest = { showConsent = false; prefs.edit().putBoolean("consent_v1", false).apply() },
-            title = { Text("高德地图与隐私") },
+            title = "高德地图与隐私",
             text = {
-                Column {
-                    Text("启用后，路线和当前位置会提供给高德地图用于地图显示，高德还会接收加载地图所需的网络请求。Max 使用现有位置数据，不启用高德定位服务。")
-                    TextButton(onClick = { uri.openUri("https://lbs.amap.com/pages/privacy/") }) { Text("查看高德地图隐私政策") }
+                Column(verticalArrangement = Arrangement.spacedBy(com.horizon.maxhelmet.ui.theme.VisorSpace.x2)) {
+                    DialogText("启用后，路线和当前位置会提供给高德地图用于地图显示，高德还会接收加载地图所需的网络请求。${AssistantBranding.name} 使用现有位置数据，不启用高德定位服务。")
+                    VisorButton("查看高德地图隐私政策", { uri.openUri("https://lbs.amap.com/pages/privacy/") }, style = VisorButtonStyle.GHOST)
                 }
             },
-            confirmButton = { TextButton(onClick = {
+            confirmButton = { VisorButton("同意并启用", {
                 prefs.edit().putBoolean("consent_v1", true).apply(); consent = true; showConsent = false
-            }) { Text("同意并启用") } },
-            dismissButton = { TextButton(onClick = {
+            }, style = VisorButtonStyle.PRIMARY) },
+            dismissButton = { VisorButton("暂不启用", {
                 prefs.edit().putBoolean("consent_v1", false).apply(); showConsent = false
-            }) { Text("暂不启用") } }
+            }, style = VisorButtonStyle.GHOST) }
         )
     }
 }
@@ -69,8 +74,9 @@ private fun NativeGuidanceMap(guidance: NavGuidanceState, detailed: Boolean, fol
             MapView(context).apply { onCreate(Bundle()) }
         }.getOrNull()
     }
-    if (mapView == null) { Text("地图加载失败 · 语音导航仍可使用"); return }
-    val renderer = remember(mapView) { RouteMapRenderer(mapView) }
+    if (mapView == null) { MapNote("地图加载失败 · 语音导航仍可使用"); return }
+    val accentArgb = Visor.colors.accent.toArgb()
+    val renderer = remember(mapView, accentArgb) { RouteMapRenderer(mapView, accentArgb) }
     DisposableEffect(mapView, lifecycle) {
         mapView.map.setOnMapLoadedListener { loaded = true; failed = false; renderer.fit() }
         val observer = LifecycleEventObserver { _, event ->
@@ -91,18 +97,24 @@ private fun NativeGuidanceMap(guidance: NavGuidanceState, detailed: Boolean, fol
         }
     }
     LaunchedEffect(mapView) { delay(15_000); if (!loaded) failed = true }
-    Box(viewportModifier ?: Modifier.fillMaxWidth().height(if (detailed) 360.dp else 200.dp)) {
+    Box((viewportModifier ?: Modifier.fillMaxWidth().height(if (detailed) 360.dp else 200.dp)).clip(VisorShapes.card)) {
         AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize(), update = {
             runCatching { renderer.update(guidance, detailed, followsRider) }.onFailure { failed = true }
         })
-        if (!loaded || failed) Surface {
-            Text(if (failed) "地图加载失败 · 语音导航仍可使用" else "正在加载地图…", Modifier.padding(8.dp))
+        if (!loaded || failed) Surface(color = Visor.colors.surface2) {
+            Text(
+                if (failed) "地图加载失败 · 语音导航仍可使用" else "正在加载地图…",
+                Modifier.padding(8.dp), color = Visor.colors.textSecondary, style = VisorType.caption
+            )
         }
     }
-    if (!detailed) TextButton(onClick = { renderer.fit() }) { Text("查看完整路线") }
+    if (!detailed) VisorButton("查看完整路线", { renderer.fit() }, style = VisorButtonStyle.GHOST)
 }
 
-private class RouteMapRenderer(private val view: MapView) {
+@Composable
+private fun MapNote(text: String) = Text(text, color = Visor.colors.textSecondary, style = VisorType.caption)
+
+private class RouteMapRenderer(private val view: MapView, private val routeColor: Int) {
     private var active = true
     private var route: NavigationRoute? = null
     private var rider: Marker? = null
@@ -123,7 +135,7 @@ private class RouteMapRenderer(private val view: MapView) {
             map.clear(); rider = null; turn = null; lastRider = null
             route?.let { current ->
                 map.addPolyline(PolylineOptions().addAll(current.polyline.map { LatLng(it.lat, it.lon) })
-                    .width(12f).color(android.graphics.Color.rgb(165, 224, 124)))
+                    .width(12f).color(routeColor))
                 map.addMarker(MarkerOptions().position(LatLng(current.destination.lat, current.destination.lon)).title(current.destinationName))
             }
             view.post { fit() }

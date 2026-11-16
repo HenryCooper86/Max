@@ -35,13 +35,14 @@ final class AgentScreenLayoutTests: XCTestCase {
         )
         // A live route asks for the whole guidance card (44 top bar + 8 spacing
         // + 232 card) instead of the 220 cap that clipped it. The helmet keeps
-        // its full size; captions are the documented first thing to yield, and
-        // they do here — 143 points is under their 52 + 96 requirement.
+        // its full (240-point Visor stage) size; captions are the documented
+        // first thing to yield. With the shorter stage 203 points remain for
+        // utility, which clears their 52 + 96 requirement.
         let expected = HudDeterministicAllocation(
             alertViewportHeight: 284,
-            helmetDiameter: 300,
-            utilityViewportHeight: 143,
-            captionsVisible: false
+            helmetDiameter: 240,
+            utilityViewportHeight: 203,
+            captionsVisible: true
         )
 
         let allocation = hudDeterministicAllocation(
@@ -59,15 +60,25 @@ final class AgentScreenLayoutTests: XCTestCase {
             inputs: HudLayoutInputs(alertsVisible: true, captionsRequested: true, handsFreeActive: true)
         )
 
-        // 220 alert viewport + 300 helmet + 103 utility viewport + 24 points
-        // of stack gaps exactly fills the 647-point safe height. Captions need
-        // 96 points beyond the 52-point active mute/control minimum, so they
-        // yield on the smallest portrait instead of hiding either control.
+        // 220 alert viewport + 240 stage + 163 utility viewport + 24 points
+        // of stack gaps exactly fills the 647-point safe height.
         XCTAssertEqual(allocation.alertViewportHeight, 220)
-        XCTAssertEqual(allocation.helmetDiameter, 300)
-        XCTAssertEqual(allocation.utilityViewportHeight, 103)
-        XCTAssertFalse(allocation.captionsVisible)
+        XCTAssertEqual(allocation.helmetDiameter, 240)
+        XCTAssertEqual(allocation.utilityViewportHeight, 163)
+        XCTAssertTrue(allocation.captionsVisible)
         XCTAssertLessThanOrEqual(allocation.occupiedHeight(for: .portrait), phoneSEPortrait.height)
+
+        // Captions need 96 points beyond the 52-point active mute/control
+        // minimum, so on a shorter screen they yield instead of hiding either
+        // control or shrinking the stage below its floor.
+        let short = hudDeterministicAllocation(
+            layout: .portrait,
+            available: CGSize(width: phoneSEPortrait.width, height: 600),
+            inputs: HudLayoutInputs(alertsVisible: true, captionsRequested: true, handsFreeActive: true)
+        )
+        XCTAssertEqual(short.helmetDiameter, 240)
+        XCTAssertEqual(short.utilityViewportHeight, 116)
+        XCTAssertFalse(short.captionsVisible)
     }
 
     func testLandscapeUsesFixedAlertViewportAndPreservesHelmetFloorForAllAlertHeights() {

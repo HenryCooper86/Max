@@ -31,4 +31,24 @@ class AgentProtocolTest {
         val mixed = parseAgentEvent("""{"type":"metric","latencyMs":23,"outgoingFps":50}""") as AgentEvent.Metric
         assertEquals(23, mixed.latencyMs)
     }
+
+    private fun startJson(voiceProvider: String? = null) = org.json.JSONObject(
+        buildSessionStart(
+            voiceGender = VoiceGender.FEMALE,
+            voicePersonality = VoicePersonality.CONCISE,
+            rideMode = RideMode.RIDE,
+            scenario = DemoScenario.COMMUTE,
+            lat = null,
+            lon = null,
+            voiceProvider = voiceProvider
+        )
+    )
+
+    @Test
+    fun `session start carries voiceProvider only when chosen`() {
+        assertEquals("live", startJson("live").getString("voiceProvider"))
+        assertEquals(false, startJson(null).has("voiceProvider"))
+        assertEquals(false, startJson("  ").has("voiceProvider"))
+        assertEquals("female", startJson("live").getString("voiceGender"))
+    }
 }

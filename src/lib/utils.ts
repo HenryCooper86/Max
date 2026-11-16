@@ -1,7 +1,7 @@
 // Stateless helpers shared by the agent hook and the HUD components.
 
 import type { AgentHealth, TesterSessionSummary, TestingStats } from "../../shared/agent";
-import type { TurnState } from "../components/HelmetVisual";
+import type { TurnState } from "../components/VisorVisual";
 import type { AudioProcessingState, RiderLocation, TranscriptItem } from "../types";
 import type { Language } from "./i18n";
 import { authToken } from "./auth";

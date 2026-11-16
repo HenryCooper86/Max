@@ -18,6 +18,12 @@ import com.horizon.maxhelmet.BuildConfig
 import com.horizon.maxhelmet.agent.AgentSession
 import com.horizon.maxhelmet.agent.AgentSessionHolder
 import com.horizon.maxhelmet.agent.AuthClient
+import com.horizon.maxhelmet.agent.HealthClient
+import androidx.compose.ui.graphics.Color
+import com.horizon.maxhelmet.ui.theme.VisorColors
+import com.horizon.maxhelmet.ui.theme.parseAccentHex
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import com.horizon.maxhelmet.agent.DemoScenario
 import com.horizon.maxhelmet.agent.RideMode
 import com.horizon.maxhelmet.agent.TranscriptItem
@@ -55,12 +61,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val KEY_TESTING_TEST_CASE_ID = "testing_test_case_id"
         private const val KEY_TESTING_RUN_ID = "testing_run_id"
         private const val KEY_TESTING_ASSIGNMENT_ID = "testing_assignment_id"
+        private const val KEY_ASSISTANT_NAME = "assistant_name"
+        private const val KEY_DEVICE_KIND = "assistant_device"
+        private const val KEY_WAKE_PHRASE = "assistant_wake_phrase"
+        private const val KEY_ACCENT_HEX = "assistant_accent_hex"
+        private const val KEY_VOICE_PROVIDER = "voice_provider"
     }
 
     private val session: AgentSession = AgentSessionHolder.get(application)
     private val prefs = application.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private val secureTokens = SecureTokenStore(prefs)
     private val authClient = AuthClient()
+    private val healthClient = HealthClient()
     private var loginGeneration = 0L
 
     fun confirmNavigation(id: String, accepted: Boolean) { session.confirmNavigation(id, accepted) }
@@ -122,6 +134,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (url != relayUrl) { loginGeneration++; loginBusy = false; companion.disconnect(); helmetDiscovery.stop(); session.detachCrashAccount() }
         relayUrl = url
         prefs.edit().putString(KEY_RELAY_URL, url).apply()
+        refreshHealth(delayMs = 700)
     }
 
     fun updateAuthToken(token: String) {
@@ -191,8 +204,73 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val isLoggedIn: Boolean get() = authUsername.isNotEmpty() && sessionToken.isNotEmpty()
 
+    // ---- white-label branding (defaults apply until the relay's /health says otherwise) ----
+
+    /** What the assistant is called everywhere user-visible. Default "Max". */
+    var assistantName by mutableStateOf(
+        (prefs.getString(KEY_ASSISTANT_NAME, null) ?: DEFAULT_ASSISTANT_NAME).ifBlank { DEFAULT_ASSISTANT_NAME }
+    )
+        private set
+
+    /** helmet / glasses / other: wording only, the visuals are device-agnostic. */
+    var deviceKind by mutableStateOf(DeviceKind.fromWire(prefs.getString(KEY_DEVICE_KIND, null)) ?: DeviceKind.HELMET)
+        private set
+
+    var wakePhrase by mutableStateOf(prefs.getString(KEY_WAKE_PHRASE, null))
+        private set
+
+    /** Runtime accent; the Visor theme reads this, so branding can recolour the app. */
+    var accent by mutableStateOf(parseAccentHex(prefs.getString(KEY_ACCENT_HEX, null)) ?: VisorColors.DEFAULT_ACCENT)
+        private set
+
+    /** Voice backends advertised by the relay (null until /health reports `voice`). */
+    var voiceBackends by mutableStateOf<VoiceBackends?>(null)
+        private set
+
+    /** The rider's persisted backend choice (null = relay default). */
+    var voiceProviderId by mutableStateOf(prefs.getString(KEY_VOICE_PROVIDER, null))
+        private set
+
+    private var healthJob: Job? = null
+
     init {
+        AssistantBranding.name = assistantName
+        session.setVoiceProvider(voiceProviderId)
         session.selectTranscriptOwner(authUserId.takeIf { isLoggedIn && it.isNotEmpty() })
+        refreshHealth()
+    }
+
+    /** Best-effort GET /health: applies optional assistant branding and the voice backend list. */
+    fun refreshHealth(delayMs: Long = 0) {
+        healthJob?.cancel()
+        val url = relayUrl.trim()
+        healthJob = viewModelScope.launch {
+            if (delayMs > 0) delay(delayMs)
+            healthClient.fetch(url, effectiveToken, allowSelfSigned) { info -> applyHealth(info) }
+        }
+    }
+
+    private fun applyHealth(info: HealthInfo) {
+        info.assistant?.let { a ->
+            a.name?.let { assistantName = it; AssistantBranding.name = it }
+            a.device?.let { deviceKind = it }
+            a.wakePhrase?.let { wakePhrase = it }
+            parseAccentHex(a.accentHex)?.let { accent = it }
+            prefs.edit().apply {
+                a.name?.let { putString(KEY_ASSISTANT_NAME, it) }
+                a.device?.let { putString(KEY_DEVICE_KIND, it.wire) }
+                a.wakePhrase?.let { putString(KEY_WAKE_PHRASE, it) }
+                a.accentHex?.takeIf { parseAccentHex(it) != null }?.let { putString(KEY_ACCENT_HEX, it) }
+            }.apply()
+        }
+        voiceBackends = info.voice
+    }
+
+    /** Picks a voice backend; persists it and restarts a live session like a gender change. */
+    fun selectVoiceProvider(id: String) {
+        voiceProviderId = id
+        prefs.edit().putString(KEY_VOICE_PROVIDER, id).apply()
+        session.setVoiceProvider(id)
     }
 
     /**
@@ -255,6 +333,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     .apply()
                 session.selectTranscriptOwner(login.user.id)
                 loginError = null
+                refreshHealth()
                 // A 401 cut the last attempt short — resume hands-free with
                 // the fresh session instead of demanding another tap.
                 if (pendingHandsFreeRetry && !session.state.value.handsFree) {
@@ -341,6 +420,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (companion.state.value.riding || crash.controller.active) return
             companion.disconnect()
             pendingHandsFreeRetry = false
+            refreshHealth()
             VoiceAgentService.start(app)
             session.start(
                 relayUrl.trim(),

@@ -17,17 +17,20 @@ struct CrashCheckInBanner: View {
                 now: ProcessInfo.processInfo.systemUptime
             )
             Button(action: onCancel) {
-                HStack(spacing: 10) {
+                HStack(spacing: Visor.Space.s3) {
                     Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 20, weight: .bold))
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("疑似摔车 — 你还好吗？（\(remaining)s）").font(.system(size: 15, weight: .bold))
-                        Text("点此取消，或说“我没事”").font(.system(size: 12))
+                        Text("疑似摔车 — 你还好吗？（\(remaining)s）")
+                            .visorFont(.subhead, .bold)
+                        Text("点此取消，或说“我没事”").visorFont(.caption, .medium)
                     }
                     Spacer()
                 }
-                .padding(12)
-                .background(RoundedRectangle(cornerRadius: 14).fill(Color.red.opacity(0.92)))
-                .foregroundColor(.white)
+                .padding(Visor.Space.s3)
+                .frame(minHeight: Visor.hit)
+                .background(Visor.danger, in: RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous))
+                .foregroundStyle(Visor.bg)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("疑似摔车，点击取消警报，剩余\(remaining)秒")
@@ -36,7 +39,8 @@ struct CrashCheckInBanner: View {
 }
 
 /// Alarm + escalated: full-screen, glanceable from the ground, tappable by
-/// a gloved hand or a bystander.
+/// a gloved hand or a bystander. Deliberately the loudest surface in the app:
+/// solid danger fill, dark ink, the largest type in the scale.
 struct CrashAlarmView: View {
     let phase: CrashUIPhase
     let locationText: String?
@@ -53,10 +57,18 @@ struct CrashAlarmView: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { _ in
             ZStack {
-                Color.red.opacity(0.96).ignoresSafeArea()
-                VStack(spacing: 24) {
-                    Text("检测到摔车").font(.system(size: 34, weight: .black))
-                    Text(statusLine).font(.system(size: 17, weight: .semibold))
+                Visor.danger.ignoresSafeArea()
+                VStack(spacing: Visor.Space.s6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 48, weight: .black))
+                        .accessibilityHidden(true)
+                    Text("检测到摔车")
+                        .visorFont(.alarm, .black)
+                        .minimumScaleFactor(0.6)
+                        .multilineTextAlignment(.center)
+                    Text(statusLine)
+                        .visorFont(.body, .semibold)
+                        .multilineTextAlignment(.center)
                     // Only the alarm phase counts down to escalation; once
                     // escalated the ack/status line above is the live signal.
                     if case let .alarm(sinceT) = phase {
@@ -66,20 +78,24 @@ struct CrashAlarmView: View {
                             now: ProcessInfo.processInfo.systemUptime
                         )
                         Text("\(remaining) 秒后通知紧急联系人")
-                            .font(.system(size: 26, weight: .black, design: .monospaced))
+                            .visorFont(.title, .black, mono: true)
+                            .multilineTextAlignment(.center)
                     }
                     if let locationText {
                         // Large enough for a bystander to read to 120.
-                        Text(locationText).font(.system(size: 24, weight: .bold, design: .monospaced))
+                        Text(locationText)
+                            .visorFont(.title, .bold, mono: true)
+                            .multilineTextAlignment(.center)
                     } else {
-                        Text("正在定位…").font(.system(size: 17))
+                        Text("正在定位…").visorFont(.body)
                     }
+                    Spacer(minLength: 0)
                     Button(action: onCancel) {
                         Text("我没事")
-                            .font(.system(size: 28, weight: .black))
+                            .visorFont(.display, .black)
                             .frame(maxWidth: .infinity, minHeight: 88)
-                            .background(RoundedRectangle(cornerRadius: 20).fill(Color.white))
-                            .foregroundColor(.red)
+                            .background(Visor.bg, in: RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous))
+                            .foregroundStyle(Visor.text)
                     }
                     Button {
                         if let url = URL(string: "tel://\(callNumber)") {
@@ -87,14 +103,17 @@ struct CrashAlarmView: View {
                         }
                     } label: {
                         Text("拨打 \(callNumber)")
-                            .font(.system(size: 22, weight: .bold))
+                            .visorFont(.title, .bold)
                             .frame(maxWidth: .infinity, minHeight: 66)
-                            .background(RoundedRectangle(cornerRadius: 20).fill(Color.black.opacity(0.35)))
-                            .foregroundColor(.white)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous)
+                                    .strokeBorder(Visor.bg, lineWidth: 2)
+                            )
+                            .foregroundStyle(Visor.bg)
                     }
                 }
-                .padding(28)
-                .foregroundColor(.white)
+                .padding(Visor.Space.s6)
+                .foregroundStyle(Visor.bg)
             }
         }
     }

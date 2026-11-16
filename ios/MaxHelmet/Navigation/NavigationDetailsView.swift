@@ -55,9 +55,11 @@ struct NavigationDetailsView: View {
                     }
                 }
             }
-            .background(HudColors.void)
+            .background(Visor.bg)
             .navigationTitle(guidance.destinationName)
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Visor.bg, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     if let music {
@@ -72,6 +74,9 @@ struct NavigationDetailsView: View {
                 ToolbarItem(placement: .topBarTrailing) { Button("收起") { dismiss() } }
             }
         }
+        .tint(Visor.accent)
+        .presentationBackground(Visor.bg)
+        .presentationCornerRadius(Visor.Radius.sheet)
     }
 
     private func maneuver(compact: Bool = false) -> some View {
@@ -79,17 +84,20 @@ struct NavigationDetailsView: View {
             Image(systemName: navigationManeuverSymbol(guidance.maneuverInstruction ?? ""))
                 .font(.system(size: compact ? 32 : 42, weight: .bold))
                 .frame(width: compact ? 44 : 58, height: compact ? 48 : 64)
-                .foregroundStyle(guidance.offRoute ? HudColors.amber : HudColors.lume)
+                .foregroundStyle(guidance.offRoute ? Visor.warn : Visor.accent)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(guidance.offRoute ? "重新规划中" : navigationDistance(guidance.distanceToManeuverMeters) + " 后")
-                    .font(compact ? .title2.bold() : .largeTitle.bold()).monospacedDigit()
+                    .visorFont(compact ? .title : .display, .bold, mono: true)
+                    .foregroundStyle(Visor.text)
                 Text(guidance.maneuverInstruction ?? "沿路线前往目的地")
-                    .font(.headline).fixedSize(horizontal: false, vertical: true)
+                    .visorFont(.body, .semibold).foregroundStyle(Visor.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(compact ? 12 : 16)
-        .background(HudColors.panelElevated, in: RoundedRectangle(cornerRadius: 20))
+        .background(Visor.surface1, in: RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous).strokeBorder(Visor.line, lineWidth: Visor.hairline))
         .accessibilityElement(children: .combine)
     }
 
@@ -100,15 +108,17 @@ struct NavigationDetailsView: View {
                 Button { followsRider.toggle() } label: {
                     Label(followsRider ? "全程" : "跟随位置",
                           systemImage: followsRider ? "map" : "location.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 14).frame(minHeight: 48)
-                        .background(.regularMaterial, in: Capsule())
+                        .visorFont(.footnote, .semibold)
+                        .foregroundStyle(Visor.text)
+                        .padding(.horizontal, Visor.Space.s4).frame(minHeight: 48)
+                        .background(Visor.surface2, in: Capsule())
+                        .overlay(Capsule().strokeBorder(Visor.lineStrong, lineWidth: Visor.hairline))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(followsRider ? "查看全程路线" : "返回并跟随当前位置")
                 .padding(12)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 20))
+            .clipShape(RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous))
             .accessibilityIdentifier("ridingNavigationMap")
     }
 
@@ -117,37 +127,38 @@ struct NavigationDetailsView: View {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("\(Int(ceil(guidance.remainingSeconds / 60))) 分钟")
-                        .font(.title2.bold()).foregroundStyle(HudColors.lume)
+                        .visorFont(.title, .bold, mono: true).foregroundStyle(Visor.accent)
                     Text("\(navigationDistance(guidance.remainingDistanceMeters)) · 剩余")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .visorFont(.caption).foregroundStyle(Visor.textSecondary)
                 }.frame(maxWidth: .infinity, alignment: .leading)
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(Date().addingTimeInterval(guidance.remainingSeconds), style: .time)
-                        .font(.title3.weight(.semibold)).monospacedDigit()
-                    Text("预计到达").font(.caption).foregroundStyle(.secondary)
+                        .visorFont(.body, .semibold, mono: true).foregroundStyle(Visor.text)
+                    Text("预计到达").visorFont(.caption).foregroundStyle(Visor.textSecondary)
                 }
                 Button { showsSteps.toggle() } label: {
                     Image(systemName: showsSteps ? "chevron.down" : "list.bullet")
                         .frame(width: 48, height: 48)
+                        .foregroundStyle(Visor.textSecondary)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(showsSteps ? "收起路线步骤" : "展开路线步骤")
                 .accessibilityValue(showsSteps ? "已展开" : "已收起")
             }
             if showsSteps {
-                Divider()
+                VisorDivider()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         if guidance.upcomingSteps.isEmpty {
-                            Text("暂无更多路口信息，请按当前路线行驶。").foregroundStyle(.secondary)
+                            Text("暂无更多路口信息，请按当前路线行驶。").visorFont(.footnote).foregroundStyle(Visor.textSecondary)
                         }
                         ForEach(guidance.upcomingSteps) { detail in
                             HStack(alignment: .top, spacing: 12) {
-                                Image(systemName: navigationManeuverSymbol(detail.step.instruction)).frame(width: 24)
+                                Image(systemName: navigationManeuverSymbol(detail.step.instruction)).frame(width: 24).foregroundStyle(Visor.textSecondary)
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(detail.step.instruction).font(.subheadline)
+                                    Text(detail.step.instruction).visorFont(.subhead).foregroundStyle(Visor.text)
                                     Text("距当前位置 \(navigationDistance(detail.distanceMeters))")
-                                        .font(.caption).foregroundStyle(.secondary)
+                                        .visorFont(.caption, mono: true).foregroundStyle(Visor.textSecondary)
                                 }
                             }.frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -159,7 +170,8 @@ struct NavigationDetailsView: View {
         }
         .fixedSize(horizontal: false, vertical: true)
         .padding(compact ? 8 : 12)
-        .background(HudColors.panelElevated, in: RoundedRectangle(cornerRadius: 16))
+        .background(Visor.surface1, in: RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous).strokeBorder(Visor.line, lineWidth: Visor.hairline))
     }
 
     @ViewBuilder private var musicPanel: some View {

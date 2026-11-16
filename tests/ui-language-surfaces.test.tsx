@@ -1,7 +1,7 @@
 import { act } from "react";
 import { create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { HelmetVisual, VoiceStateReadout } from "../src/components/HelmetVisual";
+import { VisorVisual, VoiceStateReadout } from "../src/components/VisorVisual";
 import { LanguageProvider } from "../src/components/LanguageToggle";
 import { LoginGate } from "../src/components/LoginGate";
 
@@ -30,7 +30,7 @@ describe("translated UI surfaces", () => {
         <LanguageProvider>
           <LoginGate authEnabled registrationOpen onSignedIn={vi.fn()} />
           <VoiceStateReadout connected turnState="listening" />
-          <HelmetVisual connected listening={false} voiceLevel={0} turnState="idle" />
+          <VisorVisual connected listening={false} voiceLevel={0} turnState="idle" />
         </LanguageProvider>
       );
     });

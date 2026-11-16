@@ -4,17 +4,19 @@ import { accountsStorageHealthy, authActive, registrationOpen } from "./accounts
 import { metrics, metricsWindow, testingSnapshot } from "./metrics";
 import { userMemoryEnabled, userMemoryStorageHealthy } from "./user-memory";
 
+import { assistant, assistantSummary } from "./assistant";
+import { resolveVoiceProviderId, voiceProvider, voiceProviderSummaries } from "./providers/catalog";
 import { config } from "./runtime-config";
 export { config };
 
-function credentialStatus(): AgentHealth["credentials"] {
-  if (config.voiceProvider !== "doubao") return "not-required";
+/** True for every backend that spends a real provider's quota. */
+function usesLiveBackend(): boolean {
+  return config.voiceProvider !== "mock";
+}
 
-  const hasApiKey = Boolean(process.env.DOUBAO_API_KEY?.trim());
-  const hasLegacy = Boolean(
-    process.env.DOUBAO_APP_ID?.trim() && process.env.DOUBAO_APP_KEY?.trim() && process.env.DOUBAO_ACCESS_KEY?.trim()
-  );
-  return hasApiKey || hasLegacy ? "configured" : "missing";
+function credentialStatus(): AgentHealth["credentials"] {
+  if (!usesLiveBackend()) return "not-required";
+  return voiceProvider(config.voiceProvider).configured() ? "configured" : "missing";
 }
 
 /** "45 s" below one minute, "10 min" from there up. */
@@ -25,11 +27,16 @@ function describeDuration(ms: number): string {
 /** Human-readable summary printed on startup. */
 export function describeConfig(): string[] {
   return [
+    `Assistant: ${assistant().name} (${assistant().device})`,
     `Realtime voice provider: ${config.voiceProvider}`,
+    `Voice backends ready: ${voiceProviderSummaries()
+      .filter((entry) => entry.configured)
+      .map((entry) => entry.id)
+      .join(", ")} · per-session switching ${config.voiceProviderSwitching ? "on" : "off"}`,
     `Provider credentials: ${credentialStatus()}`,
     `Weather context: Open-Meteo best-effort + ${config.defaultWeatherLocation.source} fallback`,
     `Weather mid-ride refresh: ${config.weatherRefreshMs ? `every ${Math.round(config.weatherRefreshMs / 60000)} min` : "off"}`,
-    `Wake word ("Max"): ${config.wakeWord ? "on" : "off"}`,
+    `Wake word ("${assistant().wake.label}"): ${config.wakeWord ? "on" : "off"}`,
     `Relay auth token: ${config.relayAuthToken ? "required" : "open"}`,
     `User accounts: ${authActive() ? "active" : "none yet"} · registration ${config.authRegistration ? "open" : "closed"}`,
     `Per-user conversation memory: ${userMemoryEnabled() ? "on" : "off"}`,
@@ -52,15 +59,22 @@ export function validateConfig(): string[] {
   const warnings: string[] = [];
   const hasAccountProtection = authActive();
 
-  if (config.voiceProvider === "doubao") {
+  const requested = process.env.VOICE_PROVIDER?.trim();
+  if (requested && !resolveVoiceProviderId(requested)) {
+    warnings.push(`VOICE_PROVIDER=${requested} 不是已知的语音后端，已回退到演示模式（mock）。`);
+  }
+
+  if (usesLiveBackend()) {
     if (credentialStatus() === "missing") {
       warnings.push(
-        "VOICE_PROVIDER=doubao 但缺少 DOUBAO_API_KEY 或完整的 DOUBAO_APP_ID/APP_KEY/ACCESS_KEY：实时语音会话将无法建立。"
+        config.voiceProvider === "doubao"
+          ? "VOICE_PROVIDER=doubao 但缺少 DOUBAO_API_KEY 或完整的 DOUBAO_APP_ID/APP_KEY/ACCESS_KEY：实时语音会话将无法建立。"
+          : `VOICE_PROVIDER=${config.voiceProvider} 但缺少 ${voiceProvider(config.voiceProvider).requires}：实时语音会话将无法建立。`
       );
     }
     if (!config.relayAuthToken && !hasAccountProtection) {
       warnings.push(
-        "RELAY_AUTH_TOKEN 未设置：任何发现该地址的人都能消耗豆包配额。生产部署请设置一个随机令牌，客户端通过 ?token=… 连接。"
+        "RELAY_AUTH_TOKEN 未设置：任何发现该地址的人都能消耗语音服务配额。生产部署请设置一个随机令牌，客户端通过 ?token=… 连接。"
       );
     }
   }
@@ -75,7 +89,7 @@ export function validateConfig(): string[] {
   // shares the proxy's socket address unless X-Forwarded-For is trusted, so the
   // per-IP limiter collapses into a single global bucket that can lock everyone
   // out. Flag it when running the real backend without proxy trust enabled.
-  if (config.voiceProvider === "doubao" && !config.trustProxy) {
+  if (usesLiveBackend() && !config.trustProxy) {
     warnings.push(
       "RELAY_TRUST_PROXY=off：若本服务位于反向代理（如部署文档中的 Caddy）之后，所有客户端会被算作同一个代理 IP —— WebSocket 速率限制和 /auth 登录限制（每 IP 每分钟 " +
         `${config.authAttemptsPerMinute} 次）都会退化为全局限制并可能锁死所有人。反代后请设置 RELAY_TRUST_PROXY=on（并按需设置 RELAY_TRUSTED_PROXY_HOPS）。`
@@ -102,7 +116,7 @@ export function readinessIssues(): string[] {
   const issues: string[] = [];
   if (!accountsStorageHealthy()) issues.push("accounts-storage-unavailable");
   if (!userMemoryStorageHealthy()) issues.push("user-memory-storage-unavailable");
-  if (config.voiceProvider === "doubao" && credentialStatus() === "missing") {
+  if (usesLiveBackend() && credentialStatus() === "missing") {
     issues.push("provider-credentials-missing");
   }
   if (process.env.NODE_ENV === "production" && !config.relayAuthToken && !authActive()) {
@@ -118,6 +132,12 @@ export function buildHealth(uptimeSec: number, includeTesting = false): AgentHea
   return {
     ok: true,
     provider: config.voiceProvider,
+    assistant: assistantSummary(config.wakeWord),
+    voice: {
+      active: config.voiceProvider,
+      switching: config.voiceProviderSwitching,
+      providers: voiceProviderSummaries()
+    },
     uptimeSec,
     credentials: credentialStatus(),
     weather: "available",

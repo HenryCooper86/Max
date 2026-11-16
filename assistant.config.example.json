@@ -1,0 +1,13 @@
+{
+  "name": "Nova",
+  "device": "glasses",
+  "tagline": "Your eyes-up assistant",
+  "developer": "Your Company",
+  "accentColor": "#C6F432",
+  "languages": ["en", "zh"],
+  "strictLanguages": false,
+  "wake": {
+    "names": ["nova", "noah", "诺瓦"],
+    "falseFriends": ["诺瓦克"]
+  }
+}

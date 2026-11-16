@@ -25,6 +25,8 @@ const TRANSCRIPT_CAP = 200;
 type StoredSettings = {
   voiceGender?: VoiceGender;
   voicePersonality?: VoicePersonality;
+  /** Voice backend id from AgentHealth.voice.providers; absent = relay default. */
+  voiceProvider?: string;
   testerId?: string;
   testingCampaignId?: string;
   testingTestCaseId?: string;
@@ -58,6 +60,10 @@ export function normalizeStoredSettings(value: unknown): StoredSettings {
     VOICE_PERSONALITIES.has(value.voicePersonality as VoicePersonality)
   ) {
     settings.voicePersonality = value.voicePersonality as VoicePersonality;
+  }
+  if (typeof value.voiceProvider === "string") {
+    const voiceProvider = stripControlChars(value.voiceProvider.normalize("NFKC")).trim().slice(0, 64);
+    if (voiceProvider) settings.voiceProvider = voiceProvider;
   }
   if (typeof value.testerId === "string") {
     const testerId = stripControlChars(value.testerId.normalize("NFKC")).replace(/\s+/g, " ").trim().slice(0, 80);

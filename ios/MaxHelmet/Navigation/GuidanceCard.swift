@@ -120,10 +120,11 @@ struct GuidanceCard: View {
     var body: some View {
         content
             .padding(.vertical, guidanceCardVerticalPadding)
-            .padding(.horizontal, 14)
-            .background(HudColors.panelElevated, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .padding(.horizontal, Visor.Space.s4 - 2)
+            .background(Visor.surface1, in: RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(HudColors.border, lineWidth: 1)
+                RoundedRectangle(cornerRadius: Visor.Radius.card, style: .continuous)
+                    .strokeBorder(Visor.line, lineWidth: Visor.hairline)
             )
             .frame(maxWidth: arrangement == .stacked ? 420 : .infinity)
             .applyingGuidanceCardAccessibilityPolicy(
@@ -162,12 +163,14 @@ struct GuidanceCard: View {
     private var summaryWithConfirmation: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let id = guidance.confirmationID {
-                Text("确认目的地：\(guidance.destinationName)").font(.headline)
-                Text(etaText).font(.subheadline)
-                HStack {
-                    Button("取消") { onConfirm(id, false) }.frame(minHeight: 44)
-                    Spacer()
-                    Button("确认导航") { onConfirm(id, true) }.frame(minHeight: 44)
+                Text("确认目的地：\(guidance.destinationName)")
+                    .visorFont(.body, .semibold).foregroundStyle(Visor.text)
+                Text(etaText).visorFont(.subhead, mono: false).foregroundStyle(Visor.textSecondary)
+                HStack(spacing: Visor.Space.s2) {
+                    Button("取消") { onConfirm(id, false) }
+                        .buttonStyle(.visor(.secondary))
+                    Button("确认导航") { onConfirm(id, true) }
+                        .buttonStyle(.visor(.primary))
                 }
             } else { guidanceSummary }
         }
@@ -178,18 +181,24 @@ struct GuidanceCard: View {
         if mapHeight > 0 {
             routeMap
                 .frame(height: mapHeight)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: Visor.Radius.control, style: .continuous))
                 .overlay(alignment: .topTrailing) {
                     if guidance.confirmationID == nil {
                         Button { showingDetails = true } label: {
                             Label("导航详情", systemImage: "arrow.up.left.and.arrow.down.right")
-                                .font(.subheadline.weight(.semibold)).padding(10)
+                                .visorFont(.footnote, .semibold)
+                                .foregroundStyle(Visor.text)
+                                .padding(.horizontal, Visor.Space.s3)
+                                .frame(minHeight: Visor.hit)
                         }
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10)).padding(4)
+                        .background(Visor.surface2, in: RoundedRectangle(cornerRadius: Visor.Radius.control, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: Visor.Radius.control, style: .continuous).strokeBorder(Visor.lineStrong, lineWidth: Visor.hairline))
+                        .padding(Visor.Space.s1)
                     }
                 }
         } else if guidance.confirmationID == nil {
-            Button("打开详细导航") { showingDetails = true }.frame(minHeight: 44)
+            Button("打开详细导航") { showingDetails = true }
+                .buttonStyle(.visor(.plain, fullWidth: false))
         }
     }
 
@@ -197,27 +206,27 @@ struct GuidanceCard: View {
         VStack(alignment: .leading, spacing: 10) {
             if guidance.offRoute {
                 Text("重新规划中…")
-                    .font(.headline)
-                    .foregroundStyle(HudColors.amber)
+                    .visorFont(.body, .semibold)
+                    .foregroundStyle(Visor.warn)
             } else {
                 HStack(spacing: 12) {
                     Image(systemName: navigationManeuverSymbol(guidance.maneuverInstruction ?? ""))
                         .font(.system(size: 30, weight: .bold))
-                        .foregroundStyle(HudColors.lume)
+                        .foregroundStyle(Visor.accent)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(guidance.maneuverInstruction ?? guidance.destinationName)
-                            .font(.system(size: 20, weight: .bold))
-                            .foregroundStyle(HudColors.hudInk)
+                            .visorFont(.title, .bold)
+                            .foregroundStyle(Visor.text)
                         Text(distanceText)
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(HudColors.hudDim)
+                            .visorFont(.subhead, .semibold, mono: true)
+                            .foregroundStyle(Visor.textSecondary)
                     }
                 }
             }
 
             Text(etaText)
-                .font(.subheadline)
-                .foregroundStyle(HudColors.hudDim)
+                .visorFont(.footnote, mono: true)
+                .foregroundStyle(Visor.textSecondary)
         }
         .applyingGuidanceCardAccessibilityPolicy(
             guidanceCardAccessibilityContract.navigationSummaryChildren

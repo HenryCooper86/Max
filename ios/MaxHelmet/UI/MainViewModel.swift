@@ -155,7 +155,33 @@ final class MainViewModel: ObservableObject {
     private var companionTerminalAuthority: CompanionTerminalAuthority?
     private var authoritativeCompanionState: CompanionConnectionState = .signedOut
 
-    /// Presents the Max gallery sheet.
+    /// Branding (assistant name, device kind, accent) shared with every view.
+    /// Read-through so callers can use either the view model or the theme.
+    var theme: VisorTheme { VisorTheme.shared }
+    var assistantName: String { VisorTheme.shared.assistantName }
+    var deviceKind: DeviceKind { VisorTheme.shared.deviceKind }
+
+    /// `/health.voice` from the relay, when it advertises selectable backends.
+    @Published var voiceHealth: VoiceHealth?
+    private let healthClient = RelayHealthClient()
+    private var healthRequestGeneration = 0
+
+    /// Best-effort fetch of the relay `/health` branding and voice backends.
+    /// Silent on failure; defaults (or the last good values) stay in effect.
+    func refreshRelayHealth() {
+        healthRequestGeneration += 1
+        let generation = healthRequestGeneration
+        let url = relayURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        healthClient.fetch(relayURL: url, allowSelfSignedTls: allowSelfSigned) { [weak self] health in
+            guard let self, generation == self.healthRequestGeneration else { return }
+            VisorTheme.shared.apply(health.branding)
+            self.voiceHealth = health.voice
+        }
+    }
+
+    func setVoiceProvider(_ id: String) { session.setVoiceProvider(id) }
+
+    /// Presents the gallery sheet.
     @Published var showGallery = false
 
     /// Reads the same capture store the camera handler writes to.
@@ -1472,6 +1498,7 @@ final class MainViewModel: ObservableObject {
             session.stop()
         } else {
             pendingHandsFreeRetry = false
+            refreshRelayHealth()
             session.start(url: relayURL.trimmingCharacters(in: .whitespacesAndNewlines),
                           authToken: effectiveToken,
                           allowSelfSignedTls: allowSelfSigned,

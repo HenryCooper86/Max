@@ -1,6 +1,5 @@
 import "dotenv/config";
-
-type VoiceProvider = "mock" | "doubao";
+import { resolveVoiceProviderId, type VoiceProviderId } from "./providers/catalog";
 type WeatherLocation = {
   lat: number;
   lon: number;
@@ -20,7 +19,13 @@ export const config = {
   // Bounded like every other numeric env var: PORT="" would otherwise become 0
   // (bind a random ephemeral port) and a typo would crash listen() with NaN.
   port: resolveBoundedInt(process.env.PORT, 8787, 1, 65_535),
-  voiceProvider: (process.env.VOICE_PROVIDER === "doubao" ? "doubao" : "mock") as VoiceProvider,
+  // Any id from server/providers/catalog.ts. An unknown value falls back to the
+  // keyless demo rather than failing startup; validateConfig() says so.
+  voiceProvider: (resolveVoiceProviderId(process.env.VOICE_PROVIDER) ?? "mock") as VoiceProviderId,
+  // Lets a client pick, per session, any backend that has credentials
+  // (session.start.voiceProvider). Set VOICE_PROVIDER_SWITCHING=off to pin
+  // every session to VOICE_PROVIDER.
+  voiceProviderSwitching: process.env.VOICE_PROVIDER_SWITCHING?.trim().toLowerCase() !== "off",
   defaultWeatherLocation: resolveDefaultWeatherLocation(),
   // When on, the live agent only replies when the rider addresses it by name
   // ("Max"); set AGENT_WAKE_WORD=off to make it answer every utterance again.

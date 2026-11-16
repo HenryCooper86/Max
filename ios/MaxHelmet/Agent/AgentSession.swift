@@ -27,6 +27,9 @@ final class AgentSession: NSObject, ObservableObject {
         var voiceGender: VoiceGender = .female
         var voicePersonality: VoicePersonality = .concise
         var voiceLevel: Float = 0
+        /// Voice backend id the rider picked (relay `/health.voice.providers`),
+        /// sent as `voiceProvider` in session.start. Nil = relay default.
+        var voiceProvider: String? = UserDefaults.standard.string(forKey: "voice_provider")
         var latencyMs = 0
         var transcript: [TranscriptItem] = []
         var weather: Weather? = nil
@@ -682,6 +685,17 @@ final class AgentSession: NSObject, ObservableObject {
         restartIfConnected()
     }
 
+    static let voiceProviderDefaultsKey = "voice_provider"
+
+    /// Switches the relay's voice backend. Like the voice gender, it is fixed at
+    /// session.start, so a live session reconnects to pick it up.
+    func setVoiceProvider(_ id: String) {
+        guard !id.isEmpty, state.value.voiceProvider != id else { return }
+        UserDefaults.standard.set(id, forKey: Self.voiceProviderDefaultsKey)
+        update { $0.voiceProvider = id }
+        restartIfConnected()
+    }
+
     func setVoicePersonality(_ personality: VoicePersonality) {
         guard state.value.voicePersonality != personality else { return }
         update {
@@ -922,7 +936,8 @@ final class AgentSession: NSObject, ObservableObject {
             deviceLabel: nativeDeviceLabel(),
             browserLanguage: nativeBrowserLanguage(),
             networkType: nativeNetworkType(),
-            memory: current.sessionMemory
+            memory: current.sessionMemory,
+            voiceProvider: current.voiceProvider
         ))) { _ in }
         // The guided tour lives in the provider instance, so a fresh session
         // must be told about it again (mirrors the web client's open handler).

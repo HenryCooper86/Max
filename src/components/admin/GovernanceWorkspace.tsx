@@ -663,7 +663,6 @@ function PolicyWorkbenchView({ user, data }: Omit<Props, "view">) {
     >
       <div className="controlPlaneHead adminSectionHeader">
         <div>
-          <span>MAX QA · {localized(language, "策略", "Policy")}</span>
           <strong>{localized(language, "发布策略", "Publish policy")}</strong>
         </div>
       </div>
@@ -1028,7 +1027,6 @@ function AuditTrailView({ user, data }: Omit<Props, "view">) {
     <section className="testingControlPlane adminSectionCard" aria-label={localized(language, "审计日志", "Audit log")}>
       <div className="controlPlaneHead adminSectionHeader">
         <div>
-          <span>MAX ADMIN · {localized(language, "审计", "Audit")}</span>
           <strong>{localized(language, "审计日志", "Audit log")}</strong>
         </div>
       </div>

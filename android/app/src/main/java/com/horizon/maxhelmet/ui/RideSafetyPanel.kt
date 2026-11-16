@@ -15,61 +15,97 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.horizon.maxhelmet.BuildConfig
 import com.horizon.maxhelmet.crash.*
-import com.horizon.maxhelmet.ui.theme.HudColors
+import com.horizon.maxhelmet.ui.theme.Visor
+import com.horizon.maxhelmet.ui.theme.VisorType
 
 @Composable
 internal fun RideSafetySettings(vm: MainViewModel) {
+    val c = Visor.colors
     val companion by vm.companion.state.collectAsStateWithLifecycle()
     val tokens by vm.helmetDiscovery.tokens.collectAsStateWithLifecycle()
     var code by remember { mutableStateOf("") }
     var scanning by remember { mutableStateOf(false) }
     var unpair by remember { mutableStateOf(false) }
     DisposableEffect(Unit) { onDispose { vm.helmetDiscovery.stop() } }
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("RDK 头盔骑行", color = HudColors.Text)
-        Text(when (companion.status) {
-            "signedOut" -> if (vm.isLoggedIn) "尚未连接头盔" else "登录后可配对头盔"
-            "connecting" -> "正在连接 / 等待头盔确认"
-            "unpaired" -> "未配对"
-            "paired" -> "已配对"
-            "helmetOffline" -> "头盔离线"
-            "ready" -> "头盔已就绪"
-            "sharing" -> "正在共享位置（${companion.fixes} 次）"
-            else -> companion.detail ?: "连接失败"
-        }, color = HudColors.Text)
-        Text("仅开始头盔骑行后共享精确位置；停止、退出账号或连接失败后停止。手机免提与头盔骑行分别使用。", color = HudColors.Muted)
-        OutlinedTextField(code, { code = it.take(120) }, label = { Text("头盔配对码") }, singleLine = true)
-        Row {
-            TextButton(onClick = { vm.pairHelmet(code) }, enabled = vm.isLoggedIn && !companion.riding) { Text("配对") }
-            TextButton(onClick = { scanning = !scanning; if (scanning) vm.helmetDiscovery.start() else vm.helmetDiscovery.stop() }, enabled = vm.isLoggedIn) { Text(if (scanning) "停止搜索" else "搜索附近头盔") }
+    SettingsGroup("RDK 头盔骑行") {
+        SettingsRow(
+            title = when (companion.status) {
+                "signedOut" -> if (vm.isLoggedIn) "尚未连接头盔" else "登录后可配对头盔"
+                "connecting" -> "正在连接 / 等待头盔确认"
+                "unpaired" -> "未配对"
+                "paired" -> "已配对"
+                "helmetOffline" -> "头盔离线"
+                "ready" -> "头盔已就绪"
+                "sharing" -> "正在共享位置"
+                else -> companion.detail ?: "连接失败"
+            },
+            supporting = "仅开始头盔骑行后共享精确位置；停止、退出账号或连接失败后停止。手机免提与头盔骑行分别使用。"
+        ) {
+            if (companion.status == "sharing") Text("${companion.fixes} 次", color = c.textSecondary, style = VisorType.mono)
         }
-        tokens.forEachIndexed { index, token -> TextButton(onClick = { vm.pairHelmet(token, true) }, enabled = !companion.riding) { Text("配对附近头盔 ${index + 1}") } }
-        if (scanning) Text("手机与头盔需在同一网络。选择后，对头盔说“确认配对”。也可以输入配对码。", color = HudColors.Muted)
-        Row {
-            TextButton(onClick = { if (companion.riding) vm.companion.stopRide() else vm.startHelmetRide() }, enabled = vm.isLoggedIn) { Text(if (companion.riding) "停止头盔骑行" else "开始头盔骑行") }
-            TextButton(onClick = { unpair = true }, enabled = vm.isLoggedIn) { Text("解除配对") }
+        SettingsBlock { VisorTextField(code, { code = it.take(120) }, "头盔配对码", mono = true) }
+        SettingsRow("配对", enabled = vm.isLoggedIn && !companion.riding, onClick = { vm.pairHelmet(code) }) { ChevronIcon() }
+        SettingsRow(
+            if (scanning) "停止搜索" else "搜索附近头盔",
+            enabled = vm.isLoggedIn,
+            onClick = { scanning = !scanning; if (scanning) vm.helmetDiscovery.start() else vm.helmetDiscovery.stop() }
+        ) { ChevronIcon() }
+        tokens.forEachIndexed { index, token ->
+            SettingsRow("配对附近头盔 ${index + 1}", enabled = !companion.riding, onClick = { vm.pairHelmet(token, true) }) { ChevronIcon() }
         }
-        HorizontalDivider()
-        Text("摔车检测与求助", color = HudColors.Text)
-        Text(if (vm.crash.available) "手机免提期间检测；疑似摔车后先询问，再报警。" else "本机缺少所需运动传感器，无法自动检测摔车。", color = HudColors.Muted)
-        var config by remember { mutableStateOf(vm.crash.settings) }
-        OutlinedTextField(config.contact, { value -> config = config.copy(contact = value.take(24), optIn = false); vm.crash.settings = config }, label = { Text("紧急联系人电话（含国家区号）") }, singleLine = true)
-        Row { Text("允许中继通知该联系人", Modifier.weight(1f), color = HudColors.Text)
-            Switch(config.optIn, { config = config.copy(optIn = it); vm.crash.settings = config }, enabled = CrashController.validContact(config.contact)) }
-        Text("通知会包含事故位置（如可用）。未收到服务器确认时，需手动拨打求助电话。", color = HudColors.Muted)
-        Row {
-            FilterChip(config.callContact, { config = config.copy(callContact = true); vm.crash.settings = config }, label = { Text("拨打联系人") })
-            FilterChip(!config.callContact, { config = config.copy(callContact = false); vm.crash.settings = config }, label = { Text("拨打 120") })
+        if (scanning) SettingsBlock {
+            Text("手机与头盔需在同一网络。选择后，对头盔说“确认配对”。也可以输入配对码。", color = c.textSecondary, style = VisorType.caption)
+        }
+        SettingsRow(
+            if (companion.riding) "停止头盔骑行" else "开始头盔骑行",
+            enabled = vm.isLoggedIn,
+            onClick = { if (companion.riding) vm.companion.stopRide() else vm.startHelmetRide() }
+        ) { ChevronIcon() }
+        SettingsRow("解除配对", titleColor = c.danger, enabled = vm.isLoggedIn, onClick = { unpair = true }) { ChevronIcon() }
+    }
+
+    var config by remember { mutableStateOf(vm.crash.settings) }
+    SettingsGroup(
+        "摔车检测与求助",
+        footer = "通知会包含事故位置（如可用）。未收到服务器确认时，需手动拨打求助电话。"
+    ) {
+        SettingsBlock {
+            Text(
+                if (vm.crash.available) "手机免提期间检测；疑似摔车后先询问，再报警。" else "本机缺少所需运动传感器，无法自动检测摔车。",
+                color = c.textSecondary, style = VisorType.caption
+            )
+            VisorTextField(
+                config.contact,
+                { value -> config = config.copy(contact = value.take(24), optIn = false); vm.crash.settings = config },
+                "紧急联系人电话（含国家区号）", mono = true
+            )
+        }
+        SettingsSwitchRow(
+            "允许中继通知该联系人", config.optIn,
+            { config = config.copy(optIn = it); vm.crash.settings = config },
+            enabled = CrashController.validContact(config.contact)
+        )
+        SettingsRow("求助电话") {
+            SegmentedControl(
+                listOf(true, false), config.callContact,
+                { if (it) "联系人" else "120" },
+                { config = config.copy(callContact = it); vm.crash.settings = config }
+            )
         }
         if (BuildConfig.DEBUG && vm.devMode) {
-            Row { Text("仅记录检测（不报警）", Modifier.weight(1f), color = HudColors.Text); Switch(config.logOnly, { config = config.copy(logOnly = it); vm.crash.settings = config }) }
-            TextButton(onClick = { vm.crash.controller.simulate() }, enabled = vm.sessionState.value.handsFree) { Text("本地摔车演练（不通知联系人）") }
+            SettingsSwitchRow("仅记录检测（不报警）", config.logOnly, { config = config.copy(logOnly = it); vm.crash.settings = config })
+            SettingsRow(
+                "本地摔车演练（不通知联系人）",
+                enabled = vm.sessionState.value.handsFree,
+                onClick = { vm.crash.controller.simulate() }
+            ) { ChevronIcon() }
         }
     }
-    if (unpair) AlertDialog(onDismissRequest = { unpair = false }, title = { Text("解除头盔配对？") },
-        text = { Text("将停止位置共享，并解除账号与头盔的绑定。") },
-        confirmButton = { TextButton(onClick = { unpair = false; vm.unpairHelmet() }) { Text("解除配对") } },
-        dismissButton = { TextButton(onClick = { unpair = false }) { Text("取消") } })
+    if (unpair) VisorAlertDialog(
+        onDismissRequest = { unpair = false }, title = "解除头盔配对？",
+        text = { DialogText("将停止位置共享，并解除账号与头盔的绑定。") },
+        confirmButton = { VisorButton("解除配对", { unpair = false; vm.unpairHelmet() }, style = VisorButtonStyle.DANGER) },
+        dismissButton = { VisorButton("取消", { unpair = false }, style = VisorButtonStyle.GHOST) })
 }
 
 @Composable
@@ -80,17 +116,17 @@ internal fun CrashOverlay(vm: MainViewModel) {
     val context = LocalContext.current
     val insets = WindowInsets.safeDrawing.asPaddingValues()
     Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false, dismissOnBackPress = false, dismissOnClickOutside = false)) {
-        Surface(Modifier.fillMaxSize(), color = HudColors.Void) {
+        Surface(Modifier.fillMaxSize(), color = Visor.colors.bg) {
             Column(Modifier.fillMaxSize().padding(insets).padding(24.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                Text(if (state.phase == CrashPhase.CHECK_IN) "你还好吗？" else "疑似摔车 · 求助", style = MaterialTheme.typography.headlineLarge, color = HudColors.Red)
-                if (state.phase != CrashPhase.ESCALATED) Text("${state.remaining} 秒", style = MaterialTheme.typography.displayLarge, color = HudColors.Text)
-                Text(state.message ?: if (state.phase == CrashPhase.CHECK_IN) "没事请说“我没事”，或点击下方按钮。" else "正在报警；倒计时结束后请求中继通知。", color = HudColors.Text)
-                state.coordinate?.let { Text(it, color = HudColors.Text) }
-                Button(onClick = { vm.crash.controller.cancel() }, modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp)) { Text("我没事 · 取消报警") }
-                if (session.handsFree) TextButton(onClick = { vm.toggleHandsFree() }) { Text("结束免提（保持报警）") }
+                Text(if (state.phase == CrashPhase.CHECK_IN) "你还好吗？" else "疑似摔车 · 求助", style = VisorType.headline, color = Visor.colors.danger)
+                if (state.phase != CrashPhase.ESCALATED) Text("${state.remaining} 秒", style = VisorType.display.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace), color = Visor.colors.text)
+                Text(state.message ?: if (state.phase == CrashPhase.CHECK_IN) "没事请说“我没事”，或点击下方按钮。" else "正在报警；倒计时结束后请求中继通知。", color = Visor.colors.text, style = VisorType.body)
+                state.coordinate?.let { Text(it, color = Visor.colors.textSecondary, style = VisorType.mono) }
+                VisorButton("我没事 · 取消报警", { vm.crash.controller.cancel() }, modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp), style = VisorButtonStyle.PRIMARY)
+                if (session.handsFree) VisorButton("结束免提（保持报警）", { vm.toggleHandsFree() }, style = VisorButtonStyle.GHOST, modifier = Modifier.fillMaxWidth())
                 val config = vm.crash.settings
                 val number = if (config.callContact) config.contact.trim().takeIf(CrashController::validContact) else "120"
-                Button(onClick = { if (number != null) runCatching { context.startActivity(Intent(Intent.ACTION_DIAL, Uri.fromParts("tel", number, null))) } }, enabled = number != null, modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp)) { Text(if (config.callContact) "打开联系人拨号" else "打开 120 拨号") }
+                VisorButton(if (config.callContact) "打开联系人拨号" else "打开 120 拨号", { if (number != null) runCatching { context.startActivity(Intent(Intent.ACTION_DIAL, Uri.fromParts("tel", number, null))) } }, enabled = number != null, modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp), style = VisorButtonStyle.DANGER)
             }
         }
     }

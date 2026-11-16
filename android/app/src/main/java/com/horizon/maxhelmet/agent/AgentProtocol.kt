@@ -483,7 +483,8 @@ fun buildSessionStart(
     deviceLabel: String? = null,
     browserLanguage: String? = null,
     networkType: String? = null,
-    memory: SessionMemory? = null
+    memory: SessionMemory? = null,
+    voiceProvider: String? = null
 ): String =
     JSONObject().apply {
         put("type", "session.start")
@@ -493,6 +494,7 @@ fun buildSessionStart(
         put("voicePersonality", voicePersonality.wire)
         put("rideMode", rideMode.wire)
         put("scenario", scenario.wire)
+        voiceProvider?.takeIf { it.isNotBlank() }?.let { put("voiceProvider", it) }
         testerId?.takeIf { it.isNotBlank() }?.let { put("testerId", it) }
         testerRegion?.takeIf { it.isNotBlank() }?.let { put("testerRegion", it) }
         put("testingCampaignId", testingCampaignId)

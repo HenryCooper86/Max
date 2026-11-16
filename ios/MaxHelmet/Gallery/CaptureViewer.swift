@@ -14,22 +14,25 @@ struct CaptureViewer: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                HudColors.void.ignoresSafeArea()
+                Visor.bg.ignoresSafeArea()
                 if capture.type == .video {
                     VideoPlayer(player: AVPlayer(url: model.fileURL(for: capture)))
                 } else if let image = UIImage(contentsOfFile: model.fileURL(for: capture).path) {
                     Image(uiImage: image).resizable().scaledToFit()
                 } else {
-                    Text("无法打开").foregroundStyle(HudColors.hudDim)
+                    Text("无法打开").visorFont(.subhead).foregroundStyle(Visor.textSecondary)
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Visor.bg, for: .bottomBar)
+            .toolbarBackground(.visible, for: .bottomBar)
             .toolbar {
                 ToolbarItem(placement: .bottomBar) {
                     if model.exporting.contains(capture.id) {
                         ProgressView()
                     } else if capture.exported {
                         Label("已导出", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(Visor.ok)
                     } else {
                         Button { Task { await model.export(capture) } } label: {
                             Label("导出到相册", systemImage: "square.and.arrow.up")
@@ -50,5 +53,8 @@ struct CaptureViewer: View {
                 Button("取消", role: .cancel) {}
             }
         }
+        .tint(Visor.accent)
+        .presentationBackground(Visor.bg)
+        .presentationCornerRadius(Visor.Radius.sheet)
     }
 }

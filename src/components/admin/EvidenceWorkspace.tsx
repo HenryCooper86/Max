@@ -12,6 +12,7 @@ import {
   type TestingTestCase
 } from "../../../shared/testing";
 import type { HelmetAgent } from "../../hooks/useHelmetAgent";
+import { useAssistant } from "../AssistantContext";
 import { useLanguage } from "../LanguageToggle";
 import { localized, type Language } from "../../lib/i18n";
 import type { AuthUser } from "../../lib/auth";
@@ -386,6 +387,7 @@ export function EvidenceWorkspace({
   technical = false
 }: Props) {
   const { language } = useLanguage();
+  const assistantName = useAssistant().name;
   const location = useWorkspaceLocation();
   const [query, setQuery] = useState("");
   const [testerIdFilter, setTesterIdFilter] = useState("");
@@ -2115,7 +2117,9 @@ export function EvidenceWorkspace({
                           key={`${turn.sessionId}-${turn.at}-${turn.speaker}-${index}`}
                         >
                           <div>
-                            <strong>{turn.speaker === "rider" ? localized(language, "骑手", "Rider") : "Max"}</strong>
+                            <strong>
+                              {turn.speaker === "rider" ? localized(language, "骑手", "Rider") : assistantName}
+                            </strong>
                             <span>
                               {formatClockTime(turn.at)} ·{" "}
                               {turn.final ? localized(language, "最终", "Final") : localized(language, "实时", "Live")}
@@ -2690,7 +2694,9 @@ export function EvidenceWorkspace({
                       key={`${turn.sessionId}-${turn.at}-${turn.speaker}-${index}`}
                     >
                       <div>
-                        <strong>{turn.speaker === "rider" ? localized(language, "骑手", "Rider") : "Max"}</strong>
+                        <strong>
+                          {turn.speaker === "rider" ? localized(language, "骑手", "Rider") : assistantName}
+                        </strong>
                         <span>
                           {formatClockTime(turn.at)} ·{" "}
                           {turn.final ? localized(language, "最终", "Final") : localized(language, "实时", "Live")}

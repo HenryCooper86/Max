@@ -81,7 +81,7 @@ class VoiceAgentService : Service() {
             PendingIntent.FLAG_IMMUTABLE
         )
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle(getString(R.string.notification_title))
+            .setContentTitle(getString(R.string.notification_title, com.horizon.maxhelmet.ui.AssistantBranding.name))
             .setContentText(getString(R.string.notification_text))
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentIntent(openApp)

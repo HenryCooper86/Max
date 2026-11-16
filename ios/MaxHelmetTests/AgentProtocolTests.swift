@@ -222,3 +222,39 @@ final class AgentProtocolTests: XCTestCase {
         XCTAssertEqual(command.action, .navigationStop)
     }
 }
+
+final class VoiceProviderProtocolTests: XCTestCase {
+    private func start(voiceProvider: String?) -> [String: Any] {
+        let json = buildSessionStart(
+            voiceGender: .female, voicePersonality: .concise, rideMode: .ride,
+            scenario: .commute, lat: nil, lon: nil, voiceProvider: voiceProvider
+        )
+        return (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] ?? [:]
+    }
+
+    func testVoiceProviderIsOmittedWhenNilAndSentWhenSet() {
+        XCTAssertNil(start(voiceProvider: nil)["voiceProvider"])
+        XCTAssertEqual(start(voiceProvider: "openai")["voiceProvider"] as? String, "openai")
+    }
+
+    func testHealthParsesBrandingAndVoice() {
+        let json = """
+        {"assistant":{"name":"Nova","device":"glasses","wakePhrase":"hey nova","accentColor":"#112233"},
+         "voice":{"active":"mock","switching":true,"providers":[
+           {"id":"mock","label":"Demo","kind":"demo","configured":true},
+           {"id":"openai","label":"OpenAI","kind":"live","configured":false,"description":"d"}]}}
+        """
+        let health = RelayHealthClient.parse(data: Data(json.utf8))
+        XCTAssertEqual(health?.branding.name, "Nova")
+        XCTAssertEqual(health?.voice?.providers.count, 2)
+        XCTAssertEqual(health?.voice?.providers[1].configured, false)
+        XCTAssertEqual(health?.voice?.activeLabel, "Demo")
+        let theme = VisorTheme()
+        theme.apply(health!.branding)
+        XCTAssertEqual(theme.assistantName, "Nova")
+        XCTAssertEqual(theme.deviceKind, .glasses)
+        XCTAssertEqual(theme.wakePhrase, "hey nova")
+        XCTAssertEqual(VisorTheme.parseHex("#112233"), 0x112233)
+        XCTAssertNil(VisorTheme.parseHex("nope"))
+    }
+}

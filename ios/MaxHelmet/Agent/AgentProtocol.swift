@@ -616,7 +616,8 @@ func buildSessionStart(
     deviceLabel: String? = nil,
     browserLanguage: String? = nil,
     networkType: String? = nil,
-    memory: SessionMemory? = nil
+    memory: SessionMemory? = nil,
+    voiceProvider: String? = nil
 ) -> String {
     var payload: [String: Any] = [
         "type": "session.start",
@@ -629,6 +630,7 @@ func buildSessionStart(
         "testingCampaignId": testingCampaignId,
         "testingTestCaseId": testingTestCaseId
     ]
+    if let voiceProvider, !voiceProvider.isEmpty { payload["voiceProvider"] = voiceProvider }
     if let testerId, !testerId.isEmpty { payload["testerId"] = testerId }
     if let testerRegion, !testerRegion.isEmpty { payload["testerRegion"] = testerRegion }
     if let testingRunId, !testingRunId.isEmpty { payload["testingRunId"] = testingRunId }

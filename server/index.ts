@@ -73,8 +73,7 @@ import {
   type TestingReviewStatus,
   type TestingValidityStatus
 } from "../shared/testing";
-import { createDoubaoProvider } from "./providers/doubao";
-import { createMockProvider } from "./providers/mock";
+import { chooseVoiceProvider, createSelectableProvider, createVoiceProvider } from "./providers/factory";
 import type { AgentProvider, ProviderTelemetry } from "./providers/types";
 import { AgentSessionController } from "./session-controller";
 import { markClientActivity, startWatchdog, trackClient } from "./watchdog";
@@ -771,10 +770,14 @@ server.on("upgrade", (request, socket, head) => {
 });
 
 function selectProvider(client: WebSocket, sessionLog: Logger, telemetry: ProviderTelemetry): AgentProvider {
-  if (config.voiceProvider === "doubao") {
-    return createDoubaoProvider(client, sessionLog, telemetry);
-  }
-  return createMockProvider(client, telemetry);
+  return createSelectableProvider((requested) => {
+    const id = chooseVoiceProvider(requested, {
+      fallback: config.voiceProvider,
+      switching: config.voiceProviderSwitching
+    });
+    if (id !== config.voiceProvider) sessionLog.info("session picked its own voice backend", { provider: id });
+    return createVoiceProvider(id, client, sessionLog, telemetry);
+  });
 }
 
 wss.on("connection", (client, request) => {

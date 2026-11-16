@@ -1,9 +1,10 @@
 import { MusicPlaybackCard } from "./components/MusicPlaybackCard";
 import { ArrowBendUpRight, ChatCircleText, GearSix, Microphone, NavigationArrow, X } from "@phosphor-icons/react";
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { adasDirectionLabel } from "../shared/adas";
 import { combineHazardLevels } from "../shared/ride";
-import { HelmetVisual, VoiceStateReadout } from "./components/HelmetVisual";
+import { AssistantProvider } from "./components/AssistantContext";
+import { VisorMark, VisorVisual, VoiceStateReadout } from "./components/VisorVisual";
 import { LoginGate } from "./components/LoginGate";
 import { NavigationPanel } from "./components/NavigationPanel";
 import { VoiceTranscript } from "./components/VoiceTranscript";
@@ -18,7 +19,8 @@ import {
 import { useAmapConsent } from "./hooks/useAmapConsent";
 import { useHelmetAgent } from "./hooks/useHelmetAgent";
 import { fetchCurrentUser, type AuthUser } from "./lib/auth";
-import { localized } from "./lib/i18n";
+import { applyAccent, resolveAssistant } from "./lib/assistant";
+import { deviceCopyKey, localized } from "./lib/i18n";
 import { voiceFaceClassName } from "./lib/voice-shell";
 
 const OperationsWorkspace = lazy(() =>
@@ -200,19 +202,31 @@ function AppContent() {
     return () => window.removeEventListener("keydown", toggleHandsFree);
   }, [authUser, surface, toggleHandsFreeSession]);
 
+  // Branding from the relay (/health → assistant). Keyed on the serialised
+  // summary so the 5 s health poll does not churn the identity object.
+  const assistantKey = JSON.stringify(agent.health?.assistant ?? null);
+  const assistant = useMemo(() => resolveAssistant(JSON.parse(assistantKey)), [assistantKey]);
+  useEffect(() => {
+    document.title = assistant.name;
+  }, [assistant.name]);
+  useEffect(() => {
+    applyAccent(document.documentElement, assistant.accentColor);
+  }, [assistant.accentColor]);
+  const branded = (node: ReactNode) => <AssistantProvider value={assistant}>{node}</AssistantProvider>;
+
   const fusedHazard = combineHazardLevels(agent.rideContext.hazardLevel, agent.weather?.riskLevel ?? "normal");
-  const showRidePanels = agent.navState.phase !== "idle" || agent.musicState.visible;
+  const showRidePanels = agent.navState.phase !== "idle" || agent.musicState.visible || captionsOpen;
   const sessionInactive = !agent.connected && !listening && !starting;
   const authKnown = agent.health !== null;
   const authEnabled = agent.health?.auth?.enabled ?? false;
   const registrationOpen = agent.health?.auth?.registrationOpen ?? true;
 
   if (!authChecked || (!authUser && !authKnown && !healthTimedOut)) {
-    return <main className="shell loginShell" aria-busy="true" />;
+    return <main className="loginShell" aria-busy="true" />;
   }
 
   if (!authUser) {
-    return (
+    return branded(
       <LoginGate
         authEnabled={authKnown ? authEnabled : true}
         registrationOpen={registrationOpen}
@@ -222,11 +236,14 @@ function AppContent() {
   }
 
   if (surface === "admin" || surface === "testing") {
-    return (
+    return branded(
       <Suspense
         fallback={
-          <main className="adminWorkspace adminWorkspaceLoading">
-            {localized(language, "正在加载工作区…", "Loading workspace…")}
+          <main className="adminWorkspace workspaceBoot" aria-busy="true">
+            <div className="workspaceBootStatus" role="status">
+              <span className="workspaceSpinner" aria-hidden="true" />
+              {localized(language, "正在加载工作区…", "Loading workspace…")}
+            </div>
           </main>
         }
       >
@@ -240,18 +257,23 @@ function AppContent() {
     );
   }
 
-  return (
+  const sessionPhase = starting ? "starting" : sessionInactive ? "inactive" : undefined;
+  const micLive = listening || starting;
+
+  return branded(
     <main className="voiceShell">
       <section
-        className={`${voiceFaceClassName({ captionsOpen, navigationVisible: agent.navState.phase !== "idle" })} ${showRidePanels ? "voiceWithPanels" : ""}`}
-        aria-label={localized(language, "MAX 头盔语音助手", "MAX helmet voice assistant")}
+        className={`${voiceFaceClassName({ captionsOpen, navigationVisible: agent.navState.phase !== "idle" })}${showRidePanels ? " voiceWithPanels" : ""}`}
+        aria-label={t(deviceCopyKey("voice.assistantLabel", assistant.device), { name: assistant.name })}
       >
-        <header className={`voiceTopbar ${agent.connected ? "online" : sessionInactive ? "inactive" : "offline"}`}>
+        <header
+          className={`voiceTopbar ${agent.connected ? "online" : starting ? "starting" : sessionInactive ? "inactive" : "offline"}`}
+        >
           <div className="voiceBrand">
-            <span className="voiceBrandDot" aria-hidden="true" />
-            <span className="voiceWordmark">MAX</span>
+            <VisorMark />
+            <span className="voiceWordmark">{assistant.name}</span>
           </div>
-          <div className="voiceRelay">
+          <div className="voiceRelay" role="status">
             <span className="voiceRelayDot" aria-hidden="true" />
             {agent.connected
               ? t("voice.sessionConnected")
@@ -277,12 +299,13 @@ function AppContent() {
         ) : null}
 
         <div className="voiceHero">
-          <HelmetVisual
+          <VisorVisual
             connected={agent.connected}
             listening={agent.listening}
             voiceLevel={agent.voiceLevel}
             turnState={agent.turnState}
             hazardLevel={fusedHazard}
+            sessionState={sessionPhase}
           />
         </div>
 
@@ -290,7 +313,7 @@ function AppContent() {
           connected={agent.connected}
           turnState={agent.turnState}
           hazardLevel={fusedHazard}
-          sessionState={starting ? "starting" : sessionInactive ? "inactive" : undefined}
+          sessionState={sessionPhase}
         />
 
         {showRidePanels ? (
@@ -306,8 +329,6 @@ function AppContent() {
             {agent.musicState.visible ? <MusicPlaybackCard agent={agent} /> : null}
             {captionsOpen ? <VoiceTranscript agent={agent} /> : null}
           </div>
-        ) : captionsOpen ? (
-          <VoiceTranscript agent={agent} />
         ) : null}
 
         <nav className="voiceUtilities" aria-label={t("voice.viewLabel")}>
@@ -317,23 +338,23 @@ function AppContent() {
             aria-pressed={captionsOpen}
             onClick={() => setCaptionsOpen((open) => !open)}
           >
-            <ChatCircleText size={20} weight="regular" aria-hidden="true" />
+            <ChatCircleText size={18} weight="regular" aria-hidden="true" />
             {t("voice.captions")}
           </button>
           {agent.provider === "mock" ? (
             <button type="button" onClick={() => agent.startNavDemo(false)}>
-              <NavigationArrow size={20} weight="regular" aria-hidden="true" />
+              <NavigationArrow size={18} weight="regular" aria-hidden="true" />
               {localized(language, "演示导航", "Demo navigate")}
             </button>
           ) : null}
           {agent.provider === "mock" ? (
             <button type="button" onClick={() => agent.startNavDemo(true)}>
-              <ArrowBendUpRight size={20} weight="regular" aria-hidden="true" />
+              <ArrowBendUpRight size={18} weight="regular" aria-hidden="true" />
               {localized(language, "演示偏航", "Demo detour")}
             </button>
           ) : null}
           <button ref={settingsButtonRef} type="button" onClick={openSettings} aria-haspopup="dialog">
-            <GearSix size={20} weight="regular" aria-hidden="true" />
+            <GearSix size={18} weight="regular" aria-hidden="true" />
             {t("voice.settings")}
           </button>
         </nav>
@@ -341,18 +362,27 @@ function AppContent() {
         <div className="voicePrimaryControls">
           <button
             type="button"
-            className={`voiceMicButton ${listening || starting ? "active" : ""}`}
-            aria-pressed={listening || starting}
+            className={`voiceMicButton${micLive ? " active" : ""}${starting ? " starting" : ""}`}
+            aria-pressed={micLive}
             aria-label={
               starting ? t("voice.connecting") : listening ? t("voice.stopHandsFree") : t("voice.startHandsFree")
             }
             onClick={toggleHandsFreeSession}
           >
             <span className="voiceMicKey" aria-hidden="true">
-              {listening || starting ? <X size={24} weight="bold" /> : <Microphone size={25} weight="regular" />}
+              {micLive ? <X size={22} weight="bold" /> : <Microphone size={24} weight="fill" />}
             </span>
-            <span className="voiceMicLabel">
-              {starting ? t("voice.connectingShort") : listening ? t("voice.stopHandsFree") : t("voice.startHandsFree")}
+            <span className="voiceMicText">
+              <span className="voiceMicLabel">
+                {starting
+                  ? t("voice.connectingShort")
+                  : listening
+                    ? t("voice.stopHandsFree")
+                    : t("voice.startHandsFree")}
+              </span>
+              <span className="voiceMicState">
+                {starting ? t("voice.setupShort") : listening ? t("voice.micLive") : t("voice.micOff")}
+              </span>
             </span>
             <kbd aria-hidden="true">{t("voice.spaceKey")}</kbd>
           </button>

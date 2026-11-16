@@ -4,8 +4,10 @@
 // it). Detection runs server-side on the rider ASR transcript — the live Doubao
 // path can't pre-filter raw audio because ASR happens inside Doubao.
 
-/** What the rider says to address the agent. Shown in HUD hints. */
-export const WAKE_PHRASE_LABEL = "Max";
+/** What the rider says to address the agent. Shown in HUD hints. This is the
+ *  built-in default; a relay with its own assistant profile reports the real
+ *  phrase through `/health` (AgentHealth.assistant.wakePhrase). */
+const WAKE_PHRASE_LABEL = "Max";
 
 /**
  * After the rider addresses Max, follow-up utterances within this window count
@@ -24,33 +26,39 @@ export const WAKE_FOLLOWUP_WINDOW_MS = 12_000;
  */
 export const WAKE_FOLLOWUP_MAX_CHAIN_MS = 60_000;
 
-// Optional greeting tokens that may precede the name (English + common Chinese),
-// and name variants covering frequent ASR mishearings of "Max". The Chinese
-// renderings are kept separate: Chinese ASR output has no spaces, so they must
-// match inside a Han run ("麦克斯今天天气") where a token boundary never appears.
+// Optional greeting tokens that may precede the name (English + common Chinese).
 const GREETINGS = ["hey", "hi", "hiya", "hello", "yo", "ok", "okay", "嘿", "嗨", "喂", "你好", "哈喽", "哈罗"];
+
+/** The names an assistant answers to, split by how they have to be matched. */
+export type WakeNames = {
+  /** Shown to the wearer ("say Max"). */
+  label: string;
+  /** Latin-script names and their frequent ASR mishearings, lowercase. Matched
+   *  as whole tokens. */
+  latin: string[];
+  /** Han renderings of the name. Matched anywhere: Chinese ASR output has no
+   *  spaces, so a token boundary never appears ("麦克斯今天天气"). */
+  cjk: string[];
+  /** Common words that embed a `cjk` variant and must not wake the agent. */
+  falseFriends: string[];
+};
+
+// Name variants covering frequent ASR mishearings of "Max".
 // "maxwell"/"maximus" are deliberately excluded: they are full, distinct words
 // (Maxwell's equations, Maximus), not short ASR mishearings of "Max", and would
 // false-wake on ordinary speech — mirroring the CJK exclusion of 麦克斯韦.
-const LATIN_NAME_VARIANTS = ["max", "maxx", "maxs", "macks", "mack", "marks", "mac", "mags"];
-const CJK_NAME_VARIANTS = ["麦克斯", "马克斯", "马克思", "迈克斯", "麦克思"];
+// Known CJK false friends embed a variant inside an unrelated common word:
+// 马克思 in 马克思主义 (Marxism) and 麦克斯 in 麦克斯韦 (Maxwell, the physicist).
+export const DEFAULT_WAKE_NAMES: WakeNames = {
+  label: WAKE_PHRASE_LABEL,
+  latin: ["max", "maxx", "maxs", "macks", "mack", "marks", "mac", "mags"],
+  cjk: ["麦克斯", "马克斯", "马克思", "迈克斯", "麦克思"],
+  falseFriends: ["马克思主义", "麦克斯韦"]
+};
 
-// A Latin name variant as a standalone token, with an optional greeting in
-// front. The leading (?:^|\s) and trailing (?=\s|$) keep the match to a whole
-// token, so the name embedded in a larger word ("maximum", "maximize") does not
-// trigger, while a bare "Max" anywhere in the utterance does. Normalization
-// inserts spaces at Han↔Latin boundaries, so "max今天" still matches.
-const LATIN_WAKE_REGEX = new RegExp(
-  `(?:^|\\s)(?:(?:${GREETINGS.join("|")})\\s*)?(?:${LATIN_NAME_VARIANTS.join("|")})(?=\\s|$)`,
-  "u"
-);
-
-// Chinese renderings of the name match anywhere — Han text has no token
-// boundaries. Known false friends that embed a variant inside an unrelated
-// common word are blanked out first: 马克思 in 马克思主义 (Marxism) and 麦克斯
-// in 麦克斯韦 (Maxwell, as in the physicist/equations).
-const CJK_WAKE_REGEX = new RegExp(CJK_NAME_VARIANTS.join("|"), "u");
-const CJK_FALSE_FRIENDS = /马克思主义|麦克斯韦/gu;
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 /**
  * NFKC-fold (so fullwidth "Ｍａｘ" and CJK punctuation variants compare equal),
@@ -67,9 +75,47 @@ function normalize(text: string): string {
     .trim();
 }
 
-/** True when `text` (a rider transcript) addresses the agent by name ("Max"). */
+/** Builds a matcher for one set of names. */
+export function createWakeMatcher(names: WakeNames): (text: string) => boolean {
+  // Multi-word Latin names ("hey computer") are normalized the same way the
+  // transcript is, so they compare token for token.
+  const latin = names.latin.map(normalize).filter(Boolean).map(escapeRegex);
+  const cjk = names.cjk
+    .map((name) => name.normalize("NFKC"))
+    .filter(Boolean)
+    .map(escapeRegex);
+  const falseFriends = names.falseFriends
+    .map((word) => word.normalize("NFKC"))
+    .filter(Boolean)
+    .map(escapeRegex);
+  // A Latin name variant as a standalone token, with an optional greeting in
+  // front. The leading (?:^|\s) and trailing (?=\s|$) keep the match to a
+  // whole token, so the name embedded in a larger word ("maximum") does not
+  // trigger, while a bare name anywhere in the utterance does. Normalization
+  // inserts spaces at Han↔Latin boundaries, so "max今天" still matches.
+  const latinRegex = latin.length
+    ? new RegExp(`(?:^|\\s)(?:(?:${GREETINGS.join("|")})\\s*)?(?:${latin.join("|")})(?=\\s|$)`, "u")
+    : undefined;
+  const cjkRegex = cjk.length ? new RegExp(cjk.join("|"), "u") : undefined;
+  const falseFriendRegex = falseFriends.length ? new RegExp(falseFriends.join("|"), "gu") : undefined;
+
+  return (text) => {
+    if (!text) return false;
+    const normalized = normalize(text);
+    if (latinRegex?.test(normalized)) return true;
+    if (!cjkRegex) return false;
+    return cjkRegex.test(falseFriendRegex ? normalized.replace(falseFriendRegex, " ") : normalized);
+  };
+}
+
+let activeMatcher = createWakeMatcher(DEFAULT_WAKE_NAMES);
+
+/** Installs the names the relay's assistant answers to (server/assistant.ts). */
+export function configureWakePhrase(names: WakeNames): void {
+  activeMatcher = createWakeMatcher(names);
+}
+
+/** True when `text` (a rider transcript) addresses the agent by name. */
 export function containsWakePhrase(text: string): boolean {
-  if (!text) return false;
-  const normalized = normalize(text);
-  return LATIN_WAKE_REGEX.test(normalized) || CJK_WAKE_REGEX.test(normalized.replace(CJK_FALSE_FRIENDS, " "));
+  return activeMatcher(text);
 }

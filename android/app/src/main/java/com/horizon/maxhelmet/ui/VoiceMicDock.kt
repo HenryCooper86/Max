@@ -35,8 +35,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
@@ -48,7 +46,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.horizon.maxhelmet.agent.AgentSession
-import com.horizon.maxhelmet.ui.theme.HudColors
+import com.horizon.maxhelmet.ui.theme.Visor
+import com.horizon.maxhelmet.ui.theme.VisorShapes
+import com.horizon.maxhelmet.ui.theme.VisorSpace
+import com.horizon.maxhelmet.ui.theme.VisorType
+import androidx.compose.foundation.shape.CircleShape
 import kotlin.math.PI
 import kotlin.math.sin
 
@@ -93,85 +95,81 @@ internal fun VoiceMicDock(state: AgentSession.State, onClick: () -> Unit) {
 
     val meterLevel = if (reduceMotion) presentation.displayLevel else animatedLevel.value
     val motionLevel = if (reduceMotion) 0f else animatedLevel.value
-    val accent = when (presentation.mode) {
-        MicDockMode.IDLE -> HudColors.Ember
-        MicDockMode.CONNECTING -> HudColors.Amber
-        MicDockMode.LIVE, MicDockMode.MUTED -> HudColors.Lume
+    val c = Visor.colors
+    val live = presentation.mode == MicDockMode.LIVE
+    // Accent is reserved for the primary action (idle) and the live voice state.
+    val (container, content) = when (presentation.mode) {
+        MicDockMode.IDLE -> c.accent to c.onAccent
+        MicDockMode.CONNECTING -> c.surface2 to c.text
+        MicDockMode.LIVE -> c.surface2 to c.text
+        MicDockMode.MUTED -> c.surface2 to c.text
     }
-    val shape = RoundedCornerShape(19.dp)
+    val meterColor = when (presentation.mode) {
+        MicDockMode.IDLE -> c.onAccent
+        MicDockMode.CONNECTING -> c.textSecondary
+        else -> c.accent
+    }
+    val shape = VisorShapes.pill
     val keyScale = 1f + motionLevel * 0.04f
 
     Surface(
         onClick = onClick,
         modifier = Modifier
-            .widthIn(max = 300.dp)
+            .widthIn(max = 320.dp)
             .fillMaxWidth()
-            .heightIn(min = 64.dp)
-            .shadow(
-                elevation = (12f + 8f * motionLevel).dp,
-                shape = shape,
-                ambientColor = accent.copy(alpha = 0.20f + 0.22f * motionLevel),
-                spotColor = accent.copy(alpha = 0.20f + 0.22f * motionLevel)
-            )
+            .heightIn(min = 56.dp)
             .semantics {
                 contentDescription = presentation.accessibilityLabel
                 role = Role.Button
             },
         shape = shape,
-        color = Color(0xFF11100E),
-        border = BorderStroke(1.dp, accent.copy(alpha = 0.34f + 0.28f * motionLevel))
+        color = container,
+        border = if (presentation.mode == MicDockMode.IDLE) null else BorderStroke(1.dp, if (live) c.accent.copy(alpha = 0.35f + 0.4f * motionLevel) else c.lineStrong)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 64.dp)
-                .background(
-                    Brush.verticalGradient(listOf(Color(0x0DFFFFFF), Color.Transparent, Color(0x22110E0D)))
-                )
-                .padding(start = 8.dp, end = 15.dp, top = 8.dp, bottom = 8.dp),
+                .heightIn(min = 56.dp)
+                .padding(start = VisorSpace.x2, end = VisorSpace.x5, top = VisorSpace.x2, bottom = VisorSpace.x2),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(13.dp)
+            horizontalArrangement = Arrangement.spacedBy(VisorSpace.x3)
         ) {
             Box(
                 modifier = Modifier
-                    .size(46.dp)
+                    .size(40.dp)
                     .graphicsLayer { scaleX = keyScale; scaleY = keyScale }
-                    .background(accent.copy(alpha = 0.13f), RoundedCornerShape(13.dp))
-                    .border(1.dp, accent.copy(alpha = 0.30f + 0.25f * motionLevel), RoundedCornerShape(13.dp)),
+                    .background(if (presentation.mode == MicDockMode.IDLE) c.onAccent.copy(alpha = 0.12f) else if (live) c.accentSoft else c.surface3, CircleShape),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = if (presentation.mode == MicDockMode.IDLE) Icons.Filled.Mic else Icons.Filled.Close,
                     contentDescription = null,
-                    tint = accent,
-                    modifier = Modifier.size(25.dp)
+                    tint = if (live) c.accent else content,
+                    modifier = Modifier.size(22.dp)
                 )
             }
-            Box(Modifier.width(1.dp).height(28.dp).background(Color(0x24C4DAD8)))
             Text(
                 text = presentation.label,
                 modifier = Modifier.weight(1f),
-                color = HudColors.HudInk,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 0.64.sp
+                color = content,
+                style = VisorType.title
             )
             when (presentation.mode) {
                 MicDockMode.MUTED -> Icon(
                     imageVector = Icons.Filled.MicOff,
                     contentDescription = null,
-                    tint = HudColors.Amber,
+                    tint = c.warn,
                     modifier = Modifier.size(20.dp)
                 )
                 MicDockMode.CONNECTING -> VoiceInputMeter(
                     heights = listOf(6f, 12f, 6f),
-                    color = HudColors.Amber,
+                    color = meterColor,
                     level = 0f,
                     phase = if (reduceMotion) null else connectingPhase
                 )
                 MicDockMode.IDLE, MicDockMode.LIVE -> VoiceInputMeter(
                     heights = micMeterHeights(meterLevel),
-                    color = accent,
+                    color = meterColor,
                     level = meterLevel,
                     phase = null
                 )
@@ -200,30 +198,6 @@ private fun VoiceInputMeter(heights: List<Float>, color: Color, level: Float, ph
                         RoundedCornerShape(4.dp)
                     )
             )
-        }
-    }
-}
-
-@Composable
-internal fun MuteUtilityPill(muted: Boolean, onClick: () -> Unit) {
-    val tint = if (muted) HudColors.Amber else HudColors.HudDim
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(50),
-        color = if (muted) HudColors.Amber.copy(alpha = 0.16f) else HudColors.PanelElevated
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Icon(
-                imageVector = if (muted) Icons.Filled.MicOff else Icons.Filled.Mic,
-                contentDescription = null,
-                tint = tint,
-                modifier = Modifier.size(16.dp)
-            )
-            Text(if (muted) "取消静音" else "静音", color = tint, fontSize = 13.sp, fontWeight = FontWeight.Medium)
         }
     }
 }

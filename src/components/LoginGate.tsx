@@ -6,8 +6,11 @@
 
 import { useMemo } from "react";
 import type { AuthUser } from "../lib/auth";
+import { deviceCopyKey } from "../lib/i18n";
 import { AccountForm } from "./AccountBar";
-import { useLanguage } from "./LanguageToggle";
+import { useAssistant } from "./AssistantContext";
+import { LanguageToggle, useLanguage } from "./LanguageToggle";
+import { VisorMark } from "./VisorVisual";
 
 type Props = {
   /** False until the first account exists — the gate then offers first-run
@@ -37,6 +40,7 @@ function clearInviteFromUrl() {
 
 export function LoginGate({ authEnabled, registrationOpen, onSignedIn }: Props) {
   const { t } = useLanguage();
+  const assistant = useAssistant();
   const inviteCode = useMemo(readInviteCode, []);
 
   const hint = !authEnabled
@@ -48,30 +52,18 @@ export function LoginGate({ authEnabled, registrationOpen, onSignedIn }: Props) 
         : t("login.closedRegistration");
 
   return (
-    <main className="shell loginShell">
-      <div className="loginBackdrop" aria-hidden="true">
-        <span className="loginOrb orbA" />
-        <span className="loginOrb orbB" />
-        <span className="loginGrid" />
-        <span className="loginHorizon" />
-      </div>
+    <main className="loginShell">
       <section className="loginGate" aria-label={t("login.aria")}>
-        <div className="brand loginBrand">
-          <svg className="logoMark loginLogo" viewBox="0 0 44 44" aria-hidden="true">
-            <path className="logoShell" d="M8 24a14 14 0 0 1 28 0v4a4 4 0 0 1-4 4H12a4 4 0 0 1-4-4Z" />
-            <rect className="logoVisor" x="13" y="18" width="22" height="7" rx="3.5" />
-          </svg>
+        <header className="loginBrand">
+          <VisorMark className="loginMark" />
           <div>
-            <p className="eyebrow loginEyebrow">HCT HELMET OS</p>
-            <h1>{t("login.brand")}</h1>
+            <h1>{assistant.name}</h1>
+            <p>{assistant.tagline || t(deviceCopyKey("voice.assistantKind", assistant.device))}</p>
           </div>
-        </div>
+          <LanguageToggle />
+        </header>
         <div className="loginCard">
-          <span className="loginScanline" aria-hidden="true" />
-          <div className="loginCardHead">
-            <h2>{t("login.platform")}</h2>
-            <span className="loginStatusDot" aria-hidden="true" />
-          </div>
+          <h2>{t("login.platform")}</h2>
           <p className="loginHint">{hint}</p>
           <AccountForm
             key={`${authEnabled}-${inviteCode}`}
@@ -83,8 +75,8 @@ export function LoginGate({ authEnabled, registrationOpen, onSignedIn }: Props) 
               onSignedIn(user);
             }}
           />
-          <p className="loginFootnote">{t("login.accessFootnote")}</p>
         </div>
+        {assistant.developer ? <p className="loginFootnote">{assistant.developer}</p> : null}
       </section>
     </main>
   );

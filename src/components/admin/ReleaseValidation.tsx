@@ -566,7 +566,6 @@ export function ReleaseValidation({ agent, user, data }: Props) {
     >
       <div className="controlPlaneHead adminSectionHeader">
         <div>
-          <span>MAX QA · {localized(language, "发布", "Release")}</span>
           <strong>
             {isReviewer
               ? localized(language, "发布运行与覆盖矩阵", "Release runs & coverage")

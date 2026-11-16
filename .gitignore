@@ -35,3 +35,6 @@ __pycache__/
 
 # macOS folder metadata
 .DS_Store
+
+# A deployment's own assistant identity (see assistant.config.example.json).
+assistant.config.json

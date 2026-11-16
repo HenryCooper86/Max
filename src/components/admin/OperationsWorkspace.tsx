@@ -15,6 +15,8 @@ import {
 } from "@phosphor-icons/react";
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { AccountSessionControls } from "../AccountBar";
+import { useAssistant } from "../AssistantContext";
+import { VisorMark } from "../VisorVisual";
 import { LanguageToggle, useLanguage } from "../LanguageToggle";
 import { localized } from "../../lib/i18n";
 import { CONNECTION_LABELS, CONNECTION_LABELS_EN } from "../../lib/constants";
@@ -27,7 +29,8 @@ import {
   formatAdminRelativeTime,
   normalizeAdminSection,
   workspaceSectionLabel,
-  type Workspace
+  type Workspace,
+  type WorkspaceSection
 } from "./admin-model";
 import { useWorkspaceLocation } from "./workspace-location";
 import { AccountManagement } from "./AccountManagement";
@@ -52,6 +55,19 @@ const SECTION_ICONS = {
   audit: ShieldCheck
 };
 
+// One line under each page title saying what the page is for.
+const SECTION_DESCRIPTIONS: Record<WorkspaceSection, [string, string]> = {
+  overview: ["你的测试进度和最近需要处理的事项。", "Your testing progress and what needs attention next."],
+  plans: ["按计划开展测试，每一步都会记录在会话里。", "Work through assigned test plans; each step is recorded."],
+  evidence: ["回看对话记录、反馈和评估结果。", "Review conversations, feedback, and evaluation results."],
+  quality: ["整体通过率、延迟与需要跟进的问题。", "Pass rates, latency, and issues that need follow-up."],
+  releases: ["汇总发布候选的测试覆盖并完成批准。", "Collect test coverage for a release candidate and approve it."],
+  diagnostics: ["逐条查看会话的技术细节。", "Inspect the technical detail of individual sessions."],
+  policies: ["设置评估规则和发布门槛。", "Set evaluation rules and release thresholds."],
+  accounts: ["管理账号、角色和邀请。", "Manage accounts, roles, and invitations."],
+  audit: ["谁在什么时候改了什么。", "Who changed what, and when."]
+};
+
 type Props = {
   agent: HelmetAgent;
   user: AuthUser;
@@ -61,6 +77,7 @@ type Props = {
 
 export function OperationsWorkspace({ agent, user, onAuthenticationExpired, onClose }: Props) {
   const { language } = useLanguage();
+  const assistant = useAssistant();
   const location = useWorkspaceLocation();
   const { section, navigate } = location;
   const canAdminister = user.role === "admin";
@@ -133,15 +150,11 @@ export function OperationsWorkspace({ agent, user, onAuthenticationExpired, onCl
     <main className={`adminWorkspace ${administration ? "adminControlWorkspace" : "testingWorkspace"}`}>
       <header className="adminWorkspaceHeader">
         <div className="adminWorkspaceBrand">
-          <span className="adminWorkspaceLogo">
-            {administration ? <ShieldCheck aria-hidden="true" /> : <Flask aria-hidden="true" />}
-          </span>
-          <div>
-            <small>{administration ? "MAX ADMIN" : "MAX TESTING"}</small>
-            <h1>
-              {administration ? localized(language, "管理", "Administration") : localized(language, "测试", "Testing")}
-            </h1>
-          </div>
+          <VisorMark className="adminWorkspaceLogo" />
+          <h1>
+            <span>{assistant.name}</span>
+            {administration ? localized(language, "管理", "Administration") : localized(language, "测试", "Testing")}
+          </h1>
         </div>
         <div className="adminWorkspaceContext">
           {!administration ? (
@@ -166,7 +179,10 @@ export function OperationsWorkspace({ agent, user, onAuthenticationExpired, onCl
             </a>
           ) : null}
           <button ref={closeRef} type="button" className="adminBackAction" onClick={onClose}>
-            <ArrowLeft aria-hidden="true" /> {localized(language, "返回 Max", "Back to Max")}
+            <ArrowLeft aria-hidden="true" />{" "}
+            <span className="adminBackLabel">
+              {localized(language, `返回 ${assistant.name}`, `Back to ${assistant.name}`)}
+            </span>
           </button>
           <details className="adminProfile" ref={profileRef}>
             <summary aria-label={localized(language, "账号与偏好", "Account & preferences")}>
@@ -230,12 +246,16 @@ export function OperationsWorkspace({ agent, user, onAuthenticationExpired, onCl
         <section className="adminWorkspaceContent">
           <div className="adminPageHeading">
             <div>
-              <span>
-                {administration
-                  ? localized(language, "管理工作区", "Administration workspace")
-                  : localized(language, "测试工作区", "Testing workspace")}
-              </span>
               <h2>{title}</h2>
+              <p>
+                {administration && active === "overview"
+                  ? localized(
+                      language,
+                      "账号、邀请和系统审计一览。",
+                      "Accounts, invitations, and system audit at a glance."
+                    )
+                  : localized(language, ...SECTION_DESCRIPTIONS[active])}
+              </p>
             </div>
             {needsTestingData ? (
               <div className="adminSyncControls">
@@ -295,7 +315,7 @@ export function OperationsWorkspace({ agent, user, onAuthenticationExpired, onCl
             />
           ) : null}
           {!administration && active === "quality" && !data.testing ? (
-            <p className="adminWorkspaceLoading">
+            <p className="adminWorkspaceLoading" role="status">
               {data.status === "loading"
                 ? localized(language, "正在加载概览…", "Loading overview…")
                 : localized(language, "暂无可用概览数据。", "No overview data available.")}

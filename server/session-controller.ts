@@ -58,6 +58,7 @@ const MAX_TESTER_ID_BYTES = 80;
 const MAX_TESTER_REGION_BYTES = 96;
 const MAX_TESTING_META_BYTES = 160;
 const RDK_DEVICE_ID = /^rdk-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const VOICE_PROVIDER_ID = /^[a-z][a-z0-9-]{0,31}$/;
 
 export function normalizeRawData(data: RawData): Buffer {
   if (Buffer.isBuffer(data)) return data;
@@ -518,6 +519,12 @@ export function parseClientEvent(data: RawData): ClientEvent {
   }
   assertOptionalEnum(value.voiceGender, VOICE_GENDERS, "voiceGender");
   assertOptionalEnum(value.voicePersonality, VOICE_PERSONALITIES, "voicePersonality");
+  if (
+    value.voiceProvider !== undefined &&
+    (typeof value.voiceProvider !== "string" || !VOICE_PROVIDER_ID.test(value.voiceProvider))
+  ) {
+    throw new Error("Invalid voiceProvider");
+  }
   assertOptionalEnum(value.rideMode, RIDE_MODES, "rideMode");
   assertOptionalEnum(value.scenario, DEMO_SCENARIOS, "scenario");
   assertOptionalTesterId(value.testerId);

@@ -1,10 +1,12 @@
 import { useRef } from "react";
 import type { HelmetAgent } from "../hooks/useHelmetAgent";
 import { localized } from "../lib/i18n";
+import { useAssistant } from "./AssistantContext";
 import { useLanguage } from "./LanguageToggle";
 
 export function MusicPlaybackCard({ agent }: { agent: HelmetAgent }) {
   const { language } = useLanguage();
+  const { name } = useAssistant();
   const input = useRef<HTMLInputElement>(null);
   const { musicState: state, musicController: player } = agent;
   const label = (zh: string, en: string) => localized(language, zh, en);
@@ -21,8 +23,8 @@ export function MusicPlaybackCard({ agent }: { agent: HelmetAgent }) {
           <p>
             {state.provider === "qq"
               ? label(
-                  "在 QQ 音乐中播放和切歌；网页版 Max 暂不支持控制 QQ 音乐。",
-                  "Play and skip in QQ Music. Max cannot control QQ Music playback on the web yet."
+                  `在 QQ 音乐中播放和切歌；网页版 ${name} 暂不支持控制 QQ 音乐。`,
+                  `Play and skip in QQ Music. ${name} cannot control QQ Music playback on the web yet.`
                 )
               : track
                 ? `${state.index + 1} / ${state.tracks.length}`

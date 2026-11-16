@@ -14,7 +14,14 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.background
+import com.horizon.maxhelmet.ui.theme.Visor
+import com.horizon.maxhelmet.ui.theme.VisorShapes
+import com.horizon.maxhelmet.ui.theme.VisorSpace
+import com.horizon.maxhelmet.ui.theme.VisorType
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -30,7 +37,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
-fun CaptureGallery(store: CaptureStore, onDismiss: () -> Unit) {
+fun CaptureGallery(store: CaptureStore, assistantName: String = AssistantBranding.name, onDismiss: () -> Unit) {
+    val c = Visor.colors
     val captures by store.captures.collectAsStateWithLifecycle()
     var selected by remember { mutableStateOf<Capture?>(null) }
     var deleting by remember { mutableStateOf<Capture?>(null) }
@@ -41,23 +49,25 @@ fun CaptureGallery(store: CaptureStore, onDismiss: () -> Unit) {
     // Read the activity's insets before entering the dialog's separate window.
     val safeInsets = WindowInsets.safeDrawing.asPaddingValues()
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        Surface(Modifier.fillMaxSize()) {
-            Column(Modifier.fillMaxSize().padding(safeInsets).padding(16.dp)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Max 相册", style = MaterialTheme.typography.titleLarge)
-                    TextButton(onClick = { if (selected != null) selected = null else onDismiss() }) { Text(if (selected != null) "返回" else "关闭") }
+        Surface(Modifier.fillMaxSize(), color = c.bg) {
+            Column(Modifier.fillMaxSize().padding(safeInsets).padding(VisorSpace.x4), verticalArrangement = Arrangement.spacedBy(VisorSpace.x3)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("$assistantName 相册", color = c.text, style = VisorType.headline)
+                    VisorButton(if (selected != null) "返回" else "关闭", { if (selected != null) selected = null else onDismiss() }, style = VisorButtonStyle.GHOST)
                 }
-                message?.let { Text(it) }
+                message?.let { Text(it, color = c.textSecondary, style = VisorType.bodySmall) }
                 val item = selected
                 if (item == null) {
-                    if (captures.isEmpty()) Text("还没有拍摄内容。对 Max 说“拍照”或“开始录像”。")
+                    if (captures.isEmpty()) Text("还没有拍摄内容。对 $assistantName 说“拍照”或“开始录像”。", color = c.textSecondary, style = VisorType.body)
                     LazyVerticalGrid(columns = GridCells.Adaptive(140.dp), modifier = Modifier.weight(1f),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        horizontalArrangement = Arrangement.spacedBy(VisorSpace.x3), verticalArrangement = Arrangement.spacedBy(VisorSpace.x3)) {
                         items(captures, key = { it.id }) { capture ->
-                            Column(Modifier.clickable { selected = capture }) {
-                                CaptureThumbnail(capture, Modifier.fillMaxWidth().height(130.dp))
-                                Text(if (capture.video) "录像" else "照片")
-                                if (capture.exported) Text("已导出", style = MaterialTheme.typography.labelSmall)
+                            Column(Modifier.clickable { selected = capture }, verticalArrangement = Arrangement.spacedBy(VisorSpace.x1)) {
+                                CaptureThumbnail(capture, Modifier.fillMaxWidth().height(130.dp).clip(VisorShapes.card))
+                                Row(horizontalArrangement = Arrangement.spacedBy(VisorSpace.x2)) {
+                                    Text(if (capture.video) "录像" else "照片", color = c.text, style = VisorType.caption)
+                                    if (capture.exported) Text("已导出", color = c.textTertiary, style = VisorType.caption)
+                                }
                             }
                         }
                     }
@@ -74,9 +84,9 @@ fun CaptureGallery(store: CaptureStore, onDismiss: () -> Unit) {
                             }
                         }, modifier = Modifier.fillMaxWidth().weight(1f))
                         DisposableEffect(item.id) { onDispose { view?.stopPlayback() } }
-                    } else CaptureThumbnail(item, Modifier.fillMaxWidth().weight(1f))
-                    Row {
-                        TextButton(enabled = !exporting, onClick = {
+                    } else CaptureThumbnail(item, Modifier.fillMaxWidth().weight(1f).clip(VisorShapes.card))
+                    Row(horizontalArrangement = Arrangement.spacedBy(VisorSpace.x3)) {
+                        VisorButton(if (Build.VERSION.SDK_INT >= 29) "导出到相册" else "保存或分享", style = VisorButtonStyle.PRIMARY, enabled = !exporting, onClick = {
                             if (Build.VERSION.SDK_INT >= 29) scope.launch {
                                 exporting = true
                                 message = if (runCatching { store.export(item) }.getOrDefault(false)) "已导出到系统相册" else "导出失败，请重试"
@@ -87,19 +97,19 @@ fun CaptureGallery(store: CaptureStore, onDismiss: () -> Unit) {
                                     .setType(if (item.video) "video/mp4" else "image/jpeg").putExtra(Intent.EXTRA_STREAM, uri)
                                     .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "保存或分享")) }
                             }
-                        }) { Text(if (Build.VERSION.SDK_INT >= 29) "导出到相册" else "保存或分享") }
-                        TextButton(enabled = !exporting, onClick = { deleting = item }) { Text("删除") }
+                        })
+                        VisorButton("删除", { deleting = item }, style = VisorButtonStyle.DANGER, enabled = !exporting)
                     }
                 }
             }
         }
     }
-    deleting?.let { item -> AlertDialog(onDismissRequest = { deleting = null },
-        title = { Text("删除拍摄内容？") }, text = { Text("将删除 Max 中的原文件，已导出到系统相册的副本会保留。") },
-        confirmButton = { TextButton(onClick = {
+    deleting?.let { item -> VisorAlertDialog(onDismissRequest = { deleting = null },
+        title = "删除拍摄内容？", text = { DialogText("将删除 $assistantName 中的原文件，已导出到系统相册的副本会保留。") },
+        confirmButton = { VisorButton("删除", {
             if (store.delete(item)) selected = null else message = "删除失败，请重试"
             deleting = null
-        }) { Text("删除") } }, dismissButton = { TextButton(onClick = { deleting = null }) { Text("取消") } }) }
+        }, style = VisorButtonStyle.DANGER) }, dismissButton = { VisorButton("取消", { deleting = null }, style = VisorButtonStyle.GHOST) }) }
 }
 
 @Composable
@@ -116,5 +126,7 @@ private fun CaptureThumbnail(capture: Capture, modifier: Modifier) {
         }
     }
     bitmap?.let { Image(it.asImageBitmap(), if (capture.video) "录像预览" else "照片", modifier) }
-        ?: Box(modifier) { Text("预览加载中") }
+        ?: Box(modifier.background(Visor.colors.surface2), contentAlignment = Alignment.Center) {
+            Text("预览加载中", color = Visor.colors.textTertiary, style = VisorType.caption)
+        }
 }

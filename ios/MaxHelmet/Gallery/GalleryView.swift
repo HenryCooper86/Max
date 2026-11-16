@@ -1,14 +1,14 @@
 import SwiftUI
 import UIKit
 
-/// The Max gallery grid. Newest-first thumbnails; tap one for the viewer.
+/// The capture gallery grid. Newest-first thumbnails; tap one for the viewer.
 struct GalleryView: View {
     @ObservedObject var model: GalleryModel
     let onClose: () -> Void
 
     @State private var selected: Capture?
 
-    private let columns = [GridItem(.adaptive(minimum: 104), spacing: 6)]
+    private let columns = [GridItem(.adaptive(minimum: 104), spacing: Visor.Space.s1)]
 
     var body: some View {
         NavigationStack {
@@ -17,22 +17,26 @@ struct GalleryView: View {
                     emptyState
                 } else {
                     ScrollView {
-                        LazyVGrid(columns: columns, spacing: 6) {
+                        LazyVGrid(columns: columns, spacing: Visor.Space.s1) {
                             ForEach(model.captures) { capture in
                                 Button { selected = capture } label: { cell(capture) }
                                     .buttonStyle(.plain)
                             }
                         }
-                        .padding(6)
+                        .padding(Visor.Space.s1)
                     }
                 }
             }
-            .background(HudColors.void.ignoresSafeArea())
+            .background(Visor.bg.ignoresSafeArea())
             .navigationTitle("相册")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Visor.bg, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("完成", action: onClose)
+                        .visorFont(.subhead, .semibold)
+                        .frame(minHeight: Visor.hit)
                 }
             }
             .sheet(item: $selected) { capture in
@@ -47,6 +51,9 @@ struct GalleryView: View {
                 Text(model.exportError ?? "")
             }
         }
+        .tint(Visor.accent)
+        .presentationBackground(Visor.bg)
+        .presentationCornerRadius(Visor.Radius.sheet)
         .onAppear { model.refresh() }
     }
 
@@ -59,7 +66,7 @@ struct GalleryView: View {
             Color.clear
                 .aspectRatio(1, contentMode: .fit)
                 .overlay(AsyncThumbnail(url: model.thumbnailURL(for: capture)))
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: Visor.Radius.control, style: .continuous))
 
             HStack(spacing: 4) {
                 if capture.type == .video {
@@ -70,25 +77,27 @@ struct GalleryView: View {
                 }
                 if capture.exported {
                     Text("已导出")
-                        .padding(.horizontal, 4)
-                        .background(HudColors.lume.opacity(0.25), in: Capsule())
+                        .foregroundStyle(Visor.ok)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Visor.bg.opacity(0.85), in: Capsule())
                 }
             }
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(HudColors.hudInk)
-            .padding(6)
+            .visorFont(.caption, .semibold, mono: true)
+            .foregroundStyle(Visor.text)
+            .padding(Visor.Space.s2 - 2)
         }
         // clipShape bounds only the pixels, not hit-testing — without this, an
         // overlaid image reaching past its tile steals the neighbor's tap.
-        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: Visor.Radius.control, style: .continuous))
     }
 
     private var emptyState: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "photo.on.rectangle.angled").font(.system(size: 34))
-            Text("还没有拍摄内容").font(.subheadline)
+        VStack(spacing: Visor.Space.s2) {
+            Image(systemName: "photo.on.rectangle.angled").font(.system(size: 32, weight: .light))
+            Text("还没有拍摄内容").visorFont(.subhead)
         }
-        .foregroundStyle(HudColors.hudDim)
+        .foregroundStyle(Visor.textTertiary)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
@@ -104,7 +113,7 @@ struct AsyncThumbnail: View {
             if let image {
                 Image(uiImage: image).resizable().scaledToFill()
             } else {
-                HudColors.panelElevated
+                Visor.surface2
             }
         }
         .task(id: url) {

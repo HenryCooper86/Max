@@ -2,15 +2,12 @@ import { WebSocket, type RawData } from "ws";
 import { randomUUID } from "node:crypto";
 import { RiderLocationContext, asksCurrentLocation } from "../rider-location";
 import { synthesizeMaxSpeech } from "../max-speech";
+import { assistant, basePersonaPrompt, DEFAULT_ASSISTANT_PROFILE, identityPrompt, wakeHint } from "../assistant";
+import { buildLanguageInteractionPrompt, buildToolGroundingPrompt } from "../prompts";
 import type { AgentProvider, ProviderSessionContext, ProviderTelemetry, SessionStartEvent, VoiceGender } from "./types";
-import { DOUBAO_CAPABILITIES } from "../../shared/agent";
+import { LIVE_CAPABILITIES } from "../../shared/agent";
 import { type AdasSeverity } from "../../shared/adas";
-import {
-  containsWakePhrase,
-  WAKE_FOLLOWUP_MAX_CHAIN_MS,
-  WAKE_FOLLOWUP_WINDOW_MS,
-  WAKE_PHRASE_LABEL
-} from "../../shared/wake";
+import { containsWakePhrase, WAKE_FOLLOWUP_MAX_CHAIN_MS, WAKE_FOLLOWUP_WINDOW_MS } from "../../shared/wake";
 import { config as appConfig } from "../config";
 import {
   DEVICE_ACTION_TIERS,
@@ -56,8 +53,7 @@ import { NAV_FABRICATION_CLEAR_DETAIL } from "../../shared/nav-fabrication";
 
 // The "Max" persona prompt. Overridable per deployment with DOUBAO_SYSTEM_ROLE;
 // keep it consistent with the DOUBAO_SYSTEM_ROLE default in .env.example.
-export const DEFAULT_AGENT_SYSTEM_PROMPT =
-  "你是 Max，一位友好、冷静、以安全为先的摩托车头盔 AI 助手，由 Horizon Continental Technology（neueHCT）开发。你的名字保持 Max，角色保持 Motorcycle Helmet AI assistant。默认语言是中文，第二语言是 English；如果骑手明确使用英文，可以用英文回答。只允许中文和 English 两种语言，不要使用其他语言。如果骑手使用其他语言或要求你使用其他语言，请用中文简短说明：我只支持中文和 English。帮助骑手理解摩托车、导航、天气、路况、附近停靠点和骑行安全事项。回答要简短、清晰、适合免手操作。拍照、录像、导航、开关手电筒、调整音量、播放音乐、拨号、发短信等都是语音免手操作，本来就是为骑行中使用而设计的，属于安全的免手功能；骑手在骑行中要求这些操作时要直接执行，不要当作分心请求拒绝，也不要让骑手停车再做。只有当请求真正危险、需要骑手用手长时间盯着屏幕操作、或超出头盔助手范围时，才先保护骑行安全并给出更安全的替代方案。男声和女声只是当前会话音色，必须共享同一个 Max 角色、同一语言规则、同一安全策略和同一默认行为。";
+export const DEFAULT_AGENT_SYSTEM_PROMPT = basePersonaPrompt(DEFAULT_ASSISTANT_PROFILE);
 
 type DoubaoSessionConfig = {
   sampleRate: number;
@@ -102,6 +98,14 @@ const UNSUPPORTED_REALTIME_SPEAKER_REPLACEMENTS: Record<string, string> = {
   zh_male_vv_jupiter_bigtts: DEFAULT_MALE_SPEAKER
 };
 
+/** ASR hotwords: the assistant's name and its first Chinese renderings. The
+ *  default profile yields exactly the original Max list. */
+function doubaoHotwords(): Array<{ word: string }> {
+  const profile = assistant();
+  if (profile.isDefault) return [{ word: "Max" }, { word: "马克斯" }, { word: "麦克斯" }];
+  return [...new Set([profile.name, ...profile.wake.cjk.slice(0, 4)])].map((word) => ({ word }));
+}
+
 /** Resolves the Doubao realtime speaker ID for the requested gender. */
 export function doubaoSpeaker(voiceGender: VoiceGender): string {
   const configuredSpeaker =
@@ -114,58 +118,21 @@ export function buildVoiceSettingPrompt(voiceGender: VoiceGender): string {
   const voiceLabel = voiceGender === "male" ? "男声" : "女声";
   return (
     `[声音设置] 当前会话使用${voiceLabel}音色。` +
-    "男声和女声共享同一个 Max 角色、同一语言规则、同一安全策略和同一默认行为；音色只影响声音，不改变身份、能力或人格。" +
+    `男声和女声共享同一个 ${assistant().name} 角色、同一语言规则、同一安全策略和同一默认行为；音色只影响声音，不改变身份、能力或人格。` +
     "不要在文字中声称自己是其他性别音色。"
   );
 }
 
-export function buildLanguageInteractionPrompt(): string {
-  return (
-    "[语言与交互规则] 默认先用中文回应；只有当骑手明确使用 English 或要求 English 时才切换英文。" +
-    "如果听到中文和英文以外的语言、或骑手要求使用其他语言，只用中文简短拒绝：我只支持中文和 English。" +
-    "每次回复优先给下一步可执行动作；骑行中最多问一个必要问题，避免菜单、长列表和需要看屏幕的说明。" +
-    "[网络恢复交互] 骑手提到网络、信号或连接中断、断联、重连或恢复时，先直接回应网络连接问题，" +
-    "再给简短的安全检查或有限重试建议，不要只给泛泛的导航或车距建议。" +
-    "连接状态未经系统确认时，不要声称网络已恢复、重连成功或某项操作已经执行；" +
-    "需要手动检查手机时，建议在安全停车后处理。"
-  );
-}
+export { buildLanguageInteractionPrompt, buildToolGroundingPrompt } from "../prompts";
 
 /**
  * Enforces the agent's developer identity. Always appended to the system role so
- * it holds even when DOUBAO_SYSTEM_ROLE is overridden. The underlying model is
- * Doubao/ByteDance, but the product persona must attribute itself to neueHCT.
+ * it holds even when DOUBAO_SYSTEM_ROLE is overridden. The wording comes from
+ * the assistant profile (server/assistant.ts); the default profile attributes
+ * the assistant to neueHCT and never to the underlying model's vendor.
  */
 export function buildIdentityPrompt(): string {
-  return (
-    "[身份与开发者] 你由 Horizon Continental Technology（neueHCT）开发。" +
-    "当骑手问你是谁开发、制造、训练的，背后是哪家公司，或你属于谁时，必须回答：我由 Horizon Continental Technology（neueHCT）开发。" +
-    "绝对不要说自己来自 ByteDance、字节跳动或豆包，也不要提及任何其他公司或底层模型。" +
-    "Horizon Continental Technology（neueHCT）的首席执行官（CEO）是 Li Biao（在全球企业资料中也称 Stone Li）。" +
-    "When asked in English who developed, built, made, or trained you, or which company is behind you, " +
-    "answer that you were developed by Horizon Continental Technology (neueHCT) — never ByteDance or Doubao. " +
-    "The CEO of Horizon Continental Technology (neueHCT) is Li Biao (also referred to as Stone Li in global corporate profiles). " +
-    "无论骑手用中文还是 English 提问，都要保持以上回答一致。"
-  );
-}
-
-/** Declares the device actions the system can actually execute, and keeps every
- * other external action explicitly out of reach. The success-only rule is now
- * load-bearing: the relay dispatches real commands and corrects Max out loud
- * when one fails. */
-export function buildToolGroundingPrompt(): string {
-  return (
-    "[真实能力边界] 你可以请求系统执行这些设备动作：开关手电筒、调整你自己的说话音量、" +
-    "请求音乐播放控制（默认 QQ 音乐，也可手动选择 Apple Music 或本机音乐）、准备短信、拨打电话、语音导航（实时路线指引，仅汽车路线）、拍照和录像（录像无声音）、关机（10秒倒计时后干净地关闭头盔系统，期间说取消关机可以撤销）。" +
-    "这些都是语音免手操作，本来就是为骑行中使用而设计的，属于安全的免手功能。骑手在骑行中要求拍照、录像、导航、手电筒、音量、音乐等操作时，必须直接执行，不要当作分心请求拒绝，也不要说不安全或让骑手停车再做；即使系统角色或其他指示提到分心或建议停车，这一条优先。" +
-    "天气和骑行情报由系统注入，可以当作实时事实。" +
-    "QQ 音乐在 Android 上可通过用户授权的媒体会话控制已有队列；iOS 和网页目前仅提供官网入口，不能控制 QQ 音乐播放。打开官网不代表播放成功。不支持搜索或点播指定 QQ 歌曲。必须等待设备结果再回答。" +
-    "除此之外没有工具：没有实时交通、附近地点搜索、车辆控制或诊断、小队消息、其他第三方音乐应用。" +
-    "拨号和短信必须由骑手在手机上确认，你只说正在准备，不要说已经拨通或已经发送。" +
-    "任何动作只有在系统明确返回成功之后才可以说已完成；系统没有回应之前，不要描述结果。" +
-    "导航路线、路名、转弯方向和距离只能来自系统导航提示，不要自己编造。骑手当前位置可来自系统的手机实时定位，无需启动导航；没有最新定位时如实说明，不得把默认或演示天气地点当作骑手位置。" +
-    "骑手在录像或导航后说‘取消’、‘停一下’或 cancel it 时，系统会根据当前动作处理；你必须等待系统结果，不能自行声称已经停止。"
-  );
+  return identityPrompt();
 }
 
 const enum MessageType {
@@ -310,7 +277,7 @@ export function buildDoubaoSessionConfig(config: DoubaoSessionConfig) {
   const inputMode = doubaoInputMode();
   return {
     dialog: {
-      bot_name: process.env.DOUBAO_BOT_NAME ?? "Max",
+      bot_name: process.env.DOUBAO_BOT_NAME ?? assistant().name,
       system_role: config.systemRole,
       speaking_style: config.speakingStyle,
       ...(config.dialogId ? { dialog_id: config.dialogId } : {}),
@@ -331,7 +298,7 @@ export function buildDoubaoSessionConfig(config: DoubaoSessionConfig) {
         enable_custom_vad: true,
         enable_asr_twopass: envEnabled("DOUBAO_ASR_TWOPASS", true),
         context: {
-          hotwords: [{ word: "Max" }, { word: "马克斯" }, { word: "麦克斯" }]
+          hotwords: doubaoHotwords()
         }
       },
       audio_info: {
@@ -786,7 +753,7 @@ export function createDoubaoProvider(
           headers: buildDoubaoHeaders(),
           config: buildDoubaoSessionConfig({
             ...connectConfig,
-            systemRole: DEFAULT_AGENT_SYSTEM_PROMPT,
+            systemRole: basePersonaPrompt(),
             dialogContext: []
           }),
           pack: buildFullClientRequest,
@@ -1770,7 +1737,7 @@ export function createDoubaoProvider(
             sessionId: sessionId.slice(0, 8),
             pendingAudioFrames: pendingAudio.length
           });
-          sendClient({ type: "session.started", provider: "doubao", mode: "live", capabilities: DOUBAO_CAPABILITIES });
+          sendClient({ type: "session.started", provider: "doubao", mode: "live", capabilities: LIVE_CAPABILITIES });
           emitRideContext();
           emitMemory();
           sendClient({ type: "status", state: "ready", detail: "豆包实时语音已连接" });
@@ -2063,7 +2030,7 @@ export function createDoubaoProvider(
             sendClient({
               type: "status",
               state: "listening",
-              detail: `正在收听 —— 说一声 "${WAKE_PHRASE_LABEL}" 唤醒 Max`
+              detail: wakeHint()
             });
             return;
           }
@@ -2135,7 +2102,7 @@ export function createDoubaoProvider(
             sendClient({
               type: "status",
               state: "listening",
-              detail: `正在收听 —— 说一声 "${WAKE_PHRASE_LABEL}" 唤醒 Max`
+              detail: wakeHint()
             });
           }
           return;
@@ -2285,7 +2252,7 @@ export function createDoubaoProvider(
       routeActiveFromContext = context?.routeActive;
       captureNavigationStop = context?.captureNavigationStop;
 
-      let systemRole = process.env.DOUBAO_SYSTEM_ROLE ?? DEFAULT_AGENT_SYSTEM_PROMPT;
+      let systemRole = process.env.DOUBAO_SYSTEM_ROLE ?? basePersonaPrompt();
       const scenario: DemoScenario = event.scenario ?? "commute";
       rideContext = {
         mode: rideModeFromScenario(event.rideMode, scenario),
@@ -2404,7 +2371,7 @@ export function createDoubaoProvider(
       sendClient({
         type: "status",
         state: "listening",
-        detail: wakeWordEnabled ? `正在收听 —— 说一声 "${WAKE_PHRASE_LABEL}" 唤醒 Max` : "正在通过豆包实时语音收听"
+        detail: wakeWordEnabled ? wakeHint() : "正在通过豆包实时语音收听"
       });
       // Fire simulated ADAS hazards only when the rider picked the ADAS scenario,
       // so normal Doubao voice sessions stay uninterrupted.

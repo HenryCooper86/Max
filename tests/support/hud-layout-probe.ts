@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { LanguageProvider } from "../../src/components/LanguageToggle";
-import { HelmetVisual, VoiceStateReadout } from "../../src/components/HelmetVisual";
+import { VisorVisual, VoiceStateReadout } from "../../src/components/VisorVisual";
 import { NavigationPanel } from "../../src/components/NavigationPanel";
 import { VoiceTranscript } from "../../src/components/VoiceTranscript";
 import { voiceFaceClassName } from "../../src/lib/voice-shell";
@@ -32,7 +32,7 @@ const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 /** The furniture below is copied, not rendered. If AgentScreen's voice shell
  *  gains or loses a direct child, update this too or the measurements drift
  *  away from production without failing. */
-const SHELL_FIDELITY = "topbar, hero, readout, [nav], [captions], utilities, dock";
+const SHELL_FIDELITY = "topbar, hero, readout, [panels: nav, captions], utilities, dock";
 
 export type ProbeOptions = {
   width: number;
@@ -78,24 +78,24 @@ function harnessHtml(css: string, options: ProbeOptions): string {
     ? markup(createElement(NavigationPanel, { state: options.nav, mapConsent: "unknown", onEnableMap: () => {} }))
     : "";
   const transcriptHtml = options.captions ? markup(createElement(VoiceTranscript, { agent: transcriptAgent() })) : "";
+  const panelsHtml = navHtml + transcriptHtml;
 
   return `<!doctype html>
 <html lang="zh"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <style>${css}</style></head>
 <body>
 <main class="voiceShell">
-  <section class="${voiceFaceClassName({ captionsOpen: options.captions, navigationVisible: Boolean(options.nav) })}">
+  <section class="${voiceFaceClassName({ captionsOpen: options.captions, navigationVisible: Boolean(options.nav) })}${panelsHtml ? " voiceWithPanels" : ""}">
     <!-- ${SHELL_FIDELITY} -->
     <header class="voiceTopbar offline">
-      <div class="voiceBrand"><span class="voiceBrandDot"></span><span class="voiceWordmark">MAX</span></div>
-      <div class="voiceRelay"><span class="voiceRelayDot"></span>RELAY OFFLINE</div>
+      <div class="voiceBrand"><svg class="visorMark" viewBox="0 0 48 20"><rect x="1" y="1" width="46" height="18" rx="9"></rect></svg><span class="voiceWordmark">Max</span></div>
+      <div class="voiceRelay"><span class="voiceRelayDot"></span>离线</div>
     </header>
-    <div class="voiceHero">${markup(createElement(HelmetVisual, { connected: false, listening: false, voiceLevel: 0, turnState: "idle" }))}</div>
+    <div class="voiceHero">${markup(createElement(VisorVisual, { connected: false, listening: false, voiceLevel: 0, turnState: "idle" }))}</div>
     ${markup(createElement(VoiceStateReadout, { connected: false, turnState: "idle" }))}
-    ${navHtml}
-    ${transcriptHtml}
-    <nav class="voiceUtilities"><button type="button">字幕</button><button type="button">相册</button><button type="button">设置</button></nav>
-    <div class="voicePrimaryControls"><button type="button" class="voiceMicButton"><span class="voiceMicKey">◉</span><span class="voiceMicLabel">开启免提</span><kbd>空格</kbd></button></div>
+    ${panelsHtml ? `<div class="voiceRidePanels">${panelsHtml}</div>` : ""}
+    <nav class="voiceUtilities"><button type="button">字幕</button><button type="button">演示导航</button><button type="button">演示偏航</button><button type="button">设置</button></nav>
+    <div class="voicePrimaryControls"><button type="button" class="voiceMicButton"><span class="voiceMicKey">◉</span><span class="voiceMicText"><span class="voiceMicLabel">开始免提</span><span class="voiceMicState">麦克风已关闭</span></span><kbd>空格</kbd></button></div>
   </section>
 </main>
 <pre id="probe-result"></pre>
@@ -108,7 +108,7 @@ function harnessHtml(css: string, options: ProbeOptions): string {
                scrollable: getComputedStyle(el).overflowY === "auto", clippedPx: el.scrollHeight - el.clientHeight };
     };
     const hero = document.querySelector(".voiceHero").getBoundingClientRect();
-    const helmet = document.querySelector(".helmetStage").getBoundingClientRect();
+    const helmet = document.querySelector(".visorStage").getBoundingClientRect();
     const horizontalOverflow = Math.max(0, ...Array.from(document.querySelectorAll(".voiceTopbar, .voiceUtilities, .voicePrimaryControls, .navigationPanel, .voiceTranscript")).map(el => {
       const r = el.getBoundingClientRect();
       return Math.max(-r.left, r.right - innerWidth, el.scrollWidth - el.clientWidth);

@@ -1,32 +1,20 @@
 package com.horizon.maxhelmet.ui
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -34,12 +22,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.horizon.maxhelmet.BuildConfig
 import com.horizon.maxhelmet.agent.AgentSession
 import com.horizon.maxhelmet.agent.DemoScenario
@@ -48,7 +32,9 @@ import com.horizon.maxhelmet.agent.RideMode
 import com.horizon.maxhelmet.agent.VoiceGender
 import com.horizon.maxhelmet.agent.VoicePersonality
 import com.horizon.maxhelmet.agent.responseModeLabel
-import com.horizon.maxhelmet.ui.theme.HudColors
+import com.horizon.maxhelmet.ui.theme.Visor
+import com.horizon.maxhelmet.ui.theme.VisorSpace
+import com.horizon.maxhelmet.ui.theme.VisorType
 
 // ---- settings sheet scaffold ----------------------------------------------------------
 
@@ -58,73 +44,45 @@ internal fun SheetContent(title: String, content: @Composable ColumnScope.() -> 
         modifier = Modifier
             .fillMaxWidth()
             // The sections outgrow the sheet on short/landscape screens (e.g.
-            // tablets); without this the lower cards are simply unreachable.
+            // tablets); without this the lower groups are simply unreachable.
             .verticalScroll(rememberScrollState())
             .navigationBarsPadding()
-            .padding(horizontal = 18.dp)
-            .padding(bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+            .padding(horizontal = VisorSpace.x4)
+            .padding(bottom = VisorSpace.x6),
+        verticalArrangement = Arrangement.spacedBy(VisorSpace.x6)
     ) {
-        Text(title, color = HudColors.Text, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Text(title, color = Visor.colors.text, style = VisorType.headline)
         content()
     }
 }
 
-// ---- inline login form (settings → 账号) ----------------------------------------------
+// ---- inline login form (settings -> 账号) ---------------------------------------------
 
 @Composable
 private fun LoginFields(viewModel: MainViewModel) {
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
 
-    Text("使用网页测试平台的账号登录；登录后自动获取会话令牌。", color = HudColors.Muted, fontSize = 11.sp)
-    OutlinedTextField(
-        value = username,
-        onValueChange = { username = it },
-        singleLine = true,
-        label = { Text("用户名", fontSize = 12.sp) },
-        textStyle = MaterialTheme.typography.bodySmall.copy(color = HudColors.Text),
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = HudColors.AccentCyan,
-            unfocusedBorderColor = HudColors.Border,
-            focusedLabelColor = HudColors.AccentCyan,
-            unfocusedLabelColor = HudColors.Muted
-        ),
-        modifier = Modifier.fillMaxWidth()
-    )
-    OutlinedTextField(
-        value = password,
-        onValueChange = { password = it },
-        singleLine = true,
-        label = { Text("密码", fontSize = 12.sp) },
-        visualTransformation = PasswordVisualTransformation(),
-        textStyle = MaterialTheme.typography.bodySmall.copy(color = HudColors.Text),
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = HudColors.AccentCyan,
-            unfocusedBorderColor = HudColors.Border,
-            focusedLabelColor = HudColors.AccentCyan,
-            unfocusedLabelColor = HudColors.Muted
-        ),
-        modifier = Modifier.fillMaxWidth()
-    )
-    viewModel.loginError?.let { error ->
-        Text(error, color = HudColors.Danger, fontSize = 12.sp)
-    }
-    Button(
-        onClick = {
+    SettingsBlock {
+        Text("使用网页测试平台的账号登录；登录后自动获取会话令牌。", color = Visor.colors.textSecondary, style = VisorType.caption)
+        VisorTextField(username, { username = it }, "用户名")
+        VisorTextField(password, { password = it }, "密码", secret = true)
+        viewModel.loginError?.let { error ->
+            Text(error, color = Visor.colors.danger, style = VisorType.caption)
+        }
+        VisorButton(
+            text = if (viewModel.loginBusy) "登录中…" else "登录",
             // Not cleared eagerly: on failure the rider shouldn't retype it;
             // on success this form leaves composition (state discarded) anyway.
-            viewModel.login(username, password)
-        },
-        enabled = !viewModel.loginBusy,
-        colors = ButtonDefaults.buttonColors(containerColor = HudColors.Accent),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Text(if (viewModel.loginBusy) "登录中…" else "登录", color = Color(0xFF07221A), fontSize = 14.sp)
+            onClick = { viewModel.login(username, password) },
+            enabled = !viewModel.loginBusy,
+            style = VisorButtonStyle.PRIMARY,
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }
 
-// ---- settings (account · voice · connection · demo · diagnostics) ---------------------
+// ---- settings (account, assistant, voice, connection, demo, diagnostics) ------------
 
 @Composable
 internal fun SettingsPanel(
@@ -132,327 +90,211 @@ internal fun SettingsPanel(
     viewModel: MainViewModel,
     onExportTranscript: () -> Unit
 ) {
+    val c = Visor.colors
+
     // Account: sign in with the same username/password as the web HUD; the
     // session token then rides the /agent URL automatically. The manual
     // 认证令牌 field below stays as the operator fallback.
-    SectionCard("账号") {
+    SettingsGroup("账号") {
         if (viewModel.isLoggedIn) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            SettingsRow(
+                title = viewModel.authDisplayName.ifEmpty { viewModel.authUsername },
+                supporting = "@${viewModel.authUsername} · ${if (viewModel.authRole == "admin") "管理员" else "测试员"}"
             ) {
-                Column {
-                    Text(
-                        viewModel.authDisplayName.ifEmpty { viewModel.authUsername },
-                        color = HudColors.Text,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        "@${viewModel.authUsername} · ${if (viewModel.authRole == "admin") "管理员" else "测试员"}",
-                        color = HudColors.Muted,
-                        fontSize = 12.sp
-                    )
-                }
-                TextButton(onClick = viewModel::logout) {
-                    Text("退出登录", color = HudColors.Danger, fontSize = 13.sp)
-                }
+                VisorButton("退出登录", onClick = viewModel::logout, style = VisorButtonStyle.DANGER)
             }
         } else {
             LoginFields(viewModel)
         }
     }
 
+    AssistantSection(viewModel)
+
     RideSafetySettings(viewModel)
 
-    // Rider voice preferences.
-    SectionCard("语音") {
-        ChipRow(label = "声音") {
-            VoiceGender.entries.forEach { gender ->
-                HudChip(gender.label, state.voiceGender == gender, { viewModel.setVoiceGender(gender) })
-            }
+    // Voice preferences.
+    SettingsGroup("语音") {
+        SettingsRow("声音") {
+            SegmentedControl(VoiceGender.entries, state.voiceGender, { it.label }, viewModel::setVoiceGender)
         }
-        ChipRow(label = "语气") {
-            VoicePersonality.entries.forEach { personality ->
-                HudChip(personality.label, state.voicePersonality == personality, { viewModel.setVoicePersonality(personality) })
-            }
-        }
-        ChipRow(label = "模式") {
-            RideMode.entries.forEach { mode ->
-                HudChip(
-                    mode.label,
-                    state.rideContext.mode == mode,
-                    { viewModel.setRideMode(mode) },
-                    selectedColor = if (mode == RideMode.EMERGENCY) HudColors.Danger else HudColors.Accent
-                )
-            }
-        }
+        SegmentedRow("语气", VoicePersonality.entries, state.voicePersonality, { it.label }, viewModel::setVoicePersonality)
+        SegmentedRow(
+            "模式", RideMode.entries, state.rideContext.mode, { it.label }, viewModel::setRideMode,
+            selectedColor = { if (it == RideMode.EMERGENCY) c.danger else c.accent }
+        )
     }
 
     // Server / relay connection.
-    SectionCard("连接") {
+    SettingsGroup("音乐") {
+        SettingsRow(
+            "音乐播放器",
+            supporting = "打开播放控制",
+            onClick = {
+                viewModel.showPreferences = false
+                viewModel.music.show()
+            }
+        ) { ChevronIcon() }
+    }
+
+    SettingsGroup("连接") {
         if (state.handsFree) {
-            Text("当前服务器：${viewModel.relayUrl}", color = HudColors.Muted, fontSize = 12.sp)
-            Text("结束免提后可修改服务器地址。", color = HudColors.Muted, fontSize = 11.sp)
+            SettingsRow("当前服务器", supporting = viewModel.relayUrl, supportingColor = c.textSecondary)
+            SettingsBlock {
+                Text("结束免提后可修改服务器地址。", color = c.textTertiary, style = VisorType.caption)
+            }
         } else {
-            OutlinedTextField(
-                value = viewModel.relayUrl,
-                onValueChange = viewModel::updateRelayUrl,
-                singleLine = true,
-                label = { Text("语音中继地址（ws:// 或 wss://）", fontSize = 12.sp) },
-                textStyle = MaterialTheme.typography.bodySmall.copy(color = HudColors.Text),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = HudColors.AccentCyan,
-                    unfocusedBorderColor = HudColors.Border,
-                    focusedLabelColor = HudColors.AccentCyan,
-                    unfocusedLabelColor = HudColors.Muted
-                ),
-                modifier = Modifier.fillMaxWidth()
-            )
-            // Optional shared relay secret, sent as the ?token= query parameter.
-            OutlinedTextField(
-                value = viewModel.authToken,
-                onValueChange = viewModel::updateAuthToken,
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-                label = { Text("认证令牌（网页「复制令牌」获取）", fontSize = 12.sp) },
-                textStyle = MaterialTheme.typography.bodySmall.copy(color = HudColors.Text),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = HudColors.AccentCyan,
-                    unfocusedBorderColor = HudColors.Border,
-                    focusedLabelColor = HudColors.AccentCyan,
-                    unfocusedLabelColor = HudColors.Muted
-                ),
-                modifier = Modifier.fillMaxWidth()
-            )
+            SettingsBlock {
+                VisorTextField(viewModel.relayUrl, viewModel::updateRelayUrl, "语音中继地址（ws:// 或 wss://）", mono = true)
+                // Optional shared relay secret, sent as the ?token= query parameter.
+                VisorTextField(viewModel.authToken, viewModel::updateAuthToken, "认证令牌（网页「复制令牌」获取）", secret = true)
+            }
             if (BuildConfig.DEBUG) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("信任自签名证书（仅调试）", color = HudColors.Muted, fontSize = 12.sp)
-                    Switch(
-                        checked = viewModel.allowSelfSigned,
-                        onCheckedChange = viewModel::updateAllowSelfSigned,
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = HudColors.Accent,
-                            checkedThumbColor = Color(0xFF07221A)
-                        )
-                    )
-                }
+                SettingsSwitchRow("信任自签名证书（仅调试）", viewModel.allowSelfSigned, viewModel::updateAllowSelfSigned)
             }
         }
     }
 
-    SectionCard("QA 任务归因") {
-        Text(
-            "从网页管理台的 Release runs 复制任务标识。下一次会话会按构建、平台和任务进入发布证据矩阵。",
-            color = HudColors.Muted,
-            fontSize = 11.sp
-        )
-        val qaFields: List<Triple<String, String, (String) -> Unit>> = listOf(
-            Triple("Campaign ID", viewModel.testingCampaignId, viewModel::updateTestingCampaignId),
-            Triple("Test case ID", viewModel.testingTestCaseId, viewModel::updateTestingTestCaseId),
-            Triple("Run ID（可选）", viewModel.testingRunId, viewModel::updateTestingRunId),
-            Triple("Assignment ID（可选）", viewModel.testingAssignmentId, viewModel::updateTestingAssignmentId)
-        )
-        qaFields.forEach { (label, value, update) ->
-            OutlinedTextField(
-                value = value,
-                onValueChange = update,
-                enabled = !state.handsFree,
-                singleLine = true,
-                label = { Text(label, fontSize = 11.sp) },
-                textStyle = MaterialTheme.typography.bodySmall.copy(color = HudColors.Text),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = HudColors.AccentCyan,
-                    unfocusedBorderColor = HudColors.Border,
-                    focusedLabelColor = HudColors.AccentCyan,
-                    unfocusedLabelColor = HudColors.Muted
-                ),
-                modifier = Modifier.fillMaxWidth()
+    SettingsGroup("QA 任务归因") {
+        SettingsBlock {
+            Text(
+                "从网页管理台的 Release runs 复制任务标识。下一次会话会按构建、平台和任务进入发布证据矩阵。",
+                color = c.textSecondary,
+                style = VisorType.caption
+            )
+            val qaFields: List<Triple<String, String, (String) -> Unit>> = listOf(
+                Triple("Campaign ID", viewModel.testingCampaignId, viewModel::updateTestingCampaignId),
+                Triple("Test case ID", viewModel.testingTestCaseId, viewModel::updateTestingTestCaseId),
+                Triple("Run ID（可选）", viewModel.testingRunId, viewModel::updateTestingRunId),
+                Triple("Assignment ID（可选）", viewModel.testingAssignmentId, viewModel::updateTestingAssignmentId)
+            )
+            qaFields.forEach { (label, value, update) ->
+                VisorTextField(value, update, label, enabled = !state.handsFree, mono = true)
+            }
+            Text(
+                "Android · ${BuildConfig.VERSION_NAME}+${BuildConfig.VERSION_CODE} · commit ${BuildConfig.GIT_COMMIT}",
+                color = c.textTertiary,
+                style = VisorType.monoCaption
             )
         }
-        Text(
-            "Android · ${BuildConfig.VERSION_NAME}+${BuildConfig.VERSION_CODE} · commit ${BuildConfig.GIT_COMMIT}",
-            color = HudColors.Muted,
-            fontSize = 10.sp
-        )
     }
 
-    // Live ride intelligence: weather, route, and session memory. The data
-    // already flows over the protocol (weather / ride.context / session.memory
-    // events); this surfaces it like the web HUD instruments.
-    SectionCard("骑行情报") {
+    // Live ride intelligence: weather, route, and session memory.
+    SettingsGroup("骑行情报") {
         val weather = state.weather
         if (weather != null) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("${weather.temperatureC}°", color = HudColors.Text, fontSize = 26.sp, fontWeight = FontWeight.Bold)
-                Text(weather.description, color = HudColors.Text, fontSize = 14.sp)
-                Text("风速 ${weather.windSpeedKmh} km/h", color = HudColors.Muted, fontSize = 12.sp)
-                Spacer(Modifier.weight(1f))
+            SettingsRow(
+                title = weather.description,
+                supporting = "风速 ${weather.windSpeedKmh} km/h"
+            ) {
+                Text("${weather.temperatureC}°", color = c.text, style = VisorType.monoLarge)
                 Text(
                     when (weather.riskLevel) {
                         HazardLevel.CRITICAL -> "高风险"
                         HazardLevel.CAUTION -> "注意"
                         else -> "正常"
                     },
-                    color = hazardColor(weather.riskLevel),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
+                    color = hazardColor(c, weather.riskLevel),
+                    style = VisorType.label
                 )
             }
-            Text(weather.riderAdvice, color = HudColors.Muted, fontSize = 12.sp)
+            SettingsBlock { Text(weather.riderAdvice, color = c.textSecondary, style = VisorType.caption) }
         } else {
-            Text("激活后接入定位天气", color = HudColors.Muted, fontSize = 12.sp)
+            SettingsRow("天气", supporting = "激活后接入定位天气")
         }
-        Text(
-            "${state.rideContext.speedKmh} km/h · ${state.rideContext.routePhase}",
-            color = HudColors.Muted,
-            fontSize = 12.sp
-        )
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            InfoChip(if (state.sessionMemory.language == "zh") "中文" else "English")
-            InfoChip(responseModeLabel(state.sessionMemory.responseMode))
-            InfoChip(state.sessionMemory.lastIntent ?: "待识别")
-            state.sessionMemory.destination?.let { InfoChip(it, tint = HudColors.AccentCyan) }
-            Spacer(Modifier.weight(1f))
-            InfoChip("电量 ${state.rideContext.batteryPct}%")
+        SettingsRow("车速 · 路段", supporting = state.rideContext.routePhase) {
+            Text("${state.rideContext.speedKmh} km/h", color = c.text, style = VisorType.mono)
+        }
+        SettingsRow("电量") { Text("${state.rideContext.batteryPct}%", color = c.text, style = VisorType.mono) }
+        SettingsBlock {
+            Row(horizontalArrangement = Arrangement.spacedBy(VisorSpace.x2)) {
+                VisorTag(if (state.sessionMemory.language == "zh") "中文" else "English")
+                VisorTag(responseModeLabel(state.sessionMemory.responseMode))
+                VisorTag(state.sessionMemory.lastIntent ?: "待识别")
+            }
+            state.sessionMemory.destination?.let { VisorTag(it, tint = c.text) }
         }
     }
 
     // Demo scenarios (ADAS hazard injection).
-    SectionCard("演示场景") {
-        ChipRow(label = "场景") {
-            DemoScenario.entries.forEach { scenario ->
-                HudChip(
-                    scenario.label,
-                    state.rideContext.scenario == scenario,
-                    { viewModel.setScenario(scenario) },
-                    selectedColor = hazardColor(scenario.hazard)
-                )
-            }
-        }
-        // Guided tour of every scenario — mock provider only, like the web.
+    SettingsGroup("演示场景") {
+        SegmentedRow(
+            "场景", DemoScenario.entries, state.rideContext.scenario, { it.label }, viewModel::setScenario,
+            fill = false,
+            selectedColor = { hazardColor(c, it.hazard).let { tone -> if (it.hazard == HazardLevel.NORMAL) c.accent else tone } }
+        )
+        // Guided tour of every scenario: mock provider only, like the web.
         if (state.provider == "mock") {
-            ChipRow(label = "巡游") {
-                HudChip(
-                    if (state.guidedDemo) "■ 巡游中" else "▶ 巡游演示",
-                    state.guidedDemo,
-                    { viewModel.setGuidedDemo(!state.guidedDemo) },
-                    selectedColor = HudColors.AccentCyan
-                )
-            }
+            SettingsSwitchRow("巡游演示", state.guidedDemo, { viewModel.setGuidedDemo(!state.guidedDemo) })
         }
     }
 
     // Diagnostics: latency, telemetry, transcript export, raw status.
-    SectionCard("诊断") {
+    SettingsGroup("诊断") {
         val toneColor = when {
-            state.latencyMs < 140 -> HudColors.Accent
-            state.latencyMs < 280 -> HudColors.Warn
-            else -> HudColors.Danger
+            state.latencyMs < 140 -> c.ok
+            state.latencyMs < 280 -> c.warn
+            else -> c.danger
         }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("延迟", color = HudColors.Muted, fontSize = 11.sp)
-                Text("${state.latencyMs}ms", color = toneColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                HudChip(
-                    "导出日志",
-                    state.transcript.isNotEmpty(),
-                    { if (state.transcript.isNotEmpty()) onExportTranscript() },
-                    selectedColor = HudColors.AccentCyan
-                )
-                HudChip(
-                    "清空对话记录",
-                    state.transcript.isNotEmpty(),
-                    { if (state.transcript.isNotEmpty()) viewModel.clearTranscript() },
-                    selectedColor = HudColors.Danger
-                )
-            }
-        }
+        SettingsRow("延迟") { Text("${state.latencyMs} ms", color = toneColor, style = VisorType.mono) }
         state.telemetry?.let {
-            Text(
-                "ASR ${it.asrMs} · 思考 ${it.thinkMs} · 首音 ${it.firstAudioMs} · 总计 ${it.totalMs}ms",
-                color = HudColors.Muted,
-                fontSize = 11.sp
-            )
+            SettingsRow("ASR", supporting = "思考 ${it.thinkMs} · 首音 ${it.firstAudioMs} · 总计 ${it.totalMs}ms") {
+                Text("${it.asrMs} ms", color = c.text, style = VisorType.mono)
+            }
         }
-        Text(state.statusText, color = HudColors.Muted, fontSize = 12.sp)
+        SettingsRow(
+            "导出日志",
+            enabled = state.transcript.isNotEmpty(),
+            onClick = { if (state.transcript.isNotEmpty()) onExportTranscript() }
+        ) { ChevronIcon() }
+        SettingsRow(
+            "清空对话记录",
+            titleColor = c.danger,
+            enabled = state.transcript.isNotEmpty(),
+            onClick = { if (state.transcript.isNotEmpty()) viewModel.clearTranscript() }
+        ) { ChevronIcon() }
+        SettingsBlock { Text(state.statusText, color = c.textSecondary, style = VisorType.caption) }
     }
 }
 
-@Composable
-private fun SectionCard(title: String, content: @Composable ColumnScope.() -> Unit) {
-    HudCard {
-        Text(title, color = HudColors.Muted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(8.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { content() }
-    }
-}
+// ---- assistant: identity + voice backend picker ----------------------------------------
 
 @Composable
-private fun ChipRow(label: String, content: @Composable () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(label, color = HudColors.Muted, fontSize = 11.sp, modifier = Modifier.width(34.dp))
-        Row(
-            modifier = Modifier.horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            content()
+private fun AssistantSection(viewModel: MainViewModel) {
+    val c = Visor.colors
+    val backends = viewModel.voiceBackends
+    SettingsGroup("助手") {
+        SettingsRow("名称") { Text(viewModel.assistantName, color = c.textSecondary, style = VisorType.body) }
+        SettingsRow("设备") { Text(viewModel.deviceKind.noun, color = c.textSecondary, style = VisorType.body) }
+        if (backends != null && backends.providers.isNotEmpty()) {
+            if (backends.switching) {
+                val selectedId = viewModel.voiceProviderId?.takeIf { id -> backends.providers.any { it.id == id } } ?: backends.active
+                backends.providers.forEach { provider ->
+                    val configured = provider.configured
+                    SettingsRow(
+                        title = provider.label,
+                        supporting = if (!configured) "需配置 API 密钥" else provider.description,
+                        supportingColor = if (!configured) c.warn else c.textSecondary,
+                        enabled = configured,
+                        onClick = { if (provider.id != selectedId) viewModel.selectVoiceProvider(provider.id) }
+                    ) {
+                        Text(providerKindLabel(provider.kind), color = c.textTertiary, style = VisorType.caption)
+                        if (provider.id == selectedId) {
+                            Icon(Icons.Filled.Check, contentDescription = "当前语音后端", tint = c.accent, modifier = Modifier.size(20.dp))
+                        } else {
+                            Spacer(Modifier.size(20.dp))
+                        }
+                    }
+                }
+            } else {
+                SettingsRow("语音后端") { Text(backends.activeLabel, color = c.textSecondary, style = VisorType.body) }
+            }
         }
     }
 }
 
-@Composable
-private fun HudChip(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    selectedColor: Color = HudColors.Accent
-) {
-    val background = if (selected) selectedColor.copy(alpha = 0.16f) else HudColors.PanelElevated
-    val textColor = if (selected) selectedColor else HudColors.Muted
-    val shape = RoundedCornerShape(50)
-    Box(
-        modifier = Modifier
-            .clip(shape)
-            .background(background)
-            .then(
-                if (selected) Modifier.border(1.dp, selectedColor.copy(alpha = 0.7f), shape)
-                else Modifier
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 13.dp, vertical = 7.dp)
-    ) {
-        Text(
-            label,
-            color = textColor,
-            fontSize = 13.sp,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
-        )
-    }
+internal fun providerKindLabel(kind: String): String = when (kind) {
+    "demo" -> "演示"
+    "live" -> "实时"
+    "pipeline" -> "流水线"
+    else -> kind
 }
-
-/** Small read-only status chip (session memory / battery readouts). */
-@Composable
-private fun InfoChip(label: String, tint: Color = HudColors.Muted) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(50))
-            .background(HudColors.Panel)
-            .padding(horizontal = 9.dp, vertical = 5.dp)
-    ) {
-        Text(label, color = tint, fontSize = 11.sp, fontWeight = FontWeight.Medium, maxLines = 1)
-    }
-}
-
-// ---- shared card scaffolding -----------------------------------------------------------

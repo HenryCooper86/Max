@@ -4,7 +4,7 @@ import { createMusicController, EMPTY_MUSIC, type MusicControl } from "../lib/mu
 // I/O lives in useAudioPlayback / useMicCapture.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { TurnState } from "../components/HelmetVisual";
+import type { TurnState } from "../components/VisorVisual";
 import {
   IDLE_CLOSE_CODE,
   type AgentHealth,
@@ -128,6 +128,11 @@ export function useHelmetAgent() {
   const [voicePersonality, setVoicePersonalityState] = useState<VoicePersonality>(
     storedSettings.voicePersonality ?? "concise"
   );
+  // Voice backend the wearer picked (an AgentHealth.voice.providers id), or ""
+  // for the relay default. Sent with every session.start.
+  const [voiceProvider, setVoiceProviderState] = useState(storedSettings.voiceProvider ?? "");
+  // Backend the current relay session reported in session.started.
+  const [sessionProvider, setSessionProvider] = useState<string | null>(null);
   const [testerId, setTesterIdState] = useState(initialTesterId);
   const [testingCampaignId, setTestingCampaignIdState] = useState(
     findTestingCampaign(storedSettings.testingCampaignId).id
@@ -174,6 +179,7 @@ export function useHelmetAgent() {
   const isLiveRef = useRef(false);
   const voiceGenderRef = useRef<VoiceGender>(storedSettings.voiceGender ?? "female");
   const voicePersonalityRef = useRef<VoicePersonality>(storedSettings.voicePersonality ?? "concise");
+  const voiceProviderRef = useRef(storedSettings.voiceProvider ?? "");
   const testerIdRef = useRef(initialTesterId);
   const testingCampaignIdRef = useRef(findTestingCampaign(storedSettings.testingCampaignId).id);
   const testingTestCaseIdRef = useRef(findTestingTestCase(storedSettings.testingTestCaseId).id);
@@ -342,6 +348,7 @@ export function useHelmetAgent() {
     saveStoredSettings({
       voiceGender: voiceGenderRef.current,
       voicePersonality: voicePersonalityRef.current,
+      ...(voiceProviderRef.current ? { voiceProvider: voiceProviderRef.current } : {}),
       testerId: lastNonEmptyTesterIdRef.current,
       testingCampaignId: testingCampaignIdRef.current,
       testingTestCaseId: testingTestCaseIdRef.current,
@@ -515,6 +522,7 @@ export function useHelmetAgent() {
           platform: "web",
           voiceGender: voiceGenderRef.current,
           voicePersonality: voicePersonalityRef.current,
+          ...(voiceProviderRef.current ? { voiceProvider: voiceProviderRef.current } : {}),
           rideMode: rideModeRef.current,
           scenario: scenarioRef.current,
           ...(location ? { lat: location.lat, lon: location.lon } : {}),
@@ -553,6 +561,7 @@ export function useHelmetAgent() {
         if (event.type === "session.started") {
           providerReadyRef.current = true;
           setProvider(event.provider);
+          setSessionProvider(event.provider);
           setCapabilities(event.capabilities);
           isLiveRef.current = event.mode !== "mock";
           setConnectionState("ready");
@@ -820,6 +829,18 @@ export function useHelmetAgent() {
       setVoicePersonalityState(personality);
       persistSettings();
       setStatus(`已切换语气：${PERSONALITY_LABELS[personality]}`);
+      if (socketRef.current) restartSession();
+    },
+    [persistSettings, restartSession]
+  );
+
+  // Switch the voice backend. Like the voice gender, the backend is chosen at
+  // session start, so a live session restarts on the same path.
+  const setVoiceProvider = useCallback(
+    (providerId: string) => {
+      voiceProviderRef.current = providerId;
+      setVoiceProviderState(providerId);
+      persistSettings();
       if (socketRef.current) restartSession();
     },
     [persistSettings, restartSession]
@@ -1296,6 +1317,8 @@ export function useHelmetAgent() {
     transcript,
     voiceGender,
     voicePersonality,
+    voiceProvider,
+    sessionProvider: connectionState === "ready" ? sessionProvider : null,
     testerId,
     testingCampaignId,
     testingTestCaseId,
@@ -1319,6 +1342,7 @@ export function useHelmetAgent() {
     stopNavDemo,
     setVoiceGender,
     setVoicePersonality,
+    setVoiceProvider,
     setTesterId,
     setTestingCampaignId,
     setTestingTestCaseId,

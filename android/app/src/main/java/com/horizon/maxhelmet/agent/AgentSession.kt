@@ -76,6 +76,8 @@ class AgentSession(
         val micMuted: Boolean = false,
         val voiceGender: VoiceGender = VoiceGender.FEMALE,
         val voicePersonality: VoicePersonality = VoicePersonality.CONCISE,
+        /** Chosen voice backend id (relay /health voice.providers); null = relay default. */
+        val voiceProvider: String? = null,
         val voiceLevel: Float = 0f,
         val latencyMs: Int = 0,
         val transcript: List<TranscriptItem> = emptyList(),
@@ -590,6 +592,13 @@ class AgentSession(
         restartIfConnected()
     }
 
+    /** Selects the relay voice backend; restarts the session like a gender change. */
+    fun setVoiceProvider(id: String?) {
+        if (_state.value.voiceProvider == id) return
+        _state.update { it.copy(voiceProvider = id) }
+        restartIfConnected()
+    }
+
     /** Mirrors setVoicePersonality in src/main.tsx. */
     fun setVoicePersonality(personality: VoicePersonality) {
         if (_state.value.voicePersonality == personality) return
@@ -799,7 +808,8 @@ class AgentSession(
                         deviceLabel = nativeDeviceLabel(),
                         browserLanguage = Locale.getDefault().toLanguageTag(),
                         networkType = nativeNetworkType(),
-                        memory = current.sessionMemory
+                        memory = current.sessionMemory,
+                        voiceProvider = current.voiceProvider
                     )
                 )
                 // The guided tour lives in the provider instance, so a fresh session

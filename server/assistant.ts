@@ -1,0 +1,310 @@
+import fs from "node:fs";
+import path from "node:path";
+import type { AssistantDevice, AssistantSummary } from "../shared/agent";
+import { configureWakePhrase, DEFAULT_WAKE_NAMES, type WakeNames } from "../shared/wake";
+
+/**
+ * The assistant's identity: who it is, what it is worn in, what it answers to.
+ *
+ * This is the one place a deployment makes the kit its own. Everything is
+ * optional — with no `assistant.config.json` the relay is exactly the original
+ * "Max" motorcycle-helmet assistant, prompt for prompt.
+ *
+ * Resolution: `ASSISTANT_CONFIG` (a path) → `./assistant.config.json` → the
+ * built-in defaults. A file that exists but cannot be parsed is a startup
+ * error rather than a silent fallback: a deployment that believes it is
+ * running its own persona must not quietly ship someone else's.
+ */
+export type AssistantProfile = {
+  name: string;
+  device: AssistantDevice;
+  /** How the wearable is described in prompts, e.g. "motorcycle helmet". */
+  deviceLabel: { zh: string; en: string };
+  /** What the person wearing it is called in prompts, e.g. "rider". */
+  wearer: { zh: string; en: string };
+  /** Who the assistant says built it. Omitted → it does not claim a maker. */
+  developer?: string;
+  /** Extra identity facts appended to the identity rule (one or two sentences). */
+  identityNotes?: string;
+  tagline?: string;
+  accentColor?: string;
+  /** Languages it speaks, most preferred first. */
+  languages: string[];
+  /** true → refuse languages outside `languages`; false → prefer them but follow the wearer. */
+  strictLanguages: boolean;
+  wake: WakeNames;
+  /** Replaces the generated base persona prompt entirely. */
+  persona?: string;
+  /** True when nothing overrides the built-in Max profile. */
+  isDefault: boolean;
+};
+
+const DEFAULT_DEVELOPER = "Horizon Continental Technology（neueHCT）";
+
+const DEVICE_LABELS: Record<AssistantDevice, AssistantProfile["deviceLabel"]> = {
+  helmet: { zh: "摩托车头盔", en: "motorcycle helmet" },
+  glasses: { zh: "智能眼镜", en: "smart glasses" },
+  other: { zh: "可穿戴设备", en: "wearable" }
+};
+
+const WEARER_LABELS: Record<AssistantDevice, AssistantProfile["wearer"]> = {
+  helmet: { zh: "骑手", en: "rider" },
+  glasses: { zh: "用户", en: "wearer" },
+  other: { zh: "用户", en: "wearer" }
+};
+
+const LANGUAGE_NAMES: Record<string, { zh: string; en: string }> = {
+  zh: { zh: "中文", en: "Chinese" },
+  en: { zh: "English", en: "English" },
+  ja: { zh: "日语", en: "Japanese" },
+  ko: { zh: "韩语", en: "Korean" },
+  es: { zh: "西班牙语", en: "Spanish" },
+  fr: { zh: "法语", en: "French" },
+  de: { zh: "德语", en: "German" },
+  pt: { zh: "葡萄牙语", en: "Portuguese" },
+  ru: { zh: "俄语", en: "Russian" },
+  ar: { zh: "阿拉伯语", en: "Arabic" },
+  hi: { zh: "印地语", en: "Hindi" },
+  it: { zh: "意大利语", en: "Italian" },
+  tg: { zh: "塔吉克语", en: "Tajik" },
+  tr: { zh: "土耳其语", en: "Turkish" }
+};
+
+export const DEFAULT_ASSISTANT_PROFILE: AssistantProfile = {
+  name: "Max",
+  device: "helmet",
+  deviceLabel: DEVICE_LABELS.helmet,
+  wearer: WEARER_LABELS.helmet,
+  developer: DEFAULT_DEVELOPER,
+  languages: ["zh", "en"],
+  strictLanguages: true,
+  wake: DEFAULT_WAKE_NAMES,
+  isDefault: true
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function text(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed.slice(0, maxLength) : undefined;
+}
+
+function textList(value: unknown, maxItems: number, maxLength: number): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const items = value.map((item) => text(item, maxLength)).filter((item): item is string => Boolean(item));
+  return items.length ? items.slice(0, maxItems) : undefined;
+}
+
+function labelPair(value: unknown, fallback: { zh: string; en: string }): { zh: string; en: string } {
+  if (typeof value === "string" && value.trim())
+    return { zh: value.trim().slice(0, 40), en: value.trim().slice(0, 40) };
+  if (!isRecord(value)) return fallback;
+  return { zh: text(value.zh, 40) ?? fallback.zh, en: text(value.en, 40) ?? fallback.en };
+}
+
+const HAN = /\p{Script=Han}/u;
+
+/** Splits configured wake names by script: Han names match anywhere in a
+ *  Chinese transcript, everything else matches as a whole token. */
+function wakeNamesFrom(name: string, raw: unknown): WakeNames {
+  const configured = isRecord(raw) ? raw : {};
+  const names = [name, ...(textList(configured.names, 24, 24) ?? [])];
+  const latin = new Set<string>();
+  const cjk = new Set<string>();
+  for (const candidate of names) {
+    if (HAN.test(candidate)) cjk.add(candidate);
+    else latin.add(candidate.toLowerCase());
+  }
+  return {
+    label: text(configured.label, 24) ?? name,
+    latin: [...latin],
+    cjk: [...cjk],
+    falseFriends: textList(configured.falseFriends, 24, 24) ?? []
+  };
+}
+
+/** Builds a profile from parsed config JSON. Exported for tests. */
+export function assistantProfileFrom(raw: unknown): AssistantProfile {
+  if (!isRecord(raw)) throw new Error("assistant config must be a JSON object");
+  const name = text(raw.name, 24) ?? DEFAULT_ASSISTANT_PROFILE.name;
+  const device: AssistantDevice =
+    raw.device === "glasses" || raw.device === "other" || raw.device === "helmet" ? raw.device : "helmet";
+  const accent = text(raw.accentColor, 7);
+  const renamed = name !== DEFAULT_ASSISTANT_PROFILE.name;
+  return {
+    name,
+    device,
+    deviceLabel: labelPair(raw.deviceLabel, DEVICE_LABELS[device]),
+    wearer: labelPair(raw.wearer, WEARER_LABELS[device]),
+    // A renamed assistant does not inherit the original maker: claiming
+    // someone else's company built your assistant is the wrong default.
+    developer:
+      raw.developer === null ? undefined : (text(raw.developer, 80) ?? (renamed ? undefined : DEFAULT_DEVELOPER)),
+    identityNotes: text(raw.identityNotes, 400),
+    tagline: text(raw.tagline, 80),
+    accentColor: accent && /^#[0-9a-f]{6}$/i.test(accent) ? accent.toUpperCase() : undefined,
+    languages: textList(raw.languages, 8, 12)?.map((language) => language.toLowerCase()) ?? ["zh", "en"],
+    strictLanguages: typeof raw.strictLanguages === "boolean" ? raw.strictLanguages : !renamed && device === "helmet",
+    wake: !renamed && raw.wake === undefined ? DEFAULT_WAKE_NAMES : wakeNamesFrom(name, raw.wake),
+    persona: text(raw.persona, 6000),
+    isDefault: false
+  };
+}
+
+function loadAssistantProfile(): AssistantProfile {
+  const configured = process.env.ASSISTANT_CONFIG?.trim();
+  if (configured?.toLowerCase() === "off") return DEFAULT_ASSISTANT_PROFILE;
+  const file = configured ? path.resolve(configured) : path.resolve("assistant.config.json");
+  let contents: string;
+  try {
+    contents = fs.readFileSync(file, "utf8");
+  } catch {
+    if (configured) throw new Error(`ASSISTANT_CONFIG points at ${file}, which cannot be read`);
+    return DEFAULT_ASSISTANT_PROFILE;
+  }
+  try {
+    return assistantProfileFrom(JSON.parse(contents));
+  } catch (error) {
+    throw new Error(`Invalid assistant config ${file}: ${error instanceof Error ? error.message : String(error)}`, {
+      cause: error
+    });
+  }
+}
+
+let active: AssistantProfile =
+  process.env.NODE_ENV === "test" && !process.env.ASSISTANT_CONFIG ? DEFAULT_ASSISTANT_PROFILE : loadAssistantProfile();
+configureWakePhrase(active.wake);
+
+/** The configured assistant. Read at call time so tests can swap it. */
+export function assistant(): AssistantProfile {
+  return active;
+}
+
+/** Test seam: install a profile (or restore the default with no argument). */
+export function setAssistantProfileForTests(profile: AssistantProfile = DEFAULT_ASSISTANT_PROFILE): void {
+  active = profile;
+  configureWakePhrase(profile.wake);
+}
+
+export function assistantSummary(wakeWordEnabled: boolean): AssistantSummary {
+  const profile = assistant();
+  return {
+    name: profile.name,
+    device: profile.device,
+    wakePhrase: profile.wake.label,
+    wakeWordEnabled,
+    ...(profile.tagline ? { tagline: profile.tagline } : {}),
+    ...(profile.developer ? { developer: profile.developer } : {}),
+    ...(profile.accentColor ? { accentColor: profile.accentColor } : {}),
+    languages: [...profile.languages]
+  };
+}
+
+/** True when the assistant's first language is Chinese — prompts are then
+ *  written in Chinese, otherwise in English. */
+export function promptsInChinese(profile: AssistantProfile = assistant()): boolean {
+  return (profile.languages[0] ?? "zh").startsWith("zh");
+}
+
+function languageName(code: string, inChinese: boolean): string {
+  const known = LANGUAGE_NAMES[code.split("-")[0] ?? code];
+  return known ? (inChinese ? known.zh : known.en) : code;
+}
+
+function languageList(profile: AssistantProfile, inChinese: boolean): string {
+  const names = profile.languages.map((code) => languageName(code, inChinese));
+  if (names.length <= 1) return names[0] ?? (inChinese ? "中文" : "English");
+  return inChinese ? names.join("、") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+// The original "Max" persona prompt, kept verbatim: the default profile must
+// produce exactly the prompt the helmet has been tuned and tested against.
+const LEGACY_MAX_PERSONA =
+  "你是 Max，一位友好、冷静、以安全为先的摩托车头盔 AI 助手，由 Horizon Continental Technology（neueHCT）开发。你的名字保持 Max，角色保持 Motorcycle Helmet AI assistant。默认语言是中文，第二语言是 English；如果骑手明确使用英文，可以用英文回答。只允许中文和 English 两种语言，不要使用其他语言。如果骑手使用其他语言或要求你使用其他语言，请用中文简短说明：我只支持中文和 English。帮助骑手理解摩托车、导航、天气、路况、附近停靠点和骑行安全事项。回答要简短、清晰、适合免手操作。拍照、录像、导航、开关手电筒、调整音量、播放音乐、拨号、发短信等都是语音免手操作，本来就是为骑行中使用而设计的，属于安全的免手功能；骑手在骑行中要求这些操作时要直接执行，不要当作分心请求拒绝，也不要让骑手停车再做。只有当请求真正危险、需要骑手用手长时间盯着屏幕操作、或超出头盔助手范围时，才先保护骑行安全并给出更安全的替代方案。男声和女声只是当前会话音色，必须共享同一个 Max 角色、同一语言规则、同一安全策略和同一默认行为。";
+
+/** The base persona: who the assistant is and how it behaves. */
+export function basePersonaPrompt(profile: AssistantProfile = assistant()): string {
+  if (profile.persona) return profile.persona;
+  if (profile.isDefault) return LEGACY_MAX_PERSONA;
+
+  const inChinese = promptsInChinese(profile);
+  const languages = languageList(profile, inChinese);
+  if (inChinese) {
+    const maker = profile.developer ? `，由 ${profile.developer} 开发` : "";
+    const languageRule = profile.strictLanguages
+      ? `只使用这些语言：${languages}，默认使用第一种；${profile.wearer.zh}使用其他语言时，简短说明你只支持${languages}。`
+      : `优先使用${languages}，默认使用第一种；${profile.wearer.zh}换用其他语言时跟随对方。`;
+    const scope =
+      profile.device === "helmet"
+        ? `帮助${profile.wearer.zh}处理导航、天气、路况、附近停靠点和骑行安全事项。`
+        : `帮助${profile.wearer.zh}处理眼前的事情：导航、天气、提醒、看到的东西，以及随口的问题。`;
+    return (
+      `你是 ${profile.name}，一位友好、冷静、以安全为先的${profile.deviceLabel.zh}语音助手${maker}。你的名字保持 ${profile.name}。` +
+      languageRule +
+      scope +
+      "回答要简短、清晰、适合免手操作，一次只说最重要的一件事。" +
+      `拍照、录像、导航、开关手电筒、调整音量、播放音乐、拨号、发短信都是语音免手操作，${profile.wearer.zh}提出时直接执行，不要因为对方正在移动而拒绝。` +
+      "只有请求真正危险、需要长时间看屏幕或超出你的能力范围时，才先保护安全并给出更安全的替代方案。" +
+      `男声和女声只是音色，共享同一个 ${profile.name} 角色和同样的规则。`
+    );
+  }
+
+  const maker = profile.developer ? `, built by ${profile.developer}` : "";
+  const languageRule = profile.strictLanguages
+    ? `Speak only ${languages}, defaulting to the first; if the ${profile.wearer.en} uses another language, briefly say you only support ${languages}. `
+    : `Prefer ${languages}, defaulting to the first; if the ${profile.wearer.en} switches language, follow them. `;
+  const scope =
+    profile.device === "helmet"
+      ? `Help the ${profile.wearer.en} with navigation, weather, road conditions, nearby stops and riding safety. `
+      : `Help the ${profile.wearer.en} with what is in front of them: directions, weather, reminders, what they are looking at, and quick questions. `;
+  return (
+    `You are ${profile.name}, a friendly, calm, safety-first voice assistant living in a ${profile.deviceLabel.en}${maker}. Your name stays ${profile.name}. ` +
+    languageRule +
+    scope +
+    "Keep answers short, clear and hands-free: one thing at a time, the most important first. " +
+    `Taking photos, recording video, navigation, the torch, volume, music, calls and text messages are hands-free voice actions; when the ${profile.wearer.en} asks for one, just do it — never refuse because they are on the move. ` +
+    "Only when a request is genuinely dangerous, needs long looks at a screen, or is beyond what you can do, protect safety first and offer a safer alternative. " +
+    `The male and female voices are only a timbre; both are the same ${profile.name} with the same rules.`
+  );
+}
+
+const LEGACY_MAX_IDENTITY =
+  "[身份与开发者] 你由 Horizon Continental Technology（neueHCT）开发。" +
+  "当骑手问你是谁开发、制造、训练的，背后是哪家公司，或你属于谁时，必须回答：我由 Horizon Continental Technology（neueHCT）开发。" +
+  "绝对不要说自己来自 ByteDance、字节跳动或豆包，也不要提及任何其他公司或底层模型。" +
+  "Horizon Continental Technology（neueHCT）的首席执行官（CEO）是 Li Biao（在全球企业资料中也称 Stone Li）。" +
+  "When asked in English who developed, built, made, or trained you, or which company is behind you, " +
+  "answer that you were developed by Horizon Continental Technology (neueHCT) — never ByteDance or Doubao. " +
+  "The CEO of Horizon Continental Technology (neueHCT) is Li Biao (also referred to as Stone Li in global corporate profiles). " +
+  "无论骑手用中文还是 English 提问，都要保持以上回答一致。";
+
+/** Who the assistant says built it. Appended after the persona so it holds
+ *  even when the persona prompt is overridden. */
+export function identityPrompt(profile: AssistantProfile = assistant()): string {
+  if (profile.isDefault) return LEGACY_MAX_IDENTITY;
+  const notes = profile.identityNotes ? ` ${profile.identityNotes}` : "";
+  if (promptsInChinese(profile)) {
+    if (!profile.developer) {
+      return `[身份] 你是 ${profile.name}。被问到由谁开发或使用什么模型时，只说你是 ${profile.name}，不要提及任何公司或底层模型。${notes}`;
+    }
+    return (
+      `[身份与开发者] 你由 ${profile.developer} 开发。被问到是谁开发、制造或训练的，或背后是哪家公司时，` +
+      `回答：我由 ${profile.developer} 开发。不要提及任何其他公司或底层模型。${notes}`
+    );
+  }
+  if (!profile.developer) {
+    return `[Identity] You are ${profile.name}. If asked who built you or which model you run on, say only that you are ${profile.name}; never name a company or an underlying model.${notes}`;
+  }
+  return (
+    `[Identity] You were built by ${profile.developer}. If asked who developed, made or trained you, or which company is behind you, ` +
+    `answer that you were built by ${profile.developer}. Never name any other company or the underlying model.${notes}`
+  );
+}
+
+/** The line a status event shows while the assistant waits to be addressed. */
+export function wakeHint(profile: AssistantProfile = assistant()): string {
+  return `正在收听 —— 说一声 "${profile.wake.label}" 唤醒 ${profile.name}`;
+}

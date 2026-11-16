@@ -14,6 +14,7 @@ import {
   type AuthUser,
   type UserMemorySummary
 } from "../lib/auth";
+import { useAssistant } from "./AssistantContext";
 import { useLanguage } from "./LanguageToggle";
 import { localized } from "../lib/i18n";
 
@@ -199,6 +200,7 @@ export function AccountSessionControls(props: SessionControlsProps) {
 
 function AccountSessionControlsForUser({ user, onSignedOut, showConnectionToken = false }: SessionControlsProps) {
   const { language, t } = useLanguage();
+  const assistant = useAssistant();
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
@@ -326,11 +328,7 @@ function AccountSessionControlsForUser({ user, onSignedOut, showConnectionToken 
           type="button"
           className={`danger ${memoryClearArmed ? "armed" : ""}`}
           disabled={memoryBusy || !memorySummary?.turnCount}
-          title={localized(
-            language,
-            "清除 Max 为此账号保存的跨会话记忆",
-            "Clear Max's saved cross-session memory for this account"
-          )}
+          title={t("account.memoryHelp", { name: assistant.name })}
           onClick={() => {
             if (!memoryClearArmed) {
               setMemoryClearArmed(true);

@@ -1,16 +1,16 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { VoiceStateReadout } from "../src/components/HelmetVisual";
+import { VoiceStateReadout } from "../src/components/VisorVisual";
 
 describe("voice session readout", () => {
   it("gives an inactive session a clear first action", () => {
     const html = renderToStaticMarkup(
       createElement(VoiceStateReadout, { connected: false, turnState: "idle", sessionState: "inactive" })
     );
-    expect(html).toContain("你好，我是 MAX");
+    expect(html).toContain("你好，我是 Max");
     expect(html).toContain("开启免提");
-    expect(html).not.toContain("OFFLINE");
+    expect(html).not.toContain("离线");
   });
 
   it("explains pending setup and cancellation", () => {
@@ -24,7 +24,7 @@ describe("voice session readout", () => {
   it("keeps disconnected sessions and live hazards distinct from welcome guidance", () => {
     expect(
       renderToStaticMarkup(createElement(VoiceStateReadout, { connected: false, turnState: "listening" }))
-    ).toContain("OFFLINE");
+    ).toContain("离线");
     const html = renderToStaticMarkup(
       createElement(VoiceStateReadout, {
         connected: true,
@@ -33,7 +33,7 @@ describe("voice session readout", () => {
         sessionState: "inactive"
       })
     );
-    expect(html).toContain("HAZARD");
-    expect(html).not.toContain("你好，我是 MAX");
+    expect(html).toContain("高风险");
+    expect(html).not.toContain("你好，我是 Max");
   });
 });

@@ -214,6 +214,10 @@ export type SessionStartEvent = {
   platform?: TestingPlatform;
   voiceGender?: VoiceGender;
   voicePersonality?: VoicePersonality;
+  /** Voice backend the client asks for (an id from AgentHealth.voice.providers).
+   *  Honored only when the relay allows switching and that backend has
+   *  credentials; otherwise the relay's default backend is used. */
+  voiceProvider?: string;
   rideMode?: RideMode;
   scenario?: DemoScenario;
   lat?: number;
@@ -510,9 +514,54 @@ export type AgentEvent =
   | NavRouteEvent
   | NavErrorEvent;
 
+/** What kind of wearable this assistant lives in. Drives copy and artwork only. */
+export type AssistantDevice = "helmet" | "glasses" | "other";
+
+/** The public face of the configured assistant (see server/assistant.ts and
+ *  assistant.config.json). Everything a client needs to brand itself. */
+export type AssistantSummary = {
+  /** Display name, e.g. "Max". */
+  name: string;
+  device: AssistantDevice;
+  /** What the wearer says to address the assistant. */
+  wakePhrase: string;
+  wakeWordEnabled: boolean;
+  tagline?: string;
+  developer?: string;
+  /** Brand accent as #RRGGBB. Clients fall back to their own default. */
+  accentColor?: string;
+  /** Languages the assistant speaks, most preferred first (BCP-47-ish, e.g. "zh", "en"). */
+  languages: string[];
+};
+
+/** "demo" needs no credentials; "live" is one realtime speech-to-speech
+ *  socket; "pipeline" chains speech-to-text → chat model → text-to-speech. */
+export type VoiceProviderKind = "demo" | "live" | "pipeline";
+
+export type VoiceProviderSummary = {
+  id: string;
+  label: string;
+  kind: VoiceProviderKind;
+  /** True when the relay has the credentials this backend needs. */
+  configured: boolean;
+  description?: string;
+};
+
+type VoiceOptions = {
+  /** Backend used when a session does not ask for one. */
+  active: string;
+  /** Whether clients may pick a backend per session via session.start.voiceProvider. */
+  switching: boolean;
+  providers: VoiceProviderSummary[];
+};
+
 export type AgentHealth = {
   ok: boolean;
   provider: string;
+  /** Configured assistant identity; absent on old relays. */
+  assistant?: AssistantSummary;
+  /** Available voice backends; absent on old relays. */
+  voice?: VoiceOptions;
   uptimeSec: number;
   credentials: "configured" | "missing" | "not-required";
   weather: "available";
@@ -548,7 +597,8 @@ export const MOCK_CAPABILITIES: ProviderCapabilities = {
   emergencyMode: true
 };
 
-export const DOUBAO_CAPABILITIES: ProviderCapabilities = {
+/** What every live backend offers: real synthesized audio on top of the demo's set. */
+export const LIVE_CAPABILITIES: ProviderCapabilities = {
   serverVad: true,
   synthesizedAudio: true,
   transcriptEvents: true,
@@ -560,5 +610,5 @@ export const DOUBAO_CAPABILITIES: ProviderCapabilities = {
 };
 
 export function providerCapabilities(provider: string): ProviderCapabilities {
-  return provider === "doubao" ? DOUBAO_CAPABILITIES : MOCK_CAPABILITIES;
+  return provider === "mock" ? MOCK_CAPABILITIES : LIVE_CAPABILITIES;
 }

@@ -143,9 +143,20 @@ describe("speech detection score", () => {
     expect(score).toMatchObject({ detected: false, onsetDelayMs: null, falseStarts: 0 });
   });
 
-  it("counts the detector firing on loud noise before anyone speaks", () => {
-    const mixed = mixAtSnr(padded(syllables(2), 0.2, 0.2), synthesizeNoise("engine", 10), 0);
-    expect(scoreDetection(mixed.samples, mixed.onset, mixed.offset).falseStarts).toBeGreaterThan(0);
+  it("counts the detector firing on a sudden sound before anyone speaks", () => {
+    const mixed = mixAtSnr(padded(syllables(2), 0.2, 0.2), new Float32Array(0), null);
+    // A door slams half a second in, well before the speech at two seconds.
+    const slam = syllables(0.3, 0.5);
+    mixed.samples.set(slam, Math.round(0.5 * BENCH_RATE));
+    const score = scoreDetection(mixed.samples, mixed.onset, mixed.offset);
+    expect(score.falseStarts).toBe(1);
+    expect(score.detected).toBe(true);
+  });
+
+  it("does not fire on steady noise, and still finds speech well above it", () => {
+    const mixed = mixAtSnr(padded(syllables(2), 0.2, 0.2), synthesizeNoise("engine", 10), 15);
+    const score = scoreDetection(mixed.samples, mixed.onset, mixed.offset);
+    expect(score).toMatchObject({ detected: true, falseStarts: 0 });
   });
 });
 

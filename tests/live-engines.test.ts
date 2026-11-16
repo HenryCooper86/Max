@@ -368,6 +368,39 @@ function tone(frames: number, amplitude: number): Buffer {
   return pcm;
 }
 
+/** A moment of quiet room. The detector listens for 300 ms at the start of a
+ *  stream before it will open a turn, as a microphone always gives it. */
+const ROOM = tone(20, 0);
+
+/** A steady hiss: every sample random, at about the given loudness. */
+function hiss(frames: number, rms: number, seed = 7): Buffer {
+  const pcm = Buffer.alloc(frames * 640);
+  let state = seed;
+  for (let index = 0; index < pcm.length / 2; index += 1) {
+    state = (state * 1103515245 + 12345) & 0x7fffffff;
+    const value = (state / 0x7fffffff) * 2 - 1;
+    pcm.writeInt16LE(Math.round(value * rms * Math.sqrt(3)), index * 2);
+  }
+  return pcm;
+}
+
+/** A low rumble: a 60 Hz tone, where wind and engines are loudest. */
+function rumble(frames: number, amplitude: number): Buffer {
+  const pcm = Buffer.alloc(frames * 640);
+  for (let index = 0; index < pcm.length / 2; index += 1) {
+    pcm.writeInt16LE(Math.round(amplitude * Math.sin((2 * Math.PI * 60 * index) / 16000)), index * 2);
+  }
+  return pcm;
+}
+
+function mixed(a: Buffer, b: Buffer): Buffer {
+  const out = Buffer.alloc(Math.min(a.length, b.length));
+  for (let index = 0; index < out.length; index += 2) {
+    out.writeInt16LE(Math.max(-32768, Math.min(32767, a.readInt16LE(index) + b.readInt16LE(index))), index);
+  }
+  return out;
+}
+
 describe("voice activity detection", () => {
   it("opens on sustained speech and closes after trailing silence", () => {
     const starts: number[] = [];
@@ -395,9 +428,60 @@ describe("voice activity detection", () => {
   it("handles audio that arrives in ragged pieces", () => {
     const starts: number[] = [];
     const vad = createVad({ onStart: () => starts.push(1), onEnd: () => undefined });
-    const speech = tone(20, 9000);
+    const speech = Buffer.concat([ROOM, tone(20, 9000)]);
     for (let offset = 0; offset < speech.length; offset += 333) vad.push(speech.subarray(offset, offset + 333));
     expect(starts).toHaveLength(1);
+  });
+
+  it("does not take steady noise for speech, from the first frame or for minutes after", () => {
+    const starts: number[] = [];
+    const vad = createVad({ onStart: () => starts.push(1), onEnd: () => undefined });
+    // Two minutes of loud hiss, starting with the stream: no quiet to learn from.
+    for (let block = 0; block < 60; block += 1) vad.push(hiss(100, 3000, block + 1));
+    expect(starts).toHaveLength(0);
+  });
+
+  it("still hears speech over that noise", () => {
+    const starts: number[] = [];
+    const ends: number[] = [];
+    const vad = createVad({ onStart: () => starts.push(1), onEnd: (audio) => ends.push(audio.length) });
+    vad.push(hiss(150, 1000));
+    expect(starts).toHaveLength(0);
+    vad.push(mixed(hiss(30, 1000, 3), tone(30, 6000)));
+    expect(starts).toHaveLength(1);
+    vad.push(hiss(60, 1000, 5));
+    expect(ends).toHaveLength(1);
+  });
+
+  it("is far less sensitive to rumble below the speech band", () => {
+    const starts: number[] = [];
+    const vad = createVad({ onStart: () => starts.push(1), onEnd: () => undefined });
+    vad.push(ROOM);
+    // Wind and engine rumble arriving in a quiet room, six times the level
+    // at which speech would open a turn.
+    vad.push(rumble(150, 4000));
+    expect(starts).toHaveLength(0);
+  });
+
+  it("lets go of a noise that starts mid-stream instead of staying open on it", () => {
+    const starts: number[] = [];
+    const ends: number[] = [];
+    const vad = createVad({ onStart: () => starts.push(1), onEnd: () => ends.push(1) });
+    vad.push(ROOM);
+    vad.push(tone(40, 0));
+    // A fan switches on. It is taken for a turn once, then learned.
+    vad.push(hiss(100 * 60, 3000));
+    expect(starts).toHaveLength(1);
+    expect(ends).toHaveLength(1);
+  });
+
+  it("keeps what it learned about the room when a turn is cut short", () => {
+    const starts: number[] = [];
+    const vad = createVad({ onStart: () => starts.push(1), onEnd: () => undefined });
+    vad.push(hiss(150, 3000));
+    vad.reset();
+    vad.push(hiss(300, 3000, 9));
+    expect(starts).toHaveLength(0);
   });
 });
 
@@ -448,6 +532,7 @@ describe("Whisper pipeline engine", () => {
     await engine.connect({ ...CONFIG, languages: ["zh"] }, events);
     expect(engine.responseMode).toBe("manual-only");
 
+    engine.sendAudio(ROOM);
     engine.sendAudio(tone(30, 9000));
     engine.sendAudio(tone(12, 0));
     await vi.waitFor(() => expect(seen.some(([kind]) => kind === "rider")).toBe(true));
@@ -484,6 +569,7 @@ describe("Whisper pipeline engine", () => {
     expect(spoken).toEqual(["现在三点。", "需要导航吗？"]);
 
     // The exchange is remembered for the next turn.
+    engine.sendAudio(ROOM);
     engine.sendAudio(tone(30, 9000));
     engine.sendAudio(tone(12, 0));
     await vi.waitFor(() => expect(seen.filter(([kind]) => kind === "rider")).toHaveLength(2));
@@ -510,6 +596,7 @@ describe("Whisper pipeline engine", () => {
     const { log: seen, events } = recorder();
     const engine = createPipelineEngine(log, settings, request as never, { endSilenceMs: 200 });
     await engine.connect(CONFIG, events);
+    engine.sendAudio(ROOM);
     engine.sendAudio(tone(30, 9000));
     engine.sendAudio(tone(12, 0));
     await vi.waitFor(() => expect(seen.some(([kind]) => kind === "rider")).toBe(true));
@@ -528,6 +615,7 @@ describe("Whisper pipeline engine", () => {
     const { log: seen, events } = recorder();
     const engine = createPipelineEngine(log, settings, request as never, { endSilenceMs: 200 });
     await engine.connect(CONFIG, events);
+    engine.sendAudio(ROOM);
     engine.sendAudio(tone(30, 9000));
     engine.sendAudio(tone(12, 0));
     await vi.waitFor(() => expect(seen.some(([kind]) => kind === "error")).toBe(true));

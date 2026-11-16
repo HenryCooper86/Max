@@ -73,10 +73,11 @@ of those jobs the device does, and whether it does them well enough.
 
 ## Known limits
 
-- The relay's built-in speech detector is a loudness detector. Steady noise
-  within about 10 dB of the voice trips it. The [test bench](test-bench.md)
-  shows this on its own baseline. A device for noisy places should clean its
-  signal first or use a realtime backend.
+- The relay's built-in speech detector is a loudness detector. It ignores
+  steady noise and holds up in wind, but it does not find a voice that is
+  less than about 10 dB above engine or street noise. The
+  [test bench](test-bench.md) shows where it stops. A device for loud places
+  should clean its signal first or use a realtime backend.
 - The iOS, Android and RDK clients do not send a declaration yet. The web
   client sends what the browser reports.
 - There is no reference firmware for a microcontroller. The Python client is

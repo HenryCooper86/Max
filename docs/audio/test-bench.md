@@ -60,20 +60,27 @@ noise. `manifest.json` records what was said and exactly when.
 Scoring the generated files tells you what the software does with a perfect
 microphone. On the baseline we measured:
 
-| Condition                   | Detected | Onset delay | False starts |
-| --------------------------- | -------- | ----------- | ------------ |
-| Clean                       | 5 of 5   | 80 ms       | 0            |
-| Wind, 20 dB                 | 5 of 5   | 80 ms       | 0            |
-| Street, 20 dB               | 4 of 5   | 80 ms       | 1            |
-| Engine, 20 dB               | 2 of 5   | 80 ms       | 3            |
-| Any noise at 10 dB or worse | 0 of 5   | —           | 5            |
+| Condition            | Detected              | Onset delay  | False starts |
+| -------------------- | --------------------- | ------------ | ------------ |
+| Clean                | 5 of 5                | 80 ms        | 0            |
+| Wind, 20 to 0 dB     | 5 of 5 at every level | 80 to 130 ms | 0            |
+| Engine, 20 and 10 dB | 5 of 5                | 80 to 100 ms | 0            |
+| Engine, 5 dB         | 1 of 5                | 920 ms       | 0            |
+| Engine, 0 dB         | 0 of 5                | —            | 0            |
+| Street, 20 and 10 dB | 5 of 5                | 80 to 100 ms | 0            |
+| Street, 5 and 0 dB   | 0 of 5                | —            | 0            |
 
-Read the last row carefully: **the relay's built-in detector is a simple
-loudness detector, and steady noise 10 dB or less below the voice trips it
-before anyone speaks.** A "false start" followed by "not detected" means the
-detector was already open on the noise when the speech arrived. On a device
-that will be used in noise, either clean the signal on the device before it
-is sent, or use a realtime backend with its own detector.
+Read it as the detector's limits. It is a loudness detector that filters out
+low rumble and tracks the background, so it holds up well in wind, whose
+energy is nearly all rumble. Engine and street noise share the frequencies of
+speech, and once the voice is less than about 10 dB above them it is not
+found. It did not fire on noise alone in any recording, nor in an hour of
+each noise by itself. On a device meant for traffic or a loud engine, clean
+the signal on the device before it is sent, or use a realtime backend with
+its own detector.
+
+These figures are for synthetic noise. Real noise is rougher, and a sudden
+sound such as a horn or a slammed door will open a turn.
 
 ## Step 2: your hardware
 

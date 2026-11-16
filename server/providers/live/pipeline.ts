@@ -4,7 +4,6 @@ import {
   CLIENT_INPUT_RATE,
   CLIENT_OUTPUT_RATE,
   env,
-  pcm16Rms,
   resamplePcm16,
   wavFromPcm16,
   type EngineConfig,
@@ -199,12 +198,42 @@ export type VadOptions = {
   endSilenceMs?: number;
   minSpeechMs?: number;
   maxSpeechMs?: number;
-  /** Absolute floor for "loud", PCM16 RMS. */
+  /** Absolute floor for "loud", PCM16 RMS (measured after the rumble filter). */
   minLevel?: number;
+  /** How far above the background a frame must be to count as speech. */
+  noiseRatio?: number;
 };
 
-/** Energy-based endpointing over 20 ms frames, with a slowly adapting noise
- *  floor so it works both in a quiet room and under wind noise. */
+/** Wind and engine rumble carry most of their energy below this, and speech
+ *  very little that a listener needs. Filtered twice over, so 60 Hz is cut by
+ *  about 20 dB while 300 Hz loses about 3. */
+const RUMBLE_CUTOFF_HZ = 200;
+/** Listening only, at the start of a stream, to learn the background. */
+const WARM_UP_FRAMES = 15;
+/** How far back the quietest moment is looked for: long enough to span the
+ *  gaps between words, short enough to follow a change in the background. */
+const FLOOR_WINDOW_FRAMES = 100;
+
+/**
+ * Finds the wearer's turns in a stream of 20 ms frames, by loudness.
+ *
+ * A frame counts as speech when it stands well above the background. Three
+ * things keep steady noise from passing for speech:
+ *
+ * - Loudness is measured with low rumble filtered down, where wind and
+ *   engines are loudest and speech carries little.
+ * - The background is the larger of two estimates. One follows the level
+ *   while nobody is talking. The other is the quietest moment of the last two
+ *   seconds, which speech keeps low (it has gaps between words) and a steady
+ *   noise does not. So noise that starts and stays is recognised as the new
+ *   background within two seconds, where the first estimate alone would never
+ *   move again once it had mistaken the noise for a turn.
+ * - The first 300 ms of a stream only listen, so a session that begins in
+ *   noise learns it before it can open a turn.
+ *
+ * It is still a loudness detector. Speech no louder than the noise is not
+ * found, and a sudden sound such as a horn opens a turn.
+ */
 export function createVad(
   handlers: { onStart(): void; onEnd(audio: Buffer): void },
   options: VadOptions = {}
@@ -214,7 +243,10 @@ export function createVad(
   const minFrames = Math.round((options.minSpeechMs ?? 240) / FRAME_MS);
   const maxFrames = Math.round((options.maxSpeechMs ?? 30_000) / FRAME_MS);
   const minLevel = options.minLevel ?? 450;
+  const noiseRatio = options.noiseRatio ?? 2.5;
   const PRE_ROLL_FRAMES = 15;
+  // One-pole high-pass, y[n] = k · (y[n-1] + x[n] - x[n-1]), applied twice.
+  const highPass = 1 / (1 + (2 * Math.PI * RUMBLE_CUTOFF_HZ) / CLIENT_INPUT_RATE);
 
   let pending: Buffer = Buffer.alloc(0);
   let noiseFloor = 120;
@@ -225,6 +257,34 @@ export function createVad(
   let voicedFrames = 0;
   let preRoll: Buffer[] = [];
   let captured: Buffer[] = [];
+  let firstIn = 0;
+  let firstOut = 0;
+  let secondOut = 0;
+  let seen = 0;
+  const recent = new Float32Array(FLOOR_WINDOW_FRAMES);
+
+  /** Loudness of a frame with the rumble taken out. */
+  function levelOf(data: Buffer): number {
+    let sum = 0;
+    const samples = data.length / 2;
+    for (let index = 0; index < samples; index += 1) {
+      const sample = data.readInt16LE(index * 2);
+      const first = highPass * (firstOut + sample - firstIn);
+      secondOut = highPass * (secondOut + first - firstOut);
+      firstIn = sample;
+      firstOut = first;
+      sum += secondOut * secondOut;
+    }
+    return Math.sqrt(sum / samples);
+  }
+
+  /** The quietest of the recent frames. */
+  function quietest(): number {
+    const count = Math.min(seen, FLOOR_WINDOW_FRAMES);
+    let lowest = Infinity;
+    for (let index = 0; index < count; index += 1) if (recent[index]! < lowest) lowest = recent[index]!;
+    return count ? lowest : 0;
+  }
 
   function finish(): void {
     const audio = Buffer.concat(captured);
@@ -239,8 +299,17 @@ export function createVad(
   }
 
   function frame(data: Buffer): void {
-    const level = pcm16Rms(data);
-    const loud = level > Math.max(minLevel, noiseFloor * 3);
+    const level = levelOf(data);
+    recent[seen % FLOOR_WINDOW_FRAMES] = level;
+    seen += 1;
+    if (seen <= WARM_UP_FRAMES) {
+      // Learning the background: follow it quickly, open nothing.
+      noiseFloor = seen === 1 ? level : noiseFloor * 0.7 + level * 0.3;
+      preRoll.push(data);
+      if (preRoll.length > PRE_ROLL_FRAMES) preRoll.shift();
+      return;
+    }
+    const loud = level > Math.max(minLevel, Math.max(noiseFloor, quietest()) * noiseRatio);
     if (!speaking) {
       // Track the room only while nobody is talking.
       if (!loud) noiseFloor = noiseFloor * 0.95 + level * 0.05;
@@ -280,6 +349,8 @@ export function createVad(
       pending = pending.subarray(offset);
     },
     reset() {
+      // Ends the turn in hand. What was learned about the background is kept:
+      // the room has not changed because the assistant started talking.
       pending = Buffer.alloc(0);
       speaking = false;
       captured = [];

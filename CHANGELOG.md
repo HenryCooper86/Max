@@ -19,6 +19,12 @@
   noise, and scores recordings for speech detection, recognition and echo.
 - Added `docs/audio`: the audio contract, the test bench guide and a hardware
   guide.
+- The relay's speech detector (Whisper pipeline and local model backends) no
+  longer takes steady noise for speech. It filters out low rumble, lets its
+  background estimate rise to a noise that starts and stays, and listens for
+  300 ms before opening a turn. On the bench it went from firing on every
+  recording at 10 dB or worse to none, and now finds speech in wind down to
+  0 dB and in engine and street noise down to 10 dB.
 
 ## 2026-11-16 — Landing page, public configurator, onboarding and admin Studio
 

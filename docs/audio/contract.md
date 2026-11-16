@@ -25,9 +25,10 @@ The relay does not adjust the microphone level, and it has no automatic gain.
 - Aim for speech peaking between about -12 and -6 dBFS, and never clipping.
   This is a working target, not a measured limit.
 - The relay's own speech detector (used with the Whisper pipeline and local
-  model backends) treats a frame as speech when its RMS is above 450 (about
-  -37 dBFS) **and** above three times the background level. Speech quieter
-  than that is not heard at all.
+  model backends) filters out low rumble, then treats a frame as speech when
+  its RMS is above 450 (about -37 dBFS) **and** above two and a half times
+  the background level. Speech quieter than that is not heard at all. It
+  listens for the first 300 ms of a stream before it will open a turn.
 - The realtime backends (Doubao, OpenAI Realtime, Grok, Gemini Live) use their
   vendor's detector instead. Its thresholds are not ours to state.
 

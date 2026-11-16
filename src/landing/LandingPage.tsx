@@ -1,5 +1,5 @@
 import { Check, Copy, Pause, Play } from "@phosphor-icons/react";
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState, type RefObject } from "react";
 import type { VoiceVisualizer } from "../../shared/agent";
 import { useLanguage } from "../components/LanguageToggle";
 import { AssistantPreview, visorPropsFor } from "../components/studio/AssistantPreview";
@@ -11,6 +11,7 @@ import { SETUP_COMMANDS } from "../lib/assistant-config";
 import { BACKENDS, BUILT_IN_EQUALIZER, DEVICES, deviceLogoUrl, findDevice } from "../lib/device-catalog";
 import { localized } from "../lib/i18n";
 import { APP_PATH, BUILD_PATH, REPOSITORY_URL } from "../lib/routes";
+import { useOnScreen, useScrollReveal, useSectionMood, useTyped } from "./motion";
 import { Mascot, mascotMoodFor } from "../components/Mascot";
 import { useScriptedDemo } from "../lib/scripted-demo";
 import { TEMPLATES } from "../lib/templates";
@@ -40,13 +41,21 @@ export function CopyButton({ text, label }: { text: string; label: string }) {
   );
 }
 
-function Hero({ signedIn }: { signedIn: boolean }) {
+function Hero({
+  signedIn,
+  heroRef,
+  onScreen
+}: {
+  signedIn: boolean;
+  heroRef: RefObject<HTMLElement | null>;
+  onScreen: boolean;
+}) {
   const { language } = useLanguage();
   const say = (zh: string, en: string) => localized(language, zh, en);
   const frame = useScriptedDemo("helmet");
   const visor = visorPropsFor(frame);
   return (
-    <section className="hero" aria-labelledby="hero-title">
+    <section className="hero" aria-labelledby="hero-title" ref={heroRef}>
       <div className="heroText">
         <h1 id="hero-title">
           {say("给人们戴着的东西，做一个自己的语音助手。", "Your own voice assistant, for the things people wear.")}
@@ -79,7 +88,12 @@ function Hero({ signedIn }: { signedIn: boolean }) {
       </div>
       <div className="heroLens" aria-hidden="true">
         <VisorVisual {...visor} visualizer="wave" />
-        <Mascot className="heroBird" mood={mascotMoodFor(visor)} followCursor restOver=".heroActions, .siteHeader" />
+        <Mascot
+          className="heroBird"
+          mood={mascotMoodFor(visor)}
+          followCursor={onScreen}
+          restOver=".heroActions, .siteHeader"
+        />
       </div>
     </section>
   );
@@ -87,7 +101,7 @@ function Hero({ signedIn }: { signedIn: boolean }) {
 
 function SectionHead({ id, title, lede }: { id: string; title: string; lede: string }) {
   return (
-    <header className="sectionHead">
+    <header className="sectionHead" data-reveal="">
       <h2 id={id}>{title}</h2>
       <p>{lede}</p>
     </header>
@@ -200,7 +214,7 @@ function Devices() {
           "Each device brings its own conduct for the assistant, its own mark, and a default look and sound. You can change any of them."
         )}
       />
-      <ul className="deviceList">
+      <ul className="deviceList revealStagger" data-reveal="">
         {DEVICES.map((device) => {
           const logo = deviceLogoUrl(device.id);
           const template = TEMPLATES.find((entry) => entry.id === device.template);
@@ -262,7 +276,7 @@ function Backends() {
           "One session core serves every backend, so the wake word, hands-free device actions (navigation, camera, torch, music, calls), safety alerts and memory work the same on all of them."
         )}
       />
-      <div className="backendGroups">
+      <div className="backendGroups revealStagger" data-reveal="">
         {groups.map((group) => (
           <div key={group.place} className="backendGroup">
             <h3>{group.title}</h3>
@@ -278,7 +292,7 @@ function Backends() {
           </div>
         ))}
       </div>
-      <p className="backendDemoNote">
+      <p className="backendDemoNote" data-reveal="">
         {say(
           "还有一个不需要任何密钥的演示后端，用来先把设备和应用跑通。",
           "There is also a demo backend that needs no key at all, for getting the device and apps working first."
@@ -302,7 +316,7 @@ function LookAndSound() {
           "Design templates change the whole app, the voice display changes how speech looks in the lens, and the equaliser changes how it sounds."
         )}
       />
-      <div className="lookGrid">
+      <div className="lookGrid revealStagger" data-reveal="">
         <div>
           <h3>{say("五个设计模板", "Five design templates")}</h3>
           <ul className="lookList">
@@ -391,7 +405,7 @@ function HowItWorks() {
         title={say("它是怎么组成的", "How it fits together")}
         lede={say("全部自行部署，没有托管服务。", "Everything is self-hosted. There is no hosted service.")}
       />
-      <ol className="howSteps">
+      <ol className="howSteps revealStagger" data-reveal="">
         {steps.map((step) => (
           <li key={step.title}>
             <h3>{step.title}</h3>
@@ -407,6 +421,14 @@ function GetStarted() {
   const { language } = useLanguage();
   const say = (zh: string, en: string) => localized(language, zh, en);
   const commands = SETUP_COMMANDS.join("\n");
+  const layout = useRef<HTMLDivElement | null>(null);
+  const [arrived, setArrived] = useState(false);
+  const seen = useOnScreen(layout, "0px 0px -15% 0px", false);
+  useEffect(() => {
+    // Starts once: scrolling away and back does not type it again.
+    if (seen) setArrived(true);
+  }, [seen]);
+  const typed = useTyped(commands, arrived);
   return (
     <section className="siteSection startSection" aria-labelledby="start">
       <SectionHead
@@ -414,10 +436,17 @@ function GetStarted() {
         title={say("开始", "Get started")}
         lede={say("安装依赖，回答几个设置问题，然后启动。", "Install, answer a few setup questions, and start it.")}
       />
-      <div className="startLayout">
+      <div className="startLayout" data-reveal="" ref={layout}>
         <div className="codeBlock">
           <pre>
-            <code>{commands}</code>
+            {/* The full text sets the block's size; the typed copy sits over it. */}
+            <code className="codeGhost" aria-hidden="true">
+              {commands}
+            </code>
+            <code className="codeTyped">
+              {commands.slice(0, typed)}
+              {typed < commands.length ? <i className="codeCaret" aria-hidden="true" /> : null}
+            </code>
           </pre>
           <CopyButton text={commands} label={say("复制命令", "Copy commands")} />
         </div>
@@ -430,7 +459,7 @@ function GetStarted() {
           </li>
         </ul>
       </div>
-      <div className="startActions">
+      <div className="startActions" data-reveal="">
         <a className="siteButton" href={BUILD_PATH}>
           {say("配置你自己的", "Build yours")}
         </a>
@@ -448,9 +477,18 @@ function GetStarted() {
 }
 
 export function LandingPage({ signedIn }: { signedIn: boolean }) {
+  useScrollReveal();
+  const hero = useRef<HTMLElement | null>(null);
+  const heroOnScreen = useOnScreen(hero);
+  const mood = useSectionMood();
   return (
     <>
-      <Hero signedIn={signedIn} />
+      <Hero signedIn={signedIn} heroRef={hero} onScreen={heroOnScreen} />
+      {/* Past the hero, the bird comes along: it keeps to a corner, follows
+          the cursor, and changes with the part of the page in view. */}
+      {heroOnScreen ? null : (
+        <Mascot className="siteBird" mood={mood} followCursor restOver="a, button, input, select, .siteHeader" />
+      )}
       <Demo />
       <Devices />
       <Backends />

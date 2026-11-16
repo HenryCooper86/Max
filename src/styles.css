@@ -9928,3 +9928,379 @@ button.opsCard:disabled {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
+
+/* ============================================================
+   Public pages in motion
+   Decoration only: every rule here is off with reduced motion, and nothing
+   is hidden unless the page's script has said it will reveal it.
+   ============================================================ */
+@media (prefers-reduced-motion: no-preference) {
+  /* How far down the page the reader is, along the bottom of the header. */
+  @supports (animation-timeline: scroll()) {
+    .siteHeader::after {
+      content: "";
+      position: absolute;
+      right: 0;
+      bottom: -1px;
+      left: 0;
+      height: 2px;
+      background: var(--accent);
+      transform: scaleX(0);
+      transform-origin: 0 50%;
+      animation: siteProgress linear both;
+      animation-timeline: scroll(root);
+    }
+  }
+
+  @keyframes siteProgress {
+    to {
+      transform: scaleX(1);
+    }
+  }
+
+  /* Things arrive as they are scrolled to. */
+  [data-reveal-ready] [data-reveal]:not(.revealStagger) {
+    transition:
+      opacity 640ms var(--ease-out),
+      transform 640ms var(--ease-out);
+  }
+
+  [data-reveal-ready] [data-reveal=""]:not(.revealStagger) {
+    opacity: 0;
+    transform: translateY(22px);
+  }
+
+  /* A list arrives one item after another. */
+  [data-reveal-ready] .revealStagger > * {
+    transition:
+      opacity 560ms var(--ease-out),
+      transform 560ms cubic-bezier(0.3, 1.25, 0.5, 1);
+    transition-delay: calc(var(--reveal-i, 0) * 70ms);
+  }
+
+  [data-reveal-ready] .revealStagger[data-reveal=""] > * {
+    opacity: 0;
+    transform: translateY(26px) scale(0.97);
+  }
+
+  .revealStagger > :nth-child(2) {
+    --reveal-i: 1;
+  }
+
+  .revealStagger > :nth-child(3) {
+    --reveal-i: 2;
+  }
+
+  .revealStagger > :nth-child(4) {
+    --reveal-i: 3;
+  }
+
+  .revealStagger > :nth-child(5) {
+    --reveal-i: 4;
+  }
+
+  .revealStagger > :nth-child(6) {
+    --reveal-i: 5;
+  }
+
+  .revealStagger > :nth-child(7) {
+    --reveal-i: 6;
+  }
+
+  .revealStagger > :nth-child(n + 8) {
+    --reveal-i: 7;
+  }
+
+  /* A section's heading is underlined as it arrives. */
+  .sectionHead h2::after {
+    content: "";
+    display: block;
+    width: 64px;
+    height: 3px;
+    margin-top: 18px;
+    border-radius: 2px;
+    background: var(--accent);
+    transform-origin: 0 50%;
+    transition: transform 700ms var(--ease-out) 240ms;
+  }
+
+  [data-reveal-ready] .sectionHead[data-reveal=""] h2::after {
+    transform: scaleX(0);
+  }
+
+  /* A slow light behind every other section. */
+  .siteSection {
+    position: relative;
+    isolation: isolate;
+  }
+
+  .siteSection:nth-of-type(odd)::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 9%, transparent), transparent) no-repeat;
+    background-size: 70% 90%;
+    opacity: var(--glow);
+    pointer-events: none;
+    animation: siteLight 26s ease-in-out infinite alternate;
+  }
+
+  @keyframes siteLight {
+    from {
+      background-position: -20% 0%;
+    }
+    to {
+      background-position: 120% 100%;
+    }
+  }
+
+  /* Devices: each mark floats a little, out of step with its neighbours, and
+     the card lifts when pointed at. */
+  .deviceList li {
+    transition:
+      opacity 560ms var(--ease-out),
+      transform 560ms cubic-bezier(0.3, 1.25, 0.5, 1);
+  }
+
+  .deviceList img {
+    animation: siteFloat 5s ease-in-out infinite;
+    animation-delay: calc(var(--reveal-i, 0) * -0.7s);
+    transition: transform var(--dur-slow) var(--ease-out);
+  }
+
+  .deviceList li:hover img {
+    animation-play-state: paused;
+    transform: translateY(-6px) rotate(-6deg) scale(1.08);
+  }
+
+  .deviceList li h3 {
+    transition: color var(--dur) var(--ease-out);
+  }
+
+  .deviceList li:hover h3 {
+    color: var(--accent);
+  }
+
+  @keyframes siteFloat {
+    50% {
+      transform: translateY(-5px);
+    }
+  }
+
+  /* Backends: a light on each one, blinking in turn like a rack. */
+  .backendGroup li strong::before {
+    content: "";
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    margin-right: 9px;
+    border-radius: 50%;
+    background: var(--accent);
+    vertical-align: 0.08em;
+    animation: siteBlink 3.2s ease-in-out infinite;
+  }
+
+  .backendGroup li:nth-child(2) strong::before {
+    animation-delay: 0.4s;
+  }
+
+  .backendGroup li:nth-child(3) strong::before {
+    animation-delay: 0.8s;
+  }
+
+  .backendGroup li:nth-child(4) strong::before {
+    animation-delay: 1.2s;
+  }
+
+  .backendGroup li:nth-child(n + 5) strong::before {
+    animation-delay: 1.6s;
+  }
+
+  @keyframes siteBlink {
+    0%,
+    70%,
+    100% {
+      opacity: 0.35;
+      transform: scale(1);
+    }
+    82% {
+      opacity: 1;
+      transform: scale(1.5);
+    }
+  }
+
+  /* Look and sound: the voice displays keep moving, the swatches answer the
+     pointer. */
+  .lookList .vizPreviewMark {
+    transform-box: fill-box;
+    transform-origin: 50% 50%;
+    animation: siteVoice 1.5s ease-in-out infinite alternate;
+  }
+
+  .lookList li:nth-child(2) .vizPreviewMark {
+    animation-duration: 1.1s;
+  }
+
+  .lookList li:nth-child(3) .vizPreviewMark {
+    animation-duration: 1.9s;
+  }
+
+  .lookList li:nth-child(4) .vizPreviewMark {
+    animation-duration: 1.3s;
+  }
+
+  .lookList li:nth-child(5) .vizPreviewMark {
+    animation-duration: 2.3s;
+  }
+
+  .lookList .vizPreview.ring .vizPreviewMark {
+    animation-name: siteTurn;
+    animation-duration: 9s;
+    animation-timing-function: linear;
+    animation-direction: normal;
+  }
+
+  @keyframes siteVoice {
+    from {
+      transform: scaleY(0.55);
+    }
+    to {
+      transform: scaleY(1.15);
+    }
+  }
+
+  @keyframes siteTurn {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .lookList .templateSwatch {
+    transition: transform var(--dur-slow) cubic-bezier(0.3, 1.5, 0.5, 1);
+  }
+
+  .lookList li:hover .templateSwatch {
+    transform: scale(1.12) rotate(-3deg);
+  }
+
+  /* How it fits together: a light runs along the four steps, over and over. */
+  .howSteps li {
+    position: relative;
+  }
+
+  .howSteps li::after {
+    content: "";
+    position: absolute;
+    top: calc(var(--line-w) * -2);
+    right: 0;
+    left: 0;
+    height: calc(var(--line-w) * 2);
+    background: var(--accent);
+    transform: scaleX(0);
+    transform-origin: 0 50%;
+    animation: siteStep 8s linear infinite;
+  }
+
+  .howSteps li:nth-child(2)::after {
+    animation-delay: 2s;
+  }
+
+  .howSteps li:nth-child(3)::after {
+    animation-delay: 4s;
+  }
+
+  .howSteps li:nth-child(4)::after {
+    animation-delay: 6s;
+  }
+
+  @keyframes siteStep {
+    0% {
+      transform: scaleX(0);
+      opacity: 1;
+    }
+    25% {
+      transform: scaleX(1);
+      opacity: 1;
+    }
+    40%,
+    100% {
+      transform: scaleX(1);
+      opacity: 0;
+    }
+  }
+
+  .howSteps li::before {
+    transition: transform var(--dur-slow) cubic-bezier(0.3, 1.6, 0.5, 1);
+    transform-origin: 0 100%;
+  }
+
+  .howSteps li:hover::before {
+    transform: scale(1.25);
+  }
+
+  /* Buttons lean towards a click. */
+  .siteButton {
+    transition:
+      transform var(--dur-fast) var(--ease-out),
+      box-shadow var(--dur) var(--ease-out),
+      background var(--dur-fast) var(--ease-out);
+  }
+
+  .siteButton:hover {
+    transform: translateY(-2px);
+  }
+
+  .siteButton:active {
+    transform: translateY(0) scale(0.98);
+  }
+
+  .codeCaret {
+    animation: loginCaret 1s steps(2, jump-none) infinite;
+  }
+
+  .siteBird {
+    animation: siteBirdArrive 700ms cubic-bezier(0.3, 1.2, 0.5, 1) both;
+  }
+
+  @keyframes siteBirdArrive {
+    from {
+      opacity: 0;
+      transform: translate(60px, -120px) scale(0.6);
+    }
+  }
+}
+
+/* The commands type themselves out. The hidden copy sets the block's size,
+   so the page does not jump as they appear. */
+.codeBlock pre {
+  position: relative;
+}
+
+.codeGhost {
+  visibility: hidden;
+}
+
+.codeTyped {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+
+.codeCaret {
+  display: inline-block;
+  width: 0.55em;
+  height: 1.05em;
+  margin-left: 1px;
+  background: var(--accent);
+  vertical-align: -0.16em;
+}
+
+/* Past the hero the bird keeps to the lower right corner. */
+.siteBird {
+  position: fixed;
+  right: clamp(8px, 3vw, 40px);
+  bottom: clamp(8px, 3vw, 32px);
+  z-index: 20;
+  width: clamp(84px, 12vw, 150px);
+}

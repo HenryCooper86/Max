@@ -1,5 +1,6 @@
 import { ArrowLeft, ArrowRight, DownloadSimple, WarningCircle } from "@phosphor-icons/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Mascot, type MascotMood } from "../components/Mascot";
 import { useLanguage } from "../components/LanguageToggle";
 import { AssistantPreview } from "../components/studio/AssistantPreview";
 import {
@@ -54,6 +55,16 @@ function download(filename: string, text: string, type = "application/json") {
 /** The public configurator: design an assistant with a live preview and take
  *  the files away. Nothing here is sent to a server; the draft is kept in
  *  this browser so a refresh does not lose it. */
+/** What the bird does at each step. */
+const STEP_MOODS: Record<StepId, MascotMood> = {
+  device: "ready",
+  identity: "listening",
+  look: "happy",
+  sound: "speaking",
+  backend: "thinking",
+  finish: "happy"
+};
+
 export function BuildPage() {
   const { language } = useLanguage();
   const say = (zh: string, en: string) => localized(language, zh, en);
@@ -161,12 +172,13 @@ export function BuildPage() {
       </header>
 
       <nav className="buildSteps" aria-label={say("步骤", "Steps")}>
-        <ol>
+        {/* --build-progress drives the line under the steps: how far through. */}
+        <ol style={{ "--build-progress": (step + 1) / STEPS.length } as CSSProperties}>
           {STEPS.map((id, index) => (
             <li key={id}>
               <button
                 type="button"
-                className={`${index === step ? "active" : ""}${flagStep(id, index) ? " invalid" : ""}`}
+                className={`${index === step ? "active" : index < step ? "done" : ""}${flagStep(id, index) ? " invalid" : ""}`}
                 aria-current={index === step ? "step" : undefined}
                 onClick={() => goTo(index)}
               >
@@ -186,114 +198,118 @@ export function BuildPage() {
           <h2 id="build-step-title" ref={headingRef} tabIndex={-1}>
             {stepTitles[stepId]}
           </h2>
-          <p className="buildLede">{stepLedes[stepId]}</p>
+          {/* Keyed by step, so each step's rule and fields arrive afresh. */}
+          <span key={`rule-${stepId}`} className="buildHeadingRule" aria-hidden="true" />
+          <div key={stepId} className="buildStepBody">
+            <p className="buildLede">{stepLedes[stepId]}</p>
 
-          {stepId === "device" ? <DeviceFields draft={draft} onChange={update} errors={shownErrors} /> : null}
-          {stepId === "identity" ? <IdentityFields draft={draft} onChange={update} errors={shownErrors} /> : null}
-          {stepId === "look" ? <LookFields draft={draft} onChange={update} errors={shownErrors} logo={logo} /> : null}
-          {stepId === "sound" ? (
-            <SoundFields draft={draft} onChange={update} errors={shownErrors} equalizer={BUILT_IN_EQUALIZER} />
-          ) : null}
-          {stepId === "backend" ? <BackendChooser draft={draft} onChange={update} /> : null}
-          {stepId === "finish" ? (
-            <div className="buildFinish">
-              {hasErrors(errors) ? (
-                <div className="buildProblems" role="alert">
-                  <strong>{say("还有几处要改：", "A few things to fix first:")}</strong>
-                  <ul>
-                    {STEPS.filter(stepHasError).map((id) => (
-                      <li key={id}>
-                        <button type="button" className="linkButton" onClick={() => goTo(STEPS.indexOf(id))}>
-                          {stepTitles[id]}
-                        </button>
-                        :{" "}
-                        {STEP_FIELDS[id]
-                          .map((field) => errors[field])
-                          .filter(Boolean)
-                          .join(" ")}
-                      </li>
-                    ))}
-                  </ul>
+            {stepId === "device" ? <DeviceFields draft={draft} onChange={update} errors={shownErrors} /> : null}
+            {stepId === "identity" ? <IdentityFields draft={draft} onChange={update} errors={shownErrors} /> : null}
+            {stepId === "look" ? <LookFields draft={draft} onChange={update} errors={shownErrors} logo={logo} /> : null}
+            {stepId === "sound" ? (
+              <SoundFields draft={draft} onChange={update} errors={shownErrors} equalizer={BUILT_IN_EQUALIZER} />
+            ) : null}
+            {stepId === "backend" ? <BackendChooser draft={draft} onChange={update} /> : null}
+            {stepId === "finish" ? (
+              <div className="buildFinish">
+                {hasErrors(errors) ? (
+                  <div className="buildProblems" role="alert">
+                    <strong>{say("还有几处要改：", "A few things to fix first:")}</strong>
+                    <ul>
+                      {STEPS.filter(stepHasError).map((id) => (
+                        <li key={id}>
+                          <button type="button" className="linkButton" onClick={() => goTo(STEPS.indexOf(id))}>
+                            {stepTitles[id]}
+                          </button>
+                          :{" "}
+                          {STEP_FIELDS[id]
+                            .map((field) => errors[field])
+                            .filter(Boolean)
+                            .join(" ")}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                <div className="outputBlock">
+                  <div className="outputHead">
+                    <h3>assistant.config.json</h3>
+                    <span className="outputActions">
+                      <CopyButton text={configText} label={say("复制", "Copy")} />
+                      <button
+                        type="button"
+                        className="siteButton small"
+                        disabled={hasErrors(errors)}
+                        onClick={() => download("assistant.config.json", configText)}
+                      >
+                        <DownloadSimple size={16} aria-hidden="true" />
+                        {say("下载", "Download")}
+                      </button>
+                    </span>
+                  </div>
+                  <p className="outputNote">
+                    {say(
+                      "保存在项目根目录，和 package.json 放在一起。",
+                      "Save it in the project folder, next to package.json."
+                    )}
+                  </p>
+                  <pre>
+                    <code>{configText}</code>
+                  </pre>
                 </div>
-              ) : null}
-              <div className="outputBlock">
-                <div className="outputHead">
-                  <h3>assistant.config.json</h3>
-                  <span className="outputActions">
-                    <CopyButton text={configText} label={say("复制", "Copy")} />
-                    <button
-                      type="button"
-                      className="siteButton small"
-                      disabled={hasErrors(errors)}
-                      onClick={() => download("assistant.config.json", configText)}
-                    >
-                      <DownloadSimple size={16} aria-hidden="true" />
-                      {say("下载", "Download")}
-                    </button>
-                  </span>
+                <div className="outputBlock">
+                  <div className="outputHead">
+                    <h3>.env</h3>
+                    <CopyButton text={envText} label={say("复制", "Copy")} />
+                  </div>
+                  <p className="outputNote">
+                    {backend.env.length
+                      ? say(
+                          "把这几行加进 .env，并在你自己的机器上填入值。不要把密钥贴到任何网页里。",
+                          "Add these lines to .env and fill in the values on your own machine. Never paste a key into a web page."
+                        )
+                      : say("这个后端不需要密钥。", "This backend needs no key.")}
+                  </p>
+                  <pre>
+                    <code>{envText}</code>
+                  </pre>
                 </div>
-                <p className="outputNote">
-                  {say(
-                    "保存在项目根目录，和 package.json 放在一起。",
-                    "Save it in the project folder, next to package.json."
-                  )}
-                </p>
-                <pre>
-                  <code>{configText}</code>
-                </pre>
+                <div className="outputBlock">
+                  <div className="outputHead">
+                    <h3>{say("然后运行", "Then run")}</h3>
+                    <CopyButton text={SETUP_COMMANDS.join("\n")} label={say("复制", "Copy")} />
+                  </div>
+                  <pre>
+                    <code>{SETUP_COMMANDS.join("\n")}</code>
+                  </pre>
+                  <p className="outputNote">
+                    {draft.extra.logo
+                      ? say(
+                          "放好标志文件后运行 npm run brand，生成网页、iOS 和 Android 的图标。",
+                          "With your logo file in place, npm run brand writes the web, iOS and Android icons."
+                        )
+                      : say(
+                          "之后可在应用的管理工作室里继续修改：",
+                          "Later you can keep editing it from the Studio inside the app: "
+                        )}
+                    {draft.extra.logo ? null : <a href={APP_PATH}>{say("打开应用", "open the app")}</a>}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="linkButton"
+                  onClick={() => {
+                    if (!window.confirm(say("清空这个草稿，重新开始？", "Clear this draft and start again?"))) return;
+                    clearBuildDraft();
+                    setLogoUrl(undefined);
+                    setProgress({ draft: emptyDraft(language), step: 0 });
+                  }}
+                >
+                  {say("清空草稿，重新开始", "Clear the draft and start again")}
+                </button>
               </div>
-              <div className="outputBlock">
-                <div className="outputHead">
-                  <h3>.env</h3>
-                  <CopyButton text={envText} label={say("复制", "Copy")} />
-                </div>
-                <p className="outputNote">
-                  {backend.env.length
-                    ? say(
-                        "把这几行加进 .env，并在你自己的机器上填入值。不要把密钥贴到任何网页里。",
-                        "Add these lines to .env and fill in the values on your own machine. Never paste a key into a web page."
-                      )
-                    : say("这个后端不需要密钥。", "This backend needs no key.")}
-                </p>
-                <pre>
-                  <code>{envText}</code>
-                </pre>
-              </div>
-              <div className="outputBlock">
-                <div className="outputHead">
-                  <h3>{say("然后运行", "Then run")}</h3>
-                  <CopyButton text={SETUP_COMMANDS.join("\n")} label={say("复制", "Copy")} />
-                </div>
-                <pre>
-                  <code>{SETUP_COMMANDS.join("\n")}</code>
-                </pre>
-                <p className="outputNote">
-                  {draft.extra.logo
-                    ? say(
-                        "放好标志文件后运行 npm run brand，生成网页、iOS 和 Android 的图标。",
-                        "With your logo file in place, npm run brand writes the web, iOS and Android icons."
-                      )
-                    : say(
-                        "之后可在应用的管理工作室里继续修改：",
-                        "Later you can keep editing it from the Studio inside the app: "
-                      )}
-                  {draft.extra.logo ? null : <a href={APP_PATH}>{say("打开应用", "open the app")}</a>}
-                </p>
-              </div>
-              <button
-                type="button"
-                className="linkButton"
-                onClick={() => {
-                  if (!window.confirm(say("清空这个草稿，重新开始？", "Clear this draft and start again?"))) return;
-                  clearBuildDraft();
-                  setLogoUrl(undefined);
-                  setProgress({ draft: emptyDraft(language), step: 0 });
-                }}
-              >
-                {say("清空草稿，重新开始", "Clear the draft and start again")}
-              </button>
-            </div>
-          ) : null}
+            ) : null}
+          </div>
 
           <div className="buildNav">
             {step > 0 ? (
@@ -329,6 +345,13 @@ export function BuildPage() {
           <p className="buildPreviewNote">{say("预览使用预先写好的台词。", "The preview plays pre-written lines.")}</p>
         </aside>
       </div>
+      {/* The bird keeps the builder company: a different mood for each step. */}
+      <Mascot
+        className="siteBird"
+        mood={STEP_MOODS[stepId]}
+        followCursor
+        restOver="a, button, input, select, textarea, label, .buildPreview, .siteHeader"
+      />
     </div>
   );
 }

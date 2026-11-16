@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -220,16 +221,24 @@ private fun AgentScreenContent(
                 )
             }
             val visor: @Composable (Dp) -> Unit = { width ->
-                VisorView(
-                    mode = visorMode(state),
-                    tint = visorTint(state),
-                    level = state.voiceLevel,
-                    handsFree = state.handsFree,
-                    dimmed = state.micMuted,
-                    onTap = onToggleHandsFree,
-                    width = width,
-                    style = viewModel.voiceStyle
-                )
+                Box(contentAlignment = Alignment.Center) {
+                    VisorView(
+                        mode = visorMode(state),
+                        tint = visorTint(state),
+                        level = state.voiceLevel,
+                        handsFree = state.handsFree,
+                        dimmed = state.micMuted,
+                        onTap = onToggleHandsFree,
+                        width = width,
+                        style = viewModel.voiceStyle
+                    )
+                    val (birdWidth, birdOffset) = mascotPlacement(width)
+                    Mascot(
+                        mood = mascotMood(state),
+                        width = birdWidth,
+                        modifier = Modifier.offset(birdOffset.x, birdOffset.y)
+                    )
+                }
             }
             val availableHeight = maxHeight
             val availableWidth = maxWidth

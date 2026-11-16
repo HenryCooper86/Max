@@ -142,6 +142,12 @@ struct AgentScreen: View {
                             style: Visor.visualizer,
                             onTap: viewModel.toggleHandsFree
                         )
+                        .overlay(alignment: .topLeading) {
+                            let frame = mascotFrame(in: stage)
+                            Mascot(mood: mascotMood(visorMode(state), hazard: presentedHazard))
+                                .frame(width: frame.width, height: frame.height)
+                                .offset(x: frame.minX, y: frame.minY)
+                        }
                     },
                     utilityContent: { captionsVisible in
                         utilityContent(captionsVisible: captionsVisible, layout: layout)

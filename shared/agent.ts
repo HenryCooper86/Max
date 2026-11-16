@@ -187,6 +187,44 @@ export type SessionMemorySnapshot = {
   responseMode?: "concise" | "normal" | "emergency";
 };
 
+/**
+ * What a device's own hardware and firmware already do to the microphone
+ * signal, declared in `session.start` so the relay does not do the same job
+ * twice or work against it. Every field is optional; leaving one out means
+ * "unknown", and the relay then behaves as it always has.
+ * docs/audio/contract.md is the builder's guide to this.
+ */
+export type DeviceAudio = {
+  /** The device removes its own speaker from the microphone signal. */
+  echoCancellation?: boolean;
+  /** The device removes steady background noise (ENC, beamforming, a DSP). */
+  noiseSuppression?: boolean;
+  /** The device levels the microphone gain itself. */
+  autoGainControl?: boolean;
+  /** The device stops sending audio while nobody is speaking. */
+  voiceGate?: boolean;
+  /** The device spots the wake word itself and sends only speech meant for
+   *  the assistant. */
+  wakeWord?: boolean;
+  /** Microphones feeding the signal (1–16). */
+  microphones?: number;
+  /** How the assistant's voice reaches the wearer: sealed in or over the ear,
+   *  open near the ear, bone conduction, or a loudspeaker. */
+  speaker?: "sealed" | "open" | "bone" | "loudspeaker";
+};
+
+/** What the relay decided for a session from the device's declaration. */
+export type AudioPlan = {
+  /** Who checks that the wearer said the assistant's name: the relay, the
+   *  device, or nobody (the relay has the wake word turned off). */
+  wakeGate: "relay" | "device" | "off";
+  /** The relay supplies the silence a voice-gated device leaves out. */
+  silenceFill: boolean;
+  /** "confirm": before cutting the assistant's reply on a `hearing` status,
+   *  the device should check that its own microphone hears the wearer. */
+  bargeIn: "relay" | "confirm";
+};
+
 export type SessionStartEvent = {
   type: "session.start";
   sampleRate: number;
@@ -225,6 +263,8 @@ export type SessionStartEvent = {
   /** Equaliser for the assistant's voice this session. Honored only when the
    *  relay reports `voice.equalizer.adjustable`. */
   equalizer?: VoiceEqualizer;
+  /** What the device already does to its microphone signal. */
+  audio?: DeviceAudio;
   rideMode?: RideMode;
   scenario?: DemoScenario;
   lat?: number;
@@ -438,6 +478,9 @@ export type AgentEvent =
       provider: string;
       mode: ProviderMode;
       capabilities: ProviderCapabilities;
+      /** How the relay treats this session's audio; absent from relays older
+       *  than the audio contract. */
+      audio?: AudioPlan;
     }
   | { type: "connection"; state: ConnectionState; detail: string }
   | { type: "status"; state: string; detail: string }

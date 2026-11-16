@@ -583,7 +583,9 @@ export function createDoubaoProvider(
   // accumulates in riderTurnText; addressedUntil holds the conversation window.
   // replyDecided/replyAddressed latch the decision for the whole agent turn so
   // a late window expiry can't clip a reply that already started.
-  const wakeWordEnabled = appConfig.wakeWord;
+  // Decided again in start(): a device that spots the wake word itself turns
+  // the relay's own name check off for its session (see audio-contract.ts).
+  let wakeWordEnabled = appConfig.wakeWord;
   let riderTurnText = "";
   // Whether the current rider turn's transcript was already closed with a
   // final event (AsrEnded can repeat without new speech in between).
@@ -2264,6 +2266,7 @@ export function createDoubaoProvider(
     async start(event: SessionStartEvent, context?: ProviderSessionContext) {
       if (started) return;
       sessionPlatform = event.platform;
+      if (event.audio?.wakeWord) wakeWordEnabled = false;
       equalizer = sessionEqualizer(event);
       started = true;
       routeActiveFromContext = context?.routeActive;

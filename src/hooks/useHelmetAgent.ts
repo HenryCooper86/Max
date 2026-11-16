@@ -54,7 +54,13 @@ import {
 import { equalizerForSession, normalizeEqualizer, usableEqualizerOptions } from "../lib/equalizer";
 import { createNavigationController, type NavPhase } from "../lib/navigation";
 import { createRideSimulator } from "../lib/nav-simulator";
-import { createAgentSocket, fetchAgentHealth, getRiderLocation, mapTurnState } from "../lib/utils";
+import {
+  createAgentSocket,
+  deviceAudioDeclaration,
+  fetchAgentHealth,
+  getRiderLocation,
+  mapTurnState
+} from "../lib/utils";
 import type {
   HazardAlertState,
   PermissionStateLabel,
@@ -284,6 +290,10 @@ export function useHelmetAgent() {
     setTrackEnabled,
     resetFrameWindow
   } = useMicCapture({ socketRef, transmittingRef, providerReadyRef });
+  const audioProcessingRef = useRef(audioProcessing);
+  useEffect(() => {
+    audioProcessingRef.current = audioProcessing;
+  }, [audioProcessing]);
 
   // Live spectrum taps for the voice display: the wearer's microphone, or the
   // assistant's PCM playback. Either may be absent (not started, browser
@@ -551,6 +561,9 @@ export function useHelmetAgent() {
           type: "session.start",
           sampleRate: SAMPLE_RATE,
           channels: 1,
+          // What the browser is already doing to the microphone, when it has
+          // told us (see docs/audio/contract.md). Left out until it has.
+          ...deviceAudioDeclaration(audioProcessingRef.current),
           // Mid-edit (field cleared) the last real id keeps stats continuity.
           testerId: testerIdRef.current || lastNonEmptyTesterIdRef.current,
           testerRegion: testerRegionLabel(),

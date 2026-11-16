@@ -170,7 +170,9 @@ export function createLiveProvider(
   const wakeDecisionMs = options.wakeDecisionMs ?? 1500;
   const connectTimeoutMs = options.connectTimeoutMs ?? 12_000;
   const fetchWeather = options.fetchWeather ?? fetchRiderWeather;
-  const wakeWordEnabled = options.wakeWord ?? appConfig.wakeWord;
+  // Decided again in start(): a device that spots the wake word itself turns
+  // the relay's own name check off for its session (see audio-contract.ts).
+  let wakeWordEnabled = options.wakeWord ?? appConfig.wakeWord;
 
   let engine: VoiceEngine | undefined;
   let engineReady = false;
@@ -772,6 +774,10 @@ export function createLiveProvider(
     async start(event: SessionStartEvent, context?: ProviderSessionContext) {
       startEvent = event;
       sessionPlatform = event.platform;
+      if (wakeWordEnabled && event.audio?.wakeWord) {
+        wakeWordEnabled = false;
+        riderTurnAddressed = true;
+      }
       equalizer = sessionEqualizer(event);
       previousConversation = context?.previousConversation;
       captureNavigationStop = context?.captureNavigationStop;

@@ -4,7 +4,8 @@ import { localizeOutgoing } from "./relay-speech";
 import { normalizeEqualizer } from "./audio-eq";
 import type { RawData, WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
-import type { NavPromptEvent } from "../shared/agent";
+import type { AudioPlan, NavPromptEvent } from "../shared/agent";
+import { SilenceFiller, normalizeDeviceAudio, planAudio } from "./audio-contract";
 import { CLIENT_EVENT_TYPES } from "../shared/generated/agent-protocol";
 import { TESTING_PLATFORMS as CANONICAL_TESTING_PLATFORMS } from "../shared/testing";
 import type { Logger } from "./logger";
@@ -539,6 +540,13 @@ export function parseClientEvent(data: RawData): ClientEvent {
     if (equalizer) value.equalizer = equalizer;
     else delete value.equalizer;
   }
+  if (value.audio !== undefined) {
+    // Sanitised rather than rejected, so a device built against a newer
+    // contract still connects.
+    const audio = normalizeDeviceAudio(value.audio);
+    if (audio) value.audio = audio;
+    else delete value.audio;
+  }
   assertOptionalEnum(value.rideMode, RIDE_MODES, "rideMode");
   assertOptionalEnum(value.scenario, DEMO_SCENARIOS, "scenario");
   assertOptionalTesterId(value.testerId);
@@ -560,12 +568,42 @@ export function parseClientEvent(data: RawData): ClientEvent {
   return value as ClientEvent;
 }
 
+const SESSION_STARTED_PREFIX = '{"type":"session.started"';
+
+/**
+ * The socket a voice backend writes to. Each backend announces the session
+ * itself, and the audio plan is the relay's own decision, so it is added to
+ * that one announcement here, once, for every backend.
+ */
+function announcingAudioPlan(client: WebSocket, plan: () => AudioPlan | undefined): WebSocket {
+  return new Proxy(client, {
+    get(target, property) {
+      const value: unknown = Reflect.get(target, property, target);
+      if (typeof value !== "function") return value;
+      if (property !== "send") return (value as (...args: unknown[]) => unknown).bind(target);
+      return (data: unknown, ...rest: unknown[]) => {
+        const audio = plan();
+        if (audio && typeof data === "string" && data.startsWith(SESSION_STARTED_PREFIX)) {
+          try {
+            data = JSON.stringify({ ...(JSON.parse(data) as object), audio });
+          } catch {
+            /* send it as the backend wrote it */
+          }
+        }
+        return (target.send as (...args: unknown[]) => unknown)(data, ...rest);
+      };
+    }
+  });
+}
+
 export class AgentSessionController {
   private readonly relaySessionId = randomUUID();
   private readonly provider: AgentProvider;
   private readonly crashNotifier = selectCrashNotifier(config.crashNotifier);
   private readonly navHandler: ReturnType<typeof createNavHandler>;
   private readonly navPromptHandler: (event: NavPromptEvent) => void;
+  private audioPlan?: AudioPlan;
+  private silenceFiller?: SilenceFiller;
   private sessionStartReceived = false;
   private providerStarted = false;
   private audioActive = false;
@@ -584,21 +622,24 @@ export class AgentSessionController {
     private readonly authenticatedUser?: { id: string; username: string },
     private readonly hooks?: AgentSessionHooks
   ) {
-    this.provider = providerFactory(client, {
-      serverEvent: (payload, bytes) => {
-        metrics.serverEvent(bytes);
-        recordTesterServerEvent(this.relaySessionId, payload, bytes);
-        if (this.authenticatedUser) recordUserMemoryEvent(this.authenticatedUser.id, payload);
-        if (this.registeredDeviceId && isFinalRiderTranscript(payload)) {
-          this.hooks?.onRiderUtterance?.(this.registeredDeviceId, payload.text);
-        }
-      },
-      serverAudio: (bytes) => {
-        metrics.serverAudio(bytes);
-        recordTesterServerAudio(this.relaySessionId, bytes);
-      },
-      ttsFallback: () => recordTesterTtsFallback(this.relaySessionId)
-    });
+    this.provider = providerFactory(
+      announcingAudioPlan(client, () => this.audioPlan),
+      {
+        serverEvent: (payload, bytes) => {
+          metrics.serverEvent(bytes);
+          recordTesterServerEvent(this.relaySessionId, payload, bytes);
+          if (this.authenticatedUser) recordUserMemoryEvent(this.authenticatedUser.id, payload);
+          if (this.registeredDeviceId && isFinalRiderTranscript(payload)) {
+            this.hooks?.onRiderUtterance?.(this.registeredDeviceId, payload.text);
+          }
+        },
+        serverAudio: (bytes) => {
+          metrics.serverAudio(bytes);
+          recordTesterServerAudio(this.relaySessionId, bytes);
+        },
+        ttsFallback: () => recordTesterTtsFallback(this.relaySessionId)
+      }
+    );
     this.navHandler = createNavHandler({
       provider: selectRouteProvider(config.amapApiKey, log),
       send: (payload) => {
@@ -645,6 +686,7 @@ export class AgentSessionController {
         metrics.clientAudio(chunk.byteLength);
         recordTesterClientAudio(this.relaySessionId, chunk.byteLength);
         await this.provider.sendAudio(chunk);
+        this.silenceFiller?.frame();
         return;
       }
 
@@ -726,6 +768,14 @@ export class AgentSessionController {
           networkType: event.networkType,
           platform: event.platform
         });
+        this.audioPlan = planAudio(event.audio, config.wakeWord);
+        if (event.audio) this.log?.info("device audio declared", { ...event.audio, ...this.audioPlan });
+        if (this.audioPlan.silenceFill) {
+          this.silenceFiller = new SilenceFiller((frame) => {
+            if (!this.audioActive) return;
+            void this.provider.sendAudio(frame).catch(() => undefined);
+          });
+        }
         try {
           await this.provider.start(providerEvent, providerContext);
         } catch (error) {
@@ -770,6 +820,7 @@ export class AgentSessionController {
         this.audioActive = true;
       }
       if (event.type === "audio.stop" && this.audioActive) {
+        this.silenceFiller?.stop();
         await this.provider.stopAudio();
         this.audioActive = false;
       }
@@ -815,6 +866,7 @@ export class AgentSessionController {
     this.audioActive = false;
     if (!this.cleanupPromise) {
       const pendingMessages = this.messageQueue;
+      this.silenceFiller?.stop();
       this.cleanupPromise = (async () => {
         try {
           await pendingMessages;

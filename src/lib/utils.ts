@@ -1,6 +1,6 @@
 // Stateless helpers shared by the agent hook and the HUD components.
 
-import type { AgentHealth, TesterSessionSummary, TestingStats } from "../../shared/agent";
+import type { AgentHealth, DeviceAudio, TesterSessionSummary, TestingStats } from "../../shared/agent";
 import type { TurnState } from "../components/VisorVisual";
 import type { AudioProcessingState, RiderLocation, TranscriptItem } from "../types";
 import type { Language } from "./i18n";
@@ -58,6 +58,17 @@ export function getRiderLocation(): Promise<RiderLocation | null> {
 export function audioProcessingLabel(value: AudioProcessingState["echoCancellation"], language: Language = "zh-CN") {
   if (language === "en-US") return value === true ? "On" : value === false ? "Off" : "Unknown";
   return AUDIO_PROCESSING_LABELS[String(value) as "true" | "false" | "unknown"];
+}
+
+/** The `audio` part of session.start: what the browser reports it is doing
+ *  to the microphone. Settings it has not reported are left out, so the relay
+ *  treats them as unknown; with nothing known, the whole field is left out. */
+export function deviceAudioDeclaration(state: AudioProcessingState): { audio?: DeviceAudio } {
+  const audio: DeviceAudio = {};
+  if (typeof state.echoCancellation === "boolean") audio.echoCancellation = state.echoCancellation;
+  if (typeof state.noiseSuppression === "boolean") audio.noiseSuppression = state.noiseSuppression;
+  if (typeof state.autoGainControl === "boolean") audio.autoGainControl = state.autoGainControl;
+  return Object.keys(audio).length ? { audio } : {};
 }
 
 export function readAudioProcessingSettings(track: MediaStreamTrack): AudioProcessingState {

@@ -172,6 +172,15 @@ describe("live voice session", () => {
     });
   });
 
+  it("skips its own name check for a device that spots the wake word itself", async () => {
+    const { engine } = await open("manual-capable", { start: { audio: { wakeWord: true } } });
+    // The device only sends speech meant for the assistant, so a turn without
+    // the name is answered and the instructions no longer mention the rule.
+    expect(engine().config.instructions).not.toContain("唤醒规则");
+    // With no name check to wait for, the backend answers on its own.
+    expect(engine().config.manualResponse).toBe(false);
+  });
+
   it("sends reply audio in board-sized chunks without splitting a sample", async () => {
     const { client, engine } = await open("manual-capable", { wakeWord: false });
     engine().events.onSpeechStarted();

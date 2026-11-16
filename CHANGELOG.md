@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-11-16 — Audio integration: contract, reference device client, test bench, hardware guide
+
+- A device can declare what its own hardware does to the microphone
+  (`session.start.audio`: echo cancellation, noise suppression, gain control,
+  voice gating, wake word, microphones, speaker type). The relay answers with
+  its plan in `session.started.audio`. A device that declares nothing is
+  treated as before.
+- With `wakeWord` the relay skips its own name check. With `voiceGate` it
+  supplies the silence the device leaves out. With no echo cancellation and a
+  speaker the microphone can hear, it asks the device to confirm
+  interruptions.
+- The web client declares what the browser reports about its microphone.
+- Added `examples/device-client`: a single-file Python client for a Linux
+  board, covering capture, playback, interruption and reconnect, with tests
+  that run it against a scripted relay.
+- Added `npm run bench:audio`: generates speech in wind, engine and street
+  noise, and scores recordings for speech detection, recognition and echo.
+- Added `docs/audio`: the audio contract, the test bench guide and a hardware
+  guide.
+
 ## 2026-11-16 — Landing page, public configurator, onboarding and admin Studio
 
 - Added the Studio API (`/auth/admin/studio`, admins only): read and save the

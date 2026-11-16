@@ -50,6 +50,8 @@ The apps read all of this from the relay's `/health`.
 
 Running fully local is covered in [docs/local-models.md](docs/local-models.md), with a ready-made `docker-compose.local-voice.yml`.
 
+Putting the assistant on your own hardware is covered in the [audio integration guide](docs/audio/README.md): the audio contract, a reference device client, a test bench for microphones and speakers, and a hardware guide.
+
 Every backend shares one session core (`server/providers/live/session.ts`): wake word, device actions and their honest outcomes, navigation speech, camera questions, weather and memory behave the same whichever voice is plugged in. Adding a backend means implementing the small `VoiceEngine` interface in `server/providers/live/engine.ts` and registering it in `server/providers/catalog.ts` and `server/providers/factory.ts`. All model names, voices and endpoints are overridable in `.env` (see `.env.example`).
 
 ## Android App

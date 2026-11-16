@@ -5,9 +5,9 @@
 // connections once accounts exist, so this is enforcement, not decoration.
 //
 // The page is also the first thing anyone sees of the assistant, so it shows
-// the product rather than describing it: the lens plays a short exchange on a
-// loop, then hands over to the visitor — it follows their typing, thinks
-// while the relay checks the password and faults when it is refused.
+// the product rather than describing it: the character plays a short exchange
+// on a loop, then hands over to the visitor — it listens while they type,
+// thinks while the relay checks the password and starts when it is refused.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import type { AuthUser } from "../lib/auth";
@@ -15,7 +15,8 @@ import { deviceAssistantCopy } from "../lib/i18n";
 import { AccountForm, type AccountFormActivity } from "./AccountBar";
 import { useAssistant } from "./AssistantContext";
 import { LanguageToggle, useLanguage } from "./LanguageToggle";
-import { BrandMark, VisorVisual, type TurnState } from "./VisorVisual";
+import { Mascot, type MascotMood } from "./Mascot";
+import { BrandMark } from "./VisorVisual";
 
 type Props = {
   /** False until the first account exists — the gate then offers first-run
@@ -97,7 +98,6 @@ export function LoginGate({ authEnabled, registrationOpen, onSignedIn }: Props) 
 
   // What the visitor is doing; null while the lens runs its own loop.
   const [activity, setActivity] = useState<Exclude<AccountFormActivity, "idle"> | null>(null);
-  const [typingLevel, setTypingLevel] = useState(0);
   const release = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const onActivity = useCallback((next: AccountFormActivity) => {
@@ -107,7 +107,6 @@ export function LoginGate({ authEnabled, registrationOpen, onSignedIn }: Props) 
       return;
     }
     setActivity(next);
-    if (next === "typing") setTypingLevel(0.14 + Math.random() * 0.22);
     if (next !== "busy") {
       release.current = setTimeout(() => setActivity(null), next === "typing" ? TYPING_HOLD_MS : ERROR_HOLD_MS);
     }
@@ -124,21 +123,14 @@ export function LoginGate({ authEnabled, registrationOpen, onSignedIn }: Props) 
   const demo = useLoginDemo(phrases, activity !== null);
   const phrase = phrases[demo.phrase % phrases.length] ?? "";
 
-  // The lens: the visitor's activity wins over the loop.
-  let connected = true;
-  let turnState: TurnState = "idle";
-  let voiceLevel = 0;
-  if (activity === "error") connected = false;
-  else if (activity === "busy") turnState = "thinking";
-  else if (activity === "typing") {
-    turnState = "listening";
-    voiceLevel = typingLevel;
-  } else if (demo.stage === "hearing" && demo.shown > 0) {
-    turnState = "listening";
-    // A different, repeatable level for each character, like syllables.
-    voiceLevel = 0.1 + ((demo.shown * 37) % 11) / 44;
-  } else if (demo.stage === "thinking") turnState = "thinking";
-  else if (demo.stage === "speaking") turnState = "speaking";
+  // The character: the visitor's activity wins over the loop.
+  let mood: MascotMood = "ready";
+  if (activity === "error") mood = "alert";
+  else if (activity === "busy") mood = "thinking";
+  else if (activity === "typing") mood = "listening";
+  else if (demo.stage === "hearing" && demo.shown > 0) mood = "listening";
+  else if (demo.stage === "thinking") mood = "thinking";
+  else if (demo.stage === "speaking") mood = "speaking";
 
   // A soft light follows the pointer. It is written straight to the element:
   // re-rendering the page on every pointer move would be wasted work.
@@ -174,15 +166,7 @@ export function LoginGate({ authEnabled, registrationOpen, onSignedIn }: Props) 
       </header>
       <div className="loginStage">
         <section className="loginHero">
-          <div className="loginVisor">
-            <VisorVisual
-              connected={connected}
-              listening={turnState === "listening"}
-              voiceLevel={voiceLevel}
-              turnState={turnState}
-              visualizer={assistant.visualizer}
-            />
-          </div>
+          <Mascot className="loginMascot" mood={mood} followCursor restOver=".loginCard" />
           <h1>{t("login.welcome", { product: assistant.name })}</h1>
           <p className="loginTagline">
             {assistant.tagline || deviceAssistantCopy(t, language, "voice.assistantKind", assistant)}

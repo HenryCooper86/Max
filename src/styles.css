@@ -8246,6 +8246,11 @@ button.opsCard:disabled {
   overflow: visible;
 }
 
+.siteBrand .siteLogo {
+  width: 28px;
+  height: 28px;
+}
+
 .siteMark rect {
   stroke: var(--text);
   stroke-width: 1.5;

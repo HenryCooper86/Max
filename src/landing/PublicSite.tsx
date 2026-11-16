@@ -10,7 +10,22 @@ import { fetchAgentHealth } from "../lib/utils";
 import { BuildPage } from "./BuildPage";
 import { LandingPage } from "./LandingPage";
 
-function SiteMark() {
+/** The mark beside the name: the owner's logo from the relay when there is
+ *  one, otherwise (or if it fails to load) the built-in lens. */
+function SiteMark({ logoUrl }: { logoUrl?: string }) {
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  if (logoUrl && failedUrl !== logoUrl) {
+    return (
+      <img
+        className="brandLogo siteLogo"
+        src={logoUrl}
+        alt=""
+        decoding="async"
+        draggable={false}
+        onError={() => setFailedUrl(logoUrl)}
+      />
+    );
+  }
   return (
     <svg className="siteMark" viewBox="0 0 48 20" aria-hidden="true" focusable="false">
       <rect x="1" y="1" width="46" height="18" rx="9" />
@@ -19,14 +34,14 @@ function SiteMark() {
   );
 }
 
-function SiteHeader({ signedIn, view }: { signedIn: boolean; view: "landing" | "build" }) {
+function SiteHeader({ signedIn, view, logoUrl }: { signedIn: boolean; view: "landing" | "build"; logoUrl?: string }) {
   const { language } = useLanguage();
   const say = (zh: string, en: string) => localized(language, zh, en);
   const home = view === "landing" ? "" : "/";
   return (
     <header className="siteHeader">
       <a className="siteBrand" href="/" aria-label={say("Max 首页", "Max home")}>
-        <SiteMark />
+        <SiteMark logoUrl={logoUrl} />
         <span>Max</span>
       </a>
       <nav className="siteNav" aria-label={say("页面导航", "Page")}>
@@ -79,6 +94,7 @@ function Site({ view }: { view: "landing" | "build" }) {
   const { language } = useLanguage();
   const [signedIn, setSignedIn] = useState(false);
   const [developer, setDeveloper] = useState<string | undefined>();
+  const [logoUrl, setLogoUrl] = useState<string | undefined>();
 
   // The visitor's own template from the app's Settings, else the default.
   useLayoutEffect(() => {
@@ -100,8 +116,11 @@ function Site({ view }: { view: "landing" | "build" }) {
     void fetchAgentHealth().then((health) => {
       if (!active) return;
       setDeveloper(health?.assistant?.developer);
-      // The owner's logo is the favicon here too, as it is in the app.
-      applyBrandFavicon(document, resolveAssistant(health?.assistant ?? null).logoUrl);
+      // The owner's logo is the header mark and the favicon here too, as it
+      // is in the app.
+      const logo = resolveAssistant(health?.assistant ?? null).logoUrl;
+      setLogoUrl(logo);
+      applyBrandFavicon(document, logo);
     });
     return () => {
       active = false;
@@ -113,7 +132,7 @@ function Site({ view }: { view: "landing" | "build" }) {
       <a className="skipLink" href="#main">
         {localized(language, "跳到正文", "Skip to content")}
       </a>
-      <SiteHeader signedIn={signedIn} view={view} />
+      <SiteHeader signedIn={signedIn} view={view} logoUrl={logoUrl} />
       <main id="main" className="siteMain">
         {view === "build" ? <BuildPage /> : <LandingPage signedIn={signedIn} />}
       </main>

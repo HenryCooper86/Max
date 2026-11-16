@@ -87,7 +87,7 @@ class NavLocalizationTest {
         assertEquals("You have arrived.", tr(Str.NAV_ARRIVED))
         assertEquals("You're off the route. Recalculating.", tr(Str.NAV_OFF_ROUTE))
         assertEquals("I couldn't find a new route. Navigation has stopped.", tr(Str.NAV_REROUTE_FAILED))
-        assertEquals("Confirm the destination: 人民广场. Say “确认导航” or tap Confirm to start turn-by-turn guidance.", tr(Str.NAV_CONFIRM_PROMPT, "name" to "人民广场"))
+        assertEquals("Confirm the destination: 人民广场. Say “confirm navigation” or tap Confirm to start turn-by-turn guidance.", tr(Str.NAV_CONFIRM_PROMPT, "name" to "人民广场"))
     }
 
     @Test

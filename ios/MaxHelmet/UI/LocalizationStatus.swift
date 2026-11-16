@@ -62,7 +62,7 @@ extension LocalizationTable {
         ("crash.ack.none", "服务器未确认 — 请手动拨打", "The server hasn't confirmed — please call yourself"),
         // navigation spoken / status
         ("nav.locating", "正在定位…", "Locating…"),
-        ("nav.confirmSpoken", "请确认目的地：{dest}。确认后开始导航。", "Confirm the destination: {dest}. Say “确认导航” or tap Confirm to start turn-by-turn guidance."),
+        ("nav.confirmSpoken", "请确认目的地：{dest}。确认后开始导航。", "Confirm the destination: {dest}. Say “confirm navigation” or tap Confirm to start turn-by-turn guidance."),
         ("nav.locationLost", "手机定位中断，导航已暂停。", "The phone's location dropped out. Navigation is paused."),
         ("nav.ahead.localized", "In {n} metres, {instr}", "In {n} metres, {instr}"),
         ("nav.stopped", "已停止导航。", "Navigation stopped."),

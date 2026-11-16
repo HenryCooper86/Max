@@ -417,7 +417,7 @@ enum class Str(val zh: String, val en: String) {
     NAV_OFF_ROUTE("已偏离路线，正在重新规划。", "You're off the route. Recalculating."),
     NAV_REROUTE_FAILED("无法重新规划路线，已停止导航。", "I couldn't find a new route. Navigation has stopped."),
     NAV_LOCATING("正在定位…", "Locating…"),
-    NAV_CONFIRM_PROMPT("请确认目的地：{name}。确认后开始导航。", "Confirm the destination: {name}. Say “确认导航” or tap Confirm to start turn-by-turn guidance."),
+    NAV_CONFIRM_PROMPT("请确认目的地：{name}。确认后开始导航。", "Confirm the destination: {name}. Say “confirm navigation” or tap Confirm to start turn-by-turn guidance."),
     NOTIF_CHANNEL("免提语音会话", "Hands-free voice session"),
     NOTIF_TITLE("{name} 免提语音运行中", "{name} hands-free voice is running"),
     NOTIF_TEXT("正在监听你的语音", "Listening to your voice"),

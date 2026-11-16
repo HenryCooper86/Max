@@ -236,7 +236,7 @@ function navigation(text: string): string | undefined {
   }
   const confirm = CONFIRM_DESTINATION.exec(text);
   if (confirm) {
-    return `Confirm the destination: ${confirm[1]}. Say “确认导航” or tap Confirm to start turn-by-turn guidance.`;
+    return `Confirm the destination: ${confirm[1]}. Say “confirm navigation” or tap Confirm to start turn-by-turn guidance.`;
   }
   const instruction = translateInstruction(text);
   return instruction === text ? undefined : instruction;

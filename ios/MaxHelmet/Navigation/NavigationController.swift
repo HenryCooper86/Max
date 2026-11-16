@@ -398,11 +398,8 @@ final class NavigationController: DeviceActionHandler {
 
     func handleConfirmationReply(_ text: String) {
         guard let id = confirmationID else { return }
-        let reply = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
-        if ["确认", "确认导航", "开始导航", "是的", "yes", "confirm", "start navigation"].contains(reply) {
-            confirmDestination(id: id, accepted: true)
-        } else if ["取消", "取消导航", "不是", "no", "cancel", "cancel navigation"].contains(reply) {
-            confirmDestination(id: id, accepted: false)
+        if let accepted = navigationConfirmationReply(text, assistantName: Visor.assistantName) {
+            confirmDestination(id: id, accepted: accepted)
         }
     }
 
@@ -557,4 +554,48 @@ final class NavigationController: DeviceActionHandler {
                 remainingMeters: update?.remainingMeters ?? route.totalDistanceMeters)
         ))
     }
+}
+
+// MARK: - spoken destination confirmation
+
+private let navigationConfirmPhrases: Set<String> = [
+    "确认", "确认导航", "开始导航", "是的", "对", "对的", "好的",
+    "yes", "yeah", "yep", "ok", "okay", "correct", "thats right",
+    "confirm", "confirm navigation", "confirm destination", "yes confirm",
+    "start navigation", "start navigating"
+]
+
+private let navigationDeclinePhrases: Set<String> = [
+    "取消", "取消导航", "不是", "不对", "不用",
+    "no", "nope", "wrong", "thats wrong",
+    "cancel", "cancel navigation", "cancel that", "dont navigate"
+]
+
+/// What a spoken reply to "confirm the destination?" means: `true` to start,
+/// `false` to cancel, `nil` when it is neither and must be ignored.
+///
+/// The whole reply has to be one of the known phrases — a sentence that merely
+/// contains "yes" is not a confirmation. Punctuation, case and a leading call
+/// to the assistant ("Max, confirm navigation", "hey Max yes") are ignored, so
+/// English works as well as Chinese.
+func navigationConfirmationReply(_ text: String, assistantName: String) -> Bool? {
+    // Letters and digits only, lowercased; apostrophes vanish ("that's" → "thats").
+    var words = text.lowercased()
+        .replacingOccurrences(of: "'", with: "")
+        .replacingOccurrences(of: "\u{2019}", with: "")
+        .components(separatedBy: CharacterSet.alphanumerics.inverted)
+        .filter { !$0.isEmpty }
+    let name = assistantName.lowercased()
+    if let first = words.first, ["hey", "hi", "ok", "okay"].contains(first), words.count > 1, words[1] == name {
+        words.removeFirst()
+    }
+    if words.first == name, words.count > 1 { words.removeFirst() }
+    let reply = words.joined(separator: " ")
+    // Chinese has no spaces: also try the reply with the name stripped as a prefix.
+    let compact = reply.replacingOccurrences(of: " ", with: "")
+    for candidate in [reply, compact] {
+        if navigationConfirmPhrases.contains(candidate) { return true }
+        if navigationDeclinePhrases.contains(candidate) { return false }
+    }
+    return nil
 }

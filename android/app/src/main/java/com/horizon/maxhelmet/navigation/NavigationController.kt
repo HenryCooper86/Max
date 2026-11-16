@@ -480,11 +480,7 @@ class NavigationController(
 
     fun handleConfirmationReply(text: String) = synchronized(lock) {
         val id = confirmationId ?: return@synchronized
-        val reply = text.trim().trimEnd('.', '!', '?', '。', '！', '？').lowercase(Locale.ROOT)
-        when (reply) {
-            "确认", "确认导航", "开始导航", "是的", "yes", "confirm", "start navigation" -> confirmDestination(id, true)
-            "取消", "取消导航", "不是", "no", "cancel", "cancel navigation" -> confirmDestination(id, false)
-        }
+        navigationConfirmationReply(text, com.horizon.maxhelmet.ui.AssistantBranding.name)?.let { confirmDestination(id, it) }
     }
 
     private fun resolveConfirmationLocked(accepted: Boolean) {
@@ -779,4 +775,43 @@ class NavigationController(
         riderCoordinate = latestFix,
         confirmationId = confirmationId
     )
+}
+
+private val NAVIGATION_CONFIRM_PHRASES = setOf(
+    "确认", "确认导航", "开始导航", "是的", "对", "对的", "好的",
+    "yes", "yeah", "yep", "ok", "okay", "correct", "thats right",
+    "confirm", "confirm navigation", "confirm destination", "yes confirm",
+    "start navigation", "start navigating"
+)
+
+private val NAVIGATION_DECLINE_PHRASES = setOf(
+    "取消", "取消导航", "不是", "不对", "不用",
+    "no", "nope", "wrong", "thats wrong",
+    "cancel", "cancel navigation", "cancel that", "dont navigate"
+)
+
+private val NOT_LETTER_OR_DIGIT = Regex("[^\\p{L}\\p{N}]+")
+
+/**
+ * What a spoken reply to "confirm the destination?" means: true to start,
+ * false to cancel, null when it is neither and must be ignored.
+ *
+ * The whole reply has to be one of the known phrases — a sentence that merely
+ * contains "yes" is not a confirmation. Punctuation, case and a leading call
+ * to the assistant ("Max, confirm navigation", "hey Max yes") are ignored, so
+ * English works as well as Chinese.
+ */
+fun navigationConfirmationReply(text: String, assistantName: String): Boolean? {
+    val name = assistantName.lowercase(Locale.ROOT)
+    val words = text.lowercase(Locale.ROOT).replace("'", "").replace("\u2019", "")
+        .split(NOT_LETTER_OR_DIGIT).filter { it.isNotEmpty() }.toMutableList()
+    if (words.size > 1 && words[0] in setOf("hey", "hi", "ok", "okay") && words[1] == name) words.removeAt(0)
+    if (words.size > 1 && words[0] == name) words.removeAt(0)
+    val reply = words.joinToString(" ")
+    // Chinese has no spaces: also try the reply with them removed.
+    for (candidate in listOf(reply, reply.replace(" ", ""))) {
+        if (candidate in NAVIGATION_CONFIRM_PHRASES) return true
+        if (candidate in NAVIGATION_DECLINE_PHRASES) return false
+    }
+    return null
 }

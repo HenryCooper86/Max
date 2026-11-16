@@ -93,7 +93,7 @@ final class NavigationLocalizationTests: XCTestCase {
         XCTAssertEqual(Loc.string("nav.arrived", .en), "You have arrived.")
         XCTAssertEqual(Loc.string("nav.locationLost", .en), "The phone's location dropped out. Navigation is paused.")
         XCTAssertEqual(Loc.string("nav.confirmSpoken", .en, ["dest": "A"]),
-                       "Confirm the destination: A. Say “确认导航” or tap Confirm to start turn-by-turn guidance.")
+                       "Confirm the destination: A. Say “confirm navigation” or tap Confirm to start turn-by-turn guidance.")
         XCTAssertEqual(Loc.string("nav.offRoute", .zh), "已偏离路线，正在重新规划。")
         XCTAssertEqual(Loc.string("nav.confirmSpoken", .zh, ["dest": "A"]), "请确认目的地：A。确认后开始导航。")
     }

@@ -223,7 +223,7 @@ describe("navigation and hazards in English", () => {
     expect(relaySpeech("手机定位已断开，导航已暂停。", "en")).toMatch(/paused/);
     expect(relaySpeech("无法重新规划路线，已停止导航。", "en")).toMatch(/stopped/);
     expect(relaySpeech("请确认目的地：外滩。请说“确认导航”或点击确认，确认后开始逐向导航。", "en")).toBe(
-      "Confirm the destination: 外滩. Say “确认导航” or tap Confirm to start turn-by-turn guidance."
+      "Confirm the destination: 外滩. Say “confirm navigation” or tap Confirm to start turn-by-turn guidance."
     );
     // An instruction it cannot translate keeps the whole prompt in Chinese rather than half of it.
     expect(relaySpeech("前方200米，乘坐轮渡过江", "en")).toBe("前方200米，乘坐轮渡过江");

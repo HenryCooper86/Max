@@ -1,13 +1,23 @@
 {
   "name": "Nova",
-  "device": "glasses",
+  "device": "sunglasses",
   "tagline": "Your eyes-up assistant",
   "developer": "Your Company",
-  "accentColor": "#C6F432",
   "languages": ["en", "zh"],
   "strictLanguages": false,
   "wake": {
     "names": ["nova", "noah", "诺瓦"],
     "falseFriends": ["诺瓦克"]
+  },
+  "logo": "./brand/devices/sunglasses.svg",
+  "logoBackground": "#0B0C0E",
+  "template": "daylight",
+  "templateSwitching": true,
+  "accentColor": "#0B6BFF",
+  "theme": {
+    "radius-card": "20px"
+  },
+  "voice": {
+    "equalizer": { "preset": "open-ear", "presence": 3 }
   }
 }

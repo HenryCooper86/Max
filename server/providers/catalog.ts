@@ -2,7 +2,8 @@ import type { ProviderCapabilities, VoiceProviderKind, VoiceProviderSummary } fr
 import { LIVE_CAPABILITIES, MOCK_CAPABILITIES } from "../../shared/agent";
 import { env } from "./live/engine";
 import { geminiConfigured } from "./live/gemini-live";
-import { pipelineConfigured } from "./live/pipeline";
+import { localRealtimeEnabled } from "./live/openai-realtime";
+import { localPipelineEnabled, pipelineConfigured } from "./live/pipeline";
 
 /**
  * Every voice backend the relay knows, with what it needs to run.
@@ -11,7 +12,8 @@ import { pipelineConfigured } from "./live/pipeline";
  * setup wizard read this without loading a single upstream client. The
  * factories live in server/index.ts.
  */
-export type VoiceProviderId = "mock" | "doubao" | "openai" | "grok" | "gemini" | "pipeline";
+export type VoiceProviderId =
+  "mock" | "doubao" | "openai" | "grok" | "gemini" | "pipeline" | "local" | "local-realtime";
 
 export type VoiceProviderEntry = {
   id: VoiceProviderId;
@@ -23,6 +25,8 @@ export type VoiceProviderEntry = {
   configured(): boolean;
   /** What to set when it is not. */
   requires: string;
+  /** Runs on the owner's own hardware with open-weight models. */
+  local?: boolean;
 };
 
 function doubaoConfigured(): boolean {
@@ -83,6 +87,26 @@ export const VOICE_PROVIDERS: readonly VoiceProviderEntry[] = [
     capabilities: LIVE_CAPABILITIES,
     configured: () => pipelineConfigured(),
     requires: "PIPELINE_API_KEY or OPENAI_API_KEY (none for local endpoints)"
+  },
+  {
+    id: "local",
+    label: "Local models",
+    kind: "pipeline",
+    description: "Open-weight models on your own hardware: Whisper, an Ollama chat model, Kokoro speech.",
+    capabilities: LIVE_CAPABILITIES,
+    configured: localPipelineEnabled,
+    requires: "LOCAL_VOICE=on (see docs/local-models.md)",
+    local: true
+  },
+  {
+    id: "local-realtime",
+    label: "Local realtime",
+    kind: "live",
+    description: "A self-hosted server that speaks the OpenAI Realtime protocol.",
+    capabilities: LIVE_CAPABILITIES,
+    configured: localRealtimeEnabled,
+    requires: "LOCAL_REALTIME_URL",
+    local: true
   }
 ];
 
@@ -95,7 +119,11 @@ const ALIASES: Record<string, VoiceProviderId> = {
   "gemini-live": "gemini",
   google: "gemini",
   whisper: "pipeline",
-  cascade: "pipeline"
+  cascade: "pipeline",
+  offline: "local",
+  ollama: "local",
+  "local-pipeline": "local",
+  "open-weight": "local"
 };
 
 /** Resolves an id or a friendly alias; undefined when it names nothing. */
@@ -118,6 +146,7 @@ export function voiceProviderSummaries(): VoiceProviderSummary[] {
     label: entry.label,
     kind: entry.kind,
     configured: entry.configured(),
-    description: entry.description
+    description: entry.description,
+    ...(entry.local ? { local: true } : {})
   }));
 }

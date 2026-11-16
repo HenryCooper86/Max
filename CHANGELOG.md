@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-11-16 — Framework for embodied devices: device presets, design templates, voice equaliser, local models
+
+- Added device presets (`server/device-presets.ts`): motorcycle and bicycle
+  helmets, sunglasses, smart glasses, assistive glasses for blind and
+  low-vision wearers, AR and VR headsets. Each sets the wearer wording, the
+  device-specific conduct in the persona, and a default template and equaliser.
+- Added a relay-side voice equaliser (`server/audio-eq.ts`): bass, mid,
+  presence, treble and gain with presets (flat, clarity, wind, open-ear, warm,
+  quiet) and a soft limiter. Applied to reply audio on every backend; settable
+  in `assistant.config.json` and per session (`session.start.equalizer`).
+- Added `template`, `theme` and `templateSwitching` to the assistant profile
+  and `/health`, with validated token overrides.
+- Added local, open-weight backends: `local` (speech-to-text → chat model →
+  text-to-speech on OpenAI-compatible local servers, with WAV speech support)
+  and `local-realtime` (a self-hosted OpenAI-Realtime-compatible server), plus
+  `docker-compose.local-voice.yml` and `docs/local-models.md`.
+- Added a logo per device (`brand/devices/`): a helmet for helmets, glasses
+  for glasses, a headset for headsets. The relay serves the configured device's
+  mark, or the owner's own `logo`, at `/brand/logo`; `npm run brand` writes the
+  web favicon, iOS app icon and Android launcher icon from the same file.
+- The web HUD shows an ended session as ended while the relay socket stays warm.
+- Not covered: the local backends are tested against scripted servers only;
+  iOS and Android do not yet apply design templates.
+
 ## 2026-11-16 — Assistant kit: your own name, device and voice backend; Visor redesign
 
 - Added `assistant.config.json` (`server/assistant.ts`): name, device (helmet,

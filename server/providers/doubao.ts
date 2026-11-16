@@ -4,6 +4,8 @@ import { RiderLocationContext, asksCurrentLocation } from "../rider-location";
 import { synthesizeMaxSpeech } from "../max-speech";
 import { assistant, basePersonaPrompt, DEFAULT_ASSISTANT_PROFILE, identityPrompt, wakeHint } from "../assistant";
 import { buildLanguageInteractionPrompt, buildToolGroundingPrompt } from "../prompts";
+import { createEqualizer, type Equalizer } from "../audio-eq";
+import { sessionEqualizer } from "../session-equalizer";
 import type { AgentProvider, ProviderSessionContext, ProviderTelemetry, SessionStartEvent, VoiceGender } from "./types";
 import { LIVE_CAPABILITIES } from "../../shared/agent";
 import { type AdasSeverity } from "../../shared/adas";
@@ -779,7 +781,7 @@ export function createDoubaoProvider(
             outcome = "Congested";
             return;
           }
-          const chunk = pcm.subarray(offset, offset + 960);
+          const chunk = equalizer.process(pcm.subarray(offset, offset + 960));
           client.send(chunk, { binary: true });
           telemetry?.serverAudio(chunk.byteLength);
         }
@@ -954,7 +956,9 @@ export function createDoubaoProvider(
     forwardedReplyBytes += chunk.byteLength;
     clearTtsFallbackTimer();
     telemetry?.serverAudio(chunk.byteLength);
-    client.send(chunk, { binary: true });
+    // The wearer's equaliser, if any. Flat settings return the same buffer.
+    const shaped = equalizer.process(chunk);
+    if (shaped.byteLength) client.send(shaped, { binary: true });
   }
 
   function bufferUndecidedTtsAudio(chunk: Buffer): void {
@@ -1310,6 +1314,8 @@ export function createDoubaoProvider(
   // Captured at session.start so the hazard injector can suppress simulated
   // alerts on the embedded board, which detects hazards for real.
   let sessionPlatform: string | undefined;
+  // Replaced at session.start with the wearer's (or the profile's) settings.
+  let equalizer: Equalizer = createEqualizer(undefined);
 
   // The helmet has no way to speak generated text: it drops `useBrowserSpeech`
   // transcripts, and pre-rendered alert WAVs cannot cover arbitrary wording. So
@@ -1319,7 +1325,7 @@ export function createDoubaoProvider(
   // closes over this session's client and platform — is per-session.
   const speaker = createSpeaker({
     synthesize: synthesizeConfirmation,
-    sendAudio: (pcm) => client.send(pcm, { binary: true }),
+    sendAudio: (pcm) => client.send(equalizer.process(pcm), { binary: true }),
     platform: () => (closedByProvider ? undefined : sessionPlatform),
     onError: (error) => log.warn("confirmation speech failed", { error: String(error) })
   });
@@ -2248,6 +2254,7 @@ export function createDoubaoProvider(
     async start(event: SessionStartEvent, context?: ProviderSessionContext) {
       if (started) return;
       sessionPlatform = event.platform;
+      equalizer = sessionEqualizer(event);
       started = true;
       routeActiveFromContext = context?.routeActive;
       captureNavigationStop = context?.captureNavigationStop;

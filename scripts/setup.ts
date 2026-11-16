@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline/promises";
+import { EQUALIZER_PRESETS } from "../server/audio-eq";
+import { DEVICE_PRESETS, devicePreset, isKnownDevice } from "../server/device-presets";
 import { VOICE_PROVIDERS } from "../server/providers/catalog";
 
 /**
@@ -54,11 +56,16 @@ async function main(): Promise<void> {
   }
 
   const name = await ask("Assistant name", typeof current.name === "string" ? current.name : "Max");
-  let device = await ask(
-    "Worn in: helmet, glasses or other",
-    typeof current.device === "string" ? current.device : "helmet"
-  );
-  if (!["helmet", "glasses", "other"].includes(device)) device = "other";
+  console.log("\nDevices:");
+  DEVICE_PRESETS.forEach((preset, index) => console.log(`  ${index + 1}. ${preset.id.padEnd(20)} ${preset.label.en}`));
+  const currentDevice = devicePreset(current.device).id;
+  const deviceAnswer = await ask("Device (number or id)", currentDevice);
+  const device = /^\d+$/.test(deviceAnswer)
+    ? (DEVICE_PRESETS[Number(deviceAnswer) - 1]?.id ?? currentDevice)
+    : isKnownDevice(deviceAnswer)
+      ? devicePreset(deviceAnswer).id
+      : currentDevice;
+  const chosenDevice = devicePreset(device);
   const languages = (await ask("Languages, most preferred first", "en, zh"))
     .split(/[,\s]+/)
     .map((code) => code.toLowerCase())
@@ -68,7 +75,10 @@ async function main(): Promise<void> {
     .map((item) => item.trim())
     .filter(Boolean);
   const developer = await ask("Built by (leave empty to not name a maker)", "");
-  const accentColor = await ask("Accent colour (#RRGGBB)", "#C6F432");
+  const template = await ask("Design template (visor, daylight, beacon, ember, holo)", chosenDevice.template);
+  const accentColor = await ask("Accent colour (#RRGGBB, Enter to keep the template's)", "");
+  console.log(`\nVoice equaliser presets: ${EQUALIZER_PRESETS.map((preset) => preset.id).join(", ")}`);
+  const equalizer = await ask("Equaliser preset", chosenDevice.equalizer);
 
   console.log("\nVoice backends:");
   VOICE_PROVIDERS.forEach((entry, index) => {
@@ -78,6 +88,10 @@ async function main(): Promise<void> {
   const provider = VOICE_PROVIDERS[Number.isInteger(picked) ? picked - 1 : 0] ?? VOICE_PROVIDERS[0]!;
 
   const env: Record<string, string> = { VOICE_PROVIDER: provider.id };
+  if (provider.id === "local") env.LOCAL_VOICE = "on";
+  if (provider.id === "local-realtime") {
+    env.LOCAL_REALTIME_URL = await ask("Local realtime server URL", "ws://localhost:8000/v1/realtime");
+  }
   const keyName = KEY_FOR[provider.id];
   if (keyName) {
     const key = await ask(`${keyName} (Enter to skip and add it to .env yourself)`, "");
@@ -91,7 +105,11 @@ async function main(): Promise<void> {
     languages: languages.length ? languages : ["en"],
     ...(developer ? { developer } : {}),
     ...(/^#[0-9a-f]{6}$/i.test(accentColor) ? { accentColor } : {}),
-    ...(extraNames.length ? { wake: { names: extraNames } } : {})
+    ...(extraNames.length ? { wake: { names: extraNames } } : {}),
+    template,
+    ...(EQUALIZER_PRESETS.some((preset) => preset.id === equalizer)
+      ? { voice: { equalizer: { preset: equalizer } } }
+      : {})
   };
   fs.writeFileSync(assistantPath, `${JSON.stringify(profile, null, 2)}\n`);
 

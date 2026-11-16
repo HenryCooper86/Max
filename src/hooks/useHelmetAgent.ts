@@ -10,6 +10,8 @@ import {
   type AgentHealth,
   type ConnectionState,
   type ProviderCapabilities,
+  type VoiceEqualizer,
+  type VoiceEqualizerOptions,
   type VoicePersonality
 } from "../../shared/agent";
 import { validateAgentEvent } from "../../shared/events";
@@ -48,6 +50,7 @@ import {
   saveStoredSettings,
   saveStoredTranscript
 } from "../lib/persistence";
+import { equalizerForSession, normalizeEqualizer } from "../lib/equalizer";
 import { createNavigationController, type NavPhase } from "../lib/navigation";
 import { createRideSimulator } from "../lib/nav-simulator";
 import { createAgentSocket, fetchAgentHealth, getRiderLocation, mapTurnState } from "../lib/utils";
@@ -68,6 +71,9 @@ import { useMicCapture } from "./useMicCapture";
 const storedSettings = loadStoredSettings();
 const initialTesterId = storedSettings.testerId ?? `tester-${Math.random().toString(36).slice(2, 8)}`;
 const LOCATION_START_GRACE_MS = 900;
+// Equaliser changes restart a live session (the relay sets the filters at
+// session start); a slider drag waits this long after its last tick.
+export const EQUALIZER_RESTART_DEBOUNCE_MS = 400;
 const HEALTH_POLL_MS = 5000;
 // Mid-ride location updates: send at most one per interval, and only after
 // real movement — the relay only refetches weather past ~20 km anyway.
@@ -131,6 +137,9 @@ export function useHelmetAgent() {
   // Voice backend the wearer picked (an AgentHealth.voice.providers id), or ""
   // for the relay default. Sent with every session.start.
   const [voiceProvider, setVoiceProviderState] = useState(storedSettings.voiceProvider ?? "");
+  // The wearer's equaliser choice (null = relay default). Sent with
+  // session.start when the relay reports an adjustable equaliser.
+  const [equalizer, setEqualizerState] = useState<VoiceEqualizer | null>(storedSettings.equalizer ?? null);
   // Backend the current relay session reported in session.started.
   const [sessionProvider, setSessionProvider] = useState<string | null>(null);
   const [testerId, setTesterIdState] = useState(initialTesterId);
@@ -180,6 +189,10 @@ export function useHelmetAgent() {
   const voiceGenderRef = useRef<VoiceGender>(storedSettings.voiceGender ?? "female");
   const voicePersonalityRef = useRef<VoicePersonality>(storedSettings.voicePersonality ?? "concise");
   const voiceProviderRef = useRef(storedSettings.voiceProvider ?? "");
+  const equalizerRef = useRef<VoiceEqualizer | null>(storedSettings.equalizer ?? null);
+  // What the relay offers, from the latest /health; read at session start.
+  const equalizerOptionsRef = useRef<VoiceEqualizerOptions | undefined>(undefined);
+  const equalizerRestartTimerRef = useRef<number | null>(null);
   const testerIdRef = useRef(initialTesterId);
   const testingCampaignIdRef = useRef(findTestingCampaign(storedSettings.testingCampaignId).id);
   const testingTestCaseIdRef = useRef(findTestingTestCase(storedSettings.testingTestCaseId).id);
@@ -349,6 +362,7 @@ export function useHelmetAgent() {
       voiceGender: voiceGenderRef.current,
       voicePersonality: voicePersonalityRef.current,
       ...(voiceProviderRef.current ? { voiceProvider: voiceProviderRef.current } : {}),
+      ...(equalizerRef.current ? { equalizer: equalizerRef.current } : {}),
       testerId: lastNonEmptyTesterIdRef.current,
       testingCampaignId: testingCampaignIdRef.current,
       testingTestCaseId: testingTestCaseIdRef.current,
@@ -375,6 +389,7 @@ export function useHelmetAgent() {
     try {
       const nextHealth = await fetchAgentHealth();
       if (!nextHealth || seq !== healthRequestSeqRef.current) return;
+      equalizerOptionsRef.current = nextHealth.voice?.equalizer;
       setHealth(nextHealth);
       setProvider(nextHealth.provider);
       setCapabilities(nextHealth.capabilities);
@@ -502,6 +517,7 @@ export function useHelmetAgent() {
       // restored/previous-session turn could tag the wrong turn.
       setFeedbackFloorId(transcriptTurnRef.current);
       const location = locationRef.current;
+      const sessionEqualizer = equalizerForSession(equalizerRef.current, equalizerOptionsRef.current);
       socket.send(
         JSON.stringify({
           type: "session.start",
@@ -523,6 +539,7 @@ export function useHelmetAgent() {
           voiceGender: voiceGenderRef.current,
           voicePersonality: voicePersonalityRef.current,
           ...(voiceProviderRef.current ? { voiceProvider: voiceProviderRef.current } : {}),
+          ...(sessionEqualizer ? { equalizer: sessionEqualizer } : {}),
           rideMode: rideModeRef.current,
           scenario: scenarioRef.current,
           ...(location ? { lat: location.lat, lon: location.lon } : {}),
@@ -791,9 +808,18 @@ export function useHelmetAgent() {
     connectRef.current = connect;
   }, [connect]);
 
+  const cancelEqualizerRestart = useCallback(() => {
+    if (equalizerRestartTimerRef.current === null) return;
+    window.clearTimeout(equalizerRestartTimerRef.current);
+    equalizerRestartTimerRef.current = null;
+  }, []);
+  useEffect(() => cancelEqualizerRestart, [cancelEqualizerRestart]);
+
   // Reopen the relay so a fresh realtime session picks up changed settings
   // (e.g. the voice gender). The mic graph is untouched, so capture continues.
   const restartSession = useCallback(() => {
+    // Any restart carries the latest equaliser too; a pending one is moot.
+    cancelEqualizerRestart();
     if (!socketRef.current) return;
     // The old socket's close event is ignored once connect() replaces it.
     // Cancel its timers and route ids here, just as the normal close path does.
@@ -801,7 +827,7 @@ export function useHelmetAgent() {
     setNavState({ phase: "idle" });
     socketRef.current.close();
     connect();
-  }, [connect, navController]);
+  }, [cancelEqualizerRestart, connect, navController]);
 
   // Switch the assistant voice. The live Doubao speaker is fixed at session
   // start, so restart the session; the mock path just uses browser TTS.
@@ -844,6 +870,25 @@ export function useHelmetAgent() {
       if (socketRef.current) restartSession();
     },
     [persistSettings, restartSession]
+  );
+
+  // Choose the voice equaliser (null = the relay default). Like the backend
+  // it is fixed at session start, so a live session restarts — debounced, so
+  // dragging a slider restarts once, after the last change.
+  const setEqualizer = useCallback(
+    (choice: VoiceEqualizer | null) => {
+      const next = choice ? normalizeEqualizer(choice) : null;
+      equalizerRef.current = next;
+      setEqualizerState(next);
+      persistSettings();
+      cancelEqualizerRestart();
+      if (!socketRef.current || !equalizerOptionsRef.current?.adjustable) return;
+      equalizerRestartTimerRef.current = window.setTimeout(() => {
+        equalizerRestartTimerRef.current = null;
+        restartSession();
+      }, EQUALIZER_RESTART_DEBOUNCE_MS);
+    },
+    [cancelEqualizerRestart, persistSettings, restartSession]
   );
 
   const setTesterId = useCallback(
@@ -1178,6 +1223,7 @@ export function useHelmetAgent() {
 
   const disconnect = useCallback(() => {
     intentionalCloseRef.current = true;
+    cancelEqualizerRestart();
     if (reconnectTimerRef.current) {
       window.clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
@@ -1211,7 +1257,7 @@ export function useHelmetAgent() {
     setConnectionState("offline");
     setTurnState("idle");
     setStatus("离线");
-  }, [closePlayback, navController, releaseMic, stopAgentSpeech, stopMic, stopNavDemo]);
+  }, [cancelEqualizerRestart, closePlayback, navController, releaseMic, stopAgentSpeech, stopMic, stopNavDemo]);
 
   useEffect(() => () => disconnect(), [disconnect]);
 
@@ -1318,6 +1364,7 @@ export function useHelmetAgent() {
     voiceGender,
     voicePersonality,
     voiceProvider,
+    equalizer,
     sessionProvider: connectionState === "ready" ? sessionProvider : null,
     testerId,
     testingCampaignId,
@@ -1343,6 +1390,7 @@ export function useHelmetAgent() {
     setVoiceGender,
     setVoicePersonality,
     setVoiceProvider,
+    setEqualizer,
     setTesterId,
     setTestingCampaignId,
     setTestingTestCaseId,

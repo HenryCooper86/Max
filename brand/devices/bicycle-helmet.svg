@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>Bicycle helmet</title>
+  <rect width="64" height="64" fill="#0B0C0E" />
+  <g fill="none" stroke="#F2F4F5" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M10 39c1-13 12-22 25-22 11 0 19 7 19 18v4z" fill="#131518" />
+    <path d="M22 25l-4 9M32 21l-3 13M42 22l-2 12" stroke="#C6F432" stroke-width="3" />
+    <path d="M18 39l6 9h8" />
+  </g>
+</svg>

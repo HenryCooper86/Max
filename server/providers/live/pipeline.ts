@@ -28,33 +28,91 @@ type PipelineStage = { baseUrl: string; apiKey: string; model: string };
 export type PipelineSettings = {
   stt: PipelineStage;
   llm: PipelineStage;
-  tts: PipelineStage & { voice(gender: VoiceGender): string; sampleRate: number };
+  tts: PipelineStage & {
+    voice(gender: VoiceGender): string;
+    /** Rate of raw PCM responses. A WAV response states its own. */
+    sampleRate: number;
+    /** `response_format` asked of the speech server: "pcm" or "wav". */
+    format?: string;
+  };
 };
 
 const OPENAI_BASE = "https://api.openai.com/v1";
 
-function stage(prefix: string, defaultModel: string): PipelineStage {
+type StageDefaults = { baseUrl: string; model: string };
+
+function stage(prefix: string, name: string, defaults: StageDefaults, keys: string[]): PipelineStage {
   return {
-    baseUrl: (env(`PIPELINE_${prefix}_BASE_URL`, "PIPELINE_BASE_URL") ?? OPENAI_BASE).replace(/\/+$/, ""),
-    apiKey: env(`PIPELINE_${prefix}_API_KEY`, "PIPELINE_API_KEY", "OPENAI_API_KEY") ?? "",
-    model: env(`PIPELINE_${prefix}_MODEL`) ?? defaultModel
+    baseUrl: (env(`${prefix}_${name}_BASE_URL`, `${prefix}_BASE_URL`) ?? defaults.baseUrl).replace(/\/+$/, ""),
+    apiKey: env(`${prefix}_${name}_API_KEY`, `${prefix}_API_KEY`, ...keys) ?? "",
+    model: env(`${prefix}_${name}_MODEL`) ?? defaults.model
   };
 }
 
-function pipelineSettings(): PipelineSettings {
-  const rate = Number(env("PIPELINE_TTS_SAMPLE_RATE"));
+function settingsFrom(
+  prefix: string,
+  defaults: {
+    stt: StageDefaults;
+    llm: StageDefaults;
+    tts: StageDefaults;
+    voice: [female: string, male: string];
+    format: string;
+  },
+  keys: string[]
+): PipelineSettings {
+  const rate = Number(env(`${prefix}_TTS_SAMPLE_RATE`));
   return {
-    stt: stage("STT", "whisper-1"),
-    llm: stage("LLM", "gpt-4o-mini"),
+    stt: stage(prefix, "STT", defaults.stt, keys),
+    llm: stage(prefix, "LLM", defaults.llm, keys),
     tts: {
-      ...stage("TTS", "gpt-4o-mini-tts"),
+      ...stage(prefix, "TTS", defaults.tts, keys),
       voice: (gender) =>
         gender === "male"
-          ? (env("PIPELINE_TTS_VOICE_MALE") ?? "onyx")
-          : (env("PIPELINE_TTS_VOICE", "PIPELINE_TTS_VOICE_FEMALE") ?? "nova"),
-      sampleRate: Number.isFinite(rate) && rate >= 8000 ? rate : CLIENT_OUTPUT_RATE
+          ? (env(`${prefix}_TTS_VOICE_MALE`) ?? defaults.voice[1])
+          : (env(`${prefix}_TTS_VOICE`, `${prefix}_TTS_VOICE_FEMALE`) ?? defaults.voice[0]),
+      sampleRate: Number.isFinite(rate) && rate >= 8000 ? rate : CLIENT_OUTPUT_RATE,
+      format: env(`${prefix}_TTS_FORMAT`) ?? defaults.format
     }
   };
+}
+
+/** The hosted pipeline: OpenAI's endpoints unless a stage is pointed elsewhere. */
+function pipelineSettings(): PipelineSettings {
+  return settingsFrom(
+    "PIPELINE",
+    {
+      stt: { baseUrl: OPENAI_BASE, model: "whisper-1" },
+      llm: { baseUrl: OPENAI_BASE, model: "gpt-4o-mini" },
+      tts: { baseUrl: OPENAI_BASE, model: "gpt-4o-mini-tts" },
+      voice: ["nova", "onyx"],
+      format: "pcm"
+    },
+    ["OPENAI_API_KEY"]
+  );
+}
+
+/**
+ * The local pipeline: open-weight models on the owner's own hardware. The
+ * defaults are the usual ports of three widely used OpenAI-compatible servers —
+ * Speaches (faster-whisper) for speech-to-text, Ollama for the chat model and
+ * Kokoro-FastAPI for text-to-speech — and every one can be re-pointed at any
+ * other compatible server (whisper.cpp, llama.cpp, vLLM, LM Studio,
+ * openedai-speech, …). See docs/local-models.md.
+ */
+export function localPipelineSettings(): PipelineSettings {
+  return settingsFrom(
+    "LOCAL",
+    {
+      stt: { baseUrl: "http://localhost:8000/v1", model: "Systran/faster-whisper-small" },
+      llm: { baseUrl: "http://localhost:11434/v1", model: "qwen2.5:7b" },
+      tts: { baseUrl: "http://localhost:8880/v1", model: "kokoro" },
+      voice: ["af_heart", "am_michael"],
+      // WAV carries its own sample rate, so it works with servers that do not
+      // produce 24 kHz or do not offer raw PCM at all.
+      format: "wav"
+    },
+    []
+  );
 }
 
 /** A local endpoint needs no key; a hosted one does. */
@@ -62,6 +120,71 @@ export function pipelineConfigured(settings: PipelineSettings = pipelineSettings
   return [settings.stt, settings.llm, settings.tts].every(
     (item) => Boolean(item.apiKey) || /\/\/(localhost|127\.0\.0\.1|\[::1\]|[^/]*\.local)([:/]|$)/i.test(item.baseUrl)
   );
+}
+
+/** The local pipeline is offered once the owner says it is there: LOCAL_VOICE=on,
+ *  or any LOCAL_* endpoint or model set. Its defaults alone are not a claim
+ *  that three servers are running on this machine. */
+export function localPipelineEnabled(): boolean {
+  if (env("LOCAL_VOICE")?.toLowerCase() === "on") return true;
+  return (
+    Boolean(env("LOCAL_BASE_URL")) ||
+    ["STT", "LLM", "TTS"].some((name) => env(`LOCAL_${name}_BASE_URL`, `LOCAL_${name}_MODEL`))
+  );
+}
+
+/**
+ * Turns a text-to-speech response into 24 kHz mono PCM16. A RIFF/WAVE body is
+ * recognised whatever format was asked for, and brings its own sample rate and
+ * channel count; anything else is taken as raw PCM16 mono at `fallbackRate`.
+ */
+export function speechToPcm(body: Buffer, fallbackRate: number): Buffer {
+  if (body.length < 12 || body.toString("ascii", 0, 4) !== "RIFF" || body.toString("ascii", 8, 12) !== "WAVE") {
+    return resamplePcm16(body, fallbackRate, CLIENT_OUTPUT_RATE);
+  }
+  let rate = fallbackRate;
+  let channels = 1;
+  let bits = 16;
+  let format = 1;
+  let offset = 12;
+  while (offset + 8 <= body.length) {
+    const id = body.toString("ascii", offset, offset + 4);
+    // Streaming servers write 0xFFFFFFFF (or 0) for sizes they do not know yet.
+    const declared = body.readUInt32LE(offset + 4);
+    const start = offset + 8;
+    if (id === "fmt " && start + 16 <= body.length) {
+      format = body.readUInt16LE(start);
+      channels = Math.max(1, body.readUInt16LE(start + 2));
+      rate = body.readUInt32LE(start + 4) || fallbackRate;
+      bits = body.readUInt16LE(start + 14);
+    }
+    if (id === "data") {
+      const end = declared === 0 || declared > body.length - start ? body.length : start + declared;
+      return resamplePcm16(monoPcm16(body.subarray(start, end), channels, bits, format), rate, CLIENT_OUTPUT_RATE);
+    }
+    offset = start + declared + (declared % 2);
+  }
+  return Buffer.alloc(0);
+}
+
+/** Down-mixes and converts WAV sample data to mono PCM16. */
+function monoPcm16(data: Buffer, channels: number, bits: number, format: number): Buffer {
+  if (channels === 1 && bits === 16 && format === 1) return data;
+  // 16-bit integer, or 32-bit float (format 3) — what speech servers emit.
+  if (!(bits === 16 && format === 1) && !(bits === 32 && format === 3)) return Buffer.alloc(0);
+  const bytes = bits / 8;
+  const frames = Math.floor(data.length / (bytes * channels));
+  const output = Buffer.allocUnsafe(frames * 2);
+  for (let frame = 0; frame < frames; frame += 1) {
+    let sum = 0;
+    for (let channel = 0; channel < channels; channel += 1) {
+      const at = (frame * channels + channel) * bytes;
+      sum += bits === 16 ? data.readInt16LE(at) / 32768 : data.readFloatLE(at);
+    }
+    const sample = Math.max(-1, Math.min(1, sum / channels));
+    output.writeInt16LE(Math.round(sample * 32767), frame * 2);
+  }
+  return output;
 }
 
 // ---- Voice activity detection ----------------------------------------------
@@ -250,13 +373,12 @@ export function createPipelineEngine(
         model: settings.tts.model,
         voice: settings.tts.voice(config?.voiceGender ?? "female"),
         input: text,
-        response_format: "pcm"
+        response_format: settings.tts.format ?? "pcm"
       }),
       signal
     });
     if (!response.ok) throw await failure("Text-to-speech", response);
-    const pcm = Buffer.from(await response.arrayBuffer());
-    return resamplePcm16(pcm, settings.tts.sampleRate, CLIENT_OUTPUT_RATE);
+    return speechToPcm(Buffer.from(await response.arrayBuffer()), settings.tts.sampleRate);
   }
 
   /** Streams chat-completion text, handing each finished sentence to `onSentence`. */

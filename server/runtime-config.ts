@@ -26,6 +26,9 @@ export const config = {
   // (session.start.voiceProvider). Set VOICE_PROVIDER_SWITCHING=off to pin
   // every session to VOICE_PROVIDER.
   voiceProviderSwitching: process.env.VOICE_PROVIDER_SWITCHING?.trim().toLowerCase() !== "off",
+  // Lets a client tune the assistant's voice per session (session.start.equalizer).
+  // Off pins every session to the assistant profile's default equaliser.
+  voiceEqualizerAdjustable: process.env.VOICE_EQUALIZER_ADJUSTABLE?.trim().toLowerCase() !== "off",
   defaultWeatherLocation: resolveDefaultWeatherLocation(),
   // When on, the live agent only replies when the rider addresses it by name
   // ("Max"); set AGENT_WAKE_WORD=off to make it answer every utterance again.

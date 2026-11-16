@@ -6,11 +6,11 @@
 
 import { useMemo } from "react";
 import type { AuthUser } from "../lib/auth";
-import { deviceCopyKey } from "../lib/i18n";
+import { deviceAssistantCopy } from "../lib/i18n";
 import { AccountForm } from "./AccountBar";
 import { useAssistant } from "./AssistantContext";
 import { LanguageToggle, useLanguage } from "./LanguageToggle";
-import { VisorMark } from "./VisorVisual";
+import { BrandMark } from "./VisorVisual";
 
 type Props = {
   /** False until the first account exists — the gate then offers first-run
@@ -39,7 +39,7 @@ function clearInviteFromUrl() {
 }
 
 export function LoginGate({ authEnabled, registrationOpen, onSignedIn }: Props) {
-  const { t } = useLanguage();
+  const { language, t } = useLanguage();
   const assistant = useAssistant();
   const inviteCode = useMemo(readInviteCode, []);
 
@@ -55,10 +55,10 @@ export function LoginGate({ authEnabled, registrationOpen, onSignedIn }: Props) 
     <main className="loginShell">
       <section className="loginGate" aria-label={t("login.aria")}>
         <header className="loginBrand">
-          <VisorMark className="loginMark" />
+          <BrandMark className="loginMark" />
           <div>
             <h1>{assistant.name}</h1>
-            <p>{assistant.tagline || t(deviceCopyKey("voice.assistantKind", assistant.device))}</p>
+            <p>{assistant.tagline || deviceAssistantCopy(t, language, "voice.assistantKind", assistant)}</p>
           </div>
           <LanguageToggle />
         </header>

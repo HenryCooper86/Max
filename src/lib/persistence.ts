@@ -2,10 +2,11 @@
 // relay auth token. Everything is best-effort — storage being unavailable
 // (private browsing, quota) must never break the voice session.
 
-import type { VoicePersonality } from "../../shared/agent";
+import type { VoiceEqualizer, VoicePersonality } from "../../shared/agent";
 import { detectLanguage } from "../../shared/language";
 import { DEFAULT_TESTING_CAMPAIGN_ID, DEFAULT_TESTING_TEST_CASE_ID } from "../../shared/testing";
 import type { TranscriptItem, VoiceGender } from "../types";
+import { normalizeEqualizer } from "./equalizer";
 
 // v1 used one device-global key. That let a second account on a shared
 // browser inherit the previous rider's local transcript, even though server
@@ -32,6 +33,11 @@ type StoredSettings = {
   testingTestCaseId?: string;
   testingRunId?: string;
   testingAssignmentId?: string;
+  /** Voice equaliser the viewer chose; absent = the relay default. */
+  equalizer?: VoiceEqualizer;
+  /** Design template the viewer chose (src/lib/templates.ts id). Owned by the
+   *  appearance code, not the voice session — see saveStoredSettings. */
+  template?: string;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -84,6 +90,11 @@ export function normalizeStoredSettings(value: unknown): StoredSettings {
   if (typeof value.testingAssignmentId === "string") {
     const assignmentId = stripControlChars(value.testingAssignmentId.normalize("NFKC")).trim().slice(0, 80);
     if (assignmentId) settings.testingAssignmentId = assignmentId;
+  }
+  const equalizer = normalizeEqualizer(value.equalizer);
+  if (equalizer) settings.equalizer = equalizer;
+  if (typeof value.template === "string" && /^[a-z0-9][a-z0-9-]{0,31}$/.test(value.template)) {
+    settings.template = value.template;
   }
   return settings;
 }
@@ -184,8 +195,18 @@ export function loadStoredSettings(): StoredSettings {
   };
 }
 
+/** Replace the stored settings. The voice session writes its whole settings
+ *  object at once and knows nothing about the viewer's template, so a call
+ *  without a `template` key keeps the one already stored. */
 export function saveStoredSettings(settings: StoredSettings) {
-  writeJson(SETTINGS_KEY, normalizeStoredSettings(settings));
+  const kept =
+    "template" in settings ? {} : { template: normalizeStoredSettings(readJson<unknown>(SETTINGS_KEY)).template };
+  writeJson(SETTINGS_KEY, normalizeStoredSettings({ ...kept, ...settings }));
+}
+
+/** Remember (or, with undefined, forget) the viewer's design template. */
+export function saveStoredTemplate(template: string | undefined) {
+  saveStoredSettings({ ...normalizeStoredSettings(readJson<unknown>(SETTINGS_KEY)), template });
 }
 
 /**

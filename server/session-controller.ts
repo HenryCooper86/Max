@@ -1,3 +1,4 @@
+import { normalizeEqualizer } from "./audio-eq";
 import type { RawData, WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
 import type { NavPromptEvent } from "../shared/agent";
@@ -524,6 +525,12 @@ export function parseClientEvent(data: RawData): ClientEvent {
     (typeof value.voiceProvider !== "string" || !VOICE_PROVIDER_ID.test(value.voiceProvider))
   ) {
     throw new Error("Invalid voiceProvider");
+  }
+  if (value.equalizer !== undefined) {
+    // Sanitised rather than rejected: out-of-range bands clamp, junk drops.
+    const equalizer = normalizeEqualizer(value.equalizer);
+    if (equalizer) value.equalizer = equalizer;
+    else delete value.equalizer;
   }
   assertOptionalEnum(value.rideMode, RIDE_MODES, "rideMode");
   assertOptionalEnum(value.scenario, DEMO_SCENARIOS, "scenario");

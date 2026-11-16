@@ -4,8 +4,10 @@ import type { VoiceProviderSummary } from "../../shared/agent";
 import { combineHazardLevels, scenarioLabel } from "../../shared/ride";
 import { useAssistant } from "./AssistantContext";
 import { LanguageToggle, useLanguage } from "./LanguageToggle";
-import { VisorMark } from "./VisorVisual";
-import { deviceCopyKey, localized } from "../lib/i18n";
+import { TemplatePicker, TemplateSwatch, type AppearanceControls } from "./TemplatePicker";
+import { BrandMark } from "./VisorVisual";
+import { VoiceEqualizerPanel } from "./VoiceEqualizerPanel";
+import { deviceAssistantCopy, deviceCopyKey, localized } from "../lib/i18n";
 import type { AmapConsentControls } from "../hooks/useAmapConsent";
 import type { HelmetAgent } from "../hooks/useHelmetAgent";
 import {
@@ -31,6 +33,7 @@ import {
   SCENARIOS,
   VOICE_PERSONALITIES
 } from "../lib/constants";
+import { findTemplate } from "../lib/templates";
 import { audioProcessingLabel, exportTranscriptLog } from "../lib/utils";
 
 type Props = {
@@ -38,6 +41,7 @@ type Props = {
   amapConsent: AmapConsentControls;
   onOpenTesting: () => void;
   onOpenAdmin?: () => void;
+  appearance: AppearanceControls;
   onClose: () => void;
 };
 
@@ -112,7 +116,7 @@ function Segmented<T extends string>({
   );
 }
 
-export function WebSettingsSheet({ agent, amapConsent, onOpenTesting, onOpenAdmin, onClose }: Props) {
+export function WebSettingsSheet({ agent, amapConsent, onOpenTesting, onOpenAdmin, appearance, onClose }: Props) {
   const { language, t } = useLanguage();
   const assistant = useAssistant();
   const en = language === "en-US";
@@ -128,6 +132,8 @@ export function WebSettingsSheet({ agent, amapConsent, onOpenTesting, onOpenAdmi
     agent.voiceProvider && providers.some((provider) => provider.id === agent.voiceProvider)
       ? agent.voiceProvider
       : (voice?.active ?? "");
+  const equalizerOptions = voice?.equalizer;
+  const activeTemplate = findTemplate(appearance.templateId);
   const connectionLabels = en ? CONNECTION_LABELS_EN : CONNECTION_LABELS;
   const permissionLabels = en ? PERMISSION_LABELS_EN : PERMISSION_LABELS;
 
@@ -180,6 +186,11 @@ export function WebSettingsSheet({ agent, amapConsent, onOpenTesting, onOpenAdmi
           <span className="backendTitle">
             <strong>{provider.label}</strong>
             <span className={`backendKind ${provider.kind}`}>{t(`settings.backendKind.${provider.kind}`)}</span>
+            {provider.local ? (
+              <span className="backendKind local" title={t("settings.backendLocalHelp")}>
+                {t("settings.backendLocal")}
+              </span>
+            ) : null}
           </span>
           {provider.description ? <span className="backendDescription">{provider.description}</span> : null}
           {!provider.configured ? <span className="backendMissing">{t("settings.needsKey")}</span> : null}
@@ -223,10 +234,10 @@ export function WebSettingsSheet({ agent, amapConsent, onOpenTesting, onOpenAdmi
         <div className="settingsContent">
           <Section title={t("settings.assistant")} help={canPickBackend ? t("settings.voiceBackendHelp") : undefined}>
             <div className="settingsIdentity">
-              <VisorMark />
+              <BrandMark />
               <div>
                 <strong>{assistant.name}</strong>
-                <span>{assistant.tagline || t(deviceCopyKey("voice.assistantKind", assistant.device))}</span>
+                <span>{assistant.tagline || deviceAssistantCopy(t, language, "voice.assistantKind", assistant)}</span>
               </div>
             </div>
             <Row label={t("settings.wakePhrase")}>
@@ -280,6 +291,34 @@ export function WebSettingsSheet({ agent, amapConsent, onOpenTesting, onOpenAdmi
                 }))}
               />
             </Row>
+            {equalizerOptions ? (
+              <Row
+                label={t("settings.equalizer")}
+                detail={
+                  equalizerOptions.adjustable
+                    ? t("settings.equalizerHelp", { name: assistant.name })
+                    : t("settings.equalizerFixed")
+                }
+                stack
+              >
+                <VoiceEqualizerPanel options={equalizerOptions} value={agent.equalizer} onChange={agent.setEqualizer} />
+              </Row>
+            ) : null}
+          </Section>
+
+          <Section title={t("settings.appearance")} help={appearance.pinned ? undefined : t("settings.appearanceHelp")}>
+            {appearance.pinned && activeTemplate ? (
+              <Row label={t("settings.template")} detail={t("settings.templatePinned")}>
+                <span className="templatePinned">
+                  <TemplateSwatch template={activeTemplate} />
+                  <span className="settingsValue">{en ? activeTemplate.label.en : activeTemplate.label.zh}</span>
+                </span>
+              </Row>
+            ) : (
+              <Row label={t("settings.template")} stack>
+                <TemplatePicker value={appearance.templateId} onSelect={appearance.onSelect} />
+              </Row>
+            )}
           </Section>
 
           <Section title={t(deviceCopyKey("settings.ride", assistant.device))}>

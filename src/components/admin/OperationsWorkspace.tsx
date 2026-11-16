@@ -16,7 +16,7 @@ import {
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { AccountSessionControls } from "../AccountBar";
 import { useAssistant } from "../AssistantContext";
-import { VisorMark } from "../VisorVisual";
+import { BrandMark } from "../VisorVisual";
 import { LanguageToggle, useLanguage } from "../LanguageToggle";
 import { localized } from "../../lib/i18n";
 import { CONNECTION_LABELS, CONNECTION_LABELS_EN } from "../../lib/constants";
@@ -150,7 +150,7 @@ export function OperationsWorkspace({ agent, user, onAuthenticationExpired, onCl
     <main className={`adminWorkspace ${administration ? "adminControlWorkspace" : "testingWorkspace"}`}>
       <header className="adminWorkspaceHeader">
         <div className="adminWorkspaceBrand">
-          <VisorMark className="adminWorkspaceLogo" />
+          <BrandMark className="adminWorkspaceLogo" />
           <h1>
             <span>{assistant.name}</span>
             {administration ? localized(language, "管理", "Administration") : localized(language, "测试", "Testing")}

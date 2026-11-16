@@ -8,6 +8,7 @@
   },
   "scripts": {
     "setup": "tsx scripts/setup.ts",
+    "brand": "tsx scripts/brand.ts",
     "dev": "concurrently \"npm:dev:server\" \"npm:dev:client\"",
     "dev:client": "vite --host 0.0.0.0",
     "dev:server": "tsx watch server/index.ts",

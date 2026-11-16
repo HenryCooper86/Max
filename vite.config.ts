@@ -70,6 +70,9 @@ export default defineConfig({
       "/health": {
         target: "http://localhost:8787"
       },
+      "/brand": {
+        target: "http://localhost:8787"
+      },
       "/testing": {
         target: "http://localhost:8787"
       },

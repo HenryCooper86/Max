@@ -4,7 +4,8 @@ import { accountsStorageHealthy, authActive, registrationOpen } from "./accounts
 import { metrics, metricsWindow, testingSnapshot } from "./metrics";
 import { userMemoryEnabled, userMemoryStorageHealthy } from "./user-memory";
 
-import { assistant, assistantSummary } from "./assistant";
+import { assistant, assistantLogoProblem, assistantSummary } from "./assistant";
+import { equalizerOptions } from "./audio-eq";
 import { resolveVoiceProviderId, voiceProvider, voiceProviderSummaries } from "./providers/catalog";
 import { config } from "./runtime-config";
 export { config };
@@ -27,7 +28,7 @@ function describeDuration(ms: number): string {
 /** Human-readable summary printed on startup. */
 export function describeConfig(): string[] {
   return [
-    `Assistant: ${assistant().name} (${assistant().device})`,
+    `Assistant: ${assistant().name} (${assistant().preset.id}) · template ${assistant().template}`,
     `Realtime voice provider: ${config.voiceProvider}`,
     `Voice backends ready: ${voiceProviderSummaries()
       .filter((entry) => entry.configured)
@@ -58,6 +59,9 @@ export function describeConfig(): string[] {
 export function validateConfig(): string[] {
   const warnings: string[] = [];
   const hasAccountProtection = authActive();
+
+  const logoIssue = assistantLogoProblem();
+  if (logoIssue) warnings.push(`assistant.config.json: ${logoIssue} — the built-in mark is used instead.`);
 
   const requested = process.env.VOICE_PROVIDER?.trim();
   if (requested && !resolveVoiceProviderId(requested)) {
@@ -136,7 +140,8 @@ export function buildHealth(uptimeSec: number, includeTesting = false): AgentHea
     voice: {
       active: config.voiceProvider,
       switching: config.voiceProviderSwitching,
-      providers: voiceProviderSummaries()
+      providers: voiceProviderSummaries(),
+      equalizer: equalizerOptions(assistant().equalizer, config.voiceEqualizerAdjustable)
     },
     uptimeSec,
     credentials: credentialStatus(),

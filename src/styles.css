@@ -3,7 +3,13 @@
 
    A calm instrument, not a sci-fi dashboard: flat surfaces that step up in
    lightness, hairline rules, one signal accent used only for the primary
-   action, the selected state and the live voice. Dark only.
+   action, the selected state and the live voice.
+
+   Every colour, radius, type size and stroke width below is a token. The
+   values in :root are the default "visor" template; src/lib/templates.ts
+   defines the others (daylight, beacon, ember, holo) and writes the active
+   one onto <html> at runtime. Rules must read tokens, never assume a dark
+   page: use --line-hover, --scrim, --on-danger etc. instead of white or black.
 
    Type: Space Grotesk (display + Latin UI) and Space Mono (numbers, timings,
    key hints, ids), bundled under /public/fonts so the UI keeps its voice
@@ -32,8 +38,8 @@
 }
 
 /* ---- Tokens ---------------------------------------------------------------
-   --accent, --accent-soft and --on-accent are overridden at runtime from the
-   relay's assistant.accentColor (src/lib/assistant.ts → applyAccent). */
+   Overridden at runtime by the active template, the relay's assistant.theme
+   and assistant.accentColor (src/lib/templates.ts → applyAppearance). */
 :root {
   color-scheme: dark;
 
@@ -44,6 +50,11 @@
 
   --line: rgba(255, 255, 255, 0.08);
   --line-strong: rgba(255, 255, 255, 0.14);
+  /* Hovered input borders. */
+  --line-hover: rgba(255, 255, 255, 0.22);
+  /* Outline for containers that otherwise rely on a surface step (high
+     contrast templates make it visible; here it is transparent). */
+  --frame: rgba(0, 0, 0, 0);
 
   --text: #f2f4f5;
   --text-2: #a3abb3;
@@ -61,6 +72,23 @@
   --danger-soft: rgba(255, 90, 77, 0.14);
   --warn-soft: rgba(255, 197, 61, 0.14);
   --ok-soft: rgba(61, 220, 151, 0.14);
+  /* Ink on solid danger / warn fills. */
+  --on-danger: #0b0c0e;
+  --on-warn: #0b0c0e;
+
+  /* Modal backdrop, the Visor lens edge and tick marks, scrollbar thumbs. */
+  --scrim: rgba(0, 0, 0, 0.64);
+  --lens-stroke: rgba(255, 255, 255, 0.05);
+  --lens-tick: rgba(255, 255, 255, 0.1);
+  --scrollbar: #23272c;
+
+  /* Stroke widths for rules/borders and the keyboard focus ring. */
+  --line-w: 1px;
+  --focus-w: 2px;
+  /* Strength of the Visor's accent vignette, 0…1. */
+  --glow: 1;
+  /* How far disabled controls fade. */
+  --disabled-opacity: 0.5;
 
   --radius-control: 10px;
   --radius-card: 16px;
@@ -130,13 +158,13 @@ button {
 
 button:disabled {
   cursor: not-allowed;
-  opacity: 0.5;
+  opacity: var(--disabled-opacity);
 }
 
 /* Keyboard focus is always visible and always the same: a 2px accent ring
    with a 2px gap, so it reads on every surface including accent fills. */
 :where(button, input, select, textarea, a, summary, [tabindex]):focus-visible {
-  outline: 2px solid var(--accent);
+  outline: var(--focus-w) solid var(--accent);
   outline-offset: 2px;
 }
 
@@ -225,6 +253,34 @@ time,
   fill: none;
 }
 
+/* The owner's logo (assistant.logoUrl) in place of the mark. Logos are
+   square, so each slot gets a square about as tall as the line beside it
+   rather than the mark's wide 12:5 box. */
+.brandLogo {
+  display: block;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: 22%;
+  object-fit: cover;
+}
+
+.settingsIdentity .brandLogo {
+  width: 40px;
+  height: 40px;
+}
+
+.brandLogo.loginMark {
+  width: 44px;
+  height: 44px;
+}
+
+.adminWorkspace .brandLogo.adminWorkspaceLogo {
+  width: 28px;
+  height: 28px;
+  border-radius: 22%;
+}
+
 .visorMark rect {
   stroke: var(--text);
   stroke-width: 1.5;
@@ -244,7 +300,7 @@ time,
   align-items: center;
   gap: 8px;
   padding: 0 12px;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: var(--radius-pill);
   color: var(--text-2);
   font-size: var(--fs-13);
@@ -310,7 +366,7 @@ time,
   z-index: 0;
   border-radius: 50%;
   background: radial-gradient(closest-side, color-mix(in srgb, var(--visor-tint) 13%, transparent), transparent);
-  opacity: var(--visor-glow);
+  opacity: calc(var(--visor-glow) * var(--glow));
   pointer-events: none;
   transition: opacity var(--dur-slow) var(--ease-out);
 }
@@ -333,12 +389,12 @@ time,
 
 .visorLens {
   fill: var(--surface-1);
-  stroke: rgba(255, 255, 255, 0.05);
+  stroke: var(--lens-stroke);
   stroke-width: 1;
 }
 
 .visorTicks line {
-  stroke: rgba(255, 255, 255, 0.1);
+  stroke: var(--lens-tick);
   stroke-width: 1.5;
   stroke-linecap: round;
 }
@@ -650,7 +706,7 @@ time,
   gap: 12px;
   margin-top: 8px;
   padding: 12px 16px 12px 12px;
-  border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
+  border: var(--line-w) solid color-mix(in srgb, var(--danger) 45%, transparent);
   border-radius: var(--radius-card);
   background: var(--danger-soft);
 }
@@ -668,13 +724,14 @@ time,
   padding: 0 8px;
   border-radius: var(--radius-control);
   background: var(--danger);
-  color: var(--bg);
+  color: var(--on-danger);
   font-size: var(--fs-13);
   font-weight: 700;
 }
 
 .hazardBanner.caution .hazardDir {
   background: var(--warn);
+  color: var(--on-warn);
 }
 
 .hazardBody {
@@ -714,7 +771,7 @@ time,
   gap: 12px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-color: var(--surface-3) transparent;
+  scrollbar-color: var(--scrollbar) transparent;
   scrollbar-width: thin;
 }
 
@@ -725,7 +782,7 @@ time,
 .voiceTranscript,
 .navigationPanel,
 .musicPlaybackCard {
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: var(--radius-card);
   background: var(--surface-1);
 }
@@ -745,7 +802,7 @@ time,
   justify-content: space-between;
   gap: 12px;
   padding: 0 16px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: var(--line-w) solid var(--line);
 }
 
 .voiceTranscriptHead strong {
@@ -768,7 +825,7 @@ time,
   padding: 14px 16px 16px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-color: var(--surface-3) transparent;
+  scrollbar-color: var(--scrollbar) transparent;
   scrollbar-width: thin;
 }
 
@@ -849,7 +906,7 @@ time,
 .voiceFlagReasons button {
   min-height: 32px;
   padding: 0 12px;
-  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  border: var(--line-w) solid color-mix(in srgb, var(--danger) 40%, transparent);
   border-radius: var(--radius-pill);
   background: transparent;
   color: var(--text);
@@ -1023,7 +1080,7 @@ time,
   align-items: center;
   justify-content: center;
   padding: 0 14px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: var(--radius-control);
   background: transparent;
   color: var(--text);
@@ -1062,7 +1119,7 @@ time,
 
 .navigationSteps li {
   padding: 8px 0;
-  border-top: 1px solid var(--line);
+  border-top: var(--line-w) solid var(--line);
   overflow-wrap: anywhere;
   font-size: var(--fs-15);
 }
@@ -1166,7 +1223,11 @@ time,
     padding: 6px 4px;
     border-radius: var(--radius-control);
     font-size: var(--fs-12);
-    white-space: nowrap;
+    line-height: 1.2;
+    text-align: center;
+    /* Large-type templates wrap a long label instead of running into the
+       next button. */
+    white-space: normal;
   }
 }
 
@@ -1187,7 +1248,7 @@ time,
   align-items: center;
   gap: 14px;
   padding: 7px 16px 7px 7px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: var(--radius-pill);
   background: var(--surface-2);
   color: var(--text);
@@ -1244,7 +1305,7 @@ time,
 
 .voiceMicButton kbd {
   padding: 5px 8px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 6px;
   color: var(--text-2);
   font-size: var(--fs-12);
@@ -1495,7 +1556,7 @@ time,
   align-items: flex-end;
   justify-content: center;
   padding-top: 12px;
-  background: rgba(0, 0, 0, 0.64);
+  background: var(--scrim);
   animation: fadeIn var(--dur) var(--ease-out);
 }
 
@@ -1505,7 +1566,7 @@ time,
   max-height: calc(100dvh - 12px);
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-bottom: 0;
   border-radius: var(--radius-sheet) var(--radius-sheet) 0 0;
   background: var(--surface-1);
@@ -1521,7 +1582,7 @@ time,
 
   .settingsSheet {
     max-height: min(900px, calc(100dvh - 48px));
-    border-bottom: 1px solid var(--line);
+    border-bottom: var(--line-w) solid var(--line);
     border-radius: var(--radius-sheet);
   }
 }
@@ -1546,7 +1607,7 @@ time,
   justify-content: space-between;
   gap: 12px;
   padding: 16px 16px 16px 24px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: var(--line-w) solid var(--line);
 }
 
 .settingsHeader h1 {
@@ -1595,7 +1656,7 @@ time,
   padding: 8px 16px max(24px, env(safe-area-inset-bottom));
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-color: var(--surface-3) transparent;
+  scrollbar-color: var(--scrollbar) transparent;
   scrollbar-width: thin;
 }
 
@@ -1621,10 +1682,11 @@ time,
   overflow: hidden;
   border-radius: var(--radius-card);
   background: var(--surface-2);
+  box-shadow: inset 0 0 0 var(--line-w) var(--frame);
 }
 
 .settingsList > * + * {
-  border-top: 1px solid var(--line);
+  border-top: var(--line-w) solid var(--line);
 }
 
 .settingsRow {
@@ -1781,7 +1843,7 @@ time,
   align-items: start;
   gap: 12px;
   padding: 12px 14px;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: var(--radius-control);
   background: var(--surface-1);
   color: var(--text);
@@ -1831,7 +1893,7 @@ time,
 
 .backendKind {
   padding: 1px 8px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: var(--radius-pill);
   color: var(--text-2);
   font-size: var(--fs-12);
@@ -1896,7 +1958,7 @@ time,
   align-items: center;
   gap: 8px;
   padding: 0 14px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: var(--radius-control);
   background: transparent;
   color: var(--text);
@@ -1959,11 +2021,11 @@ time,
   display: grid;
   gap: 2px;
   padding: 12px 16px;
-  border-top: 1px solid var(--line);
+  border-top: var(--line-w) solid var(--line);
 }
 
 .settingsMetrics > div:nth-child(even) {
-  border-left: 1px solid var(--line);
+  border-left: var(--line-w) solid var(--line);
 }
 
 .settingsMetrics dt {
@@ -1977,7 +2039,7 @@ time,
 }
 
 .settingsList > .settingsMetrics + * {
-  border-top: 1px solid var(--line);
+  border-top: var(--line-w) solid var(--line);
 }
 
 /* Testing & diagnostics: a collapsed row, then plain sections when open. */
@@ -2020,6 +2082,351 @@ time,
   grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
 }
 
+/* Visually hidden but still read and focusable (template radios). */
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.backendKind.local {
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+  color: var(--ok);
+}
+
+/* Appearance: one row per design template, a thumbnail of its own colours. */
+.templatePicker {
+  display: grid;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  gap: 8px;
+  border: 0;
+}
+
+.templateOption {
+  position: relative;
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px 10px 10px;
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface-1);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+.templateOption:hover {
+  border-color: var(--line-hover);
+}
+
+.templateOption.active {
+  border-color: var(--accent);
+}
+
+.templateOption:has(input:focus-visible) {
+  outline: var(--focus-w) solid var(--accent);
+  outline-offset: 2px;
+}
+
+.templateSwatch {
+  display: block;
+  width: 56px;
+  height: 40px;
+  flex: none;
+}
+
+.templateSwatchFrame {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+
+.templateText {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.templateText strong {
+  font-size: var(--fs-15);
+  font-weight: 600;
+}
+
+.templateText span {
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  line-height: 1.4;
+}
+
+.templateCheck {
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 50%;
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+.templateOption.active .templateCheck {
+  border: 5px solid var(--accent);
+}
+
+.templatePinned {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Voice equaliser: preset chips, the response preview, five band sliders. */
+.eqPanel {
+  display: grid;
+  min-width: 0;
+  gap: 14px;
+}
+
+.eqPresets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.eqChip {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  padding: 0 12px;
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: var(--fs-13);
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.eqChip:hover:not(.active) {
+  color: var(--text);
+}
+
+.eqChip.active {
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.eqChip.custom {
+  border-style: dashed;
+  cursor: default;
+}
+
+.eqChip.custom:not(.active) {
+  border-color: var(--line);
+}
+
+.eqCurve {
+  padding: 10px 10px 0;
+  border-radius: var(--radius-control);
+  background: var(--surface-1);
+}
+
+.eqCurve svg {
+  display: block;
+  width: 100%;
+  height: 88px;
+  overflow: visible;
+}
+
+.eqCurveGrid {
+  stroke: var(--line);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.eqCurveZero {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+  vector-effect: non-scaling-stroke;
+}
+
+.eqCurveFill {
+  fill: var(--accent-soft);
+}
+
+.eqCurveLine {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.eqAxis {
+  position: relative;
+  height: 24px;
+  color: var(--text-2);
+  font: var(--fs-12) / 24px var(--font-mono);
+}
+
+.eqAxis span {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+}
+
+.eqBands {
+  display: grid;
+  gap: 4px;
+  container-type: inline-size;
+}
+
+.eqBand {
+  display: grid;
+  grid-template-areas: "label slider readout";
+  grid-template-columns: minmax(76px, 7.5em) minmax(0, 1fr) 4.75em;
+  align-items: center;
+  gap: 0 12px;
+  min-height: 40px;
+}
+
+.eqBand label {
+  display: grid;
+  grid-area: label;
+  font-size: var(--fs-13);
+  line-height: 1.25;
+}
+
+.eqBand input[type="range"] {
+  grid-area: slider;
+}
+
+.eqBand .eqReadout {
+  grid-area: readout;
+}
+
+/* Narrow sheets and large type: the slider gets its own full-width line. */
+@container (max-width: 400px) {
+  .eqBand {
+    grid-template-areas:
+      "label readout"
+      "slider slider";
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding-bottom: 2px;
+  }
+
+  .eqBand label {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+}
+
+.eqBand small {
+  color: var(--text-2);
+  font: var(--fs-12) / 1.3 var(--font-mono);
+}
+
+.eqBand input[type="range"] {
+  width: 100%;
+  height: 32px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.eqBand input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    var(--eq-track) var(--eq-from),
+    var(--accent) var(--eq-from) var(--eq-to),
+    var(--eq-track) var(--eq-to)
+  );
+}
+
+.eqBand input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    var(--eq-track) var(--eq-from),
+    var(--accent) var(--eq-from) var(--eq-to),
+    var(--eq-track) var(--eq-to)
+  );
+}
+
+.eqBand input[type="range"]::-webkit-slider-thumb {
+  width: 20px;
+  height: 20px;
+  margin-top: -8px;
+  border: 2px solid var(--surface-2);
+  border-radius: 50%;
+  background: var(--text);
+  box-shadow: 0 0 0 var(--line-w) var(--line-strong);
+  -webkit-appearance: none;
+}
+
+.eqBand input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--surface-2);
+  border-radius: 50%;
+  background: var(--text);
+}
+
+.eqBand input[type="range"]:focus-visible {
+  outline-offset: 4px;
+}
+
+.eqBand {
+  --eq-track: color-mix(in srgb, var(--text) 30%, transparent);
+}
+
+.eqReadout {
+  color: var(--text);
+  font: var(--fs-13) / 1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.eqFoot {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.eqReset {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: var(--fs-13);
+}
+
+.eqReset:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.eqPanel.readOnly .eqHead .settingsValue {
+  text-align: left;
+}
+
 @media (max-width: 480px) {
   .settingsHeader {
     padding-left: 20px;
@@ -2054,7 +2461,7 @@ time,
   flex: none;
   gap: 2px;
   padding: 3px;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: var(--radius-pill);
   background: var(--surface-2);
 }
@@ -2122,7 +2529,7 @@ time,
 
 .loginCard {
   padding: 24px;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: var(--radius-card);
   background: var(--surface-1);
 }
@@ -2162,7 +2569,7 @@ time,
   min-width: 0;
   min-height: 44px;
   padding: 0 14px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: var(--radius-control);
   background: var(--bg);
   color: var(--text);
@@ -2175,7 +2582,7 @@ time,
 }
 
 .accountFields input:hover {
-  border-color: rgba(255, 255, 255, 0.22);
+  border-color: var(--line-hover);
 }
 
 .accountFields input:focus {
@@ -2234,7 +2641,7 @@ time,
 .errorCard {
   width: min(480px, 100%);
   padding: 24px;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: var(--radius-card);
   background: var(--surface-1);
 }
@@ -2287,31 +2694,31 @@ time,
 }
 
 .helmetStage.online {
-  --ring: var(--ok, #47e39b);
-  --ring-soft: rgba(71, 227, 155, 0.5);
-  --ring-faint: rgba(71, 227, 155, 0.18);
-  --glow: rgba(71, 227, 155, 0.2);
+  --ring: var(--ok);
+  --ring-soft: color-mix(in srgb, var(--ok) 50%, transparent);
+  --ring-faint: color-mix(in srgb, var(--ok) 18%, transparent);
+  --ring-glow: color-mix(in srgb, var(--ok) 20%, transparent);
 }
 
 .helmetStage.listening {
-  --ring: var(--ok, #47e39b);
-  --ring-soft: rgba(71, 227, 155, 0.62);
-  --ring-faint: rgba(71, 227, 155, 0.24);
-  --glow: rgba(71, 227, 155, 0.32);
+  --ring: var(--ok);
+  --ring-soft: color-mix(in srgb, var(--ok) 62%, transparent);
+  --ring-faint: color-mix(in srgb, var(--ok) 24%, transparent);
+  --ring-glow: color-mix(in srgb, var(--ok) 32%, transparent);
 }
 
 .helmetStage.thinking {
-  --ring: var(--warn, #f5b843);
-  --ring-soft: rgba(245, 184, 67, 0.58);
-  --ring-faint: rgba(245, 184, 67, 0.22);
-  --glow: rgba(245, 184, 67, 0.26);
+  --ring: var(--warn);
+  --ring-soft: color-mix(in srgb, var(--warn) 58%, transparent);
+  --ring-faint: color-mix(in srgb, var(--warn) 22%, transparent);
+  --ring-glow: color-mix(in srgb, var(--warn) 26%, transparent);
 }
 
 .helmetStage.speaking {
-  --ring: var(--ok, #47e39b);
-  --ring-soft: rgba(71, 227, 155, 0.62);
-  --ring-faint: rgba(71, 227, 155, 0.26);
-  --glow: rgba(71, 227, 155, 0.34);
+  --ring: var(--ok);
+  --ring-soft: color-mix(in srgb, var(--ok) 62%, transparent);
+  --ring-faint: color-mix(in srgb, var(--ok) 26%, transparent);
+  --ring-glow: color-mix(in srgb, var(--ok) 34%, transparent);
 }
 .gaugeBezel.speaking .gaugeTick {
   stroke: var(--ring);
@@ -2489,7 +2896,7 @@ time,
   min-width: 0;
   min-height: 86px;
   padding: 12px;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-left: 3px solid color-mix(in srgb, var(--ok) 45%, transparent);
   border-radius: 8px;
   background: var(--surface-2);
@@ -2551,7 +2958,7 @@ button.opsCard:disabled {
 .decisionPanel {
   min-width: 0;
   padding: 12px;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: 8px;
   background: var(--surface-2);
 }
@@ -2632,7 +3039,7 @@ button.opsCard:disabled {
   min-width: 0;
   min-height: 32px;
   margin-top: 6px;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: 8px;
   background: var(--surface-1);
   color: var(--text);
@@ -2673,7 +3080,7 @@ button.opsCard:disabled {
   min-width: 0;
   min-height: 34px;
   margin-top: 6px;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: 8px;
   background: var(--surface-1);
   color: var(--text);
@@ -2741,7 +3148,7 @@ button.opsCard:disabled {
   min-width: 0;
   min-height: 30px;
   margin-top: 6px;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: 8px;
   background: var(--surface-1);
   color: var(--text);
@@ -2762,7 +3169,7 @@ button.opsCard:disabled {
 .qualityFilter button {
   min-width: 0;
   min-height: 36px;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: 8px;
   background: transparent;
   color: var(--text-2);
@@ -2887,7 +3294,7 @@ button.opsCard:disabled {
 .testerTable th,
 .testerTable td {
   padding: 10px 8px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: var(--line-w) solid var(--line);
   text-align: left;
   white-space: nowrap;
 }
@@ -2976,7 +3383,7 @@ button.opsCard:disabled {
 .testerConversationPanel {
   min-width: 0;
   padding-top: 12px;
-  border-top: 1px solid var(--line);
+  border-top: var(--line-w) solid var(--line);
 }
 
 .testerConversationHeader {
@@ -3041,7 +3448,7 @@ button.opsCard:disabled {
 .adminNotice {
   margin: 0;
   padding: 8px 12px;
-  border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
+  border: var(--line-w) solid color-mix(in srgb, var(--danger) 45%, transparent);
   border-radius: 10px;
   background: var(--danger-soft);
   color: var(--danger);
@@ -3052,7 +3459,7 @@ button.opsCard:disabled {
 .testerConversationHeader button {
   min-height: 32px;
   padding: 0 14px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 999px;
   background: var(--ok-soft);
   color: var(--ok);
@@ -3089,7 +3496,7 @@ button.opsCard:disabled {
   gap: 4px;
   min-width: 0;
   padding: 10px;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: 8px;
   background: var(--surface-2);
   color: var(--text);
@@ -3322,7 +3729,7 @@ button.opsCard:disabled {
   border-radius: 10px;
   padding: 14px;
   background: var(--surface-2);
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-left-width: 3px;
   transition:
     transform 0.15s ease,
@@ -3361,11 +3768,11 @@ button.opsCard:disabled {
   0%,
   100% {
     opacity: 0.42;
-    filter: drop-shadow(0 0 5px rgba(239, 106, 58, 0.42));
+    filter: drop-shadow(0 0 5px color-mix(in srgb, var(--danger) 42%, transparent));
   }
   50% {
     opacity: 1;
-    filter: drop-shadow(0 0 20px #ef6a3a);
+    filter: drop-shadow(0 0 20px var(--danger));
   }
 }
 
@@ -3373,11 +3780,11 @@ button.opsCard:disabled {
   0%,
   100% {
     opacity: 0.48;
-    filter: drop-shadow(0 0 6px rgba(62, 232, 159, 0.3));
+    filter: drop-shadow(0 0 6px color-mix(in srgb, var(--ok) 30%, transparent));
   }
   50% {
     opacity: 1;
-    filter: drop-shadow(0 0 22px rgba(62, 232, 159, 0.85));
+    filter: drop-shadow(0 0 22px color-mix(in srgb, var(--ok) 85%, transparent));
   }
 }
 
@@ -3486,7 +3893,7 @@ button.opsCard:disabled {
   flex-direction: column;
   gap: 10px;
   padding: 12px;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: 12px;
   background: var(--surface-2);
 }
@@ -3569,7 +3976,7 @@ button.opsCard:disabled {
   align-items: center;
   justify-content: space-between;
   padding: 8px 10px;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: 10px;
   background: var(--surface-1);
 }
@@ -3618,7 +4025,7 @@ button.opsCard:disabled {
 .adminAccountRoleActions select {
   min-width: 104px;
   padding: 6px 8px;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: 7px;
   background: var(--surface-1);
   color: var(--text);
@@ -3626,7 +4033,7 @@ button.opsCard:disabled {
 
 .testingControlPlane {
   overflow: hidden;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: 12px;
   background: var(--surface-2);
 }
@@ -3638,7 +4045,7 @@ button.opsCard:disabled {
   align-items: flex-end;
   justify-content: space-between;
   padding: 12px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: var(--line-w) solid var(--line);
 }
 
 .controlPlaneHead > div:first-child {
@@ -3693,7 +4100,7 @@ button.opsCard:disabled {
   width: 100%;
   min-width: 0;
   padding: 7px 9px;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: 7px;
   background: var(--surface-1);
   color: var(--text);
@@ -3709,7 +4116,7 @@ button.opsCard:disabled {
 .evidenceNotes button,
 .loadMoreEvidence {
   padding: 7px 10px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 7px;
   background: var(--ok-soft);
   color: var(--text);
@@ -3769,7 +4176,7 @@ button.opsCard:disabled {
 .releaseRunDetail {
   min-width: 0;
   padding: 11px;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: 9px;
   background: var(--surface-2);
 }
@@ -3819,7 +4226,7 @@ button.opsCard:disabled {
 .reviewComposer,
 .activePolicyCard {
   padding: 11px;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: 9px;
   background: var(--surface-2);
 }
@@ -3862,7 +4269,7 @@ button.opsCard:disabled {
   grid-template-columns: 1fr auto;
   gap: 7px;
   padding: 9px;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-left: 3px solid var(--warn);
   border-radius: 8px;
   background: var(--surface-2);
@@ -3924,7 +4331,7 @@ button.opsCard:disabled {
   display: flex;
   flex-direction: column;
   padding: 6px 8px;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: 7px;
   color: var(--text-2);
   font-size: 0.65rem;
@@ -3946,7 +4353,7 @@ button.opsCard:disabled {
   grid-template-columns: 105px 1fr;
   gap: 12px;
   padding: 8px 4px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: var(--line-w) solid var(--line);
 }
 
 .auditTimeline time,
@@ -3984,7 +4391,7 @@ button.opsCard:disabled {
   align-items: end;
   margin: 9px 0;
   padding: 9px;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: 8px;
   background: var(--surface-2);
 }
@@ -4107,7 +4514,7 @@ button.opsCard:disabled {
 .adminWorkspace button {
   min-height: 40px;
   padding: 8px 13px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 8px;
   background: var(--surface-2);
   color: var(--text);
@@ -4129,7 +4536,7 @@ button.opsCard:disabled {
   min-width: 0;
   min-height: 42px;
   padding: 9px 11px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 8px;
   background: var(--surface-1);
   color: var(--text);
@@ -4175,7 +4582,7 @@ button.opsCard:disabled {
   justify-content: space-between;
   gap: 16px;
   padding: 12px 24px;
-  border-bottom: 1px solid var(--line-strong);
+  border-bottom: var(--line-w) solid var(--line-strong);
   background: var(--surface-1);
 }
 .adminWorkspaceBrand {
@@ -4190,7 +4597,7 @@ button.opsCard:disabled {
   height: 40px;
   flex: 0 0 auto;
   place-items: center;
-  border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent);
+  border: var(--line-w) solid color-mix(in srgb, var(--ok) 45%, transparent);
   border-radius: 10px;
   background: var(--surface-3);
   color: var(--ok);
@@ -4236,7 +4643,7 @@ button.opsCard:disabled {
   align-items: center;
   gap: 8px;
   padding: 6px 10px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 8px;
   cursor: pointer;
   list-style: none;
@@ -4259,7 +4666,7 @@ button.opsCard:disabled {
   max-height: calc(100dvh - 90px);
   padding: 18px;
   overflow: auto;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 12px;
   background: var(--surface-1);
 }
@@ -4282,7 +4689,7 @@ button.opsCard:disabled {
   padding: 28px 14px;
   flex-direction: column;
   gap: 16px;
-  border-right: 1px solid var(--line-strong);
+  border-right: var(--line-w) solid var(--line-strong);
   background: var(--surface-1);
 }
 .adminNavCaption {
@@ -4301,7 +4708,7 @@ button.opsCard:disabled {
   align-items: center;
   gap: 11px;
   padding: 10px 12px;
-  border: 1px solid transparent;
+  border: var(--line-w) solid transparent;
   border-radius: 8px;
   color: var(--text-2);
   text-decoration: none;
@@ -4360,7 +4767,7 @@ button.opsCard:disabled {
 
 .adminSectionCard {
   min-width: 0;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 12px;
   background: var(--surface-1);
 }
@@ -4433,7 +4840,7 @@ button.opsCard:disabled {
 .adminWorkspace .adminMetricGrid .opsCard {
   min-height: 136px;
   padding: 16px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 8px;
   background: var(--surface-1);
 }
@@ -4501,7 +4908,7 @@ button.opsCard:disabled {
   gap: 8px 16px;
   margin-bottom: 20px;
   padding: 16px;
-  border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
+  border: var(--line-w) solid color-mix(in srgb, var(--danger) 45%, transparent);
   border-radius: 8px;
   background: var(--surface-3);
   color: var(--danger);
@@ -4541,7 +4948,7 @@ button.opsCard:disabled {
 .adminWorkspace .adminAccountSummary span,
 .adminWorkspace .statGrid span {
   padding: 12px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   background: var(--surface-1);
 }
 .adminWorkspace .accountAdminRow {
@@ -4680,7 +5087,7 @@ button.opsCard:disabled {
   display: list-item;
   min-height: 40px;
   padding: 8px 12px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 8px;
   background: var(--surface-2);
   color: var(--text);
@@ -4695,7 +5102,7 @@ button.opsCard:disabled {
   z-index: 4;
   width: min(300px, calc(100vw - 60px));
   padding: 12px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 8px;
   background: var(--surface-1);
 }
@@ -4741,7 +5148,7 @@ button.opsCard:disabled {
 .adminWorkspace .sessionDetail {
   min-width: 0;
   padding: 20px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 8px;
   background: var(--surface-1);
 }
@@ -4783,7 +5190,7 @@ button.opsCard:disabled {
   gap: 8px;
   margin: 18px 0;
   padding-bottom: 14px;
-  border-bottom: 1px solid var(--line-strong);
+  border-bottom: var(--line-w) solid var(--line-strong);
 }
 .adminWorkspace .sessionTranscriptList {
   max-height: 620px;
@@ -4826,7 +5233,7 @@ button.opsCard:disabled {
 }
 .adminWorkspace .reviewComposer {
   padding: 16px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 8px;
 }
 .adminWorkspace .reviewComposer > span {
@@ -4853,7 +5260,7 @@ button.opsCard:disabled {
   grid-template-columns: 1fr;
   padding: 16px;
   gap: 12px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 8px;
   background: var(--surface-1);
 }
@@ -4872,7 +5279,7 @@ button.opsCard:disabled {
 .adminCollapsible {
   min-width: 0;
   padding: 16px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 8px;
   background: var(--surface-1);
 }
@@ -5034,7 +5441,7 @@ button.opsCard:disabled {
 }
 .adminWorkspace .activePolicyCard {
   padding: 18px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 8px;
 }
 .policyEditor {
@@ -5080,7 +5487,7 @@ button.opsCard:disabled {
   gap: 12px 20px;
   margin: 0 0 20px;
   padding: 14px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 8px;
 }
 .policyPlatformPicker legend {
@@ -5106,7 +5513,7 @@ button.opsCard:disabled {
 .policyReviewPanel {
   padding: 20px;
   margin-top: 20px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 8px;
   background: var(--surface-3);
 }
@@ -5126,7 +5533,7 @@ button.opsCard:disabled {
   grid-column: 1 / -1;
   min-width: 0;
   padding-top: 24px;
-  border-top: 1px solid var(--line-strong);
+  border-top: var(--line-w) solid var(--line-strong);
 }
 .policyVersionSelect {
   max-width: 360px;
@@ -5134,7 +5541,7 @@ button.opsCard:disabled {
 }
 .policyDiffTable {
   margin: 16px 0 0;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 8px;
   overflow: hidden;
 }
@@ -5143,7 +5550,7 @@ button.opsCard:disabled {
   grid-template-columns: minmax(160px, 1fr) minmax(0, 1.2fr);
   gap: 16px;
   padding: 12px 14px;
-  border-top: 1px solid var(--line-strong);
+  border-top: var(--line-w) solid var(--line-strong);
 }
 .policyDiffRow:first-child {
   border-top: 0;
@@ -5181,7 +5588,7 @@ button.opsCard:disabled {
   gap: 14px;
   align-items: end;
   padding-bottom: 20px;
-  border-bottom: 1px solid var(--line-strong);
+  border-bottom: var(--line-w) solid var(--line-strong);
 }
 .governanceFilterCount {
   margin: 0;
@@ -5191,7 +5598,7 @@ button.opsCard:disabled {
 .adminWorkspace .auditTimeline article.auditEvent {
   display: block;
   padding: 20px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 8px;
   background: var(--surface-1);
 }
@@ -5249,7 +5656,7 @@ button.opsCard:disabled {
   max-height: 320px;
   padding: 16px;
   overflow: auto;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 8px;
   background: var(--surface-1);
   font: 0.75rem/1.6 var(--font-mono);
@@ -5258,7 +5665,7 @@ button.opsCard:disabled {
 }
 .accountPermissions {
   padding-bottom: 14px;
-  border-bottom: 1px solid var(--line-strong);
+  border-bottom: var(--line-w) solid var(--line-strong);
 }
 .accountPermissions > summary {
   color: var(--text-2);
@@ -5299,7 +5706,7 @@ button.opsCard:disabled {
 }
 .adminAccountGroupHead > span {
   padding: 2px 8px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 5px;
   color: var(--text-2);
   font-size: 0.75rem;
@@ -5309,7 +5716,7 @@ button.opsCard:disabled {
   width: fit-content;
   padding: 2px 7px;
   margin-left: 7px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 5px;
   color: var(--text);
   font-size: 0.7rem;
@@ -5368,7 +5775,7 @@ button.opsCard:disabled {
 }
 .releaseDraftBadge {
   padding: 4px 8px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 6px;
   color: var(--text-2);
   font-size: 0.75rem;
@@ -5380,7 +5787,7 @@ button.opsCard:disabled {
 .adminWorkspace .releaseRunDetail {
   min-width: 0;
   padding: 18px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 8px;
 }
 .adminWorkspace .releaseRunTitle {
@@ -5450,7 +5857,7 @@ button.opsCard:disabled {
 }
 .coverageCaseGroup {
   overflow: hidden;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 8px;
 }
 .coverageCaseHead {
@@ -5483,7 +5890,7 @@ button.opsCard:disabled {
   align-items: center;
   gap: 10px 12px;
   padding: 14px;
-  border-top: 1px solid var(--line-strong);
+  border-top: var(--line-w) solid var(--line-strong);
 }
 .coverageRequirementRow:focus-visible {
   outline: 3px solid var(--ok);
@@ -5492,7 +5899,7 @@ button.opsCard:disabled {
 .coveragePlatform {
   width: fit-content;
   padding: 4px 8px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 5px;
   color: var(--text);
   font-size: 0.75rem;
@@ -5557,14 +5964,14 @@ button.opsCard:disabled {
   place-items: center;
   overflow: auto;
   padding: 24px;
-  background: #000a;
+  background: var(--scrim);
 }
 .releaseApprovePanel {
   width: min(100%, 560px);
   max-height: calc(100dvh - 48px);
   padding: 24px;
   overflow: auto;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 14px;
   background: var(--surface-1);
 }
@@ -5598,7 +6005,7 @@ button.opsCard:disabled {
 }
 .releaseApproveReady {
   padding: 12px;
-  border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent);
+  border: var(--line-w) solid color-mix(in srgb, var(--ok) 45%, transparent);
   border-radius: 8px;
   color: var(--ok);
   background: var(--surface-3);
@@ -5690,7 +6097,7 @@ button.opsCard:disabled {
     z-index: 5;
     padding: 8px 14px;
     border-right: 0;
-    border-bottom: 1px solid var(--line-strong);
+    border-bottom: var(--line-w) solid var(--line-strong);
   }
   .adminNavCaption {
     display: none;
@@ -5904,7 +6311,7 @@ button.opsCard:disabled {
   align-content: start;
   gap: 6px;
   padding: 13px 14px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-left: 3px solid var(--line-strong);
   border-radius: 11px;
   background: var(--surface-1);
@@ -5946,7 +6353,7 @@ button.opsCard:disabled {
   min-width: 0;
   gap: 5px;
   padding: 12px 14px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 11px;
   background: var(--surface-1);
   text-align: left;
@@ -5970,7 +6377,7 @@ button.opsCard:disabled {
 .testingWorkspace .testingQualityChip {
   flex: 0 0 auto;
   padding: 3px 10px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 999px;
   color: var(--text-2);
   font-size: 0.72rem;
@@ -6014,7 +6421,7 @@ button.opsCard:disabled {
   min-width: 0;
   gap: 13px;
   padding: 16px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 12px;
   background: var(--surface-1);
 }
@@ -6069,7 +6476,7 @@ button.opsCard:disabled {
   min-width: 0;
   gap: 8px;
   padding: 12px 14px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 10px;
   background: var(--surface-1);
 }
@@ -6104,7 +6511,7 @@ button.opsCard:disabled {
 }
 .testingWorkspace .testingTaskChips span {
   padding: 3px 10px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 999px;
   color: var(--text-2);
   font-size: 0.72rem;
@@ -6132,7 +6539,7 @@ button.opsCard:disabled {
 }
 .testingWorkspace .testingPlansArchived {
   padding-top: 12px;
-  border-top: 1px solid var(--line-strong);
+  border-top: var(--line-w) solid var(--line-strong);
 }
 .testingWorkspace .testingPlansArchived > summary {
   display: flex;
@@ -6150,7 +6557,7 @@ button.opsCard:disabled {
   display: grid;
   gap: 2px;
   padding: 10px 12px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 10px;
   background: var(--surface-1);
   opacity: 0.8;
@@ -6170,7 +6577,7 @@ button.opsCard:disabled {
   align-items: center;
   gap: 7px;
   padding: 8px 13px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 9px;
   background: var(--surface-3);
   color: var(--text);
@@ -6197,7 +6604,7 @@ button.opsCard:disabled {
   gap: 12px;
   min-width: 0;
   padding: 14px 16px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: 11px;
   background: var(--surface-1);
 }
@@ -6316,7 +6723,7 @@ button.opsCard:disabled {
   min-height: 40px;
   padding: 9px 14px;
   line-height: 1.4;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: var(--radius-control);
   background: transparent;
   color: var(--text);
@@ -6360,7 +6767,7 @@ button.opsCard:disabled {
 .adminWorkspace textarea {
   min-height: 40px;
   padding: 8px 12px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: var(--radius-control);
   background: var(--bg);
   color: var(--text);
@@ -6368,7 +6775,7 @@ button.opsCard:disabled {
 }
 
 .adminWorkspace :where(input, select, textarea):hover {
-  border-color: rgba(255, 255, 255, 0.22);
+  border-color: var(--line-hover);
 }
 
 .adminWorkspace :where(input, select, textarea):focus {
@@ -6395,7 +6802,7 @@ button.opsCard:disabled {
 }
 
 .adminWorkspace :where(button, input, select, textarea, a, summary):focus-visible {
-  outline: 2px solid var(--accent);
+  outline: var(--focus-w) solid var(--accent);
   outline-offset: 2px;
 }
 
@@ -6403,7 +6810,7 @@ button.opsCard:disabled {
 .adminWorkspaceHeader {
   min-height: 64px;
   padding: 10px clamp(16px, 2.5vw, 28px);
-  border-bottom: 1px solid var(--line);
+  border-bottom: var(--line-w) solid var(--line);
   background: var(--bg);
 }
 
@@ -6450,7 +6857,7 @@ button.opsCard:disabled {
   align-items: center;
   gap: 8px;
   padding: 0 12px;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: var(--radius-pill);
   color: var(--text-2);
   font-size: var(--fs-12);
@@ -6491,7 +6898,7 @@ button.opsCard:disabled {
 .adminProfile > summary {
   min-height: 40px;
   padding: 0 10px 0 6px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: var(--radius-pill);
   color: var(--text);
   font-size: var(--fs-13);
@@ -6511,7 +6918,7 @@ button.opsCard:disabled {
   width: min(340px, calc(100vw - 24px));
   gap: 16px;
   padding: 16px;
-  border: 1px solid var(--line-strong);
+  border: var(--line-w) solid var(--line-strong);
   border-radius: var(--radius-card);
   background: var(--surface-2);
 }
@@ -6535,7 +6942,7 @@ button.opsCard:disabled {
   padding: 20px 12px;
   gap: 4px;
   overflow-y: auto;
-  border-right: 1px solid var(--line);
+  border-right: var(--line-w) solid var(--line);
   background: var(--bg);
 }
 
@@ -6606,7 +7013,7 @@ button.opsCard:disabled {
   align-items: flex-end;
   margin-bottom: 28px;
   padding-bottom: 20px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: var(--line-w) solid var(--line);
 }
 
 .adminPageHeading h2 {
@@ -6629,7 +7036,7 @@ button.opsCard:disabled {
 
 /* Cards and sections: one surface step, hairline edge, no nested boxes. */
 .adminWorkspace .adminSectionCard {
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: var(--radius-card);
   background: var(--surface-1);
 }
@@ -6648,7 +7055,7 @@ button.opsCard:disabled {
 }
 
 .adminWorkspace .adminMetricGrid .opsCard {
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: var(--radius-card);
   background: var(--surface-1);
 }
@@ -6673,7 +7080,7 @@ button.opsCard:disabled {
 .adminWorkspace :is(th, td) {
   height: 44px;
   padding: 8px 12px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: var(--line-w) solid var(--line);
   text-align: left;
   vertical-align: middle;
 }
@@ -6754,7 +7161,7 @@ button.opsCard:disabled {
   gap: 12px;
   margin: 0;
   padding: 32px;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: var(--radius-card);
   background: var(--surface-1);
   color: var(--text-2);
@@ -6833,7 +7240,7 @@ button.opsCard:disabled {
 
 .accountBar .passwordForm {
   padding-top: 12px;
-  border-top: 1px solid var(--line);
+  border-top: var(--line-w) solid var(--line);
 }
 
 .accountMemoryNotice {
@@ -6873,7 +7280,7 @@ button.opsCard:disabled {
     padding: 0 12px;
     overflow-x: auto;
     border-right: 0;
-    border-bottom: 1px solid var(--line);
+    border-bottom: var(--line-w) solid var(--line);
     scrollbar-width: none;
   }
 
@@ -6950,7 +7357,7 @@ button.opsCard:disabled {
 /* Workspace refinements: neutral counts, flatter nested rows. */
 .adminWorkspace .adminAccountSummary span {
   padding: 12px 14px;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: var(--radius-control);
   background: transparent;
   color: var(--text-2);
@@ -6971,7 +7378,7 @@ button.opsCard:disabled {
 .adminWorkspace .adminSectionCard .accountAdminRow.invite {
   padding: 12px 0;
   border: 0;
-  border-top: 1px solid var(--line);
+  border-top: var(--line-w) solid var(--line);
   border-radius: 0;
   background: transparent;
 }
@@ -7000,7 +7407,7 @@ button.opsCard:disabled {
 
 .adminWorkspace .adminOverview .adminSectionCard.adminSectionInset {
   padding: 20px;
-  border: 1px solid var(--line);
+  border: var(--line-w) solid var(--line);
   border-radius: var(--radius-card);
   background: var(--surface-1);
 }

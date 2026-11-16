@@ -8,25 +8,42 @@ Production-oriented AI voice testing framework for the Max motorcycle helmet ass
 
 ## Make It Your Own
 
-The relay and apps are a kit: rename the assistant, put it in a helmet or a pair of smart glasses, and choose the voice behind it.
+Max is a framework for voice assistants that live in things people wear: motorcycle and bicycle helmets, sunglasses and smart glasses, assistive glasses for blind and low-vision wearers, AR and VR headsets. Rename it, pick the device, the look, the voice and how it sounds.
 
 ```bash
 npm install
-npm run setup   # name, device, wake word, languages, accent colour, voice backend
+npm run setup   # name, device, wake word, languages, design template, equaliser, voice backend
 npm run dev     # http://localhost:5173
 ```
 
-- **Identity** lives in `assistant.config.json` (see `assistant.config.example.json`): `name`, `device` (`helmet` | `glasses` | `other`), `languages`, `wake.names` (extra spellings and mishearings the assistant answers to), `developer`, `accentColor`, and an optional full `persona` override. Without the file the relay is the original Max helmet assistant, prompt for prompt. The web, iOS and Android apps read the name, wake phrase and accent colour from the relay's `/health`.
-- **Voice backends** are chosen with `VOICE_PROVIDER` and, per session, from the apps' Settings → Assistant list (only backends whose key is set on the relay are selectable; `VOICE_PROVIDER_SWITCHING=off` pins everyone to the default).
+Everything about the assistant lives in `assistant.config.json` (see `assistant.config.example.json`). Without the file the relay is the original Max helmet assistant, prompt for prompt.
 
-| `VOICE_PROVIDER` | Backend                                                                                                            | Needs                                                      |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
-| `mock`           | Scripted demo                                                                                                      | nothing                                                    |
-| `doubao`         | Doubao realtime voice                                                                                              | `DOUBAO_API_KEY`                                           |
-| `openai`         | OpenAI Realtime                                                                                                    | `OPENAI_API_KEY`                                           |
-| `grok`           | xAI Grok Voice                                                                                                     | `XAI_API_KEY`                                              |
-| `gemini`         | Google Gemini Live                                                                                                 | `GEMINI_API_KEY`                                           |
-| `pipeline`       | Whisper speech-to-text → any chat model → any text-to-speech (OpenAI-compatible endpoints, local servers included) | `PIPELINE_API_KEY` or `OPENAI_API_KEY`; none for localhost |
+| Key                                                       | What it sets                                                                                                                                                                                                                                                                                                                                                                                                 |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `name`, `wake.names`, `languages`, `developer`, `persona` | Who it is, what it answers to, what it speaks, who made it, and an optional full persona override                                                                                                                                                                                                                                                                                                            |
+| `device`                                                  | The embodied device: `motorcycle-helmet`, `bicycle-helmet`, `sunglasses`, `smart-glasses`, `assistive-glasses`, `ar-headset`, `vr-headset`, `wearable`. Each brings its own wearer wording and conduct (for example, assistive glasses speak positions as clock directions and never refer to a screen) plus a default template and equaliser. Add a device by adding an entry to `server/device-presets.ts` |
+| `template`, `theme`, `accentColor`, `templateSwitching`   | The design template (`visor`, `daylight`, `beacon`, `ember`, `holo`), per-token overrides on top of it, the brand accent, and whether viewers may pick their own template                                                                                                                                                                                                                                    |
+| `logo`, `logoBackground`                                  | Your own logo (a square `.svg` or `.png`, path relative to the config file) and the colour behind it on app icons. Without one, the logo follows the device: a helmet for a helmet, glasses for glasses, a headset for a headset (`brand/devices/`). Run `npm run brand` to write the web favicon, the iOS app icon and the Android launcher icon from it                                                    |
+| `voice.equalizer`                                         | The default equaliser for the assistant's voice: a preset (`flat`, `clarity`, `wind`, `open-ear`, `warm`, `quiet`) and/or `bass`, `mid`, `presence`, `treble`, `gain` in dB (−12…12)                                                                                                                                                                                                                         |
+
+The apps read all of this from the relay's `/health`.
+
+**Voice equaliser.** The relay shapes the assistant's speech itself (`server/audio-eq.ts`), so it sounds the same on every client and on a board that plays raw audio. Wearers can tune it per session in Settings unless `VOICE_EQUALIZER_ADJUSTABLE=off`.
+
+**Voice backends** are chosen with `VOICE_PROVIDER` and, per session, from the apps' Settings → Assistant list (only backends that are set up on the relay are selectable; `VOICE_PROVIDER_SWITCHING=off` pins everyone to the default).
+
+| `VOICE_PROVIDER` | Backend                                                                                                                               | Needs                                  |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| `mock`           | Scripted demo                                                                                                                         | nothing                                |
+| `doubao`         | Doubao realtime voice                                                                                                                 | `DOUBAO_API_KEY`                       |
+| `openai`         | OpenAI Realtime                                                                                                                       | `OPENAI_API_KEY`                       |
+| `grok`           | xAI Grok Voice                                                                                                                        | `XAI_API_KEY`                          |
+| `gemini`         | Google Gemini Live                                                                                                                    | `GEMINI_API_KEY`                       |
+| `pipeline`       | Whisper speech-to-text → any chat model → any text-to-speech (OpenAI-compatible endpoints)                                            | `PIPELINE_API_KEY` or `OPENAI_API_KEY` |
+| `local`          | Open-weight models on your own hardware: Whisper-class speech-to-text, an Ollama/llama.cpp/vLLM chat model, Kokoro/Piper-class speech | `LOCAL_VOICE=on`, no key               |
+| `local-realtime` | A self-hosted server that speaks the OpenAI Realtime protocol                                                                         | `LOCAL_REALTIME_URL`                   |
+
+Running fully local is covered in [docs/local-models.md](docs/local-models.md), with a ready-made `docker-compose.local-voice.yml`.
 
 Every backend shares one session core (`server/providers/live/session.ts`): wake word, device actions and their honest outcomes, navigation speech, camera questions, weather and memory behave the same whichever voice is plugged in. Adding a backend means implementing the small `VoiceEngine` interface in `server/providers/live/engine.ts` and registering it in `server/providers/catalog.ts` and `server/providers/factory.ts`. All model names, voices and endpoints are overridable in `.env` (see `.env.example`).
 

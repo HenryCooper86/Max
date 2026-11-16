@@ -1,4 +1,5 @@
 import type { AssistantDevice } from "../../shared/agent";
+import { detectLanguage } from "../../shared/language";
 
 export type Language = "zh-CN" | "en-US";
 
@@ -43,6 +44,25 @@ const DICTIONARIES = {
     "voice.assistantKind.helmet": "头盔语音助手",
     "voice.assistantKind.glasses": "智能眼镜语音助手",
     "voice.assistantKind.other": "可穿戴语音助手",
+    "voice.assistantKind.custom": "{device}语音助手",
+    "settings.appearance": "外观",
+    "settings.appearanceHelp": "只改变这台设备上的界面样式。",
+    "settings.template": "设计模板",
+    "settings.templatePinned": "由所有者固定",
+    "settings.backendLocal": "本地",
+    "settings.backendLocalHelp": "在所有者自己的硬件上运行",
+    "settings.equalizer": "均衡器",
+    "settings.equalizerHelp": "调整 {name} 的声音。开启的会话会在调整后重新连接。",
+    "settings.equalizerFixed": "由服务器设定",
+    "settings.equalizerPresets": "均衡器预设",
+    "settings.equalizerCustom": "自定义",
+    "settings.equalizerReset": "恢复默认",
+    "settings.equalizerCurve": "频率响应：{summary}",
+    "settings.eq.bass": "低音",
+    "settings.eq.mid": "中音",
+    "settings.eq.presence": "人声",
+    "settings.eq.treble": "高音",
+    "settings.eq.gain": "总音量",
     "login.welcome": "欢迎使用 {product}",
     "language.chinese": "中文",
     "language.english": "EN",
@@ -82,6 +102,7 @@ const DICTIONARIES = {
     "voice.assistantLabel.helmet": "{name} 头盔语音助手",
     "voice.assistantLabel.glasses": "{name} 智能眼镜语音助手",
     "voice.assistantLabel.other": "{name} 语音助手",
+    "voice.assistantLabel.custom": "{name} {device}语音助手",
     "login.aria": "登录",
     "login.platform": "内部测试平台",
     "login.firstUse": "首次使用：注册第一个账号，该账号将成为管理员。",
@@ -171,6 +192,25 @@ const DICTIONARIES = {
     "voice.assistantKind.helmet": "Helmet voice assistant",
     "voice.assistantKind.glasses": "Smart-glasses voice assistant",
     "voice.assistantKind.other": "Wearable voice assistant",
+    "voice.assistantKind.custom": "{device} voice assistant",
+    "settings.appearance": "Appearance",
+    "settings.appearanceHelp": "Changes the look on this device only.",
+    "settings.template": "Design template",
+    "settings.templatePinned": "Pinned by the owner",
+    "settings.backendLocal": "Local",
+    "settings.backendLocalHelp": "Runs on the owner's own hardware",
+    "settings.equalizer": "Equalizer",
+    "settings.equalizerHelp": "Shape how {name} sounds. A live session reconnects after a change.",
+    "settings.equalizerFixed": "Set by the server",
+    "settings.equalizerPresets": "Equalizer presets",
+    "settings.equalizerCustom": "Custom",
+    "settings.equalizerReset": "Reset",
+    "settings.equalizerCurve": "Frequency response: {summary}",
+    "settings.eq.bass": "Bass",
+    "settings.eq.mid": "Mid",
+    "settings.eq.presence": "Presence",
+    "settings.eq.treble": "Treble",
+    "settings.eq.gain": "Gain",
     "login.welcome": "Welcome to {product}",
     "language.chinese": "中文",
     "language.english": "EN",
@@ -210,6 +250,7 @@ const DICTIONARIES = {
     "voice.assistantLabel.helmet": "{name} helmet voice assistant",
     "voice.assistantLabel.glasses": "{name} smart-glasses voice assistant",
     "voice.assistantLabel.other": "{name} voice assistant",
+    "voice.assistantLabel.custom": "{name}, {device} voice assistant",
     "login.aria": "Sign in",
     "login.platform": "Internal testing platform",
     "login.firstUse": "First use: register the first account; it becomes the administrator.",
@@ -279,6 +320,47 @@ type DeviceCopyPrefix =
  *  `<prefix>.<device>`; every prefix here has all three variants. */
 export function deviceCopyKey(prefix: DeviceCopyPrefix, device: AssistantDevice): TranslationKey {
   return `${prefix}.${device}` as TranslationKey;
+}
+
+/** Client names for the relay's built-in device profiles (mirrors
+ *  server/device-presets.ts), used when the relay's deviceLabel is written in
+ *  the other UI language. Custom profiles keep the relay's label as is. */
+const DEVICE_PROFILE_LABELS: Record<string, { zh: string; en: string }> = {
+  "motorcycle-helmet": { zh: "摩托车头盔", en: "motorcycle helmet" },
+  "bicycle-helmet": { zh: "自行车头盔", en: "bicycle helmet" },
+  sunglasses: { zh: "智能太阳镜", en: "smart sunglasses" },
+  "smart-glasses": { zh: "智能眼镜", en: "smart glasses" },
+  "assistive-glasses": { zh: "助视眼镜", en: "assistive glasses" },
+  "ar-headset": { zh: "AR 眼镜", en: "AR glasses" },
+  "vr-headset": { zh: "VR 头显", en: "VR headset" },
+  wearable: { zh: "可穿戴设备", en: "wearable" }
+};
+
+type DeviceIdentity = { device: AssistantDevice; deviceProfile?: string; deviceLabel?: string };
+
+function deviceLabelIn(language: Language, assistant: DeviceIdentity): string | undefined {
+  const label = assistant.deviceLabel;
+  if (!label) return undefined;
+  const wanted = language === "en-US" ? "en" : "zh";
+  if (detectLanguage(label) === wanted) return label;
+  return DEVICE_PROFILE_LABELS[assistant.deviceProfile ?? ""]?.[wanted] ?? label;
+}
+
+/** An "X voice assistant" line. The relay's own name for the device
+ *  (assistant.deviceLabel, e.g. "bicycle helmet") wins over the generic
+ *  helmet/glasses/other copy when it is provided. */
+export function deviceAssistantCopy(
+  t: Translator,
+  language: Language,
+  prefix: "voice.assistantKind" | "voice.assistantLabel",
+  assistant: DeviceIdentity,
+  params: Record<string, string | number> = {}
+): string {
+  const device = deviceLabelIn(language, assistant);
+  if (!device) return t(deviceCopyKey(prefix, assistant.device), params);
+  const line = t(`${prefix}.custom`, { ...params, device });
+  // "bicycle helmet voice assistant" opens a line in the kind copy.
+  return prefix === "voice.assistantKind" ? line.charAt(0).toUpperCase() + line.slice(1) : line;
 }
 
 export function localized(language: Language, chinese: string, english: string): string {

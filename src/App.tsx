@@ -1,10 +1,20 @@
 import { MusicPlaybackCard } from "./components/MusicPlaybackCard";
 import { ArrowBendUpRight, ChatCircleText, GearSix, Microphone, NavigationArrow, X } from "@phosphor-icons/react";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode
+} from "react";
 import { adasDirectionLabel } from "../shared/adas";
 import { combineHazardLevels } from "../shared/ride";
 import { AssistantProvider } from "./components/AssistantContext";
-import { VisorMark, VisorVisual, VoiceStateReadout } from "./components/VisorVisual";
+import { BrandMark, VisorVisual, VoiceStateReadout } from "./components/VisorVisual";
 import { LoginGate } from "./components/LoginGate";
 import { NavigationPanel } from "./components/NavigationPanel";
 import { VoiceTranscript } from "./components/VoiceTranscript";
@@ -19,8 +29,10 @@ import {
 import { useAmapConsent } from "./hooks/useAmapConsent";
 import { useHelmetAgent } from "./hooks/useHelmetAgent";
 import { fetchCurrentUser, type AuthUser } from "./lib/auth";
-import { applyAccent, resolveAssistant } from "./lib/assistant";
-import { deviceCopyKey, localized } from "./lib/i18n";
+import { applyBrandFavicon, resolveAssistant } from "./lib/assistant";
+import { loadStoredSettings, saveStoredTemplate } from "./lib/persistence";
+import { applyAppearance, resolveAppearance } from "./lib/templates";
+import { deviceAssistantCopy, localized } from "./lib/i18n";
 import { voiceFaceClassName } from "./lib/voice-shell";
 
 const OperationsWorkspace = lazy(() =>
@@ -210,8 +222,31 @@ function AppContent() {
     document.title = assistant.name;
   }, [assistant.name]);
   useEffect(() => {
-    applyAccent(document.documentElement, assistant.accentColor);
-  }, [assistant.accentColor]);
+    applyBrandFavicon(document, assistant.logoUrl);
+  }, [assistant.logoUrl]);
+  // Design template: the owner's choice from the relay, the viewer's own
+  // choice (remembered on this device) unless the owner pinned it, then the
+  // owner's token overrides and brand accent. Applied before paint so a
+  // template switch never flashes the previous one.
+  const [viewerTemplate, setViewerTemplate] = useState(() => loadStoredSettings().template);
+  const appearance = useMemo(
+    () =>
+      resolveAppearance({
+        relayTemplate: assistant.template,
+        viewerTemplate,
+        templateSwitching: assistant.templateSwitching,
+        theme: assistant.theme,
+        accentColor: assistant.accentColor
+      }),
+    [assistant, viewerTemplate]
+  );
+  useLayoutEffect(() => {
+    applyAppearance(appearance);
+  }, [appearance]);
+  const chooseTemplate = useCallback((id: string) => {
+    setViewerTemplate(id);
+    saveStoredTemplate(id);
+  }, []);
   const branded = (node: ReactNode) => <AssistantProvider value={assistant}>{node}</AssistantProvider>;
 
   const fusedHazard = combineHazardLevels(agent.rideContext.hazardLevel, agent.weather?.riskLevel ?? "normal");
@@ -269,13 +304,13 @@ function AppContent() {
     <main className="voiceShell">
       <section
         className={`${voiceFaceClassName({ captionsOpen, navigationVisible: agent.navState.phase !== "idle" })}${showRidePanels ? " voiceWithPanels" : ""}`}
-        aria-label={t(deviceCopyKey("voice.assistantLabel", assistant.device), { name: assistant.name })}
+        aria-label={deviceAssistantCopy(t, language, "voice.assistantLabel", assistant, { name: assistant.name })}
       >
         <header
           className={`voiceTopbar ${sessionLive ? "online" : starting ? "starting" : sessionInactive ? "inactive" : "offline"}`}
         >
           <div className="voiceBrand">
-            <VisorMark />
+            <BrandMark />
             <span className="voiceWordmark">{assistant.name}</span>
           </div>
           <div className="voiceRelay" role="status">
@@ -400,6 +435,11 @@ function AppContent() {
           amapConsent={amapConsent}
           onOpenTesting={openTesting}
           onOpenAdmin={authUser.role === "admin" ? openAdmin : undefined}
+          appearance={{
+            templateId: appearance.template.id,
+            pinned: assistant.templateSwitching === false,
+            onSelect: chooseTemplate
+          }}
           onClose={closeSettings}
         />
       ) : null}

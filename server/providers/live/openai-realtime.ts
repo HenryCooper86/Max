@@ -35,6 +35,8 @@ export type RealtimeDialect = {
   say(text: string): Record<string, unknown>[];
   /** Role used for silent context notes. */
   contextRole: "system" | "user";
+  /** `session.type` the upstream requires on every session.update, if any. */
+  sessionType?: string;
 };
 
 const SAY_INSTRUCTION = "Say exactly the following line and nothing else, in the language it is written in: ";
@@ -78,7 +80,8 @@ export function openAiDialect(): RealtimeDialect {
       // conversation, so it must not steer later answers.
       { type: "response.create", response: { conversation: "none", instructions: SAY_INSTRUCTION + text } }
     ],
-    contextRole: "system"
+    contextRole: "system",
+    sessionType: "realtime"
   };
 }
 
@@ -121,6 +124,48 @@ export function grokDialect(): RealtimeDialect {
     ],
     contextRole: "user"
   };
+}
+
+/**
+ * Any self-hosted server that implements the OpenAI Realtime protocol in
+ * front of open-weight models (Speaches, LocalAI and similar). These grew up
+ * against the original, flat `session` shape, so that is what is sent; the
+ * event names in both generations are already understood on the way back.
+ */
+export function localRealtimeDialect(): RealtimeDialect {
+  const model = env("LOCAL_REALTIME_MODEL") ?? "";
+  const base = (env("LOCAL_REALTIME_URL") ?? "ws://localhost:8000/v1/realtime").replace(/\/+$/, "");
+  return {
+    name: "Local realtime",
+    url: model ? `${base}?model=${encodeURIComponent(model)}` : base,
+    // Local servers rarely check the key, but the header must not be empty.
+    apiKey: env("LOCAL_REALTIME_API_KEY", "LOCAL_API_KEY") ?? "local",
+    responseMode: "manual-capable",
+    inputRate: 24_000,
+    voice: (gender) =>
+      gender === "male"
+        ? (env("LOCAL_REALTIME_VOICE_MALE") ?? "am_michael")
+        : (env("LOCAL_REALTIME_VOICE", "LOCAL_REALTIME_VOICE_FEMALE") ?? "af_heart"),
+    session: (config, voice) => ({
+      modalities: ["audio", "text"],
+      instructions: config.instructions,
+      voice,
+      input_audio_format: "pcm16",
+      output_audio_format: "pcm16",
+      input_audio_transcription: {
+        model: env("LOCAL_REALTIME_TRANSCRIBE_MODEL") ?? "Systran/faster-whisper-small",
+        ...(config.languages.length === 1 ? { language: config.languages[0] } : {})
+      },
+      turn_detection: { type: "server_vad", create_response: !config.manualResponse }
+    }),
+    say: (text) => [{ type: "response.create", response: { instructions: SAY_INSTRUCTION + text } }],
+    contextRole: "system"
+  };
+}
+
+/** Offered once the owner points at a local realtime server. */
+export function localRealtimeEnabled(): boolean {
+  return Boolean(env("LOCAL_REALTIME_URL"));
 }
 
 type UpstreamEvent = {
@@ -304,7 +349,7 @@ export function createRealtimeEngine(
       if (!ready) return;
       sendEvent({
         type: "session.update",
-        session: { ...(dialect.contextRole === "system" ? { type: "realtime" } : {}), instructions }
+        session: { ...(dialect.sessionType ? { type: dialect.sessionType } : {}), instructions }
       });
     },
     addContext(text) {

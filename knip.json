@@ -7,5 +7,5 @@
     "scripts/synthetic-qa/browser/runtime.ts"
   ],
   "ignore": ["public/pcm-worklet.js", "rdk/**"],
-  "ignoreBinaries": ["mkfifo"]
+  "ignoreBinaries": ["mkfifo", "rsvg-convert", "magick"]
 }

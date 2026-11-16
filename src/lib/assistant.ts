@@ -1,9 +1,11 @@
 // The assistant's public identity as the web client uses it: name, the
 // wearable it lives in, what the wearer says to address it, and its brand
-// accent. The relay reports this on /health (AgentHealth.assistant); older
+// accent and look. The relay reports this on /health (AgentHealth.assistant); older
 // relays do not, and then the client is the original "Max" helmet assistant.
 
 import type { AssistantDevice, AssistantSummary } from "../../shared/agent";
+import { inkOn, withAlpha } from "./color";
+import { sanitizeThemeOverrides, type ThemeOverrides } from "./theme-tokens";
 
 export type AssistantIdentity = {
   name: string;
@@ -14,6 +16,17 @@ export type AssistantIdentity = {
   developer?: string;
   /** Validated #RRGGBB, or undefined to keep the client's default accent. */
   accentColor?: string;
+  /** Specific device id (e.g. "bicycle-helmet") and its human name. */
+  deviceProfile?: string;
+  deviceLabel?: string;
+  /** Design template the owner chose; may name a template this client lacks. */
+  template?: string;
+  /** Validated per-token overrides (see theme-tokens.ts). */
+  theme?: ThemeOverrides;
+  /** Present (false) only when the owner pinned the template. */
+  templateSwitching?: false;
+  /** The owner's square logo: a validated same-origin "/brand/…" path. */
+  logoUrl?: string;
 };
 
 export const DEFAULT_ASSISTANT: AssistantIdentity = {
@@ -40,6 +53,11 @@ export function resolveAssistant(summary: AssistantSummary | undefined | null): 
   const tagline = cleanText(summary.tagline, 120);
   const developer = cleanText(summary.developer, 80);
   const accentColor = typeof summary.accentColor === "string" && HEX_COLOR.test(summary.accentColor.trim());
+  const deviceProfile = cleanText(summary.deviceProfile, 40);
+  const deviceLabel = cleanText(summary.deviceLabel, 40);
+  const template = cleanText(summary.template, 32).toLowerCase();
+  const theme = sanitizeThemeOverrides(summary.theme);
+  const logoUrl = brandLogoPath(summary.logoUrl);
   return {
     name,
     device,
@@ -47,17 +65,64 @@ export function resolveAssistant(summary: AssistantSummary | undefined | null): 
     wakeWordEnabled: summary.wakeWordEnabled !== false,
     ...(tagline ? { tagline } : {}),
     ...(developer ? { developer } : {}),
-    ...(accentColor ? { accentColor: summary.accentColor!.trim().toUpperCase() } : {})
+    ...(accentColor ? { accentColor: summary.accentColor!.trim().toUpperCase() } : {}),
+    ...(deviceProfile ? { deviceProfile } : {}),
+    ...(deviceLabel ? { deviceLabel } : {}),
+    ...(template ? { template } : {}),
+    ...(Object.keys(theme).length ? { theme } : {}),
+    ...(summary.templateSwitching === false ? { templateSwitching: false as const } : {}),
+    ...(logoUrl ? { logoUrl } : {})
   };
 }
 
-function channel(value: number): number {
-  const c = value / 255;
-  return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+const BRAND_BASE = "https://relay.invalid";
+
+/** The relay's logo path if it is a plain same-origin path under /brand/,
+ *  else undefined. Absolute and protocol-relative URLs, backslashes, control
+ *  characters, and paths that climb out of /brand/ are all refused; the
+ *  result is the normalised path and query. */
+export function brandLogoPath(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const raw = value.trim();
+  if (!raw.startsWith("/brand/") || raw.startsWith("//") || raw.length > 512) return undefined;
+  if (raw.includes("\\") || [...raw].some((char) => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127)) {
+    return undefined;
+  }
+  try {
+    const url = new URL(raw, BRAND_BASE);
+    if (url.origin !== BRAND_BASE || !url.pathname.startsWith("/brand/") || url.pathname === "/brand/")
+      return undefined;
+    return `${url.pathname}${url.search}`;
+  } catch {
+    return undefined;
+  }
 }
 
-function luminance(r: number, g: number, b: number): number {
-  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+const ICON_SELECTOR = 'link[rel~="icon"]';
+
+/** Point the page's favicon links at the owner's logo, or put the static
+ *  ones from index.html back when there is no logo. The originals are kept
+ *  on each link so a later restore is exact. */
+export function applyBrandFavicon(doc: Document, logoUrl: string | undefined): void {
+  for (const link of doc.querySelectorAll<HTMLLinkElement>(ICON_SELECTOR)) {
+    if (link.dataset.staticHref === undefined) {
+      link.dataset.staticHref = link.getAttribute("href") ?? "";
+      link.dataset.staticType = link.getAttribute("type") ?? "";
+      link.dataset.staticSizes = link.getAttribute("sizes") ?? "";
+    }
+    const restore = (name: string, saved: string | undefined) =>
+      saved ? link.setAttribute(name, saved) : link.removeAttribute(name);
+    if (logoUrl) {
+      link.setAttribute("href", logoUrl);
+      // SVG or PNG, decided by the relay: let the browser sniff it.
+      link.removeAttribute("type");
+      link.setAttribute("sizes", "any");
+    } else {
+      restore("href", link.dataset.staticHref);
+      restore("type", link.dataset.staticType);
+      restore("sizes", link.dataset.staticSizes);
+    }
+  }
 }
 
 const DARK_INK = "#0B0C0E";
@@ -67,31 +132,6 @@ const LIGHT_INK = "#FFFFFF";
  *  near-black or white reads with more contrast on the accent. */
 export function accentTokens(hex: string): { accent: string; accentSoft: string; onAccent: string } | null {
   if (!HEX_COLOR.test(hex)) return null;
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  const lum = luminance(r, g, b);
-  const darkInk = luminance(0x0b, 0x0c, 0x0e);
-  const contrastWithDark = (lum + 0.05) / (darkInk + 0.05);
-  const contrastWithWhite = 1.05 / (lum + 0.05);
-  return {
-    accent: hex.toUpperCase(),
-    accentSoft: `rgba(${r}, ${g}, ${b}, 0.14)`,
-    onAccent: contrastWithDark >= contrastWithWhite ? DARK_INK : LIGHT_INK
-  };
-}
-
-const ACCENT_PROPERTIES = ["--accent", "--accent-soft", "--on-accent"] as const;
-
-/** Apply (or, with no valid colour, remove) a runtime accent on an element —
- *  normally document.documentElement, where the stylesheet's defaults live. */
-export function applyAccent(element: HTMLElement, hex: string | undefined) {
-  const tokens = hex ? accentTokens(hex) : null;
-  if (!tokens) {
-    for (const property of ACCENT_PROPERTIES) element.style.removeProperty(property);
-    return;
-  }
-  element.style.setProperty("--accent", tokens.accent);
-  element.style.setProperty("--accent-soft", tokens.accentSoft);
-  element.style.setProperty("--on-accent", tokens.onAccent);
+  const accent = hex.toUpperCase();
+  return { accent, accentSoft: withAlpha(accent, 0.14), onAccent: inkOn(accent, DARK_INK, LIGHT_INK) };
 }

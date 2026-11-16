@@ -218,6 +218,9 @@ export type SessionStartEvent = {
    *  Honored only when the relay allows switching and that backend has
    *  credentials; otherwise the relay's default backend is used. */
   voiceProvider?: string;
+  /** Equaliser for the assistant's voice this session. Honored only when the
+   *  relay reports `voice.equalizer.adjustable`. */
+  equalizer?: VoiceEqualizer;
   rideMode?: RideMode;
   scenario?: DemoScenario;
   lat?: number;
@@ -532,6 +535,60 @@ export type AssistantSummary = {
   accentColor?: string;
   /** Languages the assistant speaks, most preferred first (BCP-47-ish, e.g. "zh", "en"). */
   languages: string[];
+  /** The specific embodied device this build is for — an id from the relay's
+   *  device presets (server/device-presets.ts), e.g. "motorcycle-helmet",
+   *  "assistive-glasses", "vr-headset". `device` stays the coarse family. */
+  deviceProfile?: string;
+  /** Human name of that device in the relay's primary language, e.g. "Bicycle helmet". */
+  deviceLabel?: string;
+  /** Design template the owner chose (a client template id, e.g. "visor",
+   *  "daylight", "beacon"). Clients fall back to their default template. */
+  template?: string;
+  /** Per-token overrides applied on top of the template: CSS-variable-style
+   *  names without the leading dashes ("bg", "surface-1", "accent", "text",
+   *  "radius-card", …) mapped to validated values. */
+  theme?: Record<string, string>;
+  /** False when the owner pinned the template: clients hide their template picker. */
+  templateSwitching?: boolean;
+  /** The owner's own logo, served by the relay (a path on the relay origin,
+   *  e.g. "/brand/logo?v=1a2b3c"). SVG or PNG, square. Absent → clients show
+   *  their built-in mark. Use it for the in-app mark and the page favicon. */
+  logoUrl?: string;
+};
+
+/**
+ * Voice equaliser settings, in decibels (-12…12). Applied by the relay to the
+ * assistant's outgoing speech, so it sounds the same on every client and on a
+ * board that plays raw PCM. `preset` names one of VoiceEqualizerOptions.presets;
+ * explicit band values override the preset's.
+ */
+export type VoiceEqualizer = {
+  preset?: string;
+  /** Low shelf around 180 Hz — body; cut it under wind noise. */
+  bass?: number;
+  /** Peak around 1 kHz — fullness. */
+  mid?: number;
+  /** Peak around 3 kHz — consonants, the band that carries intelligibility. */
+  presence?: number;
+  /** High shelf around 7 kHz — air and sibilance. */
+  treble?: number;
+  /** Overall level after the bands. */
+  gain?: number;
+};
+
+export type VoiceEqualizerPreset = {
+  id: string;
+  label: string;
+  description?: string;
+  bands: Required<Omit<VoiceEqualizer, "preset">>;
+};
+
+export type VoiceEqualizerOptions = {
+  /** What a session gets when it does not ask for anything. */
+  default: VoiceEqualizer;
+  presets: VoiceEqualizerPreset[];
+  /** Whether clients may send their own settings in session.start.equalizer. */
+  adjustable: boolean;
 };
 
 /** "demo" needs no credentials; "live" is one realtime speech-to-speech
@@ -545,6 +602,8 @@ export type VoiceProviderSummary = {
   /** True when the relay has the credentials this backend needs. */
   configured: boolean;
   description?: string;
+  /** True when the backend runs on the owner's own hardware (open-weight models). */
+  local?: boolean;
 };
 
 type VoiceOptions = {
@@ -553,6 +612,8 @@ type VoiceOptions = {
   /** Whether clients may pick a backend per session via session.start.voiceProvider. */
   switching: boolean;
   providers: VoiceProviderSummary[];
+  /** Absent on relays without the equaliser. */
+  equalizer?: VoiceEqualizerOptions;
 };
 
 export type AgentHealth = {

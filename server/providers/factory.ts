@@ -3,8 +3,8 @@ import type { Logger } from "../logger";
 import { resolveVoiceProviderId, voiceProvider, type VoiceProviderId } from "./catalog";
 import { createDoubaoProvider } from "./doubao";
 import { createGeminiLiveEngine } from "./live/gemini-live";
-import { createRealtimeEngine, grokDialect, openAiDialect } from "./live/openai-realtime";
-import { createPipelineEngine } from "./live/pipeline";
+import { createRealtimeEngine, grokDialect, localRealtimeDialect, openAiDialect } from "./live/openai-realtime";
+import { createPipelineEngine, localPipelineSettings } from "./live/pipeline";
 import { createLiveProvider, type LiveBackend } from "./live/session";
 import { createMockProvider } from "./mock";
 import type { AgentProvider, ProviderTelemetry, SessionStartEvent } from "./types";
@@ -49,6 +49,20 @@ export function createVoiceProvider(
       return createLiveProvider(
         client,
         liveBackend(id, (engineLog) => createPipelineEngine(engineLog)),
+        log,
+        telemetry
+      );
+    case "local":
+      return createLiveProvider(
+        client,
+        liveBackend(id, (engineLog) => createPipelineEngine(engineLog, localPipelineSettings())),
+        log,
+        telemetry
+      );
+    case "local-realtime":
+      return createLiveProvider(
+        client,
+        liveBackend(id, (engineLog) => createRealtimeEngine(localRealtimeDialect(), engineLog)),
         log,
         telemetry
       );

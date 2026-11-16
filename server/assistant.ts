@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { AssistantDevice, AssistantSummary } from "../shared/agent";
+import type { AssistantDevice, AssistantSummary, VoiceEqualizer } from "../shared/agent";
+import { normalizeEqualizer } from "./audio-eq";
+import { devicePreset, type DevicePreset } from "./device-presets";
 import { configureWakePhrase, DEFAULT_WAKE_NAMES, type WakeNames } from "../shared/wake";
 
 /**
@@ -17,7 +19,10 @@ import { configureWakePhrase, DEFAULT_WAKE_NAMES, type WakeNames } from "../shar
  */
 export type AssistantProfile = {
   name: string;
+  /** Coarse family, for clients that only know helmet / glasses / other. */
   device: AssistantDevice;
+  /** The specific embodied device (server/device-presets.ts). */
+  preset: DevicePreset;
   /** How the wearable is described in prompts, e.g. "motorcycle helmet". */
   deviceLabel: { zh: string; en: string };
   /** What the person wearing it is called in prompts, e.g. "rider". */
@@ -28,6 +33,18 @@ export type AssistantProfile = {
   identityNotes?: string;
   tagline?: string;
   accentColor?: string;
+  /** Design template the clients should use; defaults to the device preset's. */
+  template: string;
+  /** Token overrides on top of the template (validated names and values). */
+  theme?: Record<string, string>;
+  /** False pins the template so viewers cannot pick their own. */
+  templateSwitching: boolean;
+  /** The owner's own logo file, when one is configured and readable. */
+  logo?: BrandLogo;
+  /** Background behind the logo where a platform needs one (app icons). */
+  logoBackground: string;
+  /** Default equaliser for the assistant's voice; defaults to the device preset's. */
+  equalizer: VoiceEqualizer;
   /** Languages it speaks, most preferred first. */
   languages: string[];
   /** true → refuse languages outside `languages`; false → prefer them but follow the wearer. */
@@ -40,18 +57,6 @@ export type AssistantProfile = {
 };
 
 const DEFAULT_DEVELOPER = "Horizon Continental Technology（neueHCT）";
-
-const DEVICE_LABELS: Record<AssistantDevice, AssistantProfile["deviceLabel"]> = {
-  helmet: { zh: "摩托车头盔", en: "motorcycle helmet" },
-  glasses: { zh: "智能眼镜", en: "smart glasses" },
-  other: { zh: "可穿戴设备", en: "wearable" }
-};
-
-const WEARER_LABELS: Record<AssistantDevice, AssistantProfile["wearer"]> = {
-  helmet: { zh: "骑手", en: "rider" },
-  glasses: { zh: "用户", en: "wearer" },
-  other: { zh: "用户", en: "wearer" }
-};
 
 const LANGUAGE_NAMES: Record<string, { zh: string; en: string }> = {
   zh: { zh: "中文", en: "Chinese" },
@@ -70,11 +75,72 @@ const LANGUAGE_NAMES: Record<string, { zh: string; en: string }> = {
   tr: { zh: "土耳其语", en: "Turkish" }
 };
 
+/** A logo the relay can serve: where it is, what it is, and a cache-busting tag. */
+export type BrandLogo = { path: string; contentType: "image/svg+xml" | "image/png"; version: string };
+
+const MAX_LOGO_BYTES = 512 * 1024;
+const DEFAULT_LOGO_BACKGROUND = "#0B0C0E";
+
+/** Resolves a configured logo path (relative to the config file). Anything
+ *  that is not a readable, reasonably sized SVG or PNG is ignored with the
+ *  reason, so a typo cannot take the relay down or serve an arbitrary file. */
+export function brandLogoFrom(value: unknown, baseDir: string): { logo?: BrandLogo; problem?: string } {
+  const configured = text(value, 400);
+  if (!configured) return {};
+  const file = path.resolve(baseDir, configured);
+  const extension = path.extname(file).toLowerCase();
+  if (extension !== ".svg" && extension !== ".png")
+    return { problem: `logo must be an .svg or .png file: ${configured}` };
+  try {
+    const stat = fs.statSync(file);
+    if (!stat.isFile()) return { problem: `logo is not a file: ${file}` };
+    if (stat.size > MAX_LOGO_BYTES) return { problem: `logo is larger than ${MAX_LOGO_BYTES / 1024} KiB: ${file}` };
+    return {
+      logo: {
+        path: file,
+        contentType: extension === ".svg" ? "image/svg+xml" : "image/png",
+        version: `${stat.size.toString(36)}${Math.round(stat.mtimeMs).toString(36)}`
+      }
+    };
+  } catch {
+    return { problem: `logo cannot be read: ${file}` };
+  }
+}
+
+const deviceLogos = new Map<string, BrandLogo | undefined>();
+
+/** The built-in mark for a device (brand/devices/<id>.svg): a helmet for a
+ *  helmet, glasses for glasses, a headset for a headset. */
+function deviceLogo(presetId: string): BrandLogo | undefined {
+  if (!deviceLogos.has(presetId)) {
+    deviceLogos.set(presetId, brandLogoFrom(`brand/devices/${presetId}.svg`, process.cwd()).logo);
+  }
+  return deviceLogos.get(presetId);
+}
+
+/** The logo clients should show: the owner's own, else the device's mark. */
+export function assistantLogo(profile: AssistantProfile = assistant()): BrandLogo | undefined {
+  return profile.logo ?? deviceLogo(profile.preset.id);
+}
+
+/** Set when the configured logo was rejected; reported at startup. */
+let logoProblem: string | undefined;
+
+export function assistantLogoProblem(): string | undefined {
+  return logoProblem;
+}
+
 export const DEFAULT_ASSISTANT_PROFILE: AssistantProfile = {
   name: "Max",
   device: "helmet",
-  deviceLabel: DEVICE_LABELS.helmet,
-  wearer: WEARER_LABELS.helmet,
+  preset: devicePreset("motorcycle-helmet"),
+  deviceLabel: devicePreset("motorcycle-helmet").label,
+  wearer: devicePreset("motorcycle-helmet").wearer,
+  template: "visor",
+  templateSwitching: true,
+  logoBackground: DEFAULT_LOGO_BACKGROUND,
+  // The original helmet shipped with the backend's voice untouched.
+  equalizer: { preset: "flat" },
   developer: DEFAULT_DEVELOPER,
   languages: ["zh", "en"],
   strictLanguages: true,
@@ -105,6 +171,22 @@ function labelPair(value: unknown, fallback: { zh: string; en: string }): { zh: 
   return { zh: text(value.zh, 40) ?? fallback.zh, en: text(value.en, 40) ?? fallback.en };
 }
 
+// Theme overrides reach clients' style sheets, so both sides are an allow-list:
+// token-shaped names, and values that can only be a colour, a length or a number.
+const THEME_KEY = /^[a-z][a-z0-9-]{0,31}$/;
+const THEME_VALUE =
+  /^(#[0-9a-f]{3,8}|rgba?\(\s*[0-9.]+\s*(,\s*[0-9.]+%?\s*){2,3}\)|-?[0-9]+(\.[0-9]+)?(px|rem|em|ms|%)?)$/i;
+
+function themeFrom(raw: unknown): Record<string, string> | undefined {
+  if (!isRecord(raw)) return undefined;
+  const theme: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw).slice(0, 48)) {
+    const cleaned = typeof value === "number" ? String(value) : text(value, 48);
+    if (THEME_KEY.test(key) && cleaned && THEME_VALUE.test(cleaned)) theme[key] = cleaned;
+  }
+  return Object.keys(theme).length ? theme : undefined;
+}
+
 const HAN = /\p{Script=Han}/u;
 
 /** Splits configured wake names by script: Han names match anywhere in a
@@ -127,18 +209,30 @@ function wakeNamesFrom(name: string, raw: unknown): WakeNames {
 }
 
 /** Builds a profile from parsed config JSON. Exported for tests. */
-export function assistantProfileFrom(raw: unknown): AssistantProfile {
+export function assistantProfileFrom(raw: unknown, baseDir = process.cwd()): AssistantProfile {
   if (!isRecord(raw)) throw new Error("assistant config must be a JSON object");
+  const brand = brandLogoFrom(raw.logo, baseDir);
+  logoProblem = brand.problem;
+  const logoBackground = text(raw.logoBackground, 7);
   const name = text(raw.name, 24) ?? DEFAULT_ASSISTANT_PROFILE.name;
-  const device: AssistantDevice =
-    raw.device === "glasses" || raw.device === "other" || raw.device === "helmet" ? raw.device : "helmet";
+  const preset = devicePreset(raw.device);
+  const device: AssistantDevice = preset.family;
+  const voice = isRecord(raw.voice) ? raw.voice : {};
   const accent = text(raw.accentColor, 7);
   const renamed = name !== DEFAULT_ASSISTANT_PROFILE.name;
   return {
     name,
     device,
-    deviceLabel: labelPair(raw.deviceLabel, DEVICE_LABELS[device]),
-    wearer: labelPair(raw.wearer, WEARER_LABELS[device]),
+    preset,
+    deviceLabel: labelPair(raw.deviceLabel, preset.label),
+    wearer: labelPair(raw.wearer, preset.wearer),
+    template: text(raw.template, 32)?.toLowerCase() ?? preset.template,
+    theme: themeFrom(raw.theme),
+    templateSwitching: raw.templateSwitching !== false,
+    ...(brand.logo ? { logo: brand.logo } : {}),
+    logoBackground:
+      logoBackground && /^#[0-9a-f]{6}$/i.test(logoBackground) ? logoBackground.toUpperCase() : DEFAULT_LOGO_BACKGROUND,
+    equalizer: normalizeEqualizer(raw.equalizer ?? voice.equalizer) ?? { preset: preset.equalizer },
     // A renamed assistant does not inherit the original maker: claiming
     // someone else's company built your assistant is the wrong default.
     developer:
@@ -166,7 +260,7 @@ function loadAssistantProfile(): AssistantProfile {
     return DEFAULT_ASSISTANT_PROFILE;
   }
   try {
-    return assistantProfileFrom(JSON.parse(contents));
+    return assistantProfileFrom(JSON.parse(contents), path.dirname(file));
   } catch (error) {
     throw new Error(`Invalid assistant config ${file}: ${error instanceof Error ? error.message : String(error)}`, {
       cause: error
@@ -191,6 +285,7 @@ export function setAssistantProfileForTests(profile: AssistantProfile = DEFAULT_
 
 export function assistantSummary(wakeWordEnabled: boolean): AssistantSummary {
   const profile = assistant();
+  const logo = assistantLogo(profile);
   return {
     name: profile.name,
     device: profile.device,
@@ -199,7 +294,13 @@ export function assistantSummary(wakeWordEnabled: boolean): AssistantSummary {
     ...(profile.tagline ? { tagline: profile.tagline } : {}),
     ...(profile.developer ? { developer: profile.developer } : {}),
     ...(profile.accentColor ? { accentColor: profile.accentColor } : {}),
-    languages: [...profile.languages]
+    languages: [...profile.languages],
+    deviceProfile: profile.preset.id,
+    deviceLabel: promptsInChinese(profile) ? profile.deviceLabel.zh : profile.deviceLabel.en,
+    template: profile.template,
+    ...(profile.theme ? { theme: { ...profile.theme } } : {}),
+    templateSwitching: profile.templateSwitching,
+    ...(logo ? { logoUrl: `/brand/logo?v=${logo.version}` } : {})
   };
 }
 
@@ -237,10 +338,7 @@ export function basePersonaPrompt(profile: AssistantProfile = assistant()): stri
     const languageRule = profile.strictLanguages
       ? `只使用这些语言：${languages}，默认使用第一种；${profile.wearer.zh}使用其他语言时，简短说明你只支持${languages}。`
       : `优先使用${languages}，默认使用第一种；${profile.wearer.zh}换用其他语言时跟随对方。`;
-    const scope =
-      profile.device === "helmet"
-        ? `帮助${profile.wearer.zh}处理导航、天气、路况、附近停靠点和骑行安全事项。`
-        : `帮助${profile.wearer.zh}处理眼前的事情：导航、天气、提醒、看到的东西，以及随口的问题。`;
+    const scope = profile.preset.scope.zh + profile.preset.conduct.zh;
     return (
       `你是 ${profile.name}，一位友好、冷静、以安全为先的${profile.deviceLabel.zh}语音助手${maker}。你的名字保持 ${profile.name}。` +
       languageRule +
@@ -256,10 +354,7 @@ export function basePersonaPrompt(profile: AssistantProfile = assistant()): stri
   const languageRule = profile.strictLanguages
     ? `Speak only ${languages}, defaulting to the first; if the ${profile.wearer.en} uses another language, briefly say you only support ${languages}. `
     : `Prefer ${languages}, defaulting to the first; if the ${profile.wearer.en} switches language, follow them. `;
-  const scope =
-    profile.device === "helmet"
-      ? `Help the ${profile.wearer.en} with navigation, weather, road conditions, nearby stops and riding safety. `
-      : `Help the ${profile.wearer.en} with what is in front of them: directions, weather, reminders, what they are looking at, and quick questions. `;
+  const scope = profile.preset.scope.en + profile.preset.conduct.en;
   return (
     `You are ${profile.name}, a friendly, calm, safety-first voice assistant living in a ${profile.deviceLabel.en}${maker}. Your name stays ${profile.name}. ` +
     languageRule +

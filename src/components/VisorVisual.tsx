@@ -1,4 +1,4 @@
-import { useId, type CSSProperties } from "react";
+import { useId, useState, type CSSProperties } from "react";
 import type { HazardLevel } from "../../shared/agent";
 import { deviceCopyKey } from "../lib/i18n";
 import { useAssistant } from "./AssistantContext";
@@ -134,12 +134,32 @@ export function VisorVisual(props: Props) {
 }
 
 /** A small, static rendering of the lens for headers and the sign-in card. */
-export function VisorMark({ className = "" }: { className?: string }) {
+function VisorMark({ className = "" }: { className?: string }) {
   return (
     <svg className={`visorMark ${className}`.trim()} viewBox="0 0 48 20" aria-hidden="true" focusable="false">
       <rect x="1" y="1" width="46" height="18" rx="9" />
       <path d="M9 10h6l3-5 4 10 4-8 3 3h10" />
     </svg>
+  );
+}
+
+/** The assistant's mark wherever the brand appears (header, settings card,
+ *  sign-in, workspaces): the owner's logo from the relay when it has one,
+ *  otherwise — or if that image fails to load — the built-in Visor mark.
+ *  `className` names the slot so each can size the logo for itself. */
+export function BrandMark({ className = "" }: { className?: string }) {
+  const { logoUrl } = useAssistant();
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  if (!logoUrl || failedUrl === logoUrl) return <VisorMark className={className} />;
+  return (
+    <img
+      className={`brandLogo ${className}`.trim()}
+      src={logoUrl}
+      alt=""
+      decoding="async"
+      draggable={false}
+      onError={() => setFailedUrl(logoUrl)}
+    />
   );
 }
 

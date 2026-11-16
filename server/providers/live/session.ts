@@ -21,6 +21,8 @@ import {
   type SessionMemory
 } from "../../../shared/session";
 import { containsWakePhrase, WAKE_FOLLOWUP_MAX_CHAIN_MS, WAKE_FOLLOWUP_WINDOW_MS } from "../../../shared/wake";
+import { createEqualizer, type Equalizer } from "../../audio-eq";
+import { sessionEqualizer } from "../../session-equalizer";
 import { assistant, basePersonaPrompt, identityPrompt, promptsInChinese, wakeHint } from "../../assistant";
 import { config as appConfig } from "../../config";
 import {
@@ -172,6 +174,7 @@ export function createLiveProvider(
   let reconnectTimer: NodeJS.Timeout | undefined;
 
   let startEvent: SessionStartEvent | undefined;
+  let equalizer: Equalizer = createEqualizer(undefined);
   let sessionPlatform: string | undefined;
   let previousConversation: ProviderSessionContext["previousConversation"];
   let captureNavigationStop: ProviderSessionContext["captureNavigationStop"];
@@ -304,6 +307,7 @@ export function createLiveProvider(
       audioCarry = data.subarray(data.length - 1);
       data = data.subarray(0, data.length - 1);
     }
+    data = equalizer.process(data);
     for (let offset = 0; offset < data.length; offset += CLIENT_AUDIO_CHUNK_BYTES) {
       const chunk = data.subarray(offset, Math.min(offset + CLIENT_AUDIO_CHUNK_BYTES, data.length));
       telemetry?.serverAudio(chunk.byteLength);
@@ -757,6 +761,7 @@ export function createLiveProvider(
     async start(event: SessionStartEvent, context?: ProviderSessionContext) {
       startEvent = event;
       sessionPlatform = event.platform;
+      equalizer = sessionEqualizer(event);
       previousConversation = context?.previousConversation;
       captureNavigationStop = context?.captureNavigationStop;
       const scenario: DemoScenario = event.scenario ?? "commute";

@@ -12,8 +12,16 @@ import type { BrandLogo } from "./assistant";
  * `~/.horizon-helmet-testing` by default, and Express refuses such paths
  * unless told otherwise. The path is the relay's own (config or Studio), never
  * taken from the request, so allowing it opens nothing.
+ *
+ * `/brand/logo` is addressed with a version in the query, so it can be cached
+ * for a day. The favicon addresses are fixed, so they pass a `cacheControl`
+ * that makes the browser check back.
  */
-export function sendBrandLogo(res: Response, logo: BrandLogo | undefined): void {
+export function sendBrandLogo(
+  res: Response,
+  logo: BrandLogo | undefined,
+  cacheControl = "public, max-age=86400"
+): void {
   const missing = () => {
     if (res.headersSent) return;
     // A miss must not be cached: the logo may be fixed a moment later.
@@ -31,7 +39,7 @@ export function sendBrandLogo(res: Response, logo: BrandLogo | undefined): void 
   res.setHeader("Content-Type", logo.contentType);
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox");
-  res.setHeader("Cache-Control", "public, max-age=86400");
+  res.setHeader("Cache-Control", cacheControl);
   res.sendFile(logo.path, { dotfiles: "allow" }, (error) => {
     if (error) missing();
   });

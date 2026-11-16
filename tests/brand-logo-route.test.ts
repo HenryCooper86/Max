@@ -44,6 +44,29 @@ describe("the logo route", () => {
     expect(response.headers.get("cache-control")).toBe("public, max-age=86400");
   });
 
+  it("lets a fixed address, like the favicon's, ask the browser to check back", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "logo-route-"));
+    cleanup = () => fs.rmSync(home, { recursive: true, force: true });
+    const file = path.join(home, "brand-logo.svg");
+    fs.writeFileSync(file, SVG);
+    const app = express();
+    app.get("/favicon.ico", (_req, res) => {
+      sendBrandLogo(res, { path: file, contentType: "image/svg+xml", version: "1" }, "no-cache");
+    });
+    const server = app.listen(0);
+    const close = cleanup;
+    cleanup = () => {
+      server.close();
+      close?.();
+    };
+    const port = (server.address() as AddressInfo).port;
+    const response = await fetch(`http://127.0.0.1:${port}/favicon.ico`, { headers: { Connection: "close" } });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe(SVG);
+    expect(response.headers.get("content-type")).toContain("image/svg+xml");
+    expect(response.headers.get("cache-control")).toBe("no-cache");
+  });
+
   it("answers a missing file, or no logo at all, with an uncached 404", async () => {
     for (const file of [path.join(os.tmpdir(), "no-such-logo-file.svg"), undefined]) {
       const { response, body } = await get(file);

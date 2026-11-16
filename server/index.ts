@@ -73,7 +73,7 @@ import {
   type TestingReviewStatus,
   type TestingValidityStatus
 } from "../shared/testing";
-import { assistantLogo } from "./assistant";
+import { assistant, assistantLogo } from "./assistant";
 import { sendBrandLogo } from "./brand-logo-route";
 import { localizeErrors } from "./error-language";
 import { removeStudioLogo, saveStudioConfig, saveStudioLogo, studioState } from "./studio";
@@ -164,6 +164,20 @@ app.use(localizeErrors);
 // nothing else, so a logo file can never run script on the relay's origin.
 app.get("/brand/logo", (_req, res) => {
   sendBrandLogo(res, assistantLogo());
+});
+
+// The owner's logo is also the favicon. The page asks for these two addresses
+// before any script runs, so they answer with the logo itself rather than
+// waiting for the app to swap the icon; a browser reads the image type from
+// the response, not from the address. With no logo of the owner's, the built
+// client's own icon files are served further down.
+app.get(["/favicon.svg", "/favicon.ico"], (_req, res, next) => {
+  const logo = assistant().logo;
+  if (!logo) {
+    next();
+    return;
+  }
+  sendBrandLogo(res, logo, "no-cache, max-age=0, must-revalidate");
 });
 
 app.get("/health", (_req, res) => {

@@ -5,6 +5,7 @@ import { localized } from "../lib/i18n";
 import { loadStoredSettings } from "../lib/persistence";
 import { APP_PATH, BUILD_PATH, REPOSITORY_URL } from "../lib/routes";
 import { applyAppearance, resolveAppearance } from "../lib/templates";
+import { applyBrandFavicon, resolveAssistant } from "../lib/assistant";
 import { fetchAgentHealth } from "../lib/utils";
 import { BuildPage } from "./BuildPage";
 import { LandingPage } from "./LandingPage";
@@ -97,7 +98,10 @@ function Site({ view }: { view: "landing" | "build" }) {
       if (active) setSignedIn(result.status === "authenticated");
     });
     void fetchAgentHealth().then((health) => {
-      if (active) setDeveloper(health?.assistant?.developer);
+      if (!active) return;
+      setDeveloper(health?.assistant?.developer);
+      // The owner's logo is the favicon here too, as it is in the app.
+      applyBrandFavicon(document, resolveAssistant(health?.assistant ?? null).logoUrl);
     });
     return () => {
       active = false;

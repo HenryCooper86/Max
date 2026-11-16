@@ -71,6 +71,11 @@ final class AuthClient: NSObject {
         request.httpMethod = "POST"
         request.timeoutInterval = 12
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // The relay words its errors in the app's language, not the phone's.
+        request.setValue(
+            VisorTheme.shared.language == .en ? "en-US" : "zh-CN",
+            forHTTPHeaderField: "Accept-Language"
+        )
         request.httpBody = try? JSONSerialization.data(withJSONObject: [
             "username": username,
             "password": password

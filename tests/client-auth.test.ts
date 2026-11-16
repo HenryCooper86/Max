@@ -190,12 +190,12 @@ describe("user memory controls", () => {
     await expect(forgetUserMemory()).resolves.toBe(true);
     expect(fetchMock).toHaveBeenNthCalledWith(1, "/auth/memory", {
       signal: expect.any(AbortSignal),
-      headers: { Authorization: "Bearer sess_valid" }
+      headers: { "Accept-Language": "zh-CN", Authorization: "Bearer sess_valid" }
     });
     expect(fetchMock).toHaveBeenNthCalledWith(2, "/auth/memory", {
       signal: expect.any(AbortSignal),
       method: "DELETE",
-      headers: { Authorization: "Bearer sess_valid" }
+      headers: { "Accept-Language": "zh-CN", Authorization: "Bearer sess_valid" }
     });
   });
 });

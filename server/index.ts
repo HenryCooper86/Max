@@ -74,6 +74,7 @@ import {
   type TestingValidityStatus
 } from "../shared/testing";
 import { assistantLogo } from "./assistant";
+import { localizeErrors } from "./error-language";
 import { removeStudioLogo, saveStudioConfig, saveStudioLogo, studioState } from "./studio";
 import { loadStudioBackends, saveStudioBackends, studioBackendsState } from "./studio-backends";
 import { chooseVoiceProvider, createSelectableProvider, createVoiceProvider } from "./providers/factory";
@@ -153,6 +154,8 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.json({ limit: "32kb", strict: true }));
+// Errors go out in English to a client that asks for it.
+app.use(localizeErrors);
 
 // The assistant's logo: the owner's own (assistant.config.json → "logo"), else
 // the mark of the configured device. Public like /health: the

@@ -2,6 +2,8 @@ package com.horizon.maxhelmet.agent
 
 import com.horizon.maxhelmet.ui.tr
 import com.horizon.maxhelmet.ui.Str
+import com.horizon.maxhelmet.ui.AppLanguage
+import com.horizon.maxhelmet.ui.Localization
 
 import android.os.Handler
 import android.os.Looper
@@ -77,7 +79,12 @@ class AuthClient {
             .put("password", password)
             .toString()
             .toRequestBody(JSON)
-        val request = Request.Builder().url("$base/auth/login").post(body).build()
+        // The relay words its errors in the app's language, not the phone's.
+        val request = Request.Builder()
+            .url("$base/auth/login")
+            .header("Accept-Language", if (Localization.language == AppLanguage.EN) "en-US" else "zh-CN")
+            .post(body)
+            .build()
 
         httpClient.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {

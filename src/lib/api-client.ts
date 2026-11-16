@@ -1,3 +1,5 @@
+import { readStoredLanguage } from "./i18n";
+
 type ApiErrorKind = "unauthorized" | "forbidden" | "not-found" | "conflict" | "invalid" | "server" | "unavailable";
 
 export type ApiError = { kind: ApiErrorKind; message: string; status?: number };
@@ -13,6 +15,8 @@ function errorKind(status: number): ApiErrorKind {
 }
 
 export async function requestJson<T>(path: string, init?: RequestInit): Promise<ApiResult<T>> {
+  const language = readStoredLanguage();
+  const english = language === "en-US";
   const controller = new AbortController();
   const abort = () => controller.abort();
   const callerSignal = init?.signal;
@@ -20,7 +24,17 @@ export async function requestJson<T>(path: string, init?: RequestInit): Promise<
   else callerSignal?.addEventListener("abort", abort, { once: true });
   const timeout = setTimeout(abort, 15_000);
   try {
-    const response = await fetch(path, { ...init, signal: controller.signal });
+    // The relay answers in the app's language, not the browser's.
+    const given = init?.headers;
+    let headers: HeadersInit;
+    if (given instanceof Headers || Array.isArray(given)) {
+      const merged = new Headers(given);
+      if (!merged.has("Accept-Language")) merged.set("Accept-Language", language);
+      headers = merged;
+    } else {
+      headers = { "Accept-Language": language, ...given };
+    }
+    const response = await fetch(path, { ...init, headers, signal: controller.signal });
     let payload: unknown;
     try {
       payload = await response.json();
@@ -32,18 +46,32 @@ export async function requestJson<T>(path: string, init?: RequestInit): Promise<
       const message =
         payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string"
           ? payload.error
-          : `请求失败（HTTP ${response.status}）。`;
+          : english
+            ? `The request failed (HTTP ${response.status}).`
+            : `请求失败（HTTP ${response.status}）。`;
       return { ok: false, error: { kind: errorKind(response.status), status: response.status, message } };
     }
     if (payload === null) {
       return {
         ok: false,
-        error: { kind: "server", status: response.status, message: "中继返回了无效的数据，请稍后重试。" }
+        error: {
+          kind: "server",
+          status: response.status,
+          message: english
+            ? "The relay returned invalid data. Please try again later."
+            : "中继返回了无效的数据，请稍后重试。"
+        }
       };
     }
     return { ok: true, data: payload as T };
   } catch {
-    return { ok: false, error: { kind: "unavailable", message: "无法连接中继，请稍后重试。" } };
+    return {
+      ok: false,
+      error: {
+        kind: "unavailable",
+        message: english ? "Could not reach the relay. Please try again later." : "无法连接中继，请稍后重试。"
+      }
+    };
   } finally {
     clearTimeout(timeout);
     callerSignal?.removeEventListener("abort", abort);

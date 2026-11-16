@@ -32,6 +32,7 @@ export type UserMemorySummary = {
 
 import { relayAuthToken } from "./persistence";
 import { requestJson, type ApiResult } from "./api-client";
+import { readStoredLanguage } from "./i18n";
 
 const AUTH_TOKEN_KEY = "max.authToken";
 let fallbackAuthToken: string | null = null;
@@ -73,6 +74,11 @@ function storeAuthToken(token: string) {
   }
 }
 
+/** A message this client writes itself, in the app's language. */
+function localMessage(chinese: string, english: string): string {
+  return readStoredLanguage() === "en-US" ? english : chinese;
+}
+
 async function postAuth(path: string, body: Record<string, unknown>): Promise<AuthResponse> {
   try {
     // A stored operator relay token rides along: token-protected relays
@@ -89,12 +95,21 @@ async function postAuth(path: string, body: Record<string, unknown>): Promise<Au
     if (!response.ok) return { ok: false, error: response.error.message };
     const payload = response.data;
     if (payload.ok && (typeof payload.token !== "string" || !payload.token.trim() || !isAuthUser(payload.user))) {
-      return { ok: false, error: "服务器返回了无效的登录数据，请稍后重试。" };
+      return {
+        ok: false,
+        error: localMessage(
+          "服务器返回了无效的登录数据，请稍后重试。",
+          "The server returned invalid sign-in data. Please try again later."
+        )
+      };
     }
     if (payload.ok) storeAuthToken(payload.token);
     return payload;
   } catch {
-    return { ok: false, error: "无法连接服务器，请稍后再试。" };
+    return {
+      ok: false,
+      error: localMessage("无法连接服务器，请稍后再试。", "Could not reach the server. Please try again later.")
+    };
   }
 }
 
@@ -132,7 +147,12 @@ export async function changePasswordAccount(
   newPassword: string
 ): Promise<{ ok: boolean; error?: string }> {
   const token = authToken();
-  if (!token) return { ok: false, error: "未登录或会话已过期。" };
+  if (!token) {
+    return {
+      ok: false,
+      error: localMessage("未登录或会话已过期。", "You are not signed in, or your session has expired.")
+    };
+  }
   try {
     const response = await requestJson<{ ok: boolean; error?: string }>("/auth/password", {
       method: "POST",
@@ -141,7 +161,10 @@ export async function changePasswordAccount(
     });
     return response.ok ? response.data : { ok: false, error: response.error.message };
   } catch {
-    return { ok: false, error: "无法连接服务器，请稍后再试。" };
+    return {
+      ok: false,
+      error: localMessage("无法连接服务器，请稍后再试。", "Could not reach the server. Please try again later.")
+    };
   }
 }
 

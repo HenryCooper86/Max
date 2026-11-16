@@ -144,7 +144,7 @@ struct AgentScreen: View {
                         )
                         .overlay(alignment: .topLeading) {
                             let frame = mascotFrame(in: stage)
-                            Mascot(mood: mascotMood(visorMode(state), hazard: presentedHazard))
+                            Mascot(mood: mascotMood(visorMode(state), hazard: presentedHazard), tiltEnabled: layout != .landscape)
                                 .frame(width: frame.width, height: frame.height)
                                 .offset(x: frame.minX, y: frame.minY)
                         }
@@ -172,6 +172,7 @@ struct AgentScreen: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Visor.bg.ignoresSafeArea())
+        .mascotFollowsTouches()
         .visorAnimation(viewModel.showCaptions)
         .visorAnimation(state.micMuted)
         .onAppear { viewModel.refreshRelayHealth() }

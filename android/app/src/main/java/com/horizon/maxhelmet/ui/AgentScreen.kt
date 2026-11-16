@@ -198,7 +198,7 @@ private fun AgentScreenContent(
     LaunchedEffect(viewModel.showPreferences) { if (viewModel.showPreferences) viewModel.refreshHealth() }
 
     Box(
-        modifier = Modifier.fillMaxSize().background(c.bg),
+        modifier = Modifier.fillMaxSize().background(c.bg).mascotFollowsTouches(),
         contentAlignment = Alignment.TopCenter
     ) {
         BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = VisorSpace.x4, vertical = VisorSpace.x3)) {
@@ -236,7 +236,8 @@ private fun AgentScreenContent(
                     Mascot(
                         mood = mascotMood(state),
                         width = birdWidth,
-                        modifier = Modifier.offset(birdOffset.x, birdOffset.y)
+                        modifier = Modifier.offset(birdOffset.x, birdOffset.y),
+                        tiltEnabled = !landscape
                     )
                 }
             }

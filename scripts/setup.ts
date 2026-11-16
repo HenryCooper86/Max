@@ -79,6 +79,7 @@ async function main(): Promise<void> {
   const accentColor = await ask("Accent colour (#RRGGBB, Enter to keep the template's)", "");
   console.log(`\nVoice equaliser presets: ${EQUALIZER_PRESETS.map((preset) => preset.id).join(", ")}`);
   const equalizer = await ask("Equaliser preset", chosenDevice.equalizer);
+  const visualizer = await ask("Voice display (wave, bars, mirror, dots, ring)", chosenDevice.visualizer);
 
   console.log("\nVoice backends:");
   VOICE_PROVIDERS.forEach((entry, index) => {
@@ -107,6 +108,7 @@ async function main(): Promise<void> {
     ...(/^#[0-9a-f]{6}$/i.test(accentColor) ? { accentColor } : {}),
     ...(extraNames.length ? { wake: { names: extraNames } } : {}),
     template,
+    ...(["wave", "bars", "mirror", "dots", "ring"].includes(visualizer) ? { visualizer } : {}),
     ...(EQUALIZER_PRESETS.some((preset) => preset.id === equalizer)
       ? { voice: { equalizer: { preset: equalizer } } }
       : {})

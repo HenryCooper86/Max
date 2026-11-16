@@ -1,4 +1,4 @@
-import type { AssistantDevice } from "../shared/agent";
+import type { AssistantDevice, VoiceVisualizer } from "../shared/agent";
 
 /**
  * The embodied devices the framework knows how to speak for.
@@ -25,6 +25,8 @@ export type DevicePreset = {
   equalizer: string;
   /** Design template that suits how the companion app is used with it. */
   template: string;
+  /** How the live voice display is drawn by default. */
+  visualizer: VoiceVisualizer;
 };
 
 export const DEVICE_PRESETS: readonly DevicePreset[] = [
@@ -39,7 +41,8 @@ export const DEVICE_PRESETS: readonly DevicePreset[] = [
     },
     conduct: { zh: "", en: "" },
     equalizer: "wind",
-    template: "visor"
+    template: "visor",
+    visualizer: "wave"
   },
   {
     id: "bicycle-helmet",
@@ -55,7 +58,8 @@ export const DEVICE_PRESETS: readonly DevicePreset[] = [
       en: "A cyclist needs to hear traffic: keep answers even shorter than usual and do not volunteer small talk while they are working hard. "
     },
     equalizer: "wind",
-    template: "daylight"
+    template: "daylight",
+    visualizer: "bars"
   },
   {
     id: "sunglasses",
@@ -71,7 +75,8 @@ export const DEVICE_PRESETS: readonly DevicePreset[] = [
       en: "The speakers are open-ear and others may overhear: before reading out anything private, ask whether to say it now. "
     },
     equalizer: "open-ear",
-    template: "daylight"
+    template: "daylight",
+    visualizer: "bars"
   },
   {
     id: "smart-glasses",
@@ -87,7 +92,8 @@ export const DEVICE_PRESETS: readonly DevicePreset[] = [
       en: "The speakers are open-ear and others may overhear: before reading out anything private, ask whether to say it now. "
     },
     equalizer: "open-ear",
-    template: "visor"
+    template: "visor",
+    visualizer: "wave"
   },
   {
     id: "assistive-glasses",
@@ -107,7 +113,8 @@ export const DEVICE_PRESETS: readonly DevicePreset[] = [
         "Say what matters for safety first — steps, vehicles, obstacles. When you cannot see something clearly, say so; never guess. Read text out word for word unless they ask for a summary. "
     },
     equalizer: "clarity",
-    template: "beacon"
+    template: "beacon",
+    visualizer: "mirror"
   },
   {
     id: "ar-headset",
@@ -123,7 +130,8 @@ export const DEVICE_PRESETS: readonly DevicePreset[] = [
       en: "The wearer already has a display in view: speak only what the display does not show, and do not read back what is on it. "
     },
     equalizer: "open-ear",
-    template: "holo"
+    template: "holo",
+    visualizer: "dots"
   },
   {
     id: "vr-headset",
@@ -139,7 +147,8 @@ export const DEVICE_PRESETS: readonly DevicePreset[] = [
       en: "The wearer cannot see the real room: before suggesting they move or reach, remind them to mind the space around them. "
     },
     equalizer: "flat",
-    template: "holo"
+    template: "holo",
+    visualizer: "ring"
   },
   {
     id: "wearable",
@@ -152,7 +161,8 @@ export const DEVICE_PRESETS: readonly DevicePreset[] = [
     },
     conduct: { zh: "", en: "" },
     equalizer: "flat",
-    template: "visor"
+    template: "visor",
+    visualizer: "wave"
   }
 ];
 

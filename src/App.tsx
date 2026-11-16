@@ -12,6 +12,7 @@ import {
   type ReactNode
 } from "react";
 import { adasDirectionLabel } from "../shared/adas";
+import type { VoiceVisualizer } from "../shared/agent";
 import { combineHazardLevels } from "../shared/ride";
 import { AssistantProvider } from "./components/AssistantContext";
 import { BrandMark, VisorVisual, VoiceStateReadout } from "./components/VisorVisual";
@@ -30,7 +31,8 @@ import { useAmapConsent } from "./hooks/useAmapConsent";
 import { useHelmetAgent } from "./hooks/useHelmetAgent";
 import { fetchCurrentUser, type AuthUser } from "./lib/auth";
 import { applyBrandFavicon, resolveAssistant } from "./lib/assistant";
-import { loadStoredSettings, saveStoredTemplate } from "./lib/persistence";
+import { loadStoredSettings, saveStoredAppearance } from "./lib/persistence";
+import { resolveVisualizer } from "./lib/visualizer";
 import { applyAppearance, resolveAppearance } from "./lib/templates";
 import { deviceAssistantCopy, localized } from "./lib/i18n";
 import { voiceFaceClassName } from "./lib/voice-shell";
@@ -245,7 +247,18 @@ function AppContent() {
   }, [appearance]);
   const chooseTemplate = useCallback((id: string) => {
     setViewerTemplate(id);
-    saveStoredTemplate(id);
+    saveStoredAppearance({ template: id });
+  }, []);
+  // Voice display style, with the same precedence and pinning as the template.
+  const [viewerVisualizer, setViewerVisualizer] = useState(() => loadStoredSettings().visualizer);
+  const visualizer = resolveVisualizer({
+    relay: assistant.visualizer,
+    viewer: viewerVisualizer,
+    templateSwitching: assistant.templateSwitching
+  });
+  const chooseVisualizer = useCallback((id: VoiceVisualizer) => {
+    setViewerVisualizer(id);
+    saveStoredAppearance({ visualizer: id });
   }, []);
   const branded = (node: ReactNode) => <AssistantProvider value={assistant}>{node}</AssistantProvider>;
 
@@ -346,6 +359,8 @@ function AppContent() {
             turnState={agent.turnState}
             hazardLevel={fusedHazard}
             sessionState={sessionPhase}
+            visualizer={visualizer}
+            getAnalyser={agent.getVoiceAnalyser}
           />
         </div>
 
@@ -438,7 +453,9 @@ function AppContent() {
           appearance={{
             templateId: appearance.template.id,
             pinned: assistant.templateSwitching === false,
-            onSelect: chooseTemplate
+            onSelect: chooseTemplate,
+            visualizer,
+            onSelectVisualizer: chooseVisualizer
           }}
           onClose={closeSettings}
         />

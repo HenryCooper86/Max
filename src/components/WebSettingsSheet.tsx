@@ -1,11 +1,12 @@
 import { CaretDown, CaretRight, DownloadSimple, Flask, ShieldCheck, Trash, X } from "@phosphor-icons/react";
-import { useEffect, useId, useRef, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, type ReactNode } from "react";
 import type { VoiceProviderSummary } from "../../shared/agent";
 import { combineHazardLevels, scenarioLabel } from "../../shared/ride";
 import { useAssistant } from "./AssistantContext";
 import { LanguageToggle, useLanguage } from "./LanguageToggle";
 import { TemplatePicker, TemplateSwatch, type AppearanceControls } from "./TemplatePicker";
 import { BrandMark } from "./VisorVisual";
+import { VisualizerBadge, VisualizerPicker } from "./VisualizerPicker";
 import { VoiceEqualizerPanel } from "./VoiceEqualizerPanel";
 import { deviceAssistantCopy, deviceCopyKey, localized } from "../lib/i18n";
 import type { AmapConsentControls } from "../hooks/useAmapConsent";
@@ -33,6 +34,7 @@ import {
   SCENARIOS,
   VOICE_PERSONALITIES
 } from "../lib/constants";
+import { usableEqualizerOptions } from "../lib/equalizer";
 import { findTemplate } from "../lib/templates";
 import { audioProcessingLabel, exportTranscriptLog } from "../lib/utils";
 
@@ -132,7 +134,8 @@ export function WebSettingsSheet({ agent, amapConsent, onOpenTesting, onOpenAdmi
     agent.voiceProvider && providers.some((provider) => provider.id === agent.voiceProvider)
       ? agent.voiceProvider
       : (voice?.active ?? "");
-  const equalizerOptions = voice?.equalizer;
+  // Only the ten-band offer is usable; an older relay's is ignored (no panel).
+  const equalizerOptions = useMemo(() => usableEqualizerOptions(voice?.equalizer), [voice?.equalizer]);
   const activeTemplate = findTemplate(appearance.templateId);
   const connectionLabels = en ? CONNECTION_LABELS_EN : CONNECTION_LABELS;
   const permissionLabels = en ? PERMISSION_LABELS_EN : PERMISSION_LABELS;
@@ -301,7 +304,13 @@ export function WebSettingsSheet({ agent, amapConsent, onOpenTesting, onOpenAdmi
                 }
                 stack
               >
-                <VoiceEqualizerPanel options={equalizerOptions} value={agent.equalizer} onChange={agent.setEqualizer} />
+                <VoiceEqualizerPanel
+                  options={equalizerOptions}
+                  value={agent.equalizer}
+                  onChange={agent.setEqualizer}
+                  enabled={agent.equalizerEnabled}
+                  onEnabledChange={agent.setEqualizerEnabled}
+                />
               </Row>
             ) : null}
           </Section>
@@ -317,6 +326,15 @@ export function WebSettingsSheet({ agent, amapConsent, onOpenTesting, onOpenAdmi
             ) : (
               <Row label={t("settings.template")} stack>
                 <TemplatePicker value={appearance.templateId} onSelect={appearance.onSelect} />
+              </Row>
+            )}
+            {appearance.pinned ? (
+              <Row label={t("settings.visualizer")} detail={t("settings.templatePinned")}>
+                <VisualizerBadge value={appearance.visualizer} />
+              </Row>
+            ) : (
+              <Row label={t("settings.visualizer")} detail={t("settings.visualizerHelp")} stack>
+                <VisualizerPicker value={appearance.visualizer} onSelect={appearance.onSelectVisualizer} />
               </Row>
             )}
           </Section>

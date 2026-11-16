@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { AssistantDevice, AssistantSummary, VoiceEqualizer } from "../shared/agent";
+import type { AssistantDevice, AssistantSummary, VoiceEqualizer, VoiceVisualizer } from "../shared/agent";
 import { normalizeEqualizer } from "./audio-eq";
 import { devicePreset, type DevicePreset } from "./device-presets";
 import { configureWakePhrase, DEFAULT_WAKE_NAMES, type WakeNames } from "../shared/wake";
@@ -39,6 +39,8 @@ export type AssistantProfile = {
   theme?: Record<string, string>;
   /** False pins the template so viewers cannot pick their own. */
   templateSwitching: boolean;
+  /** How the live voice display is drawn; defaults to the device preset's. */
+  visualizer: VoiceVisualizer;
   /** The owner's own logo file, when one is configured and readable. */
   logo?: BrandLogo;
   /** Background behind the logo where a platform needs one (app icons). */
@@ -138,6 +140,7 @@ export const DEFAULT_ASSISTANT_PROFILE: AssistantProfile = {
   wearer: devicePreset("motorcycle-helmet").wearer,
   template: "visor",
   templateSwitching: true,
+  visualizer: "wave",
   logoBackground: DEFAULT_LOGO_BACKGROUND,
   // The original helmet shipped with the backend's voice untouched.
   equalizer: { preset: "flat" },
@@ -187,6 +190,8 @@ function themeFrom(raw: unknown): Record<string, string> | undefined {
   return Object.keys(theme).length ? theme : undefined;
 }
 
+const VISUALIZERS: readonly VoiceVisualizer[] = ["wave", "bars", "mirror", "dots", "ring"];
+
 const HAN = /\p{Script=Han}/u;
 
 /** Splits configured wake names by script: Han names match anywhere in a
@@ -229,6 +234,9 @@ export function assistantProfileFrom(raw: unknown, baseDir = process.cwd()): Ass
     template: text(raw.template, 32)?.toLowerCase() ?? preset.template,
     theme: themeFrom(raw.theme),
     templateSwitching: raw.templateSwitching !== false,
+    visualizer: VISUALIZERS.includes(raw.visualizer as VoiceVisualizer)
+      ? (raw.visualizer as VoiceVisualizer)
+      : preset.visualizer,
     ...(brand.logo ? { logo: brand.logo } : {}),
     logoBackground:
       logoBackground && /^#[0-9a-f]{6}$/i.test(logoBackground) ? logoBackground.toUpperCase() : DEFAULT_LOGO_BACKGROUND,
@@ -300,6 +308,7 @@ export function assistantSummary(wakeWordEnabled: boolean): AssistantSummary {
     template: profile.template,
     ...(profile.theme ? { theme: { ...profile.theme } } : {}),
     templateSwitching: profile.templateSwitching,
+    visualizer: profile.visualizer,
     ...(logo ? { logoUrl: `/brand/logo?v=${logo.version}` } : {})
   };
 }

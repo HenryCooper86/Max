@@ -3,9 +3,10 @@
 // accent and look. The relay reports this on /health (AgentHealth.assistant); older
 // relays do not, and then the client is the original "Max" helmet assistant.
 
-import type { AssistantDevice, AssistantSummary } from "../../shared/agent";
+import type { AssistantDevice, AssistantSummary, VoiceVisualizer } from "../../shared/agent";
 import { inkOn, withAlpha } from "./color";
 import { sanitizeThemeOverrides, type ThemeOverrides } from "./theme-tokens";
+import { isVisualizer } from "./visualizer";
 
 export type AssistantIdentity = {
   name: string;
@@ -27,6 +28,8 @@ export type AssistantIdentity = {
   templateSwitching?: false;
   /** The owner's square logo: a validated same-origin "/brand/…" path. */
   logoUrl?: string;
+  /** The owner's voice display style, when it is one this client draws. */
+  visualizer?: VoiceVisualizer;
 };
 
 export const DEFAULT_ASSISTANT: AssistantIdentity = {
@@ -58,6 +61,7 @@ export function resolveAssistant(summary: AssistantSummary | undefined | null): 
   const template = cleanText(summary.template, 32).toLowerCase();
   const theme = sanitizeThemeOverrides(summary.theme);
   const logoUrl = brandLogoPath(summary.logoUrl);
+  const visualizer = isVisualizer(summary.visualizer) ? summary.visualizer : undefined;
   return {
     name,
     device,
@@ -71,7 +75,8 @@ export function resolveAssistant(summary: AssistantSummary | undefined | null): 
     ...(template ? { template } : {}),
     ...(Object.keys(theme).length ? { theme } : {}),
     ...(summary.templateSwitching === false ? { templateSwitching: false as const } : {}),
-    ...(logoUrl ? { logoUrl } : {})
+    ...(logoUrl ? { logoUrl } : {}),
+    ...(visualizer ? { visualizer } : {})
   };
 }
 

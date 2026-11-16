@@ -8,11 +8,12 @@ import {
 } from "../server/assistant";
 import {
   createEqualizer,
-  equalizerBands,
+  equalizerCurve,
   equalizerOptions,
   EQUALIZER_PRESETS,
   normalizeEqualizer
 } from "../server/audio-eq";
+import { EQUALIZER_FREQUENCIES } from "../shared/agent";
 import { DEVICE_PRESETS, devicePreset, isKnownDevice } from "../server/device-presets";
 import { resolveVoiceProviderId, voiceProviderSummaries } from "../server/providers/catalog";
 import { localRealtimeDialect } from "../server/providers/live/openai-realtime";
@@ -103,12 +104,17 @@ describe("device presets", () => {
         text: "url(javascript:alert(1))",
         "surface-1": "red; background: url(x)"
       },
-      voice: { equalizer: { preset: "wind", bass: -30, treble: "loud" } }
+      visualizer: "ring",
+      voice: { equalizer: { preset: "wind", preamp: -30 } }
     });
     expect(profile.template).toBe("ember");
     expect(profile.templateSwitching).toBe(false);
     expect(profile.theme).toEqual({ accent: "#ff8800", "radius-card": "20px", bg: "rgb(10, 12, 14)" });
-    expect(profile.equalizer).toEqual({ preset: "wind", bass: -12 });
+    expect(profile.equalizer).toEqual({ preset: "wind", preamp: -12 });
+    expect(profile.visualizer).toBe("ring");
+    // An unknown style falls back to the device's own.
+    expect(assistantProfileFrom({ device: "vr", visualizer: "lasers" }).visualizer).toBe("ring");
+    expect(assistantProfileFrom({ device: "sunglasses" }).visualizer).toBe("bars");
   });
 });
 
@@ -130,32 +136,71 @@ function gainAt(frequency: number, settings: Parameters<typeof createEqualizer>[
   return 10 * Math.log10(outSum / inSum);
 }
 
+/** Ten flat bands with one of them moved. */
+function only(index: number, gain: number): { bands: number[] } {
+  const bands = new Array<number>(10).fill(0);
+  bands[index] = gain;
+  return { bands };
+}
+
 describe("voice equaliser", () => {
+  it("is a ten-band graphic equaliser laid out inside the speech bandwidth", () => {
+    expect([...EQUALIZER_FREQUENCIES]).toEqual([60, 125, 250, 500, 1000, 2000, 3000, 4000, 6000, 9000]);
+    expect(EQUALIZER_PRESETS.length).toBeGreaterThanOrEqual(12);
+    expect(new Set(EQUALIZER_PRESETS.map((preset) => preset.id)).size).toBe(EQUALIZER_PRESETS.length);
+    for (const preset of EQUALIZER_PRESETS) {
+      expect(preset.bands).toHaveLength(10);
+      expect(preset.bands.every((gain) => Math.abs(gain) <= 12)).toBe(true);
+      expect(Math.abs(preset.preamp)).toBeLessThanOrEqual(12);
+    }
+    for (const id of [
+      "flat",
+      "wind",
+      "open-ear",
+      "bass-boost",
+      "treble-boost",
+      "radio",
+      "telephone",
+      "loud",
+      "night"
+    ]) {
+      expect(EQUALIZER_PRESETS.some((preset) => preset.id === id)).toBe(true);
+    }
+  });
+
   it("is a true bypass when flat", () => {
     const pcm = Buffer.from([1, 2, 3, 4, 5]);
     expect(createEqualizer(undefined).bypass).toBe(true);
     expect(createEqualizer({ preset: "flat" }).process(pcm)).toBe(pcm);
-    expect(createEqualizer({ bass: 0, gain: 0 }).bypass).toBe(true);
+    expect(createEqualizer({ bands: new Array<number>(10).fill(0), preamp: 0 }).bypass).toBe(true);
   });
 
-  it("moves each band by about what was asked, and leaves the others alone", () => {
-    expect(gainAt(60, { bass: -8 })).toBeLessThan(-6.5);
-    expect(gainAt(3000, { bass: -8 })).toBeGreaterThan(-0.5);
-    expect(gainAt(3000, { presence: 6 })).toBeCloseTo(6, 0);
-    expect(gainAt(200, { presence: 6 })).toBeLessThan(0.5);
-    expect(gainAt(10_000, { treble: 6 })).toBeGreaterThan(5);
-    expect(gainAt(300, { treble: 6 })).toBeLessThan(0.5);
-    expect(gainAt(1000, { mid: -6 })).toBeCloseTo(-6, 0);
-    expect(gainAt(1000, { gain: -6 })).toBeCloseTo(-6, 1);
+  it("moves each band at its own frequency and leaves distant ones alone", () => {
+    EQUALIZER_FREQUENCIES.forEach((frequency, index) => {
+      // The end bands are shelves, so they are measured a little past their corner.
+      const probe = index === 0 ? 40 : index === 9 ? 11_000 : frequency;
+      expect(gainAt(probe, only(index, 6)), `${frequency} Hz boost`).toBeGreaterThan(4.5);
+      expect(gainAt(probe, only(index, -6)), `${frequency} Hz cut`).toBeLessThan(-4.5);
+    });
+    expect(gainAt(3000, only(1, 9))).toBeLessThan(0.6);
+    expect(gainAt(125, only(6, 9))).toBeLessThan(0.6);
+    expect(gainAt(1000, only(9, 9))).toBeLessThan(0.6);
+    expect(gainAt(1000, { preamp: -6 })).toBeCloseTo(-6, 1);
   });
 
-  it("shapes speech the way the wind preset describes", () => {
+  it("shapes speech the way its presets describe", () => {
     expect(gainAt(80, { preset: "wind" })).toBeLessThan(-4);
     expect(gainAt(3000, { preset: "wind" })).toBeGreaterThan(5);
+    expect(gainAt(100, { preset: "bass-boost" })).toBeGreaterThan(5);
+    expect(gainAt(8000, { preset: "treble-boost" })).toBeGreaterThan(5);
+    // A telephone line: the middle survives, both ends do not.
+    expect(gainAt(1500, { preset: "telephone" })).toBeGreaterThan(2);
+    expect(gainAt(100, { preset: "telephone" })).toBeLessThan(-9);
+    expect(gainAt(8000, { preset: "telephone" })).toBeLessThan(-9);
   });
 
   it("limits instead of wrapping when boosted speech would clip", () => {
-    const equalizer = createEqualizer({ gain: 12 });
+    const equalizer = createEqualizer({ preamp: 12 });
     const loud = Buffer.alloc(2000);
     for (let index = 0; index < 1000; index += 1) {
       loud.writeInt16LE(Math.round(Math.sin(index / 5) * 30_000), index * 2);
@@ -174,8 +219,8 @@ describe("voice equaliser", () => {
   });
 
   it("carries a split sample across chunks without losing or inventing bytes", () => {
-    const whole = createEqualizer({ presence: 4 });
-    const split = createEqualizer({ presence: 4 });
+    const whole = createEqualizer(only(6, 4));
+    const split = createEqualizer(only(6, 4));
     const pcm = Buffer.alloc(400);
     for (let index = 0; index < 200; index += 1) pcm.writeInt16LE(Math.round(Math.sin(index / 3) * 8000), index * 2);
     const expected = whole.process(pcm);
@@ -189,15 +234,27 @@ describe("voice equaliser", () => {
   });
 
   it("sanitises untrusted settings", () => {
-    expect(normalizeEqualizer({ preset: "wind", bass: 40, mid: "x", gain: -3.26 })).toEqual({
+    expect(normalizeEqualizer({ preset: "wind", bands: [40, -40, 1.26, 0, 0, 0, 0, 0, 0, 0], preamp: -3.26 })).toEqual({
       preset: "wind",
-      bass: 12,
-      gain: -3.3
+      bands: [12, -12, 1.3, 0, 0, 0, 0, 0, 0, 0],
+      preamp: -3.3
     });
+    // The wrong number of bands, or a non-number among them, is dropped whole.
+    expect(normalizeEqualizer({ preset: "warm", bands: [1, 2, 3] })).toEqual({ preset: "warm" });
+    expect(normalizeEqualizer({ bands: [0, 0, 0, 0, "x", 0, 0, 0, 0, 0] })).toBeUndefined();
     expect(normalizeEqualizer({ preset: "nope" })).toBeUndefined();
     expect(normalizeEqualizer([1, 2])).toBeUndefined();
     expect(normalizeEqualizer("wind")).toBeUndefined();
-    expect(equalizerBands({ preset: "wind", bass: 0 })).toMatchObject({ bass: 0, presence: 5 });
+    expect(equalizerCurve({ preset: "wind", preamp: 0 })).toMatchObject({ preamp: 0 });
+    expect(equalizerCurve({ preset: "wind" }).bands[0]).toBe(-12);
+  });
+
+  it("still understands a config written for the earlier five-band equaliser", () => {
+    const converted = normalizeEqualizer({ bass: -8, presence: 4, gain: 2 })!;
+    expect(converted.bands).toHaveLength(10);
+    expect(converted.bands![0]).toBe(-8);
+    expect(converted.bands![6]).toBe(4);
+    expect(converted.preamp).toBe(2);
   });
 
   it("gives a session the wearer's settings, or the profile's default", () => {
@@ -206,6 +263,7 @@ describe("voice equaliser", () => {
     expect(sessionEqualizer({ equalizer: { preset: "flat" } }).bypass).toBe(true);
     const options = equalizerOptions({ preset: "wind" }, true);
     expect(options).toMatchObject({ default: { preset: "wind" }, adjustable: true });
+    expect(options.frequencies).toHaveLength(10);
     expect(options.presets.map((preset) => preset.id)).toContain("open-ear");
   });
 });

@@ -1,4 +1,5 @@
 import { useId } from "react";
+import type { VoiceVisualizer } from "../../shared/agent";
 import { TEMPLATES, type DesignTemplate } from "../lib/templates";
 import { useLanguage } from "./LanguageToggle";
 
@@ -9,6 +10,9 @@ export type AppearanceControls = {
   /** True when the owner pinned the template: show it, offer no choice. */
   pinned: boolean;
   onSelect: (id: string) => void;
+  /** The voice display style in effect, and the viewer's way to change it. */
+  visualizer: VoiceVisualizer;
+  onSelectVisualizer: (id: VoiceVisualizer) => void;
 };
 
 /** A thumbnail of the template: its page, the Visor lens on a surface with

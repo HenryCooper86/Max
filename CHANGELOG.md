@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-16 — Ten-band equaliser, more presets, voice display styles
+
+- Rebuilt the voice equaliser as a ten-band graphic equaliser with a preamp
+  (60 Hz – 9 kHz, inside the bandwidth 24 kHz speech carries) and fifteen
+  presets, including bass boost, treble boost, vocal, radio, telephone, loud,
+  night and outdoor. Settings written for the earlier five bands still load.
+- Added voice display styles (`wave`, `bars`, `mirror`, `dots`, `ring`) to the
+  assistant profile and `/health`, with a default per device.
+
 ## 2026-11-16 — Framework for embodied devices: device presets, design templates, voice equaliser, local models
 
 - Added device presets (`server/device-presets.ts`): motorcycle and bicycle

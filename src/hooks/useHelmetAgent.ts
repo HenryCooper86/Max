@@ -50,7 +50,7 @@ import {
   saveStoredSettings,
   saveStoredTranscript
 } from "../lib/persistence";
-import { equalizerForSession, normalizeEqualizer } from "../lib/equalizer";
+import { equalizerForSession, normalizeEqualizer, usableEqualizerOptions } from "../lib/equalizer";
 import { createNavigationController, type NavPhase } from "../lib/navigation";
 import { createRideSimulator } from "../lib/nav-simulator";
 import { createAgentSocket, fetchAgentHealth, getRiderLocation, mapTurnState } from "../lib/utils";
@@ -140,6 +140,9 @@ export function useHelmetAgent() {
   // The wearer's equaliser choice (null = relay default). Sent with
   // session.start when the relay reports an adjustable equaliser.
   const [equalizer, setEqualizerState] = useState<VoiceEqualizer | null>(storedSettings.equalizer ?? null);
+  // The equaliser's on/off switch; off asks the relay for a flat curve while
+  // keeping the wearer's choice for when it is switched back on.
+  const [equalizerEnabled, setEqualizerEnabledState] = useState(storedSettings.equalizerOff !== true);
   // Backend the current relay session reported in session.started.
   const [sessionProvider, setSessionProvider] = useState<string | null>(null);
   const [testerId, setTesterIdState] = useState(initialTesterId);
@@ -190,6 +193,7 @@ export function useHelmetAgent() {
   const voicePersonalityRef = useRef<VoicePersonality>(storedSettings.voicePersonality ?? "concise");
   const voiceProviderRef = useRef(storedSettings.voiceProvider ?? "");
   const equalizerRef = useRef<VoiceEqualizer | null>(storedSettings.equalizer ?? null);
+  const equalizerEnabledRef = useRef(storedSettings.equalizerOff !== true);
   // What the relay offers, from the latest /health; read at session start.
   const equalizerOptionsRef = useRef<VoiceEqualizerOptions | undefined>(undefined);
   const equalizerRestartTimerRef = useRef<number | null>(null);
@@ -227,11 +231,12 @@ export function useHelmetAgent() {
     setStatus("已打断 Max，继续听你说");
   }, []);
 
-  const { playPcm16, stopAgentSpeech, speak, speakWarning, ensurePlaybackContext, closePlayback } = useAudioPlayback({
-    voiceGenderRef,
-    transmittingRef,
-    onInterrupted
-  });
+  const { playPcm16, stopAgentSpeech, speak, speakWarning, ensurePlaybackContext, closePlayback, getPlaybackAnalyser } =
+    useAudioPlayback({
+      voiceGenderRef,
+      transmittingRef,
+      onInterrupted
+    });
 
   // Keep a stable controller for event handlers; its commands and route ids
   // belong to one relay session. Both socket close and settings replacement
@@ -263,6 +268,7 @@ export function useHelmetAgent() {
 
   const {
     voiceLevel,
+    getMicAnalyser,
     packetStats,
     setPacketStats,
     audioProcessing,
@@ -271,6 +277,15 @@ export function useHelmetAgent() {
     setTrackEnabled,
     resetFrameWindow
   } = useMicCapture({ socketRef, transmittingRef, providerReadyRef });
+
+  // Live spectrum taps for the voice display: the wearer's microphone, or the
+  // assistant's PCM playback. Either may be absent (not started, browser
+  // TTS, test doubles); the display then synthesises its spectrum.
+  const getVoiceAnalyser = useCallback(
+    (source: "mic" | "playback"): AnalyserNode | null =>
+      (source === "mic" ? getMicAnalyser?.() : getPlaybackAnalyser?.()) ?? null,
+    [getMicAnalyser, getPlaybackAnalyser]
+  );
 
   // Persist the browser-side transport/signal quality with the session
   // evidence. One report per second is enough for QA without adding noisy
@@ -363,6 +378,7 @@ export function useHelmetAgent() {
       voicePersonality: voicePersonalityRef.current,
       ...(voiceProviderRef.current ? { voiceProvider: voiceProviderRef.current } : {}),
       ...(equalizerRef.current ? { equalizer: equalizerRef.current } : {}),
+      ...(equalizerEnabledRef.current ? {} : { equalizerOff: true }),
       testerId: lastNonEmptyTesterIdRef.current,
       testingCampaignId: testingCampaignIdRef.current,
       testingTestCaseId: testingTestCaseIdRef.current,
@@ -389,7 +405,8 @@ export function useHelmetAgent() {
     try {
       const nextHealth = await fetchAgentHealth();
       if (!nextHealth || seq !== healthRequestSeqRef.current) return;
-      equalizerOptionsRef.current = nextHealth.voice?.equalizer;
+      // Only the ten-band shape is usable; an older relay's offer is ignored.
+      equalizerOptionsRef.current = usableEqualizerOptions(nextHealth.voice?.equalizer);
       setHealth(nextHealth);
       setProvider(nextHealth.provider);
       setCapabilities(nextHealth.capabilities);
@@ -517,7 +534,11 @@ export function useHelmetAgent() {
       // restored/previous-session turn could tag the wrong turn.
       setFeedbackFloorId(transcriptTurnRef.current);
       const location = locationRef.current;
-      const sessionEqualizer = equalizerForSession(equalizerRef.current, equalizerOptionsRef.current);
+      const sessionEqualizer = equalizerForSession(
+        equalizerRef.current,
+        equalizerOptionsRef.current,
+        equalizerEnabledRef.current
+      );
       socket.send(
         JSON.stringify({
           type: "session.start",
@@ -875,20 +896,34 @@ export function useHelmetAgent() {
   // Choose the voice equaliser (null = the relay default). Like the backend
   // it is fixed at session start, so a live session restarts — debounced, so
   // dragging a slider restarts once, after the last change.
+  const scheduleEqualizerRestart = useCallback(() => {
+    cancelEqualizerRestart();
+    if (!socketRef.current || !equalizerOptionsRef.current?.adjustable) return;
+    equalizerRestartTimerRef.current = window.setTimeout(() => {
+      equalizerRestartTimerRef.current = null;
+      restartSession();
+    }, EQUALIZER_RESTART_DEBOUNCE_MS);
+  }, [cancelEqualizerRestart, restartSession]);
+
   const setEqualizer = useCallback(
     (choice: VoiceEqualizer | null) => {
       const next = choice ? normalizeEqualizer(choice) : null;
       equalizerRef.current = next;
       setEqualizerState(next);
       persistSettings();
-      cancelEqualizerRestart();
-      if (!socketRef.current || !equalizerOptionsRef.current?.adjustable) return;
-      equalizerRestartTimerRef.current = window.setTimeout(() => {
-        equalizerRestartTimerRef.current = null;
-        restartSession();
-      }, EQUALIZER_RESTART_DEBOUNCE_MS);
+      scheduleEqualizerRestart();
     },
-    [cancelEqualizerRestart, persistSettings, restartSession]
+    [persistSettings, scheduleEqualizerRestart]
+  );
+
+  const setEqualizerEnabled = useCallback(
+    (enabled: boolean) => {
+      equalizerEnabledRef.current = enabled;
+      setEqualizerEnabledState(enabled);
+      persistSettings();
+      scheduleEqualizerRestart();
+    },
+    [persistSettings, scheduleEqualizerRestart]
   );
 
   const setTesterId = useCallback(
@@ -1360,11 +1395,13 @@ export function useHelmetAgent() {
     latencyMs,
     packetStats,
     voiceLevel,
+    getVoiceAnalyser,
     transcript,
     voiceGender,
     voicePersonality,
     voiceProvider,
     equalizer,
+    equalizerEnabled,
     sessionProvider: connectionState === "ready" ? sessionProvider : null,
     testerId,
     testingCampaignId,
@@ -1391,6 +1428,7 @@ export function useHelmetAgent() {
     setVoicePersonality,
     setVoiceProvider,
     setEqualizer,
+    setEqualizerEnabled,
     setTesterId,
     setTestingCampaignId,
     setTestingTestCaseId,

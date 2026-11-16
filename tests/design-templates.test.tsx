@@ -10,7 +10,7 @@ import {
   loadStoredSettings,
   normalizeStoredSettings,
   saveStoredSettings,
-  saveStoredTemplate
+  saveStoredAppearance
 } from "../src/lib/persistence";
 import {
   applyAppearance,
@@ -300,10 +300,10 @@ describe("viewer template persistence", () => {
 
   it("survives the voice session rewriting its settings", () => {
     stubStorage();
-    saveStoredTemplate("beacon");
+    saveStoredAppearance({ template: "beacon" });
     saveStoredSettings({ voiceGender: "male" });
     expect(loadStoredSettings()).toMatchObject({ voiceGender: "male", template: "beacon" });
-    saveStoredTemplate(undefined);
+    saveStoredAppearance({ template: undefined });
     expect(loadStoredSettings()).not.toHaveProperty("template");
     expect(loadStoredSettings()).toMatchObject({ voiceGender: "male" });
   });

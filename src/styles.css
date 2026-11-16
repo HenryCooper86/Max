@@ -405,6 +405,49 @@ time,
   stroke-dasharray: 2 6;
 }
 
+/* Spectrum styles (bars, mirror, dots, ring): drawn in the stage colour,
+   with the peak caps and ring core taking the hazard tint when one is up. */
+.visorSpectrum rect,
+.visorSpectrum circle {
+  fill: currentColor;
+}
+
+.visorSpectrum.ring line {
+  stroke: currentColor;
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.visorSpectrum .visorCap {
+  opacity: 0.85;
+}
+
+.visorSpectrum.ring .visorRingCore {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  opacity: 0.6;
+}
+
+.visorStage:is(.hazard-caution, .hazard-critical) :is(.visorCap, .visorRingCore) {
+  fill: var(--visor-tint);
+  stroke: var(--visor-tint);
+}
+
+.visorStage.hazard-caution .visorRingCore,
+.visorStage.hazard-critical .visorRingCore {
+  fill: none;
+}
+
+.visorStage.viz-ring .visorTicks,
+.visorStage.viz-ring .visorDots {
+  display: none;
+}
+
+.visorStage.offline .visorSpectrum {
+  opacity: 0.5;
+}
+
 .visorWave {
   transform: scaleY(var(--visor-amp, 0.1));
   transform-box: view-box;
@@ -2181,23 +2224,31 @@ time,
   gap: 10px;
 }
 
-/* Voice equaliser: preset chips, the response preview, five band sliders. */
+/* Voice equaliser: a ten-band graphic EQ built like a hardware rack — a
+   preamp fader, a dB scale, ten faders in one row with their frequencies
+   underneath, and the response curve drawn through the fader caps. The row
+   never wraps: if large type makes it wider than the sheet it scrolls. */
 .eqPanel {
+  --eq-col: max(26px, 2.2em);
+  --eq-slot: 132px;
+  --eq-label: 22px;
   display: grid;
   min-width: 0;
-  gap: 14px;
+  gap: 12px;
 }
 
-.eqPresets {
+.eqToolbar {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
 }
 
-.eqChip {
+.eqPower {
   display: inline-flex;
-  min-height: 32px;
+  min-height: 36px;
   align-items: center;
+  gap: 8px;
   padding: 0 12px;
   border: var(--line-w) solid var(--line-strong);
   border-radius: var(--radius-pill);
@@ -2205,210 +2256,76 @@ time,
   color: var(--text-2);
   cursor: pointer;
   font-size: var(--fs-13);
-  transition:
-    background-color var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
 }
 
-.eqChip:hover:not(.active) {
+.eqPowerLamp {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--line-strong);
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.eqPower.on {
   color: var(--text);
 }
 
-.eqChip.active {
-  border-color: transparent;
-  background: var(--accent-soft);
-  color: var(--accent);
+.eqPower.on .eqPowerLamp {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-.eqChip.custom {
-  border-style: dashed;
-  cursor: default;
+.eqPresetField {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+  flex: 1 1 140px;
 }
 
-.eqChip.custom:not(.active) {
-  border-color: var(--line);
-}
-
-.eqCurve {
-  padding: 10px 10px 0;
+.eqPresetField select {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 32px 0 12px;
+  border: var(--line-w) solid var(--line-strong);
   border-radius: var(--radius-control);
   background: var(--surface-1);
-}
-
-.eqCurve svg {
-  display: block;
-  width: 100%;
-  height: 88px;
-  overflow: visible;
-}
-
-.eqCurveGrid {
-  stroke: var(--line);
-  stroke-width: 1;
-  vector-effect: non-scaling-stroke;
-}
-
-.eqCurveZero {
-  stroke: var(--line-strong);
-  stroke-width: 1;
-  stroke-dasharray: 3 4;
-  vector-effect: non-scaling-stroke;
-}
-
-.eqCurveFill {
-  fill: var(--accent-soft);
-}
-
-.eqCurveLine {
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 2;
-  stroke-linejoin: round;
-  vector-effect: non-scaling-stroke;
-}
-
-.eqAxis {
-  position: relative;
-  height: 24px;
-  color: var(--text-2);
-  font: var(--fs-12) / 24px var(--font-mono);
-}
-
-.eqAxis span {
-  position: absolute;
-  top: 0;
-  transform: translateX(-50%);
-}
-
-.eqBands {
-  display: grid;
-  gap: 4px;
-  container-type: inline-size;
-}
-
-.eqBand {
-  display: grid;
-  grid-template-areas: "label slider readout";
-  grid-template-columns: minmax(76px, 7.5em) minmax(0, 1fr) 4.75em;
-  align-items: center;
-  gap: 0 12px;
-  min-height: 40px;
-}
-
-.eqBand label {
-  display: grid;
-  grid-area: label;
-  font-size: var(--fs-13);
-  line-height: 1.25;
-}
-
-.eqBand input[type="range"] {
-  grid-area: slider;
-}
-
-.eqBand .eqReadout {
-  grid-area: readout;
-}
-
-/* Narrow sheets and large type: the slider gets its own full-width line. */
-@container (max-width: 400px) {
-  .eqBand {
-    grid-template-areas:
-      "label readout"
-      "slider slider";
-    grid-template-columns: minmax(0, 1fr) auto;
-    padding-bottom: 2px;
-  }
-
-  .eqBand label {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-  }
-}
-
-.eqBand small {
-  color: var(--text-2);
-  font: var(--fs-12) / 1.3 var(--font-mono);
-}
-
-.eqBand input[type="range"] {
-  width: 100%;
-  height: 32px;
-  margin: 0;
-  background: transparent;
-  cursor: pointer;
-  appearance: none;
-  -webkit-appearance: none;
-}
-
-.eqBand input[type="range"]::-webkit-slider-runnable-track {
-  height: 4px;
-  border-radius: 2px;
-  background: linear-gradient(
-    to right,
-    var(--eq-track) var(--eq-from),
-    var(--accent) var(--eq-from) var(--eq-to),
-    var(--eq-track) var(--eq-to)
-  );
-}
-
-.eqBand input[type="range"]::-moz-range-track {
-  height: 4px;
-  border-radius: 2px;
-  background: linear-gradient(
-    to right,
-    var(--eq-track) var(--eq-from),
-    var(--accent) var(--eq-from) var(--eq-to),
-    var(--eq-track) var(--eq-to)
-  );
-}
-
-.eqBand input[type="range"]::-webkit-slider-thumb {
-  width: 20px;
-  height: 20px;
-  margin-top: -8px;
-  border: 2px solid var(--surface-2);
-  border-radius: 50%;
-  background: var(--text);
-  box-shadow: 0 0 0 var(--line-w) var(--line-strong);
-  -webkit-appearance: none;
-}
-
-.eqBand input[type="range"]::-moz-range-thumb {
-  width: 16px;
-  height: 16px;
-  border: 2px solid var(--surface-2);
-  border-radius: 50%;
-  background: var(--text);
-}
-
-.eqBand input[type="range"]:focus-visible {
-  outline-offset: 4px;
-}
-
-.eqBand {
-  --eq-track: color-mix(in srgb, var(--text) 30%, transparent);
-}
-
-.eqReadout {
   color: var(--text);
-  font: var(--fs-13) / 1 var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-  white-space: nowrap;
+  cursor: pointer;
+  font-size: var(--fs-13);
+  appearance: none;
 }
 
-.eqFoot {
-  display: flex;
-  justify-content: flex-end;
+.eqPresetField select:hover:not(:disabled) {
+  border-color: var(--line-hover);
+}
+
+.eqPresetCaret {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  color: var(--text-2);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.eqPresetFixed {
+  color: var(--text);
+  font-size: var(--fs-15);
+}
+
+.eqPresetNote {
+  margin: -4px 0 0;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  line-height: 1.45;
 }
 
 .eqReset {
   display: inline-flex;
-  min-height: 32px;
+  min-height: 36px;
   align-items: center;
   gap: 6px;
+  margin-left: auto;
   padding: 0 10px;
   border: 0;
   border-radius: var(--radius-control);
@@ -2423,8 +2340,282 @@ time,
   color: var(--text);
 }
 
-.eqPanel.readOnly .eqHead .settingsValue {
-  text-align: left;
+/* The rack: an inset console on the sheet's own surface. */
+.eqRack {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border-radius: var(--radius-control);
+  background: var(--surface-1);
+  box-shadow: inset 0 0 0 var(--line-w) var(--line);
+  scrollbar-color: var(--scrollbar) transparent;
+  scrollbar-width: thin;
+}
+
+.eqConsole {
+  display: grid;
+  min-width: min-content;
+  grid-template-columns: var(--eq-col) auto minmax(0, 1fr);
+  align-items: start;
+  gap: 0 6px;
+  padding: 6px 8px 4px;
+  font-size: var(--fs-12);
+}
+
+.eqFader {
+  display: grid;
+  grid-template-rows: var(--eq-label) var(--eq-slot) var(--eq-label);
+  justify-items: center;
+  min-width: var(--eq-col);
+}
+
+.eqFader.preamp {
+  padding-right: 6px;
+  border-right: var(--line-w) solid var(--line);
+}
+
+.eqFaderValue,
+.eqFaderLabel {
+  align-self: center;
+  color: var(--text-2);
+  font: 1em / 1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.eqFader.moved .eqFaderValue {
+  color: var(--accent);
+}
+
+.eqScale {
+  display: flex;
+  height: var(--eq-slot);
+  margin-top: var(--eq-label);
+  flex-direction: column;
+  justify-content: space-between;
+  color: var(--text-2);
+  font: 1em / 1 var(--font-mono);
+  text-align: right;
+}
+
+.eqScale span {
+  transform: translateY(-50%);
+}
+
+.eqScale span:first-child {
+  transform: none;
+}
+
+.eqScale span:last-child {
+  transform: translateY(0);
+}
+
+.eqBank {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(10, minmax(var(--eq-col), 1fr));
+}
+
+.eqCurve {
+  position: absolute;
+  top: var(--eq-label);
+  left: 0;
+  width: 100%;
+  height: var(--eq-slot);
+  overflow: visible;
+  pointer-events: none;
+}
+
+.eqGrid {
+  stroke: var(--line);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.eqGrid.zero {
+  stroke: var(--line-strong);
+  stroke-dasharray: 3 4;
+}
+
+.eqCurveFill {
+  fill: var(--accent-soft);
+}
+
+.eqCurveLine {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+/* A fader: a thin groove, the accent run from 0 dB to the value, and a cap. */
+.eqSlot {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 4px;
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.eqSlot[aria-disabled="true"] {
+  cursor: default;
+}
+
+.eqSlot:focus-visible {
+  outline-offset: 1px;
+}
+
+.eqGroove,
+.eqFill {
+  position: absolute;
+  left: 50%;
+  width: 3px;
+  border-radius: 2px;
+  transform: translateX(-50%);
+}
+
+.eqGroove {
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--text) 22%, transparent);
+}
+
+.eqFill {
+  background: var(--accent);
+}
+
+.eqCap {
+  position: absolute;
+  left: 50%;
+  width: min(20px, 78%);
+  height: 10px;
+  border-radius: 3px;
+  background: var(--accent);
+  box-shadow:
+    inset 0 -1px 0 color-mix(in srgb, var(--on-accent) 35%, transparent),
+    0 0 0 var(--line-w) var(--surface-1);
+  transform: translate(-50%, -50%);
+}
+
+.eqCap::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 3px;
+  left: 3px;
+  height: 1px;
+  background: var(--on-accent);
+  opacity: 0.6;
+}
+
+.eqSlot:focus-visible .eqCap,
+.eqSlot:active .eqCap {
+  box-shadow:
+    0 0 0 var(--line-w) var(--surface-1),
+    0 0 0 calc(var(--line-w) + 3px) var(--accent-soft);
+}
+
+.eqPanel.off .eqConsole,
+.eqPanel.readOnly .eqConsole {
+  opacity: 0.55;
+}
+
+.eqPanel.off .eqCap,
+.eqPanel.off .eqFill,
+.eqPanel.off .eqCurveLine {
+  filter: grayscale(1);
+}
+
+@media (max-width: 480px) {
+  .eqPanel {
+    --eq-col: max(24px, 2em);
+    --eq-slot: 112px;
+  }
+
+  .eqConsole {
+    gap: 0 4px;
+    padding-inline: 4px;
+  }
+
+  .eqFader.preamp {
+    padding-right: 4px;
+  }
+}
+
+/* Settings → Appearance → Voice display: five small lenses. */
+.vizPicker {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.vizOption {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 10px 6px 8px;
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface-1);
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: var(--fs-13);
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+.vizOption:hover {
+  border-color: var(--line-hover);
+}
+
+.vizOption.active {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.vizOption:has(input:focus-visible) {
+  outline: var(--focus-w) solid var(--accent);
+  outline-offset: 2px;
+}
+
+.vizPreview {
+  display: block;
+  width: 64px;
+  height: 30px;
+  flex: none;
+}
+
+.vizPreviewLens {
+  fill: var(--bg);
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+
+.vizPreviewMark {
+  fill: var(--text-2);
+  stroke: none;
+}
+
+.vizPreview.wave .vizPreviewMark,
+.vizPreview.ring .vizPreviewMark {
+  fill: none;
+  stroke: var(--text-2);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+
+.vizOption.active .vizPreviewMark {
+  fill: var(--accent);
+}
+
+.vizOption.active .vizPreview.wave .vizPreviewMark,
+.vizOption.active .vizPreview.ring .vizPreviewMark {
+  fill: none;
+  stroke: var(--accent);
 }
 
 @media (max-width: 480px) {

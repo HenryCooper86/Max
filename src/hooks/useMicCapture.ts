@@ -4,6 +4,7 @@
 
 import { useCallback, useRef, useState, type MutableRefObject } from "react";
 import { createPacketWindow, recordDroppedFrame, recordSentFrame, type PacketWindow } from "../../shared/audio";
+import { createVoiceAnalyser } from "../lib/visualizer";
 import { DEFAULT_AUDIO_PROCESSING, DEFAULT_PACKET_STATS, SAMPLE_RATE } from "../lib/constants";
 import { readAudioProcessingSettings } from "../lib/utils";
 import type { AudioProcessingState, PacketStats, WorkletMessage } from "../types";
@@ -24,6 +25,9 @@ export function useMicCapture({ socketRef, transmittingRef, providerReadyRef }: 
   const streamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
+  // A read-only tap for the voice display: a side branch off the mic source,
+  // never in the capture path, so it cannot change what is sent.
+  const analyserRef = useRef<AnalyserNode | null>(null);
   // In-flight setup promise: two rapid start triggers (double Space press,
   // double-click) must share one getUserMedia, or the loser's MediaStream
   // leaks (mic indicator stays on) and both worklets stream duplicate frames.
@@ -159,6 +163,7 @@ export function useMicCapture({ socketRef, transmittingRef, providerReadyRef }: 
 
         source.connect(workletNode);
         workletNode.connect(audioContext.destination);
+        analyserRef.current = createVoiceAnalyser(audioContext, source);
 
         streamRef.current = stream;
         audioContextRef.current = audioContext;
@@ -188,6 +193,7 @@ export function useMicCapture({ socketRef, transmittingRef, providerReadyRef }: 
 
   const releaseMic = useCallback(() => {
     transmittingRef.current = false;
+    analyserRef.current = null;
     micGenerationRef.current += 1;
     micSetupRef.current = null;
     if (workletNodeRef.current) {
@@ -219,8 +225,11 @@ export function useMicCapture({ socketRef, transmittingRef, providerReadyRef }: 
     setVoiceLevel(0);
   }, []);
 
+  const getMicAnalyser = useCallback(() => analyserRef.current, []);
+
   return {
     voiceLevel,
+    getMicAnalyser,
     packetStats,
     setPacketStats,
     audioProcessing,

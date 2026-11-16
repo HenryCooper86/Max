@@ -13,11 +13,12 @@
   "logoBackground": "#0B0C0E",
   "template": "daylight",
   "templateSwitching": true,
+  "visualizer": "bars",
   "accentColor": "#0B6BFF",
   "theme": {
     "radius-card": "20px"
   },
   "voice": {
-    "equalizer": { "preset": "open-ear", "presence": 3 }
+    "equalizer": { "preset": "open-ear", "preamp": 1 }
   }
 }

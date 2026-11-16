@@ -2,11 +2,12 @@
 // relay auth token. Everything is best-effort — storage being unavailable
 // (private browsing, quota) must never break the voice session.
 
-import type { VoiceEqualizer, VoicePersonality } from "../../shared/agent";
+import type { VoiceEqualizer, VoicePersonality, VoiceVisualizer } from "../../shared/agent";
 import { detectLanguage } from "../../shared/language";
 import { DEFAULT_TESTING_CAMPAIGN_ID, DEFAULT_TESTING_TEST_CASE_ID } from "../../shared/testing";
 import type { TranscriptItem, VoiceGender } from "../types";
 import { normalizeEqualizer } from "./equalizer";
+import { isVisualizer } from "./visualizer";
 
 // v1 used one device-global key. That let a second account on a shared
 // browser inherit the previous rider's local transcript, even though server
@@ -33,11 +34,17 @@ type StoredSettings = {
   testingTestCaseId?: string;
   testingRunId?: string;
   testingAssignmentId?: string;
-  /** Voice equaliser the viewer chose; absent = the relay default. */
+  /** Voice equaliser the viewer chose; absent = the relay default. A setting
+   *  stored in the retired five-band shape normalises away. */
   equalizer?: VoiceEqualizer;
+  /** True when the viewer switched the equaliser off. */
+  equalizerOff?: true;
   /** Design template the viewer chose (src/lib/templates.ts id). Owned by the
    *  appearance code, not the voice session — see saveStoredSettings. */
   template?: string;
+  /** Voice display style the viewer chose (src/lib/visualizer.ts id). Also
+   *  owned by the appearance code. */
+  visualizer?: VoiceVisualizer;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -93,9 +100,11 @@ export function normalizeStoredSettings(value: unknown): StoredSettings {
   }
   const equalizer = normalizeEqualizer(value.equalizer);
   if (equalizer) settings.equalizer = equalizer;
+  if (value.equalizerOff === true) settings.equalizerOff = true;
   if (typeof value.template === "string" && /^[a-z0-9][a-z0-9-]{0,31}$/.test(value.template)) {
     settings.template = value.template;
   }
+  if (isVisualizer(value.visualizer)) settings.visualizer = value.visualizer;
   return settings;
 }
 
@@ -195,18 +204,23 @@ export function loadStoredSettings(): StoredSettings {
   };
 }
 
+type AppearanceSettings = Pick<StoredSettings, "template" | "visualizer">;
+const APPEARANCE_KEYS = ["template", "visualizer"] as const;
+
 /** Replace the stored settings. The voice session writes its whole settings
- *  object at once and knows nothing about the viewer's template, so a call
- *  without a `template` key keeps the one already stored. */
+ *  object at once and knows nothing about the viewer's appearance choices,
+ *  so any appearance key the call leaves out keeps its stored value. */
 export function saveStoredSettings(settings: StoredSettings) {
-  const kept =
-    "template" in settings ? {} : { template: normalizeStoredSettings(readJson<unknown>(SETTINGS_KEY)).template };
+  const stored = normalizeStoredSettings(readJson<unknown>(SETTINGS_KEY));
+  const kept: AppearanceSettings = {};
+  for (const key of APPEARANCE_KEYS) if (!(key in settings) && stored[key]) Object.assign(kept, { [key]: stored[key] });
   writeJson(SETTINGS_KEY, normalizeStoredSettings({ ...kept, ...settings }));
 }
 
-/** Remember (or, with undefined, forget) the viewer's design template. */
-export function saveStoredTemplate(template: string | undefined) {
-  saveStoredSettings({ ...normalizeStoredSettings(readJson<unknown>(SETTINGS_KEY)), template });
+/** Remember (or, with undefined, forget) the viewer's template or voice
+ *  display choice. */
+export function saveStoredAppearance(patch: AppearanceSettings) {
+  saveStoredSettings({ ...normalizeStoredSettings(readJson<unknown>(SETTINGS_KEY)), ...patch });
 }
 
 /**

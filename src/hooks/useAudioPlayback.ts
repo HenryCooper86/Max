@@ -6,6 +6,7 @@ import { useCallback, useRef, useState, type MutableRefObject } from "react";
 import { detectLanguage } from "../../shared/language";
 import { PLAYBACK_GAIN, PLAYBACK_SAMPLE_RATE } from "../lib/constants";
 import { selectVoice, VOICE_LOCALE } from "../lib/speech";
+import { createVoiceAnalyser } from "../lib/visualizer";
 import { createWarningAudioPlayer, getWarningClip } from "../lib/warning-audio";
 import type { VoiceGender } from "../types";
 
@@ -21,6 +22,8 @@ export function useAudioPlayback({ voiceGenderRef, transmittingRef, onInterrupte
   const playbackCursorRef = useRef(0);
   const playbackSourcesRef = useRef<AudioBufferSourceNode[]>([]);
   const playbackGainRef = useRef<GainNode | null>(null);
+  // Read-only tap after the limiter for the voice display (what is heard).
+  const playbackAnalyserRef = useRef<AnalyserNode | null>(null);
   const deferredSpeechRef = useRef<string | null>(null);
   const warningGenerationRef = useRef(0);
   const [warningPlayer] = useState(() =>
@@ -118,6 +121,7 @@ export function useAudioPlayback({ voiceGenderRef, transmittingRef, onInterrupte
       gain.connect(limiter);
       limiter.connect(audioContext.destination);
       playbackGainRef.current = gain;
+      playbackAnalyserRef.current = createVoiceAnalyser(audioContext, limiter);
     }
     return gain;
   }, []);
@@ -212,11 +216,22 @@ export function useAudioPlayback({ voiceGenderRef, transmittingRef, onInterrupte
       playbackContextRef.current = null;
     }
     playbackGainRef.current = null;
+    playbackAnalyserRef.current = null;
     playbackCursorRef.current = 0;
     // Drop references to sources whose context is now closed; leaving them would
     // make the next stopAgentSpeech report speech and call .stop() on dead nodes.
     playbackSourcesRef.current = [];
   }, [warningPlayer]);
 
-  return { playPcm16, stopAgentSpeech, speak, speakWarning, ensurePlaybackContext, closePlayback };
+  const getPlaybackAnalyser = useCallback(() => playbackAnalyserRef.current, []);
+
+  return {
+    playPcm16,
+    stopAgentSpeech,
+    speak,
+    speakWarning,
+    ensurePlaybackContext,
+    closePlayback,
+    getPlaybackAnalyser
+  };
 }

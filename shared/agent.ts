@@ -550,46 +550,56 @@ export type AssistantSummary = {
   theme?: Record<string, string>;
   /** False when the owner pinned the template: clients hide their template picker. */
   templateSwitching?: boolean;
+  /** Visualiser style the owner chose for the live voice display. Clients
+   *  fall back to "wave"; viewers may pick their own unless the template is pinned. */
+  visualizer?: VoiceVisualizer;
   /** The owner's own logo, served by the relay (a path on the relay origin,
    *  e.g. "/brand/logo?v=1a2b3c"). SVG or PNG, square. Absent → clients show
    *  their built-in mark. Use it for the in-app mark and the page favicon. */
   logoUrl?: string;
 };
 
+/** Centre frequencies of the equaliser's ten bands, in Hz. A graphic
+ *  equaliser in the classic ten-slider layout, with the bands placed inside
+ *  the 12 kHz that 24 kHz speech audio actually carries. */
+export const EQUALIZER_FREQUENCIES = [60, 125, 250, 500, 1000, 2000, 3000, 4000, 6000, 9000] as const;
+
 /**
  * Voice equaliser settings, in decibels (-12…12). Applied by the relay to the
  * assistant's outgoing speech, so it sounds the same on every client and on a
  * board that plays raw PCM. `preset` names one of VoiceEqualizerOptions.presets;
- * explicit band values override the preset's.
+ * `bands` (one gain per EQUALIZER_FREQUENCIES entry) and `preamp` override the
+ * preset's when present.
  */
 export type VoiceEqualizer = {
   preset?: string;
-  /** Low shelf around 180 Hz — body; cut it under wind noise. */
-  bass?: number;
-  /** Peak around 1 kHz — fullness. */
-  mid?: number;
-  /** Peak around 3 kHz — consonants, the band that carries intelligibility. */
-  presence?: number;
-  /** High shelf around 7 kHz — air and sibilance. */
-  treble?: number;
-  /** Overall level after the bands. */
-  gain?: number;
+  /** Ten gains, lowest band first. */
+  bands?: number[];
+  /** Overall level, applied before the bands. */
+  preamp?: number;
 };
 
 export type VoiceEqualizerPreset = {
   id: string;
   label: string;
   description?: string;
-  bands: Required<Omit<VoiceEqualizer, "preset">>;
+  bands: number[];
+  preamp: number;
 };
 
 export type VoiceEqualizerOptions = {
   /** What a session gets when it does not ask for anything. */
   default: VoiceEqualizer;
   presets: VoiceEqualizerPreset[];
+  /** Centre frequency of each band, in Hz. */
+  frequencies: number[];
   /** Whether clients may send their own settings in session.start.equalizer. */
   adjustable: boolean;
 };
+
+/** How the live voice display is drawn. Like a media player's visualiser:
+ *  the same signal, a different look. */
+export type VoiceVisualizer = "wave" | "bars" | "mirror" | "dots" | "ring";
 
 /** "demo" needs no credentials; "live" is one realtime speech-to-speech
  *  socket; "pipeline" chains speech-to-text → chat model → text-to-speech. */

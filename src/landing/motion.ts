@@ -36,7 +36,11 @@ export function useScrollReveal(): void {
           if (entry.isIntersecting) (entry.target as HTMLElement).dataset.reveal = "in";
         }
       },
-      { rootMargin: "0px 0px -12% 0px", threshold: 0.08 }
+      // A phone scrolls a tall, narrow column quickly: there things arrive as
+      // soon as they touch the screen, so no one scrolls into a blank.
+      window.matchMedia?.("(max-width: 720px)").matches
+        ? { rootMargin: "0px 0px 8% 0px", threshold: 0 }
+        : { rootMargin: "0px 0px -12% 0px", threshold: 0.08 }
     );
     // The reset waits until the element is clear of the screen by a margin, so
     // nothing blinks out at the edge while it is still partly in view.

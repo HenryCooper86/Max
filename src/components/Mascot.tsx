@@ -170,7 +170,15 @@ type Props = {
 
 export function Mascot({ mood = "ready", className = "", label, followCursor = false, restOver }: Props) {
   const video = useRef<HTMLVideoElement | null>(null);
-  const [still] = useState(prefersReducedMotion);
+  const [still, setStill] = useState(prefersReducedMotion);
+  // A phone may refuse to autoplay (Low Power Mode, a data saver) and would
+  // then show a frozen frame under a play button. Ask once more, and if the
+  // answer is still no, show the still picture instead.
+  const playOrFallBack = () => {
+    const film = video.current;
+    if (!film || !film.paused) return;
+    film.play().catch(() => setStill(true));
+  };
   const flight = useCursorFlight(followCursor && !still, restOver);
 
   useEffect(() => {
@@ -199,6 +207,7 @@ export function Mascot({ mood = "ready", className = "", label, followCursor = f
               playsInline
               disablePictureInPicture
               preload="auto"
+              onCanPlay={playOrFallBack}
             >
               <source src={`${BASE}.mov`} type='video/mp4; codecs="hvc1"' />
               <source src={`${BASE}.webm`} type="video/webm" />

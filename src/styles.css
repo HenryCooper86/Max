@@ -10610,3 +10610,10 @@ button.opsCard:disabled {
   z-index: 20;
   width: clamp(84px, 12vw, 150px);
 }
+
+/* A phone has no margin for it: there the bird would sit on the text. */
+@media (max-width: 720px) {
+  .siteBird {
+    display: none;
+  }
+}

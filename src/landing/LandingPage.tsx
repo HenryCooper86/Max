@@ -130,7 +130,7 @@ function Demo() {
           "This is a scripted preview. Nothing connects to a server and no account or microphone is used: the lines are written in advance, to show what a session looks like on different devices."
         )}
       />
-      <div className="demoLayout">
+      <div className="demoLayout" data-reveal="">
         <AssistantPreview
           identity={{ name: "Max", device, template: activeTemplate, visualizer: activeVisualizer }}
           playing={playing}

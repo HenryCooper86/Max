@@ -20,30 +20,42 @@ function canObserve(): boolean {
 
 /**
  * Reveals every `[data-reveal]` element under the document as it scrolls into
- * view, once. Elements are only hidden while `data-reveal-ready` is set on
- * <html>, so a page whose script never runs still shows all of its content.
+ * view, and again each time it comes back: an element is reset once it is well
+ * off screen, above or below. Elements are only hidden while
+ * `data-reveal-ready` is set on <html>, so a page whose script never runs
+ * still shows all of its content.
  */
 export function useScrollReveal(): void {
   useEffect(() => {
     if (!canObserve()) return;
     const root = document.documentElement;
     const targets = Array.from(document.querySelectorAll<HTMLElement>("[data-reveal]"));
-    const observer = new IntersectionObserver(
+    const show = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
-          // On screen, or already scrolled past: a jump down the page by a
-          // menu link must not leave what it skipped hidden above.
-          if (!entry.isIntersecting && entry.boundingClientRect.bottom > 0) continue;
-          (entry.target as HTMLElement).dataset.reveal = "in";
-          observer.unobserve(entry.target);
+          if (entry.isIntersecting) (entry.target as HTMLElement).dataset.reveal = "in";
         }
       },
       { rootMargin: "0px 0px -12% 0px", threshold: 0.08 }
     );
-    for (const target of targets) observer.observe(target);
+    // The reset waits until the element is clear of the screen by a margin, so
+    // nothing blinks out at the edge while it is still partly in view.
+    const hide = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) (entry.target as HTMLElement).dataset.reveal = "";
+        }
+      },
+      { rootMargin: "12% 0px 12% 0px" }
+    );
+    for (const target of targets) {
+      show.observe(target);
+      hide.observe(target);
+    }
     root.dataset.revealReady = "";
     return () => {
-      observer.disconnect();
+      show.disconnect();
+      hide.disconnect();
       delete root.dataset.revealReady;
       for (const target of targets) target.dataset.reveal = "";
     };

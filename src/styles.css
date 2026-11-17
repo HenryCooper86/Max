@@ -10259,6 +10259,43 @@ button.opsCard:disabled {
     animation: loginCaret 1s steps(2, jump-none) infinite;
   }
 
+  /* The demo screen swings in from an angle and settles flat. */
+  [data-reveal-ready] .demoLayout > :first-child {
+    transition: transform 900ms var(--ease-out);
+  }
+
+  [data-reveal-ready] .demoLayout[data-reveal=""] > :first-child {
+    transform: perspective(1200px) rotateY(-14deg) rotateX(5deg) scale(0.93);
+  }
+
+  /* The notes beside the commands slide in from the left, one after another. */
+  [data-reveal-ready] .startNotes li {
+    transition:
+      opacity 560ms var(--ease-out),
+      transform 560ms var(--ease-out);
+    transition-delay: 160ms;
+  }
+
+  [data-reveal-ready] .startNotes li:nth-child(2) {
+    transition-delay: 240ms;
+  }
+
+  [data-reveal-ready] .startLayout[data-reveal=""] .startNotes li {
+    opacity: 0;
+    transform: translateX(-24px);
+  }
+
+  /* The way in glows slowly until it is pointed at. */
+  .startActions .siteButton:first-child:not(:hover) {
+    animation: siteBeckon 2.6s ease-in-out infinite;
+  }
+
+  @keyframes siteBeckon {
+    50% {
+      box-shadow: 0 0 24px 2px color-mix(in srgb, var(--accent) 55%, transparent);
+    }
+  }
+
   .siteBird {
     animation: siteBirdArrive 700ms cubic-bezier(0.3, 1.2, 0.5, 1) both;
   }

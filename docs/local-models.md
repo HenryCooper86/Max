@@ -53,15 +53,47 @@ What each stage needs from its server:
 
 Anything that exposes the endpoints above works; none of these is required.
 
-| Stage          | Open-weight models                                                              | Servers with an OpenAI-compatible API              |
-| -------------- | ------------------------------------------------------------------------------- | -------------------------------------------------- |
-| Speech-to-text | Whisper (large-v3, large-v3-turbo, small), Distil-Whisper, Parakeet, SenseVoice | Speaches, whisper.cpp server, LocalAI              |
-| Chat model     | Qwen, Llama, Gemma, Mistral, DeepSeek, Phi                                      | Ollama, llama.cpp server, vLLM, LM Studio, LocalAI |
-| Text-to-speech | Kokoro, Piper, XTTS-v2, CosyVoice, F5-TTS, Chatterbox, Orpheus                  | Kokoro-FastAPI, openedai-speech, Speaches, LocalAI |
+| Stage          | Open-weight models                                                                                       | Servers with an OpenAI-compatible API                                                                                |
+| -------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Speech-to-text | Whisper (large-v3, large-v3-turbo, small), Distil-Whisper, Parakeet, SenseVoice, MOSS-Transcribe-Diarize | Speaches, whisper.cpp server, LocalAI, SGLang Omni, vLLM                                                             |
+| Chat model     | Qwen, Llama, Gemma, Mistral, DeepSeek, Phi                                                               | Ollama, llama.cpp server, vLLM, LM Studio, LocalAI                                                                   |
+| Text-to-speech | Kokoro, Piper, XTTS-v2, CosyVoice, F5-TTS, Chatterbox, Orpheus, MOSS-TTS-Nano                            | Kokoro-FastAPI, openedai-speech, Speaches, LocalAI, [our MOSS-TTS-Nano adapter](../examples/moss-tts-nano/README.md) |
 
 Pick the chat model for your languages and hardware: it is the stage that decides how the assistant sounds in
 conversation and most of the response time. A model in the 7–8 B range answers comfortably on a recent laptop GPU;
 smaller ones suit a single-board computer.
+
+### OpenMOSS models
+
+[OpenMOSS](https://github.com/OpenMOSS) publishes open speech models that fit two of the three stages.
+
+**Speech-to-text: MOSS-Transcribe-Diarize** (0.9B, Apache-2.0, 50+ languages). Serve it with SGLang Omni or vLLM, which
+both give it the OpenAI transcription endpoint. It needs an NVIDIA GPU (CUDA 12 or 13); on a Mac, keep Whisper.
+
+```bash
+vllm serve OpenMOSS-Team/MOSS-Transcribe-Diarize --trust-remote-code --port 8000
+```
+
+```bash
+LOCAL_STT_BASE_URL=http://localhost:8000/v1
+LOCAL_STT_MODEL=OpenMOSS-Team/MOSS-Transcribe-Diarize
+```
+
+It labels speakers and times (`[0.52][S01]Where is my order?[1.87]`); the relay keeps only the words.
+
+**Text-to-speech: MOSS-TTS-Nano** (0.1B, Apache-2.0, about 20 languages, voice cloning). It runs on a CPU. Its own
+server has no OpenAI-style endpoint, so use [the adapter in examples/moss-tts-nano](../examples/moss-tts-nano/README.md):
+
+```bash
+LOCAL_TTS_BASE_URL=http://localhost:8890/v1
+LOCAL_TTS_MODEL=moss-tts-nano
+LOCAL_TTS_VOICE=Junhao
+LOCAL_TTS_FORMAT=wav
+```
+
+**Not yet usable as a backend.** MOSS-Speech (speech-to-speech on Qwen3-8B) ships only a Gradio demo, without streaming
+or an API. MOSS-Live (full-duplex, with tools) is offered as a hosted realtime API whose protocol is not published in its
+repository. Either can become a backend once it has a documented streaming interface.
 
 ### What to expect
 

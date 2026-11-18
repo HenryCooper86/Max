@@ -114,6 +114,15 @@ export function localPipelineSettings(): PipelineSettings {
   );
 }
 
+// Speaker labels and timestamps that diarizing speech servers (MOSS-Transcribe-Diarize:
+// "[0.52][S01]Hello there[1.87]") wrap around the words: [1.87], [00:01.87], [S01].
+const TRANSCRIPT_MARKUP = /\[(?:\d{1,2}:)?\d{1,2}(?::\d{2})?(?:[.,]\d+)?s?\]|\[\d+(?:\.\d+)?s?\]|\[S\d{1,3}\]/g;
+
+/** Just the words of a transcript, without diarization markup. */
+export function spokenText(transcript: string): string {
+  return transcript.replace(TRANSCRIPT_MARKUP, " ").replace(/\s+/g, " ").trim();
+}
+
 /** A local endpoint needs no key; a hosted one does. */
 export function pipelineConfigured(settings: PipelineSettings = pipelineSettings()): boolean {
   return [settings.stt, settings.llm, settings.tts].every(
@@ -448,7 +457,7 @@ export function createPipelineEngine(
       signal: AbortSignal.timeout(20_000)
     });
     if (!response.ok) throw await failure("Speech-to-text", response);
-    const text = ((await response.json()) as { text?: string }).text?.trim() ?? "";
+    const text = spokenText(((await response.json()) as { text?: string }).text ?? "");
     if (closed || mine !== generation) return;
     pendingUser = text || undefined;
     // An empty transcript still closes the turn the VAD opened.

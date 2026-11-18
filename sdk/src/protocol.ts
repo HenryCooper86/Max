@@ -14,6 +14,8 @@ export const DOWNLINK_SAMPLE_RATE = 24000;
 export const FRAME_SAMPLES = 320;
 /** The relay closes idle sessions with this code; clients must not auto-reconnect. */
 export const IDLE_CLOSE_CODE = 4001;
+/** The relay closes with this when the user has used up their voice minutes. */
+export const USAGE_LIMIT_CLOSE_CODE = 4003;
 /** Longest context string the relay accepts. */
 const MAX_CONTEXT_CHARS = 2000;
 /** Longest typed message the relay accepts. */
@@ -249,9 +251,10 @@ export function reconnectDelayMs(attempt: number): number {
   return Math.min(8000, 1000 * 2 ** Math.max(0, attempt - 1));
 }
 
-/** Whether to reconnect after a close. Idle closes (4001) are final. */
+/** Whether to reconnect after a close. Idle closes (4001) and used-up voice
+ *  minutes (4003) are final: reconnecting would only be refused again. */
 export function shouldReconnect(code: number, attempt: number, enabled = true): boolean {
-  return enabled && code !== IDLE_CLOSE_CODE && attempt <= MAX_RECONNECT_ATTEMPTS;
+  return enabled && code !== IDLE_CLOSE_CODE && code !== USAGE_LIMIT_CLOSE_CODE && attempt <= MAX_RECONNECT_ATTEMPTS;
 }
 
 /**

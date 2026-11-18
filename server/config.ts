@@ -11,6 +11,13 @@ import { resolveVoiceProviderId, voiceProvider, voiceProviderSummaries } from ".
 import { config } from "./runtime-config";
 export { config };
 
+/** The monthly voice-minute limit and webhook, as the startup log states them. */
+function usageLimitLine(): string {
+  const minutes = Number(process.env.USAGE_MONTHLY_MINUTES);
+  const limit = Number.isFinite(minutes) && minutes > 0 ? `${minutes} min per user per month` : "off";
+  return `${limit} · usage webhook ${process.env.USAGE_WEBHOOK_URL?.trim() ? "on" : "off"}`;
+}
+
 /** True for every backend that spends a real provider's quota. */
 function usesLiveBackend(): boolean {
   return config.voiceProvider !== "mock";
@@ -39,6 +46,7 @@ export function describeConfig(): string[] {
     `Weather context: Open-Meteo best-effort + ${config.defaultWeatherLocation.source} fallback`,
     `Weather mid-ride refresh: ${config.weatherRefreshMs ? `every ${Math.round(config.weatherRefreshMs / 60000)} min` : "off"}`,
     `Wake word ("${assistant().wake.label}"): ${wakeWordActive(config.wakeWord) ? "on" : "off"}`,
+    `Usage limit: ${usageLimitLine()}`,
     `Server tools: ${
       serverTools().length
         ? serverTools()

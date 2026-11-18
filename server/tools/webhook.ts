@@ -88,8 +88,18 @@ export function plainHttpAllowed(hostname: string): boolean {
 
 /** True when a URL may carry a call: https anywhere, plain http only to local
  *  or private hosts. Checked on the configured URL and again once expanded. */
-function urlAllowed(url: URL): boolean {
+export function urlAllowed(url: URL): boolean {
   return url.protocol === "https:" || (url.protocol === "http:" && plainHttpAllowed(url.hostname));
+}
+
+/** The signature headers every relay webhook carries: an HMAC-SHA256 of
+ *  `<timestamp>.<body>` keyed with the shared secret. */
+export function signatureHeaders(body: string, secret: string, at: number): Record<string, string> {
+  const timestamp = String(at);
+  return {
+    "x-voice-agent-timestamp": timestamp,
+    "x-voice-agent-signature": `sha256=${createHmac("sha256", secret).update(`${timestamp}.${body}`).digest("hex")}`
+  };
 }
 
 /** Parses one `tools[]` entry of the config file. */
@@ -200,12 +210,7 @@ export async function callWebhook(
       ...(context.userId ? { userId: context.userId } : {})
     }
   });
-  if (secret) {
-    const timestamp = String(now());
-    headers["x-voice-agent-timestamp"] = timestamp;
-    headers["x-voice-agent-signature"] =
-      `sha256=${createHmac("sha256", secret.value).update(`${timestamp}.${body}`).digest("hex")}`;
-  }
+  if (secret) Object.assign(headers, signatureHeaders(body, secret.value, now()));
   const response = await request(url.value, {
     method: webhook.method,
     headers: { "content-type": "application/json", accept: "application/json, text/plain", ...headers },

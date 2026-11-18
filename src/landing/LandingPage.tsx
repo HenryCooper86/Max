@@ -57,13 +57,11 @@ function Hero({
   return (
     <section className="hero" aria-labelledby="hero-title" ref={heroRef}>
       <div className="heroText">
-        <h1 id="hero-title">
-          {say("给人们戴着的东西，做一个自己的语音助手。", "Your own voice assistant, for the things people wear.")}
-        </h1>
+        <h1 id="hero-title">{say("给你的产品加上会说话的智能体。", "A voice agent for your product.")}</h1>
         <p>
           {say(
-            "Max 是一个开放框架，用来做头盔、眼镜和头显里的免手语音助手。设备、名字、外观、声音和模型都由你决定，跑在你自己的服务器上。",
-            "Max is an open framework for hands-free assistants in helmets, glasses and headsets. You choose the device, the name, the look, the voice and the model, and you run it yourself."
+            "Max 是开源的实时语音智能体工具包。用一个 script 标签放进网站或应用，或者装进头盔、眼镜和头显；接入你自己的工具，选择任意语音模型，自己部署或交给 Max Cloud。",
+            "Max is an open-source kit for realtime voice agents. Add one to a website or app with a single script tag, or put it in a helmet, glasses or a headset. Give it your own tools, pick any voice model, and run it yourself or let Max Cloud host it."
           )}
         </p>
         <div className="heroActions">
@@ -403,7 +401,10 @@ function HowItWorks() {
       <SectionHead
         id="how"
         title={say("它是怎么组成的", "How it fits together")}
-        lede={say("全部自行部署，没有托管服务。", "Everything is self-hosted. There is no hosted service.")}
+        lede={say(
+          "全部可以免费自行部署；也可以让 Max Cloud 替你运行中继。",
+          "Self-host all of it for free, or let Max Cloud run the relay for you."
+        )}
       />
       <ol className="howSteps revealStagger" data-reveal="">
         {steps.map((step) => (

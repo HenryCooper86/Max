@@ -38,6 +38,8 @@ export type AgentSessionHooks = {
   /** What the session token this socket opened with says about the session
    *  (server/session-tokens.ts). */
   tokenGrant?: { userId?: string; context?: string };
+  /** Every event the provider sends the client (usage metering counts tool calls). */
+  onServerEvent?(payload: unknown): void;
 };
 
 const MAX_TEXT_INPUT_CHARS = 2_000;
@@ -666,6 +668,7 @@ export class AgentSessionController {
       {
         serverEvent: (payload, bytes) => {
           metrics.serverEvent(bytes);
+          this.hooks?.onServerEvent?.(payload);
           recordTesterServerEvent(this.relaySessionId, payload, bytes);
           if (this.authenticatedUser) recordUserMemoryEvent(this.authenticatedUser.id, payload);
           if (this.registeredDeviceId && isFinalRiderTranscript(payload)) {

@@ -771,6 +771,14 @@ export type AgentHealth = {
  */
 export const IDLE_CLOSE_CODE = 4001;
 
+/**
+ * WebSocket close code when the session's user has used up their monthly
+ * voice minutes (USAGE_MONTHLY_MINUTES, server/usage.ts). Final, like an idle
+ * close: reconnecting would only be refused again. An `error` event with the
+ * reason comes first.
+ */
+export const USAGE_LIMIT_CLOSE_CODE = 4003;
+
 export const MOCK_CAPABILITIES: ProviderCapabilities = {
   serverVad: true,
   synthesizedAudio: false,

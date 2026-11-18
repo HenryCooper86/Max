@@ -35,6 +35,8 @@ import {
 import { buildHealth, config, describeConfig, readinessIssues, validateConfig } from "./config";
 import { sessionTokens } from "./session-tokens";
 import { installServerTools } from "./tools/registry";
+import { createUsageMeter, monthOf, usageSettingsFromEnv } from "./usage";
+import { USAGE_LIMIT_CLOSE_CODE } from "../shared/agent";
 import { createLogger, shortSessionId } from "./logger";
 import {
   clearAllTesterData,
@@ -121,6 +123,7 @@ server.requestTimeout = 30_000;
 server.keepAliveTimeout = 5_000;
 server.maxRequestsPerSocket = 1_000;
 const activeSessions = new Map<WebSocket, AgentSessionController>();
+const usageMeter = createUsageMeter(usageSettingsFromEnv());
 const log = createLogger("relay");
 const companionStore = createCompanionBindingStore();
 const companionRegistry = createCompanionRegistry({ store: companionStore, log });
@@ -244,6 +247,23 @@ app.use(
       .send(existsSync(sdkDir) ? "Not found." : "The SDK has not been built. Run: npm run build:sdk");
   }
 );
+
+// Voice minutes per user and month (server/usage.ts), for billing and limits.
+// Owner-only: the relay token, or an open relay in development.
+app.get("/v1/usage", (req, res) => {
+  const open = !config.relayAuthToken && !authActive();
+  if (!open && !relayTokenPresented(req)) {
+    res.status(401).json({ ok: false, error: "Send the relay token: Authorization: Bearer <RELAY_AUTH_TOKEN>." });
+    return;
+  }
+  const month = typeof req.query.month === "string" ? req.query.month : monthOf(Date.now());
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+    res.status(400).json({ ok: false, error: "month must look like 2026-11" });
+    return;
+  }
+  const userId = typeof req.query.userId === "string" && req.query.userId ? req.query.userId : undefined;
+  res.json(usageMeter.report(month, userId));
+});
 
 app.get("/health", (_req, res) => {
   // Liveness stays small and public. Evidence moved to scoped /testing APIs;
@@ -957,6 +977,31 @@ wss.on("connection", (client, request) => {
     });
   }
   sessionLog.info("client connected", { address, region, provider: config.voiceProvider });
+
+  // Usage: whose minutes these are, and whether they have any left.
+  const usageUserId = authenticatedUser?.id ?? tokenGrant?.userId;
+  const usageLimitReached = () => {
+    sessionLog.info("monthly voice minutes used up", { userId: usageUserId });
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(
+        JSON.stringify({ type: "error", message: "This account has used all of its voice minutes for this month." })
+      );
+      client.close(USAGE_LIMIT_CLOSE_CODE, "usage limit reached");
+    }
+  };
+  if (usageMeter.overLimit(usageUserId)) {
+    // Refused before any session exists: nothing else to clean up.
+    unregisterAuthenticatedConnection(client);
+    usageLimitReached();
+    return;
+  }
+  const meteredSession = usageMeter.open(randomUUID(), usageUserId);
+  const usageCheck = usageMeter.limitMinutes()
+    ? setInterval(() => {
+        if (usageMeter.overLimit(usageUserId)) usageLimitReached();
+      }, 15_000)
+    : undefined;
+  usageCheck?.unref();
   metrics.sessionOpened();
   trackClient(client);
   const session = new AgentSessionController(
@@ -969,6 +1014,10 @@ wss.on("connection", (client, request) => {
     {
       deviceRegistrationAuthorized: relayTokenPresented(request) || (!config.relayAuthToken && !authActive()),
       ...(tokenGrant ? { tokenGrant: { userId: tokenGrant.userId, context: tokenGrant.context } } : {}),
+      onServerEvent: (payload) => {
+        const event = payload as { type?: unknown; state?: unknown };
+        if (event?.type === "tool.activity" && event.state === "started") meteredSession.toolCall();
+      },
       onDeviceRegistered: (peer) => companionRegistry.attachHelmet(peer),
       onRiderUtterance: (deviceId, text) => companionRegistry.handleRiderUtterance(deviceId, text)
     }
@@ -987,6 +1036,8 @@ wss.on("connection", (client, request) => {
   });
 
   client.on("close", async (code) => {
+    if (usageCheck) clearInterval(usageCheck);
+    meteredSession.close();
     unregisterAuthenticatedConnection(client);
     activeSessions.delete(client);
     sessionLog.info("client disconnected", { code });
@@ -1089,6 +1140,7 @@ function shutdown(signal: NodeJS.Signals): Promise<void> {
     await companionRegistry.close();
     await companionStore.flush();
     await Promise.allSettled([...activeSessions.values()].map((session) => session.close()));
+    usageMeter.flush();
     await Promise.allSettled([flushAccounts(), flushUserMemory(), flushTestingHistory()]);
     closeTestingStore();
     await serverClosed;

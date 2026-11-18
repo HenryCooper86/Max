@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-11-18 — Pricing, usage metering and monthly allowances
+
+- A pricing page at `/pricing`: Open source (free, MIT), Max Cloud ($0.02 a
+  minute with your own model key, first 1,000 minutes a month free, early
+  access) and Enterprise (custom). Waitlist and sales conversations go to
+  GitHub Discussions. The landing page now pitches voice agents for any
+  product, and links the public repository.
+- The relay counts voice minutes and tool calls per user and month
+  (`usage.json`), reports them at `GET /v1/usage`, and can give each user a
+  monthly allowance (`USAGE_MONTHLY_MINUTES`): a user who runs out gets an
+  error and close code 4003, which the web SDK does not retry.
+- `USAGE_WEBHOOK_URL` POSTs each finished session's usage, signed like tool
+  webhooks, so the owner can bill their own customers (Stripe example in
+  docs/usage-and-billing.md).
+
 ## 2026-11-18 — Voice agents for any product: tools, session tokens, web SDK
 
 - Tools. The assistant can call functions mid-conversation on OpenAI

@@ -3,6 +3,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { LanguageProvider } from "../src/components/LanguageToggle";
 import { LandingPage } from "../src/landing/LandingPage";
+import { PricingPage } from "../src/landing/PricingPage";
+import { CLOUD_PRICE_PER_MINUTE_USD, CONTACT_URL, PLANS } from "../src/lib/pricing";
 import { DEVICES } from "../src/lib/device-catalog";
 import { REPOSITORY_URL, resolveRoute } from "../src/lib/routes";
 import { demoFrame, scriptForDevice, scriptLength } from "../src/lib/scripted-demo";
@@ -14,6 +16,8 @@ describe("top-level routing", () => {
     expect(at("/")).toEqual({ surface: "landing" });
     expect(at("")).toEqual({ surface: "landing" });
     expect(at("/nope")).toEqual({ surface: "landing" });
+    expect(at("/pricing")).toEqual({ surface: "pricing" });
+    expect(at("/pricing/")).toEqual({ surface: "pricing" });
     expect(at("/", "#demo")).toEqual({ surface: "landing" });
   });
 
@@ -103,8 +107,28 @@ describe("landing page", () => {
     }
   });
 
-  it("links the repository only once there is one", () => {
-    expect(REPOSITORY_URL).toBe("");
-    expect(render(false)).not.toContain("GitHub");
+  it("links the public repository", () => {
+    expect(REPOSITORY_URL).toBe("https://github.com/HenryCooper86/Max");
+    expect(render(false)).toContain(`href="${REPOSITORY_URL}"`);
+  });
+});
+
+describe("pricing page", () => {
+  const html = renderToStaticMarkup(
+    <LanguageProvider>
+      <PricingPage />
+    </LanguageProvider>
+  );
+
+  it("shows every plan with its price and a way to act on it", () => {
+    for (const plan of PLANS) {
+      expect(html).toContain(plan.name.zh);
+      expect(html).toContain(plan.cta.href.replace(/&/g, "&amp;"));
+    }
+    expect(html).toContain(`$${CLOUD_PRICE_PER_MINUTE_USD}`);
+  });
+
+  it("sends business conversations to the repository's Discussions", () => {
+    expect(CONTACT_URL.startsWith(`${REPOSITORY_URL}/discussions`)).toBe(true);
   });
 });

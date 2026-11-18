@@ -3,12 +3,13 @@ import { LanguageProvider, LanguageToggle, useLanguage } from "../components/Lan
 import { fetchCurrentUser } from "../lib/auth";
 import { localized } from "../lib/i18n";
 import { loadStoredSettings } from "../lib/persistence";
-import { APP_PATH, BUILD_PATH, REPOSITORY_URL } from "../lib/routes";
+import { APP_PATH, BUILD_PATH, PRICING_PATH, REPOSITORY_URL } from "../lib/routes";
 import { applyAppearance, resolveAppearance } from "../lib/templates";
 import { applyBrandFavicon, resolveAssistant } from "../lib/assistant";
 import { fetchAgentHealth } from "../lib/utils";
 import { BuildPage } from "./BuildPage";
 import { LandingPage } from "./LandingPage";
+import { PricingPage } from "./PricingPage";
 
 /** The mark beside the name: the owner's logo from the relay when there is
  *  one, otherwise (or if it fails to load) the built-in lens. */
@@ -34,7 +35,15 @@ function SiteMark({ logoUrl }: { logoUrl?: string }) {
   );
 }
 
-function SiteHeader({ signedIn, view, logoUrl }: { signedIn: boolean; view: "landing" | "build"; logoUrl?: string }) {
+function SiteHeader({
+  signedIn,
+  view,
+  logoUrl
+}: {
+  signedIn: boolean;
+  view: "landing" | "build" | "pricing";
+  logoUrl?: string;
+}) {
   const { language } = useLanguage();
   const say = (zh: string, en: string) => localized(language, zh, en);
   const home = view === "landing" ? "" : "/";
@@ -50,6 +59,9 @@ function SiteHeader({ signedIn, view, logoUrl }: { signedIn: boolean; view: "lan
         <a href={`${home}#backends`}>{say("语音后端", "Backends")}</a>
         <a href={BUILD_PATH} aria-current={view === "build" ? "page" : undefined}>
           {say("配置器", "Build yours")}
+        </a>
+        <a href={PRICING_PATH} aria-current={view === "pricing" ? "page" : undefined}>
+          {say("价格", "Pricing")}
         </a>
       </nav>
       <div className="siteHeaderActions">
@@ -71,8 +83,8 @@ function SiteFooter({ developer }: { developer?: string }) {
         <strong>Max</strong>
         <p>
           {say(
-            "为可穿戴设备打造语音助手的开放框架，自行部署。",
-            "An open, self-hosted framework for voice assistants on things people wear."
+            "开源的实时语音智能体工具包：放进网站、应用或可穿戴设备，自己部署或交给 Max Cloud。",
+            "Open-source realtime voice agents for websites, apps and wearables. Host it yourself, or let Max Cloud run it."
           )}
         </p>
         {developer ? <p className="siteFooterMaker">{developer}</p> : null}
@@ -80,6 +92,7 @@ function SiteFooter({ developer }: { developer?: string }) {
       <nav aria-label={say("页脚链接", "Footer")}>
         <a href={APP_PATH}>{say("打开应用", "Open the app")}</a>
         <a href={BUILD_PATH}>{say("配置器", "Build yours")}</a>
+        <a href={PRICING_PATH}>{say("价格", "Pricing")}</a>
         {REPOSITORY_URL ? (
           <a href={REPOSITORY_URL} rel="noreferrer noopener">
             GitHub
@@ -90,7 +103,7 @@ function SiteFooter({ developer }: { developer?: string }) {
   );
 }
 
-function Site({ view }: { view: "landing" | "build" }) {
+function Site({ view }: { view: "landing" | "build" | "pricing" }) {
   const { language } = useLanguage();
   const [signedIn, setSignedIn] = useState(false);
   const [developer, setDeveloper] = useState<string | undefined>();
@@ -105,7 +118,9 @@ function Site({ view }: { view: "landing" | "build" }) {
     document.title =
       view === "build"
         ? localized(language, "配置你的助手 · Max", "Build your assistant · Max")
-        : localized(language, "Max：为可穿戴设备打造语音助手", "Max: voice assistants for things people wear");
+        : view === "pricing"
+          ? localized(language, "价格 · Max", "Pricing · Max")
+          : localized(language, "Max：给你的产品加上语音智能体", "Max: voice agents for your product");
   }, [language, view]);
 
   useEffect(() => {
@@ -134,15 +149,15 @@ function Site({ view }: { view: "landing" | "build" }) {
       </a>
       <SiteHeader signedIn={signedIn} view={view} logoUrl={logoUrl} />
       <main id="main" className="siteMain">
-        {view === "build" ? <BuildPage /> : <LandingPage signedIn={signedIn} />}
+        {view === "build" ? <BuildPage /> : view === "pricing" ? <PricingPage /> : <LandingPage signedIn={signedIn} />}
       </main>
       <SiteFooter developer={developer} />
     </div>
   );
 }
 
-/** The public surfaces: the landing page at / and the configurator at /build. */
-export function PublicSite({ view }: { view: "landing" | "build" }) {
+/** The public surfaces: the landing page at /, the configurator at /build and pricing at /pricing. */
+export function PublicSite({ view }: { view: "landing" | "build" | "pricing" }) {
   return (
     <LanguageProvider>
       <Site view={view} />

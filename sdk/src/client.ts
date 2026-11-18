@@ -20,6 +20,7 @@ import {
   relayUrl,
   shouldReconnect,
   IDLE_CLOSE_CODE,
+  USAGE_LIMIT_CLOSE_CODE,
   MAX_TOOLS
 } from "./protocol.js";
 import type {
@@ -616,7 +617,12 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
       return;
     }
     if (!willReconnect) {
-      this.fail(new VoiceAgentError("connection", "Lost the connection to the relay"));
+      this.fail(
+        new VoiceAgentError(
+          "connection",
+          code === USAGE_LIMIT_CLOSE_CODE ? "Voice minutes used up for this month" : "Lost the connection to the relay"
+        )
+      );
       return;
     }
     this.setLifecycle("connecting");

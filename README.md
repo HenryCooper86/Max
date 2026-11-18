@@ -227,21 +227,39 @@ With no config file the relay runs **Max**, the motorcycle-helmet assistant this
 Android and embedded clients, navigation, camera and hazard alerts. That reference product is documented in
 [docs/max-helmet.md](docs/max-helmet.md).
 
+## Pricing
+
+Max is free and open source under the MIT license, including for commercial products. Paid plans add services, not
+features:
+
+| Plan            | Price                                             | For                                                                |
+| --------------- | ------------------------------------------------- | ------------------------------------------------------------------ |
+| **Open source** | Free                                              | Everything here, self-hosted                                       |
+| **Max Cloud**   | $0.02/min with your own model key, 1,000 min free | A hosted relay, no servers to run. Early access: join the waitlist |
+| **Enterprise**  | Custom                                            | Support with an SLA, deployment help, custom integrations          |
+
+Details in [pricing and licensing](docs/pricing.md); talk to us in
+[Discussions](https://github.com/HenryCooper86/Max/discussions). Charging your own customers? The relay meters voice
+minutes per user, can cap them, and can send each session to your billing system: see
+[usage and billing](docs/usage-and-billing.md).
+
 ## Documentation
 
-| Guide                                      | What it covers                                                       |
-| ------------------------------------------ | -------------------------------------------------------------------- |
-| [Getting started](docs/getting-started.md) | From clone to a voice agent in your own app, then to production      |
-| [Web SDK](sdk/README.md)                   | Widget, `VoiceAgent`, React hook, events, client tools               |
-| [Tools](docs/tools.md)                     | Code, webhook and client tools; signatures; writing good tools       |
-| [Configuration](docs/configuration.md)     | Every `assistant.config.json` key and the main environment variables |
-| [Voice backends](docs/backends.md)         | Each backend, its settings, and adding your own                      |
-| [Protocol](docs/protocol.md)               | The `/agent` WebSocket protocol, for custom clients in any language  |
-| [Security](docs/security.md)               | Session tokens, origins, webhook signing, prompt-injection advice    |
-| [Deployment](docs/deployment.md)           | Docker, TLS reverse proxies, scaling, health checks                  |
-| [Hardware and audio](docs/audio/README.md) | Putting the agent on your own device: audio contract and test bench  |
-| [Running locally](docs/local-models.md)    | Open-weight speech and chat models on your own machine               |
-| [Examples](examples/README.md)             | The web shop example and the Python device client                    |
+| Guide                                          | What it covers                                                       |
+| ---------------------------------------------- | -------------------------------------------------------------------- |
+| [Getting started](docs/getting-started.md)     | From clone to a voice agent in your own app, then to production      |
+| [Web SDK](sdk/README.md)                       | Widget, `VoiceAgent`, React hook, events, client tools               |
+| [Tools](docs/tools.md)                         | Code, webhook and client tools; signatures; writing good tools       |
+| [Configuration](docs/configuration.md)         | Every `assistant.config.json` key and the main environment variables |
+| [Voice backends](docs/backends.md)             | Each backend, its settings, and adding your own                      |
+| [Protocol](docs/protocol.md)                   | The `/agent` WebSocket protocol, for custom clients in any language  |
+| [Security](docs/security.md)                   | Session tokens, origins, webhook signing, prompt-injection advice    |
+| [Deployment](docs/deployment.md)               | Docker, TLS reverse proxies, scaling, health checks                  |
+| [Usage and billing](docs/usage-and-billing.md) | Minutes per user, monthly allowances, billing webhooks, Stripe       |
+| [Pricing and licensing](docs/pricing.md)       | The MIT license, Max Cloud and Enterprise                            |
+| [Hardware and audio](docs/audio/README.md)     | Putting the agent on your own device: audio contract and test bench  |
+| [Running locally](docs/local-models.md)        | Open-weight speech and chat models on your own machine               |
+| [Examples](examples/README.md)                 | The web shop example and the Python device client                    |
 
 ## Project layout
 

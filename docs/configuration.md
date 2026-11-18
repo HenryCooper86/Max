@@ -140,12 +140,14 @@ The most used ones. `.env.example` documents all of them, including each backend
 
 ### Behaviour
 
-| Variable                     | Default                     | What it does                                                               |
-| ---------------------------- | --------------------------- | -------------------------------------------------------------------------- |
-| `ASSISTANT_CONFIG`           | none                        | Path of the config file, or `off`.                                         |
-| `STUDIO_DIR`                 | `~/.horizon-helmet-testing` | Where the Studio keeps its config, logo and saved backend keys.            |
-| `AGENT_WAKE_WORD`            | `on`                        | `off` turns the wake word off for every assistant.                         |
-| `VOICE_EQUALIZER_ADJUSTABLE` | `on`                        | `off` stops users changing the voice equaliser.                            |
-| `RELAY_IDLE_TIMEOUT_MS`      | `600000`                    | Closes a session with no client traffic after this long (close code 4001). |
-| `RELAY_HEARTBEAT_MS`         | `30000`                     | How often the relay pings clients to find dead connections.                |
-| `PORT`                       | `8787`                      | The relay's port.                                                          |
+| Variable                                    | Default                     | What it does                                                                              |
+| ------------------------------------------- | --------------------------- | ----------------------------------------------------------------------------------------- |
+| `ASSISTANT_CONFIG`                          | none                        | Path of the config file, or `off`.                                                        |
+| `STUDIO_DIR`                                | `~/.horizon-helmet-testing` | Where the Studio keeps its config, logo and saved backend keys.                           |
+| `AGENT_WAKE_WORD`                           | `on`                        | `off` turns the wake word off for every assistant.                                        |
+| `VOICE_EQUALIZER_ADJUSTABLE`                | `on`                        | `off` stops users changing the voice equaliser.                                           |
+| `RELAY_IDLE_TIMEOUT_MS`                     | `600000`                    | Closes a session with no client traffic after this long (close code 4001).                |
+| `RELAY_HEARTBEAT_MS`                        | `30000`                     | How often the relay pings clients to find dead connections.                               |
+| `PORT`                                      | `8787`                      | The relay's port.                                                                         |
+| `USAGE_MONTHLY_MINUTES`                     | off                         | Voice minutes each user may use per month. See [usage and billing](usage-and-billing.md). |
+| `USAGE_WEBHOOK_URL`, `USAGE_WEBHOOK_SECRET` | off                         | Where each finished session's usage is POSTed, and its signing secret.                    |

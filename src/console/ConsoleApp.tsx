@@ -3,6 +3,7 @@ import { LanguageProvider, LanguageToggle } from "../components/LanguageToggle";
 import { PRICING_PATH, REPOSITORY_URL } from "../lib/routes";
 import { ApiError, createCloudApi } from "./api";
 import { Mascot } from "../components/Mascot";
+import { SiteMark, useSiteLogo } from "../components/SiteMark";
 import { AuthCard, inviteFromLocation } from "./AuthCard";
 import { BalanceCard } from "./BalanceCard";
 import { useConsoleData, useSay, type Session } from "./hooks";
@@ -13,21 +14,13 @@ import { ActivitySection, UsageSection } from "./UsageSection";
 
 const DOCS_URL = `${REPOSITORY_URL}#readme`;
 
-function ConsoleMark() {
-  return (
-    <svg className="siteMark" viewBox="0 0 48 20" aria-hidden="true" focusable="false">
-      <rect x="1" y="1" width="46" height="18" rx="9" />
-      <path d="M9 10h6l3-5 4 10 4-8 3 3h10" />
-    </svg>
-  );
-}
-
 function ConsoleHeader({ onLogout }: { onLogout?: () => void }) {
   const say = useSay();
+  const { logoUrl } = useSiteLogo();
   return (
     <header className="siteHeader">
       <a className="siteBrand" href="/" aria-label={say("Max 首页", "Max home")}>
-        <ConsoleMark />
+        <SiteMark logoUrl={logoUrl} />
         <span>Max</span>
       </a>
       <nav className="siteNav" aria-label={say("页面导航", "Page")}>

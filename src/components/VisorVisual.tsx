@@ -10,6 +10,7 @@ import {
   type SpectrumMode
 } from "../lib/visualizer";
 import { deviceCopyKey } from "../lib/i18n";
+import hummingbirdMark from "../../brand/hummingbird.svg?url";
 import { useAssistant } from "./AssistantContext";
 import { useLanguage } from "./LanguageToggle";
 
@@ -391,32 +392,24 @@ export function VisorVisual(props: Props) {
   );
 }
 
-/** A small, static rendering of the lens for headers and the sign-in card. */
-function VisorMark({ className = "" }: { className?: string }) {
-  return (
-    <svg className={`visorMark ${className}`.trim()} viewBox="0 0 48 20" aria-hidden="true" focusable="false">
-      <rect x="1" y="1" width="46" height="18" rx="9" />
-      <path d="M9 10h6l3-5 4 10 4-8 3 3h10" />
-    </svg>
-  );
-}
-
 /** The assistant's mark wherever the brand appears (header, settings card,
  *  sign-in, workspaces): the owner's logo from the relay when it has one,
- *  otherwise — or if that image fails to load — the built-in Visor mark.
+ *  otherwise — or if that image fails to load — Max's hummingbird.
  *  `className` names the slot so each can size the logo for itself. */
 export function BrandMark({ className = "" }: { className?: string }) {
   const { logoUrl } = useAssistant();
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
-  if (!logoUrl || failedUrl === logoUrl) return <VisorMark className={className} />;
+  const src = logoUrl && failedUrl !== logoUrl ? logoUrl : hummingbirdMark;
   return (
     <img
       className={`brandLogo ${className}`.trim()}
-      src={logoUrl}
+      src={src}
       alt=""
       decoding="async"
       draggable={false}
-      onError={() => setFailedUrl(logoUrl)}
+      onError={() => {
+        if (logoUrl) setFailedUrl(logoUrl);
+      }}
     />
   );
 }

@@ -7,33 +7,10 @@ import { APP_PATH, BUILD_PATH, CONSOLE_PATH, PRICING_PATH, REPOSITORY_URL } from
 import { applyAppearance, resolveAppearance } from "../lib/templates";
 import { applyBrandFavicon, resolveAssistant } from "../lib/assistant";
 import { fetchAgentHealth } from "../lib/utils";
+import { SiteMark } from "../components/SiteMark";
 import { BuildPage } from "./BuildPage";
 import { LandingPage } from "./LandingPage";
 import { PricingPage } from "./PricingPage";
-
-/** The mark beside the name: the owner's logo from the relay when there is
- *  one, otherwise (or if it fails to load) the built-in lens. */
-function SiteMark({ logoUrl }: { logoUrl?: string }) {
-  const [failedUrl, setFailedUrl] = useState<string | null>(null);
-  if (logoUrl && failedUrl !== logoUrl) {
-    return (
-      <img
-        className="brandLogo siteLogo"
-        src={logoUrl}
-        alt=""
-        decoding="async"
-        draggable={false}
-        onError={() => setFailedUrl(logoUrl)}
-      />
-    );
-  }
-  return (
-    <svg className="siteMark" viewBox="0 0 48 20" aria-hidden="true" focusable="false">
-      <rect x="1" y="1" width="46" height="18" rx="9" />
-      <path d="M9 10h6l3-5 4 10 4-8 3 3h10" />
-    </svg>
-  );
-}
 
 function SiteHeader({
   signedIn,

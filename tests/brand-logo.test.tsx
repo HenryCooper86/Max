@@ -45,7 +45,7 @@ describe("owner logo path", () => {
 });
 
 describe("brand mark", () => {
-  it("shows the owner's logo as a decorative image, else the built-in mark", () => {
+  it("shows the owner's logo as a decorative image, else Max's hummingbird", () => {
     const withLogo = renderToStaticMarkup(
       <AssistantProvider value={{ ...DEFAULT_ASSISTANT, logoUrl: "/brand/logo?v=1" }}>
         <BrandMark className="loginMark" />
@@ -56,8 +56,9 @@ describe("brand mark", () => {
     expect(withLogo).toContain('alt=""');
 
     const builtIn = renderToStaticMarkup(<BrandMark className="loginMark" />);
-    expect(builtIn).toContain('<svg class="visorMark loginMark"');
-    expect(builtIn).not.toContain("<img");
+    expect(builtIn).toMatch(/<img[^>]*class="brandLogo loginMark"/);
+    expect(builtIn).toMatch(/Hummingbird/);
+    expect(builtIn).not.toContain("visorMark");
   });
 });
 

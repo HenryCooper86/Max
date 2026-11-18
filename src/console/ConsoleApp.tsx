@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { LanguageProvider, LanguageToggle } from "../components/LanguageToggle";
 import { PRICING_PATH, REPOSITORY_URL } from "../lib/routes";
 import { ApiError, createCloudApi } from "./api";
+import { Mascot } from "../components/Mascot";
 import { AuthCard, inviteFromLocation } from "./AuthCard";
 import { BalanceCard } from "./BalanceCard";
 import { useConsoleData, useSay, type Session } from "./hooks";
@@ -158,6 +159,13 @@ function Console() {
           />
         )}
       </main>
+      {/* The site's bird: ready at the door, happy once you are in. */}
+      <Mascot
+        className="siteBird"
+        mood={session ? "happy" : "ready"}
+        followCursor
+        restOver="a, button, input, select, textarea, label, .cxCard, .cxDialog, .siteHeader"
+      />
     </div>
   );
 }

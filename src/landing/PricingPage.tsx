@@ -1,4 +1,5 @@
 import { useLanguage } from "../components/LanguageToggle";
+import { Mascot } from "../components/Mascot";
 import { localized } from "../lib/i18n";
 import { BILLING_GUIDE_URL, PLANS, PRICING_FAQ, type Plan } from "../lib/pricing";
 
@@ -71,6 +72,13 @@ export function PricingPage() {
           .
         </p>
       </section>
+      {/* The bird keeps visitors company here too, as on every public page. */}
+      <Mascot
+        className="siteBird"
+        mood="ready"
+        followCursor
+        restOver="a, button, .planCard, .pricingFaq dt, .siteHeader"
+      />
     </div>
   );
 }

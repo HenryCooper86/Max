@@ -6,8 +6,13 @@ import { AuthCard } from "../src/console/AuthCard";
 import { BalanceCard } from "../src/console/BalanceCard";
 import { NotEnabled } from "../src/console/ConsoleApp";
 import { KeyReveal } from "../src/console/KeyReveal";
-import { ProjectEditor } from "../src/console/ProjectEditor";
-import { Snippets } from "../src/console/Snippets";
+import { ProjectsSection, startFromTemplate } from "../src/console/ProjectsSection";
+import { writeInstructions } from "../src/console/studio/AgentTab";
+import { appendKnowledge } from "../src/console/studio/KnowledgeTab";
+import { patchFromDraft, Studio } from "../src/console/studio/Studio";
+import { draftChanged, draftFromProject } from "../src/console/studio/types";
+import { AGENT_TEMPLATES } from "../src/lib/agent-templates";
+import { DEFAULT_STUDIO } from "../shared/cloud-studio";
 import { ActivitySection, UsageSection } from "../src/console/UsageSection";
 import { PricingPage } from "../src/landing/PricingPage";
 import { INVITE_REQUEST_URL, PLANS, PRICING_FAQ } from "../src/lib/pricing";
@@ -24,6 +29,9 @@ const project: Project = {
   assistantName: "Max",
   instructions: "Be brief",
   greeting: "Hi",
+  studio: DEFAULT_STUDIO,
+  publicId: "pub_0123456789abcdef01234567",
+  hasWebhookSecret: false,
   createdAt: 1
 };
 
@@ -50,32 +58,82 @@ describe("overview pieces", () => {
     expect(html).toContain("1,000");
   });
 
-  it("warns when a project has no model key and masks a saved one", () => {
-    const editor = wrap(
-      <ProjectEditor
+  it("opens the studio on the agent tab, masking a saved model key", () => {
+    const studio = wrap(
+      <Studio
         session={{ api, token: "t", fail: () => "" }}
         project={project}
+        origin="https://max.example"
         onChanged={() => undefined}
         onKeyRotated={() => undefined}
         onDeleted={() => undefined}
       />
     );
-    expect(editor).toContain("•••• saved");
-    expect(editor).toContain('type="password"');
-    expect(editor).toContain("移除密钥");
-    expect(editor).not.toContain("confirm(");
+    expect(studio).toContain("•••• 已保存");
+    expect(studio).toContain('type="password"');
+    expect(studio).toContain('role="tablist"');
+    for (const tab of ["助手", "知识", "工具", "测试", "安装", "对话", "设置"]) expect(studio).toContain(tab);
+    // Getting started: the key is in, testing and installing are next.
+    expect(studio).toContain("和它说说话");
+    expect(studio).not.toContain("confirm(");
+  });
+
+  it("saves only what changed, and the model key only when typed", () => {
+    const draft = draftFromProject(project);
+    expect(draftChanged(draft, project)).toBe(false);
+    expect(draftChanged({ ...draft, studio: { ...draft.studio, voice: "Puck" } }, project)).toBe(true);
+    expect(draftChanged({ ...draft, modelKey: "sk-new" }, project)).toBe(true);
+    expect(patchFromDraft(draft)).not.toHaveProperty("modelKey");
+    expect(patchFromDraft({ ...draft, modelKey: " sk-new " }).modelKey).toBe("sk-new");
+  });
+
+  it("writes instructions from a few plain answers", () => {
+    const brief = {
+      business: "Corner Bakery",
+      job: "take cake orders",
+      tone: "calm" as const,
+      never: "promise discounts"
+    };
+    const english = writeInstructions(brief, "en-US");
+    expect(english).toContain("You are the voice assistant for Corner Bakery.");
+    expect(english).toContain("Your job: take cake orders");
+    expect(english).toContain("calm and reassuring");
+    expect(english).toContain("Never: promise discounts");
+    expect(writeInstructions({ ...brief, never: "" }, "en-US")).not.toContain("Never:");
+    expect(writeInstructions(brief, "zh-CN")).toContain("你是Corner Bakery的语音助手。");
+  });
+
+  it("adds imported knowledge after what is there, within 20,000 characters", () => {
+    expect(appendKnowledge("", "  Hours: 9-5 ")).toEqual({ text: "Hours: 9-5", cut: false });
+    expect(appendKnowledge("A", "B")).toEqual({ text: "A\n\nB", cut: false });
+    const long = appendKnowledge("x".repeat(19_999), "yyyy");
+    expect(long.text).toHaveLength(20_000);
+    expect(long.cut).toBe(true);
+  });
+
+  it("starts a project from a template in the visitor's language", () => {
+    const support = AGENT_TEMPLATES.find((template) => template.id === "support")!;
+    const english = startFromTemplate(support, "Help desk", "en-US");
+    expect(english).toMatchObject({ name: "Help desk", assistantName: "Sam", studio: { template: "support" } });
+    expect(english.instructions).toContain("check_order");
+    expect(startFromTemplate(support, "客服", "zh-CN").greeting).toContain("客服");
+    const list = wrap(
+      <ProjectsSection
+        session={{ api, token: "t", fail: () => "" }}
+        projects={[project]}
+        setProjects={() => undefined}
+        origin="https://max.example"
+        onMoney={() => undefined}
+      />
+    );
+    expect(list).toContain("打开工作室");
+    expect(list).toContain("新建助手");
   });
 
   it("shows a new key once with a clear warning", () => {
     const html = wrap(<KeyReveal projectName="Demo" apiKey="mpk_secret" onDismiss={() => undefined} />);
     expect(html).toContain("mpk_secret");
     expect(html).toContain("不会再显示");
-  });
-
-  it("gives copyable snippets", () => {
-    const html = wrap(<Snippets origin="https://max.example" />);
-    expect(html).toContain("https://max.example/v1/session-tokens");
-    expect(html).toContain("/api/voice-token");
   });
 
   it("lists usage and newest activity first", () => {

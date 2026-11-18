@@ -318,16 +318,29 @@ export function projectAssistantProfile(input: {
   name: string;
   instructions?: string;
   greeting?: string;
+  /** Language code the agent speaks first; empty follows the user. */
+  language?: string;
+  /** Reference facts the agent answers from (up to 20,000 characters). */
+  knowledge?: string;
 }): AssistantProfile {
   const savedProblem = logoProblem;
   try {
-    return assistantProfileFrom({
+    const profile = assistantProfileFrom({
       name: input.name,
       device: "app",
       wakeWord: false,
+      ...(input.language ? { languages: [input.language], strictLanguages: false } : {}),
       ...(input.instructions ? { instructions: input.instructions } : {}),
       ...(input.greeting ? { greeting: input.greeting } : {})
     });
+    const knowledge = input.knowledge?.trim();
+    if (!knowledge) return profile;
+    // Added after the loader, whose 8,000-character cap is for instructions alone.
+    const reference =
+      "Reference information for answering questions. Answer from it when it covers the question; " +
+      "when it does not, say you do not know rather than guessing, and offer what you can do instead.\n" +
+      `<reference>\n${knowledge}\n</reference>`;
+    return { ...profile, instructions: profile.instructions ? `${profile.instructions}\n\n${reference}` : reference };
   } finally {
     logoProblem = savedProblem;
   }

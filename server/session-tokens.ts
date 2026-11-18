@@ -33,16 +33,28 @@ type SessionTokenGrant = {
   context?: string;
   /** Set when a Max Cloud project's API key minted the token: the session
    *  runs as that project and is billed to its customer. */
-  project?: { projectId: string; customerId: string; keyHash: string };
+  project?: CloudProjectGrant;
 };
 
 type MintRequest = { ttlSeconds?: unknown; userId?: unknown; context?: unknown };
+
+/** The Max Cloud project a token runs as, and where the session was started:
+ *  "api" (the project key minted it), "test" (the console's Test panel) or
+ *  "embed" (the public widget on an allowed website). */
+type CloudProjectGrant = {
+  projectId: string;
+  customerId: string;
+  keyHash: string;
+  source?: "api" | "test" | "embed";
+  /** Embed tokens: the website that asked for it, the only Origin it opens a session from. */
+  origin?: string;
+};
 
 export type SessionTokenStore = {
   /** Validates a request body and issues a token, or explains what is wrong. */
   mint(
     request: MintRequest,
-    project?: { projectId: string; customerId: string; keyHash: string }
+    project?: CloudProjectGrant
   ): { ok: true; token: string; expiresAt: number } | { ok: false; error: string };
   /** The grant behind a live token, if any. */
   grant(token: string | null | undefined): SessionTokenGrant | undefined;
@@ -97,8 +109,12 @@ export function createSessionTokenStore(
       const at = now();
       prune(at);
       if (project && limits.perProject) {
-        // A project can only ever push out its own tokens.
-        const own = [...tokens].filter(([, grant]) => grant.project?.projectId === project.projectId);
+        // A project can only ever push out its own tokens, and public-embed tokens (which
+        // anyone visiting a listed website can mint) only other embed tokens.
+        const embed = project.source === "embed";
+        const own = [...tokens].filter(
+          ([, grant]) => grant.project?.projectId === project.projectId && (grant.project.source === "embed") === embed
+        );
         for (const [token] of own.slice(0, Math.max(0, own.length - limits.perProject + 1))) tokens.delete(token);
       }
       while (tokens.size >= maxLive) {

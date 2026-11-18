@@ -13,6 +13,7 @@ import type { TranscriptItem, VoiceGender } from "./protocol.js";
 
 const OBSERVED = [
   "relay",
+  "project",
   "token",
   "token-url",
   "language",
@@ -27,6 +28,7 @@ const OBSERVED = [
 /** Attributes that only matter when a session is created. */
 const CONNECTION_ATTRS: ReadonlySet<string> = new Set([
   "relay",
+  "project",
   "token",
   "token-url",
   "language",
@@ -81,7 +83,9 @@ const TEMPLATE = `
   }
   :host([position="inline"]) { display: inline-block; position: relative; }
   :host(:not([position="inline"])) { position: fixed; right: 20px; bottom: 20px; z-index: 2147483000; }
+  :host([position="bottom-left"]) { right: auto; left: 20px; }
   .root { display: flex; flex-direction: column; align-items: flex-end; gap: 12px; }
+  :host([position="bottom-left"]) .root { align-items: flex-start; }
   .panel {
     width: min(340px, calc(100vw - 40px));
     max-height: min(420px, 60vh);
@@ -175,8 +179,9 @@ async function fetchToken(url: string): Promise<string> {
 /**
  * `<voice-agent>`: a voice assistant button for any page.
  *
- * Attributes: `relay`, `token`, `token-url`, `language`, `voice`, `backend`,
- * `context` (facts about the page, for the assistant), `label`, `accent`, `position` (`inline` to place it in the flow), `text-input`.
+ * Attributes: `relay`, `project` (a Max Cloud public agent id: no backend needed), `token`, `token-url`, `language`, `voice`, `backend`,
+ * `context` (facts about the page, for the assistant), `label`, `accent`, `position` (`bottom-right` by default,
+ * `bottom-left`, or `inline` to place it in the flow), `text-input`.
  * Set the `tools` property to give the agent client tools. Dispatches
  * `voice-agent:status`, `:transcript`, `:toolcall` and `:error` events.
  */
@@ -323,6 +328,7 @@ export class VoiceAgentElement extends HTMLElement {
     const options: VoiceAgentOptions = {
       url: relay ?? "",
       ...(tokenUrl ? { token: () => fetchToken(tokenUrl) } : token ? { token } : {}),
+      ...(this.getAttribute("project") ? { project: this.getAttribute("project")! } : {}),
       ...(this.getAttribute("language") ? { language: this.getAttribute("language")! } : {}),
       ...(voice === "female" || voice === "male" ? { voice: voice as VoiceGender } : {}),
       ...(this.getAttribute("backend") ? { backend: this.getAttribute("backend")! } : {}),
@@ -393,7 +399,7 @@ export function defineVoiceAgentElement(): void {
 
 /**
  * Appends a `<voice-agent>` configured from a script tag's `data-*` attributes
- * (`data-relay`, `data-token`, `data-token-url`, `data-language`, `data-voice`,
+ * (`data-relay`, `data-project`, `data-token`, `data-token-url`, `data-language`, `data-voice`,
  * `data-backend`, `data-context`, `data-label`, `data-accent`, `data-position`,
  * `data-text-input`). Does nothing without `data-relay`.
  *

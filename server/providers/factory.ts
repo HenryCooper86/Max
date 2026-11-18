@@ -23,6 +23,8 @@ export type ProviderOverrides = {
   apiKey?: string;
   profile?: AssistantProfile;
   serverTools?: () => readonly ToolDefinition[];
+  /** A voice name for the backend, instead of the gender-based default. */
+  voice?: string;
 };
 
 /** Builds the provider for one backend id. */
@@ -43,7 +45,9 @@ export function createVoiceProvider(
     case "openai":
       return createLiveProvider(
         client,
-        liveBackend(id, (engineLog) => createRealtimeEngine(openAiDialect(overrides.apiKey), engineLog)),
+        liveBackend(id, (engineLog) =>
+          createRealtimeEngine(openAiDialect(overrides.apiKey, overrides.voice), engineLog)
+        ),
         log,
         telemetry,
         sessionOptions
@@ -51,7 +55,7 @@ export function createVoiceProvider(
     case "grok":
       return createLiveProvider(
         client,
-        liveBackend(id, (engineLog) => createRealtimeEngine(grokDialect(overrides.apiKey), engineLog)),
+        liveBackend(id, (engineLog) => createRealtimeEngine(grokDialect(overrides.apiKey, overrides.voice), engineLog)),
         log,
         telemetry,
         sessionOptions
@@ -59,7 +63,7 @@ export function createVoiceProvider(
     case "gemini":
       return createLiveProvider(
         client,
-        liveBackend(id, (engineLog) => createGeminiLiveEngine(engineLog, undefined, overrides.apiKey)),
+        liveBackend(id, (engineLog) => createGeminiLiveEngine(engineLog, undefined, overrides.apiKey, overrides.voice)),
         log,
         telemetry,
         sessionOptions

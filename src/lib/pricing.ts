@@ -66,6 +66,14 @@ export const PLANS: readonly Plan[] = [
       en: "We run the relay. You bring your own model key."
     },
     features: [
+      {
+        zh: "工作室：模板、声音、知识、工具、在浏览器里测试",
+        en: "A Studio: templates, voices, knowledge, tools, test in the browser"
+      },
+      {
+        zh: "一行代码嵌入网站，不用写后端",
+        en: "One line on your website, no backend needed"
+      },
       { zh: "托管中继：TLS、扩容和更新都由我们负责", en: "Hosted relay with TLS, scaling and updates handled" },
       {
         zh: "使用你自己的 OpenAI、Gemini 或 xAI 密钥，模型费用直接付给他们",

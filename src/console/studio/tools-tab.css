@@ -1,0 +1,130 @@
+.cxsTools {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+.cxsTools > * {
+  min-width: 0;
+}
+.cxsToolsHead h2,
+.cxsToolsSection h3 {
+  margin: 0;
+  font: 600 var(--fs-15) / 1.3 var(--font-display);
+}
+.cxsToolsList {
+  display: grid;
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.cxsToolsSuggest {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.cxsToolsSuggest li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 6px 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  font-size: var(--fs-13);
+}
+.cxsToolsCard {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-card);
+  background: var(--surface-1);
+}
+.cxsToolsCard input,
+.cxsToolsCard textarea,
+.cxsToolsCard select {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.cxsToolsCard textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+.cxsToolsParams {
+  display: grid;
+  gap: 10px;
+}
+.cxsToolsParam {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+}
+.cxsToolsCheck {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cxsToolsCheck input {
+  width: auto;
+}
+.cxsToolsActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.cxsToolsTest {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-control);
+}
+.cxsToolsResult {
+  margin: 0;
+  padding: 10px;
+  overflow-x: auto;
+  max-width: 100%;
+  border-radius: var(--radius-control);
+  background: var(--surface-3);
+  font: var(--fs-13) / 1.5 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.cxsToolsOk {
+  color: var(--ok);
+}
+.cxsToolsSecret {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.cxsToolsSecret code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.cxsToolsDocs pre {
+  margin: 8px 0;
+  padding: 10px;
+  overflow-x: auto;
+  max-width: 100%;
+  border-radius: var(--radius-control);
+  background: var(--surface-3);
+  font: var(--fs-13) / 1.5 var(--font-mono);
+}
+.cxsToolsDocs summary {
+  cursor: pointer;
+  font-weight: 600;
+}

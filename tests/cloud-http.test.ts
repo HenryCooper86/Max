@@ -1,3 +1,4 @@
+import { DEFAULT_STUDIO } from "../shared/cloud-studio";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -282,6 +283,9 @@ describe("projects", () => {
       assistantName: "",
       instructions: "",
       greeting: "",
+      studio: { ...DEFAULT_STUDIO, keepConversations: true },
+      publicId: expect.stringMatching(/^pub_[0-9a-f]{24}$/),
+      hasWebhookSecret: false,
       createdAt: START
     });
     const id = created.project.id;

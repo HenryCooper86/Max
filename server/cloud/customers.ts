@@ -3,6 +3,7 @@
 // tokens, never accepted by the staff gates and vice versa.
 
 import { randomBytes } from "node:crypto";
+import { DEFAULT_STUDIO, parseStudio, type ProjectStudio } from "../../shared/cloud-studio";
 import { createLogger } from "../logger";
 import { cloudSecretKey, now } from "./context";
 import {
@@ -17,6 +18,7 @@ import {
   insertSession,
   liveProject,
   liveProjects,
+  deleteProjectConversations,
   replaceProjectKey,
   sessionCustomer,
   softDeleteProject,
@@ -28,6 +30,7 @@ import {
   type ProjectRow
 } from "./store";
 import {
+  decryptModelKey,
   encryptModelKey,
   hashPassword,
   hashToken,
@@ -51,6 +54,11 @@ export type PublicProject = {
   assistantName: string;
   instructions: string;
   greeting: string;
+  studio: ProjectStudio;
+  /** Id for embedding without a backend; the console shows it in the snippet. */
+  publicId: string;
+  /** True once a webhook signing secret exists (it is made with the first tool). */
+  hasWebhookSecret: boolean;
   createdAt: number;
 };
 
@@ -201,6 +209,18 @@ export function logout(token: string): void {
 
 // --- projects -------------------------------------------------------------------
 
+/** A project's stored Studio settings; defaults when the stored JSON is missing or no longer valid. */
+export function projectStudio(row: Pick<ProjectRow, "studio" | "backend">): ProjectStudio {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(row.studio || "{}");
+  } catch {
+    raw = {};
+  }
+  const parsed = parseStudio(raw, row.backend);
+  return parsed.value ?? structuredClone(DEFAULT_STUDIO);
+}
+
 function publicProject(row: ProjectRow): PublicProject {
   return {
     id: row.id,
@@ -211,8 +231,27 @@ function publicProject(row: ProjectRow): PublicProject {
     assistantName: row.assistant_name,
     instructions: row.instructions,
     greeting: row.greeting,
+    studio: projectStudio(row),
+    publicId: row.public_id ?? "",
+    hasWebhookSecret: Boolean(row.webhook_secret_enc),
     createdAt: row.created_at
   };
+}
+
+const newPublicId = () => `pub_${randomBytes(12).toString("hex")}`;
+const webhookSecretScope = (projectId: string) => `${projectId}#webhook-secret`;
+
+/** The project's webhook signing secret, decrypted; undefined when it has none. */
+export function projectWebhookSecret(row: Pick<ProjectRow, "id" | "webhook_secret_enc">): string | undefined {
+  const secret = cloudSecretKey();
+  if (!secret || !row.webhook_secret_enc) return undefined;
+  return decryptModelKey(row.webhook_secret_enc, secret, webhookSecretScope(row.id));
+}
+
+function newWebhookSecret(projectId: string): string | undefined {
+  const secret = cloudSecretKey();
+  if (!secret) return undefined;
+  return encryptModelKey(`whsec_${randomBytes(24).toString("base64url")}`, secret, webhookSecretScope(projectId));
 }
 
 function newApiKey(): { apiKey: string; keyHash: string; keyPrefix: string } {
@@ -243,18 +282,33 @@ export function createProject(
 ): Result<{ project: PublicProject; apiKey: string }> {
   const name = textField(body.name, { field: "Name", max: LIMITS.name, required: true });
   if (name.error || name.value === undefined) return fail(400, name.error ?? "Name is required.");
+  // A template fills the rest; each field is checked as an edit would be.
+  const starters = {
+    assistantName: textField(body.assistantName, { field: "Assistant name", max: LIMITS.assistantName }),
+    instructions: textField(body.instructions, { field: "Instructions", max: LIMITS.instructions, multiline: true }),
+    greeting: textField(body.greeting, { field: "Greeting", max: LIMITS.greeting, multiline: true })
+  };
+  for (const starter of Object.values(starters)) if (starter.error) return fail(400, starter.error);
+  // New projects keep conversations unless asked not to; the console says so where they are listed.
+  const requested = body.studio && typeof body.studio === "object" ? (body.studio as Record<string, unknown>) : {};
+  const studio = parseStudio({ ...requested, keepConversations: requested.keepConversations !== false }, "openai");
+  if (studio.error !== undefined) return fail(400, studio.error);
+  const id = newId("prj_");
   const key = newApiKey();
   const row: ProjectRow = {
-    id: newId("prj_"),
+    id,
     customer_id: customerId,
     name: name.value,
     key_hash: key.keyHash,
     key_prefix: key.keyPrefix,
     backend: "openai",
     model_key_enc: null,
-    assistant_name: "",
-    instructions: "",
-    greeting: "",
+    assistant_name: starters.assistantName.value ?? "",
+    instructions: starters.instructions.value ?? "",
+    greeting: starters.greeting.value ?? "",
+    studio: JSON.stringify(studio.value),
+    public_id: newPublicId(),
+    webhook_secret_enc: studio.value.tools.length ? (newWebhookSecret(id) ?? null) : null,
     created_at: now(),
     deleted_at: null
   };
@@ -267,7 +321,8 @@ export function patchProject(
   projectId: string,
   body: Record<string, unknown>
 ): Result<{ project: PublicProject }> {
-  if (!liveProject(projectId, customerId)) return fail(404, "Project not found.");
+  const current = liveProject(projectId, customerId);
+  if (!current) return fail(404, "Project not found.");
   const changes: ProjectChanges = {};
   const fields = [
     ["name", { field: "Name", max: LIMITS.name, required: body.name !== undefined }],
@@ -289,6 +344,24 @@ export function patchProject(
   if (body.backend !== undefined) {
     if (!BACKENDS.includes(body.backend as Backend)) return fail(400, "Backend must be openai, gemini or grok.");
     changes.backend = body.backend as Backend;
+  }
+  const backend = changes.backend ?? current.backend;
+  if (body.studio !== undefined || backend !== current.backend) {
+    const raw = body.studio !== undefined ? body.studio : projectStudio(current);
+    let studio = parseStudio(raw, backend);
+    // A voice belongs to one backend: after a backend change, fall back to the new one's default voice.
+    if (studio.error !== undefined && backend !== current.backend && raw && typeof raw === "object") {
+      studio = parseStudio({ ...(raw as object), voice: "" }, backend);
+    }
+    if (studio.error !== undefined) return fail(400, studio.error);
+    changes.studio = JSON.stringify(studio.value);
+    const next = JSON.parse(changes.studio) as ProjectStudio;
+    if (next.tools.length && !current.webhook_secret_enc) {
+      const secret = newWebhookSecret(projectId);
+      if (!secret) return fail(503, "Max Cloud is not configured");
+      changes.webhook_secret_enc = secret;
+    }
+    if (!current.public_id) changes.public_id = newPublicId();
   }
   if (body.modelKey !== undefined) {
     if (typeof body.modelKey !== "string") return fail(400, "Model key must be text.");
@@ -323,5 +396,26 @@ export function rotateProjectKey(
 
 export function deleteProject(customerId: string, projectId: string): Result<{ ok: true }> {
   if (!softDeleteProject(projectId, customerId, now())) return fail(404, "Project not found.");
+  // Transcripts go with the project.
+  deleteProjectConversations(projectId, customerId);
   return { ok: true, value: { ok: true } };
+}
+
+/** The project's webhook signing secret, for the person setting up their tool's server. */
+export function revealWebhookSecret(customerId: string, projectId: string): Result<{ secret: string }> {
+  const row = liveProject(projectId, customerId);
+  if (!row) return fail(404, "Project not found.");
+  const secret = projectWebhookSecret(row);
+  if (!secret) return fail(404, "This project has no signing secret yet: add a tool first.");
+  return { ok: true, value: { secret } };
+}
+
+/** Replaces the webhook signing secret; the old one stops verifying at once. */
+export function rotateWebhookSecret(customerId: string, projectId: string): Result<{ secret: string }> {
+  const row = liveProject(projectId, customerId);
+  if (!row) return fail(404, "Project not found.");
+  const encrypted = newWebhookSecret(projectId);
+  if (!encrypted) return fail(503, "Max Cloud is not configured");
+  if (!updateProject(projectId, customerId, { webhook_secret_enc: encrypted })) return fail(404, "Project not found.");
+  return revealWebhookSecret(customerId, projectId);
 }

@@ -1,0 +1,138 @@
+.cxsTest {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.cxsTest .cxsTestNote {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  overflow-wrap: anywhere;
+}
+.cxsTestStage {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 16px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--surface-1);
+}
+.cxsTestMic {
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+  background: var(--surface-3);
+  color: var(--text);
+  font-size: 34px;
+  line-height: 1;
+  cursor: pointer;
+}
+.cxsTestMic[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.cxsTestMic:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.cxsTestMic:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+.cxsTestStatus {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-15);
+  font-weight: 600;
+}
+.cxsTestTimer {
+  font-family: var(--font-mono);
+  color: var(--text-2);
+  font-weight: 400;
+}
+.cxsTestControls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+.cxsTestLog {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 160px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--surface-1);
+}
+.cxsTestEmpty {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+}
+.cxsTestBubble {
+  max-width: 86%;
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: var(--radius-card);
+  font-size: var(--fs-15);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.cxsTestBubbleUser {
+  justify-self: end;
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.cxsTestBubbleAgent {
+  justify-self: start;
+  background: var(--surface-3);
+  color: var(--text);
+}
+.cxsTestBubblePartial {
+  opacity: 0.7;
+  font-style: italic;
+}
+.cxsTestTool {
+  margin: 0;
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
+  overflow-wrap: anywhere;
+}
+.cxsTestTool[data-state="succeeded"] {
+  color: var(--ok);
+}
+.cxsTestTool[data-state="failed"] {
+  color: var(--danger);
+}
+.cxsTestSend {
+  display: flex;
+  gap: 8px;
+}
+.cxsTestSend input {
+  flex: 1;
+  min-width: 0;
+}
+@media (max-width: 480px) {
+  .cxsTestBubble {
+    max-width: 100%;
+  }
+  .cxsTestSend {
+    flex-wrap: wrap;
+  }
+}

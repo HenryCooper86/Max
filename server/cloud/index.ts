@@ -2,9 +2,11 @@
 // agents (docs/superpowers/specs/2026-11-18-max-cloud-design.md). This is the
 // surface the relay uses; nothing here runs unless CLOUD_SECRET_KEY is set.
 
+import type { ProjectStudio } from "../../shared/cloud-studio";
 import { createLogger } from "../logger";
 import { bookedSeconds, secondsForFen } from "./billing";
 import { cloudEnabled, cloudSecretKey, now } from "./context";
+import { projectStudio, projectWebhookSecret } from "./customers";
 import { decryptModelKey, hashToken } from "./secrets";
 import {
   bookUsage,
@@ -19,7 +21,9 @@ import {
 } from "./store";
 
 export { cloudEnabled } from "./context";
-export { registerCloudPaymentRoutes, registerCloudRoutes } from "./routes";
+export { registerCloudPaymentRoutes, registerCloudRoutes, registerEmbedRoutes } from "./routes";
+export { conversationRecorder, pruneOldConversations, saveConversation } from "./conversations";
+export { projectServerTools } from "./tools";
 export {
   createInvite as createCloudInvite,
   listInvites as listCloudInvites,
@@ -38,6 +42,9 @@ export type ProjectRuntime = {
   assistantName: string;
   instructions?: string;
   greeting?: string;
+  studio: ProjectStudio;
+  /** Signs the project's webhook tool calls. */
+  webhookSecret?: string;
 };
 
 /** The project a project API key belongs to (live projects only), with the
@@ -131,7 +138,9 @@ export function projectRuntime(projectId: string): ProjectRuntime | undefined {
     modelKey,
     assistantName: project.assistant_name || "Assistant",
     ...(project.instructions ? { instructions: project.instructions } : {}),
-    ...(project.greeting ? { greeting: project.greeting } : {})
+    ...(project.greeting ? { greeting: project.greeting } : {}),
+    studio: projectStudio(project),
+    ...(project.webhook_secret_enc ? { webhookSecret: projectWebhookSecret(project) } : {})
   };
 }
 

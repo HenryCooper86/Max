@@ -206,6 +206,34 @@ export function relayUrl(base: string, token?: string): string {
   return url.toString();
 }
 
+/** The relay's HTTP base (`https://relay.example.com`) for any relay URL form, including `wss://…/agent`. */
+function relayHttpBase(base: string): string {
+  const origin = (globalThis as { location?: { href?: string } }).location?.href;
+  const url = new URL(base, origin);
+  if (url.protocol === "ws:") url.protocol = "http:";
+  else if (url.protocol === "wss:") url.protocol = "https:";
+  const path = url.pathname.replace(/\/+$/, "").replace(/\/agent$/, "");
+  return `${url.origin}${path}`;
+}
+
+/**
+ * A session token for a Max Cloud agent embedded without a backend. Works only
+ * on a website the agent's owner listed in the console.
+ */
+export async function fetchPublicAgentToken(relay: string, project: string): Promise<string> {
+  const response = await fetch(`${relayHttpBase(relay)}/v1/public-session-tokens`, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({ project }),
+    credentials: "omit"
+  });
+  const body = (await response.json().catch(() => ({}))) as { token?: unknown; error?: unknown };
+  if (!response.ok || typeof body.token !== "string") {
+    throw new Error(typeof body.error === "string" ? body.error : `The relay answered ${response.status}`);
+  }
+  return body.token;
+}
+
 /** Tool names the relay accepts. */
 export const TOOL_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$/;
 

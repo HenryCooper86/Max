@@ -57,7 +57,8 @@ export function realtimeTools(config: EngineConfig): Record<string, unknown> {
 }
 
 /** `apiKey` overrides OPENAI_API_KEY (a Max Cloud project brings its own). */
-export function openAiDialect(apiKey?: string): RealtimeDialect {
+/** `voiceName` overrides the gender-based voice (a Max Cloud project picks one). */
+export function openAiDialect(apiKey?: string, voiceName?: string): RealtimeDialect {
   const model = env("OPENAI_REALTIME_MODEL") ?? "gpt-realtime";
   const base = (env("OPENAI_REALTIME_URL") ?? "wss://api.openai.com/v1/realtime").replace(/\/+$/, "");
   return {
@@ -67,9 +68,10 @@ export function openAiDialect(apiKey?: string): RealtimeDialect {
     responseMode: "manual-capable",
     inputRate: 24_000,
     voice: (gender) =>
-      gender === "male"
+      voiceName ??
+      (gender === "male"
         ? (env("OPENAI_VOICE_MALE") ?? "cedar")
-        : (env("OPENAI_VOICE", "OPENAI_VOICE_FEMALE") ?? "marin"),
+        : (env("OPENAI_VOICE", "OPENAI_VOICE_FEMALE") ?? "marin")),
     session: (config, voice) => ({
       type: "realtime",
       model,
@@ -103,7 +105,7 @@ export function openAiDialect(apiKey?: string): RealtimeDialect {
 }
 
 /** `apiKey` overrides XAI_API_KEY (a Max Cloud project brings its own). */
-export function grokDialect(apiKey?: string): RealtimeDialect {
+export function grokDialect(apiKey?: string, voiceName?: string): RealtimeDialect {
   const model = env("XAI_VOICE_MODEL", "GROK_VOICE_MODEL") ?? "grok-voice-latest";
   const base = (env("XAI_REALTIME_URL") ?? "wss://api.x.ai/v1/realtime").replace(/\/+$/, "");
   return {
@@ -115,7 +117,8 @@ export function grokDialect(apiKey?: string): RealtimeDialect {
     responseMode: "auto",
     inputRate: CLIENT_INPUT_RATE,
     voice: (gender) =>
-      gender === "male" ? (env("XAI_VOICE_MALE") ?? "rex") : (env("XAI_VOICE", "XAI_VOICE_FEMALE") ?? "eve"),
+      voiceName ??
+      (gender === "male" ? (env("XAI_VOICE_MALE") ?? "rex") : (env("XAI_VOICE", "XAI_VOICE_FEMALE") ?? "eve")),
     session: (config, voice) => ({
       voice,
       instructions: config.instructions,

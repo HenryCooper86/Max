@@ -36,10 +36,53 @@ invitations**: add an optional note (who it is for), generate the link, and send
 (`https://<relay>/console?invite=cinv_…`) creates one account and expires after 7 days; unused links can be revoked
 there. Logging in needs no invitation. To let anyone sign up instead, set `CLOUD_SIGNUP=open`.
 
+## The Studio
+
+Each project opens in a Studio in the console, built so someone new to voice agents gets from nothing to an agent on
+their website in a few minutes, without writing a backend:
+
+- **Templates.** A new agent starts from a template: website guide, customer support, appointment booking, restaurant
+  orders, sales qualifier, language practice, or blank. A template fills the name, instructions, greeting and an
+  outline of the knowledge to add, and suggests tools.
+- **Agent.** Name, language, voice model and model key (with a link to get one), a voice picked from the backend's
+  voices, instructions with a "help me write it" form, and the greeting.
+- **Knowledge.** Up to 20,000 characters of facts (hours, prices, policies, FAQs), pasted or imported from a text file.
+  The agent answers from them and says it does not know otherwise.
+- **Tools.** No-code webhook tools: a name, when to use it, an https address and its parameters. Max POSTs each call,
+  signed with the project's signing secret (`whsec_…`, shown and rotated in the tab), exactly as the relay's
+  [webhook tools](tools.md#webhook-tools). "Send test request" calls it with sample values. Addresses must be public
+  https: the relay resolves each host and refuses private, loopback and link-local addresses, connects to the address
+  it checked, follows no redirects and gives a tool 10 seconds.
+- **Test.** Talk to the agent in the browser (or type), with its tools running, before anyone else does. Test minutes
+  count like any others.
+- **Install.** The one-line embed (below), the widget's label, colour and side, and copyable code for a backend in
+  plain JavaScript, React, Next.js, Express or Flask.
+- **Conversations.** What was said in each session (final transcript lines and tool outcomes, never audio), kept 30
+  days and deleted with the project. New projects keep them and say so; projects made before the Studio do not until
+  their owner turns it on, and it can be turned off per project.
+
 ## How customers connect
 
+### The one-line embed (no backend)
+
+In **Install**, turn on "Let the websites below use this agent directly", list the websites (`https://shop.example.com`,
+plus `http://localhost:5173` while developing), save, and paste:
+
+```html
+<script src="https://<relay>/sdk/voice-agent.iife.js" data-relay="https://<relay>" data-project="pub_…"></script>
+```
+
+The widget asks `POST /v1/public-session-tokens {"project":"pub_…"}` for a two-minute token. The relay gives one only
+when the browser's `Origin` is on the project's list, and the token opens a voice session only from that same origin.
+Like any public chat widget, anyone visiting a listed site can use it, so it is limited: 10 tokens a minute per visitor
+address, 120 a minute per project, at most 3 of the customer's 5 simultaneous sessions (so their own backend and tests
+always have room), 15 minutes per conversation, and their balance as always. Embed tokens can only push out other
+embed tokens. A project's public id is not a secret; its project key is.
+
+### With their own backend
+
 1. Open the invitation link, create an account, and create a project. The project key (`mpk_…`) is shown once.
-2. Choose a backend, paste a model key, set the assistant's name, instructions and greeting.
+2. Choose a backend, paste a model key, set the assistant up in the Studio.
 3. From their own backend, mint a short-lived session token with the project key:
 
    ```bash

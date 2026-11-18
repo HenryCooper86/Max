@@ -1,0 +1,153 @@
+.cxsHistory {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.cxsHistoryHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.cxsHistoryTitle {
+  flex: 1 1 auto;
+  margin: 0;
+  font: 600 var(--fs-15) / 1.3 var(--font-display);
+}
+
+.cxsHistoryList,
+.cxsHistoryTurns {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cxsHistoryRow {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--surface-1);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cxsHistoryRow:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--surface-2);
+}
+
+.cxsHistoryRow:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.cxsHistoryMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+}
+
+.cxsHistoryDuration {
+  font-family: var(--font-mono);
+}
+
+.cxsHistoryBadge {
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: var(--fs-13);
+}
+
+.cxsHistoryPreview {
+  overflow: hidden;
+  font-size: var(--fs-15);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cxsHistoryEmpty {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  padding: 16px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-card);
+}
+
+.cxsHistoryEmpty p {
+  margin: 0;
+}
+
+.cxsHistoryBubble {
+  display: grid;
+  gap: 2px;
+  max-width: 88%;
+  padding: 8px 12px;
+  border-radius: var(--radius-card);
+  background: var(--surface-2);
+  overflow-wrap: anywhere;
+}
+
+.cxsHistoryBubble.user {
+  justify-self: end;
+  background: var(--accent-soft);
+}
+
+.cxsHistoryBubble.agent {
+  justify-self: start;
+}
+
+.cxsHistoryBubble p {
+  margin: 0;
+  font-size: var(--fs-15);
+  white-space: pre-wrap;
+}
+
+.cxsHistoryWho {
+  color: var(--text-2);
+  font-size: var(--fs-13);
+}
+
+.cxsHistoryTool {
+  justify-self: center;
+  max-width: 100%;
+  color: var(--ok);
+  font: var(--fs-13) / 1.4 var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.cxsHistoryTool.bad {
+  color: var(--danger);
+}
+
+.cxsHistorySetting {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.cxsHistorySetting p {
+  margin: 0;
+}
+
+.cxsHistoryCheck {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-15);
+}

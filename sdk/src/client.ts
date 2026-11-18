@@ -17,6 +17,7 @@ import {
   mergeTranscript,
   parseRelayEvent,
   reconnectDelayMs,
+  fetchPublicAgentToken,
   relayUrl,
   shouldReconnect,
   IDLE_CLOSE_CODE,
@@ -111,6 +112,12 @@ export interface VoiceAgentOptions {
    * Omit when the relay needs no token.
    */
   token?: string | (() => Promise<string>);
+  /**
+   * A Max Cloud public agent id (`pub_…`), for embedding without a backend:
+   * the SDK asks the relay for a token itself. Works only on websites the
+   * agent's owner listed in the console. Ignored when `token` is set.
+   */
+  project?: string;
   /** Conversation language, for example `"en"` or `"zh"`. */
   language?: string;
   /** Preferred agent voice. */
@@ -524,7 +531,14 @@ export class VoiceAgent extends Emitter<VoiceAgentEvents> {
   }
 
   private async resolveToken(): Promise<string | undefined> {
-    const { token } = this.options;
+    const { token, project } = this.options;
+    if (token === undefined && project) {
+      try {
+        return await fetchPublicAgentToken(this.options.url, project);
+      } catch (error) {
+        throw new VoiceAgentError("token", `Could not start the agent: ${errorMessage(error)}`, { cause: error });
+      }
+    }
     if (typeof token !== "function") return token;
     try {
       return await token();

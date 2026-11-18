@@ -33,6 +33,12 @@ export type ProjectRow = {
   assistant_name: string;
   instructions: string;
   greeting: string;
+  /** JSON of ProjectStudio (shared/cloud-studio.ts). */
+  studio: string;
+  /** Public id for embedding without a backend (pub_…). */
+  public_id: string | null;
+  /** The webhook signing secret, encrypted like the model key. */
+  webhook_secret_enc: string | null;
   created_at: number;
   deleted_at: number | null;
 };
@@ -179,7 +185,30 @@ function database(): DatabaseSync {
         started_at INTEGER NOT NULL,
         last_seen INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS conversations (
+        id TEXT PRIMARY KEY,
+        customer_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        started_at INTEGER NOT NULL,
+        ended_at INTEGER NOT NULL,
+        seconds INTEGER NOT NULL,
+        source TEXT NOT NULL,
+        preview TEXT NOT NULL DEFAULT '',
+        turns TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_conversations_project ON conversations(project_id, started_at);
+      CREATE INDEX IF NOT EXISTS idx_conversations_age ON conversations(started_at);
     `);
+    // Columns added after the first release: older databases gain them here.
+    const projectColumns = new Set(
+      (db.prepare("PRAGMA table_info(projects)").all() as { name: string }[]).map((column) => column.name)
+    );
+    if (!projectColumns.has("studio")) db.exec("ALTER TABLE projects ADD COLUMN studio TEXT NOT NULL DEFAULT '{}'");
+    if (!projectColumns.has("public_id")) db.exec("ALTER TABLE projects ADD COLUMN public_id TEXT NULL");
+    if (!projectColumns.has("webhook_secret_enc")) {
+      db.exec("ALTER TABLE projects ADD COLUMN webhook_secret_enc TEXT NULL");
+    }
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_public_id ON projects(public_id)");
   } catch (error) {
     db.close();
     throw error;
@@ -270,8 +299,8 @@ export function insertProject(row: ProjectRow, limit: number): boolean {
     if (count >= limit) return false;
     db.prepare(
       `INSERT INTO projects (id, customer_id, name, key_hash, key_prefix, backend, model_key_enc, assistant_name,
-         instructions, greeting, created_at, deleted_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`
+         instructions, greeting, studio, public_id, webhook_secret_enc, created_at, deleted_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`
     ).run(
       row.id,
       row.customer_id,
@@ -283,6 +312,9 @@ export function insertProject(row: ProjectRow, limit: number): boolean {
       row.assistant_name,
       row.instructions,
       row.greeting,
+      row.studio,
+      row.public_id,
+      row.webhook_secret_enc,
       row.created_at
     );
     return true;
@@ -303,16 +335,42 @@ export function liveProject(projectId: string, customerId?: string): ProjectRow 
   return row;
 }
 
+export function liveProjectByPublicId(publicId: string): ProjectRow | undefined {
+  return database().prepare("SELECT * FROM projects WHERE public_id = ? AND deleted_at IS NULL").get(publicId) as
+    ProjectRow | undefined;
+}
+
 export function liveProjectByKeyHash(keyHash: string): ProjectRow | undefined {
   return database().prepare("SELECT * FROM projects WHERE key_hash = ? AND deleted_at IS NULL").get(keyHash) as
     ProjectRow | undefined;
 }
 
 export type ProjectChanges = Partial<
-  Pick<ProjectRow, "name" | "backend" | "model_key_enc" | "assistant_name" | "instructions" | "greeting">
+  Pick<
+    ProjectRow,
+    | "name"
+    | "backend"
+    | "model_key_enc"
+    | "assistant_name"
+    | "instructions"
+    | "greeting"
+    | "studio"
+    | "public_id"
+    | "webhook_secret_enc"
+  >
 >;
 
-const PROJECT_COLUMNS = ["name", "backend", "model_key_enc", "assistant_name", "instructions", "greeting"] as const;
+const PROJECT_COLUMNS = [
+  "name",
+  "backend",
+  "model_key_enc",
+  "assistant_name",
+  "instructions",
+  "greeting",
+  "studio",
+  "public_id",
+  "webhook_secret_enc"
+] as const;
 
 /** Applies changes to a live project of `customerId`; false when there is no such project. */
 export function updateProject(projectId: string, customerId: string, changes: ProjectChanges): boolean {
@@ -629,4 +687,72 @@ export function insertCustomerWithInvite(
     db.prepare("UPDATE cloud_invites SET used_by = ?, used_at = ? WHERE code = ?").run(row.id, at, code);
     return "created";
   });
+}
+
+// --- conversations ----------------------------------------------------------------
+
+export type ConversationRow = {
+  id: string;
+  customer_id: string;
+  project_id: string;
+  started_at: number;
+  ended_at: number;
+  seconds: number;
+  /** "test" (the console), "embed" (public widget) or "api" (a minted token). */
+  source: string;
+  /** The first thing the user said, shown in the list. */
+  preview: string;
+  /** JSON list of ConversationTurn. */
+  turns: string;
+};
+
+export function insertConversation(row: ConversationRow): void {
+  database()
+    .prepare(
+      `INSERT OR IGNORE INTO conversations
+         (id, customer_id, project_id, started_at, ended_at, seconds, source, preview, turns)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      row.id,
+      row.customer_id,
+      row.project_id,
+      row.started_at,
+      row.ended_at,
+      row.seconds,
+      row.source,
+      row.preview,
+      row.turns
+    );
+}
+
+/** A project's conversations, newest first, without their turns. */
+export function projectConversations(
+  projectId: string,
+  customerId: string,
+  limit: number
+): Omit<ConversationRow, "turns">[] {
+  return database()
+    .prepare(
+      `SELECT id, customer_id, project_id, started_at, ended_at, seconds, source, preview FROM conversations
+       WHERE project_id = ? AND customer_id = ? ORDER BY started_at DESC LIMIT ?`
+    )
+    .all(projectId, customerId, limit) as Omit<ConversationRow, "turns">[];
+}
+
+export function conversationById(id: string, customerId: string): ConversationRow | undefined {
+  return database().prepare("SELECT * FROM conversations WHERE id = ? AND customer_id = ?").get(id, customerId) as
+    ConversationRow | undefined;
+}
+
+export function deleteProjectConversations(projectId: string, customerId: string): number {
+  return Number(
+    database().prepare("DELETE FROM conversations WHERE project_id = ? AND customer_id = ?").run(projectId, customerId)
+      .changes
+  );
+}
+
+/** Deletes conversations that started before `before`; returns how many. */
+export function pruneConversations(before: number): number {
+  return Number(database().prepare("DELETE FROM conversations WHERE started_at < ?").run(before).changes);
 }

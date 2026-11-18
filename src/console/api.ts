@@ -2,6 +2,9 @@
 // the bearer token (when the endpoint needs one) and an optional fetch, so
 // tests can inject both.
 
+import type { ProjectStudio } from "../../shared/cloud-studio";
+
+export type { ProjectStudio } from "../../shared/cloud-studio";
 export type Backend = "openai" | "gemini" | "grok";
 export type Provider = "wechat" | "alipay" | "test";
 
@@ -17,6 +20,10 @@ export type Project = {
   assistantName: string;
   instructions: string;
   greeting: string;
+  studio: ProjectStudio;
+  /** Public agent id for embedding without a backend. */
+  publicId: string;
+  hasWebhookSecret: boolean;
   createdAt: number;
 };
 export type ProjectPatch = Partial<{
@@ -26,7 +33,32 @@ export type ProjectPatch = Partial<{
   assistantName: string;
   instructions: string;
   greeting: string;
+  studio: ProjectStudio;
 }>;
+/** What a new project starts with (from a template). */
+export type ProjectStart = { name: string } & Partial<{
+  assistantName: string;
+  instructions: string;
+  greeting: string;
+  studio: Partial<ProjectStudio>;
+}>;
+export type ConversationSummary = {
+  id: string;
+  startedAt: number;
+  endedAt: number;
+  seconds: number;
+  source: "test" | "embed" | "api" | string;
+  preview: string;
+};
+export type ConversationTurn = {
+  at: number;
+  speaker: "user" | "agent" | "tool";
+  text: string;
+  ok?: boolean;
+  ms?: number;
+};
+export type Conversation = ConversationSummary & { projectId: string; turns: ConversationTurn[] };
+export type ToolTestResult = { ok: true; result: unknown; ms: number } | { ok: false; error: string; ms: number };
 export type Usage = {
   month: string;
   seconds: number;
@@ -116,14 +148,26 @@ export function createCloudApi(fetcher?: FetchLike) {
     logout: (token: string) => send<{ ok: true }>(token, "POST", "/logout"),
     me: (token: string) => get<Me>(token, "/me"),
     listProjects: (token: string) => get<{ projects: Project[] }>(token, "/projects"),
-    createProject: (token: string, name: string) =>
-      send<{ project: Project; apiKey: string }>(token, "POST", "/projects", { name }),
+    createProject: (token: string, start: ProjectStart) =>
+      send<{ project: Project; apiKey: string }>(token, "POST", "/projects", start),
     updateProject: (token: string, projectId: string, patch: ProjectPatch) =>
       send<{ project: Project }>(token, "PATCH", `/projects/${id(projectId)}`, patch),
     rotateKey: (token: string, projectId: string) =>
       send<{ project: Project; apiKey: string }>(token, "POST", `/projects/${id(projectId)}/rotate-key`),
     deleteProject: (token: string, projectId: string) =>
       send<{ ok: true }>(token, "DELETE", `/projects/${id(projectId)}`),
+    testSession: (token: string, projectId: string) =>
+      send<{ token: string; expiresAt: number }>(token, "POST", `/projects/${id(projectId)}/test-session`),
+    testTool: (token: string, projectId: string, name: string, args: Record<string, unknown>) =>
+      send<ToolTestResult>(token, "POST", `/projects/${id(projectId)}/tools/test`, { name, arguments: args }),
+    webhookSecret: (token: string, projectId: string) =>
+      get<{ secret: string }>(token, `/projects/${id(projectId)}/webhook-secret`),
+    rotateWebhookSecret: (token: string, projectId: string) =>
+      send<{ secret: string }>(token, "POST", `/projects/${id(projectId)}/webhook-secret/rotate`),
+    conversations: (token: string, projectId: string) =>
+      get<{ conversations: ConversationSummary[] }>(token, `/projects/${id(projectId)}/conversations`),
+    conversation: (token: string, conversationId: string) =>
+      get<{ conversation: Conversation }>(token, `/conversations/${id(conversationId)}`),
     usage: (token: string, month?: string) =>
       get<Usage>(token, month ? `/usage?month=${encodeURIComponent(month)}` : "/usage"),
     ledger: (token: string) => get<{ entries: LedgerEntry[] }>(token, "/ledger"),

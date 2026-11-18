@@ -1,3 +1,4 @@
+import { DEFAULT_STUDIO } from "../shared/cloud-studio";
 import { randomBytes } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { chargeSession, cloudEnabled, projectForApiKey, projectRuntime, remainingSeconds } from "../server/cloud";
@@ -163,7 +164,8 @@ describe("projects for the relay", () => {
       customerId,
       backend: "gemini",
       modelKey: "sk-proj-abc",
-      assistantName: "Assistant"
+      assistantName: "Assistant",
+      studio: { ...DEFAULT_STUDIO, keepConversations: true }
     });
 
     patchProject(customerId, project.id, { assistantName: "Ava", instructions: "Be brief.", greeting: "Hi!" });

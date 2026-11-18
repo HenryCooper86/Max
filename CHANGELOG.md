@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-11-18 — Max Cloud Studio
+
+- Every project opens in a Studio built for people new to voice agents:
+  templates (website guide, support, booking, restaurant orders, sales,
+  language practice), a voice picker, a language, instructions with a "help me
+  write it" form, and up to 20,000 characters of knowledge the agent answers
+  from.
+- Talk to the agent in the console (voice or typed) before publishing it.
+- No-code webhook tools with a test button and a per-project signing secret.
+  Customer addresses are called only over https to public addresses, checked at
+  connect time, with no redirects.
+- One-line embed with no backend: list your websites, paste a script tag with
+  the project's public id. Tokens are given only to listed websites and work
+  only from them. The SDK gains a `project` option and the widget can dock
+  bottom-left.
+- Conversation history per project, kept 30 days.
+
 ## 2026-11-18 — Max Cloud: accounts, projects and prepaid balance
 
 - A developer console at `/console`: sign up, create projects, paste a model

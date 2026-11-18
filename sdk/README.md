@@ -188,6 +188,19 @@ field exposes the underlying `VoiceAgent`.
 
 ## Script tag
 
+With [Max Cloud](https://max.bionicloud.net/console), one line is enough: list your website in the console's
+**Install** tab and paste
+
+```html
+<script
+  src="https://max.bionicloud.net/sdk/voice-agent.iife.js"
+  data-relay="https://max.bionicloud.net"
+  data-project="pub_…"
+></script>
+```
+
+The same `project` option works for `new VoiceAgent({ url, project })` and `useVoiceAgent({ url, project })`.
+
 ```html
 <script
   src="https://relay.example.com/sdk/voice-agent.iife.js"
@@ -215,13 +228,14 @@ the element yourself:
 | Attribute (`data-` on the script) | Meaning                                                                                                                     |
 | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | `relay`                           | Relay base URL.                                                                                                             |
+| `project`                         | A Max Cloud public agent id (`pub_…`): no backend or token needed, on websites listed in the console.                       |
 | `token`                           | A fixed token (development only).                                                                                           |
 | `token-url`                       | Your endpoint. It is called with POST (GET if POST gets 404/405) before every connect and must return `{ "token": "..." }`. |
 | `language`, `voice`, `backend`    | As in the options above.                                                                                                    |
 | `context`                         | Facts about the page for the assistant, such as "The visitor is on the pricing page". Read at the next connect.             |
 | `label`                           | Accessible name of the button. Default "Talk to the assistant".                                                             |
 | `accent`                          | Brand colour, any CSS colour.                                                                                               |
-| `position`                        | Bottom right by default; `inline` places it in the page flow.                                                               |
+| `position`                        | Bottom right by default; `bottom-left`, or `inline` to place it in the page flow.                                           |
 | `text-input`                      | Show a text box in the panel.                                                                                               |
 
 The element has a Shadow DOM, a labelled toggle button (`aria-pressed`) with a

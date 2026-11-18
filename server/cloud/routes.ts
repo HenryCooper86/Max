@@ -8,6 +8,7 @@ import { checkAuthRateLimit, clientAddress } from "../auth";
 import { createLogger } from "../logger";
 import { PACKS } from "./billing";
 import { cloudEnabled, cloudPaymentProvider, cloudPaymentProviders, now } from "./context";
+import { listConversations, readConversation } from "./conversations";
 import {
   createProject,
   customerForToken,
@@ -16,11 +17,18 @@ import {
   login,
   logout,
   patchProject,
+  projectStudio,
+  projectWebhookSecret,
   publicCustomer,
+  revealWebhookSecret,
   rotateProjectKey,
+  rotateWebhookSecret,
   signup,
   type Result
 } from "./customers";
+import { mintEmbedSession, mintTestSession } from "./sessions";
+import { liveProject } from "./store";
+import { testProjectTool } from "./tools";
 import { customerFunds, ledgerEntries, usageSummary, type CustomerRow } from "./store";
 import { creditAccepted, creditPaidOrder, createTopup, readOrder, topupStatus, validOrderId } from "./topups";
 
@@ -170,6 +178,52 @@ export function registerCloudRoutes(app: express.Express): void {
     "/projects/:id",
     handle((req, res) => send(res, deleteProject(customerOf(res).id, param(req, "id"))))
   );
+  // The console's Test panel: a short-lived session token for the owner.
+  api.post(
+    "/projects/:id/test-session",
+    handle((req, res) => send(res, mintTestSession(customerOf(res).id, param(req, "id")), 201))
+  );
+  // "Send test request" for one saved tool, with sample arguments.
+  api.post(
+    "/projects/:id/tools/test",
+    handle(async (req, res) => {
+      const row = liveProject(param(req, "id"), customerOf(res).id);
+      if (!row) {
+        res.status(404).json({ ok: false, error: "Project not found." });
+        return;
+      }
+      if (!checkAuthRateLimit(`tool-test:${row.id}`)) {
+        res.status(429).json({ ok: false, error: "Too many test requests. Try again in a minute." });
+        return;
+      }
+      const input = body(req);
+      const args = input.arguments && typeof input.arguments === "object" && !Array.isArray(input.arguments);
+      res.json(
+        await testProjectTool(
+          projectStudio(row),
+          projectWebhookSecret(row),
+          typeof input.name === "string" ? input.name : "",
+          args ? (input.arguments as Record<string, unknown>) : {}
+        )
+      );
+    })
+  );
+  api.get(
+    "/projects/:id/webhook-secret",
+    handle((req, res) => send(res, revealWebhookSecret(customerOf(res).id, param(req, "id"))))
+  );
+  api.post(
+    "/projects/:id/webhook-secret/rotate",
+    handle((req, res) => send(res, rotateWebhookSecret(customerOf(res).id, param(req, "id"))))
+  );
+  api.get(
+    "/projects/:id/conversations",
+    handle((req, res) => send(res, listConversations(customerOf(res).id, param(req, "id"))))
+  );
+  api.get(
+    "/conversations/:id",
+    handle((req, res) => send(res, readConversation(customerOf(res).id, param(req, "id"))))
+  );
 
   api.get(
     "/usage",
@@ -215,6 +269,46 @@ export function registerCloudRoutes(app: express.Express): void {
   app.use("/cloud", noStore, requireEnabled, (_req: Request, res: Response) => {
     res.status(404).json({ ok: false, error: "Not found." });
   });
+}
+
+// --- public embed -------------------------------------------------------------------
+
+/**
+ * POST /v1/public-session-tokens {"project":"pub_…"}: a session token for the
+ * widget on a website the project's owner listed. Called by browsers on other
+ * sites, so it answers CORS for whichever site asks; only a listed site gets
+ * a token, and the token opens a session from that site only.
+ */
+export function registerEmbedRoutes(app: express.Express): void {
+  const path = "/v1/public-session-tokens";
+  const cors = (req: Request, res: Response) => {
+    const origin = req.headers.origin;
+    if (typeof origin === "string" && origin.length < 300) res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+    res.setHeader("Cache-Control", "no-store");
+  };
+  app.options(path, (req, res) => {
+    cors(req, res);
+    res.setHeader("Access-Control-Allow-Methods", "POST");
+    res.setHeader("Access-Control-Allow-Headers", "content-type");
+    res.setHeader("Access-Control-Max-Age", "600");
+    res.status(204).end();
+  });
+  app.post(
+    path,
+    handle((req, res) => {
+      cors(req, res);
+      if (!cloudEnabled()) {
+        res.status(503).json({ ok: false, error: NOT_CONFIGURED });
+        return;
+      }
+      send(
+        res,
+        mintEmbedSession({ publicId: body(req).project, origin: req.headers.origin, address: clientAddress(req) }),
+        201
+      );
+    })
+  );
 }
 
 // --- payments ---------------------------------------------------------------------

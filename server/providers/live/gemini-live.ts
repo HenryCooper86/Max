@@ -89,7 +89,9 @@ export function createGeminiLiveEngine(
   log: Logger,
   createSocket: (url: string) => WebSocket = (url) => new WebSocket(url),
   /** Overrides GEMINI_API_KEY (a Max Cloud project brings its own). */
-  apiKeyOverride?: string
+  apiKeyOverride?: string,
+  /** Overrides the gender-based voice (a Max Cloud project picks one). */
+  voiceOverride?: string
 ): VoiceEngine {
   let socket: WebSocket | undefined;
   let events: EngineEvents | undefined;
@@ -185,9 +187,10 @@ export function createGeminiLiveEngine(
   function setup(config: EngineConfig): Record<string, unknown> {
     const model = env("GEMINI_LIVE_MODEL") ?? "gemini-3.8-live";
     const voice =
-      config.voiceGender === "male"
+      voiceOverride ??
+      (config.voiceGender === "male"
         ? (env("GEMINI_VOICE_MALE") ?? "Puck")
-        : (env("GEMINI_VOICE", "GEMINI_VOICE_FEMALE") ?? "Aoede");
+        : (env("GEMINI_VOICE", "GEMINI_VOICE_FEMALE") ?? "Aoede"));
     return {
       setup: {
         model: model.startsWith("models/") ? model : `models/${model}`,

@@ -44,12 +44,17 @@ import {
   cloudSessionAlive,
   cloudSessionEnded,
   cloudSessionStarted,
+  conversationRecorder,
   projectForApiKey,
+  pruneOldConversations,
+  projectServerTools,
+  saveConversation,
   projectKeyValid,
   projectRuntime,
   recoverCloudSessions,
   registerCloudPaymentRoutes,
   registerCloudRoutes,
+  registerEmbedRoutes,
   remainingSeconds
 } from "./cloud";
 import { USAGE_LIMIT_CLOSE_CODE } from "../shared/agent";
@@ -143,6 +148,13 @@ const usageMeter = createUsageMeter(usageSettingsFromEnv());
 const CLOUD_BALANCE_MESSAGE = "Your Max Cloud balance is used up. Top up in the console.";
 /** Simultaneous voice sessions per Max Cloud customer. */
 const CLOUD_SESSIONS_PER_CUSTOMER = 5;
+/** Of those, at most this many from the public embed, which anyone visiting a listed website (or
+ *  anyone faking its Origin) can start: the customer's own backend and tests always keep room. */
+const CLOUD_EMBED_SESSIONS_PER_CUSTOMER = 3;
+/** A public-embed session ends after this long, so nobody can hold one open for hours. */
+const CLOUD_EMBED_SESSION_MS = 15 * 60_000;
+/** Customer id → ids of their live public-embed sessions. */
+const liveEmbedSessions = new Map<string, Set<string>>();
 const PROJECT_MINTS_PER_MINUTE = 120;
 const projectMints = new Map<string, number[]>();
 /** A project's token mints in the trailing minute, within the limit. */
@@ -206,6 +218,8 @@ app.use((req, res, next) => {
 });
 // Payment notifications must be read as raw bytes to verify their signatures.
 registerCloudPaymentRoutes(app);
+// A Cloud project carries up to 20,000 characters of knowledge (3 bytes each in Chinese) and its tools.
+app.use("/cloud/api/projects", express.json({ limit: "512kb", strict: true }));
 app.use(express.json({ limit: "32kb", strict: true }));
 // Errors go out in English to a client that asks for it.
 app.use(localizeErrors);
@@ -966,6 +980,7 @@ app.post("/testing/clear", (req, res) => {
 });
 
 // Max Cloud's console API (server/cloud).
+registerEmbedRoutes(app);
 registerCloudRoutes(app);
 
 // API typos must remain JSON 404s; the SPA fallback below is only for client
@@ -1122,6 +1137,16 @@ wss.on("connection", (client, request) => {
     );
     return;
   }
+  const embedSession = cloudProject?.source === "embed";
+  if (
+    cloudCustomer &&
+    embedSession &&
+    (liveEmbedSessions.get(cloudCustomer)?.size ?? 0) >= CLOUD_EMBED_SESSIONS_PER_CUSTOMER
+  ) {
+    unregisterAuthenticatedConnection(client);
+    refuse(1013, "This assistant is busy right now. Try again in a minute.", "too many embed sessions");
+    return;
+  }
   // Left to talk: the customer's free seconds and balance, minus every one of
   // their sessions still running (they are only booked when they end).
   const cloudSecondsLeft = () =>
@@ -1149,10 +1174,17 @@ wss.on("connection", (client, request) => {
   }
   const usageSessionId = randomUUID();
   const meteredSession = usageMeter.open(usageSessionId, usageUserId);
+  // The project's conversation history, when the customer keeps one.
+  const recorder = runtime?.studio.keepConversations ? conversationRecorder() : undefined;
   if (cloudProject) {
     const sessions = liveCloudSessions.get(cloudProject.customerId) ?? new Map<string, number>();
     sessions.set(usageSessionId, Date.now());
     liveCloudSessions.set(cloudProject.customerId, sessions);
+    if (embedSession) {
+      const embeds = liveEmbedSessions.get(cloudProject.customerId) ?? new Set<string>();
+      embeds.add(usageSessionId);
+      liveEmbedSessions.set(cloudProject.customerId, embeds);
+    }
     cloudSessionStarted({
       sessionId: usageSessionId,
       customerId: cloudProject.customerId,
@@ -1175,6 +1207,13 @@ wss.on("connection", (client, request) => {
         }, 15_000)
       : undefined;
   usageCheck?.unref();
+  const embedLimit = embedSession
+    ? setTimeout(
+        () => refuse(1000, "This conversation reached its 15-minute limit.", "embed session time limit"),
+        CLOUD_EMBED_SESSION_MS
+      )
+    : undefined;
+  embedLimit?.unref();
   metrics.sessionOpened();
   trackClient(client);
   const session = new AgentSessionController(
@@ -1186,9 +1225,13 @@ wss.on("connection", (client, request) => {
             profile: projectAssistantProfile({
               name: runtime.assistantName,
               instructions: runtime.instructions,
-              greeting: runtime.greeting
+              greeting: runtime.greeting,
+              language: runtime.studio.language,
+              knowledge: runtime.studio.knowledge
             }),
-            serverTools: () => []
+            // Only the project's own webhook tools: never the relay's.
+            serverTools: () => projectServerTools(runtime.studio, runtime.webhookSecret),
+            ...(runtime.studio.voice ? { voice: runtime.studio.voice } : {})
           })
         : selectProvider(socket, sessionLog, telemetry),
     sessionLog,
@@ -1201,6 +1244,7 @@ wss.on("connection", (client, request) => {
       privateSession: Boolean(cloudProject),
       ...(tokenGrant ? { tokenGrant: { userId: tokenGrant.userId, context: tokenGrant.context } } : {}),
       onServerEvent: (payload) => {
+        recorder?.event(payload);
         const event = payload as { type?: unknown; state?: unknown };
         if (event?.type === "tool.activity" && event.state === "started") meteredSession.toolCall();
       },
@@ -1223,11 +1267,32 @@ wss.on("connection", (client, request) => {
 
   client.on("close", async (code) => {
     if (usageCheck) clearInterval(usageCheck);
+    if (embedLimit) clearTimeout(embedLimit);
+    if (cloudProject && embedSession) {
+      const embeds = liveEmbedSessions.get(cloudProject.customerId);
+      embeds?.delete(usageSessionId);
+      if (embeds && embeds.size === 0) liveEmbedSessions.delete(cloudProject.customerId);
+    }
     const usage = meteredSession.close();
     if (cloudProject) {
       const sessions = liveCloudSessions.get(cloudProject.customerId);
       sessions?.delete(usageSessionId);
       if (sessions && sessions.size === 0) liveCloudSessions.delete(cloudProject.customerId);
+    }
+    if (cloudProject && recorder) {
+      try {
+        saveConversation({
+          customerId: cloudProject.customerId,
+          projectId: cloudProject.projectId,
+          source: cloudProject.source ?? "api",
+          seconds: usage?.seconds ?? 0,
+          recorder
+        });
+      } catch (error) {
+        sessionLog.warn("conversation could not be saved", {
+          message: error instanceof Error ? error.message : String(error)
+        });
+      }
     }
     if (cloudProject && usage) {
       try {
@@ -1307,6 +1372,16 @@ authSessionSweepTimer.unref();
 await installServerTools(assistant().tools);
 // Max Cloud sessions a crash or restart left unbooked are charged up to their last checkpoint.
 recoverCloudSessions();
+// Conversation transcripts expire after 30 days even for projects nobody talks to any more.
+const conversationPruneTimer = setInterval(() => {
+  if (!cloudEnabled()) return;
+  try {
+    pruneOldConversations();
+  } catch (error) {
+    log.warn("conversation pruning failed", { message: error instanceof Error ? error.message : String(error) });
+  }
+}, 3_600_000);
+conversationPruneTimer.unref();
 
 const warnings = validateConfig();
 server.on("error", (error) => {

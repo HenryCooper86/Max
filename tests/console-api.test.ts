@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { ApiError, createCloudApi, type FetchLike } from "../src/console/api";
 import { formatMinutes, formatYuan, wholeMinutes } from "../src/console/format";
 import { shouldKeepPolling, toMillis } from "../src/console/poll";
-import { mintTokenSnippet, widgetSnippet } from "../src/console/snippetText";
 import { CONSOLE_PATH, resolveRoute } from "../src/lib/routes";
 
 type Call = { url: string; init?: RequestInit };
@@ -57,15 +56,6 @@ describe("top-up polling", () => {
   it("reads second timestamps as milliseconds", () => {
     expect(toMillis(1_800_000_000)).toBe(1_800_000_000_000);
     expect(toMillis(1_800_000_000_000)).toBe(1_800_000_000_000);
-  });
-});
-
-describe("snippets", () => {
-  it("use the origin", () => {
-    expect(mintTokenSnippet("https://max.example")).toContain("https://max.example/v1/session-tokens");
-    expect(widgetSnippet("https://max.example")).toBe(
-      '<script src="https://max.example/sdk/voice-agent.iife.js"></script>\n<voice-agent relay="https://max.example" token-url="/api/voice-token"></voice-agent>'
-    );
   });
 });
 

@@ -208,7 +208,18 @@ export function authorizeUpgrade(request: IncomingMessage, now = Date.now()): Up
     return { ok: false, code: 429, reason: "Too many connection attempts" };
   }
 
-  if (config.allowedOrigins.length) {
+  // The grant the session will run with: the same choice the connection handler makes.
+  const cloudProject = presentedTokens(request)
+    .map((provided) => sessionTokens.grant(provided) ?? cloudSessionTokens.grant(provided))
+    .find((grant) => grant !== undefined)?.project;
+  if (cloudProject) {
+    // Max Cloud sessions run on customers' own websites, so the relay's own
+    // allowlist does not apply. A token the public embed minted works only
+    // from the website that asked for it.
+    if (cloudProject.origin && request.headers.origin !== cloudProject.origin) {
+      return { ok: false, code: 403, reason: "Origin not allowed" };
+    }
+  } else if (config.allowedOrigins.length) {
     const origin = request.headers.origin;
     // Native apps (iOS/Android/health checks) send no Origin header; the
     // allowlist guards browsers, where a hostile page could otherwise open

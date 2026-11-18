@@ -1,11 +1,27 @@
 import { useState, type FormEvent } from "react";
-import type { Project } from "./api";
+import { useLanguage } from "../components/LanguageToggle";
+import { AGENT_TEMPLATES, findTemplate, type AgentTemplate } from "../lib/agent-templates";
+import type { Language } from "../lib/i18n";
+import type { Project, ProjectStart } from "./api";
 import { useSay, type Session } from "./hooks";
 import { KeyReveal } from "./KeyReveal";
-import { BACKENDS, ProjectEditor } from "./ProjectEditor";
-import { Snippets } from "./Snippets";
+import { BACKENDS } from "./studio/AgentTab";
+import { Studio } from "./studio/Studio";
+import type { StudioTab } from "./studio/types";
 
 const backendLabel = (id: string) => BACKENDS.find((option) => option.id === id)?.label ?? id;
+
+/** What a new project starts with when made from `template`, in the visitor's language. */
+export function startFromTemplate(template: AgentTemplate, name: string, language: Language): ProjectStart {
+  const pick = (text: { zh: string; en: string }) => (language === "en-US" ? text.en : text.zh);
+  return {
+    name,
+    assistantName: pick(template.assistantName),
+    instructions: pick(template.instructions),
+    greeting: pick(template.greeting),
+    studio: { template: template.id, knowledge: pick(template.knowledge) }
+  };
+}
 
 function NewProject({
   session,
@@ -15,19 +31,28 @@ function NewProject({
   onCreated: (project: Project, apiKey: string) => void;
 }) {
   const say = useSay();
+  const { language } = useLanguage();
   const [open, setOpen] = useState(false);
+  const [template, setTemplate] = useState<AgentTemplate | null>(null);
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
+  const close = () => {
+    setOpen(false);
+    setTemplate(null);
+    setName("");
+    setError("");
+  };
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (!template) return;
     setBusy(true);
     setError("");
     try {
-      const result = await session.api.createProject(session.token, name.trim());
-      setName("");
-      setOpen(false);
+      const result = await session.api.createProject(session.token, startFromTemplate(template, name.trim(), language));
+      close();
       onCreated(result.project, result.apiKey);
     } catch (caught) {
       setError(session.fail(caught));
@@ -38,22 +63,50 @@ function NewProject({
 
   if (!open) {
     return (
-      <button type="button" className="siteButton secondary" onClick={() => setOpen(true)}>
-        {say("新建项目", "New project")}
+      <button type="button" className="siteButton" onClick={() => setOpen(true)}>
+        {say("新建助手", "New agent")}
       </button>
     );
   }
   return (
-    <form className="cxInline" onSubmit={(event) => void submit(event)}>
-      <label className="cxField">
-        <span>{say("项目名称", "Project name")}</span>
-        <input autoFocus required maxLength={60} value={name} onChange={(e) => setName(e.target.value)} />
-      </label>
+    <form className="cxCard cxInline" onSubmit={(event) => void submit(event)} aria-labelledby="cx-new-title">
+      <h3 id="cx-new-title">{say("你想做什么样的助手？", "What kind of agent do you want?")}</h3>
+      <p className="cxMuted">
+        {say("选一个起点。之后都能改。", "Pick a starting point. You can change everything later.")}
+      </p>
+      <ul className="cxsTemplates">
+        {AGENT_TEMPLATES.map((option) => (
+          <li key={option.id}>
+            <button
+              type="button"
+              aria-pressed={template?.id === option.id}
+              onClick={() => {
+                setTemplate(option);
+                if (!name.trim() || AGENT_TEMPLATES.some((other) => say(other.title.zh, other.title.en) === name)) {
+                  setName(say(option.title.zh, option.title.en));
+                }
+              }}
+            >
+              <span className="cxsTemplateIcon" aria-hidden="true">
+                {option.icon}
+              </span>
+              <strong>{say(option.title.zh, option.title.en)}</strong>
+              <span>{say(option.blurb.zh, option.blurb.en)}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      {template ? (
+        <label className="cxField">
+          <span>{say("项目名称", "Project name")}</span>
+          <input autoFocus required maxLength={60} value={name} onChange={(e) => setName(e.target.value)} />
+        </label>
+      ) : null}
       <div className="cxRow">
-        <button className="siteButton" type="submit" disabled={busy || !name.trim()}>
-          {say("创建", "Create")}
+        <button className="siteButton" type="submit" disabled={busy || !template || !name.trim()}>
+          {busy ? say("正在创建…", "Creating…") : say("创建", "Create")}
         </button>
-        <button type="button" className="siteButton quiet" onClick={() => setOpen(false)}>
+        <button type="button" className="siteButton quiet" onClick={close}>
           {say("取消", "Cancel")}
         </button>
       </div>
@@ -61,6 +114,33 @@ function NewProject({
         {error}
       </p>
     </form>
+  );
+}
+
+function StatusChips({ project }: { project: Project }) {
+  const say = useSay();
+  const template = findTemplate(project.studio.template);
+  return (
+    <div className="cxsChips">
+      {template ? (
+        <span className="cxsChip">
+          {template.icon} {say(template.title.zh, template.title.en)}
+        </span>
+      ) : null}
+      <span className="cxsChip">{backendLabel(project.backend)}</span>
+      {project.hasModelKey ? null : <span className="cxsChip">{say("需要模型密钥", "Needs a model key")}</span>}
+      {project.studio.tools.length ? (
+        <span className="cxsChip">
+          {say(
+            `${project.studio.tools.length} 个工具`,
+            project.studio.tools.length === 1 ? "1 tool" : `${project.studio.tools.length} tools`
+          )}
+        </span>
+      ) : null}
+      {project.studio.publicEmbed.enabled ? (
+        <span className="cxsChip ok">{say("已上线网站", "Live on your site")}</span>
+      ) : null}
+    </div>
   );
 }
 
@@ -78,7 +158,7 @@ export function ProjectsSection({
   onMoney: () => void;
 }) {
   const say = useSay();
-  const [openId, setOpenId] = useState<string | null>(null);
+  const [open, setOpen] = useState<{ id: string; tab: StudioTab } | null>(null);
   const [revealed, setRevealed] = useState<{ name: string; apiKey: string } | null>(null);
 
   const replace = (project: Project) => setProjects((projects ?? []).map((p) => (p.id === project.id ? project : p)));
@@ -86,13 +166,13 @@ export function ProjectsSection({
   return (
     <section className="cxSection" id="projects" aria-labelledby="cx-projects">
       <div className="cxRow spread">
-        <h2 id="cx-projects">{say("项目", "Projects")}</h2>
+        <h2 id="cx-projects">{say("你的助手", "Your agents")}</h2>
         <NewProject
           session={session}
           onCreated={(project, apiKey) => {
             setProjects([project, ...(projects ?? [])]);
             setRevealed({ name: project.name, apiKey });
-            setOpenId(project.id);
+            setOpen({ id: project.id, tab: "agent" });
           }}
         />
       </div>
@@ -104,41 +184,38 @@ export function ProjectsSection({
       ) : projects.length === 0 ? (
         <p className="cxMuted">
           {say(
-            "还没有项目。新建一个，贴上模型密钥，就能开始。",
-            "No projects yet. Create one, paste your model key, and you're set."
+            "还没有助手。点“新建助手”，选一个模板，几分钟就能和它说上话。",
+            "No agents yet. Click New agent, pick a template, and you'll be talking to it in a few minutes."
           )}
         </p>
       ) : (
         <ul className="cxProjects">
           {projects.map((project) => {
-            const open = openId === project.id;
+            const isOpen = open?.id === project.id;
             return (
               <li key={project.id} className="cxCard">
                 <div className="cxProjectHead">
                   <div>
                     <h3>{project.name}</h3>
-                    <p className="cxMuted">
-                      {backendLabel(project.backend)} · <code>{project.keyPrefix}…</code>
-                    </p>
-                    {!project.hasModelKey ? (
-                      <p className="cxWarn">{say("需要填写模型密钥", "Needs a model key")}</p>
-                    ) : null}
+                    <StatusChips project={project} />
                   </div>
                   <button
                     type="button"
-                    className="siteButton secondary small"
-                    aria-expanded={open}
+                    className={`siteButton small${isOpen ? " secondary" : ""}`}
+                    aria-expanded={isOpen}
                     aria-controls={`cx-panel-${project.id}`}
-                    onClick={() => setOpenId(open ? null : project.id)}
+                    onClick={() => setOpen(isOpen ? null : { id: project.id, tab: "agent" })}
                   >
-                    {open ? say("收起", "Close") : say("设置", "Settings")}
+                    {isOpen ? say("收起", "Close") : say("打开工作室", "Open studio")}
                   </button>
                 </div>
-                {open ? (
+                {isOpen ? (
                   <div id={`cx-panel-${project.id}`}>
-                    <ProjectEditor
+                    <Studio
                       session={session}
                       project={project}
+                      origin={origin}
+                      initialTab={open.tab}
                       onChanged={replace}
                       onKeyRotated={(next, apiKey) => {
                         replace(next);
@@ -146,11 +223,10 @@ export function ProjectsSection({
                       }}
                       onDeleted={(gone) => {
                         setProjects((projects ?? []).filter((p) => p.id !== gone.id));
-                        setOpenId(null);
+                        setOpen(null);
                         onMoney();
                       }}
                     />
-                    <Snippets origin={origin} />
                   </div>
                 ) : null}
               </li>

@@ -257,6 +257,8 @@ export function assistantProfileFrom(raw: unknown, baseDir = process.cwd()): Ass
   const voice = isRecord(raw.voice) ? raw.voice : {};
   const accent = text(raw.accentColor, 7);
   const renamed = name !== DEFAULT_ASSISTANT_PROFILE.name;
+  // Changing only the look, the logo or the sound leaves the assistant who it was.
+  const stock = !PERSONA_KEYS.some((key) => raw[key] !== undefined && raw[key] !== null);
   return {
     name,
     device,
@@ -274,7 +276,8 @@ export function assistantProfileFrom(raw: unknown, baseDir = process.cwd()): Ass
       logoBackground && /^#[0-9a-f]{6}$/i.test(logoBackground) ? logoBackground.toUpperCase() : DEFAULT_LOGO_BACKGROUND,
     equalizer: normalizeEqualizer(raw.equalizer ?? voice.equalizer) ?? { preset: preset.equalizer },
     // Who built it is the owner's to say; without a `developer` it names no company.
-    developer: raw.developer === null ? undefined : text(raw.developer, 80),
+    // A config that only changes the look keeps the stock Max, maker included.
+    developer: raw.developer === null ? undefined : (text(raw.developer, 80) ?? (stock ? MAX_DEVELOPER : undefined)),
     identityNotes: text(raw.identityNotes, 400),
     tagline: text(raw.tagline, 80),
     accentColor: accent && /^#[0-9a-f]{6}$/i.test(accent) ? accent.toUpperCase() : undefined,
@@ -295,7 +298,7 @@ export function assistantProfileFrom(raw: unknown, baseDir = process.cwd()): Ass
     },
     // Changing only the look, the logo or the sound leaves the assistant who
     // it was: it keeps the original Max prompts word for word.
-    isDefault: !PERSONA_KEYS.some((key) => raw[key] !== undefined && raw[key] !== null)
+    isDefault: stock
   };
 }
 

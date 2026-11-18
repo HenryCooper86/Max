@@ -14,6 +14,14 @@ import { containsWakePhrase, createWakeMatcher } from "../shared/wake";
 afterEach(() => setAssistantProfileForTests());
 
 describe("assistant profile", () => {
+  it("keeps the stock maker when a config only changes the look", () => {
+    expect(assistantProfileFrom({ logo: "brand/devices/app.svg", accentColor: "#0b6bff" }).developer).toBe(
+      "Henry (cooph2o)"
+    );
+    expect(assistantProfileFrom({ name: "Nova" }).developer).toBeUndefined();
+    expect(assistantProfileFrom({ developer: null }).developer).toBeUndefined();
+  });
+
   it("keeps the original Max persona when nothing is configured", () => {
     expect(basePersonaPrompt()).toBe(DEFAULT_AGENT_SYSTEM_PROMPT);
     expect(basePersonaPrompt()).toMatch(/^你是 Max，/);

@@ -24,6 +24,8 @@
 	<string>$(HORIZON_GIT_COMMIT)</string>
 	<key>HorizonAMapKey</key>
 	<string>$(AMAP_IOS_KEY)</string>
+	<key>HorizonRelayHost</key>
+	<string>$(MAX_RELAY_HOST)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UILaunchScreen</key>

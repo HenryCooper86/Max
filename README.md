@@ -74,8 +74,12 @@ transcript and an optional text box.
 <voice-agent relay="https://voice.example.com" token-url="/api/voice-token" text-input></voice-agent>
 ```
 
-**React.** Install the typed `max-voice-agent` package. Until it is on npm, `npm run pack:sdk` builds a tarball you can
-`npm install` (see the [SDK reference](sdk/README.md#install)).
+**React.** Install the typed `max-voice-agent` package. Until it is on npm, install it from the
+[GitHub release](https://github.com/HenryCooper86/Max/releases/tag/sdk-v0.1.0):
+
+```bash
+npm install https://github.com/HenryCooper86/Max/releases/download/sdk-v0.1.0/max-voice-agent-0.1.0.tgz
+```
 
 ```tsx
 import { useVoiceAgent } from "max-voice-agent/react";

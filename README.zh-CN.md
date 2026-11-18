@@ -101,4 +101,4 @@ iOS 使用 `ios/MaxHelmet.xcworkspace`，先按 [iOS 说明](ios/README.md) 安�
 
 共享 Lightsail 测试服务器的部署脚本为 `deploy-lightsail.command`。它要求干净的工作树、已评审的 `main` 提交，以及与 `gitlab/main` 一致的 SHA；从开发机推送构建产物，并在存活/就绪检查失败时回滚。具体步骤和持久化数据预检见[英文部署章节](README.md#build--deployment-pipeline)及 [RDK 伴侣验收说明](docs/rdk-ios-companion-acceptance.md)。
 
-接下来的工作重点是附近停靠点工具、真实 ADAS 传感器与置信度、可信证书、以及各平台和 RDK 的真机验收。既有问题与历史验证记录见 [代码审查记录](docs/code-audit-2026-09-15.md)和[移动端一致性审查](docs/mobile-parity.md)。
+接下来的工作重点是附近停靠点工具、真实 ADAS 传感器与置信度、可信证书、以及各平台和 RDK 的真机验收。移动端一致性记录见[移动端一致性审查](docs/mobile-parity.md)。

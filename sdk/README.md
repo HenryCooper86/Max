@@ -15,7 +15,13 @@ three entry points:
 | `max-voice-agent/react`  | `useVoiceAgent` (React 18 or newer is a peer dependency)             |
 | `max-voice-agent/widget` | Registers the `<voice-agent>` element (browser only, not during SSR) |
 
-Until the package is published to npm, build it from this repository and install the file:
+Until the package is published to npm, install it from the GitHub release:
+
+```bash
+npm install https://github.com/HenryCooper86/Max/releases/download/sdk-v0.1.0/max-voice-agent-0.1.0.tgz
+```
+
+or build it from this repository and install the file:
 
 ```bash
 npm run pack:sdk                                  # in this repository: writes dist/max-voice-agent-0.1.0.tgz

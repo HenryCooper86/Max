@@ -40,3 +40,7 @@ __pycache__/
 assistant.config.json
 # …but the examples' configs are part of the examples.
 !examples/**/assistant.config.json
+
+# Internal analysis and research, kept locally only.
+reports/
+research_notes/

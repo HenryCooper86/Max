@@ -986,7 +986,7 @@ rollback. The evidence template and physical checklist live in
 
 ## Verification
 
-The latest repository-wide review, fixes, verification results, and remaining physical acceptance gaps are in [docs/code-audit-2026-09-24.md](code-audit-2026-09-24.md).
+Remaining physical acceptance gaps are tracked in [live agent testing](live-agent-testing.md) and the [RDK companion acceptance checklist](rdk-ios-companion-acceptance.md).
 
 Build, lint, and test the web/relay stack:
 

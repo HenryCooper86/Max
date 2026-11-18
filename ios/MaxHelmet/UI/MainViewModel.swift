@@ -68,15 +68,25 @@ final class MainViewModel: ObservableObject {
 
     /// On the iOS Simulator, `localhost` reaches the host machine where the relay
     /// listens on :8787. On a physical device, `localhost` is the phone itself, so
-    /// default to the shared AWS Lightsail test relay (self-signed wss://) instead.
-    /// Either default can be overridden in the HUD's 语音中继地址 field.
+    /// the default is your own relay: set MAX_RELAY_HOST in
+    /// ios/Config/Secrets.xcconfig (a host name or address, such as
+    /// relay.example.com), which reaches the app as the HorizonRelayHost
+    /// Info.plist key. Either default can be overridden in the HUD's 语音中继地址 field.
     static let defaultRelayURL: String = {
         #if targetEnvironment(simulator)
         return "ws://localhost:8787/agent"
         #else
-        return "wss://3.35.135.136/agent"
+        return deviceRelayURL()
         #endif
     }()
+
+    /// `wss://<MAX_RELAY_HOST>/agent`, or a placeholder when no host is configured.
+    static func deviceRelayURL(infoDictionary: [String: Any] = Bundle.main.infoDictionary ?? [:]) -> String {
+        let host = (infoDictionary["HorizonRelayHost"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // An unset build setting reaches the plist as "" or as the literal "$(MAX_RELAY_HOST)".
+        guard !host.isEmpty, !host.contains("$(") else { return "wss://relay.example.com/agent" }
+        return "wss://\(host)/agent"
+    }
 
     /// Debug device builds can opt into the self-signed test relay. Release builds
     /// always use normal platform certificate and hostname validation.

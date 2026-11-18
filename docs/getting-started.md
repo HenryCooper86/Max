@@ -26,6 +26,9 @@ An assistant is one JSON file. Create `assistant.config.json` in the repository 
 }
 ```
 
+If you have used the relay's Admin → Studio before, the config it saved (in `~/.horizon-helmet-testing/`) takes
+precedence over this file; pass `ASSISTANT_CONFIG=assistant.config.json` to be sure which one runs.
+
 `"device": "app"` makes it a software assistant: it answers without a wake word and has no wearable behaviour (no
 riding context, torch or navigation). `instructions` is where your product knowledge and house rules go. Every key is
 described in the [configuration reference](configuration.md). Prefer a wizard? Run `npm run setup`.
@@ -43,7 +46,9 @@ curl -s http://localhost:8787/health | head -c 300
 ```
 
 The demo backend needs no account. It hears when you speak (but cannot understand speech), answers typed messages and
-runs your tools for real. That is enough to build and test the whole integration before choosing a model.
+runs your tools for real. That is enough to build and test the whole integration before choosing a model. The relay keeps its own data (accounts,
+Studio settings, session history for the QA screens) in `~/.horizon-helmet-testing/`; set `STUDIO_DIR` and `HOME` to keep
+it elsewhere.
 
 ## 4. Use a real voice model
 
@@ -80,7 +85,8 @@ example `npx serve .`), because browsers only allow the microphone on `http://lo
 </html>
 ```
 
-Press the microphone button and talk. That is the whole integration while the relay is open. Before you put it on the
+Press the microphone button and talk, or with the demo backend type into the text box. That is the whole integration
+while the relay is open. Before you put it on the
 internet, close the relay (step 7).
 
 To build your own interface instead of the widget, use `VoiceAgent` or the React hook from the

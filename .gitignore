@@ -38,3 +38,5 @@ __pycache__/
 
 # A deployment's own assistant identity (see assistant.config.example.json).
 assistant.config.json
+# …but the examples' configs are part of the examples.
+!examples/**/assistant.config.json

@@ -97,8 +97,9 @@ client sends. Authorise users by this `userId`, not by anything the page says.
 Make your backend fetch a fresh token when a connect is refused with 401. The SDK's token callback does this on each
 connect and reconnect. The relay keeps at most 50,000 live tokens and drops the oldest first.
 
-**Who may mint.** The relay token. On a relay with no protection at all (no relay token, no accounts) anyone may mint,
-which grants nothing the open relay does not already give. The endpoint has no CORS headers on purpose: call it from a
+**Who may mint.** The relay token. On a relay with no protection at all (no relay token, no accounts) anyone may mint
+a plain token, which grants nothing the open relay does not already give; minting there is rate-limited per address,
+and a request with a `userId` or `context` is refused (403), because on an open relay anyone could claim any identity. The endpoint has no CORS headers on purpose: call it from a
 server, not from a browser.
 
 ### Origin allowlist

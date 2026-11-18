@@ -800,6 +800,16 @@ export const LIVE_CAPABILITIES: ProviderCapabilities = {
   textInput: true
 };
 
+/** The keyless demo of a software assistant (server/providers/app-demo.ts):
+ *  it runs tools and takes typed turns, and has no weather or emergency mode. */
+export const APP_DEMO_CAPABILITIES: ProviderCapabilities = {
+  ...MOCK_CAPABILITIES,
+  weatherContext: false,
+  emergencyMode: false,
+  tools: true,
+  textInput: true
+};
+
 /** Doubao's realtime dialogue has no function calling and no typed turns. */
 export const DOUBAO_CAPABILITIES: ProviderCapabilities = { ...LIVE_CAPABILITIES, tools: false, textInput: false };
 

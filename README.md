@@ -36,28 +36,29 @@ npm install
 npm run build:sdk
 ```
 
-Start the relay with the example shop assistant, using the keyless demo backend:
+Start the relay with the example shop assistant, using the keyless demo backend. The relay token is the secret your
+own backend uses to mint short-lived tokens for browsers; any random string works locally:
 
 ```bash
-ASSISTANT_CONFIG=examples/web-embed/assistant.config.json VOICE_PROVIDER=mock \
-  TOOL_WEBHOOK_SECRET=dev-secret npx tsx server/index.ts
+RELAY_AUTH_TOKEN=dev-relay-secret TOOL_WEBHOOK_SECRET=dev-secret \
+  ASSISTANT_CONFIG=examples/web-embed/assistant.config.json VOICE_PROVIDER=mock npx tsx server/index.ts
 ```
 
-In a second terminal, start the example shop (your "own product"):
+In a second terminal, start the example shop (your "own product") with the same two secrets:
 
 ```bash
-TOOL_WEBHOOK_SECRET=dev-secret node examples/web-embed/server.mjs
+RELAY_AUTH_TOKEN=dev-relay-secret TOOL_WEBHOOK_SECRET=dev-secret node examples/web-embed/server.mjs
 ```
 
-Open <http://localhost:3000>, press the microphone button and type `check stock {"product": "Trail Runner 2"}`. The
+Open <http://localhost:3000>, press the microphone button and, since the demo backend cannot understand speech, type `check stock {"product": "Trail Runner 2"}`. The
 relay calls a code tool. `get_order_status {"orderId": "A-1042"}` calls a signed webhook on the shop's backend, and
 `show_product {"product": "storm-shell-jacket"}` runs a tool inside the page.
 
 To talk for real, restart the relay with a real backend:
 
 ```bash
-ASSISTANT_CONFIG=examples/web-embed/assistant.config.json VOICE_PROVIDER=openai OPENAI_API_KEY=sk-... \
-  TOOL_WEBHOOK_SECRET=dev-secret npx tsx server/index.ts
+RELAY_AUTH_TOKEN=dev-relay-secret TOOL_WEBHOOK_SECRET=dev-secret ASSISTANT_CONFIG=examples/web-embed/assistant.config.json \
+  VOICE_PROVIDER=openai OPENAI_API_KEY=sk-... npx tsx server/index.ts
 ```
 
 Now ask out loud: "Where is my order A-1042?" The full walkthrough, including your own assistant and production

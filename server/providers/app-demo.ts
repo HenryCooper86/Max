@@ -1,5 +1,5 @@
 import type { WebSocket } from "ws";
-import { MOCK_CAPABILITIES, type ProviderCapabilities } from "../../shared/agent";
+import { APP_DEMO_CAPABILITIES } from "../../shared/agent";
 import { assistant, promptsInChinese } from "../assistant";
 import type { Logger } from "../logger";
 import { sessionLanguage } from "../prompts";
@@ -25,14 +25,6 @@ import type { AgentProvider, ProviderSessionContext, ProviderTelemetry, SessionS
  *
  * Replies are spoken by the client's own text-to-speech (`useBrowserSpeech`).
  */
-
-const APP_DEMO_CAPABILITIES: ProviderCapabilities = {
-  ...MOCK_CAPABILITIES,
-  weatherContext: false,
-  emergencyMode: false,
-  tools: true,
-  textInput: true
-};
 
 export type AppDemoOptions = {
   serverTools?: () => readonly ToolDefinition[];

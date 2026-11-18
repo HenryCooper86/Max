@@ -1,4 +1,4 @@
-import { assistant, wakeWordActive } from "./assistant";
+import { assistant, promptsInChinese, wakeWordActive } from "./assistant";
 import { clientToolSpecsFrom } from "./tools/schema";
 import { sessionLanguage } from "./prompts";
 import { localizeOutgoing } from "./relay-speech";
@@ -696,7 +696,11 @@ export class AgentSessionController {
       speak: (speech) => this.provider.speakNavPrompt?.(speech),
       clearRoute: this.navHandler.clearRoute
     });
-    this.send({ type: "connection", state: "relay", detail: "语音中继 WebSocket 已连接" });
+    this.send({
+      type: "connection",
+      state: "relay",
+      detail: promptsInChinese() ? "语音中继 WebSocket 已连接" : "Voice relay connected"
+    });
   }
 
   /**

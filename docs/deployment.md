@@ -150,7 +150,7 @@ Before going live:
 | Spend limit                | A budget alert or hard limit with your model vendor.                                                           |
 
 All variables are described in `.env.example`. The values for sessions are in [security](security.md#rate-limits).
-Note that `RELAY_MAX_PAYLOAD_BYTES` has a floor of 320 KiB: the `65536` shown in `.env.example` is raised to 327,680.
+Note that `RELAY_MAX_PAYLOAD_BYTES` is clamped to 320 KiB–1 MiB; the default is 384 KiB.
 
 ## Health and readiness
 

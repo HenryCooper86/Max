@@ -1,4 +1,4 @@
-import { providerCapabilities, type AgentHealth } from "../shared/agent";
+import { APP_DEMO_CAPABILITIES, providerCapabilities, type AgentHealth } from "../shared/agent";
 import { buildInfo } from "./build-info";
 import { accountsStorageHealthy, authActive, registrationOpen } from "./accounts";
 import { metrics, metricsWindow, testingSnapshot } from "./metrics";
@@ -55,7 +55,7 @@ export function describeConfig(): string[] {
     `Relay heartbeat: ${config.heartbeatMs ? `ping every ${Math.round(config.heartbeatMs / 1000)} s` : "off"}`,
     `Relay idle timeout: ${config.idleTimeoutMs ? describeDuration(config.idleTimeoutMs) : "off"}`,
     `Relay proxy trust: ${config.trustProxy ? `on (${config.trustedProxyHops} hop${config.trustedProxyHops === 1 ? "" : "s"} via X-Forwarded-For)` : "off (client IP = socket address)"}`,
-    `事故通知通道: ${config.crashNotifier}`
+    `Crash notification channel: ${config.crashNotifier}`
   ];
 }
 
@@ -154,7 +154,11 @@ export function buildHealth(uptimeSec: number, includeTesting = false): AgentHea
     uptimeSec,
     credentials: credentialStatus(),
     weather: "available",
-    capabilities: providerCapabilities(config.voiceProvider),
+    // What a session will actually report: a software assistant's demo is not the helmet's.
+    capabilities:
+      config.voiceProvider === "mock" && assistant().preset.general
+        ? APP_DEMO_CAPABILITIES
+        : providerCapabilities(config.voiceProvider),
     metrics: { ...metrics.snapshot() },
     metricsWindow: { ...metricsWindow() },
     // Lets clients decide whether to show the login/registration UI.

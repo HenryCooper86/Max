@@ -349,7 +349,6 @@ export function BuildPage() {
           <Mascot
             className="buildBird"
             mood={STEP_MOODS[stepId]}
-            {...(draft.characters ? { characters: draft.characters } : {})}
             followCursor
             restOver="a, button, input, select, textarea, label, .siteHeader"
           />

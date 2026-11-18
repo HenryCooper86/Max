@@ -63,7 +63,6 @@ const EDITABLE_KEYS = [
   "theme",
   "templateSwitching",
   "visualizer",
-  "characters",
   "accentColor",
   "logoBackground",
   "voice"

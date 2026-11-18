@@ -308,13 +308,6 @@ app.post("/v1/session-tokens", (req, res) => {
   res.status(201).json({ token: minted.token, expiresAt: minted.expiresAt });
 });
 
-// The characters' footage (public/character, built into dist/client). The
-// widget shows them on other sites, so they too must be readable cross-origin.
-app.use("/character", (_req, res, next) => {
-  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-  next();
-});
-
 // The browser SDK (built by vite.sdk.config.ts into dist/sdk). Loaded by other
 // sites with <script src>, so it must be readable cross-origin: the relay's
 // same-origin resource policy would otherwise block it.

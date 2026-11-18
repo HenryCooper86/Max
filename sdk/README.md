@@ -225,19 +225,18 @@ the element yourself:
 </script>
 ```
 
-| Attribute (`data-` on the script) | Meaning                                                                                                                                                                           |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `relay`                           | Relay base URL.                                                                                                                                                                   |
-| `project`                         | A Max Cloud public agent id (`pub_…`): no backend or token needed, on websites listed in the console.                                                                             |
-| `token`                           | A fixed token (development only).                                                                                                                                                 |
-| `token-url`                       | Your endpoint. It is called with POST (GET if POST gets 404/405) before every connect and must return `{ "token": "..." }`.                                                       |
-| `language`, `voice`, `backend`    | As in the options above.                                                                                                                                                          |
-| `context`                         | Facts about the page for the assistant, such as "The visitor is on the pricing page". Read at the next connect.                                                                   |
-| `label`                           | Accessible name of the button. Default "Talk to the assistant".                                                                                                                   |
-| `accent`                          | Brand colour, any CSS colour.                                                                                                                                                     |
-| `position`                        | Bottom right by default; `bottom-left`, or `inline` to place it in the page flow.                                                                                                 |
-| `text-input`                      | Show a text box in the panel.                                                                                                                                                     |
-| `characters`                      | Real creatures that hover beside the button: up to three of `hummingbird`, `bee`, `butterfly`, comma-separated (`bee,butterfly`, `bee,bee`). They liven up while the agent talks. |
+| Attribute (`data-` on the script) | Meaning                                                                                                                     |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `relay`                           | Relay base URL.                                                                                                             |
+| `project`                         | A Max Cloud public agent id (`pub_…`): no backend or token needed, on websites listed in the console.                       |
+| `token`                           | A fixed token (development only).                                                                                           |
+| `token-url`                       | Your endpoint. It is called with POST (GET if POST gets 404/405) before every connect and must return `{ "token": "..." }`. |
+| `language`, `voice`, `backend`    | As in the options above.                                                                                                    |
+| `context`                         | Facts about the page for the assistant, such as "The visitor is on the pricing page". Read at the next connect.             |
+| `label`                           | Accessible name of the button. Default "Talk to the assistant".                                                             |
+| `accent`                          | Brand colour, any CSS colour.                                                                                               |
+| `position`                        | Bottom right by default; `bottom-left`, or `inline` to place it in the page flow.                                           |
+| `text-input`                      | Show a text box in the panel.                                                                                               |
 
 The element has a Shadow DOM, a labelled toggle button (`aria-pressed`) with a
 visible focus ring, a live transcript region, Esc to stop, light and dark themes

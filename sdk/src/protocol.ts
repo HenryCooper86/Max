@@ -207,7 +207,7 @@ export function relayUrl(base: string, token?: string): string {
 }
 
 /** The relay's HTTP base (`https://relay.example.com`) for any relay URL form, including `wss://…/agent`. */
-export function relayHttpBase(base: string): string {
+function relayHttpBase(base: string): string {
   const origin = (globalThis as { location?: { href?: string } }).location?.href;
   const url = new URL(base, origin);
   if (url.protocol === "ws:") url.protocol = "http:";
@@ -232,18 +232,6 @@ export async function fetchPublicAgentToken(relay: string, project: string): Pro
     throw new Error(typeof body.error === "string" ? body.error : `The relay answered ${response.status}`);
   }
   return body.token;
-}
-
-/** Real creatures that can hover beside the widget's button (footage on the relay: /character/<id>.webm|.webp|.png). */
-const CHARACTER_IDS = new Set(["hummingbird", "bee", "butterfly"]);
-
-/** The ids in a `characters` attribute ("bee,butterfly"): known ones only, in order, at most three. */
-export function parseCharacters(value: string | null): string[] {
-  return (value ?? "")
-    .split(",")
-    .map((item) => item.trim().toLowerCase())
-    .filter((item) => CHARACTER_IDS.has(item))
-    .slice(0, 3);
 }
 
 /** Tool names the relay accepts. */

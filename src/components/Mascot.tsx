@@ -1,21 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { characterInfo, characterList, DEFAULT_CHARACTERS, type CharacterId } from "../../shared/characters";
-import { fetchAgentHealth } from "../lib/utils";
-import { useAssistant } from "./AssistantContext";
 
 /**
- * The assistant's characters: real creatures (a hummingbird, a bee, a
- * butterfly), filmed hovering and cut out of their background so they fly over
- * the page. The owner picks which, up to three at once; the first leads and
- * follows the cursor, the others hover round it.
+ * The assistant's character: a real hummingbird, filmed hovering, cut out of
+ * its background so it flies over the page.
  *
- * Footage cannot act, so the moods are shown by how they fly: they lean in to
- * listen, drift while thinking, bob as the assistant speaks and start back
- * when something is wrong. The footage is a transparent video and, for phones
- * and Safari, an animated picture; with reduced motion, or where the video
- * will not play, a still frame is shown instead.
+ * A filmed bird cannot act, so the moods are shown by how it flies: it leans
+ * in to listen, drifts while it thinks, bobs as the assistant speaks and
+ * starts back when something is wrong. The footage is a transparent video
+ * and, for phones and Safari, an animated picture; with reduced motion, or
+ * where the video will not play, a still frame is shown instead.
  *
- * Footage credits: public/character/CREDITS.txt.
+ * Footage credit: public/character/CREDITS.txt.
  */
 
 export type MascotMood = "ready" | "listening" | "thinking" | "speaking" | "happy" | "alert" | "asleep" | "wink";
@@ -39,34 +34,7 @@ export function mascotMoodFor(state: {
   return "ready";
 }
 
-const footage = (id: CharacterId) => `/character/${id}`;
-
-/** The owner's characters from /health, fetched once per page for surfaces
- *  outside the app's assistant context (the public pages and the console). */
-let ownerCharacters: Promise<CharacterId[]> | undefined;
-function fetchOwnerCharacters(): Promise<CharacterId[]> {
-  ownerCharacters ??= fetchAgentHealth().then(
-    (health) => characterList(health?.assistant?.characters) ?? [...DEFAULT_CHARACTERS]
-  );
-  return ownerCharacters;
-}
-
-/** Which characters fly: the ones passed in, else the owner's choice. */
-function useCharacters(explicit: CharacterId[] | undefined): CharacterId[] {
-  const fromContext = useAssistant().characters;
-  const [fetched, setFetched] = useState<CharacterId[] | null>(null);
-  useEffect(() => {
-    if (explicit || fromContext) return;
-    let active = true;
-    void fetchOwnerCharacters().then((list) => {
-      if (active) setFetched(list);
-    });
-    return () => {
-      active = false;
-    };
-  }, [explicit, fromContext]);
-  return explicit ?? fromContext ?? fetched ?? [...DEFAULT_CHARACTERS];
-}
+const BASE = "/character/hummingbird";
 
 function prefersReducedMotion(): boolean {
   return typeof window !== "undefined" && Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
@@ -86,7 +54,10 @@ const SPEED: Record<MascotMood, number> = {
   wink: 1
 };
 
-/** How far the leader keeps its head from the cursor, in pixels. */
+/** Where the beak tip sits in the footage, from the centre, as a fraction of
+ *  the frame, with the bird facing right. */
+const BEAK = { x: 0.2, y: -0.12 };
+/** How far the bird keeps its beak from the cursor, in pixels. */
 const REACH = 26;
 /** After this long without the cursor moving, the bird flies home. */
 const HOME_AFTER_MS = 2600;
@@ -127,7 +98,7 @@ type MotionPermission = { requestPermission?: () => Promise<"granted" | "denied"
  * visitor allows it, and is asked when they first touch the bird. Reduced
  * motion turns all of this off.
  */
-function useCursorFlight(enabled: boolean, restOver: string | undefined, head: { x: number; y: number }) {
+function useCursorFlight(enabled: boolean, restOver: string | undefined) {
   const node = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -196,8 +167,8 @@ function useCursorFlight(enabled: boolean, restOver: string | undefined, head: {
       const { x: homeX, y: homeY } = home(box);
       const side = event.clientX >= homeX + position.x ? 1 : -1;
       chasing = true;
-      target.x = event.clientX - homeX - side * (head.x * box.width + REACH);
-      target.y = event.clientY - homeY - head.y * box.height;
+      target.x = event.clientX - homeX - side * (BEAK.x * box.width + REACH);
+      target.y = event.clientY - homeY - BEAK.y * box.height;
       homeTimer = setTimeout(goHome, HOME_AFTER_MS);
       start();
     };
@@ -263,7 +234,7 @@ function useCursorFlight(enabled: boolean, restOver: string | undefined, head: {
       if (frame) window.cancelAnimationFrame(frame);
       element.style.transform = "";
     };
-  }, [enabled, restOver, head.x, head.y]);
+  }, [enabled, restOver]);
 
   return node;
 }
@@ -277,66 +248,25 @@ type Props = {
   followCursor?: boolean;
   /** A selector the bird keeps clear of: over it, the bird flies home. */
   restOver?: string;
-  /** Which creatures fly, in order (up to 3). Default: the owner's choice, else the hummingbird. */
-  characters?: CharacterId[];
 };
 
-/** One creature's footage: video, animated picture or still. */
-function Film({
-  id,
-  mood,
-  still,
-  picture,
-  onRefused
-}: {
-  id: CharacterId;
-  mood: MascotMood;
-  still: boolean;
-  picture: boolean;
-  onRefused: () => void;
-}) {
+export function Mascot({ mood = "ready", className = "", label, followCursor = false, restOver }: Props) {
   const video = useRef<HTMLVideoElement | null>(null);
-  const base = footage(id);
+  const [still, setStill] = useState(prefersReducedMotion);
+  const [picture] = useState(usesPicture);
   // A phone may refuse to autoplay (Low Power Mode, a data saver) and would
   // then show a frozen frame under a play button. Ask once more, and if the
   // answer is still no, show the still picture instead.
   const playOrFallBack = () => {
     const film = video.current;
     if (!film || !film.paused) return;
-    film.play().catch(onRefused);
+    film.play().catch(() => setStill(true));
   };
+  const flight = useCursorFlight(followCursor && !still, restOver);
+
   useEffect(() => {
     if (video.current) video.current.playbackRate = SPEED[mood];
   }, [mood]);
-  if (still) return <img className="mascotFilm" src={`${base}.png`} alt="" draggable={false} />;
-  if (picture) {
-    return <img className="mascotFilm" src={`${base}.webp`} alt="" draggable={false} decoding="async" />;
-  }
-  return (
-    <video
-      ref={video}
-      className="mascotFilm"
-      poster={`${base}.png`}
-      autoPlay
-      loop
-      muted
-      playsInline
-      disablePictureInPicture
-      preload="auto"
-      onCanPlay={playOrFallBack}
-    >
-      <source src={`${base}.webm`} type="video/webm" />
-    </video>
-  );
-}
-
-export function Mascot({ mood = "ready", className = "", label, followCursor = false, restOver, characters }: Props) {
-  const [still, setStill] = useState(prefersReducedMotion);
-  const [picture] = useState(usesPicture);
-  const flock = useCharacters(characters);
-  const [leader = "hummingbird", ...companions] = flock;
-  const flight = useCursorFlight(followCursor && !still, restOver, characterInfo(leader).head);
-  const refuse = () => setStill(true);
 
   return (
     <div
@@ -344,16 +274,29 @@ export function Mascot({ mood = "ready", className = "", label, followCursor = f
       role={label ? "img" : undefined}
       aria-label={label}
       aria-hidden={label ? undefined : true}
-      data-characters={flock.join(" ")}
     >
       <div className="mascotFollow" ref={flight}>
         <div className="mascotFlight">
-          <Film id={leader} mood={mood} still={still} picture={picture} onRefused={refuse} />
-          {companions.map((id, index) => (
-            <div key={`${id}-${index}`} className={`mascotCompanion mascotCompanion${index + 1}`}>
-              <Film id={id} mood={mood} still={still} picture={picture} onRefused={refuse} />
-            </div>
-          ))}
+          {still ? (
+            <img className="mascotFilm" src={`${BASE}.png`} alt="" draggable={false} />
+          ) : picture ? (
+            <img className="mascotFilm" src={`${BASE}.webp`} alt="" draggable={false} decoding="async" />
+          ) : (
+            <video
+              ref={video}
+              className="mascotFilm"
+              poster={`${BASE}.png`}
+              autoPlay
+              loop
+              muted
+              playsInline
+              disablePictureInPicture
+              preload="auto"
+              onCanPlay={playOrFallBack}
+            >
+              <source src={`${BASE}.webm`} type="video/webm" />
+            </video>
+          )}
         </div>
       </div>
     </div>

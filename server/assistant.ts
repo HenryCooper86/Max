@@ -1,4 +1,3 @@
-import { characterList, type CharacterId } from "../shared/characters";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -44,8 +43,6 @@ export type AssistantProfile = {
   templateSwitching: boolean;
   /** How the live voice display is drawn; defaults to the device preset's. */
   visualizer: VoiceVisualizer;
-  /** The creatures that fly on the pages (shared/characters.ts); the hummingbird when unset. */
-  characters?: CharacterId[];
   /** The owner's own logo file, when one is configured and readable. */
   logo?: BrandLogo;
   /** Background behind the logo where a platform needs one (app icons). */
@@ -283,7 +280,6 @@ export function assistantProfileFrom(raw: unknown, baseDir = process.cwd()): Ass
     visualizer: VISUALIZERS.includes(raw.visualizer as VoiceVisualizer)
       ? (raw.visualizer as VoiceVisualizer)
       : preset.visualizer,
-    ...(characterList(raw.characters) ? { characters: characterList(raw.characters) } : {}),
     ...(brand.logo ? { logo: brand.logo } : {}),
     logoBackground:
       logoBackground && /^#[0-9a-f]{6}$/i.test(logoBackground) ? logoBackground.toUpperCase() : DEFAULT_LOGO_BACKGROUND,
@@ -425,7 +421,6 @@ export function assistantSummary(wakeWordEnabled: boolean): AssistantSummary {
     ...(profile.theme ? { theme: { ...profile.theme } } : {}),
     templateSwitching: profile.templateSwitching,
     visualizer: profile.visualizer,
-    ...(profile.characters ? { characters: [...profile.characters] } : {}),
     ...(logo ? { logoUrl: `/brand/logo?v=${logo.version}` } : {})
   };
 }

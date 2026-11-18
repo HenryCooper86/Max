@@ -1,8 +1,7 @@
 /** Text generators for the Studio's Install tab. Pure, so they can be tested without a browser. */
-import type { CharacterId } from "../../../shared/characters";
 import type { WidgetPosition } from "../../../shared/cloud-studio";
 
-export type WidgetLook = { label: string; accent: string; position: WidgetPosition; characters?: CharacterId[] };
+export type WidgetLook = { label: string; accent: string; position: WidgetPosition };
 
 export type Framework = "html" | "react" | "next" | "express" | "flask";
 
@@ -30,7 +29,6 @@ export function publicEmbedSnippet(origin: string, publicId: string, widget: Wid
   if (widget.label.trim()) attributes.push(`data-label="${escapeAttribute(widget.label.trim())}"`);
   if (/^#[0-9a-f]{6}$/i.test(widget.accent)) attributes.push(`data-accent="${escapeAttribute(widget.accent)}"`);
   if (widget.position === "bottom-left") attributes.push(`data-position="bottom-left"`);
-  if (widget.characters?.length) attributes.push(`data-characters="${escapeAttribute(widget.characters.join(","))}"`);
   return `<script ${attributes.join(" ")}></script>`;
 }
 

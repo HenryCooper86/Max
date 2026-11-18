@@ -8,20 +8,3 @@ Vecteezy's Free License requires attribution and is described as being for
 individuals with non-commercial projects. Commercial use needs a Vecteezy Pro
 licence. The clip was cropped, scaled down and its green background removed.
 Check the licence yourself before shipping or redistributing these files.
-
-bee.webm, bee.webp, bee.png
-
-Made from "Bee, Wasp, Wings, Green Screen" by ManmathVhanrao on Pixabay:
-https://pixabay.com/videos/bee-wasp-wings-green-screen-218571/
-
-butterfly.webm, butterfly.webp, butterfly.png
-
-Made from "Butterfly, Insect, Wings, Pollination" by Ahmad_raza123 on Pixabay:
-https://pixabay.com/videos/butterfly-insect-wings-pollination-119339/
-
-Both are free for commercial use under the Pixabay Content License
-(https://pixabay.com/service/license-summary/), no attribution required (given
-here anyway). A three-second stretch of each was cut out of its green screen,
-kept in place, played forwards then backwards to loop, and scaled down with
-scripts/cut-out-character.py. The licence does not allow selling or
-redistributing the clips on their own: use them as part of Max.

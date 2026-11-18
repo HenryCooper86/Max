@@ -1,5 +1,3 @@
-import { DEFAULT_CHARACTERS } from "../../../shared/characters";
-import { CharacterPicker } from "../CharacterPicker";
 import { UploadSimple, WarningCircle, X } from "@phosphor-icons/react";
 import { useId, useRef, type ReactNode } from "react";
 import type { VoiceEqualizerOptions } from "../../../shared/agent";
@@ -348,23 +346,6 @@ export function LookFields({ draft, onChange, errors, logo }: FieldProps & { log
         }
       >
         <VisualizerPicker value={visualizer} onSelect={(next) => onChange({ visualizer: next })} />
-      </Field>
-      <Field
-        label={say("角色", "Characters")}
-        hint={
-          draft.characters ? (
-            <button type="button" className="linkButton" onClick={() => onChange({ characters: null })}>
-              {say("只用蜂鸟", "Just the hummingbird")}
-            </button>
-          ) : (
-            say("目前是蜂鸟。", "The hummingbird for now.")
-          )
-        }
-      >
-        <CharacterPicker
-          value={draft.characters ?? DEFAULT_CHARACTERS}
-          onChange={(next) => onChange({ characters: next })}
-        />
       </Field>
       <LogoField deviceId={draft.device} logo={logo} />
     </>

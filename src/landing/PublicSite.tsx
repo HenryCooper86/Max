@@ -35,7 +35,6 @@ function SiteHeader({
         <a href={`${home}#demo`}>{say("演示", "Demo")}</a>
         <a href={`${home}#devices`}>{say("设备", "Devices")}</a>
         <a href={`${home}#backends`}>{say("语音后端", "Backends")}</a>
-        <a href={`${home}#characters`}>{say("角色", "Characters")}</a>
         <a href={BUILD_PATH} aria-current={view === "build" ? "page" : undefined}>
           {say("配置器", "Build yours")}
         </a>

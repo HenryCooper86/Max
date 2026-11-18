@@ -28,8 +28,6 @@ few lines of JavaScript, and the agent can call your own code and APIs while it 
   client and an embedded Linux client, all speaking the same [documented protocol](docs/protocol.md).
 - **Try it with no keys.** The keyless demo backend runs the whole loop, tools included, before you sign up for
   anything.
-- **Characters.** A real hummingbird, bee and butterfly, cut out of footage, fly over your pages and beside the widget:
-  up to three at once, following the cursor and livening up while the agent talks.
 
 ## Quick start
 
@@ -224,13 +222,9 @@ lists every key.
   "languages": ["en"],
   "greeting": "Hi, I'm Ava. What can I help you with?",
   "instructions": "You are the voice assistant of the Acme Outdoor web shop. Prices are in US dollars.",
-  "toolsModule": "./agent-tools.ts",
-  "characters": ["bee", "butterfly"]
+  "toolsModule": "./agent-tools.ts"
 }
 ```
-
-`characters` picks the creatures that fly on the pages: up to three of `hummingbird`, `bee` and `butterfly`, in order
-(the first follows the cursor), repeats allowed. On the widget it is one attribute: `characters="bee,butterfly"`.
 
 With no config file the relay runs **Max**, the motorcycle-helmet assistant this kit grew out of, with its iOS,
 Android and embedded clients, navigation, camera and hazard alerts. That reference product is documented in

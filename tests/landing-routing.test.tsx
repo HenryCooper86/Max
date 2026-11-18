@@ -85,15 +85,6 @@ describe("landing page", () => {
       </LanguageProvider>
     );
 
-  it("shows the characters, a group to try, and how to turn them on", () => {
-    const html = render(false);
-    expect(html).toContain('id="characters"');
-    for (const id of ["hummingbird", "bee", "butterfly"]) expect(html).toContain(`/character/${id}.webm`);
-    expect(html).toContain("两只蜜蜂");
-    expect(html).toContain("&quot;characters&quot;: [&quot;bee&quot;, &quot;butterfly&quot;]");
-    expect(html).toContain("characters=&quot;bee,butterfly&quot;");
-  });
-
   it("says what it is, offers the demo and the configurator, and labels the demo as scripted", () => {
     const html = render(false);
     expect(html).toContain('href="#demo"');

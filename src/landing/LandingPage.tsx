@@ -1,7 +1,6 @@
 import { Check, Copy, Pause, Play } from "@phosphor-icons/react";
 import { useEffect, useId, useRef, useState, type RefObject } from "react";
 import type { VoiceVisualizer } from "../../shared/agent";
-import { CHARACTERS, type CharacterId } from "../../shared/characters";
 import { useLanguage } from "../components/LanguageToggle";
 import { AssistantPreview, visorPropsFor } from "../components/studio/AssistantPreview";
 import { TemplateSwatch } from "../components/TemplatePicker";
@@ -364,131 +363,6 @@ function LookAndSound() {
   );
 }
 
-/** Groups a visitor can try on the stage. */
-const FLOCKS: { id: string; zh: string; en: string; characters: CharacterId[] }[] = [
-  { id: "one", zh: "一只蜂鸟", en: "One hummingbird", characters: ["hummingbird"] },
-  { id: "bees", zh: "两只蜜蜂", en: "Two bees", characters: ["bee", "bee"] },
-  { id: "pair", zh: "蜜蜂和蝴蝶", en: "A bee and a butterfly", characters: ["bee", "butterfly"] },
-  { id: "all", zh: "三个一起", en: "All three", characters: ["hummingbird", "bee", "butterfly"] }
-];
-
-const CHARACTER_NOTES: Record<CharacterId, { zh: string; en: string }> = {
-  hummingbird: {
-    zh: "Max 的原版角色：悬停、凑近、跟着光标飞。",
-    en: "Max's own: hovers, leans in and chases the cursor."
-  },
-  bee: { zh: "侧身悬停的蜜蜂，翅膀快速扇动。", en: "A bee hovering side-on, wings a blur." },
-  butterfly: { zh: "帝王蝶在原地慢慢扇翅。", en: "A monarch flapping slowly in place." }
-};
-
-function Characters() {
-  const { language } = useLanguage();
-  const say = (zh: string, en: string) => localized(language, zh, en);
-  const [flock, setFlock] = useState(FLOCKS[3]!);
-  const config = `{\n  "characters": ["bee", "butterfly"]\n}`;
-  const widget = `<voice-agent\n  relay="https://max.bionicloud.net"\n  project="pub_…"\n  characters="bee,butterfly">\n</voice-agent>`;
-  return (
-    <section className="siteSection" aria-labelledby="characters">
-      <SectionHead
-        id="characters"
-        title={say("和你的助手一起飞的角色", "Characters that fly with your agent")}
-        lede={say(
-          "真实的蜂鸟、蜜蜂和蝴蝶，从绿幕素材里抠出来，在页面上悬停、跟着光标飞，助手说话时也跟着动起来。最多同时三个。",
-          "A real hummingbird, bee and butterfly, cut out of green-screen footage. They hover over the page, follow the cursor and liven up while your agent talks. Up to three at once."
-        )}
-      />
-      <ul className="characterCards revealStagger" data-reveal="">
-        {CHARACTERS.map((character) => (
-          <li key={character.id}>
-            <Mascot className="characterCardFilm" characters={[character.id]} />
-            <strong>{say(character.label.zh, character.label.en)}</strong>
-            <small>{say(CHARACTER_NOTES[character.id].zh, CHARACTER_NOTES[character.id].en)}</small>
-          </li>
-        ))}
-      </ul>
-      <div className="characterStage" data-reveal="">
-        <div className="characterStageFilm">
-          <Mascot key={flock.id} className="characterStageBird" mood="speaking" characters={flock.characters} />
-        </div>
-        <div className="characterStageControls">
-          <h3>{say("试一组", "Try a group")}</h3>
-          <p>
-            {say(
-              "第一个领头，其余在旁边飞。可以重复，比如两只蜜蜂。",
-              "The first leads and the others hover nearby. Repeats are fine, like two bees."
-            )}
-          </p>
-          <div className="characterFlocks" role="group" aria-label={say("角色组合", "Character groups")}>
-            {FLOCKS.map((option) => (
-              <button
-                key={option.id}
-                type="button"
-                aria-pressed={flock.id === option.id}
-                onClick={() => setFlock(option)}
-              >
-                {say(option.zh, option.en)}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-      <div className="characterHow revealStagger" data-reveal="">
-        <div>
-          <h3>{say("自己部署", "Self-hosted")}</h3>
-          <p>
-            {say(
-              "在应用里打开 管理 → 工作室 → 外观 → 角色，按顺序添加，保存后马上生效。也可以写进 assistant.config.json：",
-              "Open Admin → Studio → Look → Characters in the app, add them in order and save; it applies at once. Or put it in assistant.config.json:"
-            )}
-          </p>
-          <div className="codeBlock">
-            <pre>
-              <code>{config}</code>
-            </pre>
-            <CopyButton text={config} label={say("复制配置", "Copy config")} />
-          </div>
-        </div>
-        <div>
-          <h3>Max Cloud</h3>
-          <p>
-            {say(
-              "在控制台打开项目的“安装”标签，在“角色”里选择。一行嵌入代码会自动带上它们，按钮旁边就会出现。",
-              "In the console, open your project's Install tab and pick them under Characters. The one-line embed includes them, and they appear beside the button."
-            )}
-          </p>
-          <a className="siteButton secondary" href="/console">
-            {say("打开控制台", "Open the console")}
-          </a>
-        </div>
-        <div>
-          <h3>{say("在你的页面上", "On your page")}</h3>
-          <p>
-            {say(
-              "网页组件加一个 characters 属性即可（脚本标签用 data-characters）：",
-              "Add one characters attribute to the widget (data-characters on the script tag):"
-            )}
-          </p>
-          <div className="codeBlock">
-            <pre>
-              <code>{widget}</code>
-            </pre>
-            <CopyButton text={widget} label={say("复制代码", "Copy code")} />
-          </div>
-        </div>
-      </div>
-      <p className="characterCredit" data-reveal="">
-        {say(
-          "开启“减少动态效果”时，它们会静止显示。也可以在配置器里预览：",
-          "With reduced motion turned on they hold still. Preview them in the configurator: "
-        )}
-        <a className="siteTextLink" href={BUILD_PATH}>
-          {say("配置你自己的", "Build yours")}
-        </a>
-      </p>
-    </section>
-  );
-}
-
 function HowItWorks() {
   const { language } = useLanguage();
   const say = (zh: string, en: string) => localized(language, zh, en);
@@ -620,7 +494,6 @@ export function LandingPage({ signedIn }: { signedIn: boolean }) {
       <Devices />
       <Backends />
       <LookAndSound />
-      <Characters />
       <HowItWorks />
       <GetStarted />
     </>

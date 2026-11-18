@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-11-18 — Voice agents for any product: tools, session tokens, web SDK
+
+- Tools. The assistant can call functions mid-conversation on OpenAI
+  Realtime, Gemini Live, Grok Voice and both pipeline backends. Code tools
+  run in the relay (`toolsModule`), webhook tools POST to any backend with an
+  optional HMAC signature (`tools[].webhook`), and client tools run in the
+  page or app (`session.start.tools`, `tool.call`, `tool.result`). Every call
+  reports `tool.activity`. Every call ends in exactly one result for the
+  model, whether the tool succeeds, fails, times out or the session closes.
+- Typed turns: `text.input` is answered aloud like a spoken turn.
+- Session tokens. `POST /v1/session-tokens` (with the relay token) mints a
+  short-lived `vst_` token. It opens voice sessions only, and can carry a
+  `userId` and `context` the client cannot change.
+- Web SDK (`sdk/`, built to `dist/sdk/` and served at `/sdk/`): `VoiceAgent`,
+  a React hook, and a `<voice-agent>` widget that works from one script tag.
+- A software assistant: `"device": "app"`. No wake word, riding context,
+  built-in device actions or weather. It has a persona written for products,
+  and English by default. `instructions`, `greeting` and `wakeWord` are new
+  config keys. The client may pass untrusted `context`.
+- With `VOICE_PROVIDER=mock`, an app assistant gets a keyless demo that
+  detects speech, answers typed messages and runs tools for real.
+- Status lines follow the session's language.
+- Added `examples/web-embed`: a shop page with a token endpoint, a signed
+  webhook tool, a code tool and a client tool.
+- New README and guides: getting started, tools, configuration, voice
+  backends, protocol, security and deployment. The helmet guide moved to
+  `docs/max-helmet.md`.
+
 ## 2026-11-16 — Audio integration: contract, reference device client, test bench, hardware guide
 
 - A device can declare what its own hardware does to the microphone

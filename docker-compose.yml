@@ -1,0 +1,41 @@
+# Runs the voice relay in a container.
+#
+#   cp .env.example .env      # then edit it: VOICE_PROVIDER, API keys, RELAY_AUTH_TOKEN
+#   docker compose up -d --build
+#   curl http://localhost:8787/health
+#
+# Put a TLS reverse proxy in front before exposing it to the internet
+# (see docs/deployment.md).
+services:
+  relay:
+    build: .
+    image: voice-agent-kit
+    env_file: .env
+    ports:
+      - "8787:8787"
+    volumes:
+      # Accounts, testing history and Studio settings (HOME=/data in the image).
+      - relay-data:/data
+      # To use your own assistant identity and tools, uncomment, and set
+      # ASSISTANT_CONFIG=/app/assistant.config.json in .env. Paths inside the
+      # config (logo, toolsModule) resolve relative to the config file.
+      # - ./assistant.config.json:/app/assistant.config.json:ro
+    restart: unless-stopped
+
+  # Optional: a fully local voice stack (Whisper, Ollama, Kokoro) for
+  # VOICE_PROVIDER=local. Start it with the file it comes from, then set
+  # LOCAL_VOICE=on and the LOCAL_*_BASE_URL variables in .env to the service
+  # names below (for example http://ollama:11434/v1). See docs/local-models.md.
+  #
+  #   docker compose -f docker-compose.yml -f docker-compose.local-voice.yml up -d
+  #
+  # Or merge it by hand: include the services from
+  # docker-compose.local-voice.yml in this file and keep one network.
+  #
+  # local-voice:
+  #   extends:
+  #     file: docker-compose.local-voice.yml
+  #     service: ollama
+
+volumes:
+  relay-data:

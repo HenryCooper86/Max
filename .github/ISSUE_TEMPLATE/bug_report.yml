@@ -1,0 +1,59 @@
+name: Bug report
+description: Something does not work as the documentation says.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please do not paste API keys, relay tokens or session tokens. For a security problem, do not use this form: see SECURITY.md.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Commands, config (with secrets removed) and the smallest example that shows the problem.
+      render: shell
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where
+      options:
+        - Relay (server)
+        - Browser SDK or widget
+        - Protocol or a custom client
+        - A voice backend
+        - Tools or webhooks
+        - Docker or deployment
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: backend
+    attributes:
+      label: Voice backend
+      description: The value of VOICE_PROVIDER, for example mock, openai or local.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The commit hash, or the build.gitCommit value from GET /health.
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Node version, operating system, browser, or Docker version.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant relay output or browser console messages, with secrets removed.
+      render: text

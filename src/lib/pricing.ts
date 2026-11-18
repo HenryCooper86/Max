@@ -20,8 +20,15 @@ export type Plan = {
   featured?: boolean;
 };
 
-/** Where business conversations happen: the repository's public Discussions. */
-export const CONTACT_URL = `${REPOSITORY_URL}/discussions/new?category=general`;
+/** Where people reach the maker of Max: invitations, Enterprise, balance. */
+export const CONTACT_EMAIL = "henry.cooper86@gmail.com";
+
+/** A mailto link to CONTACT_EMAIL with a subject that says what it is about. */
+export function contactUrl(subject: string): string {
+  return `mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent(subject)}`;
+}
+
+export const INVITE_REQUEST_URL = contactUrl("Max Cloud invitation");
 
 /** Max Cloud's price, used in the copy below. */
 export const CLOUD_PRICE_PER_MINUTE_USD = 0.02;
@@ -70,7 +77,7 @@ export const PLANS: readonly Plan[] = [
         en: "Same SDK and protocol: move to self-hosting any time"
       }
     ],
-    cta: { label: { zh: "申请邀请", en: "Request an invite" }, href: CONTACT_URL },
+    cta: { label: { zh: "申请邀请", en: "Request an invite" }, href: INVITE_REQUEST_URL },
     badge: { zh: "凭邀请", en: "By invitation" },
     featured: true
   },
@@ -89,7 +96,7 @@ export const PLANS: readonly Plan[] = [
       { zh: "定制工具、后端和集成", en: "Custom tools, backends and integrations" },
       { zh: "安全评审和团队培训", en: "Security review and team onboarding" }
     ],
-    cta: { label: { zh: "联系我们", en: "Talk to us" }, href: CONTACT_URL }
+    cta: { label: { zh: "联系我们", en: "Talk to us" }, href: contactUrl("Max Enterprise") }
   }
 ];
 
@@ -120,8 +127,8 @@ export const PRICING_FAQ: readonly Question[] = [
   {
     question: { zh: "Max Cloud 现在可以用吗？", en: "Can I use Max Cloud today?" },
     answer: {
-      zh: "抢先体验期间凭邀请使用：在 GitHub Discussions 申请邀请，收到邀请链接后在控制台注册。每月前 1,000 分钟免费。",
-      en: "By invitation during early access: ask for an invite in GitHub Discussions, then sign up in the console with your invitation link. The first 1,000 minutes every month are free."
+      zh: "抢先体验期间凭邀请使用：发邮件到 henry.cooper86@gmail.com 申请邀请，收到邀请链接后在控制台注册。每月前 1,000 分钟免费。",
+      en: "By invitation during early access: email henry.cooper86@gmail.com for an invite, then sign up in the console with your invitation link. The first 1,000 minutes every month are free."
     }
   },
   {

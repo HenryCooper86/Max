@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { CONTACT_URL } from "../lib/pricing";
+import { INVITE_REQUEST_URL } from "../lib/pricing";
 import { ApiError, type CloudApi } from "./api";
 import { useSay } from "./hooks";
 
@@ -106,7 +106,7 @@ export function AuthCard({
                 ? say("已从你的邀请链接填好。", "Filled in from your invitation link.")
                 : say("没有邀请？", "No invitation yet?")}{" "}
               {initialInvite ? null : (
-                <a className="siteTextLink" href={CONTACT_URL} rel="noreferrer noopener">
+                <a className="siteTextLink" href={INVITE_REQUEST_URL}>
                   {say("申请邀请", "Request one")}
                 </a>
               )}

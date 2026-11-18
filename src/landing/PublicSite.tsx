@@ -8,6 +8,7 @@ import { applyAppearance, resolveAppearance } from "../lib/templates";
 import { applyBrandFavicon, resolveAssistant } from "../lib/assistant";
 import { fetchAgentHealth } from "../lib/utils";
 import { SiteMark } from "../components/SiteMark";
+import { CONTACT_EMAIL, contactUrl } from "../lib/pricing";
 import { BuildPage } from "./BuildPage";
 import { LandingPage } from "./LandingPage";
 import { PricingPage } from "./PricingPage";
@@ -66,6 +67,10 @@ function SiteFooter({ developer }: { developer?: string }) {
           )}
         </p>
         {developer ? <p className="siteFooterMaker">{developer}</p> : null}
+        <p className="siteFooterContact">
+          {say("联系：", "Contact: ")}
+          <a href={contactUrl("Max")}>{CONTACT_EMAIL}</a>
+        </p>
       </div>
       <nav aria-label={say("页脚链接", "Footer")}>
         <a href={APP_PATH}>{say("打开应用", "Open the app")}</a>

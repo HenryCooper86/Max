@@ -3131,6 +3131,12 @@ time,
   line-height: 1.5;
 }
 
+.loginContact a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .loginFootnote {
   margin: 0;
   color: var(--text-3);
@@ -8900,6 +8906,12 @@ button.opsCard:disabled {
 
 .siteFooter a {
   color: var(--text-2);
+}
+
+.siteFooter .siteFooterContact a {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 /* ---- Configurator ------------------------------------------------------ */

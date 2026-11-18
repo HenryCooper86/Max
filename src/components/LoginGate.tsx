@@ -11,7 +11,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import type { AuthUser } from "../lib/auth";
-import { deviceAssistantCopy } from "../lib/i18n";
+import { deviceAssistantCopy, localized } from "../lib/i18n";
+import { CONTACT_EMAIL, contactUrl } from "../lib/pricing";
 import { AccountForm, type AccountFormActivity } from "./AccountBar";
 import { useAssistant } from "./AssistantContext";
 import { LanguageToggle, useLanguage } from "./LanguageToggle";
@@ -199,6 +200,10 @@ export function LoginGate({ authEnabled, registrationOpen, onSignedIn }: Props) 
             />
           </div>
           {assistant.developer ? <p className="loginFootnote">{assistant.developer}</p> : null}
+          <p className="loginFootnote loginContact">
+            {localized(language, "需要账号或帮助？", "Need an account or help? ")}
+            <a href={contactUrl("Max account")}>{CONTACT_EMAIL}</a>
+          </p>
         </section>
       </div>
     </main>

@@ -9,9 +9,8 @@ plans are on the website at `/pricing`.
 | **Max Cloud**   | ¥0.15 (about $0.02) per minute, first 1,000 minutes every month free. _By invitation._ | We run the relay: TLS, scaling and updates. You bring your own OpenAI, Gemini or xAI key, and model costs go straight to them.       |
 | **Enterprise**  | Custom, annual agreement                                                               | Priority support with an SLA, help deploying on your own infrastructure, custom tools and integrations, security review, onboarding. |
 
-Max Cloud is by invitation during early access. To ask for an invitation, add balance or talk about Enterprise, start a
-conversation in
-[GitHub Discussions](https://github.com/HenryCooper86/Max/discussions).
+Max Cloud is by invitation during early access. To ask for an invitation, add balance or talk about Enterprise, email
+[henry.cooper86@gmail.com](mailto:henry.cooper86@gmail.com).
 
 ## The license
 
@@ -33,4 +32,4 @@ you change one URL.
 **Can I charge my own customers?** Yes. The relay counts voice minutes per user, can cap them, and can send each
 session's usage to your billing system. See [usage and billing](usage-and-billing.md).
 
-**Do I need to tell you I am using Max?** No. We are always glad to hear about it in Discussions.
+**Do I need to tell you I am using Max?** No. We are always glad to hear about it, by email or in GitHub Discussions.

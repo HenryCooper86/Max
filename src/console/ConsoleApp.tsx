@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { LanguageProvider, LanguageToggle } from "../components/LanguageToggle";
+import { CONTACT_EMAIL, contactUrl } from "../lib/pricing";
 import { PRICING_PATH, REPOSITORY_URL } from "../lib/routes";
 import { ApiError, createCloudApi } from "./api";
 import { Mascot } from "../components/Mascot";
@@ -13,6 +14,18 @@ import { TopUpDialog } from "./TopUpDialog";
 import { ActivitySection, UsageSection } from "./UsageSection";
 
 const DOCS_URL = `${REPOSITORY_URL}#readme`;
+
+function ConsoleFooter() {
+  const say = useSay();
+  return (
+    <footer className="siteFooter cxFooter">
+      <p className="siteFooterContact">
+        {say("问题、邀请或增加余额：", "Questions, invitations or balance: ")}
+        <a href={contactUrl("Max Cloud")}>{CONTACT_EMAIL}</a>
+      </p>
+    </footer>
+  );
+}
 
 function ConsoleHeader({ onLogout }: { onLogout?: () => void }) {
   const say = useSay();
@@ -152,6 +165,7 @@ function Console() {
           />
         )}
       </main>
+      <ConsoleFooter />
       {/* The site's bird: ready at the door, happy once you are in. */}
       <Mascot
         className="siteBird"

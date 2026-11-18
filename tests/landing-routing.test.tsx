@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { LanguageProvider } from "../src/components/LanguageToggle";
 import { LandingPage } from "../src/landing/LandingPage";
 import { PricingPage } from "../src/landing/PricingPage";
-import { CLOUD_PRICE_PER_MINUTE_USD, CONTACT_URL, PLANS } from "../src/lib/pricing";
+import { CLOUD_PRICE_PER_MINUTE_USD, CONTACT_EMAIL, PLANS } from "../src/lib/pricing";
 import { DEVICES } from "../src/lib/device-catalog";
 import { REPOSITORY_URL, resolveRoute } from "../src/lib/routes";
 import { demoFrame, scriptForDevice, scriptLength } from "../src/lib/scripted-demo";
@@ -128,7 +128,10 @@ describe("pricing page", () => {
     expect(html).toContain(`$${CLOUD_PRICE_PER_MINUTE_USD}`);
   });
 
-  it("sends business conversations to the repository's Discussions", () => {
-    expect(CONTACT_URL.startsWith(`${REPOSITORY_URL}/discussions`)).toBe(true);
+  it("sends business conversations to the maker's email", () => {
+    expect(CONTACT_EMAIL).toBe("henry.cooper86@gmail.com");
+    for (const id of ["cloud", "enterprise"]) {
+      expect(PLANS.find((plan) => plan.id === id)!.cta.href).toMatch(/^mailto:henry\.cooper86@gmail\.com\?subject=/);
+    }
   });
 });

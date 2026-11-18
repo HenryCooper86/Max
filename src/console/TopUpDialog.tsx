@@ -1,7 +1,7 @@
 import QRCode from "qrcode";
 import { useEffect, useRef, useState } from "react";
 import type { Pack, Packs, Provider, TopupOrder } from "./api";
-import { CONTACT_URL } from "../lib/pricing";
+import { CONTACT_EMAIL, contactUrl } from "../lib/pricing";
 import { formatYuan } from "./format";
 import { useSay, type Session } from "./hooks";
 import { shouldKeepPolling, toMillis, TOPUP_POLL_MS } from "./poll";
@@ -257,15 +257,15 @@ function ManualTopUp() {
     <div className="cxManual">
       <p>
         {say(
-          "在线支付暂未开放。需要增加余额时，请联系我们，告诉我们你的账户邮箱和金额；我们会发送付款方式，收款后为你加上余额。",
-          "Online payment isn't available yet. To add balance, contact us with your account email and the amount: we'll send payment details and add the balance once it arrives."
+          `在线支付暂未开放。需要增加余额时，请发邮件到 ${CONTACT_EMAIL}，告诉我们你的账户邮箱和金额；我们会发送付款方式，收款后为你加上余额。`,
+          `Online payment isn't available yet. To add balance, email ${CONTACT_EMAIL} with your account email and the amount: we'll send payment details and add the balance once it arrives.`
         )}
       </p>
       <p className="cxMuted">
         {say("每月前 1,000 分钟免费，无需充值。", "Your first 1,000 minutes every month are free; no top-up needed.")}
       </p>
-      <a className="siteButton" href={CONTACT_URL} rel="noreferrer noopener">
-        {say("联系我们", "Contact us")}
+      <a className="siteButton" href={contactUrl("Max Cloud balance")}>
+        {say("发送邮件", "Email us")}
       </a>
     </div>
   );

@@ -71,7 +71,8 @@ every session left open, up to its last checkpoint.
 
 ### Today: manual top-ups
 
-Until online payment is set up, the console's **Top up** button tells customers to contact you (GitHub Discussions).
+Until online payment is set up, the console's **Top up** button tells customers to email you (the address is
+`CONTACT_EMAIL` in `src/lib/pricing.ts`, also shown in the site's footer and on the login page).
 When a customer has paid you some other way, add the balance:
 
 ```bash

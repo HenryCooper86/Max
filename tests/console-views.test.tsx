@@ -10,7 +10,7 @@ import { ProjectEditor } from "../src/console/ProjectEditor";
 import { Snippets } from "../src/console/Snippets";
 import { ActivitySection, UsageSection } from "../src/console/UsageSection";
 import { PricingPage } from "../src/landing/PricingPage";
-import { CONTACT_URL, PLANS, PRICING_FAQ } from "../src/lib/pricing";
+import { INVITE_REQUEST_URL, PLANS, PRICING_FAQ } from "../src/lib/pricing";
 
 const wrap = (node: React.ReactNode) => renderToStaticMarkup(<LanguageProvider>{node}</LanguageProvider>);
 const api = createCloudApi(async () => new Response("{}"));
@@ -113,7 +113,7 @@ describe("pricing page", () => {
   const html = wrap(<PricingPage />);
   it("prices Max Cloud in yuan and offers an invitation", () => {
     const cloud = PLANS.find((plan) => plan.id === "cloud")!;
-    expect(cloud.cta.href).toBe(CONTACT_URL);
+    expect(cloud.cta.href).toBe(INVITE_REQUEST_URL);
     expect(html).toContain("¥0.15");
     expect(html).toContain("申请邀请");
     expect(html).toContain("凭邀请");

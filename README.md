@@ -238,8 +238,8 @@ features:
 | **Max Cloud**   | ¥0.15/min (≈ $0.02) with your own model key, 1,000 min free | A hosted relay, no servers to run. By invitation during early access |
 | **Enterprise**  | Custom                                                      | Support with an SLA, deployment help, custom integrations            |
 
-Details in [pricing and licensing](docs/pricing.md); talk to us in
-[Discussions](https://github.com/HenryCooper86/Max/discussions). Charging your own customers? The relay meters voice
+Details in [pricing and licensing](docs/pricing.md); for an invitation or Enterprise, email
+[henry.cooper86@gmail.com](mailto:henry.cooper86@gmail.com). Charging your own customers? The relay meters voice
 minutes per user, can cap them, and can send each session to your billing system: see
 [usage and billing](docs/usage-and-billing.md).
 

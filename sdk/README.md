@@ -6,8 +6,8 @@ transcript, and runs tools you define in your page.
 
 ## Install
 
-**With a bundler** (Vite, Next.js, webpack, …), install the `max-voice-agent` package. It is fully typed and ships
-three entry points:
+**With a bundler** (Vite, Next.js, webpack, …), install the [`max-voice-agent`](https://www.npmjs.com/package/max-voice-agent)
+package. It is fully typed and ships three entry points:
 
 | Import                   | What you get                                                         |
 | ------------------------ | -------------------------------------------------------------------- |
@@ -15,17 +15,8 @@ three entry points:
 | `max-voice-agent/react`  | `useVoiceAgent` (React 18 or newer is a peer dependency)             |
 | `max-voice-agent/widget` | Registers the `<voice-agent>` element (browser only, not during SSR) |
 
-Until the package is published to npm, install it from the GitHub release:
-
 ```bash
-npm install https://github.com/HenryCooper86/Max/releases/download/sdk-v0.1.0/max-voice-agent-0.1.0.tgz
-```
-
-or build it from this repository and install the file:
-
-```bash
-npm run pack:sdk                                  # in this repository: writes dist/max-voice-agent-0.1.0.tgz
-npm install /path/to/Max/dist/max-voice-agent-0.1.0.tgz   # in your project
+npm install max-voice-agent
 ```
 
 Maintainers publish with `npm run pack:sdk && cd dist/sdk-package && npm publish`.

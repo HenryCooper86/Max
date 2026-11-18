@@ -1,6 +1,6 @@
 {
   "name": "max-voice-agent",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Put a realtime voice agent into any web page: a VoiceAgent client, a React hook and a <voice-agent> widget for the Max relay.",
   "license": "MIT",
   "type": "module",

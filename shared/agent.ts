@@ -671,6 +671,9 @@ export type AssistantSummary = {
    *  e.g. "/brand/logo?v=1a2b3c"). SVG or PNG, square. Absent → clients show
    *  their built-in mark. Use it for the in-app mark and the page favicon. */
   logoUrl?: string;
+  /** The creatures that fly on the pages, in order (ids from shared/characters.ts, up to 3).
+   *  Absent → the hummingbird. */
+  characters?: string[];
 };
 
 /** Centre frequencies of the equaliser's ten bands, in Hz. A graphic

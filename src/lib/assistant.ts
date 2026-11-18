@@ -3,6 +3,7 @@
 // accent and look. The relay reports this on /health (AgentHealth.assistant); older
 // relays do not, and then the client is the original "Max" helmet assistant.
 
+import { characterList, type CharacterId } from "../../shared/characters";
 import type { AssistantDevice, AssistantSummary, VoiceVisualizer } from "../../shared/agent";
 import { inkOn, withAlpha } from "./color";
 import { sanitizeThemeOverrides, type ThemeOverrides } from "./theme-tokens";
@@ -30,6 +31,8 @@ export type AssistantIdentity = {
   logoUrl?: string;
   /** The owner's voice display style, when it is one this client draws. */
   visualizer?: VoiceVisualizer;
+  /** The creatures that fly on the pages, when the owner chose them. */
+  characters?: CharacterId[];
 };
 
 export const DEFAULT_ASSISTANT: AssistantIdentity = {
@@ -62,6 +65,7 @@ export function resolveAssistant(summary: AssistantSummary | undefined | null): 
   const theme = sanitizeThemeOverrides(summary.theme);
   const logoUrl = brandLogoPath(summary.logoUrl);
   const visualizer = isVisualizer(summary.visualizer) ? summary.visualizer : undefined;
+  const characters = characterList(summary.characters);
   return {
     name,
     device,
@@ -76,7 +80,8 @@ export function resolveAssistant(summary: AssistantSummary | undefined | null): 
     ...(Object.keys(theme).length ? { theme } : {}),
     ...(summary.templateSwitching === false ? { templateSwitching: false as const } : {}),
     ...(logoUrl ? { logoUrl } : {}),
-    ...(visualizer ? { visualizer } : {})
+    ...(visualizer ? { visualizer } : {}),
+    ...(characters ? { characters } : {})
   };
 }
 

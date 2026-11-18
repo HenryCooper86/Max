@@ -9,6 +9,7 @@
 
 import { VoiceAgent } from "./client.js";
 import type { ClientTool, VoiceAgentOptions, VoiceAgentStatus } from "./client.js";
+import { parseCharacters, relayHttpBase } from "./protocol.js";
 import type { TranscriptItem, VoiceGender } from "./protocol.js";
 
 const OBSERVED = [
@@ -23,7 +24,8 @@ const OBSERVED = [
   "label",
   "accent",
   "position",
-  "text-input"
+  "text-input",
+  "characters"
 ] as const;
 /** Attributes that only matter when a session is created. */
 const CONNECTION_ATTRS: ReadonlySet<string> = new Set([
@@ -131,7 +133,20 @@ const TEMPLATE = `
   @keyframes pulse { 50% { opacity: 0.35; transform: scale(1.25); } }
   button:focus-visible, input:focus-visible { outline: 3px solid var(--va-accent); outline-offset: 2px; }
   .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .root { position: relative; }
+  .critters { position: absolute; right: 50px; bottom: -18px; width: 118px; height: 86px; pointer-events: none; }
+  :host([position="bottom-left"]) .critters { right: auto; left: 50px; }
+  .critters[hidden] { display: none; }
+  .critter { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; animation: va-drift 7s ease-in-out infinite; }
+  .critter.c1 { inset: auto; left: -46%; top: -40%; width: 70%; height: 70%; animation-duration: 9s; animation-delay: -3s; }
+  .critter.c2 { inset: auto; left: 18%; top: -78%; width: 62%; height: 62%; animation-duration: 11s; animation-delay: -6s; }
+  .root[data-status="speaking"] .critter { animation: va-bob 0.9s ease-in-out infinite; }
+  .root[data-status="listening"] .critters, .root[data-status="hearing"] .critters { transform: translate(-6px, -4px) scale(1.06); }
+  .critters { transition: transform 600ms cubic-bezier(0.3, 1.3, 0.5, 1); }
+  @keyframes va-drift { 25% { transform: translate(3%, -5%); } 50% { transform: translate(-2%, 2%); } 75% { transform: translate(-4%, -3%); } }
+  @keyframes va-bob { 50% { transform: translateY(-6%); } }
   @media (prefers-reduced-motion: reduce) {
+    .critter, .critters { animation: none !important; transition: none; }
     .fab, .ring { transition: none; animation: none !important; }
     .ring { transform: none; }
     .fab:hover { transform: none; }
@@ -157,7 +172,21 @@ const TEMPLATE = `
     </svg>
   </button>
   <span class="sr" role="status"></span>
+  <div class="critters" part="characters" aria-hidden="true" hidden></div>
 </div>`;
+
+const CHARACTER_SPEED: Record<string, number> = { thinking: 0.85, speaking: 1.1, listening: 0.9, hearing: 0.9 };
+
+/** Phones and Safari get the animated picture: some play transparent video with a box round it. */
+function usesPicture(): boolean {
+  if (typeof navigator === "undefined" || typeof window === "undefined") return false;
+  const safari = /safari/i.test(navigator.userAgent) && !/chrome|chromium|android|edg/i.test(navigator.userAgent);
+  return Boolean(window.matchMedia?.("(pointer: coarse)").matches) || safari;
+}
+
+function reducedMotion(): boolean {
+  return typeof window !== "undefined" && Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
+}
 
 function select<T extends Element>(root: ParentNode, selector: string): T {
   const found = root.querySelector<T>(selector);
@@ -181,7 +210,8 @@ async function fetchToken(url: string): Promise<string> {
  *
  * Attributes: `relay`, `project` (a Max Cloud public agent id: no backend needed), `token`, `token-url`, `language`, `voice`, `backend`,
  * `context` (facts about the page, for the assistant), `label`, `accent`, `position` (`bottom-right` by default,
- * `bottom-left`, or `inline` to place it in the flow), `text-input`.
+ * `bottom-left`, or `inline` to place it in the flow), `text-input`, `characters` (up to three of
+ * hummingbird, bee, butterfly, comma-separated: real creatures that hover beside the button).
  * Set the `tools` property to give the agent client tools. Dispatches
  * `voice-agent:status`, `:transcript`, `:toolcall` and `:error` events.
  */
@@ -205,7 +235,9 @@ export class VoiceAgentElement extends HTMLElement {
     fab: HTMLButtonElement;
     mute: HTMLButtonElement;
     live: HTMLElement;
+    critters: HTMLElement;
   };
+  #critterKey = "";
 
   constructor() {
     super();
@@ -240,7 +272,8 @@ export class VoiceAgentElement extends HTMLElement {
       input: select(root, "input"),
       fab: select(root, ".fab"),
       mute: select(root, ".mute"),
-      live: select(root, ".sr")
+      live: select(root, ".sr"),
+      critters: select(root, ".critters")
     };
     const ui = this.#ui;
     ui.fab.addEventListener("click", () => void this.#toggle());
@@ -311,6 +344,54 @@ export class VoiceAgentElement extends HTMLElement {
     if (accent) this.style.setProperty("--va-accent", accent);
     else this.style.removeProperty("--va-accent");
     ui.form.hidden = !this.hasAttribute("text-input");
+    this.#renderCritters();
+  }
+
+  /** The creatures beside the button, rebuilt only when the list or the relay changes. */
+  #renderCritters(): void {
+    const box = this.#ui.critters;
+    const ids = parseCharacters(this.getAttribute("characters"));
+    const relay = this.getAttribute("relay") ?? "";
+    const key = `${relay}|${ids.join(",")}`;
+    if (key === this.#critterKey) return;
+    this.#critterKey = key;
+    box.replaceChildren();
+    box.hidden = ids.length === 0 || !relay;
+    if (box.hidden) return;
+    let base: string;
+    try {
+      base = relayHttpBase(relay);
+    } catch {
+      box.hidden = true;
+      return;
+    }
+    const still = reducedMotion();
+    const picture = usesPicture();
+    ids.forEach((id, index) => {
+      const src = `${base}/character/${id}`;
+      let element: HTMLImageElement | HTMLVideoElement;
+      if (still || picture) {
+        element = document.createElement("img");
+        element.src = `${src}.${still ? "png" : "webp"}`;
+        element.alt = "";
+        element.decoding = "async";
+      } else {
+        const video = document.createElement("video");
+        video.src = `${src}.webm`;
+        video.poster = `${src}.png`;
+        video.muted = true;
+        video.loop = true;
+        video.autoplay = true;
+        video.playsInline = true;
+        video.disablePictureInPicture = true;
+        video.setAttribute("muted", "");
+        video.setAttribute("playsinline", "");
+        element = video;
+      }
+      element.className = index === 0 ? "critter" : `critter c${index}`;
+      element.draggable = false;
+      box.append(element);
+    });
   }
 
   #ensureAgent(): VoiceAgent {
@@ -364,6 +445,8 @@ export class VoiceAgentElement extends HTMLElement {
     const status = this.#agent?.status ?? "idle";
     const active = this.#active();
     ui.wrap.dataset.status = status;
+    const speed = CHARACTER_SPEED[status] ?? 1;
+    for (const video of ui.critters.querySelectorAll("video")) video.playbackRate = speed;
     ui.fab.setAttribute("aria-pressed", String(active));
     ui.panel.hidden = !active && status !== "error" && this.#lines.size === 0;
     ui.state.textContent = STATUS_LABELS[status];
@@ -400,7 +483,7 @@ export function defineVoiceAgentElement(): void {
 /**
  * Appends a `<voice-agent>` configured from a script tag's `data-*` attributes
  * (`data-relay`, `data-project`, `data-token`, `data-token-url`, `data-language`, `data-voice`,
- * `data-backend`, `data-context`, `data-label`, `data-accent`, `data-position`,
+ * `data-backend`, `data-context`, `data-label`, `data-accent`, `data-position`, `data-characters`,
  * `data-text-input`). Does nothing without `data-relay`.
  *
  * @returns the created element, if any.

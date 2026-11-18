@@ -1,3 +1,5 @@
+import { characterList, type CharacterId } from "./characters";
+
 /**
  * Max Cloud Studio: what a project can be set up with beyond its name, key
  * and instructions. Shared by the relay (which validates and runs it) and the
@@ -103,7 +105,8 @@ export type ProjectStudio = {
   tools: StudioTool[];
   /** Embed without a backend: sessions start from these websites only. */
   publicEmbed: { enabled: boolean; origins: string[] };
-  widget: { label: string; accent: string; position: WidgetPosition };
+  /** `characters` fly beside the widget's button (none when empty). */
+  widget: { label: string; accent: string; position: WidgetPosition; characters: CharacterId[] };
   /** Keep transcripts of conversations for 30 days. Off unless the customer turns it on
    *  (new projects made in the console start with it on, and say so). */
   keepConversations: boolean;
@@ -116,7 +119,7 @@ export const DEFAULT_STUDIO: ProjectStudio = {
   knowledge: "",
   tools: [],
   publicEmbed: { enabled: false, origins: [] },
-  widget: { label: "", accent: "", position: "bottom-right" },
+  widget: { label: "", accent: "", position: "bottom-right", characters: [] },
   keepConversations: false
 };
 
@@ -366,7 +369,12 @@ export function parseStudio(raw: unknown, backend: CloudBackend): Outcome<Projec
       knowledge: knowledge.value,
       tools,
       publicEmbed: { enabled, origins },
-      widget: { label: label.value, accent: accent.value.toLowerCase(), position },
+      widget: {
+        label: label.value,
+        accent: accent.value.toLowerCase(),
+        position,
+        characters: characterList(rawWidget.characters) ?? []
+      },
       keepConversations: raw.keepConversations === true
     }
   };

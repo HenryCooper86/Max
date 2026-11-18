@@ -1,6 +1,7 @@
 import "./install-tab.css";
 import { useId, useState, type KeyboardEvent } from "react";
 import { STUDIO_LIMITS, normalizeOrigin, type WidgetPosition } from "../../../shared/cloud-studio";
+import { CharacterPicker } from "../../components/CharacterPicker";
 import { CopyButton } from "../CopyButton";
 import { useSay } from "../hooks";
 import { FRAMEWORKS, frameworkSnippets, mintTokenCurl, publicEmbedSnippet, type Framework } from "./install-snippets";
@@ -205,6 +206,21 @@ export function InstallTab(props: StudioTabProps) {
                 <option value="bottom-left">{say("左下角", "Bottom left")}</option>
               </select>
             </div>
+          </div>
+          <div className="cxField">
+            <span>{say("角色", "Characters")}</span>
+            <small>
+              {say(
+                "在按钮旁飞的真实动物；说话时它们会跟着动起来。",
+                "Real creatures that hover beside the button and liven up while the agent talks."
+              )}
+            </small>
+            <CharacterPicker
+              value={widget.characters}
+              allowNone
+              assetBase={origin}
+              onChange={(characters) => setWidget({ characters })}
+            />
           </div>
           <div className="cxsInstallPreview" role="img" aria-label={say("按钮预览", "Button preview")}>
             <span className="cxsInstallFab" data-position={widget.position} style={{ background: accent }}>

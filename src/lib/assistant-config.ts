@@ -4,6 +4,7 @@
 // back in the shape the relay accepts (server/assistant.ts). Fields the
 // editor does not touch (persona, wearer, theme, …) ride along untouched.
 
+import { characterList, type CharacterId } from "../../shared/characters";
 import type { VoiceEqualizer, VoiceVisualizer } from "../../shared/agent";
 import { DEFAULT_DEVICE_ID, DEVICES, findBackend } from "./device-catalog";
 import { normalizeBands, normalizeEqualizer } from "./equalizer";
@@ -25,6 +26,8 @@ export type AssistantDraft = {
   template: string | null;
   templateSwitching: boolean;
   visualizer: VoiceVisualizer | null;
+  /** The creatures that fly on the pages, in order; null keeps the hummingbird. */
+  characters: CharacterId[] | null;
   /** "#RRGGBB", or "" for the template's own accent. */
   accentColor: string;
   /** null follows the device's default preset. */
@@ -55,6 +58,7 @@ const OWNED = new Set([
   "template",
   "templateSwitching",
   "visualizer",
+  "characters",
   "accentColor",
   "voice",
   "equalizer"
@@ -72,6 +76,7 @@ export function emptyDraft(language: Language = "en-US"): AssistantDraft {
     template: null,
     templateSwitching: true,
     visualizer: null,
+    characters: null,
     accentColor: "",
     equalizer: null,
     voiceProvider: "mock",
@@ -123,6 +128,7 @@ export function draftFromConfig(config: unknown, language: Language = "en-US"): 
     template: text(config.template).toLowerCase() || null,
     templateSwitching: config.templateSwitching !== false,
     visualizer: isVisualizer(config.visualizer) ? config.visualizer : null,
+    characters: characterList(config.characters) ?? null,
     accentColor: HEX.test(text(config.accentColor)) ? text(config.accentColor).toUpperCase() : "",
     equalizer: normalizeEqualizer(voiceEqualizer ?? config.equalizer),
     extra
@@ -147,6 +153,7 @@ export function configFromDraft(draft: AssistantDraft): Record<string, unknown> 
   if (draft.template) config.template = draft.template;
   if (!draft.templateSwitching) config.templateSwitching = false;
   if (draft.visualizer) config.visualizer = draft.visualizer;
+  if (draft.characters?.length) config.characters = [...draft.characters];
   if (draft.accentColor) config.accentColor = draft.accentColor.toUpperCase();
   if (theme !== undefined) config.theme = theme;
   const equalizer = draft.equalizer ? normalizeEqualizer(draft.equalizer) : null;

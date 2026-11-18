@@ -105,6 +105,17 @@ async function createProject(token: string, name = "Shop") {
   return response.body as { project: { id: string; keyPrefix: string }; apiKey: string };
 }
 
+// These suites exercise accounts, projects and money; signup by invitation has
+// its own tests (tests/cloud-invites.test.ts).
+const savedSignup = process.env.CLOUD_SIGNUP;
+beforeEach(() => {
+  process.env.CLOUD_SIGNUP = "open";
+});
+afterEach(() => {
+  if (savedSignup === undefined) delete process.env.CLOUD_SIGNUP;
+  else process.env.CLOUD_SIGNUP = savedSignup;
+});
+
 beforeEach(async () => {
   process.env.CLOUD_SECRET_KEY = KEY;
   delete process.env.CLOUD_PUBLIC_URL;

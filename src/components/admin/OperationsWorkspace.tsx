@@ -35,6 +35,7 @@ import {
 } from "./admin-model";
 import { useWorkspaceLocation } from "./workspace-location";
 import { AccountManagement } from "./AccountManagement";
+import { CloudInvites } from "./CloudInvites";
 import { AdminOverview } from "./AdminOverview";
 import { AssistantStudio, SECTION_LEAVE_EVENT } from "./AssistantStudio";
 import { QualityOverview } from "./QualityOverview";
@@ -391,7 +392,10 @@ export function OperationsWorkspace({ agent, user, onAuthenticationExpired, onCl
             />
           ) : null}
           {administration && active === "accounts" ? (
-            <AccountManagement key={accountScope} user={user} onAuthenticationExpired={onAuthenticationExpired} />
+            <>
+              <AccountManagement key={accountScope} user={user} onAuthenticationExpired={onAuthenticationExpired} />
+              <CloudInvites key={`cloud-${accountScope}`} onAuthenticationExpired={onAuthenticationExpired} />
+            </>
           ) : null}
           {canAdminister ? (
             <div

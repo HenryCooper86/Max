@@ -1,22 +1,31 @@
 import { useState, type FormEvent } from "react";
+import { CONTACT_URL } from "../lib/pricing";
 import { ApiError, type CloudApi } from "./api";
 import { useSay } from "./hooks";
 
 type Mode = "signup" | "login";
 const MIN_PASSWORD_LENGTH = 10;
 
-/** One card: Create account / Log in. */
+/** The invitation code in the page address (`/console?invite=cinv_…`), if any. */
+export function inviteFromLocation(search: string): string {
+  const code = new URLSearchParams(search).get("invite")?.trim() ?? "";
+  return /^cinv_[0-9a-f]{32}$/.test(code) ? code : "";
+}
+
+/** One card: Create account (by invitation) / Log in. */
 export function AuthCard({
   api,
   onSignedIn,
-  initialMode = "signup"
+  invite: initialInvite = ""
 }: {
   api: CloudApi;
   onSignedIn: (token: string) => void;
-  initialMode?: Mode;
+  /** From the invitation link; opens the card on Create account. */
+  invite?: string;
 }) {
   const say = useSay();
-  const [mode, setMode] = useState<Mode>(initialMode);
+  const [mode, setMode] = useState<Mode>(initialInvite ? "signup" : "login");
+  const [invite, setInvite] = useState(initialInvite);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -33,7 +42,9 @@ export function AuthCard({
     setBusy(true);
     setError("");
     try {
-      const result = await (mode === "signup" ? api.signup(email.trim(), password) : api.login(email.trim(), password));
+      const result = await (mode === "signup"
+        ? api.signup(email.trim(), password, invite.trim())
+        : api.login(email.trim(), password));
       onSignedIn(result.token);
     } catch (caught) {
       setError(
@@ -48,8 +59,8 @@ export function AuthCard({
       <h1 id="cx-auth-title">{say("Max Cloud 控制台", "Max Cloud console")}</h1>
       <p className="cxReassure">
         {say(
-          "每月 1,000 分钟免费。使用你自己的 OpenAI、Gemini 或 xAI 密钥。",
-          "1,000 free minutes every month. Bring your own OpenAI, Gemini or xAI key."
+          "抢先体验期间凭邀请注册。每月 1,000 分钟免费，使用你自己的 OpenAI、Gemini 或 xAI 密钥。",
+          "Early access is by invitation. 1,000 free minutes every month; bring your own OpenAI, Gemini or xAI key."
         )}
       </p>
       <div className="cxTabs" role="tablist" aria-label={say("账户", "Account")}>
@@ -77,6 +88,31 @@ export function AuthCard({
         aria-labelledby={`cx-tab-${mode}`}
         onSubmit={(event) => void submit(event)}
       >
+        {mode === "signup" ? (
+          <label className="cxField">
+            <span>{say("邀请码", "Invitation code")}</span>
+            <input
+              type="text"
+              required
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="cinv_…"
+              aria-describedby="cx-invite-hint"
+              value={invite}
+              onChange={(event) => setInvite(event.target.value)}
+            />
+            <small id="cx-invite-hint">
+              {initialInvite
+                ? say("已从你的邀请链接填好。", "Filled in from your invitation link.")
+                : say("没有邀请？", "No invitation yet?")}{" "}
+              {initialInvite ? null : (
+                <a className="siteTextLink" href={CONTACT_URL} rel="noreferrer noopener">
+                  {say("申请邀请", "Request one")}
+                </a>
+              )}
+            </small>
+          </label>
+        ) : null}
         <label className="cxField">
           <span>{say("邮箱", "Email")}</span>
           <input

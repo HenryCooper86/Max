@@ -20,6 +20,11 @@ import {
 
 export { cloudEnabled } from "./context";
 export { registerCloudPaymentRoutes, registerCloudRoutes } from "./routes";
+export {
+  createInvite as createCloudInvite,
+  listInvites as listCloudInvites,
+  revokeInvite as revokeCloudInvite
+} from "./customers";
 
 const log = createLogger("cloud");
 

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { LanguageProvider, LanguageToggle } from "../components/LanguageToggle";
 import { PRICING_PATH, REPOSITORY_URL } from "../lib/routes";
 import { ApiError, createCloudApi } from "./api";
-import { AuthCard } from "./AuthCard";
+import { AuthCard, inviteFromLocation } from "./AuthCard";
 import { BalanceCard } from "./BalanceCard";
 import { useConsoleData, useSay, type Session } from "./hooks";
 import { ProjectsSection } from "./ProjectsSection";
@@ -148,8 +148,11 @@ function Console() {
         ) : (
           <AuthCard
             api={api}
+            invite={inviteFromLocation(window.location.search)}
             onSignedIn={(next) => {
               storeToken(next);
+              // The invitation is used up: keep it out of the address bar and history.
+              if (window.location.search) window.history.replaceState(null, "", window.location.pathname);
               setToken(next);
             }}
           />

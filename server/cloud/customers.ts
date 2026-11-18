@@ -2,12 +2,17 @@
 // the relay's staff accounts (server/accounts.ts): own table, own `mcs_`
 // tokens, never accepted by the staff gates and vice versa.
 
+import { randomBytes } from "node:crypto";
 import { createLogger } from "../logger";
 import { cloudSecretKey, now } from "./context";
 import {
   customerByEmail,
+  deleteOpenInvite,
   deleteSession,
   insertCustomer,
+  insertCustomerWithInvite,
+  insertInvite,
+  openInvites,
   insertProject,
   insertSession,
   liveProject,
@@ -18,6 +23,7 @@ import {
   updateProject,
   type Backend,
   type CustomerRow,
+  type InviteRow,
   type ProjectChanges,
   type ProjectRow
 } from "./store";
@@ -95,10 +101,56 @@ function startSession(customer: CustomerRow): { token: string; customer: PublicC
   return { token, customer: publicCustomer(customer) };
 }
 
+const INVITE_CODE = /^cinv_[0-9a-f]{32}$/;
+const INVITE_LIFETIME_MS = 7 * 86_400_000;
+const INVALID_INVITE = "This invitation is not valid: it may have been used or have expired. Ask for a new one.";
+
+/** True when anyone may sign up without an invitation (CLOUD_SIGNUP=open). */
+function openSignup(): boolean {
+  return process.env.CLOUD_SIGNUP?.trim().toLowerCase() === "open";
+}
+
+/** A new single-use invitation, valid for 7 days. */
+export function createInvite(createdBy: string, noteInput: unknown): InviteRow {
+  const at = now();
+  const row: InviteRow = {
+    code: `cinv_${randomBytes(16).toString("hex")}`,
+    note:
+      typeof noteInput === "string"
+        ? [...noteInput]
+            .map((char) => (char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127 ? " " : char))
+            .join("")
+            .trim()
+            .slice(0, 120)
+        : "",
+    created_by: createdBy.slice(0, 80),
+    created_at: at,
+    expires_at: at + INVITE_LIFETIME_MS,
+    used_by: null,
+    used_at: null
+  };
+  insertInvite(row);
+  log.info("cloud invite created", { by: row.created_by, code: `${row.code.slice(0, 10)}…` });
+  return row;
+}
+
+export function listInvites(): InviteRow[] {
+  return openInvites(now());
+}
+
+export function revokeInvite(code: unknown): boolean {
+  return typeof code === "string" && INVITE_CODE.test(code.trim()) ? deleteOpenInvite(code.trim()) : false;
+}
+
 export async function signup(
   emailInput: unknown,
-  passwordInput: unknown
+  passwordInput: unknown,
+  inviteInput?: unknown
 ): Promise<Result<{ token: string; customer: PublicCustomer }>> {
+  const invite = typeof inviteInput === "string" ? inviteInput.trim() : "";
+  if (!openSignup() && !INVITE_CODE.test(invite)) {
+    return fail(403, "Max Cloud is invitation-only. Use the invitation link you were sent, or ask for one.");
+  }
   const email = normalizeEmail(emailInput);
   if (!email) return fail(400, "Enter a valid email address.");
   if (!validPassword(passwordInput)) {
@@ -112,7 +164,13 @@ export async function signup(
     password_salt: salt,
     created_at: now()
   };
-  if (!insertCustomer(row)) return fail(409, "This email cannot be used to sign up. If it is yours, log in.");
+  if (openSignup() && !INVITE_CODE.test(invite)) {
+    if (!insertCustomer(row)) return fail(409, "This email cannot be used to sign up. If it is yours, log in.");
+  } else {
+    const outcome = insertCustomerWithInvite(row, invite, row.created_at);
+    if (outcome === "invalid-invite") return fail(403, INVALID_INVITE);
+    if (outcome === "email-taken") return fail(409, "This email cannot be used to sign up. If it is yours, log in.");
+  }
   log.info("customer signed up", { customerId: row.id });
   return { ok: true, value: startSession(row) };
 }

@@ -70,8 +70,8 @@ export const PLANS: readonly Plan[] = [
         en: "Same SDK and protocol: move to self-hosting any time"
       }
     ],
-    cta: { label: { zh: "免费开始", en: "Start free" }, href: "/console" },
-    badge: { zh: "抢先体验", en: "Early access" },
+    cta: { label: { zh: "申请邀请", en: "Request an invite" }, href: CONTACT_URL },
+    badge: { zh: "凭邀请", en: "By invitation" },
     featured: true
   },
   {
@@ -120,8 +120,8 @@ export const PRICING_FAQ: readonly Question[] = [
   {
     question: { zh: "Max Cloud 现在可以用吗？", en: "Can I use Max Cloud today?" },
     answer: {
-      zh: "可以。目前是抢先体验：在控制台注册就能开始，每月前 1,000 分钟免费。",
-      en: "Yes, in early access. Sign up in the console and start right away; the first 1,000 minutes every month are free."
+      zh: "抢先体验期间凭邀请使用：在 GitHub Discussions 申请邀请，收到邀请链接后在控制台注册。每月前 1,000 分钟免费。",
+      en: "By invitation during early access: ask for an invite in GitHub Discussions, then sign up in the console with your invitation link. The first 1,000 minutes every month are free."
     }
   },
   {

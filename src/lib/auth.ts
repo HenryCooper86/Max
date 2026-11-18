@@ -232,6 +232,41 @@ export const adminAccountApi: AdminAccountApi = {
   updateRole
 };
 
+/** A Max Cloud invitation (separate from the testing platform's). */
+export type CloudInvite = { code: string; note: string; createdBy: string; createdAt: number; expiresAt: number };
+
+/** Max Cloud invitations, managed by staff admins. */
+export const cloudInviteApi = {
+  async list(): Promise<ApiResult<{ enabled: boolean; invites: CloudInvite[] }>> {
+    const result = await requestJson<{ ok: true; enabled: boolean; invites: CloudInvite[] }>(
+      "/auth/admin/cloud-invites",
+      { headers: adminHeaders() }
+    );
+    return result.ok ? { ok: true, data: { enabled: result.data.enabled, invites: result.data.invites } } : result;
+  },
+  async create(note: string): Promise<ApiResult<CloudInvite>> {
+    const result = await requestJson<{ ok: true; invite: CloudInvite }>("/auth/admin/cloud-invites", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...adminHeaders() },
+      body: JSON.stringify({ note })
+    });
+    return result.ok ? { ok: true, data: result.data.invite } : result;
+  },
+  async revoke(code: string): Promise<ApiResult<{ removed: boolean }>> {
+    const result = await requestJson<{ ok: true; removed: boolean }>("/auth/admin/cloud-invites/revoke", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...adminHeaders() },
+      body: JSON.stringify({ code })
+    });
+    return result.ok ? { ok: true, data: { removed: result.data.removed } } : result;
+  }
+};
+
+/** The link a developer opens to sign up for Max Cloud with an invitation. */
+export function cloudInviteUrl(code: string): string {
+  return `${window.location.origin}/console?invite=${encodeURIComponent(code)}`;
+}
+
 /** The full invite URL a new tester opens to register. */
 export function inviteUrl(code: string): string {
   return `${window.location.origin}/?invite=${encodeURIComponent(code)}`;

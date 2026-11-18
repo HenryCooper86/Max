@@ -29,9 +29,16 @@ Without `CLOUD_SECRET_KEY` every `/cloud` address answers "Max Cloud is not conf
 Data lives in `cloud.sqlite` in the relay's data folder (`STUDIO_DIR`, default `~/.max-relay`), next to the relay's
 other data. Back up that folder and `CLOUD_SECRET_KEY` together.
 
+## Invitations
+
+Signup is by invitation, like the testing platform's accounts. In the app, **Admin → Accounts → Max Cloud
+invitations**: add an optional note (who it is for), generate the link, and send it. Each link
+(`https://<relay>/console?invite=cinv_…`) creates one account and expires after 7 days; unused links can be revoked
+there. Logging in needs no invitation. To let anyone sign up instead, set `CLOUD_SIGNUP=open`.
+
 ## How customers connect
 
-1. Sign up at `https://<relay>/console` and create a project. The project key (`mpk_…`) is shown once.
+1. Open the invitation link, create an account, and create a project. The project key (`mpk_…`) is shown once.
 2. Choose a backend, paste a model key, set the assistant's name, instructions and greeting.
 3. From their own backend, mint a short-lived session token with the project key:
 

@@ -38,6 +38,9 @@ import { installServerTools } from "./tools/registry";
 import { createUsageMeter, monthOf, usageSettingsFromEnv } from "./usage";
 import {
   cloudEnabled,
+  createCloudInvite,
+  listCloudInvites,
+  revokeCloudInvite,
   cloudSessionAlive,
   cloudSessionEnded,
   cloudSessionStarted,
@@ -508,6 +511,44 @@ app.post("/auth/admin/invites/revoke", (req, res) => {
   }
   const removed = revokeInvite(body.code);
   res.json({ ok: true, removed });
+});
+
+// Max Cloud invitations: signup at /console is invitation-only, like the
+// testing platform's accounts. Admins create single-use links here.
+function cloudInviteView(invite: ReturnType<typeof listCloudInvites>[number]) {
+  return {
+    code: invite.code,
+    note: invite.note,
+    createdBy: invite.created_by,
+    createdAt: invite.created_at,
+    expiresAt: invite.expires_at
+  };
+}
+
+app.get("/auth/admin/cloud-invites", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  res.json({
+    ok: true,
+    enabled: cloudEnabled(),
+    invites: cloudEnabled() ? listCloudInvites().map(cloudInviteView) : []
+  });
+});
+
+app.post("/auth/admin/cloud-invites", (req, res) => {
+  const admin = requireAdmin(req, res);
+  if (!admin) return;
+  if (!cloudEnabled()) {
+    res.status(503).json({ ok: false, error: "Max Cloud is not configured" });
+    return;
+  }
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  res.json({ ok: true, invite: cloudInviteView(createCloudInvite(admin.username, body.note)) });
+});
+
+app.post("/auth/admin/cloud-invites/revoke", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  res.json({ ok: true, removed: cloudEnabled() ? revokeCloudInvite(body.code) : false });
 });
 
 // Studio: an admin edits the live assistant (name, device, look, voice shaping)

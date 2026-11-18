@@ -122,7 +122,7 @@ export function registerCloudRoutes(app: express.Express): void {
   api.post(
     "/signup",
     rateLimited,
-    handle(async (req, res) => send(res, await signup(body(req).email, body(req).password), 201))
+    handle(async (req, res) => send(res, await signup(body(req).email, body(req).password, body(req).invite), 201))
   );
   api.post(
     "/login",

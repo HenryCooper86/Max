@@ -10,7 +10,7 @@ import { ProjectEditor } from "../src/console/ProjectEditor";
 import { Snippets } from "../src/console/Snippets";
 import { ActivitySection, UsageSection } from "../src/console/UsageSection";
 import { PricingPage } from "../src/landing/PricingPage";
-import { PLANS, PRICING_FAQ } from "../src/lib/pricing";
+import { CONTACT_URL, PLANS, PRICING_FAQ } from "../src/lib/pricing";
 
 const wrap = (node: React.ReactNode) => renderToStaticMarkup(<LanguageProvider>{node}</LanguageProvider>);
 const api = createCloudApi(async () => new Response("{}"));
@@ -111,12 +111,12 @@ describe("overview pieces", () => {
 
 describe("pricing page", () => {
   const html = wrap(<PricingPage />);
-  it("prices Max Cloud in yuan and links to the console", () => {
+  it("prices Max Cloud in yuan and offers an invitation", () => {
     const cloud = PLANS.find((plan) => plan.id === "cloud")!;
-    expect(cloud.cta.href).toBe("/console");
+    expect(cloud.cta.href).toBe(CONTACT_URL);
     expect(html).toContain("¥0.15");
-    expect(html).toContain('href="/console"');
-    expect(html).toContain("抢先体验");
+    expect(html).toContain("申请邀请");
+    expect(html).toContain("凭邀请");
   });
 
   it("explains how to pay", () => {

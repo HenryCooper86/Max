@@ -109,8 +109,8 @@ export function createCloudApi(fetcher?: FetchLike) {
     call<T>(fetcher, token, method, path, body);
   const id = encodeURIComponent;
   return {
-    signup: (email: string, password: string) =>
-      send<{ token: string; customer: Customer }>(null, "POST", "/signup", { email, password }),
+    signup: (email: string, password: string, invite: string) =>
+      send<{ token: string; customer: Customer }>(null, "POST", "/signup", { email, password, invite }),
     login: (email: string, password: string) =>
       send<{ token: string; customer: Customer }>(null, "POST", "/login", { email, password }),
     logout: (token: string) => send<{ ok: true }>(token, "POST", "/logout"),

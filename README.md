@@ -232,11 +232,11 @@ Android and embedded clients, navigation, camera and hazard alerts. That referen
 Max is free and open source under the MIT license, including for commercial products. Paid plans add services, not
 features:
 
-| Plan            | Price                                                       | For                                                                    |
-| --------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------- |
-| **Open source** | Free                                                        | Everything here, self-hosted                                           |
-| **Max Cloud**   | ¥0.15/min (≈ $0.02) with your own model key, 1,000 min free | A hosted relay, no servers to run. Early access: sign up at `/console` |
-| **Enterprise**  | Custom                                                      | Support with an SLA, deployment help, custom integrations              |
+| Plan            | Price                                                       | For                                                                  |
+| --------------- | ----------------------------------------------------------- | -------------------------------------------------------------------- |
+| **Open source** | Free                                                        | Everything here, self-hosted                                         |
+| **Max Cloud**   | ¥0.15/min (≈ $0.02) with your own model key, 1,000 min free | A hosted relay, no servers to run. By invitation during early access |
+| **Enterprise**  | Custom                                                      | Support with an SLA, deployment help, custom integrations            |
 
 Details in [pricing and licensing](docs/pricing.md); talk to us in
 [Discussions](https://github.com/HenryCooper86/Max/discussions). Charging your own customers? The relay meters voice

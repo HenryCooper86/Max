@@ -163,6 +163,15 @@ function database(): DatabaseSync {
         expires_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(customer_id, created_at);
+      CREATE TABLE IF NOT EXISTS cloud_invites (
+        code TEXT PRIMARY KEY,
+        note TEXT NOT NULL DEFAULT '',
+        created_by TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        used_by TEXT NULL,
+        used_at INTEGER NULL
+      );
       CREATE TABLE IF NOT EXISTS live_sessions (
         session_id TEXT PRIMARY KEY,
         customer_id TEXT NOT NULL,
@@ -562,4 +571,62 @@ export function endLiveSession(sessionId: string): void {
 
 export function leftoverLiveSessions(): LiveSessionRow[] {
   return database().prepare("SELECT * FROM live_sessions").all() as LiveSessionRow[];
+}
+
+/** An invitation to sign up for Max Cloud: one use, until it expires. */
+export type InviteRow = {
+  code: string;
+  note: string;
+  created_by: string;
+  created_at: number;
+  expires_at: number;
+  used_by: string | null;
+  used_at: number | null;
+};
+
+export function insertInvite(row: InviteRow): void {
+  database()
+    .prepare(
+      `INSERT INTO cloud_invites (code, note, created_by, created_at, expires_at, used_by, used_at)
+       VALUES (?, ?, ?, ?, ?, NULL, NULL)`
+    )
+    .run(row.code, row.note, row.created_by, row.created_at, row.expires_at);
+}
+
+/** Invites not yet used and not expired, newest first. */
+export function openInvites(at: number): InviteRow[] {
+  return database()
+    .prepare("SELECT * FROM cloud_invites WHERE used_by IS NULL AND expires_at > ? ORDER BY created_at DESC LIMIT 200")
+    .all(at) as InviteRow[];
+}
+
+/** Removes an unused invite; false when there was none. */
+export function deleteOpenInvite(code: string): boolean {
+  return database().prepare("DELETE FROM cloud_invites WHERE code = ? AND used_by IS NULL").run(code).changes === 1;
+}
+
+/**
+ * Creates a customer with an invite, in one transaction: the invite must be
+ * unused and unexpired, and is used up only when the account is created.
+ */
+export function insertCustomerWithInvite(
+  row: CustomerRow,
+  code: string,
+  at: number
+): "created" | "invalid-invite" | "email-taken" {
+  return immediate((db) => {
+    const invite = db
+      .prepare("SELECT 1 FROM cloud_invites WHERE code = ? AND used_by IS NULL AND expires_at > ?")
+      .get(code, at);
+    if (!invite) return "invalid-invite";
+    const inserted = db
+      .prepare(
+        `INSERT INTO customers (id, email, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(email) DO NOTHING`
+      )
+      .run(row.id, row.email, row.password_hash, row.password_salt, row.created_at);
+    if (inserted.changes !== 1) return "email-taken";
+    db.prepare("UPDATE cloud_invites SET used_by = ?, used_at = ? WHERE code = ?").run(row.id, at, code);
+    return "created";
+  });
 }

@@ -49,6 +49,17 @@ function newProject(customerId: string, name = "Shop") {
   return result.value;
 }
 
+// These suites exercise accounts, projects and money; signup by invitation has
+// its own tests (tests/cloud-invites.test.ts).
+const savedSignup = process.env.CLOUD_SIGNUP;
+beforeEach(() => {
+  process.env.CLOUD_SIGNUP = "open";
+});
+afterEach(() => {
+  if (savedSignup === undefined) delete process.env.CLOUD_SIGNUP;
+  else process.env.CLOUD_SIGNUP = savedSignup;
+});
+
 beforeEach(() => {
   process.env.CLOUD_SECRET_KEY = KEY.toString("base64");
   delete process.env.CLOUD_PUBLIC_URL;

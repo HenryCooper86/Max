@@ -22,6 +22,17 @@ const START = Date.UTC(2026, 10, 18, 12, 0, 0);
 let clock = START;
 const saved = { key: process.env.CLOUD_SECRET_KEY, url: process.env.CLOUD_PUBLIC_URL };
 
+// These suites exercise accounts, projects and money; signup by invitation has
+// its own tests (tests/cloud-invites.test.ts).
+const savedSignup = process.env.CLOUD_SIGNUP;
+beforeEach(() => {
+  process.env.CLOUD_SIGNUP = "open";
+});
+afterEach(() => {
+  if (savedSignup === undefined) delete process.env.CLOUD_SIGNUP;
+  else process.env.CLOUD_SIGNUP = savedSignup;
+});
+
 beforeEach(() => {
   process.env.CLOUD_SECRET_KEY = randomBytes(32).toString("base64");
   process.env.CLOUD_PUBLIC_URL = "https://max.example.com";

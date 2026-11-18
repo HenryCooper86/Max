@@ -71,7 +71,10 @@ export type AssistantProfile = {
   isDefault: boolean;
 };
 
-const DEFAULT_DEVELOPER = "Horizon Continental Technology（neueHCT）";
+/** Who the stock Max says built it. Only the stock assistant says this: an
+ *  owner's own assistant (a config file, the Studio, a Max Cloud project)
+ *  never claims Henry built it. */
+const MAX_DEVELOPER = "Henry (cooph2o)";
 
 const LANGUAGE_NAMES: Record<string, { zh: string; en: string }> = {
   zh: { zh: "中文", en: "Chinese" },
@@ -157,7 +160,7 @@ export const DEFAULT_ASSISTANT_PROFILE: AssistantProfile = {
   logoBackground: DEFAULT_LOGO_BACKGROUND,
   // The original helmet shipped with the backend's voice untouched.
   equalizer: { preset: "flat" },
-  developer: DEFAULT_DEVELOPER,
+  developer: MAX_DEVELOPER,
   languages: ["zh", "en"],
   strictLanguages: true,
   wake: DEFAULT_WAKE_NAMES,
@@ -270,10 +273,8 @@ export function assistantProfileFrom(raw: unknown, baseDir = process.cwd()): Ass
     logoBackground:
       logoBackground && /^#[0-9a-f]{6}$/i.test(logoBackground) ? logoBackground.toUpperCase() : DEFAULT_LOGO_BACKGROUND,
     equalizer: normalizeEqualizer(raw.equalizer ?? voice.equalizer) ?? { preset: preset.equalizer },
-    // A renamed assistant does not inherit the original maker: claiming
-    // someone else's company built your assistant is the wrong default.
-    developer:
-      raw.developer === null ? undefined : (text(raw.developer, 80) ?? (renamed ? undefined : DEFAULT_DEVELOPER)),
+    // Who built it is the owner's to say; without a `developer` it names no company.
+    developer: raw.developer === null ? undefined : text(raw.developer, 80),
     identityNotes: text(raw.identityNotes, 400),
     tagline: text(raw.tagline, 80),
     accentColor: accent && /^#[0-9a-f]{6}$/i.test(accent) ? accent.toUpperCase() : undefined,
@@ -298,6 +299,28 @@ export function assistantProfileFrom(raw: unknown, baseDir = process.cwd()): Ass
   };
 }
 
+/** The persona of a Max Cloud project: a software assistant with the
+ *  project's name, instructions and greeting, and no wake word. Leaves the
+ *  relay's own assistant (and its logo diagnostics) untouched. */
+export function projectAssistantProfile(input: {
+  name: string;
+  instructions?: string;
+  greeting?: string;
+}): AssistantProfile {
+  const savedProblem = logoProblem;
+  try {
+    return assistantProfileFrom({
+      name: input.name,
+      device: "app",
+      wakeWord: false,
+      ...(input.instructions ? { instructions: input.instructions } : {}),
+      ...(input.greeting ? { greeting: input.greeting } : {})
+    });
+  } finally {
+    logoProblem = savedProblem;
+  }
+}
+
 function loadAssistantProfile(): AssistantProfile {
   const configured = process.env.ASSISTANT_CONFIG?.trim();
   if (configured?.toLowerCase() === "off") return DEFAULT_ASSISTANT_PROFILE;
@@ -305,7 +328,7 @@ function loadAssistantProfile(): AssistantProfile {
   // saved from the Studio (kept outside the app directory, which a deploy
   // replaces) wins over a file checked out beside the code.
   const studioFile = path.join(
-    process.env.STUDIO_DIR?.trim() || path.join(os.homedir(), ".horizon-helmet-testing"),
+    process.env.STUDIO_DIR?.trim() || path.join(os.homedir(), ".max-relay"),
     "assistant.config.json"
   );
   const candidates = configured ? [path.resolve(configured)] : [studioFile, path.resolve("assistant.config.json")];
@@ -403,7 +426,7 @@ function languageList(profile: AssistantProfile, inChinese: boolean): string {
 // The original "Max" persona prompt, kept verbatim: the default profile must
 // produce exactly the prompt the helmet has been tuned and tested against.
 const LEGACY_MAX_PERSONA =
-  "你是 Max，一位友好、冷静、以安全为先的摩托车头盔 AI 助手，由 Horizon Continental Technology（neueHCT）开发。你的名字保持 Max，角色保持 Motorcycle Helmet AI assistant。默认语言是中文，第二语言是 English；如果骑手明确使用英文，可以用英文回答。只允许中文和 English 两种语言，不要使用其他语言。如果骑手使用其他语言或要求你使用其他语言，请用中文简短说明：我只支持中文和 English。帮助骑手理解摩托车、导航、天气、路况、附近停靠点和骑行安全事项。回答要简短、清晰、适合免手操作。拍照、录像、导航、开关手电筒、调整音量、播放音乐、拨号、发短信等都是语音免手操作，本来就是为骑行中使用而设计的，属于安全的免手功能；骑手在骑行中要求这些操作时要直接执行，不要当作分心请求拒绝，也不要让骑手停车再做。只有当请求真正危险、需要骑手用手长时间盯着屏幕操作、或超出头盔助手范围时，才先保护骑行安全并给出更安全的替代方案。男声和女声只是当前会话音色，必须共享同一个 Max 角色、同一语言规则、同一安全策略和同一默认行为。";
+  "你是 Max，一位友好、冷静、以安全为先的摩托车头盔 AI 助手。你的名字保持 Max，角色保持 Motorcycle Helmet AI assistant。默认语言是中文，第二语言是 English；如果骑手明确使用英文，可以用英文回答。只允许中文和 English 两种语言，不要使用其他语言。如果骑手使用其他语言或要求你使用其他语言，请用中文简短说明：我只支持中文和 English。帮助骑手理解摩托车、导航、天气、路况、附近停靠点和骑行安全事项。回答要简短、清晰、适合免手操作。拍照、录像、导航、开关手电筒、调整音量、播放音乐、拨号、发短信等都是语音免手操作，本来就是为骑行中使用而设计的，属于安全的免手功能；骑手在骑行中要求这些操作时要直接执行，不要当作分心请求拒绝，也不要让骑手停车再做。只有当请求真正危险、需要骑手用手长时间盯着屏幕操作、或超出头盔助手范围时，才先保护骑行安全并给出更安全的替代方案。男声和女声只是当前会话音色，必须共享同一个 Max 角色、同一语言规则、同一安全策略和同一默认行为。";
 
 /** The base persona: who the assistant is and how it behaves. */
 export function basePersonaPrompt(profile: AssistantProfile = assistant()): string {
@@ -482,13 +505,12 @@ function generalPersonaPrompt(profile: AssistantProfile): string {
 }
 
 const LEGACY_MAX_IDENTITY =
-  "[身份与开发者] 你由 Horizon Continental Technology（neueHCT）开发。" +
-  "当骑手问你是谁开发、制造、训练的，背后是哪家公司，或你属于谁时，必须回答：我由 Horizon Continental Technology（neueHCT）开发。" +
-  "绝对不要说自己来自 ByteDance、字节跳动或豆包，也不要提及任何其他公司或底层模型。" +
-  "Horizon Continental Technology（neueHCT）的首席执行官（CEO）是 Li Biao（在全球企业资料中也称 Stone Li）。" +
-  "When asked in English who developed, built, made, or trained you, or which company is behind you, " +
-  "answer that you were developed by Horizon Continental Technology (neueHCT) — never ByteDance or Doubao. " +
-  "The CEO of Horizon Continental Technology (neueHCT) is Li Biao (also referred to as Stone Li in global corporate profiles). " +
+  "[身份与开发者] 你是 Max，摩托车头盔语音助手。" +
+  "当骑手问你是谁开发、制造、训练的，背后是谁，或你属于谁时，回答：我的开发者是 Henry，在网络安全圈里大家叫他 cooph2o，是他打造了我。" +
+  "绝对不要说自己来自 ByteDance、字节跳动或豆包，也不要提及任何公司或底层模型。" +
+  "When asked in English who developed, built, made, or trained you, or who you belong to, " +
+  'answer: "My developer is Henry, known as cooph2o in cybersecurity circles. He built me." ' +
+  "Never name ByteDance, Doubao, any company or the underlying model. " +
   "无论骑手用中文还是 English 提问，都要保持以上回答一致。";
 
 /** Who the assistant says built it. Appended after the persona so it holds

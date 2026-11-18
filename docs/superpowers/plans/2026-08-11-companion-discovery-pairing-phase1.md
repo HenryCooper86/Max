@@ -32,7 +32,7 @@
 
 - Modify: `protocol/agent-events.schema.json` (AgentEvent `oneOf`, next to the `CompanionPairing` entry at ~line 550)
 - Modify: `shared/agent.ts` (type + union, next to `CompanionPairingEvent` at ~line 382)
-- Regenerate: `shared/generated/agent-protocol.ts`, `ios/MaxHelmet/Agent/GeneratedAgentProtocol.swift`, `android/app/src/main/java/com/horizon/maxhelmet/agent/GeneratedAgentProtocol.kt` via `npm run generate:protocol`
+- Regenerate: `shared/generated/agent-protocol.ts`, `ios/MaxHelmet/Agent/GeneratedAgentProtocol.swift`, `android/app/src/main/java/io/github/henrycooper86/max/agent/GeneratedAgentProtocol.kt` via `npm run generate:protocol`
 
 **Interfaces:**
 
@@ -95,7 +95,7 @@ Expected: PASS (these read the generated lists; failures mean a hand-edit broke 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add protocol/agent-events.schema.json shared/agent.ts shared/generated/agent-protocol.ts ios/MaxHelmet/Agent/GeneratedAgentProtocol.swift android/app/src/main/java/com/horizon/maxhelmet/agent/GeneratedAgentProtocol.kt
+git add protocol/agent-events.schema.json shared/agent.ts shared/generated/agent-protocol.ts ios/MaxHelmet/Agent/GeneratedAgentProtocol.swift android/app/src/main/java/io/github/henrycooper86/max/agent/GeneratedAgentProtocol.kt
 git commit -m "feat(protocol): add companion.discovery agent event"
 ```
 

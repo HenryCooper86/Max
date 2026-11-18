@@ -59,7 +59,7 @@ cleanup() {
   if [[ "$exit_status" -ne 0 && "$DEPLOY_ACTIVATED" == "on" ]]; then
     echo "==> Deployment failed after activation; restoring the previous release" >&2
     ssh -i "$KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$HOST" \
-      "set -e; rm -rf '$REMOTE_FAILED_DIR'; mv '$REMOTE_APP_DIR' '$REMOTE_FAILED_DIR'; mv '$REMOTE_PREVIOUS_DIR' '$REMOTE_APP_DIR'; pm2 restart horizon --update-env; rm -rf '$REMOTE_FAILED_DIR'" \
+      "set -e; rm -rf '$REMOTE_FAILED_DIR'; mv '$REMOTE_APP_DIR' '$REMOTE_FAILED_DIR'; mv '$REMOTE_PREVIOUS_DIR' '$REMOTE_APP_DIR'; (pm2 restart max --update-env || pm2 restart horizon --update-env); rm -rf '$REMOTE_FAILED_DIR'" \
       || echo "Automatic rollback failed; inspect $HOST immediately." >&2
   fi
   [[ "$DEPLOY_STAGE" == /tmp/doubao-deploy.* ]] && rm -rf "$DEPLOY_STAGE"
@@ -113,8 +113,23 @@ ssh -i "$KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$HOST" \
 ssh -i "$KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$HOST" \
   "set -e; test -d '$REMOTE_APP_DIR'; test -d '$REMOTE_NEXT_DIR'; rm -rf '$REMOTE_PREVIOUS_DIR'; mv '$REMOTE_APP_DIR' '$REMOTE_PREVIOUS_DIR'; if ! mv '$REMOTE_NEXT_DIR' '$REMOTE_APP_DIR'; then mv '$REMOTE_PREVIOUS_DIR' '$REMOTE_APP_DIR'; exit 1; fi"
 DEPLOY_ACTIVATED="on"
+# One-time migration (2026-11-18): the data folder moves to ~/.max-relay and
+# the pm2 process is renamed to max. A link at the old path keeps a rolled-back
+# release working. Remove this block once the server has migrated.
 ssh -i "$KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$HOST" \
-  "cd '$REMOTE_APP_DIR' && pm2 restart horizon --update-env"
+  "set -e; cd '$REMOTE_APP_DIR'
+   if [ -d \"\$HOME/.horizon-helmet-testing\" ] && [ ! -L \"\$HOME/.horizon-helmet-testing\" ] && [ ! -e \"\$HOME/.max-relay\" ]; then
+     pm2 stop horizon >/dev/null 2>&1 || true
+     mv \"\$HOME/.horizon-helmet-testing\" \"\$HOME/.max-relay\"
+     ln -s \"\$HOME/.max-relay\" \"\$HOME/.horizon-helmet-testing\"
+   fi
+   if pm2 describe max >/dev/null 2>&1; then
+     pm2 restart max --update-env
+   else
+     pm2 delete horizon >/dev/null 2>&1 || true
+     pm2 start node_modules/.bin/tsx --name max -- server/index.ts
+   fi
+   pm2 save >/dev/null"
 
 echo "==> 4/4 Health check"
 HEALTH_RESPONSE=""

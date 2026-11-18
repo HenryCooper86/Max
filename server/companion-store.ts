@@ -37,7 +37,7 @@ type BindingMaps = {
   byDevice: Map<string, CompanionBinding>;
 };
 
-const DEFAULT_COMPANION_BINDINGS_FILE = path.join(os.homedir(), ".horizon-helmet-testing", "companion-bindings.json");
+const DEFAULT_COMPANION_BINDINGS_FILE = path.join(os.homedir(), ".max-relay", "companion-bindings.json");
 
 function cloneBinding(binding: CompanionBinding): CompanionBinding {
   return { ...binding };

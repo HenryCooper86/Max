@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-export const DEFAULT_TESTING_STORAGE_DIRECTORY = path.join(os.homedir(), ".horizon-helmet-testing");
+export const DEFAULT_TESTING_STORAGE_DIRECTORY = path.join(os.homedir(), ".max-relay");
 
 function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException)?.code === "ENOENT";

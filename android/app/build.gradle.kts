@@ -11,7 +11,7 @@ val localConfig = Properties().apply {
 val amapAndroidKey = providers.environmentVariable("AMAP_ANDROID_KEY").orNull
     ?: localConfig.getProperty("amap.android.key", "")
 
-val horizonGitCommitRaw = (providers.environmentVariable("HORIZON_GIT_COMMIT").orNull
+val maxGitCommitRaw = (providers.environmentVariable("MAX_GIT_COMMIT").orNull
     ?.trim()
     ?.takeIf { it.isNotEmpty() }
     ?: runCatching {
@@ -25,14 +25,14 @@ val horizonGitCommitRaw = (providers.environmentVariable("HORIZON_GIT_COMMIT").o
     .filter { it.isLetterOrDigit() || it == '.' || it == '_' || it == '-' }
     .take(80)
     .ifEmpty { "unknown" }
-val horizonGitCommit = if (horizonGitCommitRaw.matches(Regex("^[0-9a-fA-F]{7,40}$"))) {
-    horizonGitCommitRaw.take(12).lowercase()
+val maxGitCommit = if (maxGitCommitRaw.matches(Regex("^[0-9a-fA-F]{7,40}$"))) {
+    maxGitCommitRaw.take(12).lowercase()
 } else {
-    horizonGitCommitRaw
+    maxGitCommitRaw
 }
 
 android {
-    namespace = "com.horizon.maxhelmet"
+    namespace = "io.github.henrycooper86.max"
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
@@ -40,13 +40,13 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.horizon.maxhelmet"
+        applicationId = "io.github.henrycooper86.max"
         minSdk = 26
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
-        testInstrumentationRunner = "com.horizon.maxhelmet.agent.SyntheticQaInstrumentation"
-        buildConfigField("String", "GIT_COMMIT", "\"$horizonGitCommit\"")
+        testInstrumentationRunner = "io.github.henrycooper86.max.agent.SyntheticQaInstrumentation"
+        buildConfigField("String", "GIT_COMMIT", "\"$maxGitCommit\"")
         buildConfigField("String", "AMAP_ANDROID_KEY", "\"${amapAndroidKey.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
     }
 

@@ -284,5 +284,5 @@ The unit tests cannot prove the deadlock is gone, because the deadlock needs a r
 4. **Before this change:** `尚未连接 RDK 头盔`, no helmet listed, no 解除配对, dead 开始 Helmet Ride.
    **After:** the section resolves on its own — `RDK 头盔已连接` with 解除配对 present and Start enabled if the board is powered on, or `已配对，头盔离线` with 解除配对 present and Start correctly disabled if the board is powered down. Either is correct; no six-digit code typed.
 5. Confirm on the relay that exactly one `companion phone attached` line appears for that appearance, and **no** `companion request rejected` line:
-   `ssh -i ~/Desktop/LightsailDefaultKey-ap-northeast-2.pem ubuntu@3.35.135.136 'grep -iE "companion" ~/.pm2/logs/horizon-out.log | tail -5'`
+   `ssh -i ~/Desktop/LightsailDefaultKey-ap-northeast-2.pem ubuntu@3.35.135.136 'grep -iE "companion" ~/.pm2/logs/max-out.log | tail -5'`
 6. Leave the screen and return to it; confirm no further connects once the state is known.

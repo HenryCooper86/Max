@@ -31,7 +31,7 @@ import { config } from "./runtime-config";
 /** Where the Studio keeps its config and uploaded logo. Outside the app
  *  directory on purpose: a deploy replaces that directory wholesale. */
 function studioDirectory(): string {
-  return process.env.STUDIO_DIR?.trim() || path.join(os.homedir(), ".horizon-helmet-testing");
+  return process.env.STUDIO_DIR?.trim() || path.join(os.homedir(), ".max-relay");
 }
 
 /** The config file the Studio reads and writes: ASSISTANT_CONFIG when the

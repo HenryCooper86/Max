@@ -38,10 +38,10 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   -workspace ios/MaxHelmet.xcworkspace \
   -scheme MaxHelmet \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
-  HORIZON_GIT_COMMIT=$(git rev-parse --short=12 HEAD) build
+  MAX_GIT_COMMIT=$(git rev-parse --short=12 HEAD) build
 ```
 
-如果命令行工具当前指向 Command Line Tools，保留上面的 `DEVELOPER_DIR` 设置即可。CI 与发布候选构建应写入 `HORIZON_GIT_COMMIT`；未标记的本地构建会诚实报告 `unknown`。
+如果命令行工具当前指向 Command Line Tools，保留上面的 `DEVELOPER_DIR` 设置即可。CI 与发布候选构建应写入 `MAX_GIT_COMMIT`；未标记的本地构建会诚实报告 `unknown`。
 
 ## 连接中继
 
@@ -81,7 +81,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun simctl b
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun simctl install "$DEVICE" \
   ~/Library/Developer/Xcode/DerivedData/MaxHelmet-*/Build/Products/Debug-iphonesimulator/MaxHelmet.app
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun simctl launch "$DEVICE" \
-  com.horizon.maxhelmet
+  io.github.henrycooper86.max
 ```
 
 真机需签名团队，开启 **设置 → 隐私与安全性 → 开发者模式**。在 Xcode 的账号和 target 签名设置中选择自己的团队；如提示不受信任的开发者，在设备的 VPN 与设备管理中信任。免费个人团队签名约七天后过期，需要重新安装。
@@ -95,7 +95,7 @@ xcodebuild -workspace ios/MaxHelmet.xcworkspace -scheme MaxHelmet \
   -derivedDataPath /tmp/MaxHelmetBuild -allowProvisioningUpdates build
 xcrun devicectl device install app --device "$UDID" \
   /tmp/MaxHelmetBuild/Build/Products/Debug-iphoneos/MaxHelmet.app
-xcrun devicectl device process launch --device "$UDID" com.horizon.maxhelmet
+xcrun devicectl device process launch --device "$UDID" io.github.henrycooper86.max
 ```
 
 ## 权限与隐私

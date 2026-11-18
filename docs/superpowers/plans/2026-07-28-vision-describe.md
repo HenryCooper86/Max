@@ -548,7 +548,7 @@ git commit -m "feat(vision): add camera.look and fetch the frame on the board"
 - Modify: `protocol/agent-events.schema.json`
 - Modify: `server/session-controller.ts`
 - Modify: `server/providers/types.ts`
-- Generated (do not hand-edit): `shared/generated/agent-protocol.ts`, `android/app/src/main/java/com/horizon/maxhelmet/agent/GeneratedAgentProtocol.kt`, `ios/MaxHelmet/Agent/GeneratedAgentProtocol.swift`
+- Generated (do not hand-edit): `shared/generated/agent-protocol.ts`, `android/app/src/main/java/io/github/henrycooper86/max/agent/GeneratedAgentProtocol.kt`, `ios/MaxHelmet/Agent/GeneratedAgentProtocol.swift`
 - Test: `tests/agent.test.ts` or the existing client-event validation test file — match where `hazard.report` validation is tested
 
 **Interfaces:**

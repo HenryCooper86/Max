@@ -232,11 +232,11 @@ Android and embedded clients, navigation, camera and hazard alerts. That referen
 Max is free and open source under the MIT license, including for commercial products. Paid plans add services, not
 features:
 
-| Plan            | Price                                             | For                                                                |
-| --------------- | ------------------------------------------------- | ------------------------------------------------------------------ |
-| **Open source** | Free                                              | Everything here, self-hosted                                       |
-| **Max Cloud**   | $0.02/min with your own model key, 1,000 min free | A hosted relay, no servers to run. Early access: join the waitlist |
-| **Enterprise**  | Custom                                            | Support with an SLA, deployment help, custom integrations          |
+| Plan            | Price                                                       | For                                                                    |
+| --------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------- |
+| **Open source** | Free                                                        | Everything here, self-hosted                                           |
+| **Max Cloud**   | ¥0.15/min (≈ $0.02) with your own model key, 1,000 min free | A hosted relay, no servers to run. Early access: sign up at `/console` |
+| **Enterprise**  | Custom                                                      | Support with an SLA, deployment help, custom integrations              |
 
 Details in [pricing and licensing](docs/pricing.md); talk to us in
 [Discussions](https://github.com/HenryCooper86/Max/discussions). Charging your own customers? The relay meters voice
@@ -257,6 +257,7 @@ minutes per user, can cap them, and can send each session to your billing system
 | [Deployment](docs/deployment.md)               | Docker, TLS reverse proxies, scaling, health checks                  |
 | [Usage and billing](docs/usage-and-billing.md) | Minutes per user, monthly allowances, billing webhooks, Stripe       |
 | [Pricing and licensing](docs/pricing.md)       | The MIT license, Max Cloud and Enterprise                            |
+| [Running Max Cloud](docs/cloud.md)             | Accounts, projects, prepaid top-ups, WeChat Pay and Alipay           |
 | [Hardware and audio](docs/audio/README.md)     | Putting the agent on your own device: audio contract and test bench  |
 | [Running locally](docs/local-models.md)        | Open-weight speech and chat models on your own machine               |
 | [Examples](examples/README.md)                 | The web shop example and the Python device client                    |

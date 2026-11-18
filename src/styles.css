@@ -10754,3 +10754,437 @@ button.opsCard:disabled {
     display: none;
   }
 }
+
+/* Console */
+.cxMain {
+  display: grid;
+  justify-items: center;
+  padding-block: clamp(24px, 5vw, 64px) clamp(48px, 8vw, 96px);
+}
+
+.cxStack {
+  display: grid;
+  width: min(100%, 760px);
+  gap: clamp(20px, 3vw, 32px);
+}
+
+.cxCard {
+  min-width: 0;
+  padding: clamp(18px, 2.4vw, 28px);
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: var(--radius-card);
+  background: var(--surface-1);
+}
+
+.cxAuth {
+  width: min(100%, 440px);
+}
+
+.cxAuth h1 {
+  margin: 0;
+  font: 600 var(--fs-22) / 1.25 var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+.cxReassure,
+.cxMuted {
+  margin: 8px 0 0;
+  color: var(--text-2);
+  font-size: var(--fs-15);
+  line-height: 1.5;
+}
+
+.cxTabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin: 20px 0;
+  padding: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+}
+
+.cxTabs button {
+  min-height: 40px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  font: 600 var(--fs-15) / 1 var(--font-display);
+}
+
+.cxTabs button.active {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.cxField {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  margin-bottom: 16px;
+  color: var(--text);
+  font-size: var(--fs-15);
+}
+
+.cxField > span,
+.cxField > label > span {
+  font-weight: 600;
+}
+
+.cxField input,
+.cxField select,
+.cxField textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.cxField input:hover,
+.cxField select:hover,
+.cxField textarea:hover {
+  border-color: var(--line-hover);
+}
+
+.cxField textarea {
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.cxField small {
+  color: var(--text-2);
+  font-size: var(--fs-13);
+}
+
+.cxError {
+  min-height: 0;
+  margin: 0 0 12px;
+  color: var(--danger);
+  font-size: var(--fs-15);
+}
+
+.cxError:empty {
+  display: none;
+}
+
+.cxWarn {
+  margin: 6px 0 0;
+  color: var(--warn);
+  font-size: var(--fs-15);
+  font-weight: 600;
+}
+
+.cxOk {
+  margin: 0;
+  color: var(--ok);
+  font: 600 var(--fs-22) / 1.3 var(--font-display);
+}
+
+.cxStatus {
+  color: var(--ok);
+  font-size: var(--fs-15);
+}
+
+.cxRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+}
+
+.cxRow.spread {
+  justify-content: space-between;
+}
+
+.cxRow > input {
+  flex: 1 1 160px;
+}
+
+.cxBalance {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.cxBalance h2,
+.cxSection h2,
+.cxDialog h2 {
+  margin: 0;
+  font: 600 var(--fs-17) / 1.3 var(--font-display);
+}
+
+.cxSection h2 {
+  font-size: clamp(1.25rem, 2.4vw, 1.5rem);
+  letter-spacing: -0.02em;
+}
+
+.cxBig {
+  margin: 6px 0 0;
+  font: 600 clamp(2rem, 6vw, 2.75rem) / 1.1 var(--font-display);
+  letter-spacing: -0.03em;
+}
+
+.cxSection {
+  display: grid;
+  gap: 14px;
+}
+
+.cxProjects,
+.cxLedger {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 12px;
+  list-style: none;
+}
+
+.cxProjectHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cxProjectHead h3,
+.cxSubsection h3,
+.cxReveal h3 {
+  margin: 0;
+  font: 600 var(--fs-17) / 1.3 var(--font-display);
+  overflow-wrap: anywhere;
+}
+
+.cxEditor {
+  display: grid;
+  gap: 8px;
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: var(--line-w) solid var(--line);
+}
+
+.cxDanger {
+  padding-top: 4px;
+}
+
+.cxDanger p {
+  margin: 0 0 10px;
+}
+
+.cxDangerButton {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: var(--on-danger);
+}
+
+.cxInline {
+  width: 100%;
+  padding: 16px;
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: var(--radius-card);
+}
+
+.cxReveal {
+  border-color: var(--accent);
+}
+
+.cxCode {
+  display: block;
+  margin: 12px 0;
+  padding: 12px;
+  overflow-x: auto;
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+  color: var(--text);
+  font: var(--fs-13) / 1.5 var(--font-mono);
+  white-space: pre;
+}
+
+.cxReveal .cxCode {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.cxSubsection {
+  margin-top: 20px;
+}
+
+.cxSnippet h4 {
+  margin: 12px 0 0;
+  font-size: var(--fs-15);
+}
+
+.cxStats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.cxStats div {
+  padding: 14px 16px;
+  border-radius: var(--radius-control);
+  background: var(--surface-1);
+}
+
+.cxStats dt {
+  color: var(--text-2);
+  font-size: var(--fs-13);
+}
+
+.cxStats dd {
+  margin: 4px 0 0;
+  font: 600 var(--fs-22) / 1.2 var(--font-display);
+}
+
+.cxTableWrap {
+  overflow-x: auto;
+}
+
+.cxTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-15);
+}
+
+.cxTable th,
+.cxTable td {
+  padding: 10px 8px;
+  border-bottom: var(--line-w) solid var(--line);
+  text-align: left;
+}
+
+.cxTable thead th {
+  color: var(--text-2);
+  font-size: var(--fs-13);
+}
+
+.cxTable tbody th {
+  overflow-wrap: anywhere;
+  font-weight: 500;
+}
+
+.cxLedger li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: var(--line-w) solid var(--line);
+}
+
+.cxLedger small {
+  display: block;
+  color: var(--text-3);
+  font-size: var(--fs-13);
+}
+
+.cxLedger strong {
+  white-space: nowrap;
+}
+
+.cxLedger strong.plus {
+  color: var(--ok);
+}
+
+.cxScrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  padding: 16px;
+  overflow-y: auto;
+  place-items: center;
+  background: var(--scrim);
+}
+
+.cxDialog {
+  display: grid;
+  width: min(100%, 440px);
+  gap: 16px;
+  padding: clamp(18px, 3vw, 28px);
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: var(--radius-sheet);
+  background: var(--surface-1);
+}
+
+.cxChoices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 16px;
+  padding: 0;
+  border: 0;
+}
+
+.cxChoices legend {
+  margin-bottom: 8px;
+  padding: 0;
+  font-weight: 600;
+}
+
+.cxChoices label {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+
+.cxChoices label.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.cxChoices label:has(input:focus-visible) {
+  outline: var(--focus-w) solid var(--accent);
+  outline-offset: 2px;
+}
+
+.cxPay {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  text-align: center;
+}
+
+.cxPay p {
+  margin: 0;
+}
+
+.cxQr {
+  width: 240px;
+  max-width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  border-radius: var(--radius-control);
+  background: #fff;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cxSite * {
+    scroll-behavior: auto;
+    transition: none;
+  }
+}
+
+.cxManual {
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+}
+
+.cxManual p {
+  margin: 0;
+  line-height: 1.55;
+}

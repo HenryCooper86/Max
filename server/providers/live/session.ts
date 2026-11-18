@@ -30,7 +30,8 @@ import {
   identityPrompt,
   promptsInChinese,
   wakeHint,
-  wakeWordActive
+  wakeWordActive,
+  type AssistantProfile
 } from "../../assistant";
 import { config as appConfig } from "../../config";
 import {
@@ -86,6 +87,9 @@ export type LiveSessionOptions = {
   serverTools?: () => readonly ToolDefinition[];
   /** How long a client tool may take to answer. */
   toolTimeoutMs?: number;
+  /** The assistant this session speaks as, instead of the relay's own
+   *  (a Max Cloud project's persona). */
+  profile?: AssistantProfile;
 };
 
 // 20 ms of 24 kHz mono PCM16. The embedded board paces playback per WebSocket
@@ -129,8 +133,12 @@ export function buildLiveInstructions(input: {
   wakeWord: boolean;
   /** Context stamped on the session token by the owner's backend. */
   trustedContext?: string;
+  /** The assistant to speak as; defaults to the relay's own. */
+  profile?: AssistantProfile;
+  /** How many server tools the session has; defaults to the relay's own. */
+  serverToolCount?: number;
 }): string {
-  const profile = assistant();
+  const profile = input.profile ?? assistant();
   if (profile.preset.general) return buildGeneralInstructions({ ...input, profile });
   const inChinese = promptsInChinese(profile);
   const voiceLabel = (input.event.voiceGender ?? "female") === "male" ? "男声" : "女声";
@@ -205,6 +213,7 @@ function buildGeneralInstructions(input: {
   previousConversation?: ProviderSessionContext["previousConversation"];
   wakeWord: boolean;
   trustedContext?: string;
+  serverToolCount?: number;
   profile: ReturnType<typeof assistant>;
 }): string {
   const { profile } = input;
@@ -214,7 +223,7 @@ function buildGeneralInstructions(input: {
     input.previousConversation?.turns ?? [],
     input.previousConversation?.facts ?? []
   );
-  const tools = (input.event.tools?.length ?? 0) > 0 || installedServerTools().length > 0;
+  const tools = (input.event.tools?.length ?? 0) > 0 || (input.serverToolCount ?? installedServerTools().length) > 0;
   const toolRule = tools
     ? inChinese
       ? "\n\n[工具] 需要实时数据或执行操作时调用工具。调用工具之前可以先简短说一句你要做什么（例如“我查一下”）。工具失败时如实告诉用户，不要假装成功。"
@@ -255,14 +264,16 @@ export function createLiveProvider(
   options: LiveSessionOptions = {}
 ): AgentProvider {
   const now = options.now ?? Date.now;
+  /** Who this session speaks as: its own profile, or the relay's assistant. */
+  const me = (): AssistantProfile => options.profile ?? assistant();
   const wakeDecisionMs = options.wakeDecisionMs ?? 1500;
   const connectTimeoutMs = options.connectTimeoutMs ?? 12_000;
   const fetchWeather = options.fetchWeather ?? fetchRiderWeather;
   // Decided again in start(): a device that spots the wake word itself turns
   // the relay's own name check off for its session (see audio-contract.ts).
-  let wakeWordEnabled = options.wakeWord ?? wakeWordActive(appConfig.wakeWord);
+  let wakeWordEnabled = options.wakeWord ?? wakeWordActive(appConfig.wakeWord, me());
   /** A software assistant: no ride context, device actions or weather. */
-  const general = Boolean(assistant().preset.general);
+  const general = Boolean(me().preset.general);
 
   let engine: VoiceEngine | undefined;
   let engineReady = false;
@@ -353,12 +364,12 @@ export function createLiveProvider(
   function t(zh: string, en: string): string {
     if (speechLanguage === "en") return en;
     if (speechLanguage && speechLanguage !== "zh" && !speechLanguage.startsWith("zh")) return en;
-    return promptsInChinese() ? zh : en;
+    return promptsInChinese(me()) ? zh : en;
   }
 
   function listeningDetail(): string {
     if (wakeWordEnabled) {
-      return t(wakeHint(), `Listening. Say "${assistant().wake.label}" to talk to ${assistant().name}`);
+      return t(wakeHint(me()), `Listening. Say "${me().wake.label}" to talk to ${me().name}`);
     }
     return t(`正在通过 ${backend.label} 收听`, "Listening");
   }
@@ -395,7 +406,9 @@ export function createLiveProvider(
       weatherRole,
       locationRole: riderLocation.isFresh() ? riderLocation.role() : "",
       wakeWord: wakeWordEnabled,
-      trustedContext
+      trustedContext,
+      profile: options.profile,
+      serverToolCount: (options.serverTools ?? installedServerTools)().length
     });
   }
 
@@ -416,7 +429,7 @@ export function createLiveProvider(
       return;
     }
     if (replyAudioBytes === 0) {
-      status("speaking", t(`${assistant().name} 正在回答`, `${assistant().name} is speaking`));
+      status("speaking", t(`${me().name} 正在回答`, `${me().name} is speaking`));
       const reference = riderFinalAt || speechStartedAt;
       if (reference && !replyForced) {
         const latencyMs = Math.max(0, now() - reference);
@@ -462,7 +475,7 @@ export function createLiveProvider(
     if (replyForced) return;
     if (!sentThinking) {
       sentThinking = true;
-      status("thinking", t(`${assistant().name} 正在思考`, `${assistant().name} is thinking`));
+      status("thinking", t(`${me().name} 正在思考`, `${me().name} is thinking`));
     }
     send(transcriptEvent(agentDelivery, "agent", replyText));
   }
@@ -543,7 +556,7 @@ export function createLiveProvider(
     dropHeld();
     engine?.cancel();
     // "hearing" is the client's cue to stop playing buffered assistant audio.
-    status("hearing", t(`${assistant().name} 正在播报操作结果`, `${assistant().name} is reporting the result`));
+    status("hearing", t(`${me().name} 正在播报操作结果`, `${me().name} is reporting the result`));
   }
 
   // ---- Device actions -------------------------------------------------------
@@ -731,7 +744,7 @@ export function createLiveProvider(
       resolveGate(true);
       return;
     }
-    status("thinking", t(`${assistant().name} 正在思考`, `${assistant().name} is thinking`));
+    status("thinking", t(`${me().name} 正在思考`, `${me().name} is thinking`));
     // An upstream that answers on its own is already composing the reply.
     if (!manualResponse) return;
     // The wearer asked where they are: answer from the phone's GPS fix rather
@@ -772,7 +785,7 @@ export function createLiveProvider(
     memory = updateSessionMemory(memory, text, rideContext.mode);
     emitMemory();
     if (!general) dispatchDeviceCommand(text);
-    status("thinking", t(`${assistant().name} 正在思考`, `${assistant().name} is thinking`));
+    status("thinking", t(`${me().name} 正在思考`, `${me().name} is thinking`));
     engine?.sendText?.(text);
   }
 
@@ -887,10 +900,7 @@ export function createLiveProvider(
       }
       const epoch = toolEpoch;
       toolsRunning += 1;
-      status(
-        "thinking",
-        t(`${assistant().name} 正在使用工具：${call.name}`, `${assistant().name} is using ${call.name}`)
-      );
+      status("thinking", t(`${me().name} 正在使用工具：${call.name}`, `${me().name} is using ${call.name}`));
       const current = engine;
       void tools.run(call).then((outcome) => {
         toolsRunning = Math.max(0, toolsRunning - 1);
@@ -915,7 +925,7 @@ export function createLiveProvider(
   };
 
   function engineConfig(): EngineConfig {
-    const profile = assistant();
+    const profile = me();
     const responseMode = engine?.responseMode ?? "auto";
     manualResponse = responseMode === "manual-only" || (responseMode === "manual-capable" && wakeWordEnabled);
     return {
@@ -1021,7 +1031,7 @@ export function createLiveProvider(
           parameters: tool.parameters ?? { type: "object", properties: {} }
         })),
         send,
-        language: () => speechLanguage || assistant().languages[0],
+        language: () => speechLanguage || me().languages[0],
         userId: context?.userId,
         log,
         clientTimeoutMs: options.toolTimeoutMs
@@ -1029,7 +1039,7 @@ export function createLiveProvider(
       const scenario: DemoScenario = event.scenario ?? "commute";
       rideContext = { mode: rideModeFromScenario(event.rideMode, scenario), scenario, network: "online" };
       memory = restoreSessionMemory(event.memory, rideContext.mode);
-      speechLanguage = sessionLanguage(event.language, assistant().languages);
+      speechLanguage = sessionLanguage(event.language, me().languages);
       if (speechLanguage === "en" && !event.memory?.language) {
         memory = { ...memory, language: "en" };
       }
@@ -1060,7 +1070,7 @@ export function createLiveProvider(
       if (!general) emitRideContext();
       status("listening", listeningDetail());
       if (!general && rideContext.scenario === "adas") hazardInjector.start(5000, 2000);
-      const greeting = assistant().greeting;
+      const greeting = me().greeting;
       if (greeting && !greeted && engineReady) {
         greeted = true;
         greet(greeting);

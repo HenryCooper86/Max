@@ -1,5 +1,5 @@
 {
-  "name": "horizon-helmet-voice-agent",
+  "name": "max-voice-agent-kit",
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
@@ -17,6 +17,7 @@
     "build": "tsc && vite build && npm run build:sdk",
     "build:sdk": "node -e \"require('node:fs').rmSync('dist/sdk',{recursive:true,force:true})\" && vite build -c vite.sdk.config.ts && vite build -c vite.sdk.config.ts --mode iife && tsc -p sdk/tsconfig.build.json",
     "pack:sdk": "npm run build:sdk && tsx scripts/pack-sdk.ts",
+    "cloud:credit": "tsx scripts/cloud-credit.ts",
     "check:sdk": "tsc -p sdk/tsconfig.json --noEmit",
     "generate:protocol": "tsx scripts/generate-agent-protocol.ts",
     "check:protocol": "tsx scripts/generate-agent-protocol.ts --check",
@@ -38,6 +39,7 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "multicast-dns": "^7.2.5",
+    "qrcode": "^1.5.4",
     "tsx": "^4.19.2",
     "ws": "^8.21.1"
   },
@@ -46,6 +48,7 @@
     "@types/express": "^5.0.6",
     "@types/multicast-dns": "^7.2.4",
     "@types/node": "^26.1.1",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@types/react-test-renderer": "^19.1.0",

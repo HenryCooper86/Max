@@ -17,7 +17,8 @@ describe("assistant profile", () => {
   it("keeps the original Max persona when nothing is configured", () => {
     expect(basePersonaPrompt()).toBe(DEFAULT_AGENT_SYSTEM_PROMPT);
     expect(basePersonaPrompt()).toMatch(/^你是 Max，/);
-    expect(buildIdentityPrompt()).toContain("Horizon Continental Technology（neueHCT）");
+    expect(buildIdentityPrompt()).toContain("你是 Max");
+    expect(assistantSummary(true).developer).toBe("Henry (cooph2o)");
     expect(assistantSummary(true)).toMatchObject({ name: "Max", device: "helmet", wakePhrase: "Max" });
     expect(wakeHint()).toContain('"Max"');
   });
@@ -34,7 +35,7 @@ describe("assistant profile", () => {
     expect(persona).toContain("You are Nova");
     expect(persona).toContain("smart glasses");
     expect(persona).toContain("English and Spanish");
-    expect(persona + identityPrompt(profile)).not.toMatch(/Horizon|neueHCT|Max/);
+    expect(persona + identityPrompt(profile)).not.toMatch(/Max/);
     expect(identityPrompt(profile)).toContain("never name a company");
     expect(profile.accentColor).toBe("#FF8800");
     expect(profile.wake).toMatchObject({ label: "Nova", latin: ["nova", "noah"], cjk: ["诺瓦"] });

@@ -60,7 +60,7 @@
 
 - `.gitignore` — ignore CocoaPods/Ruby output and the local key file.
 - `ios/MaxHelmet.xcodeproj/project.pbxproj` — attach Debug/Release xcconfigs and the bridging header.
-- `ios/MaxHelmet/Info.plist` — inject `HorizonAMapKey` from `AMAP_IOS_KEY`.
+- `ios/MaxHelmet/Info.plist` — inject `MaxAMapKey` from `AMAP_IOS_KEY`.
 - `ios/MaxHelmet/Info-Debug.plist` — same Debug key injection.
 - `ios/MaxHelmet/Navigation/GuidanceCard.swift` — replace MapKit with `GuidanceMapHost`.
 - `ios/MaxHelmet/UI/AgentScreen.swift` — remove dock instances, pass session state to helmet accessibility.
@@ -158,7 +158,7 @@ Create `ios/MaxHelmet/Navigation/AMapConfiguration.swift`:
 import Foundation
 
 struct AMapConfiguration: Equatable {
-    static let plistKey = "HorizonAMapKey"
+    static let plistKey = "MaxAMapKey"
 
     let apiKey: String?
 
@@ -278,10 +278,10 @@ Do not replace the test target's CocoaPods-generated base configurations.
 
 - [ ] **Step 6: Inject the build setting into both app plists and ignore local/generated files**
 
-Add to both `Info.plist` and `Info-Debug.plist` immediately after `HorizonGitCommit`:
+Add to both `Info.plist` and `Info-Debug.plist` immediately after `MaxGitCommit`:
 
 ```xml
-<key>HorizonAMapKey</key>
+<key>MaxAMapKey</key>
 <string>$(AMAP_IOS_KEY)</string>
 ```
 

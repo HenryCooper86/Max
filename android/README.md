@@ -39,7 +39,7 @@ Android Studio writes this automatically on first open; command-line Gradle (inc
 From this `android/` directory:
 
 ```bash
-HORIZON_GIT_COMMIT=$(git -C .. rev-parse --short=12 HEAD) \
+MAX_GIT_COMMIT=$(git -C .. rev-parse --short=12 HEAD) \
   JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew assembleDebug
 ```
 
@@ -74,7 +74,7 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradle
 For release QA, the settings sheet's **QA 任务归因** section accepts Campaign, Test case, Run,
 and Assignment IDs from the web control plane. The app persists them and sends them atomically
 with `platform=android` on the next `session.start`. Gradle resolves the current repository commit
-automatically; CI can set `HORIZON_GIT_COMMIT` explicitly so the APK and release run always use the
+automatically; CI can set `MAX_GIT_COMMIT` explicitly so the APK and release run always use the
 same candidate identity.
 
 ### Permissions
@@ -105,7 +105,7 @@ npm run dev:server
 # Terminal 2 — emulator + install
 ~/Library/Android/sdk/emulator/emulator -avd Medium_Tablet &
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew installDebug
-~/Library/Android/sdk/platform-tools/adb shell am start -n com.horizon.maxhelmet/.MainActivity
+~/Library/Android/sdk/platform-tools/adb shell am start -n io.github.henrycooper86.max/.MainActivity
 ```
 
 The emulator forwards the host Mac's microphone, so the full voice loop is testable.

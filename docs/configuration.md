@@ -12,7 +12,7 @@ Two places configure the relay:
 The first of these that exists wins:
 
 1. The file named by `ASSISTANT_CONFIG` (set `ASSISTANT_CONFIG=off` to ignore every config file).
-2. The file the Studio saved: `$STUDIO_DIR/assistant.config.json` (default `~/.horizon-helmet-testing/`). It lives
+2. The file the Studio saved: `$STUDIO_DIR/assistant.config.json` (default `~/.max-relay/`). It lives
    outside the app directory so a deploy does not erase it.
 3. `assistant.config.json` in the directory the relay was started from.
 
@@ -140,14 +140,14 @@ The most used ones. `.env.example` documents all of them, including each backend
 
 ### Behaviour
 
-| Variable                                    | Default                     | What it does                                                                              |
-| ------------------------------------------- | --------------------------- | ----------------------------------------------------------------------------------------- |
-| `ASSISTANT_CONFIG`                          | none                        | Path of the config file, or `off`.                                                        |
-| `STUDIO_DIR`                                | `~/.horizon-helmet-testing` | Where the Studio keeps its config, logo and saved backend keys.                           |
-| `AGENT_WAKE_WORD`                           | `on`                        | `off` turns the wake word off for every assistant.                                        |
-| `VOICE_EQUALIZER_ADJUSTABLE`                | `on`                        | `off` stops users changing the voice equaliser.                                           |
-| `RELAY_IDLE_TIMEOUT_MS`                     | `600000`                    | Closes a session with no client traffic after this long (close code 4001).                |
-| `RELAY_HEARTBEAT_MS`                        | `30000`                     | How often the relay pings clients to find dead connections.                               |
-| `PORT`                                      | `8787`                      | The relay's port.                                                                         |
-| `USAGE_MONTHLY_MINUTES`                     | off                         | Voice minutes each user may use per month. See [usage and billing](usage-and-billing.md). |
-| `USAGE_WEBHOOK_URL`, `USAGE_WEBHOOK_SECRET` | off                         | Where each finished session's usage is POSTed, and its signing secret.                    |
+| Variable                                    | Default        | What it does                                                                              |
+| ------------------------------------------- | -------------- | ----------------------------------------------------------------------------------------- |
+| `ASSISTANT_CONFIG`                          | none           | Path of the config file, or `off`.                                                        |
+| `STUDIO_DIR`                                | `~/.max-relay` | Where the Studio keeps its config, logo and saved backend keys.                           |
+| `AGENT_WAKE_WORD`                           | `on`           | `off` turns the wake word off for every assistant.                                        |
+| `VOICE_EQUALIZER_ADJUSTABLE`                | `on`           | `off` stops users changing the voice equaliser.                                           |
+| `RELAY_IDLE_TIMEOUT_MS`                     | `600000`       | Closes a session with no client traffic after this long (close code 4001).                |
+| `RELAY_HEARTBEAT_MS`                        | `30000`        | How often the relay pings clients to find dead connections.                               |
+| `PORT`                                      | `8787`         | The relay's port.                                                                         |
+| `USAGE_MONTHLY_MINUTES`                     | off            | Voice minutes each user may use per month. See [usage and billing](usage-and-billing.md). |
+| `USAGE_WEBHOOK_URL`, `USAGE_WEBHOOK_SECRET` | off            | Where each finished session's usage is POSTed, and its signing secret.                    |

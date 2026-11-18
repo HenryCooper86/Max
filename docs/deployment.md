@@ -27,7 +27,7 @@ NODE_ENV=production node --import tsx server/index.ts
 ```
 
 The existing test deployment (`deploy-lightsail.command`) copies the built tree to an AWS Lightsail host, runs
-`npm ci --omit=dev`, and restarts a pm2 process named `horizon` that runs `tsx server/index.ts` on port 8787. Both ways
+`npm ci --omit=dev`, and restarts a pm2 process named `max` that runs `tsx server/index.ts` on port 8787. Both ways
 run the same file. Set `NODE_ENV=production` so the relay sends HSTS and reports configuration problems at `/ready`.
 
 The relay reads `.env` from the working directory (through `dotenv`) and from the environment. Set `PORT` to change the
@@ -55,7 +55,7 @@ docker compose logs -f relay
 Notes:
 
 - `docker run --env-file` does not strip quotes the way `.env` loaders do. Write values without quotes.
-- The image sets `HOME=/data` and `STUDIO_DIR=/data/.horizon-helmet-testing`. Mount a volume at `/data` or you lose
+- The image sets `HOME=/data` and `STUDIO_DIR=/data/.max-relay`. Mount a volume at `/data` or you lose
   accounts, history and Studio settings when the container is replaced.
 - To use your own assistant identity, mount the file and point at it:
 
@@ -205,7 +205,7 @@ a level and a source such as `relay` or `sess:8021ea69`. Collect them with your 
 
 ```bash
 docker compose logs -f relay          # Docker Compose
-pm2 logs horizon                      # the pm2 deployment
+pm2 logs max                          # the pm2 deployment
 journalctl -u voice-relay -f          # a systemd unit
 ```
 
@@ -215,7 +215,7 @@ warnings such as tools that were dropped and why.
 
 ## Data directory
 
-The relay keeps state in one directory, `~/.horizon-helmet-testing` by default (the name is historical). Set `STUDIO_DIR`
+The relay keeps state in one directory, `~/.max-relay` by default (the name is historical). Set `STUDIO_DIR`
 to move the Studio's files, and `HOME` (or the per-file variables below) to move the rest. In Docker both are under
 `/data`.
 

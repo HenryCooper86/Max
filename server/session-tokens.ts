@@ -31,13 +31,19 @@ type SessionTokenGrant = {
   expiresAt: number;
   userId?: string;
   context?: string;
+  /** Set when a Max Cloud project's API key minted the token: the session
+   *  runs as that project and is billed to its customer. */
+  project?: { projectId: string; customerId: string };
 };
 
 type MintRequest = { ttlSeconds?: unknown; userId?: unknown; context?: unknown };
 
 export type SessionTokenStore = {
   /** Validates a request body and issues a token, or explains what is wrong. */
-  mint(request: MintRequest): { ok: true; token: string; expiresAt: number } | { ok: false; error: string };
+  mint(
+    request: MintRequest,
+    project?: { projectId: string; customerId: string }
+  ): { ok: true; token: string; expiresAt: number } | { ok: false; error: string };
   /** The grant behind a live token, if any. */
   grant(token: string | null | undefined): SessionTokenGrant | undefined;
   /** Revokes a token now. */
@@ -55,7 +61,7 @@ export function createSessionTokenStore(now: () => number = Date.now): SessionTo
   }
 
   return {
-    mint(request) {
+    mint(request, project) {
       const ttl = request.ttlSeconds === undefined ? DEFAULT_TOKEN_TTL_SECONDS : Number(request.ttlSeconds);
       if (!Number.isInteger(ttl) || ttl < MIN_TOKEN_TTL_SECONDS || ttl > MAX_TOKEN_TTL_SECONDS) {
         return {
@@ -87,7 +93,8 @@ export function createSessionTokenStore(now: () => number = Date.now): SessionTo
       tokens.set(token, {
         expiresAt,
         ...(typeof request.userId === "string" ? { userId: request.userId.trim() } : {}),
-        ...(typeof request.context === "string" && request.context.trim() ? { context: request.context.trim() } : {})
+        ...(typeof request.context === "string" && request.context.trim() ? { context: request.context.trim() } : {}),
+        ...(project ? { project: { ...project } } : {})
       });
       return { ok: true, token, expiresAt };
     },

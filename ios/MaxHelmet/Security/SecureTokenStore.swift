@@ -4,7 +4,7 @@ import Security
 /// Small Keychain wrapper for relay bearer tokens. Values are device-only and
 /// remain available after the rider has unlocked once, including background use.
 enum SecureTokenStore {
-    private static let service = Bundle.main.bundleIdentifier ?? "com.horizon.maxhelmet"
+    private static let service = Bundle.main.bundleIdentifier ?? "io.github.henrycooper86.max"
 
     static func read(account: String) -> String? {
         var query = baseQuery(account: account)

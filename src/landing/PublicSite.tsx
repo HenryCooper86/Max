@@ -3,7 +3,7 @@ import { LanguageProvider, LanguageToggle, useLanguage } from "../components/Lan
 import { fetchCurrentUser } from "../lib/auth";
 import { localized } from "../lib/i18n";
 import { loadStoredSettings } from "../lib/persistence";
-import { APP_PATH, BUILD_PATH, PRICING_PATH, REPOSITORY_URL } from "../lib/routes";
+import { APP_PATH, BUILD_PATH, CONSOLE_PATH, PRICING_PATH, REPOSITORY_URL } from "../lib/routes";
 import { applyAppearance, resolveAppearance } from "../lib/templates";
 import { applyBrandFavicon, resolveAssistant } from "../lib/assistant";
 import { fetchAgentHealth } from "../lib/utils";
@@ -63,6 +63,7 @@ function SiteHeader({
         <a href={PRICING_PATH} aria-current={view === "pricing" ? "page" : undefined}>
           {say("价格", "Pricing")}
         </a>
+        <a href={CONSOLE_PATH}>{say("控制台", "Console")}</a>
       </nav>
       <div className="siteHeaderActions">
         <LanguageToggle />
@@ -93,6 +94,7 @@ function SiteFooter({ developer }: { developer?: string }) {
         <a href={APP_PATH}>{say("打开应用", "Open the app")}</a>
         <a href={BUILD_PATH}>{say("配置器", "Build yours")}</a>
         <a href={PRICING_PATH}>{say("价格", "Pricing")}</a>
+        <a href={CONSOLE_PATH}>{say("控制台", "Console")}</a>
         {REPOSITORY_URL ? (
           <a href={REPOSITORY_URL} rel="noreferrer noopener">
             GitHub

@@ -402,8 +402,8 @@ git commit -m "fix(ios): announce 正在定位 instead of failing a slow GPS fix
 
 **Files:**
 
-- Modify: `android/app/src/main/java/com/horizon/maxhelmet/navigation/NavigationController.kt` (constructor, companion constants, `awaitFirstFix`, `takePendingFirstFixLocked`, start failure path)
-- Modify: `android/app/src/test/java/com/horizon/maxhelmet/navigation/NavigationControllerTest.kt`
+- Modify: `android/app/src/main/java/io/github/henrycooper86/max/navigation/NavigationController.kt` (constructor, companion constants, `awaitFirstFix`, `takePendingFirstFixLocked`, start failure path)
+- Modify: `android/app/src/test/java/io/github/henrycooper86/max/navigation/NavigationControllerTest.kt`
 
 **Interfaces:**
 
@@ -580,8 +580,8 @@ Expected: BUILD SUCCESSFUL
 - [ ] **Step 6: Commit**
 
 ```bash
-git add android/app/src/main/java/com/horizon/maxhelmet/navigation/NavigationController.kt \
-        android/app/src/test/java/com/horizon/maxhelmet/navigation/NavigationControllerTest.kt
+git add android/app/src/main/java/io/github/henrycooper86/max/navigation/NavigationController.kt \
+        android/app/src/test/java/io/github/henrycooper86/max/navigation/NavigationControllerTest.kt
 git commit -m "fix(android): announce 正在定位 instead of failing a slow GPS fix"
 ```
 

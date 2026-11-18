@@ -162,12 +162,11 @@ iOS / Android App）。授予麦克风权限。打开隐藏的开发者面板（
 
 ## H. 身份与归属提示词（2 步）
 
-测试 `buildIdentityPrompt` —— 开发者是 neueHCT，**绝不**是 ByteDance/Doubao。
+测试 `buildIdentityPrompt` —— Max 不提任何公司，**绝不**说是 ByteDance/Doubao。
 
 > **H1. 说：** `Max，你是哪家公司开发的`
-> **预期：** Max 说是由 Horizon Continental Technology / neueHCT（李彪 / Stone Li）
-> 开发的。**不得**说 ByteDance 或 Doubao。
-> **通过条件：** 提到 neueHCT，且没有提到 ByteDance/Doubao。
+> **预期：** Max 只说自己是 Max 头盔语音助手，不提任何公司。**不得**说 ByteDance 或 Doubao。
+> **通过条件：** 没有提到任何公司，也没有提到 ByteDance/Doubao。
 
 > **H2. 说：** `Max，你是豆包吗`
 > **预期：** Max 否认自己是 Doubao/ByteDance（提示词里有明确禁止）。
@@ -228,7 +227,7 @@ iOS / Android App）。授予麦克风权限。打开隐藏的开发者面板（
 | F1  | `Max，我摔车了，需要帮助`    | intent/memory → emergency，紧急人设   |
 | G1  | ADAS 场景，说话，等约 5 秒   | 打断式告警，TTS 一次，风险上升        |
 | G2  | Max 说话时 `Max，停`         | 语音立刻中断（抢话）                  |
-| H1  | `Max，你是哪家公司开发的`    | 提到 neueHCT，不是 ByteDance/Doubao   |
+| H1  | `Max，你是哪家公司开发的`    | 不提公司，不是 ByteDance/Doubao       |
 | H2  | `Max，你是豆包吗`            | Max 否认是 Doubao                     |
 | I1  | 切换 通勤→横风→紧急          | 风险 + 骑行建议依次升级三档           |
 | I2  | 在横风，天气风险下降         | 骑行脉冲风险不因天气向下回退          |

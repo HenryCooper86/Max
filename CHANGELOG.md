@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-11-18 — Max Cloud: accounts, projects and prepaid balance
+
+- A developer console at `/console`: sign up, create projects, paste a model
+  key (OpenAI Realtime, Gemini Live or Grok Voice), set the assistant's name,
+  instructions and greeting, and see balance, usage and activity. Project keys
+  (`mpk_…`) mint session tokens, and a project's sessions run on its own key and
+  persona, with none of the relay's tools and no QA recording.
+- Prepaid balance at ¥0.15 a minute after 1,000 free minutes a month. Top-ups by
+  WeChat Pay (Native) or Alipay (订单码支付) QR code once merchant credentials
+  are set; until then the console asks customers to get in touch and
+  `npm run cloud:credit` adds balance by hand. Every payment is verified and
+  credited once.
+- Model keys are encrypted at rest (AES-256-GCM bound to the project);
+  passwords use scrypt; logins and project keys are stored as hashes.
+- The stock Max names Henry (cooph2o) as its developer. Every mention of the
+  previous company is gone. The apps are now `io.github.henrycooper86.max`,
+  the data folder is `~/.max-relay`, and the server process is `max`.
+
 ## 2026-11-18 — Pricing, usage metering and monthly allowances
 
 - A pricing page at `/pricing`: Open source (free, MIT), Max Cloud ($0.02 a
@@ -432,7 +450,7 @@ rdk/README.md's bench findings):
 - Web sessions now report aggregate frame rate, drops, jitter, clipping, and
   silence. Native clients accept run/assignment/test-case attribution and no
   longer send fake `ios-local`/`android-local` commits; Android resolves git at
-  build time and iOS accepts `HORIZON_GIT_COMMIT` as a build setting.
+  build time and iOS accepts `MAX_GIT_COMMIT` as a build setting.
 - Added a 24-case deterministic fault matrix, a live release-gate report CLI,
   and GitLab jobs that retain build and release-decision artifacts.
 
@@ -761,7 +779,7 @@ full register → logout → gate → login round trip verified in a real browse
   with scrypt password hashing (node:crypto, per-user salt, timing-safe
   compares), opaque `sess_…` tokens with a configurable lifetime
   (`AUTH_SESSION_DAYS`, default 30), persisted to
-  `~/.horizon-helmet-testing/accounts.json` with atomic write-then-rename on a
+  `~/.max-relay/accounts.json` with atomic write-then-rename on a
   serialized queue (mode 0600). The **first** registered account becomes the
   admin; later accounts are testers. Login failures return one uniform message
   so responses don't reveal which usernames exist, and unknown-user logins
@@ -1516,10 +1534,9 @@ Audio fixes across all clients, plus a "Max" wake word on the live agent.
 - **iOS & Android: tap the Max ring to start/stop** — the big turn-state ring (the
   element riders instinctively press) is now a button that toggles hands-free, in
   addition to the existing 开启免提 / 结束免提 button.
-- **Agent identity** — Max now attributes its development to **Horizon Continental
-  Technology (neueHCT)** (never the underlying model vendor) and names the CEO as
-  **Li Biao** (a.k.a. **Stone Li**), in both Chinese and English. Enforced by a new
-  always-appended `buildIdentityPrompt()` in `server/providers/doubao.ts`.
+- **Agent identity** — Max never attributes itself to the underlying model
+  vendor, in both Chinese and English. Enforced by a new always-appended
+  `buildIdentityPrompt()` in `server/providers/doubao.ts`.
 
 ### Added
 

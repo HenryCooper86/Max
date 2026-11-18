@@ -1,0 +1,269 @@
+// Max Cloud customers and their projects. Customers are a separate world from
+// the relay's staff accounts (server/accounts.ts): own table, own `mcs_`
+// tokens, never accepted by the staff gates and vice versa.
+
+import { createLogger } from "../logger";
+import { cloudSecretKey, now } from "./context";
+import {
+  customerByEmail,
+  deleteSession,
+  insertCustomer,
+  insertProject,
+  insertSession,
+  liveProject,
+  liveProjects,
+  replaceProjectKey,
+  sessionCustomer,
+  softDeleteProject,
+  updateProject,
+  type Backend,
+  type CustomerRow,
+  type ProjectChanges,
+  type ProjectRow
+} from "./store";
+import {
+  encryptModelKey,
+  hashPassword,
+  hashToken,
+  newId,
+  newPasswordSalt,
+  newToken,
+  passwordHashesMatch
+} from "./secrets";
+
+const log = createLogger("cloud");
+
+export type Result<T> = { ok: true; value: T } | { ok: false; status: number; error: string };
+
+export type PublicCustomer = { id: string; email: string; createdAt: number };
+export type PublicProject = {
+  id: string;
+  name: string;
+  keyPrefix: string;
+  backend: Backend;
+  hasModelKey: boolean;
+  assistantName: string;
+  instructions: string;
+  greeting: string;
+  createdAt: number;
+};
+
+const SESSION_LIFETIME_MS = 30 * 86_400_000;
+const MIN_PASSWORD_LENGTH = 10;
+const MAX_PASSWORD_LENGTH = 200;
+const MAX_EMAIL_LENGTH = 254;
+const MAX_PROJECTS = 20;
+const LIMITS = { name: 60, assistantName: 24, instructions: 8000, greeting: 300, modelKey: 400 } as const;
+const BACKENDS: readonly Backend[] = ["openai", "gemini", "grok"];
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/;
+const WRONG_LOGIN = "Wrong email or password";
+// Hashed when the email is unknown, so a login takes as long whether or not the account exists.
+const DECOY_SALT = newPasswordSalt();
+
+const fail = (status: number, error: string) => ({ ok: false, status, error }) as const;
+
+function hasControlCharacter(value: string, allowNewlines = false): boolean {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (allowNewlines && (character === "\n" || character === "\r" || character === "\t")) continue;
+    if (code < 32 || (code >= 127 && code < 160)) return true;
+  }
+  return false;
+}
+
+function normalizeEmail(input: unknown): string | undefined {
+  if (typeof input !== "string") return undefined;
+  const email = input.trim().toLowerCase();
+  if (!email || email.length > MAX_EMAIL_LENGTH || hasControlCharacter(email) || !EMAIL_SHAPE.test(email)) {
+    return undefined;
+  }
+  return email;
+}
+
+function validPassword(input: unknown): input is string {
+  return typeof input === "string" && input.length >= MIN_PASSWORD_LENGTH && input.length <= MAX_PASSWORD_LENGTH;
+}
+
+export function publicCustomer(row: CustomerRow): PublicCustomer {
+  return { id: row.id, email: row.email, createdAt: row.created_at };
+}
+
+function startSession(customer: CustomerRow): { token: string; customer: PublicCustomer } {
+  const at = now();
+  const token = newToken("mcs_");
+  insertSession(hashToken(token), customer.id, at + SESSION_LIFETIME_MS, at);
+  return { token, customer: publicCustomer(customer) };
+}
+
+export async function signup(
+  emailInput: unknown,
+  passwordInput: unknown
+): Promise<Result<{ token: string; customer: PublicCustomer }>> {
+  const email = normalizeEmail(emailInput);
+  if (!email) return fail(400, "Enter a valid email address.");
+  if (!validPassword(passwordInput)) {
+    return fail(400, `Use a password of ${MIN_PASSWORD_LENGTH} to ${MAX_PASSWORD_LENGTH} characters.`);
+  }
+  const salt = newPasswordSalt();
+  const row: CustomerRow = {
+    id: newId("cus_"),
+    email,
+    password_hash: await hashPassword(passwordInput, salt),
+    password_salt: salt,
+    created_at: now()
+  };
+  if (!insertCustomer(row)) return fail(409, "This email cannot be used to sign up. If it is yours, log in.");
+  log.info("customer signed up", { customerId: row.id });
+  return { ok: true, value: startSession(row) };
+}
+
+export async function login(
+  emailInput: unknown,
+  passwordInput: unknown
+): Promise<Result<{ token: string; customer: PublicCustomer }>> {
+  const email = normalizeEmail(emailInput);
+  const password = typeof passwordInput === "string" ? passwordInput.slice(0, MAX_PASSWORD_LENGTH + 1) : "";
+  const customer = email ? customerByEmail(email) : undefined;
+  const hash = await hashPassword(password, customer?.password_salt ?? DECOY_SALT);
+  if (!customer || !validPassword(passwordInput) || !passwordHashesMatch(hash, customer.password_hash)) {
+    return fail(401, WRONG_LOGIN);
+  }
+  return { ok: true, value: startSession(customer) };
+}
+
+/** The customer behind an `mcs_` token, if it is live. */
+export function customerForToken(token: string): CustomerRow | undefined {
+  if (!token.startsWith("mcs_") || token.length > 100) return undefined;
+  return sessionCustomer(hashToken(token), now());
+}
+
+export function logout(token: string): void {
+  deleteSession(hashToken(token));
+}
+
+// --- projects -------------------------------------------------------------------
+
+function publicProject(row: ProjectRow): PublicProject {
+  return {
+    id: row.id,
+    name: row.name,
+    keyPrefix: row.key_prefix,
+    backend: row.backend,
+    hasModelKey: Boolean(row.model_key_enc),
+    assistantName: row.assistant_name,
+    instructions: row.instructions,
+    greeting: row.greeting,
+    createdAt: row.created_at
+  };
+}
+
+function newApiKey(): { apiKey: string; keyHash: string; keyPrefix: string } {
+  const apiKey = newToken("mpk_");
+  return { apiKey, keyHash: hashToken(apiKey), keyPrefix: apiKey.slice(0, 8) };
+}
+
+type TextRule = { field: string; max: number; multiline?: boolean; required?: boolean };
+
+/** A trimmed text field, undefined when absent, or an error message. */
+function textField(value: unknown, rule: TextRule): { value?: string; error?: string } {
+  if (value === undefined) return rule.required ? { error: `${rule.field} is required.` } : {};
+  if (typeof value !== "string") return { error: `${rule.field} must be text.` };
+  const text = value.trim();
+  if (rule.required && !text) return { error: `${rule.field} is required.` };
+  if (text.length > rule.max) return { error: `${rule.field} must be at most ${rule.max} characters.` };
+  if (hasControlCharacter(text, rule.multiline)) return { error: `${rule.field} contains characters it cannot have.` };
+  return { value: text };
+}
+
+export function listProjects(customerId: string): PublicProject[] {
+  return liveProjects(customerId).map(publicProject);
+}
+
+export function createProject(
+  customerId: string,
+  body: Record<string, unknown>
+): Result<{ project: PublicProject; apiKey: string }> {
+  const name = textField(body.name, { field: "Name", max: LIMITS.name, required: true });
+  if (name.error || name.value === undefined) return fail(400, name.error ?? "Name is required.");
+  const key = newApiKey();
+  const row: ProjectRow = {
+    id: newId("prj_"),
+    customer_id: customerId,
+    name: name.value,
+    key_hash: key.keyHash,
+    key_prefix: key.keyPrefix,
+    backend: "openai",
+    model_key_enc: null,
+    assistant_name: "",
+    instructions: "",
+    greeting: "",
+    created_at: now(),
+    deleted_at: null
+  };
+  if (!insertProject(row, MAX_PROJECTS)) return fail(409, `You can have at most ${MAX_PROJECTS} projects.`);
+  return { ok: true, value: { project: publicProject(row), apiKey: key.apiKey } };
+}
+
+export function patchProject(
+  customerId: string,
+  projectId: string,
+  body: Record<string, unknown>
+): Result<{ project: PublicProject }> {
+  if (!liveProject(projectId, customerId)) return fail(404, "Project not found.");
+  const changes: ProjectChanges = {};
+  const fields = [
+    ["name", { field: "Name", max: LIMITS.name, required: body.name !== undefined }],
+    ["assistant_name", { field: "Assistant name", max: LIMITS.assistantName }],
+    ["instructions", { field: "Instructions", max: LIMITS.instructions, multiline: true }],
+    ["greeting", { field: "Greeting", max: LIMITS.greeting, multiline: true }]
+  ] as const;
+  const inputs = {
+    name: body.name,
+    assistant_name: body.assistantName,
+    instructions: body.instructions,
+    greeting: body.greeting
+  };
+  for (const [column, rule] of fields) {
+    const result = textField(inputs[column], rule);
+    if (result.error) return fail(400, result.error);
+    if (result.value !== undefined) changes[column] = result.value;
+  }
+  if (body.backend !== undefined) {
+    if (!BACKENDS.includes(body.backend as Backend)) return fail(400, "Backend must be openai, gemini or grok.");
+    changes.backend = body.backend as Backend;
+  }
+  if (body.modelKey !== undefined) {
+    if (typeof body.modelKey !== "string") return fail(400, "Model key must be text.");
+    const modelKey = body.modelKey.trim();
+    if (modelKey.length > LIMITS.modelKey) return fail(400, `Model key must be at most ${LIMITS.modelKey} characters.`);
+    if (/\s/.test(modelKey) || hasControlCharacter(modelKey))
+      return fail(400, "Model key contains characters it cannot have.");
+    if (!modelKey) {
+      changes.model_key_enc = null;
+    } else {
+      const secret = cloudSecretKey();
+      if (!secret) return fail(503, "Max Cloud is not configured");
+      changes.model_key_enc = encryptModelKey(modelKey, secret, projectId);
+    }
+  }
+  if (!updateProject(projectId, customerId, changes)) return fail(404, "Project not found.");
+  const row = liveProject(projectId, customerId);
+  if (!row) return fail(404, "Project not found.");
+  return { ok: true, value: { project: publicProject(row) } };
+}
+
+export function rotateProjectKey(
+  customerId: string,
+  projectId: string
+): Result<{ project: PublicProject; apiKey: string }> {
+  const key = newApiKey();
+  if (!replaceProjectKey(projectId, customerId, key.keyHash, key.keyPrefix)) return fail(404, "Project not found.");
+  const row = liveProject(projectId, customerId);
+  if (!row) return fail(404, "Project not found.");
+  return { ok: true, value: { project: publicProject(row), apiKey: key.apiKey } };
+}
+
+export function deleteProject(customerId: string, projectId: string): Result<{ ok: true }> {
+  if (!softDeleteProject(projectId, customerId, now())) return fail(404, "Project not found.");
+  return { ok: true, value: { ok: true } };
+}

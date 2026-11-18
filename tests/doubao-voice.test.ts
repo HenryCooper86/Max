@@ -9,6 +9,7 @@ import {
   buildVoiceSettingPrompt,
   doubaoSpeaker
 } from "../server/providers/doubao";
+import { assistantProfileFrom, basePersonaPrompt, identityPrompt } from "../server/assistant";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -50,17 +51,20 @@ describe("doubaoSpeaker", () => {
     expect(femalePrompt).toContain("音色只影响声音");
   });
 
-  it("attributes the developer to neueHCT, not ByteDance, in both languages", () => {
+  it("names Henry (cooph2o) as its developer and never the model vendor, in both languages", () => {
     const identity = buildIdentityPrompt();
-    expect(identity).toContain("Horizon Continental Technology");
-    expect(identity).toContain("neueHCT");
-    expect(identity).toContain("Li Biao");
-    expect(identity).toContain("Stone Li");
+    expect(identity).toContain("我的开发者是 Henry，在网络安全圈里大家叫他 cooph2o，是他打造了我。");
+    expect(identity).toContain("My developer is Henry, known as cooph2o in cybersecurity circles. He built me.");
     // Must explicitly forbid the underlying-model attribution.
-    expect(identity).toContain("ByteDance");
-    expect(identity).toMatch(/never ByteDance or Doubao|不要说自己来自 ByteDance/);
-    // The base persona also names the developer.
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain("Horizon Continental Technology");
+    expect(identity).toMatch(/Never name ByteDance, Doubao/);
+    expect(identity).toContain("不要说自己来自 ByteDance");
+    expect(identity + DEFAULT_AGENT_SYSTEM_PROMPT).not.toMatch(/CEO|首席执行官/);
+  });
+
+  it("does not let anyone else's assistant claim Henry built it", () => {
+    const custom = assistantProfileFrom({ name: "Nova", device: "app" });
+    expect(identityPrompt(custom) + basePersonaPrompt(custom)).not.toMatch(/Henry|cooph2o/);
+    expect(custom.developer).toBeUndefined();
   });
 
   it("treats voice-triggered device actions as safe hands-free ops, not distractions to defer", () => {

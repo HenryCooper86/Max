@@ -4,8 +4,6 @@
 
 [简体中文](../README.zh-CN.md) · English
 
-[![pipeline status](https://gitlab-ce.orb.local/hct/doubao/badges/main/pipeline.svg)](https://gitlab-ce.orb.local/hct/doubao/-/pipelines)
-
 Production-oriented AI voice testing framework for the Max motorcycle helmet assistant. Max keeps the same name and motorcycle helmet assistant role, speaks Chinese by default, can also use English, and refuses other languages. The framework combines the hands-free web HUD, iOS and Android clients, a secure realtime relay, mock/live providers, scenario injection, telemetry, and per-tester QA statistics for validating helmet voice behavior before field release. Realtime Doubao voice defaults to the working female Chinese voice.
 
 ## Make It Your Own
@@ -31,7 +29,7 @@ Everything about the assistant lives in `assistant.config.json` (see `assistant.
 
 The apps read all of this from the relay's `/health`.
 
-**Studio.** An admin can change all of the above from the app, at Admin → Studio, with a live preview; a save applies to new sessions at once. The Studio writes its own `assistant.config.json` under `STUDIO_DIR` (default `~/.horizon-helmet-testing`), outside the app directory so a deploy does not erase it, and that file takes precedence over one beside the code. Voice backends can be set up there too: enter a backend's API key, model and voices, choose the default backend, and decide whether wearers may switch. Keys are write-only — they can be set or cleared, never read back — and are stored in `voice-backends.json` under `STUDIO_DIR` with owner-only permissions. A value cleared in the Studio falls back to what `.env` provides.
+**Studio.** An admin can change all of the above from the app, at Admin → Studio, with a live preview; a save applies to new sessions at once. The Studio writes its own `assistant.config.json` under `STUDIO_DIR` (default `~/.max-relay`), outside the app directory so a deploy does not erase it, and that file takes precedence over one beside the code. Voice backends can be set up there too: enter a backend's API key, model and voices, choose the default backend, and decide whether wearers may switch. Keys are write-only — they can be set or cleared, never read back — and are stored in `voice-backends.json` under `STUDIO_DIR` with owner-only permissions. A value cleared in the Studio falls back to what `.env` provides.
 
 **Language.** Each app sends the language it is set to. When the assistant speaks that language it answers in it for the session, and the relay's own lines (device confirmations, failures, route summaries) are spoken in it too. An English app makes the stock Max, who is Chinese-first, answer in English.
 
@@ -88,7 +86,7 @@ The embedded RDK X5 client runs the helmet audio, camera, local HUD, and ADAS de
 - Voice-triggered live navigation (web) — the same "导航去X" / "停止导航" flow now guides from the browser HUD too. Routing runs relay-side (`nav.request`/`nav.route`/`nav.error` over `/agent`) against the Amap Web 服务 REST API (place search + v5 driving, GCJ-02 throughout); with no `AMAP_API_KEY` configured the relay falls back to a deterministic mock route so the demo still works keylessly. The web HUD guides with the same maneuver-timing rules as iOS, ported to a shared TypeScript `GuidanceEngine` (`shared/guidance.ts`) so both platforms are tested against one table, plus an on-map ride simulator (演示导航 walks the route; 演示偏航 forces an off-route reroute) for demoing without a real ride; if that reroute request fails, guidance stops cleanly with a spoken "无法重新规划路线，已停止导航" instead of continuing on the stale route, matching iOS and Android. The Amap JS API tile layer renders the route on a live map; its 安全密钥 (`AMAP_JS_SECRET`) never reaches the browser — it stays server-side inside the `/_AMapService` proxy, which signs requests on the map's behalf. Same honesty limit as iOS: car routing only, no motorcycle profile, so 摩托车禁行 roads aren't respected.
 - Voice-triggered live navigation (Android) — the same "导航去X" / "停止导航" flow guides from the native app on the shared relay route protocol. GCJ-02 stays on the wire and inside the app; GPS fixes are converted once at the controller boundary. The Kotlin guidance engine follows the same six-rule contract as web and iOS. The Android AMap SDK displays the route, destination, and rider position after map consent when a separately registered Android key is configured; without a usable key, text and voice guidance continue with an unavailable-map state. The first-fix deadline is 8 s. Guidance runs inside the foreground session and uses car routing, which does not account for motorcycle-restricted roads.
 - iPhone companion navigation for the RDK helmet — an authenticated iOS account pairs to one durable RDK device with a six-digit, single-use code, then explicitly starts a separate **Helmet Ride** to forward precise phone fixes through `/companion`. The RDK HUD and ranked audio path own route guidance, pause when the fix is stale or unavailable, resume on a fresh fix, and let armed ADAS alerts preempt ordinary navigation speech. Pairing never starts location, login/app launch never resumes a ride, and Stop Helmet Ride, Unpair, logout, or force-quit ends forwarding. No map or raw-coordinate UI and no fix persistence are added to the phone companion flow.
-- Agent identity — attributes its development to Horizon Continental Technology (neueHCT) and names the CEO (Li Biao / Stone Li), in Chinese and English.
+- Agent identity — names no company and never the underlying model vendor, in Chinese and English.
 - Acoustic echo cancellation — built-in-speaker echo is cancelled so the agent doesn't hear and answer itself (web `echoCancellation`; iOS shared voice-processing engine; Android `VOICE_COMMUNICATION` + `AcousticEchoCanceler`).
 - Native iOS and Android clients that reuse the same `/agent` relay protocol as the web HUD, with a width-capped, centered HUD that reads the same on phones and tablets/iPad.
 - Mobile main screen — helmet session control, optional captions, and a settings sheet for rider preferences (声音 / 语气 / 模式).
@@ -277,7 +275,7 @@ Protocol behavior follows Volcengine's [Doubao realtime dialogue API](https://ww
 - **Hands-free** — activating the session with the main button or Space streams the mic continuously (Doubao's `keep_alive` input mode); Doubao's server-side VAD segments turns, so the rider never taps again. `turnState` (`idle`/`listening`/`hearing`/`thinking`/`speaking`) is derived from server `status` events and drives the helmet's caption and ring colour. Space toggling ignores editable controls so future form inputs are not hijacked.
 - **Wake word ("Max")** — on the live Doubao path the agent only replies when the rider addresses it by name (`shared/wake.ts`). Because Doubao runs ASR internally, the relay cannot pre-filter raw audio; it keeps cumulative ASR and early TTS in bounded private buffers until the turn is addressed. Unaddressed background speech is never emitted as a transcript, written to user memory, or logged as text; its generated audio/transcript is suppressed and the provider conversation items are deleted. Saying "Max" anywhere in the utterance addresses it. Once addressed, a 12 s follow-up window keeps the conversation open without repeating the name, but never more than 60 s past the last explicit "Max". The matcher tolerates casing, punctuation, fullwidth forms such as `Ｍａｘ`, common ASR mishearings, and Chinese renderings inside unspaced Han runs, while ignoring the name embedded in a larger word ("maximum"). Disable with `AGENT_WAKE_WORD=off`. The mock provider is unaffected.
 - **Language policy** — Max speaks Chinese by default, can answer in English, and refuses unsupported languages. Client-side language detection is used for TTS voice selection and transcript labeling; server prompt context enforces the rider-facing behavior.
-- **Agent identity** — when asked who built/developed it, Max attributes itself to **Horizon Continental Technology (neueHCT)** — never the underlying model vendor — and states that the CEO is **Li Biao** (also known as **Stone Li**), consistently in both Chinese and English. Enforced by `buildIdentityPrompt()` in `server/providers/doubao.ts`, which is always appended to the system role even when `DOUBAO_SYSTEM_ROLE` is overridden.
+- **Agent identity** — when asked who built it, Max says only that it is Max, the helmet's voice assistant: it names no company and never the underlying model vendor, consistently in Chinese and English. Enforced by `buildIdentityPrompt()` in `server/providers/doubao.ts`, which is always appended to the system role even when `DOUBAO_SYSTEM_ROLE` is overridden.
 - **Ride intelligence** — `session.start` carries the selected `rideMode` and `scenario`; `shared/ride.ts` turns that into a safety policy, response style, hazard level, and HUD focus. Doubao receives this as prompt context; the mock provider turns it into scenario-specific transcripts and telemetry. The HUD's `态势摘要` card fuses ride hazard and weather risk into immediate normal / caution / critical rider guidance.
 - **Weather** — on activation the browser requests geolocation and sends `lat`/`lon` with `session.start`. `server/weather.ts` fetches current conditions from **Open-Meteo**, classifies rider risk, and emits weather/advice to the HUD. The fetch runs concurrently with the Doubao handshake and only gates `StartSession`; clients do not transmit PCM until `session.started`, eliminating the old startup burst. Mid-ride `location.update` events refresh both the HUD and the active model context through `UpdateConfig`.
 - **Telemetry** — providers emit `metric` and `telemetry` events. First-audio and thinking latency are anchored to final ASR and clamped non-negative; upstream request IDs and usage events are retained in structured server logs.
@@ -572,7 +570,7 @@ separate review/confirmation steps, and both remain server-enforced.
 ### `POST /auth/register` · `POST /auth/login` · `POST /auth/logout` · `GET /auth/me`
 
 User accounts for the testing framework, stored dependency-free in
-`~/.horizon-helmet-testing/accounts.json` (scrypt password hashes, atomic
+`~/.max-relay/accounts.json` (scrypt password hashes, atomic
 writes). Registration (`{username, password, displayName?}`) returns
 `{ok, token, user}` and logs the user in; the **first** registered account
 becomes the admin, later ones are testers. Admins can promote accounts to the
@@ -606,7 +604,7 @@ Testing, administrators in Administration) and paste it into the iOS/Android
 认证令牌 field to connect the native apps.
 
 Authenticated conversation memory is stored separately in
-`~/.horizon-helmet-testing/user-memory.json`. `GET /auth/memory` returns only
+`~/.max-relay/user-memory.json`. `GET /auth/memory` returns only
 metadata (saved-turn/fact counts, update time, and the small preference snapshot),
 never raw history; `DELETE /auth/memory` forgets it. The account bar exposes
 the same operation with a two-step confirmation. Set `USER_MEMORY_FILE` to
@@ -881,14 +879,14 @@ A shared test server runs on **AWS Lightsail** (region `ap-northeast-2`) so the 
 | --------------- | -------------------------------------------------------------------------------- |
 | URL             | `https://max.bionicloud.net/` — trusted HTTPS with automatic certificate renewal |
 | Host            | Ubuntu; app deployed at `/home/ubuntu/app`                                       |
-| Process manager | `pm2`, process name `horizon` (runs `tsx server/index.ts` on port `8787`)        |
+| Process manager | `pm2`, process name `max` (runs `tsx server/index.ts` on port `8787`)            |
 | Reverse proxy   | `Caddy` — `:80` redirects to `:443`, terminates TLS, proxies to `:8787`          |
 | Provider        | `VOICE_PROVIDER=doubao` — testers get real Doubao realtime voice                 |
 
 The `max.bionicloud.net` A record points to `3.35.135.136` in the existing Lightsail DNS zone for `bionicloud.net`. Caddy manages its Let's Encrypt certificate. The IP URL remains available with its existing self-signed certificate. The web app includes motorcycle helmet SVG/ICO favicons and an Apple touch icon in `public/`.
 
 The Lightsail box cannot reach the internal GitLab, so deployment is an **rsync push from a developer machine** — not a `git pull` on the server.
-QA evidence and operations are indexed in `~/.horizon-helmet-testing/testing.sqlite`; completed sessions are also appended to `sessions.jsonl` as a recovery archive. Both live outside `/home/ubuntu/app`, so deploys do not erase evidence. The default directory is owner-only (`0700`) and evidence files are `0600`. Set `TESTING_DATABASE` or `TESTING_HISTORY_DIR` to relocate them, or `TESTING_HISTORY_MAX_SESSIONS=500` to raise the in-memory dashboard window. The recovery archive is unbounded by default; `TESTING_ARCHIVE_MAX_SESSIONS` adds an explicit retention cap without truncating SQLite.
+QA evidence and operations are indexed in `~/.max-relay/testing.sqlite`; completed sessions are also appended to `sessions.jsonl` as a recovery archive. Both live outside `/home/ubuntu/app`, so deploys do not erase evidence. The default directory is owner-only (`0700`) and evidence files are `0600`. Set `TESTING_DATABASE` or `TESTING_HISTORY_DIR` to relocate them, or `TESTING_HISTORY_MAX_SESSIONS=500` to raise the in-memory dashboard window. The recovery archive is unbounded by default; `TESTING_ARCHIVE_MAX_SESSIONS` adds an explicit retention cap without truncating SQLite.
 
 ### 5. Deploy to the test server
 
@@ -926,11 +924,11 @@ An intentional staging deployment from another branch requires the explicit
 ### RDK companion data and rollout
 
 Set `COMPANION_BINDINGS_FILE` in the relay's protected `.env` to an explicit durable path (the
-default is `~/.horizon-helmet-testing/companion-bindings.json`). Its parent directory must be
+default is `~/.max-relay/companion-bindings.json`). Its parent directory must be
 owned by the relay account at mode `0700`. On a new path the JSON file is normally absent until the
 first successful Pair; do not create an empty-byte placeholder, because it is not a valid snapshot.
 The executable acceptance preflight is deliberately scoped to the canonical default parent
-`$HOME/.horizon-helmet-testing`. It preserves the raw parent/file arguments and rejects relative or
+`$HOME/.max-relay`. It preserves the raw parent/file arguments and rejects relative or
 lexically non-canonical forms before any filesystem access. For both existing and absent parents it
 validates the canonical relay home as a real relay-owned directory that is not group/world writable;
 the parent must be its exact direct child and either already be a real relay-owned `0700` directory or
@@ -947,7 +945,7 @@ leaves `/ready` healthy without printing account/device identities. The snapshot
 account ID, RDK device ID, and creation/update timestamps—never a pairing code or phone fix. Back up
 an existing valid file with owner-only permissions before later relay changes. For recovery, stop
 traffic, restore one known-good complete snapshot with the same ownership and modes, restart
-`horizon`, and require `/ready` to return `200` before pairing. An unreadable, invalid, or
+`max`, and require `/ready` to return `200` before pairing. An unreadable, invalid, or
 failed-to-persist snapshot makes readiness fail; `/health` can remain `200` because it is process
 liveness, not permission to route traffic. The executable pre-pair and post-first-Pair commands are
 in [`docs/rdk-ios-companion-acceptance.md`](rdk-ios-companion-acceptance.md).
@@ -955,7 +953,7 @@ in [`docs/rdk-ios-companion-acceptance.md`](rdk-ios-companion-acceptance.md).
 Roll out one reviewed SHA in this order: **relay first**, then the signed iOS build, then the RDK
 board. `deploy-lightsail.command` refuses a dirty tree, the wrong branch, or a local `HEAD` that
 differs from `gitlab/main`; it archives and stamps that exact SHA, restarts the expected PM2
-service `horizon`, and accepts the release only when both `/health` and `/ready` report the stamp.
+service `max`, and accepts the release only when both `/health` and `/ready` report the stamp.
 The script's `LIGHTSAIL_KEY`, `LIGHTSAIL_HOST`, `LIGHTSAIL_APP_DIR`,
 `LIGHTSAIL_HEALTH_URL`, `LIGHTSAIL_READY_URL`, and `LIGHTSAIL_DEPLOY_REMOTE` inputs identify the deployment without placing
 secret values in logs or documentation. Do not use the non-main override for production.

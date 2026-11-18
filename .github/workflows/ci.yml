@@ -92,5 +92,5 @@ jobs:
             -workspace ios/MaxHelmet.xcworkspace \
             -scheme MaxHelmet \
             -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.id }}' \
-            HORIZON_GIT_COMMIT="${GITHUB_SHA::12}" \
+            MAX_GIT_COMMIT="${GITHUB_SHA::12}" \
             test

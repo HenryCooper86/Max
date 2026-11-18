@@ -36,6 +36,15 @@ import { buildHealth, config, describeConfig, readinessIssues, validateConfig } 
 import { sessionTokens } from "./session-tokens";
 import { installServerTools } from "./tools/registry";
 import { createUsageMeter, monthOf, usageSettingsFromEnv } from "./usage";
+import {
+  chargeSession,
+  cloudEnabled,
+  projectForApiKey,
+  projectRuntime,
+  registerCloudPaymentRoutes,
+  registerCloudRoutes,
+  remainingSeconds
+} from "./cloud";
 import { USAGE_LIMIT_CLOSE_CODE } from "../shared/agent";
 import { createLogger, shortSessionId } from "./logger";
 import {
@@ -78,7 +87,7 @@ import {
   type TestingReviewStatus,
   type TestingValidityStatus
 } from "../shared/testing";
-import { assistant, assistantLogo } from "./assistant";
+import { assistant, assistantLogo, projectAssistantProfile } from "./assistant";
 import { sendBrandLogo } from "./brand-logo-route";
 import { localizeErrors } from "./error-language";
 import { removeStudioLogo, saveStudioConfig, saveStudioLogo, studioState } from "./studio";
@@ -124,6 +133,7 @@ server.keepAliveTimeout = 5_000;
 server.maxRequestsPerSocket = 1_000;
 const activeSessions = new Map<WebSocket, AgentSessionController>();
 const usageMeter = createUsageMeter(usageSettingsFromEnv());
+const CLOUD_BALANCE_MESSAGE = "Your Max Cloud balance is used up. Top up in the console.";
 const log = createLogger("relay");
 const companionStore = createCompanionBindingStore();
 const companionRegistry = createCompanionRegistry({ store: companionStore, log });
@@ -160,6 +170,8 @@ app.use((req, res, next) => {
   }
   next();
 });
+// Payment notifications must be read as raw bytes to verify their signatures.
+registerCloudPaymentRoutes(app);
 app.use(express.json({ limit: "32kb", strict: true }));
 // Errors go out in English to a client that asks for it.
 app.use(localizeErrors);
@@ -193,6 +205,26 @@ app.get(["/favicon.svg", "/favicon.ico"], (_req, res, next) => {
 // open relay does not already give, and keeps development and production code
 // paths identical.
 app.post("/v1/session-tokens", (req, res) => {
+  // A Max Cloud project's API key mints tokens for that project's sessions.
+  const bearer = req.headers.authorization?.startsWith("Bearer ") ? req.headers.authorization.slice(7).trim() : "";
+  if (bearer.startsWith("mpk_")) {
+    const project = cloudEnabled() ? projectForApiKey(bearer) : undefined;
+    if (!project) {
+      res.status(401).json({ ok: false, error: "Unknown or revoked project key." });
+      return;
+    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const minted = sessionTokens.mint(
+      { ttlSeconds: body.ttlSeconds, userId: body.userId, context: body.context },
+      project
+    );
+    if (!minted.ok) {
+      res.status(400).json({ ok: false, error: minted.error });
+      return;
+    }
+    res.status(201).json({ token: minted.token, expiresAt: minted.expiresAt });
+    return;
+  }
   const open = !config.relayAuthToken && !authActive();
   if (!open && !relayTokenPresented(req)) {
     res.status(401).json({ ok: false, error: "Send the relay token: Authorization: Bearer <RELAY_AUTH_TOKEN>." });
@@ -857,6 +889,9 @@ app.post("/testing/clear", (req, res) => {
   res.json({ ok: true, ...result });
 });
 
+// Max Cloud's console API (server/cloud).
+registerCloudRoutes(app);
+
 // API typos must remain JSON 404s; the SPA fallback below is only for client
 // routes and must never turn a missing API endpoint into a successful HTML page.
 app.use(["/auth", "/testing"], (_req, res) => {
@@ -978,41 +1013,81 @@ wss.on("connection", (client, request) => {
   }
   sessionLog.info("client connected", { address, region, provider: config.voiceProvider });
 
-  // Usage: whose minutes these are, and whether they have any left.
-  const usageUserId = authenticatedUser?.id ?? tokenGrant?.userId;
-  const usageLimitReached = () => {
-    sessionLog.info("monthly voice minutes used up", { userId: usageUserId });
+  // A Max Cloud project's session runs on the project's own model key and
+  // persona, is billed to its customer, and is nobody else's business: no
+  // relay tools, no QA recording.
+  const cloudProject = tokenGrant?.project;
+  const runtime = cloudProject && cloudEnabled() ? projectRuntime(cloudProject.projectId) : undefined;
+  const refuse = (code: number, message: string, reason: string) => {
+    sessionLog.info("connection refused", { reason });
     if (client.readyState === WebSocket.OPEN) {
-      client.send(
-        JSON.stringify({ type: "error", message: "This account has used all of its voice minutes for this month." })
-      );
-      client.close(USAGE_LIMIT_CLOSE_CODE, "usage limit reached");
+      client.send(JSON.stringify({ type: "error", message }));
+      client.close(code, reason);
     }
   };
-  if (usageMeter.overLimit(usageUserId)) {
+  if (cloudProject && !runtime) {
+    unregisterAuthenticatedConnection(client);
+    refuse(1008, "This Max Cloud project is not ready: add a model key in the console.", "project not ready");
+    return;
+  }
+  const cloudBalanceGone = (sessionSeconds: number) =>
+    cloudProject ? remainingSeconds(cloudProject.customerId) - sessionSeconds <= 0 : false;
+
+  // Usage: whose minutes these are, and whether they have any left.
+  const usageUserId = cloudProject
+    ? `project:${cloudProject.projectId}`
+    : (authenticatedUser?.id ?? tokenGrant?.userId);
+  const limitReached = () =>
+    cloudProject
+      ? refuse(USAGE_LIMIT_CLOSE_CODE, CLOUD_BALANCE_MESSAGE, "balance used up")
+      : refuse(
+          USAGE_LIMIT_CLOSE_CODE,
+          "This account has used all of its voice minutes for this month.",
+          "usage limit reached"
+        );
+  // A Cloud project pays from its balance; the relay-wide allowance is for the relay's own users.
+  if (cloudProject ? cloudBalanceGone(0) : usageMeter.overLimit(usageUserId)) {
     // Refused before any session exists: nothing else to clean up.
     unregisterAuthenticatedConnection(client);
-    usageLimitReached();
+    limitReached();
     return;
   }
   const meteredSession = usageMeter.open(randomUUID(), usageUserId);
-  const usageCheck = usageMeter.limitMinutes()
-    ? setInterval(() => {
-        if (usageMeter.overLimit(usageUserId)) usageLimitReached();
-      }, 15_000)
-    : undefined;
+  const connectedAt = Date.now();
+  const usageCheck =
+    cloudProject || usageMeter.limitMinutes()
+      ? setInterval(() => {
+          const over = cloudProject
+            ? cloudBalanceGone((Date.now() - connectedAt) / 1000)
+            : usageMeter.overLimit(usageUserId);
+          if (over) limitReached();
+        }, 15_000)
+      : undefined;
   usageCheck?.unref();
   metrics.sessionOpened();
   trackClient(client);
   const session = new AgentSessionController(
     client,
-    (socket, telemetry) => selectProvider(socket, sessionLog, telemetry),
+    (socket, telemetry) =>
+      runtime
+        ? createVoiceProvider(runtime.backend, socket, sessionLog, telemetry, {
+            apiKey: runtime.modelKey,
+            profile: projectAssistantProfile({
+              name: runtime.assistantName,
+              instructions: runtime.instructions,
+              greeting: runtime.greeting
+            }),
+            serverTools: () => []
+          })
+        : selectProvider(socket, sessionLog, telemetry),
     sessionLog,
     address,
     region,
     authenticatedUser,
     {
-      deviceRegistrationAuthorized: relayTokenPresented(request) || (!config.relayAuthToken && !authActive()),
+      deviceRegistrationAuthorized:
+        !cloudProject && (relayTokenPresented(request) || (!config.relayAuthToken && !authActive())),
+      privateSession: Boolean(cloudProject),
       ...(tokenGrant ? { tokenGrant: { userId: tokenGrant.userId, context: tokenGrant.context } } : {}),
       onServerEvent: (payload) => {
         const event = payload as { type?: unknown; state?: unknown };
@@ -1037,7 +1112,24 @@ wss.on("connection", (client, request) => {
 
   client.on("close", async (code) => {
     if (usageCheck) clearInterval(usageCheck);
-    meteredSession.close();
+    const usage = meteredSession.close();
+    if (cloudProject && usage) {
+      try {
+        chargeSession({
+          customerId: cloudProject.customerId,
+          projectId: cloudProject.projectId,
+          sessionId: usage.sessionId,
+          seconds: usage.seconds,
+          endedAt: usage.endedAt
+        });
+      } catch (error) {
+        sessionLog.error("cloud session could not be charged", {
+          projectId: cloudProject.projectId,
+          seconds: usage.seconds,
+          message: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
     unregisterAuthenticatedConnection(client);
     activeSessions.delete(client);
     sessionLog.info("client disconnected", { code });

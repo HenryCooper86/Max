@@ -87,7 +87,9 @@ export function geminiConfigured(): boolean {
 
 export function createGeminiLiveEngine(
   log: Logger,
-  createSocket: (url: string) => WebSocket = (url) => new WebSocket(url)
+  createSocket: (url: string) => WebSocket = (url) => new WebSocket(url),
+  /** Overrides GEMINI_API_KEY (a Max Cloud project brings its own). */
+  apiKeyOverride?: string
 ): VoiceEngine {
   let socket: WebSocket | undefined;
   let events: EngineEvents | undefined;
@@ -217,7 +219,7 @@ export function createGeminiLiveEngine(
     responseMode: "auto",
     connect(config, engineEvents) {
       events = engineEvents;
-      const apiKey = env("GEMINI_API_KEY", "GOOGLE_API_KEY");
+      const apiKey = apiKeyOverride ?? env("GEMINI_API_KEY", "GOOGLE_API_KEY");
       if (!apiKey) return Promise.reject(new Error("Gemini Live: API key is not configured on the relay"));
       const base = env("GEMINI_LIVE_URL") ?? DEFAULT_URL;
       return new Promise<void>((resolve, reject) => {

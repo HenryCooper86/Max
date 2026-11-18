@@ -36,15 +36,15 @@
 
 **Files:**
 
-- Create: `android/app/src/main/java/com/horizon/maxhelmet/navigation/CoordinateDatum.kt`
-- Test: `android/app/src/test/java/com/horizon/maxhelmet/navigation/CoordinateDatumTest.kt`
+- Create: `android/app/src/main/java/io/github/henrycooper86/max/navigation/CoordinateDatum.kt`
+- Test: `android/app/src/test/java/io/github/henrycooper86/max/navigation/CoordinateDatumTest.kt`
 
 **Interfaces:**
 
 - Produces (Tasks 2, 5 rely on):
 
 ```kotlin
-package com.horizon.maxhelmet.navigation
+package io.github.henrycooper86.max.navigation
 
 /** A latitude/longitude pair. Inside the Android app every LatLon is GCJ-02
  *  by convention (spec §Coordinates "Android: GCJ-02 inside"); raw WGS-84
@@ -63,7 +63,7 @@ object CoordinateDatum {
 - [ ] **Step 1: Write the failing tests**
 
 ```kotlin
-package com.horizon.maxhelmet.navigation
+package io.github.henrycooper86.max.navigation
 
 import kotlin.math.hypot
 import org.junit.Assert.assertEquals
@@ -100,7 +100,7 @@ class CoordinateDatumTest {
 - [ ] **Step 2: RED** — `./gradlew test` fails to compile (`LatLon`/`CoordinateDatum` missing).
 - [ ] **Step 3: Implement** — port shared/geo.ts's `transformLat`/`transformLon`/forward literally (private helpers, private constants `A`/`EE`, same outOfChina bounds `lon < 72.004 || lon > 137.8347 || lat < 0.8293 || lat > 55.8271`, same operation order — preserve the series' asymmetries exactly; constant or series drift against shared/geo.ts is the failure mode). KDoc header: Android is GCJ-02 inside so only the forward transform exists here (spec §Coordinates), and the constants must never drift from shared/geo.ts.
 - [ ] **Step 4: GREEN** — full `./gradlew test`.
-- [ ] **Step 5: Commit** — `git add android/app/src/main/java/com/horizon/maxhelmet/navigation/CoordinateDatum.kt android/app/src/test/java/com/horizon/maxhelmet/navigation/CoordinateDatumTest.kt && git commit -m "feat(nav-android): wgs-84 to gcj-02 forward transform with golden vectors"`
+- [ ] **Step 5: Commit** — `git add android/app/src/main/java/io/github/henrycooper86/max/navigation/CoordinateDatum.kt android/app/src/test/java/io/github/henrycooper86/max/navigation/CoordinateDatumTest.kt && git commit -m "feat(nav-android): wgs-84 to gcj-02 forward transform with golden vectors"`
 
 ---
 
@@ -108,10 +108,10 @@ class CoordinateDatumTest {
 
 **Files:**
 
-- Create: `android/app/src/main/java/com/horizon/maxhelmet/navigation/Geo.kt`
-- Create: `android/app/src/main/java/com/horizon/maxhelmet/navigation/NavigationRoute.kt`
-- Create: `android/app/src/main/java/com/horizon/maxhelmet/navigation/GuidanceEngine.kt`
-- Test: `android/app/src/test/java/com/horizon/maxhelmet/navigation/GuidanceEngineTest.kt`
+- Create: `android/app/src/main/java/io/github/henrycooper86/max/navigation/Geo.kt`
+- Create: `android/app/src/main/java/io/github/henrycooper86/max/navigation/NavigationRoute.kt`
+- Create: `android/app/src/main/java/io/github/henrycooper86/max/navigation/GuidanceEngine.kt`
+- Test: `android/app/src/test/java/io/github/henrycooper86/max/navigation/GuidanceEngineTest.kt`
 
 **Interfaces:**
 
@@ -119,7 +119,7 @@ class CoordinateDatumTest {
 - Produces (Tasks 4-6 rely on):
 
 ```kotlin
-package com.horizon.maxhelmet.navigation
+package io.github.henrycooper86.max.navigation
 
 data class ManeuverStep(
     val instruction: String,
@@ -190,8 +190,8 @@ object GuidanceEngine {
 
 **Files:**
 
-- Modify: `android/app/src/main/java/com/horizon/maxhelmet/agent/AgentProtocol.kt`
-- Test: `android/app/src/test/java/com/horizon/maxhelmet/agent/NavProtocolTest.kt` (create)
+- Modify: `android/app/src/main/java/io/github/henrycooper86/max/agent/AgentProtocol.kt`
+- Test: `android/app/src/test/java/io/github/henrycooper86/max/agent/NavProtocolTest.kt` (create)
 
 **Interfaces:**
 
@@ -240,8 +240,8 @@ fun buildDeviceResult(commandId: String, status: String, reason: String? = null)
 
 **Files:**
 
-- Create: `android/app/src/main/java/com/horizon/maxhelmet/navigation/RelayNavigationSearch.kt`
-- Test: `android/app/src/test/java/com/horizon/maxhelmet/navigation/RelayNavigationSearchTest.kt`
+- Create: `android/app/src/main/java/io/github/henrycooper86/max/navigation/RelayNavigationSearch.kt`
+- Test: `android/app/src/test/java/io/github/henrycooper86/max/navigation/RelayNavigationSearchTest.kt`
 
 **Interfaces:**
 
@@ -249,7 +249,7 @@ fun buildDeviceResult(commandId: String, status: String, reason: String? = null)
 - Produces (Tasks 5-6 rely on):
 
 ```kotlin
-package com.horizon.maxhelmet.navigation
+package io.github.henrycooper86.max.navigation
 
 class RelayNavigationSearch(
     private val send: (String) -> Unit,
@@ -283,9 +283,9 @@ Behavior (binding): synthesize `commandId = "nav-" + UUID.randomUUID()`; store O
 
 **Files:**
 
-- Create: `android/app/src/main/java/com/horizon/maxhelmet/navigation/NavigationController.kt`
-- Create: `android/app/src/main/java/com/horizon/maxhelmet/navigation/LocationSource.kt`
-- Test: `android/app/src/test/java/com/horizon/maxhelmet/navigation/NavigationControllerTest.kt`
+- Create: `android/app/src/main/java/io/github/henrycooper86/max/navigation/NavigationController.kt`
+- Create: `android/app/src/main/java/io/github/henrycooper86/max/navigation/LocationSource.kt`
+- Test: `android/app/src/test/java/io/github/henrycooper86/max/navigation/NavigationControllerTest.kt`
 
 **Interfaces:**
 
@@ -293,7 +293,7 @@ Behavior (binding): synthesize `commandId = "nav-" + UUID.randomUUID()`; store O
 - Produces (Task 6 relies on):
 
 ```kotlin
-package com.horizon.maxhelmet.navigation
+package io.github.henrycooper86.max.navigation
 
 /** Delivers raw WGS-84 device fixes. start() is idempotent. */
 interface LocationSource {
@@ -374,10 +374,10 @@ class LocationManagerSource(private val context: Context) : LocationSource {
 
 **Files:**
 
-- Modify: `android/app/src/main/java/com/horizon/maxhelmet/agent/AgentSession.kt`
-- Modify: `android/app/src/main/java/com/horizon/maxhelmet/ui/AgentScreen.kt`
-- Modify: `android/app/src/main/java/com/horizon/maxhelmet/ui/HelmetPresentationModel.kt`
-- Test: `android/app/src/test/java/com/horizon/maxhelmet/ui/NavPresentationTest.kt` (create), `android/app/src/test/java/com/horizon/maxhelmet/agent/AgentProtocolTest.kt` (extend only if touched)
+- Modify: `android/app/src/main/java/io/github/henrycooper86/max/agent/AgentSession.kt`
+- Modify: `android/app/src/main/java/io/github/henrycooper86/max/ui/AgentScreen.kt`
+- Modify: `android/app/src/main/java/io/github/henrycooper86/max/ui/HelmetPresentationModel.kt`
+- Test: `android/app/src/test/java/io/github/henrycooper86/max/ui/NavPresentationTest.kt` (create), `android/app/src/test/java/io/github/henrycooper86/max/agent/AgentProtocolTest.kt` (extend only if touched)
 
 **Interfaces:**
 

@@ -54,7 +54,7 @@ open `MaxHelmet.xcworkspace` in Xcode and press Run. The app uses `SwiftUI`, `AV
 `CoreLocation`, `Combine`, and the native AMap iOS 3D Map SDK provided by CocoaPods.
 
 On a physical device, select your team under **Signing & Capabilities** first (the bundle ID is
-`com.horizon.maxhelmet`; change it if it collides).
+`io.github.henrycooper86.max`; change it if it collides).
 
 > New Swift files dropped into `MaxHelmet/` are picked up automatically — the target uses a
 > synchronized group, so there is no "add to target" step.
@@ -68,7 +68,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   -workspace ios/MaxHelmet.xcworkspace \
   -scheme MaxHelmet \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
-  HORIZON_GIT_COMMIT=$(git rev-parse --short=12 HEAD) build
+  MAX_GIT_COMMIT=$(git rev-parse --short=12 HEAD) build
 ```
 
 If `xcodebuild` reports that the active developer directory is Command Line Tools, use the
@@ -100,7 +100,7 @@ Point it back at a Mac relay by typing the LAN URL (and toggling self-signed off
 For release QA, the settings sheet's **QA 任务归因** section accepts Campaign, Test case, Run,
 and Assignment IDs from the web control plane. The app persists them and sends them atomically
 with `platform=ios` on the next `session.start`. Command-line/CI builds should always pass
-`HORIZON_GIT_COMMIT`; an unstamped local Xcode build reports `unknown` honestly and cannot receive
+`MAX_GIT_COMMIT`; an unstamped local Xcode build reports `unknown` honestly and cannot receive
 credit for an assignment targeting a specific candidate commit.
 
 ### RDK 头盔配对与 Helmet Ride
@@ -149,7 +149,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun simctl b
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun simctl install "$DEVICE" \
   ~/Library/Developer/Xcode/DerivedData/MaxHelmet-*/Build/Products/Debug-iphonesimulator/MaxHelmet.app
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun simctl launch "$DEVICE" \
-  com.horizon.maxhelmet
+  io.github.henrycooper86.max
 ```
 
 The simulator can connect to the Mac relay at `ws://localhost:8787/agent`.
@@ -175,7 +175,7 @@ xcodebuild -workspace ios/MaxHelmet.xcworkspace -scheme MaxHelmet \
   -derivedDataPath /tmp/MaxHelmetBuild -allowProvisioningUpdates build
 xcrun devicectl device install app --device "$UDID" \
   /tmp/MaxHelmetBuild/Build/Products/Debug-iphoneos/MaxHelmet.app
-xcrun devicectl device process launch --device "$UDID" com.horizon.maxhelmet
+xcrun devicectl device process launch --device "$UDID" io.github.henrycooper86.max
 ```
 
 The device must have **Developer Mode** enabled (Settings ▸ Privacy & Security ▸ Developer Mode).
@@ -324,7 +324,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   -workspace ios/MaxHelmet.xcworkspace \
   -scheme MaxHelmet \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
-  HORIZON_GIT_COMMIT=$(git rev-parse --short=12 HEAD) build
+  MAX_GIT_COMMIT=$(git rev-parse --short=12 HEAD) build
 ```
 
 For a release candidate, also record the full reviewed SHA, Xcode build configuration, app build

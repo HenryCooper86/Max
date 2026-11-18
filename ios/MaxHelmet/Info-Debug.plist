@@ -20,12 +20,12 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<key>HorizonAMapKey</key>
+	<key>MaxAMapKey</key>
 	<string>$(AMAP_IOS_KEY)</string>
-	<key>HorizonRelayHost</key>
+	<key>MaxRelayHost</key>
 	<string>$(MAX_RELAY_HOST)</string>
-	<key>HorizonGitCommit</key>
-	<string>$(HORIZON_GIT_COMMIT)</string>
+	<key>MaxGitCommit</key>
+	<string>$(MAX_GIT_COMMIT)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSAppTransportSecurity</key>

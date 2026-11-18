@@ -9,7 +9,7 @@ import type { BrandLogo } from "./assistant";
  *
  * The file may live anywhere the owner put it, including under a directory
  * whose name starts with a dot: the Studio keeps an uploaded logo in
- * `~/.horizon-helmet-testing` by default, and Express refuses such paths
+ * `~/.max-relay` by default, and Express refuses such paths
  * unless told otherwise. The path is the relay's own (config or Studio), never
  * taken from the request, so allowing it opens nothing.
  *

@@ -1,7 +1,7 @@
 import Foundation
 
 struct AMapConfiguration: Equatable {
-    static let plistKey = "HorizonAMapKey"
+    static let plistKey = "MaxAMapKey"
 
     let apiKey: String?
 

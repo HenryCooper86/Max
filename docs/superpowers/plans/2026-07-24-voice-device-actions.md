@@ -362,7 +362,7 @@ git commit -m "feat(actions): add rider command grammar"
 - Modify: `server/session-controller.ts:105-175` (`parseClientEvent`)
 - Modify: `shared/agent.ts:215-238` (`ClientEvent`), `shared/agent.ts:240-308` (`AgentEvent`)
 - Create: `tests/device-protocol.test.ts`
-- Regenerated (do not hand-edit): `shared/generated/agent-protocol.ts`, `android/app/src/main/java/com/horizon/maxhelmet/agent/GeneratedAgentProtocol.kt`, `ios/MaxHelmet/Agent/GeneratedAgentProtocol.swift`
+- Regenerated (do not hand-edit): `shared/generated/agent-protocol.ts`, `android/app/src/main/java/io/github/henrycooper86/max/agent/GeneratedAgentProtocol.kt`, `ios/MaxHelmet/Agent/GeneratedAgentProtocol.swift`
 
 **Interfaces:**
 
@@ -560,7 +560,7 @@ Expected: exit 0, no "stale" output.
 
 ```bash
 git add protocol/agent-events.schema.json shared/agent.ts shared/generated/agent-protocol.ts \
-  android/app/src/main/java/com/horizon/maxhelmet/agent/GeneratedAgentProtocol.kt \
+  android/app/src/main/java/io/github/henrycooper86/max/agent/GeneratedAgentProtocol.kt \
   ios/MaxHelmet/Agent/GeneratedAgentProtocol.swift \
   server/session-controller.ts tests/device-protocol.test.ts
 git commit -m "feat(protocol): add device.command and device.result events"

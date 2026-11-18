@@ -148,7 +148,7 @@ describe("reviewed RDK release operations", () => {
     temporaryDirectories.push(sandboxFixture);
     const sandbox = realpathSync(sandboxFixture);
     const relayHome = join(sandbox, "relay-home");
-    const parent = join(relayHome, ".horizon-helmet-testing");
+    const parent = join(relayHome, ".max-relay");
     const bindingFile = join(parent, "companion-bindings.json");
     const fixtureBin = join(sandbox, "bin");
     const statFixture = join(fixtureBin, "stat");
@@ -280,7 +280,7 @@ describe("reviewed RDK release operations", () => {
     const relayHome = join(sandbox, "relay-home");
     const unrelatedTarget = join(sandbox, "unrelated-target");
     const unrelatedFile = join(unrelatedTarget, "keep.txt");
-    const configuredParent = join(relayHome, ".horizon-helmet-testing");
+    const configuredParent = join(relayHome, ".max-relay");
     const bindingFile = join(configuredParent, "companion-bindings.json");
     mkdirSync(relayHome, { mode: 0o755 });
     mkdirSync(unrelatedTarget, { mode: 0o755 });
@@ -341,7 +341,7 @@ describe("reviewed RDK release operations", () => {
     temporaryDirectories.push(sandboxFixture);
     const sandbox = realpathSync(sandboxFixture);
     const relayHome = join(sandbox, "relay-home");
-    const configuredParent = join(relayHome, ".horizon-helmet-testing");
+    const configuredParent = join(relayHome, ".max-relay");
     const bindingFile = join(configuredParent, "companion-bindings.json");
     mkdirSync(relayHome, { mode: 0o755 });
     mkdirSync(configuredParent, { mode: 0o700 });
@@ -369,7 +369,7 @@ describe("reviewed RDK release operations", () => {
     temporaryDirectories.push(sandboxFixture);
     const sandbox = realpathSync(sandboxFixture);
     const relayHome = join(sandbox, "relay-home");
-    const configuredParent = join(relayHome, ".horizon-helmet-testing");
+    const configuredParent = join(relayHome, ".max-relay");
     const bindingFile = join(configuredParent, "companion-bindings.json");
     const sentinelFile = join(configuredParent, "keep.txt");
     const traceHook = writePreflightTraceHook(sandbox, true);
@@ -389,17 +389,17 @@ describe("reviewed RDK release operations", () => {
       },
       {
         label: "dot-segment parent",
-        parent: `${relayHome}/./.horizon-helmet-testing`,
+        parent: `${relayHome}/./.max-relay`,
         file: bindingFile
       },
       {
         label: "dot-dot-segment parent",
-        parent: `${relayHome}/unused/../.horizon-helmet-testing`,
+        parent: `${relayHome}/unused/../.max-relay`,
         file: bindingFile
       },
       {
         label: "repeated-separator parent",
-        parent: `${relayHome}//.horizon-helmet-testing`,
+        parent: `${relayHome}//.max-relay`,
         file: bindingFile
       },
       {
@@ -452,7 +452,7 @@ describe("reviewed RDK release operations", () => {
     temporaryDirectories.push(sandboxFixture);
     const sandbox = realpathSync(sandboxFixture);
     const relayHome = join(sandbox, "relay-home");
-    const configuredParent = join(relayHome, ".horizon-helmet-testing");
+    const configuredParent = join(relayHome, ".max-relay");
     const bindingFile = join(configuredParent, "companion-bindings.json");
     const sentinelFile = join(configuredParent, "keep.txt");
     const traceHook = writePreflightTraceHook(sandbox);

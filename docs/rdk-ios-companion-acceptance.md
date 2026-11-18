@@ -30,7 +30,7 @@ git ls-remote origin refs/heads/main
 | Lightsail host/app identity (no credentials)                           | PENDING | PENDING |
 | `/health` build stamp and UTC observation                              | PENDING | PENDING |
 | `/ready` build stamp, empty issues, UTC observation                    | PENDING | PENDING |
-| PM2 service `horizon` online after deploy                              | PENDING | PENDING |
+| PM2 service `max` online after deploy                                  | PENDING | PENDING |
 | `COMPANION_BINDINGS_FILE` configured path                              | PENDING | PENDING |
 | Raw parent/file paths absolute and lexically canonical                 | PENDING | PENDING |
 | Parent is exact default child of verified canonical relay home         | PENDING | PENDING |
@@ -45,7 +45,7 @@ Run the guarded deployment only from reviewed clean `main`:
 LIGHTSAIL_KEY=/path/to/key ./deploy-lightsail.command
 curl --fail --silent --show-error https://relay.example.com/health
 curl --fail --silent --show-error https://relay.example.com/ready
-ssh -i /path/to/key ubuntu@relay.example.com 'pm2 describe horizon'
+ssh -i /path/to/key ubuntu@relay.example.com 'pm2 describe max'
 ```
 
 For the controlled self-signed test relay only, `curl --insecure` may be recorded as test evidence;
@@ -63,7 +63,7 @@ and durably removed. It never creates or changes `BINDING_FILE`.
 Pre-pair binding-file permission/schema evidence remains **PENDING**:
 
 ```bash
-BINDING_PARENT=/home/ubuntu/.horizon-helmet-testing
+BINDING_PARENT=/home/ubuntu/.max-relay
 BINDING_FILE="$BINDING_PARENT/companion-bindings.json"
 ssh -i /path/to/key ubuntu@relay.example.com bash -s -- \
   "$BINDING_PARENT" "$BINDING_FILE" <<'REMOTE'
@@ -114,7 +114,7 @@ function requireCanonicalOwnedDirectory(location, stat, label) {
 }
 
 const relayHome = requireCanonicalAbsolute(os.homedir(), "relay home");
-if (parent !== path.join(relayHome, ".horizon-helmet-testing")) {
+if (parent !== path.join(relayHome, ".max-relay")) {
   throw new Error("binding parent must be the documented direct child of the relay home");
 }
 const homeStat = lstatIfPresent(relayHome);
@@ -301,7 +301,7 @@ timestamps, pairing codes, or fixes. An absent, empty-byte, malformed, wrong-own
 or empty-relationship snapshot fails:
 
 ```bash
-BINDING_PARENT=/home/ubuntu/.horizon-helmet-testing
+BINDING_PARENT=/home/ubuntu/.max-relay
 BINDING_FILE="$BINDING_PARENT/companion-bindings.json"
 ssh -i /path/to/key ubuntu@relay.example.com bash -s -- \
   "$BINDING_PARENT" "$BINDING_FILE" <<'REMOTE'

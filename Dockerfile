@@ -28,7 +28,7 @@ FROM ${NODE_IMAGE} AS runtime
 ENV NODE_ENV=production \
     PORT=8787 \
     HOME=/data \
-    STUDIO_DIR=/data/.horizon-helmet-testing
+    STUDIO_DIR=/data/.max-relay
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json tsconfig.json assistant.config.example.json ./
@@ -38,7 +38,7 @@ COPY brand ./brand
 COPY --from=build /app/dist ./dist
 # Accounts, testing history, Studio settings and companion bindings live under
 # HOME. Create it owned by the unprivileged user so a named volume inherits that.
-RUN mkdir -p /data/.horizon-helmet-testing && chown -R node:node /data
+RUN mkdir -p /data/.max-relay && chown -R node:node /data
 USER node
 VOLUME ["/data"]
 EXPOSE 8787

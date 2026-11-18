@@ -7,7 +7,7 @@ import { createCompanionBindingStore } from "../server/companion-store";
 let tempDir: string | null = null;
 
 function bindingPath(name = "companion-bindings.json"): string {
-  tempDir ??= fs.mkdtempSync(path.join(os.tmpdir(), "horizon-companion-store-"));
+  tempDir ??= fs.mkdtempSync(path.join(os.tmpdir(), "max-companion-store-"));
   return path.join(tempDir, "private", name);
 }
 

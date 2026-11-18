@@ -19,7 +19,7 @@ chmod 600 "$task_dir/connection.json"
 stamp="$(date +%Y%m%d-%H%M%S)"
 xcodebuild build-for-testing -workspace "$repo_dir/ios/MaxHelmet.xcworkspace" \
   -scheme MaxHelmet -configuration Debug -destination "platform=iOS Simulator,id=$device_id" \
-  -derivedDataPath "$derived_dir" "HORIZON_GIT_COMMIT=$source_build" \
+  -derivedDataPath "$derived_dir" "MAX_GIT_COMMIT=$source_build" \
   > "$task_dir/ios-build-$stamp.log" 2>&1
 python3 - "$derived_dir" "$task_dir" "$repeats" "$repo_dir" "$source_commit" <<'PY'
 import glob,hashlib,os,plistlib,sys

@@ -79,6 +79,7 @@ export default defineConfig({
       "/auth": {
         target: "http://localhost:8787"
       },
+      "/cloud": { target: "http://localhost:8787" },
       "/nav": { target: "http://localhost:8787" },
       "/sdk": { target: "http://localhost:8787" },
       "/v1": { target: "http://localhost:8787" },

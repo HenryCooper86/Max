@@ -669,7 +669,7 @@ xcrun devicectl device install app \
 xcrun devicectl device process launch \
   --device "$DEVICE_ID" \
   --terminate-existing \
-  com.horizon.maxhelmet \
+  io.github.henrycooper86.max \
   -- --debug-amap-route --debug-reset-amap-consent >"$launch_output" 2>&1
 ```
 

@@ -49,10 +49,10 @@ export const PLANS: readonly Plan[] = [
   {
     id: "cloud",
     name: { zh: "Max Cloud", en: "Max Cloud" },
-    price: { zh: `$${CLOUD_PRICE_PER_MINUTE_USD} / 分钟`, en: `$${CLOUD_PRICE_PER_MINUTE_USD} / minute` },
+    price: { zh: "¥0.15 / 分钟", en: "¥0.15 / minute" },
     priceNote: {
-      zh: `每月前 ${CLOUD_FREE_MINUTES_PER_MONTH.toLocaleString("en-US")} 分钟免费`,
-      en: `First ${CLOUD_FREE_MINUTES_PER_MONTH.toLocaleString("en-US")} minutes every month free`
+      zh: `每月前 ${CLOUD_FREE_MINUTES_PER_MONTH.toLocaleString("en-US")} 分钟免费 · 约 $${CLOUD_PRICE_PER_MINUTE_USD}`,
+      en: `First ${CLOUD_FREE_MINUTES_PER_MONTH.toLocaleString("en-US")} minutes every month free · about $${CLOUD_PRICE_PER_MINUTE_USD}`
     },
     summary: {
       zh: "我们运行中继服务，你使用自己的模型密钥。",
@@ -70,7 +70,7 @@ export const PLANS: readonly Plan[] = [
         en: "Same SDK and protocol: move to self-hosting any time"
       }
     ],
-    cta: { label: { zh: "加入等候名单", en: "Join the waitlist" }, href: CONTACT_URL },
+    cta: { label: { zh: "免费开始", en: "Start free" }, href: "/console" },
     badge: { zh: "抢先体验", en: "Early access" },
     featured: true
   },
@@ -120,8 +120,15 @@ export const PRICING_FAQ: readonly Question[] = [
   {
     question: { zh: "Max Cloud 现在可以用吗？", en: "Can I use Max Cloud today?" },
     answer: {
-      zh: "目前是抢先体验。在 GitHub Discussions 留言加入等候名单，我们会在帖子里回复你。",
-      en: "It is in early access. Join the waitlist in GitHub Discussions and we will reply there."
+      zh: "可以。目前是抢先体验：在控制台注册就能开始，每月前 1,000 分钟免费。",
+      en: "Yes, in early access. Sign up in the console and start right away; the first 1,000 minutes every month are free."
+    }
+  },
+  {
+    question: { zh: "怎么付款？", en: "How do I pay?" },
+    answer: {
+      zh: "用多少扣多少，没有订阅：先用每月的免费分钟，再从余额里扣。在线支付（微信支付、支付宝）开放之前，联系我们即可增加余额。",
+      en: "Minutes are deducted as you use them; there is no subscription. Free minutes go first, then your balance. Until online payment (WeChat Pay, Alipay) opens, contact us to add balance."
     }
   },
   {

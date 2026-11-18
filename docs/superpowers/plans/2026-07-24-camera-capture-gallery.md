@@ -201,7 +201,7 @@ git commit -m "feat(actions): add camera command grammar"
 - Modify: `protocol/agent-events.schema.json`
 - Modify: `server/providers/doubao.ts` (`buildToolGroundingPrompt`)
 - Modify: `tests/device-grounding.test.ts`
-- Regenerated (do not hand-edit): `shared/generated/agent-protocol.ts`, `android/app/src/main/java/com/horizon/maxhelmet/agent/GeneratedAgentProtocol.kt`, `ios/MaxHelmet/Agent/GeneratedAgentProtocol.swift`
+- Regenerated (do not hand-edit): `shared/generated/agent-protocol.ts`, `android/app/src/main/java/io/github/henrycooper86/max/agent/GeneratedAgentProtocol.kt`, `ios/MaxHelmet/Agent/GeneratedAgentProtocol.swift`
 
 **Interfaces:**
 
@@ -266,7 +266,7 @@ Expected: PASS — protocol check, format, lint, dead-code, tests, fault matrix,
 
 ```bash
 git add protocol/agent-events.schema.json shared/generated/agent-protocol.ts \
-  android/app/src/main/java/com/horizon/maxhelmet/agent/GeneratedAgentProtocol.kt \
+  android/app/src/main/java/io/github/henrycooper86/max/agent/GeneratedAgentProtocol.kt \
   ios/MaxHelmet/Agent/GeneratedAgentProtocol.swift server/providers/doubao.ts tests/device-grounding.test.ts
 git commit -m "feat(protocol): add camera actions and declare them to Max"
 ```

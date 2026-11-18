@@ -37,7 +37,7 @@ Spec: `docs/superpowers/specs/2026-08-03-crash-detection-design.md`.
 
 - Modify: `protocol/agent-events.schema.json`
 - Modify: `shared/agent.ts` (ClientEvent union ~line 228, AgentEvent union ~line 279)
-- Regenerate (never hand-edit): `shared/generated/agent-protocol.ts`, `ios/MaxHelmet/Agent/GeneratedAgentProtocol.swift`, `android/app/src/main/java/com/horizon/maxhelmet/agent/GeneratedAgentProtocol.kt`
+- Regenerate (never hand-edit): `shared/generated/agent-protocol.ts`, `ios/MaxHelmet/Agent/GeneratedAgentProtocol.swift`, `android/app/src/main/java/io/github/henrycooper86/max/agent/GeneratedAgentProtocol.kt`
 - Test: `tests/crash-protocol.test.ts`
 
 **Interfaces:**
@@ -192,7 +192,7 @@ Run: `npm run check:protocol && npx tsc --noEmit` — clean.
 ```bash
 git add protocol/agent-events.schema.json shared/agent.ts shared/generated/agent-protocol.ts \
   ios/MaxHelmet/Agent/GeneratedAgentProtocol.swift \
-  android/app/src/main/java/com/horizon/maxhelmet/agent/GeneratedAgentProtocol.kt \
+  android/app/src/main/java/io/github/henrycooper86/max/agent/GeneratedAgentProtocol.kt \
   tests/crash-protocol.test.ts
 git commit -m "feat(protocol): crash.alert / crash.cancel / crash.ack / crash.simulate events"
 ```

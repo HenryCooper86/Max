@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Compile all harness entry points and fixture data only in Debug builds.
-- Do not change Release behavior, production routing, relay protocols, signing settings, or the app bundle identifier `com.horizon.maxhelmet`.
+- Do not change Release behavior, production routing, relay protocols, signing settings, or the app bundle identifier `io.github.henrycooper86.max`.
 - Do not auto-accept AMap consent or construct an AMap object before the existing disclosure records acceptance.
 - Do not commit, print, snapshot, or otherwise expose the local AMap key.
 - Do not add a second map implementation, UI-test target, AMap Location SDK, or simulator map fallback.
@@ -566,7 +566,7 @@ xcodebuild -workspace ios/MaxHelmet.xcworkspace -scheme MaxHelmet \
 xcrun devicectl device install app --device "$UDID" \
   /tmp/MaxHelmetAMapDevice/Build/Products/Debug-iphoneos/MaxHelmet.app
 xcrun devicectl device process launch --device "$UDID" --terminate-existing \
-  com.horizon.maxhelmet --debug-amap-route --debug-reset-amap-consent
+  io.github.henrycooper86.max --debug-amap-route --debug-reset-amap-consent
 ```
 
 Explain that the reset argument deletes only the app's AMap consent decision, never accepts consent, and should be omitted when verifying persistence. Include the Task 2 `RUN_AMAP_DEVICE_INTEGRATION=1 xcodebuild test` command, but tell other developers to substitute their own device and team identifiers. State that both arguments are Debug-only and absent from Release.

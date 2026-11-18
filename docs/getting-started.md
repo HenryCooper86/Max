@@ -26,7 +26,7 @@ An assistant is one JSON file. Create `assistant.config.json` in the repository 
 }
 ```
 
-If you have used the relay's Admin → Studio before, the config it saved (in `~/.horizon-helmet-testing/`) takes
+If you have used the relay's Admin → Studio before, the config it saved (in `~/.max-relay/`) takes
 precedence over this file; pass `ASSISTANT_CONFIG=assistant.config.json` to be sure which one runs.
 
 `"device": "app"` makes it a software assistant: it answers without a wake word and has no wearable behaviour (no
@@ -47,7 +47,7 @@ curl -s http://localhost:8787/health | head -c 300
 
 The demo backend needs no account. It hears when you speak (but cannot understand speech), answers typed messages and
 runs your tools for real. That is enough to build and test the whole integration before choosing a model. The relay keeps its own data (accounts,
-Studio settings, session history for the QA screens) in `~/.horizon-helmet-testing/`; set `STUDIO_DIR` and `HOME` to keep
+Studio settings, session history for the QA screens) in `~/.max-relay/`; set `STUDIO_DIR` and `HOME` to keep
 it elsewhere.
 
 ## 4. Use a real voice model

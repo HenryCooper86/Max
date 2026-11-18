@@ -24,10 +24,10 @@
 
 ## File Structure
 
-- Create `android/app/src/main/java/com/horizon/maxhelmet/ui/VoiceMicDockModel.kt`: pure Android dock state, voice gating, level curve, and meter geometry.
-- Create `android/app/src/main/java/com/horizon/maxhelmet/ui/VoiceMicDock.kt`: Compose dock and Mute utility pill only.
-- Create `android/app/src/test/java/com/horizon/maxhelmet/ui/VoiceMicDockTest.kt`: JUnit coverage for the pure Android model.
-- Modify `android/app/src/main/java/com/horizon/maxhelmet/ui/AgentScreen.kt`: compose the dock, place Mute in utilities, and remove circular controls.
+- Create `android/app/src/main/java/io/github/henrycooper86/max/ui/VoiceMicDockModel.kt`: pure Android dock state, voice gating, level curve, and meter geometry.
+- Create `android/app/src/main/java/io/github/henrycooper86/max/ui/VoiceMicDock.kt`: Compose dock and Mute utility pill only.
+- Create `android/app/src/test/java/io/github/henrycooper86/max/ui/VoiceMicDockTest.kt`: JUnit coverage for the pure Android model.
+- Modify `android/app/src/main/java/io/github/henrycooper86/max/ui/AgentScreen.kt`: compose the dock, place Mute in utilities, and remove circular controls.
 - Create `ios/MaxHelmet/UI/VoiceMicDockModel.swift`: pure iOS dock state, voice gating, level curve, and meter geometry.
 - Create `ios/MaxHelmet/UI/VoiceMicDock.swift`: SwiftUI dock and Mute utility pill only.
 - Create `ios/MaxHelmetTests/VoiceMicDockTests.swift`: XCTest coverage for the pure iOS model.
@@ -40,8 +40,8 @@
 
 **Files:**
 
-- Create: `android/app/src/main/java/com/horizon/maxhelmet/ui/VoiceMicDockModel.kt`
-- Test: `android/app/src/test/java/com/horizon/maxhelmet/ui/VoiceMicDockTest.kt`
+- Create: `android/app/src/main/java/io/github/henrycooper86/max/ui/VoiceMicDockModel.kt`
+- Test: `android/app/src/test/java/io/github/henrycooper86/max/ui/VoiceMicDockTest.kt`
 
 **Interfaces:**
 
@@ -50,14 +50,14 @@
 
 - [ ] **Step 1: Write the failing model tests**
 
-Create `android/app/src/test/java/com/horizon/maxhelmet/ui/VoiceMicDockTest.kt`:
+Create `android/app/src/test/java/io/github/henrycooper86/max/ui/VoiceMicDockTest.kt`:
 
 ```kotlin
-package com.horizon.maxhelmet.ui
+package io.github.henrycooper86.max.ui
 
-import com.horizon.maxhelmet.agent.AgentSession
-import com.horizon.maxhelmet.agent.ConnectionState
-import com.horizon.maxhelmet.agent.TurnState
+import io.github.henrycooper86.max.agent.AgentSession
+import io.github.henrycooper86.max.agent.ConnectionState
+import io.github.henrycooper86.max.agent.TurnState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -126,21 +126,21 @@ Run:
 
 ```bash
 cd android
-./gradlew :app:testDebugUnitTest --tests 'com.horizon.maxhelmet.ui.VoiceMicDockTest'
+./gradlew :app:testDebugUnitTest --tests 'io.github.henrycooper86.max.ui.VoiceMicDockTest'
 ```
 
 Expected: compilation fails with unresolved references such as `MicDockMode` and `micDockPresentation`.
 
 - [ ] **Step 3: Implement the pure model**
 
-Create `android/app/src/main/java/com/horizon/maxhelmet/ui/VoiceMicDockModel.kt`:
+Create `android/app/src/main/java/io/github/henrycooper86/max/ui/VoiceMicDockModel.kt`:
 
 ```kotlin
-package com.horizon.maxhelmet.ui
+package io.github.henrycooper86.max.ui
 
-import com.horizon.maxhelmet.agent.AgentSession
-import com.horizon.maxhelmet.agent.ConnectionState
-import com.horizon.maxhelmet.agent.TurnState
+import io.github.henrycooper86.max.agent.AgentSession
+import io.github.henrycooper86.max.agent.ConnectionState
+import io.github.henrycooper86.max.agent.TurnState
 
 internal const val MIC_DOCK_NOISE_FLOOR = 0.035f
 internal const val MIC_DOCK_SENSITIVITY = 1.7f
@@ -198,7 +198,7 @@ Run:
 
 ```bash
 cd android
-./gradlew :app:testDebugUnitTest --tests 'com.horizon.maxhelmet.ui.VoiceMicDockTest'
+./gradlew :app:testDebugUnitTest --tests 'io.github.henrycooper86.max.ui.VoiceMicDockTest'
 ./gradlew :app:testDebugUnitTest
 ```
 
@@ -207,7 +207,7 @@ Expected: `VoiceMicDockTest` passes, followed by `BUILD SUCCESSFUL` for the full
 - [ ] **Step 5: Commit the Android model**
 
 ```bash
-git add android/app/src/main/java/com/horizon/maxhelmet/ui/VoiceMicDockModel.kt android/app/src/test/java/com/horizon/maxhelmet/ui/VoiceMicDockTest.kt
+git add android/app/src/main/java/io/github/henrycooper86/max/ui/VoiceMicDockModel.kt android/app/src/test/java/io/github/henrycooper86/max/ui/VoiceMicDockTest.kt
 git commit -m "test(android): define microphone dock states"
 ```
 
@@ -217,8 +217,8 @@ git commit -m "test(android): define microphone dock states"
 
 **Files:**
 
-- Create: `android/app/src/main/java/com/horizon/maxhelmet/ui/VoiceMicDock.kt`
-- Modify: `android/app/src/main/java/com/horizon/maxhelmet/ui/AgentScreen.kt:25-65, 286-297, 650-744`
+- Create: `android/app/src/main/java/io/github/henrycooper86/max/ui/VoiceMicDock.kt`
+- Modify: `android/app/src/main/java/io/github/henrycooper86/max/ui/AgentScreen.kt:25-65, 286-297, 650-744`
 
 **Interfaces:**
 
@@ -227,10 +227,10 @@ git commit -m "test(android): define microphone dock states"
 
 - [ ] **Step 1: Add the focused Compose component**
 
-Create `android/app/src/main/java/com/horizon/maxhelmet/ui/VoiceMicDock.kt` with these behaviors and constants:
+Create `android/app/src/main/java/io/github/henrycooper86/max/ui/VoiceMicDock.kt` with these behaviors and constants:
 
 ```kotlin
-package com.horizon.maxhelmet.ui
+package io.github.henrycooper86.max.ui
 
 import android.provider.Settings
 import androidx.compose.animation.core.Animatable
@@ -279,8 +279,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.horizon.maxhelmet.agent.AgentSession
-import com.horizon.maxhelmet.ui.theme.HudColors
+import io.github.henrycooper86.max.agent.AgentSession
+import io.github.henrycooper86.max.ui.theme.HudColors
 import kotlin.math.PI
 import kotlin.math.sin
 
@@ -506,7 +506,7 @@ Expected: every unit test passes and `android/app/build/outputs/apk/debug/app-de
 - [ ] **Step 4: Commit the Android dock**
 
 ```bash
-git add android/app/src/main/java/com/horizon/maxhelmet/ui/AgentScreen.kt android/app/src/main/java/com/horizon/maxhelmet/ui/VoiceMicDock.kt
+git add android/app/src/main/java/io/github/henrycooper86/max/ui/AgentScreen.kt android/app/src/main/java/io/github/henrycooper86/max/ui/VoiceMicDock.kt
 git commit -m "feat(android): add web-style voice mic dock"
 ```
 
@@ -982,8 +982,8 @@ Install and launch the Android app in another terminal:
 
 ```bash
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
-adb shell am force-stop com.horizon.maxhelmet
-adb shell monkey -p com.horizon.maxhelmet 1
+adb shell am force-stop io.github.henrycooper86.max
+adb shell monkey -p io.github.henrycooper86.max 1
 ```
 
 Pass when the idle dock matches Web, Connecting and Live labels are correct, speaking into the emulator microphone moves the three bars and glow, Max playback does not move them, Mute moves to the utility row and stops the meter, and ending the session resets the level immediately. Turn Android animator duration scale off and confirm the meter updates discretely without scaling or shimmer.
@@ -1001,7 +1001,7 @@ xcodebuild -project ios/MaxHelmet.xcodeproj -scheme MaxHelmet \
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun simctl boot 'iPhone 17 Pro' || true
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun simctl install booted \
   /tmp/MaxHelmetMicDock/Build/Products/Debug-iphonesimulator/MaxHelmet.app
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun simctl launch booted com.horizon.maxhelmet
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun simctl launch booted io.github.henrycooper86.max
 ```
 
 Pass when the same state, rider-input, playback, Mute, reset, VoiceOver, and Reduce Motion checks from Android pass on iOS.
@@ -1023,7 +1023,7 @@ Run:
 ```bash
 git diff --check
 git status --short
-rg -n "CircleControl|PrimaryControls" android/app/src/main/java/com/horizon/maxhelmet/ui/AgentScreen.kt ios/MaxHelmet/UI/AgentScreen.swift
+rg -n "CircleControl|PrimaryControls" android/app/src/main/java/io/github/henrycooper86/max/ui/AgentScreen.kt ios/MaxHelmet/UI/AgentScreen.swift
 ```
 
 Expected: `git diff --check` is silent; `git status --short` lists only the intended README changes; the `rg` command exits with no matches.

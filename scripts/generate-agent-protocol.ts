@@ -58,7 +58,7 @@ function kotlinOutput() {
             .join(", ")})`
       )
       .join(",\n");
-  return `// ${generatedNotice}\npackage com.horizon.maxhelmet.agent\n\nobject ClientEventTypes {\n${constants(client)}\n    val all: Set<String> = setOf(${client.map((event) => screaming(event.properties.type.const)).join(", ")})\n}\n\nobject ServerEventTypes {\n${constants(server)}\n    val all: Set<String> = setOf(${server.map((event) => screaming(event.properties.type.const)).join(", ")})\n}\n\nval SERVER_EVENT_REQUIRED_FIELDS: Map<String, Set<String>> = mapOf(\n${fields(server)}\n)\n`;
+  return `// ${generatedNotice}\npackage io.github.henrycooper86.max.agent\n\nobject ClientEventTypes {\n${constants(client)}\n    val all: Set<String> = setOf(${client.map((event) => screaming(event.properties.type.const)).join(", ")})\n}\n\nobject ServerEventTypes {\n${constants(server)}\n    val all: Set<String> = setOf(${server.map((event) => screaming(event.properties.type.const)).join(", ")})\n}\n\nval SERVER_EVENT_REQUIRED_FIELDS: Map<String, Set<String>> = mapOf(\n${fields(server)}\n)\n`;
 }
 
 function swiftOutput() {
@@ -84,7 +84,7 @@ function swiftOutput() {
 
 const outputs = new Map<string, string>([
   ["shared/generated/agent-protocol.ts", tsOutput()],
-  ["android/app/src/main/java/com/horizon/maxhelmet/agent/GeneratedAgentProtocol.kt", kotlinOutput()],
+  ["android/app/src/main/java/io/github/henrycooper86/max/agent/GeneratedAgentProtocol.kt", kotlinOutput()],
   ["ios/MaxHelmet/Agent/GeneratedAgentProtocol.swift", swiftOutput()]
 ]);
 

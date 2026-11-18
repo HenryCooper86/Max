@@ -18,7 +18,7 @@ Android 客户端使用 Kotlin 和 Jetpack Compose，通过与网页、iOS 相�
 cd android
 ANDROID_HOME="$HOME/Library/Android/sdk" \
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
-HORIZON_GIT_COMMIT=$(git -C .. rev-parse --short=12 HEAD) \
+MAX_GIT_COMMIT=$(git -C .. rev-parse --short=12 HEAD) \
 ./gradlew assembleDebug
 ```
 
@@ -51,7 +51,7 @@ npm run dev:server
 ANDROID_HOME="$HOME/Library/Android/sdk" \
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
 ./gradlew installDebug
-~/Library/Android/sdk/platform-tools/adb shell am start -n com.horizon.maxhelmet/.MainActivity
+~/Library/Android/sdk/platform-tools/adb shell am start -n io.github.henrycooper86.max/.MainActivity
 ```
 
 ## 权限

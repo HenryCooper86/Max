@@ -70,7 +70,7 @@ final class MainViewModel: ObservableObject {
     /// listens on :8787. On a physical device, `localhost` is the phone itself, so
     /// the default is your own relay: set MAX_RELAY_HOST in
     /// ios/Config/Secrets.xcconfig (a host name or address, such as
-    /// relay.example.com), which reaches the app as the HorizonRelayHost
+    /// relay.example.com), which reaches the app as the MaxRelayHost
     /// Info.plist key. Either default can be overridden in the HUD's 语音中继地址 field.
     static let defaultRelayURL: String = {
         #if targetEnvironment(simulator)
@@ -82,7 +82,7 @@ final class MainViewModel: ObservableObject {
 
     /// `wss://<MAX_RELAY_HOST>/agent`, or a placeholder when no host is configured.
     static func deviceRelayURL(infoDictionary: [String: Any] = Bundle.main.infoDictionary ?? [:]) -> String {
-        let host = (infoDictionary["HorizonRelayHost"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let host = (infoDictionary["MaxRelayHost"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         // An unset build setting reaches the plist as "" or as the literal "$(MAX_RELAY_HOST)".
         guard !host.isEmpty, !host.contains("$(") else { return "wss://relay.example.com/agent" }
         return "wss://\(host)/agent"

@@ -198,7 +198,7 @@ extension SyntheticAudioLiveTests {
                 "build": connection.build,
                 "baseSourceCommit": ProcessInfo.processInfo.environment["MAX_SYNTHETIC_QA_BASE_SOURCE_COMMIT"] ?? "unrecorded",
                 "qaOverlayRevision": ProcessInfo.processInfo.environment["MAX_SYNTHETIC_QA_OVERLAY_REVISION"] ?? "unrecorded",
-                "nativeBundleSourceBuild": Bundle.main.infoDictionary?["HorizonGitCommit"] as? String ?? "unknown",
+                "nativeBundleSourceBuild": Bundle.main.infoDictionary?["MaxGitCommit"] as? String ?? "unknown",
                 "releaseRunId": connection.runId ?? "", "assignmentId": connection.assignmentIds?[caseID] ?? "", "harness": "Debug XCTest; synthetic source; actual AgentSession URLSession transport, event parser, SwiftUI HUD and PcmPlayer output",
                 "device": "\(UIDevice.current.model) \(UIDevice.current.systemName) \(UIDevice.current.systemVersion) Simulator",
                 "fixture": fixture, "fixtureSha256": manifest.fixtures[fixture]?.sha256 ?? "unknown",

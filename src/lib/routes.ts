@@ -3,11 +3,12 @@
 // the public configurator is /build, and what it costs is /pricing. The relay serves index.html for every
 // path, so this is decided in the browser before anything heavy loads.
 
-type Surface = "landing" | "build" | "pricing" | "app";
+type Surface = "landing" | "build" | "pricing" | "app" | "console";
 
 export const APP_PATH = "/app";
 export const BUILD_PATH = "/build";
 export const PRICING_PATH = "/pricing";
+export const CONSOLE_PATH = "/console";
 /** The public repository. */
 export const REPOSITORY_URL = "https://github.com/HenryCooper86/Max";
 
@@ -24,6 +25,7 @@ function normalizePath(pathname: string): string {
 export function resolveRoute(location: { pathname: string; hash: string; search?: string }): Route {
   const path = normalizePath(location.pathname);
   if (path === APP_PATH || path.startsWith(`${APP_PATH}/`)) return { surface: "app" };
+  if (path === CONSOLE_PATH || path.startsWith(`${CONSOLE_PATH}/`)) return { surface: "console" };
   if (path === BUILD_PATH) return { surface: "build" };
   if (path === PRICING_PATH) return { surface: "pricing" };
   if (path === "/" && /^#\/(admin|testing)(\/|\?|$)/.test(location.hash)) {

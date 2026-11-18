@@ -44,7 +44,7 @@ export type UserMemorySummary = {
 };
 
 const log = createLogger("user-memory");
-const DEFAULT_USER_MEMORY_PATH = path.join(os.homedir(), ".horizon-helmet-testing", "user-memory.json");
+const DEFAULT_USER_MEMORY_PATH = path.join(os.homedir(), ".max-relay", "user-memory.json");
 const MAX_STORED_TURNS = 24;
 // The realtime system prompt supports substantially more context than the old
 // eight-turn window. Supplying the whole bounded store prevents the opening

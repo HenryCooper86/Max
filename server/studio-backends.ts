@@ -128,7 +128,7 @@ export type StudioBackendsState = {
 };
 
 function storePath(): string {
-  const directory = process.env.STUDIO_DIR?.trim() || path.join(os.homedir(), ".horizon-helmet-testing");
+  const directory = process.env.STUDIO_DIR?.trim() || path.join(os.homedir(), ".max-relay");
   return path.join(directory, "voice-backends.json");
 }
 

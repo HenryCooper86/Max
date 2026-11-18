@@ -198,7 +198,7 @@ Ask the human partner to run one short voice turn that produces a spoken reply, 
 
 ```bash
 ssh -i ~/Desktop/LightsailDefaultKey-ap-northeast-2.pem ubuntu@3.35.135.136 \
-  'grep "frame order" ~/.pm2/logs/horizon-out.log | tail -40'
+  'grep "frame order" ~/.pm2/logs/max-out.log | tail -40'
 ```
 
 - [ ] **Step 3: Write the finding**

@@ -86,7 +86,7 @@ const SCENARIOS: Record<DemoScenario, ScenarioProfile> = {
       { rider: "Max，拍照", agent: "好的，拍好了。", latencyBase: 92 },
       {
         rider: "你是谁开发的？",
-        agent: "我是 Max，由 Horizon Continental Technology（neueHCT）开发。",
+        agent: "我的开发者是 Henry，在网络安全圈里大家叫他 cooph2o，是他打造了我。",
         latencyBase: 90
       },
       { rider: "前面堵吗？", agent: "前方 1.4 公里轻微拥堵。我会提前提示变道。", latencyBase: 112 },

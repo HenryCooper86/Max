@@ -605,7 +605,7 @@ struct SettingsPanel: View {
             }
             .disabled(state.handsFree)
             VisorRow(divider: false) {
-                Text("iOS · build \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown") · commit \(Bundle.main.infoDictionary?["HorizonGitCommit"] as? String ?? "unknown")")
+                Text("iOS · build \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown") · commit \(Bundle.main.infoDictionary?["MaxGitCommit"] as? String ?? "unknown")")
                     .visorFont(.caption, mono: true)
                     .foregroundStyle(Visor.textTertiary)
             }

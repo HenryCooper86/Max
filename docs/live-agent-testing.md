@@ -324,9 +324,9 @@ session drops with a parse error — that's the regression signal for this layer
 realtime speaker), and builds the identity, language-interaction, and
 voice-setting prompts, provider-supported realtime controls, and an explicit
 capability boundary that prevents unsupported navigation, messaging, vehicle,
-phone, and emergency actions from being reported as completed. The developer is
-attributed to neueHCT — **never** ByteDance/Doubao — and the agent speaks Chinese
-first, English second, nothing else.
+phone, and emergency actions from being reported as completed. The agent names no
+company — **never** ByteDance/Doubao — and speaks Chinese first, English second,
+nothing else.
 
 **Code:** `server/providers/doubao.ts` (`doubaoSpeaker`,
 `DEFAULT_AGENT_SYSTEM_PROMPT`, `buildIdentityPrompt`,
@@ -335,7 +335,7 @@ first, English second, nothing else.
 
 **Unit test:** `tests/doubao-voice.test.ts` — default + overridden speakers per
 gender, the unsupported-speaker fallback, shared Max role / "音色只影响声音",
-neueHCT attribution with the explicit ByteDance/Doubao forbid, and the
+the no-company identity with the explicit ByteDance/Doubao forbid, and the
 Chinese-first/English-second/other-rejected language rule.
 
 ```bash
@@ -344,8 +344,8 @@ npm test -- "doubaoSpeaker"
 
 **Live test (Doubao):** Set `DOUBAO_VOICE=zh_female_custom_bigtts` (or any valid
 voice id) and confirm Max speaks in that voice. In the dev panel, the raw
-session-start log shows the assembled system prompt; confirm it contains
-"Horizon Continental Technology" and the language rule, and that the agent
+session-start log shows the assembled system prompt; confirm it contains the
+identity rule and the language rule, and that the agent
 refuses to attribute itself to ByteDance if asked "你是哪家公司的".
 
 ---
@@ -583,10 +583,10 @@ QA data uses:
 
 ### Durable evidence and deterministic decisions
 
-SQLite at `~/.horizon-helmet-testing/testing.sqlite` indexes evidence, runs,
+SQLite at `~/.max-relay/testing.sqlite` indexes evidence, runs,
 assignments, reviews, policy versions, audit events, and the approved baseline.
 The append-oriented JSONL file at
-`~/.horizon-helmet-testing/sessions.jsonl` remains a recovery/export archive.
+`~/.max-relay/sessions.jsonl` remains a recovery/export archive.
 Both live outside the deploy tree. Configure `TESTING_DATABASE` and
 `TESTING_HISTORY_DIR`; use `off` only for ephemeral/test environments.
 The default storage directory is enforced as owner-only (`0700`), and SQLite,
@@ -634,9 +634,9 @@ cannot authorize a deployment.
 Native releases must carry the actual commit:
 
 ```bash
-HORIZON_GIT_COMMIT=$(git rev-parse --short=12 HEAD) ./android/gradlew -p android assembleRelease
+MAX_GIT_COMMIT=$(git rev-parse --short=12 HEAD) ./android/gradlew -p android assembleRelease
 xcodebuild -workspace ios/MaxHelmet.xcworkspace -scheme MaxHelmet \
-  HORIZON_GIT_COMMIT=$(git rev-parse --short=12 HEAD) build
+  MAX_GIT_COMMIT=$(git rev-parse --short=12 HEAD) build
 ```
 
 ### Evidence telemetry details

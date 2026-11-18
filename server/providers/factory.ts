@@ -8,7 +8,8 @@ import { createPipelineEngine, localPipelineSettings } from "./live/pipeline";
 import { createLiveProvider, type LiveBackend } from "./live/session";
 import { createMockProvider } from "./mock";
 import { createAppDemoProvider } from "./app-demo";
-import { assistant } from "../assistant";
+import { assistant, type AssistantProfile } from "../assistant";
+import type { ToolDefinition } from "../tools";
 import type { AgentProvider, ProviderTelemetry, SessionStartEvent } from "./types";
 
 function liveBackend(id: VoiceProviderId, createEngine: LiveBackend["createEngine"]): LiveBackend {
@@ -16,36 +17,52 @@ function liveBackend(id: VoiceProviderId, createEngine: LiveBackend["createEngin
   return { id, label: entry.label, capabilities: entry.capabilities, createEngine };
 }
 
+/** What one session runs with instead of the relay's own settings: a Max
+ *  Cloud project's model key, persona and (no) tools. */
+export type ProviderOverrides = {
+  apiKey?: string;
+  profile?: AssistantProfile;
+  serverTools?: () => readonly ToolDefinition[];
+};
+
 /** Builds the provider for one backend id. */
 export function createVoiceProvider(
   id: VoiceProviderId,
   client: WebSocket,
   log: Logger,
-  telemetry: ProviderTelemetry
+  telemetry: ProviderTelemetry,
+  overrides: ProviderOverrides = {}
 ): AgentProvider {
+  const sessionOptions = {
+    ...(overrides.profile ? { profile: overrides.profile } : {}),
+    ...(overrides.serverTools ? { serverTools: overrides.serverTools } : {})
+  };
   switch (id) {
     case "doubao":
       return createDoubaoProvider(client, log, telemetry);
     case "openai":
       return createLiveProvider(
         client,
-        liveBackend(id, (engineLog) => createRealtimeEngine(openAiDialect(), engineLog)),
+        liveBackend(id, (engineLog) => createRealtimeEngine(openAiDialect(overrides.apiKey), engineLog)),
         log,
-        telemetry
+        telemetry,
+        sessionOptions
       );
     case "grok":
       return createLiveProvider(
         client,
-        liveBackend(id, (engineLog) => createRealtimeEngine(grokDialect(), engineLog)),
+        liveBackend(id, (engineLog) => createRealtimeEngine(grokDialect(overrides.apiKey), engineLog)),
         log,
-        telemetry
+        telemetry,
+        sessionOptions
       );
     case "gemini":
       return createLiveProvider(
         client,
-        liveBackend(id, (engineLog) => createGeminiLiveEngine(engineLog)),
+        liveBackend(id, (engineLog) => createGeminiLiveEngine(engineLog, undefined, overrides.apiKey)),
         log,
-        telemetry
+        telemetry,
+        sessionOptions
       );
     case "pipeline":
       return createLiveProvider(

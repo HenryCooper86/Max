@@ -63,7 +63,7 @@ function positiveNumber(raw: string | undefined): number {
 
 /** The settings from the environment. */
 export function usageSettingsFromEnv(env: NodeJS.ProcessEnv = process.env): UsageSettings {
-  const dataDir = env.STUDIO_DIR?.trim() || path.join(os.homedir(), ".horizon-helmet-testing");
+  const dataDir = env.STUDIO_DIR?.trim() || path.join(os.homedir(), ".max-relay");
   return {
     file: path.join(dataDir, "usage.json"),
     monthlyMinutes: positiveNumber(env.USAGE_MONTHLY_MINUTES),

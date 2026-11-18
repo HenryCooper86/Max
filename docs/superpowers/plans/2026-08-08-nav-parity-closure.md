@@ -113,8 +113,8 @@ send(request)
 
 **Files:**
 
-- Modify: `android/app/src/main/java/com/horizon/maxhelmet/navigation/NavigationController.kt`
-- Test: `android/app/src/test/java/com/horizon/maxhelmet/navigation/NavigationControllerTest.kt`
+- Modify: `android/app/src/main/java/io/github/henrycooper86/max/navigation/NavigationController.kt`
+- Test: `android/app/src/test/java/io/github/henrycooper86/max/navigation/NavigationControllerTest.kt`
 
 **Interfaces:** no public change. Binding behaviors (mirror Task 3 exactly):
 
@@ -144,7 +144,7 @@ send(request)
 
 **Files:**
 
-- Modify: `tests/guidance.test.ts`, `ios/MaxHelmetTests/GuidanceEngineTests.swift`, `android/app/src/test/java/com/horizon/maxhelmet/navigation/GuidanceEngineTest.kt` (tests ONLY — any engine file change is a defect)
+- Modify: `tests/guidance.test.ts`, `ios/MaxHelmetTests/GuidanceEngineTests.swift`, `android/app/src/test/java/io/github/henrycooper86/max/navigation/GuidanceEngineTest.kt` (tests ONLY — any engine file change is a defect)
 
 **Binding content, identical literals on all three:**
 
@@ -161,7 +161,7 @@ send(request)
 - [ ] **Step 1: README** — root `README.md`: the web nav bullet's reroute sentence updated to the stop-cleanly behavior; confirm the iOS/Android bullets need no change (they describe relay routing, not the summary voice — if either mentions the local summary, update it to "the relay speaks the summary").
 - [ ] **Step 2: Gates** — `npm run check` exit 0; full iOS suite green; full `./gradlew test lintDebug assembleDebug` green.
 - [ ] **Step 3: Commit** — `docs(nav): document the relay-spoken summary and web reroute alignment` (only if Step 1 changed anything; otherwise skip).
-- [ ] **Step 4: Audit** — `git log --oneline <branch-base>..HEAD`: only server/, src/, ios/, android/, tests/, docs/, README.md; `grep -rn "openingSummary" ios/` → empty; `grep -n "前方\\\\d" tests/guidance.test.ts ios/MaxHelmetTests/GuidanceEngineTests.swift android/app/src/test/java/com/horizon/maxhelmet/navigation/GuidanceEngineTest.kt` → empty (no regex assertions remain); no changes under protocol/, shared/, rdk/.
+- [ ] **Step 4: Audit** — `git log --oneline <branch-base>..HEAD`: only server/, src/, ios/, android/, tests/, docs/, README.md; `grep -rn "openingSummary" ios/` → empty; `grep -n "前方\\\\d" tests/guidance.test.ts ios/MaxHelmetTests/GuidanceEngineTests.swift android/app/src/test/java/io/github/henrycooper86/max/navigation/GuidanceEngineTest.kt` → empty (no regex assertions remain); no changes under protocol/, shared/, rdk/.
 
 ---
 

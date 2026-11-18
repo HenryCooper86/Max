@@ -42,13 +42,13 @@
 - Create: shared/companion.ts
 - Regenerate: shared/generated/agent-protocol.ts
 - Regenerate: ios/MaxHelmet/Agent/GeneratedAgentProtocol.swift
-- Regenerate: android/app/src/main/java/com/horizon/maxhelmet/agent/GeneratedAgentProtocol.kt
+- Regenerate: android/app/src/main/java/io/github/henrycooper86/max/agent/GeneratedAgentProtocol.kt
 - Modify: server/session-controller.ts
 - Test: tests/agent.test.ts
 - Test: tests/nav-protocol.test.ts
 - Create test: tests/companion-protocol.test.ts
 - Modify test: ios/MaxHelmetTests/AgentProtocolTests.swift
-- Modify test: android/app/src/test/java/com/horizon/maxhelmet/agent/GeneratedAgentProtocolTest.kt
+- Modify test: android/app/src/test/java/io/github/henrycooper86/max/agent/GeneratedAgentProtocolTest.kt
 
 **Interfaces:**
 
@@ -201,7 +201,7 @@ if (value.deviceId !== undefined && (typeof value.deviceId !== "string" || !RDK_
 }
 ```
 
-- [ ] **Step 4: Regenerate and run GREEN.** Run npm run generate:protocol; npx vitest run tests/agent.test.ts tests/nav-protocol.test.ts tests/companion-protocol.test.ts; from ios/ run DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild test -project MaxHelmet.xcodeproj -scheme MaxHelmet -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:MaxHelmetTests/AgentProtocolTests; from android/ run JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew testDebugUnitTest --tests 'com.horizon.maxhelmet.agent.GeneratedAgentProtocolTest'; then run npm run check:protocol from the root.
+- [ ] **Step 4: Regenerate and run GREEN.** Run npm run generate:protocol; npx vitest run tests/agent.test.ts tests/nav-protocol.test.ts tests/companion-protocol.test.ts; from ios/ run DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild test -project MaxHelmet.xcodeproj -scheme MaxHelmet -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:MaxHelmetTests/AgentProtocolTests; from android/ run JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew testDebugUnitTest --tests 'io.github.henrycooper86.max.agent.GeneratedAgentProtocolTest'; then run npm run check:protocol from the root.
 - [ ] **Step 5: Commit.** git commit -m "feat(protocol): define RDK companion and navigation prompt events"
 
 ---
@@ -260,7 +260,7 @@ expect(store.bindingForDevice("rdk-a")?.accountId).toBe("acct-b");
 ```
 
 - [ ] **Step 2: Run RED.** npx vitest run tests/companion-store.test.ts.
-- [ ] **Step 3: Implement the store.** Default COMPANION_BINDINGS_FILE to ~/.horizon-helmet-testing/companion-bindings.json, mirror accounts.ts serialized snapshot/write/rename behavior, and never silently replace corrupt content with an empty trusted store. bind/unbind stage a candidate snapshot and update the live maps only after the atomic rename succeeds; a failed write leaves the prior binding authoritative and sets readinessIssue.
+- [ ] **Step 3: Implement the store.** Default COMPANION_BINDINGS_FILE to ~/.max-relay/companion-bindings.json, mirror accounts.ts serialized snapshot/write/rename behavior, and never silently replace corrupt content with an empty trusted store. bind/unbind stage a candidate snapshot and update the live maps only after the atomic rename succeeds; a failed write leaves the prior binding authoritative and sets readinessIssue.
 
 ```ts
 const snapshot = JSON.stringify({ version: 1, bindings: [...byAccount.values()] }, null, 2);

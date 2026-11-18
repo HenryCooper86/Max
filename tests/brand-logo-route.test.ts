@@ -31,7 +31,7 @@ describe("the logo route", () => {
   it("serves a logo kept under a dot directory, where the Studio stores it", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "logo-route-"));
     cleanup = () => fs.rmSync(home, { recursive: true, force: true });
-    const directory = path.join(home, ".horizon-helmet-testing");
+    const directory = path.join(home, ".max-relay");
     fs.mkdirSync(directory);
     const file = path.join(directory, "brand-logo.svg");
     fs.writeFileSync(file, SVG);

@@ -143,8 +143,8 @@ export { buildLanguageInteractionPrompt, buildToolGroundingPrompt } from "../pro
 /**
  * Enforces the agent's developer identity. Always appended to the system role so
  * it holds even when DOUBAO_SYSTEM_ROLE is overridden. The wording comes from
- * the assistant profile (server/assistant.ts); the default profile attributes
- * the assistant to neueHCT and never to the underlying model's vendor.
+ * the assistant profile (server/assistant.ts); the default profile names no
+ * company and never the underlying model's vendor.
  */
 export function buildIdentityPrompt(): string {
   return identityPrompt();

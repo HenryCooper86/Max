@@ -65,9 +65,9 @@
 
 **Files:**
 
-- Modify: `android/app/src/main/java/com/horizon/maxhelmet/navigation/NavigationController.kt` (failPending hoist, same semantics as Task 3)
-- Modify: `android/app/src/main/java/com/horizon/maxhelmet/navigation/LocationSource.kt` (`manager != null && requested.isSuccess`)
-- Test: `android/app/src/test/java/com/horizon/maxhelmet/navigation/NavigationControllerTest.kt` (hoist test mirroring Task 3; the deferred-identity watchdog pin per the Global Constraints; the dead `started` bookkeeping resolved)
+- Modify: `android/app/src/main/java/io/github/henrycooper86/max/navigation/NavigationController.kt` (failPending hoist, same semantics as Task 3)
+- Modify: `android/app/src/main/java/io/github/henrycooper86/max/navigation/LocationSource.kt` (`manager != null && requested.isSuccess`)
+- Test: `android/app/src/test/java/io/github/henrycooper86/max/navigation/NavigationControllerTest.kt` (hoist test mirroring Task 3; the deferred-identity watchdog pin per the Global Constraints; the dead `started` bookkeeping resolved)
 
 - [ ] **Step 1: Write the failing tests** (hoist RED; watchdog pin RED-by-inspection is NOT acceptable here — the pin must fail against a hypothetical generation-guard, so verify it at least fails when the identity guard is temporarily reverted to a generation check, per this plan family's RED standard). **Step 2: RED.** **Step 3: Implement.** **Step 4: GREEN** — scoped, then full `./gradlew test lintDebug`. **Step 5: Commit** — `git commit -m "fix(nav-android): hoist failPending, pin the identity watchdog, tighten the location source"`
 

@@ -170,12 +170,12 @@ Tests `shared/adas.ts` + `server/hazard-injector.ts`. On the live path this
 
 ## H. Identity & prompt attribution (2 steps)
 
-Tests `buildIdentityPrompt` — developer is neueHCT, **never** ByteDance/Doubao.
+Tests `buildIdentityPrompt` — Max names no company, **never** ByteDance/Doubao.
 
 > **H1. Say:** `Max，你是哪家公司开发的`
-> **Expected:** Max says it's developed by Horizon Continental Technology /
-> neueHCT (Li Biao / Stone Li). It must **not** say ByteDance or Doubao.
-> **Pass when:** neueHCT is named and ByteDance/Doubao is not.
+> **Expected:** Max says it is Max, the helmet's voice assistant, without naming
+> a company. It must **not** say ByteDance or Doubao.
+> **Pass when:** no company and neither ByteDance nor Doubao is named.
 
 > **H2. Say:** `Max，你是豆包吗`
 > **Expected:** Max denies being Doubao/ByteDance (per the explicit forbid in
@@ -239,7 +239,7 @@ during the session above.
 | F1  | `Max，我摔车了，需要帮助`      | intent/memory → emergency, emergency persona         |
 | G1  | ADAS scenario, talk, wait ~5 s | interrupting alert, TTS once, hazard rises           |
 | G2  | `Max，停` while Max talks      | speech cuts off (barge-in)                           |
-| H1  | `Max，你是哪家公司开发的`      | neueHCT named, not ByteDance/Doubao                  |
+| H1  | `Max，你是哪家公司开发的`      | no company named, not ByteDance/Doubao               |
 | H2  | `Max，你是豆包吗`              | Max denies being Doubao                              |
 | I1  | switch 通勤→横风→紧急          | hazard + rider action escalate through 3 levels      |
 | I2  | on 横风, weather risk drops    | ride-pulse hazard does not ratchet down from weather |

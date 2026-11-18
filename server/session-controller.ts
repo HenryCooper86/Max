@@ -40,6 +40,10 @@ export type AgentSessionHooks = {
   tokenGrant?: { userId?: string; context?: string };
   /** Every event the provider sends the client (usage metering counts tool calls). */
   onServerEvent?(payload: unknown): void;
+  /** Someone else's session (a Max Cloud customer's end user): never recorded
+   *  in the relay's own QA evidence. Every QA recorder ignores a session that
+   *  was never begun. */
+  privateSession?: boolean;
 };
 
 const MAX_TEXT_INPUT_CHARS = 2_000;
@@ -802,24 +806,25 @@ export class AgentSessionController {
               }
             : {})
         };
-        beginTesterSession(this.relaySessionId, {
-          // Logged-in users cannot claim another tester's evidence row. The
-          // operator relay-token path has no account identity and keeps the
-          // explicit testerId for automation rigs.
-          testerId: this.authenticatedUser?.username ?? event.testerId,
-          ipAddress: this.clientIp,
-          region: event.testerRegion ?? this.requestRegion,
-          testingCampaignId: event.testingCampaignId,
-          testingTestCaseId: event.testingTestCaseId,
-          testingRunId: event.testingRunId,
-          testingAssignmentId: event.testingAssignmentId,
-          appVersion: event.appVersion,
-          gitCommit: event.gitCommit,
-          deviceLabel: event.deviceLabel,
-          browserLanguage: event.browserLanguage,
-          networkType: event.networkType,
-          platform: event.platform
-        });
+        if (!this.hooks?.privateSession)
+          beginTesterSession(this.relaySessionId, {
+            // Logged-in users cannot claim another tester's evidence row. The
+            // operator relay-token path has no account identity and keeps the
+            // explicit testerId for automation rigs.
+            testerId: this.authenticatedUser?.username ?? event.testerId,
+            ipAddress: this.clientIp,
+            region: event.testerRegion ?? this.requestRegion,
+            testingCampaignId: event.testingCampaignId,
+            testingTestCaseId: event.testingTestCaseId,
+            testingRunId: event.testingRunId,
+            testingAssignmentId: event.testingAssignmentId,
+            appVersion: event.appVersion,
+            gitCommit: event.gitCommit,
+            deviceLabel: event.deviceLabel,
+            browserLanguage: event.browserLanguage,
+            networkType: event.networkType,
+            platform: event.platform
+          });
         this.audioPlan = planAudio(event.audio, wakeWordActive(config.wakeWord));
         if (event.audio) this.log?.info("device audio declared", { ...event.audio, ...this.audioPlan });
         if (this.audioPlan.silenceFill) {

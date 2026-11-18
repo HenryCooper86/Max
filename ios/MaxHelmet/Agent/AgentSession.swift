@@ -842,7 +842,7 @@ final class AgentSession: NSObject, ObservableObject {
     }
 
     private func nativeGitCommit() -> String {
-        let value = (Bundle.main.infoDictionary?["HorizonGitCommit"] as? String ?? "")
+        let value = (Bundle.main.infoDictionary?["MaxGitCommit"] as? String ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty, !value.contains("$(") else { return "unknown" }
         let isGitCommit = value.range(of: "^[0-9a-fA-F]{7,40}$", options: .regularExpression) != nil

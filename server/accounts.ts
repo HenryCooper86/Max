@@ -83,7 +83,7 @@ function resolveAccountsPath(): string | null {
   if (configured?.toLowerCase() === "off") return null;
   if (configured) return configured;
   if (process.env.NODE_ENV === "test") return null;
-  return path.join(os.homedir(), ".horizon-helmet-testing", "accounts.json");
+  return path.join(os.homedir(), ".max-relay", "accounts.json");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

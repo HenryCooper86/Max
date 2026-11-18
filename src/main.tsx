@@ -15,6 +15,7 @@ declare global {
 // landing page.
 const AssistantApp = lazy(() => import("./App").then((module) => ({ default: module.App })));
 const PublicSite = lazy(() => import("./landing/PublicSite").then((module) => ({ default: module.PublicSite })));
+const ConsoleApp = lazy(() => import("./console/ConsoleApp").then((module) => ({ default: module.ConsoleApp })));
 
 const route = resolveRoute(window.location);
 if (route.redirect) window.history.replaceState(null, "", route.redirect);
@@ -27,7 +28,13 @@ root.render(
   <React.StrictMode>
     <ErrorBoundary>
       <Suspense fallback={<main className="loginShell" aria-busy="true" />}>
-        {route.surface === "app" ? <AssistantApp /> : <PublicSite view={route.surface} />}
+        {route.surface === "app" ? (
+          <AssistantApp />
+        ) : route.surface === "console" ? (
+          <ConsoleApp />
+        ) : (
+          <PublicSite view={route.surface} />
+        )}
       </Suspense>
     </ErrorBoundary>
   </React.StrictMode>

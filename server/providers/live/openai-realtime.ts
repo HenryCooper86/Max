@@ -56,13 +56,14 @@ export function realtimeTools(config: EngineConfig): Record<string, unknown> {
   };
 }
 
-export function openAiDialect(): RealtimeDialect {
+/** `apiKey` overrides OPENAI_API_KEY (a Max Cloud project brings its own). */
+export function openAiDialect(apiKey?: string): RealtimeDialect {
   const model = env("OPENAI_REALTIME_MODEL") ?? "gpt-realtime";
   const base = (env("OPENAI_REALTIME_URL") ?? "wss://api.openai.com/v1/realtime").replace(/\/+$/, "");
   return {
     name: "OpenAI Realtime",
     url: `${base}?model=${encodeURIComponent(model)}`,
-    apiKey: env("OPENAI_API_KEY") ?? "",
+    apiKey: apiKey ?? env("OPENAI_API_KEY") ?? "",
     responseMode: "manual-capable",
     inputRate: 24_000,
     voice: (gender) =>
@@ -101,13 +102,14 @@ export function openAiDialect(): RealtimeDialect {
   };
 }
 
-export function grokDialect(): RealtimeDialect {
+/** `apiKey` overrides XAI_API_KEY (a Max Cloud project brings its own). */
+export function grokDialect(apiKey?: string): RealtimeDialect {
   const model = env("XAI_VOICE_MODEL", "GROK_VOICE_MODEL") ?? "grok-voice-latest";
   const base = (env("XAI_REALTIME_URL") ?? "wss://api.x.ai/v1/realtime").replace(/\/+$/, "");
   return {
     name: "Grok Voice",
     url: `${base}?model=${encodeURIComponent(model)}`,
-    apiKey: env("XAI_API_KEY", "GROK_API_KEY") ?? "",
+    apiKey: apiKey ?? env("XAI_API_KEY", "GROK_API_KEY") ?? "",
     // xAI documents server VAD without a way to defer the reply, so the relay
     // withholds unaddressed replies instead of preventing them.
     responseMode: "auto",

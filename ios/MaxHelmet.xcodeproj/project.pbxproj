@@ -35,7 +35,7 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		7B0000000000000000000001 /* Exceptions for "MaxHelmet" folder in "MaxHelmet" target */ = {
+		7B0000000000000000000001 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				"Info-Debug.plist",
@@ -46,29 +46,8 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		7A0000000000000000000001 /* MaxHelmet */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				7B0000000000000000000001 /* Exceptions for "MaxHelmet" folder in "MaxHelmet" target */,
-			);
-			explicitFileTypes = {
-			};
-			explicitFolders = (
-			);
-			path = MaxHelmet;
-			sourceTree = "<group>";
-		};
-		7C0000000000000000000001 /* MaxHelmetTests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
-			explicitFileTypes = {
-			};
-			explicitFolders = (
-			);
-			path = MaxHelmetTests;
-			sourceTree = "<group>";
-		};
+		7A0000000000000000000001 /* MaxHelmet */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (7B0000000000000000000001 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = MaxHelmet; sourceTree = "<group>"; };
+		7C0000000000000000000001 /* MaxHelmetTests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = MaxHelmetTests; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -138,7 +117,6 @@
 				F11199C836B47A4CDBCCE770 /* Pods-MaxHelmetTests.debug.xcconfig */,
 				8E8B1E7EF09E53ACC2809341 /* Pods-MaxHelmetTests.release.xcconfig */,
 			);
-			name = Pods;
 			path = Pods;
 			sourceTree = "<group>";
 		};
@@ -293,11 +271,16 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-MaxHelmet/Pods-MaxHelmet-resources-${CONFIGURATION}-input-files.xcfilelist",
 			);
+			inputPaths = (
+			);
 			name = "[CP] Copy Pods Resources";
 			outputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-MaxHelmet/Pods-MaxHelmet-resources-${CONFIGURATION}-output-files.xcfilelist",
 			);
+			outputPaths = (
+			);
 			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
 			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-MaxHelmet/Pods-MaxHelmet-resources.sh\"\n";
 			showEnvVarsInLog = 0;
 		};

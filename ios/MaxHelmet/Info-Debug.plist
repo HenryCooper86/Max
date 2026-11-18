@@ -20,12 +20,42 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<key>HorizonGitCommit</key>
-	<string>$(HORIZON_GIT_COMMIT)</string>
 	<key>HorizonAMapKey</key>
 	<string>$(AMAP_IOS_KEY)</string>
+	<key>HorizonGitCommit</key>
+	<string>$(HORIZON_GIT_COMMIT)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>Max 需要访问音乐库，才能在骑行时控制播放。</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_maxhelmet._tcp</string>
+	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Max 需要使用相机，才能在你说出指令时拍照和录像。</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Max 需要读取通讯录，才能在你说出名字时拨打电话或发送短信。</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Max 需要访问本地网络以连接同一 Wi-Fi 下的语音中继服务器，并发现附近的 Max 头盔以便配对。</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Max 会在您显式开始导航或 Helmet Ride 后使用精确位置；Helmet Ride 可在锁屏期间为 RDK 头盔导航转发位置，直到您停止 Helmet Ride。</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Max 需要使用麦克风进行免提语音对话。</string>
+	<key>NSMotionUsageDescription</key>
+	<string>检测摔车事故需要读取运动传感器。</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Max 需要把你导出的拍摄内容保存到系统相册。</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>location</string>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
@@ -41,36 +71,5 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>audio</string>
-		<string>location</string>
-	</array>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>Max 需要使用麦克风进行免提语音对话。</string>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Max 会在您显式开始导航或 Helmet Ride 后使用精确位置；Helmet Ride 可在锁屏期间为 RDK 头盔导航转发位置，直到您停止 Helmet Ride。</string>
-	<key>NSContactsUsageDescription</key>
-	<string>Max 需要读取通讯录，才能在你说出名字时拨打电话或发送短信。</string>
-	<key>NSAppleMusicUsageDescription</key>
-	<string>Max 需要访问音乐库，才能在骑行时控制播放。</string>
-	<key>NSCameraUsageDescription</key>
-	<string>Max 需要使用相机，才能在你说出指令时拍照和录像。</string>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Max 需要把你导出的拍摄内容保存到系统相册。</string>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Max 需要访问本地网络以连接同一 Wi-Fi 下的语音中继服务器，并发现附近的 Max 头盔以便配对。</string>
-	<key>NSBonjourServices</key>
-	<array>
-		<string>_maxhelmet._tcp</string>
-	</array>
-	<key>NSMotionUsageDescription</key>
-	<string>检测摔车事故需要读取运动传感器。</string>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<!-- Debug only: allows ws:// dev relays and self-signed test servers. -->
-		<key>NSAllowsArbitraryLoads</key>
-		<true/>
-	</dict>
 </dict>
 </plist>

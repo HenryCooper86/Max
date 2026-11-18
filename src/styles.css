@@ -9152,6 +9152,31 @@ button.opsCard:disabled {
   gap: 8px;
 }
 
+/* The configurator's bird: large, perched on the preview's top corner, in the
+   margin beside it, so it stays in view while the column sticks. */
+.buildBird {
+  position: absolute;
+  top: -168px;
+  right: clamp(-150px, -8vw, -48px);
+  width: clamp(220px, 19vw, 300px);
+}
+
+/* Stacked layout: the preview spans the page, so the bird sits on its corner. */
+@media (max-width: 960px) {
+  .buildBird {
+    top: -96px;
+    right: 0;
+    width: 150px;
+  }
+}
+
+/* A phone has no room for it beside the form. */
+@media (max-width: 720px) {
+  .buildBird {
+    display: none;
+  }
+}
+
 .buildPreviewNote,
 .studioPreviewNote {
   margin: 0;
@@ -9237,7 +9262,8 @@ button.opsCard:disabled {
   }
 
   .buildPreview {
-    position: static;
+    /* Not sticky, but still the anchor for the perched bird. */
+    position: relative;
     order: -1;
   }
 }

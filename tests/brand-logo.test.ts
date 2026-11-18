@@ -25,8 +25,11 @@ describe("device logos", () => {
     }
   });
 
-  it("shows a helmet for a helmet and glasses for glasses", () => {
-    expect(assistantLogo()?.path).toMatch(/brand\/devices\/motorcycle-helmet\.svg$/);
+  it("shows the hummingbird for stock Max, a helmet for a helmet and glasses for glasses", () => {
+    expect(assistantLogo()?.path).toMatch(/brand\/hummingbird\.svg$/);
+    expect(assistantLogo(assistantProfileFrom({ name: "Rider", device: "motorcycle-helmet" }))?.path).toMatch(
+      /brand\/devices\/motorcycle-helmet\.svg$/
+    );
     expect(assistantSummary(true).logoUrl).toMatch(/^\/brand\/logo\?v=[a-z0-9]+$/);
     const glasses = assistantProfileFrom({ name: "Nova", device: "sunglasses" });
     expect(assistantLogo(glasses)?.path).toMatch(/brand\/devices\/sunglasses\.svg$/);
@@ -73,10 +76,10 @@ describe("icon generator", () => {
       "/repo/brand/devices/assistive-glasses.svg"
     );
     expect(resolveBrandSource(undefined, undefined, cwd)).toEqual({
-      file: "/repo/brand/devices/motorcycle-helmet.svg",
+      file: "/repo/brand/hummingbird.svg",
       background: "#0B0C0E"
     });
-    expect(resolveBrandSource(undefined, "{not json", cwd).file).toBe("/repo/brand/devices/motorcycle-helmet.svg");
+    expect(resolveBrandSource(undefined, "{not json", cwd).file).toBe("/repo/brand/hummingbird.svg");
   });
 
   it("keeps the Android logo inside the launcher's safe zone at every density", () => {

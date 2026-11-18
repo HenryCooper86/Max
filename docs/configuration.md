@@ -58,16 +58,16 @@ module path is code on the server's disk, so it is set by whoever deploys the re
 These shape the relay's own web app and the native apps. The SDK widget takes its colour from its `accent` attribute
 instead.
 
-| Key                 | Type    | What it does                                                                                                                                                              |
-| ------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `template`          | string  | Design template: `visor`, `daylight`, `beacon`, `ember` or `holo`. Defaults to the device's.                                                                              |
-| `theme`             | object  | Token overrides on top of the template, such as `{ "radius-card": "20px" }`. Values must be colours, lengths or numbers.                                                  |
-| `templateSwitching` | boolean | `false` pins the template so viewers cannot pick their own.                                                                                                               |
-| `accentColor`       | string  | Brand colour, `#RRGGBB`.                                                                                                                                                  |
-| `logo`              | string  | A square `.svg` or `.png` (≤ 512 KiB). `npm run brand` turns it into the favicon and app icons.                                                                           |
-| `logoBackground`    | string  | Colour behind the logo where a platform needs one, `#RRGGBB`.                                                                                                             |
-| `visualizer`        | string  | How the live voice is drawn: `wave`, `bars`, `mirror`, `dots` or `ring`.                                                                                                  |
-| `voice.equalizer`   | object  | Shapes the assistant's voice for every client: a `preset` (such as `flat`, `clarity`, `warm`, `open-ear`, `telephone`) and/or ten `bands` in dB (−12 to 12) and `preamp`. |
+| Key                 | Type    | What it does                                                                                                                                                                             |
+| ------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `template`          | string  | Design template: `visor`, `daylight`, `beacon`, `ember` or `holo`. Defaults to the device's.                                                                                             |
+| `theme`             | object  | Token overrides on top of the template, such as `{ "radius-card": "20px" }`. Values must be colours, lengths or numbers.                                                                 |
+| `templateSwitching` | boolean | `false` pins the template so viewers cannot pick their own.                                                                                                                              |
+| `accentColor`       | string  | Brand colour, `#RRGGBB`.                                                                                                                                                                 |
+| `logo`              | string  | A square `.svg` or `.png` (≤ 512 KiB). `npm run brand` turns it into the favicon and app icons. Without one, stock Max shows its hummingbird and a configured device shows its own mark. |
+| `logoBackground`    | string  | Colour behind the logo where a platform needs one, `#RRGGBB`.                                                                                                                            |
+| `visualizer`        | string  | How the live voice is drawn: `wave`, `bars`, `mirror`, `dots` or `ring`.                                                                                                                 |
+| `voice.equalizer`   | object  | Shapes the assistant's voice for every client: a `preset` (such as `flat`, `clarity`, `warm`, `open-ear`, `telephone`) and/or ten `bands` in dB (−12 to 12) and `preamp`.                |
 
 ### Devices
 

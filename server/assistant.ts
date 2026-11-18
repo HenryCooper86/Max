@@ -138,7 +138,16 @@ function deviceLogo(presetId: string): BrandLogo | undefined {
 
 /** The logo clients should show: the owner's own, else the device's mark. */
 export function assistantLogo(profile: AssistantProfile = assistant()): BrandLogo | undefined {
-  return profile.logo ?? deviceLogo(profile.preset.id);
+  if (profile.logo) return profile.logo;
+  // Max's own mark is the hummingbird; an assistant of someone else's shows
+  // its device until it has a logo of its own.
+  return profile.isDefault ? stockLogo() : deviceLogo(profile.preset.id);
+}
+
+let stockMark: BrandLogo | undefined | null = null;
+function stockLogo(): BrandLogo | undefined {
+  if (stockMark === null) stockMark = brandLogoFrom("brand/hummingbird.svg", process.cwd()).logo;
+  return stockMark ?? deviceLogo("motorcycle-helmet");
 }
 
 /** Set when the configured logo was rejected; reported at startup. */

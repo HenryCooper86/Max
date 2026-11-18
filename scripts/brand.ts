@@ -50,7 +50,13 @@ export function resolveBrandSource(
     }
   }
   return {
-    file: path.resolve(cwd, argument ?? configured ?? `brand/devices/${devicePreset(device).id}.svg`),
+    // Stock Max's mark is the hummingbird; a configured device brings its own.
+    file: path.resolve(
+      cwd,
+      argument ??
+        configured ??
+        (device === undefined ? "brand/hummingbird.svg" : `brand/devices/${devicePreset(device).id}.svg`)
+    ),
     background
   };
 }

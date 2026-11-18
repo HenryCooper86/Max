@@ -1,6 +1,7 @@
 import { ArrowLeft, ArrowRight, DownloadSimple, WarningCircle } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Mascot, type MascotMood } from "../components/Mascot";
+import hummingbirdMark from "../../brand/hummingbird.svg?url";
 import { useLanguage } from "../components/LanguageToggle";
 import { AssistantPreview } from "../components/studio/AssistantPreview";
 import {
@@ -338,20 +339,21 @@ export function BuildPage() {
               template: draft.template ?? device.template,
               visualizer: draft.visualizer ?? device.visualizer,
               accentColor: /^#[0-9a-f]{6}$/i.test(draft.accentColor) ? draft.accentColor : undefined,
-              logoUrl
+              // Max's own mark until you upload yours.
+              logoUrl: logoUrl ?? hummingbirdMark
             }}
             label={say("助手预览（脚本演示）", "Assistant preview (scripted)")}
           />
           <p className="buildPreviewNote">{say("预览使用预先写好的台词。", "The preview plays pre-written lines.")}</p>
+          {/* The bird keeps the builder company beside the preview: a different mood for each step. */}
+          <Mascot
+            className="buildBird"
+            mood={STEP_MOODS[stepId]}
+            followCursor
+            restOver="a, button, input, select, textarea, label, .siteHeader"
+          />
         </aside>
       </div>
-      {/* The bird keeps the builder company: a different mood for each step. */}
-      <Mascot
-        className="siteBird"
-        mood={STEP_MOODS[stepId]}
-        followCursor
-        restOver="a, button, input, select, textarea, label, .buildPreview, .siteHeader"
-      />
     </div>
   );
 }

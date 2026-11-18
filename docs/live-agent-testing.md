@@ -29,9 +29,9 @@ The relay URL clients must use is exactly `ws://localhost:8787/agent` (any other
 path is rejected with HTTP 400). The shared test server is
 `wss://3.35.135.136/agent`.
 
-For the iOS client end-to-end, the `run-ios-simulator` skill builds, installs,
-grants mic permission, fixes the saved relay URL, taps the hands-free button,
-and verifies the WebSocket — see `.claude/skills/run-ios-simulator/SKILL.md`.
+For the iOS client end-to-end, build and run it on a simulator as described in
+the [iOS guide](../ios/README.md), grant microphone access, point it at the relay,
+and start hands-free.
 
 ---
 

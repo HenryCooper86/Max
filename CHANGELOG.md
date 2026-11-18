@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-11-18 — Characters: a bee and a butterfly join the hummingbird
+
+- Two more real creatures, cut out of green-screen footage like the
+  hummingbird: a bee and a monarch butterfly. Pick up to three, in order and
+  with repeats (two bees), in Admin → Studio → Look → Characters, in
+  `assistant.config.json` (`"characters": ["bee", "butterfly"]`), on the Build
+  page, or in Max Cloud's Install tab. The first follows the cursor; the others
+  hover round it.
+- The widget takes a `characters` attribute (`data-characters` on the script
+  tag) and shows them beside its button, livelier while the agent talks.
+- The landing page has a Characters section to try groups live.
+- `scripts/cut-out-character.py` turns any green-screen clip into the files the
+  pages use.
+
 ## 2026-11-18 — Max Cloud Studio
 
 - Every project opens in a Studio built for people new to voice agents:

@@ -10,11 +10,11 @@ any other speech server.
 ## Run it
 
 ```bash
-# 1. MOSS-TTS-Nano itself (Python 3.12)
+# 1. MOSS-TTS-Nano itself (Python 3.10 or newer; uv shown, pip works too)
 git clone https://github.com/OpenMOSS/MOSS-TTS-Nano.git
 cd MOSS-TTS-Nano
-python3.12 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt && pip install -e .
+uv venv --python 3.12 .venv && source .venv/bin/activate
+uv pip install -r requirements.txt && uv pip install --no-deps -e .
 
 # 2. The speech API (downloads the ONNX model on first run)
 python /path/to/Max/examples/moss-tts-nano/server.py
@@ -32,7 +32,19 @@ LOCAL_TTS_VOICE_MALE=Junhao
 LOCAL_TTS_FORMAT=wav
 ```
 
-`curl localhost:8890/v1/audio/voices` lists the voices.
+`curl localhost:8890/v1/audio/voices` lists the voices. English ones include Ava, Bella, Adam and Nathan; Chinese ones
+include Junhao, Zhiming, Xiaoyu and Lingyu.
+
+On a MacBook's CPU a sentence takes about half a second to a second, roughly five times faster than it plays.
+
+**If the install fails on `pynini`** (common on macOS: it needs the OpenFst C++ library), install everything else:
+
+```bash
+grep -v WeTextProcessing requirements.txt > requirements-lite.txt && uv pip install -r requirements-lite.txt
+```
+
+WeTextProcessing only improves how numbers and dates are read aloud in Chinese and English. The server notices it is
+missing and uses the model's own normalizer.
 
 ## Your own voice
 

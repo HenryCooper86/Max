@@ -28,6 +28,7 @@ Only the Python standard library is used here; MOSS-TTS-Nano brings numpy.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import io
 import json
 import logging
@@ -95,8 +96,14 @@ def mono_pcm_24k(waveform: Any, sample_rate: int) -> bytes:
 class Speaker:
     """The model, its voices and a lock: ONNX sessions here are not shared between requests."""
 
-    def __init__(self, runtime: Any, voices_dir: Path | None, default_voice: str | None) -> None:
+    def __init__(
+        self, runtime: Any, voices_dir: Path | None, default_voice: str | None, wetext: bool = False
+    ) -> None:
         self.runtime = runtime
+        # WeTextProcessing (Chinese/English number and date reading) is optional: it needs
+        # pynini, which often fails to build on macOS. Without it the model's own
+        # normalizer is used.
+        self.wetext = wetext
         self.voices_dir = voices_dir
         self.lock = threading.Lock()
         self.builtin = [str(item["voice"]) for item in runtime.list_builtin_voices()]
@@ -128,6 +135,7 @@ class Speaker:
                 prompt_audio_path=str(clip) if clip else None,
                 output_audio_path=str(Path(scratch) / "speech.wav"),
                 streaming=True,
+                enable_wetext=self.wetext,
             )
         return result["waveform"], int(result["sample_rate"])
 
@@ -148,7 +156,8 @@ def make_handler(speaker: Speaker) -> type[BaseHTTPRequestHandler]:
             self.wfile.write(body)
 
         def fail(self, status: int, message: str) -> None:
-            self.send_json(status, {"error": {"message": message, "type": "invalid_request_error"}})
+            kind = "server_error" if status >= 500 else "invalid_request_error"
+            self.send_json(status, {"error": {"message": message, "type": kind}})
 
         def do_GET(self) -> None:  # noqa: N802 (http.server naming)
             path = self.path.split("?", 1)[0].rstrip("/")
@@ -239,7 +248,10 @@ def main(argv: list[str] | None = None) -> None:
         execution_provider=args.execution_provider,
     )
     voices_dir = Path(args.voices_dir).expanduser().resolve() if args.voices_dir else None
-    speaker = Speaker(runtime, voices_dir, args.default_voice)
+    wetext = importlib.util.find_spec("tn") is not None
+    if not wetext:
+        log.info("WeTextProcessing is not installed: using the model's built-in text normalizer")
+    speaker = Speaker(runtime, voices_dir, args.default_voice, wetext=wetext)
     log.info("built-in voices: %s", ", ".join(speaker.builtin) or "none")
     if voices_dir:
         log.info("cloned voices in %s: %s", voices_dir, ", ".join(speaker.cloned()) or "none yet")

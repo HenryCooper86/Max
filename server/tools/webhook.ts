@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { isIP } from "node:net";
 import type { ToolContext, ToolDefinition, ToolParameters } from "./index";
 import { toolSpecFrom } from "./schema";
 
@@ -72,11 +73,23 @@ export function expandEnv(value: string, env: NodeJS.ProcessEnv = process.env): 
  */
 export function plainHttpAllowed(hostname: string): boolean {
   const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
-  if (host === "localhost" || host === "::1" || host.endsWith(".localhost")) return true;
+  const family = isIP(host);
+  if (family === 4) {
+    const [a = -1, b = -1] = host.split(".").map(Number);
+    return a === 127 || a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31);
+  }
+  if (family === 6) return host === "::1" || /^f[cd][0-9a-f]{2}:/.test(host);
+  // Names: only ones that cannot be registered on the public internet. A
+  // dotted name such as 10.example.com is a public name, whatever it starts with.
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
   if (host.endsWith(".local") || host.endsWith(".internal")) return true;
-  if (/^127\.|^10\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
-  if (/^f[cd][0-9a-f]{2}:/.test(host)) return true;
   return /^[a-z0-9-]+$/.test(host) && !/^\d+$/.test(host);
+}
+
+/** True when a URL may carry a call: https anywhere, plain http only to local
+ *  or private hosts. Checked on the configured URL and again once expanded. */
+function urlAllowed(url: URL): boolean {
+  return url.protocol === "https:" || (url.protocol === "http:" && plainHttpAllowed(url.hostname));
 }
 
 /** Parses one `tools[]` entry of the config file. */
@@ -96,7 +109,7 @@ export function webhookToolFrom(raw: unknown): { tool?: ToolDefinition; webhook?
   } catch {
     return { problem: `tool ${spec.name}: webhook.url is not a URL` };
   }
-  if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && plainHttpAllowed(parsed.hostname)))
+  if (!urlAllowed(parsed))
     return { problem: `tool ${spec.name}: webhook.url must be https (plain http only to local or private hosts)` };
   const headers: Record<string, string> = {};
   if (isRecord(hook.headers)) {
@@ -167,6 +180,15 @@ export async function callWebhook(
   // Fail closed: a call with a blank credential would leak the request to an
   // endpoint expecting authentication, and its 401 would be harder to read.
   if (missing.size) throw new Error(`relay is missing environment variable ${[...missing].join(", ")}`);
+  // A variable in the URL can name any host, so the rule is applied again to
+  // what the URL actually became.
+  let target: URL;
+  try {
+    target = new URL(url.value);
+  } catch {
+    throw new Error("webhook URL is not a URL once its variables are filled in");
+  }
+  if (!urlAllowed(target)) throw new Error("webhook URL must be https (plain http only to local or private hosts)");
 
   const body = JSON.stringify({
     tool: name,

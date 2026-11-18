@@ -238,6 +238,9 @@ export function createRealtimeEngine(
   let continueAfterTools = false;
   /** A `response.create` that must wait for the active reply to finish. */
   let respondWhenIdle = false;
+  /** A `response.create` was sent and the upstream has not answered it yet:
+   *  `responseActive` only turns true on `response.created`, a round trip later. */
+  let createPending = false;
 
   function sendEvent(event: Record<string, unknown>): void {
     if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event));
@@ -245,9 +248,14 @@ export function createRealtimeEngine(
 
   /** Asks for a reply now, or as soon as the current one has finished:
    *  realtime APIs reject a second concurrent response. */
+  function createResponse(): void {
+    createPending = true;
+    sendEvent({ type: "response.create" });
+  }
+
   function requestResponse(): void {
-    if (responseActive) respondWhenIdle = true;
-    else sendEvent({ type: "response.create" });
+    if (responseActive || createPending) respondWhenIdle = true;
+    else createResponse();
   }
 
   function functionCall(call: { call_id?: string; name?: string; arguments?: string }): void {
@@ -271,15 +279,16 @@ export function createRealtimeEngine(
   }
 
   function afterReply(): void {
+    if (responseActive || createPending) return;
     if (continueAfterTools && awaitingCalls.size === 0) {
       continueAfterTools = false;
       respondWhenIdle = false;
-      sendEvent({ type: "response.create" });
+      createResponse();
       return;
     }
     if (respondWhenIdle && !continueAfterTools) {
       respondWhenIdle = false;
-      sendEvent({ type: "response.create" });
+      createResponse();
     }
   }
 
@@ -310,6 +319,11 @@ export function createRealtimeEngine(
       if (event.error?.code === "response_cancel_not_active" || /no active response/i.test(message)) return;
       if (!ready) settle.reject(new Error(`${dialect.name}: ${message}`));
       else events?.onError(message);
+      // A refused response.create will never be answered with response.created.
+      if (createPending) {
+        createPending = false;
+        afterReply();
+      }
       return;
     }
     if (type === "input_audio_buffer.speech_started") {
@@ -326,6 +340,7 @@ export function createRealtimeEngine(
     }
     if (type === "response.created") {
       responseActive = true;
+      createPending = false;
       // Upstreams that never send a "completed" transcript (cumulative
       // "updated" only) mark the end of the wearer's turn by answering it.
       if (riderPending && dialect.responseMode === "auto" && riderText.trim()) {

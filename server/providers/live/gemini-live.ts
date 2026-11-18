@@ -123,8 +123,11 @@ export function createGeminiLiveEngine(
     if (message.error?.message) events?.onError(message.error.message);
     for (const call of message.toolCall?.functionCalls ?? []) {
       if (!call.id || !call.name) continue;
-      // The model asking for a tool is it answering: the wearer's turn is over.
-      closeRiderTurn();
+      // The model asking for a tool is it answering: the wearer's turn is
+      // over, and the reply starts here. Gemini can send a tool call before
+      // any content, and the session only runs tools inside a reply it has
+      // already judged (wake word, barge-in).
+      beginReply();
       pendingCalls.set(call.id, call.name);
       if (events?.onToolCall) events.onToolCall({ callId: call.id, name: call.name, arguments: call.args ?? {} });
       else sendToolResponse(call.id, JSON.stringify({ error: "tools are not available" }));
@@ -285,7 +288,10 @@ export function createGeminiLiveEngine(
     },
     sendText(text) {
       if (!ready) return;
-      closeRiderTurn();
+      // The session already settled any spoken fragment before this typed
+      // turn; reporting it again would make it a second, new turn.
+      riderOpen = false;
+      riderText = "";
       sendMessage({ realtimeInput: { text } });
     },
     close() {

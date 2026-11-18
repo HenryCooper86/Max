@@ -121,7 +121,7 @@ describe("app demo provider", () => {
     const { client, provider } = await setup([failing]);
     await provider.textInput!("get_order_status");
     await vi.waitFor(() => expect(client.agentLines()).toHaveLength(1));
-    expect(client.ofType("tool.activity").at(-1)).toMatchObject({ state: "failed", error: "boom" });
+    expect(client.ofType("tool.activity").at(-1)).toMatchObject({ state: "failed", error: "failed" }); // server detail stays off the client
     expect(client.agentLines().at(-1)).toContain("get_order_status failed:");
   });
 

@@ -121,7 +121,7 @@ describe("live session tools", () => {
     events.onToolCall!({ callId: "c1", name: "server_lookup", arguments: "{}" });
     await vi.waitFor(() => expect(toolResults).toHaveLength(1));
     expect(JSON.parse(toolResults[0]![1])).toEqual({ error: "backend down" });
-    expect(client.ofType("tool.activity").at(-1)).toMatchObject({ state: "failed", error: "backend down" });
+    expect(client.ofType("tool.activity").at(-1)).toMatchObject({ state: "failed", error: "failed" }); // server detail stays off the client
     await provider.close();
   });
 

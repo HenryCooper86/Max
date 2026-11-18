@@ -164,7 +164,10 @@ export function createToolBroker(options: ToolBrokerOptions): ToolBroker {
         } catch {
           /* keep the generic reason */
         }
-        activity(call, where, "failed", { durationMs, error: reason.slice(0, 200) });
+        // A client tool's reason came from the client. A server tool's can hold
+        // internal detail (a webhook's error body, a missing variable's name,
+        // an internal address): the model and the log get it, the browser not.
+        activity(call, where, "failed", { durationMs, error: where === "client" ? reason.slice(0, 200) : "failed" });
       }
       return outcome;
     },

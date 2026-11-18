@@ -98,7 +98,7 @@ describe("server tools", () => {
     const outcome = await broker.run({ callId: "c", name: "srv", arguments: "" });
     expect(outcome.ok).toBe(false);
     expect(JSON.parse(outcome.output)).toEqual({ error: "db down" });
-    expect(activity().at(-1)).toMatchObject({ state: "failed", error: "db down", durationMs: expect.any(Number) });
+    expect(activity().at(-1)).toMatchObject({ state: "failed", error: "failed", durationMs: expect.any(Number) });
   });
 
   it("turns a rejected promise into a failure", async () => {

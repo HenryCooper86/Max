@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AssistantSummary, VoiceEqualizerOptions, VoiceProviderSummary } from "../shared/agent";
 import {
+  assistant,
   assistantProfileFrom,
   assistantSummary,
   installAssistantProfile,
@@ -160,8 +161,16 @@ export function saveStudioConfig(raw: unknown): StudioState {
   // code on the server's disk), never typed into the app.
   const previous = readStored();
   if (typeof previous.logo === "string") next.logo = previous.logo;
+  // The Studio's file is often not where the tools were declared: before the
+  // first save the relay runs ./assistant.config.json, and once a Studio file
+  // exists it wins. Carry the running assistant's tools over, so a save can
+  // never silently drop them at the next restart. The module path is absolute
+  // here, so it still resolves from the Studio's directory.
+  const running = assistant().tools;
   if (previous.tools !== undefined) next.tools = previous.tools;
+  else if (running.tools !== undefined) next.tools = running.tools;
   if (typeof previous.toolsModule === "string") next.toolsModule = previous.toolsModule;
+  else if (running.modulePath) next.toolsModule = running.modulePath;
 
   const before = readStored();
   writeStored(next);

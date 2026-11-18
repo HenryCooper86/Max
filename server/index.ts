@@ -196,6 +196,23 @@ app.post("/v1/session-tokens", (req, res) => {
     return;
   }
   const body = (req.body ?? {}) as Record<string, unknown>;
+  if (open) {
+    // Anyone can call this on an open relay, so a token minted here must not
+    // vouch for anyone: a userId or context would reach tools and the prompt
+    // as if the owner's backend had set them. Rate-limited too, so nobody can
+    // flood the store and push out other tokens.
+    if (body.userId !== undefined || body.context !== undefined) {
+      res.status(403).json({
+        ok: false,
+        error: "Set RELAY_AUTH_TOKEN before minting tokens with a userId or context: on an open relay anyone could."
+      });
+      return;
+    }
+    if (!checkAuthRateLimit(clientAddress(req))) {
+      res.status(429).json({ ok: false, error: "Too many token requests." });
+      return;
+    }
+  }
   const minted = sessionTokens.mint({ ttlSeconds: body.ttlSeconds, userId: body.userId, context: body.context });
   if (!minted.ok) {
     res.status(400).json({ ok: false, error: minted.error });
